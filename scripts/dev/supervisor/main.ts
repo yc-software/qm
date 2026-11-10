@@ -75,13 +75,14 @@ let bootResult: BootResult | null = null;
 let phaseName = "boot";
 let shuttingDown = false;
 
+type Prepared = SpecInputs & { sandbox: SandboxResolution };
+
 const children = new Map<ChildName, Child>();
 const healthFails = new Map<ChildName, number>();
-let specInputs: SpecInputs | null = null;
+let specInputs: Prepared | null = null;
 let currentEnvSha = "";
 let currentGitSha = "";
 let handle = "";
-let sandbox: SandboxResolution | null = null;
 let durability = { databaseUrl: "" };
 let watch = true;
 let bootId = "";
@@ -300,11 +301,11 @@ function persistState(): void {
     bootId,
     envSha: currentEnvSha,
     gitSha: currentGitSha,
-    sandbox: sandbox ? { backend: sandbox.backend, detail: sandbox.detail } : null,
+    sandbox: specInputs ? { backend: specInputs.sandbox.backend, detail: specInputs.sandbox.detail } : null,
   });
 }
 
-async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
+async function assembleAndPrepare(spec: BootSpec): Promise<Prepared> {
   phase("env", "start");
   seedEnvFromMain(worktree, log);
   const assembled = await assembleEnv({
@@ -320,7 +321,7 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
   phase("deps", "ok");
 
   phase("sandbox", "start");
-  sandbox = await resolveSandbox({
+  const sandbox = await resolveSandbox({
     worktree,
     requested: spec.sandbox,
     corePort: ports.core,
@@ -394,6 +395,7 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
     portalSessionSecret,
     portalDevPrincipal,
     sandboxEnv: sandbox.env,
+    sandbox,
   };
 }
 
@@ -573,7 +575,7 @@ async function teardown(reason: string): Promise<void> {
     const pid = readPidFile(lock, aux);
     if (pid) await killTree(pid, 3000);
   }
-  if (sandbox?.backend === "local") await destroyLocalDevSandboxes(log);
+  if (specInputs?.sandbox.backend === "local") await destroyLocalDevSandboxes(log);
 }
 
 async function shutdownSelf(removeLock: boolean): Promise<void> {
@@ -772,14 +774,16 @@ async function statusReport(): Promise<StatusReport> {
     bootedAt,
     envSha: currentEnvSha,
     gitSha: currentGitSha,
-    sandbox: sandbox ? { backend: sandbox.backend, detail: sandbox.detail } : { backend: "none", detail: "" },
+    sandbox: specInputs
+      ? { backend: specInputs.sandbox.backend, detail: specInputs.sandbox.detail }
+      : { backend: "none", detail: "" },
     durability: {
       databaseUrl: Boolean(durability.databaseUrl),
     },
     slackEnabled,
     webEnabled: readBootSpec().web !== false,
     watch,
-    publicApiUrl: sandbox?.publicApiUrl ?? null,
+    publicApiUrl: specInputs?.sandbox.publicApiUrl ?? null,
     children: childStatuses,
   };
 }

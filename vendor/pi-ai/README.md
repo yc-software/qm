@@ -1,7 +1,7 @@
-# Vendored pi-ai 0.82.0 (qm.4)
+# Vendored pi-ai 0.82.0 (qm.5)
 
 qm installs `@earendil-works/pi-ai` from the GitHub release
-[`vendored-pi-ai-0.82.0-qm.4`](https://github.com/yc-software/qm/releases/tag/vendored-pi-ai-0.82.0-qm.4),
+[`vendored-pi-ai-0.82.0-qm.5`](https://github.com/yc-software/qm/releases/tag/vendored-pi-ai-0.82.0-qm.5),
 built from stock npm 0.82.0 plus `provider-error.patch`, `served-tier.patch` and `fetch-option.patch` (dist only;
 version unchanged; not sent upstream).
 
@@ -24,6 +24,8 @@ drops it, and prices a reported `fast` at the standard rate. The patch keeps the
 as pi-ai does from 0.99.0, and exports `getServiceTierCostMultiplier` from `api/openai-responses` so qm prices an
 Ultrafast call served at another tier with pi-ai's own rates. openai-codex-responses is left out: its backend reports
 `default` for priority and flex requests, which pi-ai corrects from the requested tier that qm doesn't pass it.
+For anthropic-messages the same field keeps the response's `usage.speed` (`fast` or `standard`), which stock pi-ai drops,
+so qm prices a Claude call at the speed it was served rather than the speed requested.
 
 `fetch-option.patch`: stock 0.82.0 builds its OpenAI and Anthropic SDK clients with the global fetch, so qm can't
 send a custom model provider's calls through its private-network guard. The patch backports the `fetch` stream option
@@ -37,7 +39,7 @@ so there is one pi-ai in the tree.
 
 Rebuild (both are byte-reproducible and verify their inputs' SHA-256):
 
-    vendor/pi-ai/build.sh                 # earendil-works-pi-ai-0.82.0-qm.4.tgz
+    vendor/pi-ai/build.sh                 # earendil-works-pi-ai-0.82.0-qm.5.tgz
     vendor/pi-ai/repack-coding-agent.sh   # earendil-works-pi-coding-agent-0.82.0-qm-security.6.tgz
 
 Drop this directory when qm upgrades past 0.82.0 to a pi-ai that exposes equivalent fields.

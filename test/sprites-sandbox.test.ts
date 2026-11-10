@@ -362,6 +362,47 @@ test("a checkpoint failure is reported and never fails the teardown", async () =
   assert.ok(fake.checkpoints(h.id).length <= 1);
 });
 
+test("a failed checkpoint waits out the interval before it is tried again, across core restarts", async () => {
+  const events: Array<{ code: string }> = [];
+  const options = { initializationStore: testMap(), onError: (e: { code: string }) => events.push(e) };
+  const s = make(options);
+  const h = await s.provision(scope);
+  fake.failCheckpoints(h.id, "Failed to create checkpoint: rename clone: file exists");
+  const attempts = () => fake.calls.filter((c) => c.method === "POST" && c.path.endsWith(`/${h.id}/checkpoint`));
+  await s.teardown(h);
+  await s.teardown(h);
+  const restarted = make(options);
+  await restarted.teardown(await restarted.provision(scope));
+  assert.equal(attempts().length, 1, "the failed attempt throttles the next teardowns, in this core and the next");
+  assert.deepEqual(
+    events.map((e) => e.code),
+    ["checkpoint_failed"],
+  );
+});
+
+test("a run of checkpoint failures is reported once, and again after a success", async () => {
+  const events: Array<{ code: string; message: string }> = [];
+  const s = make({ checkpointIntervalMs: 1, onError: (e: { code: string; message: string }) => events.push(e) });
+  const h = await s.provision(scope);
+  const failures = () => events.filter((e) => e.code === "checkpoint_failed");
+  fake.failCheckpoints(h.id, "file exists");
+  for (let i = 0; i < 3; i++) {
+    await sleep(5);
+    await s.teardown(h);
+  }
+  assert.equal(failures().length, 1, "repeats of the same failure run are not reported again");
+  assert.match(failures()[0]!.message, /file exists/);
+  fake.failCheckpoints(h.id);
+  await sleep(5);
+  await s.teardown(h);
+  assert.equal(fake.checkpoints(h.id).length, 1, "the checkpoint is retried and succeeds once the provider recovers");
+  fake.failCheckpoints(h.id, "fetch failed");
+  await sleep(5);
+  await s.teardown(h);
+  assert.equal(failures().length, 2, "a new failure after a success is reported");
+  assert.match(failures()[1]!.message, /fetch failed/);
+});
+
 test("computerStatus reports checkpoint recovery and a healthy machine whose shell has stopped answering", async () => {
   const h = await sandbox.provision(scope);
   const fresh = await sandbox.computerStatus!(scope);

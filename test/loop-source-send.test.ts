@@ -407,14 +407,14 @@ test("a mention that fell out of the bounded draft history is still disarmed thr
   assert.equal(renderSlackSendText(held, "human kept <!here>"), "human kept @\u200bhere");
 });
 
-test("Gmail sends only through the explicitly bound account, including legacy sent chats", async () => {
-  for (const accountType of ["default", "personal", "company", undefined]) {
+test("Gmail sends only through the explicitly bound account", async () => {
+  for (const accountType of ["default", "personal", "company"]) {
     for (const connected of [true, false]) {
       const requested: (string | undefined)[] = [];
       let sends = 0;
       const bound = item("gmail", {
         sentChat: true,
-        gmail: { threadId: "t", to: ["a@example.com"], ...(accountType ? { accountType } : {}) },
+        gmail: { threadId: "t", to: ["a@example.com"], accountType },
       });
       const result = await gmailAdapter.act(
         {
@@ -422,7 +422,7 @@ test("Gmail sends only through the explicitly bound account, including legacy se
           tokens: {
             connectorAccessToken: async (_host, _owner, slot) => {
               requested.push(slot);
-              if (slot !== (accountType ?? "default")) return "wrong-token";
+              if (slot !== accountType) return "wrong-token";
               return connected ? "bound-token" : null;
             },
           },
@@ -437,7 +437,7 @@ test("Gmail sends only through the explicitly bound account, including legacy se
         { body: "Hello" },
       );
       assert.equal(result.ok, connected);
-      assert.deepEqual(requested, [accountType ?? "default"]);
+      assert.deepEqual(requested, [accountType]);
       assert.equal(sends, connected ? 1 : 0);
     }
   }

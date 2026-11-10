@@ -156,6 +156,8 @@ export interface ComposerSurface {
   fillSuggestedPrompt(prompt: string, agent: Agent): void;
   addAnnotations(text: string, files: File[], annotationId?: string, remove?: boolean): Promise<boolean>;
   sendSuggestedPrompt(prompt: string, agent: Agent): Promise<void>;
+  readyToSend(): boolean;
+  sendText(text: string, agent: Agent): Promise<void>;
   resizeComposer(): void;
   currentModelOption(): ModelOption | undefined;
   followsDefault(): boolean;

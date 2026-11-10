@@ -214,7 +214,7 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
     ...(attestActor ? { attestActor } : {}),
     ...(attestAudience === "any" ? { attestAudience } : {}),
     readOnly: (b.readOnly ?? existing?.readOnly) === true,
-    enabled: b.enabled !== false,
+    enabled: (b.enabled ?? existing?.enabled) !== false,
     updatedAt: Date.now(),
     updatedBy: authorized.id,
   };
