@@ -1,14 +1,13 @@
 import { LRUCache } from "lru-cache";
+import { swallow } from "../../chassis/src/errors";
 import { fetchTranscript, TAIL_TURNS, type TranscriptPage } from "./core-bridge";
 
 const cache = new LRUCache<string, TranscriptPage>({ max: 40 });
 const pendingRefreshes = new Map<string, ReturnType<typeof setTimeout>>();
-let lastOpened: string | null = null;
 
 const CACHE_REFRESH_DEBOUNCE_MS = 1_000;
 
 export function cachedTranscript(id: string): TranscriptPage | undefined {
-  lastOpened = id;
   return cache.get(id);
 }
 
@@ -26,19 +25,17 @@ export function clearTranscriptCache(): void {
   cache.clear();
 }
 
-export function resyncTranscriptCache(): void {
-  const latest = lastOpened;
+export function resyncTranscriptCache(openId: string | null): void {
   clearTranscriptCache();
-  if (latest)
-    fetchTranscript(latest, { tailTurns: TAIL_TURNS }).then(
-      (page) => storeTranscript(latest, page),
-      () => {},
+  if (openId)
+    fetchTranscript(openId, { tailTurns: TAIL_TURNS }).then(
+      (page) => storeTranscript(openId, page),
+      (error: unknown) => swallow("web-ui: resync cached transcript", error),
     );
 }
 
 export function refreshCachedTranscript(id: string): void {
-  if (!cache.has(id)) return;
-  clearTimeout(pendingRefreshes.get(id));
+  if (!cache.has(id) || pendingRefreshes.has(id)) return;
   pendingRefreshes.set(
     id,
     setTimeout(() => {
@@ -48,7 +45,10 @@ export function refreshCachedTranscript(id: string): void {
         (page) => {
           if (cache.has(id)) cache.set(id, page);
         },
-        () => cache.delete(id),
+        (error: unknown) => {
+          cache.delete(id);
+          swallow("web-ui: refresh cached transcript", error);
+        },
       );
     }, CACHE_REFRESH_DEBOUNCE_MS),
   );

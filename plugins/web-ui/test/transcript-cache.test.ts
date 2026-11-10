@@ -201,7 +201,7 @@ test("signing out clears the cache", async () => {
   assert.equal(cache.cachedTranscript("a"), undefined);
 });
 
-test("nudges for a cached chat refresh its tail once after a quiet second", async () => {
+test("a burst of nudges for a cached chat refreshes its tail once, a second later", async () => {
   transcripts.set("a", [entry(0, "first question"), entry(1, "first answer")]);
   await visitThenLeave("a");
   transcripts.get("a")!.push(entry(2, "from another device"), entry(3, "reply"));
@@ -222,11 +222,11 @@ test("nudges for a cached chat refresh its tail once after a quiet second", asyn
   );
 });
 
-test("a stream resync drops the cache and refetches only the last opened chat", async () => {
+test("a stream resync drops the cache and refetches only the open chat", async () => {
   transcripts.set("a", [entry(0, "first question"), entry(1, "first answer")]);
   await visitThenLeave("a");
 
-  cache.resyncTranscriptCache();
+  cache.resyncTranscriptCache("other");
   assert.equal(cache.cachedTranscript("a"), undefined);
   await settle();
 

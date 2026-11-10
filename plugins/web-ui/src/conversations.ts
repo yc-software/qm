@@ -84,7 +84,7 @@ let deliveryStreamOpen = false;
 
 function refreshCachedThread(threadRef: string): void {
   const id = sessionsState.list.find((session) => session.threadRef === threadRef)?.id;
-  if (id) refreshCachedTranscript(id);
+  if (id && ![...live].some((conv) => conv.state.sessionId === id)) refreshCachedTranscript(id);
 }
 
 export function ensureDeliveryStream(): void {
@@ -124,7 +124,7 @@ export function ensureDeliveryStream(): void {
       else for (const conv of live) conv.onDelivery(event.threadRef);
     },
     () => {
-      resyncTranscriptCache();
+      resyncTranscriptCache(main?.state.sessionId ?? null);
       void refreshSessions({ silent: true });
       refreshOpenTrees();
       resyncUiCanvas([...live].map((conv) => conv.state.sessionId));
