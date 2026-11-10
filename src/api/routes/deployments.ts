@@ -956,9 +956,16 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
       return true;
     }
     if (isShellRequest) {
-      if (pathname === "/__claw__/version" && deployment)
-        sendJson(res, 200, { version: deployment.appliedVersion ?? deployment.currentVersion });
-      else if (annotationsEnabled && (pathname === "/__claw__/annotate.js" || pathname === "/__claw__/annotate.css")) {
+      if (pathname === "/__claw__/version" && deployment) {
+        const draft = (await app.deploymentLiveEdit(deployment.id))?.draft;
+        sendJson(res, 200, {
+          version: deployment.appliedVersion ?? deployment.currentVersion,
+          ...(draft ? { live: draft.reloads } : {}),
+        });
+      } else if (
+        annotationsEnabled &&
+        (pathname === "/__claw__/annotate.js" || pathname === "/__claw__/annotate.css")
+      ) {
         const kind = pathname.endsWith(".js") ? "js" : "css";
         res.writeHead(200, {
           "content-type": kind === "js" ? "text/javascript; charset=utf-8" : "text/css; charset=utf-8",
@@ -1426,7 +1433,21 @@ export async function getDeployment(ctx: ApiCtx): Promise<void> {
   const stored = await app.getDeployment(params.id!);
   const permission = stored ? await app.deploymentGitPermissionFor(stored.id, principalId) : null;
   if (!stored || !permission) return sendJson(res, 404, { error: "not_found" });
-  const deployment = { ...deploymentView(stored), permission, webUrl: webUrlOf(stored.id) };
+  const draft = permission === "write" ? (await app.deploymentLiveEdit(stored.id))?.draft : null;
+  const deployment = {
+    ...deploymentView(stored),
+    permission,
+    webUrl: webUrlOf(stored.id),
+    ...(draft
+      ? {
+          savedEdits: {
+            savedAt: draft.savedAt,
+            ...(draft.publishAt ? { publishAt: draft.publishAt } : {}),
+            ...(draft.failure ? { publishFailure: draft.failure } : {}),
+          },
+        }
+      : {}),
+  };
   if (!secret) return sendJson(res, 200, { deployment });
   const git = await app.deploymentGitUrlFor(deployment.id, principalId, { secret, baseUrl: gitUrlBase(ctx) });
   return sendJson(res, 200, { deployment: git ? { ...deployment, gitUrl: git.url } : deployment });

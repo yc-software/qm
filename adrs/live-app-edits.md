@@ -1,0 +1,13 @@
+# Live edits for published apps
+
+Republishing an app used to rebuild and restart it, so every change took 30–60 s to show. People editing an app beside its chat should see a change within moments, never pick between an edit mode and a publish mode, and still get versions they can roll back to.
+
+## Contract
+
+- Republishing a running app with the same entrypoint, env and home files, or pushing to its git remote, is a **save**, when the deploy provider implements `liveEdit`. Core diffs the files against the app's saved source, commits them to the app's git store at once and moves its `current` ref, so the next clone starts from the edits. It records a draft in `deployment_drafts` and has the provider write only the changed files into the running app. No version is created.
+- If the app's `package.json` has a `dev` script, a save runs the app with `npm install --no-audit --no-fund && npm run dev` instead of its entrypoint, so a dev server that serves on `$PORT` hot-reloads open tabs. Otherwise each save restarts the entrypoint. The first save, and every restart, bumps the draft's reload counter, which the app shell polls and answers with one reload.
+- Two minutes after the last save, a leader-only sweep publishes the draft: it starts the production entrypoint on the saved commit (no restart when the app already runs it), records it as a new version and drops the draft. If that start fails, the app goes back to the saved edits, the draft keeps the failure and waits for the next save, and the app's chat is told on its next turn. The app's chat is also told that a save shows at once and that the version follows two minutes later, so it does not republish to force a version.
+- Anything that re-places the app (a replaced or rotated microVM, a restore) places the saved edits, never an older version. A full publish (new entrypoint, env or home files) or a rollback discards the draft.
+- Saves need the same permission as publishing. People who may publish see a pending save in the deployment view as `savedEdits` (`savedAt`, `publishAt`, and `publishFailure` with the whole error); the app's chat header carries the last lines of a failure.
+
+Providers without `liveEdit` keep publishing a version for every change.

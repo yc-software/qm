@@ -45,11 +45,16 @@ async function fixture(t: TestContext, appSource?: string, entrypoint = "node ap
   const root = await mkdtemp(join(tmpdir(), "qm-render-runner-"));
   await chmod(root, 0o755);
   const backings = testDeployBackings();
-  const { deployments } = backings;
+  const { deployments, drafts } = backings;
   const archiveStore = testMap<DeployGitArchive>();
   const credentials = testMap<StoredRenderDeployCredential>();
   const gitDir = join(root, "writer");
-  const deployStore = createDeployStore({ deployments, git: { repoRoot: gitDir, archiveStore }, pg: backings.pg });
+  const deployStore = createDeployStore({
+    deployments,
+    drafts,
+    git: { repoRoot: gitDir, archiveStore },
+    pg: backings.pg,
+  });
   const d = await deployStore.create({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -85,6 +90,7 @@ bypass.listen(Number(process.env.QM_QA_GATEWAY_PORT), "0.0.0.0");`,
   });
   const readerStore = createDeployStore({
     deployments,
+    drafts,
     git: { repoRoot: join(root, "reader"), archiveStore },
     pg: backings.pg,
   });

@@ -166,7 +166,12 @@ import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
 import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-store.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
-import { createDeployStore, deployTouchDebounceMs, type Deployment } from "./deploy/deploy-store.ts";
+import {
+  createDeployStore,
+  deployTouchDebounceMs,
+  type Deployment,
+  type DeploymentDraft,
+} from "./deploy/deploy-store.ts";
 import { viewerIdentityKey } from "./deploy/access-token.ts";
 import { deploymentCredentialSlugs } from "./deploy/deployment-credentials.ts";
 import { createDockerDeployProvider } from "./deploy/docker-deploy-provider.ts";
@@ -1693,6 +1698,7 @@ export function buildApp(
   };
   const deployStore = createDeployStore({
     deployments: pgArtifactMap.map<Deployment>("deployments", undefined, DEPLOYMENT_TABLES),
+    drafts: artifactMap<DeploymentDraft>("deployment_drafts"),
     pg: pgArtifactMap.pool,
     touchDebounceMs: deployTouchDebounceMs(config.deployIdleTtlMs),
     git: {
@@ -2937,6 +2943,7 @@ export function buildApp(
       : null;
   const DEPLOY_MAINTENANCE_INTERVAL_MS = 5 * 60_000;
   const deployMaintenanceSweeper = createSweeper(() => app.maintainDeployments(), DEPLOY_MAINTENANCE_INTERVAL_MS);
+  const liveEditPublishSweeper = createSweeper(() => app.publishDueLiveEdits(), 10_000);
   const deepIdleMachineMs = config.deepIdleMachineMs;
   const devIdleMachineMs = config.devIdleMachineMs;
   const SANDBOX_MAINTENANCE_INTERVAL_MS = 5 * 60_000;
@@ -2983,6 +2990,7 @@ export function buildApp(
       fileUploads?.start();
       idleSweeper?.start();
       deployMaintenanceSweeper.start();
+      liveEditPublishSweeper.start();
       deepIdleSweeper?.start();
       wakeSweep.start();
       swarms?.start();
@@ -3017,6 +3025,7 @@ export function buildApp(
       skillSyncEngine.stop(),
       idleSweeper?.stop(),
       deployMaintenanceSweeper.stop(),
+      liveEditPublishSweeper.stop(),
       deepIdleSweeper?.stop(),
       blobSweeper.stop(),
       composioReturnSweeper.stop(),

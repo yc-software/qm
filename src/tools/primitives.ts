@@ -56,6 +56,7 @@ import type { MonitorBroker, BackgroundWatchResult, BackgroundUnwatchResult } fr
 import { deploymentEntrypoint, type DeployService, type DeployFile } from "../deploy/deploy-service.ts";
 import { appUrlOf } from "../deploy/deploy-store.ts";
 import { carriesGitMetadata } from "../deploy/deploy-fs.ts";
+import type { LiveEditSaved } from "../deploy/live-edits.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import type { OutboundFile } from "../core/attachments.ts";
@@ -123,6 +124,7 @@ interface PublishResult {
   alwaysOn?: boolean;
   embedAncestors?: string[];
   public?: boolean;
+  liveEdit?: LiveEditSaved;
 }
 
 export class NeedsApproval extends Error {
@@ -1096,6 +1098,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         ...(d.alwaysOn ? { alwaysOn: true } : {}),
         ...(d.embedAncestors?.length ? { embedAncestors: d.embedAncestors } : {}),
         ...(d.public ? { public: true } : {}),
+        ...(d.liveEdit ? { liveEdit: d.liveEdit } : {}),
       };
     },
 
