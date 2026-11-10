@@ -18,12 +18,7 @@ import {
 } from "./model-overlay.ts";
 import { MODEL_REGISTRY, type ModelEntry } from "./model-registry.ts";
 import { MODEL_PROVIDERS, providerBaseUrl, type ModelProvider } from "./provider-endpoints.ts";
-import {
-  type CustomRuntimeModel,
-  customModelCatalog,
-  isCustomModelId,
-  resolveCustomModel,
-} from "./custom-providers.ts";
+import { type CustomRuntimeModel, isCustomModelId, resolveCustomModel } from "./custom-providers.ts";
 import type { ProviderKeys } from "./model-runtime.ts";
 
 const getModel = getBuiltinModel as unknown as (provider: string, id: string) => Model<Api> | undefined;
@@ -151,7 +146,6 @@ export function defaultWebuiModelIds(): readonly string[] {
     ...chatOverlays()
       .filter((m) => m.webui)
       .map((m) => m.id),
-    ...customModelCatalog().map((m) => m.id),
   ];
 }
 

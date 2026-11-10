@@ -6,7 +6,6 @@ import {
   turnModelOptions,
 } from "../src/agent/runtime-choice.ts";
 import { validateWebTurnModelOptions } from "../src/api/runtime-config.ts";
-import { setCustomProviders } from "../src/model/custom-providers.ts";
 
 test("triggered turns default to extra-high thinking and non-fast mode", () => {
   assert.deepEqual(turnModelOptions({ triggered: true }), {
@@ -40,21 +39,4 @@ test("a triggered turn with an explicit low thinking level overrides the xhigh t
     thinkingLevel: "low",
     fastMode: NON_INTERACTIVE_FAST_MODE,
   });
-});
-
-test("custom-provider models listed in the web picker are accepted on web turns", () => {
-  setCustomProviders([
-    {
-      id: "lab",
-      name: "Lab",
-      protocol: "anthropic",
-      baseUrl: "https://lab.example.com",
-      models: [{ id: "probe", name: "Probe" }],
-    },
-  ]);
-  try {
-    assert.equal(validateWebTurnModelOptions({ model: "custom/lab/probe" }, null), null);
-  } finally {
-    setCustomProviders([]);
-  }
 });
