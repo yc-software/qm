@@ -104,7 +104,7 @@ export function appLabelLimitError(handle: string | undefined, ref: string): str
 export function appNameFromLabel(label: string, handle: string | undefined): string | undefined {
   if (!handle) return label;
   const split = splitAppLabel(label);
-  return split?.handle === handle ? split.name : undefined;
+  return split?.handle === handle ? split.name : label;
 }
 
 export function labelOfAppHost(host: string | undefined, appsDomain: string | undefined): string | undefined {
@@ -113,3 +113,20 @@ export function labelOfAppHost(host: string | undefined, appsDomain: string | un
   const suffix = `.${appsDomain.toLowerCase()}`;
   return bare.endsWith(suffix) ? bare.slice(0, -suffix.length) : undefined;
 }
+
+export const TENANT_APP_HOSTS_LEGACY_NAMES: PgMigrationDefinition = {
+  id: "0000-tenancy/tenant-app-hosts-legacy-names",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `DO $app_hosts$ BEGIN EXECUTE format($sql$CREATE OR REPLACE FUNCTION qm_tenant_for_app_host(label text) RETURNS uuid LANGUAGE plpgsql STABLE SECURITY DEFINER
+  SET search_path = %1$I, pg_temp AS $f$
+  DECLARE found uuid;
+  BEGIN
+    IF strpos(label, '-') > 1 THEN
+      found := qm_tenant_for_app_handle(split_part(label, '-', 1));
+      IF found IS NOT NULL THEN RETURN found; END IF;
+    END IF;
+    RETURN qm_tenant_for_deployment(label);
+  END $f$$sql$, current_schema()); END $app_hosts$`,
+  ],
+};

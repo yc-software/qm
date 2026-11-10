@@ -553,7 +553,8 @@ export function createTurnMethods(
         ({ tenantId, ...event }) => {
           if (tenant && tenantId && tenantId !== tenant) return;
           const owner = tenantId ?? tenant;
-          queue(async () => cb(await (owner ? withTenant(owner, () => rehydrate(event)) : rehydrate(event))));
+          const deliver = async () => cb(await rehydrate(event));
+          queue(() => (owner ? withTenant(owner, deliver) : deliver()));
         },
         onResync ? { onResync: () => queue(onResync) } : undefined,
       );
@@ -584,12 +585,14 @@ export function createTurnMethods(
     },
 
     subscribeRun(runId, listener, onResync) {
+      const tenant = boundTenant();
+      const bound = <T>(fn: () => T): T => (tenant ? withTenant(tenant, fn) : fn());
       return (
         deps.runStreamEvents?.subscribe(
           (event) => {
-            if (event.runId === runId) listener(event);
+            if (event.runId === runId) bound(() => listener(event));
           },
-          { onResync },
+          { onResync: onResync && (() => bound(onResync)) },
         ) ?? (() => {})
       );
     },
