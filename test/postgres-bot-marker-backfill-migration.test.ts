@@ -5,12 +5,13 @@ import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresUserStore } from "../src/identity/user-store.ts";
 import { BACKFILL_BOT_MARKER_MIGRATION } from "../src/triggers/trigger-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 test("the bot marker backfill marks what a Slack app user made and nothing a person made", async () => {
   const url = testDatabaseUrl();
   const users = createPostgresUserStore(url);
-  for (const id of ["release-bot", "U1"]) await users.record({ id, source: "turn", at: Date.now() });
-  await users.markApps(["release-bot"]);
+  for (const id of ["release-bot", "U1"]) await users.record(testTenant, { id, source: "turn", at: Date.now() });
+  await users.markApps(testTenant, ["release-bot"]);
   const maps = createPostgresMapFactory(url);
   const creators = {
     crons: "createdBy",

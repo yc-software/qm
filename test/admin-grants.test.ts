@@ -222,7 +222,7 @@ test("granting admin puts the person on the roster first, so a failed roster wri
   const svc = createAdminService(testAdminGrantStore(), { users: testUsers() });
   const admin = { id: "admin-alice", type: "internal" as const };
   await svc.createGrant(tenant, admin, { principalId: "new-admin", role: "org_admin", scopeId: "org:default-org" });
-  assert.equal((await svc.users.get("new-admin"))?.source, "admin");
+  assert.equal((await svc.users.get(tenant, "new-admin"))?.source, "admin");
 
   const failing = createAdminService(testAdminGrantStore(), {
     users: {

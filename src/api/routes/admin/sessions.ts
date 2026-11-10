@@ -12,7 +12,8 @@ import { createTranscriptSource } from "../../../sessions/transcript-source.ts";
 import { isUserItem, type Item } from "../../../sessions/items.ts";
 import { sendJson } from "../../http.ts";
 import { audit, requireScopedAdmin } from "../shared.ts";
-import { type ApiCtx } from "../route.ts";
+import type { Tenant } from "../../../tenants/context.ts";
+import { tenantOf, type ApiCtx } from "../route.ts";
 import { requireScopedResource } from "./common.ts";
 import { activityCounts, scopeActivity } from "./scope-activity.ts";
 import { deliveryOrigin, parseSessionWakeRef, sessionKind, sessionOrigin, type AdminSessionOrigin } from "./origins.ts";
@@ -21,16 +22,26 @@ const SESSIONS_PAGE_LIMIT_MAX = 200;
 const SESSIONS_PAGE_LIMIT_DEFAULT = 50;
 const TRANSCRIPT_LIMIT_MAX = 50000;
 const TRANSCRIPT_LIMIT_DEFAULT = 500;
-async function displayNameForPrincipal(app: App, deps: ServerDeps, principalId: string): Promise<string> {
+async function displayNameForPrincipal(
+  app: App,
+  deps: ServerDeps,
+  tenant: Tenant,
+  principalId: string,
+): Promise<string> {
   const member = await app.directoryMember(principalId);
-  const user = await deps.users?.get(principalId).catch(() => null);
+  const user = await deps.users?.get(tenant, principalId).catch(() => null);
   return personLabel(principalId, { displayName: member?.displayName, user });
 }
 
-async function inferSingleParticipantName(app: App, deps: ServerDeps, sessionId: string): Promise<string | null> {
+async function inferSingleParticipantName(
+  app: App,
+  deps: ServerDeps,
+  tenant: Tenant,
+  sessionId: string,
+): Promise<string | null> {
   const participantIds = new Set((await deps.sessions?.participantsOf(sessionId)) ?? []);
   if (participantIds.size !== 1) return null;
-  return displayNameForPrincipal(app, deps, [...participantIds][0]!);
+  return displayNameForPrincipal(app, deps, tenant, [...participantIds][0]!);
 }
 
 function withSpeakerName(item: Item, name: string): Item {
@@ -39,8 +50,14 @@ function withSpeakerName(item: Item, name: string): Item {
   return { ...item, body: { ...item.body, name } };
 }
 
-async function labelTranscriptItems(app: App, deps: ServerDeps, session: Session, items: Item[]): Promise<Item[]> {
-  const fallbackName = await inferSingleParticipantName(app, deps, session.id);
+async function labelTranscriptItems(
+  app: App,
+  deps: ServerDeps,
+  tenant: Tenant,
+  session: Session,
+  items: Item[],
+): Promise<Item[]> {
+  const fallbackName = await inferSingleParticipantName(app, deps, tenant, session.id);
   if (!fallbackName) return items;
   return items.map((item) => withSpeakerName(item, fallbackName));
 }
@@ -255,7 +272,13 @@ export async function getAdminSession(ctx: ApiCtx): Promise<void> {
     ? (await createTranscriptSource(deps.sessions).forRender(id, all ? undefined : { limit: limit + 1 })).items
     : [];
   const hasMore = !all && raw.length > limit;
-  const items = await labelTranscriptItems(app, deps, session, hasMore ? raw.slice(raw.length - limit) : raw);
+  const items = await labelTranscriptItems(
+    app,
+    deps,
+    tenantOf(ctx),
+    session,
+    hasMore ? raw.slice(raw.length - limit) : raw,
+  );
   const recipientDeliveries = deps.deliveries
     ? await deps.deliveries.listByRecipientThread(session.threadRef, { limit: 100 })
     : [];

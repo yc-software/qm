@@ -32,8 +32,8 @@ const directory = createPostgresDirectoryStore(appUrl(databaseUrl));
 const users = createPostgresUserStore(appUrl(databaseUrl));
 
 const signIn = (tenant: string, alias: string, person: string) =>
-  withTenant(tenant, () =>
-    users.link({ principalId: alias, canonicalId: person, evidence: "sso", linkedBy: "", createdAt: 0 }),
+  withTenant(tenant, (t) =>
+    users.link(t, { principalId: alias, canonicalId: person, evidence: "sso", linkedBy: "", createdAt: 0 }),
   );
 
 async function member(tenant: string, principal: string, type = "internal"): Promise<void> {
@@ -151,7 +151,7 @@ test("a company admin or user is found by email or sign-in principal, directly o
     await signIn(alpha, "oidc:issuer:elsewhere", "linked@copied.test");
     await signIn(beta, "oidc:issuer:user", "user@copied.test");
     await signIn(alpha, "oidc:issuer:leaver", "leaver@copied.test");
-    await withTenant(alpha, () => users.markOffboarded("leaver@copied.test", "linked@copied.test"));
+    await withTenant(alpha, (t) => users.markOffboarded(t, "leaver@copied.test", "linked@copied.test"));
     try {
       assert.deepEqual(await directory.tenantsForEmail!("founder@copied.test"), [{ id: alpha, brandName: "Alpha" }]);
       assert.deepEqual(await directory.tenantsForEmail!("User@Copied.test"), [{ id: beta }]);
@@ -354,5 +354,5 @@ test("the portal stores a signed-in person's name in their own tenant, and the c
       { "x-portal-identity": await as(oidc, beta) },
     );
     assert.equal(blank.status, 400);
-    assert.equal(await withTenant(alpha, async () => (await users.get(oidc))?.displayName), undefined);
+    assert.equal(await withTenant(alpha, async (t) => (await users.get(t, oidc))?.displayName), undefined);
   }));

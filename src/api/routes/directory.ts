@@ -36,7 +36,7 @@ async function canonicalPrincipal(ctx: ApiCtx): Promise<void> {
   if (!id) return sendJson(res, 404, { error: "not_found" });
   await deps.identity?.refresh();
   const canonicalId = canonicalPerson(id);
-  const user = await deps.users?.get(canonicalId);
+  const user = await deps.users?.get(tenantOf(ctx), canonicalId);
   const label = personLabel(canonicalId, { user });
   return sendJson(res, 200, {
     principalId: id,
@@ -54,7 +54,7 @@ async function recordProfile(ctx: ApiCtx): Promise<void> {
   const displayName = cleanDisplayName(b.displayName);
   if (!principalId || !displayName)
     return sendJson(res, 400, { error: "bad_request", message: "principalId and displayName required" });
-  const changed = await deps.users.setDisplayName(canonicalPerson(principalId), displayName);
+  const changed = await deps.users.setDisplayName(tenantOf(ctx), canonicalPerson(principalId), displayName);
   return sendJson(res, 200, { ok: true, changed });
 }
 

@@ -1,4 +1,5 @@
 import { perTenant } from "../tenants/cache.ts";
+import { ambientTenant } from "../tenants/context.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createTtlRefresh } from "../util/async.ts";
 import { foldPrincipalId, type PrincipalLinkResolver } from "../directory/person.ts";
@@ -36,10 +37,11 @@ function validId(value: unknown): value is string {
 }
 
 export function createPrincipalLinkService(store: UserLinkStore, lock: AdvisoryLock): PrincipalLinkService {
+  const tenant = () => ambientTenant();
   const links = perTenant(() => ({
     byAlias: new Map<string, UserLink>(),
     byCanonical: new Map<string, UserLink[]>(),
-    refresh: createTtlRefresh(REFRESH_TTL_MS, async () => index(await store.links())),
+    refresh: createTtlRefresh(REFRESH_TTL_MS, async () => index(await store.links(tenant()))),
   }));
 
   function index(rows: UserLink[]): void {
@@ -105,7 +107,7 @@ export function createPrincipalLinkService(store: UserLinkStore, lock: AdvisoryL
             400,
             `${principalId} is the canonical principal of other links; unlink those first`,
           );
-        const stored = await store.link({
+        const stored = await store.link(tenant(), {
           principalId: aliasKey,
           canonicalId: canonicalKey,
           evidence,
@@ -120,7 +122,7 @@ export function createPrincipalLinkService(store: UserLinkStore, lock: AdvisoryL
     },
     async unlink(principalId) {
       return lock.withLock("principal-links", async () => {
-        const row = await store.unlink(foldPrincipalId(principalId));
+        const row = await store.unlink(tenant(), foldPrincipalId(principalId));
         await refresh(true);
         return row;
       });

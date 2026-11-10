@@ -13,7 +13,7 @@ import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { assertLateJoinerScopes, assertLeanListing } from "./support/participant-scopes.ts";
 import { assertParticipantSessionParity } from "./support/participant-session-parity.ts";
 import { assertSpendRollupParity } from "./support/spend-rollup-parity.ts";
-import { seedTestTenant } from "./support/test-tenant.ts";
+import { seedTestTenant, testTenant } from "./support/test-tenant.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres store tests";
@@ -1324,7 +1324,7 @@ test("pg null-byte payloads: stripped on write and counted alongside raw items",
   } finally {
     await raw.end();
   }
-  const activity = (await createPostgresUserStore(URL!).activity()).find((r) => r.principalId === "NUL1");
+  const activity = (await createPostgresUserStore(URL!).activity(testTenant)).find((r) => r.principalId === "NUL1");
   assert.equal(activity?.turns, 2, "both user turns counted");
   const lease2 = { sessionId: a.id };
   await s.append(lease2, { kind: "UserMessage", text: "z" });

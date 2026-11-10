@@ -1,12 +1,13 @@
 import type { PoolClient } from "pg";
-import { createPgPool, withPgTransaction, type PgMigrationDefinition } from "../persistence/pg-pool.ts";
+import { createPgPool, type PgMigrationDefinition } from "../persistence/pg-pool.ts";
+import type { Tenant } from "../tenants/context.ts";
 import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { SESSION_MIGRATIONS } from "../sessions/session-schema.ts";
-import { authoredUserTurn, msOf, TENANT } from "../sessions/items.ts";
+import { authoredUserTurn, msOf } from "../sessions/items.ts";
 import { foldPrincipalId } from "../directory/person.ts";
 import { PERSONA_MIGRATIONS } from "../personas/persona-schema.ts";
 import { PERSONA_TENANCY } from "../personas/persona-tenancy.ts";
-import { fold, tenantedUsers, ts, USERS_SCHEMA } from "./user-tenancy.ts";
+import { fold, tenantedUsers, ts, userOf as aliasUser, USERS_SCHEMA } from "./user-tenancy.ts";
 
 export { fold };
 
@@ -44,9 +45,9 @@ export interface UserActivity {
 }
 
 export interface UserLinkStore {
-  links(): Promise<UserLink[]>;
-  link(link: UserLink): Promise<UserLink>;
-  unlink(aliasId: string): Promise<UserLink | null>;
+  links(tenant: Tenant): Promise<UserLink[]>;
+  link(tenant: Tenant, link: UserLink): Promise<UserLink>;
+  unlink(tenant: Tenant, aliasId: string): Promise<UserLink | null>;
 }
 
 interface SeenPerson {
@@ -56,15 +57,15 @@ interface SeenPerson {
 }
 
 export interface UserStore extends UserLinkStore {
-  list(): Promise<UserRecord[]>;
-  get(idOrAlias: string): Promise<UserRecord | null>;
-  resolve(aliases: readonly string[]): Promise<Map<string, UserRecord>>;
-  activity(): Promise<UserActivity[]>;
-  record(person: SeenPerson): Promise<boolean>;
-  markOffboarded(id: string, by: string): Promise<UserRecord>;
-  markReactivated(id: string): Promise<UserRecord | null>;
-  markApps(ids: readonly string[]): Promise<number>;
-  setDisplayName(alias: string, name: string): Promise<boolean>;
+  list(tenant: Tenant): Promise<UserRecord[]>;
+  get(tenant: Tenant, idOrAlias: string): Promise<UserRecord | null>;
+  resolve(tenant: Tenant, aliases: readonly string[]): Promise<Map<string, UserRecord>>;
+  activity(tenant: Tenant): Promise<UserActivity[]>;
+  record(tenant: Tenant, person: SeenPerson): Promise<boolean>;
+  markOffboarded(tenant: Tenant, id: string, by: string): Promise<UserRecord>;
+  markReactivated(tenant: Tenant, id: string): Promise<UserRecord | null>;
+  markApps(tenant: Tenant, ids: readonly string[]): Promise<number>;
+  setDisplayName(tenant: Tenant, alias: string, name: string): Promise<boolean>;
 }
 
 const DISPLAY_NAME_MAX = 200;
@@ -257,14 +258,15 @@ export const USER_SCHEMA_MIGRATIONS: PgMigrationDefinition[] = [
 ].sort((a, b) => Number(a.id > b.id) - Number(a.id < b.id));
 
 const COLUMNS = `u.id, u.primary_alias, u.kind,
-  ARRAY(SELECT a.alias_id FROM user_links a WHERE a.user_id = u.id
+  ARRAY(SELECT a.alias_id FROM user_links a WHERE a.tenant_id = u.tenant_id AND a.user_id = u.id
          ORDER BY a.alias_id = u.primary_alias DESC, a.created_at, a.alias_id) AS aliases, ${msOf("u.first_seen_at")} AS first_seen_at, u.source,
   ${msOf("u.offboarded_at")} AS offboarded_at,
-  (SELECT b.primary_alias FROM users b WHERE b.id = u.offboarded_by) AS offboarded_by, u.display_name`;
+  (SELECT b.primary_alias FROM users b WHERE b.tenant_id = u.tenant_id AND b.id = u.offboarded_by) AS offboarded_by,
+  u.display_name`;
 const LINK_SELECT = `SELECT l.alias_id, u.primary_alias AS canonical_id, l.evidence,
-    coalesce((SELECT b.primary_alias FROM users b WHERE b.id = l.linked_by), '') AS linked_by,
+    coalesce((SELECT b.primary_alias FROM users b WHERE b.tenant_id = l.tenant_id AND b.id = l.linked_by), '') AS linked_by,
     ${msOf("l.created_at")} AS created_at
-  FROM user_links l JOIN users u ON u.id = l.user_id`;
+  FROM user_links l JOIN users u ON u.tenant_id = l.tenant_id AND u.id = l.user_id`;
 
 function toRecord(r: Record<string, unknown>): UserRecord {
   return {
@@ -294,25 +296,25 @@ const ACTIVITY = `
     SELECT ${fold("e.author")} AS alias, (${msOf("e.created_at")} / 86400000)::bigint AS day, COUNT(*) AS turns,
            ${msOf("MAX(e.created_at)")} AS last_at
       FROM items e
-     WHERE e.tenant_id = ${TENANT} AND ${authoredUserTurn("e")}
+     WHERE e.tenant_id = $1 AND ${authoredUserTurn("e")}
      GROUP BY 1, 2
   ), turns AS (
     SELECT coalesce(l.user_id::text, d.alias) AS who, d.day, SUM(d.turns) AS turns, MAX(d.last_at) AS last_at
-      FROM daily d LEFT JOIN user_links l ON l.alias_id = d.alias
+      FROM daily d LEFT JOIN user_links l ON l.tenant_id = $1 AND l.alias_id = d.alias
      GROUP BY 1, 2
   ), per AS (
     SELECT who, SUM(turns) AS turns, MAX(last_at) AS last_at, array_agg(day ORDER BY day) AS days
       FROM turns GROUP BY who
   ), member AS (
     SELECT coalesce(l.user_id::text, ${fold("p.principal_id")}) AS who, l.user_id, COUNT(DISTINCT p.session_id) AS sessions
-      FROM participants p LEFT JOIN user_links l ON l.alias_id = ${fold("p.principal_id")}
-     WHERE coalesce(btrim(p.principal_id), '') <> ''
+      FROM participants p LEFT JOIN user_links l ON l.tenant_id = p.tenant_id AND l.alias_id = ${fold("p.principal_id")}
+     WHERE p.tenant_id = $1 AND coalesce(btrim(p.principal_id), '') <> ''
      GROUP BY 1, 2
   )
   SELECT m.user_id, coalesce(u.primary_alias, m.who) AS principal_id, coalesce(u.kind, 'person') AS kind,
          m.sessions, coalesce(per.turns, 0) AS turns, per.last_at, per.days
     FROM member m
-    LEFT JOIN users u ON u.id = m.user_id
+    LEFT JOIN users u ON u.tenant_id = $1 AND u.id = m.user_id
     LEFT JOIN per ON per.who = m.who`;
 
 function toActivity(r: Record<string, unknown>): UserActivity {
@@ -334,48 +336,53 @@ const onClient =
   async (text, params) =>
     (await client.query(text, params)).rows;
 
-async function findUser(q: Query, alias: string): Promise<string | undefined> {
-  return (await q(`SELECT user_id FROM user_links WHERE alias_id = $1`, [alias]))[0]?.user_id as string | undefined;
+async function findUser(q: Query, tenant: Tenant, alias: string): Promise<string | undefined> {
+  return (await q(`SELECT user_id FROM user_links WHERE tenant_id = $1 AND alias_id = $2`, [tenant.id, alias]))[0]
+    ?.user_id as string | undefined;
 }
 
-export async function ensureUserIn(client: PoolClient, alias: string): Promise<string> {
+export async function ensureUserIn(client: PoolClient, tenant: Tenant, alias: string): Promise<string> {
   const q = onClient(client);
-  const found = await findUser(q, alias);
+  const found = await findUser(q, tenant, alias);
   if (found) return found;
   const created = (
     await q(
-      `INSERT INTO users(primary_alias) VALUES ($1) ON CONFLICT (tenant_id, primary_alias) DO NOTHING RETURNING id`,
-      [alias],
+      `INSERT INTO users(tenant_id, primary_alias) VALUES ($1, $2)
+       ON CONFLICT (tenant_id, primary_alias) DO NOTHING RETURNING id`,
+      [tenant.id, alias],
     )
   )[0]?.id as string | undefined;
   if (created) {
     const linked = await q(
-      `INSERT INTO user_links(alias_id, user_id, evidence, created_at) VALUES ($1, $2, 'primary', now())
+      `INSERT INTO user_links(tenant_id, alias_id, user_id, evidence, created_at) VALUES ($1, $2, $3, 'primary', now())
        ON CONFLICT (tenant_id, alias_id) DO NOTHING RETURNING alias_id`,
-      [alias, created],
+      [tenant.id, alias, created],
     );
     if (linked.length) return created;
-    await q(`DELETE FROM users WHERE id = $1`, [created]);
+    await q(`DELETE FROM users WHERE tenant_id = $1 AND id = $2`, [tenant.id, created]);
   }
-  const winner = await findUser(q, alias);
+  const winner = await findUser(q, tenant, alias);
   if (!winner) throw new Error(`users: could not resolve or create a user for ${alias}`);
   return winner;
 }
 
-async function linkInTransaction(client: PoolClient, link: UserLink): Promise<UserLink> {
+async function linkInTransaction(client: PoolClient, tenant: Tenant, link: UserLink): Promise<UserLink> {
   const q = onClient(client);
+  const linkOf = async (alias: string) =>
+    toLink((await q(`${LINK_SELECT} WHERE l.tenant_id = $1 AND l.alias_id = $2`, [tenant.id, alias]))[0]!);
   await q(`LOCK TABLE user_links IN SHARE ROW EXCLUSIVE MODE`);
-  const target = await ensureUserIn(client, link.canonicalId);
+  const target = await ensureUserIn(client, tenant, link.canonicalId);
   const current = (
     await q(
       `SELECT l.user_id, u.primary_alias = l.alias_id AS is_primary,
-              (SELECT count(*) FROM user_links o WHERE o.user_id = l.user_id) AS aliases
-         FROM user_links l JOIN users u ON u.id = l.user_id WHERE l.alias_id = $1`,
-      [link.principalId],
+              (SELECT count(*) FROM user_links o WHERE o.tenant_id = l.tenant_id AND o.user_id = l.user_id) AS aliases
+         FROM user_links l JOIN users u ON u.tenant_id = l.tenant_id AND u.id = l.user_id
+        WHERE l.tenant_id = $1 AND l.alias_id = $2`,
+      [tenant.id, link.principalId],
     )
   )[0];
   if (current && (current.user_id === target || !current.is_primary || Number(current.aliases) > 1)) {
-    return toLink((await q(`${LINK_SELECT} WHERE l.alias_id = $1`, [link.principalId]))[0]!);
+    return linkOf(link.principalId);
   }
   if (current) {
     const source = current.user_id as string;
@@ -388,22 +395,24 @@ async function linkInTransaction(client: PoolClient, link: UserLink): Promise<Us
          offboarded_by = CASE WHEN a.offboarded_at < c.offboarded_at OR c.offboarded_at IS NULL
                               THEN a.offboarded_by ELSE c.offboarded_by END,
          display_name = coalesce(c.display_name, a.display_name)
-       FROM users a WHERE c.id = $1 AND a.id = $2`,
-      [target, source],
+       FROM users a WHERE c.tenant_id = $1 AND a.tenant_id = $1 AND c.id = $2 AND a.id = $3`,
+      [tenant.id, target, source],
     );
-    await q(`UPDATE users SET offboarded_by = $1 WHERE offboarded_by = $2`, [target, source]);
-    await q(`UPDATE user_links SET linked_by = $1 WHERE linked_by = $2`, [target, source]);
-    await q(`UPDATE personas SET created_by = $1 WHERE created_by = $2`, [target, source]);
-    await q(`UPDATE persona_access SET granted_by = $1 WHERE granted_by = $2`, [target, source]);
-    await q(`UPDATE persona_versions SET edited_by = $1 WHERE edited_by = $2`, [target, source]);
-    await q(`DELETE FROM users WHERE id = $1`, [source]);
+    const args = [tenant.id, target, source];
+    await q(`UPDATE users SET offboarded_by = $2 WHERE tenant_id = $1 AND offboarded_by = $3`, args);
+    await q(`UPDATE user_links SET linked_by = $2 WHERE tenant_id = $1 AND linked_by = $3`, args);
+    await q(`UPDATE personas SET created_by = $2 WHERE tenant_id = $1 AND created_by = $3`, args);
+    await q(`UPDATE persona_access SET granted_by = $2 WHERE tenant_id = $1 AND granted_by = $3`, args);
+    await q(`UPDATE persona_versions SET edited_by = $2 WHERE tenant_id = $1 AND edited_by = $3`, args);
+    await q(`DELETE FROM users WHERE tenant_id = $1 AND id = $2`, [tenant.id, source]);
   }
-  const linkedBy = link.linkedBy ? await ensureUserIn(client, foldPrincipalId(link.linkedBy)) : null;
+  const linkedBy = link.linkedBy ? await ensureUserIn(client, tenant, foldPrincipalId(link.linkedBy)) : null;
   await q(
-    `INSERT INTO user_links(alias_id, user_id, evidence, linked_by, created_at) VALUES ($1, $2, $3, $4, ${ts("$5")})`,
-    [link.principalId, target, link.evidence, linkedBy, link.createdAt],
+    `INSERT INTO user_links(tenant_id, alias_id, user_id, evidence, linked_by, created_at)
+     VALUES ($1, $2, $3, $4, $5, ${ts("$6")})`,
+    [tenant.id, link.principalId, target, link.evidence, linkedBy, link.createdAt],
   );
-  return toLink((await q(`${LINK_SELECT} WHERE l.alias_id = $1`, [link.principalId]))[0]!);
+  return linkOf(link.principalId);
 }
 
 export function createPostgresUserStore(connectionString: string): UserStore {
@@ -412,103 +421,115 @@ export function createPostgresUserStore(connectionString: string): UserStore {
     ...SESSION_MIGRATIONS,
     ...USER_SCHEMA_MIGRATIONS,
   ]);
-  const { q } = pg;
-  const transaction = async <T>(fn: (client: PoolClient) => Promise<T>): Promise<T> =>
-    withPgTransaction(await pg.pool(), fn);
-  const ensureUser = async (alias: string): Promise<string> =>
-    (await findUser(q, alias)) ?? transaction((client) => ensureUserIn(client, alias));
+  const ensureUser = async (tenant: Tenant, alias: string): Promise<string> =>
+    (await findUser(pg.forTenant(tenant).q, tenant, alias)) ??
+    pg.forTenant(tenant).transaction((client) => ensureUserIn(client, tenant, alias));
   return {
-    async list() {
-      const rows = await q(
-        `SELECT ${COLUMNS} FROM users u WHERE u.first_seen_at IS NOT NULL OR u.offboarded_at IS NOT NULL`,
+    async list(tenant) {
+      const rows = await pg.forTenant(tenant).q(
+        `SELECT ${COLUMNS} FROM users u
+            WHERE u.tenant_id = $1 AND (u.first_seen_at IS NOT NULL OR u.offboarded_at IS NOT NULL)`,
+        [tenant.id],
       );
       return rows.map(toRecord);
     },
-    async get(idOrAlias) {
-      const rows = await q(
-        `SELECT ${COLUMNS} FROM users u WHERE u.id = ${userOf("$1")} OR u.id::text = lower($2)
-          ORDER BY u.id = ${userOf("$1")} DESC LIMIT 1`,
-        [foldPrincipalId(idOrAlias), idOrAlias.trim()],
+    async get(tenant, idOrAlias) {
+      const rows = await pg.forTenant(tenant).q(
+        `SELECT ${COLUMNS} FROM users u
+          WHERE u.tenant_id = $1 AND (u.id = ${aliasUser("$1", "$2")} OR u.id::text = lower($3))
+          ORDER BY u.id = ${aliasUser("$1", "$2")} DESC LIMIT 1`,
+        [tenant.id, foldPrincipalId(idOrAlias), idOrAlias.trim()],
       );
       return rows[0] ? toRecord(rows[0]) : null;
     },
-    async resolve(aliases) {
+    async resolve(tenant, aliases) {
       const wanted = [...new Set(aliases.filter((a) => foldPrincipalId(a)))];
       if (!wanted.length) return new Map();
-      const rows = await q(
+      const rows = await pg.forTenant(tenant).q(
         `SELECT s.alias AS requested, ${COLUMNS}
-           FROM unnest($1::text[]) AS s(alias)
-           JOIN user_links l ON l.alias_id = ${fold("s.alias")}
-           JOIN users u ON u.id = l.user_id`,
-        [wanted],
+           FROM unnest($2::text[]) AS s(alias)
+           JOIN user_links l ON l.tenant_id = $1 AND l.alias_id = ${fold("s.alias")}
+           JOIN users u ON u.tenant_id = l.tenant_id AND u.id = l.user_id`,
+        [tenant.id, wanted],
       );
       return new Map(rows.map((r) => [r.requested as string, toRecord(r)]));
     },
-    async activity() {
-      return (await q(ACTIVITY)).map(toActivity);
+    async activity(tenant) {
+      return (await pg.forTenant(tenant).q(ACTIVITY, [tenant.id])).map(toActivity);
     },
-    async record({ id, source, at }) {
+    async record(tenant, { id, source, at }) {
       const alias = foldPrincipalId(id);
-      const seen = `UPDATE users u SET first_seen_at = ${ts("$2")}, source = $3
-                     WHERE u.id = $1 AND u.first_seen_at IS NULL RETURNING u.id`;
-      const known = await findUser(q, alias);
-      if (known) return (await q(seen, [known, at, source])).length > 0;
-      return transaction(async (client) => {
-        const user = await ensureUserIn(client, alias);
-        return (await client.query(seen, [user, at, source])).rows.length > 0;
+      const seen = `UPDATE users u SET first_seen_at = ${ts("$3")}, source = $4
+                     WHERE u.tenant_id = $1 AND u.id = $2 AND u.first_seen_at IS NULL RETURNING u.id`;
+      const db = pg.forTenant(tenant);
+      const known = await findUser(db.q, tenant, alias);
+      if (known) return (await db.q(seen, [tenant.id, known, at, source])).length > 0;
+      return db.transaction(async (client) => {
+        const user = await ensureUserIn(client, tenant, alias);
+        return (await client.query(seen, [tenant.id, user, at, source])).rows.length > 0;
       });
     },
-    async markOffboarded(id, by) {
-      const user = await ensureUser(foldPrincipalId(id));
-      const actor = await ensureUser(foldPrincipalId(by));
-      const rows = await q(
+    async markOffboarded(tenant, id, by) {
+      const user = await ensureUser(tenant, foldPrincipalId(id));
+      const actor = await ensureUser(tenant, foldPrincipalId(by));
+      const rows = await pg.forTenant(tenant).q(
         `UPDATE users u SET offboarded_at = coalesce(u.offboarded_at, now()),
-           offboarded_by = CASE WHEN u.offboarded_at IS NULL THEN $2::uuid ELSE u.offboarded_by END
-         WHERE u.id = $1 RETURNING ${COLUMNS}`,
-        [user, actor],
+           offboarded_by = CASE WHEN u.offboarded_at IS NULL THEN $3::uuid ELSE u.offboarded_by END
+         WHERE u.tenant_id = $1 AND u.id = $2 RETURNING ${COLUMNS}`,
+        [tenant.id, user, actor],
       );
       return toRecord(rows[0]!);
     },
-    async markApps(ids) {
+    async markApps(tenant, ids) {
       if (!ids.length) return 0;
-      const rows = await q(
+      const rows = await pg.forTenant(tenant).q(
         `UPDATE users SET kind = 'app'
-          WHERE kind <> 'app' AND id IN (SELECT user_id FROM user_links WHERE alias_id = ANY($1::text[]))
+          WHERE tenant_id = $1 AND kind <> 'app'
+            AND id IN (SELECT user_id FROM user_links WHERE tenant_id = $1 AND alias_id = ANY($2::text[]))
           RETURNING id`,
-        [ids.map((id) => foldPrincipalId(id))],
+        [tenant.id, ids.map((id) => foldPrincipalId(id))],
       );
       return rows.length;
     },
-    async setDisplayName(alias, raw) {
+    async setDisplayName(tenant, alias, raw) {
       const name = cleanDisplayName(raw);
       if (!name) return false;
-      const user = await ensureUser(foldPrincipalId(alias));
-      const rows = await q(
-        `UPDATE users SET display_name = $2 WHERE id = $1 AND display_name IS DISTINCT FROM $2 RETURNING id`,
-        [user, name],
+      const user = await ensureUser(tenant, foldPrincipalId(alias));
+      const rows = await pg.forTenant(tenant).q(
+        `UPDATE users SET display_name = $3
+          WHERE tenant_id = $1 AND id = $2 AND display_name IS DISTINCT FROM $3 RETURNING id`,
+        [tenant.id, user, name],
       );
       return rows.length > 0;
     },
-    async markReactivated(id) {
-      const rows = await q(
-        `UPDATE users u SET offboarded_at = NULL, offboarded_by = NULL WHERE u.id = ${userOf("$1")} RETURNING ${COLUMNS}`,
-        [foldPrincipalId(id)],
+    async markReactivated(tenant, id) {
+      const rows = await pg.forTenant(tenant).q(
+        `UPDATE users u SET offboarded_at = NULL, offboarded_by = NULL
+          WHERE u.tenant_id = $1 AND u.id = ${aliasUser("$1", "$2")} RETURNING ${COLUMNS}`,
+        [tenant.id, foldPrincipalId(id)],
       );
       return rows[0] ? toRecord(rows[0]) : null;
     },
-    async links() {
-      return (await q(`${LINK_SELECT} WHERE l.alias_id <> u.primary_alias`)).map(toLink);
+    async links(tenant) {
+      return (
+        await pg
+          .forTenant(tenant)
+          .q(`${LINK_SELECT} WHERE l.tenant_id = $1 AND l.alias_id <> u.primary_alias`, [tenant.id])
+      ).map(toLink);
     },
-    async link(link) {
-      return transaction((client) => linkInTransaction(client, link));
+    async link(tenant, link) {
+      return pg.forTenant(tenant).transaction((client) => linkInTransaction(client, tenant, link));
     },
-    async unlink(aliasId) {
-      return transaction(async (client) => {
+    async unlink(tenant, aliasId) {
+      return pg.forTenant(tenant).transaction(async (client) => {
         const rows = (
-          await client.query(`${LINK_SELECT} WHERE l.alias_id = $1 AND l.alias_id <> u.primary_alias`, [aliasId])
+          await client.query(
+            `${LINK_SELECT} WHERE l.tenant_id = $1 AND l.alias_id = $2 AND l.alias_id <> u.primary_alias`,
+            [tenant.id, aliasId],
+          )
         ).rows;
         if (!rows[0]) return null;
-        await client.query(`DELETE FROM user_links WHERE alias_id = $1`, [aliasId]);
+        await client.query(`DELETE FROM user_links WHERE tenant_id = $1 AND alias_id = $2`, [tenant.id, aliasId]);
         return toLink(rows[0]);
       });
     },

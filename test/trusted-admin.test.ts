@@ -171,7 +171,7 @@ test("on a shared host, trusted sign-in grants admin only in a tenant the subjec
   const s = withoutTenant(() => start(true, db.appDatabaseUrl));
   t.after(s.close);
   const id = trustedPrincipal(issuer, "founder-alpha");
-  await inTenant(alpha, () => s.built.admin.users.record({ id, source: "invite", at: Date.now() }));
+  await inTenant(alpha, (token) => s.built.admin.users.record(token, { id, source: "invite", at: Date.now() }));
   const isAdmin = async (tenantId: string) =>
     (await inTenant(tenantId, (token) => s.built.admin.adminStatusOf(token, { id, type: "internal" }))).isAdmin;
   const presentTo = (tenantId: string) =>

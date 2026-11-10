@@ -32,7 +32,7 @@ export const USERS_SCHEMA = `CREATE TABLE IF NOT EXISTS users(
 
 const SOURCES = ["principal_links", "admin_grants", "items", "sessions", "directory_members", "external_members"];
 
-const userOf = (tenant: string, alias: string): string =>
+export const userOf = (tenant: string, alias: string): string =>
   `(SELECT l.user_id FROM user_links l WHERE l.tenant_id = ${tenant} AND l.alias_id = ${alias})`;
 
 const ensureUsers = (rows: string): string => `

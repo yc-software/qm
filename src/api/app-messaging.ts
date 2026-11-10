@@ -1,4 +1,5 @@
 import type { ScopeId } from "../types.ts";
+import { ambientTenant } from "../tenants/context.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { personIds, personKey, personKeys, samePersonInDirectory, samePersonMatcher } from "../directory/person.ts";
@@ -141,7 +142,7 @@ export function createMessagingMethods(
       deps.identity.listExternalMembers(),
       deps.sessions?.distinctParticipants() ?? [],
     ]);
-    const users = await deps.users?.resolve(participants).catch(() => undefined);
+    const users = await deps.users?.resolve(ambientTenant(), participants).catch(() => undefined);
     const candidates: DirectoryMember[] = [
       ...(deps.emailAuthMembers ?? []),
       ...externals
@@ -453,7 +454,7 @@ export function createMessagingMethods(
       if (!(await deps.directory.replace(tenant, members, syncedAt))) return false;
       const apps = members.filter((m) => m.isBot).map((m) => m.principalId);
       if (apps.length && deps.admin)
-        await deps.admin.users.markApps(apps).catch(reportFailureAs("users: mark apps", 0));
+        await deps.admin.users.markApps(tenant, apps).catch(reportFailureAs("users: mark apps", 0));
       const present = members.filter((m) => m.type === "internal").map((m) => m.principalId);
       const presentSet = new Set(present);
       const removed = previous.map((m) => m.principalId).filter((id) => !presentSet.has(id));

@@ -1002,7 +1002,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         (!!input.swarmGoal || !!openGoal((await deps.sessions.goals([session.id])).get(session.id)));
       if (!input.sessionParticipantIds?.length && !automatedTurn)
         await deps.sessions.addParticipant(session.id, actor.id);
-      if (introducesUser(input.origin, input)) await recordUser(deps.users, actor.id, input.botActor);
+      if (introducesUser(input.origin, input)) await recordUser(deps.users, tenant, actor.id, input.botActor);
 
       const delegatedTask = !!input.sessionSenderId && session.parentSessionId === input.sessionSenderId;
       const wakingChild =

@@ -488,7 +488,7 @@ test("/v1/admin/users: a person with a linked sign-in is one row with every sign
       actor: { externalId: "U-PAT" },
       conversation: { kind: "dm", threadRef: "dm:U-PAT:t1" },
     });
-    await s.built.admin.users.link({
+    await s.built.admin.users.link(testTenant, {
       principalId: "U-PAT",
       canonicalId: "pat@example.com",
       evidence: "qa",

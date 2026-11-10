@@ -193,7 +193,7 @@ test("self spend: your crons are split from the crons others made that you can s
 test("self spend: a linked sign-in's personal spend is yours", async () => {
   const s = await start();
   try {
-    await s.built.admin.users.link({
+    await s.built.admin.users.link(testTenant, {
       principalId: "slack-alice",
       canonicalId: "alice",
       evidence: "qa",

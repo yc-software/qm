@@ -311,7 +311,7 @@ test("linking a sign-in keeps persona authorship and grants with the person", as
   const store = createPostgresPersonaStore(url);
   const persona = await store.create({ name: "Ada" }, scopeId("personal", "alias@example.com"), "alias@example.com");
   assert.equal(persona.createdBy, "alias@example.com");
-  await users.link({
+  await users.link(testTenant, {
     principalId: "alias@example.com",
     canonicalId: "canon@example.com",
     evidence: "test",

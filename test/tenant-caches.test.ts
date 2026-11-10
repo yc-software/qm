@@ -43,14 +43,14 @@ function tenantLinks(): UserLinkStore {
   const rows = new Map<string, Map<string, UserLink>>();
   const own = () => partition(rows);
   return {
-    async links() {
+    async links(_tenant) {
       return [...own().values()];
     },
-    async link(link) {
+    async link(_tenant, link) {
       own().set(link.principalId, link);
       return link;
     },
-    async unlink(aliasId) {
+    async unlink(_tenant, aliasId) {
       const row = own().get(aliasId) ?? null;
       own().delete(aliasId);
       return row;
