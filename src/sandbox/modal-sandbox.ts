@@ -404,7 +404,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
         ? { session: sessionByName.get(name) ?? (await reviveScratch()) }
         : {
             session:
-              sessionByName.get(name) ??
+              cachedFor(name, (await store.get(scopeByName.get(name) ?? "default"))?.sandboxId) ??
               (await ensureSession(scopeByName.get(name) ?? "default", name, undefined, false)).session,
           };
     try {
@@ -932,10 +932,10 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
       if (tdOpts?.destroy && !scopeByName.has(handle.id)) return;
       const scope = scopeByName.get(handle.id) ?? "default";
       return provisionQueue(scope, async () => {
-        const session = sessionByName.get(handle.id);
         if (tdOpts?.destroy) return destroyStoredScope(scope);
-        if (!session) return;
         const stored = await store.get(scope);
+        const session = cachedFor(handle.id, stored?.sandboxId);
+        if (!session) return;
         if (!tdOpts?.homeUnchanged) await store.merge(scope, { homeDirty: true });
         if (snapshotDue(stored, tdOpts, snapshotIntervalMs))
           await attemptSnapshot(
