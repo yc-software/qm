@@ -326,9 +326,8 @@ async function saveBrainSecret(
     });
   };
   try {
-    save(readRegistry((await registry.current()).record));
-    if (!(await take())) return;
     await registry.update(save);
+    if (!(await take())) return;
   } catch (error) {
     if (!(error instanceof MemoryRegistryError)) throw error;
     return refuse(error.status, REGISTRY_ERRORS[error.status], error.message);
