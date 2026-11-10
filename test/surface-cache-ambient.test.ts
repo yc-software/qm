@@ -1181,10 +1181,11 @@ test("a Slack bot cannot be the asker of a solicited ambient wake, and its wake 
   built.runtime.start();
   try {
     const container = "C-bot-asks";
-    await built.directory.replace([
+    await built.directory.replace(testTenant, [
       { principalId: "U-deploybot", displayName: "DeployBot", type: "internal", slackId: "U-deploybot", isBot: true },
     ]);
     await built.directory.replaceChannels(
+      testTenant,
       [{ channelId: container, name: "bot-asks", isPrivate: false }],
       [{ channelId: container, principalId: "U-deploybot" }],
     );
