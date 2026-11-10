@@ -166,6 +166,7 @@ END $base_schema$`,
       statements: [
         `SET LOCAL lock_timeout = '3s'`,
         `ALTER TABLE runs ADD COLUMN IF NOT EXISTS handbacks INT NOT NULL DEFAULT 0`,
+        `UPDATE runs SET handbacks = preemptions WHERE status IN ('pending', 'running') AND handbacks < preemptions`,
       ],
     },
   ]);
