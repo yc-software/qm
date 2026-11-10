@@ -668,9 +668,9 @@ export function createSwarmService(deps: {
       if (!existing && count > (settings.notifications ?? Infinity))
         throw new Error("swarm notification budget exhausted");
       if (input.forumSandboxId) {
-        if (caller.kind === "agent" && caller.claims.botActor)
+        if (existing?.template.botActor || (caller.kind === "agent" && caller.claims.botActor))
           throw new Error(
-            "a Slack bot's turn cannot supply forumSandboxId; spawn without it and the swarm gets its own board computer",
+            "a swarm a Slack bot starts cannot take forumSandboxId; spawn without it and the swarm uses its own board computer",
           );
         const forum = await deps.sandboxes.access(auth.actorId, input.forumSandboxId);
         const session = await sessions.get(auth.sessionId);

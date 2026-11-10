@@ -39,7 +39,7 @@ const alice: Principal = { id: "alice", type: "internal" };
 const refusedDirection = "a Slack bot's turn cannot direct a person's swarm";
 const refusedComputer = "a Slack bot's turn cannot use the computers of a person's swarm";
 const refusedForum =
-  "a Slack bot's turn cannot supply forumSandboxId; spawn without it and the swarm gets its own board computer";
+  "a swarm a Slack bot starts cannot take forumSandboxId; spawn without it and the swarm uses its own board computer";
 
 type Fixture = Awaited<ReturnType<typeof swarmFixture>>;
 
@@ -534,4 +534,20 @@ test("a Slack bot's turn cannot supply a forum computer for its swarm while a pe
     { bot, afterBot, person, board: swarm.board },
     { bot: refusedForum, afterBot: null, person: [forum.id], board: undefined },
   );
+});
+
+test("a person's turn cannot supply a forum computer to a swarm a Slack bot started", async () => {
+  const f = await botSwarm();
+  const membersBefore = (await f.store.get(f.root.id))!.members.map((member) => member.id);
+  const forum = await f.sandboxes.create(alice.id, f.root.scopeId, "modal", "Shared notes");
+  const person = await f.rootTurn(alice.id, false);
+  const outcome = await f.service
+    .spawn(person.caller, { requestId: "alice-forum", text: "alice's work", forumSandboxId: forum.id })
+    .then(
+      (members) => members.map((member) => member.forumSandboxId),
+      (error: unknown) => errMessage(error),
+    );
+  await person.done();
+  const membersAfter = (await f.store.get(f.root.id))!.members.map((member) => member.id);
+  assert.deepEqual({ outcome, membersAfter }, { outcome: refusedForum, membersAfter: membersBefore });
 });
