@@ -1,4 +1,5 @@
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
+import { relayWebSocket, type UpgradeTarget } from "../../chassis/src/websocket-relay.ts";
 import { signedHeaders } from "../../chassis/src/core-client.ts";
 import { relayStream, withVary } from "../../chassis/src/http.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
@@ -140,6 +141,7 @@ export interface DeploymentTarget {
   principal: string;
   signingSecret: string | undefined;
   identitySecret?: string;
+  tenant?: string;
 }
 
 export function proxyToDeployment(req: IncomingMessage, res: ServerResponse, t: DeploymentTarget): void {
@@ -150,7 +152,7 @@ export function proxyToDeployment(req: IncomingMessage, res: ServerResponse, t: 
   const base: Record<string, string> = { host: core.host, "x-as-principal": t.principal, ...signed };
   if (t.identitySecret)
     base[PORTAL_IDENTITY_HEADER] = mintPortalIdentity(
-      { p: t.principal, exp: Date.now() + IDENTITY_TTL_MS },
+      { p: t.principal, ...(t.tenant ? { t: t.tenant } : {}), exp: Date.now() + IDENTITY_TTL_MS },
       t.identitySecret,
     );
   const headers = safeForwardHeaders(req, base);
@@ -210,8 +212,11 @@ export const INTERNAL_HEADERS = [
   "x-qm-client-ip",
 ];
 
-export function proxyToAppHost(req: IncomingMessage, res: ServerResponse, coreBase: string, clientIp?: string): void {
-  const upstream = new URL(coreBase);
+function appHostHeaders(
+  req: IncomingMessage,
+  clientIp: string | undefined,
+  keep: readonly string[] = [],
+): Record<string, string | string[]> {
   const blocked = new Set([
     ...DROP_RESPONSE_HEADERS,
     ...INTERNAL_HEADERS,
@@ -221,6 +226,7 @@ export function proxyToAppHost(req: IncomingMessage, res: ServerResponse, coreBa
     "x-forwarded-for",
     ...(req.headers.connection ?? "").split(",").map((name) => name.trim().toLowerCase()),
   ]);
+  for (const name of keep) blocked.delete(name);
   const headers: Record<string, string | string[]> = {
     "x-qm-app-host": "1",
     ...(clientIp ? { "x-qm-client-ip": clientIp } : {}),
@@ -228,6 +234,12 @@ export function proxyToAppHost(req: IncomingMessage, res: ServerResponse, coreBa
   for (const [name, value] of Object.entries(req.headers)) {
     if (value !== undefined && !blocked.has(name)) headers[name] = value;
   }
+  return headers;
+}
+
+export function proxyToAppHost(req: IncomingMessage, res: ServerResponse, coreBase: string, clientIp?: string): void {
+  const upstream = new URL(coreBase);
+  const headers = appHostHeaders(req, clientIp);
   res.removeHeader("x-frame-options");
   relay(req, res, {
     protocol: upstream.protocol,
@@ -237,4 +249,26 @@ export function proxyToAppHost(req: IncomingMessage, res: ServerResponse, coreBa
     headers,
     forwardCookies: true,
   });
+}
+
+export function relayUpgradeToAppHost(
+  req: IncomingMessage,
+  res: ServerResponse,
+  target: UpgradeTarget,
+  coreBase: string,
+  clientIp?: string,
+): void {
+  const upstream = new URL(coreBase);
+  relayWebSocket(
+    res,
+    target,
+    {
+      tls: upstream.protocol === "https:",
+      hostname: upstream.hostname,
+      port: requestPort(upstream),
+      path: req.url ?? "/",
+      headers: appHostHeaders(req, clientIp, ["connection", "upgrade"]),
+    },
+    "portal-websocket",
+  );
 }

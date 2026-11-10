@@ -49,7 +49,7 @@ export function overtaken(items: readonly Item[], partial: PartialTurn, runId: s
 }
 
 export interface RecordedTurn extends PartialTurn {
-  answer?: { seq: number; text: string };
+  answer?: { seq: number; text: string; stopped?: true; cancelled?: true };
 }
 
 export function turnAtSeq(items: readonly Item[], userSeq: number): RecordedTurn | null {
@@ -61,7 +61,12 @@ export function turnAtSeq(items: readonly Item[], userSeq: number): RecordedTurn
     const e = items[i]!;
     if (differentTurn(e, items[start]!)) continue;
     if (isAgentReply(e)) {
-      answer = { seq: e.seq, text: (e.text ?? "").trim() };
+      answer = {
+        seq: e.seq,
+        text: (e.text ?? "").trim(),
+        ...(e.body.stopped === true ? { stopped: true } : {}),
+        ...(e.body.cancelled === true ? { cancelled: true } : {}),
+      };
       continue;
     }
     if (e.kind === "ToolCall" || e.kind === "ToolResult" || e.kind === "SteeringMessage") {
