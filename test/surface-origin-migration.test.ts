@@ -1,30 +1,22 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import pg from "pg";
 import { RETIRED_ORIGIN_SWEEP_MIGRATION } from "../src/surfaces/origin-migration.ts";
-import { seedTestTenant } from "./support/test-tenant.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 const skip = databaseUrl ? false : "set DATABASE_URL (a Postgres) to run the retired origin sweep tests";
 const exec = promisify(execFile);
 
 async function withDatabase(run: (url: string, db: pg.Pool) => Promise<void>): Promise<void> {
-  const parent = new pg.Pool({ connectionString: databaseUrl });
-  const name = `origin_sweep_${randomUUID().replaceAll("-", "")}`;
-  await parent.query(`CREATE DATABASE ${name}`);
-  const url = new URL(databaseUrl!);
-  url.pathname = `/${name}`;
-  await seedTestTenant(url.toString());
-  const db = new pg.Pool({ connectionString: url.toString() });
+  const url = testDatabaseUrl();
+  const db = new pg.Pool({ connectionString: url });
   try {
-    await run(url.toString(), db);
+    await run(url, db);
   } finally {
     await db.end();
-    await parent.query(`DROP DATABASE ${name}`);
-    await parent.end();
   }
 }
 

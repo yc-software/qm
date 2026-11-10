@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,7 +8,7 @@ import { promisify } from "node:util";
 import { gunzipSync } from "node:zlib";
 import test from "node:test";
 import pg from "pg";
-import { ownerUrl } from "./support/test-tenant.ts";
+import { testBareDatabaseUrl } from "./support/test-database.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -85,17 +84,13 @@ async function migrate(url: string, dataDir: string): Promise<void> {
   assert.match(stdout, /\[qm:migrate\] database migrations applied/);
 }
 
-async function withDatabase<T>(admin: pg.Pool, run: (url: string, db: pg.Pool) => Promise<T>): Promise<T> {
-  const name = `upgrade_${randomUUID().replaceAll("-", "")}`;
-  await admin.query(`CREATE DATABASE ${name} TEMPLATE template0`);
-  const url = ownerUrl(databaseUrl!);
-  url.pathname = `/${name}`;
-  const db = new pg.Pool({ connectionString: url.toString(), max: 1 });
+async function withDatabase<T>(run: (url: string, db: pg.Pool) => Promise<T>): Promise<T> {
+  const url = testBareDatabaseUrl();
+  const db = new pg.Pool({ connectionString: url, max: 1 });
   try {
-    return await run(url.toString(), db);
+    return await run(url, db);
   } finally {
     await db.end();
-    await admin.query(`DROP DATABASE ${name}`);
   }
 }
 
@@ -108,14 +103,13 @@ test(
   "a seeded v0.1.16 database upgrades to the fresh tenant-keyed schema and keeps its rows",
   { skip: !databaseUrl, timeout: 900_000 },
   async () => {
-    const admin = new pg.Pool({ connectionString: ownerUrl(databaseUrl!).toString(), max: 1 });
     const dataDir = await mkdtemp(join(tmpdir(), "qm-upgrade-test-"));
     try {
-      const fresh = await withDatabase(admin, async (url, db) => {
+      const fresh = await withDatabase(async (url, db) => {
         await migrate(url, dataDir);
         return (await db.query<{ entry: string }>(SCHEMA_SNAPSHOT)).rows.map(({ entry }) => entry);
       });
-      await withDatabase(admin, async (url, db) => {
+      await withDatabase(async (url, db) => {
         await db.query(gunzipSync(await readFile(FIXTURE)).toString("utf8"));
         await db.query("SELECT pg_catalog.set_config('search_path', '\"$user\", public', false)");
         const before = await rowCounts(db);
@@ -151,7 +145,6 @@ test(
       });
     } finally {
       await rm(dataDir, { recursive: true, force: true });
-      await admin.end();
     }
   },
 );
