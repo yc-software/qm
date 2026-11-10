@@ -64,7 +64,11 @@ test("getRun reports stale exactly when no live worker owns a previously-claimed
   const crashed = (await built.runs.claim("w3", 5_000))[0] ?? null;
   assert.equal(await built.runs.heartbeat(runId, crashed!.leaseToken!, -1_000), true);
   await built.runs.reapExpired();
-  assert.equal((await built.app.getRun(runId))?.stale, true, "a worker lost after a planned requeue — interrupted again");
+  assert.equal(
+    (await built.app.getRun(runId))?.stale,
+    true,
+    "a worker lost after a planned requeue — interrupted again",
+  );
 
   const reclaimed = (await built.runs.claim("w2", 5_000))[0] ?? null;
   assert.equal(reclaimed?.id, runId);
