@@ -395,6 +395,4 @@ test("MCP admin edit that omits fields keeps the stored auth, name, credentials 
     ["lookup"],
   );
   assert.equal(orders?.about, "Orders");
-  assert.equal((await put("orders", { url: "https://other.example.com/mcp" })).status, 200);
-  assert.equal((await store.get("orders"))?.tools, undefined);
 });

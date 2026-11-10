@@ -211,8 +211,8 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
           clientSecret: b.clientSecret,
         }
       : {}),
-    ...(existing?.url === url && existing.tools ? { tools: existing.tools } : {}),
-    ...(existing?.url === url && existing.about ? { about: existing.about } : {}),
+    ...(existing?.tools ? { tools: existing.tools } : {}),
+    ...(existing?.about ? { about: existing.about } : {}),
     ...(approval === "annotations" ? {} : { approval }),
     ...(catalog ? { catalog } : {}),
     ...(attestActor ? { attestActor } : {}),
