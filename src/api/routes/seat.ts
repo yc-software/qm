@@ -1,7 +1,7 @@
 import { SeatError } from "../../seat/seat.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
-import type { ApiCtx, Route } from "./route.ts";
+import { tenantOf, type ApiCtx, type Route } from "./route.ts";
 
 const STATUS = { feature_disabled: 403, step_closed: 409, bad_request: 400, ask_failed: 502 } as const;
 
@@ -34,7 +34,7 @@ export const seatRoutes: ReadonlyArray<Route<ApiCtx>> = [
     actor: "query.principalId",
     handle: (ctx) =>
       seated(ctx, ctx.url.searchParams.get("principalId"), async (owner) => ({
-        steps: await Promise.all((await ctx.deps.seat!.pending(owner)).map((step) => titled(ctx, step))),
+        steps: await Promise.all((await ctx.deps.seat!.pending(tenantOf(ctx), owner)).map((step) => titled(ctx, step))),
       })),
   },
   {
@@ -45,7 +45,7 @@ export const seatRoutes: ReadonlyArray<Route<ApiCtx>> = [
     actor: "query.principalId",
     handle: (ctx) =>
       seated(ctx, ctx.url.searchParams.get("principalId"), async (owner) => {
-        const step = await ctx.deps.seat!.step(owner, ctx.params.id!);
+        const step = await ctx.deps.seat!.step(tenantOf(ctx), owner, ctx.params.id!);
         if (!step) throw new SeatError("step_closed", "This step is no longer waiting for a move.");
         return { step: await titled(ctx, step) };
       }),
@@ -59,7 +59,7 @@ export const seatRoutes: ReadonlyArray<Route<ApiCtx>> = [
     maxBodyBytes: 2_000_000,
     handle: (ctx) =>
       seated(ctx, bodyPrincipal(ctx), async (owner) => {
-        await ctx.deps.seat!.move(owner, ctx.params.id!, isObj(ctx.body) ? ctx.body.content : undefined);
+        await ctx.deps.seat!.move(tenantOf(ctx), owner, ctx.params.id!, isObj(ctx.body) ? ctx.body.content : undefined);
         return { ok: true };
       }),
   },
@@ -72,7 +72,9 @@ export const seatRoutes: ReadonlyArray<Route<ApiCtx>> = [
     handle: (ctx) => {
       const controller = new AbortController();
       ctx.res.once("close", () => controller.abort());
-      return seated(ctx, bodyPrincipal(ctx), (owner) => ctx.deps.seat!.ask(owner, ctx.params.id!, controller.signal));
+      return seated(ctx, bodyPrincipal(ctx), (owner) =>
+        ctx.deps.seat!.ask(tenantOf(ctx), owner, ctx.params.id!, controller.signal),
+      );
     },
   },
 ];

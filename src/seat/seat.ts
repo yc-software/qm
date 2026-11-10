@@ -10,6 +10,8 @@ import type {
 } from "@earendil-works/pi-ai";
 import { stream as anthropicStream } from "@earendil-works/pi-ai/api/anthropic-messages";
 import { createPgPool } from "../persistence/pg-pool.ts";
+import { tenantTables } from "../tenants/migrations.ts";
+import { ambientTenant, type Tenant } from "../tenants/context.ts";
 import { buildModelRuntime } from "../model/model-runtime.ts";
 import type { ModelRoutes } from "../model/model-route.ts";
 import { DEFAULT_AGENT_MODEL_ID, resolveModel } from "../model/pi-models.ts";
@@ -62,10 +64,10 @@ export interface Seat {
     options: SimpleStreamOptions | undefined,
     runId: string | undefined,
   ): AssistantMessageEventStream;
-  pending(ownerId: string): Promise<SeatStepSummary[]>;
-  step(ownerId: string, id: string): Promise<SeatStep | null>;
-  move(ownerId: string, id: string, content: unknown): Promise<void>;
-  ask(ownerId: string, id: string, signal: AbortSignal): Promise<SeatDraft>;
+  pending(tenant: Tenant, ownerId: string): Promise<SeatStepSummary[]>;
+  step(tenant: Tenant, ownerId: string, id: string): Promise<SeatStep | null>;
+  move(tenant: Tenant, ownerId: string, id: string, content: unknown): Promise<void>;
+  ask(tenant: Tenant, ownerId: string, id: string, signal: AbortSignal): Promise<SeatDraft>;
 }
 
 export interface SeatOptions {
@@ -229,10 +231,14 @@ export function seatAsk(routes: Pick<ModelRoutes, "baseModelId" | "route">): Sea
 }
 
 export function createSeat(connectionString: string, opts: SeatOptions): Seat {
-  const { q, query } = createPgPool(connectionString, [{ id: "seat/0001", statements: SCHEMA }]);
+  const pg = createPgPool(connectionString, [
+    { id: "seat/0001", statements: SCHEMA },
+    ...tenantTables("seat/0002-tenants", [{ table: "seat_steps", primaryKey: "id" }]),
+  ]);
   const timeoutMs = opts.timeoutMs ?? TIMEOUT_MS;
 
   async function hold(
+    tenant: Tenant,
     context: ModelRequestContext,
     runId: string | undefined,
     request: unknown,
@@ -244,14 +250,12 @@ export function createSeat(connectionString: string, opts: SeatOptions): Seat {
     if (!(await opts.enabled(actorId))) throw new Error(SEAT_OFF);
     signal?.throwIfAborted();
     const id = randomUUID();
-    await query("DELETE FROM seat_steps WHERE run_id = $1", [runId]);
-    await query("INSERT INTO seat_steps (id, owner_id, session_id, run_id, request) VALUES ($1, $2, $3, $4, $5)", [
-      id,
-      actorId,
-      sessionId,
-      runId,
-      JSON.stringify(request),
-    ]);
+    const db = pg.forTenant(tenant);
+    await db.query("DELETE FROM seat_steps WHERE tenant_id = $1 AND run_id = $2", [tenant.id, runId]);
+    await db.query(
+      "INSERT INTO seat_steps (tenant_id, id, owner_id, session_id, run_id, request) VALUES ($1, $2, $3, $4, $5, $6)",
+      [tenant.id, id, actorId, sessionId, runId, JSON.stringify(request)],
+    );
     try {
       const outcome = await waitForClientResult(opts.signals, runId, id, { timeoutMs, ...(signal ? { signal } : {}) });
       if (outcome === "cancelled") throw new DOMException("The turn was cancelled", "AbortError");
@@ -259,23 +263,31 @@ export function createSeat(connectionString: string, opts: SeatOptions): Seat {
         throw new Error(`No move was made at the Agent Seat within ${Math.round(timeoutMs / 60_000)} minutes.`);
       return seatResponse(outcome.structured as SeatBlock[]);
     } finally {
-      await query("DELETE FROM seat_steps WHERE id = $1", [id]).catch((e) => swallow("seat: close step", e));
+      await db
+        .query("DELETE FROM seat_steps WHERE tenant_id = $1 AND id = $2", [tenant.id, id])
+        .catch((e) => swallow("seat: close step", e));
     }
   }
 
-  async function live(rows: Array<Record<string, unknown>>) {
+  async function live(tenant: Tenant, rows: Array<Record<string, unknown>>) {
     const alive = await Promise.all(rows.map((row) => opts.runLive(row.run_id as string)));
     const dead = rows.filter((_, index) => !alive[index]).map((row) => row.id);
-    if (dead.length) await query("DELETE FROM seat_steps WHERE id = ANY($1)", [dead]);
+    if (dead.length)
+      await pg
+        .forTenant(tenant)
+        .query("DELETE FROM seat_steps WHERE tenant_id = $1 AND id = ANY($2)", [tenant.id, dead]);
     return rows.filter((_, index) => alive[index]);
   }
 
-  async function step(ownerId: string, id: string): Promise<SeatStep | null> {
+  async function step(tenant: Tenant, ownerId: string, id: string): Promise<SeatStep | null> {
     const [row] = await live(
-      await q(`SELECT id, session_id, run_id, request, ${CREATED_MS} FROM seat_steps WHERE id = $1 AND owner_id = $2`, [
-        id,
-        ownerId,
-      ]),
+      tenant,
+      await pg
+        .forTenant(tenant)
+        .q(
+          `SELECT id, session_id, run_id, request, ${CREATED_MS} FROM seat_steps WHERE tenant_id = $1 AND id = $2 AND owner_id = $3`,
+          [tenant.id, id, ownerId],
+        ),
     );
     if (!row) return null;
     return {
@@ -296,10 +308,11 @@ export function createSeat(connectionString: string, opts: SeatOptions): Seat {
 
     streamSimple(model, context, options, runId) {
       const requestContext = { ...currentModelRequestContext() };
+      const tenant = ambientTenant();
       const client = {
         messages: {
           create: (params: unknown, request?: { signal?: AbortSignal }) => ({
-            asResponse: () => hold(requestContext, runId, params, request?.signal),
+            asResponse: () => hold(tenant, requestContext, runId, params, request?.signal),
           }),
         },
       };
@@ -311,13 +324,16 @@ export function createSeat(connectionString: string, opts: SeatOptions): Seat {
       });
     },
 
-    async pending(ownerId) {
+    async pending(tenant, ownerId) {
       await guard(ownerId);
       const rows = await live(
-        await q(
-          `SELECT id, session_id, run_id, ${CREATED_MS} FROM seat_steps WHERE owner_id = $1 ORDER BY created_at, id`,
-          [ownerId],
-        ),
+        tenant,
+        await pg
+          .forTenant(tenant)
+          .q(
+            `SELECT id, session_id, run_id, ${CREATED_MS} FROM seat_steps WHERE tenant_id = $1 AND owner_id = $2 ORDER BY created_at, id`,
+            [tenant.id, ownerId],
+          ),
       );
       return rows.map((row) => ({
         id: row.id as string,
@@ -327,15 +343,21 @@ export function createSeat(connectionString: string, opts: SeatOptions): Seat {
       }));
     },
 
-    async step(ownerId, id) {
+    async step(tenant, ownerId, id) {
       await guard(ownerId);
-      return step(ownerId, id);
+      return step(tenant, ownerId, id);
     },
 
-    async move(ownerId, id, content) {
+    async move(tenant, ownerId, id, content) {
       await guard(ownerId);
       const blocks = parseSeatMove(content);
-      const [row] = await q("DELETE FROM seat_steps WHERE id = $1 AND owner_id = $2 RETURNING run_id", [id, ownerId]);
+      const [row] = await pg
+        .forTenant(tenant)
+        .q("DELETE FROM seat_steps WHERE tenant_id = $1 AND id = $2 AND owner_id = $3 RETURNING run_id", [
+          tenant.id,
+          id,
+          ownerId,
+        ]);
       if (!row || !(await opts.runLive(row.run_id as string))) throw new SeatError("step_closed", SEAT_CLOSED);
       await opts.signals.send(row.run_id as string, {
         kind: "client_result",
@@ -344,9 +366,9 @@ export function createSeat(connectionString: string, opts: SeatOptions): Seat {
       });
     },
 
-    async ask(ownerId, id, signal) {
+    async ask(tenant, ownerId, id, signal) {
       await guard(ownerId);
-      const found = await step(ownerId, id);
+      const found = await step(tenant, ownerId, id);
       if (!found) throw new SeatError("step_closed", SEAT_CLOSED);
       return withModelRequestContext(
         { actorId: ownerId, scopeId: scopeId("personal", ownerId), sessionId: found.sessionId },

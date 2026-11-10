@@ -6,6 +6,7 @@ import { createSeat, SEAT_OFF, SEAT_PERSONAL_ONLY, type Seat, type SeatOptions }
 import { seatModel } from "../src/model/seat-model.ts";
 import { currentModelRequestContext, withModelRequestContext } from "../src/model/request-context.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import { ambientTenant } from "../src/tenants/context.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 
 const context: Context = {
@@ -40,7 +41,7 @@ function play(seat: Seat, actorId: string, opts: { scopeId?: string; signal?: Ab
 
 async function waitForStep(seat: Seat, owner: string): Promise<string> {
   for (let i = 0; i < 200; i++) {
-    const [step] = await seat.pending(owner);
+    const [step] = await seat.pending(ambientTenant(), owner);
     if (step) return step.id;
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
@@ -53,7 +54,7 @@ test("a model call waits as a step that another instance reads verbatim and answ
   const other = seats(url);
   const reply = play(holder, "alice");
   const id = await waitForStep(other, "alice");
-  const step = await other.step("alice", id);
+  const step = await other.step(ambientTenant(), "alice", id);
   assert.equal(step?.sessionId, "session-alice");
   const request = step!.request as {
     system: Array<{ text: string }>;
@@ -68,7 +69,7 @@ test("a model call waits as a step that another instance reads verbatim and answ
   assert.deepEqual(request.messages.at(-1)?.role, "user");
   assert.match(JSON.stringify(request.messages), /List the files in \/tmp/);
 
-  await other.move("alice", id, [
+  await other.move(ambientTenant(), "alice", id, [
     { type: "text", text: "Looking." },
     { type: "tool_use", name: "execute", input: { command: "ls /tmp" } },
   ]);
@@ -81,13 +82,13 @@ test("a model call waits as a step that another instance reads verbatim and answ
       { tool: "execute", args: { command: "ls /tmp" } },
     ],
   );
-  assert.deepEqual(await other.pending("alice"), []);
+  assert.deepEqual(await other.pending(ambientTenant(), "alice"), []);
 });
 
 test("a text move ends the model call with a plain reply", async () => {
   const seat = seats(testDatabaseUrl());
   const reply = play(seat, "alice");
-  await seat.move("alice", await waitForStep(seat, "alice"), [{ type: "text", text: "All done." }]);
+  await seat.move(ambientTenant(), "alice", await waitForStep(seat, "alice"), [{ type: "text", text: "All done." }]);
   const message = await reply;
   assert.equal(message.stopReason, "stop");
   assert.deepEqual(message.content, [{ type: "text", text: "All done." }]);
@@ -97,12 +98,16 @@ test("only the owner sees and answers a step, and a step takes one move", async 
   const seat = seats(testDatabaseUrl());
   const reply = play(seat, "alice");
   const id = await waitForStep(seat, "alice");
-  assert.deepEqual(await seat.pending("bob"), []);
-  assert.equal(await seat.step("bob", id), null);
-  await assert.rejects(seat.move("bob", id, [{ type: "text", text: "hijack" }]), { code: "step_closed" });
-  await assert.rejects(seat.ask("bob", id, new AbortController().signal), { code: "step_closed" });
-  await seat.move("alice", id, [{ type: "text", text: "mine" }]);
-  await assert.rejects(seat.move("alice", id, [{ type: "text", text: "again" }]), { code: "step_closed" });
+  assert.deepEqual(await seat.pending(ambientTenant(), "bob"), []);
+  assert.equal(await seat.step(ambientTenant(), "bob", id), null);
+  await assert.rejects(seat.move(ambientTenant(), "bob", id, [{ type: "text", text: "hijack" }]), {
+    code: "step_closed",
+  });
+  await assert.rejects(seat.ask(ambientTenant(), "bob", id, new AbortController().signal), { code: "step_closed" });
+  await seat.move(ambientTenant(), "alice", id, [{ type: "text", text: "mine" }]);
+  await assert.rejects(seat.move(ambientTenant(), "alice", id, [{ type: "text", text: "again" }]), {
+    code: "step_closed",
+  });
   assert.deepEqual((await reply).content, [{ type: "text", text: "mine" }]);
 });
 
@@ -117,21 +122,21 @@ test("moves must be text or tool calls with object input", async () => {
     [{ type: "tool_use", name: "execute", input: ["ls"] }],
     "hi",
   ])
-    await assert.rejects(seat.move("alice", id, content), { code: "bad_request" });
-  await seat.move("alice", id, [{ type: "text", text: "ok" }]);
+    await assert.rejects(seat.move(ambientTenant(), "alice", id, content), { code: "bad_request" });
+  await seat.move(ambientTenant(), "alice", id, [{ type: "text", text: "ok" }]);
   await reply;
 });
 
 test("the seat refuses people without the feature and conversations outside their personal scope", async () => {
   const seat = seats(testDatabaseUrl());
-  await assert.rejects(seat.pending("off"), { code: "feature_disabled", message: SEAT_OFF });
+  await assert.rejects(seat.pending(ambientTenant(), "off"), { code: "feature_disabled", message: SEAT_OFF });
   const off = await play(seat, "off");
   assert.equal(off.stopReason, "error");
   assert.equal(off.errorMessage, SEAT_OFF);
   const shared = await play(seat, "alice", { scopeId: "channel:C1" });
   assert.equal(shared.stopReason, "error");
   assert.equal(shared.errorMessage, SEAT_PERSONAL_ONLY);
-  assert.deepEqual(await seat.pending("alice"), []);
+  assert.deepEqual(await seat.pending(ambientTenant(), "alice"), []);
 });
 
 test("cancelling the turn withdraws the step", async () => {
@@ -141,8 +146,10 @@ test("cancelling the turn withdraws the step", async () => {
   const id = await waitForStep(seat, "alice");
   controller.abort();
   assert.equal((await reply).stopReason, "aborted");
-  assert.deepEqual(await seat.pending("alice"), []);
-  await assert.rejects(seat.move("alice", id, [{ type: "text", text: "late" }]), { code: "step_closed" });
+  assert.deepEqual(await seat.pending(ambientTenant(), "alice"), []);
+  await assert.rejects(seat.move(ambientTenant(), "alice", id, [{ type: "text", text: "late" }]), {
+    code: "step_closed",
+  });
 });
 
 test("an unanswered step times out with an error the turn can show", async () => {
@@ -150,7 +157,7 @@ test("an unanswered step times out with an error the turn can show", async () =>
   const message = await play(seat, "alice");
   assert.equal(message.stopReason, "error");
   assert.match(message.errorMessage ?? "", /No move was made at the Agent Seat/);
-  assert.deepEqual(await seat.pending("alice"), []);
+  assert.deepEqual(await seat.pending(ambientTenant(), "alice"), []);
 });
 
 test("a step whose run ended is no longer offered or answerable, and a retried call replaces it", async () => {
@@ -163,15 +170,17 @@ test("a step whose run ended is no longer offered or answerable, and a retried c
   const second = new AbortController();
   const fresh = play(retry, "alice", { signal: second.signal, runId: "run-retried" });
   let freshId = staleId;
-  while (freshId === staleId) freshId = (await retry.pending("alice"))[0]?.id ?? staleId;
+  while (freshId === staleId) freshId = (await retry.pending(ambientTenant(), "alice"))[0]?.id ?? staleId;
   assert.deepEqual(
-    (await retry.pending("alice")).map((step) => step.id),
+    (await retry.pending(ambientTenant(), "alice")).map((step) => step.id),
     [freshId],
   );
   ended.add("run-retried");
   try {
-    assert.deepEqual(await retry.pending("alice"), []);
-    await assert.rejects(retry.move("alice", freshId, [{ type: "text", text: "late" }]), { code: "step_closed" });
+    assert.deepEqual(await retry.pending(ambientTenant(), "alice"), []);
+    await assert.rejects(retry.move(ambientTenant(), "alice", freshId, [{ type: "text", text: "late" }]), {
+      code: "step_closed",
+    });
   } finally {
     first.abort();
     second.abort();
@@ -196,17 +205,17 @@ test("ask replays the stored request as the step owner and returns the model's d
   const reply = play(seat, "alice", { signal: controller.signal });
   try {
     const id = await waitForStep(seat, "alice");
-    const draft = await seat.ask("alice", id, new AbortController().signal);
+    const draft = await seat.ask(ambientTenant(), "alice", id, new AbortController().signal);
     assert.equal(draft.model, "claude-x");
     assert.deepEqual(asked, [
       {
-        request: (await seat.step("alice", id))!.request,
+        request: (await seat.step(ambientTenant(), "alice", id))!.request,
         actorId: "alice",
         scopeId: "personal:alice",
         sessionId: "session-alice",
       },
     ]);
-    await seat.move("alice", id, draft.content);
+    await seat.move(ambientTenant(), "alice", id, draft.content);
     assert.equal((await reply).stopReason, "toolUse");
   } finally {
     controller.abort();
