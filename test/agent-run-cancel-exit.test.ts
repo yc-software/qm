@@ -378,3 +378,33 @@ test("reasoning streams before its thinking entry is persisted, and a cancel mid
     globalThis.fetch = realFetch;
   }
 });
+
+test("a cancel after the model has written some text records the partial as stopped by the run's cancel", async () => {
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
+  const controller = new AbortController();
+  const sink = { entries: [] as Item[] };
+  const realFetch = globalThis.fetch;
+  const head = textReplyEvents("the first half of an answer").slice(0, 3);
+  globalThis.fetch = ((_url: string | URL | Request, init?: RequestInit) => {
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(stream) {
+        for (const event of head)
+          stream.enqueue(encoder.encode(`event: ${event.type as string}\ndata: ${JSON.stringify(event)}\n\n`));
+        init?.signal?.addEventListener("abort", () => stream.error(abortShapedError()), { once: true });
+        setTimeout(() => controller.abort(), 100);
+      },
+    });
+    return Promise.resolve(new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } }));
+  }) as typeof globalThis.fetch;
+  try {
+    const result = await agent.runTurn(cancelTurn("cancel-exit-partial", controller.signal, sink));
+    assert.equal(result.stopped, true);
+    const partial = sink.entries.find(isAgentReply);
+    assert.equal(partial?.text, "the first half of an answer");
+    assert.equal(partial?.body.stopped, true);
+    assert.equal(partial?.body.cancelled, true, "the partial records that the run's cancel stopped it");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

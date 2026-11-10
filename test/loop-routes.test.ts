@@ -9,10 +9,16 @@ import { decideShip } from "../src/loops/ship-gate.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { findRoute } from "../src/api/routes/route.ts";
 import type { ApiCtx, Route } from "../src/api/routes/route.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, type TurnRequest } from "../src/types.ts";
+import { createLoopFireService } from "../src/loops/loop-fire.ts";
+import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import type { Loop, ShipGrant } from "../src/loops/types.ts";
 import { testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { withTenant } from "../src/tenants/context.ts";
+import { TEST_TENANT } from "./support/test-tenant.ts";
+
+const tenant = withTenant(TEST_TENANT, (t) => t);
 
 function fakeRes() {
   const out = { status: 0, body: undefined as unknown };
@@ -63,6 +69,7 @@ async function call(
     res,
     url,
     body,
+    tenant,
     params: found.params,
     capability:
       mode === "capability"
@@ -844,7 +851,6 @@ test("agent loop reads omit Slack avatar metadata", async () => {
   const payload = {
     source: "slack",
     participants: [{ id: "U1", name: "Alex", avatarUrl: "https://example.com/avatar.png" }],
-    slackAvatarsRefreshAt: 12345,
   };
   await deps.items.ingest([{ loopId: loop.id, dedupeKey: "D1", source: "slack", sourcePayload: payload }]);
   for (const mode of ["source", "capability"] as const) {
@@ -853,9 +859,55 @@ test("agent loop reads omit Slack avatar metadata", async () => {
     const text = JSON.stringify(response.body);
     if (mode === "source") assert.match(text, /avatar.png/);
     else {
-      assert.doesNotMatch(text, /avatarUrl|slackAvatarsRefreshAt/);
+      assert.doesNotMatch(text, /avatarUrl/);
       assert.match(text, /Alex/);
     }
   }
   assert.deepEqual((await deps.items.byLoop(loop.id))[0]!.sourcePayload, payload);
+});
+
+test("a scheduled loop a Slack bot's turn creates fires as the bot's work", async () => {
+  const deps = services();
+  const turns: TurnRequest[] = [];
+  const fire = createLoopFireService({
+    loops: deps.store,
+    crons: deps.crons,
+    items: deps.items,
+    outputs: deps.outputs,
+    grants: deps.grants,
+    files: { listOwnedByScopes: async () => ({ files: [] }), open: async () => null },
+    trigger: {
+      deliveries: { enqueue: async () => ({ id: "d1" }) } as never,
+      idempotency: createIdempotencyStore(testMap()),
+      identity: { refresh: async () => {}, classify: () => ({ type: "internal" as const }) } as never,
+      run: async (req) => {
+        turns.push(req);
+        return { status: "ok", reply: "done", sessionId: `s${turns.length}` };
+      },
+    },
+  });
+  const fireAs = async (actor: string, botActor: boolean) => {
+    const out = await call(
+      deps,
+      "POST",
+      "/v1/loops",
+      { ...CREATE, schedule: { everyMs: 3_600_000 } },
+      actor,
+      "capability",
+      true,
+      true,
+      false,
+      botActor,
+    );
+    assert.equal(out.status, 200);
+    const loop = (out.body as { loop: Loop }).loop;
+    const before = turns.length;
+    await fire.fire(loop.id, `fire-${actor}`, loop.cronId);
+    return [...new Set(turns.slice(before).map((turn) => turn.botActor))];
+  };
+  assert.deepEqual(
+    [await fireAs("josh", false), await fireAs("release-bot", true)],
+    [[undefined], [true]],
+    "the loop the bot scheduled fires as bot work",
+  );
 });

@@ -94,11 +94,16 @@ export class CoreClient {
     return this.request("POST", `/v1/admin/sandboxes/${encodeURIComponent(scopeId)}`, body);
   }
 
-  listSessions(): Promise<{ sessions: SessionSummary[] }> {
-    return this.request("GET", `/v1/admin/sessions?scope=${encodeURIComponent(this.orgScope)}&limit=200`);
+  listSessions(category: "conversation" | "all" = "conversation"): Promise<{ sessions: SessionSummary[] }> {
+    return this.request(
+      "GET",
+      `/v1/admin/sessions?scope=${encodeURIComponent(this.orgScope)}&limit=200&category=${category}`,
+    );
   }
 
-  getSession(id: string): Promise<{ session: { threadRef?: string; scopeId?: string }; items: Item[] }> {
+  getSession(
+    id: string,
+  ): Promise<{ session: { threadRef?: string; scopeId?: string; parentSessionId?: string | null }; items: Item[] }> {
     return this.request(
       "GET",
       `/v1/admin/sessions/${encodeURIComponent(id)}?scope=${encodeURIComponent(this.orgScope)}`,
@@ -149,6 +154,29 @@ export class CoreClient {
       headers: { "x-agent-capability": token },
     });
     if (!res.ok) throw new Error(`core DELETE /v1/crons/${cron.id}: ${res.status}`);
+  }
+
+  async findSessionTreeByThread(channel: string, rootTs: string): Promise<{ id: string; items: Item[] } | null> {
+    const wanted = `ch:${channel}:${rootTs}`;
+    const { sessions } = await this.listSessions("all");
+    const loaded = new Map<string, Awaited<ReturnType<CoreClient["getSession"]>>>();
+    for (const s of sessions) {
+      const full = await this.getSession(s.id).catch(() => null);
+      if (full) loaded.set(s.id, full);
+    }
+    const root = [...loaded].find(([, full]) => full.session?.threadRef === wanted)?.[0];
+    if (!root) return null;
+    const tree = new Set([root]);
+    for (let grew = true; grew;) {
+      grew = false;
+      for (const [id, full] of loaded) {
+        const parent = full.session?.parentSessionId;
+        if (tree.has(id) || !parent || !tree.has(parent)) continue;
+        tree.add(id);
+        grew = true;
+      }
+    }
+    return { id: root, items: [...tree].flatMap((id) => loaded.get(id)!.items) };
   }
 
   async findSessionByThread(channel: string, rootTs?: string): Promise<{ id: string; items: Item[] } | null> {

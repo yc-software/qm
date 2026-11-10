@@ -1,10 +1,13 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import type { DurableMap } from "../src/persistence/durable-map.ts";
+import { createPostgresMap, processLevelMap, type DurableMap } from "../src/persistence/durable-map.ts";
+import type { PgPool } from "../src/persistence/pg-pool.ts";
 import { createRenderBase, type RenderBase, type StoredRenderBase } from "../src/sandbox/render-base.ts";
 import { parseRenderSandboxImage } from "../src/sandbox/render-limits.ts";
 import { createFakeRender } from "./support/fake-render.ts";
 import { testMap } from "./support/test-database.ts";
+import { twoTenants } from "./support/two-tenants.ts";
+import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 
 const SHA_A = "0123456789abcdef0123456789abcdef01234567";
 const SHA_B = "fedcba9876543210fedcba9876543210fedcba98";
@@ -40,6 +43,9 @@ function setup(t: TestContext) {
   };
   return { fake, store, errors, make, prepareUntil };
 }
+
+const renderBaseStore = (pg: PgPool) =>
+  createPostgresMap<StoredRenderBase>(pg, "render_sandbox_bases", [], [], [processLevelMap("render_sandbox_bases")]);
 
 const prepare = (base: RenderBase) => base.prepare(new AbortController().signal);
 
@@ -235,3 +241,21 @@ test("Render base never serves a rebuilt golden that is still being created", as
   });
   await assert.rejects(make(REF_A).ready(), /still being prepared/);
 });
+
+test(
+  "Render base prepared under one tenant serves every tenant from the process-level store",
+  { skip: process.env.DATABASE_URL ? false : "set DATABASE_URL (a Postgres) to run the Render base store test" },
+  async (t) => {
+    const { fake } = setup(t);
+    const db = await twoTenants();
+    t.after(() => db.close());
+    await withoutTenant(() => renderBaseStore(db.owner).entries());
+    const [first, second] = db.tenants;
+    const base = () =>
+      createRenderBase({ client: fake.client, store: renderBaseStore(db.app), image: REF_A, pollMs: 5, waitMs: 200 });
+    await withTenant(first, () => prepare(base()));
+    const golden = await withTenant(second, () => base().ready());
+    assert.equal(golden.ref, REF_A);
+    assert.ok(golden.snapshotId);
+  },
+);
