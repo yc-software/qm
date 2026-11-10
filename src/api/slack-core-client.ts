@@ -183,7 +183,12 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       decideDeploymentAccess(deps.app, deps.identity, value, actor, approve),
     ...(deps.keychainApprovals ? { keychainApprovals: deps.keychainApprovals } : {}),
     ...(deps.taskAcknowledgements
-      ? { taskAcknowledgements: createTaskAcknowledgements(deps.taskAcknowledgements, lease, deps) }
+      ? {
+          taskAcknowledgements: createTaskAcknowledgements(deps.taskAcknowledgements, lease, {
+            runs: deps.runs,
+            ...(deps.statusActivity?.work ? { work: deps.statusActivity.work } : {}),
+          }),
+        }
       : {}),
     ...(deps.sessionStatus && deps.featureFlags
       ? {

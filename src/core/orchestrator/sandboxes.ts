@@ -351,6 +351,13 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       swarms.botMayUseComputer(resource, { actorId: actor.id, threadRef: session.threadRef, sessionId: session.id }));
   const assertDefaultUsable = (sandboxId = boundSandboxId): Promise<void> =>
     assertBotMayUseComputer(deps.sandboxResources, resolution.writableScopeId, sandboxId, botMayUse);
+  const personUsed = new Set<string>();
+  const notePersonUse = async (handle: SandboxHandle): Promise<void> => {
+    const sandboxId = handle.resourceId ?? boundSandboxId;
+    if (input.botActor || !deps.swarms || !deps.sandboxResources || !sandboxId || personUsed.has(sandboxId)) return;
+    await deps.swarms.notePersonUse(await deps.sandboxResources.get(sandboxId));
+    personUsed.add(sandboxId);
+  };
   const turnAccess = {
     env: connectorEnv,
     egress: resolution.egress,
@@ -389,10 +396,13 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   const provision = async (eager = false): Promise<SandboxHandle> => {
     if (!eager) scopedUsed = true;
     const opening = pool.get(SCOPED)?.opening;
-    if (!opening)
-      return openSlot(pool, SCOPED, (slot) => tracePhase("sandbox.provision", () => openScoped(turnPool, slot, eager)));
-    const handle = await opening;
-    await assertDefaultUsable(handle.resourceId ?? boundSandboxId);
+    const handle = opening
+      ? await opening
+      : await openSlot(pool, SCOPED, (slot) =>
+          tracePhase("sandbox.provision", () => openScoped(turnPool, slot, eager)),
+        );
+    if (opening) await assertDefaultUsable(handle.resourceId ?? boundSandboxId);
+    if (!eager) await notePersonUse(handle);
     return handle;
   };
   const writableScopeId = resolution.writableScopeId;
@@ -414,10 +424,14 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     const resource = await deps.sandboxResources!.get(id);
     return resource.jobOnly ? provisionResource(jobComputerPlan(resource)) : provisionResource(id);
   };
-  const provisionResource = (
+  const provisionResource = async (
     input: string | SandboxAccessPlan,
     authorize?: (access: SandboxAccessPlan) => void,
-  ): Promise<SandboxHandle> => openResource(turnPool, input, authorize);
+  ): Promise<SandboxHandle> => {
+    const handle = await openResource(turnPool, input, authorize);
+    await notePersonUse(handle);
+    return handle;
+  };
   const provisionScratch = (): Promise<SandboxHandle> => openScratch(turnPool);
   const turnSkills = createTurnSkills({
     deps,

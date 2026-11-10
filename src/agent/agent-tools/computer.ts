@@ -535,10 +535,13 @@ export function computerTools(kit: ToolKit) {
           case "unwatch": {
             try {
               const r = await tc.backgroundUnwatch(params.monitor_id!);
+              const refusal = r.notYours
+                ? `[not your watch: ${r.monitorId}; someone else in this conversation armed it]`
+                : `[no such watch: ${r.monitorId}]`;
               return recordResult(
                 callId,
                 { tool: "background", action: params.action, ...r },
-                text(r.removed ? `unwatched ${r.monitorId}` : `[no such watch: ${r.monitorId}]`),
+                text(r.removed ? `unwatched ${r.monitorId}` : refusal),
                 !r.removed,
               );
             } catch (e) {

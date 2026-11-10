@@ -119,6 +119,14 @@ test("stopping holds a disabled Stopping… button beside Send and queues every 
     };
     composer!.state.draft = "Keep this draft";
     draw();
+    await t.test("mounted composer focuses immediately with the caret at the end", () => {
+      const input = host.querySelector<HTMLTextAreaElement>("textarea")!;
+      input.blur();
+      composer!.focusComposerEnd();
+      assert.equal(dom.window.document.activeElement, input);
+      assert.equal(input.selectionStart, input.value.length);
+      assert.equal(input.selectionEnd, input.value.length);
+    });
     assert.equal(button(".send-btn").disabled, false);
     button(".stop-btn").click();
     assert.equal(stops, 1);
