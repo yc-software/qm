@@ -265,29 +265,22 @@ for (const lock of ["qm:schema-migrations"]) {
   });
 }
 
-test("an applied migration set is checked against the ledger in one read", { skip }, async () => {
-  const pool = new pg.Pool({ connectionString: databaseUrl, max: 1 });
-  const { id } = names();
-  const migrations = Array.from({ length: 50 }, (_, n) =>
-    definePgMigration({ id: `${id}/${String(n).padStart(2, "0")}`, statements: ["SELECT 1"] }),
-  );
+test("a migration recorded by an earlier step's SQL in the same run is not applied again", { skip }, async () => {
+  const pool = new pg.Pool({ connectionString: databaseUrl });
+  const { id, table } = names();
+  const sibling = definePgMigration({ id: `${id}/b`, statements: [`INSERT INTO ${table}(value) VALUES (2)`] });
+  const recorder = definePgMigration({
+    id: `${id}/a`,
+    statements: [
+      `CREATE TABLE ${table}(value INT)`,
+      `INSERT INTO ${PG_MIGRATIONS_TABLE}(id, checksum) VALUES ('${sibling.id}', '${sibling.checksum}')`,
+    ],
+  });
   try {
-    await applyPgMigrations(pool, migrations);
-    const client = await pool.connect();
-    const ledgerReads: string[] = [];
-    const query = client.query.bind(client) as (...args: unknown[]) => unknown;
-    (client as unknown as { query: (...args: unknown[]) => unknown }).query = (...args: unknown[]) => {
-      if (typeof args[0] === "string" && args[0].includes(PG_MIGRATIONS_TABLE)) ledgerReads.push(args[0]);
-      return query(...args);
-    };
-    client.release();
-    await applyPgMigrations(pool, migrations);
-    assert.equal(ledgerReads.filter((text) => text.startsWith("SELECT")).length, 1);
-    await assert.rejects(
-      applyPgMigrations(pool, [definePgMigration({ id: migrations[0]!.id, statements: ["SELECT 2"] })]),
-      /checksum mismatch/,
-    );
+    await applyPgMigrations(pool, [recorder, sibling]);
+    assert.deepEqual((await pool.query(`SELECT value FROM ${table}`)).rows, []);
   } finally {
+    await pool.query(`DROP TABLE IF EXISTS ${table}`);
     await pool.query(`DELETE FROM ${PG_MIGRATIONS_TABLE} WHERE id LIKE $1`, [`${id}/%`]);
     await pool.end();
   }
