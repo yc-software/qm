@@ -13,6 +13,7 @@ import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const ORG = "default-org";
 const initiator = "U1";
@@ -53,7 +54,13 @@ function registration(
       ? {
           onRegistered: async ({ ownerScopeId, id }) => {
             for (const granteeScopeId of grantees) {
-              await acl.grant({ ownerScopeId, ref: id, granteeScopeId, permission: "read", grantedBy: initiator });
+              await acl.grant(tenant, {
+                ownerScopeId,
+                ref: id,
+                granteeScopeId,
+                permission: "read",
+                grantedBy: initiator,
+              });
             }
           },
         }
@@ -82,15 +89,15 @@ test("a file delivered in a PUBLIC channel is auto-shared (read) with the org â€
     registration(files, acl, false, "channel"),
   );
 
-  const u1 = await makeApp(files, acl).listFilesForViewer(initiator);
+  const u1 = await makeApp(files, acl).listFilesForViewer(tenant, initiator);
   assert.equal(u1.owned.length, 1);
   assert.equal(u1.owned[0]!.name, "flag.png");
 
   const app = makeApp(files, acl);
-  const u2 = await app.listFilesForViewer("U2");
+  const u2 = await app.listFilesForViewer(tenant, "U2");
   assert.equal(u2.owned.length, 0, "U2 doesn't own it");
   assert.equal(u2.shared.length, 1, "the org read grant surfaces it to U2");
-  const opened = await app.openFileForViewer(u2.shared[0]!.id, "U2");
+  const opened = await app.openFileForViewer(tenant, u2.shared[0]!.id, "U2");
   assert.ok(opened, "the org grant authorizes the bytes");
 });
 
@@ -107,7 +114,7 @@ test("a file delivered in a DM stays owner-only â€” no auto-share", async () => 
     registration(files, acl, undefined, "dm"),
   );
 
-  assert.equal((await makeApp(files, acl).listFilesForViewer(initiator)).owned.length, 1, "owner sees it");
-  const u2 = await makeApp(files, acl).listFilesForViewer("U2");
+  assert.equal((await makeApp(files, acl).listFilesForViewer(tenant, initiator)).owned.length, 1, "owner sees it");
+  const u2 = await makeApp(files, acl).listFilesForViewer(tenant, "U2");
   assert.equal(u2.owned.length + u2.shared.length, 0, "nobody else sees a DM file");
 });

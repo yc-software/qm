@@ -38,8 +38,8 @@ export function withoutTenant<T>(fn: () => T): T {
   return bind(undefined, fn);
 }
 
-export async function pinTenant<T>(fn: () => Promise<T>): Promise<T> {
-  const pin = { tenant: boundTenant(), open: true };
+export async function pinTenant<T>(tenant: string | undefined, fn: () => Promise<T>): Promise<T> {
+  const pin = { tenant, open: true };
   try {
     return await pinned.run(pin, fn);
   } finally {

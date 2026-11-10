@@ -548,7 +548,15 @@ test("computer status surfaces list-view disagreement and guest pressure", async
       machine: "healthy",
       listed: "cold",
       guestResponsive: true,
-      pressure: { ioFull10: 90, ioFull60: 86.14, load1: 30.78 },
+      load: {
+        ioFull60: 86.14,
+        sampledAt: 0,
+        load1: 30.78,
+        memUsedMb: 1024,
+        memTotalMb: 4096,
+        diskUsedGb: 10,
+        diskTotalGb: 100,
+      },
     }),
     restartComputer: async () => {},
   };
@@ -558,7 +566,7 @@ test("computer status surfaces list-view disagreement and guest pressure", async
     content: Array<{ text?: string }>;
   };
   assert.match(status.content[0]!.text!, /machine: healthy \(listed: cold\)/);
-  assert.match(status.content[0]!.text!, /io pressure: 86\.14% \(load 30\.78\)/);
+  assert.match(status.content[0]!.text!, /io pressure: 86\.14%; load 30\.78, memory 1024\/4096 MiB, disk 10\/100 GiB/);
 });
 
 test("computer status exposes paused lifecycle and recovery deadlines without claiming a failed shell", async () => {
@@ -651,7 +659,15 @@ test("an exec under io pressure carries a [pressure] warning; a calm one doesn't
       stderr: "",
       code: 0,
       timedOut: false,
-      pressure: { ioFull10: 80, ioFull60: 62.4, load1: 12 },
+      load: {
+        ioFull60: 62.4,
+        sampledAt: 0,
+        load1: 12,
+        memUsedMb: 1024,
+        memTotalMb: 4096,
+        diskUsedGb: 10,
+        diskTotalGb: 100,
+      },
     }),
   };
   const ref: ToolContextRef = { current: pressured, emit: async () => undefined, scopeLabel: "personal:U1" };
@@ -666,7 +682,15 @@ test("an exec under io pressure carries a [pressure] warning; a calm one doesn't
       stderr: "",
       code: 0,
       timedOut: false,
-      pressure: { ioFull10: 1, ioFull60: 2, load1: 0.5 },
+      load: {
+        ioFull60: 2,
+        sampledAt: 0,
+        load1: 0.5,
+        memUsedMb: 1024,
+        memTotalMb: 4096,
+        diskUsedGb: 10,
+        diskTotalGb: 100,
+      },
     }),
   };
   const calm = (await call(execute, { command: "echo ok", purpose: "p" })) as { content: Array<{ text?: string }> };
@@ -713,7 +737,7 @@ test("a result over the inline cap keeps its head and tail and parks the full te
   const bytes = createMemoryDurableByteStore();
   const outputs = createPostgresToolOutputStore({ pool, bytesFor: () => bytes, now: () => clock.at });
   const appends: Promise<unknown>[] = [];
-  const full = Array.from({ length: 2_000 }, (_, i) => `line ${i}`).join("\n");
+  const full = `${Array.from({ length: 2_000 }, (_, i) => `line ${i}`).join("\n")}\nprice $' total`;
   const tc = {
     ...fakeToolContext(),
     toolOutput: outputs,
@@ -739,6 +763,7 @@ test("a result over the inline cap keeps its head and tail and parks the full te
   assert.equal(result.text, seen, "the item stores exactly what the model saw");
   assert.ok(seen.startsWith("line 0\nline 1"), "head survives");
   assert.ok(seen.includes("[exit 0]"), "tail survives");
+  assert.ok(seen.includes("price $' total"), "the tail reaches the model verbatim");
   const marker = parkedOutputKey(/tool-output\/\S+(?=;)/.exec(seen)![0])!;
   const parked = await outputs.read(session.id, marker);
   assert.ok(parked && "text" in parked, "the marker names the parked file");
@@ -755,6 +780,72 @@ test("a result over the inline cap keeps its head and tail and parks the full te
   assert.equal(uncapped.body.output, undefined, "0 turns the cap off");
   assert.ok(uncapped.text?.includes("line 1000"));
   await pool.close();
+});
+
+test("a quarantined result over the inline cap never stores the withheld text", async () => {
+  const emitted: Emitted[] = [];
+  const url = testDatabaseUrl();
+  await createPostgresSessionStore(url).getOrCreateByThread("web:quarantine-park", "dm", scopeId("personal", "U1"));
+  const pool = createPgPool(url);
+  await pool.q(
+    "INSERT INTO qm_settings(key, value) VALUES ('tool_result_inline_tokens', '100') ON CONFLICT (key) DO UPDATE SET value = '100'",
+  );
+  const bytes = createMemoryDurableByteStore();
+  const outputs = createPostgresToolOutputStore({ pool, bytesFor: () => bytes });
+  const withheld = Array.from({ length: 2_000 }, (_, i) => `withheld ${i}`).join("\n");
+  const blobsBefore = await pool.q("SELECT count(*)::int AS n FROM blobs");
+  const screened: string[] = [];
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      toolOutput: outputs,
+      execute: async () => ({ stdout: withheld, stderr: "", code: 0, timedOut: false }),
+    },
+    emit: sink(emitted),
+    scopeLabel: "personal:U1",
+    screenToolResult: async ({ result }) => {
+      screened.push(result);
+      return { outcome: "quarantine" };
+    },
+  };
+  const [execute] = createAgentTools(ref);
+  await call(execute, { command: "seq", purpose: "Run test command" });
+  const result = emitted.find((e) => e.kind === "ToolResult")!;
+  assert.ok(screened[0]?.includes("[output cut: showing the first"));
+  assert.ok(!screened[0]?.includes("tool-output/"), "the screened text a release would deliver names no parked file");
+  assert.equal(result.body.output, undefined);
+  assert.equal(result.blobSha, null);
+  assert.ok(!result.text?.includes("withheld"));
+  const blobsAfter = await pool.q("SELECT count(*)::int AS n FROM blobs");
+  assert.equal(blobsAfter[0]!.n, blobsBefore[0]!.n, "no blob row is written for the withheld text");
+  await pool.close();
+});
+
+test("a result over the inline cap that cannot be parked drops the file reference from its marker", async () => {
+  const emitted: Emitted[] = [];
+  const full = Array.from({ length: 2_000 }, (_, i) => `line ${i}`).join("\n");
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      toolOutput: {
+        inlineTokens: async () => 100,
+        save: async () => Promise.reject(new Error("down")),
+      },
+      execute: async () => ({ stdout: full, stderr: "", code: 0, timedOut: false }),
+    },
+    emit: sink(emitted),
+    scopeLabel: "personal:U1",
+  };
+  const [execute] = createAgentTools(ref);
+  const ret = (await call(execute, { command: "seq", purpose: "Run test command" })) as {
+    content: Array<{ type: string; text: string }>;
+  };
+  const result = emitted.find((e) => e.kind === "ToolResult")!;
+  assert.equal(result.body.output, undefined);
+  assert.ok(result.text?.includes("[output cut: showing the first"));
+  assert.ok(!result.text?.includes("tool-output/"), "no marker points at a file that was never written");
+  assert.ok(result.text?.includes("rerun the call narrower"));
+  assert.equal(ret.content.map((c) => c.text).join("\n"), result.text);
 });
 
 test("execute stores its output once and replays exactly what the model saw", async () => {
@@ -1478,7 +1569,7 @@ test("finish_silently on a poll fire terminates the turn at the tool contract; o
     current: fakeToolContext(),
     emit: sink(emitted),
     scopeLabel: "personal:U1",
-    pollFire: true,
+    replyOptional: true,
   };
   const finish = createAgentTools(ref).find((t) => t.name === "finish_silently");
   const res = (await call(finish, { reason: "nothing new" })) as { terminate?: boolean };
@@ -1494,7 +1585,7 @@ test("finish_silently on a poll fire terminates the turn at the tool contract; o
     1,
   );
 
-  ref.pollFire = false;
+  ref.replyOptional = false;
   ref.silentRequested = false;
   const noop = (await call(finish, { reason: "n/a" })) as { terminate?: boolean; content: Array<{ text?: string }> };
   assert.notEqual(noop.terminate, true, "a person is waiting — the tool must not end the turn");

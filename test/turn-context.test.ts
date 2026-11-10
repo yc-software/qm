@@ -12,6 +12,7 @@ import { createPostgresFileArtifactStore } from "../src/files/postgres-file-arti
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { testConfigStore, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 async function fixture() {
   const memory = createPostgresMemoryService(testDatabaseUrl());
@@ -30,6 +31,7 @@ async function fixture() {
     resolveFiles: (refs) => files.resolveByIds(refs),
   });
   const input: Parameters<typeof resolveTurnContext>[0] = {
+    tenant,
     actor: { id: "alice", type: "internal" },
     audience: [{ id: "alice", type: "internal" }],
     acl,
@@ -149,6 +151,7 @@ test("fresh turn re-resolves membership after an earlier successful read", async
 test("skill discovery uses the same included scopes and audience-filtered explicit grants", async () => {
   const { input, acl, removeMember } = await fixture();
   await acl.grant(
+    tenant,
     {
       ownerScopeId: "personal:owner",
       ref: "skill:explicit",
@@ -200,6 +203,7 @@ test("skill discovery refreshes carried membership and explicit grants in the sa
   const context = await resolveTurnContext(input);
   assert.deepEqual((await context.listSkills()).sharingSources, ["channel:eng"]);
   await acl.grant(
+    tenant,
     {
       ownerScopeId: "personal:owner",
       ref: "skill:new",
@@ -211,7 +215,7 @@ test("skill discovery refreshes carried membership and explicit grants in the sa
   );
   await context.listSkills();
   assert.deepEqual(seen[1]!.grants, [{ id: "new", ownerScopeId: "personal:owner" }]);
-  await acl.revoke("personal:owner", "skill:new", "personal:alice", "owner");
+  await acl.revoke(tenant, "personal:owner", "skill:new", "personal:alice", "owner");
   removeMember();
   assert.deepEqual((await context.listSkills()).sharingSources, []);
   assert.deepEqual(seen[2], { scopes: ["personal:alice", "org:test"], grants: [] });
@@ -220,6 +224,7 @@ test("skill discovery refreshes carried membership and explicit grants in the sa
 test("source selection precedes name shadowing and preserves skill-level grants", async () => {
   const { input, acl } = await fixture();
   await acl.grant(
+    tenant,
     {
       ownerScopeId: "personal:owner",
       ref: "skill:one",

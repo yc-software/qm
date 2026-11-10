@@ -236,7 +236,9 @@ export function createSessionItems(deps: {
              token_cap = EXCLUDED.token_cap, tokens_used = EXCLUDED.tokens_used, active_ms = EXCLUDED.active_ms,
              active_since = EXCLUDED.active_since, completion_note = EXCLUDED.completion_note,
              cancel_note = EXCLUDED.cancel_note, governor = EXCLUDED.governor, pause_reason = EXCLUDED.pause_reason,
-             created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at`,
+             created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at
+           WHERE session_goals.status NOT IN ('complete', 'cancelled')
+              OR session_goals.created_at IS DISTINCT FROM EXCLUDED.created_at`,
           [
             writer.sessionId,
             goal.objective,

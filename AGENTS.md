@@ -40,13 +40,15 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   `gh pr merge <number>` queues it rather than merging it. The queue runs CI on the
   exact commit that will land, reusing the PR's run when `main` has not moved, and
   `main`'s own CI then reuses the queue's run. Never bypass the queue with `--admin`.
+- **Check the plan against the Wall of shame before writing code.** Hold what you plan to
+  add against each _always reviewed_ lens in the [Wall of shame](./docs/SPEC.md#wall-of-shame).
+  Changing the plan is free; the same finding at review costs a rewrite.
 - **Run independent Wall of shame reviews in parallel for every PR.** First triage with
   one fast, cheap model, the latest Haiku: give it the diff and every lens in the current
   [Wall of shame](./docs/SPEC.md#wall-of-shame), and have it mark each lens relevant or
   not, keeping any lens it is unsure about. Lenses marked _always reviewed_ in the spec
   skip triage and always get a reviewer. Then dispatch a separate fresh-context
-  subagent or independent reviewer for each relevant lens. Only
-  Honorable mentions may share one combined reviewer. Launch reviews asynchronously
+  subagent or independent reviewer for each relevant lens. Launch reviews asynchronously
   and in parallel within available capacity, queuing any overflow. Do not wait for
   reviews before opening or updating the PR, running checks, or continuing other work.
   Give each reviewer the raw evidence (diff, commands, logs, provider config), never the
@@ -61,10 +63,15 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   results or substitute the author's self-review. After edits, have independent
   reviewers reassess affected lenses and explicitly carry forward unaffected results.
   These reviews run alongside PR work; before merging, every relevant lens must have accepted
-  and all requested changes must be resolved. The `Wall of shame review` CI check fails
-  until the description's report covers every lens for the PR head: relevant lenses with
-  an Accept verdict, and the rest as `Not relevant` with the triage model as reviewer and
-  its one-line reason as the assessment.
+  and all requested changes must be resolved. Only a human maintainer can waive a lens, for
+  one PR: keep the reviewer's actual score, set the verdict to `Waived`, and write the
+  assessment as `Waived by <name>:` followed by the objection that was waived. Never
+  write a waiver the maintainer did not give, and never record one as Accept. The
+  `Wall of shame review` CI check fails until the description's report covers every lens
+  for the PR head: relevant lenses with an Accept or Waived verdict, and the rest as
+  `Not relevant` with the triage model as reviewer and its one-line reason as the
+  assessment. Lenses marked _checked by CI_ are computed by that check from the diff: skip
+  them in triage and review, and give them a row only to record a waiver.
 - **Disclose configuration changes in the PR description.** Name added, removed,
   or changed settings, flags, modes, and providers, including defaults, precedence,
   and supported combinations. Explain why; keep this proportional to the change.
@@ -87,6 +94,8 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   on the old code through the real path and assert the correct behavior, not the inverse
   of the specific fix. Don't write checks that can't fail — a fixture compared against
   itself, a job that always reports success. When a feature is removed, delete its tests.
+  CI enforces the spec's Over-testing limit on test lines per PR; remove or reshape
+  existing tests to stay within it.
 - **Verify non-trivial behavior changes in a live dev instance before opening a PR.**
   When a change is substantial enough that unit tests alone won't prove it works
   end-to-end — new or changed agent behavior, or anything touching the Slack/web
@@ -106,7 +115,8 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   in a temporary directory outside the checkout or an ignored local output directory,
   and attach them to the PR or host them externally. Do not bundle review screenshots
   into the app. Only actual product assets, such as icons and instructional media,
-  belong in the app bundle.
+  belong in the app bundle. `.gitignore` ignores image files and CI fails when a tracked
+  file is ignored; a product asset needs its own `!path` line there.
 - **Demo every front-end change in the PR.** Anything an operator or user sees
   rendered — admin/web/portal UI, Slack surfaces, emails — ships with a way for a
   reviewer to see the result without booting it. Prefer a link to a live demo app

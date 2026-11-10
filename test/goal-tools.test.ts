@@ -304,7 +304,7 @@ test("time spent while paused never counts toward the floor after a resume", asy
   const minute = 60_000;
   await create.execute("c1", { objective: "long haul", floor: { minMs: 30 * minute } });
   const t0 = ref.goal!.createdAt;
-  bankGoalTurn(ref.goal!, t0, t0 + 5 * minute); // the stopped turn still counts
+  bankGoalTurn(ref.goal!, t0, t0 + 5 * minute);
   ref.goal!.status = "paused";
   for (let i = 0; i < 3; i++) bankGoalTurn(ref.goal!, t0 + (10 + i * 10) * minute, t0 + (20 + i * 10) * minute);
   assert.equal(ref.goal!.activeMs, 5 * minute);
@@ -749,7 +749,7 @@ test("a swarm-paused worker's next tool result ends its reply", async () => {
       userAborted: false,
       cancelled: false,
       surfaceTools: false,
-      pollFire: false,
+      replyOptional: false,
       ref: { ...ref, modelCalls: 3 },
       session: endedEmpty as unknown as Parameters<typeof emptyEndingNote>[0]["session"],
       turnWallClockMs: 0,

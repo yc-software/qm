@@ -1,10 +1,11 @@
 import { foldPrincipalId, personIds, personKey } from "../directory/person.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
-import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import type { SharingPosture } from "../resolution/sharing-posture.ts";
 import type { Conversation, Principal, ScopeId } from "../types.ts";
 import { scopeId } from "../types.ts";
+import type { Tenant } from "../tenants/context.ts";
 import { tenantTables } from "../tenants/migrations.ts";
 
 interface Team {
@@ -36,10 +37,10 @@ export interface TeamChange {
 }
 
 export interface TeamStore {
-  list(): Promise<Team[]>;
-  forTurn(scope: ScopeId, principalIds: readonly string[]): Promise<TurnTeam[]>;
-  isMember(principalId: string, teamId: string): Promise<boolean>;
-  apply(change: TeamChange, actorId: string): Promise<void>;
+  list(tenant: Tenant): Promise<Team[]>;
+  forTurn(tenant: Tenant, scope: ScopeId, principalIds: readonly string[]): Promise<TurnTeam[]>;
+  isMember(tenant: Tenant, principalId: string, teamId: string): Promise<boolean>;
+  apply(tenant: Tenant, change: TeamChange, actorId: string): Promise<void>;
 }
 
 const SCHEMA = [
@@ -75,7 +76,7 @@ export function createPostgresTeamStore(
   flags: Pick<FeatureFlagStore, "enabled">,
   orgScope: ScopeId,
 ): TeamStore {
-  const { q, pool } = createPgPool(connectionString, [
+  const pg = createPgPool(connectionString, [
     { id: "teams/0001", statements: SCHEMA },
     ...tenantTables(
       "teams/0002-tenants",
@@ -97,13 +98,15 @@ export function createPostgresTeamStore(
   ]);
   const enabled = () => flags.enabled("team_scopes", orgScope);
   return {
-    async list() {
+    async list(tenant) {
       if (!(await enabled())) return [];
-      const rows = await q(
+      const rows = await pg.forTenant(tenant).q(
         `SELECT t.team_id, t.name, t.isolated_in_open,
-           (SELECT count(*)::int FROM team_members m WHERE m.team_id = t.team_id) AS member_count,
-           COALESCE((SELECT array_agg(r.scope_id ORDER BY r.scope_id) FROM team_rooms r WHERE r.team_id = t.team_id), '{}') AS rooms
-         FROM teams t ORDER BY t.team_id`,
+           (SELECT count(*)::int FROM team_members m WHERE m.tenant_id = t.tenant_id AND m.team_id = t.team_id) AS member_count,
+           COALESCE((SELECT array_agg(r.scope_id ORDER BY r.scope_id) FROM team_rooms r
+             WHERE r.tenant_id = t.tenant_id AND r.team_id = t.team_id), '{}') AS rooms
+         FROM teams t WHERE t.tenant_id = $1 ORDER BY t.team_id`,
+        [tenant.id],
       );
       return rows.map((r) => ({
         id: r.team_id as string,
@@ -113,16 +116,17 @@ export function createPostgresTeamStore(
         memberCount: r.member_count as number,
       }));
     },
-    async forTurn(scope, principalIds) {
+    async forTurn(tenant, scope, principalIds) {
       if (!(await enabled())) return [];
-      const rows = await q(
+      const rows = await pg.forTenant(tenant).q(
         `SELECT t.team_id, t.name, t.isolated_in_open,
-           EXISTS (SELECT 1 FROM team_rooms r WHERE r.team_id = t.team_id AND r.scope_id = $1) AS configured,
+           EXISTS (SELECT 1 FROM team_rooms r
+             WHERE r.tenant_id = t.tenant_id AND r.team_id = t.team_id AND r.scope_id = $2) AS configured,
            array_agg(m.principal_id) AS present
-         FROM team_members m JOIN teams t ON t.team_id = m.team_id
-         WHERE m.principal_id = ANY($2)
+         FROM team_members m JOIN teams t ON t.tenant_id = m.tenant_id AND t.team_id = m.team_id
+         WHERE m.tenant_id = $1 AND m.principal_id = ANY($3)
          GROUP BY t.tenant_id, t.team_id ORDER BY t.team_id`,
-        [scope, [...new Set(principalIds.flatMap(keysOf))]],
+        [tenant.id, scope, [...new Set(principalIds.flatMap(keysOf))]],
       );
       return rows.map((r) => ({
         id: r.team_id as string,
@@ -132,28 +136,31 @@ export function createPostgresTeamStore(
         present: new Set(r.present as string[]),
       }));
     },
-    async isMember(principalId, teamId) {
+    async isMember(tenant, principalId, teamId) {
       if (!(await enabled())) return false;
-      const rows = await q("SELECT 1 FROM team_members WHERE team_id = $1 AND principal_id = ANY($2) LIMIT 1", [
-        teamId,
-        keysOf(principalId),
-      ]);
+      const rows = await pg
+        .forTenant(tenant)
+        .q("SELECT 1 FROM team_members WHERE tenant_id = $1 AND team_id = $2 AND principal_id = ANY($3) LIMIT 1", [
+          tenant.id,
+          teamId,
+          keysOf(principalId),
+        ]);
       return rows.length > 0;
     },
-    async apply(c, actorId) {
+    async apply(tenant, c, actorId) {
       const now = Date.now();
-      await withPgTransaction(await pool(), async (db) => {
+      await pg.forTenant(tenant).transaction(async (db) => {
         if (c.remove) {
-          await db.query("DELETE FROM teams WHERE team_id = $1", [c.id]);
+          await db.query("DELETE FROM teams WHERE tenant_id = $1 AND team_id = $2", [tenant.id, c.id]);
           return;
         }
         await db.query(
-          `INSERT INTO teams (team_id, name, isolated_in_open, created_by, created_at)
-           VALUES ($1, COALESCE($2, $1), COALESCE($3, FALSE), $4, $5)
+          `INSERT INTO teams (tenant_id, team_id, name, isolated_in_open, created_by, created_at)
+           VALUES ($1, $2, COALESCE($3, $2), COALESCE($4, FALSE), $5, $6)
            ON CONFLICT (tenant_id, team_id) DO UPDATE SET
-             name = COALESCE($2, teams.name),
-             isolated_in_open = COALESCE($3, teams.isolated_in_open)`,
-          [c.id, c.name ?? null, c.isolatedInOpen ?? null, actorId, now],
+             name = COALESCE($3, teams.name),
+             isolated_in_open = COALESCE($4, teams.isolated_in_open)`,
+          [tenant.id, c.id, c.name ?? null, c.isolatedInOpen ?? null, actorId, now],
         );
         const people = [
           ...(c.addMembers ?? []).map((p) => [personKey(p), "member"]),
@@ -161,23 +168,28 @@ export function createPostgresTeamStore(
         ];
         if (people.length)
           await db.query(
-            `INSERT INTO team_members (team_id, principal_id, role, added_by, added_at)
-             SELECT $1, p, r, $4, $5 FROM unnest($2::text[], $3::text[]) AS x(p, r)
+            `INSERT INTO team_members (tenant_id, team_id, principal_id, role, added_by, added_at)
+             SELECT $1, $2, p, r, $5, $6 FROM unnest($3::text[], $4::text[]) AS x(p, r)
              ON CONFLICT (tenant_id, team_id, principal_id) DO UPDATE SET role = EXCLUDED.role`,
-            [c.id, people.map(([p]) => p), people.map(([, r]) => r), actorId, now],
+            [tenant.id, c.id, people.map(([p]) => p), people.map(([, r]) => r), actorId, now],
           );
         if (c.drop?.length)
-          await db.query("DELETE FROM team_members WHERE team_id = $1 AND principal_id = ANY($2)", [
+          await db.query("DELETE FROM team_members WHERE tenant_id = $1 AND team_id = $2 AND principal_id = ANY($3)", [
+            tenant.id,
             c.id,
             c.drop.map(personKey),
           ]);
         if (c.addRooms?.length)
           await db.query(
-            "INSERT INTO team_rooms (team_id, scope_id) SELECT $1, unnest($2::text[]) ON CONFLICT DO NOTHING",
-            [c.id, c.addRooms],
+            "INSERT INTO team_rooms (tenant_id, team_id, scope_id) SELECT $1, $2, unnest($3::text[]) ON CONFLICT DO NOTHING",
+            [tenant.id, c.id, c.addRooms],
           );
         if (c.dropRooms?.length)
-          await db.query("DELETE FROM team_rooms WHERE team_id = $1 AND scope_id = ANY($2)", [c.id, c.dropRooms]);
+          await db.query("DELETE FROM team_rooms WHERE tenant_id = $1 AND team_id = $2 AND scope_id = ANY($3)", [
+            tenant.id,
+            c.id,
+            c.dropRooms,
+          ]);
       });
     },
   };
@@ -212,6 +224,7 @@ export function teamsForTurn(
 export async function scopeTeamsToTurn<
   T extends { actor: Principal; conversation: Conversation; conversationHeader?: string },
 >(
+  tenant: Tenant,
   input: T,
   deps: {
     teams?: TeamStore;
@@ -222,7 +235,7 @@ export async function scopeTeamsToTurn<
   if (external || !deps.teams) return input;
   const { actor, conversation } = input;
   const scope = conversationScope(conversation, actor.id);
-  const rows = await deps.teams.forTurn(scope, [actor.id, ...conversation.audience.map((p) => p.id)]);
+  const rows = await deps.teams.forTurn(tenant, scope, [actor.id, ...conversation.audience.map((p) => p.id)]);
   if (!rows.length) return input;
   const posture = (await deps.config?.resolveSharingPostureDurable(scopeId("personal", actor.id), scope)) ?? "isolated";
   const { teamIds, note } = teamsForTurn(rows, { scope, actorId: actor.id, audience: conversation.audience, posture });

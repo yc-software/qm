@@ -58,10 +58,6 @@ ${SECURITY_SCREEN_RUBRIC}
 
 ${SECURITY_SCREEN_OUTPUT_CONTRACT}`;
 
-/**
- * Step recorded on a captured security-screen LLM request. Screening calls are not part of any
- * turn's step sequence, so they are stamped with this sentinel.
- */
 export const SECURITY_SCREEN_STEP = -1;
 
 export interface SecurityScreenVerdict {

@@ -409,6 +409,7 @@ test("Render turns share one computer through the sandbox router", { timeout: 60
   const render = make();
   const resources = createSandboxResources({
     records: testMap(),
+    loads: testMap(),
     defaults: testMap(),
     backends: { render },
     defaultBackend: "render",

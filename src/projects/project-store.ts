@@ -88,13 +88,10 @@ export function isProjectGroupRef(ref: string): boolean {
   return ref.startsWith(PROJECT_GROUP_PREFIX);
 }
 
-/** A project's sidebar icon: one Unicode emoji, or a workspace custom emoji by name. */
 export type ProjectIcon = { kind: "emoji"; value: string } | { kind: "custom"; name: string };
 
-/** Exactly one emoji from Unicode's recommended (RGI) emoji set. */
 const ONE_EMOJI = /^\p{RGI_Emoji}$/v;
 
-/** Shape check only; whether a custom name exists in the workspace catalog is checked by the caller. */
 export function validProjectIcon(value: unknown): value is ProjectIcon | null {
   if (value === null) return true;
   if (typeof value !== "object" || !value) return false;

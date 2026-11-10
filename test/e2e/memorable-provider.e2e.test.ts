@@ -47,7 +47,6 @@ describe("memorable provider e2e (live Pi + real memorable CLI + Postgres)", { s
       MEMORABLE_HOME: mkdtempSync(join(tmpdir(), "memorable-home-")),
       ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
     };
-    // Consent is the CLI's own act, per scope, exactly as an operator would do it.
     const [cmd, ...args] = CLI!.split(" ");
     execFileSync(cmd!, [...args, "enable", "--scope", scope], {
       env: { ...cliEnv, MEMORABLE_BACKEND: "qm", MEMORABLE_DB_URL: DB },

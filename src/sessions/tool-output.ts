@@ -13,6 +13,8 @@ export const TOOL_OUTPUT_RETENTION_DAYS = 30;
 const SETTING_CACHE_MS = 30_000;
 const TOOL_OUTPUT_PATH = "tool-output/";
 const DIGEST_DIR = "md5/";
+const UNPARKED_NOTE =
+  " The full output was not kept; rerun the call narrower (filter or paginate it) if you need the rest";
 
 export interface ToolOutputRef {
   blob: string;
@@ -84,16 +86,29 @@ export async function inlineTokensOf(store: Pick<ToolOutputStore, "inlineTokens"
     : DEFAULT_INLINE_TOKENS;
 }
 
-export async function parkIfOverCap(
-  store: Pick<ToolOutputStore, "inlineTokens" | "save">,
+export interface InlineCut {
+  text: string;
+  unparkedText: string;
+  shownChars: number;
+}
+
+export async function cutIfOverCap(
+  store: Pick<ToolOutputStore, "inlineTokens">,
   text: string,
   callId: string,
-): Promise<{ text: string; output: ToolOutputRef } | null> {
+): Promise<InlineCut | null> {
   const inlineTokens = await inlineTokensOf(store);
   const cut = cutToolOutput(text, inlineTokens, callId);
-  if (!cut) return null;
+  return cut ? { ...cut, unparkedText: cutToInline(text, inlineTokens, UNPARKED_NOTE)!.text } : null;
+}
+
+export async function parkFullText(
+  store: Pick<ToolOutputStore, "save">,
+  text: string,
+  cut: InlineCut,
+): Promise<ToolOutputRef | null> {
   const blob = await store.save(text).catch(swallowAs("tool output: park full text", null));
-  return blob ? { text: cut.text, output: { blob, chars: text.length, shownChars: cut.shownChars } } : null;
+  return blob ? { blob, chars: text.length, shownChars: cut.shownChars } : null;
 }
 
 async function readText(bytes: DurableByteStore, blobKey: string): Promise<string | null> {

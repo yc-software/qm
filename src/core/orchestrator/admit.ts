@@ -6,6 +6,7 @@ import { isSubagentThreadRef } from "../../sessions/session-syscalls.ts";
 import { scopeId as toScopeId, type ScopeId, type Session, type TurnResult } from "../../types.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
+import type { Tenant } from "../../tenants/context.ts";
 
 export class ProjectRosterChanged extends Error {}
 
@@ -88,6 +89,7 @@ export const rosterChanged = (sessionId?: string): TurnResult => ({
 });
 
 export async function admitAudienceAndBudget(
+  tenant: Tenant,
   deps: OrchestratorDeps,
   conversation: Conversation,
   actor: Actor,
@@ -109,7 +111,7 @@ export async function admitAudienceAndBudget(
   }
 
   if (deps.budget) {
-    const b = await deps.budget.check(actor.id);
+    const b = await deps.budget.check(tenant, actor.id);
     if (!b.allowed) {
       return {
         status: "refused",
