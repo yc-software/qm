@@ -71,9 +71,7 @@ import { resolveEnvironmentId } from "../environments/environment-store.ts";
 import type { SessionWriter } from "../sessions/session-store.ts";
 import { sessionOrigin } from "../sessions/session-store.ts";
 import { currentModelRequestContext, withModelRequestContext } from "../model/request-context.ts";
-import { supportsProcessSessions, supportsScopeProfile } from "../sandbox/sandbox.ts";
-import { createBackgroundBroker } from "../connectors/background-exec-broker.ts";
-import { createMonitorBroker, readBackgroundOutputTail } from "../monitors/monitor-broker.ts";
+import { supportsScopeProfile } from "../sandbox/sandbox.ts";
 import { isPollSurface } from "../triggers/run-trigger.ts";
 import { askResolutionEvents, renderKeychainManifest, type KeychainAsk } from "../credentials/keychain.ts";
 import { configuredConnectorProviders } from "../credentials/connector-status.ts";
@@ -119,12 +117,9 @@ import { skillsIndex } from "../skills/materialize.ts";
 import { isIdeasConversation, PROACTIVE_OPENER_PROMPT } from "../onboarding/onboarding.ts";
 import { runCronScript } from "../cron/script.ts";
 import { createToolContext, NeedsApproval, CommandDenied, type CommandCredential } from "../tools/primitives.ts";
-import type { FileArtifact } from "../files/file-artifact-store.ts";
 import { artifactImageLoader } from "../agent/replay-images.ts";
-import { entitledScopes, principalEntitledToScope } from "../resolution/context-filter.ts";
 import { openSessionItem, searchSessionItems } from "../sessions/history-search.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
-import { defaultPublishAudience } from "../resolution/publish-audience.ts";
 import {
   INBOX_DIR,
   TURN_FILES_DIR,
@@ -199,6 +194,7 @@ import { resolveTurnRuntimeAuth } from "./orchestrator/turn-runtime.ts";
 import { startStallWatchdog } from "./orchestrator/stall-watchdog.ts";
 import { openSegmentGoal, segmentEnvironment } from "./orchestrator/run-segment.ts";
 import { selectTurnResult, startMemoryCapture } from "./orchestrator/settle.ts";
+import { createArtifactAccess, createFileRegistration, createTurnBrokers } from "./orchestrator/turn-tools.ts";
 import {
   countSkills,
   createSecurityClassifier,
@@ -1519,55 +1515,20 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           deps.turnStream.begin(input.runId);
         }
 
-        const backgroundBroker =
-          deps.processes && supportsProcessSessions(deps.sandbox)
-            ? createBackgroundBroker({
-                sandbox: deps.sandbox,
-                registry: deps.processes,
-                provisionSandbox: provisionJobSandbox,
-                onExit: finishProcess,
-                scopeId: memoryScopeId,
-                sessionRef: conversation.threadRef,
-                ttlMs: deps.backgroundJobTtlMs,
-                ttlMaxMs: deps.backgroundJobTtlMaxMs,
-                assertComputerUsable: assertDefaultUsable,
-              })
-            : undefined;
-
-        const readOutputTail = backgroundBroker
-          ? async (processId: string, maxBytes: number) => {
-              const handle = (await backgroundBroker.handleFor?.(processId)) ?? (await provision());
-              return readBackgroundOutputTail(maxBytes, async (cursor, readMaxBytes) => {
-                const read = await backgroundBroker.poll(handle, processId, {
-                  sinceCursor: cursor,
-                  maxBytes: readMaxBytes,
-                  waitMs: 0,
-                });
-                return {
-                  chunks: read.chunks,
-                  cursor: read.cursor,
-                  ...(read.status.state === "exited" ? { exitCode: read.status.code } : {}),
-                };
-              });
-            }
-          : undefined;
-
-        const monitorBroker =
-          deps.monitors && deps.processes && readOutputTail
-            ? createMonitorBroker({
-                store: deps.monitors,
-                registry: deps.processes,
-                readOutputTail,
-                scopeId: memoryScopeId,
-                owner: actor.id,
-                ownerScopeId: scopeId,
-                ...(input.botActor ? { botActor: true } : {}),
-                threadRef: conversation.threadRef,
-                ...(defaultDestination ? { destination: defaultDestination } : {}),
-                returnsToParent: isSubagentThreadRef(conversation.threadRef) && Boolean(session.parentSessionId),
-                assertComputerUsable: assertDefaultUsable,
-              })
-            : undefined;
+        const { backgroundBroker, monitorBroker } = createTurnBrokers({
+          deps,
+          input,
+          actor,
+          conversation,
+          session,
+          scopeId,
+          memoryScopeId,
+          defaultDestination,
+          provision,
+          provisionJobSandbox,
+          finishProcess,
+          assertDefaultUsable,
+        });
 
         const spine: SpineState = {
           surfaceOutboundCount: 0,
@@ -1579,55 +1540,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         let spineFirstBlock = "";
         let spineFirstBlockOpen = true;
         let spineAckText: string | undefined;
-        const fileAudience =
-          !external && resolution.orgScopeId
-            ? defaultPublishAudience({
-                kind: conversation.kind,
-                ...(conversation.isPrivate !== undefined ? { isPrivate: conversation.isPrivate } : {}),
-                ...(conversation.isMpim !== undefined ? { isMpim: conversation.isMpim } : {}),
-                ...(conversation.publishMembers ? { members: conversation.publishMembers } : {}),
-                orgScopeId: resolution.orgScopeId,
-                ownerId: actor.id,
-              }).grantees
-            : [];
-        const fileOwnerScopeId = external ? scopeId : toScopeId("personal", actor.id);
-        const fileGrantees = [...fileAudience];
-        if ((conversation.kind === "group" || conversation.kind === "dm") && scopeId !== fileOwnerScopeId) {
-          fileGrantees.push(scopeId);
-        }
-        const fileRegistration: ArtifactRegistration = {
-          store: deps.files,
-          ownerScopeId: fileOwnerScopeId,
-          createdBy: actor.id,
-          createdInScope: scopeId,
-          seed: input.runId ?? `${session.id}:${Date.now()}`,
-          ...(fileGrantees.length
-            ? {
-                onRegistered: async ({ ownerScopeId, id }) => {
-                  for (const granteeScopeId of fileGrantees) {
-                    await deps.acl.grant({
-                      ownerScopeId,
-                      ref: id,
-                      granteeScopeId,
-                      permission: "read",
-                      grantedBy: actor.id,
-                    });
-                  }
-                },
-              }
-            : {}),
-          onError: (e) =>
-            deps.errors.record(
-              {
-                category: "file_store",
-                code: "register_failed",
-                message: errMessage(e),
-                scopeLabel: scopeId,
-                sessionId: session.id,
-              },
-              e,
-            ),
-        };
+        const fileRegistration = createFileRegistration({
+          deps,
+          input,
+          actor,
+          conversation,
+          session,
+          scopeId,
+          external,
+          resolution,
+        });
         const earlyTaskAck =
           surface?.capabilities.liveReplies === true &&
           humanInput &&
@@ -1662,34 +1584,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             .then(() => deps.turnStream.markSurfacePosted(runId))
             .catch(swallowAs("orchestrator: first-block ack", undefined));
         };
-        let readableHandles: Awaited<ReturnType<typeof deps.acl.handlesForAudience>> | undefined;
-        const mayReadArtifact = async (artifact: FileArtifact, fresh = false): Promise<boolean> => {
-          if (
-            conversation.audience.every((principal) =>
-              principalEntitledToScope(principal, artifact.ownerScopeId, scopeId, resolution.orgScopeId),
-            )
-          )
-            return true;
-          let handles = fresh ? undefined : readableHandles;
-          handles ??= await deps.acl.handlesForAudience(
-            conversation.audience,
-            scopeId,
-            resolution.orgScopeId,
-            entitledScopes,
-          );
-          if (!fresh) readableHandles = handles;
-          return handles.some(
-            (handle) => handle.ownerScopeId === artifact.ownerScopeId && handle.fileId === artifact.id,
-          );
-        };
-        const provisionOutbound = (sandboxId?: string) =>
-          sandboxId !== undefined ? provisionResource(sandboxId) : provision();
-        const openStoredOutbound = async (id: string) => {
-          const artifact = await deps.files.get(id);
-          if (!artifact || !(await mayReadArtifact(artifact, true))) return null;
-          const opened = await deps.files.open(id);
-          return opened ? { ...artifact, sizeBytes: opened.sizeBytes, stream: opened.stream } : null;
-        };
+        const { mayReadArtifact, provisionOutbound, openStoredOutbound } = createArtifactAccess({
+          deps,
+          conversation,
+          scopeId,
+          resolution,
+          provision,
+          provisionResource,
+        });
         const surfaceToolDeps = createSurfaceToolDeps({
           deps,
           input,
