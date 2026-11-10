@@ -79,3 +79,18 @@ test("other people's @-mentions read as @name; only the assistant's own mention 
     .find((l) => l.includes("<message "));
   assert.match(line!, />@esther can you remind me\? cc @dave &lt;@U00000009&gt; &lt;@U00000002&gt;</);
 });
+
+test("the judge sees earlier messages cut short and new ones whole, while the worker keeps the full text", () => {
+  const long = (word: string): string => `${word} `.repeat(200).trim();
+  const earlier = msg("1.0", long("earlier"), { bot: true, authorName: "Triage" });
+  const fresh = msg("2.0", long("fresh"), { bot: true, authorName: "Triage" });
+  const batch = base({ recent: [earlier, fresh], messages: [fresh] });
+  const [first, second] = renderAmbientPrompt(batch)
+    .split("\n")
+    .filter((l) => l.includes("<message "));
+  const body = (line: string): string => line.replace(/^.*?>/, "").replace(/<\/message>$/, "");
+  assert.ok(body(first!).length < 400, "an earlier message is shortened");
+  assert.ok(body(first!).endsWith("…"));
+  assert.equal(body(second!), long("fresh"));
+  assert.equal(recentWakeMessages(batch)[0]!.text, long("earlier"));
+});
