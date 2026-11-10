@@ -15,6 +15,7 @@ import {
   ListObjectsV2Command,
   PutBucketLifecycleConfigurationCommand,
   PutObjectCommand,
+  S3Client,
   UploadPartCommand,
 } from "@aws-sdk/client-s3";
 import {
@@ -28,6 +29,12 @@ import {
   type BlobTransferStore,
 } from "../src/persistence/blob-transfer.ts";
 
+function s3With(send: (command: unknown) => Promise<unknown>): S3Client {
+  return Object.assign(new S3Client({ region: "us-east-1", credentials: { accessKeyId: "a", secretAccessKey: "s" } }), {
+    send,
+  });
+}
+
 function fakeS3(now: () => number = () => Date.now(), hooks: { onAbort?: () => void } = {}) {
   const objects = new Map<string, { body: Buffer; lastModified: Date }>();
   const uploads = new Map<string, Buffer[]>();
@@ -35,7 +42,7 @@ function fakeS3(now: () => number = () => Date.now(), hooks: { onAbort?: () => v
   const aborted: string[] = [];
   let lifecycle: { Rules: Array<Record<string, unknown>> } | null = null;
   let nextUploadId = 1;
-  const client = {
+  const handler = {
     async send(command: unknown): Promise<unknown> {
       if (command instanceof CreateMultipartUploadCommand) {
         const UploadId = `up-${nextUploadId++}`;
@@ -107,7 +114,7 @@ function fakeS3(now: () => number = () => Date.now(), hooks: { onAbort?: () => v
   };
   return {
     objects,
-    client,
+    client: s3With(handler.send),
     partSizes,
     aborted,
     liveUploads: uploads,
@@ -222,7 +229,7 @@ test("s3: open returns null for a missing object (NoSuchKey is not an error)", a
 test("s3: open THROWS on a transient error (does NOT masquerade a 5xx/throttle as absent)", async () => {
   const boom = new Error("ServiceUnavailable") as Error & { $metadata: { httpStatusCode: number } };
   boom.$metadata = { httpStatusCode: 503 };
-  const store = createS3BlobTransferStore({ bucket: "b", _client: { send: async () => Promise.reject(boom) } });
+  const store = createS3BlobTransferStore({ bucket: "b", _client: s3With(async () => Promise.reject(boom)) });
   await assert.rejects(() => store.open("ffffffffffffffffffffffffffffffff"), /ServiceUnavailable/);
 });
 
@@ -242,7 +249,7 @@ test("local-fs: open THROWS on a non-ENOENT stat error (ENOTDIR), not a false 40
 test("s3: a malformed blobId never touches S3 (anti-traversal guard)", async () => {
   let sends = 0;
   const { client } = fakeS3();
-  const guarded = { send: (c: unknown) => (sends++, client.send(c)) };
+  const guarded = s3With((c: unknown) => (sends++, client.send(c as GetObjectCommand)));
   const store = createS3BlobTransferStore({ bucket: "b", _client: guarded });
   assert.equal(await store.open("../etc/passwd"), null);
   await store.delete("../etc/passwd");
@@ -408,4 +415,41 @@ test("s3: ensureExpiry also reaps incomplete multipart uploads (invisible to Lis
     { DaysAfterInitiation: 3 },
     "orphaned parts are not objects; only this rule can reap them",
   );
+});
+
+test("s3: a failed part aborts the multipart upload and surfaces the part error", async () => {
+  const f = fakeS3();
+  const failing = s3With(async (command: unknown) => {
+    if (command instanceof UploadPartCommand && command.input.PartNumber === 2) throw new Error("SlowDown");
+    return f.client.send(command as UploadPartCommand);
+  });
+  const store = createS3BlobTransferStore({ bucket: "b", _client: failing });
+  const chunk = Buffer.alloc(S3_PART_BYTES, 0x65);
+  await assert.rejects(() => store.put(Readable.from([chunk, chunk, chunk])), /SlowDown/);
+  assert.equal(f.aborted.length, 1, "the started multipart upload was aborted");
+  assert.equal(f.liveUploads.size, 0, "no parts left billing in the bucket");
+  assert.equal(f.objects.size, 0, "and no object was completed");
+});
+
+test("s3: when a part fails and the abort fails too, the part error surfaces and the leak is reported", async () => {
+  const f = fakeS3(() => Date.now(), {
+    onAbort: () => {
+      throw new Error("AccessDenied: s3:AbortMultipartUpload");
+    },
+  });
+  const failing = s3With(async (command: unknown) => {
+    if (command instanceof UploadPartCommand && command.input.PartNumber === 2) throw new Error("SlowDown");
+    return f.client.send(command as UploadPartCommand);
+  });
+  const store = createS3BlobTransferStore({ bucket: "b", _client: failing });
+  const chunk = Buffer.alloc(S3_PART_BYTES, 0x66);
+  const warnings: string[] = [];
+  const realWarn = console.warn;
+  console.warn = (...args: unknown[]) => void warnings.push(args.join(" "));
+  try {
+    await assert.rejects(() => store.put(Readable.from([chunk, chunk, chunk])), /SlowDown/);
+  } finally {
+    console.warn = realWarn;
+  }
+  assert.ok(warnings.some((w) => w.includes("leaked S3 multipart parts") && w.includes("up-1")));
 });
