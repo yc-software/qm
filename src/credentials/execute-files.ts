@@ -8,6 +8,7 @@ import { homeRelativePath } from "./paths.ts";
 import { builtInCredentialPaths, type CredentialPathSpec } from "./resident-paths.ts";
 import {
   credentialFileHashes,
+  sameCredentialFileHashes,
   fileCredentialEnvironment,
   KeychainError,
   MAX_CREDENTIAL_BYTES,
@@ -47,7 +48,7 @@ export function processCredentialFiles(
   };
 }
 
-type ProcessCredentialDeps = {
+export type ProcessCredentialDeps = {
   sandbox: Sandbox;
   processes: Pick<ProcessRegistry, "credentialFiles" | "setCredentialFiles" | "advanceCredentialFiles">;
   keychain?: Pick<Keychain, "writebackBaseline" | "updateFiles">;
@@ -100,7 +101,7 @@ export async function syncProcessCredentials(
     stored.plan,
     stored.sources.map((source, index) => async (files: CredentialFile[]) => {
       const hashes = credentialFileHashes(files);
-      if (sameHashes(hashes, source.fileHashes)) return [];
+      if (sameCredentialFileHashes(hashes, source.fileHashes)) return [];
       const overruled = await saveSource(deps.keychain, source)(files);
       saved.set(index, hashes);
       return overruled;
@@ -109,18 +110,20 @@ export async function syncProcessCredentials(
     { keepDirectory: true },
   );
   if (note) console.warn(`[credentials] background job ${processId}: ${note}`);
-  if (saved.size)
-    await deps.processes.advanceCredentialFiles(processId, stored, {
+  if (
+    saved.size &&
+    !(await deps.processes.advanceCredentialFiles(processId, stored, {
       ...stored,
       sources: stored.sources.map((source, index) => ({
         ...source,
         fileHashes: saved.get(index) ?? source.fileHashes,
       })),
-    });
+    }))
+  )
+    console.warn(
+      `[credentials] background job ${processId}: saved refreshed files, but its baseline changed meanwhile; the exit save will merge against the older baseline`,
+    );
 }
-
-const sameHashes = (a: Record<string, string>, b: Record<string, string>) =>
-  Object.keys(a).length === Object.keys(b).length && Object.entries(a).every(([path, hash]) => b[path] === hash);
 
 async function runOrThrow(sandbox: Sandbox, handle: SandboxHandle, command: string, failure: string) {
   const result = await sandbox.run(handle, command);
@@ -271,26 +274,18 @@ async function finishExecutionFiles(
         const remaining = refreshed.filter((file) => belongsTo(file.path, roots));
         const deleted = paths.filter((path) => !refreshed.some((entry) => entry.path === path));
         if (deleted.length && !remaining.length) {
-          notes.push(
-            `deleted all of its credential files (${deleted.join(", ")}); the saved login was left unchanged. To remove the saved login itself, delete the credential from the keychain`,
-          );
+          notes.push(`deleted all of its credential files (${deleted.join(", ")}); the saved login was left unchanged`);
           return;
         }
         const overruled = (await saves[index]!(remaining)) ?? [];
         const removed = deleted.filter((path) => !overruled.includes(path));
-        const kept = deleted.filter((path) => overruled.includes(path));
-        const lost = overruled.filter((path) => !deleted.includes(path));
         if (removed.length)
           notes.push(
             `deleted ${removed.join(", ")}; the saved login no longer includes ${removed.length === 1 ? "it" : "them"}`,
           );
-        if (kept.length)
+        if (overruled.length)
           notes.push(
-            `deleted ${kept.join(", ")}, but another command changed ${kept.length === 1 ? "it" : "them"} meanwhile; the saved login keeps that version`,
-          );
-        if (lost.length)
-          notes.push(
-            `changed ${lost.join(", ")}, but another command saved its own change first; the saved login keeps that version, so rerun this command if its change is needed`,
+            `changed ${overruled.join(", ")}, but the saved login kept another command's version; rerun this command if its change is needed`,
           );
       }),
     );
@@ -306,7 +301,7 @@ async function finishExecutionFiles(
     if (failures.length)
       throw new AggregateError(
         failures.map(({ reason }) => reason),
-        `${retry.length ? "Could not persist refreshed credentials; will retry" : "Could not persist refreshed credentials"}: ${failures.map(({ reason }) => errMessage(reason)).join("; ")}`,
+        `${retry.length ? "Could not persist refreshed credentials; will retry" : "Could not persist refreshed credentials"}: ${failures.map(({ reason }) => errMessage(reason)).join("; ")}${notes.length ? ` [credentials] This command ${notes.join("; and ")}.` : ""}`,
       );
     return notes.length ? `[credentials] This command ${notes.join("; and ")}.` : undefined;
   };

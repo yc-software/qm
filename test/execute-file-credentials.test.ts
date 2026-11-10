@@ -657,7 +657,7 @@ test("a command whose change loses a conflict says so on stderr", async (t) => {
   assert.equal(result.code, 0);
   assert.match(
     result.stderr,
-    /\[credentials\] This command changed \.aws\/sso\/cache\/session\.json, but another command saved its own change first; the saved login keeps that version, so rerun this command if its change is needed\.$/,
+    /\[credentials\] This command changed \.aws\/sso\/cache\/session\.json, but the saved login kept another command's version; rerun this command if its change is needed\.$/,
   );
   assert.equal(await savedValue(f), "saved-meanwhile");
 });

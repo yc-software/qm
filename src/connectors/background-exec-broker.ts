@@ -103,11 +103,12 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
   const termGraceMs = deps.termGraceMs ?? DEFAULT_TERM_GRACE_MS;
   const killGraceMs = deps.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
 
+  const outputSeen = new Map<string, number>();
   const exited = async (handle: SandboxHandle, processId: string) => {
+    outputSeen.delete(processId);
     await deps.registry.markStatus(processId, "exited");
     await deps.onExit?.(handle, processId);
   };
-  const outputSeen = new Map<string, number>();
   const settle = async (
     handle: SandboxHandle,
     processId: string,
@@ -115,15 +116,12 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
     cursor: number,
     credentials: boolean,
   ) => {
-    if (status.state === "exited") {
-      outputSeen.delete(processId);
-      return exited(handle, processId);
-    }
+    if (status.state === "exited") return exited(handle, processId);
     if (!credentials || cursor <= (outputSeen.get(processId) ?? 0)) return;
     outputSeen.set(processId, cursor);
     await deps
       .onOutput?.(handle, processId)
-      .catch(reportFailureAs("background job: save refreshed credentials", undefined));
+      .catch(reportFailureAs("background job: save refreshed credentials", undefined, processId));
   };
   return {
     async handleFor(processId) {

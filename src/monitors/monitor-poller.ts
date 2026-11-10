@@ -205,7 +205,7 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
     const expired = !exited && t >= m.expiresAt;
     if (!exited && read.chunks)
       await deps.onProcessOutput?.(handle, m.processId).catch((e) => {
-        reportFailure("monitor: save refreshed credentials", e);
+        reportFailure("monitor: save refreshed credentials", e, m.processId);
         return deps.monitors.recordError(m.id, errMessage(e));
       });
     const raw = (m.tail ?? "") + read.chunks;

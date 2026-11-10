@@ -2762,10 +2762,11 @@ export function buildApp(
   orchestratorDeps.validateScheduledRuntime = (scope, choice, purpose) =>
     availableRuntimeError({ deps: runtimeDeps }, scope, choice, purpose);
   orchestratorDeps.runtime = createRuntimeService(runtimeDeps, app);
+  const processCredentialDeps = { sandbox, processes: processes!, ...(keychain ? { keychain } : {}) };
   const finishCredentials = (handle: SandboxHandle, processId: string) =>
-    finishProcessCredentials({ sandbox, processes: processes!, ...(keychain ? { keychain } : {}) }, handle, processId);
+    finishProcessCredentials(processCredentialDeps, handle, processId);
   const syncCredentials = (handle: SandboxHandle, processId: string) =>
-    syncProcessCredentials({ sandbox, processes: processes!, ...(keychain ? { keychain } : {}) }, handle, processId);
+    syncProcessCredentials(processCredentialDeps, handle, processId);
   const monitorPoller =
     processes && supportsProcessSessions(sandbox)
       ? createMonitorPoller({

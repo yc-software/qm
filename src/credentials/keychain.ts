@@ -456,14 +456,6 @@ export interface FileCredentialSource {
   writeback?: boolean;
 }
 
-function credentialFilesFingerprint(files: CredentialFile[]): string {
-  return fileCredentialFingerprint(
-    files
-      .map((file) => ({ ...file, mode: restoredFileMode(file.mode) }))
-      .sort((a, b) => homeRelativePath(a.path).localeCompare(homeRelativePath(b.path))),
-  );
-}
-
 function credentialFileHash(file: CredentialFile): string {
   return fingerprintOf(
     JSON.stringify({
@@ -478,8 +470,8 @@ export function credentialFileHashes(files: CredentialFile[]): Record<string, st
   return Object.fromEntries(files.map((file) => [homeRelativePath(file.path), credentialFileHash(file)]));
 }
 
-function fileCredentialFingerprint(files: CredentialFile[]): string {
-  return fingerprintOf(JSON.stringify(files.map((f) => ({ ...f, path: homeRelativePath(f.path) }))));
+export function sameCredentialFileHashes(a: Record<string, string>, b: Record<string, string>): boolean {
+  return Object.keys(a).length === Object.keys(b).length && Object.entries(a).every(([path, hash]) => b[path] === hash);
 }
 
 function keychainFilePath(path: string): string {
@@ -1093,13 +1085,9 @@ export function createKeychain(deps: {
       if (!materialized.writeback) return [];
       const normalized = checkedFiles(files.map((file) => ({ ...file, path: keychainFilePath(file.path) })));
       if (!normalized.length) throw new KeychainError(409, "Refreshed credential files are missing");
-      const fingerprint = credentialFilesFingerprint;
-      const baseline = new Map(Object.entries(materialized.baseline ?? credentialFileHashes(materialized.files)));
-      if (
-        baseline.size === normalized.length &&
-        normalized.every((file) => baseline.get(file.path) === credentialFileHash(file))
-      )
-        return [];
+      const baselineHashes = materialized.baseline ?? credentialFileHashes(materialized.files);
+      if (sameCredentialFileHashes(credentialFileHashes(normalized), baselineHashes)) return [];
+      const baseline = new Map(Object.entries(baselineHashes));
       let overruled: string[] = [];
 
       const updated = await deps.creds.update(materialized.credentialId, (current) => {
@@ -1114,7 +1102,8 @@ export function createKeychain(deps: {
         });
         overruled = merged.overruled;
         const next = checkedFiles(merged.files);
-        if (!next.length || fingerprint(next) === fingerprint(currentFiles)) return current;
+        if (!next.length || sameCredentialFileHashes(credentialFileHashes(next), credentialFileHashes(currentFiles)))
+          return current;
         const secret = JSON.stringify(next);
         return {
           ...current,
