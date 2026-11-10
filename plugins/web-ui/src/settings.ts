@@ -69,10 +69,14 @@ function storeCustomTheme(palette: Palette | null): void {
   }
 }
 
-let themeParentOrigin: string | null = null;
+let embedderOrigin: string | null = null;
+
+export function tellEmbedder(message: Record<string, unknown>): void {
+  if (embedderOrigin) window.parent.postMessage(message, embedderOrigin);
+}
 
 function publishTheme(): void {
-  if (!themeParentOrigin) return;
+  if (!embedderOrigin) return;
   const root = document.documentElement;
   const style = getComputedStyle(root);
   const colors = Object.fromEntries(
@@ -81,11 +85,7 @@ function publishTheme(): void {
       style.getPropertyValue(key).trim(),
     ]),
   );
-  window.parent.postMessage({ type: "qm:theme", dark: root.classList.contains("dark"), colors }, themeParentOrigin);
-}
-
-export function tellEmbedder(type: string): void {
-  if (themeParentOrigin) window.parent.postMessage({ type }, themeParentOrigin);
+  tellEmbedder({ type: "qm:theme", dark: root.classList.contains("dark"), colors });
 }
 
 export function applyTheme(): void {
@@ -151,7 +151,7 @@ export function watchSystemTheme(): void {
   window.addEventListener("message", (event) => {
     if (window.parent === window || event.source !== window.parent || event.origin === "null") return;
     if (event.data?.type !== "qm:theme-request") return;
-    themeParentOrigin = event.origin;
+    embedderOrigin = event.origin;
     publishTheme();
   });
   window.addEventListener("storage", (event) => {

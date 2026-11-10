@@ -1101,7 +1101,7 @@ export function createChatSurface(
       const finished = activityItems(work.activity).findLast((item) => item.kind === "ToolResult");
       if (finished && finished.seq > toldThrough) {
         toldThrough = finished.seq;
-        tellEmbedder("qm:app-check");
+        tellEmbedder({ type: "qm:app-check" });
       }
       appendConsumedSteers(agent.state.messages, work);
       if (work.runtime && switchedDefault(work.runtime) && work.runtime.modelId !== chatState.turnRuntime?.modelId)
