@@ -875,7 +875,7 @@ test("a parking teardown keeps the computer warm when another run holds it by th
   };
   await resources.hold(record.id, "late-run");
   await router.teardown(handle);
-  await resources.release(record.id, "late-run", async () => false);
+  await resources.release(record.id, "late-run");
   await router.teardown(handle);
   assert.deepEqual(teardowns, [{ keepWarm: true }, {}]);
 });
@@ -952,16 +952,16 @@ test("legacy import does not validate obsolete provider choices after explicit s
 });
 
 test("a computer stays held until its last live run releases it, and ended runs stop counting", async () => {
-  const { resources } = fixture();
+  const { options } = fixture();
+  const live = new Set(["a", "b"]);
+  const resources = createSandboxResources({ ...options, isRunLive: async (runId) => live.has(runId) });
   const record = await resources.create("alice", "personal:alice", "local");
   await resources.hold(record.id, "a");
   await resources.hold(record.id, "b");
   await resources.hold(record.id, "b");
-  const live = new Set(["a", "b"]);
-  const isLive = async (runId: string) => live.has(runId);
-  assert.equal(await resources.release(record.id, "a", isLive), true);
+  assert.equal(await resources.release(record.id, "a"), true);
   live.delete("b");
-  assert.equal(await resources.release(record.id, undefined, isLive), false);
+  assert.equal(await resources.release(record.id, undefined), false);
   assert.deepEqual((await resources.get(record.id)).holders, []);
   const listed = (await resources.list("alice", "personal:alice")).sandboxes.find((s) => s.id === record.id);
   assert.equal(listed?.holders, undefined);

@@ -87,6 +87,8 @@ function stubResources(defaults: Record<string, SandboxResource | null>, extra: 
     isLocked: () => held > 0,
     resolve: async (scopeId: string) => defaults[scopeId] ?? null,
     defaultBackend: async () => "aws" as const,
+    inUse: async () => false,
+    heldBackings: async () => new Set<string>(),
     get: async (id: string) => {
       const r = byId.get(id);
       if (!r) throw new Error(`sandbox ${id} not found`);
