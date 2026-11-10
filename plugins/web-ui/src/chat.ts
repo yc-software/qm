@@ -18,6 +18,7 @@ import {
   activityLabel,
   activityGroupSummary,
   activityGroups,
+  thinkingLabel,
   thinkingPresentation,
   sessionPresentation,
 } from "./activity-presentation";
@@ -2435,9 +2436,10 @@ export function createChatSurface(
         }
       }
       if (chunk.type === "thinking" && chunk.thinking.trim()) {
+        const live = animating && chunkIndex === message.content.length - 1;
         parts.push(
           html`<details class="thinking">
-            <summary>${sheenLabel("Thinking", animating)}</summary>
+            <summary>${sheenLabel(thinkingLabel(live), live)}</summary>
             ${markdown(chunk.thinking)}
           </details>`,
         );
@@ -3153,6 +3155,8 @@ export function createChatSurface(
         return false;
       });
       const tail = active && last ? streamedAnswer(text, work) : "";
+      const liveTail = active && last && !tail.trim() ? timeline.at(-1) : undefined;
+      const liveItem = liveTail?.kind === "thinking" ? timelineKey(liveTail) : undefined;
       const stopping = isStreaming && runSlot.stopGeneration === runSlot.generation;
       const ending = last && (stopped || stopping);
       const animating = active && last && !stopping;
@@ -3174,7 +3178,7 @@ export function createChatSurface(
         !oneStep &&
         !(last && (stopped || stopping || work.stale || work.pendingApprovals?.length))
       )
-        return html`${renderTimelineItem(timeline[0]!, work)}${replies.map((reply) => html`<div class="streaming-text" dir="auto">${markdown(reply)}</div>`)}`;
+        return html`${renderTimelineItem(timeline[0]!, work, liveItem)}${replies.map((reply) => html`<div class="streaming-text" dir="auto">${markdown(reply)}</div>`)}`;
       let fold =
         timeline.length || tail.trim() || (last && (active || work.pendingApprovals?.length))
           ? html`<details
@@ -3202,13 +3206,14 @@ export function createChatSurface(
                     sessionsState.list,
                     index,
                     last,
+                    liveItem,
                   ],
                   () =>
                     repeat(
                       activityGroups(timeline),
                       (items) => timelineKey(items[0]!),
                       (items) => {
-                        if (items.length === 1) return renderTimelineItem(items[0]!, work);
+                        if (items.length === 1) return renderTimelineItem(items[0]!, work, liveItem);
                         const summary = activityGroupSummary(items, work.status);
                         const groupIcon = { read: BookOpen, search: Search, execute: Terminal, other: Wrench }[
                           summary.category
@@ -3222,7 +3227,7 @@ export function createChatSurface(
                             ><span class="activity-chevron">${icon(ChevronRight, 14)}</span>
                           </summary>
                           <div class="work-rows">
-                            ${repeat(items, timelineKey, (item) => renderTimelineItem(item, work))}
+                            ${repeat(items, timelineKey, (item) => renderTimelineItem(item, work, liveItem))}
                           </div>
                         </details>`;
                       },
@@ -3301,7 +3306,7 @@ export function createChatSurface(
     );
   }
 
-  function renderTimelineItem(item: TimelineItem, work: WorkBlock): TemplateResult {
+  function renderTimelineItem(item: TimelineItem, work: WorkBlock, liveItem?: string): TemplateResult {
     const status = work.status;
     const stale = work.stale === true;
     if (item.kind === "steer") {
@@ -3311,8 +3316,8 @@ export function createChatSurface(
       </div>`;
     }
     if (item.kind === "thinking") {
-      const thought = thinkingPresentation(item.text);
       const key = timelineKey(item);
+      const thought = thinkingPresentation(item.text, key === liveItem);
       return html`<details
         class="thinking-row"
         ?open=${openThinking.has(key)}

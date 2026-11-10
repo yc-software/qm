@@ -124,9 +124,13 @@ export function createRecorder(ref: ToolContextRef) {
         .catch((): ToolResultScreen => ({ outcome: "unscreened" }));
       if (screen?.outcome === "quarantine") {
         quarantinedMessages.add(message.id);
-        ref.pausedOnApproval = true;
-        (ret as { terminate?: boolean }).terminate = true;
-        const notice = "[An internal agent message is quarantined pending human approval.]";
+        if (!ref.approvalUnavailable) {
+          ref.pausedOnApproval = true;
+          (ret as { terminate?: boolean }).terminate = true;
+        }
+        const notice = ref.approvalUnavailable
+          ? "[An internal agent message was quarantined by the security screen.]"
+          : "[An internal agent message is quarantined pending human approval.]";
         ret.content.push({ type: "text", text: notice });
         appended += `\n${notice}`;
         continue;
@@ -195,7 +199,7 @@ export function createRecorder(ref: ToolContextRef) {
           })
           .catch((): ToolResultScreen => ({ outcome: "unscreened" }));
         if (screen.outcome === "quarantine") {
-          const releaseRequested = !!ref.pendingApprovals;
+          const releaseRequested = !!ref.pendingApprovals && !ref.approvalUnavailable;
           const from = screenAs?.source ? ` (${screenAs.source})` : "";
           result = releaseRequested
             ? `[tool output quarantined by the security screen${from} — release requested, awaiting human approval]`

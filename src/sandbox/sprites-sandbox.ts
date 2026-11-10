@@ -21,6 +21,7 @@ import { tenantSpritesShape } from "./tenant-sandbox-shape.ts";
 import { withConnectorSdk, type ConnectorSdkBundle } from "./connector-sdk.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
 import {
+  attemptSnapshot,
   createHomeSnapshotOps,
   HOME_SNAPSHOT_PRUNE,
   snapshotDue,
@@ -111,6 +112,10 @@ export function processKeepaliveScript(processId: string): string {
   return `LOOP=${shq(loop)}; if command -v setsid >/dev/null 2>&1; then setsid sh -c "$LOOP" >/dev/null 2>&1 & else sh -c "$LOOP" >/dev/null 2>&1 & fi; echo OK`;
 }
 
+export interface StoredSprite extends SnapshotBookkeeping {
+  pending?: boolean;
+}
+
 export interface SpritesSandboxOptions extends BlobStagingOptions {
   token?: string;
   baseUrl?: string;
@@ -120,7 +125,7 @@ export interface SpritesSandboxOptions extends BlobStagingOptions {
   egressProxyAdditionalUrls?: string[];
   checkpointIntervalMs?: number;
   snapshots?: HomeSnapshotStore;
-  initializationStore: DurableMap<{ pending: boolean }>;
+  initializationStore: DurableMap<StoredSprite>;
   advisoryLock: AdvisoryLock;
   extraTools?: string[];
   credentialPaths?: CredentialPathSpec[];
@@ -174,7 +179,6 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
   const appliedSize = new Map<string, number>();
   const egressPolicyByName = new Map<string, string>();
   const pressureEpisodes = new Set<string>();
-  const checkpointBooks = new Map<string, SnapshotBookkeeping>();
 
   const reportError = (category: string, code: string, message: string, scopeLabel?: string): void => {
     try {
@@ -367,6 +371,7 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
     } catch (e) {
       if (!isMissing(e)) throw new Error(`sprites delete ${name}: ${spritesErrorDetail(e)}`, { cause: e });
     }
+    await initializationStore.delete(name);
   }
 
   const homeSnapshots = opts.snapshots
@@ -425,17 +430,19 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
 
   async function checkpointIfDue(name: string, tdOpts?: TeardownOptions): Promise<void> {
     await requireInitialized(name);
-    const book = checkpointBooks.get(name) ?? {};
-    checkpointBooks.set(name, book);
-    if (!tdOpts?.homeUnchanged) book.homeDirty = true;
+    const book = (await initializationStore.get(name)) ?? (await initializationStore.putIfAbsent(name, {}));
+    const record = (patch: SnapshotBookkeeping) => initializationStore.merge(name, patch);
+    if (!tdOpts?.homeUnchanged && book.homeDirty !== true) await record({ homeDirty: true });
     if (!snapshotDue(book, tdOpts, checkpointIntervalMs)) return;
-    try {
-      await createCheckpoint(name);
-      book.lastSnapshotMs = Date.now();
-      book.homeDirty = false;
-    } catch (e) {
-      reportError("sandbox_snapshot", "checkpoint_failed", errMessage(e), base.scopeFor(name));
-    }
+    await attemptSnapshot(
+      book,
+      record,
+      async () => {
+        await createCheckpoint(name);
+        await record({ lastSnapshotMs: Date.now(), homeDirty: false });
+      },
+      (message) => reportError("sandbox_snapshot", "checkpoint_failed", message, base.scopeFor(name)),
+    );
   }
 
   const forget = (name: string): void => {
@@ -443,7 +450,6 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
     appliedSize.delete(name);
     pressureEpisodes.delete(name);
     egressPolicyByName.delete(name);
-    checkpointBooks.delete(name);
   };
 
   const base = createExecSandboxBase({
