@@ -200,7 +200,10 @@ test("publish by name inherits the current entrypoint when redeploying without o
   assert.equal(second.version, 2);
   assert.equal(d.versions[1]!.entrypoint, "node server.js");
   assert.deepEqual(
-    (await s.deployStore.filesOf(d.id, 2))?.map((f) => ({ path: f.path, data: [...f.data] })),
+    (await s.deployStore.filesOf(d.id, (await s.deployStore.versionOf(d.id, 2))!.commit!)).map((f) => ({
+      path: f.path,
+      data: [...f.data],
+    })),
     [{ path: "server.js", data: [...bytes("v2")] }],
   );
 });

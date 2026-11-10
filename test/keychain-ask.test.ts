@@ -593,18 +593,22 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     await built.app.upsertDirectory([
       { principalId: "U_ALICE", displayName: "Alice", type: "internal" },
       { principalId: "U_BOB", displayName: "Bob", type: "internal" },
+      { principalId: "U_RELEASE_BOT", displayName: "Release bot", type: "internal" },
     ]);
     await built.app.upsertChannels(
       [
         { channelId: "C_INFRA", name: "infra", isPrivate: true },
         { channelId: "C_NOALICE", name: "no-alice", isPrivate: true },
         { channelId: "C_PUBLIC", name: "public-room" },
+        { channelId: "C_RELEASE", name: "release", isPrivate: true },
       ],
       [
         { channelId: "C_INFRA", principalId: "U_ALICE" },
         { channelId: "C_INFRA", principalId: "U_BOB" },
         { channelId: "C_NOALICE", principalId: "U_BOB" },
         { channelId: "C_PUBLIC", principalId: "U_BOB" },
+        { channelId: "C_RELEASE", principalId: "U_ALICE" },
+        { channelId: "C_RELEASE", principalId: "U_RELEASE_BOT" },
       ],
     );
     approvals = createKeychainApprovals({
@@ -933,6 +937,27 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     const resolution = await waitFor(() => resumeTurns(session!.id, /declined the access request/));
     assert.equal(resolution.length, 1);
     assert.equal((await decide(made.ask.id, "U_ALICE", "once")).ask.status, "declined", "a decided card stays decided");
+  });
+
+  it("a credential request a Slack bot's turn makes resumes as the bot's work", async () => {
+    const { credential } = (await (
+      await post("/v1/keychain/credentials", { service: "release-signing", secret: "s" }, await capFor("U_ALICE"))
+    ).json()) as any;
+    const threadRef = "ch:C_RELEASE-thread";
+    const made = (await (
+      await post(
+        "/v1/keychain/asks",
+        { credential: credential.id, purpose: "sign the release" },
+        await capFor("U_RELEASE_BOT", "channel:C_RELEASE", {
+          threadRef,
+          destination: { type: "slack", target: "C_RELEASE", audienceScopeId: "channel:C_RELEASE" },
+          botActor: true,
+        }),
+      )
+    ).json()) as any;
+    await decide(made.ask.id, "U_ALICE", "deny");
+    const [run] = await waitFor(() => built.runs.list({ threadRef }));
+    assert.equal(run?.request.botActor, true);
   });
 
   it("the removed chat-approval routes are gone; background requests may still ask", async () => {

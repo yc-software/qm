@@ -4,6 +4,10 @@ import type { App } from "../src/api/app.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 import { discoverScopes, personNamer, threadRefLabel } from "../src/api/routes/admin/common.ts";
 import { installPrincipalLinks } from "../src/directory/person.ts";
+import { TEST_TENANT } from "./support/test-tenant.ts";
+import { withTenant } from "../src/tenants/context.ts";
+
+const tenant = withTenant(TEST_TENANT, (t) => t);
 
 const trusted = "oidc:issuer-hash:c3ViamVjdA";
 
@@ -43,7 +47,7 @@ test("one person's two personal scopes get labels that tell them apart", async (
     sessions: { distinctScopes: async () => [], distinctParticipants: async () => [] },
     admin: { listGrants: async () => [] },
   } as unknown as ServerDeps;
-  const labels = await discoverScopes(app, deps, [
+  const labels = await discoverScopes(app, deps, tenant, [
     `personal:${trusted}`,
     "personal:founder@company.test",
     "personal:solo@company.test",

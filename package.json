@@ -59,6 +59,7 @@
     "lint:ox": "oxlint --deny-warnings src plugins scripts cli test",
     "dev-instance:doctor": "bash scripts/dev-instance.sh doctor",
     "lint:knip": "knip",
+    "lint:tenancy": "node scripts/tenant-ratchet.ts",
     "audit:prod": "npm audit --omit=dev --audit-level=moderate",
     "build:app-annotations": "node scripts/build-app-devbar.mjs"
   },

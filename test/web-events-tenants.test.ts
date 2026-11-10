@@ -65,8 +65,8 @@ test("the same person in two tenants only hears their own tenant's session state
   try {
     const inA = browser();
     const inB = browser();
-    withTenant(a, () => events.stream("pat", inA));
-    withTenant(b, () => events.stream("pat", inB));
+    withTenant(a, (t) => events.stream("pat", inA, t));
+    withTenant(b, (t) => events.stream("pat", inB, t));
     fake.state({ tenantId: a, threadRef: "web:pat:one", participants: ["pat"], state: "working", at: 1 });
     assert.match(inA.text(), /event: session_state\ndata: .*web:pat:one/);
     assert.doesNotMatch(inB.text(), /web:pat:one/);
@@ -98,7 +98,7 @@ test("an inbox event from one tenant never reaches another tenant's browsers", a
   withoutTenant(() => events.start());
   try {
     const inB = browser();
-    withTenant(b, () => events.stream("pat", inB));
+    withTenant(b, (t) => events.stream("pat", inB, t));
     fake.ledger({ tenantId: a, loopId: "loop", itemId: "item", owner: "pat" } as OwnedLedgerEvent);
     fake.ledger({ loopId: "loop", itemId: "item", owner: "pat" } as OwnedLedgerEvent);
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -124,7 +124,7 @@ test("an inbox event emitted outside any tenant binding is forwarded inside the 
   withoutTenant(() => events.start());
   try {
     const inB = browser();
-    withTenant(b, () => events.stream("pat", inB));
+    withTenant(b, (t) => events.stream("pat", inB, t));
     fake.ledger({ tenantId: b, loopId: "loop", itemId: "item", owner: "pat" } as OwnedLedgerEvent);
     await new Promise((resolve) => setTimeout(resolve, 50));
     assert.match(inB.text(), /event: inbox_resync/);
