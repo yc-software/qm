@@ -25,11 +25,11 @@ export function clearTranscriptCache(): void {
   cache.clear();
 }
 
-export function resyncTranscriptCache(openId: string | null): void {
+export function resyncTranscriptCache(openIds: readonly string[]): void {
   clearTranscriptCache();
-  if (openId)
-    fetchTranscript(openId, { tailTurns: TAIL_TURNS }).then(
-      (page) => storeTranscript(openId, page),
+  for (const id of openIds)
+    fetchTranscript(id, { tailTurns: TAIL_TURNS }).then(
+      (page) => storeTranscript(id, page),
       (error: unknown) => swallow("web-ui: resync cached transcript", error),
     );
 }

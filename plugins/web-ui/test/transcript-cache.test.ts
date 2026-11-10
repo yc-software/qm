@@ -226,7 +226,7 @@ test("a stream resync drops the cache and refetches only the open chat", async (
   transcripts.set("a", [entry(0, "first question"), entry(1, "first answer")]);
   await visitThenLeave("a");
 
-  cache.resyncTranscriptCache("other");
+  cache.resyncTranscriptCache(["other"]);
   assert.equal(cache.cachedTranscript("a"), undefined);
   await settle();
 

@@ -124,10 +124,11 @@ export function ensureDeliveryStream(): void {
       else for (const conv of live) conv.onDelivery(event.threadRef);
     },
     () => {
-      resyncTranscriptCache(main?.state.sessionId ?? null);
+      const openIds = [...live].flatMap((conv) => (conv.state.sessionId ? [conv.state.sessionId] : []));
+      resyncTranscriptCache(openIds);
       void refreshSessions({ silent: true });
       refreshOpenTrees();
-      resyncUiCanvas([...live].map((conv) => conv.state.sessionId));
+      resyncUiCanvas(openIds);
     },
     (event) => inboxItemHandler?.(event),
     () => inboxResyncHandler?.(),
