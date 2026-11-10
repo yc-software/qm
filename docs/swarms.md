@@ -272,10 +272,12 @@ run on its own worker computer. The check runs each time the turn uses a compute
 turn that is already running loses that access as soon as someone else posts or a person's turn works on one of those computers. Background
 jobs on those computers are covered too: the bot's `background` list leaves them out, it
 cannot watch them, and a watch it armed while it could stops reading the job's output.
-A computer supplied as `forumSandboxId` stays an ordinary computer of its scope, with one
-exception: until the swarm's work window ends, a bot's turn that may not direct the swarm
-cannot use it either, from the swarm's thread or from anywhere else. A swarm without a work
-window keeps its forum off-limits to those turns for as long as the swarm exists.
+A computer supplied as `forumSandboxId` is otherwise an ordinary computer of its scope, but
+the same rule keeps a bot's turn off it, from the swarm's thread or from anywhere else, until
+the swarm's work window ends. Swarms have no work window unless `lifetimeMs` is set, and
+swarm records are kept, so by default a computer that has served as a person's forum stays
+off-limits to those turns permanently. This covers forums named before this rule existed,
+and the forum of a bot-started swarm once the bot loses that swarm.
 Worker sessions never inherit the root session's command or security-screen
 approval grants; a worker must obtain its own approval. Auto screening receives host-verified swarm delegation provenance, so routine delegated tasks and in-swarm reporting are distinguished from external instructions. Delegation does not authorize credential disclosure, permission changes, or overriding higher-priority instructions; those remain screened. Frozen swarm roster checks
 apply to swarm notifications, not ordinary human follow-ups in the root session.
