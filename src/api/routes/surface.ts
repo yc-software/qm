@@ -1347,13 +1347,9 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
   if (ctx.body.inherit === true) await config.setRuntimeSelection(target.scope, null);
   else if (ctx.body.keep === true) {
     const runtime = await config.getRuntimeSelectionDurable(target.scope);
-    if (runtime) await config.acknowledgeRuntimeSelection(target.scope);
-    else {
-      const legacyModel = await config.getBaseModelOwnDurable(target.scope);
-      if (legacyModel && modelSupported(legacyModel) && (await webuiModelEnabled(ctx, legacyModel))) {
-        await config.setRuntimeSelection(target.scope, { modelId: legacyModel });
-      }
-    }
+    const legacyModel = runtime ? null : await config.getBaseModelOwnDurable(target.scope);
+    if (runtime || (legacyModel && modelSupported(legacyModel) && (await webuiModelEnabled(ctx, legacyModel))))
+      await config.acknowledgeRuntimeSelection(target.scope);
   } else {
     const modelId = ctx.body.modelId;
     if (typeof modelId !== "string" || !modelSupported(modelId))

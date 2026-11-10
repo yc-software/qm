@@ -433,14 +433,19 @@ export function createSwarmService(deps: {
             maxAttempts: 2,
           }),
         );
+        let held = false;
         await step(() =>
           store.update(swarm.id, (current) => {
-            current.messages.find((item) => item.id === message.id)!.notifications[recipientId] = {
-              state: "queued",
-              runId: run.id,
-            };
+            const notifications = current.messages.find((item) => item.id === message.id)!.notifications;
+            held = controlState(current, recipientId) !== "active";
+            if (notifications[recipientId]?.state !== "pending") return;
+            notifications[recipientId] = { state: held ? "pending" : "queued", runId: run.id };
           }),
         );
+        if (held)
+          await step(() =>
+            runs.withdraw(run.id, { unstartedOnly: true }).catch(swallowAs("swarm: withdraw a paused run", false)),
+          );
       }
     }
   }
@@ -884,30 +889,27 @@ export function createSwarmService(deps: {
           ancestor = swarm.members.find((member) => member.id === ancestor)?.parentId;
         if (!ancestor) throw new Error("agents may only control themselves or their descendants");
       }
+      const withdrawing: string[] = [];
       const updated = await update(auth, (current) => {
         assertCallerMayDirect(caller, auth, current);
         const member = current.members.find((peer) => peer.id === target.id)!;
         if (member.control === "stopped") throw new Error("stopped workers cannot be resumed");
         if (input.state === "active") delete member.control;
         else member.control = input.state;
+        withdrawing.length = 0;
+        if (input.state !== "paused") return;
+        for (const message of current.messages)
+          for (const [id, notification] of Object.entries(message.notifications))
+            if (notification.state === "queued" && notification.runId && controlState(current, id) === "paused") {
+              message.notifications[id] = { state: "pending", runId: notification.runId };
+              withdrawing.push(notification.runId);
+            }
       });
-      if (input.state === "paused") {
-        let withdrawing: string[] = [];
-        await store.update(updated.id, (current) => {
-          withdrawing = [];
-          for (const message of current.messages)
-            for (const [id, notification] of Object.entries(message.notifications))
-              if (notification.state === "queued" && notification.runId && controlState(current, id) === "paused") {
-                message.notifications[id] = { state: "pending", runId: notification.runId };
-                withdrawing.push(notification.runId);
-              }
-        });
-        await Promise.all(
-          withdrawing.map((runId) =>
-            runs.withdraw(runId, { unstartedOnly: true }).catch(swallowAs("swarm: withdraw a paused run", false)),
-          ),
-        );
-      }
+      await Promise.all(
+        withdrawing.map((runId) =>
+          runs.withdraw(runId, { unstartedOnly: true }).catch(swallowAs("swarm: withdraw a paused run", false)),
+        ),
+      );
       if (input.state === "stopped") {
         const stopped = new Set(
           updated.members.filter((m) => controlState(updated, m.id) === "stopped").map((m) => m.id),

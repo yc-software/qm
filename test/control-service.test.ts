@@ -244,7 +244,7 @@ for (const state of ["active", "paused", "archived", "completed"] as const) {
       });
       if (state === "paused") await built.crons.setEnabled(cron.id, false);
       if (state === "archived") await built.crons.update(cron.id, { archived: true });
-      if (state === "completed") await built.crons.markFired(cron.id, firstFireAt);
+      if (state === "completed") await built.crons.markFired(cron, firstFireAt);
     }
     assert.equal((await built.crons.list()).length, 101);
     const created = await control.createCron(
