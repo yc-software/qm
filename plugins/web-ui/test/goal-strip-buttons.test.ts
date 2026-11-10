@@ -12,6 +12,7 @@ async function settle(check: () => boolean): Promise<void> {
 }
 
 const goal = (status: Status) => ({ objective: "ship the fix", status, createdAt: 1000, updatedAt: 1000 });
+const note = item("Wake", { seq: 5, createdAt: 6000, body: { kind: "goal_cancelled", objective: "ship the fix" } });
 
 async function openGoalBar(action: "resume" | "cancel", before: Status, after: Status) {
   const posts: string[] = [];
@@ -45,6 +46,7 @@ async function openGoalBar(action: "resume" | "cancel", before: Status, after: S
               body: { action: "create", goal: goal("active") },
             }),
             ...(before === "paused" ? [item("Stop", { seq: 4, createdAt: 5000, body: { reason: "by user" } })] : []),
+            ...(posts.length && after === "cancelled" ? [note] : []),
           ],
           goal: goal(posts.length ? after : before),
         });
@@ -89,8 +91,8 @@ test("the play button on a paused goal bar resumes the goal and sends the turn t
 });
 
 for (const [name, before, after] of [
-  ["cancelling an active goal removes its bar", "active", "cancelled"],
-  ["cancelling a paused goal whose reply was stopped removes its bar", "paused", "cancelled"],
+  ["cancelling an active goal removes its bar and notes the cancellation", "active", "cancelled"],
+  ["cancelling a paused goal whose reply was stopped does the same without a reload", "paused", "cancelled"],
   ["a goal core still reports active after a cancel keeps its bar and a working cancel button", "active", "active"],
 ] as const)
   test(name, async () => {
@@ -99,6 +101,7 @@ for (const [name, before, after] of [
       const button = () => bar()?.querySelector<HTMLButtonElement>('[aria-label="Cancel goal"]');
       button()!.click();
       await settle(() => posts.length > 0 && (after === "cancelled" ? !bar() : button()?.disabled === false));
+      if (after === "cancelled") await settle(() => /Goal cancelled/.test(h.mainText()));
     } finally {
       await h.close();
     }
