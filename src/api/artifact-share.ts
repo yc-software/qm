@@ -22,12 +22,6 @@ export function livePersonCapability(
   return c?.botActor !== true && (c?.liveAuthor === true || c?.liveActor === true);
 }
 
-/**
- * A person is at the keyboard: the turn carries their authority AND nobody is acting on a schedule. Fires carry
- * their owner's authority (livePersonCapability), but shared-artifact governance — rewriting a team skill,
- * promoting one to the org, moving a deploy into someone's personal scope — stays with typed turns, since a
- * fire's input is whatever the schedule happened to read.
- */
 export function personAtKeyboard(
   c: { liveActor?: boolean; liveAuthor?: boolean; botActor?: boolean; triggered?: boolean } | undefined,
 ): boolean {

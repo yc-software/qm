@@ -538,9 +538,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ? await delegatedAuthorizationOrigin(input, { runs: deps.runs, sessions: deps.sessions })
           : undefined;
       const authorizationOrigin = sessionTurn ? (delegatedOrigin ?? { kind: "automation" as const }) : input.origin;
-      // A cron, webhook, loop or monitor fire runs as the person who wrote its standing instructions, so it
-      // carries that person's own authority — the same as a turn they typed. Session-to-session messages that
-      // fall back to an automation origin do not: they carry only what the delegation chain proves.
       const ownerFireTurn = authorizationOrigin.kind === "automation" && !sessionTurn && !input.botActor;
       const liveTurn = (authorizationOrigin.kind === "human" || ownerFireTurn) && allInternal && !external;
       const liveAuthorTurn =

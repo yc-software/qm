@@ -217,7 +217,6 @@ export async function canAdministerCron(
 ): Promise<boolean> {
   if (await ownsCron(app, cron, actorId, isActor)) return true;
   if (actsAsScope(cron.owner, cron.ownerScopeId) || cron.ownerScopeId.startsWith("personal:")) return false;
-  // Rewriting a shared cron's task hands its fires to the rewriter; the creator keeps a hand on it regardless.
   if (await (isActor ? isActor(cron.createdBy) : app.samePerson(cron.createdBy, actorId))) return true;
   return (await app.artifactGrantPermission(cron.ownerScopeId, encodeRef(cronRef(cron.id)), actorId)) === "write";
 }
@@ -530,8 +529,6 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           return { ok: false, code: "bad_request", message: CRON_SCRIPT_HOME_ONLY };
         patch.script = script;
       } else if (before.script && (req.script === null || req.text !== undefined)) patch.script = null;
-      // A fire runs with its owner's authority, so whoever rewrites what the cron does becomes its owner:
-      // the standing instructions are then theirs, and the fires run as them, not as the previous owner.
       if (
         (req.action !== undefined || req.text !== undefined) &&
         !(await ownsCron(app, before, capability.actorId)) &&
@@ -556,7 +553,6 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           changeSummary.push(req.session ? "tied to a session" : "untied from its session");
         const detail: CronEditDetail =
           req.schedule !== undefined ? { schedule: withDefaultTimezone(req.schedule, capability) } : {};
-        // On a takeover the notice goes to whoever owned the cron before this edit, not to the editor.
         await notifyEdit({ ...cron, owner: before.owner }, capability, changeSummary, detail);
         return { ok: true, cron };
       } catch (e) {

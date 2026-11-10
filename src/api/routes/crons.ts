@@ -411,7 +411,6 @@ async function patchCronAsPerson(ctx: ApiCtx, cron: Cron, body: unknown): Promis
     return sendJson(res, 400, { error: "bad_request", message: PERSON_CRON_PATCH_BAD_REQUEST });
   const schedule = body.schedule !== undefined ? userScheduleFromBody(body.schedule)! : undefined;
   const editor = url.searchParams.get("principalId");
-  // Fires run with the owner's authority, so whoever rewrites the task takes ownership of the cron.
   const takesOver =
     body.task !== undefined &&
     !!editor &&
