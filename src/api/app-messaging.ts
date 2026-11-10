@@ -5,6 +5,7 @@ import { personIds, personKey, personKeys, samePersonInDirectory, samePersonMatc
 import type { Destination } from "../types.ts";
 import type { SurfaceContextRequest, SurfaceContextResult } from "../reach/reach.ts";
 import { reportFailureAs } from "../util/errors.ts";
+import { declineUnreachableApproval } from "../core/approval-requester.ts";
 import { tenantListeners } from "../tenants/cache.ts";
 import { adminCronHistoryUrl } from "../util/admin-links.ts";
 import { randomUUID } from "node:crypto";
@@ -432,8 +433,14 @@ export function createMessagingMethods(
     async ackDelivery(id, slackApiMs) {
       await deps.deliveries.ack(id, Date.now(), slackApiMs);
     },
-    failDelivery(id, reason) {
-      return deps.deliveries.fail(id, reason, Date.now());
+    async failDelivery(id, reason) {
+      const failed = await deps.deliveries.fail(id, reason, Date.now());
+      const approvalId = failed?.destination.commandApprovalId;
+      if (approvalId && reason === "cannot_dm_bot" && deps.approvals)
+        await declineUnreachableApproval({ approvals: deps.approvals, sessions: deps.sessions }, approvalId).catch(
+          reportFailureAs("deliveries: decline approval for a bot requester", null),
+        );
+      return failed;
     },
     async ackDeliveryByKey(idempotencyKey) {
       await deps.deliveries.ackByKey(idempotencyKey, Date.now());

@@ -1,4 +1,5 @@
 import { externalSlackRequestAllowed } from "../resolution/external-slack.ts";
+import { requesterIsBot } from "../core/approval-requester.ts";
 import { createPersonNames } from "../identity/person-names.ts";
 import { turnModelRefusal } from "./runtime-config.ts";
 import type { Run } from "../runs/run-store.ts";
@@ -331,7 +332,7 @@ export function createTurnMethods(
         ...(req.personaId && origin.kind === "automation" && req.surface === "cron"
           ? { personaId: req.personaId }
           : {}),
-        ...(req.botActor ? { botActor: true } : {}),
+        ...(requesterIsBot(req) ? { botActor: true } : {}),
         ...(req.surfaceTools ? { surfaceTools: true } : {}),
         ...(req.clientTools?.length ? { clientTools: req.clientTools } : {}),
         desktopClientId: desktopClientForTurn({ ...req, origin }),

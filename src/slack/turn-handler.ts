@@ -117,6 +117,10 @@ export interface TurnHandler {
   botHasStakeInThread(client: any, channel: string, threadTs: string, before?: string): Promise<boolean>;
 }
 
+export function botAuthoredActor(actor: ActorAssertion, botAuthored: boolean): ActorAssertion {
+  return botAuthored && !actor.isBot && !actor.externalId.includes("@") ? { ...actor, isBot: true } : actor;
+}
+
 function channelType(kind: SlackConversationKind, conversationKind: SlackConversationKind): string {
   if (kind === "dm") return "im";
   return conversationKind === "group" ? "mpim" : "channel";
@@ -207,10 +211,14 @@ export function createTurnHandler(deps: {
         ...(inc.prefetched.timezone ? { timezone: inc.prefetched.timezone } : {}),
       };
     else classified = await classifyUserCached(client, inc.userId);
-    const actor = classified.actor;
-    if (deps.externalAccess && (actor.isExternalGuest || actor.isBot || !inc.userId || inc.synthetic)) return;
+    if (
+      deps.externalAccess &&
+      (classified.actor.isExternalGuest || classified.actor.isBot || !inc.userId || inc.synthetic)
+    )
+      return;
     if (deps.externalAccess && inc.unprompted) inc = { ...inc, unprompted: false };
-    if (deps.allowActor && !deps.allowActor(actor)) return;
+    if (deps.allowActor && !deps.allowActor(classified.actor)) return;
+    const actor = botAuthoredActor(classified.actor, inc.botAuthored === true);
     const timezone = classified.timezone;
     const text = resolveMentions(
       decodeSlackEntities(inc.rawText).trim(),

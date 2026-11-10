@@ -265,6 +265,7 @@ import { createAttachStaging } from "./orchestrator/attach-tool.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "../slack/message-revisions.ts";
 import { type ProviderKeys } from "../model/model-runtime.ts";
 import { surfaceToolPrompt } from "../surfaces/registry.ts";
+import { BOT_REQUESTER_APPROVAL_NOTE, BOT_REQUESTER_REFUSAL } from "./approval-requester.ts";
 
 async function recordUser(users: OrchestratorDeps["users"], id: string, botActor: boolean | undefined): Promise<void> {
   try {
@@ -680,6 +681,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         audit({ action: "spend_limit.refused", resource: scopeId, detail: spendLimit.over });
         return { status: "refused", reason: spendLimitRefusal(spendLimit), refusalKind: "model_budget" };
       }
+      const botRequester = input.botActor === true;
+      const botApprovalRefusal = (sessionId: string, command: string): TurnResult => {
+        audit({
+          action: "command_approval.unavailable",
+          resource: command,
+          status: "refused",
+          detail: JSON.stringify({ approvalOutcome: "requester_is_bot" }),
+        });
+        return { status: "refused", sessionId, reason: BOT_REQUESTER_REFUSAL, refusalKind: "approval_denied" };
+      };
       const issueApproval = async (
         requestId: string,
         fields: Omit<PendingApprovalRecord, "createdAt" | "request">,
@@ -929,6 +940,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await deps.sessions.addParticipant(session.id, actor.id);
         if (input.shutdown?.aborted)
           return { status: "queued", sessionId: session.id, ...(input.runId ? { runId: input.runId } : {}) };
+        if (botRequester) return botApprovalRefusal(session.id, "security-screen");
         let approval: PendingApproval;
         try {
           approval = await withManagedRosterVersion(async () => {
@@ -3683,6 +3695,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   },
                 }
               : {}),
+            ...(botRequester ? { approvalUnavailable: BOT_REQUESTER_APPROVAL_NOTE } : {}),
             toolApprovalGate: (tool: string, callKey?: string) => {
               if (callKey) return consumeApproval(callKey);
               return securityPolicy.toolApprovals !== "all" || authorizeToolCall(tool);
@@ -3969,6 +3982,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           finalResult = { status: "silent", sessionId: session.id, stopped: true, ...stopScope };
         } else if (isPollFire && result.silent && !stagedAttachments.length && result.pausedOnApproval !== true) {
           finalResult = { status: "silent", sessionId: session.id };
+        } else if (botRequester && (result.pendingApprovals?.length || quarantineReleaseApprovals.length)) {
+          for (const pa of [...(result.pendingApprovals ?? []), ...quarantineReleaseApprovals])
+            audit({
+              action: "command_approval.unavailable",
+              resource: pa.command,
+              status: "refused",
+              detail: JSON.stringify({ approvalOutcome: "requester_is_bot" }),
+            });
+          finalResult =
+            input.surfaceTools && surfaceToolDeps && !strictReadOnly
+              ? { status: "silent", sessionId: session.id }
+              : { status: "ok", sessionId: session.id, reply };
         } else if (result.pendingApprovals?.length || quarantineReleaseApprovals.length) {
           const issued: Array<[string, Omit<PendingApprovalRecord, "createdAt" | "request">]> = [];
           const turnApprovals: Array<
@@ -4059,6 +4084,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       } catch (err) {
         if (err instanceof ProjectRosterChanged) return rosterChanged(session.id);
         if (err instanceof NeedsApproval) {
+          if (botRequester) return botApprovalRefusal(session.id, err.command);
           const summary = await approvalSummary(scopeId, err.command, err.approvalReason);
           let approval: PendingApproval;
           try {
