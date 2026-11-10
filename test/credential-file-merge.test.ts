@@ -13,7 +13,10 @@ const text = (files: CredentialFile[]) =>
   Object.fromEntries(files.map((f) => [f.path, Buffer.from(f.contentBase64, "base64").toString()]));
 
 test("expiry is read from AWS SSO, AWS CLI and epoch-style fields", () => {
-  assert.equal(credentialFileExpiry(file("a", { expiresAt: "2026-11-09T18:00:00Z" })), Date.parse("2026-11-09T18:00:00Z"));
+  assert.equal(
+    credentialFileExpiry(file("a", { expiresAt: "2026-11-09T18:00:00Z" })),
+    Date.parse("2026-11-09T18:00:00Z"),
+  );
   assert.equal(
     credentialFileExpiry(file("b", { Credentials: { Expiration: "2026-11-09T19:00:00+00:00" } })),
     Date.parse("2026-11-09T19:00:00Z"),

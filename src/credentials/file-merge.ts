@@ -15,7 +15,7 @@ const field =
     );
 
 /** Common expiry fields: AWS SSO token cache (`expiresAt`), AWS CLI/STS cache (`Credentials.Expiration`), OAuth-style token files. */
-export const EXPIRY_PROBES: readonly ExpiryProbe[] = [
+const EXPIRY_PROBES: readonly ExpiryProbe[] = [
   field("expiresAt"),
   field("expires_at"),
   field("Credentials", "Expiration"),

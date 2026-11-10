@@ -623,3 +623,14 @@ test("a running background job's login is saved when it prints, and later saves 
   });
   assert.equal(await bg.registry.credentialFiles(started.processId), null);
 });
+
+test("a deletion and a concurrent refresh of another file both survive the merge", async (t) => {
+  const f = await fixture(t);
+  const wal = textFile(".aws/cli/cache/session.db-wal", "scratch");
+  await f.keychain.updateFiles(await startCommand(f), [...files("original"), wal]);
+  const deleter = await startCommand(f);
+  const refresher = await startCommand(f);
+  await f.keychain.updateFiles(refresher, [...files("refreshed"), wal]);
+  await f.keychain.updateFiles(deleter, files("original"));
+  assert.deepEqual(await savedFiles(f), { ".aws/sso/cache/session.json": "refreshed" });
+});
