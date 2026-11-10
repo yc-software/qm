@@ -217,7 +217,7 @@ export async function canAdministerCron(
 ): Promise<boolean> {
   if (await ownsCron(app, cron, actorId, isActor)) return true;
   if (actsAsScope(cron.owner, cron.ownerScopeId) || cron.ownerScopeId.startsWith("personal:")) return false;
-  if (await (isActor ? isActor(cron.createdBy) : app.samePerson(cron.createdBy, actorId))) return true;
+  if (await ownsCron(app, { ...cron, owner: cron.createdBy }, actorId, isActor)) return true;
   return (await app.artifactGrantPermission(cron.ownerScopeId, encodeRef(cronRef(cron.id)), actorId)) === "write";
 }
 

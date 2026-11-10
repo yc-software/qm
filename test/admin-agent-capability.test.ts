@@ -598,9 +598,10 @@ for (const [name, input, expected] of [
   ["human thread reply", { origin: { kind: "ambient", live: true } }, 200],
   ["synthetic ambient wake", { origin: { kind: "ambient" } }, 403],
   ["bot thread reply", { origin: { kind: "ambient" }, botActor: true }, 403],
-  ["cron", { origin: { kind: "automation" }, surface: "cron" }, 200],
-  ["webhook", { origin: { kind: "automation" }, surface: "webhook" }, 200],
-  ["bot-actor automation", { origin: { kind: "automation" }, surface: "cron", botActor: true }, 403],
+  ["cron", { origin: { kind: "automation", ownerFire: true }, surface: "cron" }, 200],
+  ["webhook", { origin: { kind: "automation", ownerFire: true }, surface: "webhook" }, 200],
+  ["unmarked automation", { origin: { kind: "automation" }, surface: "cron" }, 403],
+  ["bot-actor automation", { origin: { kind: "automation", ownerFire: true }, surface: "cron", botActor: true }, 403],
 ] satisfies Array<[string, Partial<TurnRequest>, number]>) {
   test(`orchestrator-issued ${name} token reaches the HTTP admin gate with the right authority`, async () => {
     const s = await start();
