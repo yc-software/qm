@@ -21,7 +21,6 @@ async function opener(
 ) {
   const built = stopAtEnd(buildApp(testConfig({ openaiApiKey: "sk-test" })));
   if (scopeDefault) await built.config.setRuntimeSelection(defaultScope, { modelId: scopeDefault });
-  await built.featureFlags.setEnabled("persistent_subagents", scope, true, "admin");
   const room = await built.sessions.getOrCreateByThread("web:room", "dm", scope, undefined, "web");
   await built.sessions.addParticipant(room.id, actor.id);
   const syscalls = built.sessionSyscalls.forTurn({

@@ -21,13 +21,13 @@ test("the org scope enables a feature everywhere", async () => {
   assert.equal(await store.enabled("inbox_loops", "channel:C1"), true);
 });
 
-test("persistent subagents default off and can be enabled for individual people", async () => {
+test("a personal feature defaults off and can be enabled for individual people", async () => {
   const store = createFeatureFlagStore(testMap<FeatureFlagRecord>());
-  assert.equal(await store.enabled("persistent_subagents", "personal:U1"), false);
-  await store.setEnabled("persistent_subagents", "personal:U1", true, "admin");
-  assert.equal(await store.enabled("persistent_subagents", "personal:U1"), true);
-  assert.equal(await store.enabled("persistent_subagents", "personal:U2"), false);
-  assert.equal(await store.enabled("persistent_subagents", "channel:C1"), false);
+  assert.equal(await store.enabled("swarms", "personal:U1"), false);
+  await store.setEnabled("swarms", "personal:U1", true, "admin");
+  assert.equal(await store.enabled("swarms", "personal:U1"), true);
+  assert.equal(await store.enabled("swarms", "personal:U2"), false);
+  assert.equal(await store.enabled("swarms", "channel:C1"), false);
 });
 
 test("retired feature records are not offered as configurable flags", async () => {
