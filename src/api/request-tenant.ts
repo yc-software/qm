@@ -7,16 +7,6 @@ import { CAPABILITY_HEADER } from "./contract.ts";
 import { sendJson } from "./http.ts";
 import type { Route } from "./routes/route.ts";
 
-const tenants = new WeakMap<IncomingMessage, Tenant>();
-
-export function requestTenant(req: IncomingMessage): Tenant | undefined {
-  return tenants.get(req);
-}
-
-export function bindRequestTenant(req: IncomingMessage, tenant: Tenant | undefined): void {
-  if (tenant) tenants.set(req, tenant);
-}
-
 const verified = new WeakMap<IncomingMessage, { token: string; claims: Promise<CapabilityClaims | null> }>();
 
 export function capabilityToken(req: IncomingMessage, bearer: boolean): string | null {

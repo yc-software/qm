@@ -15,6 +15,10 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import type { Loop, ShipGrant } from "../src/loops/types.ts";
 import { testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { withTenant } from "../src/tenants/context.ts";
+import { TEST_TENANT } from "./support/test-tenant.ts";
+
+const tenant = withTenant(TEST_TENANT, (t) => t);
 
 function fakeRes() {
   const out = { status: 0, body: undefined as unknown };
@@ -65,6 +69,7 @@ async function call(
     res,
     url,
     body,
+    tenant,
     params: found.params,
     capability:
       mode === "capability"

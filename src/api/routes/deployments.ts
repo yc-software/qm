@@ -154,7 +154,10 @@ async function proxyAdminDeployment(ctx: BaseCtx): Promise<void> {
     return;
   const found = await app.getDeployment(parts.id);
   const deployment = found?.id === parts.id ? found : undefined;
-  const actor = await authorizeAdmin({ req, res, deps, capability: null }, deployment?.ownerScopeId ?? orgScope(deps));
+  const actor = await authorizeAdmin(
+    { req, res, deps, capability: null, tenant: ctx.tenant },
+    deployment?.ownerScopeId ?? orgScope(deps),
+  );
   if (!actor) return;
   if (!deployment) return sendJson(res, 404, { error: "not_found" });
   audit(deps, {

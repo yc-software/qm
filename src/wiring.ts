@@ -1821,7 +1821,7 @@ export function buildApp(
   const adminGrantStore = createAdminGrantStore(createPostgresAdminGrantStore(databaseUrl), {
     seed: parseAdminGrants(config.adminGrants, config.orgId) ?? [],
     seedsTenant: (tenant) => tenant.id === bootTenant(),
-    beforeSeed: (_tenant, grants) =>
+    beforeSeed: (grants) =>
       Promise.all(grants.map((g) => users.record({ id: g.principalId, source: "admin", at: Date.now() }))),
   });
   const admin = createAdminService(adminGrantStore, {
