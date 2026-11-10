@@ -79,9 +79,9 @@ describe("tenant settings and operator commands", () => {
   before(async () => {
     db = await twoTenants();
     stopLoad = onTenantLoad(() => loadTenantSettings(db.app));
-    await withTenant(db.tenants[0], async () => {
+    await withTenant(db.tenants[0], async (tenant) => {
       await createPostgresDirectoryStore(db.ownerDatabaseUrl).list();
-      await createPostgresAdminGrantStore(db.ownerDatabaseUrl).all();
+      await createPostgresAdminGrantStore(db.ownerDatabaseUrl).all(tenant);
     });
   });
 

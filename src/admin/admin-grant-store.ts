@@ -1,5 +1,4 @@
-import { perTenant } from "../tenants/cache.ts";
-import { currentTenant } from "../tenants/context.ts";
+import type { Tenant } from "../tenants/context.ts";
 import type { ScopeId } from "../types.ts";
 
 export type AdminRole = "org_admin";
@@ -17,17 +16,17 @@ export function grantKey(principalId: string, scopeId: ScopeId, role: AdminRole)
 }
 
 export interface AdminGrantPersistence {
-  all(): Promise<AdminGrant[]>;
-  put(g: AdminGrant): Promise<void>;
-  insertIfAbsent(g: AdminGrant): Promise<boolean>;
-  remove(principalId: string, scopeId: ScopeId, role: AdminRole): Promise<void>;
+  all(tenant: Tenant): Promise<AdminGrant[]>;
+  put(tenant: Tenant, g: AdminGrant): Promise<void>;
+  insertIfAbsent(tenant: Tenant, g: AdminGrant): Promise<boolean>;
+  remove(tenant: Tenant, principalId: string, scopeId: ScopeId, role: AdminRole): Promise<void>;
 }
 
 export interface AdminGrantStore {
-  list(): Promise<AdminGrant[]>;
-  add(g: AdminGrant): Promise<void>;
-  addIfAbsent(g: AdminGrant): Promise<boolean>;
-  revoke(principalId: string, scopeId: ScopeId, role: AdminRole): Promise<void>;
+  list(tenant: Tenant): Promise<AdminGrant[]>;
+  add(tenant: Tenant, g: AdminGrant): Promise<void>;
+  addIfAbsent(tenant: Tenant, g: AdminGrant): Promise<boolean>;
+  revoke(tenant: Tenant, principalId: string, scopeId: ScopeId, role: AdminRole): Promise<void>;
 }
 
 export interface AdminGrantStoreOptions {
@@ -41,39 +40,39 @@ export function createAdminGrantStore(
   opts: AdminGrantStoreOptions = {},
 ): AdminGrantStore {
   const seeds = opts.seed ?? [];
-  const seeding = perTenant<{ done?: Promise<void> }>(() => ({}));
-  function ensureSeeded(): Promise<void> {
-    const state = seeding();
-    if (!state.done) {
-      const done = (async () => {
-        if (!seeds.length || (opts.seedTenant && (await opts.seedTenant()) !== currentTenant())) return;
-        if ((await persist.all()).length > 0) return;
+  const seeding = new Map<string, Promise<void>>();
+  function ensureSeeded(tenant: Tenant): Promise<void> {
+    let done = seeding.get(tenant.id);
+    if (!done) {
+      done = (async () => {
+        if (!seeds.length || (opts.seedTenant && (await opts.seedTenant()) !== tenant.id)) return;
+        if ((await persist.all(tenant)).length > 0) return;
         await opts.beforeSeed?.(seeds);
-        for (const g of seeds) await persist.put({ grantedBy: "system", createdAt: 0, ...g });
+        for (const g of seeds) await persist.put(tenant, { grantedBy: "system", createdAt: 0, ...g });
       })().catch((e) => {
-        state.done = undefined;
+        seeding.delete(tenant.id);
         throw e;
       });
-      state.done = done;
+      seeding.set(tenant.id, done);
     }
-    return state.done;
+    return done;
   }
   return {
-    async list() {
-      await ensureSeeded();
-      return persist.all();
+    async list(tenant) {
+      await ensureSeeded(tenant);
+      return persist.all(tenant);
     },
-    async add(g) {
-      await ensureSeeded();
-      await persist.put(g);
+    async add(tenant, g) {
+      await ensureSeeded(tenant);
+      await persist.put(tenant, g);
     },
-    async addIfAbsent(g) {
-      await ensureSeeded();
-      return persist.insertIfAbsent(g);
+    async addIfAbsent(tenant, g) {
+      await ensureSeeded(tenant);
+      return persist.insertIfAbsent(tenant, g);
     },
-    async revoke(principalId, scopeId, role) {
-      await ensureSeeded();
-      await persist.remove(principalId, scopeId, role);
+    async revoke(tenant, principalId, scopeId, role) {
+      await ensureSeeded(tenant);
+      await persist.remove(tenant, principalId, scopeId, role);
     },
   };
 }

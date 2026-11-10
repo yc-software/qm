@@ -294,6 +294,9 @@ jobs:
       - name: Oxlint
         if: needs.reuse.outputs.reusable != 'true'
         run: npm run lint:ox
+      - name: Tenant ratchet
+        if: needs.reuse.outputs.reusable != 'true'
+        run: npm run lint:tenancy
 
   core-postgres:
     name: Core Postgres tests
