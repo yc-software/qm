@@ -66,7 +66,8 @@ export function createWebEvents(
     let failure: unknown;
     try {
       const now = Date.now();
-      const drainLane = async (tenant?: string): Promise<void> => {
+      const drainLane = async (_id?: string, bound?: Tenant): Promise<void> => {
+        const tenant = bound?.id;
         for (const d of await app.pendingDeliveries("web")) {
           const owner = canonicalPerson(ownerOfWebThread(d.destination.target) ?? "");
           if (clientsOf(tenant).get(owner)?.size) send(tenant, owner, "delivery", { threadRef: d.destination.target });
