@@ -250,7 +250,7 @@ describe("POST /v1/reach with files", () => {
     assert.equal(malformed.status, 400);
   });
 
-  it("refuses a Slack bot's turn a swarm computer named by sandbox_id when it may not direct that swarm", async () => {
+  it("refuses a Slack bot's turn a swarm computer it may not use, named by sandbox_id or as the default", async () => {
     const scope = scopeId("personal", "U-carol");
     const resources = built.sandboxResources.forTurn({
       actorId: "U-carol",
@@ -270,11 +270,11 @@ describe("POST /v1/reach with files", () => {
     const handle = await built.sandbox.provision(scope, { sandboxId: worker.id });
     await built.sandbox.writeFile(handle, "plan.md", "carol's plan\n");
     await built.sandbox.teardown(handle, { keepWarm: true });
-    const send = async (botActor: boolean) =>
+    const send = async (botActor: boolean, sandboxId?: string) =>
       post(
         base,
         "/v1/reach",
-        { text: "plan", recipient: "Alice", files: ["plan.md"], sandbox_id: worker.id },
+        { text: "plan", recipient: "Alice", files: ["plan.md"], ...(sandboxId ? { sandbox_id: sandboxId } : {}) },
         {
           "x-agent-capability": await mintCapabilityToken(
             {
@@ -287,12 +287,26 @@ describe("POST /v1/reach with files", () => {
           ),
         },
       );
-    const bot = await send(true);
+    const bot = await send(true, worker.id);
     assert.equal(bot.status, 403);
     assert.equal(((await bot.json()) as any).error, "forbidden");
-    const person = await send(false);
+    const person = await send(false, worker.id);
     assert.equal(person.status, 200);
     assert.deepEqual(await readDelivered(((await person.json()) as any).deliveryId), ["plan.md:carol's plan\n"]);
+    const previousDefault = (await resources.resolve(scope))?.id ?? null;
+    await resources.setDefault("U-carol", scope, worker.id);
+    try {
+      const botDefault = await send(true);
+      assert.equal(botDefault.status, 403);
+      assert.equal(((await botDefault.json()) as any).error, "forbidden");
+      const personDefault = await send(false);
+      assert.equal(personDefault.status, 200);
+      assert.deepEqual(await readDelivered(((await personDefault.json()) as any).deliveryId), [
+        "plan.md:carol's plan\n",
+      ]);
+    } finally {
+      await resources.setDefault("U-carol", scope, previousDefault);
+    }
   });
 
   it("composes named workspace files into the delivery as attachments (the silent-drop bug)", async () => {

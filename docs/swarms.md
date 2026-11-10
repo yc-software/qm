@@ -26,6 +26,13 @@ path before starting workers. Memory stores implement the same contract for test
 they are not a production durability substitute. Swarms are unavailable with
 mixed memory/Postgres stores so execution leases and writes share one authority.
 
+Each swarm board and worker computer records its swarm's id (`swarmId`), which is how
+a Slack bot's turn is kept off a person's swarm computers. Releases from before that
+field leave it unset; `durable-map/swarms/0040-stamp-computers` stamps the computers of
+existing swarms once at startup. Drain an older release's cores and workers before
+upgrading from it, because a computer the older release provisions after that migration
+stays unmarked.
+
 ## Agent API
 
 These routes appear in `/v1/apis` and work from every agent turn that can use QM's

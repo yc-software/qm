@@ -26,6 +26,7 @@ export const STAMP_SWARM_COMPUTERS_MIGRATION = {
     `DO $$
     BEGIN
       IF to_regclass('swarms') IS NOT NULL AND to_regclass('sandbox_resources') IS NOT NULL THEN
+        UPDATE durable_map_versions SET v = v + 1 WHERE tbl = 'sandbox_resources';
         UPDATE sandbox_resources r SET json = r.json || jsonb_build_object('swarmId', c.swarm_id)
         FROM (
           SELECT tenant_id, id AS swarm_id, json #>> '{board,sandboxId}' AS sandbox_id FROM swarms
@@ -34,7 +35,6 @@ export const STAMP_SWARM_COMPUTERS_MIGRATION = {
           FROM swarms s, jsonb_array_elements(s.json -> 'members') AS member
         ) c
         WHERE r.tenant_id = c.tenant_id AND r.id = c.sandbox_id AND NOT r.json ? 'swarmId';
-        UPDATE durable_map_versions SET v = v + 1 WHERE tbl = 'sandbox_resources';
       END IF;
     END $$`,
   ],

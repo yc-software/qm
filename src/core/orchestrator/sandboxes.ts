@@ -10,9 +10,8 @@ import {
 } from "../../sandbox/sandbox.ts";
 import {
   accessConversationSandbox,
-  BOT_SWARM_COMPUTER_REFUSAL,
+  assertBotMayUseDefault,
   preferredBackend,
-  SandboxAccessError,
   type SandboxAccessPlan,
   type SandboxResource,
 } from "../../sandbox/sandbox-resources.ts";
@@ -95,9 +94,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     ((resource: SandboxResource) =>
       swarms.botMayUseComputer(resource, { actorId: actor.id, threadRef: session.threadRef, sessionId: session.id }));
   const assertDefaultUsable = async (): Promise<void> => {
-    if (!botMayUse || boundSandboxId) return;
-    const resource = await deps.sandboxResources?.resolve(resolution.writableScopeId);
-    if (resource && !(await botMayUse(resource))) throw new SandboxAccessError(BOT_SWARM_COMPUTER_REFUSAL);
+    if (!boundSandboxId) await assertBotMayUseDefault(deps.sandboxResources, resolution.writableScopeId, botMayUse);
   };
   const turnAccess = {
     env: connectorEnv,

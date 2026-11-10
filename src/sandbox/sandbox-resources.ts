@@ -115,6 +115,16 @@ export async function accessConversationSandbox(
   return resource;
 }
 
+export async function assertBotMayUseDefault(
+  resources: SandboxResources | undefined,
+  scopeId: ScopeId,
+  botMayUse: ((resource: SandboxResource) => Promise<boolean>) | undefined,
+): Promise<void> {
+  if (!botMayUse) return;
+  const resource = await resources?.resolve(scopeId);
+  if (resource && !(await botMayUse(resource))) throw new SandboxAccessError(BOT_SWARM_COMPUTER_REFUSAL);
+}
+
 export function createSandboxResources(opts: {
   upgrade?: () => Promise<void>;
   records: DurableMap<SandboxResource>;
