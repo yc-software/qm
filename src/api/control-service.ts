@@ -21,6 +21,7 @@ import { SoulUpdateDeniedError, SoulVersionConflictError } from "./app-types.ts"
 import { AdminError } from "../admin/admin-service.ts";
 import {
   livePersonCapability,
+  personAtKeyboard,
   resolveShareTarget,
   SHARED_SKILL_TRIGGER_REFUSAL,
   type ShareArtifactRequest,
@@ -830,7 +831,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
             home.id,
             toScope,
             capability.actorId,
-            capability.liveActor === true && livePersonCapability(capability),
+            personAtKeyboard(capability),
           );
           return {
             ok: true,
@@ -846,8 +847,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           const deployPersonTransfer =
             req.type === "deploy" &&
             toKind === "personal" &&
-            capability.liveActor === true &&
-            livePersonCapability(capability);
+            personAtKeyboard(capability);
           if (toKind === "persona" && req.type !== "skill" && req.type !== "file") {
             return {
               ok: false,
@@ -864,7 +864,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           }
           if (
             req.type === "skill" &&
-            !livePersonCapability(capability) &&
+            !personAtKeyboard(capability) &&
             (isMultiMemberSkillScope(home.ownerScopeId) || isMultiMemberSkillScope(toScope))
           ) {
             return { ok: false, code: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL };
