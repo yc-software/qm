@@ -75,7 +75,9 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
       message: "id must be 2-40 chars: lowercase letters, digits, hyphens, starting with a letter",
     });
   }
-  const b = ctx.body as Partial<McpServer> & { validate?: boolean };
+  const body = ctx.body as Partial<McpServer> & { validate?: boolean };
+  const existing = await ctx.deps.mcpServers.get(id);
+  const b: typeof body = { ...existing, ...Object.fromEntries(Object.entries(body).filter(([, v]) => v != null)) };
   const url = typeof b.url === "string" ? b.url.trim() : "";
   let parsed: URL;
   try {
@@ -92,7 +94,6 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
       message: "url must not carry credentials, query, or fragment",
     });
   }
-  const existing = await ctx.deps.mcpServers.get(id);
   let discovered: DiscoveredOAuth | undefined;
   const discover = async () => (discovered ??= await discoverOAuth(parsed));
   const probe = !b.auth && !existing && b.validate !== false && parsed.protocol === "https:";
@@ -100,7 +101,7 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
   if (!AUTH_MODES.includes(auth)) {
     return sendJson(ctx.res, 400, { error: "bad_request", message: `auth must be one of ${AUTH_MODES.join(", ")}` });
   }
-  const approval = b.approval ?? existing?.approval ?? "annotations";
+  const approval = b.approval ?? "annotations";
   if (!APPROVAL_POLICIES.includes(approval)) {
     return sendJson(ctx.res, 400, {
       error: "bad_request",
@@ -108,8 +109,8 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
     });
   }
   const oauthUser = auth === "oauth-user";
-  const catalog = (b.catalog ?? existing?.catalog) === true;
-  const attestActor = (b.attestActor ?? existing?.attestActor) === true;
+  const catalog = b.catalog === true;
+  const attestActor = b.attestActor === true;
   if ((catalog || attestActor) && oauthUser) {
     return sendJson(ctx.res, 400, {
       error: "bad_request",
@@ -119,7 +120,7 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
   if (oauthUser && PROVIDERS[id]) {
     return sendJson(ctx.res, 400, { error: "bad_request", message: `id ${id} is reserved by a built-in connector` });
   }
-  const credentialScope = oauthUser ? "per-user" : (b.credentialScope ?? existing?.credentialScope ?? "shared");
+  const credentialScope = oauthUser ? "per-user" : (b.credentialScope ?? "shared");
   if (credentialScope !== "shared" && credentialScope !== "per-user") {
     return sendJson(ctx.res, 400, { error: "bad_request", message: "credentialScope must be shared or per-user" });
   }
@@ -133,14 +134,14 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
         "attestActor requires catalog, shared credentials, and bearer or client-credentials auth, so only QM can assert the person",
     });
   }
-  const attestAudience = b.attestAudience ?? (attestActor ? existing?.attestAudience : undefined) ?? "personal";
+  const attestAudience = body.attestAudience ?? (attestActor ? existing?.attestAudience : undefined) ?? "personal";
   if (attestAudience !== "personal" && attestAudience !== "any") {
     return sendJson(ctx.res, 400, { error: "bad_request", message: "attestAudience must be personal or any" });
   }
   if (attestAudience === "any" && !attestActor) {
     return sendJson(ctx.res, 400, { error: "bad_request", message: "attestAudience any requires attestActor" });
   }
-  const credentialHost = b.credentialHost ?? existing?.credentialHost ?? (oauthUser ? parsed.hostname : undefined);
+  const credentialHost = b.credentialHost ?? (oauthUser ? parsed.hostname : undefined);
   if (
     oauthUser &&
     typeof credentialHost === "string" &&
@@ -160,7 +161,7 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
   }
   let oauthAuthorizeUrl = httpsUrl(b.oauthAuthorizeUrl) ?? (oauthUser ? existing?.oauthAuthorizeUrl : undefined);
   let oauthTokenUrl = httpsUrl(b.oauthTokenUrl) ?? (oauthUser ? existing?.oauthTokenUrl : undefined);
-  const credentialAccountType = b.credentialAccountType ?? existing?.credentialAccountType ?? "default";
+  const credentialAccountType = b.credentialAccountType ?? "default";
   if (!isAccountType(credentialAccountType)) {
     return sendJson(ctx.res, 400, {
       error: "bad_request",
@@ -209,12 +210,14 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
           clientSecret: typeof b.clientSecret === "string" && b.clientSecret ? b.clientSecret : existing?.clientSecret,
         }
       : {}),
+    ...(existing?.tools ? { tools: existing.tools } : {}),
+    ...(existing?.about ? { about: existing.about } : {}),
     ...(approval === "annotations" ? {} : { approval }),
     ...(catalog ? { catalog } : {}),
     ...(attestActor ? { attestActor } : {}),
     ...(attestAudience === "any" ? { attestAudience } : {}),
-    readOnly: (b.readOnly ?? existing?.readOnly) === true,
-    enabled: (b.enabled ?? existing?.enabled) !== false,
+    readOnly: b.readOnly === true,
+    enabled: b.enabled !== false,
     updatedAt: Date.now(),
     updatedBy: authorized.id,
   };

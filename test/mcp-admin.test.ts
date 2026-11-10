@@ -107,7 +107,7 @@ test("MCP admin validates and preserves credential scope, without returning secr
   assert.equal((await store.get("crm"))?.approval, undefined);
   assert.equal((await put({ attestActor: true })).status, 400);
   assert.equal(
-    (await put({ catalog: true, attestActor: true })).status,
+    (await put({ catalog: true, attestActor: true, auth: "none" })).status,
     400,
     "an unauthenticated upstream cannot trust the actor",
   );
@@ -336,4 +336,63 @@ test("MCP admin save stores the server's own description from the probe", async 
   assert.equal(res.status, 200);
   assert.deepEqual(((await res.json()) as { tools: string[] }).tools, ["query", "update"]);
   assert.equal((await store.get("crm"))!.about, "Search and update CRM records.\nAlways query first.");
+});
+
+test("MCP admin edit that omits fields keeps the stored auth, name, credentials and discovered tools", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "mcp-admin-merge-"));
+  const built = buildApp(testConfig({ dataDir: dir }));
+  const store = createMcpServerStore(testMap<McpServer>());
+  const server = createInsecureTestServer(built.app, {
+    admin: built.admin,
+    auditLog: built.auditLog,
+    mcpServers: store,
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(dir, { recursive: true, force: true });
+  });
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/admin/mcp-servers`;
+  const put = (id: string, body: object) =>
+    fetch(`${base}/${id}`, { method: "PUT", headers: ADMIN, body: JSON.stringify({ validate: false, ...body }) });
+  const url = "https://tools.example.com/mcp";
+  assert.equal((await put("crm", { url, name: "CRM", auth: "bearer", bearerToken: "secret" })).status, 200);
+  assert.equal((await put("crm", { url, readOnly: true })).status, 200);
+  const crm = await store.get("crm");
+  assert.equal(crm?.auth, "bearer");
+  assert.equal(crm?.bearerToken, "secret");
+  assert.equal(crm?.name, "CRM");
+  assert.equal((await put("crm", { readOnly: false })).status, 200);
+  assert.equal((await store.get("crm"))?.url, url);
+  assert.equal((await put("cc", { url, auth: "client-credentials", clientId: "id", clientSecret: "cs" })).status, 200);
+  assert.equal((await put("cc", { url, enabled: false })).status, 200);
+  assert.equal((await store.get("cc"))?.clientSecret, "cs");
+  await store.put({
+    id: "orders",
+    name: "Orders",
+    url,
+    auth: "oauth-user",
+    credentialScope: "per-user",
+    credentialHost: "tools.example.com",
+    clientId: "c",
+    oauthAuthorizeUrl: "https://id.example.com/authorize",
+    oauthTokenUrl: "https://id.example.com/token",
+    oauthScopes: ["a"],
+    tools: [{ name: "lookup", description: "", inputSchema: { type: "object" } }],
+    about: "Orders",
+    readOnly: false,
+    enabled: true,
+    updatedAt: 1,
+    updatedBy: "admin",
+  });
+  assert.equal((await put("orders", { url, readOnly: true })).status, 200);
+  const orders = await store.get("orders");
+  assert.equal(orders?.auth, "oauth-user");
+  assert.equal(orders?.clientId, "c");
+  assert.deepEqual(
+    orders?.tools?.map((tool) => tool.name),
+    ["lookup"],
+  );
+  assert.equal(orders?.about, "Orders");
 });
