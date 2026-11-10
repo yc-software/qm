@@ -137,7 +137,7 @@ import { BUDGET_MIGRATIONS, createPostgresBudgetTracker } from "./ratelimit/post
 import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
 import { PUBLISHED_ORIGIN_UPGRADE, PUBLISHED_ORIGIN_COMPLETE } from "./surfaces/published-upgrade.ts";
 import { RETIRED_ORIGIN_SWEEP_MIGRATION } from "./surfaces/origin-migration.ts";
-import { DROP_RECIPIENT_CONSENT_MIGRATION } from "./triggers/trigger-store.ts";
+import { BACKFILL_BOT_MARKER_MIGRATION, DROP_RECIPIENT_CONSENT_MIGRATION } from "./triggers/trigger-store.ts";
 import { createPostgresCronFireStore } from "./cron/fire-store.ts";
 import { createLoopStore } from "./loops/loop-store.ts";
 import { createLoopItemLedger } from "./loops/item-ledger.ts";
@@ -1995,6 +1995,7 @@ export function buildApp(
   pgArtifactMap.pool.registerMigration(PUBLISHED_ORIGIN_COMPLETE);
   pgArtifactMap.pool.registerMigration(RETIRED_ORIGIN_SWEEP_MIGRATION);
   pgArtifactMap.pool.registerMigration(DROP_RECIPIENT_CONSENT_MIGRATION);
+  pgArtifactMap.pool.registerMigration(BACKFILL_BOT_MARKER_MIGRATION);
   pgArtifactMap.pool.registerMigration(STAMP_SWARM_COMPUTERS_MIGRATION);
   pgArtifactMap.pool.registerMigration({
     id: "durable-map/crons/0002-drop-fire-log",
