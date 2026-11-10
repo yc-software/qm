@@ -1,3 +1,4 @@
+import type { PromptSnapshot } from "./core/orchestrator/prompt-snapshot.ts";
 import { onTenantLoad, perTenant } from "./tenants/cache.ts";
 import { loadTenantSettings, TENANT_SETTINGS_REFRESH_MS } from "./tenants/settings.ts";
 import { nonDeploymentCredential, withDeploymentCredentials } from "./credentials/deployment-credentials.ts";
@@ -224,7 +225,7 @@ import type { FileArtifactStore } from "./files/file-artifact-store.ts";
 import { createPostgresFileArtifactStore } from "./files/postgres-file-artifact-store.ts";
 import { createAwsSandbox, type StoredMicrovm } from "./sandbox/aws-sandbox.ts";
 import { createLocalSandbox } from "./sandbox/local-sandbox.ts";
-import { createSpritesSandbox } from "./sandbox/sprites-sandbox.ts";
+import { createSpritesSandbox, type StoredSprite } from "./sandbox/sprites-sandbox.ts";
 import { createSmolmachinesSandbox, type StoredSmolmachinesSandbox } from "./sandbox/smolmachines-sandbox.ts";
 import { createAgent37Sandbox } from "./sandbox/agent37-sandbox.ts";
 import {
@@ -351,6 +352,7 @@ import { createDrainController, type BackgroundServices, type DrainController } 
 import { createReaper, REAPER_LEASE_KEY, type Reaper } from "./runs/reaper.ts";
 import { createSweeper as createUntrackedSweeper, type Sweeper } from "./util/sweeper.ts";
 import { createPostgresProcessRegistry, type ProcessRegistry } from "./processes/process-registry.ts";
+import { createSessionWork } from "./sessions/session-work.ts";
 import { createProcessReaper, createReaperKillHook, type ProcessReaper } from "./processes/process-reaper.ts";
 import { createJobComputerSweep } from "./processes/job-computers.ts";
 import { createMonitorStore, type MonitorStore } from "./monitors/monitor-store.ts";
@@ -879,7 +881,7 @@ export function buildApp(
     const { snapshotS3Bucket, ...sprites } = config.spritesSandbox;
     return createSpritesSandbox({
       ...sprites,
-      initializationStore: artifactMap<{ pending: boolean }>("sprites_initialization"),
+      initializationStore: artifactMap<StoredSprite>("sprites_initialization"),
       advisoryLock,
       ...(snapshotS3Bucket
         ? { snapshots: createS3SnapshotStore({ bucket: snapshotS3Bucket, prefix: "sprites-home" }) }
@@ -1216,13 +1218,11 @@ export function buildApp(
             awsBodies.entries(),
             superserveBodies.entries(),
           ]);
-          const bind = (backend: SandboxBackendName, rows: Array<[string, { sandboxId: string }]>) =>
-            rows.map(([scopeId, body]) => ({ scopeId, backend, machineId: body.sandboxId }));
           return [
-            ...bind("e2b", e2b),
-            ...bind("modal", modal),
-            ...aws.map(([scopeId, body]) => ({ scopeId, backend: "aws" as const, machineId: body.microvmId })),
-            ...bind("superserve", superserve),
+            ...e2b.map(([scopeId]) => ({ scopeId, backend: "e2b" as const })),
+            ...modal.map(([scopeId]) => ({ scopeId, backend: "modal" as const })),
+            ...aws.map(([scopeId]) => ({ scopeId, backend: "aws" as const })),
+            ...superserve.map(([scopeId]) => ({ scopeId, backend: "superserve" as const })),
           ];
         },
       });
@@ -1645,9 +1645,7 @@ export function buildApp(
           sandboxes: sandboxResources,
           lock: advisoryLock,
           signals: runSignals,
-          enabled: (actorId) => featureFlags.enabled("swarms", scopeId("personal", actorId)),
           authorize: async (claims) => {
-            if (!(await featureFlags.enabled("swarms", scopeId("personal", claims.actorId)))) return false;
             await identity.refresh();
             return (
               identity.isInternal(identity.classify(claims.actorId)) &&
@@ -1824,8 +1822,10 @@ export function buildApp(
     beforeSeed: (grants) =>
       Promise.all(grants.map((g) => users.record({ id: g.principalId, source: "admin", at: Date.now() }))),
   });
+  const directory = createPostgresDirectoryStore(databaseUrl);
   const admin = createAdminService(adminGrantStore, {
     trustedOidcAdminIssuer: config.trustedOidcAdminIssuer,
+    memberTenants: async (principal) => ((await directory.tenantsForPrincipal?.(principal)) ?? []).map(({ id }) => id),
     users,
   });
   const { strategy: memoryStrategy, memory } = createMemoryStrategy(config.memoryStrategy, {
@@ -1836,7 +1836,6 @@ export function buildApp(
     onCaptureError: (e, scope) =>
       errors.record({ category: "memory", code: "capture_failed", message: errMessage(e), scopeLabel: scope }, e),
   });
-  const directory = createPostgresDirectoryStore(databaseUrl);
   const vouchedInternalEmail = async (email: string): Promise<boolean> => {
     await identity.refresh();
     return (
@@ -2003,6 +2002,13 @@ export function buildApp(
     statements: [
       "CREATE TABLE IF NOT EXISTS crons (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
       "UPDATE crons SET json = json - 'fireLog' WHERE json ? 'fireLog'",
+    ],
+  });
+  pgArtifactMap.pool.registerMigration({
+    id: "durable-map/sandbox_resources/0001-drop-machine-id",
+    statements: [
+      "CREATE TABLE IF NOT EXISTS sandbox_resources (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
+      "UPDATE sandbox_resources SET json = json - 'machineId' WHERE json ? 'machineId'",
     ],
   });
   pgArtifactMap.pool.registerMigration({
@@ -2241,6 +2247,7 @@ export function buildApp(
     deliveries,
     approvals,
     approvalGrants: artifactMap<CommandApprovalGrant>("approval_grants", ["actorId"]),
+    promptSnapshots: artifactMap<PromptSnapshot>("prompt_snapshots"),
     ...(processes ? { processes } : {}),
     monitors,
     crons,
@@ -2468,7 +2475,10 @@ export function buildApp(
     surfaceCache,
     taskAcknowledgements: artifactMap<TaskAckState>("slack_task_acknowledgements"),
     sessionStatus: artifactMap<SlackSessionStatusState>("slack_session_status"),
-    statusActivity: { processes, monitors, sessions, publicWebUrl: config.publicWebUrl },
+    statusActivity: {
+      work: createSessionWork({ runs, sessions, ...(processes ? { processes } : {}), monitors, deliveries }),
+      publicWebUrl: config.publicWebUrl,
+    },
     featureFlags,
     inboxEvent: (event) => inboxRealtime.onConversationEvent(event),
     app,

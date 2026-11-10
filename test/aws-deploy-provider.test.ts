@@ -1050,3 +1050,22 @@ test("liveEdit: reports false when no microVM is running the app", async () => {
   });
   assert.equal(edited, false);
 });
+
+test("resolveEndpoint: a dead body never drops a pointer that a rotation already replaced", async () => {
+  const { api, vms } = fakeApi();
+  const { fetchImpl } = fakeDaemon();
+  const store = testMap<StoredDeployBody>();
+  const p = provider(api, fetchImpl, store);
+  const d = deployment(ID);
+  await p.apply(d, version(localSnapshot("a", "1")));
+  const old = (await store.get(ID))!;
+  const describe = api.tryGetMicrovm.bind(api);
+  api.tryGetMicrovm = async (id) => {
+    await store.put(ID, { ...old, microvmId: "mvm-replacement" });
+    vms.get(old.microvmId)!.state = "TERMINATED";
+    return describe(id);
+  };
+
+  assert.equal(await p.resolveEndpoint!(d, version("/unused")), null);
+  assert.equal((await store.get(ID))?.microvmId, "mvm-replacement");
+});

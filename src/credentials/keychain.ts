@@ -8,6 +8,7 @@ import { errMessage } from "../util/errors.ts";
 import { canonicalPerson, personIds, personKey, samePerson } from "../directory/person.ts";
 import { cronIdOf } from "../sessions/session-store.ts";
 import { hashId } from "../util/crypto.ts";
+import { mergeCredentialFiles } from "./file-merge.ts";
 import { shq } from "../util/shell.ts";
 import { homeRelativePath } from "./paths.ts";
 import { envKey } from "./connector-token.ts";
@@ -116,6 +117,7 @@ export interface KeychainGrant {
   usedAt?: number;
   usedBy?: string;
   askId?: string;
+  botActor?: true;
 }
 
 type AskStatus = "pending" | "approved" | "declined" | "expired";
@@ -319,6 +321,7 @@ interface CreateGrantInput {
   purpose: string;
   expiresAt?: number;
   askId?: string;
+  botActor?: boolean;
 }
 
 interface CreateAskInput {
@@ -368,6 +371,7 @@ interface MaterializedFileCred {
   grantId?: string;
   purpose?: string;
   writeback?: boolean;
+  baseline?: Record<string, string>;
 }
 
 export type MaterializedCred = ({ kind: "env" } & MaterializedEnvCred) | ({ kind: "file" } & MaterializedFileCred);
@@ -388,10 +392,10 @@ interface GrantListFilter {
 
 export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   save(input: SaveCredentialInput): Promise<KeychainCredentialMeta>;
-  updateFiles(materialized: Extract<MaterializedCred, { kind: "file" }>, files: CredentialFile[]): Promise<void>;
+  updateFiles(materialized: Extract<MaterializedCred, { kind: "file" }>, files: CredentialFile[]): Promise<string[]>;
   writebackBaseline(
     source: FileCredentialSource,
-    fingerprint: string,
+    fileHashes: Record<string, string>,
   ): Promise<Extract<MaterializedCred, { kind: "file" }>>;
   listAllMetadata(): Promise<KeychainCredentialMeta[]>;
   listByOwner(ownerId: string): Promise<KeychainCredentialMeta[]>;
@@ -413,7 +417,10 @@ export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   getGrant(id: string): Promise<KeychainGrant | null>;
   listGrants(filter: GrantListFilter): Promise<KeychainGrant[]>;
   revokeGrant(ownerId: string, grantId: string): Promise<boolean>;
-  grantsForScope(scopeId: ScopeId): Promise<Array<{ grant: KeychainGrant; credential: KeychainCredentialMeta }>>;
+  grantsForScope(
+    scopeId: ScopeId,
+    opts?: { includePersonGrants?: boolean },
+  ): Promise<Array<{ grant: KeychainGrant; credential: KeychainCredentialMeta }>>;
 
   createAsk(input: CreateAskInput): Promise<{ ask: KeychainAsk; existing: boolean }>;
   getAsk(id: string): Promise<KeychainAsk | null>;
@@ -456,7 +463,7 @@ export interface FileCredentialSource {
   writeback?: boolean;
 }
 
-export function credentialFilesFingerprint(files: CredentialFile[]): string {
+function credentialFilesFingerprint(files: CredentialFile[]): string {
   return fileCredentialFingerprint(
     files
       .map((file) => ({ ...file, mode: restoredFileMode(file.mode) }))
@@ -466,6 +473,10 @@ export function credentialFilesFingerprint(files: CredentialFile[]): string {
 
 function fileCredentialFingerprint(files: CredentialFile[]): string {
   return fingerprintOf(JSON.stringify(files.map((f) => ({ ...f, path: homeRelativePath(f.path) }))));
+}
+
+export function credentialFileHashes(files: CredentialFile[]): Record<string, string> {
+  return Object.fromEntries(files.map((file) => [file.path, credentialFilesFingerprint([file])]));
 }
 
 function keychainFilePath(path: string): string {
@@ -499,6 +510,20 @@ function legacyUsernameEnvKey(passwordEnvKey: string): string {
 
 function consumedGrant(grant: KeychainGrant): boolean {
   return grant.status === "used" || (grant.mode === "once" && grant.usedAt !== undefined);
+}
+
+function askTask(a: {
+  credentialId: string;
+  requesterScopeId: string;
+  requesterThreadRef?: string;
+  botActor?: boolean;
+}): string {
+  return JSON.stringify([
+    a.credentialId,
+    a.requesterScopeId,
+    cronIdOf(a.requesterThreadRef) ?? a.requesterThreadRef,
+    a.botActor === true,
+  ]);
 }
 
 function expired(rec: { expiresAt?: number }, now: number): boolean {
@@ -1057,17 +1082,21 @@ export function createKeychain(deps: {
       createdAt: t,
       ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
       ...(input.askId ? { askId: input.askId } : {}),
+      ...(input.botActor ? { botActor: true } : {}),
     };
     if (input.askId) return deps.grants.putIfAbsent(grant.id, grant);
     await deps.grants.put(grant.id, grant);
     return grant;
   }
 
+  const revokeActiveGrant = (id: string) =>
+    deps.grants.update(id, (current) =>
+      current.status === "active" ? { ...current, status: "revoked", revokedAt: now() } : current,
+    );
+
   async function deleteCredential(id: string): Promise<void> {
     for (const grant of await deps.grants.all()) {
-      if (grant.credentialId === id && grant.status === "active") {
-        await deps.grants.merge(grant.id, { status: "revoked", revokedAt: now() });
-      }
+      if (grant.credentialId === id && grant.status === "active") await revokeActiveGrant(grant.id);
     }
     await deps.creds.delete(id);
   }
@@ -1076,44 +1105,69 @@ export function createKeychain(deps: {
     save: saveCredential,
 
     async updateFiles(materialized, files) {
-      if (!materialized.writeback) return;
+      if (!materialized.writeback) return [];
       const normalized = checkedFiles(files.map((file) => ({ ...file, path: keychainFilePath(file.path) })));
       if (!normalized.length) throw new KeychainError(409, "Refreshed credential files are missing");
       const fingerprint = credentialFilesFingerprint;
-      if (fingerprint(normalized) === fingerprint(materialized.files)) return;
+      const baseline = new Map(Object.entries(materialized.baseline ?? credentialFileHashes(materialized.files)));
+      const ours = Object.entries(credentialFileHashes(normalized));
+      if (ours.length === baseline.size && ours.every(([path, hash]) => baseline.get(path) === hash)) return [];
+      let overruled: string[] = [];
+      let byExpiry: Array<{ path: string; kept: string }> = [];
 
       const updated = await deps.creds.update(materialized.credentialId, (current) => {
         if (current.kind !== "file" || !samePerson(current.ownerId, materialized.ownerId))
           throw new KeychainError(409, "Credential changed during execution");
         const currentFiles = decryptToFiles(current).files;
-        if (fingerprint(currentFiles) === fingerprint(normalized)) return current;
-        if (fingerprint(currentFiles) !== fingerprint(materialized.files))
-          throw new KeychainError(409, "Credential changed during execution; refreshed files were not saved");
-        const secret = JSON.stringify(normalized);
+        const merged = mergeCredentialFiles({
+          baseline,
+          stored: currentFiles,
+          refreshed: normalized,
+          hash: (file) => fingerprint([file]),
+        });
+        overruled = merged.overruled;
+        byExpiry = merged.byExpiry;
+        const next = checkedFiles(merged.files);
+        if (!next.length) {
+          console.warn(
+            `[credentials] ${materialized.credentialId}: a save would have left no files, so the stored login was kept unchanged`,
+          );
+          return current;
+        }
+        if (fingerprint(next) === fingerprint(currentFiles)) return current;
+        const secret = JSON.stringify(next);
         return {
           ...current,
-          targets: normalized.map((file) => file.path),
+          targets: next.map((file) => file.path),
           secretEnc: encryptSecret(secret, deps.key),
           fingerprint: fingerprintOf(secret),
           updatedAt: now(),
         };
       });
       if (!updated) throw new KeychainError(410, "Credential was removed during execution");
+      if (overruled.length)
+        console.warn(
+          `[credentials] ${materialized.credentialId}: kept the stored version of ${overruled.join(", ")} over a concurrent change`,
+        );
+      for (const { path, kept } of byExpiry)
+        console.warn(
+          `[credentials] ${materialized.credentialId}: kept the ${kept} version of ${path} over a concurrent change because it expires later`,
+        );
+      return overruled;
     },
 
-    async writebackBaseline(source, fingerprint) {
+    async writebackBaseline(source, fileHashes) {
       const current = await deps.creds.get(source.credentialId);
       if (!current || current.kind !== "file" || !samePerson(current.ownerId, source.ownerId))
         throw new KeychainError(410, "Credential was removed during execution");
       const files = decryptToFiles(current).files;
-      if (credentialFilesFingerprint(files) !== fingerprint)
-        throw new KeychainError(409, "Credential changed during execution; refreshed files were not saved");
       return {
         kind: "file",
         credentialId: current.id,
         ownerId: current.ownerId,
         service: current.service,
         files,
+        baseline: fileHashes,
         ...(source.grantId ? { grantId: source.grantId } : {}),
         ...(source.writeback ? { writeback: true } : {}),
       };
@@ -1195,13 +1249,14 @@ export function createKeychain(deps: {
     async revokeGrant(ownerId, grantId) {
       const g = await deps.grants.get(grantId);
       if (!g || !samePerson(g.ownerId, ownerId)) return false;
-      if (g.status === "active") await deps.grants.merge(grantId, { status: "revoked", revokedAt: now() });
+      await revokeActiveGrant(grantId);
       return true;
     },
 
-    async grantsForScope(scopeId) {
+    async grantsForScope(scopeId, opts) {
       const out: Array<{ grant: KeychainGrant; credential: KeychainCredentialMeta }> = [];
       for (const grant of await activeGrantsFor(scopeId)) {
+        if (!opts?.includePersonGrants && grant.botActor !== true) continue;
         const cred = await deps.creds.get(grant.credentialId);
         if (cred && (cred.managed === "connector" || !credExpired(cred, now())))
           out.push({ grant, credential: toMeta(cred) });
@@ -1225,11 +1280,10 @@ export function createKeychain(deps: {
       ) {
         throw new KeychainError(403, "personal requests require the credential owner's own conversation");
       }
-      const origin = cronIdOf(input.requesterThreadRef) ?? input.requesterThreadRef;
+      const task = askTask({ ...input, credentialId: cred.id });
       for (const rec of (await deps.asks.all()).reverse().sort((a, b) => b.createdAt - a.createdAt)) {
         const a = await freshAsk(rec, t);
-        const sameOrigin = (cronIdOf(a.requesterThreadRef) ?? a.requesterThreadRef) === origin;
-        if (a.credentialId !== cred.id || a.requesterScopeId !== input.requesterScopeId || !sameOrigin) continue;
+        if (askTask(a) !== task) continue;
         if (a.status === "pending") return { ask: a, existing: true };
         if (a.status === "approved") break;
         if (input.triggered && (a.status === "declined" || a.status === "expired")) {
@@ -1294,6 +1348,7 @@ export function createKeychain(deps: {
           purpose: input.purpose,
           ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
           askId: ask.id,
+          ...(ask.botActor ? { botActor: true } : {}),
         });
         const patch = { status: "approved" as const, resolvedAt: t, grantId: grant.id, notifiedAt: undefined };
         await deps.asks.merge(ask.id, patch);
@@ -1323,9 +1378,9 @@ export function createKeychain(deps: {
         const taskDecisions = new Set<string>();
         for (const rec of (await deps.asks.all()).reverse().sort((a, b) => b.createdAt - a.createdAt)) {
           const a = await freshAsk(rec, nowAt);
-          const origin = cronIdOf(a.requesterThreadRef) ?? a.requesterThreadRef;
-          const task = JSON.stringify([a.credentialId, a.requesterScopeId, origin]);
-          const retain = origin !== undefined && !taskDecisions.has(task) && !!(await deps.creds.get(a.credentialId));
+          const task = askTask(a);
+          const retain =
+            a.requesterThreadRef !== undefined && !taskDecisions.has(task) && !!(await deps.creds.get(a.credentialId));
           taskDecisions.add(task);
           if (a.status === "pending") continue;
           if (a.notifiedAt === undefined) found.push({ ...a, tenantId: currentTenant() });

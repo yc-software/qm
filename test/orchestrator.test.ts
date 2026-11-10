@@ -9,6 +9,11 @@ import { join } from "node:path";
 import { buildApp as buildAppRaw } from "./support/build-app.ts";
 import { mockHeldTurns } from "./support/mock-agent.ts";
 import { approvalCardId } from "../src/core/approval-id.ts";
+import {
+  BOT_REQUESTER_APPROVAL_NOTE,
+  BOT_REQUESTER_REFUSAL,
+  undeliverableApprovalNote,
+} from "../src/core/approval-requester.ts";
 import { scopeId, type Destination, type TurnRequest } from "../src/types.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 import { runNowSettled, settle } from "./support/settle.ts";
@@ -1817,7 +1822,7 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
     conversation: { kind: "dm", threadRef: "dm:admin-alice:auto2" },
     text: "!sysprompt",
   });
-  assert.doesNotMatch(autoPrompt.reply ?? "", /## Acting for an org admin|System administration is not limited/);
+  assert.doesNotMatch(autoPrompt.reply ?? "", /The sender is an org admin\./);
 
   captured = undefined;
   assert.equal(
@@ -1855,6 +1860,7 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
   });
   assert.match(threadPrompt.reply ?? "", /## Acting for an org admin/);
   assert.match(threadPrompt.reply ?? "", /System administration is not limited to the admin dashboard/);
+  assert.match(threadPrompt.reply ?? "", /The sender is an org admin\./);
 
   assert.equal(
     claims!.liveActor,
@@ -2401,6 +2407,39 @@ test("finish_silently is a no-op off a poll fire — the agent's reply still del
   assert.match(interactive.reply ?? "", /ending silently/);
 });
 
+test("a subagent's wake of its web parent may finish silently; a sidebar session's turn may not", async () => {
+  const built = freshApp();
+  built.runtime.start();
+  try {
+    const threadRef = "dm:U1:child-wake";
+    const opened = await built.app.turn({ ...dm("hello"), conversation: { kind: "dm", threadRef } });
+    assert.equal(opened.status, "ok");
+    const [source] = await built.runs.list({ threadRef });
+    const parent = (await built.sessions.getByThread(threadRef))!;
+    const session = async (ref: string) =>
+      built.sessions.getOrCreateByThread(ref, "dm", parent.scopeId, undefined, "web");
+    const child = await session("agent:main:subagent:child-wake");
+    await built.sessions.setParentSession(child.id, parent.id);
+    const sidebar = await session("dm:U1:child-wake:sidebar");
+    await built.sessions.setParentSession(sidebar.id, parent.id);
+    const turnFrom = async (sessionSenderId: string) => {
+      const { run } = await built.runs.enqueue({
+        sessionId: threadRef,
+        request: { ...source!.request, sessionSenderId, text: "!finish-silent", envelopeWrapped: true },
+      });
+      return (await built.runs.waitFor(run.id, 20_000)).result;
+    };
+    const wake = await turnFrom(child.id);
+    assert.equal(wake?.status, "silent", "nothing new, so the wake ends without a reply");
+    assert.equal(wake?.reply, undefined);
+    const other = await turnFrom(sidebar.id);
+    assert.equal(other?.status, "ok");
+    assert.match(other?.reply ?? "", /ending silently/);
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
 test("finish_silently on a poll fire wins over a coexisting collected approval", async () => {
   const { app } = freshApp();
   const res = await app.turn({
@@ -2749,6 +2788,45 @@ test("dangerous command pauses for HiLO approval, then proceeds when approved", 
     true,
     "the continuation's replay is hidden so the chat never shows the human saying it twice",
   );
+});
+
+test("a bot-requested turn never opens an approval when a command is gated", async () => {
+  const built = await withCommandRules(freshApp());
+  const res = await built.app.turn(dm("!run git push --force origin main", { botActor: true }));
+  assert.equal(res.status, "refused");
+  assert.equal(res.reason, BOT_REQUESTER_REFUSAL);
+  assert.equal(res.pendingApprovals, undefined);
+  assert.equal((await built.deliveries.pending("principal")).length, 0);
+});
+
+test("a bot-requested turn tells the agent that approvals are unavailable", async () => {
+  const { app } = freshApp();
+  const res = await app.turn(dm("!approval-note", { botActor: true }));
+  assert.equal(res.status, "ok");
+  assert.equal(res.reply, BOT_REQUESTER_APPROVAL_NOTE);
+  assert.equal((await app.turn(dm("!approval-note"))).reply, "approvals available");
+});
+
+test("a command-approval card that fails terminally settles the approval as declined", async () => {
+  const built = await withCommandRules(freshApp());
+  const first = await built.app.turn(dm("!run git push --force origin main"));
+  assert.equal(first.status, "pending_approval");
+  const requestId = first.pendingApprovals![0]!.requestId;
+  const card = await built.deliveries.enqueue({
+    destination: { ...principalDestination("U1", "U1"), commandApprovalId: requestId },
+    text: "Approval needed",
+    idempotencyKey: "test-card",
+  });
+  await built.app.failDelivery(card.id, "cannot_dm_bot");
+  assert.equal(await built.app.getApproval(requestId), null);
+  const items = (await built.app.getSession(first.sessionId!))!.items;
+  const decision = items.find((item) => item.kind === "ElicitationResponse" && item.elicitId === requestId);
+  assert.equal(decision?.approved, false);
+  assert.ok(
+    items.some((item) => isHidden(item) && (item.text ?? "").startsWith(undeliverableApprovalNote("cannot_dm_bot"))),
+  );
+  const follow = await built.app.turn(dm("what happened?"));
+  assert.notEqual(follow.status, "pending_approval");
 });
 
 test("a pending command approval blocks unrelated follow-up input in the same thread", async () => {

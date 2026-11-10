@@ -107,7 +107,7 @@ export interface AgentTurnInput {
   surfaceName?: string;
   surfacePrompt?: SurfaceToolPrompt;
   clientTools?: readonly ClientToolDeclaration[];
-  pollFire?: boolean;
+  replyOptional?: boolean;
   turnWallClockMs?: number;
   systemPrompt: string;
   history: Item[];
@@ -118,6 +118,7 @@ export interface AgentTurnInput {
   tools: ToolContext;
   mcpTools?: McpToolDescriptor[];
   toolApprovalGate?(tool: string, callKey?: string): boolean;
+  approvalUnavailable?: string;
   emit(item: NewItem): Promise<Item>;
   resumeToolCall?: ResumableToolCall;
   approvedToolCalls?: ApprovedToolCall[];

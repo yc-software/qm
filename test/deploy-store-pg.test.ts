@@ -232,3 +232,59 @@ test(
     }
   },
 );
+
+test("concurrent field writes and new versions from two instances all land", { skip }, async () => {
+  const a = makeStore().store;
+  const b = makeStore().store;
+  const d = await a.create(createInput());
+  for (let i = 0; i < 25; i++) {
+    const status = i % 2 ? "running" : "stopped";
+    const host = `h${i}.example.test`;
+    await Promise.all([a.setStatus(d.id, status), b.setEndpoint(d.id, { host, port: 443 })]);
+    const blob = (await raw("SELECT json FROM deployments WHERE id = $1", [d.id]))[0]!.json as Deployment;
+    assert.equal(blob.status, status, `status survives a concurrent endpoint write (round ${i})`);
+    assert.equal(blob.endpoint?.host, host, `endpoint survives a concurrent status write (round ${i})`);
+  }
+  for (let i = 0; i < 10; i++) {
+    const status = i % 2 ? "running" : "stopped";
+    await Promise.all([
+      a.addVersion(d.id, { entrypoint: "node s.js", snapshotDir: "/snap" }),
+      b.setStatus(d.id, status),
+    ]);
+    const blob = (await raw("SELECT json FROM deployments WHERE id = $1", [d.id]))[0]!.json as Deployment;
+    assert.equal(blob.status, status, `status survives a concurrent new version (round ${i})`);
+    assert.equal(blob.versions.length, i + 2, `new version survives a concurrent status write (round ${i})`);
+  }
+  await a.setStatus("missing-id", "stopped");
+  assert.equal((await raw("SELECT count(*) c FROM deployments WHERE id = 'missing-id'"))[0]!.c, "0");
+});
+
+test("version setters from two instances keep each other's writes on Postgres", { skip }, async () => {
+  const a = makeStore().store;
+  const b = makeStore().store;
+  const d = await a.create({ ...createInput(), files: [{ path: "s.js", data: "1" }] });
+  await a.addVersion(d.id, { entrypoint: "node s.js", snapshotDir: "/snap", files: [{ path: "s.js", data: "2" }] });
+  const blob = async () => (await raw("SELECT json FROM deployments WHERE id = $1", [d.id]))[0]!.json as Deployment;
+
+  for (let i = 0; i < 10; i++) {
+    const status = i % 2 ? "running" : "stopped";
+    await Promise.all([a.setAppliedVersion(d.id, (i % 2) + 1), b.setStatus(d.id, status)]);
+    assert.equal((await blob()).status, status, `status survives a concurrent applied-version write (round ${i})`);
+    assert.equal((await blob()).currentVersion, (i % 2) + 1);
+  }
+
+  await Promise.all([a.setAppliedVersion(d.id, 2), b.setEndpoint(d.id, { host: "x.example.test", port: 443 })]);
+  assert.equal((await blob()).appliedVersion, 2);
+  assert.equal((await blob()).endpoint?.host, "x.example.test");
+  await assert.rejects(a.setAppliedVersion(d.id, 99), /no such version 99/);
+  assert.equal((await blob()).appliedVersion, 2);
+
+  const results = await Promise.allSettled([
+    a.addVersion(d.id, { entrypoint: "node s.js", snapshotDir: "/snap" }),
+    b.addVersion(d.id, { entrypoint: "node s.js", snapshotDir: "/snap" }),
+  ]);
+  const landed = results.filter((r) => r.status === "fulfilled").length;
+  assert.ok(landed >= 1);
+  for (const r of results) if (r.status === "rejected") assert.match(String(r.reason), /gained a version concurrently/);
+  assert.equal((await blob()).versions.length, 2 + landed);
+});
