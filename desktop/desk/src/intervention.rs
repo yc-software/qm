@@ -850,20 +850,29 @@ mod activity_watcher_tests {
 mod runner_probe {
     use super::*;
 
-
     #[test]
     fn probe_real_timeout_disable_with_two_taps() {
         use core_foundation::runloop::CFRunLoop;
         let first_failed = Arc::new(AtomicBool::new(false));
         let second_failed = Arc::new(AtomicBool::new(false));
         let first_registry = Arc::new(Registry::default());
-        let first = Tap::create(TapContext { context: None, retained: None, activity: Some((Arc::clone(&first_registry), Arc::clone(&first_failed))), kind: TapKind::Intervention });
+        let first = Tap::create(TapContext {
+            context: None,
+            retained: None,
+            activity: Some((Arc::clone(&first_registry), Arc::clone(&first_failed))),
+            kind: TapKind::Intervention,
+        });
         eprintln!("PROBE2 first tap: {:?}", first.as_ref().map(|_| ()));
         let quit = Arc::new(AtomicBool::new(false));
         let q = Arc::clone(&quit);
         let sf = Arc::clone(&second_failed);
         let other = thread::spawn(move || {
-            let second = Tap::create(TapContext { context: None, retained: None, activity: Some((Arc::new(Registry::default()), sf)), kind: TapKind::Intervention });
+            let second = Tap::create(TapContext {
+                context: None,
+                retained: None,
+                activity: Some((Arc::new(Registry::default()), sf)),
+                kind: TapKind::Intervention,
+            });
             eprintln!("PROBE2 second tap: {:?}", second.as_ref().map(|_| ()));
             while !q.load(Ordering::Acquire) {
                 CFRunLoop::run_in_mode(unsafe { kCFRunLoopDefaultMode }, Duration::from_millis(50), false);
