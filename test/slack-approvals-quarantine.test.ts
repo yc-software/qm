@@ -89,3 +89,18 @@ test("an approved resume that succeeds leaves no pin behind either", async () =>
   assert.equal(f.flow.inFlightRuns.has("R2"), false);
   assert.match(String(f.updates.at(-1)?.text ?? ""), /done/);
 });
+
+test("an approved resume that is stopped before replying settles the card without a stopped note", async () => {
+  const f = fixture({
+    submit: { status: "queued", runId: "R3" },
+    wait: { status: "ok", reply: "", stopped: true },
+  });
+  await f.clickApprove();
+  await new Promise((resolve) => setImmediate(resolve));
+  const last = String(f.updates.at(-1)?.text ?? "");
+  assert.match(last, /allowed/i);
+  assert.equal(
+    f.updates.some((u) => /Stopped\.|\(no response\)/.test(String(u?.text ?? ""))),
+    false,
+  );
+});

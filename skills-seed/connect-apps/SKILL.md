@@ -1,6 +1,6 @@
 ---
 name: connect-apps
-description: Connect an administrator-enabled SaaS app for a user with a one-time OAuth consent link.
+description: Link a user's Slack account or add QM to the company Slack, or connect an administrator-enabled SaaS app with a one-time OAuth consent link.
 ---
 
 ## Connecting SaaS apps
@@ -36,4 +36,4 @@ curl -sS -X POST "$AGENT_API_URL/v1/connectors/oauth/consent/mint" \
 
 When someone asks to connect Slack or use their existing web connectors from Slack, offer the personal Slack linking widget in web chat, or direct them to QM web Settings (`/?view=settings`) and **Link your Slack account** from Slack. They must sign in with their existing web account before connecting. This authorizes personal Slack access and links their verified Slack identity to that QM account. Workspace bot installation is separate. Do not create a generic Composio Slack link or infer identity from matching emails.
 
-In web chat, offer personal Slack account linking with `::link-slack-account{}` as a standalone paragraph, outside code fences and quotations. Use it when someone wants Slack search, actions on their behalf, or access to their existing web connectors from Slack. This shows the personal linking card and its verified connection status, without the general app picker. Company bot installation must be completed first; use `::add-to-slack{}` for that separate administrator step. In Slack, send them to QM web Settings while signed into their existing web account; web widget directives do not render in Slack.
+In web chat, when someone asks to link or connect their Slack, reply with one short line and `::link-slack-account{}` as a standalone paragraph, outside code fences and quotations. Do not list other options. It shows the personal linking card and its verified connection status. Company bot installation must be completed first: for an admin whose `GET /v1/admin/slack-installation` shows `configured: false`, use `::add-to-slack{}` instead. When they ask to add or install QM in their Slack, reply with `::add-to-slack{}`. That widget shows whether QM is already installed and includes the linking card, so never pair it with `::link-slack-account{}`, and do not describe buttons or name a workspace around it. In Slack, send them to QM web Settings while signed into their existing web account; web widget directives do not render in Slack.

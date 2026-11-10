@@ -7,13 +7,18 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createPorterDeployProvider, type StoredPorterDeployBody } from "../src/deploy/porter-deploy-provider.ts";
 import { type DurableMap } from "../src/persistence/durable-map.ts";
-import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.ts";
+import { appUrlOf, type Deployment, type DeploymentVersion } from "../src/deploy/deploy-store.ts";
 import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
 import { NotFoundError } from "porter-sandbox";
 import { scopeId } from "../src/types.ts";
+import { randomUUID } from "node:crypto";
+import { withTenant } from "../src/tenants/context.ts";
+import { noteTenantAppHandle } from "../src/tenants/settings.ts";
+import { asCompany, companyTest } from "./support/app-handle.ts";
 import { installFakePorter, type FakePorter } from "./support/fake-porter.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testMap } from "./support/test-database.ts";
+import { tenantMap } from "./support/tenant-map.ts";
 
 const SERVER = [
   "const fs = require('fs');",
@@ -113,15 +118,19 @@ after(() => {
 
 test("apply serves the app on a stable public domain", async () => {
   const d = deployment("dep-1", "myapp");
-  const endpoint = await provider.apply(
-    d,
-    version({ "server.js": SERVER }, "node server.js", { env: { APP_VERSION: "1" } }),
+  const endpoint = await asCompany(() =>
+    provider.apply(d, version({ "server.js": SERVER }, "node server.js", { env: { APP_VERSION: "1" } })),
   );
-  assert.deepEqual(endpoint, { host: "myapp.apps.test", port: 443, tls: true, publicUrl: "https://myapp.apps.test/" });
+  assert.deepEqual(endpoint, {
+    host: "acme1-myapp.apps.test",
+    port: 443,
+    tls: true,
+    publicUrl: "https://acme1-myapp.apps.test/",
+  });
   const body = fake.bodies()[0]!;
   assert.equal(body.phase, "running");
   assert.deepEqual(body.networking, [
-    { port: appPort, domains: [{ domain: "myapp.apps.test", visibility: "private" }] },
+    { port: appPort, domains: [{ domain: "acme1-myapp.apps.test", visibility: "private" }] },
   ]);
   assert.equal(body.tags["qm-deploy"], "dep-1");
   assert.equal(body.env?.APP_VERSION, "1");
@@ -130,6 +139,82 @@ test("apply serves the app on a stable public domain", async () => {
   assert.match(await fetchText("/"), /^hello from .*-app v1$/);
   assert.equal(provider.profile.dataDir, "/data");
   assert.equal(provider.profile.managedScaleToZero, false);
+});
+
+test("a company without an app handle gets no app domain, only the host the cluster names", async () => {
+  const d = deployment("dep-nh", "myapp");
+  const endpoint = await withTenant(randomUUID(), () =>
+    createPorterDeployProvider({
+      ...singleProcessDeps(),
+      appsDomain: "apps.test",
+      namePrefix: "qmt",
+      appPort,
+      readyWindowSec: 10,
+      client: fake.client,
+      store: tenantMap<StoredPorterDeployBody>(),
+    }).apply(d, version({ "server.js": SERVER }, "node server.js")),
+  );
+  assert.deepEqual(fake.bodies()[0]!.networking, [{ port: appPort }]);
+  assert.match(endpoint.host, /^qmt-app-dep-nh-[a-z0-9]{5}\.fake\.test$/);
+  assert.equal(endpoint.publicUrl, `https://${endpoint.host}/`);
+});
+
+test("a company with an app handle gets the same <handle>-<app> host on Porter that its app links use", async () => {
+  const d = deployment("dep-h", "sales-board");
+  const [endpoint, link] = await withTenant(randomUUID(), async () => {
+    noteTenantAppHandle("nitroduck7");
+    const handled = createPorterDeployProvider({
+      ...singleProcessDeps(),
+      appsDomain: "apps.test",
+      appPort,
+      readyWindowSec: 10,
+      client: fake.client,
+      store: tenantMap<StoredPorterDeployBody>(),
+    });
+    const applied = await handled.apply(d, version({ "server.js": SERVER }, "node server.js"));
+    return [applied, appUrlOf(d, { sharedWebUrl: undefined, appsDomain: "apps.test" })];
+  });
+  assert.equal(link, "https://nitroduck7-sales-board.apps.test/");
+  assert.equal(endpoint.publicUrl, link);
+  assert.deepEqual(fake.bodies()[0]!.networking, [
+    { port: appPort, domains: [{ domain: new URL(link!).host, visibility: "private" }] },
+  ]);
+});
+
+test("after a company's handle changes, the next resolve hands the app back for a re-apply under the new host", async () => {
+  const d = deployment("dep-r", "sales-board");
+  const hosts = await withTenant(randomUUID(), async () => {
+    noteTenantAppHandle("nitroduck7");
+    const handled = createPorterDeployProvider({
+      ...singleProcessDeps(),
+      appsDomain: "apps.test",
+      appPort,
+      readyWindowSec: 10,
+      resolveCacheMs: 0,
+      client: fake.client,
+      store: tenantMap<StoredPorterDeployBody>(),
+    });
+    const v = version({ "server.js": SERVER }, "node server.js");
+    await handled.apply(d, v);
+    const before = await handled.resolveEndpoint!(d, v);
+    noteTenantAppHandle("beta8");
+    const stale = await handled.resolveEndpoint!(d, v);
+    await handled.apply(d, v);
+    const after = await handled.resolveEndpoint!(d, v);
+    const settled = await handled.resolveEndpoint!(d, v);
+    return [before?.host, stale, after?.host, settled?.host];
+  });
+  assert.deepEqual(hosts, [
+    "nitroduck7-sales-board.apps.test",
+    null,
+    "beta8-sales-board.apps.test",
+    "beta8-sales-board.apps.test",
+  ]);
+  const live = fake.bodies().filter((b) => b.phase === "running");
+  assert.deepEqual(
+    live.map((b) => b.networking),
+    [[{ port: appPort, domains: [{ domain: "beta8-sales-board.apps.test", visibility: "private" }] }]],
+  );
 });
 
 const bulkFiles = (): Record<string, string> =>
@@ -167,9 +252,11 @@ test("apply writes files one at a time when the bundle upload fails", async () =
 
 test("explicit public visibility opts the domain out of the private default", async () => {
   make({ visibility: "public" });
-  await provider.apply(deployment("dep-1b", "shown"), version({ "server.js": SERVER }, "node server.js"));
+  await asCompany(() =>
+    provider.apply(deployment("dep-1b", "shown"), version({ "server.js": SERVER }, "node server.js")),
+  );
   assert.deepEqual(fake.bodies()[0]!.networking, [
-    { port: appPort, domains: [{ domain: "shown.apps.test", visibility: "public" }] },
+    { port: appPort, domains: [{ domain: "acme1-shown.apps.test", visibility: "public" }] },
   ]);
 });
 
@@ -191,7 +278,7 @@ test("without an apps domain the app defaults to its cluster-internal address", 
   assert.match(await (await fetch(`http://${endpoint.host}:${endpoint.port}/`)).text(), /^hello from .*-app v\?$/);
 });
 
-test("redeploy keeps the domain and the /data volume and retires the old body", async () => {
+companyTest("redeploy keeps the domain and the /data volume and retires the old body", async () => {
   const d = deployment("dep-2", "keeper");
   await provider.apply(d, version({ "server.js": SERVER }, "node server.js", { env: { APP_VERSION: "1" } }));
   writeFileSync(join(fake.volumeDir("qmt-app-dep-2-data"), "note.txt"), "kept");
@@ -199,7 +286,7 @@ test("redeploy keeps the domain and the /data volume and retires the old body", 
     d,
     version({ "server.js": SERVER }, "node server.js", { env: { APP_VERSION: "2" } }),
   );
-  assert.equal(endpoint.publicUrl, "https://keeper.apps.test/");
+  assert.equal(endpoint.publicUrl, "https://acme1-keeper.apps.test/");
   const bodies = fake.bodies();
   assert.equal(bodies.filter((b) => b.phase === "running").length, 1);
   assert.equal(bodies.filter((b) => b.phase === "terminated").length, 1);
@@ -221,11 +308,10 @@ test("redeploy waits for a slowly terminating body before claiming its domain", 
 
 test("an entrypoint that hands off to a background child still counts as ready", async () => {
   const d = deployment("dep-2c");
-  const endpoint = await provider.apply(
-    d,
-    version({ "server.js": SERVER }, "(sleep 1; exec node server.js) > /dev/null 2>&1 & exit 0"),
+  const endpoint = await asCompany(() =>
+    provider.apply(d, version({ "server.js": SERVER }, "(sleep 1; exec node server.js) > /dev/null 2>&1 & exit 0")),
   );
-  assert.equal(endpoint.publicUrl, "https://dep-2c.apps.test/");
+  assert.equal(endpoint.publicUrl, "https://acme1-dep-2c.apps.test/");
   assert.match(await fetchText("/"), /^hello from/);
 });
 
@@ -439,10 +525,10 @@ test("a cluster that names no host fails the deploy and leaves no body behind", 
   assert.equal(fake.bodies().filter((b) => b.phase === "running").length, 0);
 });
 
-test("a cluster-assigned hostname wins over the derived domain", async () => {
+companyTest("a cluster-assigned hostname wins over the derived domain", async () => {
   const d = deployment("dep-8b", "kept");
   const endpoint = await provider.apply(d, version({ "server.js": SERVER }, "node server.js"));
-  assert.equal(endpoint.host, "kept.apps.test");
+  assert.equal(endpoint.host, "acme1-kept.apps.test");
   assert.equal(endpoint.publicUrl, `https://${endpoint.host}/`);
   assert.deepEqual(await provider.resolveEndpoint!({ ...d, endpoint }, version({}, "")), endpoint);
   assert.match(await fetchText("/"), /^hello from/);
@@ -450,8 +536,8 @@ test("a cluster-assigned hostname wins over the derived domain", async () => {
 
 test("deployment names become DNS labels and ids become sandbox-safe names", async () => {
   const d = deployment("dep-9", "My_App.v2");
-  const endpoint = await provider.apply(d, version({ "server.js": SERVER }, "node server.js"));
-  assert.match(endpoint.host, /^my-app-v2-[0-9a-f]{6}\.apps\.test$/);
+  const endpoint = await asCompany(() => provider.apply(d, version({ "server.js": SERVER }, "node server.js")));
+  assert.match(endpoint.host, /^acme1-my-app-v2-[0-9a-f]{6}\.apps\.test$/);
   const body = fake.bodies().find((b) => b.phase === "running")!;
   assert.match(body.name, /^qmt-app-dep-9-/);
   assert.deepEqual(fake.volumeNames(), ["qmt-app-dep-9-data"]);
