@@ -48,7 +48,6 @@ export interface ProcessRegistry {
   liveByScope(scopeId: string, now?: number): Promise<ProcessRecord[]>;
   listLive(now?: number): Promise<ProcessRecord[]>;
   markStatus(processId: string, status: ProcessStatus): Promise<boolean>;
-  expire(processId: string, now?: number): Promise<void>;
   credentialFiles(processId: string): Promise<ProcessCredentialFiles | null>;
   setCredentialFiles(processId: string, files: ProcessCredentialFiles | null): Promise<void>;
   claimExpired(now?: number): Promise<ClaimedRow[]>;
@@ -203,12 +202,6 @@ export function createPostgresProcessRegistry(connectionString: string): Process
         processId,
       ]);
       return updated.length > 0;
-    },
-    async expire(processId, now = Date.now()) {
-      await q(
-        "UPDATE process_sessions SET expires_at = LEAST(expires_at, $2) WHERE process_id = $1 AND status = 'running'",
-        [processId, now],
-      );
     },
     async claimExpired(now = Date.now()) {
       return claimRows({ q }, "claim_expired_process_sessions", [now]);

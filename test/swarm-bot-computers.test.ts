@@ -16,8 +16,12 @@ import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import type { Principal, TurnRequest } from "../src/types.ts";
 import type { ProcessSandbox } from "../src/sandbox/sandbox.ts";
-import { createPostgresProcessRegistry, type ProcessRegistry } from "../src/processes/process-registry.ts";
-import { createProcessReaper, createReaperKillHook } from "../src/processes/process-reaper.ts";
+import {
+  createPostgresProcessRegistry,
+  type ProcessRecord,
+  type ProcessRegistry,
+} from "../src/processes/process-registry.ts";
+import { createReaperKillHook } from "../src/processes/process-reaper.ts";
 import { createMonitorStore, type MonitorStore } from "../src/monitors/monitor-store.ts";
 import { createMonitorPoller } from "../src/monitors/monitor-poller.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
@@ -34,6 +38,7 @@ import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
+import { settle } from "./support/settle.ts";
 import { errMessage } from "../src/util/errors.ts";
 
 const releaseBot: Principal = { id: "release-bot", type: "internal", displayName: "Release bot" };
@@ -43,7 +48,10 @@ const refusedComputer = "a Slack bot's turn cannot use the computers of a person
 
 type Fixture = Awaited<ReturnType<typeof swarmFixture>>;
 
-type SwarmDeps = Pick<NonNullable<Parameters<typeof swarmFixture>[0]>, "backend" | "processes" | "signals">;
+type SwarmDeps = Pick<
+  NonNullable<Parameters<typeof swarmFixture>[0]>,
+  "backend" | "processes" | "signals" | "stopProcess"
+>;
 
 function channelSwarm(deps: SwarmDeps = {}) {
   const url = testDatabaseUrl();
@@ -569,6 +577,45 @@ test("a bot's watch of a job in a swarm only it directs stops reading the job on
   assert.deepEqual([monitor?.enabled, monitor?.lastError], [false, refusedComputer]);
 });
 
+async function botBoardJob(f: Fixture, processes: ProcessRegistry) {
+  const board = (await f.store.get(f.root.id))!.board!.sandboxId;
+  const { run: queued } = await f.runs.enqueue({
+    sessionId: f.root.threadRef,
+    request: channelRequest(f, releaseBot, true),
+    maxAttempts: 1,
+  });
+  const { started } = await drive(
+    f,
+    queued,
+    async (call) => ({
+      started: await call("execute", {
+        command: "tail -f board.md",
+        background: true,
+        sandbox_id: board,
+        purpose: "Following the board",
+      }),
+    }),
+    { processes },
+  );
+  await f.runs.complete(queued.id, (await f.runs.get(queued.id))!.leaseToken!, { status: "ok", reply: "started" });
+  const job = (await processes.listLive()).find((rec) => rec.sandboxId === board);
+  assert.ok(job, String(started));
+  return job;
+}
+
+function jobStops(backend: ProcessSandbox) {
+  const stopped: string[] = [];
+  const kill = createReaperKillHook(backend);
+  const stopProcess = async (job: ProcessRecord) => {
+    stopped.push(job.processId);
+    await kill(job);
+  };
+  return { stopped, stopProcess };
+}
+
+const reaped = (processes: ProcessRegistry, processId: string) =>
+  settle(async () => (await processes.get(processId))?.status === "reaped");
+
 test("a Slack bot's turn running on its swarm's computer is told to stop once a person sends work into the swarm", async () => {
   const signals = createPostgresRunSignalStore(testDatabaseUrl());
   const f = await botSwarm({ signals });
@@ -593,55 +640,29 @@ test("a Slack bot's turn running on its swarm's computer is told to stop once a 
 test("a background job a Slack bot started on its swarm's computer stops once a person's send into the swarm completes", async () => {
   const computers = jobComputers();
   const registry = createPostgresProcessRegistry(testDatabaseUrl());
-  let expireFailures = 1;
+  let lookupFailures = 0;
   const processes: ProcessRegistry = {
     ...registry,
-    async expire(processId, now) {
-      if (expireFailures-- > 0) throw new Error("process registry unavailable");
-      await registry.expire(processId, now);
+    async liveByScope(scopeId, now) {
+      if (lookupFailures-- > 0) throw new Error("process registry unavailable");
+      return registry.liveByScope(scopeId, now);
     },
   };
-  const f = await botSwarm({ backend: computers.backend, processes });
+  const { stopped, stopProcess } = jobStops(computers.backend);
+  const f = await botSwarm({ backend: computers.backend, processes, stopProcess });
   const swarm = (await f.store.get(f.root.id))!;
   const worker = swarm.members.find((member) => member.id !== swarm.id)!;
-  const board = swarm.board!.sandboxId;
-  const { run: queued } = await f.runs.enqueue({
-    sessionId: f.root.threadRef,
-    request: channelRequest(f, releaseBot, true),
-    maxAttempts: 1,
-  });
-  const { started } = await drive(
-    f,
-    queued,
-    async (call) => ({
-      started: await call("execute", {
-        command: "tail -f board.md",
-        background: true,
-        sandbox_id: board,
-        purpose: "Following the board",
-      }),
-    }),
-    { processes },
-  );
-  await f.runs.complete(queued.id, (await f.runs.get(queued.id))!.leaseToken!, { status: "ok", reply: "started" });
-  const botJob = (await processes.listLive()).find((rec) => rec.sandboxId === board);
-  assert.ok(botJob, String(started));
-  const reaper = createProcessReaper(processes, {
-    ...singleProcessDeps(),
-    intervalMs: 60_000,
-    kill: createReaperKillHook(computers.backend),
-  });
+  const botJob = await botBoardJob(f, processes);
   const bot = await f.rootTurn(releaseBot.id, true);
   await f.service.send(bot.caller, { requestId: "bot-send", audience: [worker.id], text: "more bot work" });
   await bot.done();
-  await reaper.sweep();
-  assert.deepEqual(computers.signals, []);
+  assert.deepEqual(stopped, []);
   const person = await f.rootTurn(alice.id, false);
   if (person.caller.kind !== "agent") throw new Error("wrong caller");
   const aliceJob = await processes.register({
     processId: `notes-${f.root.id}`,
     scopeId: f.root.scopeId,
-    sandboxId: board,
+    sandboxId: botJob.sandboxId!,
     kind: "background",
     command: "bg: tail -f notes.md",
     purpose: "alice's notes",
@@ -650,11 +671,42 @@ test("a background job a Slack bot started on its swarm's computer stops once a 
   });
   const personSend = () =>
     f.service.send(person.caller, { requestId: "person-send", audience: [worker.id], text: "alice's work" });
+  lookupFailures = 1;
   assert.equal(await personSend().then(() => "sent", errMessage), "process registry unavailable");
+  assert.deepEqual(stopped, []);
   await personSend();
   await person.done();
-  await reaper.sweep();
+  await reaped(processes, botJob.processId);
+  assert.deepEqual(stopped, [botJob.processId]);
   assert.deepEqual(computers.signals, [botJob.processId]);
-  assert.equal((await processes.get(botJob.processId))?.status, "reaped");
   assert.equal((await processes.get(aliceJob.processId))?.status, "running");
+});
+
+test("a background job a Slack bot started on its swarm's computer stops once a person's turn works on the swarm's computers", async () => {
+  const computers = jobComputers();
+  const processes = createPostgresProcessRegistry(testDatabaseUrl());
+  const { stopProcess } = jobStops(computers.backend);
+  const f = await botSwarm({ backend: computers.backend, processes, stopProcess });
+  const botJob = await botBoardJob(f, processes);
+  const { run } = await f.runs.enqueue({
+    sessionId: f.root.threadRef,
+    request: channelRequest(f, alice, false),
+    maxAttempts: 1,
+  });
+  await drive(
+    f,
+    run,
+    async (call) => ({
+      board: await call("files", {
+        action: "write",
+        path: "board.md",
+        data: "alice's board",
+        sandbox_id: botJob.sandboxId,
+      }),
+    }),
+    { processes },
+  );
+  await f.runs.complete(run.id, (await f.runs.get(run.id))!.leaseToken!, { status: "ok", reply: "done" });
+  await reaped(processes, botJob.processId);
+  assert.deepEqual(computers.signals, [botJob.processId]);
 });

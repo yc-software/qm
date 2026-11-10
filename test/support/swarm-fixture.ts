@@ -13,7 +13,7 @@ import type { CapabilityClaims } from "../../src/auth/capability-token.ts";
 import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./test-database.ts";
 import { createPostgresRunStore } from "../../src/runs/postgres-run-store.ts";
-import type { ProcessRegistry } from "../../src/processes/process-registry.ts";
+import type { ProcessRecord, ProcessRegistry } from "../../src/processes/process-registry.ts";
 import type { RunSignalStore } from "../../src/runs/run-signal-store.ts";
 
 export async function swarmFixture(
@@ -30,6 +30,7 @@ export async function swarmFixture(
     channel?: string;
     processes?: ProcessRegistry;
     signals?: Pick<RunSignalStore, "send">;
+    stopProcess?: (job: ProcessRecord) => Promise<void>;
   } = {},
 ) {
   const sessions = options.sessions ?? createPostgresSessionStore(testDatabaseUrl());
@@ -134,6 +135,7 @@ export async function swarmFixture(
     authorize: async () => state.allowed,
     ...(options.signals ? { signals: options.signals } : {}),
     ...(options.processes ? { processes: options.processes } : {}),
+    ...(options.stopProcess ? { stopProcess: options.stopProcess } : {}),
   };
   const service = createSwarmService(serviceOptions);
   const workerCaller = async (id: string): Promise<SwarmCaller> => {
