@@ -48,6 +48,7 @@ import {
   getSlackInstallation,
   putSlackInstallation,
   startSlackInstallation,
+  managedSlackEvent,
   managedSlackRequest,
 } from "./admin/slack-installation.ts";
 import { deleteModelProvider, getModelProviders, putModelProvider } from "./admin/model-providers.ts";
@@ -95,9 +96,21 @@ const MEMORY_REGISTRY_DELETE =
   "deleting a memory brain or binding never goes through the agent — an org admin deletes it through the admin API outside chat";
 
 const routes: Route<ApiCtx>[] = [
-  { method: "POST", path: "/v1/slack/managed/installation", auth: "public", handle: managedSlackRequest },
-  { method: "DELETE", path: "/v1/slack/managed/installation", auth: "public", handle: managedSlackRequest },
-  { method: "POST", path: "/v1/slack/managed/events", auth: "public", handle: managedSlackRequest },
+  {
+    method: "POST",
+    path: "/v1/slack/managed/installation",
+    auth: "public",
+    tenant: "none",
+    handle: managedSlackRequest,
+  },
+  {
+    method: "DELETE",
+    path: "/v1/slack/managed/installation",
+    auth: "public",
+    tenant: "none",
+    handle: managedSlackRequest,
+  },
+  { method: "POST", path: "/v1/slack/managed/events", auth: "public", tenant: "none", handle: managedSlackEvent },
   ...withAdmin([
     { method: "POST", path: "/v1/admin/slack-installation/start", auth: "either", handle: startSlackInstallation },
     { method: "GET", path: "/v1/admin/slack-installation", auth: "either", handle: getSlackInstallation },

@@ -9,6 +9,7 @@ import type { PendingApprovalRecord, ScopeId, Session } from "../types.ts";
 import { isUserItem, type Item, messageTs, proseText } from "../sessions/items.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
+import { ambientTenant } from "../tenants/context.ts";
 import { fileArtifactId, artifactPath } from "../files/file-artifact-store.ts";
 import { windowedTranscript } from "../sessions/session-store.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
@@ -109,6 +110,7 @@ export function createSessionMethods(
   | "detachSession"
   | "cancelSessionGoal"
   | "regenerateTitle"
+  | "suggestNextPrompt"
   | "spawnSession"
   | "discardSession"
   | "forkSession"
@@ -1061,6 +1063,11 @@ export function createSessionMethods(
       );
     },
 
+    async suggestNextPrompt(sessionId, principalId) {
+      if (!(await sessionForViewer(sessionId, principalId))) return null;
+      return deps.orchestrator.suggestNextPrompt(sessionId, principalId);
+    },
+
     async forkSession(sessionId, principalId, opts) {
       if (!(await sessionForViewer(sessionId, principalId))) return null;
       const source = await deps.sessions.get(sessionId);
@@ -1228,7 +1235,7 @@ export function createSessionMethods(
       if (liveActor !== true)
         throw new AdminError(403, "promoting a skill org-wide takes a live person, never an autonomous trigger");
       if (!deps.admin) throw new Error("org promotion requires an admin service");
-      const status = await deps.admin.adminStatusOf({ id: actorId, type: "internal" });
+      const status = await deps.admin.adminStatusOf(ambientTenant(), { id: actorId, type: "internal" });
       if (!status.isAdmin) throw new AdminError(403, "only an org admin can promote a skill org-wide");
       const promoted = await deps.skills.promote(id, targetScopeId);
       deps.auditLog.record({
