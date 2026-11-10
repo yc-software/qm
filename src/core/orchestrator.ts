@@ -94,21 +94,9 @@ import {
   type PublicServiceCredential,
 } from "../credentials/keychain.ts";
 import { configuredConnectorProviders } from "../credentials/connector-status.ts";
-import { SANDBOX_MODEL_PREFIX } from "../api/contract.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
 import { createSpendLimits, spendLimitNote, spendLimitRefusal } from "../ratelimit/spend-limits.ts";
-import {
-  mintCapabilityToken,
-  CAPABILITY_TTL_MS,
-  SANDBOX_CAPABILITY_TTL_MS,
-  CONTROL_PLANE_AUD,
-  BROWSER_MODEL_AUD,
-  SANDBOX_MODEL_AUD,
-  OAUTH_CONSENT_AUD,
-  EGRESS_PROXY_AUD,
-  isValidCapabilityTimezone,
-  type CapabilityClaims,
-} from "../auth/capability-token.ts";
+import { CAPABILITY_TTL_MS, isValidCapabilityTimezone, type CapabilityClaims } from "../auth/capability-token.ts";
 import type {
   ApprovedToolCall,
   DetectResult,
@@ -185,7 +173,7 @@ import {
   type OverheardEntryPayload,
 } from "../agent/replay.ts";
 import { errMessage, reportFailure, reportFailureAs, swallow, swallowAs } from "../util/errors.ts";
-import { headSlice, pgTextSafe, trimTrailingSlashes } from "../util/text.ts";
+import { headSlice, pgTextSafe } from "../util/text.ts";
 import { absoluteAppLinks } from "../util/markdown.ts";
 import {
   isModelBudget,
@@ -211,7 +199,6 @@ import {
   approvalGrantId,
   completedSurfaceEnqueues,
   deliveryCandidatesFor,
-  egressClaimAllowingControlPlane,
   filterConnectorSkills,
   isScreenableTextAttachment,
   loadActiveBundles,
@@ -239,6 +226,7 @@ import {
   type SystemContextBlocks,
 } from "./orchestrator/prompt-blocks.ts";
 import { createCompaction } from "./orchestrator/compaction.ts";
+import { mintTurnCapabilities } from "./orchestrator/capability-tokens.ts";
 import { startStallWatchdog } from "./orchestrator/stall-watchdog.ts";
 import {
   cleanVerdict,
@@ -249,7 +237,6 @@ import {
 } from "./orchestrator/security-screen.ts";
 import { createTurnSandboxes } from "./orchestrator/sandboxes.ts";
 import { isolationBrief } from "../sessions/child-isolation.ts";
-import type { EgressPolicy } from "../types.ts";
 import {
   createCredentialCatalog,
   registerBrokeredTools,
@@ -1506,128 +1493,44 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         connectorEnv.BROWSE_LAB_MODEL_PROVIDER = "managed";
         connectorEnv.BROWSE_LAB_MODEL = browserModel;
       }
-      let actorIsOrgAdmin = false;
-      let orgMemoryWrite: ScopeId | undefined;
-      let controlClaims: CapabilityClaims | undefined;
-      const sandboxTokenTtlMs = deps.sandboxCapabilityTtlMs ?? SANDBOX_CAPABILITY_TTL_MS;
-      const sandboxTokenExpiry = sandboxTokenTtlMs === 0 ? 0 : Date.now() + sandboxTokenTtlMs;
-      const scopeAttestation = {
-        ...(external ? { externalSlack: true as const } : {}),
-        actorId: actor.id,
+      const {
+        actorIsOrgAdmin,
+        orgMemoryWrite,
+        controlClaims,
+        sandboxTokenExpiry,
+        scopeAttestation,
+        egressTokenForPolicy,
+      } = await mintTurnCapabilities({
+        deps,
+        input,
+        actor,
+        conversation,
+        session,
         scopeId,
-        ...(audienceScopeId ? { audienceScopeId } : {}),
-        ...(input.scopeVersion ? { scopeVersion: input.scopeVersion } : {}),
-        ...(conversation.publishMembers ? { members: conversation.publishMembers } : {}),
-        ...(liveTurn ? { liveActor: true } : {}),
-        ...(input.botActor ? { botActor: true } : {}),
-        ...(actAsActor ? { actAsActor: true } : {}),
-      };
-      if (!strictReadOnly && deps.signingSecret && deps.apiBaseUrl) {
-        const destination = defaultDestination;
-        connectorEnv.AGENT_API_URL = deps.apiBaseUrl;
-        if (deps.admin && liveAuthorTurn) {
-          const status = await deps.admin
-            .adminStatusOf(actor)
-            .catch(swallowAs("orchestrator: admin status for turn", { isAdmin: false }));
-          actorIsOrgAdmin = status.isAdmin;
-          if (
-            actorIsOrgAdmin &&
-            liveTurn &&
-            useMemory &&
-            memoryPolicy.capture !== "off" &&
-            resolution.orgScopeId !== memoryScopeId
-          ) {
-            orgMemoryWrite = resolution.orgScopeId;
-          }
-        }
-        const memoryClaim = memoryAccess
-          ? { ...memoryAccess, read: baseRecallScopes, ...(orgMemoryWrite ? { orgWrite: orgMemoryWrite } : {}) }
-          : undefined;
-        const turnSurface = input.surface === "web" ? "web" : (session.surface ?? input.surface);
-        controlClaims = {
-          ...scopeAttestation,
-          aud: CONTROL_PLANE_AUD,
-          ...(!external && allInternal && ownCredentialsAllowed ? { ownerConnections: true } : {}),
-          exp: sandboxTokenExpiry,
-          ...(turnTimezone ? { timezone: turnTimezone } : {}),
-          ...(destination ? { destination } : {}),
-          ...(delivery.candidates.length > 0 ? { destinations: delivery.candidates } : {}),
-          ...(delivery.defaultKey ? { defaultDestinationKey: delivery.defaultKey } : {}),
-          ...(!external && conversation.kind !== "dm"
-            ? { keychainMembers: conversation.audience.filter((p) => p.type === "internal") }
-            : {}),
-          ...(conversation.kind === "dm" ||
-          conversation.kind === "group" ||
-          conversation.isPrivate === true ||
-          conversation.isMpim === true
-            ? { privateScope: true }
-            : {}),
-          ...(memoryClaim ? { memory: memoryClaim } : {}),
-          ...(liveAuthorTurn ? { liveAuthor: true } : {}),
-          ...(automatedTurn ? { triggered: true } : {}),
-          ...(!liveTurn && input.unattendedGrants ? { grants: input.unattendedGrants } : {}),
-          ...(input.runId ? { runId: input.runId } : {}),
-          sessionId: session.id,
-          origin,
-          runAttempt: input.attempt,
-          runLeaseToken: input.runLeaseToken,
-          threadRef: conversation.threadRef,
-          ...(turnSurface ? { surface: turnSurface } : {}),
-        };
-        connectorEnv.AGENT_API_TOKEN = await mintCapabilityToken(
-          controlClaims,
-          deps.capabilitySecret ?? deps.signingSecret,
-          deps.capabilityTokenCompression,
-        );
-        if (browserModel) {
-          connectorEnv.BROWSE_LAB_BASE_URL = `${trimTrailingSlashes(deps.apiBaseUrl)}/v1/browser-model`;
-          connectorEnv.BROWSE_LAB_MODEL_TOKEN = await mintCapabilityToken(
-            {
-              ...scopeAttestation,
-              aud: BROWSER_MODEL_AUD,
-              browserModel,
-              browserAccount: sessionAuth?.account ?? "company",
-              sessionId: session.id,
-              origin,
-              exp: Date.now() + CAPABILITY_TTL_MS,
-            },
-            deps.capabilitySecret ?? deps.signingSecret,
-          );
-        }
-        if (deps.sandboxModels && allInternal && securityPolicy.posture !== "strict") {
-          connectorEnv.MODEL_GATEWAY_URL = `${trimTrailingSlashes(deps.apiBaseUrl)}${SANDBOX_MODEL_PREFIX}`;
-          connectorEnv.MODEL_GATEWAY_TOKEN = await mintCapabilityToken(
-            { ...scopeAttestation, aud: SANDBOX_MODEL_AUD, exp: sandboxTokenExpiry },
-            deps.capabilitySecret ?? deps.signingSecret,
-            deps.capabilityTokenCompression,
-          );
-          turnContextBlocks["Model access"] =
-            "## Model access\nAn OpenAI-compatible model gateway is at `$MODEL_GATEWAY_URL` in the sandbox; authenticate with `Authorization: Bearer $MODEL_GATEWAY_TOKEN`. `GET $MODEL_GATEWAY_URL/v1/models` lists the usable models. The token is bound to this turn and expires with it; never send it anywhere but the gateway.";
-        }
-        connectorEnv.AGENT_OAUTH_CONSENT_TOKEN = await mintCapabilityToken(
-          {
-            ...scopeAttestation,
-            aud: OAUTH_CONSENT_AUD,
-            exp: sandboxTokenExpiry,
-          },
-          deps.capabilitySecret ?? deps.signingSecret,
-          deps.capabilityTokenCompression,
-        );
-      }
-      const egressSecret = deps.capabilitySecret ?? deps.signingSecret;
-      const egressTokenForPolicy = async (egress: EgressPolicy): Promise<string | undefined> => {
-        if (strictReadOnly || !egressSecret) return undefined;
-        return mintCapabilityToken(
-          {
-            ...scopeAttestation,
-            aud: EGRESS_PROXY_AUD,
-            egress: egressClaimAllowingControlPlane(egress, deps.apiBaseUrl ?? "", securityPolicy.denyPrivateNetworks),
-            exp: sandboxTokenExpiry,
-          },
-          egressSecret,
-          deps.capabilityTokenCompression,
-        );
-      };
+        audienceScopeId,
+        resolution,
+        external,
+        strictReadOnly,
+        allInternal,
+        liveTurn,
+        liveAuthorTurn,
+        automatedTurn,
+        actAsActor,
+        useMemory,
+        memoryPolicy,
+        memoryScopeId,
+        memoryAccess,
+        baseRecallScopes,
+        ownCredentialsAllowed,
+        turnTimezone,
+        delivery,
+        defaultDestination,
+        origin,
+        browserModel,
+        sessionAuth,
+        connectorEnv,
+        turnContextBlocks,
+      });
       const egressTokenForTurn = await egressTokenForPolicy(resolution.egress);
       await tracePhase("turn.credentials", () =>
         registerServiceCredentials(
