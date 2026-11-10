@@ -33,6 +33,7 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { testMap, testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { isAgentReply } from "../src/sessions/items.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 test("ProjectStore atomically maintains a managed-group roster", async () => {
   let at = 10;
@@ -398,7 +399,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.equal(projectContext?.sessionCount, 0);
   assert.equal(projectContext?.project?.id, project.id);
   assert.deepEqual(projectContext?.project?.members, [{ principalId: "owner", displayName: "Owner" }]);
-  assert.ok(await built.app.listScopeResources("owner", scope));
+  assert.ok(await built.app.listScopeResources(tenant, "owner", scope));
 
   const turn = (actor: string, threadRef: string, text = "hello project") =>
     built.app.turn({
@@ -480,7 +481,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   );
   assert.match(JSON.stringify((await built.app.getSessionForViewer(first.id, "member"))?.items), /secret-before-join/);
   assert.equal(await built.app.managesScope("member", scope), true);
-  assert.ok(await built.app.listScopeResources("member", scope));
+  assert.ok(await built.app.listScopeResources(tenant, "member", scope));
   assert.deepEqual(await built.app.listSessionApprovals(pendingBeforeJoin.sessionId!, "member"), []);
   const hiddenBlocked = await turn("member", "web:owner:approval", "new work while blocked");
   assert.equal(
@@ -516,7 +517,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
     entrypoint: "node server.js",
     files: [{ path: "server.js", data: "console.log('ready')" }],
   });
-  await deployAcl.grant({
+  await deployAcl.grant(tenant, {
     ownerScopeId: "personal:owner",
     ref: `deployment:${deployment.id}`,
     granteeScopeId: scope,
@@ -698,7 +699,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.equal(await built.app.belongsToScope("member", scope), false);
   assert.equal(await built.app.managesScope("member", scope), false);
   assert.equal((await deploy.reachDeployment(deployment.id, "member")).status, "denied");
-  assert.equal(await built.app.listScopeResources("member", scope), null);
+  assert.equal(await built.app.listScopeResources(tenant, "member", scope), null);
   assert.ok(!(await built.app.listSessions("member")).some((session) => session.scopeId === scope));
   assert.equal(await built.app.getSessionForViewer(first.id, "member"), null);
   assert.equal((await turn("member", "web:owner:first")).status, "refused");

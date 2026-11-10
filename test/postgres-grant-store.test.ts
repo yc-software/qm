@@ -7,6 +7,7 @@ import { entitledScopes } from "../src/resolution/context-filter.ts";
 import { scopeId, type Grant, type Principal } from "../src/types.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres grant-store tests";
@@ -39,24 +40,24 @@ const grant = (over: Partial<Grant> = {}): Grant => ({
 });
 
 const onResource = (store: ReturnType<typeof createPostgresGrantStore>, ref: string) =>
-  store.find({ ownerScopeId: owner, ref });
+  store.find(tenant, { ownerScopeId: owner, ref });
 
 test("pg grant persistence: put is an idempotent upsert; remove is permission-keyed", { skip }, async () => {
   const store = createPostgresGrantStore(URL!);
 
-  await store.put(grant());
-  await store.put(grant());
+  await store.put(tenant, grant());
+  await store.put(tenant, grant());
   assert.equal((await onResource(store, "redline.md")).length, 1, "put dedups on owner+path+grantee+permission");
   assert.deepEqual((await onResource(store, "redline.md"))[0], grant());
 
-  await store.put(grant({ permission: "write" }));
+  await store.put(tenant, grant({ permission: "write" }));
   assert.equal((await onResource(store, "redline.md")).length, 2);
 
-  await store.put(grant({ grantedBy: "U1-again" }));
+  await store.put(tenant, grant({ grantedBy: "U1-again" }));
   assert.equal((await onResource(store, "redline.md")).length, 2);
   assert.equal((await onResource(store, "redline.md")).find((g) => g.permission === "read")!.grantedBy, "U1-again");
 
-  await store.remove(grant({ permission: "write" }));
+  await store.remove(tenant, grant({ permission: "write" }));
   assert.deepEqual(
     (await onResource(store, "redline.md")).map((g) => g.permission),
     ["read"],
@@ -85,12 +86,12 @@ test("pg grant persistence: queries select by grantee and resource kind", { skip
   const skill = grant({ ref: "skill:S1", granteeScopeId: dave });
   const deploy = grant({ ref: "deployment:D1", granteeScopeId: dave });
   const file = grant({ ref: "kinds.md", granteeScopeId: dave });
-  for (const g of [skill, deploy, file]) await store.put(g);
-  await store.put(grant({ ref: "skill:S1" }));
+  for (const g of [skill, deploy, file]) await store.put(tenant, g);
+  await store.put(tenant, grant({ ref: "skill:S1" }));
 
-  assert.deepEqual(await store.find({ granteeScopeIds: [dave] }), [deploy, file, skill]);
-  assert.deepEqual(await store.find({ granteeScopeIds: [dave], kind: "skill" }), [skill]);
-  assert.deepEqual(await store.find({ granteeScopeIds: [] }), []);
+  assert.deepEqual(await store.find(tenant, { granteeScopeIds: [dave] }), [deploy, file, skill]);
+  assert.deepEqual(await store.find(tenant, { granteeScopeIds: [dave], kind: "skill" }), [skill]);
+  assert.deepEqual(await store.find(tenant, { granteeScopeIds: [] }), []);
 });
 
 test("pg grant persistence serializes competing empty-set conditional replacements", { skip }, async () => {
@@ -99,8 +100,8 @@ test("pg grant persistence serializes competing empty-set conditional replacemen
   const a = grant({ ref: "empty-cas.md", granteeScopeId: scopeId("personal", "A") });
   const b = grant({ ref: "empty-cas.md", granteeScopeId: scopeId("personal", "B") });
   const results = await Promise.all([
-    left.replaceForResourceIfCurrent(owner, "empty-cas.md", [], [a]),
-    right.replaceForResourceIfCurrent(owner, "empty-cas.md", [], [b]),
+    left.replaceForResourceIfCurrent(tenant, owner, "empty-cas.md", [], [a]),
+    right.replaceForResourceIfCurrent(tenant, owner, "empty-cas.md", [], [b]),
   ]);
   assert.deepEqual(results.sort(), [false, true]);
   assert.equal((await onResource(left, "empty-cas.md")).length, 1);
@@ -128,20 +129,21 @@ test(
     }
     const acl = createAclStore(createPostgresGrantStore(URL!), { resolveFiles: (refs) => files.resolveByIds(refs) });
 
-    await assert.rejects(acl.grant(grant({ ref: "owner-only", grantedBy: "U2" })), /only a manager/);
+    await assert.rejects(acl.grant(tenant, grant({ ref: "owner-only", grantedBy: "U2" })), /only a manager/);
 
-    await acl.grant(grant({ ref: "owner-only" }));
-    await acl.grant(grant({ ref: "owner-only" }));
-    assert.equal((await acl.grantsFor(owner, "owner-only")).length, 1);
+    await acl.grant(tenant, grant({ ref: "owner-only" }));
+    await acl.grant(tenant, grant({ ref: "owner-only" }));
+    assert.equal((await acl.grantsFor(tenant, owner, "owner-only")).length, 1);
 
-    const handles = await acl.handlesFor([carol]);
+    const handles = await acl.handlesFor(tenant, [carol]);
     assert.equal(
       handles.some((h) => h.handlePath === "shared/owner-only.md" && h.ownerScopeId === owner),
       true,
     );
 
-    await acl.grant(grant({ ref: "poster", granteeScopeId: org }));
+    await acl.grant(tenant, grant({ ref: "poster", granteeScopeId: org }));
     const surfaced = await acl.handlesForAudience(
+      tenant,
       [person("U1"), person("U2")],
       scopeId("channel", "C1"),
       org,
@@ -152,9 +154,13 @@ test(
       true,
     );
 
-    await acl.grant(grant({ ref: "owner-only", permission: "write" }));
-    assert.equal((await acl.grantsFor(owner, "owner-only")).length, 2);
-    await acl.revoke(owner, "owner-only", carol, "U1");
-    assert.equal((await acl.grantsFor(owner, "owner-only")).length, 0, "revoke drops every permission for the triple");
+    await acl.grant(tenant, grant({ ref: "owner-only", permission: "write" }));
+    assert.equal((await acl.grantsFor(tenant, owner, "owner-only")).length, 2);
+    await acl.revoke(tenant, owner, "owner-only", carol, "U1");
+    assert.equal(
+      (await acl.grantsFor(tenant, owner, "owner-only")).length,
+      0,
+      "revoke drops every permission for the triple",
+    );
   },
 );

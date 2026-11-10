@@ -25,6 +25,7 @@ import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const SECRET = "deployment-broker-secret".repeat(3);
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
@@ -332,10 +333,11 @@ test("a deployment credential cannot back a decision provider", async () => {
   const ctx = (body: unknown) =>
     ({
       body,
+      tenant,
       deps: {
         serviceCreds,
         decisions: {
-          saveProvider: async (provider: unknown) => void saved.push(provider),
+          saveProvider: async (_tenant: unknown, provider: unknown) => void saved.push(provider),
           providers: async () => [],
           rules: async () => [],
         },
@@ -349,7 +351,7 @@ test("a deployment credential cannot back a decision provider", async () => {
   assert.deepEqual(saved, []);
   await decisionsResource.apply!(ctx(provider("stored")), { id: "admin" } as never, ORG);
   assert.equal(saved.length, 1);
-  const listing = (await decisionsResource.get!(ctx({}).deps, ORG)) as { credentials: string[] };
+  const listing = (await decisionsResource.get!(ctx({}).deps, ORG, tenant)) as { credentials: string[] };
   assert.deepEqual(listing.credentials, ["stored"]);
 });
 

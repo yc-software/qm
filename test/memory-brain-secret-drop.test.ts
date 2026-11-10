@@ -28,10 +28,7 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
-import { TEST_TENANT } from "./support/test-tenant.ts";
-import { withTenant } from "../src/tenants/context.ts";
-
-const tenant = withTenant(TEST_TENANT, (t) => t);
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const SECRET = "memory-brain-drop-test-secret".repeat(2);
 const BRAIN = {
@@ -418,4 +415,22 @@ test("a signed-in admin mints a brain link from the browser, and a signed-in mem
   const admin = await browserMint("admin-alice", brainDrop);
   assert.equal(admin.status, 200, admin.text);
   assert.match((JSON.parse(admin.text) as { formPath: string }).formPath, /^\/drop\//);
+});
+
+test("a brain link stays usable when saving the secret fails, and works once on the retry", async (t) => {
+  const { built, mint, servedSecret } = await setup(t);
+  const link = await mint("admin-alice", { memoryBrain: "acme-personal", purpose: "survive a save failure" });
+  const registry = built.memoryRegistry as unknown as Record<string, unknown>;
+  const update = registry.update;
+  registry.update = async () => {
+    throw new Error("registry unavailable");
+  };
+  try {
+    assert.equal((await link.redeem("brain-secret-retry")).status, 500);
+  } finally {
+    registry.update = update;
+  }
+  assert.equal((await link.redeem("brain-secret-retry")).status, 200);
+  assert.equal(await servedSecret(), "brain-secret-retry");
+  assert.equal((await link.redeem("brain-secret-again")).status, 404);
 });

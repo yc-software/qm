@@ -749,7 +749,7 @@ test("a swarm-paused worker's next tool result ends its reply", async () => {
       userAborted: false,
       cancelled: false,
       surfaceTools: false,
-      pollFire: false,
+      replyOptional: false,
       ref: { ...ref, modelCalls: 3 },
       session: endedEmpty as unknown as Parameters<typeof emptyEndingNote>[0]["session"],
       turnWallClockMs: 0,

@@ -409,6 +409,7 @@ test("Render turns share one computer through the sandbox router", { timeout: 60
   const render = make();
   const resources = createSandboxResources({
     records: testMap(),
+    loads: testMap(),
     defaults: testMap(),
     backends: { render },
     defaultBackend: "render",
@@ -532,7 +533,7 @@ test("Render disposes a new native checkpoint when its staging record write fail
 });
 
 test("Render retains the provider reason when a native checkpoint fails", async (t) => {
-  const { make, fake, store, scope, errors } = setup(t);
+  const { make, fake, store, scope } = setup(t);
   const create = fake.client.createSnapshot;
   fake.client.createSnapshot = async (id, name) => {
     const saved = fake.snapshots.get((await create(id, name)).id)!;
@@ -542,11 +543,20 @@ test("Render retains the provider reason when a native checkpoint fails", async 
   };
   await assert.rejects(make().provision(scope), /insufficient snapshot capacity/);
   assert.match((await store.get(scope))!.recoveryError!, /insufficient snapshot capacity/);
-  assert.ok(
-    errors.some(
-      ({ code, message }) => code === "native_checkpoint_failed" && message.includes("insufficient snapshot capacity"),
-    ),
-  );
+});
+
+test("Render reports a teardown checkpoint failure once per failure run", async (t) => {
+  const { make, fake, scope, errors } = setup(t);
+  const sandbox = make();
+  const handle = await sandbox.provision(scope);
+  fake.client.createSnapshot = async () => {
+    throw new Error("Provider: insufficient snapshot capacity");
+  };
+  await sandbox.teardown(handle);
+  await sandbox.teardown(handle);
+  const failures = errors.filter(({ code }) => code === "teardown_checkpoint_failed");
+  assert.equal(failures.length, 1);
+  assert.match(failures[0]!.message, /insufficient snapshot capacity/);
 });
 
 test("Render finishes a destroy that stopped after it wrote the cleanup record", async (t) => {
@@ -595,13 +605,13 @@ test("Render checkpoints background changes even when deep idle reaping is disab
   await startBackgroundProcess(fake, stored.sandboxId);
   await sandbox.writeFile(handle, "background", "retained output");
   const stale = Date.now() - 360_000;
-  await store.merge(scope, { savedAtMs: stale, lastActivityMs: Date.now() - 7200_000 });
+  await store.merge(scope, { lastSnapshotMs: stale, lastActivityMs: Date.now() - 7200_000 });
   assert.deepEqual(await sandbox.reapDeepIdle!(0), { reaped: 0 });
   assert.equal(fake.sandboxes.get(stored.sandboxId)?.status, "running");
-  const checkpointAtMs = (await store.get(scope))!.savedAtMs!;
+  const checkpointAtMs = (await store.get(scope))!.lastSnapshotMs!;
   assert.ok(checkpointAtMs > stale);
   assert.deepEqual(await sandbox.reapDeepIdle!(0), { reaped: 0 });
-  assert.equal((await store.get(scope))!.savedAtMs, checkpointAtMs);
+  assert.equal((await store.get(scope))!.lastSnapshotMs, checkpointAtMs);
   await fake.client.terminate(stored.sandboxId);
   const other = make();
   const restored = await other.provision(scope);
@@ -764,17 +774,17 @@ test("Render skips remote probes and checkpoints for a recently used sandbox", a
   const { make, fake, store, scope } = setup(t);
   const sandbox = make();
   await sandbox.provision(scope);
-  await store.merge(scope, { savedAtMs: Date.now() - 360_000 });
+  await store.merge(scope, { lastSnapshotMs: Date.now() - 360_000 });
   const before = (await store.get(scope))!;
   const get = t.mock.method(fake.client, "get");
   const commands = fake.commands.length;
   assert.deepEqual(await sandbox.reapDeepIdle!(3600_000), { reaped: 0 });
   assert.equal(get.mock.callCount(), 0);
   assert.equal(fake.commands.length, commands);
-  assert.equal((await store.get(scope))!.savedAtMs, before.savedAtMs);
+  assert.equal((await store.get(scope))!.lastSnapshotMs, before.lastSnapshotMs);
   await make().provision(scope);
   assert.ok(fake.commands.slice(commands).every((command) => !command.includes(".agent-proc")));
-  assert.equal((await store.get(scope))!.savedAtMs, before.savedAtMs);
+  assert.equal((await store.get(scope))!.lastSnapshotMs, before.lastSnapshotMs);
 });
 
 test("Render leaves an idle sandbox with a running process running", async (t) => {
@@ -784,9 +794,9 @@ test("Render leaves an idle sandbox with a running process running", async (t) =
   const before = (await store.get(scope))!;
   await startBackgroundProcess(fake, before.sandboxId);
   const stale = Date.now() - 360_000;
-  await store.merge(scope, { lastActivityMs: Date.now() - 7200_000, savedAtMs: stale });
+  await store.merge(scope, { lastActivityMs: Date.now() - 7200_000, lastSnapshotMs: stale });
   assert.deepEqual(await sandbox.reapDeepIdle!(3600_000), { reaped: 0 });
-  assert.equal((await store.get(scope))!.savedAtMs, stale);
+  assert.equal((await store.get(scope))!.lastSnapshotMs, stale);
   assert.equal(fake.sandboxes.get(before.sandboxId)?.status, "running");
 });
 
@@ -892,9 +902,9 @@ test("Render saves a home in use without stopping its sandbox and stops it once 
   await sandbox.writeFile(handle, "latest", "retained before stopping");
   const before = (await store.get(scope))!;
   const stale = Date.now() - 360_000;
-  await store.merge(scope, { savedAtMs: stale });
+  await store.merge(scope, { lastSnapshotMs: stale });
   assert.deepEqual(await sandbox.reapDeepIdle!(0), { reaped: 0 });
-  assert.ok((await store.get(scope))!.savedAtMs! > stale);
+  assert.ok((await store.get(scope))!.lastSnapshotMs! > stale);
   assert.equal(fake.sandboxes.get(before.sandboxId)?.status, "running");
   await store.merge(scope, { lastActivityMs: Date.now() - 7200_000 });
   const get = t.mock.method(fake.client, "get");
@@ -991,7 +1001,7 @@ for (const failure of ["cleanup release", "record write"] as const) {
     await assert.rejects(make().provision(scope), new RegExp(`${failure} failed`));
     assert.deepEqual(await cleanupStore.get(scope), { resources: [{ sandboxId: "sbx-1" }] });
     assert.equal(fake.sandboxes.get("sbx-1")?.status, "running");
-    assert.equal(await store.get(scope), null);
+    assert.equal((await store.get(scope))?.sandboxId, failure === "cleanup release" ? "sbx-1" : undefined);
     cleanupStore.delete = release;
     store.put = put;
     fake.failTerminate();
@@ -1085,19 +1095,19 @@ test("Render checkpoints at teardown once per interval and skips an unused compu
   const { make, store, scope } = setup(t);
   const sandbox = make(5 * 60_000);
   const handle = await sandbox.provision(scope);
-  const initial = (await store.get(scope))!.savedAtMs;
+  const initial = (await store.get(scope))!.lastSnapshotMs;
   await sandbox.writeFile(handle, "recent", "written within the interval");
   await sandbox.teardown(handle, { keepWarm: true });
-  assert.equal((await store.get(scope))!.savedAtMs, initial);
+  assert.equal((await store.get(scope))!.lastSnapshotMs, initial);
   const stale = Date.now() - 6 * 60_000;
-  await store.merge(scope, { savedAtMs: stale });
+  await store.merge(scope, { lastSnapshotMs: stale });
   await sandbox.teardown(handle, { keepWarm: true });
-  assert.ok((await store.get(scope))!.savedAtMs! > stale);
-  await store.merge(scope, { savedAtMs: stale });
+  assert.ok((await store.get(scope))!.lastSnapshotMs! > stale);
+  await store.merge(scope, { lastSnapshotMs: stale });
   await sandbox.teardown(handle, { homeUnchanged: true });
-  assert.equal((await store.get(scope))!.savedAtMs, stale);
+  assert.equal((await store.get(scope))!.lastSnapshotMs, stale);
   await sandbox.teardown(handle);
-  assert.ok((await store.get(scope))!.savedAtMs! > stale);
+  assert.ok((await store.get(scope))!.lastSnapshotMs! > stale);
 });
 
 test("Render replaces an idle computer near the end of its lifetime at turn start", async (t) => {
@@ -1158,7 +1168,7 @@ test("Render does not report a computer that QM itself restarted as ended", asyn
   const first = (await store.get(scope))!.sandboxId;
   await sandbox.restartComputer!(scope);
   assert.equal(fake.sandboxes.get(first)?.status, "terminated");
-  await store.merge(scope, { lastActivityMs: Date.now() - 7200_000, homeDirty: true, savedAtMs: 0 });
+  await store.merge(scope, { lastActivityMs: Date.now() - 7200_000, homeDirty: true, lastSnapshotMs: 0 });
   await sandbox.reapDeepIdle!(3600_000);
   assert.deepEqual(
     errors.filter((error) => error.code === "computer_ended"),
@@ -1194,18 +1204,18 @@ test("Render reaper checkpoints changes a throttled teardown left behind", async
   const initial = (await store.get(scope))!;
   await sandbox.writeFile(handle, "late", "written after the checkpoint");
   await sandbox.teardown(handle, { keepWarm: true });
-  assert.equal((await store.get(scope))!.savedAtMs, initial.savedAtMs);
+  assert.equal((await store.get(scope))!.lastSnapshotMs, initial.lastSnapshotMs);
   assert.equal((await store.get(scope))!.homeDirty, true);
   const stale = Date.now() - 6 * 60_000;
-  await store.merge(scope, { savedAtMs: stale });
+  await store.merge(scope, { lastSnapshotMs: stale });
   assert.deepEqual(await sandbox.reapDeepIdle!(3600_000), { reaped: 0 });
   const saved = (await store.get(scope))!;
-  assert.ok(saved.savedAtMs! > stale);
+  assert.ok(saved.lastSnapshotMs! > stale);
   assert.equal(saved.homeDirty, false);
   assert.equal(fake.sandboxes.get(initial.sandboxId)?.status, "running");
-  await store.merge(scope, { savedAtMs: stale });
+  await store.merge(scope, { lastSnapshotMs: stale });
   assert.deepEqual(await sandbox.reapDeepIdle!(3600_000), { reaped: 0 });
-  assert.equal((await store.get(scope))!.savedAtMs, stale);
+  assert.equal((await store.get(scope))!.lastSnapshotMs, stale);
 });
 
 test("Render backs up each interval of a detached process and its completed output", async (t) => {
@@ -1218,23 +1228,23 @@ test("Render backs up each interval of a detached process and its completed outp
   await startBackgroundProcess(fake, initial.sandboxId);
   await sandbox.writeFile(handle, "foreground-output", "complete");
   await sandbox.teardown(handle, { keepWarm: true });
-  assert.equal((await store.get(scope))!.savedAtMs, initial.savedAtMs);
+  assert.equal((await store.get(scope))!.lastSnapshotMs, initial.lastSnapshotMs);
   assert.equal((await store.get(scope))!.homeDirty, true);
   now += 6 * 60_000;
   assert.deepEqual(await sandbox.reapDeepIdle!(0), { reaped: 0 });
-  assert.equal((await store.get(scope))!.savedAtMs, now);
+  assert.equal((await store.get(scope))!.lastSnapshotMs, now);
   assert.equal((await store.get(scope))!.homeDirty, true);
   assert.equal(fake.sandboxes.get(initial.sandboxId)?.status, "running");
   await fake.client.writeFileBytes(initial.sandboxId, "/root/workspace/detached-output", Buffer.from("in progress"));
   now += 6 * 60_000;
   await sandbox.reapDeepIdle!(0);
-  assert.equal((await store.get(scope))!.savedAtMs, now);
+  assert.equal((await store.get(scope))!.lastSnapshotMs, now);
   assert.equal((await store.get(scope))!.homeDirty, true);
   await fake.client.writeFileBytes(initial.sandboxId, "/root/workspace/detached-output", Buffer.from("complete"));
   await finishBackgroundProcess(fake, initial.sandboxId);
   now += 6 * 60_000;
   await sandbox.reapDeepIdle!(0);
-  assert.equal((await store.get(scope))!.savedAtMs, now);
+  assert.equal((await store.get(scope))!.lastSnapshotMs, now);
   assert.equal((await store.get(scope))!.homeDirty, false);
   await fake.client.terminate(initial.sandboxId);
   const next = make();

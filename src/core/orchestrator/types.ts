@@ -56,6 +56,7 @@ import type { McpToolService } from "../../mcp/mcp-tool-service.ts";
 import type { MemoryStrategy } from "../../memory/strategy.ts";
 import type { MemoryPolicy } from "../../memory/policy.ts";
 import type { DurableMap } from "../../persistence/durable-map.ts";
+import type { PromptSnapshot } from "./prompt-snapshot.ts";
 import type { BlobTransferStore } from "../../persistence/blob-transfer.ts";
 import type { SkillStore } from "../../skills/skill-store.ts";
 import type { OAuthClientResolver } from "../../connectors/oauth.ts";
@@ -69,6 +70,7 @@ import type { SwarmService, SwarmTurn } from "../../swarms/swarm-service.ts";
 import type { ChannelPolicyStore } from "../../surface-cache/channel-policy-store.ts";
 import type { SurfaceCache } from "../../surface-cache/types.ts";
 import type { SurfaceRegistry } from "../../surfaces/registry.ts";
+import type { Tenant } from "../../tenants/context.ts";
 
 export interface OrchestratorInput extends Omit<
   TurnRequest,
@@ -153,6 +155,7 @@ export interface OrchestratorDeps {
   skillsReady?: () => Promise<void>;
   approvals: DurableMap<PendingApprovalRecord>;
   approvalGrants: DurableMap<CommandApprovalGrant>;
+  promptSnapshots: DurableMap<PromptSnapshot>;
   errors: ErrorLog;
   signals: RunSignalStore;
   turnStream: TurnStream;
@@ -204,6 +207,7 @@ export interface SurfaceContextPuller {
 export interface Orchestrator {
   handleTurn(input: OrchestratorInput): Promise<TurnResult>;
   screenSecuritySteer(input: {
+    tenant: Tenant;
     payload: string;
     actor: Principal;
     conversation: Conversation;

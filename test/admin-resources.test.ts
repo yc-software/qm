@@ -271,6 +271,22 @@ test("runtime-config lets a person set, keep, and inherit an approved personal r
     };
     assert.equal(keptLegacy.upgradeAvailable, false);
     assert.deepEqual(keptLegacy.scopeOverride, { modelId: "claude-sonnet-4-6", orgRevision: 2 });
+
+    await srv.built.config.setRuntimeSelection("personal:alice", null);
+    await srv.built.config.setBaseModel("personal:alice", "claude-sonnet-4-6");
+    const config = srv.built.config;
+    const picker = config.getWebuiModelsDurable;
+    config.getWebuiModelsDurable = async (id) => {
+      config.getWebuiModelsDurable = picker;
+      await config.setRuntimeSelection("personal:alice", { modelId: "gpt-5.5" });
+      return picker(id);
+    };
+    const racedKeep = await fetch(`${srv.base}/v1/runtime-config`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ principalId: "alice", scopeId: "personal:alice", keep: true }),
+    });
+    assert.equal(((await racedKeep.json()) as { scopeOverride: { modelId: string } }).scopeOverride.modelId, "gpt-5.5");
   } finally {
     await srv.close();
   }
@@ -343,10 +359,10 @@ test("feature flag table changes one scope live without restart", async () => {
       }
     ).featureFlags;
     assert.deepEqual(flags.find((flag) => flag.featureName === "inbox_loops")?.enabledScopes, ["channel:C1"]);
-    const swarms = flags.find((flag) => flag.featureName === "swarms");
-    assert.equal(swarms?.label, "Swarms");
-    assert.equal(swarms?.personalOnly, true);
-    assert.deepEqual(swarms?.enabledScopes, []);
+    const canvas = flags.find((flag) => flag.featureName === "ui_canvas");
+    assert.equal(canvas?.label, "UI canvas and UI state (agent code runs in the page)");
+    assert.equal(canvas?.personalOnly, true);
+    assert.deepEqual(canvas?.enabledScopes, []);
   } finally {
     await srv.close();
   }

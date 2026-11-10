@@ -14,6 +14,7 @@ import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability
 import { testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";
 import { failedTurnError } from "./support/failed-turn.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const SECRET = "control-service-test";
 
@@ -239,7 +240,7 @@ for (const state of ["active", "paused", "archived", "completed"] as const) {
       });
       if (state === "paused") await built.crons.setEnabled(cron.id, false);
       if (state === "archived") await built.crons.update(cron.id, { archived: true });
-      if (state === "completed") await built.crons.markFired(cron.id, firstFireAt);
+      if (state === "completed") await built.crons.markFired(cron, firstFireAt);
     }
     assert.equal((await built.crons.list()).length, 101);
     const created = await control.createCron(
@@ -573,7 +574,7 @@ test("a channel cron belongs to its creator: members see it, only the owner or a
     action: "tidy",
   });
   assert.ok((await control.patchCron(conversational.id, { title: "renamed" }, chanClaims("U2"))).ok);
-  await built.app.grant({
+  await built.app.grant(tenant, {
     ownerScopeId: chanScope,
     ref: `cron:${conversational.id}`,
     granteeScopeId: scopeId("personal", "U9"),
@@ -601,7 +602,7 @@ test("a channel cron belongs to its creator: members see it, only the owner or a
     "bad_request",
     "a personal cron runs with the whole keychain",
   );
-  await built.app.grant({
+  await built.app.grant(tenant, {
     ownerScopeId: personal.cron.ownerScopeId,
     ref: `cron:${personal.cron.id}`,
     granteeScopeId: scopeId("personal", "U2"),

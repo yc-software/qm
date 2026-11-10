@@ -11,6 +11,7 @@ import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import type { Config } from "../src/config.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { sleep } from "../src/util/async.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 // Full application/tool/materializer path, with deterministic model commands and
 // the repo's host-backed Sprites transport. This does not test VM isolation.
@@ -215,7 +216,7 @@ test("sharing e2e: a delegated turn shares its live parent's access under curren
     ),
     "available",
   );
-  assert.deepEqual(await b.keychain!.grantsForScope("channel:C1"), []);
+  assert.deepEqual(await b.keychain!.grantsForScope("channel:C1", { includePersonGrants: true }), []);
   await b.config.setSharingPosture("personal:U1", "isolated");
   assert.match(await childTurn(read), /no file/);
   await b.config.clearSharingPosture("personal:U1");
@@ -281,6 +282,7 @@ test("sharing e2e: Isolated preserves local skills and explicit grants without i
   const s = await b.skill("personal:U2", "explicit-helper", "EXPLICIT");
   await b.config.setSharingPosture("org:default-org", "isolated");
   await b.acl.grant(
+    tenant,
     {
       ownerScopeId: "personal:U2",
       ref: `skill:${s.id}`,
@@ -293,7 +295,7 @@ test("sharing e2e: Isolated preserves local skills and explicit grants without i
   assert.match(await b.turn("!sysprompt"), /personal-helper/);
   await assert.equal(await b.turn("!skill-run explicit-helper python3 {dir}/scripts/value.py"), "EXPLICIT");
   assert.doesNotMatch(await b.turn("!sysprompt", true), /personal-helper|explicit-helper/);
-  await b.acl.revoke("personal:U2", `skill:${s.id}`, "personal:U1", "U2", "U2");
+  await b.acl.revoke(tenant, "personal:U2", `skill:${s.id}`, "personal:U1", "U2", "U2");
   assert.match(await b.turn("!skill explicit-helper"), /no skill file/);
   assert.equal(await b.turn("!run sh -c \"find . -name value.py | wc -l | tr -d ' '\""), "0");
 });
@@ -370,6 +372,7 @@ test("sharing e2e: explicit text-file grants survive Isolated and revoke without
     direction: "out",
   });
   await b.acl.grant(
+    tenant,
     {
       ownerScopeId: "personal:U2",
       ref: "shared-note",
@@ -382,7 +385,7 @@ test("sharing e2e: explicit text-file grants survive Isolated and revoke without
   await b.config.setSharingPosture("org:default-org", "isolated");
   assert.equal(await b.turn("!read shared/shared-note.txt"), "EXPLICIT_TEXT");
   assert.match(await b.turn("!read shared/shared-note.txt", true), /no file/);
-  await b.acl.revoke("personal:U2", "shared-note", "personal:U1", "U2", "U2");
+  await b.acl.revoke(tenant, "personal:U2", "shared-note", "personal:U1", "U2", "U2");
   assert.match(await b.turn("!read shared/shared-note.txt"), /no file/);
 });
 
@@ -521,8 +524,9 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
     );
   }
   const ambientPrompt = await b.turn("!sysprompt", true, "U2", { origin: { kind: "ambient", live: true } });
-  assert.match(ambientPrompt, /### U2\n(?:(?!###)[\s\S])*`npm:/);
-  assert.doesNotMatch(ambientPrompt, /### U1\n/);
+  const ambientNote = ambientPrompt.split("<environment>")[1] ?? "";
+  assert.match(ambientNote, /Added to "Credentials › U2":(?:\n- .*)*`npm:/);
+  assert.match(ambientNote, /Removed all of "Credentials › U1"/);
   assert.match(await b.turn(`!run ${probe}`, true, "U2"), /^unset\|unset\|absent\|/);
   await b.directory.replaceGroups([
     { groupId: "G1", principalId: "U1" },
@@ -543,8 +547,8 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
       "True|True|file_U1|True|isolated",
     );
   }
-  assert.deepEqual(await b.keychain.grantsForScope("group:G1"), []);
-  assert.deepEqual(await b.keychain.grantsForScope("channel:C1"), []);
+  assert.deepEqual(await b.keychain.grantsForScope("group:G1", { includePersonGrants: true }), []);
+  assert.deepEqual(await b.keychain.grantsForScope("channel:C1", { includePersonGrants: true }), []);
   assert.ok((await b.auditLog.events()).some((event) => event.action === "keychain.open_speaker_use"));
   const onScratch = (command: string) =>
     `!execute ${JSON.stringify({ command, credentials: [handles.get("U1")![0]] })}`;
@@ -650,7 +654,7 @@ test("shared conversations run named credentials on the turn's scratch computer 
       secret: `secret_${slug}`,
       host: delivery === "env" ? "" : "api.example.test",
     });
-    await b.acl.grant({
+    await b.acl.grant(tenant, {
       ownerScopeId: "org:default-org",
       ref: encodeRef(serviceCredRef(slug)),
       granteeScopeId: "org:default-org",
@@ -779,3 +783,33 @@ for (const [where, room, actor] of [
       );
   });
 }
+
+test("a credential an owner approved in a channel reaches a Slack bot's turns there only when the bot asked for it", async (t) => {
+  const b = await fixture(t);
+  const credential = await b.keychain!.save({
+    ownerId: "U1",
+    service: "approved-test",
+    secret: "fixture-secret",
+    envKey: "APPROVED_TEST_TOKEN",
+  });
+  const approve = async (requesterId: string, botActor: boolean) => {
+    const { ask } = await b.keychain!.createAsk({
+      credentialId: credential.id,
+      requesterId,
+      requesterScopeId: "channel:C1",
+      requesterThreadRef: "C1:shared-test",
+      purpose: "deploy the release",
+      ...(botActor ? { botActor } : {}),
+    });
+    await b.keychain!.approveAsk({ askId: ask.id, ownerId: "U1", mode: "standing", purpose: "deploy the release" });
+  };
+  const use = `!execute ${JSON.stringify({
+    command: 'printf %s "${APPROVED_TEST_TOKEN:+available}"',
+    credentials: [credentialHandle(credential)],
+  })}`;
+  await approve("U2", false);
+  assert.equal(await b.turn(use, true, "U2"), "available");
+  assert.doesNotMatch(await b.turn(use, true, "U3", { botActor: true }), /available/);
+  await approve("U3", true);
+  assert.equal(await b.turn(use, true, "U3", { botActor: true }), "available");
+});

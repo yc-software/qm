@@ -128,6 +128,7 @@ async function verifyCapability(
   method: string,
   pathname: string,
   required: { aud: string; bearer?: true } | null,
+  tenant: Tenant | undefined,
 ): Promise<CapabilityClaims | null> {
   const requiredAud = required?.aud ?? null;
   const capToken = capabilityToken(req, required?.bearer === true);
@@ -172,7 +173,7 @@ async function verifyCapability(
   }
   if (
     !(capability.externalSlack
-      ? await externalSlackCapabilityAllowed(capability, deps)
+      ? tenant !== undefined && (await externalSlackCapabilityAllowed(tenant, capability, deps))
       : await app.authorizesCapabilityScope({
           actorId: capability.actorId,
           scopeId: capability.scopeId,
@@ -221,7 +222,7 @@ async function gate(
   if (isPublicRoute) {
     void isPublicRoute;
   } else if (requiredAud || capToken) {
-    capability = await verifyCapability(req, res, wiring, method, pathname, requiredAuth);
+    capability = await verifyCapability(req, res, wiring, method, pathname, requiredAuth, tenant);
     if (!capability) return null;
     if (routeAuth === "either") {
       if (capability.aud !== undefined && capability.aud !== CONTROL_PLANE_AUD) {
@@ -290,6 +291,8 @@ async function gate(
         return null;
       }
       actor = signedIn;
+      const release = await deps.web?.shell.release();
+      if (release) res.setHeader("x-qm-release", release);
     } else actor = token && psecret ? await verifyPortalIdentity(token, psecret, Date.now()) : null;
     if (actor && deps.identity) {
       const identity = deps.identity;
@@ -637,7 +640,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     if (raw) {
       const routeAuth = raw.route.auth;
       if (typeof routeAuth === "object") {
-        base.capability = await verifyCapability(req, res, wiring, base.method, base.pathname, routeAuth);
+        base.capability = await verifyCapability(req, res, wiring, base.method, base.pathname, routeAuth, base.tenant);
         if (!base.capability) return void req.resume();
       }
       await run(raw.route, raw.params, base);

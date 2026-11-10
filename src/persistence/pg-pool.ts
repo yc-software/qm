@@ -117,6 +117,7 @@ export interface PgQueryOptions {
 export interface TenantDb {
   q(text: string, params?: unknown[], options?: PgQueryOptions): Promise<Rows>;
   query(text: string, params?: unknown[], options?: PgQueryOptions): Promise<{ rows: Rows; rowCount: number }>;
+  transaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T>;
 }
 
 export interface PgPool {
@@ -203,21 +204,22 @@ async function rollbackOrReport(client: PoolClient, context: string): Promise<Er
   }
 }
 
-async function beginTransaction(client: PoolClient): Promise<void> {
-  const settings = tenantSettings(boundTenant());
-  await client.query("BEGIN");
-  if (settings.length) await client.query(settingsQuery(settings));
-}
-
 export function withPgTransaction<T>(pool: Pool, fn: (client: PoolClient) => Promise<T>): Promise<T> {
-  return pinTenant(() => runPgTransaction(pool, fn));
+  const tenant = boundTenant();
+  return pinTenant(tenant, () => runPgTransaction(pool, tenant, fn));
 }
 
-async function runPgTransaction<T>(pool: Pool, fn: (client: PoolClient) => Promise<T>): Promise<T> {
+async function runPgTransaction<T>(
+  pool: Pool,
+  tenant: string | undefined,
+  fn: (client: PoolClient) => Promise<T>,
+): Promise<T> {
   const client = await pool.connect();
   let rollbackError: Error | undefined;
   try {
-    await beginTransaction(client);
+    const settings = tenantSettings(tenant);
+    await client.query("BEGIN");
+    if (settings.length) await client.query(settingsQuery(settings));
     const result = await fn(client);
     await client.query("COMMIT");
     return result;
@@ -343,21 +345,28 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
       )`,
       );
     }
-    for (const migration of migrations) {
-      if (migration.upgradeFrom) {
-        const predecessor = await client.query(`SELECT 1 FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`, [
-          migration.upgradeFrom,
-        ]);
-        if (!predecessor.rowCount) continue;
+    const known = new Map(
+      (
+        await client.query<{ id: string; checksum: string }>(`SELECT id, checksum FROM ${PG_MIGRATIONS_TABLE}`)
+      ).rows.map((row) => [row.id, row.checksum]),
+    );
+    const recorded = async (id: string): Promise<string | undefined> => {
+      if (!known.has(id)) {
+        const row = await client.query<{ checksum: string }>(
+          `SELECT checksum FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`,
+          [id],
+        );
+        if (row.rows[0]) known.set(id, row.rows[0].checksum);
       }
-      const applied = await client.query<{ checksum: string }>(
-        `SELECT checksum FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`,
-        [migration.id],
-      );
-      if (applied.rows[0]) {
-        if (applied.rows[0].checksum !== migration.checksum) {
+      return known.get(id);
+    };
+    for (const migration of migrations) {
+      if (migration.upgradeFrom && (await recorded(migration.upgradeFrom)) === undefined) continue;
+      const applied = await recorded(migration.id);
+      if (applied !== undefined) {
+        if (applied !== migration.checksum) {
           throw new Error(
-            `pg-pool: migration ${migration.id} checksum mismatch (database=${applied.rows[0].checksum}, source=${migration.checksum})`,
+            `pg-pool: migration ${migration.id} checksum mismatch (database=${applied}, source=${migration.checksum})`,
           );
         }
         continue;
@@ -606,7 +615,15 @@ export function createPgPool(connectionString: string, definitions: readonly PgM
   function forTenant(tenant: Tenant): TenantDb {
     const scoped = async (text: string, params: unknown[] = [], options: PgQueryOptions = {}) =>
       run(explicitTenantId(tenant), text, params, options);
-    return { query: scoped, q: async (text, params, options) => (await scoped(text, params, options)).rows };
+    return {
+      query: scoped,
+      q: async (text, params, options) => (await scoped(text, params, options)).rows,
+      async transaction(fn) {
+        const id = explicitTenantId(tenant);
+        const p = await pool();
+        return pinTenant(id, () => runPgTransaction(p, id, fn));
+      },
+    };
   }
   async function close(): Promise<void> {
     if (closed) return;

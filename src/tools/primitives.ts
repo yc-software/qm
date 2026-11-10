@@ -725,7 +725,10 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       } catch (error) {
         return withCleanup(
           () => Promise.reject(error),
-          () => fileExecution!.finish(),
+          async () => {
+            const note = await fileExecution!.finish();
+            if (note) console.warn(`${note} The command could not start.`);
+          },
         );
       }
     }
@@ -796,13 +799,12 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       const probe = async (status: ComputerStatus, provision: () => Promise<SandboxHandle>) => {
         if (!status.provisioned || status.lifecycleState === "paused") return status;
         try {
-          const code = await withTimeout(
-            async () =>
-              (await deps.sandbox.run(await provision(), "true", { timeoutMs: COMMAND_PATH_PROBE_TIMEOUT_MS })).code,
+          const { code, load } = await withTimeout(
+            async () => deps.sandbox.run(await provision(), "true", { timeoutMs: COMMAND_PATH_PROBE_TIMEOUT_MS }),
             COMMAND_PATH_PROBE_TIMEOUT_MS * 2,
             "command probe",
           );
-          return { ...status, guestResponsive: code === 0 };
+          return { ...status, guestResponsive: code === 0, ...(load ? { load } : {}) };
         } catch (e) {
           return { ...status, guestResponsive: false, probeError: errMessage(e) };
         }
@@ -896,6 +898,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         "command",
         execOpts?.signal,
       );
+      let credentialNote: string | undefined;
       const r = await withCleanup(
         async (): Promise<ExecResult> => {
           const commandHandle = Object.keys(commandEnv).length
@@ -914,10 +917,17 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           }
         },
         async () => {
-          await fileExecution?.finish();
+          credentialNote = await fileExecution?.finish();
         },
-      );
-      return { ...r, ...(scratchReroute ? { scratchReroute } : {}) };
+      ).catch((error: unknown) => {
+        if (credentialNote) console.warn(`${credentialNote} The command itself failed.`);
+        throw error;
+      });
+      return {
+        ...r,
+        ...(credentialNote ? { stderr: r.stderr ? `${r.stderr}\n${credentialNote}` : credentialNote } : {}),
+        ...(scratchReroute ? { scratchReroute } : {}),
+      };
     },
 
     async read(path: string, signal?: AbortSignal, sandboxId?: string): Promise<ReadResult> {
@@ -1116,12 +1126,13 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     async memorySearch(q: string, limit?: number, scope?: ScopeId) {
       const context = deps.context;
       const search = context
-        ? (report: OutcomeReport) => context.searchMemory(q, limit, scope, report)
+        ? (report: OutcomeReport) => context.searchMemory(q, limit, scope, report, deps.sessionId)
         : memory &&
           ((report: OutcomeReport) =>
             searchNotebooks(memory, deps.memoryAccess?.read ?? [], q, limit, scope, {
               actorId: deps.createdBy,
               ...(deps.audienceScopeId ? { audienceScopeId: deps.audienceScopeId } : {}),
+              ...(deps.sessionId ? { sessionId: deps.sessionId } : {}),
               report,
             }));
       if (!search) return null;

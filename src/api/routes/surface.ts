@@ -132,6 +132,25 @@ async function cancelSessionGoal(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, out);
 }
 
+async function resumeSessionGoal(ctx: ApiCtx): Promise<void> {
+  const { res, app, body } = ctx;
+  const principalId = (body as { principalId?: unknown }).principalId;
+  if (typeof principalId !== "string" || !principalId) {
+    return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
+  }
+  const out = await app.resumeSessionGoal(ctx.params.id!, principalId);
+  if (!out) return sendJson(res, 404, { error: "not_found" });
+  if (!out.resumed)
+    return sendJson(res, 409, {
+      error: out.reason,
+      message:
+        out.reason === "busy"
+          ? "The conversation is still working on a reply. Try again when it finishes."
+          : "This conversation has no active or paused goal to resume.",
+    });
+  return sendJson(res, 200, out);
+}
+
 async function spawnWebSession(ctx: ApiCtx): Promise<void> {
   const b = (isObj(ctx.body) ? ctx.body : {}) as { principalId?: unknown; scopeId?: unknown };
   if (typeof b.principalId !== "string" || !b.principalId || typeof b.scopeId !== "string" || !b.scopeId)
@@ -354,6 +373,7 @@ async function listFiles(ctx: ApiCtx): Promise<void> {
   const scope = url.searchParams.get("scope");
   const nameQuery = (url.searchParams.get("q") ?? "").trim();
   const page = await app.listFilesForViewer(
+    tenantOf(ctx),
     viewer,
     {
       ...(limitRaw ? { limit: Number(limitRaw) } : {}),
@@ -613,7 +633,7 @@ async function listScopeResources(ctx: ApiCtx): Promise<void> {
   const scope = url.searchParams.get("scope");
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
   if (!scope) return sendJson(res, 400, { error: "bad_request", message: "scope required" });
-  const out = await app.listScopeResources(principalId, scope as ScopeId);
+  const out = await app.listScopeResources(tenantOf(ctx), principalId, scope as ScopeId);
   if (!out) return sendJson(res, 404, { error: "not_found", message: "not a context you can see" });
   return sendJson(res, 200, {
     files: out.files,
@@ -725,7 +745,7 @@ async function listAgentApis(ctx: ApiCtx): Promise<void> {
       capability,
       { isAdmin: admin.isAdmin, ...(admin.role ? { role: admin.role } : {}) },
       {
-        swarmsEnabled: Boolean(await ctx.app.swarms?.enabledFor(capability.actorId)),
+        swarmsEnabled: Boolean(await ctx.app.swarms?.authorizes(capability)),
         personasEnabled: Boolean(await ctx.app.personas?.enabledFor(capability.actorId)),
       },
     ),
@@ -793,6 +813,7 @@ const searchMemory = agentMemory(async (ctx, memory, capability) => {
     searchAcrossScopes(memory, scopes, query, typeof b.limit === "number" ? b.limit : 20, {
       actorId: capability.actorId,
       ...(capability.audienceScopeId ? { audienceScopeId: capability.audienceScopeId } : {}),
+      ...(capability.sessionId ? { sessionId: capability.sessionId } : {}),
       report,
     }),
   );
@@ -1144,7 +1165,7 @@ async function createGrant(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
   if (!isGrant(body)) return sendJson(res, 400, { error: "bad_request", message: "expected a Grant" });
   try {
-    await app.grant(body);
+    await app.grant(tenantOf(ctx), body);
     return sendJson(res, 200, { ok: true });
   } catch (e) {
     return sendJson(res, 400, { error: "grant_failed", message: errMessage(e) });
@@ -1161,7 +1182,7 @@ async function revokeGrant(ctx: ApiCtx): Promise<void> {
     });
   }
   try {
-    await app.revokeGrant(b.ownerScopeId, b.ref, b.granteeScopeId, b.revokedBy);
+    await app.revokeGrant(tenantOf(ctx), b.ownerScopeId, b.ref, b.granteeScopeId, b.revokedBy);
     return sendJson(res, 200, { ok: true });
   } catch (e) {
     return sendJson(res, 400, { error: "revoke_failed", message: errMessage(e) });
@@ -1347,13 +1368,9 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
   if (ctx.body.inherit === true) await config.setRuntimeSelection(target.scope, null);
   else if (ctx.body.keep === true) {
     const runtime = await config.getRuntimeSelectionDurable(target.scope);
-    if (runtime) await config.acknowledgeRuntimeSelection(target.scope);
-    else {
-      const legacyModel = await config.getBaseModelOwnDurable(target.scope);
-      if (legacyModel && modelSupported(legacyModel) && (await webuiModelEnabled(ctx, legacyModel))) {
-        await config.setRuntimeSelection(target.scope, { modelId: legacyModel });
-      }
-    }
+    const legacyModel = runtime ? null : await config.getBaseModelOwnDurable(target.scope);
+    if (runtime || (legacyModel && modelSupported(legacyModel) && (await webuiModelEnabled(ctx, legacyModel))))
+      await config.acknowledgeRuntimeSelection(target.scope);
   } else {
     const modelId = ctx.body.modelId;
     if (typeof modelId !== "string" || !modelSupported(modelId))
@@ -1502,6 +1519,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
     { method: "POST", path: "/v1/sessions/:id/fork", browser: true, auth: "source", handle: forkSession },
     { method: "POST", path: "/v1/sessions/:id/detach", browser: true, auth: "source", handle: detachSession },
     { method: "POST", path: "/v1/sessions/:id/goal/cancel", browser: true, auth: "source", handle: cancelSessionGoal },
+    { method: "POST", path: "/v1/sessions/:id/goal/resume", browser: true, auth: "source", handle: resumeSessionGoal },
     { method: "POST", path: "/v1/sessions/:id", browser: true, auth: "source", handle: patchSession },
     { method: "PATCH", path: "/v1/memory", browser: true, auth: "source", handle: selfMemory },
     { method: "DELETE", path: "/v1/memory", browser: true, auth: "source", handle: selfMemory },
