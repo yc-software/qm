@@ -43,7 +43,7 @@ export function currentStep(
   for (let i = timeline.length - 1; i >= 0; i--) {
     const item = timeline[i]!;
     if (item.kind === "thinking") {
-      const title = thinkingPresentation(item.text).title;
+      const title = thinkingPresentation(item.text, false).title;
       return { icon: Brain, label: title };
     }
     if (item.kind !== "tool") continue;

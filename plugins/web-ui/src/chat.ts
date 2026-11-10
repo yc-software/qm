@@ -2437,7 +2437,7 @@ export function createChatSurface(
       if (chunk.type === "thinking" && chunk.thinking.trim()) {
         parts.push(
           html`<details class="thinking">
-            <summary>${sheenLabel(animating ? "Thinking" : "Thought", animating)}</summary>
+            <summary>${sheenLabel(thinkingPresentation("", !animating).title, animating)}</summary>
             ${markdown(chunk.thinking)}
           </details>`,
         );
@@ -3304,7 +3304,6 @@ export function createChatSurface(
     );
   }
 
-  /** `liveItem` keys the thinking row still streaming, if any; every other thinking row has finished. */
   function renderTimelineItem(item: TimelineItem, work: WorkBlock, liveItem?: string): TemplateResult {
     const status = work.status;
     const stale = work.stale === true;
