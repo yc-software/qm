@@ -61,7 +61,7 @@ export interface ToolContextRef {
   abortSignal?: AbortSignal;
   steered?: AbortSignal;
   shutdown?: AbortSignal;
-  pollFire?: boolean;
+  replyOptional?: boolean;
   silentRequested?: boolean;
   swarmHeld?: boolean;
 

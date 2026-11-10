@@ -992,6 +992,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (introducesUser(input.origin, input)) await recordUser(deps.users, actor.id, input.botActor);
 
       const delegatedTask = !!input.sessionSenderId && session.parentSessionId === input.sessionSenderId;
+      const wakingChild =
+        input.sessionSenderId && !input.approval && !input.surfaceTools && !isSubagentThreadRef(conversation.threadRef)
+          ? await deps.sessions.get(input.sessionSenderId)
+          : null;
+      const childWake = wakingChild?.parentSessionId === session.id && isSubagentThreadRef(wakingChild.threadRef);
       const syntheticInput =
         (input.proactiveOpener && !input.text.trim()) ||
         ((automatedTurn || (sessionTurn && input.envelopeWrapped)) && !delegatedTask);
@@ -1360,6 +1365,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           tenant,
           orgMemoryWritable,
           automatedTurn,
+          childWake,
         });
         ({ rosterMembers, scopeAskList } = await addConversationBlocks({
           deps,
@@ -2000,6 +2006,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
         if (cronScript?.escalation) turnInput = `${turnInput}\n\n${cronScript.escalation}`;
         const isPollFire = automatedTurn && !!input.surface && isPollSurface(input.surface);
+        const replyOptional = isPollFire || childWake;
         const sessionUsedTools = visibleHistory.some(
           (e) => e.kind === "ToolCall" && !(e.tool === "skill" || (e.tool === "skills" && e.body.action === "read")),
         );
@@ -2340,7 +2347,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ? { clientTools: session.clientTools ?? input.clientTools }
               : {}),
             ...(input.surfaceTools && surfaceToolDeps ? { surfaceTools: true } : {}),
-            ...(isPollFire ? { pollFire: true } : {}),
+            ...(replyOptional ? { replyOptional: true } : {}),
             turnWallClockMs:
               effectiveTurnWallClockMs > 0
                 ? Math.max(1, effectiveTurnWallClockMs - (Date.now() - turnStart))
@@ -2577,7 +2584,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           reply,
           turnCompleted,
           cancelStopped,
-          isPollFire,
+          replyOptional,
           stagedAttachments,
           quarantineReleaseApprovals,
           surfaceToolDeps,
