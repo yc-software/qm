@@ -334,7 +334,11 @@ export async function startSlackPlugin(
       core.sessionStatus
         ?.reconcile(statusClient, statusAccount())
         .catch(swallowAs("slack: session status reconciliation", undefined)),
-      core.taskAcknowledgements?.reconcile(statusClient).catch(swallowAs("slack: task ack reconciliation", undefined)),
+      CORE_SINGLETON || cfg.externalAccess
+        ? core.taskAcknowledgements
+            ?.reconcile(statusClient)
+            .catch(swallowAs("slack: task ack reconciliation", undefined))
+        : undefined,
     ])
       .then(() => undefined)
       .finally(() => {
