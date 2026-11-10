@@ -10,6 +10,7 @@ import { createPostgresFileArtifactStore } from "../src/files/postgres-file-arti
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import type { Tenant } from "../src/tenants/context.ts";
 
 const ORG = "default-org";
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe, 0x7f]);
@@ -29,9 +30,9 @@ function makeUploadApp(files: FileArtifactStore, acl: ReturnType<typeof createAc
     isInternal: (p: { type: string }) => p.type === "internal",
   };
   const directory = {
-    listChannelsFor: async (principalId: string) =>
+    listChannelsFor: async (_tenant: Tenant, principalId: string) =>
       principalId === "U1" || principalId === "U2" ? [{ channelId: "C1", name: "eng", isPrivate: true }] : [],
-    channelMember: async (channelId: string, principalId: string) =>
+    channelMember: async (_tenant: Tenant, channelId: string, principalId: string) =>
       channelId === "C1" && (principalId === "U1" || principalId === "U2"),
   };
   const sessions = { listByParticipant: async (_p: string) => [], participantScopes: async (_p: string) => [] };

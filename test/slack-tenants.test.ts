@@ -33,7 +33,7 @@ describe("per-tenant Slack runtimes", () => {
     const [a, b] = db.tenants;
     const events: string[] = [];
     const runtimes = createTenantSlackRuntimes({
-      runtimeFor: (tenant) => {
+      runtimeFor: ({ id: tenant }) => {
         events.push(`create ${tenant} in ${boundTenant()}`);
         return {
           start: () => void events.push(`start ${tenant} in ${boundTenant()}`),

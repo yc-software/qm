@@ -18,7 +18,6 @@ import { appUrlOf } from "../src/deploy/deploy-store.ts";
 import { appHostLabel, appLabelLimitError, appNameFromLabel } from "../src/tenants/app-handle.ts";
 import { scopeId } from "../src/types.ts";
 import { twoTenants, type TwoTenants } from "./support/two-tenants.ts";
-import { testTenant } from "./support/test-tenant.ts";
 
 const ORG = scopeId("org", "test-org");
 
@@ -81,7 +80,7 @@ describe("tenant settings and operator commands", () => {
     db = await twoTenants();
     stopLoad = onTenantLoad(() => loadTenantSettings(db.app));
     await withTenant(db.tenants[0], async (tenant) => {
-      await createPostgresDirectoryStore(db.ownerDatabaseUrl).list(testTenant);
+      await createPostgresDirectoryStore(db.ownerDatabaseUrl).list(tenant);
       await createPostgresAdminGrantStore(db.ownerDatabaseUrl).all(tenant);
     });
   });

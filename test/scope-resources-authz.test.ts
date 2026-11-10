@@ -13,6 +13,7 @@ import { testDatabaseUrl, testAdvisoryLock, testMap } from "./support/test-datab
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import type { Tenant } from "../src/tenants/context.ts";
 
 const ORG = "default-org";
 const U1 = "U1";
@@ -32,11 +33,13 @@ function makeDeps() {
     isInternal: (p: { type: string }) => p.type === "internal",
   };
   const directory = {
-    listChannelsFor: async (principalId: string) =>
+    listChannelsFor: async (_tenant: Tenant, principalId: string) =>
       principalId === U1 ? [{ channelId: C1, name: "general", isPrivate: true }] : [],
-    channelMember: async (channelId: string, principalId: string) => principalId === U1 && channelId === C1,
-    channelPrivacy: async (channelId: string): Promise<boolean | undefined> => (channelId === C1 ? true : undefined),
-    groupRosters: async () => new Map(),
+    channelMember: async (_tenant: Tenant, channelId: string, principalId: string) =>
+      principalId === U1 && channelId === C1,
+    channelPrivacy: async (_tenant: Tenant, channelId: string): Promise<boolean | undefined> =>
+      channelId === C1 ? true : undefined,
+    groupRosters: async (_tenant: Tenant) => new Map(),
   };
   const sessions: {
     listByParticipant: (principalId: string) => Promise<unknown[]>;
@@ -189,10 +192,11 @@ test("a member of a PUBLIC channel may read its resources but NOT manage them", 
   const deps = makeDeps();
   const PUB = "PUB";
   const pubScope = scopeId("channel", PUB);
-  deps.directory.listChannelsFor = async (p: string) =>
+  deps.directory.listChannelsFor = async (_tenant: Tenant, p: string) =>
     p === U1 ? [{ channelId: PUB, name: "town-square", isPrivate: false }] : [];
-  deps.directory.channelMember = async (c: string, p: string) => p === U1 && c === PUB;
-  deps.directory.channelPrivacy = async (c: string): Promise<boolean | undefined> => (c === PUB ? false : undefined);
+  deps.directory.channelMember = async (_tenant: Tenant, c: string, p: string) => p === U1 && c === PUB;
+  deps.directory.channelPrivacy = async (_tenant: Tenant, c: string): Promise<boolean | undefined> =>
+    c === PUB ? false : undefined;
   await deps.crons.create({
     schedule: { everyMs: 60_000 },
     action: "pub",
