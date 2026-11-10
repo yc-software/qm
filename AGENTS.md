@@ -62,8 +62,8 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   reviewers reassess affected lenses and explicitly carry forward unaffected results.
   These reviews run alongside PR work; before merging, every relevant lens must have accepted
   and all requested changes must be resolved. Only a human maintainer can waive a lens, for
-  one PR: keep the reviewer's actual score, set the verdict to `Waived`, and start the
-  assessment with `Waived by <name>:` followed by the objection that was waived. Never
+  one PR: keep the reviewer's actual score, set the verdict to `Waived`, and write the
+  assessment as `Waived by <name>:` followed by the objection that was waived. Never
   write a waiver the maintainer did not give, and never record one as Accept. The
   `Wall of shame review` CI check fails until the description's report covers every lens
   for the PR head: relevant lenses with an Accept or Waived verdict, and the rest as

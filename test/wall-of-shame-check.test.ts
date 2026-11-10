@@ -62,13 +62,14 @@ test("always-reviewed lenses cannot be triaged as not relevant", () => {
   ]);
 });
 
-test("a waived lens passes only when the row names who waived it", () => {
+test("a waived lens passes only when the row names who waived it and what", () => {
   const rest = [row("Regex"), row("Honorable mentions")];
   const waived = (assessment: string) => body(head, [row("Overengineering", "Waived", assessment), ...rest]);
+  const malformed = 'Overengineering: a Waived row\'s assessment must read "Waived by <name>: <what was waived>".';
   assert.deepEqual(problems(waived("Waived by Regan: the reviewer asked for a smaller helper.")), []);
-  assert.deepEqual(problems(waived("Ships as is.")), [
-    'Overengineering: a Waived row\'s assessment must start with "Waived by <name>:".',
-  ]);
+  assert.deepEqual(problems(waived("Ships as is.")), [malformed]);
+  assert.deepEqual(problems(waived("Waived by : no name.")), [malformed]);
+  assert.deepEqual(problems(waived("Waived by Regan")), [malformed]);
 });
 
 test("over-testing is counted from the diff, whatever the report says", () => {
@@ -77,7 +78,12 @@ test("over-testing is counted from the diff, whatever the report says", () => {
     [...reviewed, "Over-testing"].map((lens) => row(lens)),
   );
   const diff = (...entries: string[]) => [...entries, ""].join("\0");
-  const source = ["10\t4\tsrc/a.ts", "500\t0\tplugins/web-ui/package-lock.json", "-\t-\tdocs/logo.png"];
+  const source = [
+    "10\t4\tsrc/a.ts",
+    "500\t0\tplugins/web-ui/package-lock.json",
+    "300\t0\tdocs/notes.md",
+    "-\t-\tdocs/logo.png",
+  ];
   const moved = ["2\t0\t", "test/old.test.ts", "plugins/web-ui/test/new.test.ts"];
   assert.deepEqual(problems(accepted, diff(...source, "9\t0\ttest/a.test.ts", ...moved)), [overTested(11, 10)]);
   assert.deepEqual(problems(accepted, diff(...source, "8\t0\tios/QMTests/A.swift", ...moved)), []);
@@ -91,13 +97,27 @@ test("over-testing is counted from the diff, whatever the report says", () => {
     problems(body(head, [...reviewed.map((lens) => row(lens)), waiver]), diff("9\t0\ttest/a.test.ts")),
     [],
   );
+  const unmarked = spec.replace(" (checked by CI)", "");
+  assert.deepEqual(
+    problems(
+      body(
+        head,
+        reviewed.map((lens) => row(lens)),
+      ),
+      diff("9\t0\ttest/a.test.ts"),
+      unmarked,
+    ),
+    ["Over-testing: no review row.", overTested(9, 0)],
+  );
 });
 
 test("the spec always reviews Historylessness and counts Over-testing", () => {
   const real = readFileSync("docs/SPEC.md", "utf8");
-  const rows = wallOfShameLenses(real).map((lens) =>
-    lens === "Historylessness" ? `| ${lens} | Haiku triage | Not relevant |  | No schema change. |` : row(lens),
-  );
+  const rows = wallOfShameLenses(real)
+    .filter((lens) => lens !== "Over-testing")
+    .map((lens) =>
+      lens === "Historylessness" ? `| ${lens} | Haiku triage | Not relevant |  | No schema change. |` : row(lens),
+    );
   assert.deepEqual(problems(body(head, rows), "1\t0\ttest/a.test.ts", real), [
     "Historylessness: always reviewed; triage cannot mark it Not relevant.",
     overTested(1, 0),
