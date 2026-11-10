@@ -5,6 +5,7 @@ import { subscribeDeliveries } from "./core-bridge";
 import { applySessionState } from "./session-list";
 import { refreshOpenTrees, refreshSessions, refreshTreesFor, renderList, sessionsState } from "./sessions";
 import { appState } from "./shell-state";
+import { refreshCachedTranscript, resyncTranscriptCache } from "./transcript-cache";
 import { handleUiSignal, releaseUiCanvas, resyncUiCanvas } from "./ui-canvas";
 import type { Conversation, ConvCtx, ConvHost } from "./conv-types";
 
@@ -81,11 +82,17 @@ export function onInboxResync(fn: () => void): void {
 
 let deliveryStreamOpen = false;
 
+function refreshCachedThread(threadRef: string): void {
+  const id = sessionsState.list.find((session) => session.threadRef === threadRef)?.id;
+  if (id) refreshCachedTranscript(id);
+}
+
 export function ensureDeliveryStream(): void {
   if (deliveryStreamOpen) return;
   deliveryStreamOpen = true;
   subscribeDeliveries(
     (threadRef) => {
+      refreshCachedThread(threadRef);
       void refreshSessions({ silent: true });
       refreshTreesFor(threadRef);
       for (const conv of live) conv.onDelivery(threadRef);
@@ -100,6 +107,7 @@ export function ensureDeliveryStream(): void {
         refreshTreesFor(event.threadRef);
         return;
       }
+      refreshCachedThread(event.threadRef);
       const { list, matched } = applySessionState(sessionsState.list, { ...event, state: event.state });
       if (matched) {
         sessionsState.list = list;
@@ -116,6 +124,7 @@ export function ensureDeliveryStream(): void {
       else for (const conv of live) conv.onDelivery(event.threadRef);
     },
     () => {
+      resyncTranscriptCache();
       void refreshSessions({ silent: true });
       refreshOpenTrees();
       resyncUiCanvas([...live].map((conv) => conv.state.sessionId));
