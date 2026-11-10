@@ -81,7 +81,6 @@ import { replyEditNote } from "../delivery/run-result-delivery.ts";
 import type { DirectoryStore, DirectoryMember } from "../directory/directory-store.ts";
 import { resolveEnvironmentId } from "../environments/environment-store.ts";
 import type { SessionWriter } from "../sessions/session-store.ts";
-import { CONFIG_DEFAULTS } from "../config.ts";
 import { sessionOrigin } from "../sessions/session-store.ts";
 import { currentModelRequestContext, withModelRequestContext } from "../model/request-context.ts";
 import { supportsProcessSessions, supportsScopeProfile } from "../sandbox/sandbox.ts";
@@ -308,10 +307,9 @@ const DIRECTORY_INDEX_CACHE_MAX_ENTRIES = 100;
 export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   const config = deps.config;
   const spendReport = deps.sessions.spendReport?.bind(deps.sessions);
-  const spendLimits =
-    config && spendReport
-      ? createSpendLimits({ orgId, getSpendLimit: (scope) => config.getSpendLimitDurable(scope), spendReport })
-      : undefined;
+  const spendLimits = spendReport
+    ? createSpendLimits({ orgId, getSpendLimit: (scope) => config.getSpendLimitDurable(scope), spendReport })
+    : undefined;
   const pending = deps.approvals;
   const transcripts = createTranscriptSource(deps.sessions);
   const approvalGrants = deps.approvalGrants;
@@ -362,7 +360,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       ]);
       return summary?.trim() || undefined;
     } catch (e) {
-      deps.errors?.record(
+      deps.errors.record(
         {
           category: "command_policy",
           code: "summary_failed",
@@ -381,7 +379,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     sessions: deps.sessions,
     agent: deps.agent,
     ...(deps.sessionStateBus ? { sessionStateBus: deps.sessionStateBus } : {}),
-    ...(deps.errors ? { errors: deps.errors } : {}),
+    errors: deps.errors,
   });
 
   const orchestrator: Orchestrator = {
@@ -622,7 +620,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const step = typeof id === "string" && item.step !== null ? { id, index: item.step } : undefined;
           if (item.body.redacted !== true && item.text?.trim())
             await append({ ...item, body: step ? { wire: { message: { id: step.id } } } : {} });
-          if (step) deps.turnStream?.settleReasoning(input.runId, step.id, step.index);
+          if (step) deps.turnStream.settleReasoning(input.runId, step.id, step.index);
         }
       };
       const rosterChanged = (sessionId?: string): TurnResult => ({
@@ -636,7 +634,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const externalAllowed =
           external ||
           (surface?.capabilities.externalParticipants &&
-            (deps.config ? await deps.config.getExternalSlackParticipantsDurable(toScopeId("org", orgId())) : false));
+            (await deps.config.getExternalSlackParticipantsDurable(toScopeId("org", orgId()))));
         if (!externalAllowed) {
           return {
             status: "refused",
@@ -669,7 +667,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         deps.auditLog.record({ at: Date.now(), principalId: actor.id, scopeLabel: scopeId, ...event });
       const spendLimit = spendLimits
         ? await spendLimits.status(scopeId).catch((e: unknown) => {
-            deps.errors?.record(
+            deps.errors.record(
               { category: "turn", code: "spend_limit_check", message: errMessage(e), scopeLabel: scopeId },
               e,
             );
@@ -1418,7 +1416,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         input.origin.kind === "automation" &&
         input.origin.useOwnerKeychain === true &&
         conversation.kind !== "dm" &&
-        !!deps.config &&
         !!deps.isCurrentSharedScopeMember &&
         (await isOpenScopeMember({
           actorId: actor.id,
@@ -1444,7 +1441,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (!openSpeakerKeychain && !openAutomationKeychain) return;
         if (
           !(await isCurrentSharedScopeMember(actor.id, scopeId)) ||
-          (await deps.config?.resolveSharingPostureDurable(personalScope(actor.id), scopeId)) !== "open"
+          (await deps.config.resolveSharingPostureDurable(personalScope(actor.id), scopeId)) !== "open"
         ) {
           throw new Error("Open speaker keychain access is no longer authorized");
         }
@@ -1594,7 +1591,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
       };
       if (!strictReadOnly && allInternal && deps.serviceCreds) {
-        const browseSteps = deps.config?.getBrowseMaxSteps(toScopeId("org", orgId()));
+        const browseSteps = deps.config.getBrowseMaxSteps(toScopeId("org", orgId()));
         if (browseSteps && !("BROWSE_LAB_MAX_STEPS" in connectorEnv))
           connectorEnv.BROWSE_LAB_MAX_STEPS = String(browseSteps);
       }
@@ -1602,12 +1599,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         { surface: input.surface, triggered: automatedTurn, infrequentCron: input.infrequentCron },
         !!session.parentSessionId || !!swarmBinding?.member.parentId,
       );
-      const purposeDefault = runtimePurpose ? await deps.config?.getPurposeRuntimeDurable(runtimePurpose) : undefined;
+      const purposeDefault = runtimePurpose ? await deps.config.getPurposeRuntimeDurable(runtimePurpose) : undefined;
       const loadRuntimeAuth = async (runtime: Partial<RuntimeChoice>) => {
         const userCredStore = external ? undefined : deps.userModelCredentials;
         const account = external
           ? "company"
-          : (input.modelAccount ?? (await deps.config?.getModelAccountDurable(actor.id)) ?? "company");
+          : (input.modelAccount ?? (await deps.config.getModelAccountDurable(actor.id)) ?? "company");
         if (!userCredStore || !humanInput || account === "company")
           return {
             userProviderKeys: undefined,
@@ -2369,14 +2366,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (automatedTurn && input.surface && isPollSurface(input.surface)) {
           systemPrompt += `\n\nThis turn was fired by a scheduled trigger, not a person typing. If there's nothing new worth reporting, call \`finish_silently\` to end the turn without sending anything.`;
         }
-        if (!external && deps.directory && conversation.kind !== "dm") {
+        if (!external && conversation.kind !== "dm") {
           rosterMembers = await (async () => {
             const audienceMembers = conversation.audience.filter((p) => p.type === "internal");
             const participants = [
               ...(audienceMembers.some((p) => samePerson(p.id, actor.id)) ? [] : [actor]),
               ...audienceMembers,
             ];
-            const index = await directoryIndexFor(deps.directory!);
+            const index = await directoryIndexFor(deps.directory);
             const seen = new Set<string>();
             const resolved: DirectoryMember[] = [];
             for (const p of participants) {
@@ -2469,7 +2466,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               recordLlmRequest: recordSessionLlmRequest,
             })
             .catch((e: unknown): DetectResult => {
-              deps.errors?.record(
+              deps.errors.record(
                 {
                   category: "turn",
                   code: "detection_failed",
@@ -2505,7 +2502,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ?.setDeliveryState(input.runId, input.runLeaseToken, { replying: true })
               .catch(swallowAs("orchestrator: persist reply engagement", false));
           }
-          deps.turnStream?.begin(input.runId);
+          deps.turnStream.begin(input.runId);
         }
 
         const backgroundBroker =
@@ -2517,8 +2514,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 onExit: finishProcess,
                 scopeId: memoryScopeId,
                 sessionRef: conversation.threadRef,
-                ...(deps.backgroundJobTtlMs !== undefined ? { ttlMs: deps.backgroundJobTtlMs } : {}),
-                ...(deps.backgroundJobTtlMaxMs !== undefined ? { ttlMaxMs: deps.backgroundJobTtlMaxMs } : {}),
+                ttlMs: deps.backgroundJobTtlMs,
+                ttlMaxMs: deps.backgroundJobTtlMaxMs,
               })
             : undefined;
 
@@ -2603,7 +2600,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }
             : {}),
           onError: (e) =>
-            deps.errors?.record(
+            deps.errors.record(
               {
                 category: "file_store",
                 code: "register_failed",
@@ -2643,7 +2640,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             return;
           spineFirstBlockOpen = false;
           const ack = spineFirstBlock.trim();
-          if (deliberatePost || !ack || !defaultDestination || !deps.deliveries) return;
+          if (deliberatePost || !ack || !defaultDestination) return;
           spineAckText = ack;
           const runId = input.runId;
           const ackKey = `ack:${turnKey}`;
@@ -2654,7 +2651,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             idempotencyKey: ackKey,
             provenance: postProvenance(ackKey),
           })
-            .then(() => deps.turnStream?.markSurfacePosted(runId))
+            .then(() => deps.turnStream.markSurfacePosted(runId))
             .catch(swallowAs("orchestrator: first-block ack", undefined));
         };
         let readableHandles: Awaited<ReturnType<typeof deps.acl.handlesForAudience>> | undefined;
@@ -2780,7 +2777,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(conversation.isMpim !== undefined ? { isMpim: conversation.isMpim } : {}),
             ...(conversation.publishMembers ? { publishMembers: conversation.publishMembers } : {}),
           },
-          ...(deps.config ? { config: deps.config } : {}),
+          config: deps.config,
           ...(deps.control && controlClaims ? { control: deps.control, controlClaims } : {}),
           ...(deps.apiBaseUrl && connectorEnv.AGENT_API_TOKEN
             ? {
@@ -2796,7 +2793,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             : {}),
           ...(deps.webhookPublicUrl ? { webhookPublicUrl: deps.webhookPublicUrl } : {}),
           ...(humanInput && !external && !input.botActor ? { humanTurn: true } : {}),
-          ...(deps.toolOutput ? { toolOutput: deps.toolOutput, sessionId: session.id } : {}),
+          toolOutput: deps.toolOutput,
+          sessionId: session.id,
           ...(surfaceToolDeps ? { surface: surfaceToolDeps } : {}),
           ...(turnSessionSyscalls ? { sessionSyscalls: turnSessionSyscalls } : {}),
           ...(strictReadOnly ? {} : { attach: attachStaging.attach }),
@@ -2822,9 +2820,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               open: async (seq: number) => openSessionItem(await historyView(), seq),
             };
           })(),
-          ...(deps.execTimeoutMs !== undefined ? { execTimeoutMs: deps.execTimeoutMs } : {}),
-          ...(deps.execTimeoutCeilingMs !== undefined ? { execTimeoutCeilingMs: deps.execTimeoutCeilingMs } : {}),
-          ...(deps.signals ? { signals: deps.signals } : {}),
+          execTimeoutMs: deps.execTimeoutMs,
+          execTimeoutCeilingMs: deps.execTimeoutCeilingMs,
+          signals: deps.signals,
           ...(input.runId ? { runId: input.runId } : {}),
           ...(backgroundBroker ? { backgroundBroker } : {}),
           ...(monitorBroker ? { monitorBroker } : {}),
@@ -2844,7 +2842,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     { sessionId: session.id, hook: "tool_response", request: input.text, surface: "cron_script" },
                     recordScreenRequest,
                   ),
-                  ...(deps.toolOutput ? { toolOutput: deps.toolOutput } : {}),
+                  toolOutput: deps.toolOutput,
                 },
                 turnAbort.signal,
               )
@@ -2944,7 +2942,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           typeof input.fastMode !== "boolean" &&
           !purposeDefault &&
           humanInput &&
-          (await deps.config?.getInteractiveFastModeDurable());
+          (await deps.config.getInteractiveFastModeDurable());
         const effectiveFastMode = resolveTurnFastMode(input.fastMode, humanInput, wantsOrgFastMode === true);
         compactionRoute = sessionRoute;
         const preTurnRoute = compactionRoute;
@@ -3167,7 +3165,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const effectiveTurnWallClockMs =
           typeof input.turnWallClockMs === "number" && input.turnWallClockMs > 0 && !swarmGoalTurn
             ? input.turnWallClockMs
-            : (deps.defaultTurnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000);
+            : deps.defaultTurnWallClockMs;
         const servesModel = (requested: string, routed: string | undefined, keys: ProviderKeys | undefined) =>
           (keys ? personalModelId(requested, keys) : requested) === routed;
         const requestedModel = input.model ?? purposeDefault?.modelId;
@@ -3269,18 +3267,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             recallOutcomes,
           );
           const snapshot = membershipEvent(rosterMembers, continuation?.history ?? rawEntries, session.id);
-          const guidance =
-            !external && deps.config
-              ? guidanceUpdateEvent(
-                  {
-                    version: deps.config.soulVersion(scopeId),
-                    personal: conversation.kind === "dm",
-                    revisions: deps.config.soulHistory(scopeId),
-                  },
-                  continuation?.history ?? rawEntries,
-                  session.id,
-                )
-              : undefined;
+          const guidance = !external
+            ? guidanceUpdateEvent(
+                {
+                  version: deps.config.soulVersion(scopeId),
+                  personal: conversation.kind === "dm",
+                  revisions: deps.config.soulHistory(scopeId),
+                },
+                continuation?.history ?? rawEntries,
+                session.id,
+              )
+            : undefined;
           const turnEnvironment = environmentNote(
             [
               turnEnvironmentContents,
@@ -3359,7 +3356,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               toolCalls += 1;
               if (toolCalls === 1 && input.runId) {
                 if (!input.surfaceTools) {
-                  deps.turnStream?.noteToolCall(input.runId);
+                  deps.turnStream.noteToolCall(input.runId);
                 } else {
                   publishFirstAck(appended.tool === surfaceName && appended.body.action === "post");
                 }
@@ -3380,7 +3377,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           }
           const saveGoal = async (goal: GoalRecord): Promise<void> => {
             await deps.sessions.setGoal(writer, goal);
-            if (input.runId) deps.turnStream?.noteGoal(input.runId, goalView(goal));
+            if (input.runId) deps.turnStream.noteGoal(input.runId, goalView(goal));
           };
           const swarmHandoff =
             swarmGoalTurn && deps.swarms && input.runId
@@ -3519,7 +3516,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 runtimePinned: true,
                 ...(userProviderKeys ? { providerKeys: userProviderKeys } : {}),
               };
-              if (input.runId) deps.turnStream?.noteRuntime(input.runId, runtime);
+              if (input.runId) deps.turnStream.noteRuntime(input.runId, runtime);
             },
             ...(runtimePurpose ? { runtimePurpose } : {}),
             ...(deps.runtime && input.runId
@@ -3715,27 +3712,25 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             onModelRequest: () => dispatchTrace?.modelRequest(),
             onDelta: (chunk: string) => {
               dispatchTrace?.firstToken();
-              if (input.runId && deps.turnStream && !input.surfaceTools) deps.turnStream.publish(input.runId, chunk);
+              if (input.runId && !input.surfaceTools) deps.turnStream.publish(input.runId, chunk);
               if (input.surfaceTools && spineFirstBlockOpen && spineFirstBlock.length < FIRST_BLOCK_CAPTURE_MAX_CHARS)
                 spineFirstBlock += chunk;
             },
             onReasoningDelta: (step: string, index: number, chunk: string) => {
-              if (input.runId && deps.turnStream && !input.surfaceTools)
-                deps.turnStream.publishReasoning(input.runId, step, index, chunk);
+              if (input.runId && !input.surfaceTools) deps.turnStream.publishReasoning(input.runId, step, index, chunk);
             },
             onToolCallStart: (name: string) => {
               if (!earlyTaskAck || name === surfaceName) return;
               if (input.surfaceTools) publishFirstAck(false);
-              else if (input.runId) deps.turnStream?.noteToolCall(input.runId);
+              else if (input.runId) deps.turnStream.noteToolCall(input.runId);
             },
             onTextBlockStart: async (phase) => {
-              if (input.runId && deps.turnStream && !input.surfaceTools) deps.turnStream.publishBlockStart(input.runId);
+              if (input.runId && !input.surfaceTools) deps.turnStream.publishBlockStart(input.runId);
               if (input.surfaceTools && spineFirstBlock) spineFirstBlockOpen = false;
               if (!input.surfaceTools) {
-                const streamOffset =
-                  input.runId && deps.turnStream
-                    ? deps.turnStream.startOffset(input.runId) + (deps.turnStream.snapshot(input.runId) ?? "").length
-                    : undefined;
+                const streamOffset = input.runId
+                  ? deps.turnStream.startOffset(input.runId) + (deps.turnStream.snapshot(input.runId) ?? "").length
+                  : undefined;
                 const runId = input.runId;
                 const runActivity = deps.runActivity;
                 if (runId && runActivity) {
@@ -3824,7 +3819,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           !result.stopped
         ) {
           const primaryReply = stripAckPrefix(result.reply ?? "", spineAckText).trim();
-          if (input.addressed && primaryReply && defaultDestination && deps.deliveries) {
+          if (input.addressed && primaryReply && defaultDestination) {
             try {
               const directKey = postKeys.key(defaultDestination, postKeys.take());
               const editNote = replyEditNote(result.retracted);
@@ -3836,7 +3831,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 provenance: postProvenance(directKey),
               });
               spine.surfaceOutboundCount += 1;
-              if (input.runId) deps.turnStream?.markSurfacePosted(input.runId);
+              if (input.runId) deps.turnStream.markSurfacePosted(input.runId);
             } catch (e) {
               reportFailure("orchestrator: direct reply delivery", e, `session=${session.id}`);
             }
@@ -3856,7 +3851,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             );
             if (input.addressed && spine.surfaceOutboundCount === 0 && !result.silent && !result.stopped) {
               const fallback = stripAckPrefix(result.reply ?? "", spineAckText).trim();
-              if (fallback && defaultDestination && deps.deliveries) {
+              if (fallback && defaultDestination) {
                 try {
                   const fallbackKey = postKeys.key(defaultDestination, postKeys.take());
                   await reachEnqueue({
@@ -3867,7 +3862,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     provenance: postProvenance(fallbackKey),
                   });
                   spine.surfaceOutboundCount += 1;
-                  if (input.runId) deps.turnStream?.markSurfacePosted(input.runId);
+                  if (input.runId) deps.turnStream.markSurfacePosted(input.runId);
                 } catch (e) {
                   console.error(
                     `[orchestrator] shed-reply fallback delivery failed session=${session.id}:`,
@@ -3884,7 +3879,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const stagedAttachments = attachStaging.staged();
         const harvestedAck = (() => {
           if (!surface?.capabilities.liveReplies || input.surfaceTools || !input.runId) return undefined;
-          const fb = deps.turnStream?.firstBlock(input.runId);
+          const fb = deps.turnStream.firstBlock(input.runId);
           const text = fb?.text.trim();
           return fb?.closed && text ? text : undefined;
         })();
@@ -3899,7 +3894,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         });
         const turnCompleted = outcome.completed;
         const pausing = outcome.paused;
-        if (input.runId && !pausing && reply && reply.trim()) deps.turnStream?.markReplyDone(input.runId);
+        if (input.runId && !pausing && reply && reply.trim()) deps.turnStream.markReplyDone(input.runId);
         const turnUserSeq = partial?.userSeq ?? emittedEntries.find(isUserItem)?.seq;
         const onTurnEnd = memoryStrategy.onTurnEnd?.bind(memoryStrategy);
         if (
@@ -3926,7 +3921,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 idempotencyKey: input.runId ?? `${session.id}:${spine.turnUserEntrySeq ?? "turn"}`,
               });
             } catch (e) {
-              deps.errors?.record(
+              deps.errors.record(
                 {
                   category: "memory",
                   code: "capture_failed",
@@ -4054,7 +4049,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         revisionsCaughtUp = true;
         const work = deps.admittedWork;
         void (work?.canRun() ? work.run(tail) : tail()).catch(swallowAs("orchestrator: turn tail", undefined));
-        await deps.errors?.flush();
+        await deps.errors.flush();
         return finalResult;
       } catch (err) {
         if (err instanceof ProjectRosterChanged) return rosterChanged(session.id);
@@ -4082,7 +4077,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           return { status: "pending_approval", sessionId: session.id, pendingApprovals: [approval] };
         }
         if (err instanceof CommandDenied) {
-          deps.errors?.record({
+          deps.errors.record({
             category: "command_policy",
             code: "denied",
             message: err.message,
@@ -4092,7 +4087,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           return { status: "refused", sessionId: session.id, reason: err.message };
         }
         const budget = isModelBudget(err) && !input.cancel?.aborted;
-        deps.errors?.record(
+        deps.errors.record(
           {
             category: "turn",
             code: budget ? "model_budget" : "error",
@@ -4121,7 +4116,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           };
         throw err;
       } finally {
-        if (input.runId) deps.turnStream?.end(input.runId);
+        if (input.runId) deps.turnStream.end(input.runId);
         stall.stop();
         if (!tailOwnsCleanup) await reclaimBox();
         if (!revisionsCaughtUp) await catchUpMessageRevisions();

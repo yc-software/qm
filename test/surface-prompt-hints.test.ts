@@ -19,7 +19,8 @@ import { createPostgresMemoryService } from "../src/memory/postgres-memory-servi
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
-import { singleProcessDeps, testSurfaces } from "./support/single-process.ts";
+import { testSurfaces } from "./support/single-process.ts";
+import { orchestratorTestDeps } from "./support/orchestrator-deps.ts";
 import { testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
 
 const ORG = "default-org";
@@ -55,7 +56,7 @@ function turnCapture(surfaces: readonly Surface[]) {
   const mock = createMockAgent();
   const turns: AgentTurnInput[] = [];
   const orchestrator = createOrchestrator({
-    ...singleProcessDeps(),
+    ...orchestratorTestDeps(),
     surfaces: createSurfaceRegistry({ surfaces }),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     resolution: createResolutionService(ORG, config, acl),
