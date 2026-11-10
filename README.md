@@ -32,7 +32,7 @@ runs models from many providers, so a deployment isn't tied to any single vendor
 
 Tell your coding agent of choice `Let's deploy https://github.com/yc-software/qm`. From here, it should follow the deployment guide in this repo.
 
-You can also try out a 3rd-party hosted version of QM [here](https://www.agent37.com/qm).
+For less setup, you can also use a hosted version of QM: [Agent 37](https://www.agent37.com/qm), [E2B](https://e2b.dev/docs/agents/qm), or [DigitalOcean](https://marketplace.digitalocean.com/apps/yc-qm).
 
 If you're an infra provider interested in offering a hosted version of QM, feel free to reach out.
 
@@ -126,8 +126,10 @@ posture. `observe` only records verdicts in the audit log. `enforce` quarantines
 flagged content pending release approval, except under Dangerous, which caps
 screening at `observe`.
 
-The predeclared command policy — approval rules and hard denials for things like
-recursive deletes or destructive SQL — applies in every posture, Dangerous included.
+Command policy ships with no rules. An administrator can add approval rules and hard
+denials, for example for recursive deletes or destructive SQL, in the admin Command policy
+card or with `PUT /v1/admin/scopes/<scopeId>/command-policy`. Configured rules apply in
+every posture, Dangerous included.
 
 Sharing posture is independent:
 

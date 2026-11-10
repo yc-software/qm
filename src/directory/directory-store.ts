@@ -32,6 +32,12 @@ export function groupParticipantsKey(participants: readonly string[]): string {
   return [...new Set(participants.filter((p) => p))].sort().join(",");
 }
 
+interface SignInTenant {
+  id: string;
+  brandName?: string;
+  handle?: string;
+}
+
 export interface DirectoryMeta {
   workspaceUrl: string | null;
 }
@@ -62,6 +68,7 @@ export interface DirectoryStore {
   channelMembership(channelId: string, principalId: string): Promise<boolean | undefined>;
   channelMemberIds(channelId: string): Promise<string[] | undefined>;
   channelPrivacy(channelId: string): Promise<boolean | undefined>;
+  rosterCoversAudience(channelId: string): Promise<boolean | undefined>;
   replaceGroups(
     groupMembers: GroupMembership[],
     syncedAt?: number,
@@ -78,6 +85,11 @@ export interface DirectoryStore {
   listChannelsFor(principalId: string): Promise<DirectoryChannel[]>;
   setWorkspaceUrl(url: string): Promise<void>;
   meta(): Promise<DirectoryMeta>;
+  tenantsForEmail?(email: string): Promise<SignInTenant[]>;
+  tenantsForPrincipal?(principal: string): Promise<SignInTenant[]>;
+  setAppHandle?(handle: string): Promise<"ok" | "taken">;
+  tenantForAppHandle?(handle: string): Promise<string | undefined>;
+  trustedClientFor?(tenant: string): Promise<{ clientId: string; clientSecret: string } | undefined>;
 }
 
 export const MAX_CANDIDATES = 10;

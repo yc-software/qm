@@ -37,18 +37,46 @@ checksums to bypass this check. A previously completed legacy webhook sweep is
 adopted into the checksum ledger without disabling webhooks that an operator has
 subsequently re-enabled.
 
-The cron journal imports existing `cron_fire_log` history into `cron_fires` and
-continues importing writes from older workers during a rolling upgrade. History
-retention also removes expired entries from the legacy table, preventing a later
-restart from importing them again. The legacy table remains available for older
-binaries.
+The cron journal imports existing `cron_fire_log` history into `cron_fires` once
+and then drops `cron_fire_log`.
 
-Session, run and directory tables start from one base schema (`sessions/store/0047-base-schema`,
-`runs/store/0011-base-schema`, `directory/store/0006-base-schema`). A database already at
-`sessions/store/0046-spend-days-cron-rebuild`, `runs/store/0010-drop-turn-metrics` and
-`directory/store/0005` treats the base schema as applied. A database with session, run or
-directory tables from an older release refuses to start: first run a release that applies
-those migrations but predates the base schema until its migrations finish, then upgrade.
+Published 0.1.15 databases upgrade directly. Stop all older core and worker processes
+before running the new migrations: this upgrade replaces `session_entries` with
+`items`, and the old binary cannot read or write the converted schema. Back up the
+database first. A rollback after this conversion requires restoring that backup as
+well as the previous images; changing the image alone is insufficient.
+
+The published upgrade restores session migrations `0034` through `0046` and run
+migration `0010` with their historical identifiers and SQL checksums. The two
+historical preparation backfills retain their original empty-statement checksums.
+A recorded `sessions/store/0033-client-tools` or `runs/store/0009-claim-priority-index`
+selects its respective upgrade chain. Fresh databases skip those chains and use
+the existing base schemas. An installation that already applied the chain validates
+its checksums and skips it. Databases older than those supported anchors remain
+subject to the existing base-schema refusal; do not forge ledger entries.
+
+| Existing data                                                              | Upgrade result                                                                                                                                                                                                                                             |
+| -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sessions`, participant membership and display preferences                 | Kept; origin and last-user-activity backfilled; later existing migrations add session facts and retain active membership.                                                                                                                                  |
+| `session_entries` and previously prepared `legacy_tape_steps`              | Converted by the historical items migration into `items`, keyed by `(tenant_id, session_id, seq)`; message text, tool call/result pairing, turn IDs and timestamps travel with each supported item. The legacy history and search tables are then dropped. |
+| No `qm_tenant` / `qm_tenant_id()`                                          | Historical items migration creates the singleton UUID and function before the current session tenant backfill reads them.                                                                                                                                  |
+| `runs`                                                                     | Kept; the original `0010` removes obsolete `turn_metrics`, and the existing base migration removes unused `tool_calls`.                                                                                                                                    |
+| Saved turn requests, approval requests, run signals and Slack destinations | Historical conversion functions populate typed `origin`, `surfaceOrigin` and destination `account` fields before the retired-origin sweep checks them. Request rewrites commit in batches and can resume.                                                  |
+| `qm_schema_migrations`                                                     | Existing IDs/checksums retained; completed upgrade steps are recorded. Restart skips them without copying history twice.                                                                                                                                   |
+
+For example (invented), a `tool_result` row with payload
+`{"callId":"22222222-2222-4222-8222-222222222222","result":"apples"}`
+becomes a `ToolResult` item with the same sequence, `call_id` and `text = 'apples'`.
+A request with `triggered: true` and a Slack `triggerDestination` becomes an
+automation `origin` whose destination contains `account.id` and `account.workspace`.
+No deployment settings or public API shapes are added by this compatibility path.
+
+`test/postgres-published-upgrade.test.ts` loads the schema and migration ledger
+produced by the published v0.1.15 source, adds synthetic conversation/run/directory
+rows, invokes the real migration entrypoint, checks preserved history and preferences,
+and runs the entrypoint again. It also resumes after the history-copy migration has
+committed. The fixture contains no deployment data; its provenance and regeneration
+procedure are in `test/fixtures/upgrades/README.md`.
 
 Rolling back the runtime restores code and configuration, not database contents.
 Older binaries do not display cron history written only to the new journal; those

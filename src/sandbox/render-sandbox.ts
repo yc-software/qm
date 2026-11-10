@@ -1,4 +1,7 @@
+import { bootTenant, tenancyBooted } from "../tenants/boot.ts";
 import { SandboxSnapshotNotFoundError } from "@renderinc/sdk";
+import { randomUUID } from "node:crypto";
+import { orgId } from "../config.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { CredentialPathSpec } from "../credentials/resident-paths.ts";
@@ -24,9 +27,12 @@ import {
   type Sandbox,
   type SandboxHandle,
 } from "./sandbox.ts";
-import type { RenderClient, RenderSandboxInfo, RenderSnapshot } from "./render-client.ts";
+import type { RenderClient, RenderListedSandbox, RenderSandboxInfo, RenderSnapshot } from "./render-client.ts";
 import type { RenderBase } from "./render-base.ts";
 import { RENDER_COMPUTER_LIFETIME_SEC, RENDER_IDLE_STOP_MS, RENDER_SANDBOX_TTL_SEC } from "./render-limits.ts";
+import { claimThenBind } from "../tenants/claim.ts";
+
+const ORPHAN_GRACE_MS = 15 * 60_000;
 
 interface RenderSandboxResources {
   sandboxId?: string;
@@ -50,6 +56,10 @@ export interface StoredRenderScratch extends RenderSandboxInfo {
   cleanupPending?: boolean;
 }
 
+export interface StoredRenderNamespace {
+  id: string;
+}
+
 export interface StoredRenderCleanup {
   resources: RenderSandboxResources[];
   error?: string;
@@ -62,6 +72,7 @@ export interface RenderSandboxOptions extends BlobStagingOptions {
   scratchStore: DurableMap<StoredRenderScratch>;
   cleanupStore: DurableMap<StoredRenderCleanup>;
   advisoryLock: AdvisoryLock;
+  namespaceStore: DurableMap<StoredRenderNamespace>;
   namePrefix?: string;
   homeDir?: string;
   defaultTimeoutSec?: number;
@@ -81,6 +92,15 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
   const checkpointIntervalMs = opts.checkpointIntervalMs ?? 5 * 60_000;
   const scratch = new Map<string, RenderSandboxInfo>();
   const nameFor = (scope: string): string => sandboxScopeName(prefix, scope);
+  let sandboxName: Promise<string> | undefined;
+  const nameSandbox = (): Promise<string> =>
+    (sandboxName ??= opts.namespaceStore.putIfAbsent("singleton", { id: randomUUID() }).then(
+      (namespace) => sandboxScopeName(prefix, `${orgId()}-${namespace.id}`),
+      (error: unknown) => {
+        sandboxName = undefined;
+        throw error;
+      },
+    ));
   const lifecycleKey = (name: string): string => `render-sandbox:${name}`;
   const useKey = (name: string): string => `render-sandbox-use:${name}`;
   const withLifecycle = <T>(name: string, fn: () => Promise<T>): Promise<T> =>
@@ -134,6 +154,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
   };
   const exec = async (name: string, script: string, timeoutSec: number): Promise<ExecResult> => {
     const sandboxId = await idFor(name, true);
+    const startedAtMs = Date.now();
     const result = await client.runScript(sandboxId, script, timeoutSec).catch(async (error: unknown) => {
       const scope = base.scopeFor(name);
       const info = scope ? await client.get(sandboxId).catch(() => undefined) : undefined;
@@ -144,7 +165,9 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
         cause: error,
       });
     });
-    return { stdout: result.stdout, stderr: result.stderr, code: result.exitCode, timedOut: result.exitCode === 124 };
+    const timedOut =
+      (result.exitCode === 124 || result.exitCode === 137) && Date.now() - startedAtMs >= timeoutSec * 1000;
+    return { stdout: result.stdout, stderr: result.stderr, code: result.exitCode, timedOut };
   };
   const writeAbsBytes = async (name: string, path: string, data: Uint8Array): Promise<void> =>
     client.writeFileBytes(await idFor(name, true), path, data);
@@ -323,6 +346,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
     source: { ref: string; snapshotId: string },
   ): Promise<void> {
     const created = await client.create({
+      name: await nameSandbox(),
       snapshotId: source.snapshotId,
       lifetimeSec: RENDER_COMPUTER_LIFETIME_SEC,
       onCreated: (sandboxId) => holdForCleanup(scope, sandboxId),
@@ -406,6 +430,42 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
     );
   }
 
+  async function trackedSandboxIds(): Promise<Set<string>> {
+    const resources: RenderSandboxResources[] = [];
+    for (const [, stored] of await store.entries()) resources.push(stored, ...(stored.retiredResources ?? []));
+    for (const [, pending] of await cleanupStore.entries()) resources.push(...pending.resources);
+    const ids = new Set(resources.flatMap((entry) => (entry.sandboxId ? [entry.sandboxId] : [])));
+    for (const [, temporary] of await scratchStore.entries()) ids.add(temporary.id);
+    for (const temporary of scratch.values()) ids.add(temporary.id);
+    return ids;
+  }
+
+  async function sweepOrphans(): Promise<number> {
+    if (bootTenant() === undefined && tenancyBooted()) return 0;
+    let listed: RenderListedSandbox[];
+    try {
+      listed = await client.listLive(await nameSandbox());
+    } catch (error) {
+      reportError("orphan_list_failed", error);
+      return 0;
+    }
+    const cutoff = Date.now() - ORPHAN_GRACE_MS;
+    const candidates = listed.filter((sandbox) => sandbox.createdAtMs <= cutoff);
+    if (!candidates.length) return 0;
+    const tracked = await trackedSandboxIds();
+    let reaped = 0;
+    for (const orphan of candidates) {
+      if (tracked.has(orphan.id)) continue;
+      try {
+        await client.terminate(orphan.id);
+        reaped++;
+      } catch (error) {
+        reportError("orphan_terminate_failed", new Error(`terminate orphan sandbox ${orphan.id}`, { cause: error }));
+      }
+    }
+    return reaped;
+  }
+
   async function destroyScratch(name: string): Promise<void> {
     const temporary = (await scratchStore.get(name)) ?? scratch.get(name);
     if (!temporary) return;
@@ -432,6 +492,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
     isProvisioned: (name) => scratch.has(name),
     async recreateScratch(name) {
       const temporary = await client.create({
+        name: await nameSandbox(),
         snapshotId: (await goldens.ready()).snapshotId,
         lifetimeSec: RENDER_SANDBOX_TTL_SEC,
       });
@@ -477,7 +538,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
       processSessions: true,
       egressEnforcement: "none",
       spec: {
-        os: `Debian 12 — Render sandbox from the QM sandbox base image (it stops after ${RENDER_IDLE_STOP_MS / 60_000} idle minutes with no running processes and runs at most ${RENDER_COMPUTER_LIFETIME_SEC / 86400} days, or 1 day on a Render Hobby workspace; files return from checkpoints when it starts again, but background processes do not; publish durable work to git or Files)`,
+        os: `Debian 12 — Render sandbox from the QM sandbox base image (it stops after ${RENDER_IDLE_STOP_MS / 60_000} idle minutes with no running processes and runs at most ${RENDER_COMPUTER_LIFETIME_SEC / 86400} days; files return from checkpoints when it starts again, but background processes do not; publish durable work to git or Files)`,
         runtimes: ["Node 24", "Python 3 (venv on PATH — `pip install` just works)"],
         cpus: 2,
         memoryMb: 4096,
@@ -581,72 +642,75 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
         const stored = await store.get(scope);
         if (!stored) return;
         const info = await client.get(stored.sandboxId);
-        if (info?.status !== "running") return;
-        await withUse(name, async () => {
-          await checkpoint(scope, stored, await hasLiveProcesses(info.id));
-          await client.terminate(info.id);
-          await store.merge(scope, { stopped: true });
-        });
+        await withUse(name, () => replace(scope, stored, info));
       });
     },
     async reapDeepIdle(idleMs) {
       let reaped = 0;
-      for (const [name, candidate] of await scratchStore.entries()) {
-        if (!candidate.cleanupPending && candidate.expiresAtMs > Date.now()) continue;
-        await tryLock(lifecycleKey(name), async () => {
-          const temporary = await scratchStore.get(name);
-          if (!temporary || (!temporary.cleanupPending && temporary.expiresAtMs > Date.now())) return;
-          await destroyScratch(name);
-          reaped++;
-        }).catch((error) => reportError("scratch_cleanup_failed", error));
-      }
+      const scratchDue = (scratch: StoredRenderScratch | null): boolean =>
+        !!scratch && (scratch.cleanupPending || scratch.expiresAtMs <= Date.now());
+      await claimThenBind(scratchStore.claimTenants, async () => {
+        for (const [name, scratch] of await scratchStore.entries())
+          if (scratchDue(scratch))
+            await tryLock(lifecycleKey(name), async () => {
+              if (!scratchDue(await scratchStore.get(name))) return;
+              await destroyScratch(name);
+              reaped++;
+            }).catch((error) => reportError("scratch_cleanup_failed", error));
+      });
       const cutoff = Date.now() - Math.min(idleMs > 0 ? idleMs : Infinity, RENDER_IDLE_STOP_MS);
       const stale = (stored: StoredRenderSandbox): boolean => stored.homeDirty !== false && !recentlySaved(stored);
       const due = (stored: StoredRenderSandbox): boolean =>
         !stored.stopped && (stored.expiresAtMs <= Date.now() || stored.lastActivityMs <= cutoff || stale(stored));
-      for (const [scope] of await cleanupStore.entries())
-        await tryLock(lifecycleKey(nameFor(scope)), () => finishCleanup(scope)).catch(
-          swallowAs(`render-sandbox: finish cleanup of ${scope}`, undefined),
-        );
-      for (const [scope, candidate] of await store.entries()) {
-        if (!due(candidate) && !candidate.retiredResources?.length) continue;
-        const name = nameFor(scope);
-        await tryLock(lifecycleKey(name), async () => {
-          let stored = await store.get(scope);
-          if (stored) stored = await cleanupRetired(scope, stored);
-          if (!stored || !due(stored)) return;
-          const info = await client.get(stored.sandboxId);
-          if (!info || info.status === "terminated" || info.status === "errored") {
-            if (stored.expiresAtMs > Date.now())
-              reportError(
-                "computer_ended",
-                new Error(`Render sandbox ${stored.sandboxId} is ${info?.status ?? "missing"}`),
-                scope,
-              );
-            await store.merge(scope, { stopped: true });
-            return;
-          }
-          if (info.status !== "running") return;
-          const active = await hasLiveProcesses(info.id);
-          if (active && !stale(stored)) return;
-          const current = stored;
-          const stopped =
-            !active &&
-            stored.lastActivityMs <= cutoff &&
-            (await tryUse(name, async () => {
-              if (await hasLiveProcesses(info.id)) return false;
-              await clearCredentials(info.id).catch((error: unknown) =>
-                reportError("credential_clear_failed", error, scope),
-              );
-              await checkpoint(scope, current, false);
-              await client.terminate(info.id);
+      await claimThenBind(
+        () => cleanupStore.claimIds(),
+        (scope) =>
+          tryLock(lifecycleKey(nameFor(scope)), () => finishCleanup(scope)).catch(
+            swallowAs(`render-sandbox: finish cleanup of ${scope}`, undefined),
+          ),
+      );
+      await claimThenBind(store.claimTenants, async () => {
+        for (const [scope, candidate] of await store.entries()) {
+          if (!due(candidate) && !candidate.retiredResources?.length) continue;
+          const name = nameFor(scope);
+          await tryLock(lifecycleKey(name), async () => {
+            let stored = await store.get(scope);
+            if (stored) stored = await cleanupRetired(scope, stored);
+            if (!stored || !due(stored)) return;
+            const info = await client.get(stored.sandboxId);
+            if (!info || info.status === "terminated" || info.status === "errored") {
+              if (stored.expiresAtMs > Date.now())
+                reportError(
+                  "computer_ended",
+                  new Error(`Render sandbox ${stored.sandboxId} is ${info?.status ?? "missing"}`),
+                  scope,
+                );
               await store.merge(scope, { stopped: true });
-              return true;
-            }));
-          if (stopped) reaped++;
-          else await checkpoint(scope, stored, active || undefined);
-        }).catch((error) => reportError("idle_checkpoint_failed", error, scope));
-      }
+              return;
+            }
+            if (info.status !== "running") return;
+            const active = await hasLiveProcesses(info.id);
+            if (active && !stale(stored)) return;
+            const current = stored;
+            const stopped =
+              !active &&
+              stored.lastActivityMs <= cutoff &&
+              (await tryUse(name, async () => {
+                if (await hasLiveProcesses(info.id)) return false;
+                await clearCredentials(info.id).catch((error: unknown) =>
+                  reportError("credential_clear_failed", error, scope),
+                );
+                await checkpoint(scope, current, false);
+                await client.terminate(info.id);
+                await store.merge(scope, { stopped: true });
+                return true;
+              }));
+            if (stopped) reaped++;
+            else await checkpoint(scope, stored, active || undefined);
+          }).catch((error) => reportError("idle_checkpoint_failed", error, scope));
+        }
+      });
+      reaped += await sweepOrphans();
       return { reaped };
     },
     async computerStatus(scope): Promise<ComputerStatus> {
@@ -677,6 +741,14 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
       try {
         const info = await client.get(stored.sandboxId);
         const running = info?.status === "running";
+        if (!running && stored.checkpoint && stored.checkpoint.expiresAtMs > Date.now())
+          return {
+            machine: `Render sandbox ${stored.sandboxId}: ${info?.status ?? "missing"}`,
+            lifecycleState: "paused",
+            provisioned: true,
+            guestResponsive: false,
+            recovery,
+          };
         const response = running ? await client.runScript(stored.sandboxId, "true", 10) : null;
         return {
           machine: `Render sandbox ${stored.sandboxId}: ${info?.status ?? "missing"}`,

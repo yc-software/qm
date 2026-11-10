@@ -139,6 +139,8 @@ interface ComposerState {
   pasteView: { id: string; text: string; initial: string; dirty: boolean } | null;
 }
 
+export type SteeringRun = QueuedRun & { attachments?: Attachment[] };
+
 export interface ComposerSurface {
   composerApprovalPanel(approvals: PendingApproval[], resolve?: (decision: ApprovalDecision) => void): TemplateResult;
   submit(instruction?: string): Promise<void>;
@@ -146,7 +148,7 @@ export interface ComposerSurface {
   state: ComposerState;
   composerForm(agent: Agent, header?: TemplateResult | typeof nothing): TemplateResult;
   queuedStrip(agent: Agent): TemplateResult | typeof import("lit").nothing;
-  waitingSteers(agent: Agent): QueuedRun[];
+  waitingSteers(agent: Agent): SteeringRun[];
   queuedRunsFor(threadRef: string | null): QueuedRun[];
   setQueuedRuns(threadRef: string, runs: QueuedRun[]): void;
   resetComposer(): void;

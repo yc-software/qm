@@ -2,13 +2,13 @@
 
 The portal is the public front door of a QM deployment. Core runs it in-process on its public port
 (`PUBLIC_PORT`, see `src/web/front-door.ts`); it does provider-neutral **OIDC** sign-in (Google
-Workspace is the email-first deployment default) and reverse-proxies signed-in requests to the web UI
-server, which core runs on a loopback port:
+Workspace is the email-first deployment default) and hands signed-in requests to core in-process:
 
-| Path        | → upstream    | Notes                                                                         |
-| ----------- | ------------- | ----------------------------------------------------------------------------- |
-| `/*` (root) | web UI server | Pi web UI SPA, root-mounted (`/web-ui/*` 308-redirects to root for old links) |
-| `/settings` | web UI server | Administrator settings; core checks admin                                     |
+| Path        | → handled by       | Notes                                                                           |
+| ----------- | ------------------ | ------------------------------------------------------------------------------- |
+| `/api/*`    | core's cookie lane | `/api` aliases of browser-enabled `/v1` routes; core binds the signed-in person |
+| `/*` (root) | core's web shell   | Web UI release, root-mounted (`/web-ui/*` 308-redirects to root for old links)  |
+| `/settings` | core's web shell   | Administrator settings; core checks admin                                       |
 
 User deployments are never served on this authenticated origin; they use the dedicated apps domain.
 
@@ -37,11 +37,10 @@ surfaces. Core imports it; it does **not** import the core and talks to core onl
    the subject from userinfo. The verified `sub` **is** the core principal id. It mints a
    signed `portal_session` cookie (`{sub, org, auth, exp}`, HMAC, 7-day sliding lifetime with a
    30-day absolute maximum by default).
-3. **Proxy** — every other path requires a valid session. The portal picks the upstream by the
-   **exact first path segment**, strips the prefix, and proxies to the private upstream,
-   synthesizing the surface cookie for compatibility and attaching a short-lived signed portal
-   identity. Surfaces pass that identity to core, which verifies it before any user-scoped action.
-   Before proxying, the portal asks core for the session subject's canonical principal
+3. **Hand-off** — every other path requires a valid session. Aliased `/api` paths go to core's
+   request handler, which reads the `portal_session` cookie itself and binds the signed-in (or
+   admin-impersonated) person; everything else goes to core's web shell (`src/web/shell.ts`), which
+   serves the live web UI release. Before handing off, the portal asks core for the session subject's canonical principal
    (`GET /v1/principals/:id/canonical`, cached for a minute). A sign-in that an org admin has
    linked to another identity therefore acts as that person's canonical principal; see
    [`docs/principal-links.md`](../../docs/principal-links.md).
@@ -117,16 +116,12 @@ disposable test deployment: the test redeems real links for its configured admin
 
 ## Security model (the parts that must be right)
 
-- **Identity comes from verified OIDC or an operator-issued admin link.** The browser cannot assert an unsigned identity. The
-  upstream request is built **from scratch** — an _allowlist_ of safe headers
-  (`content-type`/`accept`/`user-agent`/…) plus the one synthesized cookie. The client's
-  headers and cookies are **never** forwarded, so a browser can't smuggle a forged
-  `webuiuser=`/`x-as-principal` into a 6PN-trusting upstream. Body framing is the one exception: the
-  relay copies the client's `content-length` (or sends chunked encoding), which Node's parser has already
-  validated, so the upstream framing matches the bytes piped and there's no CL/TE desync surface.
+- **Identity comes from verified OIDC or an operator-issued admin link.** The browser cannot assert an unsigned identity:
+  core derives the person from the sealed `portal_session` cookie and strips client-sent identity headers
+  (`x-admin-actor`, `x-as-principal`, …) before any handler runs.
 - **Routing decides once.** The router rejects pathologically-encoded targets (`%2f`, `%5c`,
   `%2e%2e`, `\`, `//`, NUL → 400) and selects the upstream by exact segment. Every path that is
-  not a deployment, auth or core passthrough goes to web-ui as the signed-in user, so no path
+  not a deployment, auth or core passthrough goes to core as the signed-in user, so no path
   spelling reaches a more privileged upstream.
 - **Admin is derived from ONE source — the core's `admin_grants`.** Settings pages live in web-ui
   under `/settings`, and every admin action is checked **per action** at the core — the live
@@ -137,7 +132,7 @@ disposable test deployment: the test redeems real links for its configured admin
   outage or malformed answer counts as not-admin and is not cached. There is **no portal id
   list**; the only place an admin is named is the core's `ADMIN_GRANTS`.
 - **Non-admin users need no per-id config.** `PORTAL_EXPECTED_TEAM_ID` pins the workspace, so any
-  verified member is a valid user (`WEB_UI_PRINCIPALS` empty = any verified principal).
+  verified member is a valid user.
 - **CSRF / open-redirect.** Every non-GET requires a same-origin `Origin`; `returnTo` is reduced
   to a same-origin path (rejects `//evil`, `/\evil`, `https:/evil`, `%2f%2f`/`%5c`). The one
   exception is an origin listed in `PORTAL_API_ALLOWED_ORIGINS`, and only on the chat API (below).
@@ -165,76 +160,25 @@ disposable test deployment: the test redeems real links for its configured admin
   never redirects to the provider. Sign-out is local to this portal: it does not
   contact the OIDC provider or end the provider session, so choosing **Sign in**
   may complete silently through an existing provider session. Sign out of the
-  provider directly to end it everywhere. Built-in broker and anonymous logout
-  retain their existing flows. Local-development logout also stops on the
+  provider directly to end it everywhere. Built-in broker logout retains its
+  existing flow. Local-development logout also stops on the
   signed-out page until the user chooses **Sign in**.
 - **Stateless session limits.** Clearing browser cookies does not revoke a copied
   portal session before `exp`; the core's `canAdminister` (re-read per request)
   remains the live admin revocation path.
 
-## Playground mode
+## Apps domain and cookie domain
 
-`PORTAL_PLAYGROUND=1` turns the deployment into a public try-it instance: an
-unauthenticated browser navigation (a `GET` that accepts HTML) mints an anonymous
-principal (`playground-<random>`), seals it into the ordinary `portal_session`
-cookie, and continues — so each visitor's sessions, files, memory, and sandbox are
-pinned to their browser through the same scoping that isolates real teammates.
-Non-HTML requests without a session still get `401`, so the SPA's API calls ride
-the cookie from the first page load and bare `curl` never mints.
-
-What playground mode does **not** change: `/auth/login` still runs the full OIDC
-flow (that's how the one admin signs in — production still demands the usual OIDC
-config), anonymous sessions never pass the core's admin checks, and admin identity remains
-the core's `ADMIN_GRANTS`. Signing out of an anonymous session just clears the
-cookie; the next visit starts a fresh playground identity.
-
-Minting is rate-limited per client address through the core's Postgres-backed
-single-use claim store (the same one the sign-in broker uses), so restarts and
-blue-green deploys can't reset it; if the core can't record the claim the portal
-fails closed and answers 429. `PORTAL_PLAYGROUND_MINTS_PER_IP` (default 30, at
-most 64 — the core grants at most 64 claim slots per request) per
-`PORTAL_PLAYGROUND_MINT_WINDOW_S` (default 3600, at most 86400 — the core's
-claim horizon); the portal refuses to boot outside those ranges rather than
-silently serving 429 to everyone. IPv6 clients are bucketed per /64, not per
-address, so a visitor with a routed prefix can't rotate through fresh budgets.
-The client address comes from `clientIpOf` — on Fly that's `fly-client-ip`;
-elsewhere set `PORTAL_XFF_TRUSTED_HOPS` when a reverse proxy fronts the portal,
-or every visitor (and every crawler that accepts HTML) shares the socket
-address's one bucket.
-
-Because playground authority must never leave this origin, the portal refuses
-to boot with `PORTAL_PLAYGROUND` alongside `PORTAL_COOKIE_DOMAIN`, an apps
-domain (`PORTAL_APPS_DOMAIN` / `DEPLOY_APPS_DOMAIN`), or an explicit
-`PORTAL_DEPLOYMENTS_ENABLED=1` — a domain-wide cookie or the deployment proxy
-would hand anonymous sessions to surfaces that never see the `anon` flag. The
-deployment proxy (`/d/<app>/`), on by default for signed-in portals, turns
-itself off under the playground, and anonymous sessions are refused it at
-request time too. Outside the playground, `PORTAL_APPS_DOMAIN` defaults to
-`DEPLOY_APPS_DOMAIN`, and `PORTAL_COOKIE_DOMAIN` to the portal host itself when
-the apps domain sits directly under it (`apps.<portal host>`), so one core-side
-variable configures both processes. Any other layout needs an explicit
-`PORTAL_COOKIE_DOMAIN` — deriving a shared parent by guesswork risks landing on
-a public suffix browsers refuse. Anonymous sessions are also refused the `/connect/*` and
-`/drop/*` flows, so a visitor can't attach real OAuth tokens or dropped secrets
-to a throwaway principal that a cleared cookie orphans.
-
-The `anon` flag lives only in the portal's session cookie — it does not cross
-the portal identity boundary. To the core, a playground visitor is an ordinary
-**internal** principal of the deployment's org: they can run turns, use their
-sandbox, create crons, and reach anything granted or published at `org:` scope,
-including org-granted credentials. That is the design — visitors are members of
-the playground org — so a playground must be its own deployment with nothing
-sensitive at org scope: no org-wide credential grants, no real connector
-credentials, no company data. A cleared cookie mints a fresh principal, so pair
-this with the core's real brakes: `BUDGET_USD_PER_WINDOW`,
-`ORG_BUDGET_USD_PER_WINDOW`, and a single pinned model
-via the admin `base-model` / `webui-models` resources. Nothing
-garbage-collects an abandoned visitor's scope yet.
+`PORTAL_APPS_DOMAIN` defaults to `DEPLOY_APPS_DOMAIN`, and `PORTAL_COOKIE_DOMAIN`
+to the portal host itself when the apps domain sits directly under it
+(`apps.<portal host>`), so one core-side variable configures both processes. Any
+other layout needs an explicit `PORTAL_COOKIE_DOMAIN` — deriving a shared parent
+by guesswork risks landing on a public suffix browsers refuse.
 
 ## Env
 
 Non-secret (`[env]`): `PORT` (8097 local / 8080 image), `PUBLIC_WEB_URL`, `CORE_API_URL`,
-`CORE_ORG_ID`, `WEB_UI_UPSTREAM`,
+`CORE_ORG_ID`,
 `OIDC_AUTH_ENDPOINT` / `OIDC_TOKEN_ENDPOINT` / `OIDC_USERINFO_ENDPOINT` / `OIDC_ISSUER` /
 `OIDC_JWKS_URI` / `OIDC_SCOPES` / `OIDC_CLIENT_ID`, `PORTAL_EXPECTED_TEAM_ID`,
 `PORTAL_SESSION_TTL_S`, `PORTAL_SESSION_MAX_TTL_S`. `PORTAL_SESSION_MAX_TTL_S` caps a session's total life from authentication; it defaults to the larger of 30 days and `PORTAL_SESSION_TTL_S`, and boot fails if it is set below the TTL.

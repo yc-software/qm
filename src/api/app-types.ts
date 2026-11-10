@@ -1,10 +1,12 @@
+import type { PersonaHandover } from "../personas/persona-handover.ts";
+import type { PersonaService } from "../personas/persona-service.ts";
 import type { TeamStore } from "../teams/teams.ts";
 import type { CronScriptTrial } from "../cron/script.ts";
 import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
 import type { Mailer } from "../../plugins/chassis/src/resend.ts";
 import type { DeploymentInvitation } from "../deploy/email-access.ts";
 import type { AdmittedWork } from "../util/admitted-work.ts";
-import type { EventBus } from "../util/event-bus.ts";
+import type { EventBus, SubscribeOptions } from "../util/event-bus.ts";
 import type { RunStreamEvent } from "../runs/run-stream-events.ts";
 import type { ResourceSearchStore, ResourceSearchHit } from "../search/resource-search.ts";
 import type { ModelOverlayStore } from "../model/model-overlay-store.ts";
@@ -26,6 +28,7 @@ import type { OutgoingAttachment } from "../types.ts";
 import type { Readable } from "node:stream";
 import { type FileArtifact, type FileArtifactStore, type ListOwnedOptions } from "../files/file-artifact-store.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
+import type { UserStore } from "../identity/user-store.ts";
 import type { SessionStore, TranscriptItem } from "../sessions/session-store.ts";
 import type { Item } from "../sessions/items.ts";
 import { type Sandbox } from "../sandbox/sandbox.ts";
@@ -37,7 +40,6 @@ import type { Run, RunDeliveryState, RunStore } from "../runs/run-store.ts";
 import type { GoalView, ReasoningBlock, TurnStream } from "../runs/turn-stream.ts";
 import type { SessionStateBus, SessionStateEvent } from "../runs/session-state-bus.ts";
 import type { LedgerEventBus, OwnedLedgerEvent } from "../loops/ledger-events.ts";
-import type { SubscribeOptions } from "../util/event-bus.ts";
 import type { RunActivityEntry, RunActivityStore } from "../runs/run-activity-store.ts";
 import type { RunSignal, RunSignalStore } from "../runs/run-signal-store.ts";
 import type { CustomProviderStore, ModelCredentialStore } from "../model/model-credential-store.ts";
@@ -279,9 +281,15 @@ export interface SessionSearchHit {
 }
 
 export interface App {
+  tenantFor: import("../tenants/lookup.ts").TenantLookup["tenantFor"];
   swarms?: SwarmService;
+  personas?: PersonaService;
+  personaHandover?: PersonaHandover;
   turn(req: TurnRequest, replay?: { signalDedupKey: string }): Promise<TurnResult>;
-  getApproval(requestId: string, viewer?: string): Promise<(PendingApprovalRecord & { requestId: string }) | null>;
+  getApproval(
+    requestId: string,
+    viewer?: string,
+  ): Promise<(Omit<PendingApprovalRecord, "call"> & { requestId: string; executesOnApprove?: boolean }) | null>;
   subscribeSessionStates(cb: (event: SessionStateEvent) => void, opts?: SubscribeOptions): () => void;
   subscribeLedgerEvents(cb: (event: OwnedLedgerEvent) => void, opts?: SubscribeOptions): () => void;
   listSessionApprovals(sessionId: string, viewer: string): Promise<PendingApproval[]>;
@@ -546,6 +554,7 @@ export interface App {
   ambientJudge?(systemPrompt: string, prompt: string): Promise<string | undefined>;
   directoryMembers(): Promise<DirectoryMember[]>;
   directoryChannels(): Promise<DirectoryChannel[]>;
+  directoryChannelsFor(principalId: string): Promise<DirectoryChannel[]>;
   channelMember(channelId: string, principalId: string): Promise<boolean>;
   channelVisibleTo(actorId: string, channelId: string, isPrivate?: boolean): Promise<boolean>;
   recordPrincipalDelivery(deliveryId: string, recipientThreadRef: string): Promise<void>;
@@ -649,12 +658,15 @@ interface DeploymentGitPrincipals {
 }
 
 export interface AppDeps {
+  personas?: PersonaService;
+  personaHandover?: PersonaHandover;
   externalSlackPolicies?: ExternalSlackPolicies;
   admittedWork?: AdmittedWork;
   shutdown?: () => AbortSignal;
   resourceSearch: ResourceSearchStore;
   swarms?: SwarmService;
   identity: IdentityService;
+  users?: Pick<UserStore, "resolve">;
   publicWebUrl?: string;
   inviteMailer?: Mailer;
   sessions: SessionStore;
@@ -666,7 +678,7 @@ export interface AppDeps {
   runStreamEvents?: EventBus<RunStreamEvent>;
   runActivity?: RunActivityStore;
   signals?: RunSignalStore;
-  settleTreeWakes?: (root: Session) => Promise<void>;
+  settleTreeWakes?: (root: Session, botRunsOnly?: boolean) => Promise<void>;
   modelCredentials?: ModelCredentialStore;
   userModelCredentials?: UserModelCredentialStore;
   mcpServers?: McpServerStore;

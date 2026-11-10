@@ -3,14 +3,14 @@ import assert from "node:assert/strict";
 import pg from "pg";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
-import { migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { migrateRegisteredPgSchemas, registeredPgMigrations } from "../src/persistence/pg-pool.ts";
+import { testBareDatabaseUrl } from "./support/test-database.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 const skip = databaseUrl ? false : "set DATABASE_URL (a Postgres) to run the base schema tests";
 
 async function withDatabase(run: (url: string, admin: pg.Pool) => Promise<void>): Promise<void> {
-  const url = testDatabaseUrl();
+  const url = testBareDatabaseUrl();
   const admin = new pg.Pool({ connectionString: url });
   try {
     await run(url, admin);
@@ -27,6 +27,16 @@ async function migrate(url: string): Promise<void> {
   } finally {
     await runs.close();
   }
+}
+
+async function markTenancyApplied(url: string, admin: pg.Pool): Promise<void> {
+  createPostgresSessionStore(url);
+  await createPostgresRunStore(url).close();
+  const tenancy = registeredPgMigrations(url).filter((m) => /-tenant|claim/.test(m.id));
+  await admin.query("INSERT INTO qm_schema_migrations(id, checksum) SELECT * FROM unnest($1::text[], $2::text[])", [
+    tenancy.map((m) => m.id),
+    tenancy.map((m) => m.checksum),
+  ]);
 }
 
 const present = async (admin: pg.Pool, sql: string) => (await admin.query(`SELECT ${sql} AS v`)).rows[0].v as unknown;
@@ -60,9 +70,15 @@ test("a fully migrated database skips the base schema and drops only the retired
       "CREATE TABLE runs(id TEXT PRIMARY KEY, session_id TEXT, request TEXT, result TEXT, created_at BIGINT, seq BIGINT)",
     );
     await admin.query("CREATE EXTENSION IF NOT EXISTS btree_gin");
-    await admin.query(`CREATE TABLE items(seq BIGINT, tenant_id TEXT, kind TEXT, variant TEXT, text TEXT,
-      search TSVECTOR, target_seq BIGINT,
+    await admin.query(`CREATE TABLE items(seq BIGINT, tenant_id TEXT, session_id TEXT, kind TEXT, variant TEXT,
+      text TEXT, search TSVECTOR, target_seq BIGINT, author TEXT, body JSONB, created_at TIMESTAMPTZ,
       CONSTRAINT items_target_seq_kind CHECK (target_seq IS NULL OR kind = 'Retraction'))`);
+    await admin.query(
+      "CREATE FUNCTION forbid_direct_delete() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN OLD; END'",
+    );
+    await admin.query(
+      "CREATE TRIGGER items_delete_through_session BEFORE DELETE ON items FOR EACH ROW EXECUTE FUNCTION forbid_direct_delete()",
+    );
     await admin.query("CREATE TABLE tool_calls(run_id TEXT)");
     await admin.query("CREATE TABLE session_llm_requests(session_id TEXT, created_at BIGINT, usage_json TEXT)");
     await admin.query(`CREATE INDEX session_llm_requests_session_spend_recovery
@@ -74,6 +90,7 @@ test("a fully migrated database skips the base schema and drops only the retired
     await admin.query(
       `INSERT INTO participants VALUES ('s1', 'member', 5, NULL, 3, NULL), ('s1', 'removed', 5, 9, 3, 7)`,
     );
+    await markTenancyApplied(url, admin);
     await migrate(url);
     assert.deepEqual(
       (await admin.query("SELECT principal_id FROM participants")).rows.map((row) => row.principal_id),
@@ -85,7 +102,19 @@ test("a fully migrated database skips the base schema and drops only the retired
     );
     assert.deepEqual(
       columns.rows.map((row) => row.column_name),
-      ["seq", "tenant_id", "kind", "variant", "text", "search", "target_seq"],
+      [
+        "seq",
+        "tenant_id",
+        "session_id",
+        "kind",
+        "variant",
+        "text",
+        "search",
+        "target_seq",
+        "author",
+        "body",
+        "created_at",
+      ],
     );
     assert.equal(await present(admin, "to_regclass('blobs') IS NULL"), true);
     assert.equal(await present(admin, "to_regclass('tool_calls') IS NULL"), true);

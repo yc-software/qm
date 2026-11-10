@@ -2,6 +2,9 @@ import { errMessage, swallowAs } from "../util/errors.ts";
 import { safeChunks, safeClip } from "./safe-cut.ts";
 import { sleep } from "./util.ts";
 import { isExternallyShared, isMpim, type ChannelMeta } from "./identity.ts";
+import { trimTrailingSlashes } from "../util/text.ts";
+import type { WornPersona } from "../types.ts";
+import { EMOJI_NAME_BY_CHAR } from "./emoji-map.ts";
 
 export interface SlackReplyArgs {
   channel: string;
@@ -28,16 +31,25 @@ export function botIdentityFromEnv(env: Record<string, string | undefined>): Bot
   };
 }
 
-let defaultIdentity: BotIdentityOverride = {};
+const defaultIdentity: { identity: BotIdentityOverride } = { identity: {} };
 export function setDefaultBotIdentity(identity: BotIdentityOverride | undefined): void {
-  defaultIdentity = identity ?? {};
+  defaultIdentity.identity = identity ?? {};
 }
 
-export function botIdentityArgs(): BotIdentityOverride {
-  const id = defaultIdentity;
+function slackEmojiName(icon: WornPersona["icon"]): string | undefined {
+  if (icon?.kind === "custom") return icon.name;
+  if (icon?.kind === "emoji") return EMOJI_NAME_BY_CHAR[icon.value.replace(/\uFE0F/g, "")];
+  return undefined;
+}
+
+export function botIdentityArgs(persona?: WornPersona): BotIdentityOverride {
+  const id = defaultIdentity.identity;
+  const username = persona?.name.trim() || id.username;
+  const personaEmoji = slackEmojiName(persona?.icon);
+  const icon_emoji = personaEmoji ? `:${personaEmoji}:` : id.icon_emoji;
   return {
-    ...(id.username ? { username: id.username } : {}),
-    ...(id.icon_emoji ? { icon_emoji: id.icon_emoji } : {}),
+    ...(username ? { username } : {}),
+    ...(icon_emoji ? { icon_emoji } : {}),
   };
 }
 
@@ -45,7 +57,7 @@ export function slackReplyArgs(
   channel: string,
   text: string,
   threadTs: string | undefined,
-  opts: { threadOnly?: boolean; unfurlLinks?: boolean } = {},
+  opts: { threadOnly?: boolean; unfurlLinks?: boolean; persona?: WornPersona } = {},
 ): SlackReplyArgs {
   return {
     channel,
@@ -53,12 +65,12 @@ export function slackReplyArgs(
     ...(threadTs ? { thread_ts: threadTs } : {}),
     ...(threadTs && opts.threadOnly ? { reply_broadcast: false as const } : {}),
     ...(opts.unfurlLinks !== undefined ? { unfurl_links: opts.unfurlLinks, unfurl_media: opts.unfurlLinks } : {}),
-    ...botIdentityArgs(),
+    ...botIdentityArgs(opts.persona),
   };
 }
 
 export function scopeSurfaceUrl(webUiPublicUrl: string | undefined, scopeId: string): string | undefined {
-  const base = (webUiPublicUrl ?? "").trim().replace(/\/+$/, "");
+  const base = trimTrailingSlashes((webUiPublicUrl ?? "").trim());
   if (!base || !scopeId) return undefined;
   const personal = /^personal:([^@]+)@/.exec(scopeId);
   if (personal?.[1] && /^[a-z0-9._-]+$/i.test(personal[1])) return `${base}/projects/${personal[1].toLowerCase()}`;

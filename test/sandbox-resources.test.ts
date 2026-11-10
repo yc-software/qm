@@ -3,7 +3,12 @@ import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createSandboxResources, type SandboxResource, type SandboxDefault } from "../src/sandbox/sandbox-resources.ts";
+import {
+  createSandboxResources,
+  type SandboxResource,
+  type SandboxResources,
+  type SandboxDefault,
+} from "../src/sandbox/sandbox-resources.ts";
 import { createSandboxRouter } from "../src/sandbox/sandbox-routing.ts";
 import {
   upgradeLegacySandboxes,
@@ -16,6 +21,12 @@ import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+
+async function jobComputers(resources: SandboxResources): Promise<SandboxResource[]> {
+  const found: SandboxResource[] = [];
+  await resources.eachJobComputer(async (computer) => void found.push(computer));
+  return found;
+}
 
 function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["personal:alice"]) {
   const records = testMap<SandboxResource>();
@@ -201,6 +212,62 @@ test("status and restart resolve the selected backing machine rather than legacy
   assert.equal((await router.computerStatus!("personal:alice")).machine, record.backingScopeId);
   await router.restartComputer!("personal:alice");
   assert.deepEqual(provisioned, [record.backingScopeId, `restart:${record.backingScopeId}`]);
+});
+
+const sizedBackend = (sizes: Array<number | undefined>) => (backend: Sandbox) => {
+  backend.profile.sizesMemory = true;
+  const provision = backend.provision.bind(backend);
+  backend.provision = async (id, opts) => {
+    sizes.push(opts?.memoryGb);
+    return provision(id, opts);
+  };
+  backend.restartComputer = async (_scopeId, memoryGb) => {
+    sizes.push(memoryGb);
+  };
+};
+
+test("a computer's memory size is stored and reaches every later provision and restart", async () => {
+  const sizes: Array<number | undefined> = [];
+  const { resources, router } = fixture(sizedBackend(sizes));
+  const computer = await resources.create("alice", "personal:alice", "local", "big", undefined, undefined, 6);
+  await resources.setDefault("alice", "personal:alice", computer.id);
+  await router.provision("personal:alice");
+  await router.restartComputer!("personal:alice");
+  await resources.restart("alice", computer.id, 8);
+  await router.provision("personal:alice");
+  await resources.restart("alice", computer.id);
+  assert.deepEqual(sizes, [6, 6, 6, 8, 8, 8]);
+});
+
+test("a resize the backend refuses keeps the computer's old size", async () => {
+  const sizes: Array<number | undefined> = [];
+  const { resources, router } = fixture((backend) => {
+    sizedBackend(sizes)(backend);
+    backend.restartComputer = async (_scopeId, memoryGb) => {
+      sizes.push(memoryGb);
+      throw new Error("memory must not exceed 1Ti");
+    };
+  });
+  const computer = await resources.create("alice", "personal:alice", "local", "big", undefined, undefined, 6);
+  await resources.setDefault("alice", "personal:alice", computer.id);
+  await assert.rejects(resources.restart("alice", computer.id, 2000), /must not exceed 1Ti/);
+  await router.provision("personal:alice");
+  assert.deepEqual(sizes, [6, 2000, 6]);
+});
+
+test("a memory size is refused on a backend that takes none", async () => {
+  const { resources, records } = fixture();
+  await assert.rejects(
+    resources.create("alice", "personal:alice", "local", "big", undefined, undefined, 4),
+    /local computers take no memory size/,
+  );
+  assert.equal(
+    (await records.all()).some((record) => record.name === "big"),
+    false,
+  );
+  const computer = await resources.create("alice", "personal:alice", "local");
+  await assert.rejects(resources.restart("alice", computer.id, 4), /local computers take no memory size/);
+  assert.equal((await records.get(computer.id))?.memoryGb, undefined);
 });
 
 test("listing an untouched scope never invents a legacy machine", async () => {
@@ -652,7 +719,7 @@ test("resource activation honors scope defaults and preserves explicit legacy pr
   assert.equal((await resources.resolve("channel:room"))?.backend, "sprites");
   assert.equal((await resources.resolve("personal:existing"))?.backend, "aws");
   assert.equal(await resources.resolve("personal:new"), null);
-  assert.equal(resources.defaultBackend(), "sprites");
+  assert.equal(await resources.defaultBackend(), "sprites");
   assert.equal(legacySandboxBackendForScope("org", "sprites", scopeDefaults), "sprites");
 });
 
@@ -967,11 +1034,11 @@ test("a job computer is invisible and untargetable for everyone, and only the jo
   const handle = await router.provision("personal:alice", { sandboxId: job.id });
   assert.equal(handle.resourceId, job.id);
   assert.deepEqual(
-    (await resources.jobComputers()).map((s) => s.id),
+    (await jobComputers(resources)).map((s) => s.id),
     [job.id],
   );
   await resources.retireJobComputer(job.id, (await resources.get(job.id)).state);
-  assert.deepEqual(await resources.jobComputers(), []);
+  assert.deepEqual(await jobComputers(resources), []);
   await assert.rejects(router.provision("personal:alice", { sandboxId: job.id }), /sandbox not found/);
 });
 
@@ -981,12 +1048,12 @@ test("retiring a job computer is skipped when its state moved on, and its backin
   assert.ok(job.backingScopeId.startsWith("job-"));
   await resources.retireJobComputer(job.id, "provisioning");
   assert.deepEqual(
-    (await resources.jobComputers()).map((s) => s.id),
+    (await jobComputers(resources)).map((s) => s.id),
     [job.id],
     "a box that became ready since the sweep looked is left alone",
   );
   await resources.retireJobComputer(job.id, "ready");
-  assert.deepEqual(await resources.jobComputers(), []);
+  assert.deepEqual(await jobComputers(resources), []);
   const room = await resources.create("alice", "personal:alice", "local", "room");
   assert.ok(room.backingScopeId.startsWith("sandbox-"));
 });
@@ -1003,11 +1070,11 @@ test("a job computer whose destroy fails keeps its record for retry, and is refu
   const job = await resources.create("alice", "personal:alice", "local", "background job", undefined, true);
   await assert.rejects(resources.retireJobComputer(job.id, "ready"), /provider unavailable/);
   assert.deepEqual(
-    (await resources.jobComputers()).map((s) => [s.id, s.state, Boolean(s.error)]),
+    (await jobComputers(resources)).map((s) => [s.id, s.state, Boolean(s.error)]),
     [[job.id, "retired", true]],
   );
   await resources.retireJobComputer(job.id, (await resources.get(job.id)).state);
-  assert.deepEqual(await resources.jobComputers(), []);
+  assert.deepEqual(await jobComputers(resources), []);
   await assert.rejects(resources.get(job.id), /sandbox not found/);
   const { resources: cannotRetire } = fixture((backend) => {
     delete backend.destroyScope;

@@ -627,14 +627,14 @@ test("a live brandName accessor overrides the env default on pages and emails", 
   const { challenge } = pkcePair();
   const query = authorizeQuery({ code_challenge: challenge });
   const before = await (await fetch(`${h.base}/authorize?${query}`)).text();
-  assert.match(before, /Sign in to qm/);
+  assert.match(before, /Sign in to QM/);
 
   live = "straylight";
   const after = await (
     await fetch(`${h.base}/authorize?${authorizeQuery({ code_challenge: pkcePair().challenge })}`)
   ).text();
   assert.match(after, /Sign in to straylight/);
-  assert.doesNotMatch(after, /Sign in to qm/);
+  assert.doesNotMatch(after, /Sign in to QM/);
 
   await requestLink(h);
   assert.match(h.mailer.sent[0]!.subject, /straylight/);
@@ -781,8 +781,10 @@ test("trusted sign-in remains available when email is unavailable", async () => 
   const h = await startHarness({ trustedSignInLabel: "Company SSO", env: { RESEND_API_KEY: undefined } });
   try {
     const response = await fetch(`${h.base}/authorize?${authorizeQuery()}`);
-    assert.equal(response.status, 503);
-    assert.match(await response.text(), /href="\/auth\/trusted\/login"/);
+    assert.equal(response.status, 200);
+    const html = await response.text();
+    assert.match(html, /href="\/auth\/trusted\/login"/);
+    assert.doesNotMatch(html, /Email delivery isn't configured|<form/);
   } finally {
     await h.close();
   }

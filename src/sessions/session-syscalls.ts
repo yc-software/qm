@@ -49,11 +49,10 @@ export function isSubagentThreadRef(threadRef: string): boolean {
 }
 
 export function requiresDelegation(
-  request: Pick<OrchestratorInput, "surface" | "surfaceTools" | "conversation" | "swarm">,
-  enabled: boolean,
+  request: Pick<OrchestratorInput, "surface" | "surfaceTools" | "conversation" | "swarm" | "surfaceOrigin">,
 ): boolean {
   return (
-    enabled &&
+    request.surfaceOrigin?.audience !== "external" &&
     !request.swarm &&
     !isSubagentThreadRef(request.conversation.threadRef) &&
     (request.surface === "slack" || request.surfaceTools === true)
@@ -171,6 +170,8 @@ export function sessionContextOf(input: OrchestratorInput): SpawnMeta {
     ...(input.deliveryWebhook ? { deliveryWebhook: input.deliveryWebhook } : {}),
     ...(input.timezone ? { timezone: input.timezone } : {}),
     ...(input.readOnly ? { readOnly: true } : {}),
+    ...(input.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
+    ...(input.botActor ? { botActor: true } : {}),
     ...(input.model ? { model: input.model } : {}),
     ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
     ...(input.fastMode !== undefined ? { fastMode: input.fastMode } : {}),
@@ -288,6 +289,8 @@ export interface SessionSyscallBinding {
     | "deliveryWebhook"
     | "timezone"
     | "readOnly"
+    | "memoryNotebookOnly"
+    | "botActor"
     | "scopeVersion"
     | "sessionParticipantIds"
     | "surfaceOrigin"
@@ -318,7 +321,6 @@ export interface SessionSyscallsFactory {
 export interface SessionSyscallDeps {
   mailbox: SessionMailbox;
   enabled?: (actorId: string) => Promise<boolean>;
-  delegationEnabled?: (actorId: string) => Promise<boolean>;
   sessions: Pick<
     SessionStore,
     | "get"
@@ -431,6 +433,8 @@ function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayT
     displayText,
     envelopeWrapped: true,
     ...(meta.readOnly ? { readOnly: true } : {}),
+    ...(meta.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
+    ...(meta.botActor ? { botActor: true } : {}),
     ...(meta.model ? { model: meta.model } : {}),
     ...(meta.thinkingLevel ? { thinkingLevel: meta.thinkingLevel } : {}),
     ...(meta.fastMode !== undefined ? { fastMode: meta.fastMode } : {}),
@@ -519,7 +523,7 @@ export const ANCESTOR_STOP = "because the parent session was stopped";
 export const USER_STOP = "by user";
 export const USER_STOP_ALL = "by user (subagents too)";
 
-type StopRequest = { reason?: string | undefined; scope?: StopScope };
+type StopRequest = { reason?: string | undefined; scope?: StopScope; botRunsOnly?: boolean };
 
 export const sparesDescendants = (scope: StopScope | undefined): boolean => scope === "run" || scope === "session";
 
@@ -562,7 +566,7 @@ export async function stopSessionRuns(
 ): Promise<{ id: string; withdrawn: boolean }[]> {
   const stopped: { id: string; withdrawn: boolean }[] = [];
   for (const run of await deps.runs.inFlightForThread(session.threadRef)) {
-    if (interrupt && !interruptible(run)) continue;
+    if ((interrupt && !interruptible(run)) || (stop.botRunsOnly && !run.request.botActor)) continue;
     const sender = interrupt && unstarted(run) ? run.request.sessionSenderId : undefined;
     const foreign = interrupt && sender && sender !== interrupt.by ? { mailbox: interrupt.mailbox, sender } : undefined;
     if (foreign)
@@ -571,6 +575,7 @@ export async function stopSessionRuns(
         recipientId: session.id,
         senderId: foreign.sender,
         actor: run.request.actor,
+        ...(run.request.botActor ? { botActor: true } : {}),
         audience: run.request.conversation.audience,
         text: run.request.text,
         createdAt: run.createdAt,
@@ -613,7 +618,13 @@ async function steerRunningTurn(
 ): Promise<"steered" | "replayed" | "refused" | undefined> {
   if (message.dedupKey && (await deps.signals.runForDedupeKey(message.dedupKey))) return "steered";
   const live = inFlight.find((run) => run.status === "running");
-  if (!live || (request.readOnly && !live.request.readOnly)) return undefined;
+  if (
+    !live ||
+    (request.readOnly && !live.request.readOnly) ||
+    (request.memoryNotebookOnly && !live.request.memoryNotebookOnly) ||
+    (request.botActor && !live.request.botActor)
+  )
+    return undefined;
   const steered = await deps.steerRun(live, {
     kind: "steer",
     text: message.text,
@@ -633,10 +644,12 @@ export async function stopSessionTree(
   },
   root: Session,
   reason?: string,
+  botRunsOnly?: boolean,
 ): Promise<boolean> {
   let stopped = false;
   for (const session of await treeSessions(deps.sessions, root)) {
-    const stop: StopRequest = session.id === root.id ? { reason } : { reason: ANCESTOR_STOP, scope: "ancestor" };
+    const stop: StopRequest =
+      session.id === root.id ? { reason, botRunsOnly } : { reason: ANCESTOR_STOP, scope: "ancestor", botRunsOnly };
     if (session.scopeId === root.scopeId && (await stopSessionRuns(deps, session, stop)).length) stopped = true;
   }
   return stopped;
@@ -708,12 +721,15 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         if (deps.enabled && !(await deps.enabled(binding.request.actor.id)))
           throw new Error("persistent subagents are not enabled for this user");
         const current = await deps.sessions.get(binding.session.id);
-        if (
-          !current ||
-          current.scopeId !== binding.scopeId ||
-          (deps.authorize && !(await deps.authorize(current, binding.request.actor.id)))
-        )
-          throw new Error("the sender no longer has access to this session");
+        if (!current) throw new Error("this session no longer exists; nothing was started or sent.");
+        if (current.scopeId !== binding.scopeId)
+          throw new Error(
+            `this session moved from ${binding.scopeId} to ${current.scopeId}; nothing was started or sent.`,
+          );
+        if (deps.authorize && !(await deps.authorize(current, binding.request.actor.id)))
+          throw new Error(
+            `${binding.request.actor.id} can't currently be confirmed as a member of ${binding.scopeId}, so helpers can't run here; nothing was started or sent.`,
+          );
         const request: OrchestratorInput = {
           ...binding.request,
           origin: binding.request.origin ?? { kind: "automation" },
@@ -769,6 +785,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           await deps.mailbox?.acknowledge(binding.session.id, ids);
         },
         async open(input) {
+          if (binding.session.sideChat && !binding.session.sideChat.expanded)
+            return { ok: false, message: "Side chats cannot launch subagents. Open this chat as a session first." };
           return lock
             .withLock("session-tree-admission", async (): Promise<SessionOpenResult> => {
               if (binding.request.swarm || binding.session.threadRef.startsWith("swarm:"))
@@ -920,6 +938,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   origin: caller.origin,
                   unattendedGrants: caller.unattendedGrants,
                   readOnly: privateMessage || caller.readOnly || meta.readOnly || target.spawnMeta?.readOnly,
+                  memoryNotebookOnly: caller.memoryNotebookOnly || meta.memoryNotebookOnly,
+                  botActor: caller.botActor,
                 },
                 "",
                 "",
@@ -932,6 +952,17 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   return { ok: false, message: "ordinary sessions accept private messages, not interrupts" };
                 if (caller.readOnly && !target.spawnMeta?.readOnly)
                   return { ok: false, message: "a read-only session cannot interrupt a writable task" };
+                if (caller.memoryNotebookOnly && !meta.memoryNotebookOnly)
+                  return {
+                    ok: false,
+                    message: "a notebook-only turn cannot interrupt a session that isn't notebook-only",
+                  };
+                if (
+                  caller.botActor &&
+                  (!target.spawnMeta?.botActor ||
+                    (await deps.runs.inFlightForThread(target.threadRef)).some((run) => !run.request.botActor))
+                )
+                  return { ok: false, message: "a Slack bot's turn cannot interrupt a person's task" };
               }
               const text = input.text?.trim();
               if (!text) {
@@ -966,6 +997,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   recipientId: target.id,
                   senderId: binding.session.id,
                   actor: caller.actor,
+                  ...(caller.botActor ? { botActor: true } : {}),
                   audience: caller.conversation.audience,
                   createdAt: Date.now(),
                 });
@@ -975,6 +1007,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               if (!input.wake && !input.interrupt) return leaveMail();
               if (binding.request.privateSessionMessage)
                 return leaveMail("a private turn cannot start work in another session");
+              if (caller.memoryNotebookOnly && !meta.memoryNotebookOnly)
+                return leaveMail("a notebook-only turn cannot start work in a session that isn't notebook-only");
               if (isPeerMessage(binding.session, target)) {
                 if (caller.readOnly) return leaveMail("a read-only turn cannot start work in another conversation");
                 if (messageDepth > SESSION_MESSAGE_DEPTH_CAP)

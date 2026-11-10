@@ -8,11 +8,15 @@ import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts"
 import { createSwarmStore, SWARM_LIMITS, type SwarmStorage } from "../src/swarms/swarm-store.ts";
 import { createSwarmService } from "../src/swarms/swarm-service.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
+import { seedTestTenant } from "./support/test-tenant.ts";
 
 const baseUrl = process.env.DATABASE_URL;
 const schema = `swarm_test_${process.pid}`;
 const isolatedUrl = baseUrl ? new URL(baseUrl) : undefined;
-isolatedUrl?.searchParams.set("options", `-c search_path=${schema}`);
+isolatedUrl?.searchParams.set(
+  "options",
+  `${isolatedUrl?.searchParams.get("options") ?? ""} -c search_path=${schema}`.trim(),
+);
 const databaseUrl = isolatedUrl?.toString();
 before(async () => {
   if (!baseUrl) return;
@@ -23,6 +27,7 @@ before(async () => {
   } finally {
     await pool.end();
   }
+  await seedTestTenant(databaseUrl!);
 });
 after(async () => {
   if (!baseUrl) return;
@@ -43,7 +48,7 @@ test(
     const factory = createPostgresMapFactory(databaseUrl!);
     const runtime = createPostgresRunStore(databaseUrl!);
     const sessions = createPostgresSessionStore(databaseUrl!);
-    const backing = factory.map<SwarmStorage>("swarms");
+    const backing = factory.map<SwarmStorage>("swarms", ["pending"]);
     const fixture = await swarmFixture({
       store: createSwarmStore(backing, { runs: runtime.runs, sessions, pg: factory.pool }),
       sessions,
@@ -114,7 +119,7 @@ test(
 
 test("Postgres pending selection retains one live query across sweep timeouts", { skip }, async (context) => {
   const factory = createPostgresMapFactory(databaseUrl!);
-  const backing = factory.map<SwarmStorage>("swarms");
+  const backing = factory.map<SwarmStorage>("swarms", ["pending"]);
   const store = createSwarmStore(backing);
   const { service } = await swarmFixture({ store });
   await backing.select({ limit: 1 });
@@ -124,7 +129,7 @@ test("Postgres pending selection retains one live query across sweep timeouts", 
   const waiting = async (): Promise<number> => {
     const result = await observer.query<{ count: number }>(
       "SELECT count(*)::int AS count FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE $1",
-      ["SELECT id, json% FROM swarms%"],
+      ["SELECT tenant_id::text AS tenant_id, id FROM claim_swarms_tenants(%"],
     );
     return result.rows[0]!.count;
   };
@@ -171,7 +176,7 @@ test(
     const factory = createPostgresMapFactory(databaseUrl!);
     const runtime = createPostgresRunStore(databaseUrl!);
     const sessions = createPostgresSessionStore(databaseUrl!);
-    const backing = factory.map<SwarmStorage>("swarms");
+    const backing = factory.map<SwarmStorage>("swarms", ["pending"]);
     const store = createSwarmStore(backing, { runs: runtime.runs, sessions, pg: factory.pool });
     let rootId: string | undefined;
     try {
@@ -208,7 +213,11 @@ test("Postgres swarms atomically bound concurrent pools across independent clien
   const second = createPostgresMapFactory(databaseUrl!);
   const sessions = createPostgresSessionStore(databaseUrl!);
   const runtime = createPostgresRunStore(databaseUrl!);
-  const store = createSwarmStore(first.map<SwarmStorage>("swarms"), { runs: runtime.runs, sessions, pg: first.pool });
+  const store = createSwarmStore(first.map<SwarmStorage>("swarms", ["pending"]), {
+    runs: runtime.runs,
+    sessions,
+    pg: first.pool,
+  });
   try {
     const fixture = await swarmFixture({
       store,
@@ -218,7 +227,11 @@ test("Postgres swarms atomically bound concurrent pools across independent clien
     });
     const sibling = createSwarmService({
       ...fixture.serviceOptions,
-      store: createSwarmStore(second.map<SwarmStorage>("swarms"), { runs: runtime.runs, sessions, pg: second.pool }),
+      store: createSwarmStore(second.map<SwarmStorage>("swarms", ["pending"]), {
+        runs: runtime.runs,
+        sessions,
+        pg: second.pool,
+      }),
       lock: createPostgresAdvisoryLock(second.pool),
     });
     const attempts = await Promise.allSettled([
@@ -237,7 +250,7 @@ test("Postgres swarms atomically bound concurrent pools across independent clien
     assert.equal((await store.get(fixture.root.id))!.notificationCount, 20);
     const applied = await first.pool.q("SELECT id FROM qm_schema_migrations WHERE id = 'durable-map/swarms/0001'");
     assert.equal(applied.length, 1);
-    await first.map<SwarmStorage>("swarms").delete(fixture.root.id);
+    await first.map<SwarmStorage>("swarms", ["pending"]).delete(fixture.root.id);
   } finally {
     await runtime.close();
     await Promise.all([first.pool.close(), second.pool.close()]);
@@ -251,7 +264,11 @@ test("Postgres session, message, reservation and outbox recovery deduplicate dur
   const restoredSessions = createPostgresSessionStore(databaseUrl!);
   const runtime = createPostgresRunStore(databaseUrl!);
   const restoredRuntime = createPostgresRunStore(databaseUrl!);
-  const store = createSwarmStore(first.map<SwarmStorage>("swarms"), { runs: runtime.runs, sessions, pg: first.pool });
+  const store = createSwarmStore(first.map<SwarmStorage>("swarms", ["pending"]), {
+    runs: runtime.runs,
+    sessions,
+    pg: first.pool,
+  });
   try {
     const fixture = await swarmFixture({
       store,
@@ -272,7 +289,11 @@ test("Postgres session, message, reservation and outbox recovery deduplicate dur
       ...fixture.serviceOptions,
       sessions: restoredSessions,
       runs: restoredRuntime.runs,
-      store: createSwarmStore(second.map<SwarmStorage>("swarms"), { runs: runtime.runs, sessions, pg: second.pool }),
+      store: createSwarmStore(second.map<SwarmStorage>("swarms", ["pending"]), {
+        runs: runtime.runs,
+        sessions,
+        pg: second.pool,
+      }),
       lock: createPostgresAdvisoryLock(second.pool),
     });
     await store.update(initial.id, (swarm) => {
@@ -306,7 +327,7 @@ test("Postgres session, message, reservation and outbox recovery deduplicate dur
       (await fixture.service.read(fixture.caller, { after: binaryText.seq - 1 }))[0]!.text,
       "body\u0000\ud800",
     );
-    await first.map<SwarmStorage>("swarms").delete(initial.id);
+    await first.map<SwarmStorage>("swarms", ["pending"]).delete(initial.id);
   } finally {
     await Promise.all([runtime.close(), restoredRuntime.close()]);
     await Promise.all([first.pool.close(), second.pool.close()]);
@@ -317,7 +338,7 @@ test("Postgres rolls back a swarm mutation whose run expires while waiting for t
   const factory = createPostgresMapFactory(databaseUrl!);
   const runtime = createPostgresRunStore(databaseUrl!);
   const sessions = createPostgresSessionStore(databaseUrl!);
-  const store = createSwarmStore(factory.map<SwarmStorage>("swarms"), {
+  const store = createSwarmStore(factory.map<SwarmStorage>("swarms", ["pending"]), {
     runs: runtime.runs,
     sessions,
     pg: factory.pool,
@@ -360,7 +381,7 @@ for (const scenario of ["same request", "distinct requests", "conflicting settin
     const sessions = createPostgresSessionStore(databaseUrl!);
     const runtime = createPostgresRunStore(databaseUrl!);
     const stores = [first, second].map((factory) =>
-      createSwarmStore(factory.map<SwarmStorage>("swarms"), {
+      createSwarmStore(factory.map<SwarmStorage>("swarms", ["pending"]), {
         runs: runtime.runs,
         sessions,
         pg: factory.pool,
@@ -397,7 +418,7 @@ for (const scenario of ["same request", "distinct requests", "conflicting settin
       assert.equal(swarm.pending, true);
       assert.equal(swarm.template.turnWallClockMs, swarm.settings.turnMs);
       if (scenario === "same request") assert.deepEqual(results[0], results[1]);
-      await first.map<SwarmStorage>("swarms").delete(f.root.id);
+      await first.map<SwarmStorage>("swarms", ["pending"]).delete(f.root.id);
     } finally {
       await runtime.close();
       await Promise.all([first.pool.close(), second.pool.close()]);
@@ -413,7 +434,11 @@ test(
     const second = createPostgresMapFactory(databaseUrl!);
     const sessions = createPostgresSessionStore(databaseUrl!);
     const runtime = createPostgresRunStore(databaseUrl!);
-    const store = createSwarmStore(first.map<SwarmStorage>("swarms"), { runs: runtime.runs, sessions, pg: first.pool });
+    const store = createSwarmStore(first.map<SwarmStorage>("swarms", ["pending"]), {
+      runs: runtime.runs,
+      sessions,
+      pg: first.pool,
+    });
     try {
       const f = await swarmFixture({ store, sessions, runs: runtime.runs });
       const create = store.create.bind(store);
@@ -423,7 +448,7 @@ test(
       };
       const request = { requestId: "initial", text: "work", settings: { turnMs: 777 } };
       await assert.rejects(f.service.spawn(f.caller, request), /lost acknowledgment/);
-      const restartedStore = createSwarmStore(second.map<SwarmStorage>("swarms"), {
+      const restartedStore = createSwarmStore(second.map<SwarmStorage>("swarms", ["pending"]), {
         runs: runtime.runs,
         sessions,
         pg: second.pool,
@@ -436,7 +461,7 @@ test(
       const workers = await restarted.spawn(f.caller, request);
       assert.equal(workers[0]!.id, committed.members[1]!.id);
       assert.deepEqual(await restartedStore.get(f.root.id), committed);
-      await first.map<SwarmStorage>("swarms").delete(f.root.id);
+      await first.map<SwarmStorage>("swarms", ["pending"]).delete(f.root.id);
     } finally {
       await runtime.close();
       await Promise.all([first.pool.close(), second.pool.close()]);
@@ -448,7 +473,7 @@ test("Postgres initial pool expires atomically while waiting for the write lock"
   const factory = createPostgresMapFactory(databaseUrl!);
   const runtime = createPostgresRunStore(databaseUrl!);
   const sessions = createPostgresSessionStore(databaseUrl!);
-  const store = createSwarmStore(factory.map<SwarmStorage>("swarms"), {
+  const store = createSwarmStore(factory.map<SwarmStorage>("swarms", ["pending"]), {
     runs: runtime.runs,
     sessions,
     pg: factory.pool,

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createGoalRecord } from "../src/agent/goal.ts";
-import { createSwarmGoalInbox } from "../src/swarms/swarm-goal-inbox.ts";
+import { createSwarmGoalInbox, openSwarmMailbox } from "../src/swarms/swarm-goal-inbox.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 
 test("a message wakes its recipients unless sent with wake:false, which leaves it in their mailboxes", async () => {
@@ -108,4 +108,40 @@ test("a running goal turn shows a mailbox message once and hands it over when it
   await settle();
   const message = (await f.store.get(f.root.id))!.messages.find((item) => item.id === note.id)!;
   assert.equal(message.notifications[busy!.id]?.state, "handed");
+});
+
+test("a Slack bot's turn in a person's swarm root leaves the person's swarm replies unhanded", async () => {
+  const f = await swarmFixture({ channel: "C1" });
+  if (f.caller.kind !== "agent") throw new Error("wrong caller");
+  await f.sessions.addParticipant(f.root.id, "release-bot");
+  const [worker] = await f.service.spawn(f.caller, { requestId: "initial", text: "work" });
+  await f.service.sweep();
+  const brief = (await f.store.get(f.root.id))!.messages[0]!;
+  const workerCaller = await f.workerCaller(worker!.id);
+  const answer = await f.service.send(workerCaller, {
+    requestId: "answer",
+    audience: [f.root.id],
+    replyTo: brief.id,
+    wake: false,
+    text: "found the leak",
+  });
+  const note = await f.service.send(workerCaller, {
+    requestId: "note",
+    audience: [f.root.id],
+    wake: false,
+    text: "patch is on the board",
+  });
+  await f.runs.complete(f.caller.claims.runId!, f.caller.claims.runLeaseToken!, { status: "ok", reply: "started" });
+  const { caller: bot, claim } = await f.rootTurn("release-bot", true);
+  await assert.rejects(f.service.read(bot, { replyTo: brief.id }), /cannot direct a person's swarm/);
+  const mailbox = await openSwarmMailbox({
+    swarms: f.service,
+    input: { ...claim.request, runId: claim.id, runLeaseToken: claim.leaseToken!, attempt: claim.attempts },
+    screen: async (text) => text,
+  });
+  await mailbox.settle();
+  const states = (await f.store.get(f.root.id))!.messages
+    .filter((message) => message.id === answer.id || message.id === note.id)
+    .map((message) => message.notifications[f.root.id]!.state);
+  assert.deepEqual({ shown: mailbox.text, states }, { shown: "", states: ["mailbox", "mailbox"] });
 });

@@ -70,6 +70,32 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
     }
   });
 
+  it("channel lookup offers public channels and private ones the person is in, exact name first, then prefix matches", async () => {
+    await built.app.upsertChannels(
+      [
+        { channelId: "CPUBLIC", name: "public", isPrivate: false },
+        { channelId: "CPUB", name: "pub", isPrivate: false },
+        { channelId: "CLAUNCH", name: "launch-pub", isPrivate: false },
+        { channelId: "CSECRET", name: "pub-secret", isPrivate: true },
+        { channelId: "COTHER", name: "pub-other-team", isPrivate: true },
+      ],
+      [
+        { channelId: "CSECRET", principalId: "carol@acme.com" },
+        { channelId: "COTHER", principalId: "alice@acme.com" },
+      ],
+    );
+    const path = `/v1/directory/channels?principalId=${encodeURIComponent("carol@acme.com")}&q=%23pub`;
+    assert.equal((await fetch(`${base}${path}`)).status, 401);
+    const response = await fetch(`${base}${path}`, { headers: signedRequestHeaders(SECRET, "GET", path) });
+    assert.equal(response.status, 200);
+    const { channels } = (await response.json()) as { channels: Array<{ scopeId: string; isPrivate: boolean }> };
+    assert.deepEqual(
+      channels.map((channel) => channel.scopeId),
+      ["channel:CPUB", "channel:CSECRET", "channel:CPUBLIC", "channel:CLAUNCH"],
+    );
+    assert.equal(channels.find((channel) => channel.scopeId === "channel:CSECRET")?.isPrivate, true);
+  });
+
   it("resolves a name to a single match carrying the slackId needed to @-mention", async () => {
     const res = await get("/v1/directory/resolve?q=carol");
     assert.equal(res.status, 200);
@@ -222,6 +248,19 @@ describe("a deployment without the Slack surface (the directory store is never p
     assert.deepEqual(
       (await matchesOf("rex")).map((m) => m.principalId),
       ["rex@acme.com"],
+    );
+  });
+
+  it("lists a signed-in person under the name stored at sign-in, and finds them by it", async () => {
+    const oidc = "oidc:issuer:ruth";
+    const session = await built.sessions.getOrCreateByThread("web:2", "dm", `personal:${oidc}`);
+    await built.sessions.addParticipant(session.id, oidc);
+    await built.users.setDisplayName(oidc, "Ruth Founder");
+    const res = await get(`/v1/directory/resolve?q=${encodeURIComponent("ruth f")}`);
+    const { matches } = (await res.json()) as { matches: Array<{ principalId: string; displayName: string }> };
+    assert.deepEqual(
+      matches.map((m) => [m.principalId, m.displayName]),
+      [[oidc, "Ruth Founder"]],
     );
   });
 

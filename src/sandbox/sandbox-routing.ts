@@ -1,4 +1,6 @@
 import type { SandboxResources } from "./sandbox-resources.ts";
+import { bootTenant, tenancyBooted } from "../tenants/boot.ts";
+import { boundTenant } from "../tenants/context.ts";
 import type { ScopeId } from "../types.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 import {
@@ -45,6 +47,16 @@ export interface RoutingSandboxOptions {
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
 
+const TENANT_SEPARATED: ReadonlySet<SandboxBackendName> = new Set(["sprites", "modal", "superserve"]);
+
+function requireTenantSeparation(name: SandboxBackendName): void {
+  if (TENANT_SEPARATED.has(name) || !tenancyBooted()) return;
+  const tenant = boundTenant();
+  const boot = bootTenant();
+  if (boot !== undefined && (tenant === undefined || tenant === boot)) return;
+  throw new Error(`sandbox backend ${name} does not keep tenants apart; only a single-tenant deployment can use it`);
+}
+
 export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
   const { backends, resources, defaultBackend } = opts;
   const fallback = ((): Sandbox => {
@@ -54,12 +66,14 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
   })();
 
   const backendFor = (name: SandboxBackendName): Sandbox => {
+    requireTenantSeparation(name);
     const sandbox = backends[name];
     if (!sandbox) throw new Error(`sandbox backend unavailable: ${name}; refusing to use a substitute computer`);
     return sandbox;
   };
 
   const forHandle = (handle: SandboxHandle): Sandbox => {
+    requireTenantSeparation((handle.backend ?? defaultBackend) as SandboxBackendName);
     if (!handle.backend) return fallback;
     const sandbox = backends[handle.backend as SandboxBackendName];
     if (!sandbox) throw new Error(`sandbox backend unavailable: ${handle.backend}`);
@@ -72,7 +86,12 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
   async function computerTarget(scopeId: string) {
     const resource = await resources.resolve(scopeId);
     if (!resource) throw new NoDefaultSandboxError();
-    return { sandbox: backendFor(resource.backend), scopeId: resource.backingScopeId, resourceId: resource.id };
+    return {
+      sandbox: backendFor(resource.backend),
+      scopeId: resource.backingScopeId,
+      resourceId: resource.id,
+      memoryGb: resource.memoryGb,
+    };
   }
 
   const reportedGaps = new Set<string>();
@@ -114,11 +133,11 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
     async provision(scope: ScopeId, provOpts?: ProvisionOptions): Promise<SandboxHandle> {
       const resource =
         provOpts?.sandboxId !== undefined ? await resources.get(provOpts.sandboxId) : await resources.resolve(scope);
-      const backend = resource?.backend ?? defaultBackend;
+      const backend = resource?.backend ?? (provOpts?.scratch ? await resources.defaultBackend() : defaultBackend);
       const sandbox = backendFor(backend);
-      const provision = async (target: ScopeId) => {
+      const provision = async (target: ScopeId, options = provOpts) => {
         try {
-          return await sandbox.provision(target, provOpts);
+          return await sandbox.provision(target, options);
         } catch (error) {
           if (error instanceof SandboxProvisionCleanupError) error.handle.backend = backend;
           throw error;
@@ -129,7 +148,8 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
         return { ...handle, backend, scopeId: scope };
       }
       if (!resource) throw new NoDefaultSandboxError();
-      const handle = await resources.use(resource.id, () => provision(resource.backingScopeId));
+      const sized = resource.memoryGb ? { ...provOpts, memoryGb: resource.memoryGb } : provOpts;
+      const handle = await resources.use(resource.id, () => provision(resource.backingScopeId, sized));
       return { ...handle, backend: resource.backend, scopeId: resource.ownerScopeId, resourceId: resource.id };
     },
 
@@ -240,7 +260,8 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
       ? {
           restartComputer: async (scopeId: string) => {
             const target = await computerTarget(scopeId);
-            const action = () => requireCap(target.sandbox, "restartComputer", scopeId).restartComputer(target.scopeId);
+            const action = () =>
+              requireCap(target.sandbox, "restartComputer", scopeId).restartComputer(target.scopeId, target.memoryGb);
             return resources.use(target.resourceId, action, true);
           },
         }

@@ -1,7 +1,9 @@
+import type { ClientSurface } from "../plugins/chassis/src/client-surface.ts";
 import type { ResolvedSecurityPolicy } from "./security/security-posture.ts";
 import type { SharingPosture } from "./resolution/sharing-posture.ts";
 import type { SurfaceAccount, TurnSurfaceOrigin } from "./surfaces/contract.ts";
 import type { SessionOrigin } from "./sessions/session-store.ts";
+import type { ProjectIcon } from "./projects/project-store.ts";
 
 export type PrincipalType = "internal" | "guest";
 
@@ -18,7 +20,7 @@ export interface Principal {
   displayName?: string;
 }
 
-const SCOPE_KINDS = ["personal", "channel", "team", "org", "group"] as const;
+export const SCOPE_KINDS = ["personal", "channel", "team", "org", "group", "persona"] as const;
 export type ScopeKind = (typeof SCOPE_KINDS)[number];
 
 export type ScopeId = string;
@@ -29,6 +31,12 @@ function isScopeKind(s: string): s is ScopeKind {
 
 export function scopeId(kind: ScopeKind, ref: string): ScopeId {
   return `${kind}:${ref}`;
+}
+
+export interface WornPersona {
+  id: string;
+  name: string;
+  icon?: ProjectIcon;
 }
 
 export function personalScope(principalId: string): ScopeId {
@@ -121,6 +129,8 @@ export interface SpawnMeta {
   deliveryWebhook?: DeliveryWebhook;
   timezone?: string;
   readOnly?: boolean;
+  memoryNotebookOnly?: boolean;
+  botActor?: boolean;
   model?: string;
   thinkingLevel?: string;
   fastMode?: boolean;
@@ -149,8 +159,8 @@ export interface Session {
   spawnMeta?: SpawnMeta;
   surfaceBinding?: TurnSurfaceOrigin;
   runtime?: TurnRuntime;
+  personaId?: string;
   lastActivityAt?: number;
-  lastUserPreview?: string | null;
   hasEntries?: boolean;
   working?: boolean;
   awaitingInput?: boolean;
@@ -213,6 +223,7 @@ export interface Destination {
   audienceScopeId?: ScopeId;
   onBehalfOf?: string;
   relaySender?: string;
+  persona?: WornPersona;
   threadTs?: string;
   editRef?: string;
   unfurlLinks?: boolean;
@@ -366,6 +377,7 @@ export interface ClientToolResult {
 
 export interface TurnRequest {
   desktopClientId?: string;
+  clientSurface?: ClientSurface;
   midTurn?: "steer" | "queue";
   surfaceOrigin?: TurnSurfaceOrigin;
   sessionSenderId?: string;
@@ -394,6 +406,7 @@ export interface TurnRequest {
   unattendedGrants?: string[];
   cronScript?: import("./triggers/types.ts").CronScript;
   infrequentCron?: boolean;
+  personaId?: string;
   botActor?: boolean;
   conversationHeader?: string;
   priorTurns?: ConversationTurn[];
@@ -407,6 +420,7 @@ export interface TurnRequest {
   fastMode?: boolean;
   readOnly?: boolean;
   skipMemory?: boolean;
+  memoryNotebookOnly?: boolean;
   surfaceTools?: boolean;
   addressed?: boolean;
   envelopeWrapped?: boolean;
@@ -415,7 +429,6 @@ export interface TurnRequest {
   timezone?: string;
   approval?: { requestId: string; approved: boolean; scope?: ApprovalScope };
   proactiveOpener?: boolean;
-  analyticsSuppressed?: boolean;
   spawned?: boolean;
   idempotencyKey?: string;
   redeliveryKey?: string;
@@ -444,6 +457,12 @@ export interface PendingApproval {
   grantModes?: ApprovalGrantModes;
   blocksInput?: boolean;
   kind?: "approval" | "input";
+  executesOnApprove?: boolean;
+}
+
+export interface ApprovedToolCallSpec {
+  tool: string;
+  input: Record<string, unknown>;
 }
 
 export interface PendingApprovalRecord {
@@ -461,6 +480,7 @@ export interface PendingApprovalRecord {
   request?: TurnRequest;
   blocksInput?: boolean;
   kind?: "approval" | "input";
+  call?: ApprovedToolCallSpec;
 }
 
 type ApprovalScope = "once" | "session" | "always";
@@ -508,4 +528,5 @@ export interface TurnResult {
   runtime?: TurnRuntime;
   scriptVerdict?: string;
   retracted?: string[];
+  persona?: WornPersona;
 }

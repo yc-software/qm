@@ -7,6 +7,7 @@ import { escapeSlackText } from "./mrkdwn.ts";
 import { findPostedByKey, postWithVerify, slackReplyArgs } from "./delivery.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { parseScopeId } from "../types.ts";
+import { trimTrailingSlashes } from "../util/text.ts";
 
 const ACTIONS = ["keychain_allow_once", "keychain_allow_always", "keychain_deny"] as const;
 
@@ -89,7 +90,7 @@ export async function keychainApprovalOrigin(
     if (typeof result?.permalink === "string") return result.permalink;
   }
   if (!webUrl || !view.sessionId) return undefined;
-  const url = new URL(`${webUrl.replace(/\/+$/, "")}/s/${encodeURIComponent(view.sessionId)}`);
+  const url = new URL(`${trimTrailingSlashes(webUrl)}/s/${encodeURIComponent(view.sessionId)}`);
   if (view.seq !== undefined) url.searchParams.set("seq", String(view.seq));
   return url.toString();
 }

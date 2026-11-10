@@ -27,12 +27,20 @@ import type {
   TeardownOptions,
 } from "./sandbox.ts";
 import { execFailureDetail, visibleNotInstalled, visibleTools } from "./sandbox.ts";
-import { createHomeSnapshotOps, createS3SnapshotStore, HOME_SNAPSHOT_PRUNE, snapshotDue } from "./home-snapshot.ts";
+import {
+  createHomeSnapshotOps,
+  createS3SnapshotStore,
+  HOME_SNAPSHOT_PRUNE,
+  homeSnapshotKeys,
+  snapshotDue,
+} from "./home-snapshot.ts";
+import { claimThenBind } from "../tenants/claim.ts";
 import {
   ephemeralCredLinkPaths,
   ephemeralCredLinkScript,
   type CredentialPathSpec,
 } from "../credentials/resident-paths.ts";
+import { trimTrailingSlashes } from "../util/text.ts";
 
 const HOME_DIR = "/root";
 const WORKSPACE_BASENAME = "workspace";
@@ -76,7 +84,6 @@ export interface AwsSandboxOptions extends BlobStagingOptions {
   snapshotIntervalMs?: number;
   defaultTimeoutSec?: number;
   cpus?: number;
-  memoryMb?: number;
   diskGb?: number;
   store: DurableMap<StoredMicrovm>;
   advisoryLock: AdvisoryLock;
@@ -113,14 +120,14 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
 
   const ingress = opts.ingressConnectorArns?.length ? opts.ingressConnectorArns : [DEFAULT_INGRESS(region)];
   const egress = opts.egressConnectorArns?.length ? opts.egressConnectorArns : [DEFAULT_EGRESS(region)];
-  const s3Prefix = (opts.s3Prefix ?? "sandbox-home").replace(/\/+$/, "");
+  const s3Prefix = trimTrailingSlashes(opts.s3Prefix ?? "sandbox-home");
   const agentPort = opts.agentPort ?? 8080;
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
   const maximumDurationInSeconds = opts.maximumDurationInSeconds ?? 28_800;
   const rotateAfterMs = (opts.rotateAfterSeconds ?? 27_000) * 1000;
   const snapshotIntervalMs = opts.snapshotIntervalMs ?? 0;
   const cpus = opts.cpus ?? 4;
-  const memoryMb = opts.memoryMb ?? 8192;
+  const memoryMb = 8192;
   const diskGb = opts.diskGb ?? 8;
   const credentialPaths = opts.credentialPaths ?? [];
 
@@ -133,7 +140,7 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
     onError?.({ category, code, message, ...(scopeLabel ? { scopeLabel } : {}) });
   }
 
-  const s3KeyFor = (scope: string): string => `${s3Prefix}/${scopeStorageKey(scope)}.tar`;
+  const s3LeafFor = (scope: string): string => `${scopeStorageKey(scope)}.tar`;
 
   const client = createMicrovmClient(api, {
     agentPort,
@@ -175,7 +182,7 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
     homeDir: HOME_DIR,
     homeTarPath: HOME_TAR,
     prunePaths: [...SNAPSHOT_PRUNE, ...ephemeralCredLinkPaths(credentialPaths).map(({ rel }) => `./${rel}`)],
-    store: createS3SnapshotStore({ bucket: opts.s3Bucket, prefix: s3Prefix, s3, keyFor: s3KeyFor }),
+    store: createS3SnapshotStore({ bucket: opts.s3Bucket, prefix: s3Prefix, s3, leafFor: s3LeafFor }),
     io: {
       runCommand: async (id, script, timeoutMs) => {
         const r = await execRaw(id, script, Math.ceil(timeoutMs / 1000));
@@ -388,7 +395,9 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
       const id = expectedId ?? stored?.microvmId;
       if (id) await terminateBody(id);
       if (!expectedId || !stored || stored.microvmId === expectedId) {
-        await s3.send(new DeleteObjectCommand({ Bucket: opts.s3Bucket, Key: s3KeyFor(scopeId) }));
+        const { key, legacy } = homeSnapshotKeys(s3Prefix, s3LeafFor(scopeId));
+        for (const Key of legacy === undefined ? [key] : [key, legacy])
+          await s3.send(new DeleteObjectCommand({ Bucket: opts.s3Bucket, Key }));
         await store.delete(scopeId);
       }
       if (id) {
@@ -529,33 +538,37 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
       if (!(idleMs > 0)) return { reaped: 0 };
       const cutoff = Date.now() - idleMs;
       let reaped = 0;
-      for (const [scope, candidate] of await store.entries()) {
-        await withScopeLock(scope, async () => {
-          const rec = await store.get(scope);
-          if (!rec || rec.microvmId !== candidate.microvmId) return;
-          if (rec.orgId && rec.orgId !== configOrgId()) return;
-          if (!rec.lastActivityMs || rec.lastActivityMs > cutoff) return;
-          if (activeByMicrovm.has(rec.microvmId)) return;
-          const desc = await api.tryGetMicrovm(rec.microvmId);
-          if (!desc || desc.state === "TERMINATED" || desc.state === "TERMINATING") {
-            await store.delete(scope).catch(() => {});
-            return;
-          }
-          try {
-            endpointById.set(rec.microvmId, rec.endpoint);
-            const due = !rec.lastSnapshotMs || (rec.lastActivityMs ?? 0) > rec.lastSnapshotMs;
-            if (due) {
-              await ensureRunning(rec.microvmId);
-              await snapshotHome(scope, rec.microvmId);
-            }
-            await api.terminate(rec.microvmId);
-            await store.delete(scope);
-            reaped++;
-          } catch (e) {
-            reportError("sandbox_reap", "deep_idle_reap_failed", errMessage(e), scope);
-          }
-        });
-      }
+      const idle = (rec: StoredMicrovm): boolean =>
+        !(rec.orgId && rec.orgId !== configOrgId()) &&
+        !!rec.lastActivityMs &&
+        rec.lastActivityMs <= cutoff &&
+        !activeByMicrovm.has(rec.microvmId);
+      await claimThenBind(store.claimTenants, async () => {
+        for (const [scope, listed] of await store.entries())
+          if (idle(listed))
+            await withScopeLock(scope, async () => {
+              const rec = await store.get(scope);
+              if (!rec || !idle(rec)) return;
+              const desc = await api.tryGetMicrovm(rec.microvmId);
+              if (!desc || desc.state === "TERMINATED" || desc.state === "TERMINATING") {
+                await store.delete(scope).catch(() => {});
+                return;
+              }
+              try {
+                endpointById.set(rec.microvmId, rec.endpoint);
+                const due = !rec.lastSnapshotMs || (rec.lastActivityMs ?? 0) > rec.lastSnapshotMs;
+                if (due) {
+                  await ensureRunning(rec.microvmId);
+                  await snapshotHome(scope, rec.microvmId);
+                }
+                await api.terminate(rec.microvmId);
+                await store.delete(scope);
+                reaped++;
+              } catch (e) {
+                reportError("sandbox_reap", "deep_idle_reap_failed", errMessage(e), scope);
+              }
+            });
+      });
       return { reaped };
     },
   };

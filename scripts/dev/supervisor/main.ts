@@ -316,11 +316,7 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
   phase("env", "ok", `live turns (anthropic key from ${assembled.anthropicKeySource})`);
 
   phase("deps", "start");
-  await ensureDeps(
-    worktree,
-    { web: spec.web, watch: spec.watch, webUiBasePath: spec.callerEnv.DEV_INSTANCE_WEB_UI_BASE || "/" },
-    log,
-  );
+  await ensureDeps(worktree, { web: spec.web, webUiBasePath: spec.callerEnv.DEV_INSTANCE_WEB_UI_BASE || "/" }, log);
   phase("deps", "ok");
 
   phase("sandbox", "start");

@@ -10,6 +10,7 @@ import {
   CONFIG_DEFAULTS,
 } from "../src/config.ts";
 import { boolEnv, numEnv } from "../src/util/env.ts";
+import { withoutTenant } from "../src/tenants/context.ts";
 import { enabledSandboxBackends } from "../src/sandbox/sandbox-settings.ts";
 
 const RENDER_IMAGE = `ghcr.io/yc-software/qm/sandbox-base:${"c".repeat(40)}@sha256:${"d".repeat(64)}`;
@@ -575,6 +576,16 @@ test("MODEL_PROVIDER declares the vendor that bills the base model", () => {
   assert.throws(() => loadConfig({ MODEL_PROVIDER: "bedrock" }), /MODEL_PROVIDER.*not recognized/);
 });
 
+test("MODEL_PROVIDER loads at boot before any tenant is bound", () => {
+  for (const [provider, key] of [
+    ["anthropic", "ANTHROPIC_API_KEY"],
+    ["openai", "OPENAI_API_KEY"],
+    ["openrouter", "OPENROUTER_API_KEY"],
+  ] as const) {
+    assert.equal(withoutTenant(() => loadConfig({ MODEL_PROVIDER: provider, [key]: "k" })).modelProvider, provider);
+  }
+});
+
 test("baseModelProviders constrains the base model only when a provider is declared", () => {
   assert.deepEqual(
     baseModelProviders(loadConfig({ MODEL_PROVIDER: "openrouter", OPENROUTER_API_KEY: "k", ANTHROPIC_API_KEY: "k" })),
@@ -1003,5 +1014,24 @@ test("The Render sandbox backend needs a tagged, digest-pinned RENDER_SANDBOX_IM
   assert.ok(!enabledSandboxBackends(loadConfig(secondary)).includes("render"));
   assert.ok(
     enabledSandboxBackends(loadConfig({ ...secondary, RENDER_SANDBOX_IMAGE: RENDER_IMAGE })).includes("render"),
+  );
+});
+
+test("PRIVATE_NETWORK_ALLOWED_ORIGINS is parsed at startup and a bad entry stops core without echoing it", () => {
+  assert.equal(loadConfig({}).privateNetworkAllowedOrigins.size, 0);
+  assert.deepEqual(
+    [
+      ...loadConfig({ PRIVATE_NETWORK_ALLOWED_ORIGINS: "http://gbrain:8787,https://brain.example-tailnet.ts.net" })
+        .privateNetworkAllowedOrigins,
+    ],
+    ["http://gbrain:8787", "https://brain.example-tailnet.ts.net"],
+  );
+  assert.throws(
+    () => loadConfig({ PRIVATE_NETWORK_ALLOWED_ORIGINS: "http://gbrain:8787,http://admin:PASSWORD@localhost:8787" }),
+    (e: unknown) => {
+      assert.match(String(e), /PRIVATE_NETWORK_ALLOWED_ORIGINS entry 2 \(http:\/\/localhost:8787\)/);
+      assert.doesNotMatch(String(e), /PASSWORD|admin/);
+      return true;
+    },
   );
 });

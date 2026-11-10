@@ -1,7 +1,7 @@
 import { z } from "zod";
-import { parseScopeId, scopeId } from "../../types.ts";
+import { parseScopeId } from "../../types.ts";
 import { sendJson, readRawBody, PayloadTooLargeError } from "../http.ts";
-import { loadAdministrable } from "./loops.ts";
+import { forInboxLoopsPeople, inboxPreviewEnabled, loadAdministrable } from "./loops.ts";
 import { isObj } from "./shared.ts";
 import { withActor, type ApiCtx, type BaseCtx, type Route } from "./route.ts";
 import { conversationEvent, type LoopIngress, type IngressSetup } from "../../loops/ingress.ts";
@@ -31,7 +31,7 @@ function view(source: Omit<LoopIngress, "secret">, publicUrl?: string) {
 async function list(ctx: ApiCtx) {
   const loaded = await loadAdministrable(ctx);
   if (!loaded) return;
-  if (!(await ctx.deps.featureFlags?.enabled("inbox_loops", scopeId("personal", loaded.acting.actorId))))
+  if (!(await inboxPreviewEnabled(ctx.deps, loaded.acting.actorId)))
     return sendJson(ctx.res, 403, { error: "feature_disabled" });
   const ingress = ctx.deps.loopIngress;
   if (!ingress) return sendJson(ctx.res, 404, { error: "unavailable" });
@@ -44,7 +44,7 @@ async function list(ctx: ApiCtx) {
 async function change(ctx: ApiCtx) {
   const loaded = await loadAdministrable(ctx);
   if (!loaded) return;
-  if (!(await ctx.deps.featureFlags?.enabled("inbox_loops", scopeId("personal", loaded.acting.actorId))))
+  if (!(await inboxPreviewEnabled(ctx.deps, loaded.acting.actorId)))
     return sendJson(ctx.res, 403, { error: "feature_disabled" });
   const ingress = ctx.deps.loopIngress;
   if (!ingress) return sendJson(ctx.res, 404, { error: "unavailable" });
@@ -130,14 +130,24 @@ async function receive(ctx: BaseCtx) {
 }
 
 export const loopIngressRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  ...withActor("query.principalId", [
-    { method: "GET", path: "/v1/loops/:id/ingestion", auth: "source", handle: list },
-    { method: "POST", path: "/v1/loops/:id/ingestion", auth: "source", handle: change },
-    { method: "PATCH", path: "/v1/loops/:id/ingestion/:sourceId", auth: "source", handle: change },
-  ]),
+  ...withActor(
+    "query.principalId",
+    forInboxLoopsPeople([
+      { method: "GET", path: "/v1/loops/:id/ingestion", auth: "source", handle: list },
+      { method: "POST", path: "/v1/loops/:id/ingestion", auth: "source", handle: change },
+      { method: "PATCH", path: "/v1/loops/:id/ingestion/:sourceId", auth: "source", handle: change },
+    ]),
+  ),
   { method: "POST", path: "/v1/loops/:id/events", auth: "either", handle: events },
 ];
 
 export const loopIngressRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
-  { method: "POST", path: "/v1/loop-ingress/:id", auth: "public", handle: receive },
+  { method: "POST", path: "/v1/loop-ingress/gmail", auth: "public", tenant: "none", handle: receive },
+  {
+    method: "POST",
+    path: "/v1/loop-ingress/:id",
+    auth: "public",
+    tenant: { by: "loop_ingress", key: (params) => params.id },
+    handle: receive,
+  },
 ];

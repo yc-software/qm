@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { TenantLookup } from "../tenants/lookup.ts";
 import type { ScopeId, Session, SessionType, SpawnMeta } from "../types.ts";
 import type { GoalRecord } from "../agent/goal.ts";
 import { isUserItem, type Item, type NewItem } from "./items.ts";
@@ -152,15 +153,6 @@ export interface NewLlmRequest {
 export interface Participant {
   sessionId: string;
   principalId: string;
-}
-
-export interface AttributedTurn {
-  principalId: string;
-  sessionId: string;
-  day: number;
-  turns: number;
-  firstAt: number;
-  lastAt: number;
 }
 
 export type SessionOrigin = "conversation" | "cron" | "webhook" | "monitor" | "loop" | "swarm";
@@ -398,6 +390,7 @@ interface SessionFacts {
 }
 
 export interface SessionStore {
+  tenantLookup: TenantLookup;
   getOrCreateByThread(
     threadRef: string,
     type: SessionType,
@@ -414,6 +407,8 @@ export interface SessionStore {
   setParentSession(sessionId: string, parentSessionId: string | null): Promise<void>;
   setSpawnMeta(sessionId: string, meta: SpawnMeta): Promise<void>;
   setRuntime(sessionId: string, runtime: NonNullable<Session["runtime"]>): Promise<void>;
+  setPersona(sessionId: string, personaId: string | null): Promise<void>;
+  threadsWithPersona(personaId: string, threadRefs: readonly string[]): Promise<Set<string>>;
   endedInFailure(sessionIds: readonly string[]): Promise<Set<string>>;
   childrenOf(parentSessionId: string): Promise<Session[]>;
   sideChatsOf(sessionId: string): Promise<Session[]>;
@@ -451,7 +446,6 @@ export interface SessionStore {
   descendantsOf(rootIds: readonly string[]): Promise<SessionDescendant[]>;
   inheritedOrigin(session: Pick<Session, "id" | "parentSessionId">): Promise<SessionOrigin>;
   listDescendantsForParticipant(rootId: string, principalId: string, limit: number): Promise<Session[]>;
-  lastUserPreviews(sessionIds: readonly string[]): Promise<Map<string, string>>;
   getForParticipant(sessionId: string, principalId: string): Promise<Session | null>;
   sameScopeAncestors(threadRefs: readonly string[]): Promise<Session[]>;
 
@@ -485,8 +479,6 @@ export interface SessionStore {
   scopeActivity(): Promise<ScopeActivity[]>;
 
   scopeConversationCount(scope: ScopeId): Promise<number>;
-
-  attributedTurns(): Promise<AttributedTurn[]>;
 
   spendRollup(range: { from: number; to: number }): Promise<SpendRow[]>;
 

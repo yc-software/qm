@@ -83,18 +83,20 @@ export interface MemorySource {
 
 export interface MemoryCandidate {
   id?: string;
+  ref?: string;
+  claim?: string;
   text: string;
-  score: number;
-  at?: number;
   source?: MemorySource;
 }
 
+export const normalizeClaim = (text: string) => text.trim().toLowerCase();
+
 export function recentCandidates(facts: readonly MemoryFact[]): MemoryCandidate[] {
-  return facts.map((fact) => factCandidate(fact, 0.2)).reverse();
+  return facts.map(factCandidate).reverse();
 }
 
-export function factCandidate(fact: MemoryFact, score: number): MemoryCandidate {
-  return { id: fact.id, text: renderFacts([fact]), score, at: fact.createdAt };
+export function factCandidate(fact: MemoryFact): MemoryCandidate {
+  return { id: fact.id, claim: fact.text, text: renderFacts([fact]) };
 }
 
 export function factLine(fact: Shown & Pick<MemoryFact, "id">): string {

@@ -3,7 +3,7 @@ import { samePerson } from "../directory/person.ts";
 import { principalDestination } from "../reach/reach.ts";
 import { parseScopeId, type Permission, type ScopeId } from "../types.ts";
 import { swallow } from "../util/errors.ts";
-import { publicUrlOf, type Deployment } from "./deploy-store.ts";
+import { appUrlOf, type Deployment } from "./deploy-store.ts";
 
 export async function notifyDeploymentShared(
   deps: { deliveries?: Pick<DeliveryStore, "enqueue">; publicWebUrl?: string; deployAppsDomain?: string },
@@ -25,10 +25,7 @@ export async function notifyDeploymentShared(
     )
       return;
     const slug = d.name ?? d.id;
-    const url = deps.deployAppsDomain
-      ? `https://${slug}.${deps.deployAppsDomain}/`
-      : (publicUrlOf(d.endpoint) ??
-        (deps.publicWebUrl ? `${deps.publicWebUrl.replace(/\/+$/, "")}/d/${slug}/` : undefined));
+    const url = appUrlOf(d, { sharedWebUrl: deps.publicWebUrl, appsDomain: deps.deployAppsDomain });
     await deps.deliveries.enqueue({
       destination: principalDestination(grantee.ref, by),
       text: `${by} gave you access to the app "${d.displayName ?? slug}"${permission === "write" ? " (you can also manage it)" : ""}.${url ? ` Open it: ${url}` : ""}`,

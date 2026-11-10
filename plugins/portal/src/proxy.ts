@@ -1,8 +1,10 @@
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import { relayWebSocket, type UpgradeTarget } from "../../chassis/src/websocket-relay.ts";
 import { signedHeaders } from "../../chassis/src/core-client.ts";
-import { withVary } from "../../chassis/src/http.ts";
+import { relayStream, withVary } from "../../chassis/src/http.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
+import { CLIENT_SURFACE_HEADER } from "../../chassis/src/client-surface.ts";
+import { REQUEST_ID_HEADERS } from "../../chassis/src/error-reporting.ts";
 
 const IDENTITY_TTL_MS = 60_000;
 
@@ -13,6 +15,8 @@ const FORWARD_REQUEST_HEADERS = [
   "user-agent",
   "accept-encoding",
   "sec-fetch-dest",
+  CLIENT_SURFACE_HEADER,
+  ...REQUEST_ID_HEADERS,
 ];
 
 const DROP_RESPONSE_HEADERS = new Set([
@@ -41,12 +45,6 @@ export function requestPort(upstream: URL): string | undefined {
   return upstream.port || undefined;
 }
 
-function declaresFrameAncestors(headers: Record<string, string | string[]>): boolean {
-  const csp = headers["content-security-policy"];
-  const text = typeof csp === "string" ? csp : (csp?.join(",") ?? "");
-  return /(^|[;,])\s*frame-ancestors\s/i.test(text);
-}
-
 function relay(
   req: IncomingMessage,
   res: ServerResponse,
@@ -56,7 +54,6 @@ function relay(
     port?: string;
     path: string;
     headers: Record<string, string | string[]>;
-    honorFramePolicy?: boolean;
     forwardCookies?: boolean;
   },
 ): void {
@@ -82,10 +79,8 @@ function relay(
         out[k] = v;
       }
       if (out.vary !== undefined) out.vary = withVary(res, String(out.vary));
-      if (target.honorFramePolicy && declaresFrameAncestors(out)) res.removeHeader("x-frame-options");
       res.writeHead(upRes.statusCode ?? 502, out);
-      upRes.on("error", () => res.destroy());
-      upRes.pipe(res);
+      relayStream(upRes, res);
     },
   );
   up.on("error", () => {
@@ -96,55 +91,10 @@ function relay(
       res.end();
     }
   });
-  req.on("error", () => up.destroy());
   res.on("close", () => {
     if (!res.writableFinished) up.destroy();
   });
-  req.pipe(up);
-}
-
-export interface SurfaceTarget {
-  upstreamBase: string;
-  forwardPath: string;
-  search: string;
-  cookieName: string;
-  principal: string;
-  displayName?: string;
-  impersonator?: string;
-  identitySecret?: string;
-  authenticatedPrincipal?: string;
-  nowMs?: number;
-}
-
-export function proxyToSurface(req: IncomingMessage, res: ServerResponse, t: SurfaceTarget): void {
-  const upstream = new URL(t.upstreamBase);
-  const cookie =
-    `${t.cookieName}=${encodeURIComponent(t.principal)}` +
-    (t.displayName ? `; ${t.cookieName}_name=${encodeURIComponent(t.displayName)}` : "") +
-    (t.impersonator ? `; webui_impersonator=${encodeURIComponent(t.impersonator)}` : "");
-  const base: Record<string, string> = { host: upstream.host, cookie };
-  if (t.identitySecret) {
-    const now = t.nowMs ?? Date.now();
-    base[PORTAL_IDENTITY_HEADER] = mintPortalIdentity(
-      {
-        p: t.principal,
-        ...(t.authenticatedPrincipal ? { authenticatedAs: t.authenticatedPrincipal } : {}),
-        ...(t.displayName ? { n: t.displayName } : {}),
-        ...(t.impersonator ? { imp: t.impersonator } : {}),
-        exp: now + IDENTITY_TTL_MS,
-      },
-      t.identitySecret,
-    );
-  }
-  const headers = safeForwardHeaders(req, base);
-  relay(req, res, {
-    protocol: upstream.protocol,
-    hostname: upstream.hostname,
-    port: requestPort(upstream),
-    path: `${upstream.pathname.replace(/\/$/, "")}${t.forwardPath}${t.search}`,
-    headers,
-    honorFramePolicy: true,
-  });
+  relayStream(req, up);
 }
 
 export const FORWARD_WEBHOOK_HEADERS = [
@@ -191,6 +141,7 @@ export interface DeploymentTarget {
   principal: string;
   signingSecret: string | undefined;
   identitySecret?: string;
+  tenant?: string;
 }
 
 export function proxyToDeployment(req: IncomingMessage, res: ServerResponse, t: DeploymentTarget): void {
@@ -201,7 +152,7 @@ export function proxyToDeployment(req: IncomingMessage, res: ServerResponse, t: 
   const base: Record<string, string> = { host: core.host, "x-as-principal": t.principal, ...signed };
   if (t.identitySecret)
     base[PORTAL_IDENTITY_HEADER] = mintPortalIdentity(
-      { p: t.principal, exp: Date.now() + IDENTITY_TTL_MS },
+      { p: t.principal, ...(t.tenant ? { t: t.tenant } : {}), exp: Date.now() + IDENTITY_TTL_MS },
       t.identitySecret,
     );
   const headers = safeForwardHeaders(req, base);
@@ -250,6 +201,17 @@ export function proxyToUpstream(
 
 export const FORWARD_BROKER_HEADERS = ["accept", "accept-language", "user-agent", "content-type"];
 
+export const INTERNAL_HEADERS = [
+  "x-signature",
+  "x-timestamp",
+  "x-as-principal",
+  "x-admin-actor",
+  "x-agent-capability",
+  PORTAL_IDENTITY_HEADER,
+  "x-qm-app-host",
+  "x-qm-client-ip",
+];
+
 function appHostHeaders(
   req: IncomingMessage,
   clientIp: string | undefined,
@@ -257,14 +219,7 @@ function appHostHeaders(
 ): Record<string, string | string[]> {
   const blocked = new Set([
     ...DROP_RESPONSE_HEADERS,
-    "x-signature",
-    "x-timestamp",
-    "x-as-principal",
-    "x-admin-actor",
-    "x-agent-capability",
-    PORTAL_IDENTITY_HEADER,
-    "x-qm-app-host",
-    "x-qm-client-ip",
+    ...INTERNAL_HEADERS,
     "forwarded",
     "x-forwarded-host",
     "x-forwarded-proto",

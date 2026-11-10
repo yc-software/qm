@@ -113,7 +113,8 @@ function roundTrip(socket: Duplex, text: string): Promise<string> {
 }
 
 async function gateway(endpoint: DeployEndpoint) {
-  const deployStore = createDeployStore(testDeployBackings());
+  const backings = testDeployBackings();
+  const deployStore = createDeployStore(backings);
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore,
@@ -126,7 +127,7 @@ async function gateway(endpoint: DeployEndpoint) {
     deploy,
     acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
     directory: createPostgresDirectoryStore(testDatabaseUrl()),
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    sessions: createPostgresSessionStore(backings.databaseUrl),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
   } as unknown as Parameters<typeof createApp>[0]);
   await app.deploy({

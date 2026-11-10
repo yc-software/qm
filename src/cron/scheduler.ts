@@ -14,8 +14,10 @@ import type { VisibilityDirectory } from "../directory/visibility.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { createSweeper } from "../util/sweeper.ts";
+import { claimThenBind, inTenant } from "../tenants/claim.ts";
+import { currentTenant, withTenant } from "../tenants/context.ts";
 import { firesAtMostDaily, recoverNextFireAt } from "./schedule.ts";
-import { fireJobStartsAt, type CronFireJob, type CronJobQueue } from "./job-queue.ts";
+import { cronQueueMisconfigured, fireJobStartsAt, type CronFireJob, type CronJobQueue } from "./job-queue.ts";
 import { hashId } from "../util/crypto.ts";
 import { utcMinute } from "../util/time.ts";
 import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
@@ -82,9 +84,12 @@ export interface SchedulerDeps {
   };
   sweepAsks?: (now: number) => Promise<void>;
   jobQueue?: CronJobQueue;
-  sessions?: TriggerDeps["sessions"];
+  sessions?: NonNullable<TriggerDeps["sessions"]> & {
+    getByThread(threadRef: string): Promise<{ personaId?: string } | null>;
+  };
   resolveRecipient?: TriggerDeps["resolveRecipient"];
   skipFire?: (cron: Cron) => Promise<string | undefined>;
+  notebookOnlyMemory?: (cron: Cron) => Promise<boolean>;
   deleteCron?: (id: string) => Promise<void>;
   fireLoop?: (
     loopId: string,
@@ -291,12 +296,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     let outcome: Awaited<ReturnType<typeof runTrigger>>;
     try {
       const runtimeProblem = cron.runtime ? await deps.runtimeError?.(cron.ownerScopeId, cron.runtime) : null;
+      const personaId = cron.sessionRef ? (await deps.sessions?.getByThread(cron.sessionRef))?.personaId : undefined;
       const refusedDelivery =
         previous && cron.destination
           ? (await deps.deliveries.listBySourceSession(previous.sessionId ?? "", previous.threadRef))
               .filter((d) => d.failedReason && d.destination.target === cron.destination!.target)
               .at(-1)?.failedReason
           : undefined;
+      const notebookOnly = await deps.notebookOnlyMemory?.(cron);
       outcome = await runTrigger(
         {
           deliveries: deps.deliveries,
@@ -319,7 +326,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           ...(firesAtMostDaily(cron.schedule, scheduledAt ?? t) ? { infrequentCron: true } : {}),
           ...(cron.runtime && !runtimeProblem ? { runtime: cron.runtime } : {}),
           ...(cron.title ? { title: cron.title } : {}),
+          ...(personaId ? { personaId } : {}),
           ...(cron.script ? { cronScript: cron.script } : {}),
+          ...(notebookOnly ? { memoryNotebookOnly: true } : {}),
           onClaimed: async () => {
             await deps.crons.beginFire(cron.id, runningEntry);
           },
@@ -383,19 +392,21 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     if (t - lastRedrive < REPAIR_INTERVAL_MS) return;
     lastRedrive = t;
     try {
-      for (const entry of await deps.crons.runningFires(t)) {
-        if (stopped) break;
-        if (entry.firedAt > t - REPAIR_INTERVAL_MS || (await deps.idempotency.committed(entry.fireKey))) continue;
-        const cron = await deps.crons.get(entry.cronId);
-        if (!cron || cron.loopId) continue;
-        track(
-          withWork(() =>
-            deps.advisoryLock.tryWithLock(`cron-lifecycle:${cron.id}`, () =>
-              fire(cron, entry.firedAt, entry.fireKey, entry.scheduledAt),
-            ),
-          ).then(() => undefined, reportFailureAs("scheduler: fire re-drive", undefined, `cron=${cron.id}`)),
-        );
-      }
+      await claimThenBind(deps.crons.claimTenants, async () => {
+        for (const entry of await deps.crons.runningFires(t)) {
+          if (stopped) return;
+          if (entry.firedAt > t - REPAIR_INTERVAL_MS || (await deps.idempotency.committed(entry.fireKey))) continue;
+          const cron = await deps.crons.get(entry.cronId);
+          if (!cron || cron.loopId) continue;
+          track(
+            withWork(() =>
+              deps.advisoryLock.tryWithLock(`cron-lifecycle:${cron.id}`, () =>
+                fire(cron, entry.firedAt, entry.fireKey, entry.scheduledAt),
+              ),
+            ).then(() => undefined, reportFailureAs("scheduler: fire re-drive", undefined, `cron=${cron.id}`)),
+          );
+        }
+      });
     } catch (e) {
       reportFailure("scheduler: fire re-drive", e);
     }
@@ -422,7 +433,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       for (const cron of ordered) {
         if (batch.length >= maxFiresPerTick) break;
         try {
-          await deps.crons.markAttempted(cron.id, t);
+          await withTenant(cron.tenantId, () => deps.crons.markAttempted(cron.id, t));
           batch.push(cron);
         } catch (e) {
           reportFailure("scheduler: attempt mark (holding this cron back)", e);
@@ -433,11 +444,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     for (const cron of batch) {
       if (stopped || observed !== epoch) break;
       try {
-        await withCronLifecycle(cron.id, true, async () => {
-          if (stopped || observed !== epoch) return;
-          const { authzFailed } = await fire(cron, t, `cron:${cron.id}:${cron.scheduledAt}`, cron.scheduledAt);
-          if (!authzFailed) await deps.crons.markFired(cron.id, t, cron.scheduledAt);
-        });
+        await withTenant(cron.tenantId, () =>
+          withCronLifecycle(cron.id, true, async () => {
+            if (stopped || observed !== epoch) return;
+            const { authzFailed } = await fire(cron, t, `cron:${cron.id}:${cron.scheduledAt}`, cron.scheduledAt);
+            if (!authzFailed) await deps.crons.markFired(cron.id, t, cron.scheduledAt);
+          }),
+        );
       } catch (e) {
         reportFailure("scheduler: fire", e);
       }
@@ -473,6 +486,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     const slot = nextSlot(cron);
     if (slot === undefined) return undefined;
     return {
+      tenantId: currentTenant(),
       cronId: cron.id,
       scheduledAt: slot,
       ...(cron.deferUntil !== undefined ? { notBefore: cron.deferUntil } : {}),
@@ -528,12 +542,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   async function reconcile(): Promise<void> {
     try {
       const horizon = now() + 2 * REPAIR_INTERVAL_MS;
-      for (const cron of await deps.crons.list()) {
-        if (stopped) break;
-        if (cron.archived || !cron.enabled) continue;
-        const job = nextJob(cron);
-        if (job && fireJobStartsAt(job) <= horizon) await deps.jobQueue!.enqueueFire(job);
-      }
+      await claimThenBind(deps.crons.claimTenants, async () => {
+        for (const cron of await deps.crons.list()) {
+          if (stopped) return;
+          if (cron.archived || !cron.enabled) continue;
+          const job = nextJob(cron);
+          if (job && fireJobStartsAt(job) <= horizon) await deps.jobQueue!.enqueueFire(job);
+        }
+      });
     } catch (e) {
       reportFailure("scheduler: reconcile", e);
     }
@@ -650,14 +666,19 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const observed = epoch;
       starting = deps.jobQueue
         .start({
-          onFire: (job) => (observed === epoch ? runQueueTask(() => fireJob(job)) : Promise.resolve()),
+          onFire: (job) =>
+            observed === epoch ? inTenant(job.tenantId, () => runQueueTask(() => fireJob(job))) : Promise.resolve(),
         })
         .then(
           () => {
             if (!stopped) leaseGuard.start();
           },
           (e: unknown) => {
-            reportFailure("scheduler: cron job queue start (falling back to interval ticks)", e);
+            if (cronQueueMisconfigured(e))
+              console.error(
+                `[scheduler] misconfiguration: the cron job queue is not installed or this login cannot use it; run the migrations as the database owner (falling back to interval ticks): ${errMessage(e)}`,
+              );
+            else reportFailure("scheduler: cron job queue start (falling back to interval ticks)", e);
             if (!stopped) sweeper.start(intervalMs);
           },
         );

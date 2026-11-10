@@ -539,7 +539,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, cron, capability.actorId)))
         return { ok: false, code: "forbidden", message: "not your cron" };
-      if (req.limit !== undefined && (!Number.isInteger(req.limit) || req.limit < 1)) {
+      if (req.limit !== undefined && (!Number.isSafeInteger(req.limit) || req.limit < 1)) {
         return { ok: false, code: "bad_request", message: "limit must be a positive integer" };
       }
       const { runs, total } = await app.listCronFires(id, req.limit !== undefined ? { limit: req.limit } : {});
@@ -879,7 +879,12 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
 
       try {
         if (orgSkillCede) {
-          const promoted = await app.promoteSkill(home.id, toScope, capability.actorId, capability.liveActor === true);
+          const promoted = await app.promoteSkill(
+            home.id,
+            toScope,
+            capability.actorId,
+            capability.liveActor === true && livePersonCapability(capability),
+          );
           return {
             ok: true,
             verb: "promote",
@@ -891,7 +896,18 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         }
 
         if (req.move) {
-          const deployPersonTransfer = req.type === "deploy" && toKind === "personal" && capability.liveActor === true;
+          const deployPersonTransfer =
+            req.type === "deploy" &&
+            toKind === "personal" &&
+            capability.liveActor === true &&
+            livePersonCapability(capability);
+          if (toKind === "persona" && req.type !== "skill" && req.type !== "file") {
+            return {
+              ok: false,
+              code: "forbidden",
+              message: `a persona holds skills, files and notes; a ${req.type} can't move into one`,
+            };
+          }
           if (!deployPersonTransfer && !(await app.belongsToScope(capability.actorId, toScope))) {
             return {
               ok: false,

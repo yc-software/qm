@@ -154,6 +154,41 @@ test("a SOUL conflict loads the latest revision and keeps the draft", async () =
   admin.close();
 });
 
+test("the app handle saves only a well-formed handle and shows the server's refusal", async () => {
+  const saves: unknown[] = [];
+  const admin = await mountPage("/settings/customize", {
+    "/scopes/org:acme": { appHandle: "nitroduck" },
+    "PUT /scopes/org:acme/app-handle": ({ body }) => {
+      saves.push(plain(body));
+      return body.handle === "taken1"
+        ? { status: 409, body: { message: "another workspace already uses that handle" } }
+        : { ok: true };
+    },
+  });
+  await admin.settle();
+  assert.equal(admin.document.querySelector<HTMLInputElement>("#app-handle")!.value, "nitroduck");
+  type(admin, "#app-handle", "nitro-duck");
+  click(admin, '[data-save="app-handle"]');
+  await admin.settle();
+  assert.equal(
+    admin.document.getElementById("st-app-handle")!.textContent,
+    "Use 2–61 lowercase letters or digits, with no hyphens.",
+  );
+  assert.deepEqual(saves, []);
+  type(admin, "#app-handle", "taken1");
+  click(admin, '[data-save="app-handle"]');
+  await admin.settle();
+  assert.equal(
+    admin.document.getElementById("st-app-handle")!.textContent,
+    "another workspace already uses that handle",
+  );
+  type(admin, "#app-handle", " duck2 ");
+  click(admin, '[data-save="app-handle"]');
+  await admin.settle();
+  assert.deepEqual(saves, [{ handle: "taken1" }, { handle: "duck2" }]);
+  admin.close();
+});
+
 test("feature flags enable the scopes picked in a native multi-select", async () => {
   const saves: unknown[] = [];
   const admin = await mountPage("/settings/customize", {

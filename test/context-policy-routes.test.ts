@@ -23,6 +23,7 @@ function fakeRes() {
 }
 
 function makeCtx(over: {
+  scope?: string;
   url?: string;
   body?: unknown;
   contexts?: string[];
@@ -37,9 +38,9 @@ function makeCtx(over: {
   const audits: unknown[] = [];
   const ctx = {
     res,
-    url: new URL(over.url ?? "http://x/v1/contexts/policy"),
+    url: new URL(over.url ?? "http://x/"),
     body: over.body,
-    params: {},
+    params: { scope: over.scope ?? decodeURIComponent(new URL(over.url ?? "http://x/").pathname.split("/")[3] ?? "") },
     app: {
       listContexts: async () => (over.contexts ?? []).map((scopeId) => ({ scopeId })),
     },
@@ -53,7 +54,7 @@ function makeCtx(over: {
 
 test("context policy read requires membership and a Slack-backed scope", async () => {
   const member = makeCtx({
-    url: "http://x/v1/contexts/policy?principalId=alice&scope=channel:C1",
+    url: "http://x/v1/contexts/channel:C1/ambient-policy?principalId=alice",
     contexts: ["channel:C1"],
   });
   await member.store.set("C1", "flag launches", { setBy: "someone", bots: { "Noisy Bot": { mode: "ignore" } } });
@@ -63,12 +64,12 @@ test("context policy read requires membership and a Slack-backed scope", async (
   assert.equal(policy.orders, "flag launches");
   assert.equal(policy.bots["Noisy Bot"]!.mode, "ignore");
 
-  const outsider = makeCtx({ url: "http://x/v1/contexts/policy?principalId=mallory&scope=channel:C1", contexts: [] });
+  const outsider = makeCtx({ url: "http://x/v1/contexts/channel:C1/ambient-policy?principalId=mallory", contexts: [] });
   await getContextPolicy(outsider.ctx);
   assert.equal(outsider.out.status, 403);
 
   const personal = makeCtx({
-    url: "http://x/v1/contexts/policy?principalId=alice&scope=personal:alice",
+    url: "http://x/v1/contexts/personal:alice/ambient-policy?principalId=alice",
     contexts: ["personal:alice"],
   });
   await getContextPolicy(personal.ctx);
@@ -78,9 +79,9 @@ test("context policy read requires membership and a Slack-backed scope", async (
 test("context policy write validates the ledger, persists, and audits", async () => {
   const { ctx, out, store } = makeCtx({
     contexts: ["channel:C2"],
+    scope: "channel:C2",
     body: {
       principalId: "alice",
-      scope: "channel:C2",
       orders: "watch for deploy failures",
       bots: { "General Agent": { mode: "rollup", rollupHours: 4 } },
     },
@@ -95,7 +96,8 @@ test("context policy write validates the ledger, persists, and audits", async ()
   const bad = makeCtx({
     contexts: ["channel:C2"],
     store,
-    body: { principalId: "alice", scope: "channel:C2", orders: "", bots: { "General Agent": { mode: "sometimes" } } },
+    scope: "channel:C2",
+    body: { principalId: "alice", orders: "", bots: { "General Agent": { mode: "sometimes" } } },
   });
   await setContextPolicy(bad.ctx);
   assert.equal(bad.out.status, 400);
@@ -103,7 +105,8 @@ test("context policy write validates the ledger, persists, and audits", async ()
   const outsider = makeCtx({
     contexts: [],
     store,
-    body: { principalId: "mallory", scope: "channel:C2", orders: "", bots: {} },
+    scope: "channel:C2",
+    body: { principalId: "mallory", orders: "", bots: {} },
   });
   await setContextPolicy(outsider.ctx);
   assert.equal(outsider.out.status, 403);
@@ -115,7 +118,8 @@ test("ambientEnabled round-trips through the member route and rejects non-boolea
   const off = makeCtx({
     contexts: ["channel:C5"],
     store,
-    body: { principalId: "alice", scope: "channel:C5", orders: "", bots: {}, ambientEnabled: false },
+    scope: "channel:C5",
+    body: { principalId: "alice", orders: "", bots: {}, ambientEnabled: false },
   });
   await setContextPolicy(off.ctx);
   assert.equal(off.out.status, 200);
@@ -123,7 +127,7 @@ test("ambientEnabled round-trips through the member route and rejects non-boolea
   assert.equal((await store.get("C5"))?.ambientEnabled, false);
 
   const read = makeCtx({
-    url: "http://x/v1/contexts/policy?principalId=alice&scope=channel:C5",
+    url: "http://x/v1/contexts/channel:C5/ambient-policy?principalId=alice",
     contexts: ["channel:C5"],
     store,
   });
@@ -133,7 +137,8 @@ test("ambientEnabled round-trips through the member route and rejects non-boolea
   const bad = makeCtx({
     contexts: ["channel:C5"],
     store,
-    body: { principalId: "alice", scope: "channel:C5", orders: "", bots: {}, ambientEnabled: "nope" },
+    scope: "channel:C5",
+    body: { principalId: "alice", orders: "", bots: {}, ambientEnabled: "nope" },
   });
   await setContextPolicy(bad.ctx);
   assert.equal(bad.out.status, 400);
@@ -142,7 +147,8 @@ test("ambientEnabled round-trips through the member route and rejects non-boolea
   const cleared = makeCtx({
     contexts: ["channel:C5"],
     store,
-    body: { principalId: "alice", scope: "channel:C5", orders: "", bots: {}, ambientEnabled: null },
+    scope: "channel:C5",
+    body: { principalId: "alice", orders: "", bots: {}, ambientEnabled: null },
   });
   await setContextPolicy(cleared.ctx);
   assert.equal(cleared.out.status, 200);
@@ -157,9 +163,9 @@ test("a stale baseUpdatedAt bounces instead of reverting a concurrent edit", asy
   const stale = makeCtx({
     contexts: ["channel:C3"],
     store,
+    scope: "channel:C3",
     body: {
       principalId: "alice",
-      scope: "channel:C3",
       orders: "v2",
       bots: {},
       baseUpdatedAt: (current?.updatedAt ?? 0) - 1,
@@ -172,7 +178,8 @@ test("a stale baseUpdatedAt bounces instead of reverting a concurrent edit", asy
   const fresh = makeCtx({
     contexts: ["channel:C3"],
     store,
-    body: { principalId: "alice", scope: "channel:C3", orders: "v2", bots: {}, baseUpdatedAt: current?.updatedAt ?? 0 },
+    scope: "channel:C3",
+    body: { principalId: "alice", orders: "v2", bots: {}, baseUpdatedAt: current?.updatedAt ?? 0 },
   });
   await setContextPolicy(fresh.ctx);
   assert.equal(fresh.out.status, 200);

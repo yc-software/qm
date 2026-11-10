@@ -3,6 +3,7 @@ import type { ScopeId } from "../types.ts";
 import type { AuditEvent, AuditLog } from "../audit/audit-log.ts";
 import { reportFailureAs } from "../util/errors.ts";
 import { likeContains } from "../persistence/like.ts";
+import { tenantTables } from "../tenants/migrations.ts";
 
 function rowToEvent(r: Record<string, unknown>): AuditEvent {
   return {
@@ -58,10 +59,19 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
       id: "admin/audit-log/0002",
       statements: [`CREATE INDEX IF NOT EXISTS audit_log_by_action ON audit_log(action, at DESC)`],
     },
+    ...tenantTables("admin/audit-log/0003-tenants", [
+      {
+        table: "audit_log",
+        primaryKey: "id",
+        unique: [
+          { name: "audit_log_by_idempotency_key", columns: "idempotency_key", where: "idempotency_key IS NOT NULL" },
+        ],
+      },
+    ]),
   ]);
 
   const pendingWrites = new Set<Promise<void>>();
-  return {
+  const log: AuditLog = {
     record(e) {
       const write = q(`INSERT INTO audit_log(${COLS}) VALUES ($1,$2,$3,$4,$5,$6,$7)`, [
         e.at,
@@ -80,7 +90,7 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
     async recordOnce(key, e) {
       await q(
         `INSERT INTO audit_log(${COLS}, idempotency_key) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-         ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING`,
+         ON CONFLICT (tenant_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING`,
         [e.at, e.principalId, e.action, e.resource, e.scopeLabel, e.status ?? null, e.detail ?? null, key],
       );
     },
@@ -91,6 +101,15 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
     },
     async tail({ limit, scopeLabel, action, since, resourceContains }) {
       await Promise.allSettled(pendingWrites);
+      if (Array.isArray(action) && action.length !== 1) {
+        const batches = await Promise.all(
+          action.map((a) => log.tail({ limit, scopeLabel, action: a, since, resourceContains })),
+        );
+        return batches
+          .flat()
+          .sort((a, b) => b.at - a.at)
+          .slice(0, limit);
+      }
       const params: unknown[] = [];
       const conds: string[] = [];
       if (scopeLabel !== undefined) {
@@ -98,8 +117,8 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
         conds.push(`scope_label = $${params.length}`);
       }
       if (action !== undefined) {
-        params.push(action);
-        conds.push(typeof action === "string" ? `action = $${params.length}` : `action = ANY($${params.length})`);
+        params.push(typeof action === "string" ? action : action[0]);
+        conds.push(`action = $${params.length}`);
       }
       if (since !== undefined) {
         params.push(since);
@@ -118,4 +137,5 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
       return rows.map(rowToEvent);
     },
   };
+  return log;
 }

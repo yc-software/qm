@@ -9,6 +9,7 @@ import { errMessage, swallow } from "../util/errors.ts";
 import { isTransientFailure } from "../core/turn-error.ts";
 import { cronIdOf } from "../sessions/session-store.ts";
 import { samePerson } from "../directory/person.ts";
+import { withTenant } from "../tenants/context.ts";
 
 function resolutionInput(ask: KeychainAsk, grant?: KeychainGrant): string {
   if (ask.status === "approved") {
@@ -151,22 +152,23 @@ export function createAskExpirySweep(deps: {
   auditLog?: AuditLog;
 }): (now: number) => Promise<void> {
   return async (now) => {
-    for (const ask of await deps.keychain.unnotifiedResolvedAsks(now)) {
-      if (ask.status === "expired") {
-        deps.auditLog?.record({
-          at: now,
-          principalId: ask.ownerId,
-          action: "keychain.ask.expire",
-          resource: ask.id,
-          scopeLabel: ask.requesterScopeId,
-        });
-      }
-      try {
-        await deps.fire(ask);
-        await deps.keychain.markAskNotified(ask.id, ask.status);
-      } catch (e) {
-        swallow(`keychain: ask sweep fire failed for ${ask.id} (will retry next tick)`, e);
-      }
-    }
+    for (const ask of await deps.keychain.unnotifiedResolvedAsks(now))
+      await withTenant(ask.tenantId, async () => {
+        if (ask.status === "expired") {
+          deps.auditLog?.record({
+            at: now,
+            principalId: ask.ownerId,
+            action: "keychain.ask.expire",
+            resource: ask.id,
+            scopeLabel: ask.requesterScopeId,
+          });
+        }
+        try {
+          await deps.fire(ask);
+          await deps.keychain.markAskNotified(ask.id, ask.status);
+        } catch (e) {
+          swallow(`keychain: ask sweep fire failed for ${ask.id} (will retry next tick)`, e);
+        }
+      });
   };
 }

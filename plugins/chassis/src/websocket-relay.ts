@@ -3,7 +3,7 @@ import { request as httpsRequest } from "node:https";
 import { Socket } from "node:net";
 import type { Duplex } from "node:stream";
 import { reportBackendError } from "./error-reporting.ts";
-import { json } from "./http.ts";
+import { json, relayStream } from "./http.ts";
 
 export interface UpgradeTarget {
   socket: Duplex;
@@ -60,8 +60,8 @@ function splice(client: Duplex, upstream: Duplex): void {
     side.on("end", close);
     side.on("close", close);
   }
-  upstream.pipe(client);
-  client.pipe(upstream);
+  relayStream(upstream, client);
+  relayStream(client, upstream);
 }
 
 function refuse(res: ServerResponse, status: number, error: string, message: string): void {
@@ -99,7 +99,7 @@ export function relayWebSocket(res: ServerResponse, target: UpgradeTarget, to: R
       ...(typeof type === "string" ? { "content-type": type } : {}),
       "cache-control": "no-store",
     });
-    upRes.pipe(res);
+    relayStream(upRes, res);
   });
   up.on("error", (error) => {
     console.error("[%s] upgrade dial failed: %s", label, error.message);

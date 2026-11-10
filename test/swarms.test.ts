@@ -890,6 +890,20 @@ test("swarm provenance is bound to the durable run, content, actor, and recipien
     await assert.rejects(service.binding({ ...input, ...patch }), /forged/);
 });
 
+for (const [from, options] of [
+  ["a notebook-only turn", { request: { memoryNotebookOnly: true } }],
+  ["a person's own turn in a notebook-only subagent", { spawnMeta: { memoryNotebookOnly: true } }],
+  ["a turn whose agent token is notebook-only", { claims: { memory: { read: [], notebookOnly: true } } }],
+] satisfies Array<[string, Parameters<typeof swarmFixture>[0]]>)
+  test(`swarm workers started from ${from} stay notebook-only`, async () => {
+    const { service, caller, runs } = await swarmFixture(options);
+    await service.spawn(caller, { requestId: "one", text: "Work" });
+    await service.sweep();
+    const run = (await runs.list()).find((item) => item.request.swarm)!;
+    assert.equal(run.request.memoryNotebookOnly, true);
+    assert.ok(await service.binding({ ...run.request, runId: run.id }));
+  });
+
 test("human messages preserve human actor attribution while notifications remain unattended", async () => {
   const { service, caller, root } = await swarmFixture();
   await service.spawn(caller, { requestId: "one", text: "Work" });

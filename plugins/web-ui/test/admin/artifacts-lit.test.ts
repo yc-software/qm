@@ -91,7 +91,7 @@ test("cron list opens a detail page whose destination edit sends the API payload
   const inputs = f.host.querySelectorAll<HTMLInputElement>(".card input");
   assert.equal(inputs[0]!.placeholder, "principal id");
   type(f, inputs[0]!, "alice");
-  type(f, inputs[2]!, "bob");
+  type(f, inputs[1]!, "bob");
   button(f.host, "Save destination").click();
   await f.settle();
   const put = f.requests.find((r) => r.method === "PUT")!;
@@ -103,12 +103,24 @@ test("cron list opens a detail page whose destination edit sends the API payload
 test("apps open their public URL in a new tab", async () => {
   const f = await mountPage("/settings/deployments", {
     ...scopes,
-    "/deployments": { deployments: [{ id: "d", name: "demo", publicUrl: "https://demo.example" }] },
+    "/deployments": {
+      deployments: [
+        {
+          id: "d",
+          name: "demo",
+          publicUrl: "https://demo.example",
+          createdBy: "oidc:issuer-hash:c3ViamVjdA",
+          createdByName: "founder@company.test",
+        },
+      ],
+    },
   });
   await f.settle();
   const link = f.host.querySelector<HTMLAnchorElement>(".dense-row")!;
   assert.equal(link.href, "https://demo.example/");
   assert.equal(link.target, "_blank");
+  assert.match(link.textContent!, /founder@company\.test/);
+  assert.doesNotMatch(link.textContent!, /oidc:/);
   f.close();
 });
 

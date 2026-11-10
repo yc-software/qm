@@ -28,7 +28,9 @@ import {
   type SwarmMember,
   type SwarmMessage,
   type SwarmStore,
+  type PendingSwarm,
 } from "./swarm-store.ts";
+import { withTenant } from "../tenants/context.ts";
 
 export type SwarmCaller =
   { kind: "agent"; claims: CapabilityClaims } | { kind: "human"; actorId: string; sessionId: string; runId?: string };
@@ -150,6 +152,18 @@ function rosterMatches(current: readonly string[], expected: readonly string[]):
   return actual.size === frozen.size && [...actual].every((id) => frozen.has(id));
 }
 
+function botMayDirect(swarm: Swarm, memberId: string, actorId: string): boolean {
+  return (
+    swarm.template.botActor === true &&
+    (memberId !== swarm.id || swarm.messages.every((message) => message.actorId === actorId))
+  );
+}
+
+function assertCallerMayDirect(caller: SwarmCaller, auth: Authority, swarm: Swarm): void {
+  if (caller.kind === "agent" && caller.claims.botActor && !botMayDirect(swarm, auth.memberId, auth.actorId))
+    throw new Error("a Slack bot's turn cannot direct a person's swarm");
+}
+
 function dispatchContract(input: OrchestratorInput) {
   return {
     actor: input.actor,
@@ -160,7 +174,9 @@ function dispatchContract(input: OrchestratorInput) {
     scopeVersion: input.scopeVersion,
     unattendedGrants: input.unattendedGrants,
     readOnly: input.readOnly,
+    botActor: input.botActor,
     skipMemory: input.skipMemory,
+    memoryNotebookOnly: input.memoryNotebookOnly,
     model: input.model,
     thinkingLevel: input.thinkingLevel,
     fastMode: input.fastMode,
@@ -309,7 +325,7 @@ export function createSwarmService(deps: {
     const source = run.request;
     const inventory = await deps.sandboxes.list(auth.actorId, session.scopeId);
     const selected = inventory.sandboxes.find((box) => box.id === inventory.defaultSandboxId);
-    const requested = backend ?? selected?.backend ?? deps.sandboxes.defaultBackend();
+    const requested = backend ?? selected?.backend ?? (await deps.sandboxes.defaultBackend());
     const provider = inventory.providers.find((item) => item.name === requested);
     if (!provider || !provider.actions.includes("create") || !provider.actions.includes("retire"))
       throw new Error("sandbox backend must support creating and retiring workers");
@@ -327,7 +343,13 @@ export function createSwarmService(deps: {
       ...(source.scopeVersion ? { scopeVersion: source.scopeVersion } : {}),
       ...(source.unattendedGrants ? { unattendedGrants: source.unattendedGrants } : {}),
       ...(source.readOnly ? { readOnly: true } : {}),
+      ...(source.botActor ? { botActor: true } : {}),
       ...(source.skipMemory ? { skipMemory: true } : {}),
+      ...(source.memoryNotebookOnly ||
+      session.spawnMeta?.memoryNotebookOnly ||
+      (caller.kind === "agent" && caller.claims.memory?.notebookOnly)
+        ? { memoryNotebookOnly: true }
+        : {}),
       ...(settings.turnMs === undefined ? {} : { turnWallClockMs: settings.turnMs }),
     };
     const createdAt = Date.now();
@@ -528,13 +550,13 @@ export function createSwarmService(deps: {
   }
 
   let sweeping: Promise<void> | undefined;
-  let selecting: Promise<Swarm[]> | undefined;
+  let selecting: Promise<PendingSwarm[]> | undefined;
   let afterId: string | undefined;
   const reconciling = {
     resources: new Map<string, Promise<void>>(),
     delivery: new Map<string, Promise<void>>(),
   };
-  async function reconcileBatch(batch: Swarm[], phase: keyof typeof reconciling): Promise<void> {
+  async function reconcileBatch(batch: PendingSwarm[], phase: keyof typeof reconciling): Promise<void> {
     const active = reconciling[phase];
     const remaining = batch.values();
     await Promise.all(
@@ -547,11 +569,9 @@ export function createSwarmService(deps: {
           )
             continue;
           if (active.size >= SWARM_LIMITS.sweepConcurrency) return;
-          const operation = reconcile(swarm.id, phase)
+          const operation = withTenant(swarm.tenantId, () => reconcile(swarm.id, phase))
             .catch((error) => swallow("swarm outbox reconciliation", error))
-            .finally(() => {
-              active.delete(swarm.id);
-            });
+            .finally(() => active.delete(swarm.id));
           active.set(swarm.id, operation);
           await withTimeout(() => operation, SWARM_LIMITS.reconcileMs, "swarm reconciliation").catch((error) =>
             swallow("swarm outbox reconciliation", error),
@@ -595,6 +615,7 @@ export function createSwarmService(deps: {
       const { auth, swarm } = await load(caller);
       const value = jsonContext(context, swarm.settings.contextBytes);
       const updated = await update(auth, (swarm) => {
+        assertCallerMayDirect(caller, auth, swarm);
         assertSwarmOpen(swarm);
         swarm.members.find((member) => member.id === auth.memberId)!.context = value;
       });
@@ -649,6 +670,7 @@ export function createSwarmService(deps: {
           swarm.settings = next;
           if (next.lifetimeMs !== undefined) swarm.expiresAt = swarm.createdAt + next.lifetimeMs;
         }
+        assertCallerMayDirect(caller, auth, swarm);
         assertSwarmOpen(swarm);
         const parent = swarm.members.find((member) => member.id === auth.memberId)!;
         if (parent.depth >= swarm.settings.depth) throw new Error("swarm depth budget exhausted");
@@ -745,6 +767,7 @@ export function createSwarmService(deps: {
           if (previous.signature !== fingerprint) throw new Error("requestId reused with different content");
           return;
         }
+        assertCallerMayDirect(caller, auth, swarm);
         assertSwarmOpen(swarm);
         if (swarm.messages.length >= (swarm.settings.messages ?? Infinity))
           throw new Error("swarm message budget exhausted");
@@ -799,15 +822,17 @@ export function createSwarmService(deps: {
           .filter((message) => message.seq > after && (!options.replyTo || message.replyTo === options.replyTo))
           .slice(0, 32);
       for (;;) {
+        assertCallerMayDirect(caller, auth, swarm);
         let messages = pick(swarm);
         const unread = (current: Swarm) =>
           pick(current).filter((message) => message.notifications[auth.memberId]?.state === "mailbox");
-        if (caller.kind === "agent" && options.replyTo && unread(swarm).length)
-          messages = pick(
-            await update(auth, (current) => {
-              for (const message of unread(current)) message.notifications[auth.memberId] = { state: "handed" };
-            }),
-          );
+        if (caller.kind === "agent" && options.replyTo && unread(swarm).length) {
+          const updated = await update(auth, (current) => {
+            assertCallerMayDirect(caller, auth, current);
+            for (const message of unread(current)) message.notifications[auth.memberId] = { state: "handed" };
+          });
+          messages = pick(updated);
+        }
         if (messages.length || Date.now() >= deadline) return messages;
         await sleep(Math.min(200, deadline - Date.now()));
         ({ auth, swarm } = await load(caller));
@@ -827,6 +852,7 @@ export function createSwarmService(deps: {
         if (!ancestor) throw new Error("agents may only control themselves or their descendants");
       }
       const updated = await update(auth, (current) => {
+        assertCallerMayDirect(caller, auth, current);
         const member = current.members.find((peer) => peer.id === target.id)!;
         if (member.control === "stopped") throw new Error("stopped workers cannot be resumed");
         if (input.state === "active") delete member.control;
@@ -879,7 +905,7 @@ export function createSwarmService(deps: {
       const target = input.swarm ?? (session && turnTarget(session));
       if (!target) return [];
       const swarm = await store.get(target.swarmId);
-      if (!swarm) return [];
+      if (!swarm || (input.botActor && !botMayDirect(swarm, target.recipientId, input.actor.id))) return [];
       const mine = swarm.messages.filter((message) => {
         const state = message.notifications[target.recipientId]?.state;
         return state === "mailbox" || (state === "queued" && !options.mailboxOnly);

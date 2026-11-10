@@ -273,7 +273,7 @@ function recordedWireArguments(argumentsJson: string, call: Item): ToolCall["arg
 }
 
 export function recordedToolArguments(call: Pick<Item, "body">): Record<string, unknown> {
-  const { rerun, result: _r, ...recorded } = visibleBody(call);
+  const { rerun, result: _r, approvedRequestId: _a, ...recorded } = visibleBody(call);
   const input = (rerun as { input?: unknown } | undefined)?.input;
   if (isObj(input)) return { ...input, retrySafe: true };
   if (typeof recorded.bytes !== "number" || typeof recorded.text === "string") return recorded;
@@ -402,7 +402,9 @@ export function reconstructMessagesFromHistory(
       }
     } else if (isAgentReply(e)) {
       const t = itemText(e);
-      if (t) raw.push(legacyAssistant([{ type: "text", text: t }], e.createdAt));
+      const via = typeof e.body.via === "string" ? e.body.via : undefined;
+      if (t && via) raw.push(userMsg(messageTag({ from: "agent", via }, t), e.createdAt));
+      else if (t) raw.push(legacyAssistant([{ type: "text", text: t }], e.createdAt));
     } else if (e.kind === "AgentMessage" && e.variant === "files_delivered") {
       const t = itemText(e);
       if (t) raw.push(userMsg(deliveryNote(t), e.createdAt));

@@ -54,7 +54,6 @@ Object.assign(process.env, {
   CORE_ORG_ID: "acme",
   CORE_SIGNING_SECRET: "app-only-core-secret",
   CORE_API_URL: upstreamUrl,
-  WEB_UI_UPSTREAM: upstreamUrl,
   AUTH_BROKER_UPSTREAM: upstreamUrl,
   PORTAL_APPS_DOMAIN: "apps.example.test",
   OIDC_ISSUER: upstreamUrl,
@@ -68,7 +67,6 @@ Object.assign(process.env, {
   OIDC_ALLOWED_EMAIL_DOMAIN: "",
   OIDC_PRINCIPAL_CLAIM: "email",
   PORTAL_LOCAL_AUTH_BYPASS: "0",
-  PORTAL_PLAYGROUND: "0",
   PORTAL_SESSION_RENEW_AFTER_S: "1",
 });
 const { server } = await import("../src/index.ts");

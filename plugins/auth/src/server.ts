@@ -113,7 +113,8 @@ function readAuthorizeRequest(
 }
 
 export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
-  const { cfg, signer, claims, mailer, signingKey } = deps;
+  const { cfg, signer, claims, signingKey } = deps;
+  const mailer = cfg.emailSignIn ? deps.mailer : null;
   const sessions = deps.sessions ?? coreRememberedSessions(cfg.coreApiUrl, cfg.coreSigningSecret);
   const brandName = deps.brandName ?? ((): string => cfg.brandName);
   const invited =
@@ -291,7 +292,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
       res.writeHead(302, noStore({ location: destination.toString() }));
       return void res.end();
     }
-    if (!mailer && !passwords) return emailUnavailable(res);
+    if (!mailer && !passwords && !deps.trustedSignInLabel) return emailUnavailable(res);
     const sealed = await signer.sealRequest(parsed.request, cfg.requestTtlS, now());
     return sendHtml(res, 200, signInForm(sealed.token));
   }
