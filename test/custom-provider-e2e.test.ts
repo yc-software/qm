@@ -475,7 +475,9 @@ test("QA: a custom model named like a built-in registers and sends its own model
   }
 });
 
-test("QA: a custom provider saved without a key check cannot reach a loopback address or follow a redirect to one", async () => {
+test("QA: a custom provider saved without a key check cannot reach a loopback address or follow a redirect to one", async (t) => {
+  const logged: string[] = [];
+  t.mock.method(console, "error", (...args: unknown[]) => logged.push(args.map(String).join(" ")));
   const hits: string[] = [];
   const listener = createServer((req, res) => {
     hits.push(`${req.method} ${req.url} ${req.headers.authorization ?? req.headers["x-api-key"] ?? "-"}`);
@@ -483,7 +485,9 @@ test("QA: a custom provider saved without a key check cannot reach a loopback ad
   });
   await new Promise<void>((r) => listener.listen(0, "127.0.0.1", r));
   const listenerOrigin = `http://127.0.0.1:${(listener.address() as AddressInfo).port}`;
+  const redirected: string[] = [];
   const redirector = createServer((req, res) => {
+    redirected.push(`${req.method} ${req.url}`);
     res.writeHead(307, { location: `${listenerOrigin}${req.url}` }).end();
   });
   await new Promise<void>((r) => redirector.listen(0, "127.0.0.1", r));
@@ -534,6 +538,14 @@ test("QA: a custom provider saved without a key check cannot reach a loopback ad
       }
     }
     assert.deepEqual(hits, []);
+    assert.deepEqual(redirected, ["POST /v1/chat/completions", "POST /v1/responses", "POST /v1/messages"]);
+    assert.deepEqual(
+      [...new Set(logged)],
+      ["openai", "openai-responses", "anthropic"].map(
+        (protocol) =>
+          `[model] custom provider loopback-${protocol}: 127.0.0.1 is a private network address; a deployment operator can allow this exact origin with PRIVATE_NETWORK_ALLOWED_ORIGINS`,
+      ),
+    );
   } finally {
     server.close();
     listener.close();
