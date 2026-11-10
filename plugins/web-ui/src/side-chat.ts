@@ -470,7 +470,6 @@ export function createSideChatController(ctx: ConvCtx) {
       if (sourceId !== id) return;
       if (opening !== epoch) return;
       ctx.composer.carryModelPick(ctx.chat.state.threadRef, result.session.threadRef);
-      window.getSelection()?.removeAllRanges();
       chats = [...chats.filter((chat) => chat.id !== result.session.id), result.session];
       await show(result.session, true);
     } catch (cause) {
