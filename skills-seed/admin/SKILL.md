@@ -308,8 +308,10 @@ run with that person's standing, not the original admin's.
 - `403 admin grant required for this scope` — the user isn't an org admin (or was just
   revoked). Say so; don't retry or work around it.
 - `403 … carry a person's own authority — this turn runs with none` — a bot actor, an
-  external audience, or a session message whose authorization chain could not be
-  verified. Report it where the run delivers — never finish silently.
+  external audience, a cron or loop whose task an automated turn wrote (its owner
+  restores their authority by rewriting it on a turn they send) or that a conversation
+  owns, or a session message whose authorization chain could not be verified. Report it
+  where the run delivers — never finish silently.
 - `403 admin changes need the admin at the keyboard …` — a fire tried to change
   something. Report the change you would make where the run delivers; the admin
   confirms it on a turn they send.

@@ -70,7 +70,7 @@ async function capabilityAdminDenied(
   if (access.agent === "anyone") return null;
   if (claims.aud !== CONTROL_PLANE_AUD) return "admin routes require the per-turn agent token";
   if (!livePersonCapability(claims)) {
-    return "admin actions through the agent carry a person's own authority — this turn runs with none (a bot actor, an external audience, or a session message whose authorization chain could not be verified). Report this failure where the run delivers instead of finishing silently.";
+    return "admin actions through the agent carry a person's own authority — this turn runs with none (a bot actor, an external audience, a task an automated turn wrote or a conversation owns, or a session message whose authorization chain could not be verified). Report this failure where the run delivers instead of finishing silently.";
   }
   if (typeof access.agent === "object") return access.agent.portalOnly;
   if (WRITE_METHODS.has(method) && !personAtKeyboard(claims)) return ADMIN_WRITE_NEEDS_PERSON;

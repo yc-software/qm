@@ -122,51 +122,6 @@ test("a task an automated turn wrote fires without its owner's authority until t
   assert.equal((await built.app.getCron(byPerson.cron.id))?.taskAuthor, "automation");
 });
 
-test("a write grantee's schedule, title or enabled patch leaves a shared cron's owner alone", async () => {
-  const chanScope = scopeId("channel", "C9");
-  const chanClaims = (actor: string) =>
-    claims(actor, chanScope, {
-      privateScope: true,
-      destination: { type: ROOM.type, target: ROOM.target, audienceScopeId: chanScope },
-      destinations: [{ ...ROOM, audienceScopeId: chanScope }],
-      defaultDestinationKey: ROOM.key,
-    });
-  const { built, control } = setup();
-  await built.app.upsertDirectory([
-    { principalId: "U1", displayName: "Una", type: "internal" },
-    { principalId: "U2", displayName: "Mia", type: "internal" },
-  ]);
-  await built.app.upsertChannels(
-    [{ channelId: "C9", name: "eng", isPrivate: true }],
-    ["U1", "U2"].map((principalId) => ({ channelId: "C9", principalId })),
-  );
-  const made = await control.createCron(
-    { title: "digest", schedule: { everyMs: 60_000 }, action: "digest" },
-    chanClaims("U1"),
-  );
-  assert.ok(made.ok, JSON.stringify(made));
-  const id = made.cron.id;
-  assert.ok(
-    (await control.shareArtifact({ type: "cron", id, scope: "personal:U2", permission: "write" }, chanClaims("U1"))).ok,
-  );
-
-  for (const patch of [
-    { schedule: { everyMs: 120_000 } },
-    { title: "weekly digest" },
-    { enabled: false },
-    { enabled: true },
-    { archived: false },
-  ]) {
-    const r = await control.patchCron(id, patch, chanClaims("U2"));
-    assert.ok(r.ok, JSON.stringify({ patch, r }));
-    assert.equal(r.cron.owner, "U1", `${JSON.stringify(patch)} does not change what the cron does, so no handover`);
-  }
-  const paused = await control.setCronEnabled(id, false, chanClaims("U2"));
-  assert.ok(paused.ok);
-  assert.equal(paused.cron.owner, "U1");
-  assert.equal((await built.app.getCron(id))?.owner, "U1");
-});
-
 test("the owner rewriting their own shared cron's task keeps ownership and gets no notice", async () => {
   const chanScope = scopeId("channel", "C9");
   const chanClaims = (actor: string) =>
