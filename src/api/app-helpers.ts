@@ -10,7 +10,7 @@ import type {
   TurnResult,
 } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
-import { isManageableCreationScope, parseScopeId, scopeId } from "../types.ts";
+import { isManageableCreationScope, parseScopeId, scopeId, type TurnRequest } from "../types.ts";
 import { type ListOwnedOptions } from "../files/file-artifact-store.ts";
 import { isTerminal, RUN_WAIT_FALLBACK_MS, type Run, type SessionWatch } from "../runs/run-store.ts";
 import type { RunSignal } from "../runs/run-signal-store.ts";
@@ -695,157 +695,145 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       ...(own?.replayRunId ? { replayRunId: own.replayRunId } : {}),
     };
   }
-  async function replayOrphanedRunSignals(runId: string): Promise<Array<{ signal: RunSignal; replayRunId?: string }>> {
-    if (!deps.signals) return [];
-    const drained: Array<{ signal: RunSignal; replayRunId?: string }> = [];
-    const completed = await deps.runs.get(runId);
-    if (completed && isSubagentThreadRef(completed.sessionId)) {
-      const signals = deps.signals;
-      if ((await signals.pending(runId)).length === 0) return drained;
-      return deps.advisoryLock.withLock(`run-signal-replay:${runId}`, async () => {
-        for (const { id, signal } of await signals.pending(runId)) {
-          if (signal.kind === "abort" || signal.kind === "client_result" || !signal.text?.trim()) {
-            await signals.acknowledge(runId, id);
-            continue;
-          }
-          let replayRunId: string | undefined;
-          const dedupKey = `session-signal:${runId}:${id}`;
-          if (signal.request) {
-            const {
-              approval: _ap,
-              redeliveryKey: _redeliveryKey,
-              clientTools: _clientTools,
-              desktopClientId: _desktopClientId,
-              ...base
-            } = signal.request;
-            const prior = completed.request;
-            const inheritedOptions = {
-              ...(base.model === undefined && prior.model !== undefined ? { model: prior.model } : {}),
-              ...(base.thinkingLevel === undefined && prior.thinkingLevel !== undefined
-                ? { thinkingLevel: prior.thinkingLevel }
-                : {}),
-              ...(base.fastMode === undefined && prior.fastMode !== undefined ? { fastMode: prior.fastMode } : {}),
-              ...(base.timezone === undefined && prior.timezone !== undefined ? { timezone: prior.timezone } : {}),
-            };
-            const replayed = await app.turn(
-              { ...base, ...inheritedOptions, async: true, idempotencyKey: dedupKey },
-              { signalDedupKey: dedupKey },
-            );
-            replayRunId = replayed.runId;
-            if (!replayRunId && replayed.status !== "refused") continue;
-          } else {
-            const {
-              approval: _approval,
-              attachments: _attachments,
-              displayText: _display,
-              clientTools: _clientTools,
-              desktopClientId: _desktopClientId,
-              ...request
-            } = completed.request;
-            const { run } = await deps.runs.enqueue({
-              sessionId: completed.sessionId,
-              request: {
-                ...request,
-                text: signal.text,
-                origin: sessionTurnOrigin(
-                  completed.request.origin?.kind === "automation" ? completed.request.origin : undefined,
-                  signal.text,
-                ),
-              },
-              dedupKey,
-              maxAttempts: deps.maxAttempts,
-            });
-            replayRunId = run.id;
-          }
-          await signals.acknowledge(runId, id);
-          drained.push({ signal, ...(replayRunId ? { replayRunId } : {}) });
-        }
-        return drained;
-      });
+  type RunOptions = Pick<TurnRequest, "model" | "thinkingLevel" | "fastMode" | "timezone">;
+  function inheritedRunOptions(base: RunOptions, prior: RunOptions | undefined): RunOptions {
+    return {
+      ...(base.model === undefined && prior?.model !== undefined ? { model: prior.model } : {}),
+      ...(base.thinkingLevel === undefined && prior?.thinkingLevel !== undefined
+        ? { thinkingLevel: prior.thinkingLevel }
+        : {}),
+      ...(base.fastMode === undefined && prior?.fastMode !== undefined ? { fastMode: prior.fastMode } : {}),
+      ...(base.timezone === undefined && prior?.timezone !== undefined ? { timezone: prior.timezone } : {}),
+    };
+  }
+  type SignalReplay = "pending" | "skip" | { replayRunId?: string };
+  async function replaySubagentSignal(
+    completed: Run,
+    runId: string,
+    id: string,
+    signal: RunSignal,
+  ): Promise<SignalReplay> {
+    if (signal.kind === "abort" || signal.kind === "client_result" || !signal.text?.trim()) return "skip";
+    const dedupKey = `session-signal:${runId}:${id}`;
+    if (signal.request) {
+      const {
+        approval: _ap,
+        redeliveryKey: _redeliveryKey,
+        clientTools: _clientTools,
+        desktopClientId: _desktopClientId,
+        ...base
+      } = signal.request;
+      const replayed = await app.turn(
+        { ...base, ...inheritedRunOptions(base, completed.request), async: true, idempotencyKey: dedupKey },
+        { signalDedupKey: dedupKey },
+      );
+      if (!replayed.runId && replayed.status !== "refused") return "pending";
+      return replayed.runId ? { replayRunId: replayed.runId } : {};
     }
+    const {
+      approval: _approval,
+      attachments: _attachments,
+      displayText: _display,
+      clientTools: _clientTools,
+      desktopClientId: _desktopClientId,
+      ...request
+    } = completed.request;
+    const { run } = await deps.runs.enqueue({
+      sessionId: completed.sessionId,
+      request: {
+        ...request,
+        text: signal.text,
+        origin: sessionTurnOrigin(
+          completed.request.origin?.kind === "automation" ? completed.request.origin : undefined,
+          signal.text,
+        ),
+      },
+      dedupKey,
+      maxAttempts: deps.maxAttempts,
+    });
+    return { replayRunId: run.id };
+  }
+  async function replayRunSignal(
+    completed: Run | null,
+    runId: string,
+    id: string,
+    signal: RunSignal,
+  ): Promise<SignalReplay> {
+    if (signal.kind === "abort" || signal.kind === "client_result") return "skip";
+    if (signal.request?.approval) {
+      try {
+        const { redeliveryKey: _redeliveryKey, clientTools: _clientTools, ...decision } = signal.request;
+        const replayed = await app.turn(
+          { ...decision, async: true },
+          { signalDedupKey: `signal-replay:${runId}:${id}` },
+        );
+        return replayed.runId ? { replayRunId: replayed.runId } : {};
+      } catch (err) {
+        swallow(`signals: approval-decision replay for run ${runId}`, err);
+        return "pending";
+      }
+    }
+    const dedupKey = `steer-replay:${runId}:${id}`;
+    if (signal.request) {
+      try {
+        const {
+          approval: _ap,
+          redeliveryKey: _redeliveryKey,
+          clientTools: _clientTools,
+          desktopClientId: _desktopClientId,
+          ...base
+        } = signal.request;
+        const replayed = await app.turn(
+          { ...base, ...inheritedRunOptions(base, completed?.request), async: true },
+          { signalDedupKey: dedupKey },
+        );
+        if (replayed.runId) return { replayRunId: replayed.runId };
+      } catch (err) {
+        swallow(`signals: orphaned-signal replay for run ${runId}`, err);
+        return "pending";
+      }
+    }
+    const orphanRun = signal.text?.trim() ? completed : null;
+    if (orphanRun) {
+      try {
+        const {
+          displayText: _d,
+          attachments: _a,
+          approval: _ap,
+          clientTools: _clientTools,
+          desktopClientId: _desktopClientId,
+          ...base
+        } = orphanRun.request;
+        const { run: fresh } = await deps.runs.enqueue({
+          sessionId: orphanRun.sessionId,
+          request: { ...base, text: signal.text! },
+          dedupKey,
+        });
+        return { replayRunId: fresh.id };
+      } catch (err) {
+        swallow(`signals: requestless orphaned-steer replay for run ${runId}`, err);
+        return "pending";
+      }
+    }
+    console.warn(
+      `[signals] orphaned ${signal.kind} for terminal run ${runId} could not be replayed — dropped: ${signal.text?.slice(0, 120) ?? ""}`,
+    );
+    return {};
+  }
+  async function replayOrphanedRunSignals(runId: string): Promise<Array<{ signal: RunSignal; replayRunId?: string }>> {
     const signals = deps.signals;
-    if ((await signals.pending(runId)).length === 0) return drained;
+    if (!signals || (await signals.pending(runId)).length === 0) return [];
+    const completed = await deps.runs.get(runId);
     return deps.advisoryLock.withLock(`run-signal-replay:${runId}`, async () => {
+      const drained: Array<{ signal: RunSignal; replayRunId?: string }> = [];
       for (const { id, signal } of await signals.pending(runId)) {
-        if (signal.kind === "abort" || signal.kind === "client_result") {
-          await signals.acknowledge(runId, id);
-          continue;
-        }
-        if (signal.request?.approval) {
-          let replayRunId: string | undefined;
-          try {
-            const { redeliveryKey: _redeliveryKey, clientTools: _clientTools, ...decision } = signal.request;
-            replayRunId = (
-              await app.turn({ ...decision, async: true }, { signalDedupKey: `signal-replay:${runId}:${id}` })
-            ).runId;
-          } catch (err) {
-            swallow(`signals: approval-decision replay for run ${runId}`, err);
-            continue;
-          }
-          await signals.acknowledge(runId, id);
-          drained.push({ signal, ...(replayRunId ? { replayRunId } : {}) });
-          continue;
-        }
-        let replayRunId: string | undefined;
-        if (signal.request) {
-          try {
-            const {
-              approval: _ap,
-              redeliveryKey: _redeliveryKey,
-              clientTools: _clientTools,
-              desktopClientId: _desktopClientId,
-              ...base
-            } = signal.request;
-            const prior = (await deps.runs.get(runId))?.request;
-            const inheritedOptions = {
-              ...(base.model === undefined && prior?.model !== undefined ? { model: prior.model } : {}),
-              ...(base.thinkingLevel === undefined && prior?.thinkingLevel !== undefined
-                ? { thinkingLevel: prior.thinkingLevel }
-                : {}),
-              ...(base.fastMode === undefined && prior?.fastMode !== undefined ? { fastMode: prior.fastMode } : {}),
-              ...(base.timezone === undefined && prior?.timezone !== undefined ? { timezone: prior.timezone } : {}),
-            };
-            const replayed = await app.turn(
-              { ...base, ...inheritedOptions, async: true },
-              { signalDedupKey: `steer-replay:${runId}:${id}` },
-            );
-            replayRunId = replayed.runId;
-          } catch (err) {
-            swallow(`signals: orphaned-signal replay for run ${runId}`, err);
-            continue;
-          }
-        }
-        if (!replayRunId && signal.text?.trim()) {
-          const orphanRun = await deps.runs.get(runId);
-          if (orphanRun) {
-            try {
-              const {
-                displayText: _d,
-                attachments: _a,
-                approval: _ap,
-                clientTools: _clientTools,
-                desktopClientId: _desktopClientId,
-                ...base
-              } = orphanRun.request;
-              const { run: fresh } = await deps.runs.enqueue({
-                sessionId: orphanRun.sessionId,
-                request: { ...base, text: signal.text },
-                dedupKey: `steer-replay:${runId}:${id}`,
-              });
-              replayRunId = fresh.id;
-            } catch (err) {
-              swallow(`signals: requestless orphaned-steer replay for run ${runId}`, err);
-              continue;
-            }
-          }
-        }
-        if (!replayRunId) {
-          console.warn(
-            `[signals] orphaned ${signal.kind} for terminal run ${runId} could not be replayed — dropped: ${signal.text?.slice(0, 120) ?? ""}`,
-          );
-        }
+        const replay =
+          completed && isSubagentThreadRef(completed.sessionId)
+            ? await replaySubagentSignal(completed, runId, id, signal)
+            : await replayRunSignal(completed, runId, id, signal);
+        if (replay === "pending") continue;
         await signals.acknowledge(runId, id);
-        drained.push({ signal, ...(replayRunId ? { replayRunId } : {}) });
+        if (replay !== "skip") drained.push({ signal, ...replay });
       }
       return drained;
     });
