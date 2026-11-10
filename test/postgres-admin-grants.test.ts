@@ -18,6 +18,7 @@ beforeEach(async () => {
   await p.end();
 });
 
+const tenant = withTenant(TEST_TENANT, (t) => t);
 const org = scopeId("org", "default-org");
 const grant = (over: Partial<AdminGrant> = {}): AdminGrant => ({
   principalId: "U1",
@@ -31,20 +32,20 @@ const grant = (over: Partial<AdminGrant> = {}): AdminGrant => ({
 test("pg admin-grant persistence: put is an idempotent upsert; remove is key-scoped", { skip }, async () => {
   const store = createPostgresAdminGrantStore(URL!);
 
-  await store.put(grant());
-  await store.put(grant());
-  assert.equal((await store.all()).length, 1, "put dedups on (principal, scope, role)");
+  await store.put(tenant, grant());
+  await store.put(tenant, grant());
+  assert.equal((await store.all(tenant)).length, 1, "put dedups on (principal, scope, role)");
 
-  await store.put(grant({ grantedBy: "bob" }));
-  assert.equal((await store.all()).length, 1);
-  assert.equal((await store.all())[0]!.grantedBy, "bob");
+  await store.put(tenant, grant({ grantedBy: "bob" }));
+  assert.equal((await store.all(tenant)).length, 1);
+  assert.equal((await store.all(tenant))[0]!.grantedBy, "bob");
 
-  await store.put(grant({ principalId: "U2" }));
-  assert.equal((await store.all()).length, 2);
+  await store.put(tenant, grant({ principalId: "U2" }));
+  assert.equal((await store.all(tenant)).length, 2);
 
-  await store.remove("U1", org, "org_admin");
+  await store.remove(tenant, "U1", org, "org_admin");
   assert.deepEqual(
-    (await store.all()).map((g) => g.principalId),
+    (await store.all(tenant)).map((g) => g.principalId),
     ["U2"],
     "remove drops only the matched grant",
   );
@@ -52,11 +53,11 @@ test("pg admin-grant persistence: put is an idempotent upsert; remove is key-sco
 
 test("pg admin grants survive a restart: a promotion is read back through a SEPARATE store", { skip }, async () => {
   const boot1 = createPostgresAdminGrantStore(URL!);
-  await boot1.put(grant({ principalId: "U-durable" }));
+  await boot1.put(tenant, grant({ principalId: "U-durable" }));
 
   const boot2 = createPostgresAdminGrantStore(URL!);
   assert.equal(
-    (await boot2.all()).some((g) => g.principalId === "U-durable"),
+    (await boot2.all(tenant)).some((g) => g.principalId === "U-durable"),
     true,
     "promotion survived the restart",
   );
@@ -67,20 +68,20 @@ test("pg-backed AdminGrantStore: seed applies once, then a redeploy never clobbe
     const seed = [grant({ principalId: "seed-admin" })];
     const s1 = createAdminGrantStore(createPostgresAdminGrantStore(URL!), {
       seed,
-      seedTenant: async () => TEST_TENANT,
+      seedsTenant: (t) => t.id === TEST_TENANT,
     });
     assert.equal(
-      (await s1.list()).some((g) => g.principalId === "seed-admin"),
+      (await s1.list(tenant)).some((g) => g.principalId === "seed-admin"),
       true,
       "seed applied to the empty store",
     );
-    await s1.add(grant({ principalId: "promoted-at-runtime" }));
+    await s1.add(tenant, grant({ principalId: "promoted-at-runtime" }));
 
     const s2 = createAdminGrantStore(createPostgresAdminGrantStore(URL!), {
       seed,
-      seedTenant: async () => TEST_TENANT,
+      seedsTenant: (t) => t.id === TEST_TENANT,
     });
-    const ids = (await s2.list()).map((g) => g.principalId).sort();
+    const ids = (await s2.list(tenant)).map((g) => g.principalId).sort();
     assert.deepEqual(ids, ["promoted-at-runtime", "seed-admin"], "redeploy preserves both seed + runtime grants");
   }),
 );
@@ -88,10 +89,10 @@ test("pg-backed AdminGrantStore: seed applies once, then a redeploy never clobbe
 test("concurrent administrator provisioning preserves the first grant", { skip }, async () => {
   const store = createPostgresAdminGrantStore(URL!);
   const candidates = Array.from({ length: 8 }, (_, i) => grant({ createdAt: i, grantedBy: `issuer-${i}` }));
-  const inserted = await Promise.all(candidates.map((g) => store.insertIfAbsent(g)));
+  const inserted = await Promise.all(candidates.map((g) => store.insertIfAbsent(tenant, g)));
   assert.equal(inserted.filter(Boolean).length, 1);
   const winner = candidates[inserted.indexOf(true)]!;
-  assert.deepEqual(await store.all(), [winner]);
-  assert.equal(await createPostgresAdminGrantStore(URL!).insertIfAbsent(grant({ createdAt: 999 })), false);
-  assert.deepEqual(await store.all(), [winner]);
+  assert.deepEqual(await store.all(tenant), [winner]);
+  assert.equal(await createPostgresAdminGrantStore(URL!).insertIfAbsent(tenant, grant({ createdAt: 999 })), false);
+  assert.deepEqual(await store.all(tenant), [winner]);
 });

@@ -34,7 +34,13 @@ const auditLog = { record() {}, events: async () => [], tail: async () => [] };
 const SESSION_SECRET = "portal-session-secret";
 const LOGIN_URL = "https://portal.example.com";
 
-function mintPortalSession(sub: string, expInSeconds = 3600, secret = SESSION_SECRET, appOnly?: true): string {
+function mintPortalSession(
+  sub: string,
+  expInSeconds = 3600,
+  secret = SESSION_SECRET,
+  appOnly?: true,
+  tenant?: string,
+): string {
   const key = createHmac("sha256", secret).update("portal.session.v1").digest();
   const now = Math.floor(Date.now() / 1000);
   const body = Buffer.from(
@@ -45,6 +51,7 @@ function mintPortalSession(sub: string, expInSeconds = 3600, secret = SESSION_SE
       iat: now,
       exp: now + expInSeconds,
       ...(appOnly ? { appOnly } : {}),
+      ...(tenant ? { t: tenant } : {}),
     }),
   ).toString("base64url");
   const sig = createHmac("sha256", key).update(body).digest("base64url");
@@ -287,6 +294,14 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     });
     assert.equal(owner.status, 200, "the signed-in owner reaches the app with no capability link");
     assert.equal(owner.body, "UPSTREAM OK");
+    const sealedFor = (tenant: string) =>
+      httpGet(port, "/consultants?x=1", {
+        Host: host,
+        Accept: "text/html",
+        Cookie: `portal_session=${mintPortalSession("alice@example.com", 3600, SESSION_SECRET, undefined, tenant)}`,
+      });
+    assert.equal((await sealedFor(TEST_TENANT)).status, 200, "a session sealed for this tenant reaches the app");
+    assert.equal((await sealedFor(randomUUID())).status, 404, "a session sealed for another tenant does not");
     assert.equal(upstreamCookie, undefined, "the portal session cookie never reaches the app");
     assert.equal(upstreamUrl, "/consultants?x=1", "the app sees the clean URL");
     for (const origin of ["https://sibling.apps.example.com", "https://portal.example.com", "null"]) {

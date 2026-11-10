@@ -76,7 +76,7 @@ export async function recordStoppedTurn(
         kind: "AgentMessage",
         text: partial,
         step: replay?.step ?? null,
-        body: { stopped: true, ...replay?.body },
+        body: { stopped: true, ...(turn.cancel?.aborted ? { cancelled: true } : {}), ...replay?.body },
       })
     : null;
   const note = await turn.emit({ kind: "Stop", body: { reason } });

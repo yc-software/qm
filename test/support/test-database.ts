@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import pg from "pg";
 import { boundTenant } from "../../src/tenants/context.ts";
 import { MessageChannel, receiveMessageOnPort, Worker, type MessagePort } from "node:worker_threads";
 import { createPostgresAdminGrantStore } from "../../src/admin/postgres-admin-grant-store.ts";
@@ -88,6 +89,22 @@ export function testAdvisoryLock(): AdvisoryLock {
   return createPostgresAdvisoryLock(createPgPool(testDatabaseUrl()));
 }
 
+export function testCountedAdvisoryLock(): { lock: AdvisoryLock; held: () => number; close: () => Promise<void> } {
+  const sessions = new pg.Pool({ connectionString: testDatabaseUrl(), max: 32 });
+  const pool = createPgPool(testDatabaseUrl());
+  let held = 0;
+  sessions.on("acquire", () => held++);
+  sessions.on("release", () => held--);
+  return {
+    lock: createPostgresAdvisoryLock({ ...pool, sessionPool: async () => sessions }),
+    held: () => held,
+    close: async () => {
+      await sessions.end();
+      await pool.close();
+    },
+  };
+}
+
 export function testConfigStore(orgId: string, opts: Partial<Parameters<typeof createConfigStore>[1]> = {}) {
   return createConfigStore(orgId, { ...configStoreMaps(() => testMap<never>()), ...opts });
 }
@@ -103,7 +120,7 @@ export function testAdminGrantStore(
 ): AdminGrantStore {
   return createAdminGrantStore(createPostgresAdminGrantStore(testDatabaseUrl()), {
     seed,
-    seedTenant: async () => boundTenant(),
+    seedsTenant: (t) => t.id === boundTenant(),
   });
 }
 
@@ -119,6 +136,7 @@ export function testDeployBackings(
       undefined,
       DEPLOYMENT_TABLES,
     ),
+    drafts: maps.map<import("../../src/deploy/deploy-store.ts").DeploymentDraft>("deployment_drafts"),
     pg: maps.pool,
     ...backings,
   };

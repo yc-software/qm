@@ -56,7 +56,7 @@ test("a subagent shows its delegated tasks while the parent's completion wake st
     return { hidden: hidden === true, display: body.display as string | undefined };
   };
 
-  const opened = await syscalls.open({ task: "Summarize the repo", name: "repo summary" });
+  const opened = await syscalls.open({ task: "Summarize the repo", name: "repo summary", persistent: true });
   assert.ok(opened.ok);
   const child = (await built.sessions.get(opened.sessionId))!;
   built.runtime.start();

@@ -193,12 +193,12 @@ test("admin seed grants go only to the boot tenant, once", async () => {
   let puts = 0;
   const grants = createAdminGrantStore(
     {
-      async all() {
-        return persisted.get(currentTenant()) ?? [];
+      async all(tenant) {
+        return persisted.get(tenant.id) ?? [];
       },
-      async put(grant) {
+      async put(tenant, grant) {
         puts += 1;
-        persisted.set(currentTenant(), [...(persisted.get(currentTenant()) ?? []), grant]);
+        persisted.set(tenant.id, [...(persisted.get(tenant.id) ?? []), grant]);
       },
       async insertIfAbsent() {
         return true;
@@ -207,12 +207,12 @@ test("admin seed grants go only to the boot tenant, once", async () => {
     },
     {
       seed: [{ principalId: "admin@example.com", scopeId: scopeId("org", "acme"), role: "org_admin" }],
-      seedTenant: async () => A,
+      seedsTenant: (t) => t.id === A,
     },
   );
-  await withTenant(A, () => grants.list());
-  await withTenant(A, () => grants.list());
-  await withTenant(B, () => grants.list());
+  await withTenant(A, (tenant) => grants.list(tenant));
+  await withTenant(A, (tenant) => grants.list(tenant));
+  await withTenant(B, (tenant) => grants.list(tenant));
   assert.equal(puts, 1);
   assert.deepEqual(persisted.get(B), undefined);
 });

@@ -12,11 +12,6 @@ export const FEATURES = {
     label: "Personas",
     hint: "Lets the selected people create, share and chat with personas: reusable agents with their own instructions, skills and credentials.",
   },
-  persistent_subagents: {
-    label: "Persistent subagents",
-    personalOnly: true,
-    hint: "Persistent subagents are available for personal scopes only.",
-  },
   inbox_loops: { label: "Inbox Loops" },
   slack_loading_indicator: {
     label: "Slack loading indicator (experimental)",

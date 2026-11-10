@@ -3,9 +3,9 @@ import { gatewayRoot, type ModelGatewayTransportConfig } from "./provider-endpoi
 import { GATEWAY_MODEL_PREFIX, GATEWAY_PROVIDER, setGatewayModels, type GatewayModel } from "./gateway-models.ts";
 import { modelOfferedInWebui, selectableBaseModels } from "./pi-models.ts";
 import { readBoundedText } from "../util/bytes.ts";
+import { swallow } from "../util/errors.ts";
 
 const MAX_BYTES = 2 * 1024 * 1024;
-const MAX_MODELS = 1_000;
 const TTL_MS = 5 * 60_000;
 const RETRY_MS = 30_000;
 const STALE_MS = 15 * 60_000;
@@ -25,7 +25,7 @@ function record(value: unknown): Record<string, unknown> | undefined {
 }
 
 function modelId(value: unknown): value is string {
-  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,191}$/.test(value);
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:/+-]*$/.test(value);
 }
 
 function tokens(value: unknown): number | undefined {
@@ -123,7 +123,7 @@ async function readCatalog(
     throw Object.assign(new Error(`Gateway catalog returned HTTP ${response.status}`), { status: response.status });
   const body = await readBoundedText(response, MAX_BYTES, () => new Error("Gateway catalog exceeds size limit"));
   const data = record(JSON.parse(body))?.data;
-  if (!Array.isArray(data) || data.length > MAX_MODELS) throw new Error("Invalid gateway catalog");
+  if (!Array.isArray(data)) throw new Error("Invalid gateway catalog");
   return data;
 }
 
@@ -196,14 +196,16 @@ export function createGatewayCatalog(
       } catch (error) {
         state.retryAt = now() + RETRY_MS;
         if (state.discovered && transientFailure(error) && now() - state.lastSuccessAt < STALE_MS) {
-          console.warn("[model] Gateway model discovery failed; keeping last known models and retrying in 30 seconds");
+          swallow("model: gateway discovery failed; keeping last known models and retrying in 30 seconds", error);
           return;
         }
         if (state.discovered || Object.keys(config.models).length === 0) {
           state.routes = {};
           setGatewayModels([]);
-          console.warn("[model] Gateway model discovery unavailable; retrying in 30 seconds");
+          swallow("model: gateway discovery unavailable; retrying in 30 seconds", error);
+          return;
         }
+        swallow("model: gateway discovery failed; routing configured aliases only and retrying in 30 seconds", error);
       }
     })().finally(() => {
       state.inFlight = undefined;

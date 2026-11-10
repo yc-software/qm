@@ -1,5 +1,5 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
-import { withTenant } from "./context.ts";
+import { type Tenant, withTenant } from "./context.ts";
 
 export async function readBootTenant(databaseUrl: string): Promise<string | undefined> {
   const db = createPgPool(databaseUrl);
@@ -27,6 +27,6 @@ export async function bindBootTenant(read: () => Promise<string | undefined>): P
   return booted;
 }
 
-export function inBootTenant<T>(tenant: string | undefined, fn: () => T): T {
-  return tenant ? withTenant(tenant, fn) : fn();
+export function inBootTenant<T>(id: string | undefined, fn: (tenant: Tenant | undefined) => T): T {
+  return id ? withTenant(id, fn) : fn(undefined);
 }
