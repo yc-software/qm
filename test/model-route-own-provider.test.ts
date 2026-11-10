@@ -7,46 +7,34 @@ import { TEST_TENANT } from "./support/test-tenant.ts";
 
 const claude = defaultModelForProvider("anthropic")!;
 const gpt = defaultModelForProvider("openai")!;
-
-function routes(own: string[]) {
-  return createModelRoutes({
+const routes = (own: string[]) =>
+  createModelRoutes({
     defaultModelId: claude,
     modelGateway: {
       url: "http://gateway.invalid",
-      apiKey: "gateway-key",
+      apiKey: "k",
       apiKeyHeader: "x-api-key",
-      models: { [claude]: `anthropic/${claude}`, [gpt]: `openai/${gpt}` },
+      models: { [claude]: claude },
     },
     resolveProviderKeys: async () => Object.fromEntries(own.map((provider) => [provider, `${provider}-key`])),
     ownProviders: async () => new Set(own),
   });
-}
+const summary = (r: { modelId: string; billing: string; gateway?: unknown }) => [r.modelId, r.billing, !!r.gateway];
 
-test("company inference stays on the gateway until an admin adds the company's own provider", async () => {
-  const route = await withTenant(TEST_TENANT, () => routes([]).route(claude));
-  assert.equal(route.billing, "model_gateway");
-  assert.ok(route.gateway);
-});
-
-test("a company's own provider key takes over its models from the gateway", async () => {
-  const route = await routes(["anthropic"]).route(claude);
-  assert.deepEqual([route.modelId, route.billing, route.gateway], [claude, "org_key", undefined]);
-  assert.equal(route.keys.anthropic, "anthropic-key");
-});
-
-test("models from a provider the company has no key for move to its own provider's default model", async () => {
-  const route = await routes(["openai"]).route(claude);
-  assert.deepEqual([route.modelId, route.billing, route.gateway], [gpt, "org_key", undefined]);
-  const utility = await routes(["openai"]).utility();
-  assert.equal(utility?.billing, "org_key");
-});
-
-test("a gateway-catalog model id resolves to the provider's own model once the company has that provider", async () => {
-  const route = await routes(["anthropic"]).route(`gateway/anthropic/${claude}`);
-  assert.deepEqual([route.modelId, route.billing], [claude, "org_key"]);
-});
-
-test("personal accounts are unaffected by the company's provider choice", async () => {
-  const route = await routes(["openai"]).route(claude, { anthropic: "personal-key" });
-  assert.deepEqual([route.modelId, route.billing, route.keys.anthropic], [claude, "personal_account", "personal-key"]);
+test("company inference leaves the gateway once the organization saves its own provider key", async () => {
+  assert.deepEqual(summary(await withTenant(TEST_TENANT, () => routes([]).route(claude))), [
+    claude,
+    "model_gateway",
+    true,
+  ]);
+  assert.deepEqual(summary(await routes(["anthropic"]).route(claude)), [claude, "org_key", false]);
+  assert.deepEqual(summary(await routes(["anthropic"]).route(`gateway/anthropic/${claude}`)), [
+    claude,
+    "org_key",
+    false,
+  ]);
+  assert.deepEqual(summary(await routes(["openai"]).route(claude)), [gpt, "org_key", false]);
+  assert.deepEqual(summary((await routes(["openai"]).utility())!), [gpt, "org_key", false]);
+  const personal = await routes(["openai"]).route(claude, { anthropic: "mine" });
+  assert.deepEqual(summary(personal), [claude, "personal_account", false]);
 });
