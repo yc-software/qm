@@ -118,6 +118,7 @@ export async function swarmFixture(
       threadRef: root.threadRef,
       liveActor: true,
       exp: Date.now() + 60_000,
+      ...(options.runtime?.botActor ? { botActor: true } : {}),
       ...options.claims,
     },
   };
