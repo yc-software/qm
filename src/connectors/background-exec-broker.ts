@@ -13,6 +13,8 @@ export interface BackgroundExecBrokerDeps {
   registry: ProcessRegistry;
   provisionSandbox?: (id: string) => Promise<SandboxHandle>;
   onExit?: (handle: SandboxHandle, processId: string) => Promise<void>;
+  /** Called when a poll finds a running job with new output; failures never fail the poll. */
+  onOutput?: (handle: SandboxHandle, processId: string) => Promise<void>;
   scopeId: string;
   sessionRef?: string;
   ttlMs?: number;
@@ -227,6 +229,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
         waitMs: opts?.waitMs ?? 0,
       });
       if (read.status.state === "exited") await exited(handle, processId);
+      else if (read.chunks) await deps.onOutput?.(handle, processId).catch(() => undefined);
       return { processId, chunks: read.chunks, cursor: read.cursor, status: read.status };
     },
 

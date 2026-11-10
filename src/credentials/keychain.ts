@@ -8,6 +8,7 @@ import { errMessage } from "../util/errors.ts";
 import { canonicalPerson, personIds, personKey, samePerson } from "../directory/person.ts";
 import { cronIdOf } from "../sessions/session-store.ts";
 import { hashId } from "../util/crypto.ts";
+import { mergeCredentialFiles } from "./file-merge.ts";
 import { shq } from "../util/shell.ts";
 import { homeRelativePath } from "./paths.ts";
 import { envKey } from "./connector-token.ts";
@@ -366,6 +367,11 @@ interface MaterializedFileCred {
   grantId?: string;
   purpose?: string;
   writeback?: boolean;
+  /**
+   * Path → file hash of what the command started with, when `files` is not that snapshot
+   * (background saves re-read the store). null means the snapshot is unknown.
+   */
+  baseline?: Record<string, string> | null;
 }
 
 export type MaterializedCred = ({ kind: "env" } & MaterializedEnvCred) | ({ kind: "file" } & MaterializedFileCred);
@@ -390,6 +396,7 @@ export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   writebackBaseline(
     source: FileCredentialSource,
     fingerprint: string,
+    fileHashes?: Record<string, string>,
   ): Promise<Extract<MaterializedCred, { kind: "file" }>>;
   listAllMetadata(): Promise<KeychainCredentialMeta[]>;
   listByOwner(ownerId: string): Promise<KeychainCredentialMeta[]>;
@@ -460,6 +467,21 @@ export function credentialFilesFingerprint(files: CredentialFile[]): string {
       .map((file) => ({ ...file, mode: restoredFileMode(file.mode) }))
       .sort((a, b) => homeRelativePath(a.path).localeCompare(homeRelativePath(b.path))),
   );
+}
+
+function credentialFileHash(file: CredentialFile): string {
+  return fingerprintOf(
+    JSON.stringify({
+      path: homeRelativePath(file.path),
+      contentBase64: file.contentBase64,
+      mode: restoredFileMode(file.mode),
+    }),
+  );
+}
+
+/** Per-file hashes, so a later save can tell which files changed without keeping their contents. */
+export function credentialFileHashes(files: CredentialFile[]): Record<string, string> {
+  return Object.fromEntries(files.map((file) => [homeRelativePath(file.path), credentialFileHash(file)]));
 }
 
 function fileCredentialFingerprint(files: CredentialFile[]): string {
@@ -1078,19 +1100,29 @@ export function createKeychain(deps: {
       const normalized = checkedFiles(files.map((file) => ({ ...file, path: keychainFilePath(file.path) })));
       if (!normalized.length) throw new KeychainError(409, "Refreshed credential files are missing");
       const fingerprint = credentialFilesFingerprint;
-      if (fingerprint(normalized) === fingerprint(materialized.files)) return;
+      const hashes =
+        materialized.baseline === undefined ? credentialFileHashes(materialized.files) : materialized.baseline;
+      const baseline = hashes ? new Map(Object.entries(hashes)) : null;
+      if (
+        baseline?.size === normalized.length &&
+        normalized.every((file) => baseline.get(file.path) === credentialFileHash(file))
+      )
+        return;
 
+      // Another command may have saved since this one started. Merge per file instead of
+      // discarding this command's refresh; the row lock in update() serializes concurrent saves.
       const updated = await deps.creds.update(materialized.credentialId, (current) => {
         if (current.kind !== "file" || !samePerson(current.ownerId, materialized.ownerId))
           throw new KeychainError(409, "Credential changed during execution");
         const currentFiles = decryptToFiles(current).files;
-        if (fingerprint(currentFiles) === fingerprint(normalized)) return current;
-        if (fingerprint(currentFiles) !== fingerprint(materialized.files))
-          throw new KeychainError(409, "Credential changed during execution; refreshed files were not saved");
-        const secret = JSON.stringify(normalized);
+        const next = checkedFiles(
+          mergeCredentialFiles({ baseline, stored: currentFiles, refreshed: normalized, hash: credentialFileHash }),
+        );
+        if (!next.length || fingerprint(next) === fingerprint(currentFiles)) return current;
+        const secret = JSON.stringify(next);
         return {
           ...current,
-          targets: normalized.map((file) => file.path),
+          targets: next.map((file) => file.path),
           secretEnc: encryptSecret(secret, deps.key),
           fingerprint: fingerprintOf(secret),
           updatedAt: now(),
@@ -1099,19 +1131,19 @@ export function createKeychain(deps: {
       if (!updated) throw new KeychainError(410, "Credential was removed during execution");
     },
 
-    async writebackBaseline(source, fingerprint) {
+    async writebackBaseline(source, fingerprint, fileHashes) {
       const current = await deps.creds.get(source.credentialId);
       if (!current || current.kind !== "file" || !samePerson(current.ownerId, source.ownerId))
         throw new KeychainError(410, "Credential was removed during execution");
       const files = decryptToFiles(current).files;
-      if (credentialFilesFingerprint(files) !== fingerprint)
-        throw new KeychainError(409, "Credential changed during execution; refreshed files were not saved");
+      const unchanged = credentialFilesFingerprint(files) === fingerprint;
       return {
         kind: "file",
         credentialId: current.id,
         ownerId: current.ownerId,
         service: current.service,
         files,
+        ...(unchanged ? {} : { baseline: fileHashes ?? null }),
         ...(source.grantId ? { grantId: source.grantId } : {}),
         ...(source.writeback ? { writeback: true } : {}),
       };

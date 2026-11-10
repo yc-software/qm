@@ -47,6 +47,8 @@ export interface MonitorPollerDeps {
   maxFiresPerTick?: number;
   leaderLease: LeaderLease;
   onProcessExit?: (handle: SandboxHandle, processId: string) => Promise<void>;
+  /** Runs before firing on new output from a still-running job; failures are recorded, not fatal. */
+  onProcessOutput?: (handle: SandboxHandle, processId: string) => Promise<void>;
   heartbeatMs?: number;
   minFireIntervalMs?: number;
 }
@@ -202,6 +204,8 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
 
     const exited = read.status.state === "exited";
     const expired = !exited && t >= m.expiresAt;
+    if (!exited && read.chunks)
+      await deps.onProcessOutput?.(handle, m.processId).catch((e) => deps.monitors.recordError(m.id, errMessage(e)));
     const raw = (m.tail ?? "") + read.chunks;
     let events = raw;
     let tail: string | undefined;

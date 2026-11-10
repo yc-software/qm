@@ -7,6 +7,7 @@ import { pathUnder } from "../util/paths.ts";
 import { homeRelativePath } from "./paths.ts";
 import { builtInCredentialPaths, type CredentialPathSpec } from "./resident-paths.ts";
 import {
+  credentialFileHashes,
   credentialFilesFingerprint,
   fileCredentialEnvironment,
   KeychainError,
@@ -31,7 +32,8 @@ export interface ExecutionFilePlan {
 
 export interface ProcessCredentialFiles {
   plan: ExecutionFilePlan;
-  sources: Array<FileCredentialSource & { fingerprint: string }>;
+  /** fingerprint/fileHashes describe the job's files as of launch or its last mid-job save. */
+  sources: Array<FileCredentialSource & { fingerprint: string; fileHashes?: Record<string, string> }>;
 }
 
 export function processCredentialFiles(
@@ -42,7 +44,11 @@ export function processCredentialFiles(
     plan,
     sources: credentials.map((credential) => {
       if (!credential.source) throw new Error("Background credentials need a keychain source");
-      return { ...credential.source, fingerprint: credentialFilesFingerprint(credential.files) };
+      return {
+        ...credential.source,
+        fingerprint: credentialFilesFingerprint(credential.files),
+        fileHashes: credentialFileHashes(credential.files),
+      };
     }),
   };
 }
@@ -63,9 +69,9 @@ export async function finishProcessCredentials(
     deps.sandbox,
     handle,
     stored.plan,
-    stored.sources.map(({ fingerprint, ...source }) => async (files: CredentialFile[]) => {
+    stored.sources.map(({ fingerprint, fileHashes, ...source }) => async (files: CredentialFile[]) => {
       if (!keychain) throw new Error("Refreshed credentials cannot be saved without a keychain");
-      await keychain.updateFiles(await keychain.writebackBaseline(source, fingerprint), files);
+      await keychain.updateFiles(await keychain.writebackBaseline(source, fingerprint, fileHashes), files);
     }),
     (retry) =>
       deps.processes.setCredentialFiles(
@@ -78,6 +84,51 @@ export async function finishProcessCredentials(
           : null,
       ),
   );
+}
+
+/**
+ * Saves a still-running background job's credential files when they changed since launch or
+ * the last save, so a login the job just completed is usable by other commands right away.
+ * Leaves staging in place for the exit hook.
+ */
+export async function syncProcessCredentials(
+  deps: {
+    sandbox: Sandbox;
+    processes: Pick<ProcessRegistry, "credentialFiles" | "setCredentialFiles">;
+    keychain?: Pick<Keychain, "writebackBaseline" | "updateFiles">;
+  },
+  handle: SandboxHandle,
+  processId: string,
+): Promise<void> {
+  const stored = await deps.processes.credentialFiles(processId);
+  const keychain = deps.keychain;
+  if (!stored || !keychain) return;
+  const saved = new Map<number, CredentialFile[]>();
+  try {
+    await finishExecutionFiles(
+      deps.sandbox,
+      handle,
+      stored.plan,
+      stored.sources.map(({ fingerprint, fileHashes, ...source }, index) => async (files: CredentialFile[]) => {
+        if (credentialFilesFingerprint(files) === fingerprint) return;
+        await keychain.updateFiles(await keychain.writebackBaseline(source, fingerprint, fileHashes), files);
+        saved.set(index, files);
+      }),
+      undefined,
+      { keepDirectory: true },
+    );
+  } finally {
+    if (saved.size && (await deps.processes.credentialFiles(processId)))
+      await deps.processes.setCredentialFiles(processId, {
+        ...stored,
+        sources: stored.sources.map((source, index) => {
+          const files = saved.get(index);
+          return files
+            ? { ...source, fingerprint: credentialFilesFingerprint(files), fileHashes: credentialFileHashes(files) }
+            : source;
+        }),
+      });
+  }
 }
 
 async function runOrThrow(sandbox: Sandbox, handle: SandboxHandle, command: string, failure: string) {
@@ -180,6 +231,7 @@ async function finishExecutionFiles(
   plan: ExecutionFilePlan,
   saves: ReadonlyArray<(files: CredentialFile[]) => Promise<void>>,
   settle?: (retry: number[]) => Promise<void>,
+  opts?: { keepDirectory?: boolean },
 ): Promise<void> {
   const { directory } = plan;
   const home = `${directory}/home`;
@@ -234,6 +286,7 @@ async function finishExecutionFiles(
         `${retry.length ? "Could not persist refreshed credentials; will retry" : "Could not persist refreshed credentials"}: ${failures.map(({ reason }) => errMessage(reason)).join("; ")}`,
       );
   };
+  if (opts?.keepDirectory) return work();
   await withCleanup(work, async () => {
     await settle?.(retry);
     if (!retry.length) await removeDirectory(sandbox, handle, directory);
