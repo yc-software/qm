@@ -1002,11 +1002,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (introducesUser(input.origin, input)) await recordUser(deps.users, actor.id, input.botActor);
 
       const delegatedTask = !!input.sessionSenderId && session.parentSessionId === input.sessionSenderId;
-      const childWake =
-        !!input.sessionSenderId &&
-        !input.surfaceTools &&
-        !isSubagentThreadRef(conversation.threadRef) &&
-        (await deps.sessions.get(input.sessionSenderId))?.parentSessionId === session.id;
+      const wakingChild =
+        input.sessionSenderId && !input.surfaceTools && !isSubagentThreadRef(conversation.threadRef)
+          ? await deps.sessions.get(input.sessionSenderId)
+          : null;
+      const childWake = wakingChild?.parentSessionId === session.id && isSubagentThreadRef(wakingChild.threadRef);
       const syntheticInput =
         (input.proactiveOpener && !input.text.trim()) ||
         ((automatedTurn || (sessionTurn && input.envelopeWrapped)) && !delegatedTask);

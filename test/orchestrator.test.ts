@@ -2407,7 +2407,7 @@ test("finish_silently is a no-op off a poll fire — the agent's reply still del
   assert.match(interactive.reply ?? "", /ending silently/);
 });
 
-test("a subagent's wake of its web parent may finish silently; another session's turn may not", async () => {
+test("a subagent's wake of its web parent may finish silently; a sidebar session's turn may not", async () => {
   const built = freshApp();
   built.runtime.start();
   try {
@@ -2418,9 +2418,10 @@ test("a subagent's wake of its web parent may finish silently; another session's
     const parent = (await built.sessions.getByThread(threadRef))!;
     const session = async (ref: string) =>
       built.sessions.getOrCreateByThread(ref, "dm", parent.scopeId, undefined, "web");
-    const child = await session("dm:U1:child-wake:child");
+    const child = await session("agent:main:subagent:child-wake");
     await built.sessions.setParentSession(child.id, parent.id);
-    const stranger = await session("dm:U1:child-wake:stranger");
+    const sidebar = await session("dm:U1:child-wake:sidebar");
+    await built.sessions.setParentSession(sidebar.id, parent.id);
     const turnFrom = async (sessionSenderId: string) => {
       const { run } = await built.runs.enqueue({
         sessionId: threadRef,
@@ -2431,7 +2432,7 @@ test("a subagent's wake of its web parent may finish silently; another session's
     const wake = await turnFrom(child.id);
     assert.equal(wake?.status, "silent", "nothing new, so the wake ends without a reply");
     assert.equal(wake?.reply, undefined);
-    const other = await turnFrom(stranger.id);
+    const other = await turnFrom(sidebar.id);
     assert.equal(other?.status, "ok");
     assert.match(other?.reply ?? "", /ending silently/);
   } finally {
