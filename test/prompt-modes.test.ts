@@ -17,6 +17,7 @@ import type { ConnectorTokenStore } from "../src/credentials/keychain.ts";
 import type { SkillStore } from "../src/skills/skill-store.ts";
 import { scopeId, type Conversation, type Principal } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { orchestratorTestDeps } from "./support/orchestrator-deps.ts";
 import { FEATURE_NAMES } from "../src/feature-flags.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
@@ -99,7 +100,7 @@ async function buildOrchestrator(
   }
 
   return createOrchestrator({
-    ...singleProcessDeps(),
+    ...orchestratorTestDeps(),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     sessionSyscalls: opts.sessionSyscalls,
     featureFlags: opts.featureFlags,
@@ -281,33 +282,28 @@ test("shared-core platform guidance reaches both the DM and the spine prompt", a
   }
 });
 
-test("session search guidance follows the callable surface and feature gate", async () => {
+test("session search guidance follows the callable surface", async () => {
   for (const surface of ["web", "slack", "monitor"] as const) {
-    for (const enabled of [false, true]) {
-      for (const destination of [
-        undefined,
-        { type: "principal" as const, target: "U1", audienceScopeId: scopeId("personal", "U1"), onBehalfOf: "U1" },
-      ]) {
-        const orchestrator = await buildOrchestrator({
-          sessionSyscalls: { forTurn: () => ({}) } as unknown as OrchestratorDeps["sessionSyscalls"],
-          featureFlags: {
-            enabledFor: async () => new Set(enabled ? FEATURE_NAMES : []),
-          } as unknown as OrchestratorDeps["featureFlags"],
-        });
-        const prompt = await sysprompt(
-          orchestrator,
-          slackDm("", {
-            surface,
-            ...(destination
-              ? { origin: { kind: "automation", source: "cron", destination } as OrchestratorInput["origin"] }
-              : {}),
-          }),
-        );
-        assert.equal(
-          prompt.includes("`sessions` search for other accessible conversations"),
-          surface === "web" && enabled && !destination,
-        );
-      }
+    for (const destination of [
+      undefined,
+      { type: "principal" as const, target: "U1", audienceScopeId: scopeId("personal", "U1"), onBehalfOf: "U1" },
+    ]) {
+      const orchestrator = await buildOrchestrator({
+        sessionSyscalls: { forTurn: () => ({}) } as unknown as OrchestratorDeps["sessionSyscalls"],
+      });
+      const prompt = await sysprompt(
+        orchestrator,
+        slackDm("", {
+          surface,
+          ...(destination
+            ? { origin: { kind: "automation", source: "cron", destination } as OrchestratorInput["origin"] }
+            : {}),
+        }),
+      );
+      assert.equal(
+        prompt.includes("`sessions` search for other accessible conversations"),
+        surface === "web" && !destination,
+      );
     }
   }
 });

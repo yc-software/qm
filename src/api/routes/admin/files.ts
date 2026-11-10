@@ -7,7 +7,7 @@ import { relayStream } from "../../../../plugins/chassis/src/http.ts";
 import { audit, authorizeAdmin, requireScopedAdmin } from "../shared.ts";
 import { browserUploadFields, stageBrowserUpload } from "../blobs.ts";
 import { usesBrowserSession } from "../route.ts";
-import { type ApiCtx } from "../route.ts";
+import { tenantOf, type ApiCtx } from "../route.ts";
 import { discoverScopes, FILES_PAGE_SIZE } from "./common.ts";
 
 const FILE_PREVIEW_MAX_BYTES = 256 * 1024;
@@ -90,7 +90,7 @@ export async function listAdminFiles(ctx: ApiCtx): Promise<void> {
   audit(deps, { principalId: actor.id, action: "files.read", resource: "files", scopeLabel: scope });
   if (!deps.files) return sendJson(res, 200, { scopeId: scope, files: [] });
   const orgWide = parseScopeId(scope).kind === "org";
-  const scopes = orgWide ? [...(await discoverScopes(app, deps)).keys()] : [scope];
+  const scopes = orgWide ? [...(await discoverScopes(app, deps, tenantOf(ctx))).keys()] : [scope];
   const files: Array<{
     id: string;
     scopeId: string;

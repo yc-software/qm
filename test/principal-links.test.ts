@@ -33,6 +33,10 @@ import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap, testUserStore } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { TEST_TENANT } from "./support/test-tenant.ts";
+import { withTenant } from "../src/tenants/context.ts";
+
+const tenant = withTenant(TEST_TENANT, (t) => t);
 
 const EMAIL = "jordan@acme.test";
 const SLACK = "U0JORDAN";
@@ -320,7 +324,7 @@ describe("linked sign-ins across the HTTP surface", () => {
     );
     assert.equal(escalation.status, 400, "an admin sign-in cannot make a non-admin canonical principal an admin");
     assert.match(((await escalation.json()) as { message: string }).message, /admin grant/);
-    assert.equal(adminStatusFromGrants(await built.admin.listGrants(), "casey@acme.test").isAdmin, false);
+    assert.equal(adminStatusFromGrants(await built.admin.listGrants(tenant), "casey@acme.test").isAdmin, false);
     const created = await signed("POST", "/v1/admin/principal-links", body, admin);
     assert.equal(created.status, 200);
     const listed = (await (await signed("GET", "/v1/admin/principal-links", "", admin)).json()) as {
