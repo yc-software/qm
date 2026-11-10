@@ -1,6 +1,5 @@
 import type { AssistantMessage, Usage } from "@earendil-works/pi-ai";
 import { piUsageToCallUsage } from "../model/model-runtime.ts";
-import { servedFast } from "../model/served-speed.ts";
 import type { LlmCallUsage } from "../sessions/session-store.ts";
 import type { Item } from "../sessions/items.ts";
 import { startPhase } from "../../plugins/chassis/src/error-reporting.ts";
@@ -43,14 +42,9 @@ export function subscribeTurnStream({
       if (block?.type === "thinking" && !block.redacted)
         turn.onReasoningDelta?.(steps.streamingStepId(), contentIndex, delta);
     } else if (event.type === "message_end" && (event.message as { role?: string }).role === "assistant") {
-      const served = event.message as { usage?: Partial<Usage>; serviceTier?: string; servedSpeed?: string };
+      const served = event.message as { usage?: Partial<Usage>; serviceTier?: string };
       const stepModel = entry.agentSession.model;
-      const usage = piUsageToCallUsage(
-        served.usage,
-        stepModel,
-        servedFast(entry.ref.fast, served.servedSpeed),
-        served.serviceTier,
-      );
+      const usage = piUsageToCallUsage(served.usage, stepModel, entry.ref.fast, served.serviceTier);
       meterGrindCall(grindMeter, usage);
       const meteredGoal = entry.ref.goal;
       if (meteredGoal?.status === "active") meterGoalCall(meteredGoal, usage);

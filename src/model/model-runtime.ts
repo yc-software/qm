@@ -18,7 +18,6 @@ import { getServiceTierCostMultiplier } from "@earendil-works/pi-ai/api/openai-r
 import type { LlmCallUsage } from "../sessions/session-store.ts";
 import { claudeSubscriptionBetas } from "./claude-subscription.ts";
 import { gatewayModelsJson, gatewayModelsVersion } from "./gateway-models.ts";
-import { speedSniffingFetch, stampServedSpeed, type ServedSpeed } from "./served-speed.ts";
 import {
   customModelsJson,
   customProvidersVersion,
@@ -181,7 +180,7 @@ export async function buildModelRuntime(
   const route = <T extends ModelsSimpleStreamOptions | undefined>(
     model: Model<Api>,
     options: T,
-  ): { model: Model<Api>; options: T; served?: ServedSpeed } => {
+  ): { model: Model<Api>; options: T } => {
     const request = modelGatewayRequest(modelGateway, model, purpose);
     if (!request) {
       const custom = resolveCustomModel(model.id);
@@ -219,10 +218,8 @@ export async function buildModelRuntime(
               }),
       };
     }
-    const served: ServedSpeed | undefined = request.model.api === "anthropic-messages" ? {} : undefined;
     const routed = {
       ...retained(options),
-      ...(served ? { fetch: speedSniffingFetch(fetch, served) } : {}),
       apiKey: request.apiKey,
       transformHeaders: async (headers: ProviderHeaders) => ({
         ...(options?.transformHeaders ? await options.transformHeaders(headers) : headers),
@@ -231,7 +228,6 @@ export async function buildModelRuntime(
     } as T;
     return {
       model: request.model,
-      served,
       options: wireModelId(routed, model, async () => {
         await modelGateway?.refresh?.();
         const current = modelGatewayRequest(modelGateway, model, purpose);
@@ -247,18 +243,12 @@ export async function buildModelRuntime(
     options?: ModelsApiStreamOptions<TApi>,
   ) => {
     const routed = route(model, options as ModelsSimpleStreamOptions | undefined);
-    const events = stream(
-      routed.model as Model<TApi>,
-      context,
-      routed.options as unknown as ModelsApiStreamOptions<TApi>,
-    );
-    return routed.served ? stampServedSpeed(events, routed.served) : events;
+    return stream(routed.model as Model<TApi>, context, routed.options as unknown as ModelsApiStreamOptions<TApi>);
   }) as typeof runtime.stream;
   const streamSimple = runtime.streamSimple.bind(runtime);
   runtime.streamSimple = ((model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions) => {
     const routed = route(model, options);
-    const events = streamSimple(routed.model, context, routed.options);
-    return routed.served ? stampServedSpeed(events, routed.served) : events;
+    return streamSimple(routed.model, context, routed.options);
   }) as typeof runtime.streamSimple;
   return runtime;
 }
