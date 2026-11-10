@@ -3,7 +3,7 @@ import { contextSummary } from "../sessions/session-store.ts";
 import { isOverheard, isUserItem, itemFields, type Item, proseText, stepMessage } from "../sessions/items.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
 import { countTokens } from "../util/tokens.ts";
-import { documentAttachmentTokens, replayableDocumentMetas } from "../core/documents.ts";
+import { replayableDocumentMetas } from "../core/documents.ts";
 
 const MAX_COMPACT_ENTRY_CHARS = 16_000;
 const COMPACT_ENTRY_TAIL_CHARS = 2_000;
@@ -79,10 +79,6 @@ const itemTokenCache = new Map<string, number>();
 const ITEM_TOKEN_CACHE_MAX = 50_000;
 
 export function estimateItemTokens(item: Item): number {
-  return estimateItemTextTokens(item) + (isUserItem(item) ? documentAttachmentTokens(item.body) : 0);
-}
-
-function estimateItemTextTokens(item: Item): number {
   const prose = item.kind === "Reasoning" ? (item.text ?? "") : proseText(item);
   const environment = item.kind === "Reasoning" ? null : item.body.environment;
   const text =

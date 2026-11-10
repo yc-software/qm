@@ -1,3 +1,4 @@
+import type { UpgradeTarget } from "../../../plugins/chassis/src/websocket-relay.ts";
 import type { UNATTENDED_ADMIN_GRANTS } from "../control-service.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { readCookie } from "../../../plugins/portal/src/session.ts";
@@ -26,6 +27,7 @@ export interface BaseCtx {
   method: string;
   params: Record<string, string>;
   capability?: CapabilityClaims | null;
+  upgrade?: UpgradeTarget;
 }
 
 export interface ApiCtx extends BaseCtx {

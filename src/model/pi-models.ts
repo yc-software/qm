@@ -17,7 +17,7 @@ import {
   type ModelOverlay,
 } from "./model-overlay.ts";
 import { MODEL_REGISTRY, type ModelEntry } from "./model-registry.ts";
-import { providerBaseUrl } from "./provider-endpoints.ts";
+import { MODEL_PROVIDERS, providerBaseUrl, type ModelProvider } from "./provider-endpoints.ts";
 import { type CustomRuntimeModel, isCustomModelId, resolveCustomModel } from "./custom-providers.ts";
 import type { ProviderKeys } from "./model-runtime.ts";
 
@@ -88,13 +88,6 @@ export function thinkingLevelsFor(modelId?: string): readonly string[] {
     return true;
   });
 }
-export const MODEL_PROVIDERS = ["anthropic", "openai", "openrouter"] as const;
-export type ModelProvider = (typeof MODEL_PROVIDERS)[number];
-
-export function isModelProvider(value: unknown): value is ModelProvider {
-  return typeof value === "string" && (MODEL_PROVIDERS as readonly string[]).includes(value);
-}
-
 type PiModel = Model<Api>;
 
 export function isOverlayModel(id: string): boolean {

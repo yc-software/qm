@@ -24,6 +24,7 @@ import { scopeId, type Principal, type Session } from "../src/types.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { Run } from "../src/runs/run-store.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { orchestratorTestDeps } from "./support/orchestrator-deps.ts";
 import type { McpToolService } from "../src/mcp/mcp-tool-service.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
@@ -145,7 +146,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
   const config = testConfigStore("org");
   await config.setInteractiveFastMode(true);
   const orchestrator = createOrchestrator({
-    ...singleProcessDeps(),
+    ...orchestratorTestDeps(),
     config,
     runtime: createRuntimeService(
       { config, baseModelDefault: "claude-opus-5" },
@@ -226,14 +227,14 @@ function script(turn: Turn, subagent: boolean): Call | undefined {
 }
 
 test("the sessions tool lists, starts and messages sessions through the real tool context", async () => {
-  const w = await world(["persistent_subagents"], script);
+  const w = await world([], script);
   const { parent } = await w.parentTurn("web", "web:U1:sessions");
   assert.equal(parent.results.length, 4);
   assert.deepEqual(parent.results.map(failed), [false, false, false, false], JSON.stringify(parent.results));
 });
 
 for (const [surface, flags] of [
-  ["web", ["persistent_subagents"]],
+  ["web", []],
   ["slack", []],
 ] as const) {
   test(`a ${surface} subagent can do what its parent could, except SUBAGENT_EXCEPTIONS`, async () => {
@@ -272,7 +273,7 @@ for (const [surface, flags] of [
 }
 
 test("human-descended tasks cannot finish silently without surface tools", async () => {
-  const w = await world(["persistent_subagents"], (turn, child) => {
+  const w = await world([], (turn, child) => {
     if (turn.results.length) return;
     return child
       ? { tool: "finish_silently", args: {} }
@@ -283,7 +284,7 @@ test("human-descended tasks cannot finish silently without surface tools", async
 });
 
 test("human-descended tasks can change their runtime but not scope defaults", async () => {
-  const w = await world(["persistent_subagents"], script);
+  const w = await world([], script);
   const { parent, child } = await w.parentTurn("web", "web:U1:runtime");
   const active = { modelId: "claude-opus-5", effortLevel: "high", fastMode: false };
   assert.ok(child.runtime);

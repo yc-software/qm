@@ -521,6 +521,7 @@ export function createSideChatController(ctx: ConvCtx) {
     markers(seqs: readonly number[], index: number) {
       const matches = chats.filter((chat) => chat.sideChat && seqs.includes(chat.sideChat.entrySeq));
       const pending = pendingQuote !== null && pendingAnchor?.index === index;
+      if (!matches.length && !pending) return nothing;
       return html`<div
         class="side-chat-markers ${matches.some((chat) => choices.has(chat.id)) ? "choosing" : ""}"
         ${ref((element) => {

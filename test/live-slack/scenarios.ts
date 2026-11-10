@@ -143,7 +143,7 @@ export const scenarios: Scenario[] = [
       const uname = /Linux \S+ \d+\.\d+\.\S+/;
       const reply = await ch.waitForBotReply(root, { match: uname, timeoutMs: SANDBOX_TIMEOUT - 30_000 });
       assert.match(reply.text ?? "", uname, `no uname output in reply: ${reply.text?.slice(0, 300)}`);
-      const session = await ctx.core.findSessionByThread(ch.id, root);
+      const session = await ctx.core.findSessionTreeByThread(ch.id, root);
       assert.ok(session, "no core session found for the thread");
       const ran = session.items.some(
         (item) => item.kind === "ToolResult" && /Linux/.test(`${item.text ?? ""}${JSON.stringify(item.body)}`),

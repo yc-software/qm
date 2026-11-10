@@ -1,6 +1,11 @@
 import { definePgMigration, PG_MIGRATIONS_TABLE, type PgMigrationDefinition } from "../persistence/pg-pool.ts";
 import { REPAIR_0116_CONSTRAINTS, retire0116Tenancy } from "./retire-0116-tenancy.ts";
-import { TENANT_APP_HANDLE_DNS_BOUND, TENANT_APP_HANDLES, TENANT_APP_HOSTS_BY_HANDLE } from "./app-handle.ts";
+import {
+  TENANT_APP_HANDLE_DNS_BOUND,
+  TENANT_APP_HANDLES,
+  TENANT_APP_HOSTS_BY_HANDLE,
+  TENANT_APP_HOSTS_LEGACY_NAMES,
+} from "./app-handle.ts";
 
 const TENANCY_BASE: PgMigrationDefinition = {
   id: "0000-tenancy/base",
@@ -84,6 +89,7 @@ export const TENANCY: readonly PgMigrationDefinition[] = [
   DROP_TENANT_HOSTS,
   TENANT_APP_HANDLE_DNS_BOUND,
   TENANT_APP_HOSTS_BY_HANDLE,
+  TENANT_APP_HOSTS_LEGACY_NAMES,
 ];
 
 interface TenantKey {

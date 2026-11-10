@@ -1,4 +1,4 @@
-import type { ModelProvider } from "../../model/pi-models.ts";
+import type { ModelProvider } from "../../model/provider-endpoints.ts";
 import { completeClaudeLogin, startClaudeLogin } from "../../model/subscription-oauth.ts";
 import { createCodexDeviceLogin } from "../../model/codex-device-login.ts";
 import { errMessage } from "../../util/errors.ts";

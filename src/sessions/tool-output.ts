@@ -9,7 +9,7 @@ import { currentTenant } from "../tenants/context.ts";
 const TOOL_OUTPUT_SETTING = "tool_result_inline_tokens";
 export const DEFAULT_INLINE_TOKENS = 4096;
 const CHARS_PER_TOKEN = 4;
-const TOOL_OUTPUT_RETENTION_MS = 30 * 24 * 60 * 60_000;
+export const TOOL_OUTPUT_RETENTION_DAYS = 30;
 const SETTING_CACHE_MS = 30_000;
 const TOOL_OUTPUT_PATH = "tool-output/";
 const DIGEST_DIR = "md5/";
@@ -71,7 +71,7 @@ export function cutToolOutput(
   return cutToInline(
     text,
     inlineTokens,
-    ` The full output is in ${TOOL_OUTPUT_PATH}${DIGEST_DIR}${md5Hex(callId)}; reading it with the files tool copies it onto the computer (kept 30 days)`,
+    ` The full output is in ${TOOL_OUTPUT_PATH}${DIGEST_DIR}${md5Hex(callId)}; reading it with the files tool copies it onto the computer (kept ${TOOL_OUTPUT_RETENTION_DAYS} days)`,
   );
 }
 
@@ -129,20 +129,20 @@ export function createPostgresToolOutputStore(opts: {
           put.sizeBytes,
           `${TOOL_OUTPUT_PATH}${id}/${put.blobKey}`,
           now(),
-          now() + TOOL_OUTPUT_RETENTION_MS,
+          now() + TOOL_OUTPUT_RETENTION_DAYS * 24 * 60 * 60_000,
         ],
       );
       return put.sha256;
     },
     async read(sessionId, ref) {
       const rows = await opts.pool.q(
-        `SELECT b.storage_key, i.tenant_id::text AS tenant, i.created_at <= now() - interval '30 days' AS expired
+        `SELECT b.storage_key, i.tenant_id::text AS tenant, i.created_at <= now() - make_interval(days => $4) AS expired
            FROM items i
       LEFT JOIN blobs b ON b.tenant_id = i.tenant_id AND b.sha256 = i.blob_sha
           WHERE i.tenant_id = qm_bound_tenant() AND i.session_id = $1 AND i.kind = 'ToolResult'
             AND md5(i.call_id) = $2 AND ($3::text IS NULL OR i.call_id = $3)
             AND i.blob_sha IS NOT NULL`,
-        [sessionId, ref.digest, ref.callId ?? null],
+        [sessionId, ref.digest, ref.callId ?? null, TOOL_OUTPUT_RETENTION_DAYS],
       );
       const row = rows[0];
       if (!row) return null;

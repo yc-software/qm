@@ -4,6 +4,7 @@ import { reasoningKey } from "../../runs/run-stream-events.ts";
 import { REASONING_MAX_BLOCKS } from "../../runs/turn-stream.ts";
 import { visibleBody, type Item } from "../../sessions/items.ts";
 import type { ApiCtx, Route } from "./route.ts";
+import { swallowAs } from "../../util/errors.ts";
 
 const HEARTBEAT_MS = 15_000;
 const MAX_BUFFER_BYTES = 1_048_576;
@@ -133,12 +134,15 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
       sync();
     }
   };
+  const refreshInBackground = (): void => {
+    refresh().catch(swallowAs("run events: refresh", undefined));
+  };
   const unsubscribe = app.subscribeRun(
     runId,
     (event) => {
       if (closed) return;
       if (event.kind === "refresh") {
-        void refresh();
+        refreshInBackground();
         return;
       }
       if (event.kind === "reasoning") {
@@ -176,13 +180,13 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
     () => {
       syncing = false;
       sync();
-      void refresh();
+      refreshInBackground();
     },
   );
   const heartbeat = setInterval(() => {
     syncing = false;
     sync();
-    void refresh();
+    refreshInBackground();
   }, HEARTBEAT_MS);
   heartbeat.unref?.();
   res.on("close", cleanup);

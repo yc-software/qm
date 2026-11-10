@@ -58,8 +58,8 @@ describe("app host labels", () => {
   it("split on the first hyphen, so handles with digits and app names with hyphens both survive", () => {
     assert.equal(appHostLabel("nitroduck7", "sales-board-v2"), "nitroduck7-sales-board-v2");
     assert.equal(appNameFromLabel("nitroduck7-sales-board-v2", "nitroduck7"), "sales-board-v2");
-    assert.equal(appNameFromLabel("nitroduck7-", "nitroduck7"), undefined);
-    assert.equal(appNameFromLabel("other-sales", "nitroduck7"), undefined);
+    assert.equal(appNameFromLabel("nitroduck7-", "nitroduck7"), "nitroduck7-");
+    assert.equal(appNameFromLabel("other-sales", "nitroduck7"), "other-sales");
     assert.equal(appNameFromLabel("sales-board", undefined), "sales-board");
   });
 

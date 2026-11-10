@@ -9,7 +9,7 @@ export interface InterimReplyContext {
   addressed: boolean;
   strictReadOnly: boolean;
   destination: Destination | undefined;
-  deliveries: DeliveryStore | undefined;
+  deliveries: DeliveryStore;
   postKeys: TurnPostKeys;
   provenance: (key: string) => DeliveryProvenance;
   ackText: () => string | undefined;
@@ -19,7 +19,7 @@ export interface InterimReplyContext {
 export function interimReplyDelivery(ctx: InterimReplyContext): (text: string) => Promise<boolean> {
   return async (text) => {
     if (ctx.surfaceName === "web") return true;
-    if (ctx.strictReadOnly || !ctx.destination || !ctx.deliveries) return false;
+    if (ctx.strictReadOnly || !ctx.destination) return false;
     if (ctx.spineTurn && (!ctx.addressed || ctx.postedSoFar() > 0)) return false;
     const interim = stripAckPrefix(text, ctx.ackText()).trim();
     if (!interim) return false;

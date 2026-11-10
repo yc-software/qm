@@ -4,13 +4,13 @@ import type { ServerDeps } from "../deps.ts";
 import type { SessionStateEvent } from "../../runs/session-state-bus.ts";
 import type { OwnedLedgerEvent } from "../../loops/ledger-events.ts";
 import { canonicalPerson } from "../../directory/person.ts";
-import { reportFailure, swallow } from "../../util/errors.ts";
+import { reportFailure, swallowAs } from "../../util/errors.ts";
 import { createSweeper } from "../../util/sweeper.ts";
 import { canAdministerLoop } from "./loops.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { sendJson } from "../http.ts";
 import { bootTenant, tenancyBooted } from "../../tenants/boot.ts";
-import { boundTenant, withTenant } from "../../tenants/context.ts";
+import { boundTenant } from "../../tenants/context.ts";
 import { claimThenBind } from "../../tenants/claim.ts";
 import type { DeliveryStore } from "../../delivery/delivery-store.ts";
 
@@ -97,8 +97,8 @@ export function createWebEvents(
 
   const forwardSessionState = (event: SessionStateEvent): void => {
     if (typeof event.threadRef !== "string" || !event.threadRef) return;
-    const { participants, tenantId, ...visible } = event;
-    const tenant = tenantId ?? boundTenant();
+    const { participants, ...visible } = event;
+    const tenant = boundTenant();
     const owner = ownerOfWebThread(event.threadRef);
     const targets = new Set((participants ?? []).map(canonicalPerson));
     if (targets.size === 0 && owner) targets.add(canonicalPerson(owner));
@@ -119,14 +119,10 @@ export function createWebEvents(
     return candidates.filter((_, i) => allowed[i]);
   };
   const forwardInboxItem = async (event: OwnedLedgerEvent): Promise<void> => {
-    const tenant = event.tenantId ?? (tenancyBooted() ? bootTenant() : undefined);
+    const tenant = boundTenant();
     if (!event.loopId || !event.itemId || !clientsOf(tenant).size) return;
     if (tenancyBooted() && !tenant) return;
-    const lookup = () => viewersOf(event.loopId, tenant);
-    const viewers = await (tenant ? withTenant(tenant, lookup) : lookup()).catch((e: unknown) => {
-      swallow("web: inbox item viewers", e);
-      return undefined;
-    });
+    const viewers = await viewersOf(event.loopId, tenant).catch(swallowAs("web: inbox item viewers", undefined));
     if (viewers === undefined) {
       for (const user of clientsOf(tenant).keys()) send(tenant, user, "inbox_resync", {});
       return;
@@ -164,9 +160,7 @@ export function createWebEvents(
       if (unsubscribe.length) return;
       unsubscribe = [
         app.subscribeSessionStates(forwardSessionState, { onResync: () => broadcast("session_state_resync") }),
-        app.subscribeLedgerEvents((event) => void forwardInboxItem(event), {
-          onResync: () => broadcast("inbox_resync"),
-        }),
+        app.subscribeLedgerEvents(forwardInboxItem, { onResync: () => broadcast("inbox_resync") }),
       ];
       sweeper.start();
     },
