@@ -58,12 +58,13 @@ export interface PersistedBaseModel {
   cronRuntime?: RuntimeSelection;
   subagentRuntime?: RuntimeSelection;
   fallbackRuntime?: RuntimeSelection;
+  appEditRuntime?: RuntimeSelection;
   orgRevision?: number;
   revision?: number;
   effortLevel?: string;
   fastMode?: boolean;
 }
-type RuntimePurpose = "cron" | "subagent" | "fallback";
+type RuntimePurpose = "cron" | "subagent" | "fallback" | "appEdit";
 export type TurnRuntimePurpose = RuntimePurpose | "infrequentCron";
 
 interface RuntimeSelection {
@@ -339,6 +340,7 @@ export function createConfigStore(
           ...(row?.cronRuntime ? { cronRuntime: row.cronRuntime } : {}),
           ...(row?.subagentRuntime ? { subagentRuntime: row.subagentRuntime } : {}),
           ...(row?.fallbackRuntime ? { fallbackRuntime: row.fallbackRuntime } : {}),
+          ...(row?.appEditRuntime ? { appEditRuntime: row.appEditRuntime } : {}),
         }
       : {};
   const withoutRuntime = (id: ScopeId, row: PersistedBaseModel | null): PersistedBaseModel => ({

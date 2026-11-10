@@ -15,7 +15,7 @@ import {
   type MemoryProviderProblem,
 } from "../../memory/provider-outcome.ts";
 import { suggestedActivityRoutes } from "./suggested-activities.ts";
-import { runtimeConfigBody, userRuntimeConfigBody, webuiModelEnabled } from "../runtime-config.ts";
+import { runtimeConfigBody, userRuntimeConfigBody, webuiModelEnabled, withAppEditRuntime } from "../runtime-config.ts";
 import { canReadNotebook, searchAcrossScopes } from "../../memory/cross-scope.ts";
 import { sessionSharingRoutes } from "./session-sharing.ts";
 import type { Grant, PendingApproval, ScopeId, Session } from "../../types.ts";
@@ -1311,9 +1311,12 @@ async function getRuntimeConfig(ctx: ApiCtx): Promise<void> {
   return sendJson(
     ctx.res,
     200,
-    ctx.url.searchParams.get("account") === "company"
-      ? await runtimeConfigBody(ctx, target.scope)
-      : await userRuntimeConfigBody(ctx, target.scope, target.actorId),
+    await withAppEditRuntime(
+      ctx,
+      ctx.url.searchParams.get("account") === "company"
+        ? await runtimeConfigBody(ctx, target.scope)
+        : await userRuntimeConfigBody(ctx, target.scope, target.actorId),
+    ),
   );
 }
 
@@ -1358,7 +1361,11 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
     resource: "runtime-config",
     scopeLabel: target.scope,
   });
-  return sendJson(ctx.res, 200, await userRuntimeConfigBody(ctx, target.scope, target.actorId));
+  return sendJson(
+    ctx.res,
+    200,
+    await withAppEditRuntime(ctx, await userRuntimeConfigBody(ctx, target.scope, target.actorId)),
+  );
 }
 
 async function getChannelHeaderPin(ctx: ApiCtx): Promise<void> {

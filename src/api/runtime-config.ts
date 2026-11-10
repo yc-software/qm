@@ -48,6 +48,29 @@ export function runtimeFallback(ctx: { deps: RuntimeDeps }): RuntimeChoice {
   return { modelId: ctx.deps.baseModelDefault ?? defaultModel(undefined, providers) };
 }
 
+export const APP_EDIT_DEFAULT_RUNTIME: RuntimeChoice = { modelId: "gpt-6.1-sol-ultrafast" };
+const reportedAppEditFallbacks = new Set<string>();
+
+export async function withAppEditRuntime<T extends { models: string[] }>(
+  ctx: { deps: RuntimeDeps },
+  body: T,
+): Promise<T & { appEditRuntime?: RuntimeChoice }> {
+  const configured = (await ctx.deps.config?.getPurposeRuntimeDurable("appEdit")) ?? APP_EDIT_DEFAULT_RUNTIME;
+  if (body.models.includes(configured.modelId)) return { ...body, appEditRuntime: storedChoice(configured) };
+  const reason =
+    modelUnavailableReason(configured.modelId) ??
+    (modelSupported(configured.modelId) ? "not offered to this person on this deployment" : "unknown model");
+  const key = `${orgScope()}:${configured.modelId}:${reason}`;
+  if (!reportedAppEditFallbacks.has(key)) {
+    reportedAppEditFallbacks.add(key);
+    console.warn("[runtime] app edit runtime unavailable; app edit chats use the conversation runtime", {
+      modelId: configured.modelId,
+      reason,
+    });
+  }
+  return body;
+}
+
 export async function userRuntimeConfigBody(ctx: { deps: RuntimeDeps }, scope: ScopeId, actorId: string) {
   const account = await ctx.deps.config?.getModelAccountDurable(actorId);
   const store = ctx.deps.userModelCredentials;
