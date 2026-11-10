@@ -785,7 +785,7 @@ test("a Slack conversation that is gone is dismissed once, without an error entr
   const after = (await items.get(item.id))!;
   assert.equal(after.status, "skipped");
   assert.equal(after.actionKind, "source_gone");
-  assert.equal(after.actionResult, "The conversation is no longer available in Slack");
+  assert.equal(after.actionResult, "The conversation is no longer available in Slack (channel_not_found)");
   const reads = calls.filter((method) => method === "conversations.history").length;
   const second = await pass(loop, { discover: false });
   assert.equal(second.checked, 0);
@@ -829,7 +829,7 @@ test("a deleted Gmail thread is dismissed as gone while other failures are retri
   assert.equal(summary.failures.length, 2);
   const gone = (await items.get(item.id))!;
   assert.equal(gone.status, "skipped");
-  assert.equal(gone.actionResult, "The conversation is no longer available in Gmail");
+  assert.equal(gone.actionResult, "The conversation is no longer available in Gmail (404)");
   const retried = (await items.byLoop(mailLoop.id)).filter((row) => row.sourceKey !== "t1");
   assert.deepEqual(
     retried.map((row) => row.status),
@@ -837,5 +837,10 @@ test("a deleted Gmail thread is dismissed as gone while other failures are retri
   );
   assert.equal(errors.length, 1);
   assert.equal(errors[0]!.code, "verdict_failed");
-  assert.match(errors[0]!.message, /2 of 3 conversations failed; first: Gmail threads\/t[23] returned 50[03]/);
+  const failedIds = retried.map((row) => row.id).sort();
+  assert.match(
+    errors[0]!.message,
+    /2 of 3 conversations failed \(items [^)]+\); first: Gmail threads\/t[23] returned 50[03]/,
+  );
+  for (const id of failedIds) assert.ok(errors[0]!.message.includes(id));
 });

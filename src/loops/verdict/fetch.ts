@@ -32,13 +32,14 @@ export interface SourceClientDeps {
 type FetchOutcome =
   | { kind: "conversation"; conversation: Conversation }
   | { kind: "skipped"; reason: "not_connected" | "not_inbox" | "bad_item" }
-  | { kind: "gone"; source: "Slack" | "Gmail" };
+  | { kind: "gone"; source: "Slack" | "Gmail"; code: string };
 
 const SLACK_GONE = new Set(["channel_not_found", "thread_not_found", "not_in_channel", "is_archived"]);
 
-export function sourceGone(error: unknown): boolean {
-  if (error instanceof GmailApiError) return error.status === 404;
-  return SLACK_GONE.has(slackErrorCode(error) ?? "");
+export function goneCode(error: unknown): string | undefined {
+  if (error instanceof GmailApiError) return error.status === 404 ? "404" : undefined;
+  const code = slackErrorCode(error);
+  return code !== undefined && SLACK_GONE.has(code) ? code : undefined;
 }
 
 export class SourceRateLimited extends TransientTurnFailure {
@@ -286,7 +287,8 @@ export function createConversationFetcher(clients: SourceClients): ConversationF
               label: info.name ? `#${info.name}` : "",
             }));
     } catch (error) {
-      if (sourceGone(error)) return { kind: "gone", source: "Slack" };
+      const code = goneCode(error);
+      if (code !== undefined) return { kind: "gone", source: "Slack", code };
       throw error;
     }
     const participants = new Map<string, Participant>();
@@ -348,7 +350,8 @@ export function createConversationFetcher(clients: SourceClients): ConversationF
     try {
       thread = await clients.gmailRead(owner, token, `threads/${encodeURIComponent(threadId)}?format=full`);
     } catch (error) {
-      if (sourceGone(error)) return { kind: "gone", source: "Gmail" };
+      const code = goneCode(error);
+      if (code !== undefined) return { kind: "gone", source: "Gmail", code };
       throw error;
     }
     const raw = (Array.isArray(thread.messages) ? thread.messages.filter(isObj) : [])

@@ -86,7 +86,7 @@ export function createInboxPass(deps: InboxPassDeps): InboxPass {
       await deps.items.recordAction(item.id, {
         kind: SOURCE_GONE_ACTION,
         outcome: "dismissed",
-        result: `The conversation is no longer available in ${outcome.source}`,
+        result: `The conversation is no longer available in ${outcome.source} (${outcome.code})`,
       });
       return false;
     }
@@ -155,7 +155,7 @@ export function createInboxPass(deps: InboxPassDeps): InboxPass {
       return undefined;
     });
     let stopped = false;
-    const itemErrors: unknown[] = [];
+    const itemErrors: Array<{ id: string; error: unknown }> = [];
     for (let index = 0; index < items.length && !stopped; index += CONCURRENCY) {
       await Promise.all(
         items.slice(index, index + CONCURRENCY).map(async (item) => {
@@ -166,7 +166,7 @@ export function createInboxPass(deps: InboxPassDeps): InboxPass {
             if (error instanceof SourceRateLimited) stopped = true;
             summary.failures.push(errMessage(error));
             summary.firstError ??= error;
-            itemErrors.push(error);
+            itemErrors.push({ id: item.id, error });
           }
         }),
       );
@@ -175,8 +175,8 @@ export function createInboxPass(deps: InboxPassDeps): InboxPass {
       record(
         loop.owner,
         "verdict_failed",
-        `Inbox verdicts for loop ${loop.id}: ${itemErrors.length} of ${summary.checked} conversations failed; first: ${errMessage(itemErrors[0])}`,
-        itemErrors[0],
+        `Inbox verdicts for loop ${loop.id}: ${itemErrors.length} of ${summary.checked} conversations failed (items ${itemErrors.map((entry) => entry.id).join(", ")}); first: ${errMessage(itemErrors[0]!.error)}`,
+        itemErrors[0]!.error,
       );
     await deps.items
       .prune(loop.id, { maxItems: INBOX_LEDGER_MAX_ITEMS, retentionMs: INBOX_LEDGER_RETENTION_MS, now: now() })
