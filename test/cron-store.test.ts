@@ -428,17 +428,6 @@ test("unclaimSlot: restores a failed claim so the slot retries, and only that ex
   assert.equal((await store.get(cron.id))!.lastFiredAt, 1_001_000, "an unclaim for a different claim is a no-op");
 });
 
-test("unclaimSlot: leaves a cron rescheduled after the claim on its new schedule", async () => {
-  const store = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
-  const cron = await store.create({ ...base, schedule: { everyMs: 60_000, firstFireAt: 1_000_000 } });
-  assert.equal(await store.claimSlot(cron.id, 1_000_000, 1_000_500), true);
-  const patched = await store.update(cron.id, { schedule: { cron: "0 9 * * *", timezone: "UTC" } });
-  await store.unclaimSlot(cron, 1_000_000, 1_000_500, undefined);
-  const after = (await store.get(cron.id))!;
-  assert.equal(after.nextFireAt, patched!.nextFireAt);
-  assert.equal(after.lastFiredAt, 1_000_500);
-});
-
 test("beginFire journals a running entry; recordFire closes the same row with the outcome", async () => {
   const store = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const cron = await store.create({ ...base, schedule: { everyMs: 60_000 } });

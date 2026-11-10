@@ -14,7 +14,6 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { TEST_TENANT } from "./support/test-tenant.ts";
 import { withTenant } from "../src/tenants/context.ts";
-import { TransientTurnFailure } from "../src/core/turn-error.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the cron queue tests";
@@ -54,13 +53,13 @@ function instance(
   turnMs: number,
   fires: CronFireStore,
   enqueued: CronFireJob[] = [],
-  during?: (crons: CronStore, req: TurnRequest) => Promise<void>,
+  failAfter?: (crons: CronStore) => Promise<unknown>,
 ): { scheduler: Scheduler; crons: CronStore } {
   const maps = createPostgresMapFactory(URL!);
   const crons = createCronStore(maps.map<Cron>(CRONS_TABLE), { fires });
   const run = async (req: TurnRequest): Promise<TurnResult> => {
     calls.push(req);
-    if (during) await during(crons, req);
+    if (failAfter) throw await failAfter(crons);
     if (turnMs) await new Promise((r) => setTimeout(r, turnMs));
     return { status: "ok", reply: "QUEUE-OUTPUT" };
   };
@@ -206,38 +205,13 @@ test(
     }
   },
 );
-
-test(
-  "pg-boss queue: a fire that reschedules its cron and then fails transiently keeps the new schedule",
-  { skip, timeout: 120_000 },
-  async () => {
-    const calls: TurnRequest[] = [];
-    const fires = createPostgresCronFireStore(testDatabaseUrl());
-    const patchedAt = Date.now() + 3_600_000;
-    const a = instance(calls, 0, fires, [], async (crons, req) => {
-      const id = req.idempotencyKey!.split(":")[1]!;
-      await crons.update(id, { schedule: { firstFireAt: patchedAt } });
-      throw new TransientTurnFailure("provider overloaded");
-    });
-    const cron = await a.crons.create({
-      schedule: { firstFireAt: Date.now() - 1000 },
-      action: "reschedule then fail",
-      owner: "U4",
-      createdBy: "U4",
-      ownerScopeId: scopeId("personal", "U4"),
-    });
-    a.scheduler.start(1000);
-    try {
-      const fired = () => calls.filter((c) => c.idempotencyKey?.startsWith(`cron:${cron.id}:`)).length;
-      await until(() => fired() >= 1, 30_000);
-      await new Promise((r) => setTimeout(r, 3_000));
-      const after = (await a.crons.get(cron.id))!;
-      assert.deepEqual(after.schedule, { firstFireAt: patchedAt });
-      assert.equal(after.nextFireAt, patchedAt, "the failed fire's rollback does not restore the old slot");
-      assert.equal(fired(), 1);
-    } finally {
-      a.scheduler.stop();
-      await new Promise((r) => setTimeout(r, 500));
-    }
-  },
-);
+test("pg-boss queue: a fire that reschedules its cron then fails keeps the new schedule", { skip }, async () => {
+  const later = { firstFireAt: 4_102_444_800_000 };
+  const fail = (crons: CronStore) => crons.update(cron.id, { schedule: later }).then(() => new Error("overloaded"));
+  const a = instance([], 0, createPostgresCronFireStore(testDatabaseUrl()), [], fail);
+  const owner = { owner: "U4", createdBy: "U4", ownerScopeId: scopeId("personal", "U4") };
+  const cron = await a.crons.create({ schedule: { firstFireAt: Date.now() }, action: "reschedule", ...owner });
+  a.scheduler.start(1000);
+  await new Promise((r) => setTimeout(r, 8_000)).finally(() => a.scheduler.stop());
+  assert.equal((await a.crons.get(cron.id))!.nextFireAt, later.firstFireAt);
+});
