@@ -128,7 +128,7 @@ function dropNotYoursHtml(): string {
 function brainRefusedHtml(): string {
   return dropPage(
     "Memory brain access removed",
-    `<h1 id="title">You can no longer set this brain's secret</h1><p>Your access to this brain changed after the link was made. If you should still have access, ask an org admin to restore it, then ask the agent for a fresh link.</p>`,
+    `<h1 id="title">You can no longer set this brain's secret</h1><p>Your access to this brain changed after the link was made. It works again if an org admin restores your access.</p>`,
   );
 }
 
@@ -275,10 +275,10 @@ async function brainDestination(
   const record = readRegistry((await ctx.deps.memoryRegistry.current()).record);
   const brain = record.brains.find(({ id }) => id === target.id);
   if (!brain) return { status: 409, refused: `brain ${target.id} was removed after this link was made` };
-  if (brain.url !== target.url) return { status: 409, refused: `brain ${target.id} changed after this link was made` };
   const owner = canonicalPerson(rec.ownerId);
   const refusal = brainRefusal(record, brain, owner, await adminStanding(ctx.deps, owner));
   if (refusal) return { status: 403, refused: lostBrainAccess(refusal) };
+  if (brain.url !== target.url) return { status: 409, refused: `brain ${target.id} changed after this link was made` };
   const url = new URL(target.url);
   return {
     label: brain.label,
@@ -288,7 +288,7 @@ async function brainDestination(
       .map(({ scope }) => {
         if (scope === "personal") return "every member's personal memory";
         const { ref } = parseScopeId(scope);
-        return ref === canonicalPerson(rec.ownerId) ? "your personal memory" : `${ref}'s personal memory`;
+        return ref === owner ? "your personal memory" : `${ref}'s personal memory`;
       }),
   };
 }
