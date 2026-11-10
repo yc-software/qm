@@ -115,12 +115,9 @@ export function createHandlerInboxes(deps: HandlerInboxDeps) {
     },
 
     async wake(id: string, now: number, wake: boolean, flush: boolean): Promise<void> {
-      let taken: FireReport[] = [];
-      const inbox = await deps.inboxes.update(id, (v) => {
-        taken = wake ? v.pending : [];
-        return { ...v, pending: wake ? [] : v.pending, ...(wake ? { lastWakeAt: now } : {}) };
-      });
+      const inbox = await deps.inboxes.get(id);
       if (!inbox) return;
+      const taken = wake ? inbox.pending : [];
       let calls = 0;
       const handler = createFireHandler({
         state: structuredClone(inbox.state),
@@ -133,18 +130,15 @@ export function createHandlerInboxes(deps: HandlerInboxDeps) {
             `handler:${id}:${now}:${calls++}`,
           ),
       });
-      try {
-        const decision = await handler.handle(taken, now);
-        for (const [i, text] of decision.sendNow.entries()) await send(inbox, text, `handler:${id}:${now}:now:${i}`);
-        const digest = flush ? await handler.flushDigest(now) : null;
-        if (digest) await send(inbox, digest, `handler:${id}:${now}:digest`);
-      } catch (e) {
-        await deps.inboxes.update(id, (v) => ({ ...v, pending: [...taken, ...v.pending] }));
-        throw e;
-      }
+      const decision = await handler.handle(taken, now);
+      for (const [i, text] of decision.sendNow.entries()) await send(inbox, text, `handler:${id}:${now}:now:${i}`);
+      const digest = flush ? await handler.flushDigest(now) : null;
+      if (digest) await send(inbox, digest, `handler:${id}:${now}:digest`);
       await deps.inboxes.update(id, (v) => ({
         ...v,
+        pending: v.pending.slice(taken.length),
         state: handler.state,
+        ...(wake ? { lastWakeAt: now } : {}),
         ...(flush ? { lastDigestAt: now } : {}),
       }));
     },

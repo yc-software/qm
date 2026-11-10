@@ -1,5 +1,6 @@
 import { buildEventWakeEnvelope } from "../../wake/wake-envelope.ts";
 import { messageTag } from "../../util/message-tag.ts";
+import { reportFailureAs } from "../../util/errors.ts";
 
 export type FireReport = { cronId: string; cronTitle: string; at: number; text: string; urgent?: boolean };
 
@@ -81,7 +82,9 @@ export function createFireHandler(opts: {
         sections: reportsSection(reports),
         instructions: HANDLE_INSTRUCTIONS,
       });
-      const decisions = parseDecisions(await opts.model(prompt).catch(() => ""));
+      const decisions = parseDecisions(
+        await opts.model(prompt).catch(reportFailureAs("cron handler: triage turn", "")),
+      );
       reports.forEach((r, i) => {
         const d = decisions?.find((x) => x.report === i + 1);
         const action = d?.action ?? (r.urgent ? "now" : "digest");
@@ -105,7 +108,7 @@ export function createFireHandler(opts: {
         sections: reportsSection(state.digest),
         instructions: DIGEST_INSTRUCTIONS,
       });
-      const written = (await opts.model(prompt).catch(() => "")).trim();
+      const written = (await opts.model(prompt).catch(reportFailureAs("cron handler: digest turn", ""))).trim();
       const message = written || fallbackDigest(state);
       state.digest.length = 0;
       return message;
