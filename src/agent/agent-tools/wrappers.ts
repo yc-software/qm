@@ -132,7 +132,6 @@ export type RequestedApprovalOutcome = { card: string } | { refused: string };
 /** A sandbox command hit a connector tool that needs the person's approval for each call. Raise the same card the agent would get by calling it directly, and pause the turn after the current tool call; otherwise say why this turn can't. */
 export async function raiseRequestedToolApproval(
   ref: ToolContextRef,
-  tools: ReadonlyArray<{ name: string }>,
   request: { tool?: string; input?: Record<string, unknown> },
 ): Promise<RequestedApprovalOutcome> {
   const tc = ref.current;
@@ -140,8 +139,7 @@ export async function raiseRequestedToolApproval(
   const { tool, input } = request;
   if (!tc || !pending) return { refused: "this turn can't show approval cards" };
   if (typeof tool !== "string" || !isObj(input)) return { refused: "the request names no tool call" };
-  if (TOOL_APPROVAL_EXEMPT.has(tool) || !tools.some((t) => t.name === tool || t.name === "mcp_call"))
-    return { refused: `${tool} isn't one of this turn's connector tools` };
+  if (!ref.connectorTools?.has(tool)) return { refused: `${tool} isn't one of this turn's connector tools` };
   let needed: boolean;
   try {
     needed = await tc.mcpToolNeedsApproval(tool, input);
@@ -152,7 +150,11 @@ export async function raiseRequestedToolApproval(
   if (!needed) return { refused: "this call doesn't need approval" };
   const approval = declaredToolCallApproval(tool, input);
   if (!approval) return { refused: ARGS_TOO_LONG_REASON };
-  if (!pending.some((p) => p.approvalKey === approval.approvalKey)) pending.push(approval);
+  if (!pending.some((p) => p.approvalKey === approval.approvalKey)) {
+    if (ref.pausedOnApproval)
+      return { refused: "another approval card is already waiting for the person; wait for their decision" };
+    pending.push(approval);
+  }
   ref.pausedOnApproval = true;
   return { card: approvalCardId(approval.approvalKey!) };
 }

@@ -23,7 +23,8 @@ export interface RunSignalStore {
   send(runId: string, signal: RunSignal): Promise<boolean>;
   runForDedupeKey(dedupeKey: string): Promise<string | undefined>;
   pending(runId: string): Promise<Array<{ id: string; signal: RunSignal }>>;
-  acknowledge(runId: string, id: string): Promise<void>;
+  /** Marks a signal consumed; false when it already was. */
+  acknowledge(runId: string, id: string): Promise<boolean>;
   takePending(runId: string): Promise<RunSignal[]>;
   steerAuthors(runId: string): Promise<string[]>;
   pendingRuns(): Promise<ClaimedRow[]>;
@@ -137,6 +138,7 @@ export function startSignalPoll(
         if (s.kind === "abort" || s.kind === "client_result" || declined.has(id)) continue;
         if (s.kind === "approval_request") {
           try {
+            if (!(await signals.acknowledge(runId, id))) continue;
             let answer: ClientToolResult = { content: "this run can't show approval cards", isError: true };
             try {
               if (handlers.onApprovalRequest) answer = await handlers.onApprovalRequest(s);
@@ -151,7 +153,6 @@ export function startSignalPoll(
                 result: answer,
                 dedupeKey: `${s.dedupeKey}:answer`,
               });
-            await signals.acknowledge(runId, id);
           } catch (e) {
             declined.add(id);
             opts?.onError?.(e);
@@ -162,9 +163,9 @@ export function startSignalPoll(
           if (tookOne) await deliverStop();
           tookOne = true;
           if (s.text || s.request?.attachments?.length) {
-            const delivered = await handlers.onSteer(s.text ?? "", s.ts, s.request, () =>
-              signals.acknowledge(runId, id),
-            );
+            const delivered = await handlers.onSteer(s.text ?? "", s.ts, s.request, async () => {
+              await signals.acknowledge(runId, id);
+            });
             if (delivered === false) {
               declined.add(id);
               continue;

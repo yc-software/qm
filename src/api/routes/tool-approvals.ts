@@ -43,15 +43,17 @@ async function requestToolApproval(ctx: ApiCtx): Promise<void> {
   }
   const dedupeKey = `tool-approval:${runId}:${randomUUID()}`;
   await signals.send(runId, { kind: "approval_request", tool, input, dedupeKey });
-  const answer = await waitForClientResult(signals, runId, dedupeKey, { timeoutMs: ANSWER_WAIT_MS });
+  let answer = await waitForClientResult(signals, runId, dedupeKey, { timeoutMs: ANSWER_WAIT_MS });
+  if (typeof answer !== "object") {
+    // Withdraw the request unless the run has already claimed it; a claimed request is being handled, so wait for its answer.
+    const unanswered = (await signals.pending(runId)).find(({ signal }) => signal.dedupeKey === dedupeKey);
+    if (!unanswered || !(await signals.acknowledge(runId, unanswered.id)))
+      answer = await waitForClientResult(signals, runId, dedupeKey, { timeoutMs: ANSWER_WAIT_MS });
+  }
   let card: string | undefined;
   if (typeof answer === "object" && !answer.isError && isObj(answer.structured)) {
     const raised = answer.structured.card;
     if (typeof raised === "string") card = raised;
-  }
-  if (typeof answer !== "object") {
-    const unanswered = (await signals.pending(runId)).find(({ signal }) => signal.dedupeKey === dedupeKey);
-    if (unanswered) await signals.acknowledge(runId, unanswered.id);
   }
   audit(deps, {
     principalId: capability.actorId,

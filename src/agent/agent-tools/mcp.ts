@@ -109,6 +109,7 @@ export function mcpTools(kit: ToolKit, nativeNames: Set<string>) {
       .filter((t) => deferredNames.has(t.name) || inline.has(t.name))
       .map((t) => [t.name, withToolApprovalGate(t, kit)]),
   );
+  ref.connectorTools = new Set(callableTools.keys());
   const toolsByServer = new Map<string, Map<string, ToolDefinition>>();
   for (const d of searchable)
     toolsByServer.set(

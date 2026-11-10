@@ -141,11 +141,11 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
       return rows.map((row) => ({ id: String(row.id), signal: toSignals([row])[0]! }));
     },
     async acknowledge(runId, id) {
-      await q("UPDATE run_signals SET consumed_at=$3 WHERE run_id=$1 AND id=$2 AND consumed_at IS NULL", [
-        runId,
-        id,
-        Date.now(),
-      ]);
+      const { rows } = await q(
+        "UPDATE run_signals SET consumed_at=$3 WHERE run_id=$1 AND id=$2 AND consumed_at IS NULL RETURNING id",
+        [runId, id, Date.now()],
+      );
+      return rows.length > 0;
     },
     async takePending(runId) {
       const { rows } = await q(

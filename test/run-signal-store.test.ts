@@ -610,8 +610,9 @@ test("waitForClientResult keeps a result whose acknowledge is still in flight wh
     ...store,
     acknowledge: async (runId: string, id: string) => {
       await sleep(100);
-      await store.acknowledge(runId, id);
+      const consumed = await store.acknowledge(runId, id);
       acknowledged = true;
+      return consumed;
     },
   };
   await store.send("r1", { kind: "client_result", callId: "call-1", result: { content: "just in time" } });

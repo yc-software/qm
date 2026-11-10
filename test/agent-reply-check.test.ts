@@ -96,11 +96,14 @@ function memorySignals(): RunSignalStore & { send(runId: string, signal: RunSign
     },
     runForDedupeKey: async () => undefined,
     pending: async (runId) => [...(queued.get(runId) ?? [])],
-    acknowledge: async (runId, id) =>
-      void queued.set(
+    acknowledge: async (runId, id) => {
+      const before = queued.get(runId) ?? [];
+      queued.set(
         runId,
-        (queued.get(runId) ?? []).filter((s) => s.id !== id),
-      ),
+        before.filter((s) => s.id !== id),
+      );
+      return before.some((s) => s.id === id);
+    },
     async takePending(runId) {
       const taken = queued.get(runId) ?? [];
       queued.delete(runId);

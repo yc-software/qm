@@ -44,6 +44,8 @@ export interface ToolContextRef {
     call?: ApprovedToolCallSpec;
   }>;
   pausedOnApproval?: boolean;
+  /** Connector tools this turn can call, inline or through mcp_call. */
+  connectorTools?: ReadonlySet<string>;
   emit?: (item: NewItem) => Promise<Item | undefined>;
   scopeLabel?: ScopeId;
   orgScopeId?: ScopeId;

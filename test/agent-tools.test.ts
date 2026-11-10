@@ -4644,12 +4644,20 @@ test("a sandbox-requested approval raises the card the direct call would, and ap
     toolApprovalGate: (_tool, callKey) => !callKey || approved.has(callKey),
   };
   const tools = catalogTools(ref);
-  const first = await raiseRequestedToolApproval(ref, tools, { tool: "records", input: send });
-  assert.deepEqual(await raiseRequestedToolApproval(ref, tools, { tool: "records", input: send }), first);
+  const first = await raiseRequestedToolApproval(ref, { tool: "records", input: send });
+  assert.deepEqual(await raiseRequestedToolApproval(ref, { tool: "records", input: send }), first);
   assert.deepEqual(ref.pendingApprovals, direct.pendingApprovals, "one card, identical to the direct call's");
   assert.deepEqual(first, { card: approvalCardId(direct.pendingApprovals![0]!.approvalKey!) });
   assert.equal(ref.pausedOnApproval, true);
   assert.deepEqual(calls, [], "raising the card runs nothing");
+  assert.deepEqual(
+    await raiseRequestedToolApproval(ref, {
+      tool: "records",
+      input: { ...send, arguments: { to: "y" } },
+    }),
+    { refused: "another approval card is already waiting for the person; wait for their decision" },
+    "a command can't stack cards behind one that is already waiting",
+  );
   const card = ref.pendingApprovals!.at(-1)!;
   approved.add(card.approvalKey!);
   ref.pausedOnApproval = false;
@@ -4660,7 +4668,7 @@ test("a sandbox-requested approval raises the card the direct call would, and ap
   assert.deepEqual(calls, [[send, card.approvalKey]]);
 
   const refused: ToolContextRef = { current: context([]), pendingApprovals: [] };
-  const refusedTools = catalogTools(refused);
+  catalogTools(refused);
   const reasons = [];
   for (const request of [
     { tool: "records", input: { operation: "invoke", tool: "find", arguments: {} } },
@@ -4668,7 +4676,7 @@ test("a sandbox-requested approval raises the card the direct call would, and ap
     { tool: "records" },
     { tool: "records", input: { ...send, arguments: { note: "x".repeat(20_000) } } },
   ])
-    reasons.push(await raiseRequestedToolApproval(refused, refusedTools, request));
+    reasons.push(await raiseRequestedToolApproval(refused, request));
   assert.deepEqual(reasons, [
     { refused: "this call doesn't need approval" },
     { refused: "elsewhere isn't one of this turn's connector tools" },
@@ -4680,10 +4688,9 @@ test("a sandbox-requested approval raises the card the direct call would, and ap
   ]);
   assert.deepEqual(refused.pendingApprovals, []);
   assert.equal(refused.pausedOnApproval, undefined);
-  assert.deepEqual(
-    await raiseRequestedToolApproval({ current: context([]) }, refusedTools, { tool: "records", input: send }),
-    { refused: "this turn can't show approval cards" },
-  );
+  assert.deepEqual(await raiseRequestedToolApproval({ current: context([]) }, { tool: "records", input: send }), {
+    refused: "this turn can't show approval cards",
+  });
 });
 
 test("a failing approval check returns its error to the model and offers no card", async () => {

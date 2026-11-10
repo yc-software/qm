@@ -841,7 +841,7 @@ export function createAgent(opts?: AgentOptions): Agent {
                     const outcome =
                       !entry.agentSession.isStreaming || toolAbort.signal.aborted
                         ? { refused: "this turn has stopped running" }
-                        : await raiseRequestedToolApproval(entry.ref, tools, request);
+                        : await raiseRequestedToolApproval(entry.ref, request);
                     return "card" in outcome
                       ? { content: `approval card ${outcome.card} raised`, structured: outcome }
                       : { content: outcome.refused, isError: true };
