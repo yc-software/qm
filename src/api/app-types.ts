@@ -583,8 +583,9 @@ export interface App {
   ): Promise<Skill | "trigger_blocked" | null>;
   restoreOwnedSkill(
     id: string,
-    caller: Pick<CapabilityClaims, "actorId" | "botActor">,
-  ): Promise<Skill | "exists" | null>;
+    principalId: string,
+    opts?: { liveActor?: boolean },
+  ): Promise<Skill | "exists" | "trigger_blocked" | null>;
   listSkillPacks(): Promise<SkillPack[]>;
   getSkillPack(id: string): Promise<SkillPack | null>;
   registerSkillPack(input: NewSkillPack): Promise<SkillPack>;

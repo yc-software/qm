@@ -10,9 +10,8 @@ import { tenantAppHandle } from "../tenants/settings.ts";
 import type { App, AppDeps, ViewerDeployment } from "./app-types.ts";
 import { deploymentView } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
-import { personOrOwningBot, type CapabilityClaims } from "../auth/capability-token.ts";
+import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { Deployment } from "../deploy/deploy-store.ts";
-import { samePersonInDirectory } from "../directory/person.ts";
 
 export function createDeploymentMethods(
   deps: AppDeps,
@@ -60,10 +59,8 @@ export function createDeploymentMethods(
     caller: Pick<CapabilityClaims, "actorId" | "botActor">,
   ): Promise<"read" | "write" | null> {
     const permission = await principalGitPermission(d, caller.actorId);
-    if (permission !== "write") return permission;
-    return (await personOrOwningBot(caller, () => samePersonInDirectory(deps.directory, d.createdBy, caller.actorId)))
-      ? "write"
-      : "read";
+    if (permission !== "write" || caller.botActor !== true) return permission;
+    return (await deps.deploy.canManageDeployment(d.id, caller)) ? "write" : "read";
   }
   const invitationLock = deps.advisoryLock;
   return {

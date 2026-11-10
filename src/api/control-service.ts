@@ -802,7 +802,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
     async writeSoul(content, capability, expectedVersion) {
       try {
         const version = await app.updateSoul(capability.scopeId, content, capability.actorId, {
-          allowSharedScope: true,
+          allowSharedScope: capability.botActor !== true,
           expectedVersion,
           sessionId: capability.sessionId,
         });

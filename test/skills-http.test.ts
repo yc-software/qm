@@ -1230,7 +1230,7 @@ test("skill detail and restore capability calls hide other principals' skills an
   }
 });
 
-test("a Slack bot's turn can't restore a person's archived skill in a channel it belongs to", async () => {
+test("only a live person can restore an archived channel skill, not a Slack bot's turn or a trigger", async () => {
   const srv = await startSecure();
   try {
     await srv.directory.replaceChannels(
@@ -1252,7 +1252,8 @@ test("a Slack bot's turn can't restore a person's archived skill in a channel it
           headers: { "x-agent-capability": token },
         })
       ).status;
-    assert.equal(await restore(await srv.cap("release-bot", scopeId("channel", "C9"), true, true)), 404);
+    assert.equal(await restore(await srv.cap("release-bot", scopeId("channel", "C9"), true, true)), 403);
+    assert.equal(await restore(await srv.cap("U2", scopeId("channel", "C9"), false)), 403);
     assert.equal((await srv.skills.get(skill.id))?.status, "archived");
     assert.equal(await restore(await srv.cap("U2", scopeId("channel", "C9"))), 200);
   } finally {
