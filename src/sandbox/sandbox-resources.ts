@@ -127,13 +127,14 @@ export async function accessConversationSandbox(
   return resource;
 }
 
-export async function assertBotMayUseDefault(
+export async function assertBotMayUseComputer(
   resources: SandboxResources | undefined,
   scopeId: ScopeId,
+  sandboxId: string | undefined,
   botMayUse: ((resource: SandboxResource) => Promise<boolean>) | undefined,
 ): Promise<void> {
   if (!botMayUse) return;
-  const resource = await resources?.resolve(scopeId);
+  const resource = sandboxId ? await resources?.get(sandboxId) : await resources?.resolve(scopeId);
   if (resource && !(await botMayUse(resource))) throw new SandboxAccessError(BOT_SWARM_COMPUTER_REFUSAL);
 }
 

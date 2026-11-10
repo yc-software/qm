@@ -1,7 +1,7 @@
 import type { Principal, Resolution, ScopeId, Session } from "../../types.ts";
 import { type SandboxHandle, supportsProcessSessions, SandboxProvisionCleanupError } from "../../sandbox/sandbox.ts";
 import {
-  assertBotMayUseDefault,
+  assertBotMayUseComputer,
   createTurnSandboxAccess,
   preferredBackend,
   type SandboxAccessPlan,
@@ -84,9 +84,8 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     swarms &&
     ((resource: SandboxResource) =>
       swarms.botMayUseComputer(resource, { actorId: actor.id, threadRef: session.threadRef, sessionId: session.id }));
-  const assertDefaultUsable = async (): Promise<void> => {
-    if (!boundSandboxId) await assertBotMayUseDefault(deps.sandboxResources, resolution.writableScopeId, botMayUse);
-  };
+  const assertDefaultUsable = (sandboxId = boundSandboxId): Promise<void> =>
+    assertBotMayUseComputer(deps.sandboxResources, resolution.writableScopeId, sandboxId, botMayUse);
   const turnAccess = {
     env: connectorEnv,
     egress: resolution.egress,
@@ -164,19 +163,19 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       handle,
       processId,
     );
-  const provision = (eager = false): Promise<SandboxHandle> => {
+  const provision = async (eager = false): Promise<SandboxHandle> => {
     if (!eager) scopedUsed = true;
-    return (
-      pool.get(SCOPED)?.opening ??
-      open(SCOPED, (slot) => tracePhase("sandbox.provision", () => openScoped(slot, eager)))
-    );
+    const opening = pool.get(SCOPED)?.opening;
+    if (!opening) return open(SCOPED, (slot) => tracePhase("sandbox.provision", () => openScoped(slot, eager)));
+    const handle = await opening;
+    await assertDefaultUsable(handle.resourceId ?? boundSandboxId);
+    return handle;
   };
   const openScoped = async (slot: Slot, eager: boolean): Promise<SandboxHandle> => {
     if (input.surfaceOrigin?.audience === "external") {
       const resource = await deps.sandboxResources?.resolve(memoryScopeId);
       if (resource && resource.ownerScopeId !== scopeId) throw new Error("External Slack requires its own sandbox.");
     }
-    await assertDefaultUsable();
     if (isolation?.sandboxId)
       await ensureChildSandbox(deps.sandboxResources, {
         id: isolation.sandboxId,
@@ -185,6 +184,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         scopeId: resolution.writableScopeId,
         backendScopeId: memoryScopeId,
       });
+    await assertDefaultUsable();
     const handle = await deps.sandbox.provision(resolution.writableScopeId, {
       ...(boundSandboxId ? { sandboxId: boundSandboxId } : {}),
       ...turnAccess,

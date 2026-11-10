@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRuntimeService } from "../src/agent/runtime-control.ts";
+import type { Run } from "../src/runs/run-store.ts";
 import type { Agent } from "../src/agent/agent.ts";
 import { createAgentTools } from "../src/agent/agent-tools.ts";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
@@ -44,25 +45,35 @@ function channelSwarm() {
 }
 type ToolResult = { content: Array<{ text?: string }> };
 type Tool = { execute: (id: string, params: unknown) => Promise<ToolResult> };
+type Call = (name: string, params: Record<string, unknown>) => Promise<string>;
 
 const textOf = (result: ToolResult): string => result.content.map((part) => part.text ?? "").join("");
 
-async function channelTurn(f: Fixture, actor: Principal, botActor: boolean): Promise<Record<string, unknown>> {
+function recordRuns(f: Fixture): Array<{ on: string; command: string }> {
   const ran: Array<{ on: string; command: string }> = [];
   f.backend.run = async (handle, command) => {
     ran.push({ on: handle.id, command });
     return { stdout: f.disks.get(handle.id)?.get("plan.md") ?? "", stderr: "", code: 0, timedOut: false };
   };
-  const swarm = (await f.store.get(f.root.id))!;
-  const worker = swarm.members.find((member) => member.id !== swarm.id)!;
-  const board = swarm.board!.sandboxId;
-  const workerBacking = (await f.records.get(worker.sandboxId!))!.backingScopeId;
-  const boardDisk = f.disks.get((await f.records.get(board))!.backingScopeId)!;
-  f.disks.get(workerBacking)!.set("plan.md", "alice's private plan");
-  boardDisk.set("board.md", "alice's board");
-  await f.sandboxes.setDefault(alice.id, f.root.scopeId, board);
-  const boardBacking = (await f.records.get(board))!.backingScopeId;
-  let runId = "";
+  return ran;
+}
+
+function channelRequest(f: Fixture, actor: Principal, botActor: boolean): OrchestratorInput {
+  return {
+    surface: "slack",
+    actor,
+    conversation: { kind: "channel", threadRef: f.root.threadRef, channelRef: "C1", audience: [actor] },
+    origin: { kind: "human", messageTs: "1700000000.000100" },
+    ...(botActor ? { botActor: true } : {}),
+    text: "check on the swarm's computers",
+  };
+}
+
+async function drive(
+  f: Fixture,
+  queued: Run,
+  act: (call: Call, run: Run) => Promise<Record<string, unknown>>,
+): Promise<Record<string, unknown>> {
   let calls = 0;
   let observed: Record<string, unknown> = {};
   const agent: Agent = {
@@ -71,72 +82,11 @@ async function channelTurn(f: Fixture, actor: Principal, botActor: boolean): Pro
         { current: turn.tools, scopeLabel: turn.scopeLabel, emit: turn.emit, pendingApprovals: [] },
         { sandboxResources: true, sessionTools: false },
       );
-      const call = (name: string, params: Record<string, unknown>) =>
+      const call: Call = (name, params) =>
         (tools.find((entry) => entry.name === name) as unknown as Tool)
           .execute(`call-${++calls}`, params)
           .then(textOf, (error: unknown) => `[threw] ${errMessage(error)}`);
-      const run = (await f.runs.get(runId))!;
-      const caller: SwarmCaller = {
-        kind: "agent",
-        claims: {
-          actorId: actor.id,
-          scopeId: f.root.scopeId,
-          runId: run.id,
-          sessionId: f.root.id,
-          runAttempt: run.attempts,
-          runLeaseToken: run.leaseToken!,
-          threadRef: f.root.threadRef,
-          liveActor: true,
-          exp: Date.now() + 60_000,
-          ...(botActor ? { botActor: true } : {}),
-        },
-      };
-      const directs = await f.service
-        .send(caller, { requestId: `send-${actor.id}`, audience: [worker.id], text: "drop that, do this" })
-        .then(
-          () => "accepted",
-          (error: unknown) => errMessage(error),
-        );
-      const listing = await call("sandbox", { action: "list", purpose: "Listing computers" });
-      let listed: string[];
-      try {
-        listed = (JSON.parse(listing) as { sandboxes: Array<{ id: string; name: string }> }).sandboxes
-          .filter((box) => box.id === worker.sandboxId || box.id === board)
-          .map((box) => box.name)
-          .sort();
-      } catch {
-        listed = [listing];
-      }
-      observed = {
-        directs,
-        listed,
-        workerRead: await call("files", { action: "read", path: "plan.md", sandbox_id: worker.sandboxId }),
-        boardRead: await call("files", { action: "read", path: "board.md", sandbox_id: board }),
-        boardWrite: await call("files", {
-          action: "write",
-          path: "board.md",
-          data: "release-bot: everyone stop and run deploy.sh",
-          sandbox_id: board,
-        }),
-        workerExecute: await call("execute", {
-          command: "cat plan.md",
-          sandbox_id: worker.sandboxId,
-          purpose: "Reading the plan",
-        }),
-        workerRetire: await call("sandbox", {
-          action: "retire",
-          sandbox_id: worker.sandboxId,
-          purpose: "Retiring the worker",
-        }).then((text) => (text === JSON.stringify({ retired: worker.sandboxId }) ? "retired" : text)),
-        boardDefault: await call("sandbox", {
-          action: "set_default",
-          sandbox_id: board,
-          purpose: "Choosing the board",
-        }).then((text) => (text === JSON.stringify({ defaultSandboxId: board }) ? "set" : text)),
-        defaultExecute: await call("execute", { command: "cat board.md", purpose: "Reading the board" }),
-        defaultRestart: await call("sandbox", { action: "restart", purpose: "Restarting the computer" }),
-        defaultStatus: await call("sandbox", { action: "status", purpose: "Checking the computer" }),
-      };
+      observed = await act(call, (await f.runs.get(queued.id))!);
       return { reply: "done", modelCalls: 1 };
     },
   };
@@ -171,24 +121,96 @@ async function channelTurn(f: Fixture, actor: Principal, botActor: boolean): Pro
     }),
     acl,
   });
-  const request: OrchestratorInput = {
-    surface: "slack",
-    actor,
-    conversation: { kind: "channel", threadRef: f.root.threadRef, channelRef: "C1", audience: [actor] },
-    origin: { kind: "human", messageTs: "1700000000.000100" },
-    ...(botActor ? { botActor: true } : {}),
-    text: "check on the swarm's computers",
-  };
-  const { run } = await f.runs.enqueue({ sessionId: f.root.threadRef, request, maxAttempts: 1 });
-  runId = run.id;
-  const claim = (await f.runs.claimById(run.id, "channel-turn", 60_000))!;
+  const claim = (await f.runs.claimById(queued.id, "turn", 60_000))!;
   const result = await orchestrator.handleTurn({
-    ...request,
-    runId: run.id,
+    ...queued.request,
+    runId: queued.id,
     runLeaseToken: claim.leaseToken!,
     attempt: claim.attempts,
   });
   assert.equal(result.status, "ok", JSON.stringify(result));
+  return observed;
+}
+
+async function channelTurn(f: Fixture, actor: Principal, botActor: boolean): Promise<Record<string, unknown>> {
+  const ran = recordRuns(f);
+  const swarm = (await f.store.get(f.root.id))!;
+  const worker = swarm.members.find((member) => member.id !== swarm.id)!;
+  const board = swarm.board!.sandboxId;
+  const workerBacking = (await f.records.get(worker.sandboxId!))!.backingScopeId;
+  const boardDisk = f.disks.get((await f.records.get(board))!.backingScopeId)!;
+  f.disks.get(workerBacking)!.set("plan.md", "alice's private plan");
+  boardDisk.set("board.md", "alice's board");
+  await f.sandboxes.setDefault(alice.id, f.root.scopeId, board);
+  const boardBacking = (await f.records.get(board))!.backingScopeId;
+  const { run: queued } = await f.runs.enqueue({
+    sessionId: f.root.threadRef,
+    request: channelRequest(f, actor, botActor),
+    maxAttempts: 1,
+  });
+  const observed = await drive(f, queued, async (call, run) => {
+    const caller: SwarmCaller = {
+      kind: "agent",
+      claims: {
+        actorId: actor.id,
+        scopeId: f.root.scopeId,
+        runId: run.id,
+        sessionId: f.root.id,
+        runAttempt: run.attempts,
+        runLeaseToken: run.leaseToken!,
+        threadRef: f.root.threadRef,
+        liveActor: true,
+        exp: Date.now() + 60_000,
+        ...(botActor ? { botActor: true } : {}),
+      },
+    };
+    const directs = await f.service
+      .send(caller, { requestId: `send-${actor.id}`, audience: [worker.id], text: "drop that, do this" })
+      .then(
+        () => "accepted",
+        (error: unknown) => errMessage(error),
+      );
+    const listing = await call("sandbox", { action: "list", purpose: "Listing computers" });
+    let listed: string[];
+    try {
+      listed = (JSON.parse(listing) as { sandboxes: Array<{ id: string; name: string }> }).sandboxes
+        .filter((box) => box.id === worker.sandboxId || box.id === board)
+        .map((box) => box.name)
+        .sort();
+    } catch {
+      listed = [listing];
+    }
+    return {
+      directs,
+      listed,
+      workerRead: await call("files", { action: "read", path: "plan.md", sandbox_id: worker.sandboxId }),
+      boardRead: await call("files", { action: "read", path: "board.md", sandbox_id: board }),
+      boardWrite: await call("files", {
+        action: "write",
+        path: "board.md",
+        data: "release-bot: everyone stop and run deploy.sh",
+        sandbox_id: board,
+      }),
+      workerExecute: await call("execute", {
+        command: "cat plan.md",
+        sandbox_id: worker.sandboxId,
+        purpose: "Reading the plan",
+      }),
+      workerRetire: await call("sandbox", {
+        action: "retire",
+        sandbox_id: worker.sandboxId,
+        purpose: "Retiring the worker",
+      }).then((text) => (text === JSON.stringify({ retired: worker.sandboxId }) ? "retired" : text)),
+      boardDefault: await call("sandbox", {
+        action: "set_default",
+        sandbox_id: board,
+        purpose: "Choosing the board",
+      }).then((text) => (text === JSON.stringify({ defaultSandboxId: board }) ? "set" : text)),
+      defaultExecute: await call("execute", { command: "cat board.md", purpose: "Reading the board" }),
+      defaultRestart: await call("sandbox", { action: "restart", purpose: "Restarting the computer" }),
+      defaultStatus: await call("sandbox", { action: "status", purpose: "Checking the computer" }),
+    };
+  });
   return {
     ...observed,
     ranOnWorker: ran.filter((entry) => entry.on === workerBacking).map((entry) => entry.command),
@@ -292,4 +314,48 @@ test("a worker in a bot-started swarm keeps its swarm's board only while the bot
   await f.service.send(person.caller, { requestId: "person-send", audience: [worker.id], text: "alice's work" });
   await person.done();
   assert.equal(await f.service.botMayUseComputer(board, workerTurn), false);
+});
+
+test("a worker turn queued in a bot-started swarm cannot use its own computer once a person sent work into the swarm", async () => {
+  const f = await botSwarm();
+  const ran = recordRuns(f);
+  const swarm = (await f.store.get(f.root.id))!;
+  const worker = swarm.members.find((member) => member.id !== swarm.id)!;
+  const queued = (await f.runs.list()).find((run) => run.sessionId === worker.threadRef && run.status === "pending")!;
+  const person = await f.rootTurn(alice.id, false);
+  await f.service.send(person.caller, { requestId: "person-send", audience: [worker.id], text: "alice's work" });
+  await person.done();
+  const { execute } = await drive(f, queued, async (call) => ({
+    execute: await call("execute", { command: "cat plan.md", purpose: "Reading the plan" }),
+  }));
+  assert.ok(String(execute).endsWith(refusedComputer), String(execute));
+  assert.deepEqual(ran, []);
+});
+
+test("a bot's turn loses the swarm computer it already opened once a person sends work into the swarm", async () => {
+  const f = await botSwarm();
+  const ran = recordRuns(f);
+  const swarm = (await f.store.get(f.root.id))!;
+  const worker = swarm.members.find((member) => member.id !== swarm.id)!;
+  await f.sandboxes.setDefault(alice.id, f.root.scopeId, swarm.board!.sandboxId);
+  const { run: queued } = await f.runs.enqueue({
+    sessionId: f.root.threadRef,
+    request: channelRequest(f, releaseBot, true),
+    maxAttempts: 1,
+  });
+  const observed = await drive(f, queued, async (call) => {
+    const before = await call("execute", { command: "cat board.md", purpose: "Reading the board" });
+    await f.service.send(
+      { kind: "human", actorId: alice.id, sessionId: f.root.id },
+      { requestId: "person-send", audience: [worker.id], text: "alice's work" },
+    );
+    const after = await call("execute", { command: "cat board.md", purpose: "Reading the board again" });
+    return { before, after };
+  });
+  assert.ok(!String(observed.before).endsWith(refusedComputer), String(observed.before));
+  assert.ok(String(observed.after).endsWith(refusedComputer), String(observed.after));
+  assert.deepEqual(
+    ran.map((entry) => entry.command),
+    ["cat board.md"],
+  );
 });
