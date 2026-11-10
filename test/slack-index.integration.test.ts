@@ -1790,7 +1790,23 @@ test("own task-card status events never enter the mirror, but ordinary bot edits
       deleted_ts: status.ts,
       ts: "200.3",
     });
-    assert.equal(f.core.ingests.flat().filter((event: any) => event.ts === status.ts).length, 0);
+    await f.app.emitMessage({
+      channel: "C1",
+      channel_type: "channel",
+      ...status,
+      ts: "200.4",
+      blocks: [
+        {
+          type: "plan",
+          title: "Waiting on subagents",
+          tasks: [{ task_id: "qm_status:test:child", title: "Child", status: "in_progress" }],
+        },
+      ],
+    });
+    assert.equal(
+      f.core.ingests.flat().filter((event: any) => event.ts === status.ts || event.ts === "200.4").length,
+      0,
+    );
     assert.equal(f.core.turns.length, 0);
     await f.app.emitMessage({
       channel: "C1",

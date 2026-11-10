@@ -12,6 +12,7 @@ import { conversationWebUrl } from "../util/conversation-links.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
 import { snippet } from "../util/text.ts";
+import { EMOJI_CHAR_BY_NAME } from "./emoji-map.ts";
 
 export interface SlackSessionStatusState {
   writer?: string;
@@ -147,33 +148,33 @@ export function createSlackSessionStatus(
           if (elapsed > 5 * 60_000 && session) state.followUrl = conversationWebUrl(activity.publicWebUrl, session.id);
           if (leaseLost) return true;
           if (!(await persist(state))) return true;
+          const icon = state.emoji ? EMOJI_CHAR_BY_NAME[state.emoji] : undefined;
           const details = richText(
-            state.emoji,
+            icon ? undefined : state.emoji,
             ongoing && elapsed >= 60_000 ? `${phrase} · ${duration(elapsed, false)}` : phrase,
           );
+          const headline = snippet(icon ? `${icon} ${title}` : title, 80);
+          const status = (failed && "error") || (ongoing && "in_progress") || "complete";
+          const rows = helpers.slice(0, 50).map(({ child, run }) => {
+            const step = richText(undefined, purposeOf(run) ?? "");
+            return {
+              task_id: `${SLACK_STATUS_TASK_PREFIX}${state!.cardId}:${child.id}`,
+              title: snippet(child.title || "Subagent", 80),
+              status: "in_progress",
+              ...(step ? { details: step } : {}),
+            };
+          });
           const blocks: Record<string, unknown>[] = [
-            {
-              type: "task_card",
-              task_id: `${SLACK_STATUS_TASK_PREFIX}${state.cardId}`,
-              title: snippet(title, 80),
-              status: (failed && "error") || (ongoing && "in_progress") || "complete",
-              ...(details ? { details } : {}),
-            },
+            rows.length
+              ? { type: "plan", title: headline, tasks: rows }
+              : {
+                  type: "task_card",
+                  task_id: `${SLACK_STATUS_TASK_PREFIX}${state.cardId}`,
+                  title: headline,
+                  status,
+                  ...(details ? { details } : {}),
+                },
           ];
-          if (helpers.length)
-            blocks.push({
-              type: "plan",
-              title: helpers.length === 1 ? "1 subagent" : `${helpers.length} subagents`,
-              tasks: helpers.slice(0, 50).map(({ child, run }) => {
-                const step = richText(undefined, purposeOf(run) ?? "");
-                return {
-                  task_id: `${SLACK_STATUS_TASK_PREFIX}${state!.cardId}:${child.id}`,
-                  title: snippet(child.title || "Subagent", 80),
-                  status: "in_progress",
-                  ...(step ? { details: step } : {}),
-                };
-              }),
-            });
           if (state.followUrl)
             blocks.push({
               type: "context",
@@ -181,11 +182,11 @@ export function createSlackSessionStatus(
             });
           const content = JSON.stringify(blocks);
           try {
-            if (state.cardContent !== content && (state.cardTs || optedIn)) {
+            if (state.cardContent !== content && (state.cardTs || (optedIn && ongoing && elapsed >= SHOW_AFTER_MS))) {
               const result = (await client.apiCall(state.cardTs ? "chat.update" : "chat.postMessage", {
                 channel: state.channel,
                 ...(state.cardTs ? { ts: state.cardTs } : { thread_ts: state.threadTs, client_msg_id: state.cardId }),
-                text: title,
+                text: headline,
                 blocks,
                 unfurl_links: false,
                 unfurl_media: false,
@@ -257,6 +258,8 @@ export function createSlackSessionStatus(
     },
   };
 }
+
+const SHOW_AFTER_MS = 10_000;
 
 function duration(ms: number, seconds = true): string {
   const total = Math.max(0, Math.round(ms / 1000));

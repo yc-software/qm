@@ -12,12 +12,10 @@ export function isOwnStatusCard(
   return Boolean(
     own &&
     Array.isArray(message.blocks) &&
-    message.blocks.some(
-      (block) =>
-        isObj(block) &&
-        block.type === "task_card" &&
-        typeof block.task_id === "string" &&
-        block.task_id.startsWith(SLACK_STATUS_TASK_PREFIX),
+    message.blocks.some((block) =>
+      (isObj(block) && block.type === "plan" && Array.isArray(block.tasks) ? block.tasks : [block]).some(
+        (task) => isObj(task) && typeof task.task_id === "string" && task.task_id.startsWith(SLACK_STATUS_TASK_PREFIX),
+      ),
     ),
   );
 }

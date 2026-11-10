@@ -22,3 +22,6 @@ function buildMap(): Record<string, string> {
 }
 
 export const EMOJI_NAME_BY_CHAR: Record<string, string> = buildMap();
+
+export const EMOJI_CHAR_BY_NAME: Record<string, string> = {};
+for (const [char, name] of Object.entries(EMOJI_NAME_BY_CHAR)) EMOJI_CHAR_BY_NAME[name] ??= char;

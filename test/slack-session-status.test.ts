@@ -138,10 +138,14 @@ function fixture() {
     background,
     watch,
     enable: () => flags.setEnabled("slack_loading_indicator", "channel:C1", true, "admin"),
-    start: (id: string, account = "T1:B1", emoji?: string) =>
-      status.start(client, account, id, "C1", "1.0", emoji ? Promise.resolve(emoji) : undefined),
+    start: async (id: string, account = "T1:B1", emoji?: string) => {
+      await status.start(client, account, id, "C1", "1.0", emoji ? Promise.resolve(emoji) : undefined);
+      at += 10_000;
+      await status.reconcile(client, account);
+    },
     reconcile: () => status.reconcile(client, "T1:B1"),
     card: () => cards.at(-1)!.args.blocks as Array<Record<string, unknown>>,
+    now: () => at,
     advance: (ms: number) => {
       at += ms;
     },
@@ -176,7 +180,7 @@ test("concurrent starts share one card, terminal runs cannot clear active work, 
   assert.equal(f.cards.length, 1);
   next.status = "failed";
   await f.reconcile();
-  assert.equal(f.card()[0]?.title, "Stopped after 0s");
+  assert.equal(f.card()[0]?.title, "Stopped after 40s");
   assert.equal(f.card()[0]?.status, "error");
   assert.deepEqual(await f.store.all(), []);
   const oldCard = f.card()[0]?.task_id;
@@ -219,7 +223,7 @@ test("background lifecycle survives restart and gains a canonical link after fiv
   const monitor = f.watch();
   await f.manager().reconcile(f.client, "T1:B1");
   assert.equal(f.card()[0]?.title, "Watching for updates");
-  f.advance(300_000);
+  f.advance(290_000);
   await f.reconcile();
   assert.equal(f.card().length, 1);
   f.advance(1);
@@ -249,16 +253,17 @@ test("the card shows the latest step with the ack emoji and ends with how long t
   const f = fixture();
   await f.enable();
   const run = f.add("r1");
-  await f.start(run.id, "T1:B1", "crab");
-  assert.deepEqual(line(f.card()[0]), [
-    { type: "emoji", name: "crab" },
-    { type: "text", text: " Working on it" },
-  ]);
-  f.purposes.set("r1", "Reading status implementation");
-  f.advance(61_000);
+  await f.status.start(f.client, "T1:B1", run.id, "C1", "1.0", Promise.resolve("crab"));
+  assert.deepEqual(f.cards, []);
+  f.advance(10_000);
   await f.reconcile();
-  assert.equal(f.card()[0]?.title, "Reading status implementation");
-  assert.deepEqual(line(f.card()[0])?.[1], { type: "text", text: " Working on it · 1m" });
+  assert.equal(f.card()[0]?.title, "🦀 Thinking it through");
+  assert.deepEqual(line(f.card()[0]), [{ type: "text", text: "Working on it" }]);
+  f.purposes.set("r1", "Reading status implementation");
+  f.advance(51_000);
+  await f.reconcile();
+  assert.equal(f.card()[0]?.title, "🦀 Reading status implementation");
+  assert.deepEqual(line(f.card()[0]), [{ type: "text", text: "Working on it · 1m" }]);
   const posts = f.cards.length;
   await f.reconcile();
   assert.equal(f.cards.length, posts);
@@ -266,14 +271,34 @@ test("the card shows the latest step with the ack emoji and ends with how long t
   job.purpose = "Waiting on CI";
   run.status = "done";
   await f.reconcile();
-  assert.equal(f.card()[0]?.title, "Waiting on CI");
-  assert.deepEqual(line(f.card()[0])?.[1], { type: "text", text: " Running in the background · 1m" });
+  assert.equal(f.card()[0]?.title, "🦀 Waiting on CI");
+  assert.deepEqual(line(f.card()[0]), [{ type: "text", text: "Running in the background · 1m" }]);
   job.status = "exited";
   f.advance(73_000);
   await f.reconcile();
-  assert.equal(f.card()[0]?.title, "Done in 2m 14s");
+  assert.equal(f.card()[0]?.title, "🦀 Done in 2m 14s");
   assert.equal(f.card()[0]?.status, "complete");
-  assert.deepEqual(line(f.card()[0]), [{ type: "emoji", name: "crab" }]);
+  assert.equal(f.card()[0]?.details, undefined);
+});
+
+test("custom ack emoji ride in the details, and work that ends before the card is due posts nothing", async () => {
+  const f = fixture();
+  await f.enable();
+  const run = f.add("r1");
+  await f.start(run.id, "T1:B1", "qm-wave");
+  assert.equal(f.card()[0]?.title, "Thinking it through");
+  assert.deepEqual(line(f.card()[0]), [
+    { type: "emoji", name: "qm-wave" },
+    { type: "text", text: " Working on it" },
+  ]);
+  const quick = f.add("quick");
+  quick.sessionId = "ch:C1:2.0";
+  await f.status.start(f.client, "T1:B1", quick.id, "C1", "2.0");
+  quick.status = "done";
+  f.advance(10_000);
+  await f.reconcile();
+  assert.ok(f.cards.every((call) => call.args.thread_ts !== "2.0"));
+  assert.ok((await f.store.all()).every((row) => row.threadTs !== "2.0"));
 });
 
 test("running subagents keep the card open as plan rows showing their latest step", async () => {
@@ -286,17 +311,16 @@ test("running subagents keep the card open as plan rows showing their latest ste
   f.subagent("c2", "Elsewhere", "channel:other");
   run.status = "done";
   await f.reconcile();
-  assert.equal(f.card()[0]?.title, "Waiting on subagents");
-  assert.equal(f.card()[0]?.status, "in_progress");
-  const plan = f.card()[1] as { type: string; title: string; tasks: Array<Record<string, unknown>> };
+  const plan = f.card()[0] as { type: string; title: string; tasks: Array<Record<string, unknown>> };
   assert.equal(plan.type, "plan");
-  assert.equal(plan.title, "1 subagent");
+  assert.equal(plan.title, "Waiting on subagents");
   assert.equal(plan.tasks.length, 1);
   assert.equal(plan.tasks[0]?.title, "Slack status card personality");
   assert.deepEqual(line(plan.tasks[0]), [{ type: "text", text: "Reading Slack docs" }]);
   child.status = "done";
   await f.reconcile();
-  assert.equal(f.card()[0]?.title, "Done in 0s");
+  assert.equal(f.card()[0]?.type, "task_card");
+  assert.equal(f.card()[0]?.title, "Done in 10s");
   assert.equal(f.card().length, 1);
 });
 
@@ -318,7 +342,7 @@ test("unrelated, expired, disabled, private and nonengaged work never keeps a ca
   f.add("other").sessionId = "other-thread";
   run.status = "done";
   await f.reconcile();
-  assert.equal(f.card()[0]?.title, "Done in 0s");
+  assert.equal(f.card()[0]?.title, "Done in 10s");
 });
 
 test("opt-out settles only this account's card without cancelling work", async () => {
@@ -330,7 +354,7 @@ test("opt-out settles only this account's card without cancelling work", async (
   const job = f.background();
   await f.flags.setEnabled("slack_loading_indicator", "channel:C1", false, "admin");
   await f.reconcile();
-  assert.equal(f.card()[0]?.title, "Done in 0s");
+  assert.equal(f.card()[0]?.title, "Done in 20s");
   assert.equal(f.card()[0]?.status, "complete");
   assert.equal(job.status, "running");
   assert.deepEqual(
@@ -404,7 +428,13 @@ for (const method of ["chat.postMessage", "chat.update"]) {
     const lost = deferred(),
       blocked = deferred(),
       begun = deferred();
-    const first = createSlackSessionStatus(f.store, { hold: async (_key, fn) => fn(lost.promise) }, f.runs, f.flags);
+    const first = createSlackSessionStatus(
+      f.store,
+      { hold: async (_key, fn) => fn(lost.promise) },
+      f.runs,
+      f.flags,
+      f.now,
+    );
     if (method === "chat.update") {
       await f.start(run.id);
       run.status = "done";
@@ -416,8 +446,11 @@ for (const method of ["chat.postMessage", "chat.update"]) {
         return f.client.apiCall(called, args);
       },
     };
-    const pending =
-      method === "chat.update" ? first.reconcile(delayed, "T1:B1") : first.start(delayed, "T1:B1", run.id, "C1", "1.0");
+    if (method === "chat.postMessage") {
+      await first.start(delayed, "T1:B1", run.id, "C1", "1.0");
+      f.advance(10_000);
+    }
+    const pending = first.reconcile(delayed, "T1:B1");
     await begun.promise;
     lost.resolve();
     if (method === "chat.update") {
@@ -428,7 +461,7 @@ for (const method of ["chat.postMessage", "chat.update"]) {
     await pending;
     await f.reconcile();
     assert.equal(f.cards.filter((call) => call.method === "chat.postMessage").length, 1);
-    assert.equal(f.card()[0]?.title, method === "chat.update" ? "Thinking it through" : "Done in 0s");
+    assert.equal(f.card()[0]?.title, method === "chat.update" ? "Thinking it through" : "Done in 10s");
   });
 }
 
