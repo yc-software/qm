@@ -73,6 +73,7 @@ describeTwoTenants("mail wakes, memory indexing and job computers bind each row'
     const resources = createSandboxResources({
       upgrade: async () => void upgraded.push(currentTenant()),
       records,
+      loads: db.maps.map("sandbox_loads"),
       defaults: db.maps.map<SandboxDefault>("sandbox_defaults"),
       backends: {},
       defaultBackend: "local",

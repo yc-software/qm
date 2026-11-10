@@ -1,3 +1,4 @@
+import type { LoadSample } from "./sandbox/load-probe.ts";
 import type { PromptSnapshot } from "./core/orchestrator/prompt-snapshot.ts";
 import { onTenantLoad, perTenant } from "./tenants/cache.ts";
 import { loadTenantSettings, TENANT_SETTINGS_REFRESH_MS } from "./tenants/settings.ts";
@@ -1192,6 +1193,7 @@ export function buildApp(
   const sandboxDefaults = artifactMap<SandboxDefault>("sandbox_defaults");
   const sandboxResources = createSandboxResources({
     records: sandboxRecords,
+    loads: artifactMap<LoadSample>("sandbox_loads"),
     defaults: sandboxDefaults,
     upgrade: async () => {
       const choice = await tenantSandboxChoice({

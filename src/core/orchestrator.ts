@@ -168,6 +168,7 @@ import {
 } from "./orchestrator/turn-helpers.ts";
 import {
   currentTimeBlock,
+  defaultSandboxLoadLine,
   environmentNote,
   renderGatewayContext,
   renderSandboxProviders,
@@ -1216,6 +1217,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             false,
             scopeProfile.egressEnforcement === "domain" ? [scopeProfile.backend] : [],
           );
+      const sandboxLoad = turnSandboxResources
+        ? await defaultSandboxLoadLine(turnSandboxResources, scopeId, input.runId).catch(
+            swallowAs("orchestrator: sandbox load line", ""),
+          )
+        : "";
 
       const {
         boundSandboxId,
@@ -1926,6 +1932,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const turnEnvironmentContents = [
           sender,
           timeBlock,
+          sandboxLoad,
           manifest,
           principalDelivered,
           unscreenedNote,

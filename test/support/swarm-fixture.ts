@@ -68,6 +68,7 @@ export async function swarmFixture(
   };
   const sandboxes = createSandboxResources({
     records,
+    loads: testMap(),
     defaults: testMap(),
     backends: { modal: backend },
     defaultBackend: "modal",

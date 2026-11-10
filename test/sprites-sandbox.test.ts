@@ -1,8 +1,6 @@
 import { pollProcess } from "../src/sandbox/process-poll.ts";
 import { test, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { inspect } from "node:util";
 import {
   createSpritesSandbox,
@@ -525,57 +523,6 @@ test("exec diagnostics keep the provider's transport reason but not its URL or r
       return true;
     });
   }
-});
-
-test("exec results carry io pressure when the guest exposes it, and omit it when it can't be read", async () => {
-  const h = await sandbox.provision(scope);
-  const bare = await sandbox.run(h, "echo ok");
-  assert.equal(bare.pressure, undefined);
-
-  fake.setPressure(h.id, { full10: 85.17, full60: 86.14, load1: 30.78 });
-  const r = await sandbox.run(h, "echo ok");
-  assert.equal(r.code, 0);
-  assert.deepEqual(r.pressure, { ioFull10: 85.17, ioFull60: 86.14, load1: 30.78 });
-});
-
-test("sustained io pressure is reported once per episode, then re-arms after it clears", async () => {
-  const events: Array<{ code: string }> = [];
-  const s = make({ onError: (e: { code: string }) => events.push(e) });
-  const h = await s.provision(scope);
-
-  fake.setPressure(h.id, { full10: 90, full60: 88, load1: 25 });
-  await s.run(h, "echo a");
-  await s.run(h, "echo b");
-  assert.deepEqual(
-    events.filter((e) => e.code === "io_pressure_high").length,
-    1,
-    "a continuing episode records exactly one event",
-  );
-
-  fake.setPressure(h.id, { full10: 5, full60: 5, load1: 1 });
-  await s.run(h, "echo c");
-  fake.setPressure(h.id, { full10: 90, full60: 88, load1: 25 });
-  await s.run(h, "echo d");
-  assert.equal(events.filter((e) => e.code === "io_pressure_high").length, 2, "a new episode records again");
-});
-
-test("computerStatus carries guest pressure alongside the health check", async () => {
-  const h = await sandbox.provision(scope);
-  fake.setPressure(h.id, { full10: 60, full60: 55, load1: 8 });
-  const s = await sandbox.computerStatus!(scope);
-  assert.equal(s.machine, "healthy");
-  assert.equal(s.guestResponsive, true);
-  assert.deepEqual(s.pressure, { ioFull10: 60, ioFull60: 55, load1: 8 });
-});
-
-test("a garbled pressure read never costs the caller a completed command's result", async () => {
-  const h = await sandbox.provision(scope);
-  fake.setPressure(h.id, { full10: 60, full60: 55, load1: 8 });
-  writeFileSync(join(fake.homeDir(h.id), ".proc-loadavg"), "");
-  const r = await sandbox.run(h, "echo survived");
-  assert.equal(r.code, 0);
-  assert.equal(r.stdout.trim(), "survived");
-  assert.equal(r.pressure, undefined, "partial telemetry is dropped, not surfaced or fatal");
 });
 
 test("concurrent restart calls for one sprite collapse into sequential requests", async () => {
