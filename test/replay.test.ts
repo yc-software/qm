@@ -747,3 +747,21 @@ test("replayed context marks each Pacific calendar day once, dating overheard Sl
     "── Monday, October 19, 2026 ──\nhas the deadline passed?",
   );
 });
+
+test("a scheduled task's post replays as a tagged message, never merged into the agent's own words", () => {
+  const history = [
+    at({ kind: "UserMessage", text: "post a check here in 3 minutes" }, 1),
+    at({ kind: "AgentMessage", text: "Will post once at 9:52." }, 2),
+    at({ kind: "AgentMessage", text: "live check 2", body: { via: "cron" } }, 3),
+  ];
+  const msgs = reconstructMessagesFromHistory(history);
+  assertValidWire(msgs);
+  assert.deepEqual(
+    msgs.map((m) => [m.role, m.content.map((c) => (c as { text?: string }).text).join("")]),
+    [
+      ["user", msgs[0]!.content.map((c) => (c as { text?: string }).text).join("")],
+      ["assistant", "Will post once at 9:52."],
+      ["user", '<message from="agent" via="cron">live check 2</message>'],
+    ],
+  );
+});

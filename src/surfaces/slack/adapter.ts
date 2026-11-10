@@ -1,7 +1,6 @@
 import type { DeliveryStore } from "../../delivery/delivery-store.ts";
 import { reachEnqueue, withThread } from "../../reach/reach.ts";
 import { classifyUser, slackUserTimezone, type SlackIdentityMode, type SlackUser } from "../../slack/identity.ts";
-import { resolveMentions } from "../../slack/mrkdwn.ts";
 import type { Destination } from "../../types.ts";
 import type { ExternalAudienceAccess, Surface, SurfaceUser, TurnSurfaceOrigin } from "../contract.ts";
 
@@ -96,7 +95,6 @@ export function createSlackSurface(deps: { deliveries: DeliveryStore }): Surface
     containerOf: (target) => target.split(":")[0]!,
     principalFor: (user) => user.principal,
     mention: (user) => `<@${user.id}>`,
-    readableText: (text, mentions) => resolveMentions(text, mentions ? new Map(Object.entries(mentions)) : undefined),
     native: (kind) => (kind === "slack" ? slack : null),
   };
 }

@@ -2,6 +2,7 @@ import { parseScopeId, type ScopeId } from "../../../types.ts";
 import { sendJson } from "../../http.ts";
 import { audit, requireScopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
+import { personNamer, threadRefLabel } from "./common.ts";
 
 const EGRESS_LIST_LIMIT = 1000;
 const ERRORS_LIST_LIMIT = 200;
@@ -89,6 +90,7 @@ export async function listAdminAudit(ctx: ApiCtx): Promise<void> {
   const requested = Math.floor(Number(ctx.url.searchParams.get("limit")));
   const fallback = filtered ? cap : AUDIT_TAIL_LIMIT;
   const limit = Number.isFinite(requested) && requested > 0 ? Math.min(requested, cap) : fallback;
+  const nameOf = await personNamer(ctx.app, deps);
   const events = (
     (await deps.auditLog?.tail({
       limit,
@@ -96,13 +98,19 @@ export async function listAdminAudit(ctx: ApiCtx): Promise<void> {
       ...(action === undefined ? {} : { action }),
       ...(resourceContains === undefined ? {} : { resourceContains }),
     })) ?? []
-  ).map((e) => ({
-    ts: e.at,
-    principalId: e.principalId,
-    action: e.action,
-    scopeLabel: e.scopeLabel,
-    resource: e.resource,
-    ...(e.status ? { status: e.status } : {}),
-  }));
+  ).map((e) => {
+    const displayName = nameOf(e.principalId);
+    const resourceLabel = threadRefLabel(e.resource, nameOf);
+    return {
+      ts: e.at,
+      principalId: e.principalId,
+      ...(displayName && displayName !== e.principalId ? { displayName } : {}),
+      action: e.action,
+      scopeLabel: e.scopeLabel,
+      resource: e.resource,
+      ...(resourceLabel ? { resourceLabel } : {}),
+      ...(e.status ? { status: e.status } : {}),
+    };
+  });
   return sendJson(res, 200, { scopeId: scope, events });
 }

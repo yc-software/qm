@@ -2,7 +2,6 @@ import {
   resolveGatewayEmbeddingModel,
   gatewayEmbeddingModelIds,
   gatewayModelCatalog,
-  gatewayModelsVersion,
   isGatewayModelId,
   resolveGatewayModel,
 } from "./gateway-models.ts";
@@ -12,14 +11,13 @@ import {
   isEmbeddingModel,
   overlayModel,
   overlayModels,
-  overlaysVersion,
   overlayUnavailableReason,
   type EmbeddingModel,
   type EmbeddingModelDefinition,
   type ModelOverlay,
 } from "./model-overlay.ts";
 import { MODEL_REGISTRY, type ModelEntry } from "./model-registry.ts";
-import { providerBaseUrl } from "./provider-endpoints.ts";
+import { MODEL_PROVIDERS, providerBaseUrl, type ModelProvider } from "./provider-endpoints.ts";
 import { type CustomRuntimeModel, isCustomModelId, resolveCustomModel } from "./custom-providers.ts";
 import type { ProviderKeys } from "./model-runtime.ts";
 
@@ -90,18 +88,7 @@ export function thinkingLevelsFor(modelId?: string): readonly string[] {
     return true;
   });
 }
-export const MODEL_PROVIDERS = ["anthropic", "openai", "openrouter"] as const;
-export type ModelProvider = (typeof MODEL_PROVIDERS)[number];
-
-export function isModelProvider(value: unknown): value is ModelProvider {
-  return typeof value === "string" && (MODEL_PROVIDERS as readonly string[]).includes(value);
-}
-
 type PiModel = Model<Api>;
-
-export function modelOverlayVersion(): number {
-  return overlaysVersion() + gatewayModelsVersion();
-}
 
 export function isOverlayModel(id: string): boolean {
   return overlayModel(id) !== undefined;
@@ -284,7 +271,10 @@ export function resolveBuiltinModel(id: string): PiModel | undefined {
   return builtinModel(id);
 }
 
-function resolveBaseModel(id: string): PiModel | undefined {
+function resolveBaseModel(
+  id: string,
+  customModel: (id: string) => CustomRuntimeModel | undefined = resolveCustomModel,
+): PiModel | undefined {
   if (isGatewayModelId(id)) return resolveGatewayModel(id);
   if (overlayUnavailableReason(id) !== undefined) return undefined;
   const builtin = resolveBuiltinModel(id);
@@ -293,8 +283,12 @@ function resolveBaseModel(id: string): PiModel | undefined {
   if (overlay && !isEmbeddingModel(overlay)) {
     return modelFromOverlay(overlay, false);
   }
-  const custom = resolveCustomModel(id);
+  const custom = customModel(id);
   return custom ? customPiModel(custom) : OPENROUTER_CATALOG_MODELS.get(id);
+}
+
+export function resolveDeploymentModel(id: string): PiModel | undefined {
+  return resolveBaseModel(id, () => undefined);
 }
 
 function customPiModel(custom: CustomRuntimeModel): PiModel {

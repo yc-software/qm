@@ -6,7 +6,7 @@ import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
 import type { Mailer } from "../../plugins/chassis/src/resend.ts";
 import type { DeploymentInvitation } from "../deploy/email-access.ts";
 import type { AdmittedWork } from "../util/admitted-work.ts";
-import type { EventBus } from "../util/event-bus.ts";
+import type { EventBus, SubscribeOptions } from "../util/event-bus.ts";
 import type { RunStreamEvent } from "../runs/run-stream-events.ts";
 import type { ResourceSearchStore, ResourceSearchHit } from "../search/resource-search.ts";
 import type { ModelOverlayStore } from "../model/model-overlay-store.ts";
@@ -28,6 +28,7 @@ import type { OutgoingAttachment } from "../types.ts";
 import type { Readable } from "node:stream";
 import { type FileArtifact, type FileArtifactStore, type ListOwnedOptions } from "../files/file-artifact-store.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
+import type { UserStore } from "../identity/user-store.ts";
 import type { SessionStore, TranscriptItem } from "../sessions/session-store.ts";
 import type { Item } from "../sessions/items.ts";
 import { type Sandbox } from "../sandbox/sandbox.ts";
@@ -39,7 +40,6 @@ import type { Run, RunDeliveryState, RunStore } from "../runs/run-store.ts";
 import type { GoalView, ReasoningBlock, TurnStream } from "../runs/turn-stream.ts";
 import type { SessionStateBus, SessionStateEvent } from "../runs/session-state-bus.ts";
 import type { LedgerEventBus, OwnedLedgerEvent } from "../loops/ledger-events.ts";
-import type { SubscribeOptions } from "../util/event-bus.ts";
 import type { RunActivityEntry, RunActivityStore } from "../runs/run-activity-store.ts";
 import type { RunSignal, RunSignalStore } from "../runs/run-signal-store.ts";
 import type { CustomProviderStore, ModelCredentialStore } from "../model/model-credential-store.ts";
@@ -87,7 +87,7 @@ import { type AmbientDecision } from "../surface-cache/ambient-judge.ts";
 import type { SurfaceRegistry } from "../surfaces/registry.ts";
 import type { AmbientJudgmentStore } from "../surface-cache/ambient-judgment-store.ts";
 import type { AckEmojiPickStore } from "../surface-cache/ack-emoji-pick-store.ts";
-import type { Deployment } from "../deploy/deploy-store.ts";
+import type { Deployment, DeploymentDraft } from "../deploy/deploy-store.ts";
 import type { DeploymentLayerRuntime } from "../deployment/load-layer.ts";
 import { type ArtifactHome, type ArtifactType } from "./artifact-share.ts";
 import type {
@@ -281,6 +281,7 @@ export interface SessionSearchHit {
 }
 
 export interface App {
+  tenantFor: import("../tenants/lookup.ts").TenantLookup["tenantFor"];
   swarms?: SwarmService;
   personas?: PersonaService;
   personaHandover?: PersonaHandover;
@@ -289,8 +290,8 @@ export interface App {
     requestId: string,
     viewer?: string,
   ): Promise<(Omit<PendingApprovalRecord, "call"> & { requestId: string; executesOnApprove?: boolean }) | null>;
-  subscribeSessionStates(cb: (event: SessionStateEvent) => void, opts?: SubscribeOptions): () => void;
-  subscribeLedgerEvents(cb: (event: OwnedLedgerEvent) => void, opts?: SubscribeOptions): () => void;
+  subscribeSessionStates(cb: (event: SessionStateEvent) => void | Promise<void>, opts?: SubscribeOptions): () => void;
+  subscribeLedgerEvents(cb: (event: OwnedLedgerEvent) => void | Promise<void>, opts?: SubscribeOptions): () => void;
   listSessionApprovals(sessionId: string, viewer: string): Promise<PendingApproval[]>;
   pendingApprovalForThread(threadRef: string, viewer?: string): Promise<TurnResult | null>;
   subscribeRun(runId: string, listener: (event: RunStreamEvent) => void, onResync?: () => void): () => void;
@@ -416,6 +417,10 @@ export interface App {
     },
   ): Promise<Session | null>;
   regenerateTitle(sessionId: string, principalId: string): Promise<{ title: string | null } | null>;
+  suggestNextPrompt(
+    sessionId: string,
+    principalId: string,
+  ): Promise<{ enabled: boolean; suggestion: string | null } | null>;
   detachSession(sessionId: string, principalId: string): Promise<{ detached: true } | null>;
   cancelSessionGoal(
     sessionId: string,
@@ -563,9 +568,12 @@ export interface App {
   redeploy(id: string, input: RedeployInput): Promise<Deployment>;
   listDeployments(): Promise<Deployment[]>;
   getDeployment(idOrName: string): Promise<Deployment | null>;
-  listDeploymentsForViewer(principalId: string): Promise<ViewerDeployment[]>;
+  listDeploymentsForViewer(viewer: Pick<CapabilityClaims, "actorId" | "botActor">): Promise<ViewerDeployment[]>;
   effectiveDeploymentPermission(d: Deployment, principalId: string): Promise<Permission | null>;
-  deploymentGitPermissionFor(idOrName: string, principalId: string): Promise<"read" | "write" | null>;
+  deploymentGitPermissionFor(
+    idOrName: string,
+    viewer: Pick<CapabilityClaims, "actorId" | "botActor">,
+  ): Promise<"read" | "write" | null>;
   listSkills(): Promise<Skill[]>;
   getSkill(id: string): Promise<Skill | null>;
   archiveSkill(id: string): Promise<Skill>;
@@ -577,7 +585,11 @@ export interface App {
     patch: { description?: string; body?: string },
     opts?: { liveActor?: boolean },
   ): Promise<Skill | "trigger_blocked" | null>;
-  restoreOwnedSkill(id: string, principalId: string): Promise<Skill | "exists" | null>;
+  restoreOwnedSkill(
+    id: string,
+    principalId: string,
+    opts?: { liveActor?: boolean },
+  ): Promise<Skill | "exists" | "trigger_blocked" | null>;
   listSkillPacks(): Promise<SkillPack[]>;
   getSkillPack(id: string): Promise<SkillPack | null>;
   registerSkillPack(input: NewSkillPack): Promise<SkillPack>;
@@ -602,7 +614,11 @@ export interface App {
   rollbackDeployment(id: string, version: number, actor?: string): Promise<void>;
   archiveDeployment(id: string): Promise<void>;
   restoreDeployment(id: string, actorId?: string): Promise<Deployment>;
-  canManageDeployment(idOrName: string, callerId: string, actingScopeId?: ScopeId): Promise<boolean>;
+  canManageDeployment(
+    idOrName: string,
+    caller: Pick<CapabilityClaims, "actorId" | "botActor">,
+    actingScopeId?: ScopeId,
+  ): Promise<boolean>;
   renameDeployment(id: string, name: string): Promise<Deployment>;
   setDeploymentDisplayName(id: string, displayName: string): Promise<Deployment>;
   setDeploymentAlwaysOn(id: string, alwaysOn: boolean): Promise<Deployment>;
@@ -610,6 +626,8 @@ export interface App {
   setDeploymentPublic(idOrName: string, isPublic: boolean, actor: { createdBy: string }): Promise<Deployment>;
   setDeploymentConnectors(idOrName: string, connectors: string[], actor: { createdBy: string }): Promise<Deployment>;
   maintainDeployments(): Promise<number>;
+  publishDueLiveEdits(): Promise<number>;
+  deploymentLiveEdit(id: string): Promise<{ draft: DeploymentDraft | null } | null>;
   reachDeployment(id: string, principalId: string, opts?: ReachOptions): Promise<Reach>;
   deploymentLogsFor(
     id: string,
@@ -641,7 +659,7 @@ export interface App {
   ): Promise<T>;
   deploymentGitUrlFor(
     idOrName: string,
-    principalId: string,
+    caller: Pick<CapabilityClaims, "actorId" | "botActor">,
     opts: { secret: string; baseUrl: string; ttlMs?: number },
   ): Promise<DeploymentGitUrl | null>;
   authorizesDeploymentGitAccess(id: string, principalId: string, permission: "read" | "write"): Promise<boolean>;
@@ -665,6 +683,7 @@ export interface AppDeps {
   resourceSearch: ResourceSearchStore;
   swarms?: SwarmService;
   identity: IdentityService;
+  users?: Pick<UserStore, "resolve">;
   publicWebUrl?: string;
   inviteMailer?: Mailer;
   sessions: SessionStore;

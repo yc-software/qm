@@ -8,10 +8,11 @@ import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { withCommandRules } from "./support/command-rules.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-awaiting-"));
-  return buildApp(testConfig({ dataDir }));
+  return withCommandRules(buildApp(testConfig({ dataDir })));
 }
 
 const actor = { externalId: "U1" };
@@ -22,7 +23,7 @@ function dm(text: string, thread: string): TurnRequest {
 const BLOCKED_CMD = ["git", "push", `--${"force"}`, "origin", "main"].join(" ");
 
 test("listSessions flags a session whose turn paused on a blocking approval", async () => {
-  const { app } = freshApp();
+  const { app } = await freshApp();
 
   await app.turn(dm("Just a question", "web:U1:done"));
 
@@ -41,7 +42,7 @@ test("listSessions flags a session whose turn paused on a blocking approval", as
 });
 
 test("the awaitingInput flag clears once the pending approval is resolved", async () => {
-  const { app } = freshApp();
+  const { app } = await freshApp();
   const paused = await app.turn(dm(`!run ${BLOCKED_CMD}`, "dm:U1:resolve"));
   assert.equal(paused.status, "pending_approval");
   const sid = paused.sessionId!;
