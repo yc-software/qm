@@ -1635,8 +1635,6 @@ export function buildApp(
   if (supportsProcessSessions(sandbox)) {
     processes = createPostgresProcessRegistry(databaseUrl);
   }
-  const finishCredentials = (handle: SandboxHandle, processId: string) =>
-    finishProcessCredentials({ sandbox, processes: processes!, ...(keychain ? { keychain } : {}) }, handle, processId);
 
   const swarms =
     config.swarmsEnabled !== false
@@ -1652,9 +1650,7 @@ export function buildApp(
           sandboxes: sandboxResources,
           lock: advisoryLock,
           signals: runSignals,
-          ...(processes && supportsProcessSessions(sandbox)
-            ? { processes, stopProcess: createReaperKillHook(sandbox, { onExit: finishCredentials }) }
-            : {}),
+          ...(processes ? { processes } : {}),
           enabled: (actorId) => featureFlags.enabled("swarms", scopeId("personal", actorId)),
           authorize: async (claims) => {
             if (!(await featureFlags.enabled("swarms", scopeId("personal", claims.actorId)))) return false;
@@ -2798,6 +2794,8 @@ export function buildApp(
   orchestratorDeps.validateScheduledRuntime = (scope, choice, purpose) =>
     availableRuntimeError({ deps: runtimeDeps }, scope, choice, purpose);
   orchestratorDeps.runtime = createRuntimeService(runtimeDeps, app);
+  const finishCredentials = (handle: SandboxHandle, processId: string) =>
+    finishProcessCredentials({ sandbox, processes: processes!, ...(keychain ? { keychain } : {}) }, handle, processId);
   const monitorPoller =
     processes && supportsProcessSessions(sandbox)
       ? createMonitorPoller({

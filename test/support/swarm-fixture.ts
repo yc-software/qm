@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createSandboxResources, type SandboxResource } from "../../src/sandbox/sandbox-resources.ts";
 import { createSandboxRouter } from "../../src/sandbox/sandbox-routing.ts";
-import { supportsProcessSessions, type Sandbox } from "../../src/sandbox/sandbox.ts";
+import type { Sandbox } from "../../src/sandbox/sandbox.ts";
 import { createSwarmStore, type SwarmStore } from "../../src/swarms/swarm-store.ts";
 import { createSwarmService, type SwarmCaller } from "../../src/swarms/swarm-service.ts";
 import type { SessionStore } from "../../src/sessions/session-store.ts";
@@ -15,7 +15,6 @@ import { testAdvisoryLock, testDatabaseUrl, testMap } from "./test-database.ts";
 import { createPostgresRunStore } from "../../src/runs/postgres-run-store.ts";
 import type { ProcessRegistry } from "../../src/processes/process-registry.ts";
 import type { RunSignalStore } from "../../src/runs/run-signal-store.ts";
-import { createReaperKillHook } from "../../src/processes/process-reaper.ts";
 
 export async function swarmFixture(
   options: {
@@ -134,9 +133,7 @@ export async function swarmFixture(
     lock,
     authorize: async () => state.allowed,
     ...(options.signals ? { signals: options.signals } : {}),
-    ...(options.processes && supportsProcessSessions(sandbox)
-      ? { processes: options.processes, stopProcess: createReaperKillHook(sandbox) }
-      : {}),
+    ...(options.processes ? { processes: options.processes } : {}),
   };
   const service = createSwarmService(serviceOptions);
   const workerCaller = async (id: string): Promise<SwarmCaller> => {

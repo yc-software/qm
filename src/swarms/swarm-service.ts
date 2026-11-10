@@ -6,7 +6,7 @@ import type { OrchestratorInput } from "../core/orchestrator.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
-import type { ProcessRecord, ProcessRegistry } from "../processes/process-registry.ts";
+import type { ProcessRegistry } from "../processes/process-registry.ts";
 import type { SandboxResource, SandboxResources } from "../sandbox/sandbox-resources.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
@@ -167,6 +167,11 @@ function botMayDirect(swarm: Swarm, memberId: string, actorId: string): boolean 
   return spawn !== undefined && spawn.actorId !== actorId;
 }
 
+function botMayWorkIn(swarm: Swarm, threadRef: string, actorId: string): boolean {
+  const { rootId, memberId } = threadIdentity(threadRef, "");
+  return botMayDirect(swarm, rootId === swarm.id ? memberId : swarm.id, actorId);
+}
+
 function assertCallerMayDirect(caller: SwarmCaller, auth: Authority, swarm: Swarm): void {
   if (caller.kind === "agent" && caller.claims.botActor && !botMayDirect(swarm, auth.memberId, auth.actorId))
     throw new Error("a Slack bot's turn cannot direct a person's swarm");
@@ -236,8 +241,7 @@ export function createSwarmService(deps: {
   enabled?(actorId: string): Promise<boolean>;
   signals?: Pick<RunSignalStore, "send">;
   defaults?: SwarmSettings;
-  processes?: Pick<ProcessRegistry, "liveByScope" | "markStatus">;
-  stopProcess?: (job: ProcessRecord) => Promise<void>;
+  processes?: Pick<ProcessRegistry, "liveByScope" | "expire">;
 }): SwarmService {
   const enabledFor = deps.enabled ?? (async () => true);
   const { store, sessions, runs } = deps;
@@ -245,11 +249,8 @@ export function createSwarmService(deps: {
   const defaults = resolveSwarmSettings(deps.defaults);
   const cutOffBot = async (swarm: Swarm): Promise<void> => {
     if (!swarm.template.botActor) return;
-    const lostSwarm = (run: Run | null): boolean => {
-      if (!run?.request.botActor) return false;
-      const { rootId, memberId } = threadIdentity(run.request.conversation.threadRef, "");
-      return !botMayDirect(swarm, rootId === swarm.id ? memberId : swarm.id, run.request.actor.id);
-    };
+    const lostSwarm = (run: Run | null): boolean =>
+      run?.request.botActor === true && !botMayWorkIn(swarm, run.request.conversation.threadRef, run.request.actor.id);
     const active = await runs.activeForThreads(swarm.members.map((member) => member.threadRef));
     await Promise.all(
       [...active.values()]
@@ -260,8 +261,8 @@ export function createSwarmService(deps: {
             .catch(swallowAs("swarm: abort a bot's turn that lost the swarm", false)),
         ),
     );
-    const { processes, stopProcess } = deps;
-    if (!processes || !stopProcess) return;
+    const { processes } = deps;
+    if (!processes) return;
     const computers = new Set(swarm.members.flatMap((member) => (member.sandboxId ? [member.sandboxId] : [])));
     if (swarm.board) computers.add(swarm.board.sandboxId);
     const jobs = (await processes.liveByScope(swarm.scopeId)).filter(
@@ -269,12 +270,9 @@ export function createSwarmService(deps: {
     );
     await Promise.all(
       jobs.map(async (job) => {
-        if (!lostSwarm(await runs.get(job.runId!))) return;
-        await stopProcess(job)
-          .then(() => processes.markStatus(job.processId, "reaped"))
-          .catch(swallowAs("swarm: stop a bot's job on a computer it lost", false));
+        if (lostSwarm(await runs.get(job.runId!))) await processes.expire(job.processId);
       }),
-    );
+    ).catch(swallowAs("swarm: end a bot's jobs on computers it lost", undefined));
   };
   const view = (member: SwarmMember): SwarmMember => ({
     ...member,
@@ -900,9 +898,7 @@ export function createSwarmService(deps: {
     async botMayUseComputer(computer, turn) {
       if (!computer.swarmId) return true;
       const swarm = await store.get(computer.swarmId);
-      if (!swarm) return false;
-      const { rootId, memberId } = threadIdentity(turn.threadRef, turn.sessionId);
-      return botMayDirect(swarm, rootId === swarm.id ? memberId : swarm.id, turn.actorId);
+      return swarm !== null && botMayWorkIn(swarm, turn.threadRef, turn.actorId);
     },
     async control(caller, input) {
       const { auth, swarm } = await load(caller);

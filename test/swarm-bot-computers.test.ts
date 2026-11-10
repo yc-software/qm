@@ -17,6 +17,7 @@ import { createDeployService } from "../src/deploy/deploy-service.ts";
 import type { Principal, TurnRequest } from "../src/types.ts";
 import type { ProcessSandbox } from "../src/sandbox/sandbox.ts";
 import { createPostgresProcessRegistry, type ProcessRegistry } from "../src/processes/process-registry.ts";
+import { createProcessReaper, createReaperKillHook } from "../src/processes/process-reaper.ts";
 import { createMonitorStore, type MonitorStore } from "../src/monitors/monitor-store.ts";
 import { createMonitorPoller } from "../src/monitors/monitor-poller.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
@@ -568,9 +569,15 @@ test("a background job a Slack bot started on its swarm's computer stops once a 
   await f.runs.complete(queued.id, (await f.runs.get(queued.id))!.leaseToken!, { status: "ok", reply: "started" });
   const botJob = (await processes.listLive()).find((rec) => rec.sandboxId === board);
   assert.ok(botJob, String(started));
+  const reaper = createProcessReaper(processes, {
+    ...singleProcessDeps(),
+    intervalMs: 60_000,
+    kill: createReaperKillHook(computers.backend),
+  });
   const bot = await f.rootTurn(releaseBot.id, true);
   await f.service.send(bot.caller, { requestId: "bot-send", audience: [worker.id], text: "more bot work" });
   await bot.done();
+  await reaper.sweep();
   assert.deepEqual(computers.signals, []);
   const person = await f.rootTurn(alice.id, false);
   if (person.caller.kind !== "agent") throw new Error("wrong caller");
@@ -586,6 +593,7 @@ test("a background job a Slack bot started on its swarm's computer stops once a 
   });
   await f.service.send(person.caller, { requestId: "person-send", audience: [worker.id], text: "alice's work" });
   await person.done();
+  await reaper.sweep();
   assert.deepEqual(computers.signals, [botJob.processId]);
   assert.equal((await processes.get(botJob.processId))?.status, "reaped");
   assert.equal((await processes.get(aliceJob.processId))?.status, "running");
