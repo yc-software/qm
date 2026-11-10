@@ -918,6 +918,11 @@ test("joining a channel with the toggle off (the default) posts only the welcome
     await f.app.emitEvent("member_joined_channel", { user: "UBOT", channel: "C1", event_ts: "100.1" }, "Ev-bot-join");
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(f.client.posts.length, 1, "only the welcome message lands");
+    assert.match(
+      f.client.posts[0]!.text,
+      /^Quartermaster here, ready to assist\./,
+      "the welcome uses the branded name",
+    );
     assert.equal(f.client.pinnedByChannel.get("C1"), undefined);
   } finally {
     await f.stop();

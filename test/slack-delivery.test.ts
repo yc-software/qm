@@ -299,6 +299,46 @@ test("onBotJoinedChannel: posts welcome with the deep link and asks the ensurer 
   assert.equal(synced, 1, "directory sync must run on bot join");
 });
 
+test("onBotJoinedChannel: the welcome names the org's configured assistant label", async () => {
+  const { client, calls } = fakeJoinClient();
+  const asked: string[] = [];
+  await onBotJoinedChannel({
+    client,
+    channel: "C123",
+    joinerUserId: BOT,
+    botUserId: BOT,
+    webUiPublicUrl: WEB_BASE,
+    syncDirectory: async () => {},
+    agentLabel: async (scope) => {
+      asked.push(scope);
+      return "Atom";
+    },
+  });
+  assert.deepEqual(asked, ["channel:C123"]);
+  assert.equal(calls.posted.length, 1);
+  assert.equal(
+    calls.posted[0]!.text,
+    `Atom here, ready to assist. Access my data and channel settings <${WEB_BASE}/projects/channel/C123|here>.`,
+  );
+});
+
+test("onBotJoinedChannel: a failed label lookup still welcomes under the default name", async () => {
+  const { client, calls } = fakeJoinClient();
+  await onBotJoinedChannel({
+    client,
+    channel: "C123",
+    joinerUserId: BOT,
+    botUserId: BOT,
+    webUiPublicUrl: undefined,
+    syncDirectory: async () => {},
+    agentLabel: async () => {
+      throw new Error("core unavailable");
+    },
+  });
+  assert.equal(calls.posted.length, 1);
+  assert.equal(calls.posted[0]!.text, "QM here, ready to assist.");
+});
+
 test("onBotJoinedChannel: ignores a human joining (only the bot itself triggers it)", async () => {
   const { client, calls } = fakeJoinClient();
   let synced = 0;

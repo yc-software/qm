@@ -418,6 +418,8 @@ export async function startSlackPlugin(
     ...(denyResponder ? { denyResponder } : {}),
     ...(cfg.webUiPublicUrl ? { webUiPublicUrl: cfg.webUiPublicUrl } : {}),
     backfillHistory: (client: unknown, channel: string) => readHistory(client, channel),
+    agentLabel: async (scope: string) =>
+      (await core.surfaceHeaderFacts(scope as Parameters<typeof core.surfaceHeaderFacts>[0])).agentLabel,
     ensureHeader,
   });
   const surfaceContext = createSurfaceContextFulfiller({

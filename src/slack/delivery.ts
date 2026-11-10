@@ -83,11 +83,10 @@ export function channelSurfaceUrl(webUiPublicUrl: string | undefined, channelId:
   return scopeSurfaceUrl(webUiPublicUrl, `channel:${channelId}`);
 }
 
-export function channelWelcomeMessage(surfaceUrl: string | undefined): string {
-  if (!surfaceUrl) {
-    return "QM here, ready to assist.";
-  }
-  return `QM here, ready to assist. Access my data and channel settings <${surfaceUrl}|here>.`;
+export function channelWelcomeMessage(surfaceUrl: string | undefined, agentLabel?: string): string {
+  const greeting = `${agentLabel || "QM"} here, ready to assist.`;
+  if (!surfaceUrl) return greeting;
+  return `${greeting} Access my data and channel settings <${surfaceUrl}|here>.`;
 }
 
 export function surfaceHeaderText(facts: { modelName?: string }, projectUrl: string | undefined): string | undefined {
@@ -240,15 +239,17 @@ export async function onBotJoinedChannel(opts: {
   webUiPublicUrl: string | undefined;
   syncDirectory: () => Promise<void>;
   ensureHeader?: (channel: string) => void;
+  agentLabel?: (scope: string) => Promise<string | undefined>;
 }): Promise<void> {
-  const { client, channel, joinerUserId, botUserId, webUiPublicUrl, syncDirectory, ensureHeader } = opts;
+  const { client, channel, joinerUserId, botUserId, webUiPublicUrl, syncDirectory, ensureHeader, agentLabel } = opts;
   if (!channel || !joinerUserId || joinerUserId !== botUserId) return;
   const surfaceUrl = channelSurfaceUrl(webUiPublicUrl, channel);
   try {
     const info = (await client.conversations.info({ channel })).channel;
     if (!isExternallyShared(info)) {
+      const label = await agentLabel?.(`channel:${channel}`).catch(swallowAs("slack: welcome agent label", undefined));
       await client.chat.postMessage(
-        slackReplyArgs(channel, channelWelcomeMessage(surfaceUrl), undefined, { unfurlLinks: false }),
+        slackReplyArgs(channel, channelWelcomeMessage(surfaceUrl, label), undefined, { unfurlLinks: false }),
       );
       ensureHeader?.(channel);
     }
