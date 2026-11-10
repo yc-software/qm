@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
@@ -99,9 +98,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     readFileSync("docs/SPEC.md", "utf8"),
     process.env.PR_BODY ?? "",
     process.env.HEAD_SHA ?? "",
-    execFileSync("git", ["diff", "--numstat", "-z", "-M", `origin/${process.env.GITHUB_BASE_REF || "main"}...HEAD`], {
-      encoding: "utf8",
-    }),
+    readFileSync(0, "utf8"),
   );
   if (problems.length) {
     console.error("Wall of shame review incomplete (see AGENTS.md):");
