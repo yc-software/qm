@@ -67,6 +67,7 @@ export interface DirectoryStore {
   channelMember(channelId: string, principalId: string): Promise<boolean>;
   channelMembership(channelId: string, principalId: string): Promise<boolean | undefined>;
   channelMemberIds(channelId: string): Promise<string[] | undefined>;
+  memberChannelIds(principalId: string): Promise<string[]>;
   channelPrivacy(channelId: string): Promise<boolean | undefined>;
   rosterCoversAudience(channelId: string): Promise<boolean | undefined>;
   replaceGroups(

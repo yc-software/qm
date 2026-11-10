@@ -95,23 +95,37 @@ export function createPersonaService(deps: {
   teams?: Pick<TeamStore, "forTurn">;
   sessions: Pick<SessionStore, "setPersona">;
   isActive: (principalId: string) => boolean;
+  memberChannelIds: (principalId: string) => Promise<string[]>;
   keychain?: Pick<Keychain, "grantsForScope" | "createGrant" | "revokeGrant">;
 }): PersonaService {
   const { store } = deps;
   const enabledFor = (principalId: string) => deps.flags.enabled("personas", scopeId("personal", principalId));
 
-  async function granteeScopes(principalId: string, contextScope?: ScopeId): Promise<ScopeId[]> {
+  async function granteeScopes(principalId: string): Promise<ScopeId[]> {
     const teams = (await deps.teams?.forTurn("", [principalId])) ?? [];
     return [
       ...personIds(principalId).map((id) => scopeId("personal", id)),
       deps.orgScope,
       ...teams.map((team) => scopeId("team", team.id)),
-      ...(contextScope && parseScopeId(contextScope).kind === "channel" ? [contextScope] : []),
     ];
   }
 
+  async function editorChannels(principalId: string): Promise<ScopeId[]> {
+    if (!deps.isActive(principalId)) return [];
+    return (await deps.memberChannelIds(principalId)).map((id) => scopeId("channel", id));
+  }
+
   async function role(principalId: string, personaId: string, contextScope?: ScopeId) {
-    return (await store.roles(await granteeScopes(principalId, contextScope), personaId)).get(personaId) ?? null;
+    const inChannel = contextScope && parseScopeId(contextScope).kind === "channel" ? [contextScope] : [];
+    const [direct, here] = await Promise.all([
+      granteeScopes(principalId).then((scopes) => store.roles(scopes, personaId)),
+      inChannel.length ? store.roles(inChannel, personaId) : new Map<string, PersonaRole>(),
+    ]);
+    const held = direct.get(personaId) ?? (here.has(personaId) ? "read" : null);
+    if (atLeast(held, "write")) return held;
+    const channels = await editorChannels(principalId);
+    const viaChannel = channels.length ? (await store.roles(channels, personaId)).get(personaId) : undefined;
+    return viaChannel === "write" ? "write" : held;
   }
 
   async function guarded<T>(
@@ -142,7 +156,12 @@ export function createPersonaService(deps: {
     role,
     async list(principalId) {
       if (!(await enabledFor(principalId))) return { status: "disabled" };
-      return { status: "ok", value: await store.listFor(await granteeScopes(principalId)) };
+      const [direct, channels] = await Promise.all([granteeScopes(principalId), editorChannels(principalId)]);
+      const listed = new Map((await store.listFor(direct)).map((persona) => [persona.id, persona]));
+      for (const persona of channels.length ? await store.listFor(channels) : [])
+        if (persona.role === "write" && !atLeast(listed.get(persona.id)?.role, "write"))
+          listed.set(persona.id, persona);
+      return { status: "ok", value: [...listed.values()] };
     },
     detail(principalId, id) {
       return guarded<PersonaDetail>(principalId, id, "read", async (persona, held) => {
@@ -214,8 +233,8 @@ export function createPersonaService(deps: {
             return { status: "invalid", message: `scopeId must be personal:, team:, org: or channel: (got ${target})` };
           if (!PERSONA_ROLES.includes(e.role as PersonaRole))
             return { status: "invalid", message: "role must be owner, write or read" };
-          if (kind === "channel" && e.role !== "read")
-            return { status: "invalid", message: "a Slack channel can only be given read access" };
+          if (kind === "channel" && e.role === "owner")
+            return { status: "invalid", message: "a Slack channel can be given read or write access, not owner" };
           if (e.pinned !== undefined && typeof e.pinned !== "boolean")
             return { status: "invalid", message: "pinned must be a boolean" };
           if (e.pinned && kind !== "channel")

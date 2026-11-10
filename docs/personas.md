@@ -41,8 +41,9 @@ notebook, and keychain grants to `persona:<id>`.
 | read  | chat; see its instructions, access list and attached credential names       |
 
 Holders are people (`personal:`), teams (`team:`), the org (`org:`) or Slack channels
-(`channel:`). A channel can only hold read, and its grant only applies to conversations in
-that channel. A person's
+(`channel:`). A channel holds read or write, never owner. Read applies only to conversations
+in that channel. Write also lets every active member of the channel edit the persona from
+anywhere, following the synced channel roster as people join and leave. A person's
 role is the highest one reaching them. Every persona keeps at least one owner.
 
 An owner can also **pin** a persona in a channel it's shared with (`pinned: true` on that
@@ -108,8 +109,8 @@ add control for people whose role allows it:
   chat wearing the persona with a request started.
 - **Crons**: "New cron" opens a chat wearing the persona; a cron made there runs as it.
 - **Credentials** (owner): attach one of your own credentials or detach one.
-- **Slack channels** (owner): "Add channel" searches the channels you are in, in place; a
-  channel can only be given read.
+- **Slack channels** (owner): "Add channel" searches the channels you are in, in place; each
+  channel row has a Can edit / Can chat menu and a Pin button.
 - **Who has access**: each person, team or org grant with its role. Owners add people or
   everyone in the org ("Add people", or Share on the page or the Personas list opens the same
   search), and change or remove a role from its row; each change saves at once. The last owner's

@@ -327,6 +327,26 @@ test("an owner pins the persona in a channel from its row", async () => {
   assert.equal(flash(main), "Pinned in #design.");
 });
 
+test("an owner lets everyone in a channel edit the persona from its role menu", async () => {
+  const { main } = await openPersonaPage("Ada");
+  calls = [];
+  const menu = [...main.querySelectorAll<HTMLElement>(".persona-item")].find((row) =>
+    row.textContent?.includes("design"),
+  )!;
+  menu.querySelector<HTMLButtonElement>(".menu-button")!.click();
+  [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')]
+    .find((option) => option.textContent?.trim() === "Can edit")!
+    .click();
+  await settle();
+  assert.deepEqual(putBody(), {
+    access: [
+      { scopeId: "personal:tester", role: "owner" },
+      { scopeId: "channel:C9", role: "write" },
+    ],
+  });
+  assert.equal(flash(main), "Access saved.");
+});
+
 test("Add channel searches your Slack channels on the page and adds one with chat access", async () => {
   const { main } = await openPersonaPage("Ada");
   button(main, "Add channel").click();

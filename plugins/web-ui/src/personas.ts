@@ -562,15 +562,23 @@ function channelsSection(persona: PersonaDetail): TemplateResult {
             owner ? `Remove ${grantLabel(grant)}` : null,
             () => void removeGrantee(persona, grant),
             owner
-              ? html`<button
-                  class="btn persona-action"
-                  type="button"
-                  ?disabled=${busyId !== null}
-                  aria-pressed=${grant.pinned ? "true" : "false"}
-                  @click=${() => void togglePin(persona, grant)}
-                >
-                  ${icon(Pin, 14)}<span>${grant.pinned ? "Unpin" : "Pin"}</span>
-                </button>`
+              ? html`<fieldset class="permission-control" ?disabled=${busyId !== null}>
+                    ${menuSelect({
+                      value: grant.role,
+                      ariaLabel: `Access for ${grantLabel(grant)}`,
+                      options: (["write", "read"] as const).map((role) => ({ value: role, label: ROLE_LABELS[role] })),
+                      onSelect: (value) => void changeRole(persona, grant, value),
+                    })}
+                  </fieldset>
+                  <button
+                    class="btn persona-action"
+                    type="button"
+                    ?disabled=${busyId !== null}
+                    aria-pressed=${grant.pinned ? "true" : "false"}
+                    @click=${() => void togglePin(persona, grant)}
+                  >
+                    ${icon(Pin, 14)}<span>${grant.pinned ? "Unpin" : "Pin"}</span>
+                  </button>`
               : nothing,
           ),
         )}
@@ -580,7 +588,7 @@ function channelsSection(persona: PersonaDetail): TemplateResult {
     "Slack channels",
     owner ? rowAction("Add channel", Plus, () => void openGranteePicker(persona.id, "channels")) : nothing,
     html`${list}${flagNote}${granteePickerTpl(persona, "channels")}`,
-    `People in these channels can ask QM to use ${persona.name} in a thread there; they can't edit ${persona.name}. Pin it in a channel to make every conversation there ${persona.name}, posting under its name and icon.`,
+    `People in these channels can ask QM to use ${persona.name} in a thread there. "Can edit" lets everyone in the channel change ${persona.name}'s instructions and skills, following the channel as people join and leave. Pin it in a channel to make every conversation there ${persona.name}, posting under its name and icon.`,
   );
 }
 

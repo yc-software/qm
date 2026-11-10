@@ -411,20 +411,78 @@ test("a destination stored from a persona turn (a cron, watch or loop) does not 
   assert.deepEqual(resolved, { ok: true, destination: { type: "slack", target: "C_ADA:t1" } });
 });
 
-test("a Slack channel can only be given read access to a persona", async () => {
+test("a Slack channel can be given read or write access to a persona, never owner", async () => {
   const { personas, enable } = setup();
   await enable(ALICE);
   const ada = ok(await personas.create(ALICE, { name: "Ada" }));
   const owner = { scopeId: scopeId("personal", ALICE), role: "owner" as const };
-  for (const role of ["write", "owner"] as const)
-    assert.equal((await personas.setAccess(ALICE, ada.id, [owner, { scopeId: "channel:C1", role }])).status, "invalid");
-  ok(await personas.setAccess(ALICE, ada.id, [owner, { scopeId: "channel:C1", role: "read" }]));
+  assert.equal(
+    (await personas.setAccess(ALICE, ada.id, [owner, { scopeId: "channel:C1", role: "owner" }])).status,
+    "invalid",
+  );
+  ok(
+    await personas.setAccess(ALICE, ada.id, [
+      owner,
+      { scopeId: "channel:C1", role: "read" },
+      { scopeId: "channel:C2", role: "write" },
+    ]),
+  );
   assert.deepEqual(
     ok(await personas.detail(ALICE, ada.id)).access.map((a) => [a.scopeId, a.role]),
     [
       [scopeId("personal", ALICE), "owner"],
+      ["channel:C2", "write"],
       ["channel:C1", "read"],
     ],
+  );
+});
+
+test("a channel with write access lets its current members edit the persona, following the roster", async () => {
+  const { built, personas, enable } = setup();
+  for (const who of [ALICE, BOB, CAROL]) await enable(who);
+  const ada = ok(await personas.create(ALICE, { name: "Ada" }));
+  const roster = (members: string[]) =>
+    built.directory.replaceChannels(
+      [
+        { channelId: "C_EDIT", name: "editors", isPrivate: false },
+        { channelId: "C_USE", name: "users", isPrivate: false },
+      ],
+      [
+        ...members.map((principalId) => ({ channelId: "C_EDIT", principalId })),
+        { channelId: "C_USE", principalId: CAROL },
+      ],
+    );
+  await roster([BOB]);
+  ok(
+    await personas.setAccess(ALICE, ada.id, [
+      { scopeId: scopeId("personal", ALICE), role: "owner" },
+      { scopeId: "channel:C_EDIT", role: "write" },
+      { scopeId: "channel:C_USE", role: "read" },
+    ]),
+  );
+
+  assert.deepEqual(
+    ok(await personas.list(BOB)).map((p) => [p.name, p.role]),
+    [["Ada", "write"]],
+  );
+  assert.equal(
+    ok(await personas.update(BOB, ada.id, { description: "by a channel member" })).description,
+    "by a channel member",
+  );
+  assert.equal(await built.app.managesScope(BOB, scopeId("persona", ada.id)), true);
+  assert.equal((await personas.setAccess(BOB, ada.id, [])).status, "forbidden");
+
+  assert.deepEqual(ok(await personas.list(CAROL)), []);
+  assert.equal((await personas.update(CAROL, ada.id, { description: "not a member" })).status, "not_found");
+  assert.equal(await personas.role("U_DAVE", ada.id, scopeId("channel", "C_EDIT")), "read");
+
+  await roster([CAROL]);
+  assert.deepEqual(ok(await personas.list(BOB)), []);
+  assert.equal((await personas.update(BOB, ada.id, { description: "left the channel" })).status, "not_found");
+  assert.equal(await built.app.managesScope(BOB, scopeId("persona", ada.id)), false);
+  assert.equal(
+    ok(await personas.update(CAROL, ada.id, { description: "joined the channel" })).description,
+    "joined the channel",
   );
 });
 
