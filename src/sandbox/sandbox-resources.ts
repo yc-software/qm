@@ -103,7 +103,7 @@ export interface SandboxResources {
 
 export class SandboxAccessError extends Error {}
 
-export const BOT_SWARM_COMPUTER_REFUSAL = "a Slack bot's turn cannot use the computers of a person's swarm";
+const BOT_SWARM_COMPUTER_REFUSAL = "a Slack bot's turn cannot use the computers of a person's swarm";
 
 const JOB_ONLY_REFUSAL =
   "this computer belongs to a background job that uses private credentials; only that job's own controls can reach it";
