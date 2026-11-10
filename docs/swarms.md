@@ -32,8 +32,9 @@ field leave it unset; `durable-map/swarms/0040-stamp-computers` stamps the compu
 existing swarms once at startup. Drain an older release's cores and workers before
 upgrading from it, because a computer the older release provisions after that migration
 stays unmarked. A computer supplied as `forumSandboxId` never records a `swarmId`; the
-check finds the swarms using it as a forum by reading the swarm records of its scope, so it
-needs no migration.
+check finds the swarms using it as a forum by looking up the swarm records of its scope.
+That lookup uses an index on each swarm's `scopeId`, which startup creates like the
+table's other indexed fields; no swarm or computer record is rewritten.
 
 ## Agent API
 
