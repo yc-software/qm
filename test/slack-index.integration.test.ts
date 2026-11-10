@@ -192,6 +192,8 @@ class FakeApp {
     this.actionHandlers.push({ pattern, handler });
   }
 
+  async init(): Promise<void> {}
+
   async start(): Promise<void> {
     this.started = true;
   }
