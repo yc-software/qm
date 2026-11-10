@@ -137,9 +137,9 @@ export interface DocumentInput {
 export function turnDocumentMetas(history: readonly Item[], turnStartSeq: number | undefined): AttachmentMeta[] {
   const start = history.find((item) => item.seq === turnStartSeq);
   if (!start) return [];
-  const sameTurn = (item: Item) => item.turnId === null || start.turnId === null || item.turnId === start.turnId;
+  const steeredIn = (item: Item) => start.turnId !== null && item.turnId === start.turnId && !isOverheard(item);
   return history.flatMap((item) =>
-    item.seq >= start.seq && isUserItem(item) && !isOverheard(item) && sameTurn(item)
+    isUserItem(item) && (item === start || (item.seq > start.seq && steeredIn(item)))
       ? replayableDocumentMetas(item.body)
       : [],
   );

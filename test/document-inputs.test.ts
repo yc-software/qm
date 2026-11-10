@@ -361,6 +361,7 @@ test("only the current turn's own user messages contribute documents", () => {
     storedItem({ kind: "SteeringMessage", body: { attachments: [doc("steered")] } }, at(3)),
     storedItem({ kind: "UserMessage", body: { overheard: true, attachments: [doc("overheard")] } }, at(4)),
     storedItem({ kind: "UserMessage", body: { attachments: [doc("next-turn")] } }, at(5, other)),
+    storedItem({ kind: "UserMessage", body: { attachments: [doc("outside-a-run")] } }, { ...at(6), turnId: undefined }),
   ];
   assert.deepEqual(turnDocumentMetas(history, undefined), []);
   assert.deepEqual(
