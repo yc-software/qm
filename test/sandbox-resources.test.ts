@@ -1260,24 +1260,25 @@ test("a single session still sees the line when the disk is nearly full, without
   assert.equal(sandboxLoadLine(resource, { ...sample, diskUsedGb: 20 }, 5 * 60_000), "");
 });
 
-test("the created size, not the host kernel, is the total for mem and disk when the sandbox record carries one", () => {
-  const sample = {
-    sampledAt: 0,
-    ioFull60: null,
-    load1: 0.4,
-    memUsedMb: 1843,
-    memTotalMb: 336_691,
-    diskUsedGb: 9.5,
-    diskTotalGb: 2000,
-  };
-  const host = { id: "abcdef123456", name: "box", backend: "modal" as const, holders: ["run-1"] };
-  assert.equal(sandboxLoadLine(host, sample, 0), "");
-  assert.equal(
-    sandboxLoadLine({ ...host, spec: { memoryMb: 2048, diskGb: 10 } }, sample, 0),
-    'Sandboxes: default "box" (modal) — 1 session active, load 0.4, mem 1.8/2.0 GB, disk 95% full (sampled 0s ago). Scratch: available.',
-  );
-  assert.equal(
-    sandboxLoadLine({ ...host, spec: { memoryMb: 2048 }, memoryGb: 8 }, { ...sample, memUsedMb: 7500 }, 0),
-    'Sandboxes: default "box" (modal) — 1 session active, load 0.4, mem 7.3/8.0 GB, disk 0% full (sampled 0s ago). Scratch: available.',
-  );
+test("the recorded load sample takes mem and disk totals from the created size, falling back to the kernel's", async () => {
+  const hostLine = "\n__QM_LOAD__ - 0.00 1540 463713 1048584 536870912\n";
+  const kernel = fixture((backend) => shellRun(backend, () => hostLine));
+  const bare = await kernel.router.provision("personal:alice");
+  await kernel.router.run(bare, "true");
+  const fallback = await kernel.resources.load(bare.resourceId!);
+  assert.deepEqual([fallback?.memTotalMb, fallback?.diskTotalGb], [463713, 512]);
+
+  const sized = fixture((backend) => {
+    shellRun(backend, () => hostLine);
+    backend.profile.spec = { memoryMb: 2048, diskGb: 10 };
+  });
+  const handle = await sized.router.provision("personal:alice");
+  await sized.router.run(handle, "true");
+  const sample = await sized.resources.load(handle.resourceId!);
+  assert.deepEqual([sample?.memUsedMb, sample?.memTotalMb, sample?.diskTotalGb], [1540, 2048, 10]);
+
+  const resized = await sized.router.provision("personal:bob");
+  await sized.options.records.update(resized.resourceId!, (current) => ({ ...current, memoryGb: 8 }));
+  await sized.router.run(resized, "true");
+  assert.equal((await sized.resources.load(resized.resourceId!))?.memTotalMb, 8192);
 });

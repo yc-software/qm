@@ -1,4 +1,4 @@
-import type { SandboxResources } from "./sandbox-resources.ts";
+import type { SandboxResource, SandboxResources } from "./sandbox-resources.ts";
 import { takeLoadSample, withLoadProbe, type LoadSample } from "./load-probe.ts";
 import { bootTenant, tenancyBooted } from "../tenants/boot.ts";
 import { boundTenant } from "../tenants/context.ts";
@@ -11,6 +11,7 @@ import {
   supportsBlobStaging,
   supportsProcessSessions,
   type AgentComputerProfile,
+  type AgentComputerSpec,
   type ExecOptions,
   type ExecResult,
   type ProvisionOptions,
@@ -23,6 +24,17 @@ import {
 const PRESSURE_RECORD_FULL60 = 75;
 const PRESSURE_CLEAR_FULL60 = 40;
 const LOAD_WRITE_INTERVAL_MS = 10_000;
+
+const createdSize = (
+  sample: LoadSample,
+  record: Pick<SandboxResource, "memoryGb" | "spec">,
+  live: AgentComputerSpec | undefined,
+): LoadSample => ({
+  ...sample,
+  memTotalMb:
+    (record.memoryGb ? record.memoryGb * 1024 : (record.spec?.memoryMb ?? live?.memoryMb)) || sample.memTotalMb,
+  diskTotalGb: record.spec?.diskGb || live?.diskGb || sample.diskTotalGb,
+});
 
 export type SandboxBackendName =
   | "sprites"
@@ -187,7 +199,10 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
       if (sample.sampledAt - (loadWrites.get(resourceId) ?? 0) >= LOAD_WRITE_INTERVAL_MS) {
         loadWrites.set(resourceId, sample.sampledAt);
         await resources
-          .recordLoad(resourceId, sample)
+          .get(resourceId)
+          .then((record) =>
+            resources.recordLoad(resourceId, createdSize(sample, record, forHandle(handle).profile.spec)),
+          )
           .catch(swallowAs("sandbox router: record load sample", undefined));
       }
       return { ...result, stdout, load: sample };
