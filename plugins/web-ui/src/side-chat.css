@@ -196,6 +196,11 @@
   border: 0;
   box-shadow: none;
 }
+@container chat (max-width: 860px) {
+  .message-stack.with-side-chats > * {
+    width: 100%;
+  }
+}
 @container (max-width: 800px) {
   .message-stack.with-side-chats {
     display: flex;
