@@ -36,7 +36,6 @@ import {
   type Model,
   type ModelThinkingLevel,
   type ToolResultMessage,
-  type Usage,
 } from "@earendil-works/pi-ai";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
 
@@ -121,6 +120,9 @@ import {
   SECURITY_SCREEN_SYSTEM_PROMPT,
 } from "../security/security-posture.ts";
 import { errMessage } from "../util/errors.ts";
+import type { TurnSession } from "./turn-session.ts";
+import { recordCapturedRequests, subscribeTurnStream } from "./turn-stream.ts";
+import { settleTurnGoal, turnResult } from "./turn-settle.ts";
 import {
   ACK_EMOJI_PROMPT,
   APPROVAL_SUMMARY_PROMPT,
@@ -135,7 +137,6 @@ import {
   piLastAssistantTextOrThrow,
   piRoundFailed,
   piTurnError,
-  sumCacheUsage,
   textFromContent,
   type AssistantTextSession,
 } from "./pi-messages.ts";
@@ -158,12 +159,9 @@ import {
 import {
   createFloorCapPolicy,
   createGrindMeter,
-  meterGrindCall,
-  bankGoalTurn,
   enforceGoal,
   goalPausedNote,
   goalSteeringNote,
-  meterGoalCall,
   type GovernorVerdict,
 } from "./goal.ts";
 
@@ -194,14 +192,6 @@ export function agentConfigOptions(config: Config): AgentOptions {
     ...coreToolOptions(config),
     turnWallClockMs: config.turnWallClockMs,
   };
-}
-
-interface TurnSession {
-  agentSession: AgentSession;
-  ref: ToolContextRef & { effortLevel?: string };
-  composedPromptTokens: number;
-  agentDir: string;
-  ephemeralCwd?: string;
 }
 
 interface IsolatedResources {
@@ -739,60 +729,7 @@ export function createAgent(opts?: AgentOptions): Agent {
           if (e.type === "message_end") noteDocumentRejection(e.message);
           return e.type === "message_end" ? onMessageEnd(e.message) : undefined;
         });
-        const unsubscribe = entry.agentSession.subscribe((event) => {
-          if (event.type === "message_update" && entry.ref.firstTokenPhase) {
-            entry.ref.firstTokenPhase.end();
-            entry.ref.firstTokenPhase = undefined;
-          }
-          if (event.type === "message_start" && (event.message as { role?: string }).role === "assistant") {
-            steps.startStreaming();
-          } else if (event.type === "message_update" && event.assistantMessageEvent.type === "text_start") {
-            turn.onTextBlockStart?.();
-          } else if (event.type === "message_update" && event.assistantMessageEvent.type === "toolcall_start") {
-            const block = event.assistantMessageEvent.partial.content[event.assistantMessageEvent.contentIndex];
-            if (block?.type === "toolCall") turn.onToolCallStart?.(block.name);
-          } else if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-            turn.onDelta?.(event.assistantMessageEvent.delta);
-          } else if (event.type === "message_update" && event.assistantMessageEvent.type === "thinking_delta") {
-            const { contentIndex, delta, partial } = event.assistantMessageEvent;
-            const block = partial.content[contentIndex];
-            if (block?.type === "thinking" && !block.redacted)
-              turn.onReasoningDelta?.(steps.streamingStepId(), contentIndex, delta);
-          } else if (event.type === "message_end" && (event.message as { role?: string }).role === "assistant") {
-            const served = event.message as { usage?: Partial<Usage>; serviceTier?: string };
-            const stepModel = entry.agentSession.model;
-            const usage = piUsageToCallUsage(served.usage, stepModel, entry.ref.fast, served.serviceTier);
-            meterGrindCall(grindMeter, usage);
-            const meteredGoal = entry.ref.goal;
-            if (meteredGoal?.status === "active") meterGoalCall(meteredGoal, usage);
-            callUsage.push(usage);
-            entry.ref.firstTokenPhase?.end();
-            entry.ref.firstTokenPhase = undefined;
-            if ((event.message as AssistantMessage).stopReason === "toolUse")
-              entry.ref.stepPhase = startPhase("step.gap");
-          }
-        });
-        const drainCaptured = async (): Promise<void> => {
-          const captured = entry.ref.llmCapture ?? [];
-          entry.ref.llmCapture = undefined;
-          if (!turn.recordLlmRequest) return;
-          const usageAligned = callUsage.length === captured.length;
-          for (let step = 0; step < captured.length; step++) {
-            try {
-              await turn.recordLlmRequest({
-                turnSeq: userEntry?.seq ?? null,
-                step,
-                model: captured[step]!.transport?.modelId ?? effectiveModel,
-                promptEnvelope: captured[step]!.envelope,
-                truncated: captured[step]!.truncated,
-                transport: captured[step]!.transport ?? null,
-                usage: usageAligned ? (callUsage[step] ?? null) : null,
-              });
-            } catch (e) {
-              swallow("pi: llm request record", e);
-            }
-          }
-        };
+        const unsubscribe = subscribeTurnStream({ entry, steps, turn, grindMeter, callUsage });
         let wallClock!: TurnWallClockOutcome;
         const messagesBefore = entry.agentSession.messages.length;
         entry.ref.goalRecentWork = () => piGoalWork(entry.agentSession.messages.slice(-80));
@@ -1149,7 +1086,7 @@ export function createAgent(opts?: AgentOptions): Agent {
           activeSteps = undefined;
           entry.ref.emit = turn.emit;
           await thinkTail;
-          await drainCaptured();
+          await recordCapturedRequests({ entry, turn, callUsage, userEntry, effectiveModel });
           entry.ref.onModelRequest = undefined;
           toolAbort.abort();
           entry.ref.abortSignal = undefined;
@@ -1167,28 +1104,9 @@ export function createAgent(opts?: AgentOptions): Agent {
               (wallClock === "abandoned" ? " (a stuck operation did not respond to cancellation)" : ""),
           );
         }
-        const settleGoal = async (pause: boolean): Promise<void> => {
-          const g = entry.ref.goal;
-          if (!g) return;
-          bankGoalTurn(g, grindMeter.startedAt);
-          if (pause && g.status === "active") {
-            g.status = "paused";
-            g.updatedAt = Date.now();
-          }
-          await turn.saveGoal?.(g);
-          if (g.status === "complete") entry.ref.goal = null;
-        };
-        const result = (reply: string, extra: Partial<AgentTurnResult>): AgentTurnResult => {
-          const cacheUsage = sumCacheUsage(callUsage);
-          return {
-            reply,
-            ...extra,
-            ...(checked.retry.length ? { retracted: checked.retry } : {}),
-            ...(checked.prod.length ? { prodded: checked.prod } : {}),
-            modelCalls: entry.ref.modelCalls ?? 0,
-            ...(cacheUsage ? { cacheUsage } : {}),
-          };
-        };
+        const settleGoal = (pause: boolean): Promise<void> => settleTurnGoal({ entry, turn, grindMeter }, pause);
+        const result = (reply: string, extra: Partial<AgentTurnResult>): AgentTurnResult =>
+          turnResult({ entry, callUsage, checked }, reply, extra);
         if (entry.ref.runtimeHandoff && !userAborted && !turn.cancel?.aborted) {
           steps.flush();
           await thinkTail;
