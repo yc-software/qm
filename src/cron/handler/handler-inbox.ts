@@ -9,7 +9,7 @@ import { claimThenBind } from "../../tenants/claim.ts";
 import { DEFAULT_CRON_TIMEZONE, nextCalendarFireAfter } from "../schedule.ts";
 import { createFireHandler, type FireReport, type HandlerState } from "./fire-handler.ts";
 
-export const HANDLER_WAKE_INTERVAL_MS = 10 * 60_000;
+const HANDLER_WAKE_INTERVAL_MS = 10 * 60_000;
 const DIGEST_CRON = "0 9,17 * * *";
 
 export interface HandlerInbox {
@@ -29,7 +29,7 @@ export interface HandlerInboxDeps {
   timezone?: (principalId: string) => Promise<string | undefined>;
 }
 
-export function handlerThreadRef(principalId: string): string {
+function handlerThreadRef(principalId: string): string {
   return `handler:${principalId}`;
 }
 

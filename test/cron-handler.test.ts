@@ -4,7 +4,7 @@ import { runTrigger, type TriggerDeps } from "../src/triggers/run-trigger.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { createFireHandler, type FireReport } from "../src/cron/handler/fire-handler.ts";
+import { createFireHandler, type FireReport, type HandlerDecision } from "../src/cron/handler/fire-handler.ts";
 import { createHandlerInboxes, type HandlerInbox } from "../src/cron/handler/handler-inbox.ts";
 import { scopeId, type Destination, type TurnResult } from "../src/types.ts";
 import { testMap } from "./support/test-database.ts";
@@ -38,11 +38,12 @@ describe("fire handler decisions", () => {
       [report("a", "Routine cron noise."), report("b", "deploy failed"), report("c", "3 signups")],
       PDT_9AM,
     );
-    assert.deepEqual(d, {
+    const expected: HandlerDecision = {
       sendNow: ["Deploy failed on main."],
       digestItems: ["3 new signups."],
       dropped: [{ cronId: "a", reason: "nothing happened" }],
-    });
+    };
+    assert.deepEqual(d, expected);
     assert.equal(handler.state.digest.length, 1);
   });
 
