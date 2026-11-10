@@ -3,7 +3,6 @@ import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import * as mockAgent from "./support/mock-agent.ts";
 import { testConfig } from "./support/test-config.ts";
-import { scopeId } from "../src/types.ts";
 
 let handoffTo: string | undefined;
 let opened: Promise<string | undefined> | undefined;
@@ -30,7 +29,6 @@ const { buildApp } = await import("./support/build-app.ts");
 
 test("a subagent opened after a task runtime switch inherits the switched runtime", async () => {
   const built = buildApp(testConfig({ workers: 1 }));
-  await built.featureFlags.setEnabled("persistent_subagents", scopeId("personal", "U1"), true, "admin");
   built.runtime.start();
   try {
     handoffTo = "claude-haiku-5-5";

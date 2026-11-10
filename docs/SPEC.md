@@ -206,11 +206,12 @@ Growing the codebase to keep every path it ever took alive. The canonical case: 
 
 Description and examples pending human input.
 
-### Prod-like QA (1 example)
+### Prod-like QA (2 examples)
 
-QA every behavior change in a prod-like setting on the real system it touches before merge. Mocks and unit tests don't count; a missing credential is a blocker to solve or report, not a reason to merge.
+QA every behavior change in a prod-like setting on the real system it touches before merge. Mocks and unit tests don't count; a missing credential is a blocker to solve or report, not a reason to merge. "The real system" means the provider and path production uses, not a convenient local stand-in; a production path the reviewer can name as untested is a reason to request changes, not a footnote to an accept.
 
 - **Shipped changes for a provider without testing on that provider** (2026-10-12): [qm#2226](https://github.com/yc-software/qm/pull/2226) changed how the Fly deploy provider starts and supervises apps, and merged with only mocked unit tests for Fly. The agent had no working Fly token and shipped anyway.
+- **QA on a local provider for a change that ships on another** (2026-11-05): [qm#3137](https://github.com/yc-software/qm/pull/3137) added WebSocket upgrades to the app gateway. Its live QA ran a Vite dev server on the local Docker deploy provider, while published apps in production run on AWS microVMs, which core dials over TLS with proxy-auth headers. A separate probe exercised the AWS ingress directly, bypassing core. The Prod-like QA reviewer, given the author's summary rather than the raw evidence, named the untested AWS dial as a gap and accepted anyway. _Status:_ overridden to Request changes; the PR was then QA'd on a real AWS microVM and the lens accepted.
 
 ### Performance (3 examples)
 
