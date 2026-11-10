@@ -2,10 +2,9 @@ import { addAbortSignal } from "node:stream";
 import { createHash } from "node:crypto";
 import { Worker } from "node:worker_threads";
 import type { AttachmentMeta } from "../types.ts";
-import { isUserItem, type Item } from "../sessions/items.ts";
+import { isOverheard, isUserItem, type Item } from "../sessions/items.ts";
 import type { FileArtifact, FileArtifactStore } from "../files/file-artifact-store.ts";
 import { cachedArtifactData } from "../files/artifact-data-cache.ts";
-import { forModelContext } from "../agent/context-compaction.ts";
 import { collectBytes } from "../util/bytes.ts";
 
 export const MAX_DOCUMENT_BYTES = 8_000_000;
@@ -112,10 +111,6 @@ export function replayableDocumentMetas(payload: unknown): AttachmentMeta[] {
   );
 }
 
-export function documentAttachmentTokens(payload: unknown): number {
-  return replayableDocumentMetas(payload).reduce((sum, file) => sum + estimateDocumentTokens(file), 0);
-}
-
 export function fileContentRequest(artifactId: string): string {
   return `GET $AGENT_API_URL/v1/files/${artifactId}/content (header x-agent-capability: $AGENT_API_TOKEN)`;
 }
@@ -127,6 +122,11 @@ export function documentStub(file: { name: string; artifactId?: string }): strin
   return `${JSON.stringify(file.name)} is not included inline, to keep this conversation within the model's context. ${where}`;
 }
 
+export function documentIncludedNote(file: { name: string; artifactId?: string }): string {
+  const saved = file.artifactId ? `, but it stays saved as file ${file.artifactId}` : "";
+  return `${JSON.stringify(file.name)} is included inline with this message only; later turns will not include it again${saved}.`;
+}
+
 export interface DocumentInput {
   name: string;
   mimeType: string;
@@ -134,16 +134,15 @@ export interface DocumentInput {
   artifactId?: string;
 }
 
-export function historicalDocumentMetas(history: readonly Item[]): AttachmentMeta[] {
-  return forModelContext([...history]).flatMap((item) => {
-    if (!isUserItem(item)) return [];
-    const attachments = item.body.attachments;
-    return Array.isArray(attachments)
-      ? (attachments as AttachmentMeta[]).filter(
-          (file) => file.direction === "in" && typeof file.name === "string" && isDocumentAttachment(file),
-        )
-      : [];
-  });
+export function turnDocumentMetas(history: readonly Item[], turnStartSeq: number | undefined): AttachmentMeta[] {
+  const start = history.find((item) => item.seq === turnStartSeq);
+  if (!start) return [];
+  const steeredIn = (item: Item) => start.turnId !== null && item.turnId === start.turnId && !isOverheard(item);
+  return history.flatMap((item) =>
+    isUserItem(item) && (item === start || (item.seq > start.seq && steeredIn(item)))
+      ? replayableDocumentMetas(item.body)
+      : [],
+  );
 }
 
 export async function loadDocumentInputs(

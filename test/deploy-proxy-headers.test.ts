@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { TEST_TENANT } from "./support/test-tenant.ts";
 import assert from "node:assert/strict";
 import { createServer as createHttpServer, request as httpRequest } from "node:http";
 import { constants as http2Constants, createServer as createHttp2Server, type ServerHttp2Session } from "node:http2";
@@ -11,7 +12,10 @@ import { testAdminGrantStore, testDatabaseUrl, testUsers } from "./support/test-
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 
 function appWith(endpoint: Record<string, unknown>): App {
-  return { reachDeployment: async () => ({ status: "ok", endpoint }) } as unknown as App;
+  return {
+    tenantFor: async () => TEST_TENANT,
+    reachDeployment: async () => ({ status: "ok", endpoint }),
+  } as unknown as App;
 }
 
 test("/d/ proxy attaches the endpoint's proxyHeaders — the internal path authenticates to a token-gated deployment", async () => {
@@ -242,6 +246,7 @@ test("/d/ proxy keeps the shared HTTP/2 session when one request has invalid hea
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
   const app = {
+    tenantFor: async () => TEST_TENANT,
     reachDeployment: async () => ({
       status: "ok",
       endpoint: {
@@ -404,6 +409,7 @@ test("admin deployment proxy bypasses deployment ACL after admin auth and audits
   const auditEvents: Array<{ principalId: string; action: string; resource: string; scopeLabel: string }> = [];
   let bypassAcl: boolean | undefined;
   const app = {
+    tenantFor: async () => TEST_TENANT,
     getDeployment: async (id: string) => (id === "d1" ? { id: "d1", ownerScopeId: "personal:U1" } : null),
     reachDeployment: async (_id: string, _principal: string, opts?: { bypassAcl?: boolean }) => {
       bypassAcl = opts?.bypassAcl;
