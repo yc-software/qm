@@ -51,6 +51,115 @@ export interface TurnSandboxContext {
   visibleSkillsForTurn: (sources?: readonly string[]) => Promise<SkillResolution[]>;
 }
 
+async function retried(label: string, attempt: () => Promise<void>): Promise<void> {
+  const errors: unknown[] = [];
+  for (let n = 1; n <= 3; n++) {
+    try {
+      return await attempt();
+    } catch (error) {
+      errors.push(error);
+      if (n < 3) await sleep(50 * n);
+    }
+  }
+  throw new AggregateError(errors, label);
+}
+
+interface TurnPool {
+  ctx: TurnSandboxContext;
+  pool: Map<string, Slot>;
+  writableScopeId: ScopeId;
+  scopedUsed: () => boolean;
+  audit: (action: string, handle?: SandboxHandle, extra?: Record<string, unknown>) => void;
+}
+
+async function releasePool(t: TurnPool): Promise<void> {
+  const { deps, input, session, scopeId, turnFilesDir } = t.ctx;
+  const { pool, writableScopeId, scopedUsed, audit } = t;
+  const releaseHold = async (handle: SandboxHandle): Promise<boolean> => {
+    const runs = deps.runs;
+    if (!handle.resourceId || !runs || !deps.sandboxResources) return false;
+    return deps.sandboxResources.release(handle.resourceId, input.runId, async (runId) => {
+      const run = await runs.get(runId);
+      return run?.status === "running" && !leaseLapsed(run, Date.now());
+    });
+  };
+  const clearTurnFiles = (handle: SandboxHandle): Promise<void> =>
+    retried("turn file cleanup failed", () => deps.sandbox.removeDir(handle, turnFilesDir)).catch((err: unknown) =>
+      swallow("orchestrator: turn file cleanup", err),
+    );
+  const releaseHandle = async (
+    { handle, scoped, unchanged }: Release,
+    hasLiveJob: (handle: SandboxHandle) => Promise<boolean>,
+  ): Promise<void> => {
+    if (scoped || handle.scopeId === undefined || handle.scopeId === writableScopeId || handle.scopeId === scopeId)
+      await clearTurnFiles(handle);
+    const keepWarm =
+      (await releaseHold(handle).catch(swallowAs("orchestrator: hold release", true))) ||
+      (await hasLiveJob(handle).catch(swallowAs("orchestrator: live process check", true)));
+    await deps.sandbox
+      .teardown(handle, {
+        ...(keepWarm ? { keepWarm: true } : {}),
+        ...(unchanged ? { homeUnchanged: true } : {}),
+      })
+      .catch((error: unknown) => {
+        const message = `${handle.backend}:${handle.id}: ${errMessage(error)}`;
+        swallow(`orchestrator: teardown ${message}`, error);
+        deps.errors?.record(
+          { category: "sandbox", code: "teardown_failed", message, scopeLabel: scopeId, sessionId: session.id },
+          error,
+        );
+      });
+  };
+  const destroyHandle = async ([key, slot]: [string, Slot], handle: SandboxHandle): Promise<void> => {
+    const cleanupStart = Date.now();
+    try {
+      await retried("Disposable sandbox destruction failed", () => deps.sandbox.teardown(handle, { destroy: true }));
+      audit("scratch.released", handle, { cleanupMs: Date.now() - cleanupStart });
+    } catch (error) {
+      if (!pool.has(key)) pool.set(key, slot);
+      const message = errMessage(error);
+      audit("scratch.release_failed", handle, { cleanupMs: Date.now() - cleanupStart, error: message });
+      deps.errors?.record(
+        { category: "sandbox", code: "scratch_destroy_failed", message, scopeLabel: scopeId, sessionId: session.id },
+        error,
+      );
+      throw error;
+    }
+  };
+  const opening = () => [...pool.values()].flatMap((slot) => (slot.pending && slot.opening ? [slot.opening] : []));
+  for (let waiting = opening(); waiting.length; waiting = opening())
+    await Promise.all(waiting.map((open) => open.catch(swallowAs("orchestrator: provision", undefined))));
+  const slots = [...pool];
+  pool.clear();
+  const targets = new Map<string, Release>();
+  for (const [key, slot] of slots)
+    for (const handle of slot.handles) {
+      const id = `${handle.backend}:${handle.id}`;
+      const seen = targets.get(id);
+      const scoped = key === SCOPED;
+      targets.set(id, {
+        handle: seen?.scoped ? seen.handle : handle,
+        scoped: scoped || !!seen?.scoped,
+        unchanged: (seen?.unchanged ?? true) && scoped && !scopedUsed(),
+        ephemeral: slot.ephemeral ? [key, slot] : seen?.ephemeral,
+      });
+    }
+  let live: Promise<Set<string | undefined>> | undefined;
+  const hasLiveJob = async (handle: SandboxHandle): Promise<boolean> => {
+    if (!deps.processes || !handle.resourceId) return false;
+    live ??= deps.processes.listLive().then((processes) => new Set(processes.map((p) => p.sandboxId)));
+    return (await live).has(handle.resourceId);
+  };
+  const released = await Promise.allSettled(
+    [...targets.values()].map((target) =>
+      target.ephemeral
+        ? destroyHandle(target.ephemeral, target.handle)
+        : releaseHandle(target, hasLiveJob).catch(swallowAs("orchestrator: release", undefined)),
+    ),
+  );
+  for (const result of released) if (result.status === "rejected") throw result.reason;
+}
+
 export function createTurnSandboxes(ctx: TurnSandboxContext) {
   const {
     deps,
@@ -63,7 +172,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     transferId,
     swarmSandboxId,
     turnSessionDir,
-    turnFilesDir,
     connectorEnv,
     egressTokenForTurn,
     egressTokenForPolicy,
@@ -120,29 +228,9 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       }),
     });
   };
-  const retried = async (label: string, attempt: () => Promise<void>): Promise<void> => {
-    const errors: unknown[] = [];
-    for (let n = 1; n <= 3; n++) {
-      try {
-        return await attempt();
-      } catch (error) {
-        errors.push(error);
-        if (n < 3) await sleep(50 * n);
-      }
-    }
-    throw new AggregateError(errors, label);
-  };
   const holdResource = async (handle: SandboxHandle): Promise<void> => {
     if (handle.resourceId && deps.runs && input.runId)
       await deps.sandboxResources?.hold(handle.resourceId, input.runId);
-  };
-  const releaseHold = async (handle: SandboxHandle): Promise<boolean> => {
-    const runs = deps.runs;
-    if (!handle.resourceId || !runs || !deps.sandboxResources) return false;
-    return deps.sandboxResources.release(handle.resourceId, input.runId, async (runId) => {
-      const run = await runs.get(runId);
-      return run?.status === "running" && !leaseLapsed(run, Date.now());
-    });
   };
   const finishProcess = (handle: SandboxHandle, processId: string): Promise<void> =>
     finishProcessCredentials(
@@ -284,88 +372,12 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       { ephemeral: true },
     );
   };
-  const clearTurnFiles = (handle: SandboxHandle): Promise<void> =>
-    retried("turn file cleanup failed", () => deps.sandbox.removeDir(handle, turnFilesDir)).catch((err: unknown) =>
-      swallow("orchestrator: turn file cleanup", err),
-    );
   const prepareTurnFiles = async (handle: SandboxHandle): Promise<void> => {
     await Promise.all([turnSkills.pruneSkills(handle), clearStaleTurnFiles(deps.sandbox, handle, turnSessionDir)]);
   };
-  const releaseHandle = async (
-    { handle, scoped, unchanged }: Release,
-    hasLiveJob: (handle: SandboxHandle) => Promise<boolean>,
-  ): Promise<void> => {
-    if (scoped || handle.scopeId === undefined || handle.scopeId === writableScopeId || handle.scopeId === scopeId)
-      await clearTurnFiles(handle);
-    const keepWarm =
-      (await releaseHold(handle).catch(swallowAs("orchestrator: hold release", true))) ||
-      (await hasLiveJob(handle).catch(swallowAs("orchestrator: live process check", true)));
-    await deps.sandbox
-      .teardown(handle, {
-        ...(keepWarm ? { keepWarm: true } : {}),
-        ...(unchanged ? { homeUnchanged: true } : {}),
-      })
-      .catch((error: unknown) => {
-        const message = `${handle.backend}:${handle.id}: ${errMessage(error)}`;
-        swallow(`orchestrator: teardown ${message}`, error);
-        deps.errors?.record(
-          { category: "sandbox", code: "teardown_failed", message, scopeLabel: scopeId, sessionId: session.id },
-          error,
-        );
-      });
-  };
-  const destroyHandle = async ([key, slot]: [string, Slot], handle: SandboxHandle): Promise<void> => {
-    const cleanupStart = Date.now();
-    try {
-      await retried("Disposable sandbox destruction failed", () => deps.sandbox.teardown(handle, { destroy: true }));
-      audit("scratch.released", handle, { cleanupMs: Date.now() - cleanupStart });
-    } catch (error) {
-      if (!pool.has(key)) pool.set(key, slot);
-      const message = errMessage(error);
-      audit("scratch.release_failed", handle, { cleanupMs: Date.now() - cleanupStart, error: message });
-      deps.errors?.record(
-        { category: "sandbox", code: "scratch_destroy_failed", message, scopeLabel: scopeId, sessionId: session.id },
-        error,
-      );
-      throw error;
-    }
-  };
-  const releasePool = async (): Promise<void> => {
-    const opening = () => [...pool.values()].flatMap((slot) => (slot.pending && slot.opening ? [slot.opening] : []));
-    for (let waiting = opening(); waiting.length; waiting = opening())
-      await Promise.all(waiting.map((open) => open.catch(swallowAs("orchestrator: provision", undefined))));
-    const slots = [...pool];
-    pool.clear();
-    const targets = new Map<string, Release>();
-    for (const [key, slot] of slots)
-      for (const handle of slot.handles) {
-        const id = `${handle.backend}:${handle.id}`;
-        const seen = targets.get(id);
-        const scoped = key === SCOPED;
-        targets.set(id, {
-          handle: seen?.scoped ? seen.handle : handle,
-          scoped: scoped || !!seen?.scoped,
-          unchanged: (seen?.unchanged ?? true) && scoped && !scopedUsed,
-          ephemeral: slot.ephemeral ? [key, slot] : seen?.ephemeral,
-        });
-      }
-    let live: Promise<Set<string | undefined>> | undefined;
-    const hasLiveJob = async (handle: SandboxHandle): Promise<boolean> => {
-      if (!deps.processes || !handle.resourceId) return false;
-      live ??= deps.processes.listLive().then((processes) => new Set(processes.map((p) => p.sandboxId)));
-      return (await live).has(handle.resourceId);
-    };
-    const released = await Promise.allSettled(
-      [...targets.values()].map((target) =>
-        target.ephemeral
-          ? destroyHandle(target.ephemeral, target.handle)
-          : releaseHandle(target, hasLiveJob).catch(swallowAs("orchestrator: release", undefined)),
-      ),
-    );
-    for (const result of released) if (result.status === "rejected") throw result.reason;
-  };
+  const turnPool: TurnPool = { ctx, pool, writableScopeId, scopedUsed: () => scopedUsed, audit };
   const reclaimBox = async (): Promise<void> => {
-    while (pool.size) await releasePool();
+    while (pool.size) await releasePool(turnPool);
   };
 
   return {
