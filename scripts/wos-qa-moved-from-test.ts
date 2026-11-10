@@ -38,3 +38,6 @@ test("conditional grant compensation preserves a newer full-tuple write", async 
   assert.equal(await acl.replaceGrantsIfCurrent(owner, ref, [forward], [original], "editor"), false);
   assert.deepEqual(await acl.grantsFor(owner, ref), [forward, concurrent]);
 });
+export const movedA = 1;
+export const movedB = 2;
+export const movedC = 3;
