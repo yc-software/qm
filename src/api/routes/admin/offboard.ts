@@ -137,14 +137,18 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { principalId, applied: true, changes, user });
 }
 
+export async function reactivatePerson(deps: ApiCtx["deps"], principalId: string) {
+  await deps.identity!.reactivate(principalId);
+  return deps.admin?.users.markReactivated(principalId);
+}
+
 export async function reactivateUser(ctx: ApiCtx): Promise<void> {
   const { res, deps, params } = ctx;
   const actor = await authorizeAdmin(ctx, orgScope(deps));
   if (!actor) return;
   if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
   const { principalId } = await resolveAdminUser(deps, params.principalId!);
-  await deps.identity.reactivate(principalId);
-  const user = await deps.admin!.users.markReactivated(principalId);
+  const user = await reactivatePerson(deps, principalId);
   audit(deps, {
     principalId: actor.id,
     action: "principal.reactivate",

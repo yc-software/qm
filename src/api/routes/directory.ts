@@ -7,6 +7,7 @@ import { sendJson } from "../http.ts";
 import { audit, isObj, orgScope } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 import { trimTrailingSlashes } from "../../util/text.ts";
+import { reactivatePerson } from "./admin/offboard.ts";
 
 const numOrUndef = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
 
@@ -25,8 +26,7 @@ async function reactivatePrincipal(ctx: ApiCtx): Promise<void> {
   if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
   const id = ctx.params.id!;
   if (!id) return sendJson(res, 404, { error: "not_found" });
-  await deps.identity.reactivate(id);
-  await deps.admin?.users.markReactivated(id);
+  await reactivatePerson(deps, id);
   audit(deps, { principalId: id, action: "principal.reactivate", resource: "principal", scopeLabel: orgScope(deps) });
   return sendJson(res, 200, { ok: true, principalId: id, active: true });
 }
