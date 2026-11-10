@@ -225,7 +225,7 @@ import type { FileArtifactStore } from "./files/file-artifact-store.ts";
 import { createPostgresFileArtifactStore } from "./files/postgres-file-artifact-store.ts";
 import { createAwsSandbox, type StoredMicrovm } from "./sandbox/aws-sandbox.ts";
 import { createLocalSandbox } from "./sandbox/local-sandbox.ts";
-import { createSpritesSandbox } from "./sandbox/sprites-sandbox.ts";
+import { createSpritesSandbox, type StoredSprite } from "./sandbox/sprites-sandbox.ts";
 import { createSmolmachinesSandbox, type StoredSmolmachinesSandbox } from "./sandbox/smolmachines-sandbox.ts";
 import { createAgent37Sandbox } from "./sandbox/agent37-sandbox.ts";
 import {
@@ -880,7 +880,7 @@ export function buildApp(
     const { snapshotS3Bucket, ...sprites } = config.spritesSandbox;
     return createSpritesSandbox({
       ...sprites,
-      initializationStore: artifactMap<{ pending: boolean }>("sprites_initialization"),
+      initializationStore: artifactMap<StoredSprite>("sprites_initialization"),
       advisoryLock,
       ...(snapshotS3Bucket
         ? { snapshots: createS3SnapshotStore({ bucket: snapshotS3Bucket, prefix: "sprites-home" }) }
