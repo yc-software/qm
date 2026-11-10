@@ -13,7 +13,7 @@ const summary = "## Goal\nInvestigate migration failures.\n## Constraints & Pref
 const item = (seq: number, fields: NewItem) =>
   storedItem(fields, { sessionId: "test-session", seq, createdAt: 1_700_000_000_000 + seq });
 
-function response(text = summary, stopReason: StopReason = "stop") {
+function response(text = summary, stopReason: StopReason = "stop", usage = zeroUsage()) {
   const stream = createAssistantMessageEventStream();
   stream.end({
     role: "assistant",
@@ -21,7 +21,7 @@ function response(text = summary, stopReason: StopReason = "stop") {
     api: model.api,
     provider: model.provider,
     model: model.id,
-    usage: zeroUsage(),
+    usage,
     stopReason,
     timestamp: 0,
   });
@@ -87,14 +87,51 @@ test("compaction rejects a provider error as a typed ProviderTurnError", async (
   );
 });
 
-for (const stopReason of ["length", "aborted", "toolUse"] as const) {
+for (const stopReason of ["aborted", "toolUse"] as const) {
   test(`compaction rejects ${stopReason} even when partial text exists`, async () => {
+    let calls = 0;
     await assert.rejects(
-      summarizeHistory([], model, () => response("partial summary", stopReason)),
+      summarizeHistory([], model, () => {
+        calls++;
+        return response("partial summary", stopReason);
+      }),
       /did not complete/,
     );
+    assert.equal(calls, 1);
   });
 }
+
+test("compaction retries a length-truncated summary once with a larger output limit", async () => {
+  const limits: (number | undefined)[] = [];
+  const result = await summarizeHistory([], model, (_model, _context, options) => {
+    limits.push(options?.maxTokens);
+    return limits.length === 1 ? response("partial summary", "length") : response();
+  });
+  assert.equal(result, summary);
+  assert.deepEqual(limits, [8000, 32000]);
+});
+
+test("compaction reports token usage when the larger output limit is also exhausted", async () => {
+  const limits: (number | undefined)[] = [];
+  await assert.rejects(
+    summarizeHistory([], model, (_model, _context, options) => {
+      limits.push(options?.maxTokens);
+      return response("partial summary", "length", { ...zeroUsage(), output: 32000, reasoning: 30500 });
+    }),
+    {
+      message:
+        "Compaction did not complete (length): the summary hit the 32000-token output limit (output tokens 32000, reasoning tokens 30500)",
+    },
+  );
+  assert.deepEqual(limits, [8000, 32000]);
+});
+
+test("compaction length errors say when the provider reports no reasoning breakdown", async () => {
+  await assert.rejects(
+    summarizeHistory([], model, () => response("partial summary", "length", { ...zeroUsage(), output: 8000 })),
+    /output tokens 8000, reasoning tokens not reported/,
+  );
+});
 
 test("compaction propagates transport failures and rejects empty output", async () => {
   await assert.rejects(
