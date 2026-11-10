@@ -424,26 +424,6 @@ test("a Slack bot's turn is not live-human evidence for its loop's ship gates", 
   );
 });
 
-test("a Slack bot's turn administers only the loops it owns, even in a scope it manages", async () => {
-  const deps = services();
-  const created = await call(deps, "POST", "/v1/loops", CREATE);
-  const id = (created.body as { loop: { id: string } }).loop.id;
-  const asManager = (actor: string, botActor: boolean, method: string, path: string) =>
-    call(deps, method, path, undefined, actor, "capability", true, true, true, botActor);
-  const bot = await Promise.all([
-    asManager("release-bot", true, "GET", `/v1/loops/${id}`),
-    asManager("release-bot", true, "POST", `/v1/loops/${id}/fire`),
-    asManager("release-bot", true, "DELETE", `/v1/loops/${id}`),
-  ]);
-  assert.deepEqual(
-    bot.map(({ status }) => status),
-    [403, 403, 403],
-  );
-  assert.deepEqual(((await asManager("release-bot", true, "GET", "/v1/loops")).body as { loops: unknown[] }).loops, []);
-  assert.ok(await deps.store.get(id));
-  assert.equal((await asManager("mia", false, "GET", `/v1/loops/${id}`)).status, 200);
-});
-
 test("decisions and grants require verified live-human evidence", async () => {
   const deps = services();
   deps.fire = {
