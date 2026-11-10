@@ -4,7 +4,6 @@ import { once } from "node:events";
 import { createServer as createTcpServer, type AddressInfo, type Socket } from "node:net";
 import { test } from "node:test";
 import { createServer } from "../src/api/server.ts";
-import { loadTenant } from "../src/tenants/cache.ts";
 import { serverDeps } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
@@ -15,7 +14,6 @@ import { loadTenant } from "../src/tenants/cache.ts";
 async function fixture(checkReadiness?: (signal: AbortSignal) => Promise<void>) {
   const config = testConfig({ signingSecret: "readiness-test-source-secret".repeat(3) });
   const built = buildApp(config);
-  if (!checkReadiness) await loadTenant();
   const server = createServer(built.app, {
     ...serverDeps(config, built),
     ...(checkReadiness ? { checkReadiness } : {}),
