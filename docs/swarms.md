@@ -256,7 +256,10 @@ the swarm. Once anyone other than that bot has posted a swarm message, the bot's
 turn and every worker in a branch the bot started lose that access too. Workers in a
 branch someone else started keep it: every mail-woken worker turn in a bot-started
 swarm runs as the bot, so a worker's access comes from who sent the message that
-spawned the top of its branch.
+spawned the top of its branch. The same rule covers the board and worker computers a
+swarm creates: a bot's turn that may not direct the swarm cannot list them, reach them with
+`sandbox_id`, make one the conversation's default, or use one a person made the default.
+A computer supplied as `forumSandboxId` stays an ordinary computer of its scope.
 Worker sessions never inherit the root session's command or security-screen
 approval grants; a worker must obtain its own approval. Auto screening receives host-verified swarm delegation provenance, so routine delegated tasks and in-swarm reporting are distinguished from external instructions. Delegation does not authorize credential disclosure, permission changes, or overriding higher-priority instructions; those remain screened. Frozen swarm roster checks
 apply to swarm notifications, not ordinary human follow-ups in the root session.

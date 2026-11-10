@@ -111,6 +111,7 @@ export interface SwarmStore {
   create(swarm: Swarm, fence?: SwarmRunFence): Promise<Swarm>;
   update(id: string, mutate: (swarm: Swarm) => void, fence?: SwarmRunFence): Promise<Swarm>;
   pending(afterId?: string): Promise<PendingSwarm[]>;
+  computerOwner(scopeId: string, sandboxId: string): Promise<Swarm | null>;
 }
 
 export type PendingSwarm = Swarm & { tenantId: string };
@@ -197,6 +198,20 @@ export function createSwarmStore(
   return {
     async get(id) {
       const row = await backing.get(id);
+      return row ? decode(row) : null;
+    },
+    async computerOwner(scopeId, sandboxId) {
+      const candidates = await backing.select({
+        where: { field: "scopeId", anyOfFold: [scopeId] },
+        omit: ["messages", "template", "spawnRequests", "messageRequests"],
+      });
+      const owner = candidates.find(
+        (swarm) =>
+          swarm.scopeId === scopeId &&
+          (swarm.board?.sandboxId === sandboxId || swarm.members.some((member) => member.sandboxId === sandboxId)),
+      );
+      if (!owner) return null;
+      const row = await backing.get(owner.id);
       return row ? decode(row) : null;
     },
     async create(swarm, fence) {

@@ -184,6 +184,14 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
           capability.actorId,
           requestedSandboxId,
           (scope) => scope === capability.scopeId || scope === envScope,
+          capability.botActor && app.swarms
+            ? (computer) =>
+                app.swarms!.botMayUseComputer(computer, {
+                  actorId: capability.actorId,
+                  threadRef: capability.threadRef ?? "",
+                  sessionId: capability.sessionId ?? "",
+                })
+            : undefined,
         );
       } catch (e) {
         if (!(e instanceof SandboxAccessError)) throw e;

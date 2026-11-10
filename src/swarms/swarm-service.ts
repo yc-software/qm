@@ -6,7 +6,7 @@ import type { OrchestratorInput } from "../core/orchestrator.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
-import type { SandboxResources } from "../sandbox/sandbox-resources.ts";
+import type { SandboxResource, SandboxResources } from "../sandbox/sandbox-resources.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import { sleep, withTimeout } from "../util/async.ts";
@@ -89,6 +89,10 @@ export interface SwarmService {
   read(caller: SwarmCaller, options: { after?: number; replyTo?: string; waitMs?: number }): Promise<SwarmMessage[]>;
   control(caller: SwarmCaller, input: { memberId: string; state: SwarmControlState }): Promise<SwarmMember>;
   enabledFor(actorId: string): Promise<boolean>;
+  botMayUseComputer(
+    computer: Pick<SandboxResource, "id" | "ownerScopeId">,
+    turn: { actorId: string; threadRef: string; sessionId: string },
+  ): Promise<boolean>;
   binding(input: OrchestratorInput): Promise<{ sandboxId?: string; rootSessionId: string; member: SwarmMember } | null>;
   queuedMessages(
     input: OrchestratorInput,
@@ -845,6 +849,12 @@ export function createSwarmService(deps: {
       }
     },
     enabledFor,
+    async botMayUseComputer(computer, turn) {
+      const swarm = await store.computerOwner(computer.ownerScopeId, computer.id);
+      if (!swarm) return true;
+      const { rootId, memberId } = threadIdentity(turn.threadRef, turn.sessionId);
+      return botMayDirect(swarm, rootId === swarm.id ? memberId : swarm.id, turn.actorId);
+    },
     async control(caller, input) {
       const { auth, swarm } = await load(caller);
       if (!["active", "paused", "stopped"].includes(input.state)) throw new Error("invalid control state");

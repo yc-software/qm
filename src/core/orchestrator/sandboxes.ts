@@ -11,7 +11,9 @@ import {
 } from "../../sandbox/sandbox.ts";
 import {
   accessConversationSandbox,
+  BOT_SWARM_COMPUTER_REFUSAL,
   preferredBackend,
+  SandboxAccessError,
   type SandboxAccessPlan,
   type SandboxResource,
 } from "../../sandbox/sandbox-resources.ts";
@@ -98,6 +100,16 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
 
   const isolation = session.spawnMeta?.isolation;
   const boundSandboxId = swarmSandboxId ?? isolation?.sandboxId;
+  const swarms = input.botActor ? deps.swarms : undefined;
+  const botMayUse =
+    swarms &&
+    ((resource: SandboxResource) =>
+      swarms.botMayUseComputer(resource, { actorId: actor.id, threadRef: session.threadRef, sessionId: session.id }));
+  const assertDefaultUsable = async (): Promise<void> => {
+    if (!botMayUse || boundSandboxId) return;
+    const resource = await deps.sandboxResources?.resolve(resolution.writableScopeId);
+    if (resource && !(await botMayUse(resource))) throw new SandboxAccessError(BOT_SWARM_COMPUTER_REFUSAL);
+  };
   const turnAccess = {
     env: connectorEnv,
     egress: resolution.egress,
@@ -187,6 +199,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       const resource = await deps.sandboxResources?.resolve(memoryScopeId);
       if (resource && resource.ownerScopeId !== scopeId) throw new Error("External Slack requires its own sandbox.");
     }
+    await assertDefaultUsable();
     if (isolation?.sandboxId)
       await ensureChildSandbox(deps.sandboxResources, {
         id: isolation.sandboxId,
@@ -311,7 +324,13 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     return true;
   };
   const accessResource = async (id: string): Promise<SandboxAccessPlan> => {
-    const resource = await accessConversationSandbox(deps.sandboxResources, actor.id, id, canUseSandboxScope);
+    const resource = await accessConversationSandbox(
+      deps.sandboxResources,
+      actor.id,
+      id,
+      canUseSandboxScope,
+      botMayUse,
+    );
     const crossScope = resource.ownerScopeId !== writableScopeId && resource.ownerScopeId !== scopeId;
     if (!crossScope) return { resource, crossScope: false, egress: resolution.egress, commandPolicy: null };
     await deps.config!.refreshSecurity([resource.ownerScopeId]);
@@ -518,6 +537,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
 
   return {
     boundSandboxId,
+    assertDefaultUsable,
     workdir: isolation?.workdir,
     provision,
     provisionScratch,

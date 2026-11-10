@@ -250,6 +250,49 @@ describe("POST /v1/reach with files", () => {
     assert.equal(malformed.status, 400);
   });
 
+  it("asks the swarm service before a Slack bot's turn reads a computer named by sandbox_id", async () => {
+    const scope = scopeId("personal", "U-carol");
+    const computer = await secondSandbox("U-carol");
+    const handle = await built.sandbox.provision(scope, { sandboxId: computer.id });
+    await built.sandbox.writeFile(handle, "plan.md", "carol's plan\n");
+    await built.sandbox.teardown(handle, { keepWarm: true });
+    const send = async (botActor: boolean) =>
+      post(
+        base,
+        "/v1/reach",
+        { text: "plan", recipient: "Alice", files: ["plan.md"], sandbox_id: computer.id },
+        {
+          "x-agent-capability": await mintCapabilityToken(
+            {
+              actorId: "U-carol",
+              scopeId: scope,
+              exp: Date.now() + CAPABILITY_TTL_MS,
+              ...(botActor ? { botActor } : {}),
+            },
+            SECRET,
+          ),
+        },
+      );
+    const swarms = built.app.swarms!;
+    const decide = swarms.botMayUseComputer;
+    const asked: string[] = [];
+    swarms.botMayUseComputer = async (resource) => {
+      asked.push(resource.id);
+      return false;
+    };
+    try {
+      const bot = await send(true);
+      assert.equal(bot.status, 403);
+      assert.equal(((await bot.json()) as any).error, "forbidden");
+      const person = await send(false);
+      assert.equal(person.status, 200);
+      assert.deepEqual(await readDelivered(((await person.json()) as any).deliveryId), ["plan.md:carol's plan\n"]);
+    } finally {
+      swarms.botMayUseComputer = decide;
+    }
+    assert.deepEqual(asked, [computer.id]);
+  });
+
   it("composes named workspace files into the delivery as attachments (the silent-drop bug)", async () => {
     await seedFile("U-carol", "reports/report.md", "# hello Alice\n");
     const res = await post(

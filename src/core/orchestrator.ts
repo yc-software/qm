@@ -1961,6 +1961,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
       const {
         boundSandboxId,
+        assertDefaultUsable,
         workdir,
         provision,
         provisionScratch,
@@ -2735,6 +2736,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           provisionJobComputer,
           provisionResource,
           accessSandboxResource: accessResource,
+          assertDefaultSandboxUsable: assertDefaultUsable,
           boundSandboxId,
           workdir,
           useSkill,

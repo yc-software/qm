@@ -89,6 +89,8 @@ export interface SandboxResources {
 
 export class SandboxAccessError extends Error {}
 
+export const BOT_SWARM_COMPUTER_REFUSAL = "a Slack bot's turn cannot use the computers of a person's swarm";
+
 const JOB_ONLY_REFUSAL =
   "this computer belongs to a background job that uses private credentials; only that job's own controls can reach it";
 
@@ -101,11 +103,13 @@ export async function accessConversationSandbox(
   actorId: string,
   id: string,
   canUseScope: (scope: ScopeId) => boolean | Promise<boolean>,
+  botMayUse?: (resource: SandboxResource) => Promise<boolean>,
 ): Promise<SandboxResource> {
   if (!id.trim()) throw new SandboxAccessError("sandbox_id must be a non-empty sandbox ID");
   const resource = await resources?.access(actorId, id);
   if (!resource || resource.state === "retired" || !(await canUseScope(resource.ownerScopeId)))
     throw new SandboxAccessError("sandbox access is no longer authorized in this conversation");
+  if (botMayUse && !(await botMayUse(resource))) throw new SandboxAccessError(BOT_SWARM_COMPUTER_REFUSAL);
   return resource;
 }
 
