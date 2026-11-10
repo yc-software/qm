@@ -87,15 +87,21 @@ export function stripSlackDirectives(text: string): string {
     .trim();
 }
 
-const EMOJI_SHORTCODE = /:([a-z0-9_+-]+):/gi;
-const MRKDWN_EMPHASIS = /(^|[\s([{])([_*~])(?=\S)([^\n]*?\S)\2(?=$|[\s)\]}.,:;!?])/gm;
+function replaceShortcodes(text: string, emojiFor: (name: string) => string | null): string {
+  const parts = text.split(":");
+  let out = parts[0] ?? "";
+  for (let i = 1; i < parts.length; i++) {
+    const emoji = i < parts.length - 1 ? emojiFor(parts[i]!) : null;
+    if (emoji) {
+      out += emoji + parts[i + 1]!;
+      i++;
+    } else out += `:${parts[i]}`;
+  }
+  return out;
+}
 
-/** One-line plain preview of Slack wire text: links become their labels, :shortcodes: become
- *  emoji when known, mrkdwn emphasis markers drop, and whitespace collapses. */
+/** Plain preview of Slack wire text for one-line notes: links become their labels and known
+ *  :shortcodes: become emoji. Line breaks are left for the caller's CSS to collapse. */
 export function slackPreviewText(text: string, emojiFor: (name: string) => string | null): string {
-  return slackWireToPlain(stripSlackDirectives(text))
-    .replace(EMOJI_SHORTCODE, (whole, name: string) => emojiFor(name) ?? whole)
-    .replace(MRKDWN_EMPHASIS, "$1$3")
-    .replace(/\s+/g, " ")
-    .trim();
+  return replaceShortcodes(slackWireToPlain(stripSlackDirectives(text)), emojiFor).trim();
 }

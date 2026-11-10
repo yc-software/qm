@@ -132,13 +132,13 @@ test("a literally typed, escaped mention stays text even where plain @names are 
   ]);
 });
 
-test("slackPreviewText flattens Slack wire text into a one-line preview", () => {
+test("slackPreviewText turns Slack wire links and known shortcodes into plain text", () => {
   const emoji = (name: string) => ({ large_green_square: "🟩", white_large_square: "⬜" })[name] ?? null;
   assert.equal(
     slackPreviewText(
-      "_Standup: Wed Nov 4_\nProgress :large_green_square::white_large_square: ~15%\n• Chase <https://linear.app/ycm/issue/LAB-196|LAB-196> *now* :not_an_emoji:",
+      "Progress :large_green_square::white_large_square: at 10:30 ~15%\n• Chase <https://example.com/issue/ABC-1|ABC-1> :not_an_emoji:",
       emoji,
     ),
-    "Standup: Wed Nov 4 Progress 🟩⬜ ~15% • Chase LAB-196 now :not_an_emoji:",
+    "Progress 🟩⬜ at 10:30 ~15%\n• Chase ABC-1 :not_an_emoji:",
   );
 });
