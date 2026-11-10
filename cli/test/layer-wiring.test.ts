@@ -108,7 +108,7 @@ test("--sandbox-dir sources the layer from a shared dir while config stays in th
   }
 });
 
-test("sandbox.app/env/secretEnv become the core's FLY_* + FLY_RESIDENT_ENV_* env", async () => {
+test("sandbox.env + sandbox.secretEnv are rejected before planning a docker deployment (dead Fly resident-env path)", async () => {
   const dir = makeDeployment(
     {
       sandbox: {
@@ -120,15 +120,13 @@ test("sandbox.app/env/secretEnv become the core's FLY_* + FLY_RESIDENT_ENV_* env
     (d) => writeFileSync(join(d, ".env"), "COMPANY_API_TOKEN=sek-ret\n"),
   );
   try {
-    const out = await plan(dir);
-    assert.match(out, /FLY_RESIDENT_ENV_TZ/);
-    assert.match(out, /FLY_RESIDENT_ENV_COMPANY_API_TOKEN/);
+    await assert.rejects(() => plan(dir), /target "docker" does not support "sandbox.env", "sandbox.secretEnv"/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("a missing secretEnv value is warned, not invented", async () => {
+test("sandbox.secretEnv alone is also rejected on the default docker backend", async () => {
   const dir = makeDeployment({
     sandbox: {
       app: "s",
@@ -136,8 +134,7 @@ test("a missing secretEnv value is warned, not invented", async () => {
     },
   });
   try {
-    const out = await plan(dir);
-    assert.match(out, /sandbox.secretEnv "NOPE_TOKEN" has no value/);
+    await assert.rejects(() => plan(dir), /target "docker" does not support "sandbox.secretEnv"/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
