@@ -49,7 +49,7 @@ export function turnTools(kit: ToolKit) {
           callId,
           { tool: "finish_silently", noop: "not_a_poll_fire" },
           text(
-            "[no-op] finish_silently only applies to surface turns or scheduled background fires; a person is waiting on this turn — just reply.",
+            "[no-op] finish_silently only applies to surface turns, scheduled background fires or subagent wakes; a person is waiting on this turn — just reply.",
           ),
           true,
         );
