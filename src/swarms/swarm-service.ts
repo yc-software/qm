@@ -93,7 +93,7 @@ export interface SwarmService {
     computer: Pick<SandboxResource, "swarmId">,
     turn: { actorId: string; threadRef: string; sessionId: string },
   ): Promise<boolean>;
-  notePersonUse(computer: Pick<SandboxResource, "swarmId">): Promise<true>;
+  notePersonUse(computer: Pick<SandboxResource, "swarmId">): Promise<void>;
   binding(input: OrchestratorInput): Promise<{ sandboxId?: string; rootSessionId: string; member: SwarmMember } | null>;
   queuedMessages(
     input: OrchestratorInput,
@@ -873,7 +873,6 @@ export function createSwarmService(deps: {
         await store.update(swarm.id, (current) => {
           current.personUsedComputers = true;
         });
-      return true;
     },
     async control(caller, input) {
       const { auth, swarm } = await load(caller);
