@@ -175,5 +175,6 @@ export function startSignalPoll(
       await current;
       if (!draining && inFlight === current) break;
     }
+    await Promise.allSettled([stopCheck]);
   };
 }

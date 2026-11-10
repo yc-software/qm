@@ -73,13 +73,17 @@ test("startSignalPoll: a user stop outlives a lease-losing poller, is honored by
   );
 });
 
-test("startSignalPoll: a stop waiting behind a slow steer is delivered first", async () => {
+test("startSignalPoll: a stop sent before the poll starts is delivered at once, and the next drain puts it ahead of a slow steer", async () => {
   const store = signalStore();
+  let rings = 0;
+  const stopCounting = store.onSignal("r-order", () => void rings++);
+  await until(() => rings === 1);
   const order: string[] = [];
   let release!: () => void;
   const gate = new Promise<void>((r) => (release = r));
   await store.send("r-order", { kind: "steer", text: "screen me slowly" });
   await store.send("r-order", { kind: "abort" });
+  await until(() => rings >= 3);
   const stop = startSignalPoll(
     store,
     "r-order",
@@ -93,16 +97,44 @@ test("startSignalPoll: a stop waiting behind a slow steer is delivered first", a
     { intervalMs: 60_000 },
   );
   try {
-    await until(() => order.includes("steer"), 500);
-    assert.equal(order[0], "abort");
-    assert.deepEqual(
-      order.filter((step) => step === "steer"),
-      ["steer"],
-    );
+    await until(() => order.length >= 1);
+    await sleep(50);
+    assert.deepEqual(order, ["abort"], "starting the poll delivers the waiting stop and leaves the steer queued");
+    await store.send("r-order", { kind: "client_result", callId: "doorbell" });
+    await until(() => order.includes("steer"));
+    assert.deepEqual(order, ["abort", "abort", "steer"], "the drain delivers the stop before the slow steer");
   } finally {
     release();
     await stop();
+    stopCounting();
   }
+});
+
+test("startSignalPoll: stopping the poll waits for a stop check that is still in flight", async () => {
+  const store = signalStore();
+  await store.send("r-late", { kind: "abort" });
+  const slow: RunSignalStore = {
+    ...store,
+    pending: async (runId) => {
+      await sleep(100);
+      return store.pending(runId);
+    },
+  };
+  let aborts = 0;
+  const stop = startSignalPoll(
+    slow,
+    "r-late",
+    { onSteer: async () => {}, onAbort: async () => void aborts++ },
+    { intervalMs: 60_000 },
+  );
+  await stop();
+  const deliveredBeforeStopReturned = aborts;
+  await sleep(250);
+  assert.deepEqual(
+    [deliveredBeforeStopReturned, aborts],
+    [1, 1],
+    "the stop is delivered before the poll reports stopped, and nothing runs afterwards",
+  );
 });
 
 test("startSignalPoll: a stop that arrives during a steer's intake goes ahead of the next steer", async () => {
@@ -221,34 +253,6 @@ test("startSignalPoll: doorbell dispatches a signal immediately, far before the 
   } finally {
     stop();
   }
-});
-
-test("startSignalPoll: a stop sent before the poll starts is delivered at once, without waiting for the poll interval", async () => {
-  const store = signalStore();
-  let rings = 0;
-  const stopCounting = store.onSignal("r-early", () => void rings++);
-  await until(() => rings === 1);
-  await store.send("r-early", { kind: "abort", reason: "by user" });
-  await until(() => rings === 2);
-  const reasons: (string | undefined)[] = [];
-  const stop = startSignalPoll(
-    store,
-    "r-early",
-    { onSteer: async () => {}, onAbort: async ({ reason }) => void reasons.push(reason) },
-    { intervalMs: 60_000 },
-  );
-  try {
-    await until(() => reasons.length === 1);
-    assert.deepEqual(reasons, ["by user"]);
-  } finally {
-    await stop();
-    stopCounting();
-  }
-  assert.deepEqual(
-    (await store.pending("r-early")).map((s) => s.signal.kind),
-    ["abort"],
-    "the stop stays pending for the terminal drain",
-  );
 });
 
 test("startSignalPoll: a steer's ts is dispatched to onSteer (so the agent can persist + dedupe it)", async () => {
