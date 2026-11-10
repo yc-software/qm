@@ -34,6 +34,14 @@ export function allConversations(): Conversation[] {
   return [...live];
 }
 
+export function conversationsBusy(): boolean {
+  for (const { state, composer } of live) {
+    if (state.agent?.state.isStreaming || state.pendingSend !== null) return true;
+    if (composer.state.draft.trim() || composer.state.attachments.length > 0) return true;
+  }
+  return false;
+}
+
 export function isLiveConversation(conv: Conversation): boolean {
   return live.has(conv);
 }
