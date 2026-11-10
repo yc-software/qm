@@ -356,7 +356,8 @@ impl ActivityWatcher {
         let quit = Arc::clone(&stop);
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let thread = thread::spawn(move || {
-            let tap = Tap::create(TapContext { context: None, retained: None, activity: Some((activity, tapped)), kind: TapKind::Intervention });
+            let tap =
+                Tap::create(TapContext { context: None, retained: None, activity: Some((activity, tapped)), kind: TapKind::Intervention });
             let Ok(_tap) = tap else {
                 let _ = ready_tx.send(Err(tap.err().unwrap()));
                 return;
