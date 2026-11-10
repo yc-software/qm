@@ -10,6 +10,8 @@ import {
   Box,
   Brain,
   CalendarDays,
+  ChevronDown,
+  ChevronRight,
   Clock,
   Files,
   Folder,
@@ -555,7 +557,6 @@ export function mountShell(): void {
 }
 
 function inboxNavRow(): TemplateResult {
-  const count = inboxOpenCount();
   return html`<a
     class="navrow ${appState.currentView === "inbox" ? "active" : ""}"
     href=${deepLinkPath(UI_BASE, "inbox", null)}
@@ -568,8 +569,15 @@ function inboxNavRow(): TemplateResult {
     }}
     @dragend=${() => endPaneDrag()}
   >
-    ${icon(ICON.inbox, 17)}<span>Inbox</span>${count > 0 ? html`<span class="nav-badge" aria-label=${`${count} waiting on you`}>${count > 99 ? "99+" : count}</span>` : nothing}
+    ${icon(ICON.inbox, 17)}<span>Inbox</span>${inboxBadge()}
   </a>`;
+}
+
+function inboxBadge(): TemplateResult | typeof nothing {
+  const count = inboxOpenCount();
+  return count > 0
+    ? html`<span class="nav-badge" aria-label=${`${count} waiting on you`}>${count > 99 ? "99+" : count}</span>`
+    : nothing;
 }
 
 export function renderSidebarFooter(): void {
@@ -611,6 +619,23 @@ export function renderSidebarFooter(): void {
   );
 }
 
+let phoneNavOpen = false;
+
+function phoneNavToggle(): TemplateResult {
+  return html`<button
+    class="navrow phone-nav-toggle"
+    type="button"
+    aria-expanded=${phoneNavOpen ? "true" : "false"}
+    aria-controls="quick-nav"
+    @click=${() => {
+      phoneNavOpen = !phoneNavOpen;
+      renderSidebarTop();
+    }}
+  >
+    ${icon(phoneNavOpen ? ChevronDown : ChevronRight, 17)}<span>Menu</span>${!phoneNavOpen && can("inbox") ? inboxBadge() : nothing}
+  </button>`;
+}
+
 export function renderSidebarTop(): void {
   syncDocumentTitle();
   if (!appState.topEl) return;
@@ -632,6 +657,7 @@ export function renderSidebarTop(): void {
       aria-label=${label}
       ${tip(sidebarOpen ? "" : label)}
       @click=${() => {
+        phoneNavOpen = false;
         closeSidebarOnNarrowView();
         run();
       }}
@@ -641,7 +667,8 @@ export function renderSidebarTop(): void {
   const newChatLabel = splitState.active ? "New session" : "Create New Chat";
   render(
     html`
-      <nav class="nav quick-nav" @click=${onNavClick}>
+      ${phoneNavToggle()}
+      <nav id="quick-nav" class="nav quick-nav ${phoneNavOpen ? "phone-open" : ""}" @click=${onNavClick}>
         ${can("inbox") ? html`${inboxNavRow()} ${navRow("calendar", ICON.calendar, "Calendar")}` : nothing}
         ${actionRow(Search, "Search", () => {
           hideTooltip();
@@ -692,6 +719,7 @@ function onNavClick(e: Event): void {
   if (!isView(view)) return;
   if (e instanceof MouseEvent && !isPlainLeftClick(e)) return;
   e.preventDefault();
+  phoneNavOpen = false;
   setScopedSession(null);
   switchView(view);
   closeSidebarOnNarrowView();

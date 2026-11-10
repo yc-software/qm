@@ -346,6 +346,9 @@ html:not([data-qm-desktop="darwin"]) .layout.sidebar-closed .history-nav {
 .new-chat-nav {
   margin-top: 4px;
 }
+#sidebar-top .phone-nav-toggle {
+  display: none;
+}
 a.navrow,
 a.session,
 a.chat-row-open {
@@ -13515,4 +13518,14 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--destructive) 10%, var(--background));
   font-size: var(--font-13);
+}
+
+@media (max-width: 860px) {
+  :where(html:not(.desktop-embed)) #sidebar-top .phone-nav-toggle {
+    display: flex;
+    color: var(--muted-foreground);
+  }
+  :where(html:not(.desktop-embed)) #sidebar-top .quick-nav:not(.phone-open) {
+    display: none;
+  }
 }
