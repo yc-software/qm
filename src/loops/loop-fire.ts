@@ -2,6 +2,7 @@ import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts
 import { inboxPlaybook, inboxSource, loadInboxVoiceProfile } from "./inbox-loop.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import { cronTriggerAuthority, ownerAuthored } from "../cron/authority.ts";
+import { samePerson } from "../directory/person.ts";
 import { MAX_SCREEN_CHARS } from "../security/security-posture.ts";
 import type { CronStore } from "../cron/cron-store.ts";
 import { boundLoopCron } from "./authority.ts";
@@ -558,7 +559,8 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       fireKey,
       threadRef,
       surface: "loop",
-      ownerFire: ownerAuthored(loop) && !options?.unattended,
+      ownerFire:
+        ownerAuthored(loop) && !options?.unattended && (actorId === undefined || samePerson(actorId, loop.owner)),
       ...(options?.model ? { model: options.model } : {}),
       ...(options?.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
       ...(typeof options?.fastMode === "boolean" ? { fastMode: options.fastMode } : {}),
