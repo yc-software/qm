@@ -812,6 +812,7 @@ const searchMemory = agentMemory(async (ctx, memory, capability) => {
     searchAcrossScopes(memory, scopes, query, typeof b.limit === "number" ? b.limit : 20, {
       actorId: capability.actorId,
       ...(capability.audienceScopeId ? { audienceScopeId: capability.audienceScopeId } : {}),
+      ...(capability.sessionId ? { sessionId: capability.sessionId } : {}),
       report,
     }),
   );
