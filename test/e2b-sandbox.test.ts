@@ -428,37 +428,19 @@ test("pause failures are durable and visible and leave the source available for 
   };
   const first = make({ client, store });
   const handle = await first.provision(scope);
-  await assert.rejects(first.teardown(handle), /pause unavailable/);
-  assert.equal((await store.get(scope))?.preservationState, "pause_failed");
-  assert.equal(fake.current(scopeName())?.state, "running");
+  for (const next of [first, make({ client, store })]) {
+    await assert.rejects(first.teardown(handle), /pause unavailable/);
+    assert.equal((await store.get(scope))?.preservationState, "pause_failed");
+    assert.equal(fake.current(scopeName())?.state, "running");
+    await next.computerStatus?.(scope);
+    await next.provision(scope);
+    const stored = await store.get(scope);
+    assert.deepEqual([stored?.preservationState, stored?.preservationError], ["running", undefined]);
+  }
   fail = false;
   await first.teardown(handle);
   assert.equal((await store.get(scope))?.preservationState, "paused");
   assert.equal((await store.get(scope))?.preservationError, undefined);
-});
-
-test("resuming a sandbox whose pause failed clears the stale pause error", async () => {
-  const store = testMap<StoredE2bSandbox>();
-  const client = {
-    ...fake.client,
-    async create(options: Parameters<typeof fake.client.create>[0]) {
-      const session = await fake.client.create(options);
-      return {
-        ...session,
-        async pause() {
-          throw new Error("provider pause unavailable");
-        },
-      };
-    },
-  };
-  const first = make({ client, store });
-  for (const next of [first, make({ client, store })]) {
-    await assert.rejects(first.teardown(await first.provision(scope)), /pause unavailable/);
-    await next.computerStatus?.(scope);
-    await next.provision(scope);
-    assert.equal((await store.get(scope))?.preservationState, "running");
-    assert.equal((await store.get(scope))?.preservationError, undefined);
-  }
 });
 
 test("a lost native E2B sandbox without a recovery snapshot requires explicit recovery instead of a blank replacement", async () => {
