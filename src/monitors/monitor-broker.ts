@@ -30,6 +30,7 @@ export interface BackgroundOutputTail {
 export interface BackgroundUnwatchResult {
   monitorId: string;
   removed: boolean;
+  notYours?: true;
 }
 
 export interface MonitorBroker {
@@ -167,8 +168,8 @@ export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
     },
     async unwatch(monitorId) {
       const m = await deps.store.get(monitorId);
-      if (!m || m.ownerScopeId !== deps.ownerScopeId || !samePerson(m.owner, deps.owner))
-        return { monitorId, removed: false };
+      if (!m || m.ownerScopeId !== deps.ownerScopeId) return { monitorId, removed: false };
+      if (!samePerson(m.owner, deps.owner)) return { monitorId, removed: false, notYours: true };
       await deps.store.delete(monitorId);
       return { monitorId, removed: true };
     },

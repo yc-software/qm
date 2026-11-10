@@ -237,8 +237,16 @@ test("in a shared conversation, only the person who armed a watch can remove it"
     });
   const alice = watcher("U1");
   const watch = armed(await alice.watch("p-1", { instructions: "tell alice when it finishes" }));
-  assert.equal((await watcher("release-bot", true).unwatch(watch.monitorId)).removed, false);
-  assert.equal((await watcher("U2").unwatch(watch.monitorId)).removed, false);
+  assert.deepEqual(await watcher("release-bot", true).unwatch(watch.monitorId), {
+    monitorId: watch.monitorId,
+    removed: false,
+    notYours: true,
+  });
+  assert.deepEqual(await watcher("U2").unwatch(watch.monitorId), {
+    monitorId: watch.monitorId,
+    removed: false,
+    notYours: true,
+  });
   assert.equal((await store.get(watch.monitorId))?.instructions, "tell alice when it finishes");
   assert.equal((await alice.unwatch(watch.monitorId)).removed, true);
   assert.equal(await store.get(watch.monitorId), null);
