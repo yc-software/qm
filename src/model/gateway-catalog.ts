@@ -3,6 +3,7 @@ import { gatewayRoot, type ModelGatewayTransportConfig } from "./provider-endpoi
 import { GATEWAY_MODEL_PREFIX, GATEWAY_PROVIDER, setGatewayModels, type GatewayModel } from "./gateway-models.ts";
 import { modelOfferedInWebui, selectableBaseModels } from "./pi-models.ts";
 import { readBoundedText } from "../util/bytes.ts";
+import { swallow } from "../util/errors.ts";
 
 const MAX_BYTES = 2 * 1024 * 1024;
 const TTL_MS = 5 * 60_000;
@@ -195,14 +196,16 @@ export function createGatewayCatalog(
       } catch (error) {
         state.retryAt = now() + RETRY_MS;
         if (state.discovered && transientFailure(error) && now() - state.lastSuccessAt < STALE_MS) {
-          console.warn("[model] Gateway model discovery failed; keeping last known models and retrying in 30 seconds");
+          swallow("model: gateway discovery failed; keeping last known models and retrying in 30 seconds", error);
           return;
         }
         if (state.discovered || Object.keys(config.models).length === 0) {
           state.routes = {};
           setGatewayModels([]);
-          console.warn("[model] Gateway model discovery unavailable; retrying in 30 seconds");
+          swallow("model: gateway discovery unavailable; retrying in 30 seconds", error);
+          return;
         }
+        swallow("model: gateway discovery failed; routing configured aliases only and retrying in 30 seconds", error);
       }
     })().finally(() => {
       state.inFlight = undefined;
