@@ -85,7 +85,6 @@ export function createPartnerChatSurface(deps: {
     containerOf: partnerChatContainer,
     principalFor: (user) => user.principal,
     mention: (user) => `@${user.principal.displayName ?? user.id}`,
-    readableText: (text) => text,
     native: () => null,
   };
 }

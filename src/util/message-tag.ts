@@ -14,11 +14,12 @@ export function isoFromTs(ts: string | undefined): string {
 
 export interface MessageTagAttrs {
   id?: string;
-  from?: "human" | "agent";
+  from?: "human" | "agent" | "bot";
   author?: string;
   authorId?: string;
   via?: string;
   sentAt?: string;
+  thread?: string;
   overheard?: boolean;
   trigger?: boolean;
   mentions?: Record<string, string>;
@@ -33,6 +34,7 @@ export function messageTag(attrs: MessageTagAttrs, body: string, files?: readonl
     attrs.authorId ? `author-id="${xmlAttrEscape(attrs.authorId)}"` : "",
     attrs.via ? `via="${xmlAttrEscape(attrs.via)}"` : "",
     attrs.sentAt ? `sent-at="${attrs.sentAt}"` : "",
+    attrs.thread ? `thread="${xmlAttrEscape(attrs.thread)}"` : "",
     files?.length ? `files="${xmlAttrEscape(files.join(", "))}"` : "",
     attrs.mentions && Object.keys(attrs.mentions).length
       ? `mentions="${xmlAttrEscape(
