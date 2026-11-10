@@ -5,7 +5,6 @@ import { modelOfferedInWebui, selectableBaseModels } from "./pi-models.ts";
 import { readBoundedText } from "../util/bytes.ts";
 
 const MAX_BYTES = 2 * 1024 * 1024;
-const MAX_MODELS = 1_000;
 const TTL_MS = 5 * 60_000;
 const RETRY_MS = 30_000;
 const STALE_MS = 15 * 60_000;
@@ -25,7 +24,7 @@ function record(value: unknown): Record<string, unknown> | undefined {
 }
 
 function modelId(value: unknown): value is string {
-  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,191}$/.test(value);
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:/+-]*$/.test(value);
 }
 
 function tokens(value: unknown): number | undefined {
@@ -123,7 +122,7 @@ async function readCatalog(
     throw Object.assign(new Error(`Gateway catalog returned HTTP ${response.status}`), { status: response.status });
   const body = await readBoundedText(response, MAX_BYTES, () => new Error("Gateway catalog exceeds size limit"));
   const data = record(JSON.parse(body))?.data;
-  if (!Array.isArray(data) || data.length > MAX_MODELS) throw new Error("Invalid gateway catalog");
+  if (!Array.isArray(data)) throw new Error("Invalid gateway catalog");
   return data;
 }
 

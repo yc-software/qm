@@ -515,3 +515,17 @@ test("runtime normalization preserves native capabilities and reflects overlay c
   assert.equal(native.fastMode, true);
   assert.equal(native.effortLevel, "max");
 });
+
+test("OpenRouter catalogs keep every tool model past the first thousand, with long names", async () => {
+  const data = Array.from({ length: 1_001 }, (_, i) => ({
+    id: `catalog-vendor/model-${i}`,
+    name: `Model ${i} ${"x".repeat(250)}`,
+    supported_parameters: ["tools"],
+    context_length: 128_000,
+    top_provider: { max_completion_tokens: 8_192 },
+    pricing: { prompt: "0.000001", completion: "0.000002" },
+    architecture: { input_modalities: ["text"] },
+  }));
+  const catalog = await selectableModelCatalog(async () => Response.json({ data }));
+  assert.ok(catalog.some((m) => m.id === "catalog-vendor/model-1000"));
+});
