@@ -347,6 +347,7 @@ const createAsk = keychainRoute(async (ctx, kc, capability) => {
     ...(capability.threadRef ? { requesterThreadRef: capability.threadRef } : {}),
     purpose: b.purpose,
     ...(b.requestedMode !== undefined ? { requestedMode: b.requestedMode as GrantMode } : {}),
+    ...(capability.botActor ? { botActor: true } : {}),
     ...(expiresAt.value !== undefined ? { expiresAt: expiresAt.value } : {}),
   });
   const notice = renderAskNotice({

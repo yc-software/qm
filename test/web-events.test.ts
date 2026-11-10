@@ -280,7 +280,7 @@ test("a delivery nobody is watching waits a minute, then is acked without a fram
   const now = Date.now();
   const world = fakeHub(t, [delivery("fresh", "web:bob:t", now), delivery("stale", "web:bob:t", now - 61_000)]);
   const alice = fakeRes();
-  world.hub.stream("alice", alice);
+  world.hub.stream("alice", alice, undefined);
   await world.drain();
   assert.deepEqual(world.acked, ["stale"]);
   assert.doesNotMatch(alice.text, /event: delivery/);
@@ -305,8 +305,8 @@ test("a session state without participants goes to the web thread's owner, and r
   const world = fakeHub(t);
   const alice = fakeRes();
   const bob = fakeRes();
-  world.hub.stream("alice", alice);
-  world.hub.stream("bob", bob);
+  world.hub.stream("alice", alice, undefined);
+  world.hub.stream("bob", bob, undefined);
   world.state({ threadRef: "web:alice:t", state: "idle", at: 2 });
   world.state({ threadRef: "", state: "idle", at: 3 });
   assert.deepEqual(parse(alice.text), [
@@ -331,7 +331,7 @@ test("inbox items reach exactly the active watchers who can administer the loop,
   const streams = Object.fromEntries(
     ["alice", "bob-slack", "carol", "mallory"].map((user) => {
       const res = fakeRes();
-      world.hub.stream(user, res);
+      world.hub.stream(user, res, undefined);
       return [user, res];
     }),
   );

@@ -124,3 +124,16 @@ test("approvals requested from a Slack DM thread are delivered into that thread"
   assert.equal(delivery?.destination.threadTs, undefined);
   assert.deepEqual(delivery?.destination.account, { id: "partner", workspace: "T1" });
 });
+
+test("a Slack-originated approval goes to the Slack author even when the actor is a linked non-Slack principal", async () => {
+  const deliveries = createDeliveryStore();
+  const approvals = createApprovalStore(testMap<PendingApprovalRecord>(), deliveries);
+  const approval = record("dm:D1");
+  approval.request!.actor.externalId = "oidc:linked-principal";
+  approval.request!.surfaceOrigin = slackSurfaceOrigin({ accountId: "default", teamId: "T1", userId: "U9" });
+  await approvals.put("A1", approval);
+  const [delivery] = await deliveries.pending("principal");
+  assert.equal(delivery?.destination.target, "U9");
+  assert.equal(delivery?.destination.onBehalfOf, "oidc:linked-principal");
+  assert.equal(delivery?.destination.audienceScopeId, "personal:oidc:linked-principal");
+});
