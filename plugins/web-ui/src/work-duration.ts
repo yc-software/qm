@@ -39,14 +39,12 @@ export function workedLabel(prefix: string, secs: number): string {
 
 interface GoalTurn {
   role?: string;
-  stopReason?: string;
   work?: WorkBlock;
 }
 
-export function goalWorked(messages: readonly unknown[], goal: GoalStripState): { workedMs: number; paused: boolean } {
+export function goalWorked(messages: readonly unknown[], goal: GoalStripState): number {
   let workedMs = 0;
   let counting = false;
-  let paused = false;
   for (const m of messages as readonly GoalTurn[]) {
     const work = m.role === "assistant" ? m.work : undefined;
     if (!work) continue;
@@ -58,7 +56,6 @@ export function goalWorked(messages: readonly unknown[], goal: GoalStripState): 
       workedMs -= Math.max(0, goal.createdAt - start);
     }
     workedMs += workSeconds(work) * 1000;
-    paused = m.stopReason === "aborted";
   }
-  return { workedMs: Math.max(0, workedMs), paused };
+  return Math.max(0, workedMs);
 }

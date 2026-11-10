@@ -84,7 +84,7 @@ test("the play button on a paused goal bar resumes the goal and sends the turn t
     assert.match(
       chat.state.host!.querySelector(".goal-strip")!.textContent ?? "",
       /Pursuing goal/,
-      "the earlier stop no longer marks the goal paused once a reply is running",
+      "the bar follows the goal core reports, not the earlier stop in the transcript",
     );
     assert.equal(chat.state.host!.querySelector(".goal-strip-resume"), null, "no play button while a reply runs");
   } finally {
