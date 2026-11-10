@@ -17,6 +17,7 @@ import {
   type BridgedTool,
   type SteerIntake,
 } from "./turn-support.ts";
+import { raiseRequestedToolApproval } from "./agent-tools/wrappers.ts";
 import { withDocumentInputs, type DocumentModel } from "./document-inputs.ts";
 import { guardOutputBudget, sanitizeLlmPayload, trimPayloadToByteBudget } from "./provider-payload.ts";
 import { mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
@@ -835,6 +836,10 @@ export function createAgent(opts?: AgentOptions): Agent {
                     toolAbort.abort();
                     entry.agentSession.clearQueue();
                     await entry.agentSession.abort();
+                  },
+                  onApprovalRequest: async (request) => {
+                    if (!entry.agentSession.isStreaming || toolAbort.signal.aborted) return false;
+                    return raiseRequestedToolApproval(entry.ref, tools, request);
                   },
                 },
                 { onError: (e) => swallow("pi: run signal poll", e) },

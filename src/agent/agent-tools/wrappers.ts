@@ -93,6 +93,70 @@ function approvalCallText(label: string, params: unknown): string {
   return `${label} ${redactCommand(redactSecrets(canonicalJson(params ?? {})))}`;
 }
 
+type PendingToolApproval = NonNullable<ToolContextRef["pendingApprovals"]>[number];
+
+function keyedToolCallApproval(
+  toolName: string,
+  label: string,
+  params: unknown,
+  reason: string,
+  callKey: string,
+): PendingToolApproval {
+  return {
+    command: approvalCallText(label, params),
+    reason,
+    kind: "approval",
+    approvalKey: callKey,
+    summary: label,
+    grantModes: { session: false, always: false },
+    ...(isObj(params) && typeof params.purpose === "string" ? { purpose: params.purpose } : {}),
+    ...(isObj(params) ? { call: { tool: toolName, input: params } } : {}),
+  };
+}
+
+/** The pending approval for one exact call of a tool that declares it needs approval — the same card the gate raises when the agent makes that call itself. Undefined when the arguments are too long to show on a card. */
+function declaredToolCallApproval(toolName: string, params: Record<string, unknown>): PendingToolApproval | undefined {
+  if (canonicalJson(params).length > APPROVAL_ARGS_MAX_CHARS) return undefined;
+  return keyedToolCallApproval(
+    toolName,
+    toolName,
+    params,
+    DECLARED_TOOL_APPROVAL_REASON,
+    toolCallApprovalKey(toolName, params),
+  );
+}
+
+const MAX_REQUESTED_APPROVALS = 5;
+
+/** A sandbox command (the ycli CLI) hit a connector tool that needs the person's approval for each call. Raise the same card the agent would get by calling it directly, and pause the turn after the current tool call. False when this turn can't show it: the tool isn't one of this turn's connector tools, it doesn't need approval for these arguments, or too many are already waiting. */
+export async function raiseRequestedToolApproval(
+  ref: ToolContextRef,
+  tools: ReadonlyArray<{ name: string }>,
+  request: { tool?: string; input?: Record<string, unknown> },
+): Promise<boolean> {
+  const tc = ref.current;
+  const pending = ref.pendingApprovals;
+  const { tool, input } = request;
+  if (!tc || !pending || typeof tool !== "string" || !isObj(input)) return false;
+  if (TOOL_APPROVAL_EXEMPT.has(tool) || !tools.some((t) => t.name === tool || t.name === "mcp_call")) return false;
+  let needed: boolean;
+  try {
+    needed = await tc.mcpToolNeedsApproval(tool, input);
+  } catch (error) {
+    swallow("tool approval: sandbox-requested approval check", error);
+    return false;
+  }
+  if (!needed) return false;
+  const approval = declaredToolCallApproval(tool, input);
+  if (!approval) return false;
+  if (!pending.some((p) => p.approvalKey === approval.approvalKey)) {
+    if (pending.filter((p) => p.call).length >= MAX_REQUESTED_APPROVALS) return false;
+    pending.push(approval);
+  }
+  ref.pausedOnApproval = true;
+  return true;
+}
+
 export function withToolApprovalGate(
   tool: ToolDefinition & ToolApprovalDeclaration,
   kit: Pick<ToolKit, "ref" | "recordCall" | "recordResult">,
@@ -148,16 +212,7 @@ export function withToolApprovalGate(
         const reason = declaredReason ?? STRICT_TOOL_APPROVAL_REASON;
         ref.pendingApprovals?.push(
           callKey
-            ? {
-                command: approvalCallText(commandLabel, params),
-                reason,
-                kind: "approval",
-                approvalKey: callKey,
-                summary: commandLabel,
-                grantModes: { session: false, always: false },
-                ...(isObj(params) && typeof params.purpose === "string" ? { purpose: params.purpose } : {}),
-                ...(isObj(params) ? { call: { tool: tool.name, input: params } } : {}),
-              }
+            ? keyedToolCallApproval(tool.name, commandLabel, params, reason, callKey)
             : {
                 command: commandLabel,
                 reason,

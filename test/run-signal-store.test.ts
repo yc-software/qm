@@ -722,3 +722,42 @@ test("a queued steer remains durable until its native intake acknowledges it", a
   await stop();
   assert.deepEqual(await store.pending("intake"), []);
 });
+
+test("startSignalPoll: an approval request is taken only when the run raises its card", async () => {
+  const store = signalStore();
+  await store.send("ar1", { kind: "approval_request", tool: "ycli", input: { operation: "invoke" } });
+  const seen: string[] = [];
+  const declining = startSignalPoll(
+    store,
+    "ar1",
+    {
+      onSteer: async () => void seen.push("steer"),
+      onAbort: async () => {},
+      onApprovalRequest: async (request) => (seen.push(`ask:${request.tool}`), false),
+    },
+    { intervalMs: 20 },
+  );
+  await until(() => seen.length >= 1);
+  await declining();
+  assert.deepEqual(seen, ["ask:ycli"], "declined once, never treated as a steer");
+  assert.equal((await store.pending("ar1")).length, 1, "a declined request stays for its sender to withdraw");
+  const unhandled = startSignalPoll(
+    store,
+    "ar1",
+    { onSteer: async () => {}, onAbort: async () => {} },
+    { intervalMs: 20 },
+  );
+  await sleep(80);
+  await unhandled();
+  assert.equal((await store.pending("ar1")).length, 1, "a run without a handler leaves it pending");
+  const taking = startSignalPoll(
+    store,
+    "ar1",
+    { onSteer: async () => {}, onAbort: async () => {}, onApprovalRequest: async () => true },
+    { intervalMs: 20 },
+  );
+  const deadline = Date.now() + 3_000;
+  while ((await store.pending("ar1")).length && Date.now() < deadline) await sleep(20);
+  await taking();
+  assert.deepEqual(await store.pending("ar1"), [], "taken requests are consumed");
+});

@@ -363,6 +363,18 @@ const FAMILIES: AgentApiFamily[] = [
   },
   {
     guidance:
+      "Sandbox commands use this when a connector tool they call needs the person's approval for each call (the ycli CLI does it for you). It raises the same approval card as calling the tool directly; the turn then pauses until they decide, and an approved call runs and lands in the conversation. Only live turns can raise one.",
+    routes: [
+      {
+        method: "POST",
+        path: "/v1/tool-approvals",
+        summary:
+          "ask the person to approve one exact connector tool call — body {tool, input}; returns {card} once this turn holds the card",
+      },
+    ],
+  },
+  {
+    guidance:
       "These act on the ASKING PERSON's own conversation list (the web UI sidebar) — archiving, pinning, or renaming is a per-person view change, never a deletion, and never touches anyone else's list. Confirm before bulk-archiving.",
     routes: [
       {

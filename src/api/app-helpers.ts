@@ -705,7 +705,12 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       if ((await signals.pending(runId)).length === 0) return drained;
       return deps.advisoryLock.withLock(`run-signal-replay:${runId}`, async () => {
         for (const { id, signal } of await signals.pending(runId)) {
-          if (signal.kind === "abort" || signal.kind === "client_result" || !signal.text?.trim()) {
+          if (
+            signal.kind === "abort" ||
+            signal.kind === "client_result" ||
+            signal.kind === "approval_request" ||
+            !signal.text?.trim()
+          ) {
             await signals.acknowledge(runId, id);
             continue;
           }
@@ -765,7 +770,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       });
     }
     for (const signal of await deps.signals.takePending(runId)) {
-      if (signal.kind === "abort" || signal.kind === "client_result") continue;
+      if (signal.kind === "abort" || signal.kind === "client_result" || signal.kind === "approval_request") continue;
       if (signal.request?.approval) {
         let replayRunId: string | undefined;
         try {

@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { Check } from "typebox/value";
 import { fromJSONSchema, z, type ZodObject } from "zod";
 import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/agent/agent-tools.ts";
+import { raiseRequestedToolApproval } from "../src/agent/agent-tools/wrappers.ts";
 import { surfaceToolPrompt } from "../src/surfaces/registry.ts";
 import { reconcile } from "../src/core/turn-resume.ts";
 import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
@@ -4610,6 +4611,72 @@ test("a catalog tool asks per call and forwards the approval only on the approve
   await call(catalog, send);
   assert.equal(calls.length, 2, "the next identical call needs its own approval");
   assert.equal(ref.pendingApprovals!.length, 2);
+});
+
+test("a sandbox-requested approval raises the card the direct call would, and approving it runs that call", async () => {
+  const send = { operation: "invoke", tool: "send-message", arguments: { to: "x" } };
+  const context = (calls: Array<[Record<string, unknown>, string | undefined]>) => ({
+    ...fakeToolContext(),
+    mcpToolNeedsApproval: async (name: string, args: Record<string, unknown>) => {
+      if (name !== "records") throw new Error(`unknown MCP tool: ${name}`);
+      return args.operation === "invoke" && args.tool === "send-message";
+    },
+    callMcpTool: async (_name: string, args: Record<string, unknown>, approval?: string) => {
+      calls.push([args, approval]);
+      return "ok";
+    },
+  });
+  const direct: ToolContextRef = {
+    current: context([]),
+    pendingApprovals: [],
+    toolApprovalGate: (_tool, callKey) => !callKey,
+  };
+  await call(
+    catalogTools(direct).find((t) => t.name === "records"),
+    send,
+  );
+  const calls: Array<[Record<string, unknown>, string | undefined]> = [];
+  const approved = new Set<string>();
+  const ref: ToolContextRef = {
+    current: context(calls),
+    pendingApprovals: [],
+    toolApprovalGate: (_tool, callKey) => !callKey || approved.has(callKey),
+  };
+  const tools = catalogTools(ref);
+  assert.equal(await raiseRequestedToolApproval(ref, tools, { tool: "records", input: send }), true);
+  assert.equal(await raiseRequestedToolApproval(ref, tools, { tool: "records", input: send }), true);
+  assert.deepEqual(ref.pendingApprovals, direct.pendingApprovals, "one card, identical to the direct call's");
+  assert.equal(ref.pausedOnApproval, true);
+  assert.deepEqual(calls, [], "raising the card runs nothing");
+  const card = ref.pendingApprovals!.at(-1)!;
+  approved.add(card.approvalKey!);
+  ref.pausedOnApproval = false;
+  await call(
+    tools.find((t) => t.name === card.call!.tool),
+    card.call!.input,
+  );
+  assert.deepEqual(calls, [[send, card.approvalKey]]);
+
+  const refused: ToolContextRef = { current: context([]), pendingApprovals: [] };
+  const refusedTools = catalogTools(refused);
+  for (const request of [
+    { tool: "records", input: { operation: "invoke", tool: "find", arguments: {} } },
+    { tool: "elsewhere", input: send },
+    { tool: "records" },
+    { tool: "records", input: { ...send, arguments: { note: "x".repeat(20_000) } } },
+  ])
+    assert.equal(
+      await raiseRequestedToolApproval(refused, refusedTools, request),
+      false,
+      JSON.stringify(request).slice(0, 80),
+    );
+  assert.deepEqual(refused.pendingApprovals, []);
+  assert.equal(refused.pausedOnApproval, undefined);
+  assert.equal(
+    await raiseRequestedToolApproval({ current: context([]) }, refusedTools, { tool: "records", input: send }),
+    false,
+    "a turn that can't hold approvals refuses",
+  );
 });
 
 test("a failing approval check returns its error to the model and offers no card", async () => {

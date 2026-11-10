@@ -2,7 +2,7 @@ import type { ClientToolResult, StopScope, TurnRequest } from "../types.ts";
 import { swallowAs } from "../util/errors.ts";
 import type { ClaimedRow } from "../tenants/claim.ts";
 
-export type RunSignalKind = "abort" | "steer" | "client_result";
+export type RunSignalKind = "abort" | "steer" | "client_result" | "approval_request";
 
 export interface RunSignal {
   kind: RunSignalKind;
@@ -15,6 +15,8 @@ export interface RunSignal {
   result?: ClientToolResult;
   reason?: string;
   scope?: StopScope;
+  tool?: string;
+  input?: Record<string, unknown>;
 }
 
 export interface RunSignalStore {
@@ -91,6 +93,7 @@ const SIGNAL_POLL_MS = 5_000;
 export interface SignalPollHandlers {
   onSteer(text: string, ts?: string, request?: TurnRequest, acknowledge?: () => Promise<void>): Promise<void | boolean>;
   onAbort(stop: RunSignal): Promise<void>;
+  onApprovalRequest?(request: RunSignal): Promise<boolean>;
 }
 
 export function startSignalPoll(
@@ -131,6 +134,17 @@ export function startSignalPoll(
       let tookOne = false;
       for (const { id, signal: s } of pending) {
         if (s.kind === "abort" || s.kind === "client_result" || declined.has(id)) continue;
+        if (s.kind === "approval_request") {
+          try {
+            if (handlers.onApprovalRequest && (await handlers.onApprovalRequest(s)))
+              await signals.acknowledge(runId, id);
+            else declined.add(id);
+          } catch (e) {
+            declined.add(id);
+            opts?.onError?.(e);
+          }
+          continue;
+        }
         try {
           if (tookOne) await deliverStop();
           tookOne = true;
