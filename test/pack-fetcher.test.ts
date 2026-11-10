@@ -142,6 +142,296 @@ test("resolveRef rejects an arg-smuggling ref before invoking git", async () => 
   );
 });
 
+test("fetch honors skillGlobs with a sparse checkout; excluded trees never reach the caps", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-src-sparse-"));
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_NAME: "t",
+    GIT_AUTHOR_EMAIL: "t@t",
+    GIT_COMMITTER_NAME: "t",
+    GIT_COMMITTER_EMAIL: "t@t",
+  };
+  const g = (...args: string[]): void => {
+    execFileSync("git", args, { cwd: dir, env, stdio: "ignore" });
+  };
+  g("init", "-q");
+  mkdirSync(join(dir, "skills", "wanted", "scripts"), { recursive: true });
+  mkdirSync(join(dir, "skills", "other"), { recursive: true });
+  mkdirSync(join(dir, "big", "deep"), { recursive: true });
+  writeFileSync(join(dir, "skills", "wanted", "SKILL.md"), "---\nname: wanted\ndescription: d\n---\n# B");
+  writeFileSync(join(dir, "skills", "wanted", "scripts", "tool.py"), "print('hi')");
+  writeFileSync(join(dir, "skills", "other", "SKILL.md"), "---\nname: other\ndescription: d\n---\n# B");
+  writeFileSync(join(dir, "big", "deep", "blob.bin"), Buffer.alloc(64 * 1024 * 1024, 7));
+  g("add", "-A");
+  g("commit", "-q", "-m", "init");
+  try {
+    const repo = await createGitFetcher({ allowLocalRepos: true, maxTotalBytes: 1024 * 1024 }).fetch(
+      src({ url: dir, config: { skillGlobs: ["skills/wanted/**"], sparseCheckout: true } }),
+    );
+    const paths = repo.files.map((f) => f.path);
+    assert.ok(paths.includes("skills/wanted/SKILL.md"));
+    assert.ok(paths.includes("skills/wanted/scripts/tool.py"));
+    assert.ok(!paths.some((p) => p.startsWith("big/")), "excluded tree must not be materialized");
+    assert.ok(!paths.some((p) => p.startsWith("skills/other/")), "unmatched skill dir must not be materialized");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("fetch without skillGlobs materializes the whole tree; exact dir globs stay exact", async () => {
+  const { dir, sha } = makeSourceRepo();
+  try {
+    const whole = await createGitFetcher({ allowLocalRepos: true }).fetch(src({ url: dir, ref: sha }));
+    assert.ok(whole.files.some((f) => f.path === "bin.dat"));
+    const exact = await createGitFetcher({ allowLocalRepos: true }).fetch(
+      src({ url: dir, ref: sha, config: { skillGlobs: ["skills/demo"], sparseCheckout: true } }),
+    );
+    const paths = exact.files.map((f) => f.path);
+    assert.ok(paths.includes("skills/demo/SKILL.md"));
+    assert.ok(paths.includes("skills/demo/scripts/foo.py"));
+    assert.ok(!paths.includes("bin.dat"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("sparse checkout is a prefix superset: mid-pattern wildcards never drop glob-matched skills", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-src-sparse2-"));
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_NAME: "t",
+    GIT_AUTHOR_EMAIL: "t@t",
+    GIT_COMMITTER_NAME: "t",
+    GIT_COMMITTER_EMAIL: "t@t",
+  };
+  const g = (...args: string[]): void => {
+    execFileSync("git", args, { cwd: dir, env, stdio: "ignore" });
+  };
+  g("init", "-q");
+  mkdirSync(join(dir, "plugins", "team-a", "skills", "alpha"), { recursive: true });
+  mkdirSync(join(dir, "plugins", "team-a", "skills", "beta"), { recursive: true });
+  mkdirSync(join(dir, "loose"), { recursive: true });
+  writeFileSync(
+    join(dir, "plugins", "team-a", "skills", "alpha", "SKILL.md"),
+    "---\nname: alpha\ndescription: d\n---\n# B",
+  );
+  writeFileSync(
+    join(dir, "plugins", "team-a", "skills", "beta", "SKILL.md"),
+    "---\nname: beta\ndescription: d\n---\n# B",
+  );
+  writeFileSync(join(dir, "loose", "note.txt"), "x");
+  g("add", "-A");
+  g("commit", "-q", "-m", "init");
+  try {
+    const repo = await createGitFetcher({ allowLocalRepos: true }).fetch(
+      src({ url: dir, config: { skillGlobs: ["plugins/*/skills/**"], sparseCheckout: true } }),
+    );
+    const names = repo.files.filter((f) => f.path.endsWith("SKILL.md")).map((f) => f.path);
+    assert.deepEqual(names.sort(), ["plugins/team-a/skills/alpha/SKILL.md", "plugins/team-a/skills/beta/SKILL.md"]);
+    assert.ok(!repo.files.some((f) => f.path.startsWith("loose/")));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("multiple globs union their materialized trees", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-src-sparse3-"));
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_NAME: "t",
+    GIT_AUTHOR_EMAIL: "t@t",
+    GIT_COMMITTER_NAME: "t",
+    GIT_COMMITTER_EMAIL: "t@t",
+  };
+  const g = (...args: string[]): void => {
+    execFileSync("git", args, { cwd: dir, env, stdio: "ignore" });
+  };
+  g("init", "-q");
+  mkdirSync(join(dir, "skills", "a"), { recursive: true });
+  mkdirSync(join(dir, "skills", "b"), { recursive: true });
+  mkdirSync(join(dir, "docs"), { recursive: true });
+  writeFileSync(join(dir, "skills", "a", "SKILL.md"), "---\nname: a\ndescription: d\n---\n# B");
+  writeFileSync(join(dir, "skills", "b", "SKILL.md"), "---\nname: b\ndescription: d\n---\n# B");
+  writeFileSync(join(dir, "docs", "readme.md"), "x");
+  g("add", "-A");
+  g("commit", "-q", "-m", "init");
+  try {
+    const repo = await createGitFetcher({ allowLocalRepos: true }).fetch(
+      src({ url: dir, config: { skillGlobs: ["skills/a/**", "skills/b/**"], sparseCheckout: true } }),
+    );
+    const paths = repo.files.map((f) => f.path);
+    assert.ok(paths.includes("skills/a/SKILL.md"));
+    assert.ok(paths.includes("skills/b/SKILL.md"));
+    assert.ok(!paths.includes("docs/readme.md"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("sparseCheckout defaults off: skillGlobs alone never narrow the fetch", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-src-sparse4-"));
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_NAME: "t",
+    GIT_AUTHOR_EMAIL: "t@t",
+    GIT_COMMITTER_NAME: "t",
+    GIT_COMMITTER_EMAIL: "t@t",
+  };
+  const g = (...args: string[]): void => {
+    execFileSync("git", args, { cwd: dir, env, stdio: "ignore" });
+  };
+  g("init", "-q");
+  mkdirSync(join(dir, "skills", "wanted"), { recursive: true });
+  mkdirSync(join(dir, "lib"), { recursive: true });
+  writeFileSync(join(dir, "skills", "wanted", "SKILL.md"), "---\nname: wanted\ndescription: d\n---\n# B");
+  writeFileSync(join(dir, "lib", "shared.mjs"), "export const x = 1;");
+  g("add", "-A");
+  g("commit", "-q", "-m", "init");
+  try {
+    const repo = await createGitFetcher({ allowLocalRepos: true }).fetch(
+      src({ url: dir, config: { skillGlobs: ["skills/wanted/**"] } }),
+    );
+    const paths = repo.files.map((f) => f.path);
+    assert.ok(paths.includes("skills/wanted/SKILL.md"));
+    assert.ok(paths.includes("lib/shared.mjs"), "shared bundle files must survive without sparseCheckout");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("mid-segment wildcard truncates at the last slash before the first glob char", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-src-sparse5-"));
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_NAME: "t",
+    GIT_AUTHOR_EMAIL: "t@t",
+    GIT_COMMITTER_NAME: "t",
+    GIT_COMMITTER_EMAIL: "t@t",
+  };
+  const g = (...args: string[]): void => {
+    execFileSync("git", args, { cwd: dir, env, stdio: "ignore" });
+  };
+  g("init", "-q");
+  mkdirSync(join(dir, "plugins", "pm-os", "skills", "alpha"), { recursive: true });
+  mkdirSync(join(dir, "keep"), { recursive: true });
+  writeFileSync(
+    join(dir, "plugins", "pm-os", "skills", "alpha", "SKILL.md"),
+    "---\nname: alpha\ndescription: d\n---\n# B",
+  );
+  writeFileSync(join(dir, "keep", "x.txt"), "x");
+  g("add", "-A");
+  g("commit", "-q", "-m", "init");
+  try {
+    const repo = await createGitFetcher({ allowLocalRepos: true }).fetch(
+      src({ url: dir, config: { skillGlobs: ["plugins/pm-*/skills/*"], sparseCheckout: true } }),
+    );
+    const paths = repo.files.map((f) => f.path);
+    assert.ok(
+      paths.includes("plugins/pm-os/skills/alpha/SKILL.md"),
+      "mid-segment wildcard must not narrow to a partial segment",
+    );
+    assert.ok(!paths.includes("keep/x.txt"), "still sparse outside the truncated prefix");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a root-level wildcard glob forces a full fetch so its matches are never dropped", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-src-sparse6-"));
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_NAME: "t",
+    GIT_AUTHOR_EMAIL: "t@t",
+    GIT_COMMITTER_NAME: "t",
+    GIT_COMMITTER_EMAIL: "t@t",
+  };
+  const g = (...args: string[]): void => {
+    execFileSync("git", args, { cwd: dir, env, stdio: "ignore" });
+  };
+  g("init", "-q");
+  mkdirSync(join(dir, "skills", "a"), { recursive: true });
+  mkdirSync(join(dir, "plugins", "pm-os", "skills", "b"), { recursive: true });
+  mkdirSync(join(dir, "lib"), { recursive: true });
+  writeFileSync(join(dir, "skills", "a", "SKILL.md"), "---\nname: a\ndescription: d\n---\n# B");
+  writeFileSync(join(dir, "plugins", "pm-os", "skills", "b", "SKILL.md"), "---\nname: b\ndescription: d\n---\n# B");
+  writeFileSync(join(dir, "lib", "shared.mjs"), "export const x = 1;");
+  g("add", "-A");
+  g("commit", "-q", "-m", "init");
+  try {
+    const repo = await createGitFetcher({ allowLocalRepos: true }).fetch(
+      src({ url: dir, config: { skillGlobs: ["*/skills/*", "plugins/pm-os/skills/**"], sparseCheckout: true } }),
+    );
+    const paths = repo.files.map((f) => f.path);
+    assert.ok(paths.includes("skills/a/SKILL.md"), "root-wildcard glob must not vanish");
+    assert.ok(paths.includes("plugins/pm-os/skills/b/SKILL.md"));
+    assert.ok(paths.includes("lib/shared.mjs"), "full fetch keeps everything");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("literal prefixes with git pattern metacharacters are escaped in the sparse file", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-src-sparse7-"));
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_NAME: "t",
+    GIT_AUTHOR_EMAIL: "t@t",
+    GIT_COMMITTER_NAME: "t",
+    GIT_COMMITTER_EMAIL: "t@t",
+  };
+  const g = (...args: string[]): void => {
+    execFileSync("git", args, { cwd: dir, env, stdio: "ignore" });
+  };
+  g("init", "-q");
+  mkdirSync(join(dir, "skills", "[demo]"), { recursive: true });
+  writeFileSync(join(dir, "skills", "[demo]", "SKILL.md"), "---\nname: demo\ndescription: d\n---\n# B");
+  g("add", "-A");
+  g("commit", "-q", "-m", "init");
+  try {
+    const repo = await createGitFetcher({ allowLocalRepos: true }).fetch(
+      src({ url: dir, config: { skillGlobs: ["skills/[demo]/**"], sparseCheckout: true } }),
+    );
+    const paths = repo.files.map((f) => f.path);
+    assert.ok(
+      paths.includes("skills/[demo]/SKILL.md"),
+      "bracket literal must be escaped so git does not treat it as a character class",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("literal prefixes containing backslashes are escaped in the sparse file", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-src-sparse8-"));
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_NAME: "t",
+    GIT_AUTHOR_EMAIL: "t@t",
+    GIT_COMMITTER_NAME: "t",
+    GIT_COMMITTER_EMAIL: "t@t",
+  };
+  const g = (...args: string[]): void => {
+    execFileSync("git", args, { cwd: dir, env, stdio: "ignore" });
+  };
+  g("init", "-q");
+  mkdirSync(join(dir, "skills", "a\\b"), { recursive: true });
+  writeFileSync(join(dir, "skills", "a\\b", "SKILL.md"), "---\\nname: ab\\ndescription: d\\n---\\n# B");
+  g("add", "-A");
+  g("commit", "-q", "-m", "init");
+  try {
+    const repo = await createGitFetcher({ allowLocalRepos: true }).fetch(
+      src({ url: dir, config: { skillGlobs: ["skills/a\\b/**"], sparseCheckout: true } }),
+    );
+    const paths = repo.files.map((f) => f.path);
+    assert.ok(
+      paths.includes("skills/a\\b/SKILL.md"),
+      "backslash literal must be escaped so git does not quote the next character",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("resolvePackAuth: an explicit host-bound slug honors the configured injection", async () => {
   const sources = {
     serviceCredential: async (s: string) => ({ secret: "svc:" + s, host: "github.com", enabled: true }),
