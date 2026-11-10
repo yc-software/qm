@@ -297,6 +297,7 @@ test("publish hands a bot's turn to the deploy service as bot work", async () =>
     acl: {} as never,
     createdBy: "release-bot",
     botActor: true,
+    tenant,
   });
   await bot.publish({ entrypoint: "node server.js", name: "bot-app" });
   assert.equal(captured()?.botActor, true);

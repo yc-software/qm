@@ -1,4 +1,5 @@
 import { personaPrompt } from "../personas/persona-service.ts";
+import { recordErrorInBinding } from "../admin/error-log.ts";
 import { personLabel } from "../identity/person-names.ts";
 import { isAgentReply, isOverheard, isUserItem, type Item, type NewItem, stepMessage } from "../sessions/items.ts";
 import type { ItemKind } from "../sessions/items-schema.ts";
@@ -452,7 +453,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       try {
         return { enabled: true, suggestion: (await deps.agent.suggestNextPrompt(transcript)) ?? null };
       } catch (e) {
-        deps.errors?.record(
+        recordErrorInBinding(
+          deps.errors,
           {
             category: "next_prompt",
             code: "generation_failed",
