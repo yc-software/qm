@@ -250,11 +250,13 @@ export interface TurnPostKeys {
   seed(completed: number): void;
   take(): number;
   key(destination: Destination, seq: number): string;
+  readonly ackKey: string;
 }
 
 export function turnPostKeys(turnKey: string): TurnPostKeys {
   let next = 0;
   return {
+    ackKey: `ack:${turnKey}`,
     seed(completed) {
       next = completed;
     },

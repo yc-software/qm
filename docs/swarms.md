@@ -146,7 +146,10 @@ rosters must remain the original roster; changes fail closed. Current scope and
 identity authorization is rechecked before access and execution.
 
 Notification state is persisted as `pending`, `mailbox`, `queued` with a durable
-`runId`, `handed`, or `failed`. A queued notification means the run was accepted, not that the agent has
+`runId`, `handed`, or `failed`. In a swarm a bot started, once anyone else has posted,
+a notification for the root or for a worker the bot may no longer direct is stored as
+`mailbox` instead of waking it, so no bot turn runs for it; a person's next turn in the
+root reads it. A queued notification means the run was accepted, not that the agent has
 finished. Idle recipients wake through the normal durable worker queue. Active
 recipients receive queued unattended turns, not forged human steer signals.
 Notification enqueue uses a stable deduplication key so a crash between enqueue
@@ -247,10 +250,13 @@ notifications still run unattended.
 Agent operations require credentials bound to the exact session, run attempt, and
 unexpired execution lease. Swarm writes recheck that lease inside their database
 transaction; credentials from replaced attempts cannot authorize new work. Completed, failed, queued, and expired runs cannot authorize agent swarm
-operations. A Slack bot's turn cannot direct a person's swarm: `spawn`, `send`,
-`context`, `control` and message reads refuse it unless a bot's
-turn started the swarm. In the swarm root, a bot's turn also loses that access once
-anyone other than that bot has posted a swarm message.
+operations. A Slack bot's turn cannot direct a person's swarm: `inspect`, `spawn`,
+`send`, `context`, `control` and message reads refuse it unless a bot's turn started
+the swarm. Once anyone other than that bot has posted a swarm message, the bot's root
+turn and every worker in a branch the bot started lose that access too. Workers in a
+branch someone else started keep it: every mail-woken worker turn in a bot-started
+swarm runs as the bot, so a worker's access comes from who sent the message that
+spawned the top of its branch.
 Worker sessions never inherit the root session's command or security-screen
 approval grants; a worker must obtain its own approval. Auto screening receives host-verified swarm delegation provenance, so routine delegated tasks and in-swarm reporting are distinguished from external instructions. Delegation does not authorize credential disclosure, permission changes, or overriding higher-priority instructions; those remain screened. Frozen swarm roster checks
 apply to swarm notifications, not ordinary human follow-ups in the root session.

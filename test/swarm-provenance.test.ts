@@ -73,6 +73,7 @@ test("a Slack bot on a person's swarm roster cannot direct the person's workers"
   const spawned = await outcome(f.service.spawn(bot, { requestId: "bot-spawn", text: "bot work" }));
   const stopped = await outcome(f.service.control(bot, { memberId: worker!.id, state: "stopped" }));
   const rewritten = await outcome(f.service.context(bot, { plan: "bot work" }));
+  const inspected = await outcome(f.service.inspect(bot));
   await f.service.sweep();
   const dispatched = (await f.runs.list()).filter(
     (entry) => entry.request.swarm && entry.request.text.includes("bot work"),
@@ -85,6 +86,7 @@ test("a Slack bot on a person's swarm roster cannot direct the person's workers"
       spawned,
       stopped,
       rewritten,
+      inspected,
       dispatched: dispatched.map((entry) => [entry.request.actor.id, entry.request.botActor ?? false]),
       workerControl: swarm.members.find((member) => member.id === worker!.id)!.control,
       rootContext: swarm.members.find((member) => member.id === f.root.id)!.context,
@@ -94,6 +96,7 @@ test("a Slack bot on a person's swarm roster cannot direct the person's workers"
       spawned: refused,
       stopped: refused,
       rewritten: refused,
+      inspected: refused,
       dispatched: [],
       workerControl: undefined,
       rootContext: {},
@@ -107,8 +110,9 @@ test("a Slack bot that started a swarm cannot direct the work a person later sen
   await f.sessions.addParticipant(f.root.id, "release-bot");
   await f.runs.complete(f.caller.claims.runId!, f.caller.claims.runLeaseToken!, { status: "ok", reply: "idle" });
   const first = await f.rootTurn("release-bot", true);
-  await f.service.spawn(first.caller, { requestId: "bot-initial", text: "bot work" });
+  const [botWorker] = await f.service.spawn(first.caller, { requestId: "bot-initial", text: "bot work" });
   await first.done();
+  await f.service.sweep();
   const person = await f.rootTurn("alice", false);
   const [worker] = await f.service.spawn(person.caller, { requestId: "person-spawn", text: "person work" });
   await person.done();
@@ -119,17 +123,59 @@ test("a Slack bot that started a swarm cannot direct the work a person later sen
   );
   const stopped = await outcome(f.service.control(bot.caller, { memberId: worker!.id, state: "stopped" }));
   const rewritten = await outcome(f.service.context(bot.caller, { plan: "bot plan" }));
+  const inspected = await outcome(f.service.inspect(bot.caller));
+  const botAgent = await f.workerCaller(botWorker!.id);
+  const personAgent = await f.workerCaller(worker!.id);
+  const botWorkerSent = await outcome(
+    f.service.send(botAgent, { requestId: "bot-worker-send", audience: [worker!.id], text: "drop that, do this" }),
+  );
+  const botWorkerInspected = await outcome(f.service.inspect(botAgent));
+  const personWorkerInspected = await outcome(f.service.inspect(personAgent));
+  const personWorkerSent = await outcome(
+    f.service.send(personAgent, { requestId: "result", audience: "all", text: "person result" }),
+  );
+  await f.service.sweep();
   const swarm = (await f.store.get(f.root.id))!;
+  const result = swarm.messages.find((message) => message.text === "person result")!;
+  const woken = (await f.runs.list()).filter((entry) => entry.request.text.includes("person result"));
+  const queued = await f.service.queuedMessages({ ...f.template, actor: { id: "alice", type: "internal" } });
+  const [personChild] = await f.service.spawn(personAgent, { requestId: "person-child", text: "child work" });
+  await f.service.sweep();
+  const personChildInspected = await outcome(f.service.inspect(await f.workerCaller(personChild!.id)));
   const refused = "a Slack bot's turn cannot direct a person's swarm";
   assert.deepEqual(
     {
       sent,
       stopped,
       rewritten,
+      inspected,
+      botWorkerSent,
+      botWorkerInspected,
+      personWorkerInspected,
+      personWorkerSent,
+      personChildInspected,
+      resultNotifications: result.notifications,
+      woken: woken.map((entry) => entry.sessionId),
+      queued: queued.map((message) => message.text),
       workerControl: swarm.members.find((member) => member.id === worker!.id)!.control,
       rootContext: swarm.members.find((member) => member.id === f.root.id)!.context,
     },
-    { sent: refused, stopped: refused, rewritten: refused, workerControl: undefined, rootContext: {} },
+    {
+      sent: refused,
+      stopped: refused,
+      rewritten: refused,
+      inspected: refused,
+      botWorkerSent: refused,
+      botWorkerInspected: refused,
+      personWorkerInspected: "accepted",
+      personWorkerSent: "accepted",
+      personChildInspected: "accepted",
+      resultNotifications: { [f.root.id]: { state: "mailbox" }, [botWorker!.id]: { state: "mailbox" } },
+      woken: [],
+      queued: ["person result"],
+      workerControl: undefined,
+      rootContext: {},
+    },
   );
 });
 

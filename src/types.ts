@@ -135,6 +135,8 @@ export interface SpawnMeta {
   thinkingLevel?: string;
   fastMode?: boolean;
   isolation?: ChildIsolation;
+  persistent?: boolean;
+  retired?: boolean;
 }
 
 export interface Session {

@@ -90,7 +90,7 @@ describeTwoTenants("cron replies reach each tenant's web conversation and its op
 });
 
 describeTwoTenants("live feeds call each subscriber back under its own tenant", (db) => {
-  it("a notify from one tenant reaches every tenant's subscriber bound to that subscriber's tenant", async () => {
+  it("a notify from one tenant reaches only that tenant's subscribers, bound to that tenant", async () => {
     const bus = createPostgresSessionStateBus(db.appDatabaseUrl);
     const heard: string[] = [];
     const stops = db.tenants.map((tenant) =>
@@ -99,11 +99,12 @@ describeTwoTenants("live feeds call each subscriber back under its own tenant", 
     try {
       await new Promise((resolve) => setTimeout(resolve, 200));
       withTenant(db.tenants[1], () => bus.emit({ threadRef: "t", state: "idle", at: 1 }));
-      for (let i = 0; i < 200 && heard.length < 2; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+      for (let i = 0; i < 200 && heard.length < 1; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+      await new Promise((resolve) => setTimeout(resolve, 100));
     } finally {
       for (const stop of stops) stop();
       await bus.close?.();
     }
-    assert.deepEqual(heard.sort(), db.tenants.map((tenant) => `t ${tenant}`).sort());
+    assert.deepEqual(heard, [`t ${db.tenants[1]}`]);
   });
 });

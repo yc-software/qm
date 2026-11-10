@@ -125,6 +125,15 @@ function dropNotYoursHtml(): string {
   );
 }
 
+function brainRefusedHtml(): string {
+  return dropPage(
+    "Memory brain access removed",
+    `<h1 id="title">You can no longer set this brain's secret</h1><p>Your access to this brain changed after the link was made. It works again if an org admin restores your access.</p>`,
+  );
+}
+
+const lostBrainAccess = (refusal: string) => `you can no longer set this brain's secret: ${refusal}`;
+
 function brainChangedHtml(): string {
   return dropPage(
     "Memory brain changed",
@@ -259,14 +268,17 @@ async function brainTarget(
 async function brainDestination(
   ctx: ApiCtx,
   rec: SecretDropRecord,
-): Promise<BrainDestination | { refused: string } | undefined> {
+): Promise<BrainDestination | { status: 403 | 409; refused: string } | undefined> {
   const target = rec.memoryBrain;
   if (!target) return undefined;
-  if (!ctx.deps.memoryRegistry) return { refused: "this core has no memory registry" };
+  if (!ctx.deps.memoryRegistry) return { status: 409, refused: "this core has no memory registry" };
   const record = readRegistry((await ctx.deps.memoryRegistry.current()).record);
   const brain = record.brains.find(({ id }) => id === target.id);
-  if (!brain) return { refused: `brain ${target.id} was removed after this link was made` };
-  if (brain.url !== target.url) return { refused: `brain ${target.id} changed after this link was made` };
+  if (!brain) return { status: 409, refused: `brain ${target.id} was removed after this link was made` };
+  const owner = canonicalPerson(rec.ownerId);
+  const refusal = brainRefusal(record, brain, owner, await adminStanding(ctx.deps, owner));
+  if (refusal) return { status: 403, refused: lostBrainAccess(refusal) };
+  if (brain.url !== target.url) return { status: 409, refused: `brain ${target.id} changed after this link was made` };
   const url = new URL(target.url);
   return {
     label: brain.label,
@@ -276,7 +288,7 @@ async function brainDestination(
       .map(({ scope }) => {
         if (scope === "personal") return "every member's personal memory";
         const { ref } = parseScopeId(scope);
-        return ref === canonicalPerson(rec.ownerId) ? "your personal memory" : `${ref}'s personal memory`;
+        return ref === owner ? "your personal memory" : `${ref}'s personal memory`;
       }),
   };
 }
@@ -300,7 +312,7 @@ async function saveBrainSecret(
   const save = (record: MemoryRegistry) => {
     const brain = record.brains.find(({ id }) => id === target.id);
     const refusal = brain && brainRefusal(record, brain, owner, standing);
-    if (refusal) throw new MemoryRegistryError(403, `you can no longer set this brain's secret: ${refusal}`);
+    if (refusal) throw new MemoryRegistryError(403, lostBrainAccess(refusal));
     return setBrainSecret(record, target, secret, {
       actor: drop.ownerId,
       now: Date.now(),
@@ -445,8 +457,8 @@ async function dropForm(ctx: ApiCtx): Promise<void> {
   const brain = await brainDestination(ctx, peeked.rec);
   if (brain && "refused" in brain) {
     auditBrainRefusal(deps, peeked.rec, brain.refused);
-    res.writeHead(409, { "content-type": "text/html; charset=utf-8" });
-    return void res.end(brainChangedHtml());
+    res.writeHead(brain.status, { "content-type": "text/html; charset=utf-8" });
+    return void res.end(brain.status === 403 ? brainRefusedHtml() : brainChangedHtml());
   }
   res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
   res.end(dropFormHtml(params.id!, rec, brain));

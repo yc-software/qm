@@ -4,7 +4,8 @@ import { randomUUID } from "node:crypto";
 import type { ServerResponse } from "node:http";
 import { createWebEvents } from "../src/api/routes/web-events.ts";
 import { bindBootTenant } from "../src/tenants/boot.ts";
-import { boundTenant, currentTenant, withTenant } from "../src/tenants/context.ts";
+import { boundTenant, currentTenant, withoutTenant, withTenant } from "../src/tenants/context.ts";
+import { createMemoryEventBus } from "../src/util/event-bus.ts";
 import { installPrincipalLinks } from "../src/directory/person.ts";
 import type { SessionStateEvent } from "../src/runs/session-state-bus.ts";
 import type { OwnedLedgerEvent } from "../src/loops/ledger-events.ts";
@@ -31,27 +32,22 @@ function browser(): ServerResponse & { text(): string } {
 }
 
 function hub(pending: Record<string, Delivery[]>, acked: string[]) {
-  let onState: ((event: SessionStateEvent) => void) | undefined;
-  let onLedger: ((event: OwnedLedgerEvent) => void) | undefined;
+  const states = createMemoryEventBus<SessionStateEvent>("test session-state");
+  const ledger = createMemoryEventBus<OwnedLedgerEvent>("test ledger-event");
   const app = {
     pendingDeliveries: async () => pending[boundTenant()!] ?? [],
     ackDelivery: async (id: string) => void acked.push(`${boundTenant()}:${id}`),
-    subscribeSessionStates: (cb: (event: SessionStateEvent) => void) => {
-      onState = cb;
-      return () => undefined;
-    },
-    subscribeLedgerEvents: (cb: (event: OwnedLedgerEvent) => void) => {
-      onLedger = cb;
-      return () => undefined;
-    },
+    subscribeSessionStates: (cb: (event: SessionStateEvent) => void) =>
+      states.subscribe(({ tenantId: _tenant, ...event }) => cb(event)),
+    subscribeLedgerEvents: ledger.subscribe,
     membershipControlsScope: async () => false,
     managesScope: async () => false,
     samePerson: () => false,
   };
   return {
     app: app as unknown as Parameters<typeof createWebEvents>[0],
-    state: (event: SessionStateEvent) => onState!(event),
-    ledger: (event: OwnedLedgerEvent) => onLedger!(event),
+    state: (event: SessionStateEvent) => withoutTenant(() => states.emit(event)),
+    ledger: (event: OwnedLedgerEvent) => withoutTenant(() => ledger.emit(event)),
   };
 }
 
@@ -65,7 +61,7 @@ test("the same person in two tenants only hears their own tenant's session state
   const events = createWebEvents(fake.app, {
     deliveries: { undeliveredTenants: async () => [a, b].map((tenantId) => ({ tenantId, id: "web" })) },
   });
-  events.start();
+  withoutTenant(() => events.start());
   try {
     const inA = browser();
     const inB = browser();
@@ -99,7 +95,7 @@ test("an inbox event from one tenant never reaches another tenant's browsers", a
       },
     } as never,
   });
-  events.start();
+  withoutTenant(() => events.start());
   try {
     const inB = browser();
     withTenant(b, () => events.stream("pat", inB));
@@ -113,7 +109,7 @@ test("an inbox event from one tenant never reaches another tenant's browsers", a
   }
 });
 
-test("an inbox event delivered outside any tenant binding is forwarded inside the event's tenant", async () => {
+test("an inbox event emitted outside any tenant binding is forwarded inside the event's tenant", async () => {
   const fake = hub({}, []);
   const events = createWebEvents(fake.app, {
     loops: {
@@ -125,7 +121,7 @@ test("an inbox event delivered outside any tenant binding is forwarded inside th
     } as never,
   });
   installPrincipalLinks({ canonical: () => (currentTenant(), undefined), aliases: () => [] });
-  events.start();
+  withoutTenant(() => events.start());
   try {
     const inB = browser();
     withTenant(b, () => events.stream("pat", inB));

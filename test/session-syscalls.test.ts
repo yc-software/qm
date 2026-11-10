@@ -867,7 +867,7 @@ test("a subagent whose own subagent still works reports in progress, then its fi
   assert.equal(rootWake!.request.conversation.threadRef, r.room.threadRef);
   const relisted = await r.syscallsFor(r.room).read({});
   assert.ok(relisted.ok && relisted.mode === "children");
-  assert.equal(relisted.children[0]!.activity.status, "idle");
+  assert.deepEqual(relisted.children, []);
 });
 
 test("a result left unread while its parent subagent was busy keeps that subagent in progress until it is woken", async () => {
@@ -1374,7 +1374,7 @@ test("the live-subagents note is empty when no child is running or queued", asyn
   const r = await rig();
   const syscalls = r.syscallsFor(r.room);
   assert.ok(syscalls.liveSubagents);
-  assert.equal(await syscalls.liveSubagents(), "");
+  assert.equal(await syscalls.liveSubagents!(), "");
   const opened = await syscalls.open({ task: "one quick thing", name: "quick" });
   assert.ok(opened.ok);
   const child = await freshSession(r.sessions, opened.sessionId);
@@ -1383,7 +1383,7 @@ test("the live-subagents note is empty when no child is running or queued", asyn
   const claimed = await r.runs.claimById(queued.id, "w1", 60_000);
   assert.ok(claimed?.leaseToken);
   await r.runs.complete(queued.id, claimed.leaseToken, { status: "ok", reply: "done" });
-  assert.equal(await syscalls.liveSubagents(), "");
+  assert.equal(await syscalls.liveSubagents!(), "");
 });
 
 test("a finished child durably wakes its Slack parent exactly once and leaves the result in its mailbox", async () => {
@@ -1431,6 +1431,96 @@ test("a silent child mails a completed-without-reply notice without borrowing tr
   assert.equal(mail.length, 1);
   assert.match(mail[0]!.text, /kind="no_reply"/);
   assert.doesNotMatch(mail[0]!.text, /halfway there/);
+});
+
+async function answeredChild(
+  r: Rig,
+  result: Parameters<RunStore["complete"]>[2],
+  open: { task: string; name?: string; persistent?: boolean } = { task: "check the logs" },
+) {
+  const syscalls = r.syscallsFor(r.room);
+  const opened = await syscalls.open(open);
+  assert.ok(opened.ok);
+  const child = await freshSession(r.sessions, opened.sessionId);
+  await r.sessions.append({ sessionId: child.id }, { kind: "AgentMessage", text: "the logs are clean" });
+  const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
+  const claimed = await r.runs.claimById(queued.id, "w1", 60_000);
+  await r.runs.complete(queued.id, claimed!.leaseToken!, result);
+  await deliverSubagentMail(
+    { mailbox: r.mailbox, sessions: r.sessions, runs: r.runs, maxAttempts: 3 },
+    (await r.runs.get(queued.id))!,
+  );
+  return { syscalls, child };
+}
+
+test("a subagent retires after its final answer: hidden from the list, refused for new work, still readable by id", async () => {
+  const r = await rig();
+  const { syscalls, child } = await answeredChild(r, { status: "ok", reply: "logs are clean" });
+
+  const mail = await syscalls.receive!(0);
+  assert.equal(mail.length, 1);
+  assert.match(mail[0]!.text, /kind="final_answer"/);
+
+  const list = await syscalls.read({});
+  assert.ok(list.ok && list.mode === "children");
+  assert.deepEqual(list.children, []);
+  assert.equal(await syscalls.liveSubagents!(), "");
+
+  const sent = await syscalls.write({ target: child.id, text: "one more thing", wake: true });
+  assert.ok(!sent.ok);
+  assert.deepEqual(await r.runs.inFlightForThread(child.threadRef), []);
+
+  const transcript = await syscalls.read({ target: child.id });
+  assert.ok(transcript.ok && transcript.mode === "transcript");
+  assert.match(transcript.rendered, /the logs are clean/);
+});
+
+test("a subagent named like a retired one is the one a name reaches", async () => {
+  const r = await rig();
+  const { syscalls } = await answeredChild(r, { status: "ok", reply: "done" }, { task: "review", name: "reviewer" });
+  const fresh = await syscalls.open({ task: "review again", name: "reviewer" });
+  assert.ok(fresh.ok);
+  const sent = await syscalls.write({ target: "reviewer", text: "also the tests", wake: true });
+  assert.ok(sent.ok);
+});
+
+test("a silent subagent retires too", async () => {
+  const r = await rig();
+  const { syscalls } = await answeredChild(r, { status: "silent" });
+  const list = await syscalls.read({});
+  assert.ok(list.ok && list.mode === "children");
+  assert.deepEqual(list.children, []);
+});
+
+test("a persistent subagent stays open after its final answer and takes follow-ups", async () => {
+  const r = await rig();
+  const { syscalls, child } = await answeredChild(
+    r,
+    { status: "ok", reply: "logs are clean" },
+    { task: "operate the logs", persistent: true },
+  );
+  const list = await syscalls.read({});
+  assert.ok(list.ok && list.mode === "children");
+  assert.deepEqual(
+    list.children.map((c) => c.sessionId),
+    [child.id],
+  );
+  const sent = await syscalls.write({ target: child.id, text: "check again", wake: true });
+  assert.ok(sent.ok);
+  assert.equal(sent.delivered, "queued_turn");
+});
+
+test("a subagent that failed stays open so its parent can steer it", async () => {
+  const r = await rig();
+  const { syscalls, child } = await answeredChild(r, { status: "failed", reason: "boom" });
+  const list = await syscalls.read({});
+  assert.ok(list.ok && list.mode === "children");
+  assert.deepEqual(
+    list.children.map((c) => c.sessionId),
+    [child.id],
+  );
+  const sent = await syscalls.write({ target: child.id, text: "try again", wake: true });
+  assert.ok(sent.ok);
 });
 
 async function stoppedChildRun(r: Rig, said: string | undefined, result: Parameters<RunStore["complete"]>[2]) {
@@ -2693,7 +2783,7 @@ async function delegatedHumanRig(context: Partial<OrchestratorInput> = {}) {
     scopeId: scope,
     request: { ...parent.run.request, runId: parent.run.id },
   });
-  const opened = await api.open({ task: "inspect" });
+  const opened = await api.open({ task: "inspect", persistent: true });
   assert.ok(opened.ok);
   const child = await freshSession(r.sessions, opened.sessionId);
   const run = (await r.runs.inFlightForThread(child.threadRef))[0]!;

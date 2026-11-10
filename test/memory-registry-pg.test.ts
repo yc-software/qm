@@ -907,7 +907,6 @@ test("Alice's own turn into a notebook-only subagent leaves her brain alone, and
   };
   const { brain, built, bind } = await boundToBrain(t, agent);
   await bind();
-  await built.featureFlags.setEnabled("persistent_subagents", ALICE_SCOPE, true, "admin");
   const alice = { id: "U1", type: "internal" as const };
   const session = await built.sessions.getOrCreateByThread(subagent, "dm", ALICE_SCOPE);
   await built.sessions.addParticipant(session.id, alice.id);
