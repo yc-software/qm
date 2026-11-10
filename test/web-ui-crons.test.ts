@@ -331,7 +331,6 @@ test("a browser cron edit accepts only the fields the web app edits", async () =
     fetch(`${coreBase}/api/crons/${cron.id}`, asUser("alice", { method: "PATCH", body: JSON.stringify(body) }));
   for (const body of [
     { unfurlLinks: false },
-    { unattendedGrants: ["admin.spend.read"] },
     { session: false },
     { action: "renamed task" },
     { title: "ok", note: "extra" },

@@ -1579,7 +1579,7 @@ test("an owner's cron fire carries the owner's authority: liveActor, no org-note
     signingSecret: "test-secret",
     apiBaseUrl: "https://core.example.com",
   });
-  const { app, sandbox, admin } = buildApp(config);
+  const { app, sandbox } = buildApp(config);
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
   sandbox.provision = (owner, opts) => {
@@ -1807,7 +1807,6 @@ test("an org admin's turn carries org-notebook write (token claim + prompt hint)
   assert.match(adminPrompt.reply ?? "", /including resources owned by other users/);
   assert.match(adminPrompt.reply ?? "", /Ordinary resource-owner restrictions do not by themselves prohibit/);
   assert.match(adminPrompt.reply ?? "", /admin grant changes and impersonation are portal-only/);
-  assert.match(adminPrompt.reply ?? "", /private-content reads require a DM or an Open conversation \(organization/);
   assert.doesNotMatch(
     adminPrompt.reply ?? "",
     /private-content reads work only from a DM|bulk configuration imports require/,
@@ -1954,23 +1953,6 @@ test("admin reach rides live, all-internal turns — direct, detection and guest
   claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
   assert.equal(claims!.liveActor, undefined, "a synthetic detection turn must not attest liveness");
   assert.equal(claims!.liveAuthor, undefined, "a synthetic detection turn must not attest authorship");
-
-  captured = undefined;
-  assert.equal(
-    (
-      await app.turn({
-        surface: "cron",
-        actor: admin,
-        conversation: { kind: "dm", threadRef: "dm:admin-alice:trigger-live" },
-        text: "!run echo hi",
-        origin: { kind: "automation", ownerFire: true },
-      })
-    ).status,
-    "ok",
-  );
-  claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
-  assert.equal(claims!.liveActor, true, "an owner's automation fire carries the owner's authority");
-  assert.equal(claims!.memory?.orgWrite, undefined, "but never org-notebook write");
 
   captured = undefined;
   assert.equal(

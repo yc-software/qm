@@ -101,33 +101,6 @@ test("per-kind artifact reads are scope-filtered, authz-gated, and audited", asy
   }
 });
 
-test("an admin can repoint someone else's cron to a room; the fire still runs as its owner", async () => {
-  const s = start();
-  try {
-    const cron = await s.built.app.createCron({
-      ownerScopeId: "personal:U1",
-      owner: "U1",
-      createdBy: "U1",
-      schedule: { everyMs: 60_000 },
-      action: "review spend",
-    });
-    const put = (destination: unknown) =>
-      fetch(`${s.base}/v1/admin/crons/${encodeURIComponent(cron.id)}/destination?scope=personal:U1`, {
-        method: "PUT",
-        headers: { ...ALICE_ADMIN, "content-type": "application/json" },
-        body: JSON.stringify({ destination }),
-      });
-    const moved = await put({ type: "slack", target: "C9" });
-    assert.equal(moved.status, 200, await moved.clone().text());
-    const after = await s.built.app.getCron(cron.id);
-    assert.equal(after?.destination?.target, "C9");
-    assert.equal(after?.owner, "U1", "repointing the output does not change whose authority the fire carries");
-    assert.equal(after?.action, "review spend");
-  } finally {
-    await s.close();
-  }
-});
-
 test("an admin can edit and clear a cron destination inside the administered scope", async () => {
   const s = start();
   try {

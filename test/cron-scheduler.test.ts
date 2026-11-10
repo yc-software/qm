@@ -62,7 +62,7 @@ function agent(
   return { crons, deliveries, calls, scheduler, identity };
 }
 
-test("a fire's TurnRequest runs as the cron owner and carries no grant list: the owner's authority is the fire's", async () => {
+test("a fire's TurnRequest runs as the cron owner: the owner's authority is the fire's", async () => {
   const { crons, calls, scheduler } = agent();
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
