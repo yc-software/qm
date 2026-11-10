@@ -362,3 +362,52 @@ test("a stalled refresh can be replaced without old requests trapping later refr
     dom.window.close();
   }
 });
+
+test("marking the open chat read during the first list load does not leave the sidebar with only that chat", async () => {
+  const dom = jsdomGlobals();
+  const reads: Array<(r: Response) => void> = [];
+  const patches: Array<(r: Response) => void> = [];
+  const current = { id: "cur", threadRef: "web:alex:cur", scopeId: "personal:alex", unread: true };
+  const others = [
+    { id: "one", threadRef: "web:alex:one", scopeId: "personal:alex" },
+    { id: "two", threadRef: "web:alex:two", scopeId: "personal:alex" },
+  ];
+  globalThis.fetch = async (input) => {
+    const path = String(input);
+    if (path.startsWith("/api/sessions?")) return new Promise<Response>((resolve) => reads.push(resolve));
+    if (path === "/api/sessions/cur") return new Promise<Response>((resolve) => patches.push(resolve));
+    if (path === "/api/contexts") return Response.json({ contexts: [] });
+    throw new Error(`Unexpected request: ${path}`);
+  };
+
+  const vite = await testViteServer();
+  try {
+    const { refreshSessions, renderList, sessionsState, sessionsReady } = await vite.ssrLoadModule("/src/sessions.ts");
+    const boot = refreshSessions({ showLoading: true });
+    sessionsState.openingKey = "cur";
+    sessionsState.list = [current];
+    renderList();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(patches.length, 1, "opening an unread chat marks it read");
+
+    reads[0]!(Response.json({ sessions: [current, ...others] }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(reads.length, 1, "the list waits for the in-flight patch before reading again");
+    patches[0]!(Response.json({ session: { ...current, unread: false } }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(reads.length, 2, "a read overtaken by a patch is retried, not dropped");
+    reads[1]!(Response.json({ sessions: [{ ...current, unread: false }, ...others] }));
+
+    assert.equal(await boot, true);
+    await sessionsReady();
+    assert.equal(sessionsState.loaded, true);
+    assert.deepEqual(
+      sessionsState.list.map((s: { id: string }) => s.id).sort(),
+      ["cur", "one", "two"],
+      "every chat is back in the sidebar",
+    );
+  } finally {
+    await vite.close();
+    dom.window.close();
+  }
+});
