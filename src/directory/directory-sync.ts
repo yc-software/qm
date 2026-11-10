@@ -80,7 +80,7 @@ export function createDirectorySync(deps: {
       if (partial && complete === false) return false;
       await client.query(
         `INSERT INTO directory_sync (org_id, ${hashCol}, ${syncedAtCol}, updated_at) VALUES ($1, $2, $3, $4)
-         ON CONFLICT (org_id) DO UPDATE SET ${hashCol} = EXCLUDED.${hashCol},
+         ON CONFLICT (tenant_id, org_id) DO UPDATE SET ${hashCol} = EXCLUDED.${hashCol},
            ${syncedAtCol} = COALESCE(EXCLUDED.${syncedAtCol}, directory_sync.${syncedAtCol}),
            updated_at = EXCLUDED.updated_at`,
         [orgId, partial || complete === false ? null : hash, partial ? null : (syncedAt ?? null), Date.now()],
@@ -178,7 +178,7 @@ export function createDirectorySync(deps: {
             await client.query(
               `INSERT INTO directory_channels (org_id, channel_id, name, name_lc, is_private, is_external, roster_known, observed_at)
              SELECT $1, rows.*, $8::bigint FROM unnest($2::text[], $3::text[], $4::text[], $5::boolean[], $6::boolean[], $7::boolean[]) AS rows
-             ON CONFLICT (org_id, channel_id) DO UPDATE SET
+             ON CONFLICT (tenant_id, org_id, channel_id) DO UPDATE SET
                name = EXCLUDED.name,
                name_lc = EXCLUDED.name_lc,
                is_private = EXCLUDED.is_private,
@@ -228,7 +228,7 @@ export function createDirectorySync(deps: {
     async setWorkspaceUrl(url) {
       await q(
         `INSERT INTO directory_meta (org_id, workspace_url, updated_at) VALUES ($1, $2, $3)
-         ON CONFLICT (org_id) DO UPDATE SET workspace_url = EXCLUDED.workspace_url, updated_at = EXCLUDED.updated_at`,
+         ON CONFLICT (tenant_id, org_id) DO UPDATE SET workspace_url = EXCLUDED.workspace_url, updated_at = EXCLUDED.updated_at`,
         [orgId, url, Date.now()],
       );
     },
@@ -263,7 +263,7 @@ export function createDirectorySync(deps: {
           await client.query(
             `INSERT INTO directory_groups (org_id, group_id, roster_known)
              SELECT $1, * FROM unnest($2::text[], $3::boolean[])
-             ON CONFLICT (org_id, group_id) DO UPDATE SET
+             ON CONFLICT (tenant_id, org_id, group_id) DO UPDATE SET
                roster_known = directory_groups.roster_known OR EXCLUDED.roster_known`,
             [orgId, listedIds, listedIds.map((groupId) => rostered.has(groupId))],
           );
@@ -289,7 +289,7 @@ export function createDirectorySync(deps: {
         await client.query("SELECT pg_advisory_xact_lock(hashtext('directory'), hashtext($1))", [orgId]);
         await client.query(
           `INSERT INTO directory_groups (org_id, group_id, roster_known) VALUES ($1, $2, TRUE)
-           ON CONFLICT (org_id, group_id) DO UPDATE SET roster_known = TRUE`,
+           ON CONFLICT (tenant_id, org_id, group_id) DO UPDATE SET roster_known = TRUE`,
           [orgId, groupId],
         );
         await client.query("DELETE FROM directory_group_members WHERE org_id = $1 AND group_id = $2", [orgId, groupId]);

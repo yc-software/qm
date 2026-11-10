@@ -13,6 +13,7 @@ import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { assertLateJoinerScopes, assertLeanListing } from "./support/participant-scopes.ts";
 import { assertParticipantSessionParity } from "./support/participant-session-parity.ts";
 import { assertSpendRollupParity } from "./support/spend-rollup-parity.ts";
+import { seedTestTenant } from "./support/test-tenant.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres store tests";
@@ -24,6 +25,7 @@ before(async () => {
   await p.query("DROP SCHEMA public CASCADE");
   await p.query("CREATE SCHEMA public");
   await p.end();
+  await seedTestTenant(URL);
 });
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
@@ -277,7 +279,8 @@ test(
     const schema = `spend_order_${randomUUID().replaceAll("-", "")}`;
     await admin.query(`CREATE SCHEMA ${schema}`);
     const url = new globalThis.URL(URL!);
-    url.searchParams.set("options", `-c search_path=${schema}`);
+    url.searchParams.set("options", `${url.searchParams.get("options") ?? ""} -c search_path=${schema}`.trim());
+    await seedTestTenant(url.toString());
     const day = 86_400_000;
     const base = Date.UTC(2025, 5, 1);
     let clock = base + 3 * day;
@@ -498,10 +501,11 @@ test("pg spend ancestry only visits sessions with usage inside the requested ran
   });
   const pg = (await import("pg")).default;
   const raw = new pg.Pool({ connectionString: URL });
-  const execute = pg.Pool.prototype.query;
+  const execute = pg.Client.prototype.query;
   let query = "";
-  t.mock.method(pg.Pool.prototype, "query", function (this: InstanceType<typeof pg.Pool>, ...args: unknown[]) {
-    if (typeof args[0] === "string" && args[0].startsWith("WITH RECURSIVE")) query = args[0];
+  t.mock.method(pg.Client.prototype, "query", function (this: InstanceType<typeof pg.Client>, ...args: unknown[]) {
+    const text = typeof args[0] === "string" ? args[0] : (args[0] as { text?: unknown } | null)?.text;
+    if (typeof text === "string" && text.startsWith("WITH RECURSIVE")) query = text;
     return Reflect.apply(execute, this, args);
   });
   try {
@@ -1313,7 +1317,7 @@ test("pg null-byte payloads: stripped on write and counted alongside raw items",
   const raw = new pg.Pool({ connectionString: URL });
   try {
     await raw.query(
-      "INSERT INTO items(tenant_id, session_id, seq, kind, author, body, created_at) VALUES (qm_tenant_id(),$1,$2,'UserMessage','NUL1',$3,to_timestamp($4 / 1000.0))",
+      "INSERT INTO items(tenant_id, session_id, seq, kind, author, body, created_at) VALUES (qm_bound_tenant(),$1,$2,'UserMessage','NUL1',$3,to_timestamp($4 / 1000.0))",
       [a.id, 1, { text: "xy" }, Date.now()],
     );
     await raw.query("UPDATE sessions SET messages = NULL, turns = NULL, last_activity = NULL WHERE id = $1", [a.id]);
@@ -1367,7 +1371,7 @@ test(
       assert.equal(legacy.lastActivity, entries[entries.length - 1]!.createdAt, "last-activity = newest entry");
 
       await raw.query(
-        "INSERT INTO items(tenant_id, session_id, seq, kind, author, body, created_at) VALUES (qm_tenant_id(),$1,$2,'UserMessage','NUL1',$3,to_timestamp($4 / 1000.0))",
+        "INSERT INTO items(tenant_id, session_id, seq, kind, author, body, created_at) VALUES (qm_bound_tenant(),$1,$2,'UserMessage','NUL1',$3,to_timestamp($4 / 1000.0))",
         [a.id, 4, { text: "from the old instance" }, Date.now()],
       );
       const lease2 = { sessionId: a.id };
@@ -1377,7 +1381,7 @@ test(
       assert.equal(healed.turns, 3, "seq/messages mismatch triggers a full turns recount");
 
       await raw.query(
-        "INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at) VALUES (qm_tenant_id(),$1,0,'UserMessage',$2,to_timestamp($3 / 1000.0)), (qm_tenant_id(),$1,1,'AgentMessage',$4,to_timestamp($5 / 1000.0))",
+        "INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at) VALUES (qm_bound_tenant(),$1,0,'UserMessage',$2,to_timestamp($3 / 1000.0)), (qm_bound_tenant(),$1,1,'AgentMessage',$4,to_timestamp($5 / 1000.0))",
         [b.id, { text: "drained turn" }, Date.now(), { text: "reply" }, Date.now() + 1],
       );
       await raw.query("UPDATE sessions SET messages = 0, turns = 0 WHERE id = $1", [b.id]);

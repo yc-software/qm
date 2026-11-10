@@ -8,6 +8,8 @@ import {
   type CreateTriggerInput,
   ownedBy,
 } from "../triggers/trigger-store.ts";
+import { claimThenBind } from "../tenants/claim.ts";
+import { currentTenant } from "../tenants/context.ts";
 
 interface CreateMonitorInput extends CreateTriggerInput {
   processId: string;
@@ -26,6 +28,7 @@ export interface MonitorStore {
   list(): Promise<Monitor[]>;
   ownedBy(scopeId: string): Promise<Monitor[]>;
   enabled(): Promise<Monitor[]>;
+  claimEnabled(): Promise<Array<Monitor & { tenantId: string }>>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
   delete(id: string): Promise<void>;
   deleteDefunct(now: number): Promise<number>;
@@ -68,17 +71,23 @@ export function createMonitorStore(backing: DurableMap<Monitor>): MonitorStore {
     async enabled() {
       return (await backing.all()).filter((m) => m.enabled);
     },
+    async claimEnabled() {
+      const claimed = await claimThenBind(backing.claimTenants, async () =>
+        (await backing.all()).filter((m) => m.enabled).map((m) => ({ ...m, tenantId: currentTenant() })),
+      );
+      return claimed.flat();
+    },
     setEnabled(id, enabled) {
       return setTriggerEnabled(backing, id, enabled);
     },
     delete: (id) => backing.delete(id),
     async deleteDefunct(now) {
       const isDefunct = defunctBefore(now - DEFUNCT_MONITOR_GRACE_MS);
-      let deleted = 0;
-      for (const m of (await backing.all()).filter(isDefunct)) {
-        if (await backing.deleteIf(m.id, isDefunct)) deleted++;
-      }
-      return deleted;
+      const deleted = await claimThenBind(backing.claimTenants, async () => {
+        const defunct = (await backing.entries()).filter(([, m]) => isDefunct(m));
+        return Promise.all(defunct.map(([id]) => backing.deleteIf(id, isDefunct)));
+      });
+      return deleted.flat().filter(Boolean).length;
     },
     async advance(id, fields) {
       await backing.merge(id, {

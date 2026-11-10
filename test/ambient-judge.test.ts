@@ -1,10 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseAmbientDecision, renderAmbientPrompt, type AmbientBatch } from "../src/surface-cache/ambient-judge.ts";
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { createSlackSurface } from "../src/surfaces/slack/adapter.ts";
-
-const readable = createSlackSurface({ deliveries: createDeliveryStore() }).readableText;
+import {
+  parseAmbientDecision,
+  recentWakeMessages,
+  renderAmbientPrompt,
+  type AmbientBatch,
+} from "../src/surface-cache/ambient-judge.ts";
+import type { CachedMessage } from "../src/surface-cache/surface-cache.ts";
 
 const base = (over: Partial<AmbientBatch>): AmbientBatch => ({
   container: "C1",
@@ -12,75 +14,31 @@ const base = (over: Partial<AmbientBatch>): AmbientBatch => ({
   orders: "",
   self: { name: "agent", mentionId: "U00000002" },
   messages: [],
+  recent: [],
   ...over,
 });
 
-test("backdrop marks messages the direct path owns (handled / self-mention)", () => {
-  const prompt = renderAmbientPrompt(
-    base({
-      backdrop: [
-        {
-          container: "C1",
-          ts: "1.0",
-          authorId: "U1",
-          authorName: "alice",
-          text: "@qm can you make a weekly digest? would that be possible?",
-          mentionsSelf: true,
-          createdAt: 1,
-        },
-        {
-          container: "C1",
-          ts: "2.0",
-          authorId: "U1",
-          authorName: "alice",
-          text: "following up on the thread",
-          handled: true,
-          createdAt: 2,
-        },
-        { container: "C1", ts: "3.0", authorId: "U2", authorName: "bob", text: "unrelated chatter", createdAt: 3 },
-      ],
-      messages: [
-        {
-          container: "C1",
-          ts: "4.0",
-          authorId: "U1",
-          authorName: "alice",
-          text: "random thought: @carol @alice ^",
-          createdAt: 4,
-        },
-      ],
-    }),
-    readable,
-  );
-  const backdrop = prompt.slice(prompt.indexOf("EARLIER CONTEXT"), prompt.indexOf("NEW MESSAGES"));
-  const marker = "[handled by the direct responder — do not re-engage]";
-  assert.ok(backdrop.includes(`would that be possible? ${marker}`), "the self-mention request is marked owned");
-  assert.ok(backdrop.includes(`following up on the thread ${marker}`), "the already-handled message is marked owned");
-  assert.ok(!backdrop.includes(`unrelated chatter ${marker}`), "unowned backdrop messages are not marked");
-  assert.ok(!prompt.slice(prompt.indexOf("NEW MESSAGES")).includes(marker), "the delta is never marked");
+const msg = (ts: string, text: string, over: Partial<CachedMessage> = {}): CachedMessage => ({
+  container: "C1",
+  ts,
+  authorId: "U1",
+  authorName: "alice",
+  text,
+  createdAt: Number(ts),
+  ...over,
 });
 
-test("new messages carry their [id]; backdrop messages do not", () => {
+test("the judge reads the recent messages as the worker does: new ones are triggers, its own posts are from the agent", () => {
+  const offer = msg("2.0", "Want me to draft the memo?", { self: true, authorName: "agent", authorId: "U00000002" });
+  const hold = msg("3.0", "hold off on that");
   const prompt = renderAmbientPrompt(
-    base({
-      backdrop: [
-        { container: "C1", ts: "1.0", authorId: "U1", authorName: "alice", text: "old context", createdAt: 1 },
-      ],
-      messages: [
-        {
-          container: "C1",
-          ts: "2.0",
-          authorId: "U2",
-          authorName: "bob",
-          text: "qm can you check the deploy?",
-          createdAt: 2,
-        },
-      ],
-    }),
-    readable,
+    base({ recent: [msg("1.0", "let's back Example Co"), offer, hold], messages: [hold] }),
   );
-  assert.ok(prompt.includes("[2.0] bob: qm can you check the deploy?"), "a new message is id-prefixed");
-  assert.ok(!prompt.includes("[1.0]"), "a backdrop message carries no id");
+  const lines = prompt.split("\n").filter((l) => l.includes("<message "));
+  assert.equal(lines.length, 3, "earlier context, the assistant's own reply and the new message all appear");
+  assert.match(lines[0]!, /id="1\.0" from="human" author="alice"(?:(?!trigger)[^>])*>let's back Example Co</);
+  assert.match(lines[1]!, /id="2\.0" from="agent"(?:(?!trigger)[^>])*>Want me to draft the memo\?</);
+  assert.match(lines[2]!, /id="3\.0" from="human"[^>]*trigger="true">hold off on that</);
 });
 
 test("parseAmbientDecision reads asked_by (only on an engage)", () => {
@@ -98,32 +56,6 @@ test("parseAmbientDecision reads asked_by (only on an engage)", () => {
   assert.deepEqual(parseAmbientDecision('{"act": true, "asked_by": "[2.0]"}'), { act: true, askedBy: "2.0" });
 });
 
-test("ambient rendering resolves cached mention names without changing stored messages", () => {
-  const message = {
-    container: "C1",
-    ts: "2.0",
-    authorName: "Alice",
-    text: "<@U2> ask <@U3|old label> and <@U9> about @already-named",
-    mentions: { U2: "Bob", U3: "Carol" },
-    createdAt: 2,
-  };
-  const batch = base({
-    messages: [message, { ...message, ts: "3.0", mentions: undefined }],
-    backdrop: [{ ...message, ts: "1.0", handled: true }],
-  });
-  const original = structuredClone(batch);
-  const prompt = renderAmbientPrompt(batch, readable);
-  assert.ok(
-    prompt.includes(
-      "Alice: @Bob ask @Carol and <@U9> about @already-named [handled by the direct responder — do not re-engage]",
-    ),
-  );
-  assert.ok(prompt.includes("[2.0] Alice: @Bob ask @Carol and <@U9> about @already-named"));
-  assert.ok(prompt.includes(`[3.0] Alice: ${message.text}`));
-  assert.ok(prompt.includes("mentioned as <@U00000002>"));
-  assert.deepEqual(batch, original);
-});
-
 test("parseAmbientDecision reads the outermost object and stays linear-time on a brace flood", () => {
   assert.deepEqual(parseAmbientDecision('Sure. {"act": true, "reason": "asked for a digest"} done'), {
     act: true,
@@ -133,4 +65,17 @@ test("parseAmbientDecision reads the outermost object and stays linear-time on a
   assert.deepEqual(parseAmbientDecision("{".repeat(60_000)), { act: false });
   const elapsed = performance.now() - started;
   assert.ok(elapsed < 1_000, `brace flood took ${Math.round(elapsed)}ms`);
+});
+
+test("other people's @-mentions read as @name; only the assistant's own mention stays a raw id", () => {
+  const ask = msg("2.0", "<@U00000003> can you remind me? cc <@U00000004|old label> <@U00000009> <@U00000002>", {
+    mentions: { U00000003: "esther", U00000004: "dave", U00000002: "agent" },
+  });
+  const batch = base({ recent: [ask], messages: [ask] });
+  const [wake] = recentWakeMessages(batch);
+  assert.equal(wake!.text, "@esther can you remind me? cc @dave <@U00000009> <@U00000002>");
+  const line = renderAmbientPrompt(batch)
+    .split("\n")
+    .find((l) => l.includes("<message "));
+  assert.match(line!, />@esther can you remind me\? cc @dave &lt;@U00000009&gt; &lt;@U00000002&gt;</);
 });
