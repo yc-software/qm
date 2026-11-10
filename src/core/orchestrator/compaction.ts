@@ -114,7 +114,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     } catch (error) {
       input.cancel?.throwIfAborted();
       if (!onFailure || (error instanceof Error && error.name === "AbortError")) throw error;
-      deps.errors?.record(
+      deps.errors.record(
         {
           category: "turn",
           code: "compaction_summary_failed",
@@ -236,7 +236,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     if (compactionPending.has(input.sessionId)) return;
     compactionPending.add(input.sessionId);
     const recordFailure = (e: unknown) =>
-      deps.errors?.record(
+      deps.errors.record(
         {
           category: "turn",
           code: "background_compaction_failed",
