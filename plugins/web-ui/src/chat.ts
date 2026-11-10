@@ -18,6 +18,7 @@ import {
   activityLabel,
   activityGroupSummary,
   activityGroups,
+  thinkingLabel,
   thinkingPresentation,
   sessionPresentation,
 } from "./activity-presentation";
@@ -2435,9 +2436,10 @@ export function createChatSurface(
         }
       }
       if (chunk.type === "thinking" && chunk.thinking.trim()) {
+        const live = animating && chunkIndex === message.content.length - 1;
         parts.push(
           html`<details class="thinking">
-            <summary>${sheenLabel(thinkingPresentation("", !animating).title, animating)}</summary>
+            <summary>${sheenLabel(thinkingLabel(live), live)}</summary>
             ${markdown(chunk.thinking)}
           </details>`,
         );
@@ -3315,7 +3317,7 @@ export function createChatSurface(
     }
     if (item.kind === "thinking") {
       const key = timelineKey(item);
-      const thought = thinkingPresentation(item.text, key !== liveItem);
+      const thought = thinkingPresentation(item.text, key === liveItem);
       return html`<details
         class="thinking-row"
         ?open=${openThinking.has(key)}
