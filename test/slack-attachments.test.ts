@@ -18,6 +18,7 @@ function fakeFetch(opts: {
   status?: number;
   contentType?: string;
   contentLength?: number;
+  contentDisposition?: string;
   bytes?: Uint8Array;
 }): typeof fetch {
   return (async () => ({
@@ -26,6 +27,7 @@ function fakeFetch(opts: {
     headers: {
       get: (n: string) => {
         if (n.toLowerCase() === "content-type") return opts.contentType ?? "application/octet-stream";
+        if (n.toLowerCase() === "content-disposition") return opts.contentDisposition ?? null;
         if (n.toLowerCase() === "content-length") return String(opts.contentLength ?? opts.bytes?.length ?? 0);
         return null;
       },
@@ -86,6 +88,46 @@ test("downloadSlackFile rejects an HTML sign-in page (files:read missing)", asyn
       downloadSlackFile(
         { url_private: SLACK_URL },
         { token: "t", fetchImpl: fakeFetch({ contentType: "text/html; charset=utf-8" }) },
+      ),
+    /HTML page/,
+  );
+});
+
+test("processInboundFiles stages an HTML attachment identified by its response disposition", async () => {
+  const mimetype = "text/html";
+  const bytes = new TextEncoder().encode("<html><body>attachment marker</body></html>");
+  const file = { name: "page.html", mimetype, url_private: SLACK_URL };
+  const staged: Uint8Array[] = [];
+  const result = await processInboundFiles(
+    [file],
+    (attachment) =>
+      downloadSlackFile(attachment, {
+        token: "t",
+        fetchImpl: fakeFetch({
+          contentType: "text/html; charset=utf-8",
+          contentDisposition: 'Attachment; filename="page.html"',
+          bytes,
+        }),
+      }),
+    async (data) => {
+      staged.push(data);
+      return { blobId: "html-blob" };
+    },
+  );
+  assert.deepEqual(result.issues, []);
+  assert.equal(result.attachments.length, 1);
+  assert.equal(result.attachments[0]!.name, "page.html");
+  assert.equal(result.attachments[0]!.blobId, "html-blob");
+  assert.equal(Buffer.from(staged[0]!).toString(), Buffer.from(bytes).toString());
+});
+
+test("downloadSlackFile rejects a sign-in page even for a declared HTML file", async () => {
+  const mimetype = "text/html";
+  await assert.rejects(
+    () =>
+      downloadSlackFile(
+        { url_private: SLACK_URL, mimetype },
+        { token: "t", fetchImpl: fakeFetch({ contentType: "Text/HTML; charset=utf-8" }) },
       ),
     /HTML page/,
   );

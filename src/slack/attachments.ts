@@ -108,8 +108,9 @@ export async function downloadSlackFile(file: SlackFile, opts: DownloadOptions =
     signal: AbortSignal.timeout(opts.timeoutMs ?? 300_000),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const ct = res.headers.get("content-type") ?? "";
-  if (ct.includes("text/html")) throw new Error("got an HTML page (check files:read scope)");
+  const ct = res.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase();
+  const disposition = res.headers.get("content-disposition")?.split(";")[0]?.trim().toLowerCase();
+  if (ct === "text/html" && disposition !== "attachment") throw new Error("got an HTML page (check files:read scope)");
   const len = Number(res.headers.get("content-length") ?? "0");
   if (len > MAX_ATTACHMENT_BYTES) throw new Error("file too large");
   return new Uint8Array(await res.arrayBuffer());
