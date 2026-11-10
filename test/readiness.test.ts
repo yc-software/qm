@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createServer as createTcpServer, type AddressInfo, type Socket } from "node:net";
 import { test } from "node:test";
-import { setTimeout as sleep } from "node:timers/promises";
 import { createServer } from "../src/api/server.ts";
 import { serverDeps } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
+import { settle } from "./support/settle.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { testConfig } from "./support/test-config.ts";
 
@@ -31,13 +31,8 @@ async function fixture(checkReadiness?: (signal: AbortSignal) => Promise<void>) 
 test("readiness is public and ready", async () => {
   const srv = await fixture();
   try {
-    const deadline = Date.now() + 15_000;
-    let response = await srv.get("/readyz");
-    while (response.status === 503 && Date.now() < deadline) {
-      assert.deepEqual(await response.json(), { ok: false });
-      await sleep(100);
-      response = await srv.get("/readyz");
-    }
+    let response!: Response;
+    await settle(async () => (response = await srv.get("/readyz")).status !== 503);
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), { ok: true });
     assert.equal((await srv.get("/healthz")).status, 200);
