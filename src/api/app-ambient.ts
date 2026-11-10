@@ -1,3 +1,4 @@
+import { createKeyedQueue } from "../util/async.ts";
 import { scopeId, type ActorAssertion, type TurnRequest } from "../types.ts";
 import { personLabel } from "../identity/person-names.ts";
 import type { TurnSurfaceOrigin } from "../surfaces/contract.ts";
@@ -63,21 +64,13 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     ]);
     return [...parents!, ...ownReplies.flat()];
   }
-  const judging = new Map<string, Promise<unknown>>();
-  function judgeAmbientContainer(
+  const judgeInOrder = createKeyedQueue();
+  const judgeAmbientContainer = (
     surface: string,
     container: string,
     opts?: { reason?: "messages" | "scheduled" },
-  ): Promise<AmbientDecision> {
-    const key = `${orgIdOf()}:${surface}:${container}`;
-    const pass = (judging.get(key) ?? Promise.resolve()).then(() => judgeContainerOnce(surface, container, opts));
-    const settled = pass.catch(() => undefined);
-    judging.set(key, settled);
-    void settled.then(() => {
-      if (judging.get(key) === settled) judging.delete(key);
-    });
-    return pass;
-  }
+  ): Promise<AmbientDecision> =>
+    judgeInOrder(`${orgIdOf()}:${surface}:${container}`, () => judgeContainerOnce(surface, container, opts));
   async function judgeContainerOnce(
     surface: string,
     container: string,
