@@ -420,7 +420,7 @@ test("what a persona conversation posts carries the persona, so Slack can name i
     scopeId: opened.scopeId,
     isCurrent: async () => true,
   });
-  const computer = await computers.create(ALICE, opened.scopeId, built.sandboxResources.defaultBackend());
+  const computer = await computers.create(ALICE, opened.scopeId, await built.sandboxResources.defaultBackend());
   await computers.setDefault(ALICE, opened.scopeId, computer.id);
   const run = async () => {
     const result = await built.app.turn({

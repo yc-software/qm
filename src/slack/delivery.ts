@@ -31,9 +31,9 @@ export function botIdentityFromEnv(env: Record<string, string | undefined>): Bot
   };
 }
 
-let defaultIdentity: BotIdentityOverride = {};
+const defaultIdentity: { identity: BotIdentityOverride } = { identity: {} };
 export function setDefaultBotIdentity(identity: BotIdentityOverride | undefined): void {
-  defaultIdentity = identity ?? {};
+  defaultIdentity.identity = identity ?? {};
 }
 
 function slackEmojiName(icon: WornPersona["icon"]): string | undefined {
@@ -43,7 +43,7 @@ function slackEmojiName(icon: WornPersona["icon"]): string | undefined {
 }
 
 export function botIdentityArgs(persona?: WornPersona): BotIdentityOverride {
-  const id = defaultIdentity;
+  const id = defaultIdentity.identity;
   const username = persona?.name.trim() || id.username;
   const personaEmoji = slackEmojiName(persona?.icon);
   const icon_emoji = personaEmoji ? `:${personaEmoji}:` : id.icon_emoji;
