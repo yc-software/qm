@@ -46,29 +46,31 @@ for selected people or conversation scopes. It is off by default. The Slack app 
 support [`task_card`](https://docs.slack.dev/reference/block-kit/blocks/task-card-block)
 blocks and have `chat:write`.
 
-After QM commits to answering, one card is posted in the existing reply thread and
-updated in place: **Working**, **Waiting to resume**, **Background work**, **Monitoring**,
-or **No active work**. This describes recorded activity, not success, failure or delivery.
-Quiet ambient turns and unthreaded DMs do not create cards. Cards are visible to everyone
-in their thread; own status cards and edits are excluded from conversation history.
+After QM has been working for ten seconds, one card is posted in the existing reply thread
+and updated in place. Its title is the current step's tool `purpose`, a background job's or
+watch's purpose, or **Waiting on subagents**, prefixed with the acknowledgement emoji.
+Subagents of the thread, including their own subagents, jobs and watches, appear as plan
+rows with their latest step. A subtle **Follow via QM Web** link opens the exact web
+conversation with normal authorization; without a configured web URL, it is omitted.
+Quiet ambient turns, unthreaded DMs and turns that finish within ten seconds do not create
+cards. Cards are visible to everyone in their thread; own status cards and edits are
+excluded from conversation history.
 
 Waiting cards survive turns and restarts. Only this conversation's registered background
 jobs and enabled, unexpired process monitors count, not recurring crons or agent prose.
 Unwatched exits become visible when checked, reconciled during sandbox setup, or expired.
-Commands and monitor instructions are never rendered. After more than five minutes,
-including waits, a subtle **Follow via QM Web** link opens the exact web conversation
-with normal authorization. Without a configured web URL, the link is omitted.
+Commands and monitor instructions are never rendered.
 
-A minute sweep refreshes activity and retries transient failures. Durable receipts and
-per-thread leases preserve card identity across workers; expired run leases are shown as
-waiting, not working. Slack has no conditional writes: late updates are repaired, and an
-ambiguous initial post can duplicate if Slack does not deduplicate `client_msg_id`.
-An outage can leave a stale card until recovery. Status calls have a separate five-second
-timeout and never delay reply delivery.
+A five-second sweep refreshes activity and retries transient failures; a sweep that would
+render the same card writes nothing. Durable receipts and per-thread leases preserve card
+identity across workers; expired run leases are shown as waiting, not working. Slack has no
+conditional writes: late updates are repaired, and an ambiguous initial post can duplicate
+if Slack does not deduplicate `client_msg_id`. An outage can leave a stale card until
+recovery. Status calls have a separate five-second timeout and never delay reply delivery.
 
-Once no activity remains, the card settles without a spinner and is no longer tracked.
-Later work creates a fresh card. Disabling the flag settles existing cards without
-stopping work or deleting messages. Native session status and Stop events are not used.
+Once no activity remains and the thread has no reply waiting in the delivery outbox, the
+card is deleted and no longer tracked. Later work creates a fresh card. Disabling the flag
+removes open cards without stopping work. Native session status and Stop events are not used.
 
 > **Running locally alongside another developer? Each dev needs their OWN app.**
 > See [Local dev with multiple developers](#local-dev-with-multiple-developers)
