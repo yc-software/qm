@@ -40,10 +40,6 @@ export function resolveGatewayModel(id: string): GatewayModel | undefined {
   return model && !isEmbeddingModel(model) ? model : undefined;
 }
 
-export function gatewayFastModeModelIds(): string[] {
-  return [...gateway.models.values()].flatMap((m) => (!isEmbeddingModel(m) && m.fastMode === true ? [m.id] : []));
-}
-
 export function gatewayModelCatalog(includeAliased = false): Array<{ id: string; name: string; provider: string }> {
   return [...gateway.models.values()]
     .filter((m): m is GatewayModel => !isEmbeddingModel(m))

@@ -1,7 +1,6 @@
 import {
   resolveGatewayEmbeddingModel,
   gatewayEmbeddingModelIds,
-  gatewayFastModeModelIds,
   gatewayModelCatalog,
   isGatewayModelId,
   resolveGatewayModel,
@@ -156,7 +155,9 @@ export function fastModeModelIds(): readonly string[] {
     ...chatOverlays()
       .filter((m) => modelSupportsFastMode(m.id))
       .map((m) => m.id),
-    ...gatewayFastModeModelIds().filter(modelSupportsFastMode),
+    ...gatewayModelCatalog(true)
+      .map((m) => m.id)
+      .filter(modelSupportsFastMode),
   ];
 }
 
