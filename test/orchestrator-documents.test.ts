@@ -33,9 +33,12 @@ test("an earlier turn's document is not re-sent on later turns and stays saved i
   assert.match(JSON.stringify(requests[0]!.promptEnvelope), /"documents":\[\{"name":"notes.txt"/);
   assert.doesNotMatch(JSON.stringify(requests[1]!.promptEnvelope), /"documents":\[\{/);
   const items = await built.sessions.getItems(first.sessionId!);
-  const { artifactId } = (
-    items.find((item) => item.kind === "UserMessage")!.body as { attachments: Array<{ artifactId: string }> }
-  ).attachments[0]!;
+  const upload = items.find((item) => item.kind === "UserMessage")!;
+  const { artifactId } = (upload.body as { attachments: Array<{ artifactId: string }> }).attachments[0]!;
+  assert.match(
+    String(upload.body.environment),
+    new RegExp(`"notes.txt" is included inline with this message only; .* saved as file ${artifactId}`),
+  );
   const opened = await built.files.open(artifactId);
   assert.ok(opened);
   const chunks = [];

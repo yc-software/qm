@@ -2,7 +2,7 @@ import { addAbortSignal } from "node:stream";
 import { createHash } from "node:crypto";
 import { Worker } from "node:worker_threads";
 import type { AttachmentMeta } from "../types.ts";
-import { isUserItem, type Item } from "../sessions/items.ts";
+import { isOverheard, isUserItem, type Item } from "../sessions/items.ts";
 import type { FileArtifact, FileArtifactStore } from "../files/file-artifact-store.ts";
 import { cachedArtifactData } from "../files/artifact-data-cache.ts";
 import { collectBytes } from "../util/bytes.ts";
@@ -122,6 +122,11 @@ export function documentStub(file: { name: string; artifactId?: string }): strin
   return `${JSON.stringify(file.name)} is not included inline, to keep this conversation within the model's context. ${where}`;
 }
 
+export function documentIncludedNote(file: { name: string; artifactId?: string }): string {
+  const saved = file.artifactId ? `, but it stays saved as file ${file.artifactId}` : "";
+  return `${JSON.stringify(file.name)} is included inline with this message only; later turns will not include it again${saved}.`;
+}
+
 export interface DocumentInput {
   name: string;
   mimeType: string;
@@ -130,9 +135,13 @@ export interface DocumentInput {
 }
 
 export function turnDocumentMetas(history: readonly Item[], turnStartSeq: number | undefined): AttachmentMeta[] {
-  if (turnStartSeq === undefined) return [];
+  const start = history.find((item) => item.seq === turnStartSeq);
+  if (!start) return [];
+  const sameTurn = (item: Item) => item.turnId === null || start.turnId === null || item.turnId === start.turnId;
   return history.flatMap((item) =>
-    item.seq >= turnStartSeq && isUserItem(item) ? replayableDocumentMetas(item.body) : [],
+    item.seq >= start.seq && isUserItem(item) && !isOverheard(item) && sameTurn(item)
+      ? replayableDocumentMetas(item.body)
+      : [],
   );
 }
 

@@ -35,6 +35,7 @@ import {
   MAX_DOCUMENTS,
   estimateDocumentTokens,
   turnDocumentMetas,
+  documentIncludedNote,
   isDocumentAttachment,
   isTextDocument,
 } from "./documents.ts";
@@ -3032,6 +3033,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           if (enforceScreen) unscreened = await screenDocuments(loaded, requestText);
           else
             void screenDocuments(loaded, requestText).catch(swallowAs("orchestrator: observed document screen", false));
+          loaded.notices.push(...loaded.documents.map((document) => documentIncludedNote(document)));
           documentRoom.maxBytes -= loaded.documents.reduce(
             (sum, document) => sum + Buffer.byteLength(document.dataBase64, "base64"),
             0,

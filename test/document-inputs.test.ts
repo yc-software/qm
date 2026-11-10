@@ -348,19 +348,25 @@ test("later turns reuse verified document bytes but still check current access",
   assert.equal(opens(), 2);
 });
 
-test("only the current turn's user messages contribute documents", () => {
+test("only the current turn's own user messages contribute documents", () => {
   const { meta } = storeFor();
-  const earlier = { ...meta, artifactId: "earlier" };
-  const steered = { ...meta, artifactId: "steered" };
-  const at = (seq: number) => ({ sessionId: "s", seq, createdAt: 0 });
+  const doc = (artifactId: string) => ({ ...meta, artifactId });
+  const turn = "00000000-0000-4000-8000-00000000000a";
+  const other = "00000000-0000-4000-8000-00000000000b";
+  const at = (seq: number, turnId = turn) => ({ sessionId: "s", seq, createdAt: 0, turnId });
   const history = [
-    storedItem({ kind: "UserMessage", body: { attachments: [earlier] } }, at(0)),
-    storedItem({ kind: "AgentMessage", text: "read it" }, at(1)),
-    storedItem({ kind: "UserMessage", body: { attachments: [meta] } }, at(2)),
-    storedItem({ kind: "UserMessage", body: { attachments: [steered] } }, at(3)),
+    storedItem({ kind: "UserMessage", body: { attachments: [doc("earlier")] } }, at(0, other)),
+    storedItem({ kind: "AgentMessage", text: "read it" }, at(1, other)),
+    storedItem({ kind: "UserMessage", body: { attachments: [doc("current")] } }, at(2)),
+    storedItem({ kind: "SteeringMessage", body: { attachments: [doc("steered")] } }, at(3)),
+    storedItem({ kind: "UserMessage", body: { overheard: true, attachments: [doc("overheard")] } }, at(4)),
+    storedItem({ kind: "UserMessage", body: { attachments: [doc("next-turn")] } }, at(5, other)),
   ];
   assert.deepEqual(turnDocumentMetas(history, undefined), []);
-  assert.deepEqual(turnDocumentMetas(history, 2), [meta, steered]);
+  assert.deepEqual(
+    turnDocumentMetas(history, 2).map((file) => file.artifactId),
+    ["current", "steered"],
+  );
 });
 
 test("document restoration checks current access and budgets before opening bytes", async () => {
