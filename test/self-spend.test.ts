@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -122,8 +123,9 @@ test("self spend: your personal scope plus the shared scopes you can see, nothin
       "your row matches the admin page's row for you",
     );
     assert.equal(
-      (await s.built.auditLog.events()).filter((e) => e.action === "spend.self.read" && e.principalId === "alice")
-        .length,
+      (await s.built.auditLog.events(testTenant)).filter(
+        (e) => e.action === "spend.self.read" && e.principalId === "alice",
+      ).length,
       1,
     );
   } finally {

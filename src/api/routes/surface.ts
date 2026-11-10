@@ -511,7 +511,7 @@ async function patchAgentConversation(ctx: ApiCtx): Promise<void> {
   }
   const session = await app.updateSession(ctx.params.id!, capability.actorId, patch);
   if (!session) return sendJson(res, 404, { error: "not_found", message: "not a conversation you can see" });
-  audit(ctx.deps, {
+  audit(ctx, {
     principalId: capability.actorId,
     action: "conversation.update",
     resource: session.id,
@@ -701,7 +701,7 @@ export function parseIds(body: unknown): string[] | string {
 }
 
 async function selfMemory(ctx: ApiCtx): Promise<void> {
-  const { res, deps, url, method, body } = ctx;
+  const { res, url, method, body } = ctx;
   const principalId =
     method === "GET" ? url.searchParams.get("principalId") : (body as { principalId?: unknown }).principalId;
   if (typeof principalId !== "string" || !principalId)
@@ -720,7 +720,7 @@ async function selfMemory(ctx: ApiCtx): Promise<void> {
     await memory.delete?.(scope, ids, by);
   }
   const action = method === "GET" ? "memory.self.read" : "memory.self.update";
-  audit(deps, { principalId, action, resource: "memory", scopeLabel: scope });
+  audit(ctx, { principalId, action, resource: "memory", scopeLabel: scope });
   return sendJson(res, 200, { scopeId: scope, facts: await memoryFacts(memory, scope) });
 }
 
@@ -732,7 +732,7 @@ async function listAgentApis(ctx: ApiCtx): Promise<void> {
         .adminStatusOf(tenantOf(ctx), { id: capability.actorId, type: "internal" })
         .catch(() => ({ isAdmin: false }))
     : { isAdmin: false };
-  audit(deps, {
+  audit(ctx, {
     principalId: capability.actorId,
     action: "apis.list",
     resource: "apis",
@@ -794,7 +794,7 @@ function sendProviderProblem(res: ApiCtx["res"], problems: MemoryProviderProblem
 }
 
 const searchMemory = agentMemory(async (ctx, memory, capability) => {
-  const { res, deps, body } = ctx;
+  const { res, body } = ctx;
   const b = body as { query?: unknown; limit?: unknown; scope?: unknown };
   if (typeof b.query !== "string" || !b.query.trim()) {
     return sendJson(res, 400, { error: "bad_request", message: "query (string) required" });
@@ -817,7 +817,7 @@ const searchMemory = agentMemory(async (ctx, memory, capability) => {
       report,
     }),
   );
-  audit(deps, {
+  audit(ctx, {
     principalId: capability.actorId,
     action: "memory.agent.search",
     resource: "memory",
@@ -828,7 +828,7 @@ const searchMemory = agentMemory(async (ctx, memory, capability) => {
 });
 
 const readOwnNotebook = agentMemory(async (ctx, memory, capability) => {
-  const { res, deps } = ctx;
+  const { res } = ctx;
   const requested = ctx.url.searchParams.get("scope");
   const read = capability.memory?.read ?? [];
   const target =
@@ -838,7 +838,7 @@ const readOwnNotebook = agentMemory(async (ctx, memory, capability) => {
   if (!target || !canReadNotebook({ ...capability.memory, read }, target)) {
     return sendJson(res, 403, { error: "forbidden", message: "notebook is not readable here" });
   }
-  audit(deps, {
+  audit(ctx, {
     principalId: capability.actorId,
     action: "memory.agent.read",
     resource: "memory",
@@ -866,7 +866,7 @@ const writeMemory = (handle: (...args: [...Parameters<AgentMemoryHandler>, write
     return handle(ctx, memory, capability, write);
   });
 
-const captureFacts = writeMemory(async ({ res, deps, body }, memory, capability, write) => {
+const captureFacts = writeMemory(async ({ res, deps, tenant, body }, memory, capability, write) => {
   const facts = parseFacts(body);
   if (typeof facts === "string") return sendJson(res, 400, { error: "bad_request", message: facts });
   const { added, outcomes, problems } = await writeFacts(
@@ -882,41 +882,50 @@ const captureFacts = writeMemory(async ({ res, deps, body }, memory, capability,
     },
     capability.runId,
   );
-  audit(deps, {
-    principalId: capability.actorId,
-    action: "memory.agent.capture",
-    resource: "memory",
-    scopeLabel: write,
-  });
+  audit(
+    { deps, tenant },
+    {
+      principalId: capability.actorId,
+      action: "memory.agent.capture",
+      resource: "memory",
+      scopeLabel: write,
+    },
+  );
   if (problems.length) return sendProviderProblem(res, problems, { added, scopeId: write, outcomes });
   return sendJson(res, 200, { ok: true, added, scopeId: write, ...(outcomes.length ? { outcomes } : {}) });
 });
 
-const editFacts = writeMemory(async ({ res, deps, body }, memory, capability, write) => {
+const editFacts = writeMemory(async ({ res, deps, tenant, body }, memory, capability, write) => {
   const edits = parseEdits(body);
   if (typeof edits === "string") return sendJson(res, 400, { error: "bad_request", message: edits });
   await memory.edit?.(write, edits, turnAuthority(capability.actorId, capability.memory), {
     conversationScopeId: capability.scopeId,
   });
-  audit(deps, {
-    principalId: capability.actorId,
-    action: "memory.agent.edit",
-    resource: "memory",
-    scopeLabel: write,
-  });
+  audit(
+    { deps, tenant },
+    {
+      principalId: capability.actorId,
+      action: "memory.agent.edit",
+      resource: "memory",
+      scopeLabel: write,
+    },
+  );
   return sendJson(res, 200, { ok: true, scopeId: write });
 });
 
-const deleteFacts = writeMemory(async ({ res, deps, body }, memory, capability, write) => {
+const deleteFacts = writeMemory(async ({ res, deps, tenant, body }, memory, capability, write) => {
   const ids = parseIds(body);
   if (typeof ids === "string") return sendJson(res, 400, { error: "bad_request", message: ids });
   await memory.delete?.(write, ids, turnAuthority(capability.actorId, capability.memory));
-  audit(deps, {
-    principalId: capability.actorId,
-    action: "memory.agent.delete",
-    resource: "memory",
-    scopeLabel: write,
-  });
+  audit(
+    { deps, tenant },
+    {
+      principalId: capability.actorId,
+      action: "memory.agent.delete",
+      resource: "memory",
+      scopeLabel: write,
+    },
+  );
   return sendJson(res, 200, { ok: true, scopeId: write });
 });
 
@@ -1388,7 +1397,7 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
     }
     await config.setRuntimeSelection(target.scope, choice);
   }
-  audit(ctx.deps, {
+  audit(ctx, {
     principalId: target.actorId,
     action: "runtime-config.update",
     resource: "runtime-config",
@@ -1425,7 +1434,7 @@ async function putChannelHeaderPin(ctx: ApiCtx): Promise<void> {
       message: "expected { on: boolean | null } (null reverts to the org default)",
     });
   await ctx.deps.config.setChannelHeaderPin(target.scope, ctx.body.on);
-  audit(ctx.deps, {
+  audit(ctx, {
     principalId: target.actorId,
     action: "channel-header-pin.update",
     resource: "channel-header-pin",

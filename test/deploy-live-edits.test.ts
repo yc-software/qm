@@ -75,7 +75,7 @@ function harness(opts: { liveEdits?: boolean } = {}) {
     ...singleProcessDeps(),
     deployStore,
     provider,
-    auditLog: { record: (e: AuditEvent) => void audits.push(e), events: async () => [], tail: async () => [] },
+    auditLog: { record: (_t, e: AuditEvent) => void audits.push(e), events: async () => [], tail: async () => [] },
     acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
     deployDir: mkdtempSync(join(tmpdir(), "live-edits-")),
   });

@@ -1,3 +1,4 @@
+import { ambientTenant } from "../tenants/context.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import { canonicalPerson } from "../directory/person.ts";
 import { parseScopeId, scopeId, type ScopeId } from "../types.ts";
@@ -60,7 +61,7 @@ export function createPersonaHandover(deps: {
 
   async function handOver({ persona, to }: OwnerHandover, by: string): Promise<void> {
     await deps.store.addOwner(persona.id, scopeId("personal", canonicalPerson(to)), by);
-    deps.auditLog.record({
+    deps.auditLog.record(ambientTenant(), {
       at: now(),
       principalId: by,
       action: "persona_owner_handover",

@@ -1,3 +1,4 @@
+import type { ErrorEvent } from "../admin/error-log.ts";
 import { isSessionTurn } from "../core/turn-origin.ts";
 import { replayableRequest } from "../core/orchestrator/turn-helpers.ts";
 import {
@@ -176,6 +177,7 @@ const RUN_FALLBACK_POLL_MS = 1_000;
 const RUN_STALL_BUDGET_MS = 300_000;
 
 export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClient {
+  const recordDeliveryError = (e: Omit<ErrorEvent, "ts">): void => deps.errors?.record(ambientTenant(), e);
   const lease = deps.leaderLease;
   const orgScope: ScopeId = scopeId("org", configOrgId());
 
@@ -444,7 +446,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     },
 
     async reportDeliveryUndeliverable(id, reason) {
-      deps.errors?.record({
+      recordDeliveryError({
         category: "delivery",
         code: "delivery_undeliverable",
         message: `delivery ${id} cannot be delivered (${reason}) — retrying until the TTL expires it`,
@@ -455,7 +457,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     async failDelivery(id, reason) {
       const failed = await deps.app.failDelivery(id, reason);
       if (!failed) return;
-      deps.errors?.record({
+      recordDeliveryError({
         category: "delivery",
         code: "delivery_failed",
         message:
@@ -466,7 +468,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     },
 
     async reportSlowDeliveryDrain(info) {
-      deps.errors?.record({
+      recordDeliveryError({
         category: "delivery",
         code: "delivery_drain_slow",
         message: `drain cycle took ${Math.round(info.durationMs / 1000)}s for ${info.rows} rows`,

@@ -1,3 +1,4 @@
+import { testTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createToolContext } from "../src/tools/primitives.ts";
@@ -8,6 +9,7 @@ import { scopeId } from "../src/types.ts";
 function readBack(parked: Awaited<ReturnType<ToolOutputStore["read"]>>) {
   const written: Array<[string, string]> = [];
   const tc = createToolContext({
+    tenant: testTenant,
     sandbox: {
       readFile: async () => null,
       writeFile: async (_h: unknown, path: string, data: string) => void written.push([path, data]),

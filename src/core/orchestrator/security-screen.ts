@@ -108,7 +108,7 @@ export function createSecurityClassifier(deps: OrchestratorDeps): SecurityClassi
     }
 
     const audit = (status: ScreenStatus, requestId: string, attempts: number, result?: Screened): void => {
-      deps.auditLog.record({
+      deps.auditLog.record(tenant, {
         at: Date.now(),
         principalId: actorId,
         action: "security_screen.classify",

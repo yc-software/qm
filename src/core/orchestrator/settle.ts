@@ -1,3 +1,4 @@
+import type { Tenant } from "../../tenants/context.ts";
 import type { AgentTurnResult } from "../../agent/agent.ts";
 import type { MemoryProvenance } from "../../memory/facts.ts";
 import type { MemoryPolicy } from "../../memory/policy.ts";
@@ -15,6 +16,7 @@ import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 type QuarantineReleaseApproval = Awaited<ReturnType<typeof createApprovalLedger>>["quarantineReleaseApprovals"][number];
 
 export function startMemoryCapture(turn: {
+  tenant: Tenant;
   deps: OrchestratorDeps;
   input: OrchestratorInput;
   actor: OrchestratorInput["actor"];
@@ -35,6 +37,7 @@ export function startMemoryCapture(turn: {
   spine: SpineState;
 }): void {
   const {
+    tenant,
     deps,
     input,
     actor,
@@ -79,6 +82,7 @@ export function startMemoryCapture(turn: {
         });
       } catch (e) {
         deps.errors.record(
+          tenant,
           {
             category: "memory",
             code: "capture_failed",

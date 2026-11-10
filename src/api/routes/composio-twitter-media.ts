@@ -84,7 +84,7 @@ async function uploadMedia(ctx: ApiCtx): Promise<void> {
     if (!(await activeRun(ctx))) return;
     if (!composioUserIds(access.principal).includes(String(owned.account.user_id)))
       return sendJson(ctx.res, 403, { error: "connection_not_authorized" });
-    audit(ctx.deps, {
+    audit(ctx, {
       principalId: access.principal,
       action: "composio.twitter_media.started",
       resource,
@@ -107,7 +107,7 @@ async function uploadMedia(ctx: ApiCtx): Promise<void> {
     if (!(await activeRun(ctx))) return;
     const finished = await xMedia(ctx, access.key, accountId, `${X_MEDIA_UPLOAD}/${mediaId}/finalize`);
     if (finished.id !== mediaId) throw new Error("Media id changed during upload");
-    audit(ctx.deps, {
+    audit(ctx, {
       principalId: access.principal,
       action: "composio.twitter_media.completed",
       resource: `${resource}/${mediaId}`,
@@ -120,7 +120,7 @@ async function uploadMedia(ctx: ApiCtx): Promise<void> {
       expiresAfterSecs: typeof finished.expires_after_secs === "number" ? finished.expires_after_secs : null,
     });
   } catch (error) {
-    audit(ctx.deps, {
+    audit(ctx, {
       principalId: access.principal,
       action: "composio.twitter_media.failed",
       resource,

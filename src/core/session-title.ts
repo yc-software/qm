@@ -1,3 +1,4 @@
+import { ambientTenant } from "../tenants/context.ts";
 import type { ErrorLog } from "../admin/error-log.ts";
 import type { Agent } from "../agent/agent.ts";
 import type { SessionStateBus } from "../runs/session-state-bus.ts";
@@ -33,6 +34,7 @@ export function createSessionTitles(deps: {
       title = await deps.agent.generateTitle?.(transcript, descriptive ? { descriptive } : undefined);
     } catch (e) {
       deps.errors?.record(
+        ambientTenant(),
         {
           category: "session_title",
           code: e instanceof TitleRejected ? `rejected_${e.rule}` : "generation_failed",

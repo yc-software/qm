@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { testTenant } from "./support/test-tenant.ts";
 import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -78,11 +79,11 @@ test("an ambient message whose reply detection fails stays silent and leaves the
 
   assert.equal(result.status, "silent");
   assert.equal(ran, false);
-  const [failure] = await errors.list({ sessionId: result.sessionId! });
+  const [failure] = await errors.list(testTenant, { sessionId: result.sessionId! });
   assert.deepEqual(
     { category: failure?.category, code: failure?.code, message: failure?.message },
     { category: "turn", code: "detection_failed", message: "401 invalid x-api-key" },
   );
-  const silent = (await auditLog.events()).find((e) => e.action === "turn.silent");
+  const silent = (await auditLog.events(testTenant)).find((e) => e.action === "turn.silent");
   assert.equal(silent?.detail, "detection failed: 401 invalid x-api-key");
 });

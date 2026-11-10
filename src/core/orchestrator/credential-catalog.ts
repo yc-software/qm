@@ -25,6 +25,7 @@ import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 import type { Tenant } from "../../tenants/context.ts";
 
 export interface CredentialCatalogTurn {
+  tenant: Tenant;
   deps: OrchestratorDeps;
   input: OrchestratorInput;
   actor: OrchestratorInput["actor"];
@@ -385,7 +386,7 @@ export async function registerServiceCredentials(
 }
 
 export function registerBrokeredTools(catalog: CredentialCatalog): void {
-  const { deps, actor, scopeId, strictReadOnly, brokeredTools, addCredentialToCatalog } = catalog;
+  const { tenant, deps, actor, scopeId, strictReadOnly, brokeredTools, addCredentialToCatalog } = catalog;
   if (!strictReadOnly && actor.type === "internal") {
     for (const tool of brokeredTools) {
       const broker = deps.layerBrokerFor?.(tool);
@@ -398,7 +399,7 @@ export function registerBrokeredTools(catalog: CredentialCatalog): void {
             try {
               aws = await broker.credsForActor(actor.id);
             } catch {
-              deps.credentialUsage?.record({
+              deps.credentialUsage?.record(tenant, {
                 slug: tool.service,
                 host: "sts.amazonaws.com",
                 status: "unavailable",
@@ -407,7 +408,7 @@ export function registerBrokeredTools(catalog: CredentialCatalog): void {
               });
               throw new Error(`Could not vend credentials for ${tool.service}`);
             }
-            deps.credentialUsage?.record({
+            deps.credentialUsage?.record(tenant, {
               slug: tool.service,
               host: "sts.amazonaws.com",
               status: "vended",

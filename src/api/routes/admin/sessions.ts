@@ -143,7 +143,7 @@ export async function listAdminSessions(ctx: ApiCtx): Promise<void> {
   const authz = await requireScopedAdmin(ctx);
   if (!authz) return;
   const { actor, scope } = authz;
-  audit(deps, { principalId: actor.id, action: "sessions.read", resource: "sessions", scopeLabel: scope });
+  audit(ctx, { principalId: actor.id, action: "sessions.read", resource: "sessions", scopeLabel: scope });
   const orgWide = parseScopeId(scope).kind === "org";
   const categoryParam = url.searchParams.get("category") ?? "conversation";
   let category: SessionCategory | "all" = "conversation";
@@ -227,7 +227,7 @@ export async function getAdminSessionLlm(ctx: ApiCtx): Promise<void> {
   const scoped = await requireAdminSession(ctx, id);
   if (!scoped) return;
   const { actor, record: session } = scoped;
-  audit(deps, { principalId: actor.id, action: "session.llm.read", resource: id, scopeLabel: session.scopeId });
+  audit(ctx, { principalId: actor.id, action: "session.llm.read", resource: id, scopeLabel: session.scopeId });
   const turnParam = url.searchParams.get("turnSeq");
   if (turnParam != null && turnParam !== "") {
     let opts: { orphans: true } | { turnSeqs: number[] } | null = null;
@@ -247,7 +247,7 @@ export async function getAdminSession(ctx: ApiCtx): Promise<void> {
   const scoped = await requireAdminSession(ctx, id);
   if (!scoped) return;
   const { actor, scope, record: session } = scoped;
-  audit(deps, { principalId: actor.id, action: "session.read", resource: id, scopeLabel: session.scopeId });
+  audit(ctx, { principalId: actor.id, action: "session.read", resource: id, scopeLabel: session.scopeId });
   const want = Math.max(1, Math.floor(Number(url.searchParams.get("limit"))) || TRANSCRIPT_LIMIT_DEFAULT);
   const all = want >= TRANSCRIPT_LIMIT_MAX;
   const limit = Math.min(want, TRANSCRIPT_LIMIT_MAX);
@@ -314,7 +314,7 @@ export async function listAdminShadowDeliveries(ctx: ApiCtx): Promise<void> {
   const authz = await requireScopedAdmin(ctx);
   if (!authz) return;
   const { actor, scope } = authz;
-  audit(deps, {
+  audit(ctx, {
     principalId: actor.id,
     action: "deliveries.shadow.read",
     resource: "deliveries/shadow",

@@ -18,7 +18,7 @@ export async function listUnattendedGrants(ctx: ApiCtx, routes: ReadonlyArray<Ro
   const scope = orgScope(ctx.deps);
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
-  audit(ctx.deps, {
+  audit(ctx, {
     principalId: actor.id,
     action: "unattended-grants.read",
     resource: "unattended-grants",

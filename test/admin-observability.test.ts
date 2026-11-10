@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -146,7 +147,7 @@ test("an org admin sees conversations, transcripts, and files top-down", async (
     assert.equal(svg.headers.get("content-type"), "application/octet-stream", "svg is never served inline");
     assert.match(svg.headers.get("content-disposition") ?? "", /^attachment/);
 
-    const actions = (await s.built.auditLog.events()).map((e) => e.action);
+    const actions = (await s.built.auditLog.events(testTenant)).map((e) => e.action);
     for (const a of ["sessions.read", "session.read", "files.read", "file.read", "file.download", "file.view"]) {
       assert.ok(actions.includes(a), `audited ${a}`);
     }
@@ -228,7 +229,7 @@ test("an org admin sees EXACTLY what we sent the model per turn (captured reques
       403,
     );
     assert.ok(
-      (await s.built.auditLog.events()).some((e) => e.action === "session.llm.read"),
+      (await s.built.auditLog.events(testTenant)).some((e) => e.action === "session.llm.read"),
       "audited session.llm.read",
     );
     assert.equal(
@@ -1355,7 +1356,7 @@ test("admin errors paginate all retained records with scoped totals and bounded 
   const s = start();
   try {
     for (let i = 0; i < 260; i++) {
-      s.built.errors.record({
+      s.built.errors.record(testTenant, {
         category: "turn",
         code: String(i),
         message: "failure",
@@ -1364,7 +1365,12 @@ test("admin errors paginate all retained records with scoped totals and bounded 
       });
       await s.built.errors.flush();
     }
-    s.built.errors.record({ category: "turn", code: "other", message: "failure", scopeLabel: "personal:U2" });
+    s.built.errors.record(testTenant, {
+      category: "turn",
+      code: "other",
+      message: "failure",
+      scopeLabel: "personal:U2",
+    });
     const path = "/v1/admin/errors?scope=personal:U1&sessionId=test-session";
     const page = await getJson(s.base, path + "&limit=50&offset=200");
     assert.equal(page.total, 260);

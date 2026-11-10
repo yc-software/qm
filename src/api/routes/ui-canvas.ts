@@ -146,7 +146,7 @@ async function applyCanvas(
   }
   if (patch && !canvas)
     return sendJson(ctx.res, 404, { error: "no_canvas", message: "there is no canvas yet; pass html, css or js" });
-  audit(ctx.deps, {
+  audit(ctx, {
     principalId: turn.actorId,
     action: patch ? "ui.canvas.write" : "ui.canvas.dismiss",
     resource: target === ALWAYS_ON_CANVAS ? "ui:always-on" : `session:${turn.sessionId}`,
@@ -202,7 +202,7 @@ async function observe(ctx: ApiCtx): Promise<void> {
   } finally {
     await deps.uiState!.delete(pendingId).catch((error: unknown) => swallow("ui observe pending cleanup", error));
   }
-  audit(deps, {
+  audit(ctx, {
     principalId: turn.actorId,
     action: "ui.observe",
     resource: `session:${turn.sessionId}`,

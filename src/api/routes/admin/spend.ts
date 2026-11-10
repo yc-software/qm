@@ -576,7 +576,7 @@ export async function spendExport(ctx: BaseCtx): Promise<void> {
       enabled,
       archived,
     }));
-  audit(deps, {
+  audit(ctx, {
     principalId: SPEND_EXPORT_PRINCIPAL,
     action: "spend.export",
     resource: "spend",
@@ -591,7 +591,7 @@ export async function spend(ctx: ApiCtx): Promise<void> {
   const scope = orgScope(deps);
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
-  audit(deps, { principalId: actor.id, action: "spend.read", resource: "spend", scopeLabel: scope });
+  audit(ctx, { principalId: actor.id, action: "spend.read", resource: "spend", scopeLabel: scope });
 
   const bad = (message: string) => sendJson(res, 400, { error: "bad_request", message });
   const bucket = spendBucket(url);
@@ -677,7 +677,7 @@ export async function selfSpend(ctx: ApiCtx): Promise<void> {
     rows.filter((row) => visible.has(row.scopeId)),
     { ...days, bucket, label: (id) => shared.get(id) ?? "", cron: (id) => info.get(id) ?? null, person },
   );
-  audit(deps, { principalId, action: "spend.self.read", resource: "spend", scopeLabel: me });
+  audit(ctx, { principalId, action: "spend.self.read", resource: "spend", scopeLabel: me });
   return sendJson(res, 200, {
     scopeId: me,
     ...report,

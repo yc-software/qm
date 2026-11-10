@@ -1,3 +1,4 @@
+import type { Tenant } from "../tenants/context.ts";
 import { trialCronScript, type CronScriptTrial } from "../cron/script.ts";
 import type { AdminToolAccess } from "./admin.ts";
 import type { SelfApiCall } from "./self-api.ts";
@@ -464,6 +465,7 @@ export const CONTROL_UNAVAILABLE: ControlUnavailable = {
 };
 
 export interface ToolContextDeps {
+  tenant: Tenant;
   desktopClientId?: string;
   admin?: AdminToolAccess;
   selfApi?: SelfApiCall;
@@ -701,7 +703,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       const materialized = credential.resolve ? await credential.resolve() : { env: credential.env ?? [] };
       prepared.push(materialized);
       for (const { key, value } of materialized.env) addCommandEnv(key, value);
-      deps.auditLog?.record({
+      deps.auditLog?.record(deps.tenant, {
         at: Date.now(),
         principalId: deps.createdBy,
         action: "keychain.materialize",

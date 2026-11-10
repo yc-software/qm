@@ -57,7 +57,7 @@ import { scopeId as toScopeId, personalScope } from "../types.ts";
 import { desktopClientForTurn, introducesUser, isPersonAuthored, isSessionTurn } from "./turn-origin.ts";
 import { resolveTurnFastMode } from "./turn-options.ts";
 import { orgId } from "../config.ts";
-import { ambientTenant, currentTenant } from "../tenants/context.ts";
+import { type Tenant, ambientTenant } from "../tenants/context.ts";
 import { deriveTurnOutcome } from "./turn-outcome.ts";
 import { applyPromptVars, loadProtocolFile, type PromptVars } from "../resolution/prompt-vars.ts";
 import { cleanBrandingLabel, resolveBranding } from "../resolution/branding.ts";
@@ -273,12 +273,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     max: DIRECTORY_INDEX_CACHE_MAX_ENTRIES,
     ttl: DIRECTORY_INDEX_TTL_MS,
   });
-  async function directoryIndexFor(directory: DirectoryStore): Promise<Map<string, DirectoryMember>> {
-    const cached = directoryIndexCache.get(currentTenant());
+  async function directoryIndexFor(tenant: Tenant, directory: DirectoryStore): Promise<Map<string, DirectoryMember>> {
+    const cached = directoryIndexCache.get(tenant.id);
     if (cached) return cached;
     const byId = new Map<string, DirectoryMember>();
     for (const m of await directory.list()) byId.set(personKey(m.principalId), m);
-    directoryIndexCache.set(currentTenant(), byId);
+    directoryIndexCache.set(tenant.id, byId);
     return byId;
   }
 
@@ -292,6 +292,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   };
 
   async function approvalSummary(
+    tenant: Tenant,
     scopeId: ScopeId,
     command: string,
     reason: string,
@@ -306,6 +307,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       return summary?.trim() || undefined;
     } catch (e) {
       deps.errors.record(
+        tenant,
         {
           category: "command_policy",
           code: "summary_failed",
@@ -364,7 +366,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         return "allow";
       }
       const block = (cause: string, reason?: string): "block" => {
-        deps.auditLog.record({
+        deps.auditLog.record(tenant, {
           at: Date.now(),
           principalId: actor.id,
           action: "security_posture.steer_block",
@@ -394,7 +396,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       ).finally(() => securitySteersInFlight.delete(conversation.threadRef));
       if (verdict?.decision === "auto") {
         if (!verdict.unscreened) return "allow";
-        deps.auditLog.record({
+        deps.auditLog.record(tenant, {
           at: Date.now(),
           principalId: actor.id,
           action: "security_posture.steer_failed_open",
@@ -577,8 +579,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ? scopeId
           : undefined;
       const audit = (event: Omit<AuditEvent, "at" | "principalId" | "scopeLabel">) =>
-        deps.auditLog.record({ at: Date.now(), principalId: actor.id, scopeLabel: scopeId, ...event });
-      const { spendLimit, refusal: spendRefusal } = await checkSpendLimit(spendLimits, deps, scopeId, audit);
+        deps.auditLog.record(tenant, { at: Date.now(), principalId: actor.id, scopeLabel: scopeId, ...event });
+      const { spendLimit, refusal: spendRefusal } = await checkSpendLimit(tenant, spendLimits, deps, scopeId, audit);
       if (spendRefusal) return spendRefusal;
       const botRequester = input.botActor === true;
       const issueApproval = async (
@@ -1067,6 +1069,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         quarantineReleaseApprovals,
       } = await createApprovalLedger({ approvalGrantsFor, actor, session, resolution });
       const credentialCatalog = await createCredentialCatalog({
+        tenant,
         deps,
         input,
         actor,
@@ -1234,6 +1237,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         finishProcess,
         invalidateProvision,
       } = createTurnSandboxes({
+        tenant,
         deps: { ...deps, sandboxResources: turnSandboxResources, isCurrentSharedScopeMember },
         input,
         actor,
@@ -1381,7 +1385,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           credentialDescriptions,
           openSpeakerKeychain,
           scopeKeychainGrants,
-          directoryIndexFor,
+          directoryIndexFor: (directory) => directoryIndexFor(tenant, directory),
           rosterMembers,
           scopeAskList,
         }));
@@ -1429,6 +1433,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             })
             .catch((e: unknown): DetectResult => {
               deps.errors.record(
+                tenant,
                 {
                   category: "turn",
                   code: "detection_failed",
@@ -1547,6 +1552,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           provisionResource,
         });
         const surfaceToolDeps = createSurfaceToolDeps({
+          tenant,
           deps,
           input,
           actor,
@@ -1587,6 +1593,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const liveNote = async () =>
           (await turnSessionSyscalls?.liveSubagents?.().catch(swallowAs("live note", ""))) ?? "";
         const baseTools = createToolContext({
+          tenant,
           desktopClientId: desktopClientForTurn(input),
           sandbox: deps.sandbox,
           sandboxResources: turnSandboxResources,
@@ -2548,6 +2555,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const turnUserSeq = partial?.userSeq ?? emittedEntries.find(isUserItem)?.seq;
         const onTurnEnd = memoryStrategy.onTurnEnd?.bind(memoryStrategy);
         startMemoryCapture({
+          tenant,
           deps,
           input,
           actor,
@@ -2602,7 +2610,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           wornPersona,
           turnUserSeq,
           emittedEntries,
-          approvalSummary,
+          approvalSummary: (summaryScope, command, reason, purpose) =>
+            approvalSummary(tenant, summaryScope, command, reason, purpose),
           issueApproval,
           withManagedRosterVersion,
         });
@@ -2623,7 +2632,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (err instanceof ProjectRosterChanged) return rosterChanged(session.id);
         if (err instanceof NeedsApproval) {
           if (botRequester) return botApprovalRefusal(audit, session.id, err.command, err.approvalReason);
-          const summary = await approvalSummary(scopeId, err.command, err.approvalReason);
+          const summary = await approvalSummary(tenant, scopeId, err.command, err.approvalReason);
           let approval: PendingApproval;
           try {
             approval = await withManagedRosterVersion(() =>
@@ -2646,7 +2655,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           return { status: "pending_approval", sessionId: session.id, pendingApprovals: [approval] };
         }
         if (err instanceof CommandDenied) {
-          deps.errors.record({
+          deps.errors.record(tenant, {
             category: "command_policy",
             code: "denied",
             message: err.message,
@@ -2657,6 +2666,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
         const budget = isModelBudget(err) && !input.cancel?.aborted;
         deps.errors.record(
+          tenant,
           {
             category: "turn",
             code: budget ? "model_budget" : "error",

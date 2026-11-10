@@ -1,3 +1,4 @@
+import { testTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createToolContext, type ToolContextDeps, type SkillResult } from "../src/tools/primitives.ts";
@@ -20,6 +21,7 @@ function ctx(useSkill: (name: string, path: string, sandboxId?: string) => Promi
     },
   };
   const tc = createToolContext({
+    tenant: testTenant,
     sandbox,
     provision: async () => ({ id: "h", rootDir: "/workspace" }) as SandboxHandle,
     useSkill,
@@ -82,6 +84,7 @@ test("skill without a materializer reports no file", async () => {
 
 function createToolContextWithout(extra: Partial<ToolContextDeps> = {}) {
   const tc = createToolContext({
+    tenant: testTenant,
     sandbox: {} as unknown as Sandbox,
     provision: async () => ({ id: "h", rootDir: "/workspace" }) as SandboxHandle,
     writableScopeId: scopeId("personal", "U1"),

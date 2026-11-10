@@ -3,7 +3,12 @@ import { isIP } from "node:net";
 import { lookup as dnsLookup } from "node:dns/promises";
 import { EGRESS_PROXY_AUD, verifyCapabilityToken, type CapabilityClaims } from "./auth/capability-token.ts";
 import { egressDecision, hostMatches, isHostDenied, type EgressVerdict } from "./resolution/egress-policy.ts";
-import { createEgressAuditSink, type EgressAuditRecord, type EgressAuditSink } from "./admin/egress-audit-sink.ts";
+import {
+  createEgressAuditSink,
+  type EgressAuditRecord,
+  type EgressAuditRecorder,
+  type EgressAuditSink,
+} from "./admin/egress-audit-sink.ts";
 import { createPostgresEgressAuditSink } from "./admin/postgres-egress-audit-sink.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { createSweeper } from "./util/sweeper.ts";
@@ -42,7 +47,7 @@ export function hostFromAuthority(authority: string): string | null {
   return a;
 }
 
-export type EgressAuditRecorder = Pick<EgressAuditSink, "record">;
+export type { EgressAuditRecorder };
 
 export interface EgressAuthzDeps {
   capabilitySecret?: string;
@@ -115,18 +120,15 @@ export function buildEgressAuthzServer(deps: EgressAuthzDeps): Server {
       ? { allow: false, verdict: "denied" }
       : await decide(host, policy, lookup);
     try {
-      const record = (): void =>
-        deps.audit.record({
-          source: "proxy",
-          host,
-          allowed: d.allow,
-          verdict: d.verdict,
-          scopeLabel: (claims?.scopeId ?? "unknown") as ScopeId,
-          principalId: claims?.actorId ?? "unknown",
-          ...(claims?.tenant ? { tenant: claims.tenant } : {}),
-        });
-      if (claims?.tenant) withTenant(claims.tenant, record);
-      else record();
+      deps.audit.record({
+        source: "proxy",
+        host,
+        allowed: d.allow,
+        verdict: d.verdict,
+        scopeLabel: (claims?.scopeId ?? "unknown") as ScopeId,
+        principalId: claims?.actorId ?? "unknown",
+        ...(claims?.tenant ? { tenant: claims.tenant } : {}),
+      });
     } catch (error) {
       swallow("egress-authz: audit record", error);
     }
@@ -206,6 +208,15 @@ export function createRelayAuditSink(
   };
 }
 
+export function tenantRecorder(sink: EgressAuditSink): EgressAuditRecorder {
+  return {
+    record(r) {
+      if (!r.tenant) throw new Error("egress audit record has no tenant");
+      withTenant(r.tenant, (tenant) => sink.record(tenant, r));
+    },
+  };
+}
+
 function main(): void {
   const port = numEnv(process.env.AUTHZ_PORT) ?? 48081;
   const capabilitySecret = process.env.CAPABILITY_SECRET;
@@ -218,7 +229,7 @@ function main(): void {
   const relay = coreApiUrl && relaySecret ? createRelayAuditSink(coreApiUrl, relaySecret) : null;
   relay?.start();
   const audit: EgressAuditRecorder =
-    relay ?? (databaseUrl ? createPostgresEgressAuditSink(databaseUrl) : createEgressAuditSink());
+    relay ?? (databaseUrl ? tenantRecorder(createPostgresEgressAuditSink(databaseUrl)) : createEgressAuditSink());
 
   const tokenless = process.env.EGRESS_TOKENLESS === "open" ? ("open" as const) : ("deny" as const);
   const server = buildEgressAuthzServer({ ...(capabilitySecret ? { capabilitySecret } : {}), audit, tokenless });

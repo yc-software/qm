@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { testTenant } from "./support/test-tenant.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { AddressInfo } from "node:net";
@@ -299,7 +300,7 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
       });
       assert.equal(recoveredTurn.status, "queued", JSON.stringify(recoveredTurn));
     }
-    const events = await built.auditLog.events();
+    const events = await built.auditLog.events(testTenant);
     assert.equal(events.filter((e) => e.action === "model-registry.update").length, 2);
     assert.equal(events.filter((e) => e.action === "model-registry.delete").length, 1);
   } finally {

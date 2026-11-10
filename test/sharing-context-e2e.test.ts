@@ -436,7 +436,7 @@ test("sharing e2e: a newly blocked skill asset removes previously materialized c
   await b.skills.publish(s.id);
   assert.equal(await b.turn("!run sh -c \"find . -name value.py | wc -l | tr -d ' '\"", true), "0");
   assert.match(await b.turn("!skill screened-helper", true), /no skill file/);
-  assert.ok((await b.auditLog.events()).some((e) => e.action === "sharing.skill_screen_blocked"));
+  assert.ok((await b.auditLog.events(tenant)).some((e) => e.action === "sharing.skill_screen_blocked"));
 });
 
 test("sharing e2e: the execution capability excludes carried memories in both directions", async (t) => {
@@ -549,7 +549,7 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
   }
   assert.deepEqual(await b.keychain.grantsForScope("group:G1", { includePersonGrants: true }), []);
   assert.deepEqual(await b.keychain.grantsForScope("channel:C1", { includePersonGrants: true }), []);
-  assert.ok((await b.auditLog.events()).some((event) => event.action === "keychain.open_speaker_use"));
+  assert.ok((await b.auditLog.events(tenant)).some((event) => event.action === "keychain.open_speaker_use"));
   const onScratch = (command: string) =>
     `!execute ${JSON.stringify({ command, credentials: [handles.get("U1")![0]] })}`;
   assert.equal(await b.turn(onScratch(`python3 -c 'open("retained.txt","w").write("private")'`), true), "(exit 0)");

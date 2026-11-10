@@ -720,7 +720,7 @@ export function buildApp(
     scopeId: orgScope,
     advisoryLock,
     auditPersisted: (record) =>
-      auditLog.recordOnce!(`deployment-layer:${orgScope}:${record.version}`, {
+      auditLog.recordOnce!(ambientTenant(), `deployment-layer:${orgScope}:${record.version}`, {
         at: record.updatedAt,
         principalId: record.updatedBy,
         action: "deployment_layer.updated",
@@ -864,6 +864,7 @@ export function buildApp(
     error?: unknown,
   ) =>
     errors.record(
+      ambientTenant(),
       {
         category: e.category,
         code: e.code,
@@ -1835,7 +1836,11 @@ export function buildApp(
     captureQuietMs: config.memoryCaptureQuietMs,
     ...(config.memoryCaptureMaxTurns !== undefined ? { captureMaxTurns: config.memoryCaptureMaxTurns } : {}),
     onCaptureError: (e, scope) =>
-      errors.record({ category: "memory", code: "capture_failed", message: errMessage(e), scopeLabel: scope }, e),
+      errors.record(
+        ambientTenant(),
+        { category: "memory", code: "capture_failed", message: errMessage(e), scopeLabel: scope },
+        e,
+      ),
   });
   const vouchedInternalEmail = async (email: string): Promise<boolean> => {
     await identity.refresh();
@@ -2882,6 +2887,7 @@ export function buildApp(
                 finish: finishCredentials,
                 onError: (error, scopeId) =>
                   errors.record(
+                    ambientTenant(),
                     {
                       category: "process_session",
                       code: "job_computer_retire_failed",

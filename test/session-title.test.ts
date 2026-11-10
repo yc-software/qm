@@ -1,3 +1,4 @@
+import { testTenant } from "./support/test-tenant.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
@@ -81,7 +82,7 @@ test("a title provider exception is recorded before the completed turn gets its 
 
   assert.equal(turn.status, "ok");
   assert.equal((await app.getSession(turn.sessionId!))?.session.title, "Simulate title provider exception");
-  const failures = (await errors.list({ sessionId: turn.sessionId! })).filter(
+  const failures = (await errors.list(testTenant, { sessionId: turn.sessionId! })).filter(
     (error) => error.category === "session_title" && error.code === "generation_failed",
   );
   assert.equal(failures.length, 1);
@@ -94,7 +95,7 @@ test("a rejected title answer is recorded with the rule that rejected it before 
 
   assert.equal(turn.status, "ok");
   assert.equal((await app.getSession(turn.sessionId!))?.session.title, "Simulate reply-shaped title");
-  const recorded = (await errors.list({ sessionId: turn.sessionId! })).filter(
+  const recorded = (await errors.list(testTenant, { sessionId: turn.sessionId! })).filter(
     (error) => error.category === "session_title",
   );
   assert.deepEqual(
@@ -119,7 +120,7 @@ test("POST /v1/sessions/:id/title answers 200 with the fallback title and record
 
     assert.equal(res.status, 200);
     assert.deepEqual(await res.json(), { title: "Simulate reply-shaped title" });
-    const codes = (await errors.list({ sessionId: turn.sessionId! }))
+    const codes = (await errors.list(testTenant, { sessionId: turn.sessionId! }))
       .filter((error) => error.category === "session_title")
       .map((error) => error.code);
     assert.deepEqual(codes, ["rejected_reply_opener", "rejected_reply_opener"]);

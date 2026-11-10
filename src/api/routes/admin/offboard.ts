@@ -102,7 +102,7 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
       } catch (e) {
         Object.assign(change, { result: "failed", error: errMessage(e) });
       }
-      audit(deps, {
+      audit(ctx, {
         principalId: actor.id,
         action: `user.offboard.${change.kind}.${change.action}`,
         resource: change.id,
@@ -124,7 +124,7 @@ export async function reactivateUser(ctx: ApiCtx): Promise<void> {
   const { principalId } = await resolveAdminUser(deps, params.principalId!);
   const user = await deps.admin!.users.markReactivated(principalId);
   await deps.identity.reactivate(principalId);
-  audit(deps, {
+  audit(ctx, {
     principalId: actor.id,
     action: "principal.reactivate",
     resource: principalId,

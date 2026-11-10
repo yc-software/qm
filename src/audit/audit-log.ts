@@ -1,4 +1,5 @@
 import type { ScopeId } from "../types.ts";
+import type { Tenant } from "../tenants/context.ts";
 
 export interface AuditEvent {
   at: number;
@@ -11,16 +12,19 @@ export interface AuditEvent {
 }
 
 export interface AuditLog {
-  record(e: AuditEvent): void;
-  recordOnce?(key: string, e: AuditEvent): Promise<void>;
-  events(): Promise<readonly AuditEvent[]>;
-  tail(opts: {
-    limit: number;
-    scopeLabel?: ScopeId;
-    action?: string | readonly string[];
-    since?: number;
-    resourceContains?: string;
-  }): Promise<readonly AuditEvent[]>;
+  record(t: Tenant, e: AuditEvent): void;
+  recordOnce?(t: Tenant, key: string, e: AuditEvent): Promise<void>;
+  events(t: Tenant): Promise<readonly AuditEvent[]>;
+  tail(
+    t: Tenant,
+    opts: {
+      limit: number;
+      scopeLabel?: ScopeId;
+      action?: string | readonly string[];
+      since?: number;
+      resourceContains?: string;
+    },
+  ): Promise<readonly AuditEvent[]>;
 }
 
 export const SECURITY_FLAGGED = "security_posture.flagged";

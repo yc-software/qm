@@ -1,3 +1,4 @@
+import { ambientTenant } from "../tenants/context.ts";
 import { KeychainError, type Keychain, type KeychainAsk, type KeychainGrant } from "./keychain.ts";
 import type { App } from "../api/app.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
@@ -129,7 +130,7 @@ export function createKeychainApprovals(deps: {
         if (!latest || latest.ask.status === "pending") throw error;
         return latest;
       }
-      deps.audit?.record({
+      deps.audit?.record(ambientTenant(), {
         at: Date.now(),
         principalId: actor.id,
         action: decision === "deny" ? "keychain.ask.decline" : `keychain.grant.${decision}`,

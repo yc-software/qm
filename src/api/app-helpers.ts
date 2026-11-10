@@ -1,3 +1,5 @@
+import type { AuditEvent } from "../audit/audit-log.ts";
+import type { ErrorEvent } from "../admin/error-log.ts";
 import { randomUUID } from "node:crypto";
 import { type Tenant, ambientTenant } from "../tenants/context.ts";
 import { executesOnApprove } from "../core/orchestrator/approvals.ts";
@@ -547,6 +549,14 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     return undefined;
   }
 
+  function recordAudit(e: AuditEvent): void {
+    deps.auditLog.record(ambientTenant(), e);
+  }
+
+  function recordError(e: Omit<ErrorEvent, "ts">, error?: unknown): void {
+    deps.errors?.record(ambientTenant(), e, error);
+  }
+
   function canManageSkill(skill: Pick<Skill, "scopeId" | "createdBy">, principalId: string): Promise<boolean> {
     return principalManagesArtifactHome(skill.scopeId, skill.createdBy, principalId);
   }
@@ -557,7 +567,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     if (kind !== "channel" && kind !== "group") return skill;
     await deps.skills.review(skill.id, "system:skill-authoring", skill.manifest.requiredCapabilities);
     const published = await deps.skills.publish(skill.id);
-    deps.auditLog.record({
+    recordAudit({
       at: Date.now(),
       principalId: editorId,
       action: "skill_review",
@@ -642,7 +652,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       if (!changed) return;
       for (const m of derived) {
         if (prevSet.has(m) || manual.has(m)) continue;
-        deps.auditLog.record({
+        recordAudit({
           at: Date.now(),
           principalId: actorId,
           action: "project.member.add",
@@ -653,7 +663,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       }
       for (const m of prev) {
         if (nextSet.has(m) || manual.has(m)) continue;
-        deps.auditLog.record({
+        recordAudit({
           at: Date.now(),
           principalId: actorId,
           action: "project.member.remove",
@@ -845,6 +855,8 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   }
 
   return {
+    recordAudit,
+    recordError,
     adminBase,
     adminLink,
     directoryMember: (principalId: string) => app.directoryMember(principalId),
