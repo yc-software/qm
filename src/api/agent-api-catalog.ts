@@ -46,13 +46,14 @@ const FAMILIES: AgentApiFamily[] = [
       {
         method: "POST",
         path: "/v1/composio/execute",
-        summary: "{tool,accountId,version,arguments} executes a discovered tool using your own active connection",
+        summary:
+          "{tool,accountId,version,arguments} executes a discovered Composio tool using your own active connection; fallback for apps the proxy cannot reach",
       },
       {
         method: "POST",
         path: "/v1/composio/proxy",
         summary:
-          "{url,method?,query?,headers?,body?|bodyBase64?,accountId?} sends one raw request to a connected app's own API (Google, Dropbox, Linear, Zoom) through your own connection; replies with the provider's status and body. Used by native app skills when no direct token is present",
+          "{url,method?,query?,headers?,body?|bodyBase64?,accountId?} sends one raw request to any connected app's own API through your own connection and replies with the provider's status, headers and body; the default way to call connected apps",
       },
       {
         method: "POST",

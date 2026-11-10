@@ -224,17 +224,27 @@ test("binary uploads go as a binary body and binary downloads come back as bytes
 
 test("only an app's own API hosts are reachable, and only with that app's connection", async () => {
   for (const url of [
-    "https://evil.example/collect",
-    "https://www.googleapis.com/oauth2/v2/userinfo",
-    "https://gmail.googleapis.com.evil.example/x",
     "http://gmail.googleapis.com/gmail/v1/users/me/profile",
     "https://user:pw@gmail.googleapis.com/gmail/v1/users/me/profile",
     "https://gmail.googleapis.com:8443/gmail/v1/users/me/profile",
   ]) {
     const f = await fixture();
     const result = await f.send({ url });
-    assert.ok([400, 403].includes(result.status), url);
+    assert.equal(result.status, 400, url);
     assert.equal(f.calls.length, 0, url);
+  }
+  for (const url of [
+    "https://evil.example/collect",
+    "https://www.googleapis.com/oauth2/v2/userinfo",
+    "https://gmail.googleapis.com.evil.example/x",
+  ]) {
+    const f = await fixture();
+    f.replies.push(accounts(gmail, calendar));
+    const result = await f.send({ url });
+    assert.equal(result.status, 403, url);
+    assert.equal(result.data.error, "url_not_allowed", url);
+    assert.equal(f.calls.length, 1, url);
+    assert.equal(new URL(f.calls[0]!.url).searchParams.get("toolkit_slugs"), null, url);
   }
   const f = await fixture();
   f.replies.push(gmail);
@@ -251,6 +261,72 @@ test("only an app's own API hosts are reachable, and only with that app's connec
   const ok = await c.send({ url: "https://www.googleapis.com/calendar/v3/users/me/settings/timezone" });
   assert.equal(ok.status, 200);
   assert.equal(new URL(c.calls[0]!.url).searchParams.get("toolkit_slugs"), "googlecalendar");
+});
+
+test("any connected app's Composio base URL is reachable through its own connection", async () => {
+  const github = { id: "ca_gh", user_id: alice, status: "ACTIVE", toolkit: { slug: "github" } };
+  const f = await fixture();
+  f.replies.push(
+    accounts(gmail, github),
+    { slug: "github", base_url: "https://api.github.com", is_local_toolkit: false },
+    proxied({ login: "alice" }),
+  );
+  const result = await f.send({ url: "https://api.github.com/user" });
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.data, { login: "alice" });
+  assert.equal(new URL(f.calls[0]!.url).searchParams.get("toolkit_slugs"), null);
+  assert.match(f.calls[1]!.url, /\/toolkits\/github$/);
+  assert.equal(f.calls[2]!.body?.connected_account_id, "ca_gh");
+  assert.equal(f.calls[2]!.body?.endpoint, "https://api.github.com/user");
+
+  const cached = await fixture();
+  cached.replies.push(github, proxied({ id: 1 }));
+  const again = await cached.send({ url: "https://api.github.com/repos/a/b", accountId: "ca_gh" });
+  assert.equal(again.status, 200);
+  assert.equal(cached.calls.length, 2);
+});
+
+test("base URL routes keep their path prefix and skip templated, local, or non-https bases", async () => {
+  const cases = [
+    { slug: "notionlike", info: { base_url: "https://api.notion.example/v1" }, url: "https://api.notion.example/v2/x" },
+    {
+      slug: "shopifylike",
+      info: { base_url: "https://{{subdomain}}.myshopify.com/admin" },
+      url: "https://a.myshopify.com/admin/shop.json",
+    },
+    {
+      slug: "locallike",
+      info: { base_url: "https://local.example", is_local_toolkit: true },
+      url: "https://local.example/x",
+    },
+    { slug: "plainlike", info: { base_url: "http://plain.example" }, url: "https://plain.example/x" },
+    { slug: "nobaselike", info: {}, url: "https://nobase.example/x" },
+  ];
+  for (const { slug, info, url } of cases) {
+    const account = { id: `ca_${slug}`, user_id: alice, status: "ACTIVE", toolkit: { slug } };
+    const f = await fixture();
+    f.replies.push(accounts(account), { slug, ...info });
+    const result = await f.send({ url });
+    assert.equal(result.status, 403, slug);
+    assert.equal(result.data.error, "url_not_allowed", slug);
+    assert.ok(
+      f.calls.every((call) => !call.url.includes("/tools/execute/proxy")),
+      slug,
+    );
+  }
+  const prefixed = { id: "ca_prefixed", user_id: alice, status: "ACTIVE", toolkit: { slug: "prefixedlike" } };
+  const ok = await fixture();
+  ok.replies.push(accounts(prefixed), { base_url: "https://api.prefixed.example/v1/" }, proxied({ ok: true }));
+  assert.equal((await ok.send({ url: "https://api.prefixed.example/v1/pages" })).status, 200);
+});
+
+test("apps with fixed routes never reach other hosts through base URLs", async () => {
+  const f = await fixture();
+  f.replies.push(gmail);
+  const result = await f.send({ url: "https://api.github.com/user", accountId: "ca_gmail" });
+  assert.equal(result.status, 403);
+  assert.equal(result.data.error, "url_not_allowed");
+  assert.equal(f.calls.length, 1);
 });
 
 test("an explicit account of another app cannot reach this app's API", async () => {

@@ -682,6 +682,56 @@ test("oversized provider responses are reported with their status", async () => 
   assert.match(result.data.message, /smaller pages/);
 });
 
+test("provider failures expose status, error body and diagnostic headers without secrets", async () => {
+  const f = fixture();
+  await f.own();
+  const googleError = {
+    error: {
+      code: 403,
+      message: "Write access is required, comment-only access is not sufficient.",
+      errors: [{ reason: "insufficientFilePermissions", domain: "global" }],
+      status: "PERMISSION_DENIED",
+    },
+    echoedKey: "private-key",
+    authorization: "Bearer ya29.a0AfH6SMBexampleAccessToken0123456789abcdef",
+  };
+  f.replies.push(
+    aliceAccount,
+    gmailTool,
+    new Response(JSON.stringify(googleError), {
+      status: 403,
+      headers: {
+        "content-type": "application/json",
+        "x-request-id": "req_123",
+        "retry-after": "30",
+        "set-cookie": "session=hidden",
+      },
+    }),
+  );
+  const result = await f.invoke("/v1/composio/execute", execution, null, privateCap);
+  assert.equal(result.status, 502);
+  assert.equal(result.data.providerStatus, 403);
+  assert.deepEqual(result.data.providerBody.error.errors, googleError.error.errors);
+  assert.equal(result.data.providerBody.error.status, "PERMISSION_DENIED");
+  assert.deepEqual(result.data.providerHeaders, {
+    "content-type": "application/json",
+    "retry-after": "30",
+    "x-request-id": "req_123",
+  });
+  assert.doesNotMatch(result.text, /private-key|ya29\.|session=hidden/);
+});
+
+test("provider failure bodies are size-capped and kept as text when not JSON", async () => {
+  const f = fixture();
+  await f.own();
+  f.replies.push(aliceAccount, gmailTool, new Response("x".repeat(50_000), { status: 500 }));
+  const result = await f.invoke("/v1/composio/execute", execution, null, privateCap);
+  assert.equal(result.status, 502);
+  assert.equal(typeof result.data.providerBody, "string");
+  assert.equal(result.data.providerBody.length, 8_000);
+  assert.deepEqual(result.data.providerHeaders, { "content-type": "text/plain;charset=UTF-8" });
+});
+
 test("callback completion is browser-only and preserves the durable return URL", async () => {
   const f = fixture();
   await f.own();

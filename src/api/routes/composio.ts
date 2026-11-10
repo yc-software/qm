@@ -16,7 +16,8 @@ import { entitledScopes } from "../../resolution/context-filter.ts";
 import { sendJson } from "../http.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
-import { errMessage, httpFailure, reportFailure } from "../../util/errors.ts";
+import { errMessage, reportFailure, withRequestId } from "../../util/errors.ts";
+import { REQUEST_ID_HEADERS } from "../../../plugins/chassis/src/error-reporting.ts";
 import { activePrincipal, audit } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
@@ -138,12 +139,38 @@ export async function credential(ctx: ApiCtx): Promise<{ key: string; principal:
   return { key: record.secret, principal };
 }
 
+const PROVIDER_BODY_CHARS = 8_000;
+const PROVIDER_HEADERS = ["content-type", "retry-after", ...REQUEST_ID_HEADERS];
+
 class ComposioHttpError extends Error {
   readonly status: number;
-  constructor(status: number, message: string) {
+  readonly body: string;
+  readonly headers: Record<string, string>;
+  constructor(status: number, message: string, body = "", headers: Record<string, string> = {}) {
     super(message);
     this.status = status;
+    this.body = body;
+    this.headers = headers;
   }
+}
+
+function parseJsonOrText(text: string): unknown {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return text;
+  }
+}
+
+function providerFailure(provider: ComposioHttpError, mask: (text: string) => string): Record<string, unknown> {
+  const clean = (text: string) => mask(redactSecrets(text));
+  const text = clean(provider.body);
+  return {
+    providerStatus: provider.status,
+    providerDetail: clean(provider.message),
+    ...(text ? { providerBody: parseJsonOrText(text) } : {}),
+    providerHeaders: Object.fromEntries(Object.entries(provider.headers).map(([name, value]) => [name, clean(value)])),
+  };
 }
 
 export interface ComposioAccountRecord {
@@ -176,7 +203,7 @@ export function sendExecutionFailure(ctx: ApiCtx, error: unknown, mask: (text: s
   sendJson(ctx.res, 502, {
     error: code,
     cause: (timedOut && "timeout") || (provider && "provider_error") || "unavailable",
-    ...(provider ? { providerStatus: provider.status, providerDetail: mask(redactSecrets(provider.message)) } : {}),
+    ...(provider ? providerFailure(provider, mask) : {}),
     message:
       timedOut || provider?.status === 413
         ? "The request was too large or slow to complete. For reads, request less per call (smaller pages, metadata before bodies); for uploads, use the provider's chunked or resumable upload. Do not automatically retry a write."
@@ -201,8 +228,21 @@ export async function request(
     redirect: "error",
     signal: AbortSignal.timeout(timeoutMs),
   });
-  if (!response.ok)
-    throw new ComposioHttpError(response.status, `Composio request failed: ${await httpFailure(response)}`);
+  if (!response.ok) {
+    const body = (await response.text().catch(() => "")).slice(0, PROVIDER_BODY_CHARS);
+    const headers = Object.fromEntries(
+      PROVIDER_HEADERS.flatMap((name) => {
+        const value = response.headers.get(name);
+        return value ? [[name, value]] : [];
+      }),
+    );
+    throw new ComposioHttpError(
+      response.status,
+      withRequestId(`Composio request failed: http ${response.status} ${body.slice(0, 200)}`, response.headers),
+      body,
+      headers,
+    );
+  }
   return (await response.json()) as Record<string, unknown>;
 }
 
