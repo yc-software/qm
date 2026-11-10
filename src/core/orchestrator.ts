@@ -68,7 +68,7 @@ import {
 } from "./turn-origin.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { orgId } from "../config.ts";
-import { deriveTurnOutcome, approvalBlocksInput } from "./turn-outcome.ts";
+import { deriveTurnOutcome, approvalBlocksInput, heldReplyResult } from "./turn-outcome.ts";
 import { applyPromptVars, loadProtocolFile, type PromptVars } from "../resolution/prompt-vars.ts";
 import { cleanBrandingLabel, resolveBranding } from "../resolution/branding.ts";
 import { resolveTurnContext } from "../resolution/turn-context.ts";
@@ -1362,10 +1362,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           `[orchestrator] turn.already_answered attempt=${input.attempt} run=${input.runId} thread=${conversation.threadRef} answerSeq=${recordedAnswer.seq}`,
         );
         const stopped = recordedAnswer.stopped ? { stopped: true } : {};
-        if (recordedAnswer.cancelled) return { status: "silent", sessionId: session.id, ...stopped };
+        const surfaceTools = surfaceToolsActive({ deps, input, strictReadOnly, defaultDestination });
+        const held = heldReplyResult({
+          sessionId: session.id,
+          stopped: recordedAnswer.stopped === true,
+          runCancelled: recordedAnswer.cancelled === true,
+          surfaceTools,
+        });
         const text = absoluteAppLinks(recordedAnswer.text, deps.publicWebUrl);
-        if (surfaceToolsActive({ deps, input, strictReadOnly, defaultDestination })) {
-          if (!recordedAnswer.stopped)
+        if (held) {
+          if (surfaceTools && !recordedAnswer.stopped)
             await replayRecordedSurfaceAnswer({
               deps,
               input,
@@ -1377,7 +1383,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               text,
               postProvenance,
             });
-          return { status: "silent", sessionId: session.id, ...stopped };
+          return held;
         }
         return text.trim()
           ? {
@@ -3976,8 +3982,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const stopScope = result.stopScope ? { stopScope: result.stopScope } : {};
         const sourceUserSeq = turnUserSeq;
         const sourceAssistantEntrySeq = emittedEntries.findLast(isAgentReply)?.seq;
+        const heldReply = (runCancelled: boolean, surfaceTools: boolean) =>
+          heldReplyResult({
+            sessionId: session.id,
+            stopped: result.stopped === true,
+            ...(result.stopScope ? { stopScope: result.stopScope } : {}),
+            runCancelled,
+            surfaceTools,
+          });
         if (cancelStopped && !result.pendingApprovals?.length) {
-          finalResult = { status: "silent", sessionId: session.id, stopped: true, ...stopScope };
+          finalResult = heldReply(true, false)!;
         } else if (isPollFire && result.silent && !stagedAttachments.length && result.pausedOnApproval !== true) {
           finalResult = { status: "silent", sessionId: session.id };
         } else if (result.pendingApprovals?.length || quarantineReleaseApprovals.length) {
@@ -4036,11 +4050,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         } else if (isPollFire && !stagedAttachments.length && !reply.trim()) {
           finalResult = { status: "silent", sessionId: session.id };
         } else if (input.surfaceTools && surfaceToolDeps && !strictReadOnly) {
-          finalResult = {
-            status: "silent",
-            sessionId: session.id,
-            ...(result.stopped ? { stopped: true, ...stopScope } : {}),
-          };
+          finalResult = heldReply(false, true)!;
         } else {
           finalResult = {
             status: "ok",
