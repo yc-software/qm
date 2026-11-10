@@ -569,6 +569,16 @@ const DROP_ITEMS_TARGET_SEQ: PgMigrationDefinition = {
   ],
 };
 
+const DROP_PARTICIPANT_WINDOWS: PgMigrationDefinition = {
+  id: "sessions/store/0061-drop-participant-windows",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `DELETE FROM participants WHERE valid_to IS NOT NULL OR valid_to_seq IS NOT NULL`,
+    `ALTER TABLE participants DROP COLUMN IF EXISTS valid_from, DROP COLUMN IF EXISTS valid_to,
+       DROP COLUMN IF EXISTS valid_from_seq, DROP COLUMN IF EXISTS valid_to_seq`,
+  ],
+};
+
 export const SESSION_MIGRATIONS = [
   ...TENANCY,
   ...PUBLISHED_SESSION_UPGRADE,
@@ -588,6 +598,7 @@ export const SESSION_MIGRATIONS = [
   USER_TURNS_BY_AUTHOR,
   DROP_SESSION_LEASES,
   DROP_ITEMS_TARGET_SEQ,
+  DROP_PARTICIPANT_WINDOWS,
 ];
 
 export const ancestry = (seed: string): string => `ancestry AS (
