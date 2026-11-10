@@ -1,7 +1,6 @@
 import { REQUEST_ID_HEADERS, reportBackendError } from "../../plugins/chassis/src/error-reporting.ts";
 import { errChain as errMessage, errDetail, failureCode } from "../../plugins/chassis/src/errors.ts";
 import { WorkAdmissionClosed } from "./admitted-work.ts";
-import { tailSlice } from "./text.ts";
 
 export { errChain as errMessage, failureCode, swallow, swallowAs } from "../../plugins/chassis/src/errors.ts";
 
@@ -68,16 +67,9 @@ export async function withCleanup<T>(work: () => Promise<T>, cleanup: () => Prom
   return result;
 }
 
-const FAILURE_OUTPUT_CHARS = 300;
-
 export function execFailure(what: string, r: { stdout: string; stderr: string; code: number }): Error {
-  const tail = (out: string): string => {
-    const text = out.trim();
-    const cut = tailSlice(text, FAILURE_OUTPUT_CHARS);
-    return cut.length < text.length ? `[last ${cut.length} of ${text.length} chars] ${cut}` : text;
-  };
   const parts = [`${what} failed (exit ${r.code}${r.code === 124 ? ", timed out" : ""})`];
-  if (r.stderr.trim()) parts.push(`stderr: ${tail(r.stderr)}`);
-  if (r.stdout.trim()) parts.push(`stdout: ${tail(r.stdout)}`);
+  if (r.stderr.trim()) parts.push(`stderr: ${r.stderr.trim()}`);
+  if (r.stdout.trim()) parts.push(`stdout: ${r.stdout.trim()}`);
   return new Error(parts.join("; "));
 }
