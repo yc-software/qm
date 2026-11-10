@@ -1,5 +1,6 @@
 import type { ErrorLog } from "../admin/error-log.ts";
 import type { Agent } from "../agent/agent.ts";
+import { MAX_TITLE_CHARS } from "../agent/session-title-prompt.ts";
 import type { SessionStateBus } from "../runs/session-state-bus.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { ScopeId } from "../types.ts";
@@ -11,7 +12,7 @@ import { TitleRejected } from "./turn-error.ts";
 function fallbackSessionTitle(text: string): string | undefined {
   const clean = stripTurnBoilerplate(text).replace(/\s+/g, " ").trim();
   if (!clean) return undefined;
-  return clean.length > 60 ? `${headSlice(clean, 59).trimEnd()}…` : clean;
+  return clean.length > MAX_TITLE_CHARS ? `${headSlice(clean, MAX_TITLE_CHARS - 1).trimEnd()}…` : clean;
 }
 
 export function createSessionTitles(deps: {
@@ -24,13 +25,13 @@ export function createSessionTitles(deps: {
     sessionId: string,
     scopeId: ScopeId,
     transcript: string,
-    opts: { principalId?: string; fallbackText?: string; descriptive?: boolean } = {},
+    opts: { principalId?: string; fallbackText?: string } = {},
   ): Promise<string | undefined> {
-    const { principalId, fallbackText, descriptive } = opts;
+    const { principalId, fallbackText } = opts;
     if (!transcript.trim()) return undefined;
     let title: string | undefined;
     try {
-      title = await deps.agent.generateTitle?.(transcript, descriptive ? { descriptive } : undefined);
+      title = await deps.agent.generateTitle?.(transcript);
     } catch (e) {
       deps.errors?.record(
         {
@@ -64,7 +65,6 @@ export function createSessionTitles(deps: {
     session: { id: string; threadRef: string },
     scopeId: ScopeId,
     text: string,
-    descriptive = false,
   ): { written: Promise<void>; generated: Promise<string | undefined> } | undefined {
     const fallback = fallbackSessionTitle(text);
     if (!fallback) return undefined;
@@ -73,9 +73,7 @@ export function createSessionTitles(deps: {
       .then(() => announce(session).catch(swallowAs("session title: sidebar refresh", undefined)))
       .then(async () => {
         if (!deps.agent.generateTitle) return undefined;
-        const title = await generateAndStore(session.id, scopeId, `User:\n${stripTurnBoilerplate(text)}`, {
-          descriptive,
-        });
+        const title = await generateAndStore(session.id, scopeId, `User:\n${stripTurnBoilerplate(text)}`);
         if (title) await announce(session);
         return title;
       })
