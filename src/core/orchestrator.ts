@@ -6,8 +6,6 @@ import { countTokens } from "../util/tokens.ts";
 import { SIDE_CHAT_GUIDANCE, sideChatContext } from "./side-chat-context.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
 import type { AuditEvent } from "../audit/audit-log.ts";
-import { createAdminCall } from "../tools/admin.ts";
-import { createSelfApiCall } from "../tools/self-api.ts";
 import { scopeTeamsToTurn } from "../teams/teams.ts";
 import { externalSlackRequestAllowed, currentExternalSlackRun } from "../resolution/external-slack.ts";
 import { desktopComputerTool } from "../../plugins/chassis/src/desktop-computer.ts";
@@ -85,7 +83,7 @@ import type {
   RuntimeChoice,
   SessionRoute,
 } from "../agent/agent.ts";
-import { compactedSinceLastTurn, forModelContext, forSearchView } from "../agent/context-compaction.ts";
+import { compactedSinceLastTurn, forModelContext } from "../agent/context-compaction.ts";
 import {
   securityScreenChunks,
   securityScreenPayload,
@@ -116,9 +114,8 @@ import { DEFAULT_MEMORY_POLICY } from "../memory/policy.ts";
 import { skillsIndex } from "../skills/materialize.ts";
 import { isIdeasConversation, PROACTIVE_OPENER_PROMPT } from "../onboarding/onboarding.ts";
 import { runCronScript } from "../cron/script.ts";
-import { createToolContext, NeedsApproval, CommandDenied, type CommandCredential } from "../tools/primitives.ts";
+import { NeedsApproval, CommandDenied } from "../tools/primitives.ts";
 import { artifactImageLoader } from "../agent/replay-images.ts";
-import { openSessionItem, searchSessionItems } from "../sessions/history-search.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
 import {
   INBOX_DIR,
@@ -195,7 +192,12 @@ import { resolveTurnRuntimeAuth } from "./orchestrator/turn-runtime.ts";
 import { startStallWatchdog } from "./orchestrator/stall-watchdog.ts";
 import { openSegmentGoal, segmentEnvironment } from "./orchestrator/run-segment.ts";
 import { selectTurnResult, startMemoryCapture } from "./orchestrator/settle.ts";
-import { createArtifactAccess, createFileRegistration, createTurnBrokers } from "./orchestrator/turn-tools.ts";
+import {
+  buildToolContext,
+  createArtifactAccess,
+  createFileRegistration,
+  createTurnBrokers,
+} from "./orchestrator/turn-tools.ts";
 import {
   countSkills,
   createSecurityClassifier,
@@ -1108,7 +1110,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         ownCredentialsAllowed,
         openSpeakerKeychain,
         openAutomationKeychain,
-        placeCredential,
         addCredentialToCatalog,
       } = credentialCatalog;
       await tracePhase("turn.credentials", () =>
@@ -1669,112 +1670,54 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         });
         const liveNote = async () =>
           (await turnSessionSyscalls?.liveSubagents?.().catch(swallowAs("live note", ""))) ?? "";
-        const baseTools = createToolContext({
-          desktopClientId: desktopClientForTurn(input),
-          sandbox: deps.sandbox,
-          sandboxResources: turnSandboxResources,
+        const baseTools = buildToolContext({
+          deps,
+          input,
+          actor,
+          conversation,
+          session,
+          scopeId,
+          resolution,
+          external,
+          humanInput,
+          strictReadOnly,
+          securityPolicy,
+          surface,
+          context,
+          memoryScopeId,
+          memoryAccess,
+          audienceScopeId,
+          actAsActor,
+          turnSandboxResources,
           invalidateProvision,
           provision,
           provisionScratch,
           provisionJobComputer,
           provisionResource,
-          accessSandboxResource: accessResource,
-          assertDefaultSandboxUsable: assertDefaultUsable,
+          accessResource,
+          assertDefaultUsable,
           boundSandboxId,
           workdir,
           useSkill,
-          listSkills: (source) => visibleSkillsForTurn(source ? [source] : [scopeId, resolution.orgScopeId]),
-          writableScopeId: resolution.writableScopeId,
-          readOnlyScopeIds: resolution.readOnlyScopeIds,
-          commandPolicy: () => commandPolicy,
-          layerCommandRules: () => layerCommandRules,
+          visibleSkillsForTurn,
+          commandPolicy,
+          layerCommandRules,
           authorizeCommand,
           restoreCommand,
-          grantedHandles: resolution.grantedHandles,
-          context,
-          deploy: deps.deploy,
-          acl: deps.acl,
-          files: deps.files,
-          auditLog: deps.auditLog,
-          createdBy: actor.id,
-          botActor: input.botActor,
+          credentialCatalog,
           commandCredentials,
-          resolveCommandCredentials: async (handles) => {
-            const refreshed = new Map<string, CommandCredential>();
-            const identities = new Map<string, string>();
-            const add: typeof addCredentialToCatalog = (credential, _description, identity = credential.handle) => {
-              const prior = identities.get(credential.handle);
-              if (prior !== undefined) {
-                if (prior !== identity) throw new Error(`credential handle collision: ${credential.handle}`);
-                return;
-              }
-              identities.set(credential.handle, identity);
-              refreshed.set(credential.handle, placeCredential(credential));
-            };
-            await registerKeychainCredentials(credentialCatalog, add);
-            await registerConnectorCredentials(credentialCatalog, add);
-            await registerServiceCredentials(credentialCatalog, { scopeAttestation, sandboxTokenExpiry }, add, handles);
-            for (const credential of commandCredentials.filter((candidate) => candidate.handle.startsWith("broker_")))
-              add(credential, "");
-            return [...refreshed.values()];
-          },
-          ...(deps.publicWebUrl ? { publicWebUrl: deps.publicWebUrl } : {}),
-          publishContext: {
-            conversationKind: conversation.kind,
-            ...(conversation.channelRef ? { channelRef: conversation.channelRef } : {}),
-            ...(conversation.isPrivate !== undefined ? { isPrivate: conversation.isPrivate } : {}),
-            ...(conversation.isMpim !== undefined ? { isMpim: conversation.isMpim } : {}),
-            ...(conversation.publishMembers ? { publishMembers: conversation.publishMembers } : {}),
-          },
-          config: deps.config,
-          ...(deps.control && controlClaims ? { control: deps.control, controlClaims } : {}),
-          ...(deps.apiBaseUrl && connectorEnv.AGENT_API_TOKEN
-            ? {
-                ...(securityPolicy.posture !== "strict"
-                  ? { selfApi: createSelfApiCall(deps.apiBaseUrl, connectorEnv.AGENT_API_TOKEN) }
-                  : {}),
-                admin: {
-                  call: createAdminCall(deps.apiBaseUrl, connectorEnv.AGENT_API_TOKEN),
-                  operationsAvailable:
-                    actorIsOrgAdmin || Boolean(controlClaims?.grants?.some((grant) => grant.startsWith("admin."))),
-                },
-              }
-            : {}),
-          ...(deps.webhookPublicUrl ? { webhookPublicUrl: deps.webhookPublicUrl } : {}),
-          ...(humanInput && !external && !input.botActor ? { humanTurn: true } : {}),
-          toolOutput: deps.toolOutput,
-          sessionId: session.id,
-          ...(surfaceToolDeps ? { surface: surfaceToolDeps } : {}),
-          ...(turnSessionSyscalls ? { sessionSyscalls: turnSessionSyscalls } : {}),
-          ...(strictReadOnly ? {} : { attach: attachStaging.attach }),
-          memory: context.memory,
-          memoryCaptureMetadata: () => ({ sessionId: session.id, inheritedFacts: captureDependencies() }),
-          memoryScopeId,
-          ...(memoryAccess ? { memoryAccess } : {}),
-          ...(!external && deps.mcp ? { mcp: deps.mcp, actAsActor } : {}),
-          ...(audienceScopeId ? { audienceScopeId } : {}),
-          ...(surface?.capabilities.nativeActor ? { actingSlackUserId: actor.id } : {}),
-          ...(deps.deploymentLayer
-            ? {
-                layerAuth: {
-                  credentialPaths: deps.deploymentLayer.credentialPaths,
-                  splitEnvTemplates: deps.deploymentLayer.splitEnvTemplates,
-                },
-              }
-            : {}),
-          sessionHistory: (() => {
-            const historyView = async () => filterHistory(forSearchView(await deps.sessions.getItems(session.id)));
-            return {
-              search: async (q: string, limit?: number) => searchSessionItems(await historyView(), q, limit),
-              open: async (seq: number) => openSessionItem(await historyView(), seq),
-            };
-          })(),
-          execTimeoutMs: deps.execTimeoutMs,
-          execTimeoutCeilingMs: deps.execTimeoutCeilingMs,
-          signals: deps.signals,
-          ...(input.runId ? { runId: input.runId } : {}),
-          ...(backgroundBroker ? { backgroundBroker } : {}),
-          ...(monitorBroker ? { monitorBroker } : {}),
+          connectorEnv,
+          actorIsOrgAdmin,
+          controlClaims,
+          scopeAttestation,
+          sandboxTokenExpiry,
+          captureDependencies,
+          filterHistory,
+          attachStaging,
+          surfaceToolDeps,
+          turnSessionSyscalls,
+          backgroundBroker,
+          monitorBroker,
         });
 
         baseTools.withdrawApproval = (card: string) =>

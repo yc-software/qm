@@ -482,3 +482,30 @@ export async function loadServiceCredentialGrants(turn: {
     appConnections,
   };
 }
+
+export function createCommandCredentialResolver(
+  credentialCatalog: CredentialCatalog,
+  capability: { scopeAttestation: Omit<CapabilityClaims, "exp">; sandboxTokenExpiry: number },
+): (handles: readonly string[]) => Promise<CommandCredential[]> {
+  const { placeCredential, commandCredentials } = credentialCatalog;
+  const { scopeAttestation, sandboxTokenExpiry } = capability;
+  return async (handles) => {
+    const refreshed = new Map<string, CommandCredential>();
+    const identities = new Map<string, string>();
+    const add: AddCredential = (credential, _description, identity = credential.handle) => {
+      const prior = identities.get(credential.handle);
+      if (prior !== undefined) {
+        if (prior !== identity) throw new Error(`credential handle collision: ${credential.handle}`);
+        return;
+      }
+      identities.set(credential.handle, identity);
+      refreshed.set(credential.handle, placeCredential(credential));
+    };
+    await registerKeychainCredentials(credentialCatalog, add);
+    await registerConnectorCredentials(credentialCatalog, add);
+    await registerServiceCredentials(credentialCatalog, { scopeAttestation, sandboxTokenExpiry }, add, handles);
+    for (const credential of commandCredentials.filter((candidate) => candidate.handle.startsWith("broker_")))
+      add(credential, "");
+    return [...refreshed.values()];
+  };
+}

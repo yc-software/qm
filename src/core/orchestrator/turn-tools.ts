@@ -9,10 +9,28 @@ import { scopeId as toScopeId, type Destination, type ScopeId, type Session } fr
 import { errMessage } from "../../util/errors.ts";
 import type { ArtifactRegistration } from "../attachments.ts";
 import type { createTurnSandboxes } from "./sandboxes.ts";
+import { createToolContext } from "../../tools/primitives.ts";
+import { createAdminCall } from "../../tools/admin.ts";
+import { createSelfApiCall } from "../../tools/self-api.ts";
+import { forSearchView } from "../../agent/context-compaction.ts";
+import { openSessionItem, searchSessionItems } from "../../sessions/history-search.ts";
+import type { Item } from "../../sessions/items.ts";
+import type { MemoryProvenance } from "../../memory/facts.ts";
+import type { resolveTurnContext } from "../../resolution/turn-context.ts";
+import type { createSurfaceToolDeps } from "../../surfaces/surface-tools.ts";
+import { desktopClientForTurn } from "../turn-origin.ts";
+import type { createApprovalLedger } from "./approvals.ts";
+import type { StagedAttachments } from "./attach-tool.ts";
+import type { mintTurnCapabilities } from "./capability-tokens.ts";
+import { createCommandCredentialResolver, type CredentialCatalog } from "./credential-catalog.ts";
+import type { createSkillScreen } from "./security-screen.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 
 type TurnResolution = Awaited<ReturnType<OrchestratorDeps["resolution"]["resolve"]>>;
 type TurnSandboxes = ReturnType<typeof createTurnSandboxes>;
+type ToolContextOptions = Parameters<typeof createToolContext>[0];
+type ApprovalLedger = Awaited<ReturnType<typeof createApprovalLedger>>;
+type TurnCapabilities = Awaited<ReturnType<typeof mintTurnCapabilities>>;
 
 export function createTurnBrokers(turn: {
   deps: OrchestratorDeps;
@@ -193,4 +211,198 @@ export function createArtifactAccess(turn: {
     return opened ? { ...artifact, sizeBytes: opened.sizeBytes, stream: opened.stream } : null;
   };
   return { mayReadArtifact, provisionOutbound, openStoredOutbound };
+}
+
+interface ToolContextTurn {
+  deps: OrchestratorDeps;
+  input: OrchestratorInput;
+  actor: OrchestratorInput["actor"];
+  conversation: OrchestratorInput["conversation"];
+  session: Session;
+  scopeId: ScopeId;
+  resolution: TurnResolution;
+  external: boolean;
+  humanInput: boolean;
+  strictReadOnly: boolean;
+  securityPolicy: TurnResolution["securityPolicy"];
+  surface: ReturnType<OrchestratorDeps["surfaces"]["get"]>;
+  context: Awaited<ReturnType<typeof resolveTurnContext>>;
+  memoryScopeId: ScopeId;
+  memoryAccess: ToolContextOptions["memoryAccess"];
+  audienceScopeId: ScopeId | undefined;
+  actAsActor: boolean;
+  turnSandboxResources: ToolContextOptions["sandboxResources"];
+  invalidateProvision: TurnSandboxes["invalidateProvision"];
+  provision: TurnSandboxes["provision"];
+  provisionScratch: TurnSandboxes["provisionScratch"];
+  provisionJobComputer: TurnSandboxes["provisionJobComputer"];
+  provisionResource: TurnSandboxes["provisionResource"];
+  accessResource: TurnSandboxes["accessResource"];
+  assertDefaultUsable: TurnSandboxes["assertDefaultUsable"];
+  boundSandboxId: TurnSandboxes["boundSandboxId"];
+  workdir: TurnSandboxes["workdir"];
+  useSkill: TurnSandboxes["useSkill"];
+  visibleSkillsForTurn: ReturnType<typeof createSkillScreen>;
+  commandPolicy: TurnResolution["commandPolicy"];
+  layerCommandRules: NonNullable<OrchestratorDeps["deploymentLayer"]>["commandRules"][number][];
+  authorizeCommand: ApprovalLedger["authorizeCommand"];
+  restoreCommand: ApprovalLedger["restoreCommand"];
+  credentialCatalog: CredentialCatalog;
+  commandCredentials: CredentialCatalog["commandCredentials"];
+  connectorEnv: CredentialCatalog["connectorEnv"];
+  actorIsOrgAdmin: TurnCapabilities["actorIsOrgAdmin"];
+  controlClaims: TurnCapabilities["controlClaims"];
+  scopeAttestation: TurnCapabilities["scopeAttestation"];
+  sandboxTokenExpiry: TurnCapabilities["sandboxTokenExpiry"];
+  captureDependencies: () => MemoryProvenance[];
+  filterHistory: (items: Item[]) => Item[];
+  attachStaging: StagedAttachments;
+  surfaceToolDeps: ReturnType<typeof createSurfaceToolDeps>;
+  turnSessionSyscalls: ToolContextOptions["sessionSyscalls"];
+  backgroundBroker: ReturnType<typeof createTurnBrokers>["backgroundBroker"];
+  monitorBroker: ReturnType<typeof createTurnBrokers>["monitorBroker"];
+}
+
+export function buildToolContext(turn: ToolContextTurn) {
+  const {
+    deps,
+    input,
+    actor,
+    conversation,
+    session,
+    scopeId,
+    resolution,
+    external,
+    humanInput,
+    strictReadOnly,
+    securityPolicy,
+    surface,
+    context,
+    memoryScopeId,
+    memoryAccess,
+    audienceScopeId,
+    actAsActor,
+    turnSandboxResources,
+    invalidateProvision,
+    provision,
+    provisionScratch,
+    provisionJobComputer,
+    provisionResource,
+    accessResource,
+    assertDefaultUsable,
+    boundSandboxId,
+    workdir,
+    useSkill,
+    visibleSkillsForTurn,
+    commandPolicy,
+    layerCommandRules,
+    authorizeCommand,
+    restoreCommand,
+    credentialCatalog,
+    commandCredentials,
+    connectorEnv,
+    actorIsOrgAdmin,
+    controlClaims,
+    scopeAttestation,
+    sandboxTokenExpiry,
+    captureDependencies,
+    filterHistory,
+    attachStaging,
+    surfaceToolDeps,
+    turnSessionSyscalls,
+    backgroundBroker,
+    monitorBroker,
+  } = turn;
+  return createToolContext({
+    desktopClientId: desktopClientForTurn(input),
+    sandbox: deps.sandbox,
+    sandboxResources: turnSandboxResources,
+    invalidateProvision,
+    provision,
+    provisionScratch,
+    provisionJobComputer,
+    provisionResource,
+    accessSandboxResource: accessResource,
+    assertDefaultSandboxUsable: assertDefaultUsable,
+    boundSandboxId,
+    workdir,
+    useSkill,
+    listSkills: (source) => visibleSkillsForTurn(source ? [source] : [scopeId, resolution.orgScopeId]),
+    writableScopeId: resolution.writableScopeId,
+    readOnlyScopeIds: resolution.readOnlyScopeIds,
+    commandPolicy: () => commandPolicy,
+    layerCommandRules: () => layerCommandRules,
+    authorizeCommand,
+    restoreCommand,
+    grantedHandles: resolution.grantedHandles,
+    context,
+    deploy: deps.deploy,
+    acl: deps.acl,
+    files: deps.files,
+    auditLog: deps.auditLog,
+    createdBy: actor.id,
+    botActor: input.botActor,
+    commandCredentials,
+    resolveCommandCredentials: createCommandCredentialResolver(credentialCatalog, {
+      scopeAttestation,
+      sandboxTokenExpiry,
+    }),
+    ...(deps.publicWebUrl ? { publicWebUrl: deps.publicWebUrl } : {}),
+    publishContext: {
+      conversationKind: conversation.kind,
+      ...(conversation.channelRef ? { channelRef: conversation.channelRef } : {}),
+      ...(conversation.isPrivate !== undefined ? { isPrivate: conversation.isPrivate } : {}),
+      ...(conversation.isMpim !== undefined ? { isMpim: conversation.isMpim } : {}),
+      ...(conversation.publishMembers ? { publishMembers: conversation.publishMembers } : {}),
+    },
+    config: deps.config,
+    ...(deps.control && controlClaims ? { control: deps.control, controlClaims } : {}),
+    ...(deps.apiBaseUrl && connectorEnv.AGENT_API_TOKEN
+      ? {
+          ...(securityPolicy.posture !== "strict"
+            ? { selfApi: createSelfApiCall(deps.apiBaseUrl, connectorEnv.AGENT_API_TOKEN) }
+            : {}),
+          admin: {
+            call: createAdminCall(deps.apiBaseUrl, connectorEnv.AGENT_API_TOKEN),
+            operationsAvailable:
+              actorIsOrgAdmin || Boolean(controlClaims?.grants?.some((grant) => grant.startsWith("admin."))),
+          },
+        }
+      : {}),
+    ...(deps.webhookPublicUrl ? { webhookPublicUrl: deps.webhookPublicUrl } : {}),
+    ...(humanInput && !external && !input.botActor ? { humanTurn: true } : {}),
+    toolOutput: deps.toolOutput,
+    sessionId: session.id,
+    ...(surfaceToolDeps ? { surface: surfaceToolDeps } : {}),
+    ...(turnSessionSyscalls ? { sessionSyscalls: turnSessionSyscalls } : {}),
+    ...(strictReadOnly ? {} : { attach: attachStaging.attach }),
+    memory: context.memory,
+    memoryCaptureMetadata: () => ({ sessionId: session.id, inheritedFacts: captureDependencies() }),
+    memoryScopeId,
+    ...(memoryAccess ? { memoryAccess } : {}),
+    ...(!external && deps.mcp ? { mcp: deps.mcp, actAsActor } : {}),
+    ...(audienceScopeId ? { audienceScopeId } : {}),
+    ...(surface?.capabilities.nativeActor ? { actingSlackUserId: actor.id } : {}),
+    ...(deps.deploymentLayer
+      ? {
+          layerAuth: {
+            credentialPaths: deps.deploymentLayer.credentialPaths,
+            splitEnvTemplates: deps.deploymentLayer.splitEnvTemplates,
+          },
+        }
+      : {}),
+    sessionHistory: (() => {
+      const historyView = async () => filterHistory(forSearchView(await deps.sessions.getItems(session.id)));
+      return {
+        search: async (q: string, limit?: number) => searchSessionItems(await historyView(), q, limit),
+        open: async (seq: number) => openSessionItem(await historyView(), seq),
+      };
+    })(),
+    execTimeoutMs: deps.execTimeoutMs,
+    execTimeoutCeilingMs: deps.execTimeoutCeilingMs,
+    signals: deps.signals,
+    ...(input.runId ? { runId: input.runId } : {}),
+    ...(backgroundBroker ? { backgroundBroker } : {}),
+    ...(monitorBroker ? { monitorBroker } : {}),
+  });
 }
