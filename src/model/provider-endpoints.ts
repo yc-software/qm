@@ -142,11 +142,10 @@ export function modelGatewayHeaders(
   return headers;
 }
 
-export function modelGatewayRequest<T extends { id: string; baseUrl: string; api?: string; compat?: object }>(
+export function modelGatewayRoute<T extends { id: string; baseUrl: string; api?: string; compat?: object }>(
   config: ModelGatewayTransportConfig | undefined,
   model: T,
-  purpose?: ModelRequestPurpose,
-): { model: T; target: string; apiKey: string; headers: Record<string, string> } | undefined {
+): { model: T; target: string } | undefined {
   const target = config?.models[model.id];
   if (!target || !config) {
     if (isGatewayModelId(model.id) || config?.reservedModelIds?.has(model.id))
@@ -162,7 +161,15 @@ export function modelGatewayRequest<T extends { id: string; baseUrl: string; api
         : config.url,
     },
     target,
-    apiKey: gatewayKey(config),
-    headers: modelGatewayHeaders(config, purpose),
   };
+}
+
+export function modelGatewayRequest<T extends { id: string; baseUrl: string; api?: string; compat?: object }>(
+  config: ModelGatewayTransportConfig | undefined,
+  model: T,
+  purpose?: ModelRequestPurpose,
+): { model: T; target: string; apiKey: string; headers: Record<string, string> } | undefined {
+  const route = modelGatewayRoute(config, model);
+  if (!route || !config) return undefined;
+  return { ...route, apiKey: gatewayKey(config), headers: modelGatewayHeaders(config, purpose) };
 }
