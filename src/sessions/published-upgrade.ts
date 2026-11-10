@@ -1,5 +1,5 @@
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
-import { msOf, TENANT, USER_KINDS } from "./items.ts";
+import { msOf, USER_KINDS } from "./items.ts";
 import { ITEMS_CUTOVER_MIGRATIONS } from "./legacy-history-migrations.ts";
 
 const stableOriginPattern = (origin: string): string => `^agent:main:${origin}:[^:]+$`;
@@ -49,7 +49,7 @@ BEGIN
     EXIT WHEN batch IS NULL;
     WITH latest AS MATERIALIZED (
       SELECT b.id, (SELECT ${msOf("MAX(e.created_at)")} FROM items e
-                     WHERE e.tenant_id = ${TENANT} AND e.session_id = b.id AND e.kind IN ${USER_KINDS}) AS at
+                     WHERE e.tenant_id = qm_tenant_id() AND e.session_id = b.id AND e.kind IN ${USER_KINDS}) AS at
         FROM unnest(batch) AS b(id))
     UPDATE sessions s
        SET last_user_activity = latest.at
@@ -145,7 +145,28 @@ const migrations: readonly PgMigrationDefinition[] = [
   },
 ];
 
-export const PUBLISHED_SESSION_UPGRADE = migrations.map((migration) => ({
+const RELEASE_TENANT_SEED: PgMigrationDefinition = {
+  id: "sessions/store/0034-tenant-seed",
+  statements: [
+    `DO $release_tenant_seed$
+     DECLARE
+       boot uuid;
+     BEGIN
+       IF to_regclass('qm_tenant') IS NOT NULL OR to_regclass('items') IS NOT NULL
+          OR to_regprocedure('qm_boot_tenant()') IS NULL THEN
+         RETURN;
+       END IF;
+       EXECUTE 'SELECT qm_boot_tenant()' INTO boot;
+       IF boot IS NOT NULL THEN
+         CREATE TABLE qm_tenant(id UUID PRIMARY KEY);
+         CREATE UNIQUE INDEX qm_tenant_singleton ON qm_tenant((true));
+         INSERT INTO qm_tenant(id) VALUES (boot);
+       END IF;
+     END $release_tenant_seed$`,
+  ],
+};
+
+export const PUBLISHED_SESSION_UPGRADE = [...migrations, RELEASE_TENANT_SEED].map((migration) => ({
   ...migration,
   upgradeFrom: "sessions/store/0033-client-tools",
 }));

@@ -13,6 +13,7 @@ import { scopeId, type Destination, type TurnRequest } from "../src/types.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 import { runNowSettled, settle } from "./support/settle.ts";
 import { failedTurnError } from "./support/failed-turn.ts";
+import { withCommandRules } from "./support/command-rules.ts";
 import { loadConfig, type Config } from "../src/config.ts";
 import type { SandboxHandle, ProvisionOptions, Sandbox } from "../src/sandbox/sandbox.ts";
 import { verifyCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
@@ -50,7 +51,7 @@ function requestScope(req: TurnRequest): string | null {
 }
 async function selectComputer(built: ReturnType<typeof buildAppRaw>, actorId: string, scope: ScopeId) {
   const asSpeaker = built.sandboxResources.forTurn({ actorId, scopeId: scope, isCurrent: async () => true });
-  const computer = await asSpeaker.create(actorId, scope, built.sandboxResources.defaultBackend());
+  const computer = await asSpeaker.create(actorId, scope, await built.sandboxResources.defaultBackend());
   await asSpeaker.setDefault(actorId, scope, computer.id);
   return computer;
 }
@@ -2724,7 +2725,7 @@ test("an approval pause persists timing on its boundary entry", async () => {
 });
 
 test("dangerous command pauses for HiLO approval, then proceeds when approved", async () => {
-  const { app } = freshApp();
+  const { app } = await withCommandRules(freshApp());
   const first = await app.turn(dm("!run git push --force origin main"));
   assert.equal(first.status, "pending_approval");
   const pending = first.pendingApprovals?.[0];
@@ -2751,7 +2752,7 @@ test("dangerous command pauses for HiLO approval, then proceeds when approved", 
 });
 
 test("a pending command approval blocks unrelated follow-up input in the same thread", async () => {
-  const { app } = freshApp();
+  const { app } = await withCommandRules(freshApp());
   const first = await app.turn(dm("!run git push --force origin main"));
   assert.equal(first.status, "pending_approval");
   const pending = first.pendingApprovals![0]!;
@@ -2777,7 +2778,7 @@ test("a pending command approval blocks unrelated follow-up input in the same th
 });
 
 test("a second click on an already-consumed approval refuses instead of re-running the command", async () => {
-  const { app, auditLog } = freshApp();
+  const { app, auditLog } = await withCommandRules(freshApp());
   const first = await app.turn(dm("!run git push --force origin main"));
   assert.equal(first.status, "pending_approval");
   const pending = first.pendingApprovals![0]!;
@@ -2808,7 +2809,7 @@ test("a second click on an already-consumed approval refuses instead of re-runni
 });
 
 test("an approval id from another conversation refuses there and stays approvable where it was requested", async () => {
-  const { app, auditLog } = freshApp();
+  const { app, auditLog } = await withCommandRules(freshApp());
   const first = await app.turn(dm("!run git push --force origin main"));
   assert.equal(first.status, "pending_approval");
   const pending = first.pendingApprovals![0]!;
@@ -2835,7 +2836,7 @@ test("an approval id from another conversation refuses there and stays approvabl
 });
 
 test("a bystander presenting someone else's blocking requestId stays sealed out and consumes nothing", async () => {
-  const { app, auditLog } = freshApp();
+  const { app, auditLog } = await withCommandRules(freshApp());
   const bystander = { externalId: "U2" };
   const first = await app.turn(channel("!run git push --force origin main"));
   assert.equal(first.status, "pending_approval");
@@ -2917,7 +2918,7 @@ test("only the requester can approve or deny a collected approval; a bystander i
 });
 
 test("a pending approval stops blocking its thread once the requester is deactivated", async () => {
-  const { app, identity } = freshApp();
+  const { app, identity } = await withCommandRules(freshApp());
   const bystander = { externalId: "U2" };
   const first = await app.turn(channel("!run git push --force origin main"));
   assert.equal(first.status, "pending_approval");
@@ -2958,7 +2959,7 @@ test("a pending approval stops blocking its thread once the requester is deactiv
 });
 
 test("a blocked thread hides the requester's pending command from everyone else", async () => {
-  const { app } = freshApp();
+  const { app } = await withCommandRules(freshApp());
   const first = await app.turn(channel("!run git push --force origin main"));
   assert.equal(first.status, "pending_approval");
   const pending = first.pendingApprovals![0]!;
@@ -2978,7 +2979,7 @@ test("a blocked thread hides the requester's pending command from everyone else"
 });
 
 test("a session approval covers the whole rule: a different command matching it runs without re-prompting", async () => {
-  const { app } = freshApp();
+  const { app } = await withCommandRules(freshApp());
   const first = await app.turn(dm("!run git push --force origin main"));
   assert.equal(first.status, "pending_approval");
   const pending = first.pendingApprovals![0]!;
@@ -3045,7 +3046,7 @@ test("Dangerous posture keeps predeclared command approvals and hard denials", a
 });
 
 test("an admin-removed grant mode is refused, filters the offer, and leaves the approval pending", async () => {
-  const { app, config } = freshApp();
+  const { app, config } = await withCommandRules(freshApp());
   const org = scopeId("org", "default-org");
   await config.setApprovalGrantModes(org, { session: false, always: true });
 
@@ -3081,7 +3082,7 @@ test("an admin-removed grant mode is refused, filters the offer, and leaves the 
 });
 
 test("a grant mode disabled after an approval was issued is filtered from the re-presented card", async () => {
-  const { app, config } = freshApp();
+  const { app, config } = await withCommandRules(freshApp());
   const org = scopeId("org", "default-org");
 
   const first = await app.turn(dm("!run git push --force origin main"));
@@ -3100,7 +3101,7 @@ test("a grant mode disabled after an approval was issued is filtered from the re
 });
 
 test("disabling a grant mode suspends existing grants until it is re-enabled", async () => {
-  const { app, config } = freshApp();
+  const { app, config } = await withCommandRules(freshApp());
   const org = scopeId("org", "default-org");
 
   const first = await app.turn(dm("!run git push --force origin main"));
@@ -3295,7 +3296,7 @@ test("Strict posture gates tool actions behind HiLO and honors a session grant",
 });
 
 test("Strict posture layers predeclared command approvals on top of the tool gate", async () => {
-  const built = freshApp();
+  const built = await withCommandRules(freshApp());
   await built.config.setSecurityPosture(scopeId("org", "default-org"), "strict");
 
   const first = await built.app.turn(dm("!run git push --force origin main"));
@@ -3918,7 +3919,7 @@ test("approvals collected during an approval re-run are still surfaced (multi-st
 });
 
 test("'allow once' authorizes exactly one execution — a sibling approval for the same command stays pending", async () => {
-  const { app } = freshApp();
+  const { app } = await withCommandRules(freshApp());
   const command = "git push --force origin main";
   const first = await app.turn(dm(`!double-exec ${command}`));
   assert.equal(first.status, "ok");
@@ -3937,7 +3938,7 @@ test("'allow once' authorizes exactly one execution — a sibling approval for t
 });
 
 test("'allow for session' approves every same-command invocation in the same turn", async () => {
-  const { app } = freshApp();
+  const { app } = await withCommandRules(freshApp());
   const command = "git push --force origin main";
   const first = await app.turn(dm(`!double-exec ${command}`));
   assert.equal(first.status, "ok");
@@ -3953,7 +3954,7 @@ test("'allow for session' approves every same-command invocation in the same tur
 
 test("accepted approval decisions are durably recorded in the conversation", async () => {
   for (const approved of [false, true]) {
-    const { app, sessions, runs } = freshApp();
+    const { app, sessions, runs } = await withCommandRules(freshApp());
     const command = "git push --force origin main";
     const first = await app.turn(dm(`!run ${command}`));
     const requestId = first.pendingApprovals![0]!.requestId;
@@ -3981,7 +3982,7 @@ test("accepted approval decisions are durably recorded in the conversation", asy
 });
 
 test("a HiLO approval carries a plain-English summary, persisted durably alongside the static reason", async () => {
-  const { app } = freshApp();
+  const { app } = await withCommandRules(freshApp());
   const first = await app.turn(dm("!run git push --force origin main"));
   assert.equal(first.status, "pending_approval");
   const pending = first.pendingApprovals![0]!;
@@ -3995,7 +3996,7 @@ test("a HiLO approval carries a plain-English summary, persisted durably alongsi
 });
 
 test("a HiLO approval falls back to the static reason when the summarizer throws — never blocks the approval", async () => {
-  const { app } = freshApp();
+  const { app } = await withCommandRules(freshApp());
   const first = await app.turn(dm("!run rm -rf build !summary-boom"));
   assert.equal(first.status, "pending_approval", "the approval still surfaces despite the summary fault");
   const pending = first.pendingApprovals![0]!;
@@ -4008,7 +4009,7 @@ test("a HiLO approval falls back to the static reason when the summarizer throws
 });
 
 test("a HiLO approval summarizer that hangs past the deadline falls back without delaying the approval", async () => {
-  const { app } = freshApp({ approvalSummaryTimeoutMs: 50 });
+  const { app } = await withCommandRules(freshApp({ approvalSummaryTimeoutMs: 50 }));
   assert.equal((await app.turn(dm("hello"))).status, "ok");
   const started = Date.now();
   const first = await app.turn(dm("!run rm -rf build !summary-hang"));
@@ -4018,7 +4019,7 @@ test("a HiLO approval summarizer that hangs past the deadline falls back without
 });
 
 test("denying a pending approval clears it and does not run the command", async () => {
-  const { app } = freshApp();
+  const { app } = await withCommandRules(freshApp());
   const first = await app.turn(dm("!run rm -rf build"));
   assert.equal(first.status, "pending_approval");
   const pending = first.pendingApprovals![0]!;

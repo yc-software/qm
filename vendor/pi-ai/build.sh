@@ -8,6 +8,7 @@ echo "761e2492dab7bf5601143d005b9f82ec9000338d02d06f737b6574e057fd61c3  $work/st
 tar xzf "$work/stock.tgz" -C "$work"
 git -C "$work/package" apply -p1 "$here/provider-error.patch"
 git -C "$work/package" apply -p1 "$here/served-tier.patch"
+git -C "$work/package" apply -p1 "$here/fetch-option.patch"
 npm pack --silent "$work/package" --pack-destination "$work" >/dev/null
-mv "$work/earendil-works-pi-ai-0.82.0.tgz" ./earendil-works-pi-ai-0.82.0-qm.3.tgz
-sha256sum earendil-works-pi-ai-0.82.0-qm.3.tgz
+mv "$work/earendil-works-pi-ai-0.82.0.tgz" ./earendil-works-pi-ai-0.82.0-qm.4.tgz
+sha256sum earendil-works-pi-ai-0.82.0-qm.4.tgz
