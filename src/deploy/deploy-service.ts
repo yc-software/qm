@@ -268,10 +268,15 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     return endpoint;
   };
 
-  const markVersionRunning = async (id: string, version: number, endpoint: DeployEndpoint): Promise<void> => {
+  const markVersionRunning = async (
+    id: string,
+    version: number,
+    endpoint: DeployEndpoint,
+    placedCommit?: string,
+  ): Promise<void> => {
     await deps.deployStore.setEndpoint(id, endpoint);
     await deps.deployStore.setStatus(id, "running");
-    await deps.deployStore.setAppliedVersion(id, version);
+    await deps.deployStore.setAppliedVersion(id, version, placedCommit);
   };
 
   const liveEdits = createLiveEdits({
@@ -303,8 +308,9 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         if (!endpointsEqual(again, cur.endpoint)) await deps.deployStore.setEndpoint(cur.id, again);
         return again;
       }
-      const fresh = await applyVersion(cur.id, (await liveEdits.runningVersion(cur)) ?? v);
-      await markVersionRunning(cur.id, v.version, fresh);
+      const placed = (await liveEdits.runningVersion(cur)) ?? v;
+      const fresh = await applyVersion(cur.id, placed);
+      await markVersionRunning(cur.id, v.version, fresh, placed.commit);
       return fresh;
     });
   };
@@ -315,8 +321,9 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       if (!cur || cur.status !== "running" || !(await deps.provider.rotationDue?.(cur))) return;
       const v = currentVersionOf(cur);
       if (!v) return;
-      const endpoint = await applyVersion(cur.id, (await liveEdits.runningVersion(cur)) ?? v);
-      await markVersionRunning(cur.id, v.version, endpoint);
+      const placed = (await liveEdits.runningVersion(cur)) ?? v;
+      const endpoint = await applyVersion(cur.id, placed);
+      await markVersionRunning(cur.id, v.version, endpoint, placed.commit);
       await deps.provider.park?.(cur).catch((e) => swallow("deploy: park rotated app", e));
     });
 
@@ -509,8 +516,9 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         const version = currentVersionOf(d);
         if (!version) throw new Error(`no such version ${d.currentVersion}`);
         try {
-          const endpoint = await applyVersion(id, (await liveEdits.runningVersion(d)) ?? version);
-          await markVersionRunning(id, version.version, endpoint);
+          const placed = (await liveEdits.runningVersion(d)) ?? version;
+          const endpoint = await applyVersion(id, placed);
+          await markVersionRunning(id, version.version, endpoint, placed.commit);
         } catch (error) {
           await deps.provider
             .destroy(d)

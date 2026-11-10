@@ -142,7 +142,7 @@ export interface DeployStore {
   setConnectors(id: string, connectors: string[] | undefined): Promise<void>;
   setPublic(id: string, isPublic: boolean): Promise<void>;
   setDefaultAudience(id: string, snapshot: DefaultAudienceSnapshot): Promise<void>;
-  setAppliedVersion(id: string, version: number): Promise<void>;
+  setAppliedVersion(id: string, version: number, placedCommit?: string): Promise<void>;
   touch(id: string, at: number): Promise<void>;
   versionOf(id: string, version: number): Promise<DeploymentVersion | null>;
   treeOf(id: string, version: number): Promise<DeployGitTreeFile[] | null>;
@@ -285,8 +285,7 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
     await git.setRef(deploymentId, `refs/deploy-commits/${version.commit}`, version.commit);
   }
 
-  async function updateAppliedRef(deploymentId: string, version: DeploymentVersion): Promise<void> {
-    const commit = (await backing.drafts.get(deploymentId))?.commit ?? version.commit;
+  async function updateAppliedRef(deploymentId: string, commit: string | undefined): Promise<void> {
     if (commit) await git.setRef(deploymentId, CURRENT_REF, commit);
     else await git.deleteRef(deploymentId, CURRENT_REF);
   }
@@ -433,14 +432,14 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
         await backingMap.put(id, d);
       }
     },
-    async setAppliedVersion(id, version) {
+    async setAppliedVersion(id, version, placedCommit) {
       const d = await backingMap.get(id);
       if (!d) return;
       const v = d.versions.find((x) => x.version === version);
       if (!v) throw new Error(`no such version ${version}`);
       d.appliedVersion = version;
       await backingMap.put(id, d);
-      await updateAppliedRef(id, v);
+      await updateAppliedRef(id, placedCommit ?? v.commit);
     },
     async touch(id, at) {
       const prev = lastTouch.get(id);
