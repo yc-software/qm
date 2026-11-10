@@ -106,7 +106,8 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   in a temporary directory outside the checkout or an ignored local output directory,
   and attach them to the PR or host them externally. Do not bundle review screenshots
   into the app. Only actual product assets, such as icons and instructional media,
-  belong in the app bundle.
+  belong in the app bundle. `.gitignore` ignores image files and CI fails when a tracked
+  file is ignored; a product asset needs its own `!path` line there.
 - **Demo every front-end change in the PR.** Anything an operator or user sees
   rendered — admin/web/portal UI, Slack surfaces, emails — ships with a way for a
   reviewer to see the result without booting it. Prefer a link to a live demo app

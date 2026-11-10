@@ -282,6 +282,14 @@ jobs:
           npm ci
           npm ci --prefix plugins/web-ui
           npm ci --prefix desktop --ignore-scripts
+      - name: No tracked file is ignored
+        if: needs.reuse.outputs.reusable != 'true'
+        run: |
+          ignored=$(git -c core.ignorecase=true ls-files -ci --exclude-standard)
+          if [ -n "$ignored" ]; then
+            printf 'Tracked files match .gitignore:\n%s\nImages stay out of Git (AGENTS.md): attach them to the PR instead. A product asset needs its own !path line in .gitignore.\n' "$ignored"
+            exit 1
+          fi
       - name: Formatting
         if: needs.reuse.outputs.reusable != 'true'
         run: npm run format:check
