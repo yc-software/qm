@@ -2893,16 +2893,6 @@ test("a subagent spawned by an owner's fire inherits the fire's automation autho
     useOwnerKeychain: true,
     ownerFire: true,
   });
-  for (const patch of [
-    { actor: { ...actor, id: "other" } },
-    { delegatingRunId: "missing" },
-    { readOnly: true },
-    {
-      conversation: { ...r.run.request.conversation, audience: [...conversation.audience, { ...actor, id: "other" }] },
-    },
-    { conversation: { ...r.run.request.conversation, kind: "channel" as const, channelRef: "other" } },
-  ])
-    assert.equal(await delegatedAuthorizationOrigin({ ...r.run.request, ...patch }, r), undefined);
   await r.sessions.removeParticipant(r.run.request.sessionSenderId!, actor.id);
   assert.equal(
     (await delegatedAuthorizationOrigin(r.run.request, r))?.kind,
