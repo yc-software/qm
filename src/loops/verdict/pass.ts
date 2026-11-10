@@ -14,7 +14,7 @@ import { newestTs } from "./transcript.ts";
 import { runVerdict, writeDraft, type VerdictInput, type VerdictModel } from "./verdict.ts";
 
 export interface InboxPassDeps {
-  items: Pick<LoopItemLedger, "byLoop" | "ingest" | "recordVerdict" | "skip" | "prune">;
+  items: Pick<LoopItemLedger, "byLoop" | "ingest" | "recordVerdict" | "recordAction" | "skip" | "prune">;
   fetch: ConversationFetcher;
   discover: Discoverer;
   model: VerdictModel;
@@ -40,6 +40,7 @@ export interface InboxPassSummary {
 export type InboxPass = (loop: Loop, options: InboxPassOptions) => Promise<InboxPassSummary>;
 
 const CONCURRENCY = 4;
+export const SOURCE_GONE_ACTION = "source_gone";
 
 function passOrder(a: LoopItem, b: LoopItem): number {
   const open = Number(isResolved(a)) - Number(isResolved(b));
@@ -79,6 +80,14 @@ export function createInboxPass(deps: InboxPassDeps): InboxPass {
     const outcome = await deps.fetch(owner, item);
     if (outcome.kind === "skipped") {
       if (outcome.reason === "bad_item") await deps.items.skip(item.id, "the item has no usable source reference");
+      return false;
+    }
+    if (outcome.kind === "gone") {
+      await deps.items.recordAction(item.id, {
+        kind: SOURCE_GONE_ACTION,
+        outcome: "dismissed",
+        result: `The conversation is no longer available in ${outcome.source}`,
+      });
       return false;
     }
     const { conversation } = outcome;
@@ -138,6 +147,7 @@ export function createInboxPass(deps: InboxPassDeps): InboxPass {
       }
     const everything = options.discover && !summary.scanned;
     const items = (await deps.items.byLoop(loop.id))
+      .filter((item) => item.actionKind !== SOURCE_GONE_ACTION)
       .filter((item) => everything || alwaysRead(item) || active?.has(item.sourceKey))
       .sort(passOrder);
     const ownerName = await deps.ownerName?.(loop.owner).catch((error: unknown) => {
@@ -145,6 +155,7 @@ export function createInboxPass(deps: InboxPassDeps): InboxPass {
       return undefined;
     });
     let stopped = false;
+    const itemErrors: unknown[] = [];
     for (let index = 0; index < items.length && !stopped; index += CONCURRENCY) {
       await Promise.all(
         items.slice(index, index + CONCURRENCY).map(async (item) => {
@@ -153,11 +164,20 @@ export function createInboxPass(deps: InboxPassDeps): InboxPass {
             if (await one(loop, item, ownerName, options.voiceProfile)) summary.verdicts++;
           } catch (error) {
             if (error instanceof SourceRateLimited) stopped = true;
-            fail("verdict_failed", `Inbox verdict for item ${item.id}: ${errMessage(error)}`, error);
+            summary.failures.push(errMessage(error));
+            summary.firstError ??= error;
+            itemErrors.push(error);
           }
         }),
       );
     }
+    if (itemErrors.length)
+      record(
+        loop.owner,
+        "verdict_failed",
+        `Inbox verdicts for loop ${loop.id}: ${itemErrors.length} of ${summary.checked} conversations failed; first: ${errMessage(itemErrors[0])}`,
+        itemErrors[0],
+      );
     await deps.items
       .prune(loop.id, { maxItems: INBOX_LEDGER_MAX_ITEMS, retentionMs: INBOX_LEDGER_RETENTION_MS, now: now() })
       .catch((error: unknown) => fail("prune_failed", `Inbox prune for loop ${loop.id}: ${errMessage(error)}`, error));

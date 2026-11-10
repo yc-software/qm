@@ -756,3 +756,86 @@ test("long message bodies are cut with a visible marker instead of silently", ()
   assert.doesNotMatch(prompt, /x{3001}/);
   assert.match(prompt, /Conversation: Email thread/);
 });
+
+function slackRefusal(code: string) {
+  return Object.assign(new Error("An API error occurred"), { data: { ok: false, error: code } });
+}
+
+test("a Slack conversation that is gone is dismissed once, without an error entry, and never read again", async () => {
+  const { items, item } = await slackFixture();
+  const calls: string[] = [];
+  const refusing = (_token: string) => ({
+    apiCall: async (method: string) => {
+      calls.push(method);
+      if (method === "auth.test") return { ok: true, user_id: "U_REGAN", url: "https://acme.slack.com/" };
+      throw slackRefusal("channel_not_found");
+    },
+  });
+  const errors: Array<{ code: string }> = [];
+  const pass = createInboxPass({
+    items,
+    model: scriptedModel([]).model,
+    errors: { record: (event: { code: string }) => void errors.push(event) },
+    fetch: createConversationFetcher(createSourceClients({ tokens, slackClient: refusing })),
+    discover: async () => [],
+  });
+  const first = await pass(loop, { discover: false });
+  assert.deepEqual(first.failures, []);
+  assert.equal(errors.length, 0);
+  const after = (await items.get(item.id))!;
+  assert.equal(after.status, "skipped");
+  assert.equal(after.actionKind, "source_gone");
+  assert.equal(after.actionResult, "The conversation is no longer available in Slack");
+  const reads = calls.filter((method) => method === "conversations.history").length;
+  const second = await pass(loop, { discover: false });
+  assert.equal(second.checked, 0);
+  assert.equal(calls.filter((method) => method === "conversations.history").length, reads);
+});
+
+test("a deleted Gmail thread is dismissed as gone while other failures are retried with one error entry", async () => {
+  const { items, item } = await gmailFixture();
+  await items.ingest([
+    {
+      loopId: mailLoop.id,
+      dedupeKey: "t2",
+      source: "gmail",
+      sourceAt: 1000,
+      sourcePayload: { gmail: { threadId: "t2" } },
+    },
+    {
+      loopId: mailLoop.id,
+      dedupeKey: "t3",
+      source: "gmail",
+      sourceAt: 1000,
+      sourcePayload: { gmail: { threadId: "t3" } },
+    },
+  ]);
+  const fetchImpl: typeof fetch = async (url) => {
+    const path = String(url);
+    if (path.endsWith("/profile")) return json({ emailAddress: "regan@example.com" });
+    if (/threads\/t1\?/.test(path)) return new Response("gone", { status: 404 });
+    if (/threads\/t2\?/.test(path)) return new Response("upstream", { status: 503 });
+    return new Response("upstream", { status: 500 });
+  };
+  const errors: Array<{ code: string; message: string }> = [];
+  const summary = await createInboxPass({
+    items,
+    model: scriptedModel([]).model,
+    errors: { record: (event: { code: string; message: string }) => void errors.push(event) },
+    fetch: createConversationFetcher(createSourceClients({ tokens, fetchImpl })),
+    discover: async () => [],
+  })(mailLoop, { discover: false });
+  assert.equal(summary.checked, 3);
+  assert.equal(summary.failures.length, 2);
+  const gone = (await items.get(item.id))!;
+  assert.equal(gone.status, "skipped");
+  assert.equal(gone.actionResult, "The conversation is no longer available in Gmail");
+  const retried = (await items.byLoop(mailLoop.id)).filter((row) => row.sourceKey !== "t1");
+  assert.deepEqual(
+    retried.map((row) => row.status),
+    ["queued", "queued"],
+  );
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0]!.code, "verdict_failed");
+  assert.match(errors[0]!.message, /2 of 3 conversations failed; first: Gmail threads\/t[23] returned 50[03]/);
+});

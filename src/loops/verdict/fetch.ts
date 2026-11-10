@@ -7,6 +7,7 @@ import { gmailThreadOf } from "../sources/gmail.ts";
 import { slackConversationOf } from "../sources/slack.ts";
 import { normalizeSlackApiUrl } from "../../slack/config.ts";
 import { slackMessageContent } from "../../slack/message-content.ts";
+import { slackErrorCode } from "../../slack/payloads.ts";
 import { slackWebClient } from "../../slack/web-client.ts";
 import { GmailApiError, gmailApi } from "../../connectors/gmail-api.ts";
 import { TransientTurnFailure } from "../../core/turn-error.ts";
@@ -30,7 +31,15 @@ export interface SourceClientDeps {
 
 type FetchOutcome =
   | { kind: "conversation"; conversation: Conversation }
-  | { kind: "skipped"; reason: "not_connected" | "not_inbox" | "bad_item" };
+  | { kind: "skipped"; reason: "not_connected" | "not_inbox" | "bad_item" }
+  | { kind: "gone"; source: "Slack" | "Gmail" };
+
+const SLACK_GONE = new Set(["channel_not_found", "thread_not_found", "not_in_channel", "is_archived"]);
+
+export function sourceGone(error: unknown): boolean {
+  if (error instanceof GmailApiError) return error.status === 404;
+  return SLACK_GONE.has(slackErrorCode(error) ?? "");
+}
 
 export class SourceRateLimited extends TransientTurnFailure {
   constructor(source: string) {
@@ -257,21 +266,29 @@ export function createConversationFetcher(clients: SourceClients): ConversationF
     const token = await clients.slackToken(owner);
     if (!token) return { kind: "skipped", reason: "not_connected" };
     const identity = await clients.slackIdentity(owner, token);
-    const { messages: raw, partial } = await slackMessages(
-      owner,
-      token,
-      target.channelId,
-      target.threadTs,
-      identity.userId,
-    );
     const meta = isObj(item.sourcePayload?.slack) ? item.sourcePayload.slack : {};
-    const channel =
-      typeof meta.isDirectMessage === "boolean" && typeof meta.channelLabel === "string"
-        ? { direct: meta.isDirectMessage, label: meta.channelLabel }
-        : await clients.slackChannel(owner, token, target.channelId).then((info) => ({
-            direct: info.direct,
-            label: info.name ? `#${info.name}` : "",
-          }));
+    let raw: Array<Record<string, unknown>>;
+    let partial: boolean;
+    let channel: { direct: boolean; label: string };
+    try {
+      ({ messages: raw, partial } = await slackMessages(
+        owner,
+        token,
+        target.channelId,
+        target.threadTs,
+        identity.userId,
+      ));
+      channel =
+        typeof meta.isDirectMessage === "boolean" && typeof meta.channelLabel === "string"
+          ? { direct: meta.isDirectMessage, label: meta.channelLabel }
+          : await clients.slackChannel(owner, token, target.channelId).then((info) => ({
+              direct: info.direct,
+              label: info.name ? `#${info.name}` : "",
+            }));
+    } catch (error) {
+      if (sourceGone(error)) return { kind: "gone", source: "Slack" };
+      throw error;
+    }
     const participants = new Map<string, Participant>();
     const messages: TranscriptMessage[] = [];
     for (const m of raw) {
@@ -327,11 +344,13 @@ export function createConversationFetcher(clients: SourceClients): ConversationF
     const token = await clients.gmailToken(owner);
     if (!token) return { kind: "skipped", reason: "not_connected" };
     const address = await clients.gmailAddress(owner, token);
-    const thread = await clients.gmailRead<{ messages?: unknown[] }>(
-      owner,
-      token,
-      `threads/${encodeURIComponent(threadId)}?format=full`,
-    );
+    let thread: { messages?: unknown[] };
+    try {
+      thread = await clients.gmailRead(owner, token, `threads/${encodeURIComponent(threadId)}?format=full`);
+    } catch (error) {
+      if (sourceGone(error)) return { kind: "gone", source: "Gmail" };
+      throw error;
+    }
     const raw = (Array.isArray(thread.messages) ? thread.messages.filter(isObj) : [])
       .filter((m) => !(Array.isArray(m.labelIds) && m.labelIds.includes("DRAFT")))
       .sort((a, b) => Number(a.internalDate) - Number(b.internalDate));
