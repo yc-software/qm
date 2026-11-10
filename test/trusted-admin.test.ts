@@ -8,6 +8,9 @@ import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { twoTenants } from "./support/two-tenants.ts";
+import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../src/auth/portal-identity.ts";
+import { withTenant as inTenant } from "../src/tenants/context.ts";
 import { TEST_TENANT } from "./support/test-tenant.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
@@ -15,8 +18,6 @@ import { trustedPrincipal } from "../plugins/portal/src/trusted-entry.ts";
 import { provisionTrustedAdmin } from "../plugins/portal/src/trusted-admin.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { twoTenants } from "./support/two-tenants.ts";
-import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../src/auth/portal-identity.ts";
 import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { bindBootTenant } from "../src/tenants/boot.ts";
 
@@ -171,9 +172,9 @@ test("on a shared host, trusted sign-in grants admin only in a tenant the subjec
   const s = withoutTenant(() => start(true, db.appDatabaseUrl));
   t.after(s.close);
   const id = trustedPrincipal(issuer, "founder-alpha");
-  await withTenant(alpha, () => s.built.admin.users.record({ id, source: "invite", at: Date.now() }));
+  await inTenant(alpha, () => s.built.admin.users.record({ id, source: "invite", at: Date.now() }));
   const isAdmin = async (tenantId: string) =>
-    (await withTenant(tenantId, (token) => s.built.admin.adminStatusOf(token, { id, type: "internal" }))).isAdmin;
+    (await inTenant(tenantId, (token) => s.built.admin.adminStatusOf(token, { id, type: "internal" }))).isAdmin;
   const presentTo = (tenantId: string) =>
     withoutTenant(() => send(s.base, claims({ subject: "founder-alpha" }), identitySecret, true, tenantId));
 
@@ -193,7 +194,7 @@ test("with a boot tenant, trusted sign-in still bootstraps the boot tenant but n
   t.after(s.close);
   const id = trustedPrincipal(issuer, "founder-boot");
   const isAdmin = async (tenantId: string) =>
-    (await withTenant(tenantId, (token) => s.built.admin.adminStatusOf(token, { id, type: "internal" }))).isAdmin;
+    (await inTenant(tenantId, (token) => s.built.admin.adminStatusOf(token, { id, type: "internal" }))).isAdmin;
   assert.equal((await send(s.base, claims({ subject: "founder-boot" }), identitySecret, true, other)).status, 403);
   assert.equal(await isAdmin(other), false);
   assert.equal((await send(s.base, claims({ subject: "founder-boot" }))).status, 200);
