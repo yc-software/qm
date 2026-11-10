@@ -5,7 +5,13 @@ import {
   supportsProcessSessions,
   SandboxProvisionCleanupError,
 } from "../../sandbox/sandbox.ts";
-import { createTurnSandboxAccess, preferredBackend, type SandboxAccessPlan } from "../../sandbox/sandbox-resources.ts";
+import {
+  assertBotMayUseComputer,
+  createTurnSandboxAccess,
+  preferredBackend,
+  type SandboxAccessPlan,
+  type SandboxResource,
+} from "../../sandbox/sandbox-resources.ts";
 import { ensureChildSandbox, prepareChildWorkdir } from "../../sessions/child-isolation.ts";
 import { reconcileProcesses } from "../../processes/reconcile.ts";
 import { leaseLapsed } from "../../runs/run-store.ts";
@@ -77,6 +83,7 @@ interface TurnPool {
   audit: (action: string, handle?: SandboxHandle, extra?: Record<string, unknown>) => void;
   isolation: ChildIsolation | undefined;
   boundSandboxId: string | undefined;
+  assertDefaultUsable: (sandboxId?: string) => Promise<void>;
   turnAccess: ProvisionOptions;
   scratchKey: () => string;
   holdResource: (handle: SandboxHandle) => Promise<void>;
@@ -199,7 +206,16 @@ function openSlot(
 
 async function openScoped(t: TurnPool, slot: Slot, eager: boolean): Promise<SandboxHandle> {
   const { deps, input, actor, session, resolution, scopeId, memoryScopeId } = t.ctx;
-  const { isolation, boundSandboxId, turnAccess, holdResource, audit, prepareTurnFiles, finishProcess } = t;
+  const {
+    isolation,
+    boundSandboxId,
+    assertDefaultUsable,
+    turnAccess,
+    holdResource,
+    audit,
+    prepareTurnFiles,
+    finishProcess,
+  } = t;
   if (input.surfaceOrigin?.audience === "external") {
     const resource = await deps.sandboxResources?.resolve(memoryScopeId);
     if (resource && resource.ownerScopeId !== scopeId) throw new Error("External Slack requires its own sandbox.");
@@ -212,6 +228,7 @@ async function openScoped(t: TurnPool, slot: Slot, eager: boolean): Promise<Sand
       scopeId: resolution.writableScopeId,
       backendScopeId: memoryScopeId,
     });
+  await assertDefaultUsable();
   const handle = await deps.sandbox.provision(resolution.writableScopeId, {
     ...(boundSandboxId ? { sandboxId: boundSandboxId } : {}),
     ...turnAccess,
@@ -327,6 +344,13 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
 
   const isolation = session.spawnMeta?.isolation;
   const boundSandboxId = swarmSandboxId ?? isolation?.sandboxId;
+  const swarms = input.botActor ? deps.swarms : undefined;
+  const botMayUse =
+    swarms &&
+    ((resource: SandboxResource) =>
+      swarms.botMayUseComputer(resource, { actorId: actor.id, threadRef: session.threadRef, sessionId: session.id }));
+  const assertDefaultUsable = (sandboxId = boundSandboxId): Promise<void> =>
+    assertBotMayUseComputer(deps.sandboxResources, resolution.writableScopeId, sandboxId, botMayUse);
   const turnAccess = {
     env: connectorEnv,
     egress: resolution.egress,
@@ -362,12 +386,14 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       handle,
       processId,
     );
-  const provision = (eager = false): Promise<SandboxHandle> => {
+  const provision = async (eager = false): Promise<SandboxHandle> => {
     if (!eager) scopedUsed = true;
-    return (
-      pool.get(SCOPED)?.opening ??
-      openSlot(pool, SCOPED, (slot) => tracePhase("sandbox.provision", () => openScoped(turnPool, slot, eager)))
-    );
+    const opening = pool.get(SCOPED)?.opening;
+    if (!opening)
+      return openSlot(pool, SCOPED, (slot) => tracePhase("sandbox.provision", () => openScoped(turnPool, slot, eager)));
+    const handle = await opening;
+    await assertDefaultUsable(handle.resourceId ?? boundSandboxId);
+    return handle;
   };
   const writableScopeId = resolution.writableScopeId;
   const { accessResource, jobComputerPlan } = createTurnSandboxAccess({
@@ -376,6 +402,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     resolution,
     scopeId,
     openResourceAccess,
+    botMayUse,
   });
   const provisionJobComputer = async (): Promise<SandboxHandle> => {
     const resources = deps.sandboxResources!;
@@ -414,6 +441,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     audit,
     isolation,
     boundSandboxId,
+    assertDefaultUsable,
     turnAccess,
     scratchKey,
     holdResource,
@@ -427,6 +455,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
 
   return {
     boundSandboxId,
+    assertDefaultUsable,
     workdir: isolation?.workdir,
     provision,
     provisionScratch,

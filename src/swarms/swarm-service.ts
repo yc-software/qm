@@ -6,7 +6,7 @@ import type { OrchestratorInput } from "../core/orchestrator.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
-import type { SandboxResources } from "../sandbox/sandbox-resources.ts";
+import type { SandboxResource, SandboxResources } from "../sandbox/sandbox-resources.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import { sleep, withTimeout } from "../util/async.ts";
@@ -89,6 +89,10 @@ export interface SwarmService {
   read(caller: SwarmCaller, options: { after?: number; replyTo?: string; waitMs?: number }): Promise<SwarmMessage[]>;
   control(caller: SwarmCaller, input: { memberId: string; state: SwarmControlState }): Promise<SwarmMember>;
   enabledFor(actorId: string): Promise<boolean>;
+  botMayUseComputer(
+    computer: Pick<SandboxResource, "swarmId">,
+    turn: { actorId: string; threadRef: string; sessionId: string },
+  ): Promise<boolean>;
   binding(input: OrchestratorInput): Promise<{ sandboxId?: string; rootSessionId: string; member: SwarmMember } | null>;
   queuedMessages(
     input: OrchestratorInput,
@@ -481,7 +485,17 @@ export function createSwarmService(deps: {
             const provision = (name: string, id: string) => {
               const provisionDeadline = Math.min(deadline, Date.now() + SWARM_LIMITS.provisionMs);
               return step(
-                () => deps.sandboxes.create(swarm!.ownerId, swarm!.scopeId, swarm!.backend, name, id),
+                () =>
+                  deps.sandboxes.create(
+                    swarm!.ownerId,
+                    swarm!.scopeId,
+                    swarm!.backend,
+                    name,
+                    id,
+                    undefined,
+                    undefined,
+                    swarm!.id,
+                  ),
                 SWARM_LIMITS.provisionMs,
               ).catch((error: unknown) => {
                 provisioningTimedOut = Date.now() >= provisionDeadline;
@@ -845,6 +859,13 @@ export function createSwarmService(deps: {
       }
     },
     enabledFor,
+    async botMayUseComputer(computer, turn) {
+      if (!computer.swarmId) return true;
+      const swarm = await store.get(computer.swarmId);
+      if (!swarm) return false;
+      const { rootId, memberId } = threadIdentity(turn.threadRef, turn.sessionId);
+      return botMayDirect(swarm, rootId === swarm.id ? memberId : swarm.id, turn.actorId);
+    },
     async control(caller, input) {
       const { auth, swarm } = await load(caller);
       if (!["active", "paused", "stopped"].includes(input.state)) throw new Error("invalid control state");

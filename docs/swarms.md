@@ -26,6 +26,13 @@ path before starting workers. Memory stores implement the same contract for test
 they are not a production durability substitute. Swarms are unavailable with
 mixed memory/Postgres stores so execution leases and writes share one authority.
 
+Each swarm board and worker computer records its swarm's id (`swarmId`), which is how
+a Slack bot's turn is kept off a person's swarm computers. Releases from before that
+field leave it unset; `durable-map/swarms/0040-stamp-computers` stamps the computers of
+existing swarms once at startup. Drain an older release's cores and workers before
+upgrading from it, because a computer the older release provisions after that migration
+stays unmarked.
+
 ## Agent API
 
 These routes appear in `/v1/apis` and work from every agent turn that can use QM's
@@ -256,7 +263,12 @@ the swarm. Once anyone other than that bot has posted a swarm message, the bot's
 turn and every worker in a branch the bot started lose that access too. Workers in a
 branch someone else started keep it: every mail-woken worker turn in a bot-started
 swarm runs as the bot, so a worker's access comes from who sent the message that
-spawned the top of its branch.
+spawned the top of its branch. The same rule covers the board and worker computers a
+swarm creates: a bot's turn that may not direct the swarm cannot list them, reach them with
+`sandbox_id`, make one the conversation's default, use one a person made the default, or
+run on its own worker computer. The check runs each time the turn uses a computer, so a
+turn that is already running loses that access as soon as someone else posts.
+A computer supplied as `forumSandboxId` stays an ordinary computer of its scope.
 Worker sessions never inherit the root session's command or security-screen
 approval grants; a worker must obtain its own approval. Auto screening receives host-verified swarm delegation provenance, so routine delegated tasks and in-swarm reporting are distinguished from external instructions. Delegation does not authorize credential disclosure, permission changes, or overriding higher-priority instructions; those remain screened. Frozen swarm roster checks
 apply to swarm notifications, not ordinary human follow-ups in the root session.

@@ -40,7 +40,7 @@ import {
   isTextDocument,
 } from "./documents.ts";
 import { recoveredRuntime } from "../agent/runtime-recovery.ts";
-import { createCanWriteScope, rosterAdmits, withLiveTurnMembership } from "../resolution/scope-membership.ts";
+import { withLiveTurnMembership } from "../resolution/scope-membership.ts";
 import { goalView } from "../runs/turn-stream.ts";
 import { assignedGoal, type GoalRecord, openGoal } from "../agent/goal.ts";
 import { connectorToolsNote, deferredMcpTools } from "../agent/deferred-tools.ts";
@@ -67,7 +67,7 @@ import {
   midTurnSessionMessage,
   spokenByPerson,
 } from "./turn-origin.ts";
-import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
+import { resolveTurnFastMode } from "./turn-options.ts";
 import { orgId } from "../config.ts";
 import { currentTenant } from "../tenants/context.ts";
 import { deriveTurnOutcome, approvalBlocksInput, heldReplyResult } from "./turn-outcome.ts";
@@ -94,7 +94,7 @@ import {
 } from "../credentials/keychain.ts";
 import { configuredConnectorProviders } from "../credentials/connector-status.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
-import { createSpendLimits, spendLimitNote, spendLimitRefusal } from "../ratelimit/spend-limits.ts";
+import { createSpendLimits, spendLimitNote } from "../ratelimit/spend-limits.ts";
 import { CAPABILITY_TTL_MS, isValidCapabilityTimezone, type CapabilityClaims } from "../auth/capability-token.ts";
 import type {
   DetectResult,
@@ -167,7 +167,7 @@ import {
   selectOverheardToImport,
   type OverheardEntryPayload,
 } from "../agent/replay.ts";
-import { errMessage, reportFailure, reportFailureAs, swallow, swallowAs } from "../util/errors.ts";
+import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
 import { pgTextSafe } from "../util/text.ts";
 import { absoluteAppLinks } from "../util/markdown.ts";
 import {
@@ -187,7 +187,6 @@ import { LRUCache } from "lru-cache";
 import type { SkillResolution } from "../skills/skill-store.ts";
 import type { Orchestrator, OrchestratorDeps, OrchestratorInput } from "./orchestrator/types.ts";
 import { personalModelId } from "../model/pi-models.ts";
-import { loadPersonalModelAuth } from "./individual-auth-routing.ts";
 import { createSessionTitles } from "./session-title.ts";
 import {
   MAX_AUTO_ATTACHMENT_SCREEN_BYTES,
@@ -219,6 +218,15 @@ import {
 } from "./orchestrator/prompt-blocks.ts";
 import { createCompaction } from "./orchestrator/compaction.ts";
 import { mintTurnCapabilities } from "./orchestrator/capability-tokens.ts";
+import {
+  admitAudienceAndBudget,
+  admitSubagentSession,
+  checkSpendLimit,
+  createManagedRoster,
+  ProjectRosterChanged,
+  rosterChanged,
+} from "./orchestrator/admit.ts";
+import { resolveTurnRuntimeAuth } from "./orchestrator/turn-runtime.ts";
 import { startStallWatchdog } from "./orchestrator/stall-watchdog.ts";
 import {
   cleanVerdict,
@@ -260,8 +268,6 @@ async function recordUser(users: OrchestratorDeps["users"], id: string, botActor
 
 export { egressClaimAllowingControlPlane, filterConnectorSkills } from "./orchestrator/turn-helpers.ts";
 export type { Orchestrator, OrchestratorDeps, OrchestratorInput, SurfaceContextPuller } from "./orchestrator/types.ts";
-
-class ProjectRosterChanged extends Error {}
 
 const countSkills = (listed: { skills: readonly unknown[] }) => ({ "qm.skills": listed.skills.length });
 const ACTIVITY_KINDS = new Set<ItemKind>([
@@ -540,56 +546,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           reason: "internal-only: non-internal principals cannot interact",
         };
       }
-      const delegatedSession = isSubagentThreadRef(conversation.threadRef)
-        ? await deps.sessions.getByThread(conversation.threadRef)
-        : null;
-      if (isSubagentThreadRef(conversation.threadRef)) {
-        const canWrite = createCanWriteScope({
-          managedGroups: deps.managedGroups
-            ? {
-                recognizes: (ref) => deps.managedGroups!.recognizes(ref),
-                members: (ref) => deps.managedGroups!.members(ref),
-                membership: async (ref, id) => (await deps.managedGroups!.members(ref))?.includes(id),
-              }
-            : undefined,
-          directory: deps.directory,
-          identity: deps.identity,
-        });
-        if (
-          !delegatedSession?.spawnMeta ||
-          delegatedSession.scopeId !== deps.resolution.scopeFor(conversation, actor) ||
-          !(await deps.sessions.getForParticipant(delegatedSession.id, actor.id)) ||
-          !(await canWrite(actor.id, delegatedSession.scopeId))
-        )
-          return { status: "refused", reason: "subagent session access is no longer current" };
-      }
-      const managedGroupRef =
-        conversation.kind === "group" &&
-        conversation.channelRef &&
-        deps.managedGroups?.recognizes(conversation.channelRef)
-          ? conversation.channelRef
-          : undefined;
-      const managedRosterIsCurrent = async (): Promise<boolean> => {
-        if (!managedGroupRef) return true;
-        const expected = new Set(input.sessionParticipantIds ?? []);
-        const [current, version] = await Promise.all([
-          deps.managedGroups!.members(managedGroupRef).catch(swallowAs("managed group roster: members", undefined)),
-          deps.managedGroups!.version(managedGroupRef).catch(swallowAs("managed group roster: version", undefined)),
-        ]);
-        return (
-          !!current &&
-          version === input.scopeVersion &&
-          rosterAdmits(current, actor.id, toScopeId("group", managedGroupRef)) &&
-          current.length === expected.size &&
-          current.every((id) => expected.has(id))
-        );
-      };
-      const withManagedRosterVersion = async <T>(fn: () => Promise<T>): Promise<T> => {
-        if (!managedGroupRef) return fn();
-        const result = await deps.managedGroups!.withVersion(managedGroupRef, input.scopeVersion, fn);
-        if (result === undefined) throw new ProjectRosterChanged();
-        return result;
-      };
+      const { delegatedSession, refusal: subagentRefusal } = await admitSubagentSession(deps, conversation, actor);
+      if (subagentRefusal) return subagentRefusal;
+      const { managedRosterIsCurrent, withManagedRosterVersion } = createManagedRoster(
+        deps,
+        input,
+        actor,
+        conversation,
+      );
       let mirrored = Promise.resolve();
       const mirrorRunActivity = async (item: Item): Promise<void> => {
         if (!input.runId || !deps.runActivity) return;
@@ -607,36 +571,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           if (step) deps.turnStream.settleReasoning(input.runId, step.id, step.index);
         }
       };
-      const rosterChanged = (sessionId?: string): TurnResult => ({
-        status: "refused",
-        ...(sessionId ? { sessionId } : {}),
-        reason: "project membership changed; retry from the current project",
-      });
       if (!(await managedRosterIsCurrent())) return rosterChanged();
       const surface = input.surface ? deps.surfaces.get(input.surface) : undefined;
-      if (conversation.kind !== "dm" && !deps.identity.audienceIsAllInternal(conversation.audience)) {
-        const externalAllowed =
-          external ||
-          (surface?.capabilities.externalParticipants &&
-            (await deps.config.getExternalSlackParticipantsDurable(toScopeId("org", orgId()))));
-        if (!externalAllowed) {
-          return {
-            status: "refused",
-            refusalKind: "internal_only",
-            reason: "internal-only: shared audience includes a non-internal participant",
-          };
-        }
-      }
-
-      if (deps.budget) {
-        const b = await deps.budget.check(actor.id);
-        if (!b.allowed) {
-          return {
-            status: "refused",
-            reason: `budget exceeded ($${b.spentUsd.toFixed(2)} of $${b.limitUsd}); try again later`,
-          };
-        }
-      }
+      const admissionRefusal = await admitAudienceAndBudget(deps, conversation, actor, surface, external);
+      if (admissionRefusal) return admissionRefusal;
 
       const resolution = await deps.resolution.resolve(conversation, actor, external);
       const scopeId = deps.resolution.scopeFor(conversation, actor);
@@ -649,19 +587,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           : undefined;
       const audit = (event: Omit<AuditEvent, "at" | "principalId" | "scopeLabel">) =>
         deps.auditLog.record({ at: Date.now(), principalId: actor.id, scopeLabel: scopeId, ...event });
-      const spendLimit = spendLimits
-        ? await spendLimits.status(scopeId).catch((e: unknown) => {
-            deps.errors.record(
-              { category: "turn", code: "spend_limit_check", message: errMessage(e), scopeLabel: scopeId },
-              e,
-            );
-            return null;
-          })
-        : null;
-      if (spendLimit?.over) {
-        audit({ action: "spend_limit.refused", resource: scopeId, detail: spendLimit.over });
-        return { status: "refused", reason: spendLimitRefusal(spendLimit), refusalKind: "model_budget" };
-      }
+      const { spendLimit, refusal: spendRefusal } = await checkSpendLimit(spendLimits, deps, scopeId, audit);
+      if (spendRefusal) return spendRefusal;
       const issueApproval = async (
         requestId: string,
         fields: Omit<PendingApprovalRecord, "createdAt" | "request">,
@@ -1293,64 +1220,29 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (browseSteps && !("BROWSE_LAB_MAX_STEPS" in connectorEnv))
           connectorEnv.BROWSE_LAB_MAX_STEPS = String(browseSteps);
       }
-      const runtimePurpose = turnRuntimePurpose(
-        { surface: input.surface, triggered: automatedTurn, infrequentCron: input.infrequentCron },
-        !!session.parentSessionId || !!swarmBinding?.member.parentId,
-      );
-      const purposeDefault = runtimePurpose ? await deps.config.getPurposeRuntimeDurable(runtimePurpose) : undefined;
-      const loadRuntimeAuth = async (runtime: Partial<RuntimeChoice>) => {
-        const userCredStore = external ? undefined : deps.userModelCredentials;
-        const account = external
-          ? "company"
-          : (input.modelAccount ?? (await deps.config.getModelAccountDurable(actor.id)) ?? "company");
-        if (!userCredStore || !humanInput || account === "company")
-          return {
-            userProviderKeys: undefined,
-            userModelOverride: undefined,
-            personalAuth: false,
-            authLabel: "api-key",
-            account: "company" as const,
-          };
-        const personal = await loadPersonalModelAuth(
-          userCredStore,
-          actor.id,
-          account,
-          account === "personal" || input.surface === "web"
-            ? (runtime.modelId ?? input.model ?? purposeDefault?.modelId)
-            : (runtime.modelId ?? purposeDefault?.modelId),
-        );
-        if (!personal)
-          throw new NonRetryableTurnError(
-            "Your personal AI account is unavailable. Open Settings → AI access to reconnect Claude or ChatGPT / Codex, or choose company access. The chat cannot continue on company access.",
-          );
-        return {
-          userProviderKeys: personal.keys,
-          userModelOverride: personal.modelId,
-          personalAuth: true,
-          authLabel: personal.subscription ? `${personal.subscription}-subscription` : "api-key",
-          account,
-        };
-      };
-      const initialRuntimeAuth = loadRuntimeAuth({});
-      const sessionAuth = await initialRuntimeAuth.catch(() => undefined);
-      const sessionModel = sessionAuth?.userModelOverride ?? input.model;
-      const sessionRoute: SessionRoute | undefined = sessionAuth && {
-        ...(sessionModel ? { runtime: { modelId: sessionModel } } : {}),
-        ...(sessionAuth.userProviderKeys ? { providerKeys: sessionAuth.userProviderKeys, runtimePinned: true } : {}),
-        ...(runtimePurpose ? { runtimePurpose } : {}),
-      };
-      const browserModel =
-        !strictReadOnly && allInternal && sessionRoute
-          ? (
-              await deps
-                .resolveSessionRuntime?.({ ...sessionRoute, scopeLabel: scopeId })
-                .catch(reportFailureAs("browser model: session runtime", undefined, scopeId))
-            )?.modelId
-          : undefined;
-      if (browserModel) {
-        connectorEnv.BROWSE_LAB_MODEL_PROVIDER = "managed";
-        connectorEnv.BROWSE_LAB_MODEL = browserModel;
-      }
+      const {
+        runtimePurpose,
+        purposeDefault,
+        loadRuntimeAuth,
+        initialRuntimeAuth,
+        sessionAuth,
+        sessionModel,
+        sessionRoute,
+        browserModel,
+      } = await resolveTurnRuntimeAuth({
+        deps,
+        input,
+        actor,
+        session,
+        scopeId,
+        external,
+        strictReadOnly,
+        allInternal,
+        automatedTurn,
+        humanInput,
+        swarmBinding,
+        connectorEnv,
+      });
       const {
         actorIsOrgAdmin,
         orgMemoryWrite,
@@ -1441,6 +1333,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
       const {
         boundSandboxId,
+        assertDefaultUsable,
         workdir,
         provision,
         provisionScratch,
@@ -1976,6 +1869,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           provisionJobComputer,
           provisionResource,
           accessSandboxResource: accessResource,
+          assertDefaultSandboxUsable: assertDefaultUsable,
           boundSandboxId,
           workdir,
           useSkill,
