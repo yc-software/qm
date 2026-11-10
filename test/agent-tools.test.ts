@@ -755,15 +755,66 @@ test("a result over the inline cap keeps its head and tail and parks the full te
   const uncapped = emitted.find((e) => e.kind === "ToolResult")!;
   assert.equal(uncapped.body.output, undefined, "0 turns the cap off");
   assert.ok(uncapped.text?.includes("line 1000"));
-
-  await pool.q("UPDATE qm_settings SET value = '100' WHERE key = 'tool_result_inline_tokens'");
-  clock.at += 60_000;
-  emitted.length = 0;
-  ref.screenToolResult = async () => ({ outcome: "quarantine" });
-  await call(execute, { command: "seq", purpose: "Run test command" });
-  const quarantined = emitted.find((e) => e.kind === "ToolResult")!;
-  assert.equal(quarantined.body.output, undefined, "a quarantined result keeps no reference to the withheld text");
   await pool.close();
+});
+
+test("a quarantined result over the inline cap never stores the withheld text", async () => {
+  const emitted: Emitted[] = [];
+  const url = testDatabaseUrl();
+  await createPostgresSessionStore(url).getOrCreateByThread("web:quarantine-park", "dm", scopeId("personal", "U1"));
+  const pool = createPgPool(url);
+  await pool.q(
+    "INSERT INTO qm_settings(key, value) VALUES ('tool_result_inline_tokens', '100') ON CONFLICT (key) DO UPDATE SET value = '100'",
+  );
+  const bytes = createMemoryDurableByteStore();
+  const outputs = createPostgresToolOutputStore({ pool, bytesFor: () => bytes });
+  const withheld = Array.from({ length: 2_000 }, (_, i) => `withheld ${i}`).join("\n");
+  const blobsBefore = await pool.q("SELECT count(*)::int AS n FROM blobs");
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      toolOutput: outputs,
+      execute: async () => ({ stdout: withheld, stderr: "", code: 0, timedOut: false }),
+    },
+    emit: sink(emitted),
+    scopeLabel: "personal:U1",
+    screenToolResult: async () => ({ outcome: "quarantine" }),
+  };
+  const [execute] = createAgentTools(ref);
+  await call(execute, { command: "seq", purpose: "Run test command" });
+  const result = emitted.find((e) => e.kind === "ToolResult")!;
+  assert.equal(result.body.output, undefined);
+  assert.equal(result.blobSha, null);
+  assert.ok(!result.text?.includes("withheld"));
+  const blobsAfter = await pool.q("SELECT count(*)::int AS n FROM blobs");
+  assert.equal(blobsAfter[0]!.n, blobsBefore[0]!.n, "no blob row is written for the withheld text");
+  await pool.close();
+});
+
+test("a result over the inline cap that cannot be parked drops the file reference from its marker", async () => {
+  const emitted: Emitted[] = [];
+  const full = Array.from({ length: 2_000 }, (_, i) => `line ${i}`).join("\n");
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      toolOutput: {
+        inlineTokens: async () => 100,
+        save: async () => Promise.reject(new Error("down")),
+      },
+      execute: async () => ({ stdout: full, stderr: "", code: 0, timedOut: false }),
+    },
+    emit: sink(emitted),
+    scopeLabel: "personal:U1",
+  };
+  const [execute] = createAgentTools(ref);
+  const ret = (await call(execute, { command: "seq", purpose: "Run test command" })) as {
+    content: Array<{ type: string; text: string }>;
+  };
+  const result = emitted.find((e) => e.kind === "ToolResult")!;
+  assert.equal(result.body.output, undefined);
+  assert.ok(result.text?.includes("[output cut: showing the first"));
+  assert.ok(!result.text?.includes("tool-output/"), "no marker points at a file that was never written");
+  assert.equal(ret.content.map((c) => c.text).join("\n"), result.text);
 });
 
 test("execute stores its output once and replays exactly what the model saw", async () => {
