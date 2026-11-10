@@ -12,6 +12,7 @@ import { testConfig } from "./support/test-config.ts";
 import { settle } from "./support/settle.ts";
 import { configureCommandRules } from "./support/command-rules.ts";
 import type { SessionStateEvent } from "../src/runs/session-state-bus.ts";
+import { boundTenant, withoutTenant } from "../src/tenants/context.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-state-"));
@@ -128,7 +129,7 @@ test("the events carry the session UUID and a timestamp", async () => {
 
 async function listen(built: ReturnType<typeof freshApp>): Promise<SessionStateEvent[]> {
   const got: SessionStateEvent[] = [];
-  built.app.subscribeSessionStates((e) => got.push(e));
+  built.app.subscribeSessionStates((e) => void got.push(e));
   await heardProbe(built.sessionStateBus, got);
   return got;
 }
@@ -401,4 +402,24 @@ test("a subagent idle between its own runs is not working while its own subagent
   await built.runs.complete(leafRun.id, leasedLeaf!.leaseToken!, { status: "ok", reply: "done" });
   assert.ok(await waitFor(() => statesFor(got, rootThread).includes("idle")), "the last run settles the root");
   assert.deepEqual(statesFor(got, midThread), ["working", "idle"]);
+});
+
+test("a background subscriber hears each event inside the event's tenant", async () => {
+  const built = freshApp();
+  const tenant = "7a4f7f0e-3c55-4c3e-9d0b-2f1c8a6e5b11";
+  const heard: Array<{ at: number; tenant: string | undefined }> = [];
+  const got: SessionStateEvent[] = [];
+  withoutTenant(() =>
+    built.app.subscribeSessionStates((e) => {
+      got.push(e);
+      heard.push({ at: e.at, tenant: boundTenant() });
+    }),
+  );
+  await heardProbe(built.sessionStateBus, got);
+  built.sessionStateBus.emit({ tenantId: tenant, threadRef: "web:U1:tenanted", state: "working", at: 9 });
+  await received(got, 9);
+  assert.deepEqual(
+    heard.find((h) => h.at === 9),
+    { at: 9, tenant },
+  );
 });

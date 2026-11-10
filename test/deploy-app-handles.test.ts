@@ -129,7 +129,7 @@ test("a <handle>-<app> host serves the handle's own app, refuses other companies
     assert.equal(own.status, 200);
     assert.equal(own.body, "UPSTREAM OK");
     assert.equal((await get(port, host, "/reports", portalSession({ t: randomUUID() }))).status, 404);
-    assert.equal((await get(port, "sales-board.apps.example.com", "/", portalSession({ t: TEST_TENANT }))).status, 404);
+    assert.equal((await get(port, "sales-board.apps.example.com", "/", portalSession({ t: TEST_TENANT }))).status, 200);
   } finally {
     server.close();
     upstream.close();

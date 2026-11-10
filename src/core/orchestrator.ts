@@ -29,12 +29,13 @@ import {
   documentText,
   type DocumentInput,
   type ExtractedDocumentText,
-  historicalDocumentMetas,
   loadDocumentInputs,
   MAX_DOCUMENT_BYTES,
   MAX_DOCUMENT_TEXT_CHARS,
   MAX_DOCUMENTS,
   estimateDocumentTokens,
+  turnDocumentMetas,
+  documentIncludedNote,
   isDocumentAttachment,
   isTextDocument,
 } from "./documents.ts";
@@ -80,27 +81,19 @@ import { turnDeliveryProvenance } from "../delivery/delivery-store.ts";
 import type { DirectoryStore, DirectoryMember } from "../directory/directory-store.ts";
 import { resolveEnvironmentId } from "../environments/environment-store.ts";
 import type { SessionWriter } from "../sessions/session-store.ts";
-import { CONFIG_DEFAULTS } from "../config.ts";
 import { sessionOrigin } from "../sessions/session-store.ts";
 import { currentModelRequestContext, withModelRequestContext } from "../model/request-context.ts";
 import { supportsProcessSessions, supportsScopeProfile } from "../sandbox/sandbox.ts";
 import { createBackgroundBroker } from "../connectors/background-exec-broker.ts";
 import { createMonitorBroker, readBackgroundOutputTail } from "../monitors/monitor-broker.ts";
 import { isPollSurface } from "../triggers/run-trigger.ts";
-import { envKey } from "../credentials/connector-token.ts";
 import {
-  connectorHandle,
-  connectorLine,
-  credentialHandle,
-  credentialLineText,
   askResolutionEvents,
   renderKeychainManifest,
   type KeychainAsk,
   type PublicServiceCredential,
-  type KeychainManifestInput,
 } from "../credentials/keychain.ts";
 import { configuredConnectorProviders } from "../credentials/connector-status.ts";
-import { CONNECTOR_HOSTS } from "../connectors/oauth.ts";
 import { SANDBOX_MODEL_PREFIX } from "../api/contract.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
 import { createSpendLimits, spendLimitNote, spendLimitRefusal } from "../ratelimit/spend-limits.ts";
@@ -112,7 +105,6 @@ import {
   BROWSER_MODEL_AUD,
   SANDBOX_MODEL_AUD,
   OAUTH_CONSENT_AUD,
-  CREDENTIAL_BROKER_AUD,
   EGRESS_PROXY_AUD,
   isValidCapabilityTimezone,
   type CapabilityClaims,
@@ -258,7 +250,13 @@ import {
 import { createTurnSandboxes } from "./orchestrator/sandboxes.ts";
 import { isolationBrief } from "../sessions/child-isolation.ts";
 import type { EgressPolicy } from "../types.ts";
-import { isOpenScopeMember } from "../resolution/sharing-access.ts";
+import {
+  createCredentialCatalog,
+  registerBrokeredTools,
+  registerConnectorCredentials,
+  registerKeychainCredentials,
+  registerServiceCredentials,
+} from "./orchestrator/credential-catalog.ts";
 import {
   createSurfaceToolDeps,
   enqueueDirectReply,
@@ -313,10 +311,9 @@ const DIRECTORY_INDEX_CACHE_MAX_ENTRIES = 100;
 export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   const config = deps.config;
   const spendReport = deps.sessions.spendReport?.bind(deps.sessions);
-  const spendLimits =
-    config && spendReport
-      ? createSpendLimits({ orgId, getSpendLimit: (scope) => config.getSpendLimitDurable(scope), spendReport })
-      : undefined;
+  const spendLimits = spendReport
+    ? createSpendLimits({ orgId, getSpendLimit: (scope) => config.getSpendLimitDurable(scope), spendReport })
+    : undefined;
   const pending = deps.approvals;
   const transcripts = createTranscriptSource(deps.sessions);
   const approvalGrants = deps.approvalGrants;
@@ -367,7 +364,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       ]);
       return summary?.trim() || undefined;
     } catch (e) {
-      deps.errors?.record(
+      deps.errors.record(
         {
           category: "command_policy",
           code: "summary_failed",
@@ -386,7 +383,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     sessions: deps.sessions,
     agent: deps.agent,
     ...(deps.sessionStateBus ? { sessionStateBus: deps.sessionStateBus } : {}),
-    ...(deps.errors ? { errors: deps.errors } : {}),
+    errors: deps.errors,
   });
 
   const orchestrator: Orchestrator = {
@@ -627,7 +624,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const step = typeof id === "string" && item.step !== null ? { id, index: item.step } : undefined;
           if (item.body.redacted !== true && item.text?.trim())
             await append({ ...item, body: step ? { wire: { message: { id: step.id } } } : {} });
-          if (step) deps.turnStream?.settleReasoning(input.runId, step.id, step.index);
+          if (step) deps.turnStream.settleReasoning(input.runId, step.id, step.index);
         }
       };
       const rosterChanged = (sessionId?: string): TurnResult => ({
@@ -641,7 +638,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const externalAllowed =
           external ||
           (surface?.capabilities.externalParticipants &&
-            (deps.config ? await deps.config.getExternalSlackParticipantsDurable(toScopeId("org", orgId())) : false));
+            (await deps.config.getExternalSlackParticipantsDurable(toScopeId("org", orgId()))));
         if (!externalAllowed) {
           return {
             status: "refused",
@@ -674,7 +671,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         deps.auditLog.record({ at: Date.now(), principalId: actor.id, scopeLabel: scopeId, ...event });
       const spendLimit = spendLimits
         ? await spendLimits.status(scopeId).catch((e: unknown) => {
-            deps.errors?.record(
+            deps.errors.record(
               { category: "turn", code: "spend_limit_check", message: errMessage(e), scopeLabel: scopeId },
               e,
             );
@@ -1357,7 +1354,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           `[orchestrator] turn.already_answered attempt=${input.attempt} run=${input.runId} thread=${conversation.threadRef} answerSeq=${recordedAnswer.seq}`,
         );
         const stopped = recordedAnswer.stopped ? { stopped: true } : {};
-        const surfaceTools = surfaceToolsActive({ deps, input, strictReadOnly, defaultDestination });
+        const surfaceTools = surfaceToolsActive({ input, strictReadOnly, defaultDestination });
         const held = heldReplyResult({
           sessionId: session.id,
           stopped: recordedAnswer.stopped === true,
@@ -1449,191 +1446,45 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const cleaned = payload.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, " ").trim();
         return cleaned.length > 16_000 ? `${cleaned.slice(0, 16_000)}…` : cleaned;
       };
-      const brokeredTools = external ? [] : (deps.brokeredTools ?? []);
-      const openSpeakerKeychain =
-        liveAuthorTurn && conversation.kind !== "dm" && sharingSources.includes(personalScope(actor.id));
-      const openAutomationKeychain =
-        !external &&
-        input.origin.kind === "automation" &&
-        input.origin.useOwnerKeychain === true &&
-        conversation.kind !== "dm" &&
-        !!deps.config &&
-        !!deps.isCurrentSharedScopeMember &&
-        (await isOpenScopeMember({
-          actorId: actor.id,
-          scope: scopeId,
-          config: deps.config,
-          isCurrentSharedScopeMember: deps.isCurrentSharedScopeMember,
-        }));
-      const ownCredentialsAllowed =
-        scopeId === personalScope(actor.id) || openSpeakerKeychain || openAutomationKeychain;
-      const sharedScope =
-        !external &&
-        (scopeId !== personalScope(actor.id) ||
-          environmentId !== scopeId ||
-          ((await deps.environments?.attachmentsFor(environmentId)) ?? []).some(
-            (attachment) => attachment.scopeId !== scopeId,
-          ));
-      const connectorEnv: Record<string, string> = {};
-      const commandCredentials: CommandCredential[] = [];
-      const credentialDescriptions: NonNullable<KeychainManifestInput["execution"]> = [];
-      const credentialIdentities = new Map<string, string>();
-
-      const authorizeOwnerCredentials = async (): Promise<void> => {
-        if (!openSpeakerKeychain && !openAutomationKeychain) return;
-        if (
-          !(await isCurrentSharedScopeMember(actor.id, scopeId)) ||
-          (await deps.config?.resolveSharingPostureDurable(personalScope(actor.id), scopeId)) !== "open"
-        ) {
-          throw new Error("Open speaker keychain access is no longer authorized");
-        }
-        audit({
-          action: "keychain.open_speaker_use",
-          resource: "scratch execution",
-        });
-      };
-      const resolvedCredential = (
-        materialized: import("../credentials/keychain.ts").MaterializedCred,
-        writeback: boolean,
-      ) => {
-        if (materialized.kind === "env") return { env: materialized.env };
-        return {
-          env: [],
-          files: {
-            files: materialized.files,
-            save: (files: import("../credentials/keychain.ts").CredentialFile[]) =>
-              deps.keychain!.updateFiles({ ...materialized, writeback }, files),
-            source: {
-              credentialId: materialized.credentialId,
-              ownerId: materialized.ownerId,
-              service: materialized.service,
-              ...(materialized.grantId ? { grantId: materialized.grantId } : {}),
-              writeback,
-            },
-          },
-        };
-      };
-      const placeCredential = (credential: CommandCredential): CommandCredential => ({
-        ...credential,
-        scratchOnly: sharedScope && credential.scratchOnly !== false,
+      const credentialCatalog = await createCredentialCatalog({
+        deps,
+        input,
+        actor,
+        conversation,
+        external,
+        strictReadOnly,
+        allInternal,
+        liveAuthorTurn,
+        scopeId,
+        environmentId,
+        sharingSources,
+        resolution,
+        isCurrentSharedScopeMember,
+        audit,
+        scopeKeychainGrants,
+        serviceAllowed,
+        aclGrantedServiceCredSlugs,
+        grantedServiceCredSlugs,
+        orgWideAudience,
       });
-      const addCredentialToCatalog = (
-        credential: CommandCredential,
-        description: string,
-        identity = credential.handle,
-        ownerId = actor.id,
-        credentialId?: string,
-      ): void => {
-        const existing = credentialIdentities.get(credential.handle);
-        if (existing !== undefined) {
-          if (existing !== identity) throw new Error(`credential handle collision: ${credential.handle}`);
-          return;
-        }
-        credentialIdentities.set(credential.handle, identity);
-        commandCredentials.push(placeCredential(credential));
-        credentialDescriptions.push({ handle: credential.handle, ownerId, description, credentialId });
-      };
-      const registerKeychainCredentials = async (addCredential: typeof addCredentialToCatalog): Promise<void> => {
-        if (external || strictReadOnly || !deps.keychain) return;
-        const keychain = deps.keychain;
-        for (const { grant, credential, grantScope } of await scopeKeychainGrants()) {
-          if (credential.kind === "broker" || isBackendCredential(credential)) continue;
-          addCredential(
-            {
-              handle: credentialHandle(credential),
-              resolve: async () => {
-                const prepared = await keychain.prepareMaterialize(grant.id, grantScope, actor.id);
-                return {
-                  ...resolvedCredential(prepared.materialized, samePerson(credential.ownerId, actor.id)),
-                  commit: prepared.commit,
-                  singleUse: prepared.singleUse,
-                };
-              },
-            },
-            credential.service,
-            credential.id,
-            credential.ownerId,
-            credential.id,
-          );
-        }
-        if (ownCredentialsAllowed) {
-          for (const credential of await keychain.listByOwner(actor.id)) {
-            if (credential.kind === "broker" || isBackendCredential(credential)) continue;
-            addCredential(
-              {
-                handle: credentialHandle(credential),
-                resolve: async () => {
-                  await authorizeOwnerCredentials();
-                  return resolvedCredential(
-                    await keychain.materializeOwnById(actor.id, credential.id, personalScope(actor.id)),
-                    true,
-                  );
-                },
-              },
-              credential.service,
-              credential.id,
-              credential.ownerId,
-              credential.id,
-            );
-          }
-        }
-      };
-      await tracePhase("turn.credentials", () => registerKeychainCredentials(addCredentialToCatalog));
-      const registerConnectorCredentials = async (addCredential: typeof addCredentialToCatalog): Promise<void> => {
-        if (!external && !strictReadOnly && deps.connectorTokens && ownCredentialsAllowed) {
-          const tokens = deps.connectorTokens;
-          const inventory = tokens.listConnectorsByOwners
-            ? ((await tokens.listConnectorsByOwners([actor.id])).get(actor.id) ?? [])
-            : undefined;
-          for (const host of CONNECTOR_HOSTS) {
-            for (const accountType of ["personal", undefined, "company"]) {
-              const status = inventory
-                ? inventory.find(
-                    (credential) =>
-                      credential.host === host && (credential.accountType ?? "default") === (accountType ?? "default"),
-                  )
-                : await tokens.connectorTokenStatus(host, actor.id, accountType);
-              const healthy = status?.connected && !status.needsReconnect;
-              const operatorFallback =
-                accountType === undefined &&
-                tokens.operatorFallbackHosts?.some((allowed) => host === allowed || host.endsWith(`.${allowed}`));
-              if (!healthy && !operatorFallback) continue;
-              addCredential(
-                {
-                  handle: connectorHandle(host, accountType),
-                  resolve: async () => {
-                    await authorizeOwnerCredentials();
-                    const token = await tokens.connectorAccessToken(host, actor.id, accountType);
-                    if (!token) throw new Error(`Connector is no longer available: ${host}`);
-                    return { env: [{ key: envKey(host), value: token }] };
-                  },
-                },
-                !healthy && operatorFallback
-                  ? `${host}, configured operator fallback${status?.refreshError ? ` (own connection's refresh failed: ${status.refreshError})` : ""}; availability checked on use; env \`${envKey(host)}\``
-                  : credentialLineText(connectorLine(host, accountType)),
-                healthy && status && "credentialId" in status ? status.credentialId : undefined,
-                actor.id,
-                healthy && status && "credentialId" in status ? status.credentialId : undefined,
-              );
-            }
-          }
-        }
-      };
-      await tracePhase("turn.credentials", () => registerConnectorCredentials(addCredentialToCatalog));
-      const authorizeServiceCredential = async (slug: string): Promise<void> => {
-        if (!serviceAllowed(slug)) throw new Error("Service is not approved for external Slack.");
-        if ((await aclGrantedServiceCredSlugs()).has(slug)) return;
-        const supplied =
-          orgWideAudience &&
-          ((await deps.serviceCreds?.listServiceCredentials(resolution.orgScopeId)) ?? []).some(
-            (record) => record.slug === slug && record.source === "deployment",
-          );
-        if (!supplied) {
-          throw new Error(`Service credential is no longer authorized: ${slug}`);
-        }
-      };
+      const {
+        connectorEnv,
+        commandCredentials,
+        credentialDescriptions,
+        ownCredentialsAllowed,
+        openSpeakerKeychain,
+        openAutomationKeychain,
+        placeCredential,
+        addCredentialToCatalog,
+      } = credentialCatalog;
+      await tracePhase("turn.credentials", () =>
+        registerKeychainCredentials(credentialCatalog, addCredentialToCatalog),
+      );
+      await tracePhase("turn.credentials", () =>
+        registerConnectorCredentials(credentialCatalog, addCredentialToCatalog),
+      );
       if (!strictReadOnly && allInternal && deps.serviceCreds) {
-        const browseSteps = deps.config?.getBrowseMaxSteps(toScopeId("org", orgId()));
+        const browseSteps = deps.config.getBrowseMaxSteps(toScopeId("org", orgId()));
         if (browseSteps && !("BROWSE_LAB_MAX_STEPS" in connectorEnv))
           connectorEnv.BROWSE_LAB_MAX_STEPS = String(browseSteps);
       }
@@ -1641,12 +1492,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         { surface: input.surface, triggered: automatedTurn, infrequentCron: input.infrequentCron },
         !!session.parentSessionId || !!swarmBinding?.member.parentId,
       );
-      const purposeDefault = runtimePurpose ? await deps.config?.getPurposeRuntimeDurable(runtimePurpose) : undefined;
+      const purposeDefault = runtimePurpose ? await deps.config.getPurposeRuntimeDurable(runtimePurpose) : undefined;
       const loadRuntimeAuth = async (runtime: Partial<RuntimeChoice>) => {
         const userCredStore = external ? undefined : deps.userModelCredentials;
         const account = external
           ? "company"
-          : (input.modelAccount ?? (await deps.config?.getModelAccountDurable(actor.id)) ?? "company");
+          : (input.modelAccount ?? (await deps.config.getModelAccountDurable(actor.id)) ?? "company");
         if (!userCredStore || !humanInput || account === "company")
           return {
             userProviderKeys: undefined,
@@ -1818,150 +1669,19 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         );
       };
       const egressTokenForTurn = await egressTokenForPolicy(resolution.egress);
-      const registerServiceCredentials = async (
-        addCredential: typeof addCredentialToCatalog,
-        requestedHandles: readonly string[],
-        current?: { records: PublicServiceCredential[]; granted: Set<string> },
-      ): Promise<void> => {
-        if (strictReadOnly || !deps.serviceCreds) return;
-        const records =
-          current?.records ??
-          (await deps.serviceCreds.listServiceCredentials(resolution.orgScopeId)).filter((record) =>
-            serviceAllowed(record.slug),
-          );
-        const granted = current?.granted ?? (await grantedServiceCredSlugs(records));
-        const available = records.filter(
-          (record) => !isBackendCredential(record) && record.enabled && record.hasSecret && granted.has(record.slug),
-        );
-        const brokerSlugs = available
-          .filter((record) => record.delivery !== "env" && requestedHandles.includes(record.slug))
-          .map((record) => record.slug)
-          .sort();
-        let brokerToken: Promise<string> | undefined;
-        const resolveBrokerToken = (): Promise<string> =>
-          (brokerToken ??= (async () => {
-            const current = await deps.serviceCreds!.listServiceCredentials(resolution.orgScopeId);
-            for (const slug of brokerSlugs) {
-              await authorizeServiceCredential(slug);
-              const record = current.find((candidate) => candidate.slug === slug);
-              if (!record?.enabled || !record.hasSecret || record.delivery === "env") {
-                throw new Error(`Service credential is no longer available: ${slug}`);
-              }
-            }
-            return mintCapabilityToken(
-              {
-                ...scopeAttestation,
-                aud: CREDENTIAL_BROKER_AUD,
-                ...(external
-                  ? {
-                      runId: input.runId,
-                      runAttempt: input.attempt,
-                      runLeaseToken: input.runLeaseToken,
-                      threadRef: conversation.threadRef,
-                    }
-                  : {}),
-                credentials: brokerSlugs,
-                exp: sandboxTokenExpiry,
-              },
-              (deps.capabilitySecret ?? deps.signingSecret)!,
-              deps.capabilityTokenCompression,
-            );
-          })());
-        for (const credential of available) {
-          if (credential.delivery === "env") {
-            if ((!allInternal && !external) || !credential.envKey) continue;
-            addCredential(
-              {
-                handle: credential.slug,
-                resolve: async () => {
-                  await authorizeServiceCredential(credential.slug);
-                  const current = await deps.serviceCreds!.getServiceCredentialSecret(
-                    resolution.orgScopeId,
-                    credential.slug,
-                  );
-                  if (
-                    !current?.enabled ||
-                    isBackendCredential(current) ||
-                    !current.secret ||
-                    current.delivery !== "env" ||
-                    current.envKey !== credential.envKey
-                  ) {
-                    throw new Error(`Service credential is no longer available: ${credential.slug}`);
-                  }
-                  return { env: [{ key: credential.envKey!, value: current.secret }] };
-                },
-              },
-              `${credential.name}; env \`${credential.envKey}\``,
-              undefined,
-              "Organization",
-            );
-          } else if (deps.signingSecret && deps.apiBaseUrl) {
-            addCredential(
-              {
-                handle: credential.slug,
-                scratchOnly: false,
-                resolve: async () => ({ env: [{ key: "AGENT_CREDENTIAL_TOKEN", value: await resolveBrokerToken() }] }),
-              },
-              `${credential.name}; proxy ${credential.host}`,
-              undefined,
-              "Organization",
-            );
-          }
-        }
-      };
       await tracePhase("turn.credentials", () =>
-        registerServiceCredentials(addCredentialToCatalog, [], {
-          records: serviceCredRecords,
-          granted: grantedCredSlugs,
-        }),
+        registerServiceCredentials(
+          credentialCatalog,
+          { scopeAttestation, sandboxTokenExpiry },
+          addCredentialToCatalog,
+          [],
+          {
+            records: serviceCredRecords,
+            granted: grantedCredSlugs,
+          },
+        ),
       );
-      if (!strictReadOnly && actor.type === "internal") {
-        for (const tool of brokeredTools) {
-          const broker = deps.layerBrokerFor?.(tool);
-          if (!broker) continue;
-          addCredentialToCatalog(
-            {
-              handle: `broker_${tool.service}`,
-              resolve: async () => {
-                let aws;
-                try {
-                  aws = await broker.credsForActor(actor.id);
-                } catch {
-                  deps.credentialUsage?.record({
-                    slug: tool.service,
-                    host: "sts.amazonaws.com",
-                    status: "unavailable",
-                    scopeLabel: scopeId,
-                    principalId: actor.id,
-                  });
-                  throw new Error(`Could not vend credentials for ${tool.service}`);
-                }
-                deps.credentialUsage?.record({
-                  slug: tool.service,
-                  host: "sts.amazonaws.com",
-                  status: "vended",
-                  scopeLabel: scopeId,
-                  principalId: actor.id,
-                });
-                return {
-                  env: Object.entries({
-                    AWS_ACCESS_KEY_ID: aws.accessKeyId,
-                    AWS_SECRET_ACCESS_KEY: aws.secretAccessKey,
-                    AWS_SESSION_TOKEN: aws.sessionToken,
-                    AWS_REGION: aws.region,
-                    AWS_DEFAULT_REGION: aws.region,
-                  }).map(([key, value]) => ({
-                    key,
-                    value,
-                    secret: key !== "AWS_REGION" && key !== "AWS_DEFAULT_REGION",
-                  })),
-                };
-              },
-            },
-            `${tool.service}, role broker for ${actor.id}`,
-          );
-        }
-      }
+      registerBrokeredTools(credentialCatalog);
       let toolCalls = 0;
       const commandPolicy = resolution.commandPolicy;
       const layerCommandRules = [...(deps.deploymentLayer?.commandRules ?? [])];
@@ -2408,14 +2128,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (automatedTurn && input.surface && isPollSurface(input.surface)) {
           systemPrompt += `\n\nThis turn was fired by a scheduled trigger, not a person typing. If there's nothing new worth reporting, call \`finish_silently\` to end the turn without sending anything.`;
         }
-        if (!external && deps.directory && conversation.kind !== "dm") {
+        if (!external && conversation.kind !== "dm") {
           rosterMembers = await (async () => {
             const audienceMembers = conversation.audience.filter((p) => p.type === "internal");
             const participants = [
               ...(audienceMembers.some((p) => samePerson(p.id, actor.id)) ? [] : [actor]),
               ...audienceMembers,
             ];
-            const index = await directoryIndexFor(deps.directory!);
+            const index = await directoryIndexFor(deps.directory);
             const seen = new Set<string>();
             const resolved: DirectoryMember[] = [];
             for (const p of participants) {
@@ -2508,7 +2228,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               recordLlmRequest: recordSessionLlmRequest,
             })
             .catch((e: unknown): DetectResult => {
-              deps.errors?.record(
+              deps.errors.record(
                 {
                   category: "turn",
                   code: "detection_failed",
@@ -2544,7 +2264,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ?.setDeliveryState(input.runId, input.runLeaseToken, { replying: true })
               .catch(swallowAs("orchestrator: persist reply engagement", false));
           }
-          deps.turnStream?.begin(input.runId);
+          deps.turnStream.begin(input.runId);
         }
 
         const backgroundBroker =
@@ -2556,8 +2276,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 onExit: finishProcess,
                 scopeId: memoryScopeId,
                 sessionRef: conversation.threadRef,
-                ...(deps.backgroundJobTtlMs !== undefined ? { ttlMs: deps.backgroundJobTtlMs } : {}),
-                ...(deps.backgroundJobTtlMaxMs !== undefined ? { ttlMaxMs: deps.backgroundJobTtlMaxMs } : {}),
+                ttlMs: deps.backgroundJobTtlMs,
+                ttlMaxMs: deps.backgroundJobTtlMaxMs,
               })
             : undefined;
 
@@ -2642,7 +2362,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }
             : {}),
           onError: (e) =>
-            deps.errors?.record(
+            deps.errors.record(
               {
                 category: "file_store",
                 code: "register_failed",
@@ -2673,7 +2393,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             return;
           spineFirstBlockOpen = false;
           const ack = spineFirstBlock.trim();
-          if (deliberatePost || !ack || !defaultDestination || !deps.deliveries) return;
+          if (deliberatePost || !ack || !defaultDestination) return;
           spineAckText = ack;
           const runId = input.runId;
           const ackKey = postKeys.ackKey;
@@ -2684,7 +2404,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             idempotencyKey: ackKey,
             provenance: postProvenance(ackKey),
           })
-            .then(() => deps.turnStream?.markSurfacePosted(runId))
+            .then(() => deps.turnStream.markSurfacePosted(runId))
             .catch(swallowAs("orchestrator: first-block ack", undefined));
         };
         let readableHandles: Awaited<ReturnType<typeof deps.acl.handlesForAudience>> | undefined;
@@ -2795,9 +2515,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               identities.set(credential.handle, identity);
               refreshed.set(credential.handle, placeCredential(credential));
             };
-            await registerKeychainCredentials(add);
-            await registerConnectorCredentials(add);
-            await registerServiceCredentials(add, handles);
+            await registerKeychainCredentials(credentialCatalog, add);
+            await registerConnectorCredentials(credentialCatalog, add);
+            await registerServiceCredentials(credentialCatalog, { scopeAttestation, sandboxTokenExpiry }, add, handles);
             for (const credential of commandCredentials.filter((candidate) => candidate.handle.startsWith("broker_")))
               add(credential, "");
             return [...refreshed.values()];
@@ -2810,7 +2530,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(conversation.isMpim !== undefined ? { isMpim: conversation.isMpim } : {}),
             ...(conversation.publishMembers ? { publishMembers: conversation.publishMembers } : {}),
           },
-          ...(deps.config ? { config: deps.config } : {}),
+          config: deps.config,
           ...(deps.control && controlClaims ? { control: deps.control, controlClaims } : {}),
           ...(deps.apiBaseUrl && connectorEnv.AGENT_API_TOKEN
             ? {
@@ -2826,7 +2546,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             : {}),
           ...(deps.webhookPublicUrl ? { webhookPublicUrl: deps.webhookPublicUrl } : {}),
           ...(humanInput && !external && !input.botActor ? { humanTurn: true } : {}),
-          ...(deps.toolOutput ? { toolOutput: deps.toolOutput, sessionId: session.id } : {}),
+          toolOutput: deps.toolOutput,
+          sessionId: session.id,
           ...(surfaceToolDeps ? { surface: surfaceToolDeps } : {}),
           ...(turnSessionSyscalls ? { sessionSyscalls: turnSessionSyscalls } : {}),
           ...(strictReadOnly ? {} : { attach: attachStaging.attach }),
@@ -2852,9 +2573,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               open: async (seq: number) => openSessionItem(await historyView(), seq),
             };
           })(),
-          ...(deps.execTimeoutMs !== undefined ? { execTimeoutMs: deps.execTimeoutMs } : {}),
-          ...(deps.execTimeoutCeilingMs !== undefined ? { execTimeoutCeilingMs: deps.execTimeoutCeilingMs } : {}),
-          ...(deps.signals ? { signals: deps.signals } : {}),
+          execTimeoutMs: deps.execTimeoutMs,
+          execTimeoutCeilingMs: deps.execTimeoutCeilingMs,
+          signals: deps.signals,
           ...(input.runId ? { runId: input.runId } : {}),
           ...(backgroundBroker ? { backgroundBroker } : {}),
           ...(monitorBroker ? { monitorBroker } : {}),
@@ -2874,7 +2595,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     { sessionId: session.id, hook: "tool_response", request: input.text, surface: "cron_script" },
                     recordScreenRequest,
                   ),
-                  ...(deps.toolOutput ? { toolOutput: deps.toolOutput } : {}),
+                  toolOutput: deps.toolOutput,
                 },
                 turnAbort.signal,
               )
@@ -2974,7 +2695,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           typeof input.fastMode !== "boolean" &&
           !purposeDefault &&
           humanInput &&
-          (await deps.config?.getInteractiveFastModeDurable());
+          (await deps.config.getInteractiveFastModeDurable());
         const effectiveFastMode = resolveTurnFastMode(input.fastMode, humanInput, wantsOrgFastMode === true);
         compactionRoute = sessionRoute;
         const preTurnRoute = compactionRoute;
@@ -3062,6 +2783,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           if (enforceScreen) unscreened = await screenDocuments(loaded, requestText);
           else
             void screenDocuments(loaded, requestText).catch(swallowAs("orchestrator: observed document screen", false));
+          loaded.notices.push(...loaded.documents.map((document) => documentIncludedNote(document)));
           documentRoom.maxBytes -= loaded.documents.reduce(
             (sum, document) => sum + Buffer.byteLength(document.dataBase64, "base64"),
             0,
@@ -3070,8 +2792,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           documentRoom.maxTokens -= loaded.tokens;
           return { ...loaded, unscreened };
         };
+        const pausedTurnUserEntry =
+          input.approval && approvalRecord?.kind !== "input"
+            ? visibleHistory.findLast((e) => isUserItem(e) && !isOverheard(e))
+            : undefined;
+        const approvalReplay = !!pausedTurnUserEntry && (pausedTurnUserEntry.text ?? "").trim() === input.text.trim();
         const documentInputs = await ingestDocuments(
-          [...historicalDocumentMetas(history), ...inbound.metas],
+          [
+            ...turnDocumentMetas(history, partial?.userSeq ?? (approvalReplay ? pausedTurnUserEntry.seq : undefined)),
+            ...inbound.metas,
+          ],
           input.text,
         );
         const lastUserAt = visibleHistory.findLast((e) => isUserItem(e) && !isOverheard(e))?.createdAt;
@@ -3124,11 +2854,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           .filter((s) => s && s.trim())
           .join("\n\n");
         const baseText = input.proactiveOpener && !input.text.trim() ? PROACTIVE_OPENER_PROMPT : input.text;
-        const pausedTurnUserEntry =
-          input.approval && approvalRecord?.kind !== "input"
-            ? visibleHistory.findLast((e) => isUserItem(e) && !isOverheard(e))
-            : undefined;
-        const approvalReplay = !!pausedTurnUserEntry && (pausedTurnUserEntry.text ?? "").trim() === input.text.trim();
         if (partial) {
           const posted = completedSurfaceEnqueues(
             filterHistory(await deps.sessions.getItems(session.id, { sinceSeq: partial.userSeq })),
@@ -3197,7 +2922,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const effectiveTurnWallClockMs =
           typeof input.turnWallClockMs === "number" && input.turnWallClockMs > 0 && !swarmGoalTurn
             ? input.turnWallClockMs
-            : (deps.defaultTurnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000);
+            : deps.defaultTurnWallClockMs;
         const servesModel = (requested: string, routed: string | undefined, keys: ProviderKeys | undefined) =>
           (keys ? personalModelId(requested, keys) : requested) === routed;
         const requestedModel = input.model ?? purposeDefault?.modelId;
@@ -3299,18 +3024,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             recallOutcomes,
           );
           const snapshot = membershipEvent(rosterMembers, continuation?.history ?? rawEntries, session.id);
-          const guidance =
-            !external && deps.config
-              ? guidanceUpdateEvent(
-                  {
-                    version: deps.config.soulVersion(scopeId),
-                    personal: conversation.kind === "dm",
-                    revisions: deps.config.soulHistory(scopeId),
-                  },
-                  continuation?.history ?? rawEntries,
-                  session.id,
-                )
-              : undefined;
+          const guidance = !external
+            ? guidanceUpdateEvent(
+                {
+                  version: deps.config.soulVersion(scopeId),
+                  personal: conversation.kind === "dm",
+                  revisions: deps.config.soulHistory(scopeId),
+                },
+                continuation?.history ?? rawEntries,
+                session.id,
+              )
+            : undefined;
           const turnEnvironment = environmentNote(
             [
               turnEnvironmentContents,
@@ -3389,7 +3113,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               toolCalls += 1;
               if (toolCalls === 1 && input.runId) {
                 if (!input.surfaceTools) {
-                  deps.turnStream?.noteToolCall(input.runId);
+                  deps.turnStream.noteToolCall(input.runId);
                 } else {
                   publishFirstAck(appended.tool === surfaceName && appended.body.action === "post");
                 }
@@ -3410,7 +3134,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           }
           const saveGoal = async (goal: GoalRecord): Promise<void> => {
             await deps.sessions.setGoal(writer, goal);
-            if (input.runId) deps.turnStream?.noteGoal(input.runId, goalView(goal));
+            if (input.runId) deps.turnStream.noteGoal(input.runId, goalView(goal));
           };
           const swarmHandoff =
             swarmGoalTurn && deps.swarms && input.runId
@@ -3549,7 +3273,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 runtimePinned: true,
                 ...(userProviderKeys ? { providerKeys: userProviderKeys } : {}),
               };
-              if (input.runId) deps.turnStream?.noteRuntime(input.runId, runtime);
+              if (input.runId) deps.turnStream.noteRuntime(input.runId, runtime);
             },
             ...(runtimePurpose ? { runtimePurpose } : {}),
             ...(deps.runtime && input.runId
@@ -3745,27 +3469,25 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             onModelRequest: () => dispatchTrace?.modelRequest(),
             onDelta: (chunk: string) => {
               dispatchTrace?.firstToken();
-              if (input.runId && deps.turnStream && !input.surfaceTools) deps.turnStream.publish(input.runId, chunk);
+              if (input.runId && !input.surfaceTools) deps.turnStream.publish(input.runId, chunk);
               if (input.surfaceTools && spineFirstBlockOpen && spineFirstBlock.length < FIRST_BLOCK_CAPTURE_MAX_CHARS)
                 spineFirstBlock += chunk;
             },
             onReasoningDelta: (step: string, index: number, chunk: string) => {
-              if (input.runId && deps.turnStream && !input.surfaceTools)
-                deps.turnStream.publishReasoning(input.runId, step, index, chunk);
+              if (input.runId && !input.surfaceTools) deps.turnStream.publishReasoning(input.runId, step, index, chunk);
             },
             onToolCallStart: (name: string) => {
               if (!earlyTaskAck || name === surfaceName) return;
               if (input.surfaceTools) publishFirstAck(false);
-              else if (input.runId) deps.turnStream?.noteToolCall(input.runId);
+              else if (input.runId) deps.turnStream.noteToolCall(input.runId);
             },
             onTextBlockStart: async (phase) => {
-              if (input.runId && deps.turnStream && !input.surfaceTools) deps.turnStream.publishBlockStart(input.runId);
+              if (input.runId && !input.surfaceTools) deps.turnStream.publishBlockStart(input.runId);
               if (input.surfaceTools && spineFirstBlock) spineFirstBlockOpen = false;
               if (!input.surfaceTools) {
-                const streamOffset =
-                  input.runId && deps.turnStream
-                    ? deps.turnStream.startOffset(input.runId) + (deps.turnStream.snapshot(input.runId) ?? "").length
-                    : undefined;
+                const streamOffset = input.runId
+                  ? deps.turnStream.startOffset(input.runId) + (deps.turnStream.snapshot(input.runId) ?? "").length
+                  : undefined;
                 const runId = input.runId;
                 const runActivity = deps.runActivity;
                 if (runId && runActivity) {
@@ -3854,7 +3576,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           !result.stopped
         ) {
           const primaryReply = stripAckPrefix(result.reply ?? "", spineAckText).trim();
-          if (input.addressed && primaryReply && defaultDestination && deps.deliveries) {
+          if (input.addressed && primaryReply && defaultDestination) {
             try {
               await enqueueDirectReply({
                 deliveries: deps.deliveries,
@@ -3865,7 +3587,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 ...(result.retracted ? { retracted: result.retracted } : {}),
               });
               spine.surfaceOutboundCount += 1;
-              if (input.runId) deps.turnStream?.markSurfacePosted(input.runId);
+              if (input.runId) deps.turnStream.markSurfacePosted(input.runId);
             } catch (e) {
               reportFailure("orchestrator: direct reply delivery", e, `session=${session.id}`);
             }
@@ -3885,7 +3607,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             );
             if (input.addressed && spine.surfaceOutboundCount === 0 && !result.silent && !result.stopped) {
               const fallback = stripAckPrefix(result.reply ?? "", spineAckText).trim();
-              if (fallback && defaultDestination && deps.deliveries) {
+              if (fallback && defaultDestination) {
                 try {
                   await enqueueDirectReply({
                     deliveries: deps.deliveries,
@@ -3895,7 +3617,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     postProvenance,
                   });
                   spine.surfaceOutboundCount += 1;
-                  if (input.runId) deps.turnStream?.markSurfacePosted(input.runId);
+                  if (input.runId) deps.turnStream.markSurfacePosted(input.runId);
                 } catch (e) {
                   console.error(
                     `[orchestrator] shed-reply fallback delivery failed session=${session.id}:`,
@@ -3912,7 +3634,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const stagedAttachments = attachStaging.staged();
         const harvestedAck = (() => {
           if (!surface?.capabilities.liveReplies || input.surfaceTools || !input.runId) return undefined;
-          const fb = deps.turnStream?.firstBlock(input.runId);
+          const fb = deps.turnStream.firstBlock(input.runId);
           const text = fb?.text.trim();
           return fb?.closed && text ? text : undefined;
         })();
@@ -3927,7 +3649,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         });
         const turnCompleted = outcome.completed;
         const pausing = outcome.paused;
-        if (input.runId && !pausing && reply && reply.trim()) deps.turnStream?.markReplyDone(input.runId);
+        if (input.runId && !pausing && reply && reply.trim()) deps.turnStream.markReplyDone(input.runId);
         const turnUserSeq = partial?.userSeq ?? emittedEntries.find(isUserItem)?.seq;
         const onTurnEnd = memoryStrategy.onTurnEnd?.bind(memoryStrategy);
         if (
@@ -3954,7 +3676,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 idempotencyKey: input.runId ?? `${session.id}:${spine.turnUserEntrySeq ?? "turn"}`,
               });
             } catch (e) {
-              deps.errors?.record(
+              deps.errors.record(
                 {
                   category: "memory",
                   code: "capture_failed",
@@ -4086,7 +3808,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         revisionsCaughtUp = true;
         const work = deps.admittedWork;
         void (work?.canRun() ? work.run(tail) : tail()).catch(swallowAs("orchestrator: turn tail", undefined));
-        await deps.errors?.flush();
+        await deps.errors.flush();
         return finalResult;
       } catch (err) {
         if (err instanceof ProjectRosterChanged) return rosterChanged(session.id);
@@ -4114,7 +3836,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           return { status: "pending_approval", sessionId: session.id, pendingApprovals: [approval] };
         }
         if (err instanceof CommandDenied) {
-          deps.errors?.record({
+          deps.errors.record({
             category: "command_policy",
             code: "denied",
             message: err.message,
@@ -4124,7 +3846,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           return { status: "refused", sessionId: session.id, reason: err.message };
         }
         const budget = isModelBudget(err) && !input.cancel?.aborted;
-        deps.errors?.record(
+        deps.errors.record(
           {
             category: "turn",
             code: budget ? "model_budget" : "error",
@@ -4153,7 +3875,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           };
         throw err;
       } finally {
-        if (input.runId) deps.turnStream?.end(input.runId);
+        if (input.runId) deps.turnStream.end(input.runId);
         stall.stop();
         if (!tailOwnsCleanup) await reclaimBox();
         if (!revisionsCaughtUp) await catchUpMessageRevisions();

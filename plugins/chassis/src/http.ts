@@ -4,6 +4,9 @@ import { gzip } from "node:zlib";
 
 const COMPRESS_MIN_BYTES = 1024;
 
+const ALB_IDLE_TIMEOUT_MS = 60_000;
+export const KEEP_ALIVE_TIMEOUT_MS = ALB_IDLE_TIMEOUT_MS + 5_000;
+
 export function isLoopbackUrl(raw: string): boolean {
   const hostname = URL.parse(raw)?.hostname.toLowerCase();
   return (

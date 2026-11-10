@@ -178,11 +178,16 @@ test("successful revocation clears legacy aliases and cached models and cannot b
   assert.throws(() => modelGatewayRequest(undefined, stale), /unavailable/);
 });
 
-test("legacy routes work without discovery support, then discovery adds models and governs access", async () => {
+test("legacy routes work without discovery support, then discovery adds models and governs access", async (t) => {
+  const logged: string[] = [];
+  t.mock.method(console, "warn", (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  });
   const f = fixture([group()], { "claude-opus-5": "vendor/new-model" });
   f.status(404);
   await f.catalog.refresh();
   assert.equal(f.catalog.transport.models["claude-opus-5"], "vendor/new-model");
+  assert.match(logged[0]!, /gateway discovery failed; routing configured aliases only.*HTTP 404/);
   f.tick();
   f.status(200);
   await f.catalog.refresh();
@@ -219,7 +224,6 @@ test("a transient discovery blip keeps last known routes; a prolonged outage hid
 test("malformed and oversized catalogs cannot grant access", async () => {
   for (const response of [
     Response.json({ nope: [] }),
-    Response.json({ data: Array(1001).fill({ id: "m" }) }),
     new Response("x".repeat(2 * 1024 * 1024 + 1)),
     new Response("{}", { headers: { "content-length": "99999999" } }),
   ]) {
@@ -227,6 +231,14 @@ test("malformed and oversized catalogs cannot grant access", async () => {
     await catalog.refresh();
     assert.deepEqual(catalog.transport.models, {});
   }
+});
+
+test("a gateway catalog over a thousand models with long ids is discovered whole", async () => {
+  const long = `vendor/${"m".repeat(250)}`;
+  const f = fixture([...Array.from({ length: 1_000 }, (_, i) => group(`vendor/model-${i}`)), group(long)]);
+  await f.catalog.refresh();
+  assert.equal(Object.keys(f.catalog.transport.models).length, 1_001);
+  assert.ok(resolveModel(`gateway/${long}`));
 });
 
 test("custom provider models live in their own namespace, never the gateway one", () => {

@@ -1,40 +1,21 @@
-import { hashId } from "../../util/crypto.ts";
 import type { Principal, Resolution, ScopeId, Session } from "../../types.ts";
-import { personalScope } from "../../types.ts";
-import { intersectEgressPolicies } from "../../resolution/egress-policy.ts";
-import { isOpenScopeMember } from "../../resolution/sharing-access.ts";
 import {
   removeDirAndList,
   type SandboxHandle,
   supportsProcessSessions,
   SandboxProvisionCleanupError,
 } from "../../sandbox/sandbox.ts";
-import {
-  accessConversationSandbox,
-  preferredBackend,
-  type SandboxAccessPlan,
-  type SandboxResource,
-} from "../../sandbox/sandbox-resources.ts";
+import { createTurnSandboxAccess, preferredBackend, type SandboxAccessPlan } from "../../sandbox/sandbox-resources.ts";
 import { ensureChildSandbox, prepareChildWorkdir } from "../../sessions/child-isolation.ts";
 import { reconcileProcesses } from "../../processes/reconcile.ts";
 import { leaseLapsed } from "../../runs/run-store.ts";
 import { finishProcessCredentials } from "../../credentials/execute-files.ts";
-import {
-  materializeSkillTree as laySkillTree,
-  packRoot,
-  rehomeSkillPaths,
-  renderSkillBody,
-  skillDir,
-  SKILLS_ROOT,
-} from "../../skills/materialize.ts";
-import { safeSkillFilePath, type SkillResolution } from "../../skills/skill-store.ts";
-import { isSafeSkillName } from "../../skills/skill-name.ts";
-import type { SkillResult } from "../../tools/primitives.ts";
+import type { SkillResolution } from "../../skills/skill-store.ts";
+import { createTurnSkills } from "../../skills/turn-skills.ts";
 import { TURN_FILES_DIR } from "../attachments.ts";
 import { errMessage, swallow, swallowAs } from "../../util/errors.ts";
 import { sleep } from "../../util/async.ts";
 import { tracePhase } from "../../../plugins/chassis/src/error-reporting.ts";
-import { loadActiveBundles } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 
 const TURN_FILES_MAX_AGE_MS = 24 * 60 * 60_000;
@@ -224,111 +205,13 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     }
     return handle;
   };
-  const skillsRoot = (r: SkillResolution) =>
-    `${SKILLS_ROOT}/${turnSessionDir.split("/").at(-1)}/${hashId([r.skill!.id, String(r.skill!.version)], 16)}`;
-  const laidTrees = new Set<string>();
-  const materializeSkillTree = async (handle: SandboxHandle, r: SkillResolution): Promise<void> => {
-    const treeKey = `${handle.resourceId ?? handle.id}:${skillDir(skillsRoot(r), r)}`;
-    if (laidTrees.has(treeKey)) return;
-    try {
-      const bundles = r.screenedBundles ?? (deps.skillBundles ? await loadActiveBundles(deps.skillBundles, [r]) : []);
-      await laySkillTree(deps.sandbox, handle, skillsRoot(r), r, bundles);
-      laidTrees.add(treeKey);
-    } catch (err) {
-      deps.errors?.record(
-        {
-          category: "skills",
-          code: "tree_materialize_failed",
-          message: errMessage(err),
-          scopeLabel: scopeId,
-          sessionId: session.id,
-        },
-        err,
-      );
-      throw err;
-    }
-  };
-  const useSkill = async (name: string, file: string, sandboxId?: string, source?: string): Promise<SkillResult> => {
-    const missing = { content: null, sourceScopeId: null };
-    if (!isSafeSkillName(name)) return missing;
-    try {
-      if (safeSkillFilePath(file) !== file) return missing;
-    } catch {
-      return missing;
-    }
-    const resolution = (await visibleSkillsForTurn(source ? [source] : undefined)).find(
-      (r) => r.skill?.manifest.name === name,
-    );
-    if (!resolution?.skill) return missing;
-    const shipsFiles = (resolution.skill.manifest.files?.length ?? 0) > 0 || resolution.skill.pack !== undefined;
-    const asset = resolution.skill.manifest.files?.find((f) => {
-      try {
-        return safeSkillFilePath(f.path) === file;
-      } catch {
-        return false;
-      }
-    })?.content;
-    if (file !== "SKILL.md" && asset === undefined) return missing;
-    if (deps.skills)
-      void deps.skills.recordUse(resolution.skill.id).catch((e) => swallow("orchestrator: skill recordUse", e));
-    const render = (root?: string) =>
-      file === "SKILL.md"
-        ? renderSkillBody(resolution, root)
-        : rehomeSkillPaths(resolution, asset!, root ?? skillsRoot(resolution));
-    if (!shipsFiles) return { content: render(), sourceScopeId: resolution.skill.scopeId };
-    const access = sandboxId !== undefined ? await accessResource(sandboxId) : undefined;
-    if (access?.crossScope) return { content: render(skillsRoot(resolution)), sourceScopeId: resolution.skill.scopeId };
-    const handle = access ? await provisionResource(access) : await provision();
-    await materializeSkillTree(handle, resolution);
-    const root = `${handle.rootDir}/${skillsRoot(resolution)}`;
-    const pack = packRoot(root, resolution);
-    return {
-      content: render(root),
-      sourceScopeId: resolution.skill.scopeId,
-      dir: skillDir(root, resolution),
-      ...(pack ? { packDir: pack } : {}),
-    };
-  };
   const writableScopeId = resolution.writableScopeId;
-  const canUseSandboxScope = async (target: ScopeId): Promise<boolean> => {
-    if (target === writableScopeId || target === scopeId) return true;
-    if (!openResourceAccess || actor.type !== "internal" || !deps.config || !deps.isCurrentSharedScopeMember)
-      return false;
-    const personal = personalScope(actor.id);
-    for (const scope of new Set([scopeId, target])) {
-      if (scope === personal) {
-        if ((await deps.config.resolveSharingPostureDurable(personal, scope)) !== "open") return false;
-      } else if (
-        !(await isOpenScopeMember({
-          actorId: actor.id,
-          scope,
-          config: deps.config,
-          isCurrentSharedScopeMember: deps.isCurrentSharedScopeMember,
-        }))
-      )
-        return false;
-    }
-    return true;
-  };
-  const accessResource = async (id: string): Promise<SandboxAccessPlan> => {
-    const resource = await accessConversationSandbox(deps.sandboxResources, actor.id, id, canUseSandboxScope);
-    const crossScope = resource.ownerScopeId !== writableScopeId && resource.ownerScopeId !== scopeId;
-    if (!crossScope) return { resource, crossScope: false, egress: resolution.egress, commandPolicy: null };
-    await deps.config!.refreshSecurity([resource.ownerScopeId]);
-    const credentialScopeId = resource.ownerScopeId === personalScope(actor.id) ? resource.ownerScopeId : undefined;
-    return {
-      resource,
-      crossScope: true,
-      egress: intersectEgressPolicies(resolution.egress, deps.config!.getEgress(resource.ownerScopeId)),
-      commandPolicy: deps.config!.getCommandPolicy(resource.ownerScopeId),
-      ...(credentialScopeId ? { credentialScopeId } : {}),
-    };
-  };
-  const jobComputerPlan = (resource: SandboxResource): SandboxAccessPlan => ({
-    resource,
-    crossScope: false,
-    egress: resolution.egress,
-    commandPolicy: null,
+  const { accessResource, jobComputerPlan } = createTurnSandboxAccess({
+    deps,
+    actor,
+    resolution,
+    scopeId,
+    openResourceAccess,
   });
   const provisionJobComputer = async (): Promise<SandboxHandle> => {
     const resources = deps.sandboxResources!;
@@ -373,6 +256,16 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       { policy },
     );
   };
+  const turnSkills = createTurnSkills({
+    deps,
+    scopeId,
+    sessionId: session.id,
+    turnSessionDir,
+    visibleSkillsForTurn,
+    accessResource,
+    provisionResource,
+    provision,
+  });
 
   const provisionScratch = (): Promise<SandboxHandle> => {
     const cached = pool.get(SCRATCH);
@@ -401,24 +294,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     retried("turn file cleanup failed", () => deps.sandbox.removeDir(handle, turnFilesDir)).catch((err: unknown) =>
       swallow("orchestrator: turn file cleanup", err),
     );
-  const pruneSkills = async (handle: SandboxHandle): Promise<void> => {
-    const visible = (await visibleSkillsForTurn()).flatMap((r) => (r.skill ? [r.skill, ...r.shadowed] : []));
-    const keep = new Set(visible.map((skill) => hashId([skill.id, String(skill.version)], 16)));
-    const stale = new Set<string>();
-    const listed = await deps.sandbox
-      .listDir(handle, SKILLS_ROOT)
-      .catch(swallowAs("orchestrator: list skills to prune", [] as string[]));
-    for (const path of listed) {
-      const [root, conversation, identity] = path.split("/");
-      if (root === SKILLS_ROOT && conversation && identity && !keep.has(identity))
-        stale.add(`${SKILLS_ROOT}/${conversation}/${identity}`);
-    }
-    await Promise.all(
-      [...stale].map((dir) =>
-        deps.sandbox.removeDir(handle, dir).catch(swallowAs("orchestrator: stale skill cleanup", undefined)),
-      ),
-    );
-  };
   const clearStaleTurnFiles = async (handle: SandboxHandle): Promise<void> => {
     const cutoff = Date.now() - TURN_FILES_MAX_AGE_MS;
     const paths = await removeDirAndList(deps.sandbox, handle, turnSessionDir, TURN_FILES_DIR);
@@ -437,7 +312,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     );
   };
   const prepareTurnFiles = async (handle: SandboxHandle): Promise<void> => {
-    await Promise.all([pruneSkills(handle), clearStaleTurnFiles(handle)]);
+    await Promise.all([turnSkills.pruneSkills(handle), clearStaleTurnFiles(handle)]);
   };
   const releaseHandle = async (
     { handle, scoped, unchanged }: Release,
@@ -525,7 +400,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     provisionJobSandbox,
     accessResource,
     provisionResource,
-    useSkill,
+    useSkill: turnSkills.useSkill,
     reclaimBox,
     finishProcess,
     invalidateProvision: () => {
@@ -534,7 +409,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         pool.delete(SCOPED);
         pool.set(`retired:${retiredSlots++}`, slot);
       }
-      laidTrees.clear();
+      turnSkills.forgetLaidTrees();
     },
   };
 }
