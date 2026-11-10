@@ -28,7 +28,7 @@ const REPLACED_TABLES = new Set([
 
 const SCHEMA_SNAPSHOT = `
   WITH rels AS (
-    SELECT c.oid, n.nspname || '.' || regexp_replace(c.relname, '_[0-9]{8}(_|$)', '_N\1') AS name, c.relkind,
+    SELECT c.oid, n.nspname || '.' || regexp_replace(c.relname, '_[0-9]{8}(_|$)', '_N\\1') AS name, c.relkind,
            c.relrowsecurity, c.relforcerowsecurity
       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
      WHERE n.nspname IN ('public', 'pgboss') AND c.relkind IN ('r', 'p', 'v', 'S', 'i')
