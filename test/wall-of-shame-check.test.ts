@@ -84,7 +84,7 @@ test("over-testing is counted from the diff, whatever the report says", () => {
     "300\t0\tdocs/notes.md",
     "-\t-\tdocs/logo.png",
   ];
-  const moved = ["2\t0\t", "test/old.test.ts", "plugins/web-ui/test/new.test.ts"];
+  const moved = ["2\t0\t", "src/old.ts", "plugins/web-ui/test/new.test.ts"];
   assert.deepEqual(problems(accepted, diff(...source, "9\t0\ttest/a.test.ts", ...moved)), [overTested(11, 10)]);
   assert.deepEqual(problems(accepted, diff(...source, "8\t0\tios/QMTests/A.swift", ...moved)), []);
   assert.deepEqual(problems(accepted, diff(...source, "30\t20\ttest/a.test.ts")), []);
