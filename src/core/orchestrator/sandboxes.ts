@@ -1,7 +1,4 @@
 import type { Principal, Resolution, ScopeId, Session } from "../../types.ts";
-import { personalScope } from "../../types.ts";
-import { intersectEgressPolicies } from "../../resolution/egress-policy.ts";
-import { isOpenScopeMember } from "../../resolution/sharing-access.ts";
 import {
   removeDirAndList,
   type SandboxHandle,
@@ -9,8 +6,8 @@ import {
   SandboxProvisionCleanupError,
 } from "../../sandbox/sandbox.ts";
 import {
-  accessConversationSandbox,
   assertBotMayUseDefault,
+  createTurnSandboxAccess,
   preferredBackend,
   type SandboxAccessPlan,
   type SandboxResource,
@@ -224,51 +221,13 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     return handle;
   };
   const writableScopeId = resolution.writableScopeId;
-  const canUseSandboxScope = async (target: ScopeId): Promise<boolean> => {
-    if (target === writableScopeId || target === scopeId) return true;
-    if (!openResourceAccess || actor.type !== "internal" || !deps.config || !deps.isCurrentSharedScopeMember)
-      return false;
-    const personal = personalScope(actor.id);
-    for (const scope of new Set([scopeId, target])) {
-      if (scope === personal) {
-        if ((await deps.config.resolveSharingPostureDurable(personal, scope)) !== "open") return false;
-      } else if (
-        !(await isOpenScopeMember({
-          actorId: actor.id,
-          scope,
-          config: deps.config,
-          isCurrentSharedScopeMember: deps.isCurrentSharedScopeMember,
-        }))
-      )
-        return false;
-    }
-    return true;
-  };
-  const accessResource = async (id: string): Promise<SandboxAccessPlan> => {
-    const resource = await accessConversationSandbox(
-      deps.sandboxResources,
-      actor.id,
-      id,
-      canUseSandboxScope,
-      botMayUse,
-    );
-    const crossScope = resource.ownerScopeId !== writableScopeId && resource.ownerScopeId !== scopeId;
-    if (!crossScope) return { resource, crossScope: false, egress: resolution.egress, commandPolicy: null };
-    await deps.config!.refreshSecurity([resource.ownerScopeId]);
-    const credentialScopeId = resource.ownerScopeId === personalScope(actor.id) ? resource.ownerScopeId : undefined;
-    return {
-      resource,
-      crossScope: true,
-      egress: intersectEgressPolicies(resolution.egress, deps.config!.getEgress(resource.ownerScopeId)),
-      commandPolicy: deps.config!.getCommandPolicy(resource.ownerScopeId),
-      ...(credentialScopeId ? { credentialScopeId } : {}),
-    };
-  };
-  const jobComputerPlan = (resource: SandboxResource): SandboxAccessPlan => ({
-    resource,
-    crossScope: false,
-    egress: resolution.egress,
-    commandPolicy: null,
+  const { accessResource, jobComputerPlan } = createTurnSandboxAccess({
+    deps,
+    actor,
+    resolution,
+    scopeId,
+    openResourceAccess,
+    botMayUse,
   });
   const provisionJobComputer = async (): Promise<SandboxHandle> => {
     const resources = deps.sandboxResources!;

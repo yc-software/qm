@@ -129,7 +129,7 @@ test("the events carry the session UUID and a timestamp", async () => {
 
 async function listen(built: ReturnType<typeof freshApp>): Promise<SessionStateEvent[]> {
   const got: SessionStateEvent[] = [];
-  built.app.subscribeSessionStates((e) => got.push(e));
+  built.app.subscribeSessionStates((e) => void got.push(e));
   await heardProbe(built.sessionStateBus, got);
   return got;
 }

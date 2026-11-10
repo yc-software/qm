@@ -132,6 +132,17 @@ export default tseslint.config(
     },
   },
   {
+    files: [
+      "src/api/routes/**/*.ts",
+      "src/loops/**/*.ts",
+      "src/persistence/**/*.ts",
+      "src/runs/**/*.ts",
+      "src/util/event-bus.ts",
+    ],
+    languageOptions: { parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname } },
+    rules: { "@typescript-eslint/no-floating-promises": ["error", { ignoreVoid: false }] },
+  },
+  {
     files: ["plugins/chassis/src/http.ts"],
     rules: { "no-restricted-syntax": ["error", rawErrorRule] },
   },

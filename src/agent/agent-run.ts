@@ -9,7 +9,6 @@ import {
 import {
   recordSteerIntake,
   recordStoppedTurn,
-  imageRefs,
   resumeInterruptedToolCall,
   runApprovedToolCall,
   approvedCallSteerNote,
@@ -53,7 +52,7 @@ const TURN_EFFORT_LEVELS = new Set<string>([
   "adaptive",
 ]);
 import type { ConversationTurn, StopScope } from "../types.ts";
-import { isUserItem, type Item } from "../sessions/items.ts";
+import type { Item } from "../sessions/items.ts";
 import type { LlmCallUsage } from "../sessions/session-store.ts";
 import { NonRetryableTurnError, ProviderTurnError } from "../core/turn-error.ts";
 import {
@@ -101,9 +100,7 @@ import {
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
 import {
   reconstructMessagesFromHistory,
-  dayMarkerPrefix,
   recordedMessageTimestamps,
-  userPromptText,
   seedPriorTurns,
   legacyAssistant,
   type PiReplayMessage,
@@ -123,6 +120,7 @@ import { errMessage } from "../util/errors.ts";
 import type { TurnSession } from "./turn-session.ts";
 import { recordCapturedRequests, subscribeTurnStream } from "./turn-stream.ts";
 import { settleTurnGoal, turnResult } from "./turn-settle.ts";
+import { openTurnPrompt, replayApprovedCalls, turnToolRef } from "./turn-open.ts";
 import {
   ACK_EMOJI_PROMPT,
   APPROVAL_SUMMARY_PROMPT,
@@ -156,14 +154,7 @@ import {
   type TurnWallClockOutcome,
 } from "./turn-wall-clock.ts";
 
-import {
-  createFloorCapPolicy,
-  createGrindMeter,
-  enforceGoal,
-  goalPausedNote,
-  goalSteeringNote,
-  type GovernorVerdict,
-} from "./goal.ts";
+import { createFloorCapPolicy, createGrindMeter, enforceGoal, type GovernorVerdict } from "./goal.ts";
 
 export interface AgentOptions {
   routes?: ModelRoutes;
@@ -553,43 +544,10 @@ export function createAgent(opts?: AgentOptions): Agent {
       const route = await sessionRoute(dispatched);
       const desiredModelId = route.modelId;
       const wantFast = wantsFastMode(dispatched.runtime?.fastMode, desiredModelId);
-      const ref: TurnSession["ref"] = {
-        current: dispatched.tools,
-        documents: dispatched.documents,
-        runtimeHandoff: undefined,
-        runtimeMutationPending: false,
-        runtimeInFlight: new Set(),
-        runtimeActorId: dispatched.runtimeActorId,
-        pendingApprovals: [],
-        pausedOnApproval: undefined,
-        silentRequested: false,
-        pollFire: !!dispatched.pollFire,
-        screenToolResult: dispatched.screenToolResult,
-        governGoal: dispatched.governGoal,
-        saveGoal: dispatched.saveGoal,
-        emit: dispatched.emit,
-        scopeLabel: dispatched.scopeLabel,
-        orgScopeId: dispatched.orgScopeId,
-        toolApprovalGate: dispatched.toolApprovalGate,
-        shutdown: dispatched.shutdown,
-      };
+      const ref = turnToolRef(dispatched);
       let activeSteps: StepRecorder | undefined;
       const tools = recordingTools(createTurnTools(ref, dispatched), () => activeSteps);
-      const approvedItems: Item[] = [];
-      for (const call of dispatched.approvedToolCalls ?? [])
-        approvedItems.push(
-          ...(
-            await runApprovedToolCall(
-              call,
-              ref,
-              tools as unknown as BridgedTool[],
-              dispatched.cancel ? { cancel: dispatched.cancel } : {},
-            )
-          ).items,
-        );
-      const approvedTurn = approvedItems.length
-        ? { ...dispatched, history: [...dispatched.history, ...approvedItems] }
-        : dispatched;
+      const approvedTurn = await replayApprovedCalls(dispatched, ref, tools);
       const resumed = await resumeInterruptedToolCall(approvedTurn, ref, tools as unknown as BridgedTool[]);
       const turn = resumed ? { ...approvedTurn, history: resumed.history } : approvedTurn;
       const { entry } = await createTurnSession(
@@ -623,38 +581,7 @@ export function createAgent(opts?: AgentOptions): Agent {
         const continueTurn = !!continued;
         const grindMeter = createGrindMeter();
 
-        entry.ref.goal = turn.goal ?? null;
-        entry.ref.goalMeter = grindMeter;
-        entry.ref.goalInbox = turn.goalInbox;
-        entry.ref.goalRound = turn.continueTurn ? 1 : 0;
-        const activeGoalAtStart = entry.ref.goal?.status === "active" ? entry.ref.goal : null;
-        const pausedGoalAtStart = entry.ref.goal?.status === "paused" ? entry.ref.goal : null;
-        const goalNote = (() => {
-          if (activeGoalAtStart) return goalSteeringNote(activeGoalAtStart);
-          if (pausedGoalAtStart) return goalPausedNote(pausedGoalAtStart);
-          return "";
-        })();
-        const userEntry = continueTurn
-          ? turn.history.find((e) => e.seq === turn.resumeUserSeq)
-          : await turn.emit({
-              kind: "UserMessage",
-              text: turn.input,
-              author: turn.runtimeActorId ?? null,
-              externalId: turn.triggerTs ?? turn.entryTs ?? null,
-              body: {
-                ...(turn.environment ? { environment: turn.environment } : {}),
-                ...(goalNote.trim() ? { goalNote } : {}),
-                ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
-                ...imageRefs(turn.images),
-              },
-            });
-        const modelPrompt =
-          (userEntry
-            ? dayMarkerPrefix(
-                turn.history.findLast((e) => isUserItem(e) && e.seq < userEntry.seq),
-                userEntry,
-              )
-            : "") + userPromptText({ goalNote, text: turn.input, environment: turn.environment });
+        const { userEntry, modelPrompt } = await openTurnPrompt({ entry, turn, continueTurn, grindMeter });
         entry.ref.llmCapture = captureRequests && turn.recordLlmRequest ? [] : undefined;
         entry.ref.modelCalls = 0;
         entry.ref.onModelRequest = () => {

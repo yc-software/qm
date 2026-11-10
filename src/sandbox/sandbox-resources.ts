@@ -4,7 +4,19 @@ import { withLiveTurnMembership } from "../resolution/scope-membership.ts";
 import { randomUUID } from "node:crypto";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { parseScopeId, type CommandPolicy, type EgressPolicy, type ScopeId } from "../types.ts";
+import {
+  parseScopeId,
+  personalScope,
+  type CommandPolicy,
+  type EgressPolicy,
+  type Principal,
+  type Resolution,
+  type ScopeId,
+} from "../types.ts";
+import type { ScopedConfigStore } from "../resolution/config-store.ts";
+import type { IsCurrentSharedScopeMember } from "../resolution/scope-membership.ts";
+import { intersectEgressPolicies } from "../resolution/egress-policy.ts";
+import { isOpenScopeMember } from "../resolution/sharing-access.ts";
 import type { SandboxBackendName } from "./sandbox-routing.ts";
 import type { Sandbox, AgentComputerSpec, ProvisionOptions, ComputerStatus, EgressEnforcement } from "./sandbox.ts";
 import { JOB_COMPUTER_SCOPE_PREFIX } from "./home-snapshot.ts";
@@ -399,4 +411,67 @@ export function createSandboxResources(opts: {
       });
     },
   };
+}
+
+export function createTurnSandboxAccess(ctx: {
+  deps: {
+    sandboxResources?: SandboxResources;
+    config?: ScopedConfigStore;
+    isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
+  };
+  actor: Principal;
+  resolution: Resolution;
+  scopeId: ScopeId;
+  openResourceAccess?: boolean;
+  botMayUse?: (resource: SandboxResource) => Promise<boolean>;
+}) {
+  const { deps, actor, resolution, scopeId, openResourceAccess, botMayUse } = ctx;
+  const writableScopeId = resolution.writableScopeId;
+  const canUseSandboxScope = async (target: ScopeId): Promise<boolean> => {
+    if (target === writableScopeId || target === scopeId) return true;
+    if (!openResourceAccess || actor.type !== "internal" || !deps.config || !deps.isCurrentSharedScopeMember)
+      return false;
+    const personal = personalScope(actor.id);
+    for (const scope of new Set([scopeId, target])) {
+      if (scope === personal) {
+        if ((await deps.config.resolveSharingPostureDurable(personal, scope)) !== "open") return false;
+      } else if (
+        !(await isOpenScopeMember({
+          actorId: actor.id,
+          scope,
+          config: deps.config,
+          isCurrentSharedScopeMember: deps.isCurrentSharedScopeMember,
+        }))
+      )
+        return false;
+    }
+    return true;
+  };
+  const accessResource = async (id: string): Promise<SandboxAccessPlan> => {
+    const resource = await accessConversationSandbox(
+      deps.sandboxResources,
+      actor.id,
+      id,
+      canUseSandboxScope,
+      botMayUse,
+    );
+    const crossScope = resource.ownerScopeId !== writableScopeId && resource.ownerScopeId !== scopeId;
+    if (!crossScope) return { resource, crossScope: false, egress: resolution.egress, commandPolicy: null };
+    await deps.config!.refreshSecurity([resource.ownerScopeId]);
+    const credentialScopeId = resource.ownerScopeId === personalScope(actor.id) ? resource.ownerScopeId : undefined;
+    return {
+      resource,
+      crossScope: true,
+      egress: intersectEgressPolicies(resolution.egress, deps.config!.getEgress(resource.ownerScopeId)),
+      commandPolicy: deps.config!.getCommandPolicy(resource.ownerScopeId),
+      ...(credentialScopeId ? { credentialScopeId } : {}),
+    };
+  };
+  const jobComputerPlan = (resource: SandboxResource): SandboxAccessPlan => ({
+    resource,
+    crossScope: false,
+    egress: resolution.egress,
+    commandPolicy: null,
+  });
+  return { accessResource, jobComputerPlan };
 }

@@ -39,7 +39,6 @@ import { STALE_LEASE_GRACE_MS } from "./app-types.ts";
 const PARTICIPANT_REHYDRATE_TIMEOUT_MS = 5_000;
 import type { AppHelpers } from "./app-helpers.ts";
 import type { AmbientHelpers } from "./app-ambient.ts";
-import { boundTenant, withTenant } from "../tenants/context.ts";
 
 const freshSteerTs = () => `${Date.now()}.${crypto.randomUUID().slice(0, 8)}`;
 
@@ -548,14 +547,8 @@ export function createTurnMethods(
         tail = tail.then(step).catch(swallowAs("session-state: subscriber", undefined));
       };
       const onResync = opts?.onResync;
-      const tenant = boundTenant();
       return deps.sessionStateBus.subscribe(
-        ({ tenantId, ...event }) => {
-          if (tenant && tenantId && tenantId !== tenant) return;
-          const owner = tenantId ?? tenant;
-          const deliver = async () => cb(await rehydrate(event));
-          queue(() => (owner ? withTenant(owner, deliver) : deliver()));
-        },
+        ({ tenantId: _tenant, ...event }) => queue(async () => cb(await rehydrate(event))),
         onResync ? { onResync: () => queue(onResync) } : undefined,
       );
     },
@@ -585,15 +578,10 @@ export function createTurnMethods(
     },
 
     subscribeRun(runId, listener, onResync) {
-      const tenant = boundTenant();
-      const bound = <T>(fn: () => T): T => (tenant ? withTenant(tenant, fn) : fn());
       return (
-        deps.runStreamEvents?.subscribe(
-          (event) => {
-            if (event.runId === runId) bound(() => listener(event));
-          },
-          { onResync: onResync && (() => bound(onResync)) },
-        ) ?? (() => {})
+        deps.runStreamEvents?.subscribe((event) => (event.runId === runId ? listener(event) : undefined), {
+          onResync,
+        }) ?? (() => {})
       );
     },
 
