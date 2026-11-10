@@ -197,6 +197,13 @@ test("declining after an approval takes the access back", async (t) => {
   assert.equal((await f.notices()).filter((n) => /declined/.test(n.text)).length, 1);
 });
 
+test("declining keeps edit access the requester already had", async (t) => {
+  const f = await fixture(t);
+  await f.share("write");
+  assert.match(await f.decide(owner, false), /^Declined\./);
+  assert.deepEqual(await f.grants(), [{ scope: person(requester), permission: "write" }]);
+});
+
 test("direct share paths notify only after successful grants; org, self and revoke stay silent", async (t) => {
   const f = await fixture(t);
   await f.share(null);

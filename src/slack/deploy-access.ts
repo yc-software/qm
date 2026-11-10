@@ -85,7 +85,7 @@ export async function decideDeploymentAccess(
     });
     return `Approved. ${requesterId} can now open "${label}".`;
   }
-  if (existing) await app.revokeGrant(home.ownerScopeId, home.grantRef, grantee, actor.id);
+  if (existing?.permission === "read") await app.revokeGrant(home.ownerScopeId, home.grantRef, grantee, actor.id);
   await app.enqueueDelivery({
     destination: principalDestination(requesterId, actor.id),
     text: `${actor.id} declined your request for access to "${label}".`,
