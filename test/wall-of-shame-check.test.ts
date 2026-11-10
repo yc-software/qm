@@ -97,6 +97,10 @@ test("over-testing is counted from the diff, whatever the report says", () => {
     problems(body(head, [...reviewed.map((lens) => row(lens)), waiver]), diff("9\t0\ttest/a.test.ts")),
     [],
   );
+  const mismarked = spec.replace("### Regex", "### Regex (checked by CI)");
+  assert.deepEqual(problems(accepted, "", mismarked), [
+    "Regex: marked checked by CI, but this check does not compute it.",
+  ]);
   const unmarked = spec.replace(" (checked by CI)", "");
   assert.deepEqual(
     problems(

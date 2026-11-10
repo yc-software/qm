@@ -73,6 +73,8 @@ export function wallOfShameProblems(spec: string, body: string, headSha: string,
       if (who?.trim() && what?.trim()) waivers.push(lens);
       else problems.push(`${lens}: a Waived row's assessment must read "Waived by <name>: <what was waived>".`);
     }
+    if (computed.includes(lens) && lens !== "Over-testing")
+      problems.push(`${lens}: marked checked by CI, but this check does not compute it.`);
     if (!report || computed.includes(lens)) continue;
     if (!verdict) problems.push(`${lens}: no review row.`);
     else if (skipped && always.includes(lens))
