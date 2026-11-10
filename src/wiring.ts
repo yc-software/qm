@@ -1822,8 +1822,10 @@ export function buildApp(
     beforeSeed: (grants) =>
       Promise.all(grants.map((g) => users.record({ id: g.principalId, source: "admin", at: Date.now() }))),
   });
+  const directory = createPostgresDirectoryStore(databaseUrl);
   const admin = createAdminService(adminGrantStore, {
     trustedOidcAdminIssuer: config.trustedOidcAdminIssuer,
+    memberTenants: async (principal) => ((await directory.tenantsForPrincipal?.(principal)) ?? []).map(({ id }) => id),
     users,
   });
   const { strategy: memoryStrategy, memory } = createMemoryStrategy(config.memoryStrategy, {
@@ -1834,7 +1836,6 @@ export function buildApp(
     onCaptureError: (e, scope) =>
       errors.record({ category: "memory", code: "capture_failed", message: errMessage(e), scopeLabel: scope }, e),
   });
-  const directory = createPostgresDirectoryStore(databaseUrl);
   const vouchedInternalEmail = async (email: string): Promise<boolean> => {
     await identity.refresh();
     return (
