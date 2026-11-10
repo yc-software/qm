@@ -430,12 +430,13 @@ async function patchCronAsPerson(ctx: ApiCtx, cron: Cron, body: unknown): Promis
     const updated = await app.updateCron(cron.id, patch);
     if (updated && editor)
       await notifyOwnerOfCronEdit(app, {
-        cron: updated,
+        cron: { ...updated, owner: cron.owner },
         editorId: editor,
         changeSummary: [
           ...(body.runtime !== undefined ? ["runtime"] : []),
           ...(body.title !== undefined ? ["title"] : []),
           ...(body.task !== undefined ? ["task"] : []),
+          ...(takesOver ? ["owner"] : []),
           ...(schedule !== undefined ? ["schedule"] : []),
           ...(body.enabled !== undefined ? [`enabled=${body.enabled}`] : []),
           ...(body.archived !== undefined ? [`archived=${body.archived}`] : []),

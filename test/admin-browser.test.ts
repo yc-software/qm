@@ -105,7 +105,6 @@ const NOT_ADMIN_PAGES = [
   "GET /v1/admin/sandboxes/:scopeId",
   "POST /v1/admin/sandboxes/:scopeId",
   "GET /v1/admin/security/flags",
-  "GET /v1/admin/unattended-grants",
 ];
 
 const concrete = (path: string): string => path.replaceAll(/:[a-zA-Z]+/g, "x");

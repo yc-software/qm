@@ -217,6 +217,8 @@ export async function canAdministerCron(
 ): Promise<boolean> {
   if (await ownsCron(app, cron, actorId, isActor)) return true;
   if (actsAsScope(cron.owner, cron.ownerScopeId) || cron.ownerScopeId.startsWith("personal:")) return false;
+  // Rewriting a shared cron's task hands its fires to the rewriter; the creator keeps a hand on it regardless.
+  if (await (isActor ? isActor(cron.createdBy) : app.samePerson(cron.createdBy, actorId))) return true;
   return (await app.artifactGrantPermission(cron.ownerScopeId, encodeRef(cronRef(cron.id)), actorId)) === "write";
 }
 
@@ -544,6 +546,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         if (req.runtime !== undefined) changeSummary.push("runtime");
         if (req.title !== undefined) changeSummary.push("title");
         if (req.action !== undefined || req.text !== undefined) changeSummary.push("task");
+        if (patch.owner !== undefined) changeSummary.push("owner");
         if (req.schedule !== undefined) changeSummary.push("schedule");
         if (req.enabled !== undefined) changeSummary.push(`enabled=${req.enabled}`);
         if (req.archived !== undefined) changeSummary.push(`archived=${req.archived}`);
@@ -553,7 +556,8 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           changeSummary.push(req.session ? "tied to a session" : "untied from its session");
         const detail: CronEditDetail =
           req.schedule !== undefined ? { schedule: withDefaultTimezone(req.schedule, capability) } : {};
-        await notifyEdit(cron, capability, changeSummary, detail);
+        // On a takeover the notice goes to whoever owned the cron before this edit, not to the editor.
+        await notifyEdit({ ...cron, owner: before.owner }, capability, changeSummary, detail);
         return { ok: true, cron };
       } catch (e) {
         return { ok: false, code: "cron_update_failed", message: errMessage(e) };
@@ -827,12 +831,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
 
       try {
         if (orgSkillCede) {
-          const promoted = await app.promoteSkill(
-            home.id,
-            toScope,
-            capability.actorId,
-            personAtKeyboard(capability),
-          );
+          const promoted = await app.promoteSkill(home.id, toScope, capability.actorId, personAtKeyboard(capability));
           return {
             ok: true,
             verb: "promote",
@@ -844,10 +843,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         }
 
         if (req.move) {
-          const deployPersonTransfer =
-            req.type === "deploy" &&
-            toKind === "personal" &&
-            personAtKeyboard(capability);
+          const deployPersonTransfer = req.type === "deploy" && toKind === "personal" && personAtKeyboard(capability);
           if (toKind === "persona" && req.type !== "skill" && req.type !== "file") {
             return {
               ok: false,
