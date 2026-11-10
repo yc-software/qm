@@ -77,6 +77,12 @@ Giving the same behavior or fact multiple independent implementations or sources
 - **[qm#993](https://github.com/yc-software/qm/pull/993)** (2026-09-08): Chat search queried both the dedicated search index and legacy entry history for every visible conversation, causing timeouts. _Status:_ wound back in [qm#993](https://github.com/yc-software/qm/pull/993).
 - **[qm#488](https://github.com/yc-software/qm/pull/488)** (2026-08-13): Web-UI /api router had ~50 hand-copied body-parse/relay/path-decode fragments that drifted (some returned 400 instead of 413). _Status:_ wound back in [qm#488](https://github.com/yc-software/qm/pull/488).
 
+### One door (1 example)
+
+The Duplication lens applied to decisions about inputs, reviewed on its own because these copies drift without any test noticing: a decision about an input is made in exactly one function. Whether an incoming message starts a turn, steers the live one, stops it, waits, or is dropped, and how its files, author and security screen are handled, are each decided in one place that every surface calls. Surfaces pass what they know (origin, preferences, the live turn) as arguments; a surface is never a reason for its own copy of the rules or for a branch inside them. A second entry point calls the existing function; a rule change happens there.
+
+- **Mid-turn routing and intake** (2026-11-02): Slack's turn path and its own stop interceptor, the web signal route plus a client-side Queue/Steer setting, the ambient worker spawner, and a reverse-race branch each decided steer, queue, abort or drop with their own rules. A bare "stop" aborted on Slack but queued on web; a model-account change queued on Slack but was refused on web; a blocked ambient update was dropped on one path and spawned a second worker on another. The mid-turn file, attribution and screening steps re-implemented the new-turn intake. _Status:_ [qm#2906](https://github.com/yc-software/qm/pull/2906) and [qm#2907](https://github.com/yc-software/qm/pull/2907) route every surface through one router and give mid-turn messages the new-turn file and attribution intake; the mid-turn security screen still follows its own rules (open).
+
 ### Hand-rolling (always reviewed, 5 examples)
 
 Reimplementing a capability that an existing SDK, library, or supported API already provides. Custom protocols and plumbing make us own edge cases that the maintained integration already handles; use that integration when it meets the requirements.
