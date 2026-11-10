@@ -9,6 +9,7 @@ import {
   swallow,
   swallowAs,
   httpFailure,
+  execFailure,
   withRequestId,
 } from "../src/util/errors.ts";
 import { WorkAdmissionClosed } from "../src/util/admitted-work.ts";
@@ -160,6 +161,13 @@ test("httpFailure names the status, a clipped body, and the provider request id"
     "lambda -> 429: throttled [request id aws-1]",
   );
   assert.equal(withRequestId("fine", new Headers()), "fine");
+});
+
+test("execFailure says when command output is cut to its tail", () => {
+  const long = execFailure("deploy", { stdout: "", stderr: `${"a".repeat(500)}${"z".repeat(300)}`, code: 1 });
+  assert.equal(long.message, `deploy failed (exit 1); stderr: [last 300 of 800 chars] ${"z".repeat(300)}`);
+  const short = execFailure("deploy", { stdout: " ok \n", stderr: "", code: 124 });
+  assert.equal(short.message, "deploy failed (exit 124, timed out); stdout: ok");
 });
 
 test("errDetail preserves browser frames, nested stacks and aggregate errors without cycles", () => {
