@@ -352,6 +352,7 @@ import { createDrainController, type BackgroundServices, type DrainController } 
 import { createReaper, REAPER_LEASE_KEY, type Reaper } from "./runs/reaper.ts";
 import { createSweeper as createUntrackedSweeper, type Sweeper } from "./util/sweeper.ts";
 import { createPostgresProcessRegistry, type ProcessRegistry } from "./processes/process-registry.ts";
+import { createSessionWork } from "./sessions/session-work.ts";
 import { createProcessReaper, createReaperKillHook, type ProcessReaper } from "./processes/process-reaper.ts";
 import { createJobComputerSweep } from "./processes/job-computers.ts";
 import { createMonitorStore, type MonitorStore } from "./monitors/monitor-store.ts";
@@ -2470,7 +2471,10 @@ export function buildApp(
     surfaceCache,
     taskAcknowledgements: artifactMap<TaskAckState>("slack_task_acknowledgements"),
     sessionStatus: artifactMap<SlackSessionStatusState>("slack_session_status"),
-    statusActivity: { processes, monitors, sessions, publicWebUrl: config.publicWebUrl },
+    statusActivity: {
+      work: createSessionWork({ runs, sessions, ...(processes ? { processes } : {}), monitors, deliveries }),
+      publicWebUrl: config.publicWebUrl,
+    },
     featureFlags,
     inboxEvent: (event) => inboxRealtime.onConversationEvent(event),
     app,
