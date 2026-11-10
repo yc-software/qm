@@ -1038,8 +1038,6 @@ export function createSwarmService(deps: {
       if (!member || member.state !== "ready" || member.sessionId !== session.id || session.scopeId !== swarm.scopeId)
         throw new NonRetryableTurnError("invalid swarm membership");
       if (controlState(swarm, member.id) === "stopped") throw new NonRetryableTurnError("swarm worker stopped");
-      if (input.swarm && controlState(swarm, member.id) === "paused")
-        throw new HeldTurnError("swarm worker paused", SWARM_LIMITS.pausedRecheckMs);
       if (!input.swarm) {
         if (
           !(await sessions.participantsOf(session.id)).includes(input.actor.id) ||
@@ -1055,6 +1053,8 @@ export function createSwarmService(deps: {
         return { sandboxId: member.sandboxId, rootSessionId: swarm.id, member };
       }
       assertSwarmOpen(swarm);
+      if (controlState(swarm, member.id) === "paused")
+        throw new HeldTurnError("swarm worker paused", SWARM_LIMITS.pausedRecheckMs);
       const message = swarm.messages.find((item) => item.id === input.swarm!.messageId);
       const dedup = message ? await runs.getByDedupKey(`swarm:${message.id}:${member.id}`) : null;
       const expected = message && dedup ? dispatchRequest(swarm, message, member) : null;
