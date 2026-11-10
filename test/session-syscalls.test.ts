@@ -2903,6 +2903,12 @@ test("a subagent spawned by an owner's fire inherits the fire's automation autho
     { conversation: { ...r.run.request.conversation, kind: "channel" as const, channelRef: "other" } },
   ])
     assert.equal(await delegatedAuthorizationOrigin({ ...r.run.request, ...patch }, r), undefined);
+  await r.sessions.removeParticipant(r.run.request.sessionSenderId!, actor.id);
+  assert.equal(
+    (await delegatedAuthorizationOrigin(r.run.request, r))?.kind,
+    "automation",
+    "a fire's own thread has no participants; the run that delegated still proves whose fire it was",
+  );
   await r.sessions.setParentSession(r.child.id, null);
   assert.equal(await delegatedAuthorizationOrigin(r.run.request, r), undefined);
 });
