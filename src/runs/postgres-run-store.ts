@@ -1,40 +1,15 @@
-import { createPostgresNotifyBus } from "../persistence/postgres-notify-bus.ts";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 import { isObj } from "../util/objects.ts";
 import type { TurnResult } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
-import type {
-  EnqueueInput,
-  EnqueueResult,
-  ReapEvent,
-  Run,
-  RunDeliveryState,
-  RunStop,
-  RunStore,
-  SessionWatch,
-} from "./run-store.ts";
+import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, RunStop, RunStore } from "./run-store.ts";
 import type { RunPriority } from "./run-store.ts";
-import {
-  countedClaims,
-  isTerminal,
-  RUN_WAIT_FALLBACK_MS,
-  runPriority,
-  stopErrorCode,
-  withTraceCarrier,
-} from "./run-store.ts";
-import { swallow } from "../util/errors.ts";
-import { sleep } from "../util/async.ts";
+import { countedClaims, isTerminal, runPriority, stopErrorCode, withTraceCarrier } from "./run-store.ts";
 import { tenantTables } from "../tenants/migrations.ts";
+import { createRunWatch, NOTIFY_SESSION_AVAILABLE } from "./run-watch.ts";
 import { claimFunction, claimRows, claimThenBind, claimThenLoad, type ClaimedRow } from "../tenants/claim.ts";
-
-const NOTIFY_SESSION_AVAILABLE =
-  "pg_notify('qm_run_available', to_json(encode(sha256(convert_to(session_id, 'UTF8')), 'hex'))::text)";
-
-function sessionAvailabilityKey(sessionId: string): string {
-  return createHash("sha256").update(sessionId).digest("hex");
-}
 
 export interface PostgresRuntime {
   runs: RunStore;
@@ -162,7 +137,6 @@ const FENCE_HOLD_MS = 600_000;
 const PREVIOUS_SCHEMA = "runs/store/0010-drop-turn-metrics";
 
 export function createPostgresRunStore(connectionString: string, opts?: { maxClaims?: number }): PostgresRuntime {
-  const available = createPostgresNotifyBus<string>(connectionString, "qm_run_available", "run availability");
   const maxClaims = opts?.maxClaims ?? Number.POSITIVE_INFINITY;
 
   const pg = createPgPool(connectionString, [
@@ -237,66 +211,15 @@ END $base_schema$`,
   ]);
   const { query: q, close: closePool } = pg;
 
-  const availabilityListeners = new Map<() => void, number>();
-  let availabilityTimer: ReturnType<typeof setTimeout> | undefined;
-  let availabilityProbe: Promise<void> | null = null;
-  let availabilityClosed = false;
-
-  function watchAvailability(): void {
-    if (availabilityClosed || availabilityListeners.size === 0 || availabilityTimer || availabilityProbe) return;
-    availabilityTimer = setTimeout(
-      () => {
-        availabilityTimer = undefined;
-        availabilityProbe = claimRows(pg, "claim_available_runs", [Date.now()])
-          .then((rows) => {
-            if (rows.length) for (const listener of availabilityListeners.keys()) listener();
-          })
-          .catch((error: unknown) => swallow("run availability probe", error))
-          .finally(() => {
-            availabilityProbe = null;
-            watchAvailability();
-          });
-      },
-      Math.min(...availabilityListeners.values()),
-    );
-    availabilityTimer.unref();
-  }
-
   async function getRun(id: string): Promise<Run | null> {
     const { rows } = await q("SELECT * FROM runs WHERE id = $1", [id]);
     return rows[0] ? rowToRun(rows[0]) : null;
   }
+  const { close: closeWatch, ...watch } = createRunWatch(connectionString, pg, getRun);
   function loaded(claim: () => Promise<ClaimedRow[]>): Promise<Run[]> {
     return claimThenLoad(claim, async (ids) =>
       (await q("SELECT * FROM runs WHERE id = ANY($1)", [ids])).rows.map(rowToRun),
     );
-  }
-  function watchSession(sessionId: string): SessionWatch {
-    let changed = true;
-    let wake: (() => void) | undefined;
-    const note = (): void => {
-      changed = true;
-      wake?.();
-    };
-    const key = sessionAvailabilityKey(sessionId);
-    const off = available.subscribe((session) => session === key && note(), { onResync: note });
-    return {
-      changed(timeoutMs, signal) {
-        return new Promise<void>((resolve) => {
-          const done = (): void => {
-            clearTimeout(timer);
-            signal?.removeEventListener("abort", done);
-            wake = undefined;
-            changed = false;
-            resolve();
-          };
-          const timer = setTimeout(done, changed || signal?.aborted ? 0 : timeoutMs);
-          signal?.addEventListener("abort", done);
-          wake = done;
-        });
-      },
-      close: off,
-    };
   }
   const terminalListeners: Array<(run: Run) => void> = [];
   function settle(run: Run | null): void {
@@ -370,22 +293,7 @@ END $base_schema$`,
   }
 
   const runs: RunStore = {
-    subscribeAvailable(listener, options) {
-      availabilityListeners.set(listener, options?.pollMs ?? 50);
-      clearTimeout(availabilityTimer);
-      availabilityTimer = undefined;
-      const off = available.subscribe(listener, options);
-      watchAvailability();
-      return () => {
-        off();
-        availabilityListeners.delete(listener);
-        if (availabilityListeners.size === 0) {
-          clearTimeout(availabilityTimer);
-          availabilityTimer = undefined;
-        }
-      };
-    },
-    watchSession,
+    ...watch,
     ...(Number.isFinite(maxClaims) ? { maxClaims } : {}),
 
     async enqueue({ sessionId, request, dedupKey, maxAttempts = 3 }: EnqueueInput): Promise<EnqueueResult> {
@@ -675,30 +583,8 @@ END $base_schema$`,
       return { requeued, parked };
     },
 
-    async waitFor(runId, timeoutMs = 60_000): Promise<Run> {
-      const deadline = Date.now() + timeoutMs;
-      let watch: SessionWatch | undefined;
-      try {
-        for (;;) {
-          const run = await getRun(runId);
-          if (run && isTerminal(run.status)) return run;
-          const remaining = deadline - Date.now();
-          if (remaining <= 0) throw new Error(`run ${runId} did not finish within ${timeoutMs}ms`);
-          if (run) watch ??= watchSession(run.sessionId);
-          const wait = Math.min(RUN_WAIT_FALLBACK_MS, remaining);
-          await (watch ? watch.changed(wait) : sleep(wait));
-        }
-      } finally {
-        watch?.close();
-      }
-    },
-
     async close(): Promise<void> {
-      availabilityClosed = true;
-      clearTimeout(availabilityTimer);
-      availabilityListeners.clear();
-      await availabilityProbe;
-      await available.close?.();
+      await closeWatch();
       await closePool();
     },
   };
