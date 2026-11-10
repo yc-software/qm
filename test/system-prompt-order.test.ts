@@ -1641,7 +1641,7 @@ test("a shared thread keeps one byte-identical system prompt until compaction; c
   });
   const admin = {
     adminStatusOf: async (p: Principal) => ({ isAdmin: p.id === actor.id }),
-    listGrants: async (tenant) => {
+    listGrants: async (tenant: Parameters<AdminService["listGrants"]>[0]) => {
       assert.ok(tenant);
       return [{ principalId: actor.id, role: "org_admin", scopeId: scopeId("org", ORG) }];
     },
