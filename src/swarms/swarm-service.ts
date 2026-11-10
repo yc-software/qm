@@ -4,8 +4,9 @@ import { createHash, randomUUID } from "node:crypto";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import type { RunStore } from "../runs/run-store.ts";
+import type { Run, RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
+import type { ProcessRecord, ProcessRegistry } from "../processes/process-registry.ts";
 import type { SandboxResource, SandboxResources } from "../sandbox/sandbox-resources.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
@@ -235,11 +236,46 @@ export function createSwarmService(deps: {
   enabled?(actorId: string): Promise<boolean>;
   signals?: Pick<RunSignalStore, "send">;
   defaults?: SwarmSettings;
+  processes?: Pick<ProcessRegistry, "liveByScope" | "markStatus">;
+  stopProcess?: (job: ProcessRecord) => Promise<void>;
 }): SwarmService {
   const enabledFor = deps.enabled ?? (async () => true);
   const { store, sessions, runs } = deps;
   const update = (auth: Authority, mutate: (swarm: Swarm) => void) => store.update(auth.rootId, mutate, auth.fence);
   const defaults = resolveSwarmSettings(deps.defaults);
+  const cutOffBot = async (swarm: Swarm): Promise<void> => {
+    if (!swarm.template.botActor) return;
+    const lostSwarm = (run: Run | null): boolean => {
+      if (!run?.request.botActor) return false;
+      const { rootId, memberId } = threadIdentity(run.request.conversation.threadRef, "");
+      return !botMayDirect(swarm, rootId === swarm.id ? memberId : swarm.id, run.request.actor.id);
+    };
+    const active = await runs.activeForThreads(swarm.members.map((member) => member.threadRef));
+    await Promise.all(
+      [...active.values()]
+        .filter((run) => run.status === "running" && lostSwarm(run))
+        .map((run) =>
+          deps.signals
+            ?.send(run.id, { kind: "abort", reason: "because a person sent work into the swarm" })
+            .catch(swallowAs("swarm: abort a bot's turn that lost the swarm", false)),
+        ),
+    );
+    const { processes, stopProcess } = deps;
+    if (!processes || !stopProcess) return;
+    const computers = new Set(swarm.members.flatMap((member) => (member.sandboxId ? [member.sandboxId] : [])));
+    if (swarm.board) computers.add(swarm.board.sandboxId);
+    const jobs = (await processes.liveByScope(swarm.scopeId)).filter(
+      (job) => job.sandboxId && computers.has(job.sandboxId) && job.runId,
+    );
+    await Promise.all(
+      jobs.map(async (job) => {
+        if (!lostSwarm(await runs.get(job.runId!))) return;
+        await stopProcess(job)
+          .then(() => processes.markStatus(job.processId, "reaped"))
+          .catch(swallowAs("swarm: stop a bot's job on a computer it lost", false));
+      }),
+    );
+  };
   const view = (member: SwarmMember): SwarmMember => ({
     ...member,
     ...(member.sessionId ? { sessionUrl: `/web-ui/s/${encodeURIComponent(member.sessionId)}` } : {}),
@@ -747,6 +783,7 @@ export function createSwarmService(deps: {
       }
       if (updated.spawnRequests[key]!.signature !== fingerprint)
         throw new Error("requestId reused with different content");
+      await cutOffBot(updated);
       const ids = updated.spawnRequests[key]!.memberIds;
       return updated.members.filter((member) => ids.includes(member.id)).map(view);
     },
@@ -822,6 +859,7 @@ export function createSwarmService(deps: {
         });
         swarm.messageRequests[key] = { messageId: id, signature: fingerprint };
       });
+      await cutOffBot(updated);
       return updated.messages.find((message) => message.id === updated.messageRequests[key]!.messageId)!;
     },
     async read(caller, options) {

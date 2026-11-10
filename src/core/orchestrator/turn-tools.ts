@@ -51,6 +51,7 @@ export function createTurnBrokers(turn: {
           onExit: finishProcess,
           scopeId: memoryScopeId,
           sessionRef: conversation.threadRef,
+          ...(input.runId ? { runId: input.runId } : {}),
           ttlMs: deps.backgroundJobTtlMs,
           ttlMaxMs: deps.backgroundJobTtlMaxMs,
           assertComputerUsable: assertDefaultUsable,

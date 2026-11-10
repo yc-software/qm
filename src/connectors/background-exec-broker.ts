@@ -16,6 +16,7 @@ export interface BackgroundExecBrokerDeps {
   onExit?: (handle: SandboxHandle, processId: string) => Promise<void>;
   scopeId: string;
   sessionRef?: string;
+  runId?: string;
   ttlMs?: number;
   ttlMaxMs?: number;
   pollMs?: number;
@@ -187,6 +188,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
             purpose,
             ttlMs: ttl,
             ...(deps.sessionRef ? { sessionRef: deps.sessionRef } : {}),
+            ...(deps.runId ? { runId: deps.runId } : {}),
             ...(credentials?.files ? { credentialFiles: credentials.files } : {}),
           });
         };
