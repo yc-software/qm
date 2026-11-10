@@ -539,6 +539,7 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
         audienceScopeId: drop.audienceScopeId,
         mode: drop.grantMode,
         purpose: drop.purpose,
+        ...(attestation?.botActor ? { botActor: true } : {}),
       });
       grantId = grant.id;
     }

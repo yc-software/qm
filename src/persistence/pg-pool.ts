@@ -343,21 +343,28 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
       )`,
       );
     }
-    for (const migration of migrations) {
-      if (migration.upgradeFrom) {
-        const predecessor = await client.query(`SELECT 1 FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`, [
-          migration.upgradeFrom,
-        ]);
-        if (!predecessor.rowCount) continue;
+    const known = new Map(
+      (
+        await client.query<{ id: string; checksum: string }>(`SELECT id, checksum FROM ${PG_MIGRATIONS_TABLE}`)
+      ).rows.map((row) => [row.id, row.checksum]),
+    );
+    const recorded = async (id: string): Promise<string | undefined> => {
+      if (!known.has(id)) {
+        const row = await client.query<{ checksum: string }>(
+          `SELECT checksum FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`,
+          [id],
+        );
+        if (row.rows[0]) known.set(id, row.rows[0].checksum);
       }
-      const applied = await client.query<{ checksum: string }>(
-        `SELECT checksum FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`,
-        [migration.id],
-      );
-      if (applied.rows[0]) {
-        if (applied.rows[0].checksum !== migration.checksum) {
+      return known.get(id);
+    };
+    for (const migration of migrations) {
+      if (migration.upgradeFrom && (await recorded(migration.upgradeFrom)) === undefined) continue;
+      const applied = await recorded(migration.id);
+      if (applied !== undefined) {
+        if (applied !== migration.checksum) {
           throw new Error(
-            `pg-pool: migration ${migration.id} checksum mismatch (database=${applied.rows[0].checksum}, source=${migration.checksum})`,
+            `pg-pool: migration ${migration.id} checksum mismatch (database=${applied}, source=${migration.checksum})`,
           );
         }
         continue;

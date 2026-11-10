@@ -331,22 +331,30 @@ export async function startSlackPlugin(
   const statusAccount = () => `${ids.ownTeamId}:${ids.botUserId}`;
   let statusSync: Promise<void> | undefined;
   const reconcileStatus = () => {
-    statusSync ??= core.sessionStatus
-      ?.reconcile(statusClient, statusAccount())
-      .catch(swallowAs("slack: session status reconciliation", undefined))
+    statusSync ??= Promise.all([
+      core.sessionStatus
+        ?.reconcile(statusClient, statusAccount())
+        .catch(swallowAs("slack: session status reconciliation", undefined)),
+      CORE_SINGLETON || cfg.externalAccess
+        ? core.taskAcknowledgements
+            ?.reconcile(statusClient)
+            .catch(swallowAs("slack: task ack reconciliation", undefined))
+        : undefined,
+    ])
+      .then(() => undefined)
       .finally(() => {
         statusSync = undefined;
       });
     return statusSync;
   };
-  const statusSweep = createSweeper(reconcileStatus, 60_000, { label: "slack session status", immediate: true });
+  const statusSweep = createSweeper(reconcileStatus, 5_000, { label: "slack session status", immediate: true });
   const handler = createTurnHandler({
     accountId: ACCOUNT_LABEL,
     ...(cfg.externalAccess ? { externalAccess: cfg.externalAccess } : {}),
     continuePrivate: (runId, task) => continueInPrivate(core, runId, task, (id) => slackAccountClients().get(id)),
-    onEngaged: (runId, channel, threadTs) => {
+    onEngaged: (runId, channel, threadTs, emoji) => {
       void core.sessionStatus
-        ?.start(statusClient, statusAccount(), runId, channel, threadTs)
+        ?.start(statusClient, statusAccount(), runId, channel, threadTs, emoji)
         .catch(swallowAs("slack: session status start", undefined))
         .finally(() => {
           void reconcileStatus();

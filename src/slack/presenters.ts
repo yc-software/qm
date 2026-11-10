@@ -61,6 +61,7 @@ export interface AckPresenter {
   onFirstBlock(text: string): void;
   onSurfacePosted(): void;
   postedAck(): string | undefined;
+  emoji(): Promise<string>;
   drain(): Promise<void>;
   settle(): Promise<void>;
 }
@@ -91,12 +92,14 @@ export function createAckPresenter(deps: {
   const enqueue = (op: () => Promise<void>): void => {
     chain = chain.then(op).catch((e) => swallow("slack: ack presenter step", e));
   };
+  const choose = (): string => (emoji ||= pickResult || randomEmoji());
+  const delayMs = deps.reactionDelayMs ?? 2_000;
   const timer = setTimeout(() => {
     if (deps.taskManaged || settled || ackPosted || reactionCancelled) return;
-    emoji = pickResult || randomEmoji();
+    choose();
     reactionApplied = true;
     enqueue(() => deps.addReaction(emoji));
-  }, deps.reactionDelayMs ?? 2_000);
+  }, delayMs);
   timer.unref?.();
   const clearReaction = (): void => {
     clearTimeout(timer);
@@ -121,6 +124,10 @@ export function createAckPresenter(deps: {
       clearReaction();
     },
     postedAck: () => ackPosted,
+    async emoji() {
+      await Promise.race([deps.emojiPick, new Promise((done) => setTimeout(done, delayMs))]);
+      return choose();
+    },
     async drain() {
       await chain;
     },
