@@ -7,6 +7,7 @@ import { parseIntoClientConfig } from "pg-connection-string";
 import { boundTenant, explicitTenantId, pinTenant, type Tenant } from "../tenants/context.ts";
 import { createKeyedQueue, sleep, withAbort } from "../util/async.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
+import { untraced } from "../../plugins/chassis/src/error-reporting.ts";
 
 export type { Pool, PoolClient };
 
@@ -157,15 +158,15 @@ async function pipelinedTransaction(
 ): Promise<QueryResult> {
   const settled = await withAbort(() => {
     const statements = [
-      client.query("BEGIN"),
-      ...(settings.length ? [client.query(settingsQuery(settings))] : []),
+      untraced(() => client.query("BEGIN")),
+      ...(settings.length ? [untraced(() => client.query(settingsQuery(settings)))] : []),
       client.query({ text, values }),
     ];
-    return Promise.allSettled(signal ? statements : [...statements, client.query("COMMIT")]);
+    return Promise.allSettled(signal ? statements : [...statements, untraced(() => client.query("COMMIT"))]);
   }, signal);
   if (signal) {
     signal.throwIfAborted();
-    settled.push(...(await Promise.allSettled([client.query("COMMIT")])));
+    settled.push(...(await Promise.allSettled([untraced(() => client.query("COMMIT"))])));
   }
   const failed = settled.find((outcome) => outcome.status === "rejected");
   if (failed) throw failed.reason;
@@ -218,10 +219,10 @@ async function runPgTransaction<T>(
   let rollbackError: Error | undefined;
   try {
     const settings = tenantSettings(tenant);
-    await client.query("BEGIN");
-    if (settings.length) await client.query(settingsQuery(settings));
+    await untraced(() => client.query("BEGIN"));
+    if (settings.length) await untraced(() => client.query(settingsQuery(settings)));
     const result = await fn(client);
-    await client.query("COMMIT");
+    await untraced(() => client.query("COMMIT"));
     return result;
   } catch (error) {
     rollbackError = await rollbackOrReport(client, "pg-pool: rollback transaction");

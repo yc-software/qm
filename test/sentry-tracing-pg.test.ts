@@ -12,6 +12,7 @@ import {
   tracePhase,
   traceQueued,
 } from "../plugins/chassis/src/error-reporting.ts";
+import { createPgPool, withPgTransaction } from "../src/persistence/pg-pool.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres tracing test";
@@ -262,4 +263,51 @@ test("first-token time lands on the run even when the stream calls back outside 
   const run = await arrived("detached-stream-run");
   assert.ok(run.measurements.time_to_first_token.value >= 20);
   assert.ok(run.spans.some((sent: { op: string }) => sent.op === "turn.dispatch"));
+});
+
+test("a pipelined or explicit transaction sends one span for its statement", { skip }, async () => {
+  const db = createPgPool(URL!);
+  const pg = (await import("pg")).default;
+  const pool = new pg.Pool({ connectionString: URL, max: 1 });
+  try {
+    await traceQueued(undefined, "pipelined-run", {}, async () => {
+      await db.query("SELECT 1", [], { timeoutMs: 5_000 });
+      await withPgTransaction(pool, (client) => client.query("UPDATE pg_settings SET setting = setting WHERE false"));
+    });
+    const run = await arrived("pipelined-run");
+    assert.deepEqual(
+      run.spans
+        .filter(
+          (span: { op: string; description: string }) => span.op === "db" && !span.description.endsWith(".connect"),
+        )
+        .map((span: { description: string }) => span.description),
+      ["SELECT", "UPDATE"],
+    );
+  } finally {
+    await db.close();
+    await pool.end();
+  }
+});
+
+test("phase spans survive a turn with more than a thousand queries after the model request", { skip }, async () => {
+  const db = createPgPool(URL!);
+  try {
+    await traceQueued(undefined, "chatty-run", {}, async () => {
+      await tracePhase("turn.prompt", async () => {
+        for (let i = 0; i < 200; i++) await db.query("SELECT $1::int", [i], { timeoutMs: 5_000 });
+      });
+      const dispatch = startDispatchTrace();
+      dispatch.modelRequest();
+      for (let i = 0; i < 1_500; i++) await db.query("SELECT $1::int", [i], { timeoutMs: 5_000 });
+      dispatch.end();
+    });
+    const run = await arrived("chatty-run");
+    const ops = new Set(run.spans.map((span: { op: string }) => span.op));
+    assert.ok(ops.has("turn.prompt"));
+    assert.ok(ops.has("turn.dispatch"));
+    assert.ok(run.contexts.trace.data["qm.truncated_spans"] > 0);
+    assert.ok(run.measurements.time_to_model_request.value > 0);
+  } finally {
+    await db.close();
+  }
 });

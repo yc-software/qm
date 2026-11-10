@@ -10,7 +10,13 @@ import { createSelfApiCall } from "../tools/self-api.ts";
 import { scopeTeamsToTurn } from "../teams/teams.ts";
 import { externalSlackRequestAllowed, currentExternalSlackRun } from "../resolution/external-slack.ts";
 import { desktopComputerTool } from "../../plugins/chassis/src/desktop-computer.ts";
-import { startDispatchTrace, tracePhase, type DispatchTrace } from "../../plugins/chassis/src/error-reporting.ts";
+import {
+  startDispatchTrace,
+  startPhase,
+  tracePhase,
+  type DispatchTrace,
+  type Phase,
+} from "../../plugins/chassis/src/error-reporting.ts";
 import { externalTools } from "./orchestrator/external-tools.ts";
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import type { MemoryProviderOutcome } from "../memory/memory-service.ts";
@@ -464,6 +470,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     },
 
     async handleTurn(input: OrchestratorInput): Promise<TurnResult> {
+      let stage: Phase | undefined = startPhase("turn.open");
+      const nextStage = (op?: string): void => {
+        stage?.end();
+        stage = op ? startPhase(op) : undefined;
+      };
       const tenant = ambientTenant();
       if (
         !externalSlackRequestAllowed(
@@ -917,11 +928,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         recordScreenRequest,
         audit,
       });
+      nextStage();
       const skillSourceContext = await tracePhase(
         "turn.skills",
         () => context.listSkills([scopeId, resolution.orgScopeId]),
         { counts: countSkills },
       );
+      nextStage("turn.session");
       const otherSkillSources = skillSourceContext.skillSources
         .filter((source) => source !== scopeId && source !== resolution.orgScopeId)
         .sort();
@@ -1293,11 +1306,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       });
       let failureUserItem: NewItem<"UserMessage"> | undefined;
       try {
+        nextStage("turn.participants");
         await withManagedRosterVersion(async () => {
           await reconcileSessionParticipants(session.id);
           await Promise.all(pendingScreenRequests.splice(0).map((rec) => recordScreenRequest(rec)));
           return true;
         });
+        nextStage("turn.context_window");
         const contextWindow = deps.sessions.getContextWindow(session.id);
         const snapshot = context.memorySnapshot();
         const recallOutcomes: MemoryProviderOutcome[] = [];
@@ -1318,6 +1333,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             : contextWindow.then((window) => recallFor(filterHistory(forModelContext(window.items))));
         void earlyRecall?.catch(() => undefined);
         const [memoryWindow, memoryView] = await Promise.all([contextWindow, snapshot]);
+        nextStage("turn.prompt");
         let historyAppended = input.approval !== undefined;
         const captureDependencies = () => [
           ...memoryView.facts,
@@ -1799,6 +1815,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const priorTurns = input.priorTurns;
         let visibleHistory = filterHistory(forModelContext(rawEntries));
         const recalled = await (earlyRecall ?? recallFor(visibleHistory));
+        nextStage("turn.prepare");
         const partial = isRetry ? (recordedTurn ?? findTrailingPartialTurn(visibleHistory, input.runId)) : null;
         const reconciled = partial ? reconcile(visibleHistory, partial, input.resumeCause) : null;
         if (reconciled?.settleItems.length) {
@@ -2225,6 +2242,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           });
           const mcpTools = await mcpToolsReady;
 
+          nextStage();
           dispatchTrace ??= startDispatchTrace();
           const turnRun = deps.agent.runTurn({
             session,
