@@ -19,6 +19,7 @@ export function rowToRun(r: Record<string, unknown>): Run {
     maxAttempts: Number(r.max_attempts),
     priority: Number(r.claim_priority) as RunPriority,
     preemptions: Number(r.preemptions),
+    handbacks: Number(r.handbacks),
     leaseToken: (r.lease_token as string | null) ?? null,
     leaseExpiresAt: r.lease_expires_at === null ? null : Number(r.lease_expires_at),
     workerId: (r.worker_id as string | null) ?? null,

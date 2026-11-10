@@ -68,7 +68,7 @@ test("a fully migrated database skips the base schema and drops the retired obje
     await admin.query("CREATE TABLE directory_sync(org_id TEXT PRIMARY KEY, channel_members_synced BOOLEAN)");
     await admin.query("CREATE TABLE sessions(id TEXT PRIMARY KEY, thread_ref TEXT, spawn_meta TEXT)");
     await admin.query(
-      "CREATE TABLE runs(id TEXT PRIMARY KEY, session_id TEXT, request TEXT, result TEXT, created_at BIGINT, seq BIGINT)",
+      "CREATE TABLE runs(id TEXT PRIMARY KEY, session_id TEXT, status TEXT, request TEXT, result TEXT, created_at BIGINT, seq BIGINT, preemptions INT NOT NULL DEFAULT 0)",
     );
     await admin.query("CREATE EXTENSION IF NOT EXISTS btree_gin");
     await admin.query(`CREATE TABLE items(seq BIGINT, tenant_id TEXT, session_id TEXT, kind TEXT, variant TEXT,

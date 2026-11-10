@@ -7,6 +7,7 @@ import type { Orchestrator } from "../core/orchestrator.ts";
 import { isNonRetryable, NonRetryableTurnError, ProviderTurnError, turnFailureMessage } from "../core/turn-error.ts";
 import {
   countedClaims,
+  CRASHED,
   errorParks,
   handbackStop,
   MAX_PREEMPTIONS,
@@ -174,8 +175,10 @@ async function attemptRun(
     stopBeat();
     clearTimeout(strandTimer);
     opts?.shutdown?.removeEventListener("abort", onShutdown);
-    if (opts?.shutdown?.aborted)
-      await handBack(deps, run, token, started ? handbackStop(opts.shutdown) : undefined, stranded).catch((e) =>
+    if (shutdown?.reason === CRASHED)
+      console.warn(`[worker] run ${run.id} held by a crashing process; leaving its lease to expire`);
+    else if (shutdown?.aborted)
+      await handBack(deps, run, token, started ? handbackStop(shutdown) : undefined, stranded).catch((e) =>
         swallow(`worker: shutdown handback failed run=${run.id}; lease will expire after exit`, e),
       );
   }
@@ -224,7 +227,7 @@ export interface Worker {
   stopClaims(): Promise<void>;
   drained(): Promise<void>;
   stop(drainMs?: number): Promise<void>;
-  releaseInFlight(): Promise<void>;
+  releaseInFlight(fatal?: boolean): Promise<void>;
 }
 
 const STOP_DRAIN_MS = 2_000;
@@ -375,9 +378,9 @@ export function createWorker(deps: WorkerDeps): Worker {
       });
       if (!loopDone) run();
     },
-    async releaseInFlight() {
+    async releaseInFlight(fatal = false) {
       await stopClaims();
-      for (const held of inFlight.values()) held.shutdown.abort();
+      for (const held of inFlight.values()) held.shutdown.abort(fatal ? CRASHED : undefined);
       await settled();
     },
     stopClaims,
