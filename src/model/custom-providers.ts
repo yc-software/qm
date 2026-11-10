@@ -1,4 +1,4 @@
-import { parseProviderBaseUrl, PROVIDER_IDS } from "./provider-endpoints.ts";
+import { isModelProvider, parseProviderBaseUrl } from "./provider-endpoints.ts";
 import { perTenant } from "../tenants/cache.ts";
 import { boundTenant } from "../tenants/context.ts";
 
@@ -23,16 +23,14 @@ export interface CustomProviderSpec {
   models: CustomModelSpec[];
 }
 
-const SLUG_RE = /^[a-z][a-z0-9-]{1,31}$/;
-const RESERVED = new Set<string>(PROVIDER_IDS);
+const SLUG_RE = /^[a-z][a-z0-9-]+$/;
 
 export function validateCustomProviderSpec(spec: CustomProviderSpec): void {
   if (!SLUG_RE.test(spec.id)) {
     throw new Error(`provider id must match ${SLUG_RE} (lowercase slug), got "${spec.id}"`);
   }
-  if (RESERVED.has(spec.id)) throw new Error(`provider id "${spec.id}" is reserved`);
+  if (isModelProvider(spec.id)) throw new Error(`provider id "${spec.id}" is reserved`);
   if (!spec.name.trim()) throw new Error("provider name is required");
-  if (spec.name.length > 100) throw new Error("provider name must be 100 chars or fewer");
   if (!CUSTOM_PROVIDER_PROTOCOLS.includes(spec.protocol)) {
     throw new Error(`protocol must be one of ${CUSTOM_PROVIDER_PROTOCOLS.join(", ")}`);
   }
@@ -40,12 +38,10 @@ export function validateCustomProviderSpec(spec: CustomProviderSpec): void {
   if (!Array.isArray(spec.models) || spec.models.length === 0) {
     throw new Error("at least one model is required");
   }
-  if (spec.models.length > 200) throw new Error("at most 200 models per provider");
   const seen = new Set<string>();
   for (const m of spec.models) {
-    if (!m.id?.trim() || m.id.length > 200) throw new Error("every model needs an id (<=200 chars)");
-    if (m.name !== undefined && (typeof m.name !== "string" || m.name.length > 200))
-      throw new Error(`model "${m.id}": name must be a string of 200 chars or fewer`);
+    if (!m.id?.trim()) throw new Error("every model needs an id");
+    if (m.name !== undefined && typeof m.name !== "string") throw new Error(`model "${m.id}": name must be a string`);
     if (m.reasoning !== undefined && typeof m.reasoning !== "boolean")
       throw new Error(`model "${m.id}": reasoning must be a boolean`);
     if (seen.has(m.id)) throw new Error(`duplicate model id "${m.id}"`);

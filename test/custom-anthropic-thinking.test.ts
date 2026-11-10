@@ -6,11 +6,15 @@ import type { Api, AssistantMessage, Context, Model } from "@earendil-works/pi-a
 import { resolveModel } from "../src/model/pi-models.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
 import { buildModelRuntime } from "../src/model/model-runtime.ts";
+import { configurePublicFetch } from "../src/util/network.ts";
 
 const BINDING_BETA = "thinking-binding-controls-2026-08-01";
 const DROP_BLOCK = { prefix_mismatch_behavior: "drop_block" };
 
-afterEach(() => setCustomProviders([]));
+afterEach(() => {
+  setCustomProviders([]);
+  configurePublicFetch(new Set());
+});
 
 type Seen = { headers: IncomingHttpHeaders; body: Record<string, unknown> };
 
@@ -54,6 +58,7 @@ async function fakeAnthropic(): Promise<{ url: string; seen: Seen[]; close: () =
 }
 
 function register(baseUrl: string, models: Array<{ id: string; reasoning?: boolean }>, protocol = "anthropic"): void {
+  configurePublicFetch(new Set([new URL(baseUrl).origin]), () => false);
   setCustomProviders([
     { id: "direct", name: "Direct", protocol: protocol as "anthropic", baseUrl, models: models.map((m) => ({ ...m })) },
   ]);
