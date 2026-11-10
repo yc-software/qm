@@ -79,7 +79,7 @@ test("addVersionFromCommit registers a pushed commit as a new version inheriting
   assert.deepEqual(v2.env, { FOO: "bar" });
   assert.equal((await s.get(d.id))!.currentVersion, 2);
 
-  const v2bundle = await s.bundleOf(d.id, 2);
+  const v2bundle = await s.bundleOf(d.id, pushed);
   assert.ok((v2bundle?.byteLength ?? 0) > 0, "a push-deployed version can be exported as a git bundle");
 
   assert.equal(await s.addVersionFromCommit(d.id, pushed), null);
@@ -283,21 +283,7 @@ test("deploy versions carry git commits for app files and rollback moves the cur
     "resident home files are not part of app git history",
   );
 
-  const diff = await s2.diffVersions(d.id, 1, 2);
-  assert.deepEqual(
-    diff?.added.map((f) => f.path),
-    ["public/index.html"],
-  );
-  assert.deepEqual(
-    diff?.modified.map((f) => f.path),
-    ["data.json"],
-  );
-  assert.deepEqual(
-    diff?.deleted.map((f) => f.path),
-    [],
-  );
-
-  const bundle = await s2.bundleOf(d.id, 2);
+  const bundle = await s2.bundleOf(d.id, v2.commit!);
   assert.ok((bundle?.byteLength ?? 0) > 0, "a deploy version can be exported as a git bundle");
   const checkout = mkdtempSync(join(tmpdir(), "deploy-git-bundle-checkout-"));
   const bundlePath = join(checkout, "repo.bundle");

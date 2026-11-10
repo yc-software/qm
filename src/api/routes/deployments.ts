@@ -956,9 +956,16 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
       return true;
     }
     if (isShellRequest) {
-      if (pathname === "/__claw__/version" && deployment)
-        sendJson(res, 200, { version: deployment.appliedVersion ?? deployment.currentVersion });
-      else if (annotationsEnabled && (pathname === "/__claw__/annotate.js" || pathname === "/__claw__/annotate.css")) {
+      if (pathname === "/__claw__/version" && deployment) {
+        const live = await app.deploymentLiveEdit(deployment.id);
+        sendJson(res, 200, {
+          version: deployment.appliedVersion ?? deployment.currentVersion,
+          ...(live ? { live: live.reloads } : {}),
+        });
+      } else if (
+        annotationsEnabled &&
+        (pathname === "/__claw__/annotate.js" || pathname === "/__claw__/annotate.css")
+      ) {
         const kind = pathname.endsWith(".js") ? "js" : "css";
         res.writeHead(200, {
           "content-type": kind === "js" ? "text/javascript; charset=utf-8" : "text/css; charset=utf-8",

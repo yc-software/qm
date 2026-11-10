@@ -9,7 +9,6 @@ import { tenantAppHandle } from "../tenants/settings.ts";
 import { appHostLabel } from "../tenants/app-handle.ts";
 import {
   createDeployGitStore,
-  type DeployGitDiff,
   type DeployGitInputFile,
   type DeployGitStoreOptions,
   type DeployGitTreeFile,
@@ -90,6 +89,18 @@ export interface Deployment {
   versions: DeploymentVersion[];
 }
 
+export interface DeploymentDraft {
+  deploymentId: string;
+  commit: string;
+  entrypoint: string;
+  hot: boolean;
+  savedBy: string;
+  savedAt: number;
+  publishAt?: number;
+  reloads: number;
+  failure?: string;
+}
+
 export function currentVersionOf(d: Deployment | null): DeploymentVersion | undefined {
   return d?.versions.find((v) => v.version === d.currentVersion);
 }
@@ -137,14 +148,20 @@ export interface DeployStore {
   treeOf(id: string, version: number): Promise<DeployGitTreeFile[] | null>;
   commitTreeOf(id: string, commit: string): Promise<DeployGitTreeFile[]>;
   filesOf(id: string, version: number, paths?: string[]): Promise<DeployGitInputFile[] | null>;
-  diffVersions(id: string, fromVersion: number | undefined, toVersion: number): Promise<DeployGitDiff | null>;
-  bundleOf(id: string, version: number): Promise<Uint8Array | null>;
+  bundleOf(id: string, commit: string): Promise<Uint8Array>;
+  commitDraft(id: string, files: DeployGitInputFile[], parent: string): Promise<string>;
+  draftOf(id: string): Promise<DeploymentDraft | null>;
+  putDraft(draft: DeploymentDraft): Promise<void>;
+  deleteDraft(id: string): Promise<void>;
+  drafts(): Promise<DeploymentDraft[]>;
+  claimDraftTenants(): Promise<ClaimedRow[]>;
   refOf(id: string, ref: string): Promise<string | null>;
   repoUrl(id: string): Promise<string>;
 }
 
 export interface DeployStoreBackings {
   deployments: DurableMap<Deployment>;
+  drafts: DurableMap<DeploymentDraft>;
   git?: DeployGitStoreOptions;
   pg: PgPool;
   touchDebounceMs?: number;
@@ -440,17 +457,14 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
       const v = (await backingMap.get(id))?.versions.find((x) => x.version === version);
       return v?.commit ? git.filesOf(id, v.commit, paths) : null;
     },
-    async diffVersions(id, fromVersion, toVersion) {
-      const d = await backingMap.get(id);
-      if (!d) return null;
-      const from = fromVersion === undefined ? undefined : d.versions.find((v) => v.version === fromVersion)?.commit;
-      const to = d.versions.find((v) => v.version === toVersion)?.commit;
-      return to ? git.diff(id, from, to) : null;
-    },
-    async bundleOf(id, version) {
-      const v = (await backingMap.get(id))?.versions.find((x) => x.version === version);
-      return v?.commit ? git.bundle(id, v.commit) : null;
-    },
+    bundleOf: (id, commit) => git.bundle(id, commit),
+    commitDraft: (id, files, parent) =>
+      git.commit({ deploymentId: id, version: 0, files, parent, message: "live edit" }),
+    draftOf: (id) => backing.drafts.get(id),
+    putDraft: (draft) => backing.drafts.put(draft.deploymentId, draft),
+    deleteDraft: (id) => backing.drafts.delete(id),
+    drafts: () => backing.drafts.all(),
+    claimDraftTenants: () => backing.drafts.claimTenants(),
     refOf: (id, ref) => git.refOf(id, ref),
     repoUrl: (id) => git.repoUrl(id),
   };

@@ -21,6 +21,7 @@ import {
   type DeployStore,
   type Deployment,
   type DeployEndpoint,
+  type DeploymentDraft,
   type DeploymentVersion,
 } from "./deploy-store.ts";
 import type { DeployProfile, DeployProvider } from "./deploy-provider.ts";
@@ -31,6 +32,7 @@ import { errMessage, reportFailure, swallow } from "../util/errors.ts";
 import { uuidSchema } from "../util/ids.ts";
 import { claimThenBind } from "../tenants/claim.ts";
 import { assertAppLabelFits } from "../tenants/settings.ts";
+import { createLiveEdits, type LiveEditSaved } from "./live-edits.ts";
 
 export interface DeployFile {
   path: string;
@@ -57,6 +59,8 @@ export interface DeployInput extends RedeployInput {
 export type Reach =
   { status: "ok"; id: string; endpoint: DeployEndpoint } | { status: "denied" } | { status: "not_found" };
 
+type PublishedDeployment = Deployment & { liveEdit?: LiveEditSaved };
+
 export interface DeployOrUpdateInput {
   ownerScopeId: ScopeId;
   createdBy: string;
@@ -80,7 +84,7 @@ export interface ReachOptions {
 export interface DeployService {
   readonly providerProfile: DeployProfile;
   deploy(input: DeployInput): Promise<Deployment>;
-  redeploy(id: string, input: RedeployInput): Promise<Deployment>;
+  redeploy(id: string, input: RedeployInput): Promise<PublishedDeployment>;
   getDeployment(idOrName: string): Promise<Deployment | null>;
   appUrl?(d: Deployment): string | undefined;
   listDeployments(): Promise<Deployment[]>;
@@ -95,13 +99,15 @@ export interface DeployService {
   setDeploymentConnectors(idOrName: string, connectors: string[], actor: { createdBy: string }): Promise<Deployment>;
 
   maintainDeployments(): Promise<number>;
+  publishDueLiveEdits(): Promise<number>;
+  liveEditOf(idOrName: string): Promise<DeploymentDraft | null>;
   reachDeployment(idOrName: string, principalId: string, opts?: ReachOptions): Promise<Reach>;
   /** Recent app output (entrypoint stdout+stderr) for a deployment, newest last; null when the provider keeps none. */
   deploymentLogs(idOrName: string, opts: { tailLines: number }): Promise<string | null>;
   gitRepoPath(idOrName: string): Promise<string | null>;
   pushGit<T>(id: string, runReceivePack: () => Promise<{ result: T; ok: boolean }>, actor?: string): Promise<T>;
   reapIdleDeployments(ttlMs: number, now?: number): Promise<number>;
-  deployOrUpdate(input: DeployOrUpdateInput): Promise<Deployment>;
+  deployOrUpdate(input: DeployOrUpdateInput): Promise<PublishedDeployment>;
   deploymentGrantees(idOrName: string): Promise<DeploymentGrantee[]>;
   canManageDeployment(idOrName: string, callerId: string, actingScopeId?: ScopeId): Promise<boolean>;
   shareDeployment(
@@ -233,28 +239,20 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     return deployQueue(id, () => advisoryLock.withLock(`deploy:${id}`, fn));
   }
 
-  const applyVersion = async (
-    id: string,
-    version: DeploymentVersion,
-    fromVersion?: number,
-    alwaysOn?: boolean,
-  ): Promise<DeployEndpoint> => {
+  const withDeploymentEnv = async (d: Deployment, version: DeploymentVersion): Promise<DeploymentVersion> => {
+    const deploymentEnv = await deps.deploymentEnv?.(d);
+    return deploymentEnv && Object.keys(deploymentEnv).length
+      ? { ...version, env: { ...version.env, ...deploymentEnv } }
+      : version;
+  };
+
+  const applyVersion = async (id: string, version: DeploymentVersion, alwaysOn?: boolean): Promise<DeployEndpoint> => {
     const stored = (await deps.deployStore.get(id))!;
     const d = alwaysOn === undefined ? stored : { ...stored, alwaysOn };
-    const deploymentEnv = await deps.deploymentEnv?.(d);
-    if (deploymentEnv && Object.keys(deploymentEnv).length)
-      version = { ...version, env: { ...version.env, ...deploymentEnv } };
+    version = await withDeploymentEnv(d, version);
     let endpoint: DeployEndpoint;
     if (deps.provider.reconcile && version.commit) {
-      const diff = await deps.deployStore.diffVersions(id, fromVersion, version.version);
-      const allPaths = ((await deps.deployStore.treeOf(id, version.version)) ?? []).map((f) => f.path);
-      const gitBundle = await deps.deployStore.bundleOf(id, version.version);
-      endpoint = await deps.provider.reconcile(d, version, {
-        ...(gitBundle ? { gitBundle } : {}),
-        changedPaths: diff ? [...diff.added, ...diff.modified].map((f) => f.path) : allPaths,
-        deletedPaths: diff?.deleted.map((f) => f.path) ?? [],
-        allPaths,
-      });
+      endpoint = await deps.provider.reconcile(d, version, await deps.deployStore.bundleOf(id, version.commit));
     } else {
       let materialized = version;
       if (version.commit) {
@@ -277,6 +275,17 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     await deps.deployStore.setAppliedVersion(id, version);
   };
 
+  const liveEdits = createLiveEdits({
+    deployStore: deps.deployStore,
+    provider: deps.provider,
+    auditLog: deps.auditLog,
+    leaderLease,
+    withDeployLock,
+    applyVersion: (id, version) => applyVersion(id, version),
+    markVersionRunning,
+    withDeploymentEnv,
+  });
+
   const liveEndpoint = async (d: Deployment): Promise<DeployEndpoint | null> => {
     if (!deps.provider.resolveEndpoint || d.endpoint == null) return d.endpoint;
     const version = currentVersionOf(d);
@@ -295,7 +304,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         if (!endpointsEqual(again, cur.endpoint)) await deps.deployStore.setEndpoint(cur.id, again);
         return again;
       }
-      const fresh = await applyVersion(cur.id, v, cur.appliedVersion ?? cur.currentVersion);
+      const fresh = await applyVersion(cur.id, (await liveEdits.runningVersion(cur)) ?? v);
       await markVersionRunning(cur.id, v.version, fresh);
       return fresh;
     });
@@ -307,7 +316,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       if (!cur || cur.status !== "running" || !(await deps.provider.rotationDue?.(cur))) return;
       const v = currentVersionOf(cur);
       if (!v) return;
-      const endpoint = await applyVersion(cur.id, v, cur.appliedVersion ?? cur.currentVersion);
+      const endpoint = await applyVersion(cur.id, (await liveEdits.runningVersion(cur)) ?? v);
       await markVersionRunning(cur.id, v.version, endpoint);
       await deps.provider.park?.(cur).catch((e) => swallow("deploy: park rotated app", e));
     });
@@ -417,11 +426,22 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         await withdrawLoanUnlessPublisher(before, input.actor);
         const current = currentVersionOf(before);
         assertAppSize(fileSizes(input.files), deps.provider.profile.maxAppBytes);
+        const inherited = input.env ?? current?.env;
+        const env = input.stampEnv ? { ...inherited, ...input.stampEnv } : inherited;
+        if (
+          current &&
+          input.entrypoint === current.entrypoint &&
+          input.homeFiles === undefined &&
+          (input.alwaysOn === undefined || input.alwaysOn === !!before.alwaysOn) &&
+          envKey(env) === envKey(current.env)
+        ) {
+          const liveEdit = await liveEdits.save(before, input.files, input.actor ?? before.createdBy);
+          if (liveEdit) return { ...(await deps.deployStore.get(id))!, liveEdit };
+        }
+        await deps.deployStore.deleteDraft(id);
         const snapshotDir = await snapshotFiles(deps.deployDir, input.files);
         let homeDir = input.homeFiles === undefined ? current?.homeDir : undefined;
         if (input.homeFiles?.length) homeDir = await snapshotFiles(deps.deployDir, input.homeFiles);
-        const inherited = input.env ?? current?.env;
-        const env = input.stampEnv ? { ...inherited, ...input.stampEnv } : inherited;
         const v = await deps.deployStore.addVersion(id, {
           entrypoint: input.entrypoint,
           snapshotDir,
@@ -429,7 +449,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           ...(homeDir ? { homeDir } : {}),
           ...(env ? { env } : {}),
         });
-        const endpoint = await applyVersion(id, v, before.appliedVersion ?? before.currentVersion, input.alwaysOn);
+        const endpoint = await applyVersion(id, v, input.alwaysOn);
         await markVersionRunning(id, v.version, endpoint);
         deps.auditLog.record({
           at: Date.now(),
@@ -454,11 +474,12 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       return withDeployLock(id, async () => {
         const before = await deps.deployStore.get(id);
         if (before) await withdrawLoanUnlessPublisher(before, options?.actor);
+        await deps.deployStore.deleteDraft(id);
         await deps.deployStore.setCurrentVersion(id, version);
         const v = await deps.deployStore.versionOf(id, version);
         const d = await deps.deployStore.get(id);
         if (!d || !v) return;
-        const endpoint = await applyVersion(id, v, before?.appliedVersion ?? before?.currentVersion, options?.alwaysOn);
+        const endpoint = await applyVersion(id, v, options?.alwaysOn);
         await markVersionRunning(id, v.version, endpoint);
         deps.auditLog.record({
           at: Date.now(),
@@ -489,7 +510,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         const version = currentVersionOf(d);
         if (!version) throw new Error(`no such version ${d.currentVersion}`);
         try {
-          const endpoint = await applyVersion(id, version, d.appliedVersion);
+          const endpoint = await applyVersion(id, (await liveEdits.runningVersion(d)) ?? version);
           await markVersionRunning(id, version.version, endpoint);
         } catch (error) {
           await deps.provider
@@ -656,6 +677,13 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       return result ?? 0;
     },
 
+    publishDueLiveEdits: () => liveEdits.publishDue(),
+
+    async liveEditOf(idOrName) {
+      const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
+      return d ? deps.deployStore.draftOf(d.id) : null;
+    },
+
     async reachDeployment(idOrName, principalId, opts = {}): Promise<Reach> {
       const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
       if (!d || d.status !== "running" || d.endpoint == null) return { status: "not_found" };
@@ -697,7 +725,8 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           await withdrawLoanUnlessPublisher(before, actor);
           const v = await deps.deployStore.addVersionFromCommit(id, pushed);
           if (!v) return result;
-          const endpoint = await applyVersion(id, v, before.appliedVersion ?? before.currentVersion);
+          await deps.deployStore.deleteDraft(id);
+          const endpoint = await applyVersion(id, v);
           await markVersionRunning(id, v.version, endpoint);
           deps.auditLog.record({
             at: Date.now(),
@@ -763,9 +792,10 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           resource: existing.id,
           scopeLabel: existing.ownerScopeId,
         });
+        let liveEdit: LiveEditSaved | undefined;
         if (input.files?.length) {
           const entrypoint = requiredEntrypoint(input.entrypoint, existing);
-          await this.redeploy(existing.id, {
+          ({ liveEdit } = await this.redeploy(existing.id, {
             actor: createdBy,
             entrypoint,
             files: input.files,
@@ -773,11 +803,11 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
             ...(input.homeFiles ? { homeFiles: input.homeFiles } : {}),
             ...(input.env ? { env: input.env } : {}),
             ...(input.stampEnv ? { stampEnv: input.stampEnv } : {}),
-          });
+          }));
         } else if (input.alwaysOn !== undefined) await this.setDeploymentAlwaysOn(existing.id, input.alwaysOn);
         if (input.embedAncestors !== undefined)
           await this.setDeploymentEmbedAncestors(existing.id, input.embedAncestors);
-        return (await deps.deployStore.get(existing.id))!;
+        return { ...(await deps.deployStore.get(existing.id))!, ...(liveEdit ? { liveEdit } : {}) };
       }
 
       if (input.rollbackTo !== undefined) {
@@ -805,7 +835,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           throw new Error(`deployment name taken: ${input.name}`);
         }
         const entrypoint = requiredEntrypoint(input.entrypoint, existing);
-        await this.redeploy(existing.id, {
+        const { liveEdit } = await this.redeploy(existing.id, {
           actor: createdBy,
           entrypoint,
           files,
@@ -816,7 +846,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         });
         if (input.embedAncestors !== undefined)
           await this.setDeploymentEmbedAncestors(existing.id, input.embedAncestors);
-        return (await deps.deployStore.get(existing.id))!;
+        return { ...(await deps.deployStore.get(existing.id))!, ...(liveEdit ? { liveEdit } : {}) };
       }
       const d = await this.deploy({
         ownerScopeId,
@@ -916,6 +946,10 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       return (await deps.deployStore.get(d.id))!;
     },
   };
+}
+
+function envKey(env: Record<string, string> | undefined): string {
+  return JSON.stringify(Object.entries(env ?? {}).sort(([a], [b]) => a.localeCompare(b)));
 }
 
 function endpointsEqual(a: DeployEndpoint, b: DeployEndpoint | null): boolean {

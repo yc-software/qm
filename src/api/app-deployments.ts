@@ -37,6 +37,8 @@ export function createDeploymentMethods(
   | "setDeploymentPublic"
   | "setDeploymentConnectors"
   | "maintainDeployments"
+  | "publishDueLiveEdits"
+  | "deploymentLiveEdit"
   | "reachDeployment"
   | "deploymentLogsFor"
   | "deploymentGitRepoPath"
@@ -173,6 +175,12 @@ export function createDeploymentMethods(
     },
     maintainDeployments() {
       return deps.deploy.maintainDeployments();
+    },
+    publishDueLiveEdits() {
+      return deps.deploy.publishDueLiveEdits();
+    },
+    deploymentLiveEdit(id) {
+      return deps.deploy.liveEditOf(id);
     },
     async reachDeployment(id, principalId, opts): Promise<Reach> {
       if (opts?.bypassAcl) return deps.deploy.reachDeployment(id, principalId, opts);

@@ -114,6 +114,10 @@ async function webTurnBase(
   const displayName = ctx.actor?.n;
   const appSlug = appEditSlug(threadRef, user);
   const inbox = threadRef === `web:${user}:inbox` ? await inboxContext(ctx) : undefined;
+  const failedPublish =
+    appSlug && (await ctx.app.canManageDeployment(appSlug, user))
+      ? (await ctx.app.deploymentLiveEdit(appSlug))?.failure
+      : undefined;
   return {
     surface: "web",
     clientSurface: clientSurfaceOf(ctx.req.headers),
@@ -124,7 +128,7 @@ async function webTurnBase(
     ...(inbox ? { conversationHeader: inbox } : {}),
     ...(appSlug
       ? {
-          conversationHeader: `The user is chatting beside their deployed app ${JSON.stringify(appSlug)}. Requests about this app refer to that deployment. Use the existing app source and publish updates to the same deployment when requested. This context does not grant additional permissions.`,
+          conversationHeader: `The user is chatting beside their deployed app ${JSON.stringify(appSlug)}. Requests about this app refer to that deployment. Use the existing app source and publish updates to the same deployment when requested. This context does not grant additional permissions.${failedPublish ? ` The last automatic publish of this app failed, so it is still running the saved edits: ${failedPublish}` : ""}`,
         }
       : {}),
     text,
