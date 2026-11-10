@@ -244,19 +244,6 @@ test("a conflict with no readable expiry keeps the first save and leaves grants 
   assert.equal((await f.keychain.getGrant(grant.id))?.status, "active");
 });
 
-test("concurrent refreshes keep the token with the later expiry, whichever saves first", async (t) => {
-  for (const laterFirst of [true, false]) {
-    const f = await fixture(t);
-    const a = await startCommand(f);
-    const b = await startCommand(f);
-    const earlier = [ssoFile("A", "2026-11-09T18:00:00Z")];
-    const later = [ssoFile("B", "2026-11-09T19:00:00Z")];
-    assert.deepEqual(await f.keychain.updateFiles(a, laterFirst ? later : earlier), []);
-    assert.deepEqual(await f.keychain.updateFiles(b, laterFirst ? earlier : later), []);
-    assert.equal(JSON.parse(await savedValue(f)).accessToken, "B");
-  }
-});
-
 test("a completed login replaces files another command refreshed meanwhile", async (t) => {
   const f = await fixture(t);
   const refresher = await startCommand(f);

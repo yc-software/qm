@@ -725,7 +725,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         return withCleanup(
           () => Promise.reject(error),
           async () => {
-            await fileExecution!.finish();
+            const note = await fileExecution!.finish();
+            if (note) console.warn(`${note} The command could not start.`);
           },
         );
       }

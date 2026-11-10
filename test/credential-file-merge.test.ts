@@ -23,7 +23,8 @@ const merge = (base: CredentialFile[], stored: CredentialFile[], refreshed: Cred
 };
 const TOKEN = ".aws/sso/cache/token.json";
 
-test("expiry is read only from the declared AWS SSO and CLI cache files", () => {
+test("expiry is read only from the declared AWS SSO and CLI cache files, warning only on an unparseable value", (t) => {
+  const warn = t.mock.method(console, "warn", () => {});
   const at = Date.parse("2026-11-09T18:00:00Z");
   assert.equal(credentialFileExpiry(file(TOKEN, { expiresAt: "2026-11-09T18:00:00Z" })), at);
   assert.equal(
@@ -34,15 +35,9 @@ test("expiry is read only from the declared AWS SSO and CLI cache files", () => 
   );
   assert.equal(credentialFileExpiry(file(".config/tool/token.json", { expiresAt: "2026-11-09T18:00:00Z" })), undefined);
   assert.equal(credentialFileExpiry(file(TOKEN, "not json")), undefined);
-  assert.equal(credentialFileExpiry(file(TOKEN, { expiresAt: "soon" })), undefined);
-});
-
-test("the unreadable-expiry warning fires only when an expiry field is present but unparseable", (t) => {
-  const warn = t.mock.method(console, "warn", () => {});
-  credentialFileExpiry(file(TOKEN, { accessToken: "x" }));
-  credentialFileExpiry(file(TOKEN, { expiresAt: "2026-11-09T18:00:00Z" }));
+  assert.equal(credentialFileExpiry(file(TOKEN, { accessToken: "no expiry field" })), undefined);
   assert.equal(warn.mock.callCount(), 0);
-  credentialFileExpiry(file(TOKEN, { expiresAt: "soon" }));
+  assert.equal(credentialFileExpiry(file(TOKEN, { expiresAt: "soon" })), undefined);
   assert.equal(warn.mock.callCount(), 1);
 });
 
