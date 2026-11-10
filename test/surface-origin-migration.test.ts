@@ -2,10 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 import pg from "pg";
 import { RETIRED_ORIGIN_SWEEP_MIGRATION } from "../src/surfaces/origin-migration.ts";
+import { dropDatabaseOnceDisconnected } from "./support/test-database.ts";
 import { seedTestTenant } from "./support/test-tenant.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -24,8 +24,7 @@ async function withDatabase(run: (url: string, db: pg.Pool) => Promise<void>): P
     await run(url.toString(), db);
   } finally {
     await db.end();
-    while ((await parent.query("SELECT 1 FROM pg_stat_activity WHERE datname = $1", [name])).rowCount) await sleep(20);
-    await parent.query(`DROP DATABASE ${name} WITH (FORCE)`);
+    await dropDatabaseOnceDisconnected(parent, name);
     await parent.end();
   }
 }

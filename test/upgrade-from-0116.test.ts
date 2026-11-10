@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 import { gunzipSync } from "node:zlib";
 import test from "node:test";
 import pg from "pg";
+import { dropDatabaseOnceDisconnected } from "./support/test-database.ts";
 import { ownerUrl } from "./support/test-tenant.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -95,7 +96,7 @@ async function withDatabase<T>(admin: pg.Pool, run: (url: string, db: pg.Pool) =
     return await run(url.toString(), db);
   } finally {
     await db.end();
-    await admin.query(`DROP DATABASE ${name} WITH (FORCE)`);
+    await dropDatabaseOnceDisconnected(admin, name);
   }
 }
 

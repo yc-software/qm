@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import type { Pool } from "pg";
 import { boundTenant } from "../../src/tenants/context.ts";
 import { MessageChannel, receiveMessageOnPort, Worker, type MessagePort } from "node:worker_threads";
 import { createPostgresAdminGrantStore } from "../../src/admin/postgres-admin-grant-store.ts";
@@ -12,6 +13,7 @@ import { configStoreMaps, createConfigStore } from "../../src/resolution/config-
 import { orgId } from "../../src/config.ts";
 import { scopeId } from "../../src/types.ts";
 import { createPostgresUserStore } from "../../src/identity/user-store.ts";
+import { sleep } from "../../src/util/async.ts";
 
 function baseDatabaseUrl(): URL {
   const base = process.env.DATABASE_URL;
@@ -64,6 +66,11 @@ export function testMigratedDatabaseUrl(): string {
   const template = process.env.QM_TEST_TEMPLATE_DATABASE;
   if (!template) throw new Error("QM_TEST_TEMPLATE_DATABASE is unset: run tests through scripts/run-pg-tests.mjs");
   return boundUrl(databaseUrl(createDatabaseSync({ template })), APP_ROLE);
+}
+
+export async function dropDatabaseOnceDisconnected(admin: Pool, name: string): Promise<void> {
+  while ((await admin.query("SELECT 1 FROM pg_stat_activity WHERE datname = $1", [name])).rowCount) await sleep(20);
+  await admin.query(`DROP DATABASE ${name} WITH (FORCE)`);
 }
 
 let shared: { url: string; maps: ReturnType<typeof createPostgresMapFactory> } | undefined;
