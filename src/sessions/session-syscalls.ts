@@ -65,7 +65,7 @@ export function isOwnerFire(request: Pick<OrchestratorInput, "origin" | "botActo
 
 export async function delegatedAuthorizationOrigin(
   request: OrchestratorInput,
-  deps: { runs: Pick<RunStore, "get">; sessions: Pick<SessionStore, "get" | "getByThread" | "getForParticipant"> },
+  deps: { runs: Pick<RunStore, "get">; sessions: Pick<SessionStore, "get" | "getByThread"> },
 ): Promise<OrchestratorInput["origin"] | undefined> {
   const seen = new Set<string>();
   let current = request;
@@ -82,9 +82,7 @@ export async function delegatedAuthorizationOrigin(
       return;
     seen.add(current.delegatingRunId);
     const source = await deps.runs.get(current.delegatingRunId);
-    const sender =
-      (await deps.sessions.getForParticipant(current.sessionSenderId, request.actor.id)) ??
-      (isOwnerFire(current) ? await deps.sessions.get(current.sessionSenderId) : null);
+    const sender = await deps.sessions.get(current.sessionSenderId);
     const child = await deps.sessions.getByThread(current.conversation.threadRef);
     if (!source || !sender || !child) return;
     const delegated =

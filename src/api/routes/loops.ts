@@ -1,5 +1,6 @@
 import { LOOP_ICON_ERROR, validLoopIcon } from "../../loops/loop-store.ts";
 import { boundLoopCron } from "../../loops/authority.ts";
+import { authoredNow, reauthored } from "../../cron/authority.ts";
 import { personAtKeyboard } from "../artifact-share.ts";
 import type { AdvisoryLock } from "../../persistence/advisory-lock.ts";
 import type { Loop, LoopState, LoopTriageConfig } from "../../loops/types.ts";
@@ -273,7 +274,7 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
     createdBy: acting.actorId,
     ownerScopeId,
     ...(ctx.capability?.botActor ? { botActor: true } : {}),
-    ...(acting.liveHuman ? {} : { taskAuthor: "automation" as const }),
+    ...authoredNow(acting.liveHuman),
     name: b.name,
     ...(b.icon !== undefined ? { icon: b.icon as string | null } : {}),
     playbook: b.playbook,
@@ -437,10 +438,8 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
   )
     return;
   if (b.shipActions !== undefined) patch.shipActions = shipActions;
-  if (!acting.liveHuman) {
-    if (patch.playbookEdit || patch.name || patch.successCondition || patch.successChecks || patch.shipActions)
-      patch.taskAuthor = "automation";
-  } else if (patch.playbookEdit && loop.taskAuthor) patch.taskAuthor = null;
+  if (patch.playbookEdit || patch.successCondition || patch.successChecks || patch.shipActions)
+    Object.assign(patch, reauthored(acting.liveHuman, loop));
   const capsResult = capsFromBody(b.caps);
   if (capsResult.invalidField)
     return sendJson(ctx.res, 400, {

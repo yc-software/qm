@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { authoredNow, reauthored } from "../cron/authority.ts";
 import type { Destination } from "../types.ts";
 import type { Cron, CronFireLogEntry, CronSchedule, CronScript, Webhook } from "../triggers/types.ts";
 import { cronScriptFrom, type CronScriptTrial } from "../cron/script.ts";
@@ -228,9 +229,7 @@ export async function cronTaskRewrite(
   editorId: string,
   atKeyboard: boolean,
 ): Promise<Pick<CronPatch, "owner" | "script" | "taskAuthor">> {
-  let authored: Pick<CronPatch, "taskAuthor"> = {};
-  if (!atKeyboard) authored = { taskAuthor: "automation" };
-  else if (cron.taskAuthor) authored = { taskAuthor: null };
+  const authored = reauthored(atKeyboard, cron);
   if (actsAsScope(cron.owner, cron.ownerScopeId) || (await ownsCron(app, cron, editorId))) return authored;
   return { ...authored, owner: editorId, ...(cron.script ? { script: null } : {}) };
 }
@@ -483,7 +482,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         createdBy: capability.actorId,
         ownerScopeId,
         ...(capability.botActor ? { botActor: true } : {}),
-        ...(personAtKeyboard(capability) ? {} : { taskAuthor: "automation" as const }),
+        ...authoredNow(personAtKeyboard(capability)),
         ...(typeof req.title === "string" ? { title: req.title } : {}),
         ...(destination ? { destination } : {}),
         ...(script ? { script } : {}),
@@ -554,7 +553,6 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       const rewritesTask = req.action !== undefined || req.text !== undefined;
       if (rewritesTask || patch.script)
         Object.assign(patch, await cronTaskRewrite(app, before, capability.actorId, personAtKeyboard(capability)));
-      else if (patch.title !== undefined && !personAtKeyboard(capability)) patch.taskAuthor = "automation";
       if (!cronPatchChanges(before, patch)) return { ok: true, cron: before };
       try {
         const cron = await app.updateCron(id, patch, trial);

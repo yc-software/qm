@@ -2907,7 +2907,7 @@ test("a subagent spawned by an owner's fire inherits the fire's automation autho
   assert.equal(
     (await delegatedAuthorizationOrigin(r.run.request, r))?.kind,
     "automation",
-    "a fire's own thread has no participants; the run that delegated still proves whose fire it was",
+    "the delegating run, not a participant row, proves whose turn it was: a fire's thread has no participants",
   );
   await r.sessions.setParentSession(r.child.id, null);
   assert.equal(await delegatedAuthorizationOrigin(r.run.request, r), undefined);
