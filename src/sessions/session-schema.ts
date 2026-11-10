@@ -556,7 +556,7 @@ const USER_TURNS_BY_AUTHOR: PgMigrationDefinition = {
   ],
 };
 
-const DROP_SESSION_LEASES: PgMigrationDefinition = {
+export const DROP_SESSION_LEASES: PgMigrationDefinition = {
   id: "sessions/store/0059-drop-session-leases",
   statements: [`SET LOCAL lock_timeout = '5s'`, `DROP TABLE IF EXISTS session_leases`],
 };
