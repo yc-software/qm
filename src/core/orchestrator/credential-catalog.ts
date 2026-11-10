@@ -22,6 +22,7 @@ import type { IsCurrentSharedScopeMember } from "../../resolution/scope-membersh
 import type { CommandCredential } from "../../tools/primitives.ts";
 import { personalScope, type ScopeId } from "../../types.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
+import type { Tenant } from "../../tenants/context.ts";
 
 export interface CredentialCatalogTurn {
   deps: OrchestratorDeps;
@@ -435,6 +436,7 @@ export function registerBrokeredTools(catalog: CredentialCatalog): void {
 }
 
 export async function loadServiceCredentialGrants(turn: {
+  tenant: Tenant;
   deps: OrchestratorDeps;
   conversation: OrchestratorInput["conversation"];
   scopeId: ScopeId;
@@ -442,13 +444,14 @@ export async function loadServiceCredentialGrants(turn: {
   strictReadOnly: boolean;
   serviceAllowed: (slug: string) => boolean;
 }) {
-  const { deps, conversation, scopeId, resolution, strictReadOnly, serviceAllowed } = turn;
+  const { tenant, deps, conversation, scopeId, resolution, strictReadOnly, serviceAllowed } = turn;
   const orgServiceCreds =
     !strictReadOnly && deps.serviceCreds ? await deps.serviceCreds.listServiceCredentials(resolution.orgScopeId) : [];
   const aclGrantedServiceCredSlugs = async (): Promise<Set<string>> =>
     new Set(
       (
         await deps.acl.grantsOfKind(
+          tenant,
           "service-cred",
           conversation.audience,
           scopeId,

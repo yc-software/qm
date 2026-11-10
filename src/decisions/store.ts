@@ -1,7 +1,8 @@
 import type { PoolClient } from "pg";
-import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
 import { checkRuleSet, type DecisionHook, type DecisionProvider, type DecisionRule } from "./decisions.ts";
-import { perTenant } from "../tenants/cache.ts";
+import { tenantKeyed } from "../tenants/cache.ts";
+import type { Tenant } from "../tenants/context.ts";
 import { tenantTables } from "../tenants/migrations.ts";
 
 interface DecisionWriter {
@@ -9,12 +10,12 @@ interface DecisionWriter {
 }
 
 export interface DecisionStore {
-  providers(ids?: readonly string[]): Promise<DecisionProvider[]>;
-  rules(hook?: DecisionHook): Promise<DecisionRule[]>;
-  saveProvider(provider: DecisionProvider, by: DecisionWriter): Promise<void>;
-  removeProvider(id: string): Promise<void>;
-  saveRule(rule: DecisionRule, by: DecisionWriter): Promise<void>;
-  removeRule(id: string): Promise<void>;
+  providers(tenant: Tenant, ids?: readonly string[]): Promise<DecisionProvider[]>;
+  rules(tenant: Tenant, hook?: DecisionHook): Promise<DecisionRule[]>;
+  saveProvider(tenant: Tenant, provider: DecisionProvider, by: DecisionWriter): Promise<void>;
+  removeProvider(tenant: Tenant, id: string): Promise<void>;
+  saveRule(tenant: Tenant, rule: DecisionRule, by: DecisionWriter): Promise<void>;
+  removeRule(tenant: Tenant, id: string): Promise<void>;
 }
 
 const SCHEMA = [
@@ -51,13 +52,13 @@ const toRule = (r: Record<string, unknown>): DecisionRule => ({
   onError: r.on_error as string,
 });
 
-const RULES = "SELECT * FROM decision_rules";
+const RULES = "SELECT * FROM decision_rules WHERE tenant_id = $1";
 const CACHE_MS = 10_000;
 const MAX_STORED_RULES = 100;
 const MAX_PROVIDERS = 20;
 
 export function createPostgresDecisionStore(connectionString: string): DecisionStore {
-  const { q, pool } = createPgPool(connectionString, [
+  const pg = createPgPool(connectionString, [
     { id: "decisions/0001", statements: SCHEMA },
     ...tenantTables(
       "decisions/0002-tenants",
@@ -77,86 +78,103 @@ export function createPostgresDecisionStore(connectionString: string): DecisionS
       },
     ),
   ]);
-  const cache = perTenant(() => ({
-    active: new Map<DecisionHook, { at: number; rules: Promise<DecisionRule[]> }>(),
-    known: undefined as { at: number; providers: Promise<DecisionProvider[]> } | undefined,
-  }));
-  const write = async (fn: (db: PoolClient) => Promise<unknown>) => {
-    await withPgTransaction(await pool(), async (db) => {
+  type TenantCache = {
+    active: Map<DecisionHook, { at: number; rules: Promise<DecisionRule[]> }>;
+    known: { at: number; providers: Promise<DecisionProvider[]> } | undefined;
+  };
+  const cache = tenantKeyed((): TenantCache => ({ active: new Map(), known: undefined }));
+  const write = async (tenant: Tenant, fn: (db: PoolClient) => Promise<unknown>) => {
+    await pg.forTenant(tenant).transaction(async (db) => {
       await db.query("LOCK TABLE decision_rules IN SHARE ROW EXCLUSIVE MODE");
       await fn(db);
     });
-    const tenant = cache();
-    tenant.active.clear();
-    tenant.known = undefined;
+    const entry = cache(tenant);
+    entry.active.clear();
+    entry.known = undefined;
   };
   return {
-    async providers(ids) {
-      const tenant = cache();
-      let known = tenant.known;
+    async providers(tenant, ids) {
+      const entry = cache(tenant);
+      let known = entry.known;
       if (!known || Date.now() - known.at >= CACHE_MS) {
-        const providers = q("SELECT * FROM decision_providers ORDER BY provider_id").then((rows) =>
-          rows.map((r) => ({
-            id: r.provider_id as string,
-            protocol: r.protocol as DecisionProvider["protocol"],
-            ...(r.base_url ? { baseUrl: r.base_url as string, credential: r.credential as string } : {}),
-          })),
-        );
-        const entry = { at: Date.now(), providers };
-        known = tenant.known = entry;
-        providers.catch(() => tenant.known === entry && (tenant.known = undefined));
+        const providers = pg
+          .forTenant(tenant)
+          .q("SELECT * FROM decision_providers WHERE tenant_id = $1 ORDER BY provider_id", [tenant.id])
+          .then((rows) =>
+            rows.map((r) => ({
+              id: r.provider_id as string,
+              protocol: r.protocol as DecisionProvider["protocol"],
+              ...(r.base_url ? { baseUrl: r.base_url as string, credential: r.credential as string } : {}),
+            })),
+          );
+        const fresh = { at: Date.now(), providers };
+        known = entry.known = fresh;
+        providers.catch(() => entry.known === fresh && (entry.known = undefined));
       }
       const all = await known.providers;
       return ids ? all.filter((p) => ids.includes(p.id)) : all;
     },
-    async rules(hook) {
-      if (!hook) return (await q(`${RULES} ORDER BY rule_id`)).map(toRule);
-      const { active } = cache();
+    async rules(tenant, hook) {
+      const db = pg.forTenant(tenant);
+      if (!hook) return (await db.q(`${RULES} ORDER BY rule_id`, [tenant.id])).map(toRule);
+      const { active } = cache(tenant);
       const hit = active.get(hook);
       if (hit && Date.now() - hit.at < CACHE_MS) return hit.rules;
-      const rules = q(`${RULES} WHERE hook = $1 AND mode <> 'off' ORDER BY rule_id`, [hook]).then((r) => r.map(toRule));
+      const rules = db
+        .q(`${RULES} AND hook = $2 AND mode <> 'off' ORDER BY rule_id`, [tenant.id, hook])
+        .then((r) => r.map(toRule));
       active.set(hook, { at: Date.now(), rules });
       rules.catch(() => active.get(hook)?.rules === rules && active.delete(hook));
       return rules;
     },
-    saveProvider: (p, by) =>
-      write(async (db) => {
-        const { rows } = await db.query("SELECT count(*)::int AS n FROM decision_providers WHERE provider_id <> $1", [
-          p.id,
-        ]);
+    saveProvider: (tenant, p, by) =>
+      write(tenant, async (db) => {
+        const { rows } = await db.query(
+          "SELECT count(*)::int AS n FROM decision_providers WHERE tenant_id = $1 AND provider_id <> $2",
+          [tenant.id, p.id],
+        );
         if (rows[0].n >= MAX_PROVIDERS)
           throw new Error(`at most ${MAX_PROVIDERS} decision providers; remove one first`);
         await db.query(
-          `INSERT INTO decision_providers (provider_id, protocol, base_url, credential, updated_by, updated_at)
-           VALUES ($1, $2, $3, $4, $5, $6)
-           ON CONFLICT (tenant_id, provider_id) DO UPDATE SET protocol = $2, base_url = $3, credential = $4, updated_by = $5, updated_at = $6`,
-          [p.id, p.protocol, p.baseUrl ?? null, p.credential ?? null, by.actorId, Date.now()],
+          `INSERT INTO decision_providers (tenant_id, provider_id, protocol, base_url, credential, updated_by, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           ON CONFLICT (tenant_id, provider_id) DO UPDATE SET protocol = $3, base_url = $4, credential = $5, updated_by = $6, updated_at = $7`,
+          [tenant.id, p.id, p.protocol, p.baseUrl ?? null, p.credential ?? null, by.actorId, Date.now()],
         );
       }),
-    async removeProvider(id) {
+    async removeProvider(tenant, id) {
       try {
-        await write((db) => db.query("DELETE FROM decision_providers WHERE provider_id = $1", [id]));
+        await write(tenant, (db) =>
+          db.query("DELETE FROM decision_providers WHERE tenant_id = $1 AND provider_id = $2", [tenant.id, id]),
+        );
       } catch (error) {
         if ((error as { code?: string }).code === "23503")
           throw new Error(`decision provider ${id} is still used by a rule`, { cause: error });
         throw error;
       }
     },
-    saveRule: (rule, by) =>
-      write(async (db) => {
-        const { rows } = await db.query("SELECT count(*)::int AS n FROM decision_rules WHERE rule_id <> $1", [rule.id]);
+    saveRule: (tenant, rule, by) =>
+      write(tenant, async (db) => {
+        const { rows } = await db.query(
+          "SELECT count(*)::int AS n FROM decision_rules WHERE tenant_id = $1 AND rule_id <> $2",
+          [tenant.id, rule.id],
+        );
         if (rows[0].n >= MAX_STORED_RULES)
           throw new Error(`at most ${MAX_STORED_RULES} decision rules; remove one first`);
-        const others = await db.query(`${RULES} WHERE rule_id <> $1 AND mode <> 'off' ORDER BY rule_id`, [rule.id]);
+        const others = await db.query(`${RULES} AND rule_id <> $2 AND mode <> 'off' ORDER BY rule_id`, [
+          tenant.id,
+          rule.id,
+        ]);
         const error = checkRuleSet([...others.rows.map(toRule), rule]);
         if (error) throw new Error(error);
         await db.query(
           `INSERT INTO decision_rules
-             (rule_id, hook, question, options, provider_id, model, mode, on_error, updated_by, updated_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-           ON CONFLICT (tenant_id, rule_id) DO UPDATE SET hook = $2, question = $3, options = $4, provider_id = $5, model = $6,
-             mode = $7, on_error = $8, updated_by = $9, updated_at = $10`,
+             (tenant_id, rule_id, hook, question, options, provider_id, model, mode, on_error, updated_by, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+           ON CONFLICT (tenant_id, rule_id) DO UPDATE SET hook = $3, question = $4, options = $5, provider_id = $6, model = $7,
+             mode = $8, on_error = $9, updated_by = $10, updated_at = $11`,
           [
+            tenant.id,
             rule.id,
             rule.hook,
             rule.question,
@@ -170,6 +188,9 @@ export function createPostgresDecisionStore(connectionString: string): DecisionS
           ],
         );
       }),
-    removeRule: (id) => write((db) => db.query("DELETE FROM decision_rules WHERE rule_id = $1", [id])),
+    removeRule: (tenant, id) =>
+      write(tenant, (db) =>
+        db.query("DELETE FROM decision_rules WHERE tenant_id = $1 AND rule_id = $2", [tenant.id, id]),
+      ),
   };
 }

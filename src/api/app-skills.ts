@@ -14,6 +14,7 @@ import { parseRef } from "../acl/resource-ref.ts";
 import { entitledScopes } from "../resolution/context-filter.ts";
 import type { Principal } from "../types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
+import { ambientTenant } from "../tenants/context.ts";
 
 export async function skillVisibilityContext(
   deps: AppDeps,
@@ -41,7 +42,14 @@ export async function skillVisibilityContext(
   ];
   const granted = (
     await deps.acl
-      .sharedOfKindForAudience("skill", [actor], scopeId("personal", principalId), scopeId("org", orgIdOf()), entitled)
+      .sharedOfKindForAudience(
+        ambientTenant(),
+        "skill",
+        [actor],
+        scopeId("personal", principalId),
+        scopeId("org", orgIdOf()),
+        entitled,
+      )
       .catch(() => [])
   ).map((g) => ({ id: parseRef(g.ref).id, ownerScopeId: g.ownerScopeId }));
   return { ordered, granted };

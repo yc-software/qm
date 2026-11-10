@@ -83,6 +83,7 @@ test("provider default is pinned before retries and child provisioning, with no 
   const f = await swarmFixture();
   const options: Parameters<typeof createSandboxResources>[0] = {
     records: f.records,
+    loads: testMap(),
     defaults: testMap(),
     backends: { aws: { ...f.backend, profile: { ...f.backend.profile, backend: "aws" } } },
     defaultBackend: "aws",
@@ -110,6 +111,7 @@ test("selected scope computer determines new worker provider, but its private di
   const f = await swarmFixture();
   const sandboxes = createSandboxResources({
     records: f.records,
+    loads: testMap(),
     defaults: testMap(),
     backends: { modal: f.backend, aws: { ...f.backend, profile: { ...f.backend.profile, backend: "aws" } } },
     defaultBackend: "modal",

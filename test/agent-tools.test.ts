@@ -119,7 +119,6 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
         {
           processId: "bg-1",
           command: "bg: npm test",
-          status: { state: "running" },
           registryStatus: "running",
           startedAt: 0,
         },
@@ -549,7 +548,15 @@ test("computer status surfaces list-view disagreement and guest pressure", async
       machine: "healthy",
       listed: "cold",
       guestResponsive: true,
-      pressure: { ioFull10: 90, ioFull60: 86.14, load1: 30.78 },
+      load: {
+        ioFull60: 86.14,
+        sampledAt: 0,
+        load1: 30.78,
+        memUsedMb: 1024,
+        memTotalMb: 4096,
+        diskUsedGb: 10,
+        diskTotalGb: 100,
+      },
     }),
     restartComputer: async () => {},
   };
@@ -559,7 +566,7 @@ test("computer status surfaces list-view disagreement and guest pressure", async
     content: Array<{ text?: string }>;
   };
   assert.match(status.content[0]!.text!, /machine: healthy \(listed: cold\)/);
-  assert.match(status.content[0]!.text!, /io pressure: 86\.14% \(load 30\.78\)/);
+  assert.match(status.content[0]!.text!, /io pressure: 86\.14%; load 30\.78, memory 1024\/4096 MiB, disk 10\/100 GiB/);
 });
 
 test("computer status exposes paused lifecycle and recovery deadlines without claiming a failed shell", async () => {
@@ -652,7 +659,15 @@ test("an exec under io pressure carries a [pressure] warning; a calm one doesn't
       stderr: "",
       code: 0,
       timedOut: false,
-      pressure: { ioFull10: 80, ioFull60: 62.4, load1: 12 },
+      load: {
+        ioFull60: 62.4,
+        sampledAt: 0,
+        load1: 12,
+        memUsedMb: 1024,
+        memTotalMb: 4096,
+        diskUsedGb: 10,
+        diskTotalGb: 100,
+      },
     }),
   };
   const ref: ToolContextRef = { current: pressured, emit: async () => undefined, scopeLabel: "personal:U1" };
@@ -667,7 +682,15 @@ test("an exec under io pressure carries a [pressure] warning; a calm one doesn't
       stderr: "",
       code: 0,
       timedOut: false,
-      pressure: { ioFull10: 1, ioFull60: 2, load1: 0.5 },
+      load: {
+        ioFull60: 2,
+        sampledAt: 0,
+        load1: 0.5,
+        memUsedMb: 1024,
+        memTotalMb: 4096,
+        diskUsedGb: 10,
+        diskTotalGb: 100,
+      },
     }),
   };
   const calm = (await call(execute, { command: "echo ok", purpose: "p" })) as { content: Array<{ text?: string }> };
@@ -1479,7 +1502,7 @@ test("finish_silently on a poll fire terminates the turn at the tool contract; o
     current: fakeToolContext(),
     emit: sink(emitted),
     scopeLabel: "personal:U1",
-    pollFire: true,
+    replyOptional: true,
   };
   const finish = createAgentTools(ref).find((t) => t.name === "finish_silently");
   const res = (await call(finish, { reason: "nothing new" })) as { terminate?: boolean };
@@ -1495,7 +1518,7 @@ test("finish_silently on a poll fire terminates the turn at the tool contract; o
     1,
   );
 
-  ref.pollFire = false;
+  ref.replyOptional = false;
   ref.silentRequested = false;
   const noop = (await call(finish, { reason: "n/a" })) as { terminate?: boolean; content: Array<{ text?: string }> };
   assert.notEqual(noop.terminate, true, "a person is waiting — the tool must not end the turn");

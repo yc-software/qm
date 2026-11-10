@@ -269,10 +269,10 @@ const SETTINGS_RESOURCES = {
 
 type SettingsView = keyof typeof SETTINGS_RESOURCES;
 
-async function scopeServiceCredentials(deps: ApiCtx["deps"], targetScope: string) {
+async function scopeServiceCredentials(deps: ApiCtx["deps"], tenant: Tenant, targetScope: string) {
   const [credentials, grants] = await Promise.all([
     deps.serviceCreds?.listServiceCredentials(targetScope) ?? [],
-    deps.acl?.find({ ownerScopeId: targetScope, kind: "service-cred" }) ?? [],
+    deps.acl?.find(tenant, { ownerScopeId: targetScope, kind: "service-cred" }) ?? [],
   ]);
   const grantees = new Map<string, string[]>();
   for (const grant of grants) {
@@ -427,10 +427,14 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
     egress,
   ] = await Promise.all([
     Promise.all(
-      resources.map(async (r) => [r.readKey!, await read(r.readKey!, () => r.get!(deps, targetScope))] as const),
+      resources.map(
+        async (r) => [r.readKey!, await read(r.readKey!, () => r.get!(deps, targetScope, tenantOf(ctx)))] as const,
+      ),
     ),
     view === "connectors" ? {} : read("environment", () => scopeEnvironmentMetadata(deps, targetScope)),
-    includes("credentials") ? read("credentials", () => scopeServiceCredentials(deps, targetScope)) : undefined,
+    includes("credentials")
+      ? read("credentials", () => scopeServiceCredentials(deps, tenantOf(ctx), targetScope))
+      : undefined,
     includes("credentials") && parseScopeId(targetScope).kind === "org"
       ? read("people", () => deps.directory?.list())
       : undefined,

@@ -16,10 +16,7 @@ import { orgId } from "../src/config.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap, testUserStore } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-import { withTenant } from "../src/tenants/context.ts";
-import { TEST_TENANT } from "./support/test-tenant.ts";
-
-const tenant = withTenant(TEST_TENANT, (t) => t);
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 function fixture() {
   const keychain = createKeychain({
@@ -118,7 +115,7 @@ function fixture() {
       enabled,
     });
     if (granted)
-      await acl.grant({
+      await acl.grant(tenant, {
         ownerScopeId: org,
         ref: "service-cred:composio",
         granteeScopeId: org,
@@ -786,7 +783,7 @@ test("shared org connections recheck grants for every audience member", async ()
   const f = fixture();
   await f.shared(false);
   const org = scopeId("org", orgId());
-  await f.deps.acl!.grant({
+  await f.deps.acl!.grant(tenant, {
     ownerScopeId: org,
     ref: "service-cred:composio",
     granteeScopeId: "personal:alice",

@@ -43,6 +43,10 @@ export function threadHasBotStake(
   });
 }
 
+export function isBotAuthored(m: { bot_id?: string; bot_profile?: unknown; subtype?: string }): boolean {
+  return Boolean(m.bot_id || m.bot_profile || m.subtype === "bot_message");
+}
+
 export function shouldProcessMessage(
   m: { subtype?: string; bot_id?: string; user?: string },
   botUserId: string,

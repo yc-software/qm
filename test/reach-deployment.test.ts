@@ -19,6 +19,7 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 function appWithFakeRuntime() {
   const deployStore = createDeployStore(testDeployBackings());
@@ -87,7 +88,7 @@ test("reachDeployment: a read grant lets a non-owner reach a personal deployment
   });
   assert.equal((await app.reachDeployment(personal.id, "U2")).status, "denied");
 
-  await acl.grant({
+  await acl.grant(tenant, {
     ownerScopeId: scopeId("personal", "U1"),
     ref: `deployment:${personal.id}`,
     granteeScopeId: scopeId("personal", "U2"),
@@ -97,7 +98,7 @@ test("reachDeployment: a read grant lets a non-owner reach a personal deployment
   assert.equal((await app.reachDeployment(personal.id, "U2")).status, "ok");
   assert.equal((await app.reachDeployment(personal.id, "U3")).status, "denied");
 
-  await acl.revoke(scopeId("personal", "U1"), `deployment:${personal.id}`, scopeId("personal", "U2"), "U1");
+  await acl.revoke(tenant, scopeId("personal", "U1"), `deployment:${personal.id}`, scopeId("personal", "U2"), "U1");
   assert.equal((await app.reachDeployment(personal.id, "U2")).status, "denied");
 });
 
@@ -109,7 +110,7 @@ test("reachDeployment: shared-scope read grants require current channel or group
     entrypoint: "x",
     files: [],
   });
-  await acl.grant({
+  await acl.grant(tenant, {
     ownerScopeId: scopeId("personal", "U1"),
     ref: `deployment:${personal.id}`,
     granteeScopeId: scopeId("channel", "C1"),
@@ -130,7 +131,7 @@ test("reachDeployment: shared-scope read grants require current channel or group
     entrypoint: "x",
     files: [],
   });
-  await acl.grant({
+  await acl.grant(tenant, {
     ownerScopeId: scopeId("personal", "U1"),
     ref: `deployment:${groupDeployment.id}`,
     granteeScopeId: scopeId("group", "G1"),
@@ -148,7 +149,7 @@ test("reachDeployment: shared-scope read grants require current channel or group
     entrypoint: "x",
     files: [],
   });
-  await acl.grant({
+  await acl.grant(tenant, {
     ownerScopeId: scopeId("personal", "U1"),
     ref: `deployment:${priorGroupDeployment.id}`,
     granteeScopeId: scopeId("group", "G2"),
@@ -178,7 +179,7 @@ test("listDeploymentsForViewer includes owned and ACL-visible deployments only",
     entrypoint: "x",
     files: [],
   });
-  await acl.grant({
+  await acl.grant(tenant, {
     ownerScopeId: scopeId("personal", "U1"),
     ref: `deployment:${shared.id}`,
     granteeScopeId: scopeId("channel", "C1"),
@@ -205,7 +206,7 @@ test("listDeploymentsForViewer: a write grant yields permission write for a non-
     entrypoint: "x",
     files: [],
   });
-  await acl.grant({
+  await acl.grant(tenant, {
     ownerScopeId: scopeId("personal", "U1"),
     ref: `deployment:${shared.id}`,
     granteeScopeId: scopeId("personal", "U2"),
@@ -225,7 +226,7 @@ test("HTTP: /v1/deployments?principalId= filters through viewer authz", async ()
     files: [],
   });
   await app.deploy({ ownerScopeId: scopeId("personal", "U3"), createdBy: "U3", entrypoint: "x", files: [] });
-  await acl.grant({
+  await acl.grant(tenant, {
     ownerScopeId: scopeId("personal", "U1"),
     ref: `deployment:${shared.id}`,
     granteeScopeId: scopeId("channel", "C1"),
@@ -269,7 +270,7 @@ test("HTTP: /v1/deployments/:id shows a deployment only to principals who can se
     entrypoint: "x",
     files: [],
   });
-  await acl.grant({
+  await acl.grant(tenant, {
     ownerScopeId: scopeId("personal", "U1"),
     ref: `deployment:${shared.id}`,
     granteeScopeId: scopeId("channel", "C1"),
@@ -309,7 +310,7 @@ test("HTTP: each /v1/deployments row carries an authed, clonable gitUrl when ing
     entrypoint: "x",
     files: [],
   });
-  await acl.grant({
+  await acl.grant(tenant, {
     ownerScopeId: scopeId("personal", "U1"),
     ref: `deployment:${shared.id}`,
     granteeScopeId: scopeId("channel", "C1"),
@@ -358,7 +359,7 @@ test("reachDeployment: an org grant on a personal deployment opens it to any ver
     entrypoint: "x",
     files: [],
   });
-  await acl.grant({
+  await acl.grant(tenant, {
     ownerScopeId: scopeId("personal", "U1"),
     ref: `deployment:${personal.id}`,
     granteeScopeId: scopeId("org", "default-org"),
