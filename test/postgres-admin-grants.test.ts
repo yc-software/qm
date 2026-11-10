@@ -68,7 +68,7 @@ test("pg-backed AdminGrantStore: seed applies once, then a redeploy never clobbe
     const seed = [grant({ principalId: "seed-admin" })];
     const s1 = createAdminGrantStore(createPostgresAdminGrantStore(URL!), {
       seed,
-      seedTenant: async () => TEST_TENANT,
+      seedsTenant: (t) => t.id === TEST_TENANT,
     });
     assert.equal(
       (await s1.list(tenant)).some((g) => g.principalId === "seed-admin"),
@@ -79,7 +79,7 @@ test("pg-backed AdminGrantStore: seed applies once, then a redeploy never clobbe
 
     const s2 = createAdminGrantStore(createPostgresAdminGrantStore(URL!), {
       seed,
-      seedTenant: async () => TEST_TENANT,
+      seedsTenant: (t) => t.id === TEST_TENANT,
     });
     const ids = (await s2.list(tenant)).map((g) => g.principalId).sort();
     assert.deepEqual(ids, ["promoted-at-runtime", "seed-admin"], "redeploy preserves both seed + runtime grants");

@@ -9,7 +9,6 @@ import { PrincipalLinkError } from "../../identity/principal-links.ts";
 import { createHash } from "node:crypto";
 import { scopeId } from "../../types.ts";
 import { parseRef } from "../../acl/resource-ref.ts";
-import { currentTenant } from "../../tenants/context.ts";
 import { orgId } from "../../config.ts";
 import { externalOrgId } from "../../tenants/external-org.ts";
 import { entitledScopes } from "../../resolution/context-filter.ts";
@@ -18,7 +17,7 @@ import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { errMessage, httpFailure, reportFailure } from "../../util/errors.ts";
 import { activePrincipal, audit } from "./shared.ts";
-import type { ApiCtx, Route } from "./route.ts";
+import { tenantOf, type ApiCtx, type Route } from "./route.ts";
 
 export const ACCOUNT_ID = /^ca_[a-zA-Z0-9_-]+$/;
 
@@ -272,7 +271,7 @@ const SCOPES_TTL_MS = 5 * 60_000;
 const scopeCache = new Map<string, { scopes: string[]; expiresAt: number }>();
 
 async function configuredScopes(ctx: ApiCtx, key: string, authConfigId: string): Promise<string[]> {
-  const cacheKey = JSON.stringify([currentTenant(), authConfigId]);
+  const cacheKey = JSON.stringify([tenantOf(ctx).id, authConfigId]);
   const cached = scopeCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.scopes;
   try {

@@ -31,8 +31,8 @@ export interface AdminGrantStore {
 
 export interface AdminGrantStoreOptions {
   seed?: AdminGrant[];
-  seedTenant?: () => Promise<string | undefined>;
-  beforeSeed?: (grants: readonly AdminGrant[]) => Promise<unknown>;
+  seedsTenant?: (tenant: Tenant) => boolean;
+  beforeSeed?: (tenant: Tenant, grants: readonly AdminGrant[]) => Promise<unknown>;
 }
 
 export function createAdminGrantStore(
@@ -45,9 +45,9 @@ export function createAdminGrantStore(
     let done = seeding.get(tenant.id);
     if (!done) {
       done = (async () => {
-        if (!seeds.length || (opts.seedTenant && (await opts.seedTenant()) !== tenant.id)) return;
+        if (!seeds.length || (opts.seedsTenant && !opts.seedsTenant(tenant))) return;
         if ((await persist.all(tenant)).length > 0) return;
-        await opts.beforeSeed?.(seeds);
+        await opts.beforeSeed?.(tenant, seeds);
         for (const g of seeds) await persist.put(tenant, { grantedBy: "system", createdAt: 0, ...g });
       })().catch((e) => {
         seeding.delete(tenant.id);

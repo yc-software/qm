@@ -24,7 +24,15 @@ import {
 } from "../auth/source-auth.ts";
 import { CONTROL_PLANE_AUD, type CapabilityClaims } from "../auth/capability-token.ts";
 import { bootTenant } from "../tenants/boot.ts";
-import { capabilityToken, identityTenant, requestCapability, withRequestTenant } from "./request-tenant.ts";
+import {
+  bindRequestTenant,
+  capabilityToken,
+  identityTenant,
+  requestCapability,
+  requestTenant,
+  withRequestTenant,
+} from "./request-tenant.ts";
+import type { Tenant } from "../tenants/context.ts";
 import { inboundKey, withInboundTenant } from "./inbound-tenant.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } from "../auth/portal-identity.ts";
 import { errMessage } from "../util/errors.ts";
@@ -345,7 +353,17 @@ function assertedActorValues(field: string, url: URL, body: unknown): unknown[] 
 
 function baseCtx(req: IncomingMessage, res: ServerResponse, wiring: Wiring): BaseCtx {
   const url = new URL(req.url ?? "/", "http://localhost");
-  return { req, res, ...wiring, url, pathname: url.pathname, method: req.method ?? "GET", params: {} };
+  const tenant = requestTenant(req);
+  return {
+    req,
+    res,
+    ...wiring,
+    url,
+    pathname: url.pathname,
+    method: req.method ?? "GET",
+    params: {},
+    ...(tenant ? { tenant } : {}),
+  };
 }
 
 function respondError(req: IncomingMessage, res: ServerResponse, err: unknown): void {
@@ -569,9 +587,14 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     res: ServerResponse,
     base: BaseCtx,
     found: Matched<BaseCtx> | Matched<ApiCtx>,
-    next: () => Promise<void>,
+    then: () => Promise<void>,
   ): Promise<void> {
     const route = found?.route;
+    const next = (tenant: Tenant | undefined): Promise<void> => {
+      bindRequestTenant(req, tenant);
+      if (tenant) base.tenant = tenant;
+      return then();
+    };
     const inbound = inboundKey(req, deps, found, base.url);
     if (inbound)
       return withInboundTenant(

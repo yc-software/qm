@@ -406,6 +406,7 @@ async function fixture(
         ...(options.webUiPublicUrl ? { webUiPublicUrl: options.webUiPublicUrl } : {}),
       },
       core,
+      TENANT,
     ),
   );
   const app = FakeApp.instances.at(-1)!;

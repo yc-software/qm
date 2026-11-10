@@ -20,7 +20,7 @@ import { isSharedScope, parseScopeId } from "../../types.ts";
 import { canonicalPerson, samePerson } from "../../directory/person.ts";
 import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
 import { sendJson } from "../http.ts";
-import type { ApiCtx, Route } from "./route.ts";
+import { tenantOf, type ApiCtx, type Route } from "./route.ts";
 import {
   adminStanding,
   audit,
@@ -253,7 +253,12 @@ async function brainTarget(
   const record = readRegistry((await deps.memoryRegistry.current()).record);
   const actor = canonicalPerson(actorId);
   const brain = record.brains.find(({ id }) => id === b.memoryBrain);
-  const refusal = brainRefusal(record, brain ?? { id: String(b.memoryBrain) }, actor, await adminStanding(deps, actor));
+  const refusal = brainRefusal(
+    record,
+    brain ?? { id: String(b.memoryBrain) },
+    actor,
+    await adminStanding(deps, tenantOf(ctx), actor),
+  );
   if (refusal) {
     sendJson(res, 403, { error: "forbidden", message: refusal });
     return null;
@@ -276,7 +281,7 @@ async function brainDestination(
   const brain = record.brains.find(({ id }) => id === target.id);
   if (!brain) return { status: 409, refused: `brain ${target.id} was removed after this link was made` };
   const owner = canonicalPerson(rec.ownerId);
-  const refusal = brainRefusal(record, brain, owner, await adminStanding(ctx.deps, owner));
+  const refusal = brainRefusal(record, brain, owner, await adminStanding(ctx.deps, tenantOf(ctx), owner));
   if (refusal) return { status: 403, refused: lostBrainAccess(refusal) };
   if (brain.url !== target.url) return { status: 409, refused: `brain ${target.id} changed after this link was made` };
   const url = new URL(target.url);
@@ -308,7 +313,7 @@ async function saveBrainSecret(
     return sendJson(res, status, { error, message });
   };
   const owner = canonicalPerson(drop.ownerId);
-  const standing = await adminStanding(deps, owner);
+  const standing = await adminStanding(deps, tenantOf(ctx), owner);
   const save = (record: MemoryRegistry) => {
     const brain = record.brains.find(({ id }) => id === target.id);
     const refusal = brain && brainRefusal(record, brain, owner, standing);

@@ -13,6 +13,7 @@ import {
 import type { MemoryPolicy } from "../../memory/policy.ts";
 import type { resolveTurnContext } from "../../resolution/turn-context.ts";
 import type { EgressPolicy, ScopeId, Session } from "../../types.ts";
+import { ambientTenant } from "../../tenants/context.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { trimTrailingSlashes } from "../../util/text.ts";
 import type { SystemContextBlocks } from "./prompt-blocks.ts";
@@ -144,9 +145,10 @@ async function mintControlPlaneTokens(
     const destination = defaultDestination;
     connectorEnv.AGENT_API_URL = deps.apiBaseUrl;
     if (deps.admin && liveAuthorTurn) {
-      const status = await deps.admin
-        .adminStatusOf(actor)
-        .catch(swallowAs("orchestrator: admin status for turn", { isAdmin: false }));
+      const admin = deps.admin;
+      const status = await (async () => admin.adminStatusOf(ambientTenant(), actor))().catch(
+        swallowAs("orchestrator: admin status for turn", { isAdmin: false }),
+      );
       actorIsOrgAdmin = status.isAdmin;
       if (
         actorIsOrgAdmin &&

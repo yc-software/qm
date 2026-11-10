@@ -10,7 +10,7 @@ import { canAdministerLoop } from "./loops.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { sendJson } from "../http.ts";
 import { bootTenant, tenancyBooted } from "../../tenants/boot.ts";
-import { boundTenant } from "../../tenants/context.ts";
+import { boundTenant, type Tenant } from "../../tenants/context.ts";
 import { claimThenBind } from "../../tenants/claim.ts";
 import type { DeliveryStore } from "../../delivery/delivery-store.ts";
 
@@ -30,7 +30,7 @@ type HubApp = Pick<
 >;
 
 export interface WebEvents {
-  stream(user: string, res: ServerResponse): void;
+  stream(user: string, res: ServerResponse, tenant: Tenant | undefined): void;
   start(): void;
   stop(): Promise<void>;
 }
@@ -66,8 +66,8 @@ export function createWebEvents(
     let failure: unknown;
     try {
       const now = Date.now();
-      const drainLane = async (): Promise<void> => {
-        const tenant = boundTenant();
+      const drainLane = async (_tenantId?: string, bound?: Tenant): Promise<void> => {
+        const tenant = bound?.id;
         for (const d of await app.pendingDeliveries("web")) {
           const owner = canonicalPerson(ownerOfWebThread(d.destination.target) ?? "");
           if (clientsOf(tenant).get(owner)?.size) send(tenant, owner, "delivery", { threadRef: d.destination.target });
@@ -133,9 +133,9 @@ export function createWebEvents(
 
   let unsubscribe: Array<() => void> = [];
   return {
-    stream(user, res) {
+    stream(user, res, tenant) {
       const key = canonicalPerson(user);
-      const lane = laneOf(boundTenant());
+      const lane = laneOf(tenant?.id);
       const clients = lanes.get(lane) ?? new Map<string, Set<ServerResponse>>();
       lanes.set(lane, clients);
       res.writeHead(200, {
@@ -174,7 +174,7 @@ export function createWebEvents(
 
 function streamWebEvents(ctx: ApiCtx): void {
   if (!ctx.deps.web || !ctx.actor) return sendJson(ctx.res, 404, { error: "not_found" });
-  ctx.deps.web.events.stream(ctx.actor.p, ctx.res);
+  ctx.deps.web.events.stream(ctx.actor.p, ctx.res, ctx.tenant);
 }
 
 export const webEventRoutes: ReadonlyArray<Route<ApiCtx>> = [
