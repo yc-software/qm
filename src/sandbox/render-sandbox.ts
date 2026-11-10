@@ -35,7 +35,11 @@ import { claimThenBind } from "../tenants/claim.ts";
 const ORPHAN_GRACE_MS = 15 * 60_000;
 const ACTIVITY_TOUCH_MS = 60_000;
 const ACTIVITY_GRACE_MS = 3 * ACTIVITY_TOUCH_MS;
-const RESTARTED_MESSAGE = "This Render computer was restarted while the command ran; run it again";
+const RESTARTED_MESSAGE =
+  "This Render computer was restarted or stopped while the command ran; its file changes may be lost, so check before running it again";
+const DELETED_MESSAGE = "This Render computer was deleted while the command ran";
+const FENCE = { stopped: true, stopping: true } as const;
+const UNFENCE = { stopped: undefined, stopping: undefined };
 const activeSince = (stored: StoredRenderSandbox | null, cutoffMs: number): boolean =>
   !stored || stored.lastActivityMs > cutoffMs;
 
@@ -50,6 +54,7 @@ export interface StoredRenderSandbox extends RenderSandboxResources {
   lastActivityMs: number;
   baseImage: string;
   stopped?: boolean;
+  stopping?: boolean;
   homeDirty?: boolean;
   savedAtMs?: number;
   retiredResources?: RenderSandboxResources[];
@@ -162,16 +167,20 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
         row.stopped ? row : { ...row, lastActivityMs: Date.now(), ...(homeDirty ? { homeDirty: true } : {}) },
       );
     if (!stored) throw new Error(`Render sandbox is not provisioned: ${name}`);
+    if (stored.stopping) throw new Error("This Render computer is being restarted or stopped; try again in a moment");
     if (stored.stopped)
       throw new Error("This Render computer has stopped; the next turn restores it from its last checkpoint");
     return stored.sandboxId;
   };
-  const settle = async (name: string, sandboxId: string): Promise<boolean> => {
+  const settle = async (name: string, sandboxId: string): Promise<string | undefined> => {
     const scope = base.scopeFor(name);
-    if (!scope) return true;
+    if (!scope) return undefined;
     const current = await store.get(scope);
-    if (current?.homeDirty === false) await store.merge(scope, { homeDirty: true });
-    return !!current && !current.stopped && current.sandboxId === sandboxId;
+    if (!current) return DELETED_MESSAGE;
+    if (current.sandboxId !== sandboxId) return RESTARTED_MESSAGE;
+    if (current.stopped) return current.homeDirty === false ? RESTARTED_MESSAGE : undefined;
+    if (current.homeDirty === false) await store.merge(scope, { homeDirty: true });
+    return undefined;
   };
   const settleWrite = async <T>(name: string, sandboxId: string, work: () => Promise<T>): Promise<T> => {
     let result: T;
@@ -181,8 +190,8 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
       await settle(name, sandboxId).catch(swallowAs("render-sandbox: mark home changed", undefined));
       throw error;
     }
-    if (!(await settle(name, sandboxId).catch(swallowAs("render-sandbox: confirm write", true))))
-      throw new Error(RESTARTED_MESSAGE);
+    const lost = await settle(name, sandboxId).catch(swallowAs("render-sandbox: confirm write", undefined));
+    if (lost) throw new Error(lost);
     return result;
   };
   const exec = async (name: string, script: string, timeoutSec: number): Promise<ExecResult> => {
@@ -197,7 +206,8 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
         const current = await store.update(scope, (row) =>
           row.sandboxId === sandboxId ? { ...row, stopped: true } : row,
         );
-        if (current && current.sandboxId !== sandboxId) throw new Error(RESTARTED_MESSAGE, { cause: error });
+        if (current && (current.sandboxId !== sandboxId || current.stopping))
+          throw new Error(RESTARTED_MESSAGE, { cause: error });
         throw new Error("This Render computer has stopped; the next turn restores it from its last checkpoint", {
           cause: error,
         });
@@ -335,7 +345,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
       !(await hasLiveProcesses(info.id))
     )
       return replace(scope, stored, info, onStatus);
-    await store.merge(scope, { lastActivityMs: Date.now(), ...(stored.stopped ? { stopped: undefined } : {}) });
+    await store.merge(scope, { lastActivityMs: Date.now(), ...(stored.stopped || stored.stopping ? UNFENCE : {}) });
     return { coldStart: false };
   }
 
@@ -349,7 +359,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
     if (stored) {
       if (info?.status === "running") {
         const running = stored;
-        await store.merge(scope, { stopped: true });
+        await store.merge(scope, FENCE);
         stored = await reopenOnFailure(scope, async () => {
           const saved = await checkpoint(scope, running, false);
           await client.terminate(info.id);
@@ -385,7 +395,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
       return await work();
     } catch (error) {
       await store
-        .merge(scope, { stopped: undefined })
+        .merge(scope, UNFENCE)
         .catch(swallowAs("render-sandbox: reopen computer after a failed stop", undefined));
       throw error;
     }
@@ -414,6 +424,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
         lastActivityMs: Date.now(),
         baseImage: source.ref,
         stopped: undefined,
+        stopping: undefined,
       });
     } catch (error) {
       await client
@@ -709,7 +720,8 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
         Date.now() - Math.max(ACTIVITY_GRACE_MS, Math.min(idleMs > 0 ? idleMs : Infinity, RENDER_IDLE_STOP_MS));
       const stale = (stored: StoredRenderSandbox): boolean => stored.homeDirty !== false && !recentlySaved(stored);
       const due = (stored: StoredRenderSandbox): boolean =>
-        !stored.stopped && (stored.expiresAtMs <= Date.now() || stored.lastActivityMs <= cutoff || stale(stored));
+        !!stored.stopping ||
+        (!stored.stopped && (stored.expiresAtMs <= Date.now() || stored.lastActivityMs <= cutoff || stale(stored)));
       await claimThenBind(
         () => cleanupStore.claimIds(),
         (scope) =>
@@ -724,6 +736,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
           await tryLock(lifecycleKey(name), async () => {
             let stored = await store.get(scope);
             if (stored) stored = await cleanupRetired(scope, stored);
+            if (stored?.stopping) stored = await store.merge(scope, UNFENCE);
             if (!stored || !due(stored)) return;
             const info = await client.get(stored.sandboxId);
             if (!info || info.status === "terminated" || info.status === "errored") {
@@ -743,10 +756,8 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
               await checkpoint(scope, stored, active || undefined);
               return;
             }
-            const fenced = await store.update(scope, (row) =>
-              activeSince(row, cutoff) ? row : { ...row, stopped: true },
-            );
-            if (!fenced?.stopped) return;
+            const fenced = await store.update(scope, (row) => (activeSince(row, cutoff) ? row : { ...row, ...FENCE }));
+            if (!fenced?.stopping) return;
             const stopped = await reopenOnFailure(scope, async () => {
               if (await hasLiveProcesses(info.id)) return false;
               await clearCredentials(info.id).catch((error: unknown) =>
@@ -754,10 +765,11 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
               );
               await checkpoint(scope, fenced, false);
               await client.terminate(info.id);
+              await store.merge(scope, { stopping: undefined });
               return true;
             });
             if (stopped) reaped++;
-            else await store.merge(scope, { stopped: undefined });
+            else await store.merge(scope, UNFENCE);
           }).catch((error) => reportError("idle_checkpoint_failed", error, scope));
         }
       });

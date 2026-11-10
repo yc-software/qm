@@ -375,7 +375,7 @@ test(
     await sandbox.restartComputer!(scope);
     assert.equal(fake.sandboxes.get(before.sandboxId)?.status, "terminated");
     cut.resolve();
-    await assert.rejects(cutOff, /was restarted while the command ran; run it again/);
+    await assert.rejects(cutOff, /was restarted or stopped while the command ran/);
     assert.equal((await store.get(scope))!.stopped, undefined);
     const restored = await make().provision(scope);
     assert.equal(await sandbox.readFile(restored, "second-turn"), "saved");
@@ -673,7 +673,7 @@ test("Render refuses a write that starts during its idle-stop checkpoint", async
     return snapshot;
   });
   assert.deepEqual(await make().reapDeepIdle!(0), { reaped: 1 });
-  assert.match(String(await late), /has stopped; the next turn restores it from its last checkpoint/);
+  assert.match(String(await late), /is being restarted or stopped; try again in a moment/);
   assert.equal(fake.sandboxes.get(sandboxId)?.status, "terminated");
 });
 
@@ -702,7 +702,49 @@ test("Render reports a write that finishes during a restart instead of losing it
   const writing = sandbox.writeFile(handle, "late", "after the snapshot").catch((error: unknown) => error);
   await reached.promise;
   await sandbox.restartComputer!(scope);
-  assert.match(String(await writing), /was restarted while the command ran; run it again/);
+  assert.match(String(await writing), /was restarted or stopped while the command ran/);
+});
+
+test("Render keeps a write that finishes before a restart takes its snapshot", async (t) => {
+  const { make, fake, store, scope } = setup(t);
+  const sandbox = make();
+  const handle = await sandbox.provision(scope);
+  const reached = Promise.withResolvers<void>();
+  const gate = Promise.withResolvers<void>();
+  const write = fake.client.writeFileBytes;
+  t.mock.method(fake.client, "writeFileBytes", async (id: string, path: string, data: Uint8Array) => {
+    if (path.endsWith("/early")) {
+      reached.resolve();
+      await gate.promise;
+    }
+    return write(id, path, data);
+  });
+  const writing = sandbox.writeFile(handle, "early", "in the snapshot").then(
+    () => "kept",
+    (error: unknown) => error,
+  );
+  await reached.promise;
+  const merge = store.merge;
+  t.mock.method(store, "merge", async (id: string, patch: Partial<StoredRenderSandbox>) => {
+    if (patch.homeDirty === false) {
+      gate.resolve();
+      await writing;
+    }
+    return merge(id, patch);
+  });
+  await sandbox.restartComputer!(scope);
+  assert.equal(await writing, "kept");
+  assert.equal(await sandbox.readFile(handle, "early"), "in the snapshot");
+});
+
+test("Render finishes an idle stop that a crashed core left half done", async (t) => {
+  const { make, fake, store, scope } = setup(t);
+  await make().provision(scope);
+  const { sandboxId } = (await store.get(scope))!;
+  await store.merge(scope, { stopped: true, stopping: true, lastActivityMs: Date.now() - 7200_000 });
+  assert.deepEqual(await make().reapDeepIdle!(0), { reaped: 1 });
+  assert.equal(fake.sandboxes.get(sandboxId)?.status, "terminated");
+  assert.equal((await store.get(scope))!.stopping, undefined);
 });
 
 test("Render returns a finished command's result when it cannot confirm the write afterwards", async (t) => {
