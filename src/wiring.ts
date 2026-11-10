@@ -1,4 +1,5 @@
 import { createPostgresFinnyStore } from "./finny/postgres-store.ts";
+import { reconcileFinnyEvaluatorCorrections } from "./finny/evaluator-correction.ts";
 import {
   createPersistedDeterministicSpreadsheetWorker,
   type SpreadsheetCalculationEngine,
@@ -2212,8 +2213,8 @@ export function buildApp(
               artifactDigest: job.artifactDigest ?? null,
               instruction:
                 role === "producer"
-                  ? "Produce the approved immutable file artifact, then report its file ID as provisionalRevision and SHA-256 as artifactDigest."
-                  : "Invoke deterministic_audit once for the mandatory spreadsheet checks, then independently audit every remaining required policy check and report immutable Files evidence through Finny.",
+                  ? `Produce or reuse the approved workbook in the persistent sandbox following the resolved domain skill (such as sharechat-ap-outstanding-workbook). Persist it by POSTing JSON {name,mimetype,dataBase64} to $AGENT_API_URL/v1/files/upload with x-agent-capability: $AGENT_API_TOKEN. Then call finny_artifact_ready with the returned immutable file.id as provisionalRevision and file.sha256 as artifactDigest.`
+                  : `Execute Finny Auditor checklist: invoke deterministic_audit once for the mandatory spreadsheet checks (formula.recalculate, summary.crossfoot, artifact.structure), then independently audit every remaining required check (${Object.keys(job.policy.requiredGenerations).join(", ")}) and report immutable Files evidence through Finny.`,
             });
           },
         },
@@ -2226,6 +2227,10 @@ export function buildApp(
     let recoveryRequested = false;
     let recoveryRunning: Promise<void> | undefined;
     const reconcileRuntime = async () => {
+      await reconcileFinnyEvaluatorCorrections({
+        jobs: finnyJobs,
+        approvedEvaluator: config.finny!.spreadsheetEngine.evaluator,
+      });
       await reconcileFinnyRuntimeRecoveries({
         recoveries: () => finnyRuntime.pendingRecoveries(),
         coordinatorFor: async (scopeId, jobId) => {
@@ -2240,6 +2245,7 @@ export function buildApp(
               await coordinator.auditBlocked(input);
               await afterRecoveredAuditBlocked(input);
             },
+            verificationReopened: (input) => coordinator.verificationReopened(input),
           };
         },
         recordError: async (error, recovery) => {
@@ -2774,13 +2780,6 @@ export function buildApp(
     ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
     ...(agent.pickAckEmoji ? { pickAckEmoji: (t, c) => agent.pickAckEmoji!(t, c) } : {}),
   });
-  if (recoverFinny)
-    void recoverFinny().catch((error) =>
-      errors.record(
-        { category: "finny", code: "recovery_failed", message: errMessage(error), scopeLabel: `org:${config.orgId}` },
-        error,
-      ),
-    );
   runs.onTerminal((run) => {
     void runs
       .activeForThread(run.sessionId)
@@ -3229,6 +3228,13 @@ export function buildApp(
     if (backgroundRunning) return;
     backgroundRunning = true;
     admittedWork.resume();
+    if (recoverFinny)
+      void recoverFinny().catch((error) =>
+        errors.record(
+          { category: "finny", code: "recovery_failed", message: errMessage(error), scopeLabel: `org:${config.orgId}` },
+          error,
+        ),
+      );
     const generation = ++backgroundGeneration;
     worker.start();
     preemptionSweeper.start();

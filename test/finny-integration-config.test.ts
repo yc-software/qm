@@ -19,6 +19,11 @@ const enabled = {
   FINNY_SPREADSHEET_ENGINE_TIMEOUT_MS: "30000",
   FINNY_SPREADSHEET_ENGINE_MAX_RESPONSE_BYTES: "1048576",
   FINNY_SPREADSHEET_ENGINE_MAX_ARTIFACT_BYTES: "52428800",
+  FINNY_SPREADSHEET_EVALUATOR_ID: "libreoffice-calc",
+  FINNY_SPREADSHEET_EVALUATOR_REVISION: "24.2.7-r1",
+  FINNY_SPREADSHEET_EVALUATOR_BUILD_DIGEST: "a".repeat(64),
+  FINNY_SPREADSHEET_EVALUATOR_CONTRACT_VERSION: "finny.spreadsheet-worker.v2",
+  FINNY_SPREADSHEET_EVALUATOR_CONFIGURATION_DIGEST: "b".repeat(64),
   FINNY_MAX_EVIDENCE_BYTES: "4194304",
 };
 
@@ -59,6 +64,13 @@ test("enabled Finny integration preserves configured policy and limits", () => {
       timeoutMs: 30000,
       maxResponseBytes: 1048576,
       maxArtifactBytes: 52428800,
+      evaluator: {
+        id: enabled.FINNY_SPREADSHEET_EVALUATOR_ID,
+        revision: enabled.FINNY_SPREADSHEET_EVALUATOR_REVISION,
+        buildDigest: enabled.FINNY_SPREADSHEET_EVALUATOR_BUILD_DIGEST,
+        contractVersion: enabled.FINNY_SPREADSHEET_EVALUATOR_CONTRACT_VERSION,
+        configurationDigest: enabled.FINNY_SPREADSHEET_EVALUATOR_CONFIGURATION_DIGEST,
+      },
     },
     maxEvidenceBytes: 4194304,
   });
@@ -93,4 +105,19 @@ test("enabled Finny integration rejects invalid settings instead of applying fal
     /FINNY_SPREADSHEET_ENGINE_MAX_ARTIFACT_BYTES/,
   );
   assert.throws(() => loadConfig({ ...enabled, FINNY_MAX_EVIDENCE_BYTES: "0" }), /FINNY_MAX_EVIDENCE_BYTES/);
+});
+
+test("enabled Finny integration rejects invalid evaluator identity metadata", () => {
+  assert.throws(
+    () => loadConfig({ ...enabled, FINNY_SPREADSHEET_EVALUATOR_BUILD_DIGEST: "latest" }),
+    /EVALUATOR_BUILD_DIGEST/,
+  );
+  assert.throws(
+    () => loadConfig({ ...enabled, FINNY_SPREADSHEET_EVALUATOR_CONFIGURATION_DIGEST: "sha256:unknown" }),
+    /EVALUATOR_CONFIGURATION_DIGEST/,
+  );
+  assert.throws(
+    () => loadConfig({ ...enabled, FINNY_SPREADSHEET_EVALUATOR_CONTRACT_VERSION: "finny.spreadsheet-worker.v1" }),
+    /EVALUATOR_CONTRACT_VERSION/,
+  );
 });

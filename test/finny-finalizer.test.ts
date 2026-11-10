@@ -1,3 +1,4 @@
+import { TEST_FINNY_EVALUATOR, testDeterministicAuthority } from "./support/finny-fixture.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
@@ -23,7 +24,7 @@ async function createApprovedJob(store: FinnyStore, action: FinnyApprovalAction 
       destination: "Origin thread",
       clarifications: [],
     },
-    policy: initialFinnyPolicy(),
+    policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     originThreadRef: `slack:C1:${randomUUID()}`,
     findingPolicy: {
       id: "finny-r5-test",
@@ -80,6 +81,7 @@ async function attest(
     artifactDigest: job.artifactDigest,
     issuerPrincipalId: "U-auditor",
     issuerRunId: "run-auditor-1",
+    ...testDeterministicAuthority(checkId, verdict, job.policy.evaluator),
     idempotencyKey: randomUUID(),
   });
 }
@@ -103,6 +105,7 @@ test("finalizer reads authoritative state and returns the same signed receipt fo
   assert.equal(receipt.payload.jobId, job.id);
   assert.equal(receipt.payload.planDigest, job.planDigest);
   assert.equal(receipt.payload.artifactDigest, job.artifactDigest);
+  assert.deepEqual(receipt.payload.evaluator, job.policy.evaluator);
   assert.equal(receipt.payload.provisionalRevision, job.provisionalRevision);
   const replay = await finalizer.finalize({ scopeId: job.scopeId, jobId: job.id, idempotencyKey });
   assert.deepEqual(replay, receipt);

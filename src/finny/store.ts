@@ -7,9 +7,11 @@ import type {
   FinnyClarificationDecision,
   FinnyClarificationOption,
   FinnyClarificationRequest,
+  FinnyDeterministicEvidenceAuthority,
   FinnyJob,
   FinnyJobEvent,
   FinnyFindingPolicy,
+  FinnyEvaluatorRef,
   FinnyFinalReceipt,
   FinnyFinalReceiptPayload,
   FinnyPlanPresentation,
@@ -92,6 +94,7 @@ export interface RecordFinnyAttestationInput {
   artifactDigest: string;
   issuerPrincipalId: string;
   issuerRunId: string;
+  deterministicAuthority?: FinnyDeterministicEvidenceAuthority;
   idempotencyKey: string;
 }
 
@@ -104,6 +107,7 @@ export interface RecordFinnyAuditBlockInput {
   evidenceDigest: string;
   issuerPrincipalId: string;
   issuerRunId: string;
+  deterministicAuthority?: FinnyDeterministicEvidenceAuthority;
   findings: FinnyAuditFinding[];
   changeKinds: FinnyChangeKind[];
   resolution: { kind: "rework" } | { kind: "escalate"; reason: string };
@@ -127,6 +131,7 @@ export interface RecordFinnyAuditPassedInput {
   evidenceDigest: string;
   issuerPrincipalId: string;
   issuerRunId: string;
+  deterministicAuthority?: FinnyDeterministicEvidenceAuthority;
   idempotencyKey: string;
 }
 
@@ -134,6 +139,14 @@ export interface FinnyEventResult<T extends FinnyJobEvent = FinnyJobEvent> {
   events: T[];
   job: FinnyJob;
   deduped: boolean;
+}
+
+export interface RecordFinnyEvaluatorCorrectionInput {
+  scopeId: string;
+  jobId: string;
+  fromEvaluator: FinnyEvaluatorRef;
+  toEvaluator: FinnyEvaluatorRef;
+  idempotencyKey: string;
 }
 
 export interface FinalizeFinnyInput {
@@ -165,6 +178,8 @@ export interface FinnyStore {
   recordArtifactReady(input: RecordFinnyArtifactReadyInput): Promise<FinnyEventResult<FinnyJobEvent<"artifact_ready">>>;
   recordAuditPassed(input: RecordFinnyAuditPassedInput): Promise<FinnyEventResult<FinnyJobEvent<"audit_passed">>>;
   recordAuditBlock(input: RecordFinnyAuditBlockInput): Promise<FinnyEventResult>;
+  evaluatorCorrectionCandidates(approvedEvaluator: FinnyEvaluatorRef): Promise<FinnyJob[]>;
+  recordEvaluatorCorrection(input: RecordFinnyEvaluatorCorrectionInput): Promise<FinnyEventResult>;
   listEvents(scopeId: string, jobId: string, afterSequence?: number): Promise<FinnyJobEvent[]>;
   finalize(input: FinalizeFinnyInput, sign: FinnyReceiptSigner): Promise<FinnyFinalReceipt>;
 }

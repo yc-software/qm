@@ -1,3 +1,4 @@
+import { TEST_FINNY_EVALUATOR } from "./support/finny-fixture.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
@@ -25,7 +26,7 @@ test("durably preserves exact parent binding, destination, and artifact proposal
       destination: "Thread",
       clarifications: [],
     },
-    policy: initialFinnyPolicy(),
+    policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy: { id: "v1", maxFindings: 2, maxCodeLength: 20, maxMessageLength: 100 },
     originThreadRef: "slack:C1:100.1",
   });
@@ -85,7 +86,7 @@ test("durably preserves exact parent binding, destination, and artifact proposal
       destination: "Thread",
       clarifications: [],
     },
-    policy: initialFinnyPolicy(),
+    policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy: { id: "v1", maxFindings: 2, maxCodeLength: 20, maxMessageLength: 100 },
     originThreadRef: "slack:C1:100.1",
   };
@@ -119,7 +120,7 @@ test("startup recovery finds approved jobs whose producer dispatch is incomplete
       destination: "Thread",
       clarifications: [],
     },
-    policy: initialFinnyPolicy(),
+    policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy: { id: "v1", maxFindings: 2, maxCodeLength: 20, maxMessageLength: 100 },
     originThreadRef: "slack:C1:100.1",
   });
@@ -248,7 +249,7 @@ test("startup recovery finds approved jobs whose producer dispatch is incomplete
       destination: "Thread",
       clarifications: [],
     },
-    policy: initialFinnyPolicy(),
+    policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy: { id: "v1", maxFindings: 2, maxCodeLength: 20, maxMessageLength: 100 },
     originThreadRef: job.originThreadRef,
   });
@@ -281,7 +282,7 @@ test("material clarification keeps approval fail closed and restart recovery rel
       destination: "Thread",
       clarifications: [{ question: "Which basis?", answer: "Signed contracts" }],
     },
-    policy: initialFinnyPolicy(),
+    policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy: { id: "v1", maxFindings: 2, maxCodeLength: 20, maxMessageLength: 100 },
     originThreadRef: "slack:C1:100.1",
   };
@@ -403,7 +404,7 @@ test("nonrecommended and Other clarification decisions permanently withhold the 
         destination: "Thread",
         clarifications: [{ question: "Which basis?", answer: "Signed contracts" }],
       },
-      policy: initialFinnyPolicy(),
+      policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
       findingPolicy: { id: "v1", maxFindings: 2, maxCodeLength: 20, maxMessageLength: 100 },
       originThreadRef: "slack:C1:100.1",
     });

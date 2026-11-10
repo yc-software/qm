@@ -30,6 +30,11 @@ const configuredFinny = loadConfig({
   FINNY_SPREADSHEET_ENGINE_TIMEOUT_MS: "30000",
   FINNY_SPREADSHEET_ENGINE_MAX_RESPONSE_BYTES: "1048576",
   FINNY_SPREADSHEET_ENGINE_MAX_ARTIFACT_BYTES: "52428800",
+  FINNY_SPREADSHEET_EVALUATOR_ID: "libreoffice-calc",
+  FINNY_SPREADSHEET_EVALUATOR_REVISION: "24.2.7-r1",
+  FINNY_SPREADSHEET_EVALUATOR_BUILD_DIGEST: "a".repeat(64),
+  FINNY_SPREADSHEET_EVALUATOR_CONTRACT_VERSION: "finny.spreadsheet-worker.v2",
+  FINNY_SPREADSHEET_EVALUATOR_CONFIGURATION_DIGEST: "b".repeat(64),
   FINNY_MAX_EVIDENCE_BYTES: "4194304",
 }).finny!;
 
@@ -43,6 +48,13 @@ function stopAfter(t: TestContext, built: ReturnType<typeof buildApp>) {
 const engine: SpreadsheetCalculationEngine = {
   name: "approved-test-engine",
   version: "1",
+  evaluator: {
+    id: "test",
+    revision: "1",
+    buildDigest: "a".repeat(64),
+    contractVersion: "finny.spreadsheet-worker.v2",
+    configurationDigest: "b".repeat(64),
+  },
   async evaluate() {
     return [];
   },

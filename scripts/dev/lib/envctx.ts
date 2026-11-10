@@ -136,7 +136,7 @@ export async function assembleEnv(opts: {
   for (const key of DEV_SECURITY_SECRET_KEYS) {
     if (!env[key] && wtEnv[key]) env[key] = wtEnv[key];
   }
-  for (const k of ["SURFACE_DEBUG_FOOTER"]) {
+  for (const k of ["SURFACE_DEBUG_FOOTER", "NODE_EXTRA_CA_CERTS"]) {
     if (!env[k] && wtEnv[k]) env[k] = wtEnv[k];
   }
 

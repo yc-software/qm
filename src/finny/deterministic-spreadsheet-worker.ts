@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { artifactPath, type FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { ScopeId } from "../types.ts";
+import type { FinnyEvaluatorRef } from "./types.ts";
 
 export const SPREADSHEET_WORKER_PRINCIPAL_ID = "finny-deterministic-spreadsheet-worker";
 
@@ -16,6 +17,7 @@ export interface SpreadsheetWorkerCheckBinding {
 export interface SpreadsheetWorkerBinding {
   readonly artifactDigest: string;
   readonly policyVersion: string;
+  readonly evaluator: FinnyEvaluatorRef;
   readonly checks: readonly SpreadsheetWorkerCheckBinding[];
 }
 
@@ -50,30 +52,58 @@ export interface StructureEvidence {
   }[];
 }
 
-export type SpreadsheetWorkerResult =
+export type FormulaReasonCode = "FORMULA_MISMATCH" | "FORMULA_EVALUATION_ERROR" | "UNSUPPORTED_FORMULA";
+export type CrossFootReasonCode = "CROSSFOOT_MISMATCH" | "CROSSFOOT_EVALUATION_ERROR";
+export type StructureReasonCode = "STRUCTURE_INVALID" | "STRUCTURE_INSPECTION_ERROR";
+
+export interface SpreadsheetWorkerReason<Code extends string> {
+  readonly code: Code;
+  readonly references: readonly string[];
+}
+
+type SpreadsheetResult<
+  CheckId extends SpreadsheetWorkerCheckId,
+  Evidence,
+  BlockCode extends string,
+  ErrorCode extends string,
+> =
   | {
-      readonly checkId: "formula.recalculate";
+      readonly checkId: CheckId;
       readonly generation: number;
-      readonly verdict: "pass" | "block";
-      readonly evidence: FormulaRecalculationEvidence;
+      readonly verdict: "pass";
+      readonly reason: null;
+      readonly evidence: Evidence;
     }
   | {
-      readonly checkId: "summary.crossfoot";
+      readonly checkId: CheckId;
       readonly generation: number;
-      readonly verdict: "pass" | "block";
-      readonly evidence: CrossFootEvidence;
+      readonly verdict: "block";
+      readonly reason: SpreadsheetWorkerReason<BlockCode>;
+      readonly evidence: Evidence;
     }
   | {
-      readonly checkId: "artifact.structure";
+      readonly checkId: CheckId;
       readonly generation: number;
-      readonly verdict: "pass" | "block";
-      readonly evidence: StructureEvidence;
+      readonly verdict: "error";
+      readonly reason: SpreadsheetWorkerReason<ErrorCode>;
+      readonly evidence: Evidence;
     };
 
+export type SpreadsheetWorkerResult =
+  | SpreadsheetResult<
+      "formula.recalculate",
+      FormulaRecalculationEvidence,
+      "FORMULA_MISMATCH",
+      "FORMULA_EVALUATION_ERROR" | "UNSUPPORTED_FORMULA"
+    >
+  | SpreadsheetResult<"summary.crossfoot", CrossFootEvidence, "CROSSFOOT_MISMATCH", "CROSSFOOT_EVALUATION_ERROR">
+  | SpreadsheetResult<"artifact.structure", StructureEvidence, "STRUCTURE_INVALID", "STRUCTURE_INSPECTION_ERROR">;
+
 export interface SpreadsheetWorkerEnvelope {
-  readonly contractVersion: "finny.spreadsheet-worker.v1";
+  readonly contractVersion: "finny.spreadsheet-worker.v2";
   readonly artifactDigest: string;
   readonly policyVersion: string;
+  readonly evaluator: FinnyEvaluatorRef;
   readonly engine: {
     readonly name: string;
     readonly version: string;
@@ -90,6 +120,7 @@ export interface SpreadsheetCalculationInput {
 export interface SpreadsheetCalculationEngine {
   readonly name: string;
   readonly version: string;
+  readonly evaluator: FinnyEvaluatorRef;
   evaluate(input: SpreadsheetCalculationInput): Promise<readonly SpreadsheetWorkerResult[]>;
 }
 
@@ -99,7 +130,8 @@ export interface SpreadsheetWorkerRunInput {
 }
 
 const checkIds = new Set<string>(SPREADSHEET_WORKER_CHECK_IDS);
-const contractVersion = "finny.spreadsheet-worker.v1" as const;
+const contractVersion = "finny.spreadsheet-worker.v2" as const;
+const digestPattern = /^[a-f0-9]{64}$/;
 
 function record(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`${label} is invalid`);
@@ -147,11 +179,47 @@ export function digestSpreadsheetArtifact(bytes: Uint8Array | readonly number[])
     .digest("hex");
 }
 
+function validateEvaluatorRef(value: unknown): FinnyEvaluatorRef {
+  const evaluator = record(value, "Spreadsheet evaluator metadata");
+  exactKeys(
+    evaluator,
+    ["id", "revision", "buildDigest", "contractVersion", "configurationDigest"],
+    "Spreadsheet evaluator metadata",
+  );
+  nonEmptyString(evaluator.id, "Spreadsheet evaluator id");
+  nonEmptyString(evaluator.revision, "Spreadsheet evaluator revision");
+  nonEmptyString(evaluator.contractVersion, "Spreadsheet evaluator contract version");
+  if (evaluator.contractVersion !== contractVersion)
+    throw new Error("Spreadsheet evaluator contract version is invalid");
+  if (typeof evaluator.buildDigest !== "string" || !digestPattern.test(evaluator.buildDigest))
+    throw new Error("Spreadsheet evaluator build digest is invalid");
+  if (typeof evaluator.configurationDigest !== "string" || !digestPattern.test(evaluator.configurationDigest))
+    throw new Error("Spreadsheet evaluator configuration digest is invalid");
+  return Object.freeze({
+    id: evaluator.id,
+    revision: evaluator.revision,
+    buildDigest: evaluator.buildDigest,
+    contractVersion: evaluator.contractVersion,
+    configurationDigest: evaluator.configurationDigest,
+  });
+}
+
+function sameEvaluator(left: FinnyEvaluatorRef, right: FinnyEvaluatorRef): boolean {
+  return (
+    left.id === right.id &&
+    left.revision === right.revision &&
+    left.buildDigest === right.buildDigest &&
+    left.contractVersion === right.contractVersion &&
+    left.configurationDigest === right.configurationDigest
+  );
+}
+
 export function createSpreadsheetWorkerBinding(input: SpreadsheetWorkerBinding): SpreadsheetWorkerBinding {
   const source = record(input, "Spreadsheet worker binding");
-  exactKeys(source, ["artifactDigest", "policyVersion", "checks"], "Spreadsheet worker binding");
+  exactKeys(source, ["artifactDigest", "policyVersion", "evaluator", "checks"], "Spreadsheet worker binding");
   nonEmptyString(source.artifactDigest, "Spreadsheet artifact digest");
   nonEmptyString(source.policyVersion, "Spreadsheet policy version");
+  const evaluator = validateEvaluatorRef(source.evaluator);
   if (!Array.isArray(source.checks) || source.checks.length === 0)
     throw new Error("Spreadsheet check binding is invalid");
   const seen = new Set<string>();
@@ -173,6 +241,7 @@ export function createSpreadsheetWorkerBinding(input: SpreadsheetWorkerBinding):
   return Object.freeze({
     artifactDigest: source.artifactDigest,
     policyVersion: source.policyVersion,
+    evaluator,
     checks: Object.freeze(checks),
   });
 }
@@ -228,17 +297,87 @@ function validateStructureEvidence(value: unknown): StructureEvidence {
   return evidence as unknown as StructureEvidence;
 }
 
+const reasonCodes = {
+  "formula.recalculate": {
+    block: new Set(["FORMULA_MISMATCH"]),
+    error: new Set(["FORMULA_EVALUATION_ERROR", "UNSUPPORTED_FORMULA"]),
+  },
+  "summary.crossfoot": {
+    block: new Set(["CROSSFOOT_MISMATCH"]),
+    error: new Set(["CROSSFOOT_EVALUATION_ERROR"]),
+  },
+  "artifact.structure": {
+    block: new Set(["STRUCTURE_INVALID"]),
+    error: new Set(["STRUCTURE_INSPECTION_ERROR"]),
+  },
+} as const;
+
+function validateReason(value: unknown, checkId: SpreadsheetWorkerCheckId, verdict: "block" | "error"): void {
+  const reason = record(value, "Spreadsheet worker reason");
+  exactKeys(reason, ["code", "references"], "Spreadsheet worker reason");
+  if (typeof reason.code !== "string" || !reasonCodes[checkId][verdict].has(reason.code as never)) {
+    throw new Error("Spreadsheet worker reason code is invalid for the check outcome");
+  }
+  if (!Array.isArray(reason.references) || reason.references.length === 0 || reason.references.length > 100) {
+    throw new Error("Spreadsheet worker reason references are invalid");
+  }
+  const seen = new Set<string>();
+  for (const reference of reason.references) {
+    if (typeof reference !== "string" || reference.length === 0 || reference.length > 256 || seen.has(reference)) {
+      throw new Error("Spreadsheet worker reason reference is invalid");
+    }
+    seen.add(reference);
+  }
+}
+
+function validatePassConsistency(
+  result: Record<string, unknown>,
+  evidence: FormulaRecalculationEvidence | CrossFootEvidence | StructureEvidence,
+): void {
+  if (result.verdict !== "pass") return;
+  if (evidence.kind === "formula-recalculation" && evidence.cells.length === 0)
+    throw new Error("Spreadsheet PASS evidence is empty");
+  if (evidence.kind === "cross-foot") {
+    if (
+      evidence.comparisons.length === 0 ||
+      evidence.comparisons.some((item) => item.difference !== 0 || item.actual !== item.expected)
+    ) {
+      throw new Error("Spreadsheet PASS evidence is inconsistent");
+    }
+  }
+  if (
+    evidence.kind === "structure" &&
+    (evidence.sheets.length === 0 || evidence.sheets.some((sheet) => sheet.rows === 0 || sheet.columns === 0))
+  ) {
+    throw new Error("Spreadsheet PASS evidence is empty or inconsistent");
+  }
+}
+
 function validateResult(value: unknown): SpreadsheetWorkerResult {
   const result = record(value, "Spreadsheet worker result");
-  exactKeys(result, ["checkId", "generation", "verdict", "evidence"], "Spreadsheet worker result");
-  if (typeof result.checkId !== "string" || !checkIds.has(result.checkId)) {
+  exactKeys(result, ["checkId", "generation", "verdict", "reason", "evidence"], "Spreadsheet worker result");
+  if (typeof result.checkId !== "string" || !checkIds.has(result.checkId))
     throw new Error("Spreadsheet worker result contains an unknown check");
-  }
+  const checkId = result.checkId as SpreadsheetWorkerCheckId;
   positiveGeneration(result.generation);
-  if (result.verdict !== "pass" && result.verdict !== "block") throw new Error("Spreadsheet worker verdict is invalid");
-  if (result.checkId === "formula.recalculate") validateFormulaEvidence(result.evidence);
-  if (result.checkId === "summary.crossfoot") validateCrossFootEvidence(result.evidence);
-  if (result.checkId === "artifact.structure") validateStructureEvidence(result.evidence);
+  if (result.verdict !== "pass" && result.verdict !== "block" && result.verdict !== "error")
+    throw new Error("Spreadsheet worker verdict is invalid");
+  if (result.verdict === "pass") {
+    if (result.reason !== null) throw new Error("Spreadsheet worker PASS reason must be null");
+  } else validateReason(result.reason, checkId, result.verdict);
+  let evidence: FormulaRecalculationEvidence | CrossFootEvidence | StructureEvidence;
+  switch (checkId) {
+    case "formula.recalculate":
+      evidence = validateFormulaEvidence(result.evidence);
+      break;
+    case "summary.crossfoot":
+      evidence = validateCrossFootEvidence(result.evidence);
+      break;
+    case "artifact.structure":
+      evidence = validateStructureEvidence(result.evidence);
+      break;
+  }
+  validatePassConsistency(result, evidence);
   return result as unknown as SpreadsheetWorkerResult;
 }
 
@@ -278,13 +417,14 @@ function validateEnvelopeShape(value: unknown): void {
   const envelope = record(value, "Spreadsheet worker envelope");
   exactKeys(
     envelope,
-    ["contractVersion", "artifactDigest", "policyVersion", "engine", "results", "envelopeDigest"],
+    ["contractVersion", "artifactDigest", "policyVersion", "evaluator", "engine", "results", "envelopeDigest"],
     "Spreadsheet worker envelope",
   );
   if (envelope.contractVersion !== contractVersion) throw new Error("Spreadsheet worker contract version is invalid");
   nonEmptyString(envelope.artifactDigest, "Spreadsheet envelope artifact digest");
   nonEmptyString(envelope.policyVersion, "Spreadsheet envelope policy version");
   nonEmptyString(envelope.envelopeDigest, "Spreadsheet envelope digest");
+  validateEvaluatorRef(envelope.evaluator);
   const engine = record(envelope.engine, "Spreadsheet worker engine metadata");
   exactKeys(engine, ["name", "version"], "Spreadsheet worker engine metadata");
   nonEmptyString(engine.name, "Spreadsheet worker engine name");
@@ -307,6 +447,8 @@ export function verifySpreadsheetWorkerEnvelope(
   const envelope = cloned as SpreadsheetWorkerEnvelope;
   if (envelope.artifactDigest !== binding.artifactDigest) throw new Error("Spreadsheet envelope artifact is invalid");
   if (envelope.policyVersion !== binding.policyVersion) throw new Error("Spreadsheet envelope policy is invalid");
+  if (!sameEvaluator(envelope.evaluator, binding.evaluator))
+    throw new Error("Spreadsheet envelope evaluator is invalid");
   const expected = new Map(binding.checks.map((check) => [check.checkId, check.generation]));
   const seen = new Set<string>();
   for (const result of envelope.results) {
@@ -325,11 +467,14 @@ export function verifySpreadsheetWorkerEnvelope(
 export function createDeterministicSpreadsheetWorker(engine: SpreadsheetCalculationEngine) {
   nonEmptyString(engine.name, "Spreadsheet engine name");
   nonEmptyString(engine.version, "Spreadsheet engine version");
+  const engineEvaluator = validateEvaluatorRef(engine.evaluator);
   const engineName = engine.name;
   const engineVersion = engine.version;
   return Object.freeze({
     async run(input: SpreadsheetWorkerRunInput): Promise<SpreadsheetWorkerEnvelope> {
       const binding = createSpreadsheetWorkerBinding(input.binding);
+      if (!sameEvaluator(engineEvaluator, binding.evaluator))
+        throw new Error("Spreadsheet engine evaluator does not match the binding");
       const bytes = artifactBytes(input.artifactBytes);
       if (digestSpreadsheetArtifact(bytes) !== binding.artifactDigest) {
         throw new Error("Spreadsheet artifact does not match its binding");
@@ -350,6 +495,7 @@ export function createDeterministicSpreadsheetWorker(engine: SpreadsheetCalculat
         contractVersion,
         artifactDigest: binding.artifactDigest,
         policyVersion: binding.policyVersion,
+        evaluator: binding.evaluator,
         engine: Object.freeze({ name: engineName, version: engineVersion }),
         results: Object.freeze(results),
       } satisfies Omit<SpreadsheetWorkerEnvelope, "envelopeDigest">;

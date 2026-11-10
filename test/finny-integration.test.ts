@@ -4,6 +4,14 @@ import { createFinnyToolServiceFactory, finnySlackAuthority } from "../src/finny
 import { channelThreadRef, dmThreadRef } from "../src/slack/message-gating.ts";
 import type { FinnyJob, FinnyPlanPresentation } from "../src/finny/types.ts";
 
+const evaluator = {
+  id: "libreoffice-calc",
+  revision: "24.2.7-r1",
+  buildDigest: "a".repeat(64),
+  contractVersion: "finny.spreadsheet-worker.v2",
+  configurationDigest: "b".repeat(64),
+} as const;
+
 const plan: FinnyPlanPresentation = {
   title: "Close",
   phases: [{ name: "Prepare", owner: "Producer", dependencies: [] }],
@@ -37,6 +45,7 @@ function harness(
         timeoutMs: 1000,
         maxResponseBytes: 100_000,
         maxArtifactBytes: 100_000,
+        evaluator,
       },
       maxEvidenceBytes: 100_000,
     },
@@ -408,6 +417,7 @@ test("evidence authority derives immutable scoped file digests and verifies dete
   const artifactDigest = digestSpreadsheetArtifact(artifactBytes);
   const policy = {
     policyVersion: "finny-r5.1",
+    evaluator,
     requiredGenerations: {
       "source.completeness": 1,
       "financial.reconcile": 1,
@@ -422,6 +432,7 @@ test("evidence authority derives immutable scoped file digests and verifies dete
   const binding = {
     artifactDigest,
     policyVersion: policy.policyVersion,
+    evaluator,
     checks: [
       { checkId: "formula.recalculate" as const, generation: 2 },
       { checkId: "summary.crossfoot" as const, generation: 3 },
@@ -431,25 +442,35 @@ test("evidence authority derives immutable scoped file digests and verifies dete
   const envelope = await createDeterministicSpreadsheetWorker({
     name: "test-engine",
     version: "1",
+    evaluator,
     async evaluate() {
       return [
         {
           checkId: "formula.recalculate" as const,
           generation: 2,
           verdict: "pass" as const,
-          evidence: { kind: "formula-recalculation" as const, cells: [] },
+          reason: null,
+          evidence: {
+            kind: "formula-recalculation" as const,
+            cells: [{ sheet: "Model", cell: "A1", formula: "=1", calculatedValue: 1 }],
+          },
         },
         {
           checkId: "summary.crossfoot" as const,
           generation: 3,
           verdict: "block" as const,
-          evidence: { kind: "cross-foot" as const, comparisons: [] },
+          reason: { code: "CROSSFOOT_MISMATCH" as const, references: ["Summary!A1"] },
+          evidence: {
+            kind: "cross-foot" as const,
+            comparisons: [{ sheet: "Summary", reference: "A1", expected: 1, actual: 2, difference: 1 }],
+          },
         },
         {
           checkId: "artifact.structure" as const,
           generation: 4,
           verdict: "pass" as const,
-          evidence: { kind: "structure" as const, sheets: [] },
+          reason: null,
+          evidence: { kind: "structure" as const, sheets: [{ name: "Model", rows: 1, columns: 1, formulas: 1 }] },
         },
       ];
     },
@@ -499,7 +520,7 @@ test("evidence authority derives immutable scoped file digests and verifies dete
       };
     },
   };
-  const limits = { maxArtifactBytes: artifactBytes.length, maxEvidenceBytes: evidenceBytes.length };
+  const limits = { maxArtifactBytes: artifactBytes.length, maxEvidenceBytes: evidenceBytes.length, evaluator };
   const job = {
     id: "job-1",
     scopeId: "scope-1",
@@ -507,7 +528,7 @@ test("evidence authority derives immutable scoped file digests and verifies dete
     provisionalRevision: "artifact-file",
     policy,
   } as FinnyJob;
-  assert.equal(
+  assert.deepEqual(
     await resolveFinnyEvidenceFile(
       files as any,
       {
@@ -519,7 +540,14 @@ test("evidence authority derives immutable scoped file digests and verifies dete
       },
       limits,
     ),
-    envelope.envelopeDigest,
+    {
+      evidenceDigest: envelope.envelopeDigest,
+      deterministicAuthority: {
+        evaluator,
+        reasonSchemaVersion: "finny.spreadsheet-worker.v2",
+        reasonCode: "PASS",
+      },
+    },
   );
 
   await assert.rejects(
@@ -537,7 +565,7 @@ test("evidence authority derives immutable scoped file digests and verifies dete
     /deterministic worker provenance/i,
   );
 
-  assert.equal(
+  assert.deepEqual(
     await resolveFinnyEvidenceFile(
       files as any,
       {
@@ -549,7 +577,7 @@ test("evidence authority derives immutable scoped file digests and verifies dete
       },
       limits,
     ),
-    createHash("sha256").update("generic evidence").digest("hex"),
+    { evidenceDigest: createHash("sha256").update("generic evidence").digest("hex") },
   );
   await assert.rejects(
     resolveFinnyEvidenceFile(
@@ -673,7 +701,7 @@ test("bound Auditor runs all current deterministic checks from one trusted evide
   const artifactBytes = new TextEncoder().encode("workbook");
   const { digestSpreadsheetArtifact } = await import("../src/finny/deterministic-spreadsheet-worker.ts");
   const { initialFinnyPolicy } = await import("../src/finny/policy.ts");
-  const policy = initialFinnyPolicy();
+  const policy = initialFinnyPolicy(evaluator);
   const results = [
     {
       checkId: "formula.recalculate" as const,
@@ -685,12 +713,14 @@ test("bound Auditor runs all current deterministic checks from one trusted evide
       checkId: "summary.crossfoot" as const,
       generation: 1,
       verdict: "pass" as const,
+      reason: null,
       evidence: { kind: "cross-foot" as const, comparisons: [] },
     },
     {
       checkId: "artifact.structure" as const,
       generation: 1,
       verdict: "pass" as const,
+      reason: null,
       evidence: { kind: "structure" as const, sheets: [] },
     },
   ];
@@ -743,12 +773,13 @@ test("deterministic BLOCK uses Core findings and stops before stale remaining re
   const artifactBytes = new TextEncoder().encode("blocked workbook");
   const { digestSpreadsheetArtifact } = await import("../src/finny/deterministic-spreadsheet-worker.ts");
   const { initialFinnyPolicy } = await import("../src/finny/policy.ts");
-  const policy = initialFinnyPolicy();
+  const policy = initialFinnyPolicy(evaluator);
   const results = [
     {
       checkId: "formula.recalculate" as const,
       generation: 1,
       verdict: "block" as const,
+      reason: { code: "FORMULA_MISMATCH" as const, references: ["Summary!B9"] },
       evidence: { kind: "formula-recalculation" as const, cells: [] },
     },
     {
@@ -791,4 +822,51 @@ test("deterministic BLOCK uses Core findings and stops before stale remaining re
   assert.equal(blocked.findings.length, 1);
   assert.ok(blocked.findings[0].code.length <= 8);
   assert.ok(blocked.findings[0].message.length <= 16);
+});
+
+test("deterministic evaluator ERROR records neither PASS nor BLOCK", async () => {
+  const artifactBytes = new TextEncoder().encode("engine failure workbook");
+  const { digestSpreadsheetArtifact } = await import("../src/finny/deterministic-spreadsheet-worker.ts");
+  const { initialFinnyPolicy } = await import("../src/finny/policy.ts");
+  const policy = initialFinnyPolicy(evaluator);
+  const results = [
+    {
+      checkId: "formula.recalculate" as const,
+      generation: 1,
+      verdict: "error" as const,
+      reason: { code: "FORMULA_EVALUATION_ERROR" as const, references: ["Model!A1"] },
+      evidence: { kind: "formula-recalculation" as const, cells: [] },
+    },
+    {
+      checkId: "summary.crossfoot" as const,
+      generation: 1,
+      verdict: "pass" as const,
+      reason: null,
+      evidence: { kind: "cross-foot" as const, comparisons: [] },
+    },
+    {
+      checkId: "artifact.structure" as const,
+      generation: 1,
+      verdict: "pass" as const,
+      reason: null,
+      evidence: { kind: "structure" as const, sheets: [] },
+    },
+  ];
+  const { factory, calls } = harness(
+    { role: "auditor" },
+    {
+      artifactBytes,
+      job: {
+        artifactDigest: digestSpreadsheetArtifact(artifactBytes),
+        provisionalRevision: "artifact-file",
+        policy,
+      },
+      deterministicOutput: { evidenceFileId: "trusted-evidence", results },
+    },
+  );
+  const service = await factory.forTurn(parent);
+  assert.ok(service);
+  await assert.rejects(service.deterministicAudit({ idempotencyKey: "audit-error" }), /evaluator error.*formula/i);
+  assert.equal(calls.filter(([name]) => name === "auditPassed").length, 0);
+  assert.equal(calls.filter(([name]) => name === "auditBlocked").length, 0);
 });

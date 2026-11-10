@@ -291,7 +291,7 @@
         {
           "commandId": "finny-runtime-postgres",
           "file": "test/finny-runtime-coordinator.test.ts",
-          "name": "opens producer and Auditor concurrently and dispatches only the producer grant after approval"
+          "name": "admits producer and Auditor sequentially and dispatches only the producer grant after approval"
         },
         {
           "commandId": "finny-runtime-postgres",

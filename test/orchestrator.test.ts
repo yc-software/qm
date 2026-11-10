@@ -4263,7 +4263,8 @@ test("observe screening never waits on a hung classifier", async () => {
   const tool = await built.app.turn(dm("!screened-run printf observe-ok"));
   assert.equal(inbound.status, "ok");
   assert.equal(tool.reply, "observe-ok");
-  assert.ok(Date.now() - started < 5_000);
+  // Keep this below the 15s classifier deadline while allowing slower ARM CI hosts.
+  assert.ok(Date.now() - started < 8_000);
 });
 
 for (const [securityPosture, securityScreen] of [

@@ -1,3 +1,4 @@
+import { TEST_FINNY_EVALUATOR } from "./support/finny-fixture.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
@@ -44,7 +45,7 @@ test("pending loads the persisted plan presentation by opaque request ID", async
     id: jobId,
     scopeId: "personal:approver@example.com",
     plan,
-    policy: initialFinnyPolicy(),
+    policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy,
     originThreadRef: "slack:C-finance:100.200",
   });
@@ -83,7 +84,7 @@ test("approve requires the exact internal actor and origin then invokes coordina
     id: jobId,
     scopeId,
     plan,
-    policy: initialFinnyPolicy(),
+    policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy,
     originThreadRef: "slack:C-finance:100.200",
   });
@@ -121,7 +122,7 @@ test("a decided approval returns gone without a duplicate coordinator callback",
     id: jobId,
     scopeId,
     plan,
-    policy: initialFinnyPolicy(),
+    policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy,
     originThreadRef: "slack:C-finance:100.200",
   });
@@ -153,7 +154,7 @@ test("pending recovers a durable material clarification with persisted options",
     id: jobId,
     scopeId,
     plan,
-    policy: initialFinnyPolicy(),
+    policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy,
     originThreadRef: "slack:C-finance:100.200",
   });
@@ -205,7 +206,7 @@ test("clarification selection is bound to the exact actor, origin, and persisted
     id: jobId,
     scopeId,
     plan,
-    policy: initialFinnyPolicy(),
+    policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy,
     originThreadRef: "slack:C-finance:100.200",
   });
@@ -266,7 +267,7 @@ test("clarification creation durably enqueues its opaque request to the exact de
     id: jobId,
     scopeId,
     plan,
-    policy: initialFinnyPolicy(),
+    policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy,
     originThreadRef: "slack:C-finance:100.200",
   });
@@ -319,7 +320,7 @@ test("clarification rejects unauthorized actors, copied cards, and unpersisted b
     id: jobId,
     scopeId,
     plan,
-    policy: initialFinnyPolicy(),
+    policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy,
     originThreadRef: "slack:C-finance:100.200",
   });
@@ -388,7 +389,7 @@ test("plan decisions reject external, wrong, and copied-card actors without muta
     id: jobId,
     scopeId,
     plan,
-    policy: initialFinnyPolicy(),
+    policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy,
     originThreadRef: "slack:C-finance:100.200",
   });
@@ -429,7 +430,7 @@ test("clarification request idempotency keys cannot be reused for different mate
     id: jobId,
     scopeId,
     plan,
-    policy: initialFinnyPolicy(),
+    policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy,
     originThreadRef: "slack:C-finance:100.200",
   });
@@ -469,7 +470,7 @@ test("concurrent approval clicks settle once and invoke coordination once", asyn
     id: jobId,
     scopeId,
     plan,
-    policy: initialFinnyPolicy(),
+    policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy,
     originThreadRef: "slack:C-finance:100.200",
   });
@@ -506,7 +507,7 @@ test("approval store atomically rejects an origin context that does not match it
     id: jobId,
     scopeId,
     plan,
-    policy: initialFinnyPolicy(),
+    policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy,
     originThreadRef: "slack:C-finance:100.200",
   });
@@ -537,7 +538,7 @@ test("clarification delivery rejects a destination outside the persisted origin 
     id: jobId,
     scopeId,
     plan,
-    policy: initialFinnyPolicy(),
+    policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy,
     originThreadRef: "slack:C-finance:100.200",
   });
@@ -580,7 +581,7 @@ test("clarification persistence rejects option sets that Slack cannot render", a
     id: jobId,
     scopeId,
     plan,
-    policy: initialFinnyPolicy(),
+    policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy,
     originThreadRef: "slack:C-finance:100.200",
   });
@@ -621,7 +622,7 @@ test("a job cannot expose multiple pending approval requests", async () => {
     id: jobId,
     scopeId,
     plan,
-    policy: initialFinnyPolicy(),
+    policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy,
     originThreadRef: "slack:C-finance:100.200",
   });
@@ -657,7 +658,7 @@ test("generic clarification atomically withdraws ready approval until the persis
         ...plan,
         clarifications: [{ question: "Which accounting basis should be used?", answer: "Signed contracts" }],
       },
-      policy: initialFinnyPolicy(),
+      policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
       findingPolicy,
       originThreadRef: "slack:C-finance:100.200",
     });
@@ -737,7 +738,7 @@ test("approval readiness migration derives legacy readiness from every clarifica
       id: randomUUID(),
       scopeId: "personal:approver@example.com",
       plan,
-      policy: initialFinnyPolicy(),
+      policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
       findingPolicy,
       originThreadRef: `slack:C-finance:${randomUUID()}`,
     });
@@ -807,7 +808,7 @@ test("concurrent material clarification creation leaves one pending request and 
     id: randomUUID(),
     scopeId: "personal:approver@example.com",
     plan,
-    policy: initialFinnyPolicy(),
+    policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy,
     originThreadRef: "slack:C-finance:100.200",
   });
@@ -850,7 +851,7 @@ test("prior nonrecommended decision permanently blocks a later recommendation", 
     id: randomUUID(),
     scopeId: "personal:approver@example.com",
     plan,
-    policy: initialFinnyPolicy(),
+    policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
     findingPolicy,
     originThreadRef: "slack:C-finance:100.200",
   });
@@ -947,7 +948,7 @@ test("committed decisions survive post-commit dispatch failures for durable reco
       id: jobId,
       scopeId,
       plan,
-      policy: initialFinnyPolicy(),
+      policy: initialFinnyPolicy(TEST_FINNY_EVALUATOR),
       findingPolicy,
       originThreadRef,
     });
