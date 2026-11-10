@@ -243,11 +243,11 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
     return at == null ? d : { ...d, lastAccessAt: at };
   }
 
-  async function putNamed(d: Deployment): Promise<void> {
+  async function writeNamed(name: string | undefined, write: () => Promise<unknown>): Promise<void> {
     try {
-      await backingMap.put(d.id, d);
+      await write();
     } catch (e) {
-      if (isNameConflict(e)) throw new Error(`deployment name taken: ${d.name}`, { cause: e });
+      if (isNameConflict(e)) throw new Error(`deployment name taken: ${name}`, { cause: e });
       throw e;
     }
   }
@@ -306,7 +306,7 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
         endpoint: null,
         versions: [v],
       };
-      await putNamed(d);
+      await writeNamed(d.name, () => backingMap.put(d.id, d));
       await updateVersionRef(d.id, v);
       return d;
     },
@@ -316,31 +316,37 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
       const version = d.versions.length + 1;
       const parentCommit = currentVersionOf(d)?.commit;
       const v = await makeVersion(id, version, input, parentCommit);
-      d.versions.push(v);
-      d.currentVersion = version;
-      await backingMap.put(id, d);
+      await backingMap.update(id, (cur) => {
+        if (cur.versions.length + 1 !== version) throw new Error(`deployment ${id} gained a version concurrently`);
+        cur.versions.push(v);
+        cur.currentVersion = version;
+        return cur;
+      });
       await updateVersionRef(id, v);
       return v;
     },
     async addVersionFromCommit(id, commit) {
-      const d = await backingMap.get(id);
+      let v: DeploymentVersion | null = null;
+      const d = await backingMap.update(id, (d) => {
+        const current = currentVersionOf(d);
+        if (current?.commit === commit) return d;
+        const version = d.versions.length + 1;
+        v = {
+          version,
+          createdAt: Date.now(),
+          entrypoint: current?.entrypoint ?? "",
+          snapshotDir: current?.snapshotDir ?? "/unused",
+          ...(current?.homeDir ? { homeDir: current.homeDir } : {}),
+          ...(current?.env ? { env: current.env } : {}),
+          commit,
+          ...(current?.commit ? { parentCommit: current.commit } : {}),
+        };
+        d.versions.push(v);
+        d.currentVersion = version;
+        return d;
+      });
       if (!d) throw new Error(`unknown deployment: ${id}`);
-      const current = currentVersionOf(d);
-      if (current?.commit === commit) return null;
-      const version = d.versions.length + 1;
-      const v: DeploymentVersion = {
-        version,
-        createdAt: Date.now(),
-        entrypoint: current?.entrypoint ?? "",
-        snapshotDir: current?.snapshotDir ?? "/unused",
-        ...(current?.homeDir ? { homeDir: current.homeDir } : {}),
-        ...(current?.env ? { env: current.env } : {}),
-        commit,
-        ...(current?.commit ? { parentCommit: current.commit } : {}),
-      };
-      d.versions.push(v);
-      d.currentVersion = version;
-      await backingMap.put(id, d);
+      if (!v) return null;
       await updateVersionRef(id, v);
       return v;
     },
@@ -362,56 +368,34 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
       return ds.map((d) => withAccess(d, accessAt.get(d.id)));
     },
     async setCurrentVersion(id, version) {
-      const d = await backingMap.get(id);
-      if (!d) return;
-      const v = d.versions.find((x) => x.version === version);
-      if (!v) throw new Error(`no such version ${version}`);
-      d.currentVersion = version;
-      await backingMap.put(id, d);
+      await backingMap.update(id, (d) => {
+        if (!d.versions.some((x) => x.version === version)) throw new Error(`no such version ${version}`);
+        d.currentVersion = version;
+        return d;
+      });
     },
     async setVersionImage(id, version, image) {
-      const d = await backingMap.get(id);
-      if (!d) return;
-      const v = d.versions.find((x) => x.version === version);
-      if (!v) throw new Error(`no such version ${version}`);
-      v.image = image;
-      await backingMap.put(id, d);
+      await backingMap.update(id, (d) => {
+        const v = d.versions.find((x) => x.version === version);
+        if (!v) throw new Error(`no such version ${version}`);
+        v.image = image;
+        return d;
+      });
     },
     async setStatus(id, status) {
-      const d = await backingMap.get(id);
-      if (d) {
-        d.status = status;
-        await backingMap.put(id, d);
-      }
+      await backingMap.merge(id, { status });
     },
     async setEndpoint(id, endpoint) {
-      const d = await backingMap.get(id);
-      if (d) {
-        d.endpoint = endpoint;
-        await backingMap.put(id, d);
-      }
+      await backingMap.merge(id, { endpoint });
     },
     async setName(id, name) {
-      const d = await backingMap.get(id);
-      if (d) {
-        d.name = name;
-        await putNamed(d);
-      }
+      await writeNamed(name, () => backingMap.merge(id, { name }));
     },
     async setOwnerScope(id, ownerScopeId) {
-      const d = await backingMap.get(id);
-      if (d) {
-        d.ownerScopeId = ownerScopeId;
-        await backingMap.put(id, d);
-      }
+      await backingMap.merge(id, { ownerScopeId });
     },
     async setDisplayName(id, displayName) {
-      const d = await backingMap.get(id);
-      if (d) {
-        if (displayName) d.displayName = displayName;
-        else delete d.displayName;
-        await backingMap.put(id, d);
-      }
+      await backingMap.merge(id, { displayName: displayName || undefined });
     },
     async setAlwaysOn(id, alwaysOn) {
       await backingMap.merge(id, { alwaysOn } as Partial<Deployment>);
@@ -426,20 +410,18 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
       await backingMap.merge(id, { public: isPublic ? true : undefined });
     },
     async setDefaultAudience(id, snapshot) {
-      const d = await backingMap.get(id);
-      if (d) {
-        d.defaultAudience = snapshot;
-        await backingMap.put(id, d);
-      }
+      await backingMap.merge(id, { defaultAudience: snapshot });
     },
     async setAppliedVersion(id, version, placedCommit) {
-      const d = await backingMap.get(id);
-      if (!d) return;
-      const v = d.versions.find((x) => x.version === version);
-      if (!v) throw new Error(`no such version ${version}`);
-      d.appliedVersion = version;
-      await backingMap.put(id, d);
-      await updateAppliedRef(id, placedCommit ?? v.commit);
+      let commit: string | undefined;
+      const d = await backingMap.update(id, (d) => {
+        const v = d.versions.find((x) => x.version === version);
+        if (!v) throw new Error(`no such version ${version}`);
+        commit = v.commit;
+        d.appliedVersion = version;
+        return d;
+      });
+      if (d) await updateAppliedRef(id, placedCommit ?? commit);
     },
     async touch(id, at) {
       const prev = lastTouch.get(id);

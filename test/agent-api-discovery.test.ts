@@ -241,3 +241,18 @@ test("disabled swarms are absent from discovery and reject direct API calls", as
     await close();
   }
 });
+
+test("swarm routes are listed for internal people and hidden from callers the swarm API refuses", async () => {
+  const { base, built, close } = await start();
+  try {
+    const internal = await listApis(base, await capFor("U1"));
+    assert.ok(paths(internal.body).includes("/v1/swarm"));
+    await built.identity.deactivate("U2");
+    const refused = await listApis(base, await capFor("U2"));
+    assert.equal(refused.status, 200);
+    assert.ok(!paths(refused.body).includes("/v1/swarm"));
+    assert.ok(refused.body.guidance.every((line: string) => !line.includes("Swarm")));
+  } finally {
+    await close();
+  }
+});
