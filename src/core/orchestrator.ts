@@ -87,20 +87,13 @@ import { supportsProcessSessions, supportsScopeProfile } from "../sandbox/sandbo
 import { createBackgroundBroker } from "../connectors/background-exec-broker.ts";
 import { createMonitorBroker, readBackgroundOutputTail } from "../monitors/monitor-broker.ts";
 import { isPollSurface } from "../triggers/run-trigger.ts";
-import { envKey } from "../credentials/connector-token.ts";
 import {
-  connectorHandle,
-  connectorLine,
-  credentialHandle,
-  credentialLineText,
   askResolutionEvents,
   renderKeychainManifest,
   type KeychainAsk,
   type PublicServiceCredential,
-  type KeychainManifestInput,
 } from "../credentials/keychain.ts";
 import { configuredConnectorProviders } from "../credentials/connector-status.ts";
-import { CONNECTOR_HOSTS } from "../connectors/oauth.ts";
 import { SANDBOX_MODEL_PREFIX } from "../api/contract.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
 import { createSpendLimits, spendLimitNote, spendLimitRefusal } from "../ratelimit/spend-limits.ts";
@@ -112,7 +105,6 @@ import {
   BROWSER_MODEL_AUD,
   SANDBOX_MODEL_AUD,
   OAUTH_CONSENT_AUD,
-  CREDENTIAL_BROKER_AUD,
   EGRESS_PROXY_AUD,
   isValidCapabilityTimezone,
   type CapabilityClaims,
@@ -258,7 +250,13 @@ import {
 import { createTurnSandboxes } from "./orchestrator/sandboxes.ts";
 import { isolationBrief } from "../sessions/child-isolation.ts";
 import type { EgressPolicy } from "../types.ts";
-import { isOpenScopeMember } from "../resolution/sharing-access.ts";
+import {
+  createCredentialCatalog,
+  registerBrokeredTools,
+  registerConnectorCredentials,
+  registerKeychainCredentials,
+  registerServiceCredentials,
+} from "./orchestrator/credential-catalog.ts";
 import { createSurfaceToolDeps, type SpineState } from "../surfaces/surface-tools.ts";
 import { createAttachStaging } from "./orchestrator/attach-tool.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "../slack/message-revisions.ts";
@@ -1408,188 +1406,43 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const cleaned = payload.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, " ").trim();
         return cleaned.length > 16_000 ? `${cleaned.slice(0, 16_000)}…` : cleaned;
       };
-      const brokeredTools = external ? [] : (deps.brokeredTools ?? []);
-      const openSpeakerKeychain =
-        liveAuthorTurn && conversation.kind !== "dm" && sharingSources.includes(personalScope(actor.id));
-      const openAutomationKeychain =
-        !external &&
-        input.origin.kind === "automation" &&
-        input.origin.useOwnerKeychain === true &&
-        conversation.kind !== "dm" &&
-        !!deps.isCurrentSharedScopeMember &&
-        (await isOpenScopeMember({
-          actorId: actor.id,
-          scope: scopeId,
-          config: deps.config,
-          isCurrentSharedScopeMember: deps.isCurrentSharedScopeMember,
-        }));
-      const ownCredentialsAllowed =
-        scopeId === personalScope(actor.id) || openSpeakerKeychain || openAutomationKeychain;
-      const sharedScope =
-        !external &&
-        (scopeId !== personalScope(actor.id) ||
-          environmentId !== scopeId ||
-          ((await deps.environments?.attachmentsFor(environmentId)) ?? []).some(
-            (attachment) => attachment.scopeId !== scopeId,
-          ));
-      const connectorEnv: Record<string, string> = {};
-      const commandCredentials: CommandCredential[] = [];
-      const credentialDescriptions: NonNullable<KeychainManifestInput["execution"]> = [];
-      const credentialIdentities = new Map<string, string>();
-
-      const authorizeOwnerCredentials = async (): Promise<void> => {
-        if (!openSpeakerKeychain && !openAutomationKeychain) return;
-        if (
-          !(await isCurrentSharedScopeMember(actor.id, scopeId)) ||
-          (await deps.config.resolveSharingPostureDurable(personalScope(actor.id), scopeId)) !== "open"
-        ) {
-          throw new Error("Open speaker keychain access is no longer authorized");
-        }
-        audit({
-          action: "keychain.open_speaker_use",
-          resource: "scratch execution",
-        });
-      };
-      const resolvedCredential = (
-        materialized: import("../credentials/keychain.ts").MaterializedCred,
-        writeback: boolean,
-      ) => {
-        if (materialized.kind === "env") return { env: materialized.env };
-        return {
-          env: [],
-          files: {
-            files: materialized.files,
-            save: (files: import("../credentials/keychain.ts").CredentialFile[]) =>
-              deps.keychain!.updateFiles({ ...materialized, writeback }, files),
-            source: {
-              credentialId: materialized.credentialId,
-              ownerId: materialized.ownerId,
-              service: materialized.service,
-              ...(materialized.grantId ? { grantId: materialized.grantId } : {}),
-              writeback,
-            },
-          },
-        };
-      };
-      const placeCredential = (credential: CommandCredential): CommandCredential => ({
-        ...credential,
-        scratchOnly: sharedScope && credential.scratchOnly !== false,
+      const credentialCatalog = await createCredentialCatalog({
+        deps,
+        input,
+        actor,
+        conversation,
+        external,
+        strictReadOnly,
+        allInternal,
+        liveAuthorTurn,
+        scopeId,
+        environmentId,
+        sharingSources,
+        resolution,
+        isCurrentSharedScopeMember,
+        audit,
+        scopeKeychainGrants,
+        serviceAllowed,
+        aclGrantedServiceCredSlugs,
+        grantedServiceCredSlugs,
+        orgWideAudience,
       });
-      const addCredentialToCatalog = (
-        credential: CommandCredential,
-        description: string,
-        identity = credential.handle,
-        ownerId = actor.id,
-        credentialId?: string,
-      ): void => {
-        const existing = credentialIdentities.get(credential.handle);
-        if (existing !== undefined) {
-          if (existing !== identity) throw new Error(`credential handle collision: ${credential.handle}`);
-          return;
-        }
-        credentialIdentities.set(credential.handle, identity);
-        commandCredentials.push(placeCredential(credential));
-        credentialDescriptions.push({ handle: credential.handle, ownerId, description, credentialId });
-      };
-      const registerKeychainCredentials = async (addCredential: typeof addCredentialToCatalog): Promise<void> => {
-        if (external || strictReadOnly || !deps.keychain) return;
-        const keychain = deps.keychain;
-        for (const { grant, credential, grantScope } of await scopeKeychainGrants()) {
-          if (credential.kind === "broker" || isBackendCredential(credential)) continue;
-          addCredential(
-            {
-              handle: credentialHandle(credential),
-              resolve: async () => {
-                const prepared = await keychain.prepareMaterialize(grant.id, grantScope, actor.id);
-                return {
-                  ...resolvedCredential(prepared.materialized, samePerson(credential.ownerId, actor.id)),
-                  commit: prepared.commit,
-                  singleUse: prepared.singleUse,
-                };
-              },
-            },
-            credential.service,
-            credential.id,
-            credential.ownerId,
-            credential.id,
-          );
-        }
-        if (ownCredentialsAllowed) {
-          for (const credential of await keychain.listByOwner(actor.id)) {
-            if (credential.kind === "broker" || isBackendCredential(credential)) continue;
-            addCredential(
-              {
-                handle: credentialHandle(credential),
-                resolve: async () => {
-                  await authorizeOwnerCredentials();
-                  return resolvedCredential(
-                    await keychain.materializeOwnById(actor.id, credential.id, personalScope(actor.id)),
-                    true,
-                  );
-                },
-              },
-              credential.service,
-              credential.id,
-              credential.ownerId,
-              credential.id,
-            );
-          }
-        }
-      };
-      await tracePhase("turn.credentials", () => registerKeychainCredentials(addCredentialToCatalog));
-      const registerConnectorCredentials = async (addCredential: typeof addCredentialToCatalog): Promise<void> => {
-        if (!external && !strictReadOnly && deps.connectorTokens && ownCredentialsAllowed) {
-          const tokens = deps.connectorTokens;
-          const inventory = tokens.listConnectorsByOwners
-            ? ((await tokens.listConnectorsByOwners([actor.id])).get(actor.id) ?? [])
-            : undefined;
-          for (const host of CONNECTOR_HOSTS) {
-            for (const accountType of ["personal", undefined, "company"]) {
-              const status = inventory
-                ? inventory.find(
-                    (credential) =>
-                      credential.host === host && (credential.accountType ?? "default") === (accountType ?? "default"),
-                  )
-                : await tokens.connectorTokenStatus(host, actor.id, accountType);
-              const healthy = status?.connected && !status.needsReconnect;
-              const operatorFallback =
-                accountType === undefined &&
-                tokens.operatorFallbackHosts?.some((allowed) => host === allowed || host.endsWith(`.${allowed}`));
-              if (!healthy && !operatorFallback) continue;
-              addCredential(
-                {
-                  handle: connectorHandle(host, accountType),
-                  resolve: async () => {
-                    await authorizeOwnerCredentials();
-                    const token = await tokens.connectorAccessToken(host, actor.id, accountType);
-                    if (!token) throw new Error(`Connector is no longer available: ${host}`);
-                    return { env: [{ key: envKey(host), value: token }] };
-                  },
-                },
-                !healthy && operatorFallback
-                  ? `${host}, configured operator fallback${status?.refreshError ? ` (own connection's refresh failed: ${status.refreshError})` : ""}; availability checked on use; env \`${envKey(host)}\``
-                  : credentialLineText(connectorLine(host, accountType)),
-                healthy && status && "credentialId" in status ? status.credentialId : undefined,
-                actor.id,
-                healthy && status && "credentialId" in status ? status.credentialId : undefined,
-              );
-            }
-          }
-        }
-      };
-      await tracePhase("turn.credentials", () => registerConnectorCredentials(addCredentialToCatalog));
-      const authorizeServiceCredential = async (slug: string): Promise<void> => {
-        if (!serviceAllowed(slug)) throw new Error("Service is not approved for external Slack.");
-        if ((await aclGrantedServiceCredSlugs()).has(slug)) return;
-        const supplied =
-          orgWideAudience &&
-          ((await deps.serviceCreds?.listServiceCredentials(resolution.orgScopeId)) ?? []).some(
-            (record) => record.slug === slug && record.source === "deployment",
-          );
-        if (!supplied) {
-          throw new Error(`Service credential is no longer authorized: ${slug}`);
-        }
-      };
+      const {
+        connectorEnv,
+        commandCredentials,
+        credentialDescriptions,
+        ownCredentialsAllowed,
+        openSpeakerKeychain,
+        openAutomationKeychain,
+        placeCredential,
+        addCredentialToCatalog,
+      } = credentialCatalog;
+      await tracePhase("turn.credentials", () =>
+        registerKeychainCredentials(credentialCatalog, addCredentialToCatalog),
+      );
+      await tracePhase("turn.credentials", () =>
+        registerConnectorCredentials(credentialCatalog, addCredentialToCatalog),
+      );
       if (!strictReadOnly && allInternal && deps.serviceCreds) {
         const browseSteps = deps.config.getBrowseMaxSteps(toScopeId("org", orgId()));
         if (browseSteps && !("BROWSE_LAB_MAX_STEPS" in connectorEnv))
@@ -1776,150 +1629,19 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         );
       };
       const egressTokenForTurn = await egressTokenForPolicy(resolution.egress);
-      const registerServiceCredentials = async (
-        addCredential: typeof addCredentialToCatalog,
-        requestedHandles: readonly string[],
-        current?: { records: PublicServiceCredential[]; granted: Set<string> },
-      ): Promise<void> => {
-        if (strictReadOnly || !deps.serviceCreds) return;
-        const records =
-          current?.records ??
-          (await deps.serviceCreds.listServiceCredentials(resolution.orgScopeId)).filter((record) =>
-            serviceAllowed(record.slug),
-          );
-        const granted = current?.granted ?? (await grantedServiceCredSlugs(records));
-        const available = records.filter(
-          (record) => !isBackendCredential(record) && record.enabled && record.hasSecret && granted.has(record.slug),
-        );
-        const brokerSlugs = available
-          .filter((record) => record.delivery !== "env" && requestedHandles.includes(record.slug))
-          .map((record) => record.slug)
-          .sort();
-        let brokerToken: Promise<string> | undefined;
-        const resolveBrokerToken = (): Promise<string> =>
-          (brokerToken ??= (async () => {
-            const current = await deps.serviceCreds!.listServiceCredentials(resolution.orgScopeId);
-            for (const slug of brokerSlugs) {
-              await authorizeServiceCredential(slug);
-              const record = current.find((candidate) => candidate.slug === slug);
-              if (!record?.enabled || !record.hasSecret || record.delivery === "env") {
-                throw new Error(`Service credential is no longer available: ${slug}`);
-              }
-            }
-            return mintCapabilityToken(
-              {
-                ...scopeAttestation,
-                aud: CREDENTIAL_BROKER_AUD,
-                ...(external
-                  ? {
-                      runId: input.runId,
-                      runAttempt: input.attempt,
-                      runLeaseToken: input.runLeaseToken,
-                      threadRef: conversation.threadRef,
-                    }
-                  : {}),
-                credentials: brokerSlugs,
-                exp: sandboxTokenExpiry,
-              },
-              (deps.capabilitySecret ?? deps.signingSecret)!,
-              deps.capabilityTokenCompression,
-            );
-          })());
-        for (const credential of available) {
-          if (credential.delivery === "env") {
-            if ((!allInternal && !external) || !credential.envKey) continue;
-            addCredential(
-              {
-                handle: credential.slug,
-                resolve: async () => {
-                  await authorizeServiceCredential(credential.slug);
-                  const current = await deps.serviceCreds!.getServiceCredentialSecret(
-                    resolution.orgScopeId,
-                    credential.slug,
-                  );
-                  if (
-                    !current?.enabled ||
-                    isBackendCredential(current) ||
-                    !current.secret ||
-                    current.delivery !== "env" ||
-                    current.envKey !== credential.envKey
-                  ) {
-                    throw new Error(`Service credential is no longer available: ${credential.slug}`);
-                  }
-                  return { env: [{ key: credential.envKey!, value: current.secret }] };
-                },
-              },
-              `${credential.name}; env \`${credential.envKey}\``,
-              undefined,
-              "Organization",
-            );
-          } else if (deps.signingSecret && deps.apiBaseUrl) {
-            addCredential(
-              {
-                handle: credential.slug,
-                scratchOnly: false,
-                resolve: async () => ({ env: [{ key: "AGENT_CREDENTIAL_TOKEN", value: await resolveBrokerToken() }] }),
-              },
-              `${credential.name}; proxy ${credential.host}`,
-              undefined,
-              "Organization",
-            );
-          }
-        }
-      };
       await tracePhase("turn.credentials", () =>
-        registerServiceCredentials(addCredentialToCatalog, [], {
-          records: serviceCredRecords,
-          granted: grantedCredSlugs,
-        }),
+        registerServiceCredentials(
+          credentialCatalog,
+          { scopeAttestation, sandboxTokenExpiry },
+          addCredentialToCatalog,
+          [],
+          {
+            records: serviceCredRecords,
+            granted: grantedCredSlugs,
+          },
+        ),
       );
-      if (!strictReadOnly && actor.type === "internal") {
-        for (const tool of brokeredTools) {
-          const broker = deps.layerBrokerFor?.(tool);
-          if (!broker) continue;
-          addCredentialToCatalog(
-            {
-              handle: `broker_${tool.service}`,
-              resolve: async () => {
-                let aws;
-                try {
-                  aws = await broker.credsForActor(actor.id);
-                } catch {
-                  deps.credentialUsage?.record({
-                    slug: tool.service,
-                    host: "sts.amazonaws.com",
-                    status: "unavailable",
-                    scopeLabel: scopeId,
-                    principalId: actor.id,
-                  });
-                  throw new Error(`Could not vend credentials for ${tool.service}`);
-                }
-                deps.credentialUsage?.record({
-                  slug: tool.service,
-                  host: "sts.amazonaws.com",
-                  status: "vended",
-                  scopeLabel: scopeId,
-                  principalId: actor.id,
-                });
-                return {
-                  env: Object.entries({
-                    AWS_ACCESS_KEY_ID: aws.accessKeyId,
-                    AWS_SECRET_ACCESS_KEY: aws.secretAccessKey,
-                    AWS_SESSION_TOKEN: aws.sessionToken,
-                    AWS_REGION: aws.region,
-                    AWS_DEFAULT_REGION: aws.region,
-                  }).map(([key, value]) => ({
-                    key,
-                    value,
-                    secret: key !== "AWS_REGION" && key !== "AWS_DEFAULT_REGION",
-                  })),
-                };
-              },
-            },
-            `${tool.service}, role broker for ${actor.id}`,
-          );
-        }
-      }
+      registerBrokeredTools(credentialCatalog);
       let toolCalls = 0;
       const commandPolicy = resolution.commandPolicy;
       const layerCommandRules = [...(deps.deploymentLayer?.commandRules ?? [])];
@@ -2762,9 +2484,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               identities.set(credential.handle, identity);
               refreshed.set(credential.handle, placeCredential(credential));
             };
-            await registerKeychainCredentials(add);
-            await registerConnectorCredentials(add);
-            await registerServiceCredentials(add, handles);
+            await registerKeychainCredentials(credentialCatalog, add);
+            await registerConnectorCredentials(credentialCatalog, add);
+            await registerServiceCredentials(credentialCatalog, { scopeAttestation, sandboxTokenExpiry }, add, handles);
             for (const credential of commandCredentials.filter((candidate) => candidate.handle.startsWith("broker_")))
               add(credential, "");
             return [...refreshed.values()];
