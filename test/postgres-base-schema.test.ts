@@ -41,7 +41,7 @@ async function markTenancyApplied(url: string, admin: pg.Pool): Promise<void> {
 
 const present = async (admin: pg.Pool, sql: string) => (await admin.query(`SELECT ${sql} AS v`)).rows[0].v as unknown;
 
-test("a fresh database gets the base schema without items.target_seq", { skip }, async () => {
+test("a fresh database gets the base schema without items.target_seq or session_leases", { skip }, async () => {
   await withDatabase(async (url, admin) => {
     await migrate(url);
     assert.equal(await present(admin, "to_regclass('items') IS NOT NULL"), true);
@@ -50,6 +50,7 @@ test("a fresh database gets the base schema without items.target_seq", { skip },
       "SELECT 1 FROM information_schema.columns WHERE table_name = 'items' AND column_name = 'target_seq'",
     );
     assert.equal(column.rowCount, 0);
+    assert.equal(await present(admin, "to_regclass('session_leases') IS NULL"), true);
     assert.equal(
       await present(admin, "pg_get_indexdef('session_llm_requests_session_spend_recovery'::regclass)"),
       "CREATE INDEX session_llm_requests_session_spend_recovery ON public.session_llm_requests USING btree (session_id, created_at) WHERE (usage_json IS NOT NULL)",
@@ -80,6 +81,9 @@ test("a fully migrated database skips the base schema and drops only the retired
       "CREATE TRIGGER items_delete_through_session BEFORE DELETE ON items FOR EACH ROW EXECUTE FUNCTION forbid_direct_delete()",
     );
     await admin.query("CREATE TABLE tool_calls(run_id TEXT)");
+    await admin.query(
+      "CREATE TABLE session_leases(session_id TEXT PRIMARY KEY, token TEXT NOT NULL, expires_at BIGINT NOT NULL)",
+    );
     await admin.query("CREATE TABLE session_llm_requests(session_id TEXT, created_at BIGINT, usage_json TEXT)");
     await admin.query(`CREATE INDEX session_llm_requests_session_spend_recovery
       ON session_llm_requests(session_id, created_at) WHERE usage_json IS NOT NULL`);
@@ -118,6 +122,7 @@ test("a fully migrated database skips the base schema and drops only the retired
     );
     assert.equal(await present(admin, "to_regclass('blobs') IS NULL"), true);
     assert.equal(await present(admin, "to_regclass('tool_calls') IS NULL"), true);
+    assert.equal(await present(admin, "to_regclass('session_leases') IS NULL"), true);
     assert.equal(await present(admin, "to_regprocedure('safe_json(text)') IS NULL"), true);
     assert.equal(
       await present(
