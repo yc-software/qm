@@ -120,6 +120,10 @@ test(
         await db.query(gunzipSync(await readFile(FIXTURE)).toString("utf8"));
         await db.query("SELECT pg_catalog.set_config('search_path', '\"$user\", public', false)");
         const before = await rowCounts(db);
+        const closed = await db.query<{ n: number }>(
+          "SELECT count(*)::int AS n FROM participants WHERE valid_to IS NOT NULL OR valid_to_seq IS NOT NULL",
+        );
+        before.set("public.participants", before.get("public.participants")! - closed.rows[0]!.n);
         await migrate(url, dataDir);
         await migrate(url, dataDir);
         const upgraded = (await db.query<{ entry: string }>(SCHEMA_SNAPSHOT)).rows.map(({ entry }) => entry);
