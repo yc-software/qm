@@ -636,6 +636,10 @@ export function hasRecordedRunReply(items: Item[], runId: string): boolean {
   return false;
 }
 
+export function hasRecordedStop(items: Item[]): boolean {
+  return items.slice(items.findLastIndex(isUserMessage) + 1).some((item) => item.kind === "Stop");
+}
+
 export function resumeAnchor(): AgentMessage {
   return { role: "user", content: "", resumeAnchor: true } as unknown as AgentMessage;
 }

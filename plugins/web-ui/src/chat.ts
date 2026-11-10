@@ -76,6 +76,7 @@ import {
 import {
   continuableMessages,
   hasRecordedRunReply,
+  hasRecordedStop,
   messagesWithStreaming,
   userItemMessage,
   appendConsumedSteers,
@@ -1063,7 +1064,6 @@ export function createChatSurface(
       agent.state.messages === originalMessages &&
       agent.state.messages.at(-1) === last;
     if (last?.stopReason === "error" && !last.interruptedRunId) return drawActiveChat(agent);
-    if (last?.stopReason === "aborted") return drawActiveChat(agent);
     try {
       if (last?.stopReason === "error" && last.interruptedRunId) {
         const run = await api<RunPoll>(`/api/runs/${encodeURIComponent(last.interruptedRunId)}`, {
@@ -1082,6 +1082,7 @@ export function createChatSurface(
       if (!isCurrent()) return;
       if (last?.stopReason === "error" && !hasRecordedRunReply(page.items, last.interruptedRunId!))
         return drawActiveChat(agent);
+      if (last?.stopReason === "aborted" && !hasRecordedStop(page.items)) return drawActiveChat(agent);
       const messages = pageMessages(page);
       await syncPendingApprovals(agent, messages);
       if (!isCurrent()) return;
