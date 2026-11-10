@@ -29,6 +29,17 @@ import type { SkillResolution } from "../../skills/skill-store.ts";
 import { hashId } from "../../util/crypto.ts";
 import { filterConnectorSkills, loadActiveBundles } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
+import type { Session } from "../../types.ts";
+import { SECURITY_TOOL_RESULT_QUARANTINE } from "../../audit/audit-log.ts";
+import {
+  quarantineReleaseKey,
+  toolLabelOf,
+  type ToolResultScreen,
+  type ToolResultScreenInput,
+} from "../../security/security-posture.ts";
+import { quarantineFullText, quarantinePreview, type createApprovalLedger } from "./approvals.ts";
+
+type ApprovalLedger = Awaited<ReturnType<typeof createApprovalLedger>>;
 
 const DEFAULT_SECURITY_SCREEN_TIMEOUT_MS = 15_000;
 const MAX_SCREEN_REQUEST_CHARS = 2_000;
@@ -208,7 +219,7 @@ export async function screenChunks(
   return verdicts[0] ?? { decision: "auto" };
 }
 
-type ClassifyAs = (
+export type ClassifyAs = (
   context: Omit<SecurityScreenContext, "mode" | "thread" | "runId" | "origin">,
   record?: (rec: TurnLlmRequestRecord) => Promise<void>,
 ) => (chunk: string) => Promise<SecurityScreenVerdict | undefined>;
@@ -492,4 +503,130 @@ export function createSkillScreen(turn: SkillScreenTurn) {
     return allowed;
   };
   return visibleSkillsForTurn;
+}
+
+export interface ToolResultScreenTurn {
+  input: OrchestratorInput;
+  session: Session;
+  classifyAs: ClassifyAs;
+  recordScreenRequest: (rec: TurnLlmRequestRecord) => Promise<void>;
+  enforceScreen: boolean;
+  authorizeCommand: ApprovalLedger["authorizeCommand"];
+  audit: InboundScreenTurn["audit"];
+  quarantineReleaseApprovals: ApprovalLedger["quarantineReleaseApprovals"];
+}
+
+export function createToolResultScreen(turn: ToolResultScreenTurn) {
+  const {
+    input,
+    session,
+    classifyAs,
+    recordScreenRequest,
+    enforceScreen,
+    authorizeCommand,
+    audit,
+    quarantineReleaseApprovals,
+  } = turn;
+  return async ({
+    tool,
+    result,
+    unscreenable,
+    provenance,
+    sourceScopeId,
+    source,
+  }: ToolResultScreenInput): Promise<ToolResultScreen> => {
+    if (provenance !== "external") return { outcome: "allow" };
+    const toolLabel = toolLabelOf(tool);
+    const sourceLabel = source ? `:${source.replace(/[^A-Za-z0-9_-]/g, "_")}` : "";
+    const screenChunk = classifyAs(
+      { sessionId: session.id, hook: "tool_response", request: input.text, surface: toolLabel },
+      recordScreenRequest,
+    );
+    if (!enforceScreen) {
+      if (!unscreenable)
+        await Promise.all(securityScreenChunks(`tool_result:${toolLabel}${sourceLabel}`, result).map(screenChunk));
+      return { outcome: "allow" };
+    }
+    if (authorizeCommand(quarantineReleaseKey(tool), quarantineReleaseKey(tool))) {
+      audit({
+        action: "security_posture.tool_result_released",
+        resource: input.surface ?? "unknown",
+        status: "allowed",
+        detail: JSON.stringify({ reason: "human_release", tool: toolLabel }),
+      });
+      return { outcome: "unscreened" };
+    }
+    const verdict = unscreenable
+      ? undefined
+      : await screenChunks(securityScreenChunks(`tool_result:${toolLabel}${sourceLabel}`, result), screenChunk, {
+          batch: 4,
+        });
+    if (cleanVerdict(verdict)) return { outcome: "allow" };
+    if (verdict?.decision === "strict") {
+      const releaseKey = `security-screen-release:${toolLabel}`;
+      if (authorizeCommand(releaseKey)) {
+        audit({
+          action: "security_posture.tool_result_release",
+          resource: input.surface ?? "unknown",
+          status: "allowed",
+          detail: JSON.stringify({ reason: "human_release", tool: toolLabel }),
+        });
+        return { outcome: "allow" };
+      }
+      audit({
+        action: SECURITY_TOOL_RESULT_QUARANTINE,
+        resource: input.surface ?? "unknown",
+        status: "refused",
+        detail: JSON.stringify({
+          reason: "screen_verdict",
+          tool: toolLabel,
+          ...(source ? { source } : {}),
+          ...(verdict.reason ? { verdict: verdict.reason } : {}),
+        }),
+      });
+      if (
+        !quarantineReleaseApprovals.some(
+          (qa) =>
+            qa.approvalKey === releaseKey &&
+            qa.screenedOutput?.text === result &&
+            qa.screenedOutput?.sourceScopeId === sourceScopeId,
+        )
+      ) {
+        quarantineReleaseApprovals.push({
+          command: `release quarantined ${toolLabel} output`,
+          reason: verdict.reason
+            ? `security screen flagged this ${toolLabel} output: ${verdict.reason}`
+            : `security screen flagged this ${toolLabel} output`,
+          purpose: `Release the quarantined ${toolLabel} output into the conversation (once), or keep it blocked.`,
+          summary: `Blocked content preview: ${quarantinePreview(result)}`,
+          summaryDetail: quarantineFullText(result),
+          ...(!toolLabel.startsWith("session_message_")
+            ? {
+                screenedOutput: {
+                  tool: toolLabel,
+                  text: result,
+                  ...(sourceScopeId ? { sourceScopeId } : {}),
+                },
+              }
+            : {}),
+          approvalKey: releaseKey,
+          grantModes: { session: false, always: false },
+        });
+      }
+      return {
+        outcome: "quarantine",
+        approvalRequested: true,
+        ...(verdict.reason ? { reason: verdict.reason } : {}),
+      };
+    }
+    audit({
+      action: "security_posture.tool_result_failed_open",
+      resource: input.surface ?? "unknown",
+      status: "allowed",
+      detail: JSON.stringify({
+        reason: unscreenable ? "unscreenable_payload" : UNSCREENED_REASON,
+      }),
+    });
+    return { outcome: "unscreened" };
+  };
 }
