@@ -8,6 +8,8 @@ import { planIngest, importPack, collectSharedBundle, type ImportResult } from "
 import { computeBundleHash } from "../skills/skill-bundle-store.ts";
 import { persistedSkillRecordPaths, SKILL_MATERIALIZATION_LOCK } from "../skills/skill-collision.ts";
 import { triggerBlocksSharedSkill } from "./artifact-share.ts";
+import { personOrOwningBot } from "../auth/capability-token.ts";
+import { samePerson } from "../directory/person.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
 import { parseRef } from "../acl/resource-ref.ts";
@@ -287,19 +289,21 @@ export function createSkillMethods(
       });
       return live;
     },
-    async restoreOwnedSkill(id, principalId) {
+    async restoreOwnedSkill(id, caller) {
       const skill = await deps.skills.get(id);
-      if (!skill || skill.status !== "archived" || !(await canManageSkill(skill, principalId))) return null;
+      if (!skill || skill.status !== "archived") return null;
+      if (!(await personOrOwningBot(caller, async () => samePerson(skill.createdBy, caller.actorId)))) return null;
+      if (!(await canManageSkill(skill, caller.actorId))) return null;
       return deps.skills.withNameLock(skill.scopeId, skill.manifest.name, async () => {
         const current = await deps.skills.get(id);
         if (!current || current.status !== "archived") return null;
         if (foreignSkillCollision(await deps.skills.list(), current.scopeId, current.manifest.name, (s) => s.id === id))
           return "exists" as const;
-        await deps.skills.review(id, principalId, current.manifest.requiredCapabilities);
+        await deps.skills.review(id, caller.actorId, current.manifest.requiredCapabilities);
         const restored = await deps.skills.publish(id);
         deps.auditLog.record({
           at: Date.now(),
-          principalId,
+          principalId: caller.actorId,
           action: "skill_restore",
           resource: id,
           scopeLabel: current.scopeId,

@@ -969,7 +969,7 @@ async function restoreSkill(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 401, { error: "capability_required" });
   }
   if (!principalId) return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId required" });
-  const restored = await ctx.app.restoreOwnedSkill(ctx.params.id!, principalId);
+  const restored = await ctx.app.restoreOwnedSkill(ctx.params.id!, ctx.capability ?? { actorId: principalId });
   if (restored === "exists")
     return sendJson(ctx.res, 409, {
       error: "exists",

@@ -40,6 +40,13 @@ interface BlobGrant {
   id?: string;
 }
 
+export async function personOrOwningBot(
+  caller: Pick<CapabilityClaims, "botActor">,
+  owns: () => Promise<boolean>,
+): Promise<boolean> {
+  return caller.botActor !== true || owns();
+}
+
 type BlobTransferClaims = CapabilityClaims & { aud: typeof BLOB_TRANSFER_AUD; blob: BlobGrant };
 
 export interface CapabilityClaims {

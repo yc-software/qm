@@ -5,7 +5,7 @@ import type { Cron, CronFireLogEntry, CronSchedule, CronScript, Webhook } from "
 import { cronScriptFrom, type CronScriptTrial } from "../cron/script.ts";
 import type { CreateCronInput, CronPatch } from "../cron/cron-store.ts";
 import type { CreateWebhookInput } from "../webhooks/webhook-store.ts";
-import type { CapabilityClaims } from "../auth/capability-token.ts";
+import { personOrOwningBot, type CapabilityClaims } from "../auth/capability-token.ts";
 import {
   cronFireReadsNotes,
   describeRunNowRefusal,
@@ -23,7 +23,6 @@ import { AdminError } from "../admin/admin-service.ts";
 import type { AdminService } from "../admin/admin-service.ts";
 import {
   livePersonCapability,
-  personOrOwningBot,
   resolveShareTarget,
   SHARED_SKILL_TRIGGER_REFUSAL,
   type ShareArtifactRequest,

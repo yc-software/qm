@@ -10,10 +10,9 @@ import { tenantAppHandle } from "../tenants/settings.ts";
 import type { App, AppDeps, ViewerDeployment } from "./app-types.ts";
 import { deploymentView } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
-import type { CapabilityClaims } from "../auth/capability-token.ts";
+import { personOrOwningBot, type CapabilityClaims } from "../auth/capability-token.ts";
 import type { Deployment } from "../deploy/deploy-store.ts";
 import { samePersonInDirectory } from "../directory/person.ts";
-import { personOrOwningBot } from "./artifact-share.ts";
 
 export function createDeploymentMethods(
   deps: AppDeps,
@@ -160,13 +159,8 @@ export function createDeploymentMethods(
     rollbackDeployment(id, version, actor) {
       return deps.deploy.rollbackDeployment(id, version, actor ? { actor } : undefined);
     },
-    async canManageDeployment(idOrName, caller, actingScopeId) {
-      const createdIt = async () => {
-        const d = await deps.deploy.getDeployment(idOrName);
-        return !!d && samePersonInDirectory(deps.directory, d.createdBy, caller.actorId);
-      };
-      if (!(await personOrOwningBot(caller, createdIt))) return false;
-      return deps.deploy.canManageDeployment(idOrName, caller.actorId, actingScopeId);
+    canManageDeployment(idOrName, caller, actingScopeId) {
+      return deps.deploy.canManageDeployment(idOrName, caller, actingScopeId);
     },
     archiveDeployment(id) {
       return deps.deploy.archiveDeployment(id);

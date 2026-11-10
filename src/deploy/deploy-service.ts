@@ -12,6 +12,7 @@ import type { AclStore } from "../acl/acl-store.ts";
 import { deployRef, encodeRef } from "../acl/resource-ref.ts";
 import { normalizeRelPath } from "./deploy-fs.ts";
 import { samePerson } from "../directory/person.ts";
+import { personOrOwningBot, type CapabilityClaims } from "../auth/capability-token.ts";
 import { CONNECTOR_HOSTS } from "../connectors/oauth.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import {
@@ -64,6 +65,7 @@ type PublishedDeployment = Deployment & { liveEdit?: LiveEditSaved };
 export interface DeployOrUpdateInput {
   ownerScopeId: ScopeId;
   createdBy: string;
+  botActor?: boolean;
   name?: string;
   entrypoint?: string;
   files?: DeployFile[];
@@ -109,7 +111,11 @@ export interface DeployService {
   reapIdleDeployments(ttlMs: number, now?: number): Promise<number>;
   deployOrUpdate(input: DeployOrUpdateInput): Promise<PublishedDeployment>;
   deploymentGrantees(idOrName: string): Promise<DeploymentGrantee[]>;
-  canManageDeployment(idOrName: string, callerId: string, actingScopeId?: ScopeId): Promise<boolean>;
+  canManageDeployment(
+    idOrName: string,
+    caller: Pick<CapabilityClaims, "actorId" | "botActor">,
+    actingScopeId?: ScopeId,
+  ): Promise<boolean>;
   shareDeployment(
     idOrName: string,
     grantee: ScopeId,
@@ -363,14 +369,14 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
 
   async function canManage(
     d: Deployment,
-    _ownerScopeId: ScopeId,
-    callerId: string,
+    caller: Pick<CapabilityClaims, "actorId" | "botActor">,
     actingScopeId?: ScopeId,
   ): Promise<boolean> {
-    if (await managesHome(d, callerId, actingScopeId)) return true;
+    if (!(await personOrOwningBot(caller, async () => samePerson(d.createdBy, caller.actorId)))) return false;
+    if (await managesHome(d, caller.actorId, actingScopeId)) return true;
     for (const grant of await grantsOn(d)) {
       if (grant.permission !== "write") continue;
-      if (await canWriteScope(callerId, grant.granteeScopeId, actingScopeId)) return true;
+      if (await canWriteScope(caller.actorId, grant.granteeScopeId, actingScopeId)) return true;
     }
     return false;
   }
@@ -781,6 +787,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
 
     async deployOrUpdate(input) {
       const { ownerScopeId, createdBy } = input;
+      const caller = { actorId: createdBy, botActor: input.botActor };
       if (input.embedAncestors !== undefined && !parseEmbedAncestors(input.embedAncestors))
         throw new Error(`embedAncestors must be an ${EMBED_ANCESTORS_HINT}`);
 
@@ -789,7 +796,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         validateName(input.name);
         const existing = await deps.deployStore.getByName(input.renameFrom);
         if (!existing) throw new Error(`no deployment named: ${input.renameFrom}`);
-        if (!(await canManage(existing, ownerScopeId, createdBy, input.createdInScope)))
+        if (!(await canManage(existing, caller, input.createdInScope)))
           throw new Error(`not authorized to manage deployment: ${input.renameFrom}`);
         const clash = await deps.deployStore.getByName(input.name);
         if (clash && clash.id !== existing.id) throw new Error(`deployment name taken: ${input.name}`);
@@ -823,7 +830,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         if (input.name === undefined) throw new Error("rollback requires the deployment name");
         const existing = await deps.deployStore.getByName(input.name);
         if (!existing) throw new Error(`no deployment named: ${input.name}`);
-        if (!(await canManage(existing, ownerScopeId, createdBy, input.createdInScope)))
+        if (!(await canManage(existing, caller, input.createdInScope)))
           throw new Error(`not authorized to manage deployment: ${input.name}`);
         await this.rollbackDeployment(existing.id, input.rollbackTo, {
           actor: createdBy,
@@ -837,10 +844,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       const files = input.files ?? [];
       const existing = input.name !== undefined ? await deps.deployStore.getByName(input.name) : null;
       if (existing) {
-        if (
-          existing.ownerScopeId !== ownerScopeId &&
-          !(await canManage(existing, ownerScopeId, createdBy, input.createdInScope))
-        ) {
+        if (existing.ownerScopeId !== ownerScopeId && !(await canManage(existing, caller, input.createdInScope))) {
           throw new Error(`deployment name taken: ${input.name}`);
         }
         const entrypoint = requiredEntrypoint(input.entrypoint, existing);
@@ -873,10 +877,10 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       return (await deps.deployStore.get(d.id))!;
     },
 
-    async canManageDeployment(idOrName, callerId, actingScopeId) {
+    async canManageDeployment(idOrName, caller, actingScopeId) {
       const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
       if (!d) return false;
-      return canManage(d, scopeId("personal", callerId), callerId, actingScopeId);
+      return canManage(d, caller, actingScopeId);
     },
 
     async deploymentGrantees(idOrName) {

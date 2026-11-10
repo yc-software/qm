@@ -533,13 +533,14 @@ async function startSecure() {
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  const cap = (actorId: string, scope: ScopeId = scopeId("personal", actorId), liveActor = true) =>
+  const cap = (actorId: string, scope: ScopeId = scopeId("personal", actorId), liveActor = true, botActor = false) =>
     mintCapabilityToken(
       {
         actorId,
         scopeId: scope,
         aud: CONTROL_PLANE_AUD,
         ...(liveActor ? { liveActor: true } : {}),
+        ...(botActor ? { botActor: true } : {}),
         exp: Date.now() + CAPABILITY_TTL_MS,
       },
       SECRET,
@@ -1224,6 +1225,36 @@ test("skill detail and restore capability calls hide other principals' skills an
       401,
     );
     assert.equal((await srv.skills.get(skill.id))?.status, "archived");
+  } finally {
+    await srv.close();
+  }
+});
+
+test("a Slack bot's turn can't restore a person's archived skill in a channel it belongs to", async () => {
+  const srv = await startSecure();
+  try {
+    await srv.directory.replaceChannels(
+      [{ channelId: "C9", name: "eng", isPrivate: true }],
+      ["U1", "U2", "release-bot"].map((principalId) => ({ channelId: "C9", principalId })),
+    );
+    const skill = await srv.skills.create({
+      scopeId: scopeId("channel", "C9"),
+      manifest: { name: "retired", description: "theirs", requiredCapabilities: [], body: "# retired" },
+      createdBy: "U1",
+    });
+    await srv.skills.review(skill.id, "reviewer-1", []);
+    await srv.skills.publish(skill.id);
+    await srv.skills.archive(skill.id);
+    const restore = async (token: string) =>
+      (
+        await fetch(`${srv.base}/v1/skills/${skill.id}/restore`, {
+          method: "POST",
+          headers: { "x-agent-capability": token },
+        })
+      ).status;
+    assert.equal(await restore(await srv.cap("release-bot", scopeId("channel", "C9"), true, true)), 404);
+    assert.equal((await srv.skills.get(skill.id))?.status, "archived");
+    assert.equal(await restore(await srv.cap("U2", scopeId("channel", "C9"))), 200);
   } finally {
     await srv.close();
   }
