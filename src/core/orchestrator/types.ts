@@ -56,6 +56,7 @@ import type { McpToolService } from "../../mcp/mcp-tool-service.ts";
 import type { MemoryStrategy } from "../../memory/strategy.ts";
 import type { MemoryPolicy } from "../../memory/policy.ts";
 import type { DurableMap } from "../../persistence/durable-map.ts";
+import type { PromptSnapshot } from "./prompt-snapshot.ts";
 import type { BlobTransferStore } from "../../persistence/blob-transfer.ts";
 import type { SkillStore } from "../../skills/skill-store.ts";
 import type { OAuthClientResolver } from "../../connectors/oauth.ts";
@@ -153,6 +154,7 @@ export interface OrchestratorDeps {
   skillsReady?: () => Promise<void>;
   approvals: DurableMap<PendingApprovalRecord>;
   approvalGrants: DurableMap<CommandApprovalGrant>;
+  promptSnapshots: DurableMap<PromptSnapshot>;
   errors: ErrorLog;
   signals: RunSignalStore;
   turnStream: TurnStream;
