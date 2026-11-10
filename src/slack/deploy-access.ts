@@ -17,7 +17,8 @@ export function parseDeployAccess(value: string): Request {
   const r = JSON.parse(value) as Request;
   if (
     !r ||
-    Object.keys(r).length !== 2 ||
+    Object.keys(r).length !== (r && "requestId" in r ? 3 : 2) ||
+    (r.requestId !== undefined && (typeof r.requestId !== "string" || !uuidSchema.safeParse(r.requestId).success)) ||
     typeof r.deploymentId !== "string" ||
     !uuidSchema.safeParse(r.deploymentId).success ||
     typeof r.requesterId !== "string" ||
@@ -58,7 +59,7 @@ export async function decideDeploymentAccess(
   assertion: ActorAssertion,
   approve: boolean,
 ): Promise<string> {
-  const { deploymentId, requesterId } = parseDeployAccess(value);
+  const { deploymentId, requesterId, requestId } = parseDeployAccess(value);
   await identity.refresh(true);
   const actor = identity.resolve(assertion);
   if (!identity.isInternal(actor)) throw new Error("Only the app's owner can decide this request.");
@@ -74,18 +75,22 @@ export async function decideDeploymentAccess(
   if (!d) throw new Error("That app no longer exists.");
   const label = d.displayName ?? d.name ?? d.id;
   const grantee = scopeId("personal", requesterId);
-  const existing = (await app.deploymentGrantees(deploymentId)).find((g) => g.scope === grantee);
   if (approve) {
+    const existing = (await app.deploymentGrantees(deploymentId)).find(
+      (g) => g.scope === grantee && g.permission === "write",
+    );
     await app.grant({
       ownerScopeId: home.ownerScopeId,
       ref: home.grantRef,
       granteeScopeId: grantee,
-      permission: existing?.permission === "write" ? "write" : "read",
+      permission: existing?.permission ?? "read",
       grantedBy: actor.id,
+      ...(requestId ? { accessRequest: requestId } : {}),
     });
     return `Approved. ${requesterId} can now open "${label}".`;
   }
-  if (existing?.permission === "read") await app.revokeGrant(home.ownerScopeId, home.grantRef, grantee, actor.id);
+  if (requestId)
+    await app.revokeGrant(home.ownerScopeId, home.grantRef, grantee, actor.id, { onlyAccessRequest: requestId });
   await app.enqueueDelivery({
     destination: principalDestination(requesterId, actor.id),
     text: `${actor.id} declined your request for access to "${label}".`,

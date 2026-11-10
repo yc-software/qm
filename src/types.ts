@@ -199,6 +199,7 @@ export interface Grant {
   granteeScopeId: ScopeId;
   permission: Permission;
   grantedBy: string;
+  accessRequest?: string;
 }
 
 export interface GrantedHandle {
@@ -218,7 +219,7 @@ export interface Destination {
   webhook?: DeliveryWebhook;
   account?: SurfaceAccount;
   keychainAskId?: string;
-  deploymentAccess?: { deploymentId: string; requesterId: string };
+  deploymentAccess?: { deploymentId: string; requesterId: string; requestId?: string };
   commandApprovalId?: string;
   type: string;
   target: string;

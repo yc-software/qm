@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { externalAppSharingAllowed } from "../../feature-flags.ts";
 import { createPersonNames } from "../../identity/person-names.ts";
 import { deploymentAppTenant, deploymentGitTenant } from "./deployment-paths.ts";
@@ -1030,7 +1031,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
       await app.enqueueDelivery({
         destination: {
           ...principalDestination(ownerId, viewer),
-          deploymentAccess: { deploymentId: d.id, requesterId: viewer },
+          deploymentAccess: { deploymentId: d.id, requesterId: viewer, requestId: randomUUID() },
         },
         text:
           `${viewer} is asking for access to your app "${label}" (https://${rawHost}/). ` +

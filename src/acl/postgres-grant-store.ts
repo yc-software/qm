@@ -12,6 +12,7 @@ export function rowToGrant(r: Record<string, unknown>): Grant {
     granteeScopeId: r.grantee_scope_id as ScopeId,
     permission: r.permission as Permission,
     grantedBy: r.granted_by as string,
+    ...(r.access_request ? { accessRequest: r.access_request as string } : {}),
   };
 }
 
@@ -107,6 +108,10 @@ export const ACL_GRANT_MIGRATIONS: PgMigrationDefinition[] = [
       ],
     },
   ),
+  {
+    id: "acl/grants/0006-access-request",
+    statements: [`ALTER TABLE acl_grants ADD COLUMN IF NOT EXISTS access_request TEXT`],
+  },
 ];
 
 export function createPostgresGrantStore(connectionString: string): GrantPersistence {
@@ -126,7 +131,7 @@ export function createPostgresGrantStore(connectionString: string): GrantPersist
       if (query.kind !== undefined) match((p) => `path LIKE ${p}`, `${likeEscape(refPrefix(query.kind))}%`);
       if (query.granteeScopeIds !== undefined) match((p) => `grantee_scope_id = ANY(${p})`, [...query.granteeScopeIds]);
       const rows = await q(
-        `SELECT owner_scope_id, path, grantee_scope_id, permission, granted_by FROM acl_grants WHERE ${where.join(" AND ")} ORDER BY owner_scope_id, path, grantee_scope_id, permission`,
+        `SELECT owner_scope_id, path, grantee_scope_id, permission, granted_by, access_request FROM acl_grants WHERE ${where.join(" AND ")} ORDER BY owner_scope_id, path, grantee_scope_id, permission`,
         params,
       );
       return rows.map(rowToGrant);
@@ -135,20 +140,21 @@ export function createPostgresGrantStore(connectionString: string): GrantPersist
       await withPgTransaction(await db.pool(), async (client) => {
         await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`acl-grants:${g.ownerScopeId}\n${g.ref}`]);
         await client.query(
-          `INSERT INTO acl_grants (owner_scope_id, path, grantee_scope_id, permission, granted_by)
-           VALUES ($1, $2, $3, $4, $5)
+          `INSERT INTO acl_grants (owner_scope_id, path, grantee_scope_id, permission, granted_by, access_request)
+           VALUES ($1, $2, $3, $4, $5, $6)
            ON CONFLICT (tenant_id, owner_scope_id, path, grantee_scope_id, permission)
-           DO UPDATE SET granted_by = EXCLUDED.granted_by`,
-          [g.ownerScopeId, g.ref, g.granteeScopeId, g.permission, g.grantedBy],
+           DO UPDATE SET granted_by = EXCLUDED.granted_by,
+             access_request = CASE WHEN EXCLUDED.access_request IS NULL THEN NULL ELSE acl_grants.access_request END`,
+          [g.ownerScopeId, g.ref, g.granteeScopeId, g.permission, g.grantedBy, g.accessRequest ?? null],
         );
       });
     },
-    async remove(g) {
+    async remove(g, onlyAccessRequest) {
       await withPgTransaction(await db.pool(), async (client) => {
         await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`acl-grants:${g.ownerScopeId}\n${g.ref}`]);
         await client.query(
-          "DELETE FROM acl_grants WHERE owner_scope_id = $1 AND path = $2 AND grantee_scope_id = $3 AND permission = $4",
-          [g.ownerScopeId, g.ref, g.granteeScopeId, g.permission],
+          "DELETE FROM acl_grants WHERE owner_scope_id = $1 AND path = $2 AND grantee_scope_id = $3 AND permission = $4 AND ($5::text IS NULL OR access_request = $5)",
+          [g.ownerScopeId, g.ref, g.granteeScopeId, g.permission, onlyAccessRequest ?? null],
         );
       });
     },
@@ -156,7 +162,7 @@ export function createPostgresGrantStore(connectionString: string): GrantPersist
       return withPgTransaction(await db.pool(), async (client) => {
         await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`acl-grants:${ownerScopeId}\n${ref}`]);
         const selected = await client.query(
-          "SELECT owner_scope_id, path, grantee_scope_id, permission, granted_by FROM acl_grants WHERE owner_scope_id = $1 AND path = $2 FOR UPDATE",
+          "SELECT owner_scope_id, path, grantee_scope_id, permission, granted_by, access_request FROM acl_grants WHERE owner_scope_id = $1 AND path = $2 FOR UPDATE",
           [ownerScopeId, ref],
         );
         const current = selected.rows.map(rowToGrant);
@@ -164,8 +170,15 @@ export function createPostgresGrantStore(connectionString: string): GrantPersist
         await client.query("DELETE FROM acl_grants WHERE owner_scope_id = $1 AND path = $2", [ownerScopeId, ref]);
         for (const grant of replacement) {
           await client.query(
-            "INSERT INTO acl_grants (owner_scope_id, path, grantee_scope_id, permission, granted_by) VALUES ($1, $2, $3, $4, $5)",
-            [grant.ownerScopeId, grant.ref, grant.granteeScopeId, grant.permission, grant.grantedBy],
+            "INSERT INTO acl_grants (owner_scope_id, path, grantee_scope_id, permission, granted_by, access_request) VALUES ($1, $2, $3, $4, $5, $6)",
+            [
+              grant.ownerScopeId,
+              grant.ref,
+              grant.granteeScopeId,
+              grant.permission,
+              grant.grantedBy,
+              grant.accessRequest ?? null,
+            ],
           );
         }
         return true;

@@ -1234,8 +1234,15 @@ export function createSessionMethods(
           g.grantedBy,
         );
     },
-    async revokeGrant(ownerScopeId, ref, granteeScopeId, revokedBy) {
-      await deps.acl.revoke(ownerScopeId, ref, granteeScopeId, revokedBy, await artifactAuthor(ownerScopeId, ref));
+    async revokeGrant(ownerScopeId, ref, granteeScopeId, revokedBy, opts) {
+      await deps.acl.revoke(
+        ownerScopeId,
+        ref,
+        granteeScopeId,
+        revokedBy,
+        await artifactAuthor(ownerScopeId, ref),
+        opts?.onlyAccessRequest,
+      );
       deps.auditLog.record({
         at: Date.now(),
         principalId: revokedBy,

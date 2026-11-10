@@ -453,7 +453,13 @@ export interface App {
   ): Promise<boolean>;
   openFileForViewer(id: string, principalId: string): Promise<OpenedFile | null>;
   grant(g: Grant, opts?: { notify?: boolean }): Promise<void>;
-  revokeGrant(ownerScopeId: ScopeId, ref: string, granteeScopeId: ScopeId, revokedBy: string): Promise<void>;
+  revokeGrant(
+    ownerScopeId: ScopeId,
+    ref: string,
+    granteeScopeId: ScopeId,
+    revokedBy: string,
+    opts?: { onlyAccessRequest?: string },
+  ): Promise<void>;
   promoteSkill(id: string, targetScopeId: ScopeId, actorId: string, liveActor: boolean): Promise<Skill>;
   belongsToScope(principalId: string, scope: ScopeId): Promise<boolean>;
   canManageArtifactHome(homeScopeId: ScopeId, createdBy: string, principalId: string): Promise<boolean>;

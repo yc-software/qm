@@ -46,6 +46,7 @@ export interface AclStore {
     granteeScopeId: ScopeId,
     revokedBy: string,
     authoredBy?: string,
+    onlyAccessRequest?: string,
   ): Promise<void>;
   replaceGrantsIfCurrent(
     ownerScopeId: ScopeId,
@@ -95,7 +96,7 @@ export interface AclStoreOptions {
 export interface GrantPersistence {
   find(query: GrantQuery): Promise<Grant[]>;
   put(g: Grant): Promise<void>;
-  remove(g: Grant): Promise<void>;
+  remove(g: Grant, onlyAccessRequest?: string): Promise<void>;
   replaceForResourceIfCurrent(
     ownerScopeId: ScopeId,
     ref: string,
@@ -169,12 +170,15 @@ export function createAclStore(persist: GrantPersistence, opts: AclStoreOptions 
       await validateFileGrant(g);
       await persist.put(g);
     },
-    async revoke(ownerScopeId, ref, granteeScopeId, revokedBy, authoredBy) {
+    async revoke(ownerScopeId, ref, granteeScopeId, revokedBy, authoredBy, onlyAccessRequest) {
       if (!(await canManage(ownerScopeId, revokedBy, authoredBy))) {
         throw new Error("only a manager of this scope may revoke access");
       }
       const matches = await persist.find({ ownerScopeId, ref, granteeScopeIds: [granteeScopeId] });
-      for (const g of matches) await persist.remove(g);
+      for (const g of matches) {
+        if (onlyAccessRequest !== undefined && g.accessRequest !== onlyAccessRequest) continue;
+        await persist.remove(g, onlyAccessRequest);
+      }
     },
     async replaceGrantsIfCurrent(ownerScopeId, ref, expected, replacement, changedBy, authoredBy) {
       if (!(await canManage(ownerScopeId, changedBy, authoredBy))) {

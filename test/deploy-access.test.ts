@@ -113,6 +113,8 @@ test("card is plain text with only deployment and requester in bounded JSON butt
     assert.ok(b.value.length <= 2000);
     assert.deepEqual(parseDeployAccess(b.value), request);
   }
+  const withId = { ...request, requestId: "00000000-0000-4000-8000-0000000000aa" };
+  assert.deepEqual(parseDeployAccess(JSON.stringify(withId)), withId);
 });
 
 test("malformed or scope-injecting button payloads are rejected", () => {
@@ -129,6 +131,9 @@ test("malformed or scope-injecting button payloads are rejected", () => {
     JSON.stringify({ ...request, requesterId: "bob\n" }),
     JSON.stringify({ ...request, requesterId: 42 }),
     JSON.stringify({ ...request, requesterId: "x".repeat(321) }),
+    JSON.stringify({ ...request, requestId: "not-a-uuid" }),
+    JSON.stringify({ ...request, requestId: 7 }),
+    JSON.stringify({ ...request, requestId: undefined, extra: 1 }),
   ])
     assert.throws(() => parseDeployAccess(value));
 });
@@ -189,19 +194,71 @@ test("decline only notifies and leaves access unchanged; duplicate clicks dedupe
   assert.match(notices[0]!.text, /declined your request/);
 });
 
-test("declining after an approval takes the access back", async (t) => {
+const requestA = "00000000-0000-4000-8000-0000000000aa";
+const requestB = "00000000-0000-4000-8000-0000000000bb";
+const decideRequest = (
+  f: Awaited<ReturnType<typeof fixture>>,
+  approve: boolean,
+  requestId: string | undefined = requestA,
+) =>
+  decideDeploymentAccess(
+    f.app,
+    f.identity,
+    JSON.stringify({ deploymentId: f.d.id, requesterId: requester, ...(requestId ? { requestId } : {}) }),
+    { externalId: owner },
+    approve,
+  );
+
+test("declining a request after its own approval takes that approval's access back", async (t) => {
   const f = await fixture(t);
-  await f.decide();
-  assert.match(await f.decide(owner, false), /^Declined\./);
+  await decideRequest(f, true);
+  assert.deepEqual(await f.grants(), [{ scope: person(requester), permission: "read" }]);
+  assert.match(await decideRequest(f, false), /^Declined\./);
   assert.deepEqual(await f.grants(), []);
   assert.equal((await f.notices()).filter((n) => /declined/.test(n.text)).length, 1);
 });
 
-test("declining keeps edit access the requester already had", async (t) => {
+test("a direct read share survives a decline, even if the request was also approved", async (t) => {
+  const f = await fixture(t);
+  await f.share("read");
+  await decideRequest(f, false);
+  assert.deepEqual(await f.grants(), [{ scope: person(requester), permission: "read" }]);
+  await decideRequest(f, true);
+  await decideRequest(f, false);
+  assert.deepEqual(await f.grants(), [{ scope: person(requester), permission: "read" }]);
+});
+
+test("a direct re-share after an approval is no longer taken back by that request's decline", async (t) => {
+  const f = await fixture(t);
+  await decideRequest(f, true);
+  await f.share("read");
+  await decideRequest(f, false);
+  assert.deepEqual(await f.grants(), [{ scope: person(requester), permission: "read" }]);
+});
+
+test("edit access survives approve and decline", async (t) => {
   const f = await fixture(t);
   await f.share("write");
-  assert.match(await f.decide(owner, false), /^Declined\./);
+  await decideRequest(f, true);
+  await decideRequest(f, false);
   assert.deepEqual(await f.grants(), [{ scope: person(requester), permission: "write" }]);
+});
+
+test("a decline takes back neither another request's approval nor anything from a card without a request ID", async (t) => {
+  const f = await fixture(t);
+  await decideRequest(f, true, requestA);
+  await decideRequest(f, false, requestB);
+  await decideRequest(f, false, undefined);
+  assert.deepEqual(await f.grants(), [{ scope: person(requester), permission: "read" }]);
+  const g = await f.app.deploymentGrantees(f.d.id);
+  assert.equal(g.length, 1);
+});
+
+test("a grant from a card without a request ID is never linked, so a decline leaves it", async (t) => {
+  const f = await fixture(t);
+  await decideRequest(f, true, undefined);
+  await decideRequest(f, false, requestA);
+  assert.deepEqual(await f.grants(), [{ scope: person(requester), permission: "read" }]);
 });
 
 test("direct share paths notify only after successful grants; org, self and revoke stay silent", async (t) => {
