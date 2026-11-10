@@ -386,7 +386,13 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
     }
     const source = stored ? { ref: stored.baseImage, snapshotId: snapshotId! } : await goldens.ready(onStatus);
     onStatus?.(stored ? "Restoring your computer…" : "Starting your computer…");
-    await start(scope, stored, source);
+    await start(scope, stored, source).catch(async (error: unknown) => {
+      if (stored?.stopping)
+        await store
+          .merge(scope, { stopping: undefined })
+          .catch(swallowAs("render-sandbox: end a failed restart", undefined));
+      throw error;
+    });
     return { coldStart: !stored };
   }
 
@@ -765,11 +771,10 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
               );
               await checkpoint(scope, fenced, false);
               await client.terminate(info.id);
-              await store.merge(scope, { stopping: undefined });
               return true;
             });
+            await store.merge(scope, stopped ? { stopping: undefined } : UNFENCE);
             if (stopped) reaped++;
-            else await store.merge(scope, UNFENCE);
           }).catch((error) => reportError("idle_checkpoint_failed", error, scope));
         }
       });
