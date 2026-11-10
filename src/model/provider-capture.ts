@@ -23,6 +23,17 @@ type CaptureOptions = Pick<StreamOptions, "fetch" | "onPayload" | "onProviderStr
 const SERVED_TIER_APIS = new Set(["openai-responses", "azure-openai-responses"]);
 const SERVED_TIER_EVENTS = new Set(["response.completed", "response.incomplete"]);
 
+function servedTierOf(api: string, data: unknown): string | undefined {
+  if (!isRecord(data)) return undefined;
+  if (api === "anthropic-messages") {
+    const usage = data.type === "message_start" && isRecord(data.message) ? data.message.usage : undefined;
+    return isRecord(usage) && typeof usage.speed === "string" ? usage.speed : undefined;
+  }
+  if (!SERVED_TIER_APIS.has(api) || !SERVED_TIER_EVENTS.has(String(data.type)) || !isRecord(data.response))
+    return undefined;
+  return typeof data.response.service_tier === "string" ? data.response.service_tier : undefined;
+}
+
 function firstString(...values: unknown[]): string | undefined {
   for (const value of values) {
     if (typeof value === "string" && value) return value;
@@ -127,14 +138,7 @@ export function captureProviderResponse<T extends CaptureOptions | undefined>(
       }
     },
     onProviderStreamEvent: async (data: unknown, eventModel: Model<Api>) => {
-      if (
-        SERVED_TIER_APIS.has(api) &&
-        isRecord(data) &&
-        SERVED_TIER_EVENTS.has(String(data.type)) &&
-        isRecord(data.response) &&
-        typeof data.response.service_tier === "string"
-      )
-        servedTier = data.response.service_tier;
+      servedTier = servedTierOf(api, data) ?? servedTier;
       await options?.onProviderStreamEvent?.(data, eventModel);
     },
   } as T;
