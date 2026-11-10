@@ -545,7 +545,7 @@ export function createSessionMethods(
           grantedBy: principalId,
         });
       }
-      h.recordAudit({
+      deps.auditLog?.record(tenant, {
         at: Date.now(),
         principalId,
         action: "file.upload",
@@ -1217,7 +1217,7 @@ export function createSessionMethods(
         await deps.deploy.assertShareAllowed(g.ownerScopeId, g.granteeScopeId, g.permission);
       }
       await deps.acl.grant(tenant, g, await artifactAuthor(g.ownerScopeId, g.ref));
-      h.recordAudit({
+      deps.auditLog.record(tenant, {
         at: Date.now(),
         principalId: g.grantedBy,
         action: "grant",
@@ -1243,7 +1243,7 @@ export function createSessionMethods(
         revokedBy,
         await artifactAuthor(ownerScopeId, ref),
       );
-      h.recordAudit({
+      deps.auditLog.record(tenant, {
         at: Date.now(),
         principalId: revokedBy,
         action: "revoke",
