@@ -84,7 +84,7 @@ test("a write grantee who rewrites a shared cron's task becomes its owner, and t
     chanClaims("U1"),
   );
   assert.ok(shared.ok, JSON.stringify(shared));
-  await built.app.updateCron(id, { script: { command: "curl -fsS https://example.test/as-the-owner" } });
+  await built.crons.update(id, { script: { command: "curl -fsS https://example.test/as-the-owner" } });
 
   const rewritten = await control.patchCron(id, { action: "digest, then file the summary" }, chanClaims("U2"));
   assert.ok(rewritten.ok, JSON.stringify(rewritten));

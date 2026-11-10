@@ -831,7 +831,7 @@ test("followup accepts only typed runtime and staged attachment fields", async (
     capability: PORTAL,
   });
   assert.equal(out.status, 200);
-  assert.deepEqual(received, options);
+  assert.deepEqual(received, { ...options, unattended: true }, "a call naming a principal without a signed-in person");
   received = undefined;
   const agent = await call(w, { method: "POST", path, body: { message: "hi", attachments: options.attachments } });
   assert.equal(agent.status, 403);
