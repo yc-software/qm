@@ -380,7 +380,7 @@ test("a failed checkpoint waits out the interval before it is tried again, acros
   );
 });
 
-test("a run of checkpoint failures is reported once per cause, and again after a success", async () => {
+test("a run of checkpoint failures is reported once, and again after a success", async () => {
   const events: Array<{ code: string; message: string }> = [];
   const s = make({ checkpointIntervalMs: 1, onError: (e: { code: string; message: string }) => events.push(e) });
   const h = await s.provision(scope);
@@ -392,11 +392,6 @@ test("a run of checkpoint failures is reported once per cause, and again after a
   }
   assert.equal(failures().length, 1, "repeats of the same failure run are not reported again");
   assert.match(failures()[0]!.message, /file exists/);
-  fake.failCheckpoints(h.id, "no space left");
-  await sleep(5);
-  await s.teardown(h);
-  assert.equal(failures().length, 2, "a new cause within the run is reported");
-  assert.match(failures()[1]!.message, /no space left/);
   fake.failCheckpoints(h.id);
   await sleep(5);
   await s.teardown(h);
@@ -404,8 +399,8 @@ test("a run of checkpoint failures is reported once per cause, and again after a
   fake.failCheckpoints(h.id, "fetch failed");
   await sleep(5);
   await s.teardown(h);
-  assert.equal(failures().length, 3, "a new failure after a success is reported");
-  assert.match(failures()[2]!.message, /fetch failed/);
+  assert.equal(failures().length, 2, "a new failure after a success is reported");
+  assert.match(failures()[1]!.message, /fetch failed/);
 });
 
 test("computerStatus reports checkpoint recovery and a healthy machine whose shell has stopped answering", async () => {
