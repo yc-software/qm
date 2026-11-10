@@ -16,7 +16,7 @@ import { scopeId, type ClientToolResult } from "../src/types.ts";
 
 const SECRET = "tool-approval-requests-secret!!".repeat(2);
 
-test("a sandbox command's approval request reaches the live run, and is refused with the run\'s reason or withdrawn when no run answers", async () => {
+test("a sandbox command's approval request reaches the live run, and is refused with the run's reason or withdrawn when no run answers", async () => {
   const built = buildApp(
     testConfig({
       signingSecret: SECRET,
