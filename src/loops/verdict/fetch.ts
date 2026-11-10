@@ -30,7 +30,8 @@ export interface SourceClientDeps {
 
 type FetchOutcome =
   | { kind: "conversation"; conversation: Conversation }
-  | { kind: "skipped"; reason: "not_connected" | "not_inbox" | "bad_item" | "source_gone" };
+  | { kind: "skipped"; reason: "not_connected" | "not_inbox" | "bad_item" }
+  | { kind: "skipped"; reason: "source_gone"; detail: string };
 
 export class SourceRateLimited extends TransientTurnFailure {
   constructor(source: string) {
@@ -61,7 +62,7 @@ export interface SourceClients {
   slackUser(owner: string, token: string, userId: string): Promise<Participant>;
   gmailToken(owner: string, item?: LoopItem): Promise<string | null>;
   gmailRead<T>(owner: string, token: string, path: string): Promise<T>;
-  gmailAddress(owner: string, token: string, item?: LoopItem): Promise<string | undefined>;
+  gmailAddress(owner: string, token: string, item: LoopItem): Promise<string | undefined>;
 }
 
 export type ConversationFetcher = (owner: string, item: LoopItem) => Promise<FetchOutcome>;
@@ -76,17 +77,14 @@ export function changedSinceLastLook(item: Pick<LoopItem, "verdict">, conversati
   return newest !== undefined && newest !== item.verdict?.lastSeenTs;
 }
 
+const GMAIL = "gmail.googleapis.com";
 const goneSlackErrors = new Set(["channel_not_found", "thread_not_found"]);
 
-function sourceGone(error: unknown): boolean {
-  if (error instanceof GmailApiError) return error.status === 404;
-  return (
-    isObj(error) &&
-    error.code === ErrorCode.PlatformError &&
-    isObj(error.data) &&
-    typeof error.data.error === "string" &&
-    goneSlackErrors.has(error.data.error)
-  );
+function sourceGone(error: unknown): string | undefined {
+  if (error instanceof GmailApiError) return error.status === 404 ? `Gmail ${error.status}` : undefined;
+  const code =
+    isObj(error) && error.code === ErrorCode.PlatformError && isObj(error.data) ? error.data.error : undefined;
+  return typeof code === "string" && goneSlackErrors.has(code) ? `Slack ${code}` : undefined;
 }
 
 function rateLimitedAfter(error: unknown): number | undefined {
@@ -160,7 +158,7 @@ export function createSourceClients(deps: SourceClientDeps): SourceClients {
       users().set(userId, resolved);
       return resolved;
     },
-    gmailToken: (owner, item) => gmailToken(deps.tokens, owner, item),
+    gmailToken: (owner, item) => (item ? gmailToken(deps.tokens, owner, item) : tokenFor(deps.tokens, GMAIL, owner)),
     async gmailRead(owner, token, path) {
       if (limited().has(`${owner}:Gmail`)) throw new SourceRateLimited("Gmail");
       try {
@@ -171,7 +169,7 @@ export function createSourceClients(deps: SourceClientDeps): SourceClients {
       }
     },
     async gmailAddress(owner, token, item) {
-      const key = `${owner}:${(item && gmailAccountOf(item)) ?? ""}`;
+      const key = `${owner}:${gmailAccountOf(item) ?? ""}`;
       const cached = addresses().get(key);
       if (cached) return cached;
       const profile = await clients.gmailRead<{ emailAddress?: string }>(owner, token, "profile");
@@ -403,7 +401,8 @@ export function createConversationFetcher(clients: SourceClients): ConversationF
       if (item.source === "slack") return await slack(owner, item);
       if (item.source === "gmail") return await gmail(owner, item);
     } catch (error) {
-      if (sourceGone(error)) return { kind: "skipped", reason: "source_gone" };
+      const detail = sourceGone(error);
+      if (detail) return { kind: "skipped", reason: "source_gone", detail };
       throw error;
     }
     return { kind: "skipped", reason: "not_inbox" };

@@ -64,11 +64,11 @@ function metaOf(item: LoopItem): GmailMeta | undefined {
 }
 
 export function gmailAccountOf(item: LoopItem): GmailMeta["accountType"] {
-  return metaOf(item)?.accountType ?? (item.sourcePayload?.sentChat === true ? "default" : undefined);
+  return metaOf(item)?.accountType;
 }
 
-export async function gmailToken(tokens: ConnectorTokenSource, owner: string, item?: LoopItem): Promise<string | null> {
-  const accountType = item && gmailAccountOf(item);
+export async function gmailToken(tokens: ConnectorTokenSource, owner: string, item: LoopItem): Promise<string | null> {
+  const accountType = gmailAccountOf(item);
   return accountType
     ? await tokens.connectorAccessToken(GMAIL_HOST, owner, accountType)
     : await tokenFor(tokens, GMAIL_HOST, owner);

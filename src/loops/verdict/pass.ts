@@ -81,7 +81,10 @@ export function createInboxPass(deps: InboxPassDeps): InboxPass {
     if (outcome.kind === "skipped") {
       if (outcome.reason === "bad_item") await deps.items.skip(item.id, "the item has no usable source reference");
       if (outcome.reason === "source_gone")
-        await deps.items.skip(item.id, "the original conversation was deleted or is no longer accessible");
+        await deps.items.skip(
+          item.id,
+          `the original conversation was deleted or is no longer accessible (${outcome.detail})`,
+        );
       return false;
     }
     const { conversation } = outcome;
