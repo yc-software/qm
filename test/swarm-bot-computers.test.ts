@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
 import { createRuntimeService } from "../src/agent/runtime-control.ts";
 import type { Run } from "../src/runs/run-store.ts";
 import type { Agent } from "../src/agent/agent.ts";
@@ -146,7 +145,7 @@ async function channelTurn(f: Fixture, actor: Principal, botActor: boolean): Pro
   const ran = recordRuns(f);
   const swarm = (await f.store.get(f.root.id))!;
   const worker = swarm.members.find((member) => member.id !== swarm.id)!;
-  const board = swarm.board!.sandboxId;
+  const board = worker.forumSandboxId!;
   const workerBacking = (await f.records.get(worker.sandboxId!))!.backingScopeId;
   const boardDisk = f.disks.get((await f.records.get(board))!.backingScopeId)!;
   f.disks.get(workerBacking)!.set("plan.md", "alice's private plan");
@@ -231,11 +230,17 @@ async function channelTurn(f: Fixture, actor: Principal, botActor: boolean): Pro
   };
 }
 
-async function personSwarm(backend?: ProcessSandbox) {
+async function personSwarm(backend?: ProcessSandbox, forum?: "forum") {
   const f = await channelSwarm(backend);
   if (f.caller.kind !== "agent") throw new Error("wrong caller");
   await f.sessions.addParticipant(f.root.id, releaseBot.id);
-  await f.service.spawn(f.caller, { requestId: "initial", text: "alice's work" });
+  const shared = forum && (await f.sandboxes.create(alice.id, f.root.scopeId, "modal", "Swarm board"));
+  if (shared) f.disks.set(shared.backingScopeId, new Map());
+  await f.service.spawn(f.caller, {
+    requestId: "initial",
+    text: "alice's work",
+    forumSandboxId: shared ? shared.id : undefined,
+  });
   await f.service.sweep();
   await f.runs.complete(f.caller.claims.runId!, f.caller.claims.runLeaseToken!, { status: "ok", reply: "started" });
   return f;
@@ -267,9 +272,11 @@ function assertKeptOut(observed: Record<string, unknown>): void {
 }
 
 test("a Slack bot's channel turn that may not direct a person's swarm cannot list or use the swarm's computers", async (t) => {
-  const observed = await channelTurn(await personSwarm(), releaseBot, true);
-  t.diagnostic(`observed: ${JSON.stringify(observed)}`);
-  assertKeptOut(observed);
+  for (const forum of [undefined, "forum"] as const) {
+    const observed = await channelTurn(await personSwarm(undefined, forum), releaseBot, true);
+    t.diagnostic(`observed: ${JSON.stringify(observed)}`);
+    assertKeptOut(observed);
+  }
 });
 
 test("a Slack bot that started a swarm cannot list or use its computers once a person sent work into it", async (t) => {
@@ -343,6 +350,14 @@ test("the person keeps their swarm's computers and a bot keeps the computers of 
   t.diagnostic(`bot-only swarm: ${JSON.stringify(bot)}`);
   assertKeptIn(person);
   assertKeptIn(bot);
+  assertKeptIn(await channelTurn(await personSwarm(undefined, "forum"), alice, false));
+  const ended = await personSwarm(undefined, "forum");
+  const forum = (await ended.records.get((await ended.store.get(ended.root.id))!.members[1]!.forumSandboxId!))!;
+  await ended.store.update(ended.root.id, (swarm) => void (swarm.expiresAt = Date.now() - 1));
+  assert.equal(
+    await ended.service.botMayUseComputer(forum, { actorId: releaseBot.id, threadRef: "", sessionId: "" }),
+    true,
+  );
 });
 
 test("a person's turn that only lists computers and background jobs leaves a bot-started swarm's computers to its bot", async (t) => {
@@ -417,106 +432,6 @@ test("a bot's turn loses the swarm computer it already opened once a person send
     ran.map((entry) => entry.command),
     ["cat board.md"],
   );
-});
-
-async function personForumSwarm() {
-  const f = await channelSwarm();
-  if (f.caller.kind !== "agent") throw new Error("wrong caller");
-  await f.sessions.addParticipant(f.root.id, releaseBot.id);
-  const forum = (await f.sandboxes.create(alice.id, f.root.scopeId, "modal", "Shared notes")).id;
-  await f.service.spawn(f.caller, { requestId: "initial", text: "alice's work", forumSandboxId: forum });
-  await f.service.sweep();
-  await f.runs.complete(f.caller.claims.runId!, f.caller.claims.runLeaseToken!, { status: "ok", reply: "started" });
-  const backing = (await f.records.get(forum))!.backingScopeId;
-  f.disks.set(backing, new Map([["notes.md", "alice's swarm notes"]]));
-  await f.sandboxes.setDefault(alice.id, f.root.scopeId, forum);
-  return { f, forum, backing };
-}
-
-async function forumTurn(
-  { f, forum, backing }: Awaited<ReturnType<typeof personForumSwarm>>,
-  actor: Principal,
-  botActor: boolean,
-  threadRef = f.root.threadRef,
-): Promise<Record<string, unknown>> {
-  const ran: string[] = [];
-  f.backend.run = async (handle, command) => {
-    if (handle.id === backing) ran.push(command);
-    return { stdout: f.disks.get(handle.id)?.get("notes.md") ?? "", stderr: "", code: 0, timedOut: false };
-  };
-  const request = channelRequest(f, actor, botActor);
-  const { run } = await f.runs.enqueue({
-    sessionId: threadRef,
-    request: { ...request, conversation: { ...request.conversation, threadRef } },
-    maxAttempts: 1,
-  });
-  const observed = await drive(f, run, async (call) => {
-    const listing = JSON.parse(await call("sandbox", { action: "list", purpose: "Listing computers" })) as {
-      sandboxes: Array<{ id: string; name: string }>;
-    };
-    return {
-      listed: listing.sandboxes.filter((box) => box.id === forum).map((box) => box.name),
-      read: await call("files", { action: "read", path: "notes.md", sandbox_id: forum }),
-      execute: await call("execute", { command: "cat notes.md", sandbox_id: forum, purpose: "Reading the notes" }),
-      defaultExecute: await call("execute", { command: "cat notes.md", purpose: "Reading the default computer" }),
-      write: await call("files", {
-        action: "write",
-        path: "notes.md",
-        data: `notes from ${actor.id}`,
-        sandbox_id: forum,
-      }),
-    };
-  });
-  return { ...observed, ranOnForum: ran, forumAfter: f.disks.get(backing)?.get("notes.md") };
-}
-
-function assertKeptOffForum(observed: Record<string, unknown>): void {
-  const { listed, ranOnForum, forumAfter, ...attempts } = observed;
-  assert.deepEqual(listed, []);
-  for (const [attempt, result] of Object.entries(attempts))
-    assert.ok(String(result).endsWith(refusedComputer), `${attempt}: ${String(result)}`);
-  assert.deepEqual(ranOnForum, []);
-  assert.equal(forumAfter, "alice's swarm notes");
-}
-
-test("a Slack bot's turn cannot use a person's swarm forum from the swarm's thread or another thread in the channel", async (t) => {
-  const swarm = await personForumSwarm();
-  const elsewhere = await swarm.f.sessions.getOrCreateByThread(
-    `web:alice:${randomUUID()}`,
-    "channel",
-    "channel:C1",
-    undefined,
-    "web",
-  );
-  const inSwarm = await forumTurn(swarm, releaseBot, true);
-  const inChannel = await forumTurn(swarm, releaseBot, true, elsewhere.threadRef);
-  t.diagnostic(`swarm thread: ${JSON.stringify(inSwarm)}`);
-  t.diagnostic(`other thread: ${JSON.stringify(inChannel)}`);
-  assertKeptOffForum(inSwarm);
-  assertKeptOffForum(inChannel);
-});
-
-test("the person keeps their swarm's forum, and a Slack bot gets it back once the swarm's work window ends", async () => {
-  const swarm = await personForumSwarm();
-  const person = await forumTurn(swarm, alice, false);
-  assert.deepEqual(person.listed, ["Shared notes"]);
-  assert.equal(person.read, "alice's swarm notes");
-  assert.deepEqual(person.ranOnForum, ["cat notes.md", "cat notes.md"]);
-  assert.equal(person.forumAfter, "notes from alice");
-  await swarm.f.store.update(swarm.f.root.id, (current) => {
-    current.expiresAt = Date.now() - 1;
-  });
-  const elsewhere = await swarm.f.sessions.getOrCreateByThread(
-    `web:alice:${randomUUID()}`,
-    "channel",
-    "channel:C1",
-    undefined,
-    "web",
-  );
-  const bot = await forumTurn(swarm, releaseBot, true, elsewhere.threadRef);
-  assert.deepEqual(bot.listed, ["Shared notes"]);
-  assert.equal(bot.read, "notes from alice");
-  assert.deepEqual(bot.ranOnForum, ["cat notes.md", "cat notes.md"]);
 });
 
 function jobComputers() {
