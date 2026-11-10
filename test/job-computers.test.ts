@@ -50,7 +50,9 @@ function fixture() {
   const destroyAttempts: string[] = [];
   const sweep = createJobComputerSweep({
     resources: {
-      jobComputers: async () => computers.filter((computer) => !retired.includes(computer.id)),
+      eachJobComputer: async (work) => {
+        for (const computer of computers.filter(({ id }) => !retired.includes(id))) await work(computer);
+      },
       retireJobComputer: async (id, _seenState) => {
         destroyAttempts.push(id);
         if (failDestroy.has(id)) throw new Error("provider unavailable");

@@ -374,6 +374,31 @@ test("a member of a shared home (private channel/group) can share it even if the
   assert.equal(grants[0]!.grantedBy, "U2", "the sharing member is recorded, not the creator");
 });
 
+test("a Slack bot's turn can't share a private channel's artifact it didn't create", async () => {
+  const state = await ownerState();
+  state.privateChannels.add("C1");
+  state.artifacts["skill:CS"] = {
+    type: "skill",
+    id: "CS",
+    ownerScopeId: scopeId("channel", "C1"),
+    createdBy: "U1",
+    grantRef: "skill:CS",
+  };
+  state.scopesByPrincipal["release-bot"] = [
+    scopeId("personal", "release-bot"),
+    scopeId("org", ORG),
+    scopeId("channel", "C1"),
+    scopeId("group", "G9"),
+  ];
+  const svc = createControlService(fakeApp(state));
+  const r = await svc.shareArtifact(
+    { type: "skill", id: "CS", scope: scopeId("group", "G9") },
+    { ...cap("release-bot", scopeId("channel", "C1")), botActor: true },
+  );
+  assert.equal(r.ok ? "" : r.code, "forbidden");
+  assert.deepEqual(await grantsOf(state), []);
+});
+
 test("an author who LEFT a private channel can no longer share its artifact (parity with canManageSkill — membership, not authorship)", async () => {
   const state = await ownerState();
   state.privateChannels.add("C1");

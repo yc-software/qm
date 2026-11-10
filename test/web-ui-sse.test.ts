@@ -12,12 +12,14 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { configureCommandRules } from "./support/command-rules.ts";
 import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "webui-sse-")) }));
 built.runtime.start();
+await configureCommandRules(built.config);
 const core = createServer(built.app, {
   ...browserSessionDeps,
   replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
