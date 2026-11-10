@@ -779,3 +779,33 @@ for (const [where, room, actor] of [
       );
   });
 }
+
+test("a credential an owner approved in a channel reaches a Slack bot's turns there only when the bot asked for it", async (t) => {
+  const b = await fixture(t);
+  const credential = await b.keychain!.save({
+    ownerId: "U1",
+    service: "approved-test",
+    secret: "fixture-secret",
+    envKey: "APPROVED_TEST_TOKEN",
+  });
+  const approve = async (requesterId: string, botActor: boolean) => {
+    const { ask } = await b.keychain!.createAsk({
+      credentialId: credential.id,
+      requesterId,
+      requesterScopeId: "channel:C1",
+      requesterThreadRef: "C1:shared-test",
+      purpose: "deploy the release",
+      ...(botActor ? { botActor } : {}),
+    });
+    await b.keychain!.approveAsk({ askId: ask.id, ownerId: "U1", mode: "standing", purpose: "deploy the release" });
+  };
+  const use = `!execute ${JSON.stringify({
+    command: 'printf %s "${APPROVED_TEST_TOKEN:+available}"',
+    credentials: [credentialHandle(credential)],
+  })}`;
+  await approve("U2", false);
+  assert.equal(await b.turn(use, true, "U2"), "available");
+  assert.doesNotMatch(await b.turn(use, true, "U3", { botActor: true }), /available/);
+  await approve("U3", true);
+  assert.equal(await b.turn(use, true, "U3", { botActor: true }), "available");
+});
