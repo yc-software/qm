@@ -153,10 +153,13 @@ function rosterMatches(current: readonly string[], expected: readonly string[]):
 }
 
 function botMayDirect(swarm: Swarm, memberId: string, actorId: string): boolean {
-  return (
-    swarm.template.botActor === true &&
-    (memberId !== swarm.id || swarm.messages.every((message) => message.actorId === actorId))
-  );
+  if (swarm.template.botActor !== true) return false;
+  if (swarm.messages.every((message) => message.actorId === actorId)) return true;
+  let lineage = memberById(swarm, memberId);
+  while (lineage?.parentId && lineage.parentId !== swarm.id) lineage = memberById(swarm, lineage.parentId);
+  const head = lineage?.parentId ? lineage : undefined;
+  const spawn = head && swarm.messages.find((message) => message.audience.includes(head.id));
+  return spawn !== undefined && spawn.actorId !== actorId;
 }
 
 function assertCallerMayDirect(caller: SwarmCaller, auth: Authority, swarm: Swarm): void {
@@ -405,17 +408,19 @@ export function createSwarmService(deps: {
         const recipient = memberById(swarm, recipientId);
         if (!recipient || recipient.state === "reserved") continue;
         const control = controlState(swarm, recipient.id);
-        if (recipient.state === "failed" || control === "stopped" || swarmExpired(swarm)) {
+        const failed = recipient.state === "failed" || control === "stopped" || swarmExpired(swarm);
+        if (!failed && control === "paused") continue;
+        if (failed || (swarm.template.botActor && !botMayDirect(swarm, recipient.id, swarm.template.actor.id))) {
           await step(() =>
             store.update(swarm.id, (current) => {
               const notifications = current.messages.find((item) => item.id === message.id)!.notifications;
               const held = notifications[recipientId];
-              if (held?.state === "pending") notifications[recipientId] = { ...held, state: "failed" };
+              if (held?.state === "pending")
+                notifications[recipientId] = failed ? { ...held, state: "failed" } : { state: "mailbox" };
             }),
           );
           continue;
         }
-        if (control === "paused") continue;
         const request = dispatchRequest(swarm, message, recipient);
         const { run } = await step(() =>
           runs.enqueue({
@@ -600,7 +605,8 @@ export function createSwarmService(deps: {
     ...sweeper,
     sweep,
     async inspect(caller) {
-      const { swarm, self } = await load(caller);
+      const { auth, swarm, self } = await load(caller);
+      assertCallerMayDirect(caller, auth, swarm);
       return {
         id: swarm.id,
         self: view(self),
