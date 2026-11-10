@@ -494,6 +494,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         owner: capability.actorId,
         createdBy: capability.actorId,
         ownerScopeId,
+        ...(capability.botActor ? { botActor: true } : {}),
         ...(typeof req.title === "string" ? { title: req.title } : {}),
         ...(destination ? { destination } : {}),
         ...(req.unattendedGrants !== undefined ? { unattendedGrants: req.unattendedGrants } : {}),

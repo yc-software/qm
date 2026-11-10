@@ -9,6 +9,7 @@ import type { IdentityService } from "../identity/identity-service.ts";
 import { supportsProcessSessions, type ProcessSandbox, type Sandbox, type SandboxHandle } from "../sandbox/sandbox.ts";
 import { ProcessSessionGoneError } from "../sandbox/exec-process-session.ts";
 import { runTrigger, type TriggerDeps, type TriggerOutcome } from "../triggers/run-trigger.ts";
+import { cronTriggerAuthority } from "../cron/authority.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { createSweeper } from "../util/sweeper.ts";
 import { currentTenant, withTenant } from "../tenants/context.ts";
@@ -153,8 +154,7 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
     withErrorNotice = false,
   ): Promise<TriggerOutcome> {
     return runTrigger(triggerDeps, {
-      owner: m.owner,
-      ownerScopeId: m.ownerScopeId,
+      ...cronTriggerAuthority(m),
       input: event.input,
       securityScreenData: event.securityScreenData,
       fireKey,

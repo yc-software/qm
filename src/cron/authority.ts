@@ -8,13 +8,14 @@ import { parseScopeId } from "../types.ts";
 import { samePerson } from "../directory/person.ts";
 import { livePersonCapability } from "../api/artifact-share.ts";
 
-type TriggerAuthority = Pick<TriggerSpec, "owner" | "ownerScopeId" | "unattendedGrants">;
+type TriggerAuthority = Pick<TriggerSpec, "owner" | "ownerScopeId" | "unattendedGrants" | "botActor">;
 
 export function cronTriggerAuthority(cron: TriggerAuthority): TriggerAuthority {
   return {
     owner: cron.owner,
     ownerScopeId: cron.ownerScopeId,
     ...(cron.unattendedGrants ? { unattendedGrants: [...cron.unattendedGrants] } : {}),
+    ...(cron.botActor ? { botActor: true } : {}),
   };
 }
 

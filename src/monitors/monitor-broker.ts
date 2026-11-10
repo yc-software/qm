@@ -101,6 +101,7 @@ export interface MonitorBrokerDeps {
   scopeId: string;
   owner: string;
   ownerScopeId: ScopeId;
+  botActor?: boolean;
   threadRef: string;
   destination?: Destination;
   returnsToParent?: boolean;
@@ -134,7 +135,11 @@ export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
         }
       }
       const existing = (await deps.store.list()).find(
-        (m) => m.enabled && m.processId === processId && m.threadRef === deps.threadRef,
+        (m) =>
+          m.enabled &&
+          m.processId === processId &&
+          m.threadRef === deps.threadRef &&
+          Boolean(m.botActor) === Boolean(deps.botActor),
       );
       if (existing) {
         await deps.store.update(existing.id, {
@@ -148,6 +153,7 @@ export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
         owner: deps.owner,
         createdBy: deps.owner,
         ownerScopeId: deps.ownerScopeId,
+        ...(deps.botActor ? { botActor: true } : {}),
         ...(deps.destination && !deps.returnsToParent ? { destination: deps.destination } : {}),
         processId,
         command: rec.command,
