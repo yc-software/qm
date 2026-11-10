@@ -431,6 +431,8 @@ test("a delivery marks the web conversation unread for its participant", async (
   assert.equal((await sessions.getForParticipant(session.id, "alice@example.com"))!.unread, true);
 });
 
+const sentAsAlice = { ts: "123.789", name: "Alice", speakerId: "alice@example.com" };
+
 test("Slack send receipts survive a restart, retry a busy session, and collapse against the Slack event", async () => {
   const { sessions, inner, deliveries, runs } = wired();
   const session = await webSession(sessions, "dm:D123");
@@ -438,7 +440,7 @@ test("Slack send receipts survive a restart, retry a busy session, and collapse 
   const input = {
     destination: {
       ...webDestination("dm:D123"),
-      webTranscript: { kind: "slack_reply" as const, sessionId: session.id, ts: "123.789", name: "Alice" },
+      webTranscript: { kind: "slack_reply" as const, sessionId: session.id, ...sentAsAlice },
     },
     text: "Sent as Alice",
     idempotencyKey: "slack-reply:session:D123:123.789",
@@ -478,7 +480,7 @@ test("concurrent Slack receipt writers record one item and preserve distinct equ
         writer.enqueue({
           destination: {
             ...webDestination("dm:D123"),
-            webTranscript: { kind: "slack_reply", sessionId: session.id, ts, name: "Alice" },
+            webTranscript: { kind: "slack_reply", sessionId: session.id, ts, name: "Alice", speakerId: "alice@example.com" },
           },
           text: "App test!",
           idempotencyKey: `slack-reply:${session.id}:D123:${ts}`,
@@ -488,10 +490,10 @@ test("concurrent Slack receipt writers record one item and preserve distinct equ
   }
   const items = await sessions.getItems(session.id);
   assert.deepEqual(
-    items.map((item) => [item.kind, item.text, item.externalId]),
+    items.map((item) => [item.kind, item.text, item.externalId, item.body.speakerId]),
     [
-      ["UserMessage", "App test!", "123.100"],
-      ["UserMessage", "App test!", "123.200"],
+      ["UserMessage", "App test!", "123.100", "alice@example.com"],
+      ["UserMessage", "App test!", "123.200", "alice@example.com"],
     ],
   );
 });

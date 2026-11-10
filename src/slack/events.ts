@@ -24,7 +24,7 @@ import type { DenyResponder } from "./allow-from.ts";
 import { swallowAs } from "../util/errors.ts";
 import type { Mirror } from "./mirror.ts";
 import type { TurnHandler } from "./turn-handler.ts";
-import { shouldMirrorMessage, isOwnStatusCard, isBotAuthored } from "./message-gating.ts";
+import { shouldMirrorMessage, isOwnSlackMessage, isOwnStatusCard, isBotAuthored } from "./message-gating.ts";
 
 interface EventArgs {
   event: unknown;
@@ -219,12 +219,10 @@ export function registerSlackEvents(
         await pushSurfaceEvents([{ container: m.channel, ts: m.message.ts, deleted: true }]);
         return;
       }
-      const ownMessage = (event: { user?: string; bot_id?: string }): boolean =>
-        Boolean((ids.botUserId && event.user === ids.botUserId) || (ids.ownBotId && event.bot_id === ids.ownBotId));
       if (
         !(await actorAllowed(
           client,
-          ownMessage(m.message ?? m.previous_message ?? m)
+          isOwnSlackMessage(m.message ?? m.previous_message ?? m, ids.botUserId, ids.ownBotId)
             ? ids.botUserId
             : (m.user ?? m.message?.user ?? m.previous_message?.user),
         ))
@@ -255,9 +253,7 @@ export function registerSlackEvents(
       if (m.subtype === "message_deleted" && m.deleted_ts) {
         const type = m.channel_type;
         const prev = m.previous_message;
-        const selfDelete = Boolean(
-          prev && ((ids.botUserId && prev.user === ids.botUserId) || (ids.ownBotId && prev.bot_id === ids.ownBotId)),
-        );
+        const selfDelete = Boolean(prev && isOwnSlackMessage(prev, ids.botUserId, ids.ownBotId));
         if (m.channel && (type === "channel" || type === "group" || type === "mpim" || type === "im"))
           await pushSurfaceEvents([
             {
@@ -271,7 +267,7 @@ export function registerSlackEvents(
         return;
       }
       if (!shouldMirrorMessage(m)) return;
-      if (ownMessage(m) || !shouldProcessMessage(m, ids.botUserId, ids.ownBotId)) {
+      if (!shouldProcessMessage(m, ids.botUserId, ids.ownBotId)) {
         await mirrorMessageEvent(m, client, {
           handled: true,
           ...(m.channel_type === "im" ? { kind: "dm" } : {}),
