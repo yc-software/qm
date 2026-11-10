@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createServer, connect, type AddressInfo, type Socket } from "node:net";
 import { test } from "node:test";
 import pg from "pg";
-import { configurePgPooling, createPgPool } from "../src/persistence/pg-pool.ts";
+import { configurePgPooling, createPgPool, withPgTransaction } from "../src/persistence/pg-pool.ts";
 
 const url = process.env.DATABASE_URL;
 const skip = url ? false : "set DATABASE_URL (a Postgres) to run the query timeout tests";
@@ -224,6 +224,29 @@ test("caught database errors keep the pooled connection", { skip }, async () => 
     assert.equal(pids.size, 1);
     assert.equal((await connectionState(store)).status, "I");
   } finally {
+    await store.close();
+  }
+});
+
+test("withPgTransaction enforces idle-in-transaction timeout when client hangs", { skip }, async () => {
+  configurePgPooling({ idleInTransactionTimeoutMs: 150 });
+  const store = createPgPool(url!);
+  try {
+    await assert.rejects(
+      withPgTransaction(await store.pool(), async (client) => {
+        await client.query("SELECT 1");
+        const { promise, resolve } = Promise.withResolvers<void>();
+        setTimeout(resolve, 300);
+        await promise;
+        await client.query("SELECT 2");
+      }),
+      (error: unknown) => {
+        const msg = error instanceof Error ? error.message : String(error);
+        return /idle-in-transaction|connection error|queryable/i.test(msg);
+      },
+    );
+  } finally {
+    configurePgPooling({ idleInTransactionTimeoutMs: 60_000 });
     await store.close();
   }
 });
