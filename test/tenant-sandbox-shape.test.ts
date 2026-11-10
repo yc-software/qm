@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 import type { ModalClient, ModalSession } from "../src/sandbox/modal-client.ts";
-import { createSpritesSandbox } from "../src/sandbox/sprites-sandbox.ts";
+import { createSpritesSandbox, type StoredSprite } from "../src/sandbox/sprites-sandbox.ts";
 import {
   TenantKeyedMap,
   tenantModalClient,
@@ -57,9 +57,7 @@ describeTwoTenants("per-tenant sandbox shape", (db) => {
     const fake = installFakeSprites();
     try {
       const sandbox = createSpritesSandbox({
-        initializationStore: createPostgresMapFactory(db.ownerDatabaseUrl).map<{ pending: boolean }>(
-          "sprites_shape_init",
-        ),
+        initializationStore: createPostgresMapFactory(db.ownerDatabaseUrl).map<StoredSprite>("sprites_shape_init"),
         advisoryLock: testAdvisoryLock(),
         token: FAKE_SPRITES_TOKEN,
         namePrefix: "qmt",
