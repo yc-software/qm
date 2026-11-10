@@ -241,6 +241,23 @@ test("write creates or replaces a file and delete removes one, each as a save", 
   assert.equal(h.writes.length, 2);
 });
 
+test("an app with a dev script restarts into it on the first save and hot-reloads later ones", async () => {
+  const h = harness();
+  await h.publish("notes", {
+    "package.json": JSON.stringify({ scripts: { dev: "vite --port $PORT" } }),
+    "src/app.css": STYLES,
+  });
+  const chat = h.chat("notes");
+  const recolor = (from: string, to: string) =>
+    chat.call({
+      action: "edit",
+      edits: [{ path: "src/app.css", old: `.title { color: ${from}; }`, new: `.title { color: ${to}; }` }],
+    });
+
+  assert.match(await recolor("black", "teal"), /^Saved src\/app\.css\. It is live: the app restarted with it/);
+  assert.match(await recolor("teal", "navy"), /^Saved src\/app\.css\. It is live: open tabs hot-reloaded it\.$/);
+});
+
 test("saving content the app already has changes nothing", async () => {
   const h = harness();
   const d = await h.publish("notes");

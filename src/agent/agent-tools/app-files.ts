@@ -29,9 +29,10 @@ function describeSaved(r: SourceSaved): string {
   if (!paths.length) return "Nothing to save: the app's files already have this content.";
   if (!r.liveEdit)
     return `Saved ${paths.join(", ")} and published it as v${r.version}. This app cannot be edited while it runs, so each change is a full publish and takes longer to show.`;
-  const shown = r.liveEdit.hot
-    ? "It is live: open tabs hot-reloaded it."
-    : "It is live: the app restarted with it and open tabs reload within seconds.";
+  const shown =
+    r.liveEdit.hot && !r.liveEdit.first
+      ? "It is live: open tabs hot-reloaded it."
+      : "It is live: the app restarted with it and open tabs reload within seconds.";
   return `Saved ${paths.join(", ")}. ${shown}${previousPublishFailure(r.liveEdit)}`;
 }
 
