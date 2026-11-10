@@ -104,7 +104,8 @@ export function cronTools(kit: ToolKit) {
       "`schedule`: {cron,timezone} for anything tied to a time of day or calendar (IANA timezone: the user's local one unless they name another; omit for this turn's), {everyMs} for sub-day polling only (first run one interval from now), or {firstFireAt} (epoch ms, one-shot; Date.now() means now). Never compute future epochs for calendar times.\n" +
       "DELIVERY: by default a cron posts back to this conversation; keep that for watches and follow-ups on work started here, and don't pick a DM just because this is one. " +
       'Otherwise set `recipient` (teammate → DM), `channel`, `participants` (member ids → an existing group DM; reach it once first), or `destinationKey` (from the "Where scheduled tasks post" menu); ' +
-      'scope="personal" runs it at the asker\'s own scope and DMs them. Never put the destination inside `task`. retarget changes the destinationKey.\n' +
+      'scope="personal" runs it at the asker\'s own scope and DMs them. Never put the destination inside `task`. retarget changes the destinationKey. ' +
+      "A fire's reply to its owner's own DM is batched: a cheap model drops no-change noise, sends what needs attention as one message, and holds the rest for a 9:00/17:00 digest. Start the reply's first line with [urgent] to skip the wait.\n" +
       'Crons whose fires read admin data need `unattendedGrants`, and many admin reads have none: first follow the admin skill\'s "Scheduling admin-reading work", which fetches the live grant list. ' +
       "Before a grant-carrying cron posts anywhere but its owner's DM (create or retarget), tell the owner who will see its unattended admin output and act only on their explicit yes.\n" +
       "ACCESS: a cron belongs to its creator and runs as them; everyone here can see it, only the owner can change it unless shared with permission=write; deleted at its next fire if the owner has left its private channel or group.\n" +

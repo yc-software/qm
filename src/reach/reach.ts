@@ -1,4 +1,4 @@
-import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
+import type { Delivery, DeliveryHold, DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
 import { scopeId as makeScopeId } from "../types.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { ChannelResolution, GroupResolution, RecipientResolution } from "../directory/directory-store.ts";
@@ -296,6 +296,8 @@ export interface ReachEnqueueInput {
   provenance?: DeliveryProvenance;
   attributeAs?: string;
   shadow?: boolean;
+  hold?: DeliveryHold;
+  sourceCronId?: string;
 }
 
 export function withSlackUnfurlOption(destination: Destination, unfurlLinks: boolean | undefined): Destination {
@@ -346,6 +348,8 @@ export async function reachEnqueue(input: ReachEnqueueInput): Promise<Delivery> 
     idempotencyKey: input.idempotencyKey,
     ...(input.provenance ? { provenance: input.provenance } : {}),
     ...(input.shadow ? { shadow: true } : {}),
+    ...(input.hold ? { hold: input.hold } : {}),
+    ...(input.sourceCronId ? { sourceCronId: input.sourceCronId } : {}),
   });
 }
 

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment, ScopeId } from "../types.ts";
+import type { Delivery, DeliveryHold, DeliveryProvenance, Destination, OutgoingAttachment, ScopeId } from "../types.ts";
 import type { TurnOrigin } from "../core/turn-origin.ts";
 import { currentTenant } from "../tenants/context.ts";
 import { tenantListeners } from "../tenants/cache.ts";
@@ -46,6 +46,8 @@ export interface DeliveryStore {
     provenance?: DeliveryProvenance;
     idempotencyKey: string;
     shadow?: boolean;
+    hold?: DeliveryHold;
+    sourceCronId?: string;
   }): Promise<Delivery>;
   pending(type: string): Promise<Delivery[]>;
   claimPending(type: string, ttlMs: number): Promise<Delivery[]>;
@@ -61,6 +63,10 @@ export interface DeliveryStore {
   recordRecipientThread(id: string, recipientThreadRef: string, at: number): Promise<void>;
   listByRecipientThread(recipientThreadRef: string, opts?: { limit?: number }): Promise<Delivery[]>;
   listBySourceSession(sourceSessionId: string, sourceThreadRef: string, opts?: { limit?: number }): Promise<Delivery[]>;
+  heldTenants(now: number): Promise<ClaimedRow[]>;
+  listHeld(): Promise<Delivery[]>;
+  settleHeld(ids: string[], at: number, droppedReason?: string): Promise<void>;
+  lastCronTexts(cronIds: string[]): Promise<Map<string, string>>;
   onEnqueue(listener: (type: string) => void): () => void;
 }
 
@@ -76,6 +82,7 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
       if (
         d.deliveredAt !== null ||
         d.shadow ||
+        d.hold ||
         d.expiredAt !== undefined ||
         d.destination.webTranscript?.kind === "slack_reply"
       )
@@ -91,7 +98,7 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
     const now = Date.now();
     expireOveraged(now);
     const open = [...deliveries.values()].filter(
-      (d) => d.deliveredAt === null && d.expiredAt === undefined && !d.shadow && d.destination.type === type,
+      (d) => d.deliveredAt === null && d.expiredAt === undefined && !d.shadow && !d.hold && d.destination.type === type,
     );
     const seen = new Set<string>();
     const rows = open.filter((d) => {
@@ -134,15 +141,18 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
         createdAt: Date.now(),
         deliveredAt: null,
         ...(input.shadow ? { shadow: true } : {}),
+        ...(input.hold ? { hold: input.hold } : {}),
+        ...(input.sourceCronId ? { sourceCronId: input.sourceCronId } : {}),
       };
       deliveries.set(delivery.id, delivery);
       byKey.set(delivery.idempotencyKey, delivery.id);
-      if (!delivery.shadow) enqueueListeners.emit(delivery.destination.type);
+      if (!delivery.shadow && !delivery.hold) enqueueListeners.emit(delivery.destination.type);
       return delivery;
     },
     async pending(type) {
       return [...deliveries.values()].filter(
-        (d) => d.deliveredAt === null && d.expiredAt === undefined && !d.shadow && d.destination.type === type,
+        (d) =>
+          d.deliveredAt === null && d.expiredAt === undefined && !d.shadow && !d.hold && d.destination.type === type,
       );
     },
     async claimPending(type, ttlMs) {
@@ -153,9 +163,38 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
     },
     async undeliveredTenants(type) {
       const waiting = [...deliveries.values()].some(
-        (d) => d.deliveredAt === null && d.expiredAt === undefined && !d.shadow && d.destination.type === type,
+        (d) =>
+          d.deliveredAt === null && d.expiredAt === undefined && !d.shadow && !d.hold && d.destination.type === type,
       );
       return waiting ? [{ tenantId: currentTenant(), id: type }] : [];
+    },
+    async heldTenants(now) {
+      return [...deliveries.values()].some((d) => d.hold && d.hold.until <= now)
+        ? [{ tenantId: currentTenant(), id: "held" }]
+        : [];
+    },
+    async listHeld() {
+      return [...deliveries.values()].filter((d) => d.hold).sort((a, b) => a.createdAt - b.createdAt);
+    },
+    async settleHeld(ids, at, droppedReason) {
+      for (const id of ids) {
+        const d = deliveries.get(id);
+        if (!d?.hold) continue;
+        delete d.hold;
+        if (droppedReason === undefined) d.deliveredAt = at;
+        else {
+          d.expiredAt = at;
+          d.failedReason = droppedReason;
+        }
+      }
+    },
+    async lastCronTexts(cronIds) {
+      const out = new Map<string, string>();
+      const settled = [...deliveries.values()]
+        .filter((d) => d.sourceCronId && cronIds.includes(d.sourceCronId) && !d.hold)
+        .sort((a, b) => a.createdAt - b.createdAt);
+      for (const d of settled) out.set(d.sourceCronId!, d.text);
+      return out;
     },
     async listShadow(opts) {
       const limit = Math.max(1, opts?.limit ?? 100);

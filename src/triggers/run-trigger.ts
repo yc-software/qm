@@ -15,6 +15,7 @@ import { grantsHomedWithOwner } from "../cron/authority.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { isProjectGroupRef } from "../projects/project-store.ts";
 import { reportFailureAs, swallowAs } from "../util/errors.ts";
+import { holdReply, isOwnInbox } from "../cron/handler/held-deliveries.ts";
 
 const MEMBERSHIP_SKIP_NOTE = "the acting person is no longer a member of this trigger's home scope — run skipped";
 const UNKNOWN_HOME_SKIP_NOTE =
@@ -42,6 +43,7 @@ export interface TriggerSpec extends Pick<
 > {
   runtime?: import("../agent/agent.ts").RuntimeChoice | null;
   title?: string;
+  cronId?: string;
   owner: string;
   ownerScopeId: ScopeId;
   input: string | ((homeRoster: DirectoryMember[] | undefined) => string);
@@ -352,10 +354,15 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         note = notVisibleNote;
         return;
       }
+      const held =
+        spec.cronId && !spec.shadow && !res.attachments?.length && isOwnInbox(spec.owner, spec.destination)
+          ? holdReply(res.reply ?? "", Date.now())
+          : undefined;
       await reachEnqueue({
         deliveries: deps.deliveries,
         destination: res.persona ? { ...spec.destination, persona: res.persona } : spec.destination,
-        text: res.reply ?? "",
+        text: held?.text ?? res.reply ?? "",
+        ...(held ? { hold: held.hold, sourceCronId: spec.cronId } : {}),
         ...(res.attachments?.length ? { attachments: res.attachments } : {}),
         idempotencyKey: spec.fireKey,
         provenance: deliveryProvenance(spec, threadRef, res),

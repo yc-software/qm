@@ -5,6 +5,7 @@ import {
   exerciseDeliveryExpiryRevive,
   exerciseDeliveryFail,
   exerciseDeliveryStore,
+  exerciseHeldCronDeliveries,
 } from "./delivery-store-contract.ts";
 
 test("memory delivery store: idempotent enqueue, pending-by-type, ack, get", async () => {
@@ -21,4 +22,8 @@ test("memory delivery store: once-ever keys revive after a TTL drop instead of d
 
 test("memory delivery store: a permanently refused row fails once and never revives", async () => {
   await exerciseDeliveryFail((opts) => createDeliveryStore(opts));
+});
+
+test("delivery store: cron replies to their owner are held, triaged and digested", async () => {
+  await exerciseHeldCronDeliveries(createDeliveryStore());
 });

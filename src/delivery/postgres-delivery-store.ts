@@ -10,8 +10,11 @@ import { claimFunction, claimRows, claimThenLoad } from "../tenants/claim.ts";
 const NOW_MS_SQL = "(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT";
 const CLAIMABLE = `delivered_at IS NULL AND expired_at IS NULL AND NOT shadow
   AND (claim_expires_at IS NULL OR claim_expires_at <= ${NOW_MS_SQL})`;
+const LIVE_CLAIMABLE = `${CLAIMABLE} AND hold IS NULL`;
 const OVERAGED = `${CLAIMABLE} AND destination->'webTranscript'->>'kind' IS DISTINCT FROM 'slack_reply'
   AND created_at <= ${NOW_MS_SQL} - $1`;
+const LIVE_OVERAGED = `${OVERAGED} AND hold IS NULL`;
+const UNDELIVERED = "delivered_at IS NULL AND expired_at IS NULL AND NOT shadow AND hold IS NULL";
 function rowToDelivery(r: Record<string, unknown>): Delivery {
   return {
     id: r.id as string,
@@ -25,6 +28,8 @@ function rowToDelivery(r: Record<string, unknown>): Delivery {
     ...(r.expired_at != null ? { expiredAt: Number(r.expired_at) } : {}),
     ...(r.failed_reason != null ? { failedReason: r.failed_reason as string } : {}),
     ...(r.shadow === true ? { shadow: true } : {}),
+    ...(r.hold != null ? { hold: { kind: r.hold as "triage" | "digest", until: Number(r.held_until) } } : {}),
+    ...(r.source_cron_id != null ? { sourceCronId: r.source_cron_id as string } : {}),
     ...(r.recipient_thread_ref != null ? { recipientThreadRef: r.recipient_thread_ref as string } : {}),
     ...(r.deliver_latency_ms != null ? { deliverLatencyMs: Number(r.deliver_latency_ms) } : {}),
     ...(r.slack_api_ms != null ? { slackApiMs: Number(r.slack_api_ms) } : {}),
@@ -162,6 +167,52 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         ),
       ],
     },
+    {
+      id: "delivery/store/0013-held",
+      statements: [
+        `SET LOCAL lock_timeout = '3s'`,
+        `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS hold TEXT CHECK (hold IN ('triage', 'digest'))`,
+        `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS held_until BIGINT`,
+        `CREATE INDEX IF NOT EXISTS idx_deliveries_held ON deliveries (held_until) WHERE hold IS NOT NULL`,
+        `CREATE INDEX IF NOT EXISTS idx_deliveries_source_cron
+        ON deliveries (source_cron_id, created_at) WHERE source_cron_id IS NOT NULL`,
+        claimFunction(
+          "expire_deliveries",
+          "bigint",
+          `UPDATE deliveries SET expired_at = ${NOW_MS_SQL}
+            WHERE (tenant_id, id) IN (SELECT tenant_id, id FROM deliveries WHERE ${LIVE_OVERAGED} FOR UPDATE SKIP LOCKED)
+            RETURNING tenant_id, id::text`,
+        ),
+        claimFunction(
+          "claim_deliveries",
+          "text, bigint",
+          `SELECT pg_advisory_xact_lock(hashtext('deliveries:claim:' || $1));
+          UPDATE deliveries SET claim_expires_at = ${NOW_MS_SQL} + $2
+            WHERE (tenant_id, id) IN (
+              SELECT tenant_id, id FROM deliveries d
+               WHERE ${LIVE_CLAIMABLE} AND destination->>'type' = $1
+                 AND NOT EXISTS (
+                   SELECT 1 FROM deliveries o
+                    WHERE o.tenant_id = d.tenant_id AND o.destination->>'type' = $1
+                      AND o.destination->>'target' = d.destination->>'target'
+                      AND o.delivered_at IS NULL AND o.expired_at IS NULL AND NOT o.shadow AND o.hold IS NULL
+                      AND (o.claim_expires_at > ${NOW_MS_SQL} OR (o.created_at, o.id) < (d.created_at, d.id)))
+               ORDER BY created_at
+               FOR UPDATE SKIP LOCKED)
+            RETURNING tenant_id, id::text`,
+        ),
+        claimFunction(
+          "undelivered_delivery_tenants",
+          "text",
+          `SELECT DISTINCT tenant_id, $1 FROM deliveries WHERE ${UNDELIVERED} AND destination->>'type' = $1`,
+        ),
+        claimFunction(
+          "held_delivery_tenants",
+          "bigint",
+          `SELECT DISTINCT tenant_id, 'held' FROM deliveries WHERE hold IS NOT NULL AND held_until <= $1`,
+        ),
+      ],
+    },
   ]);
   const { q, query } = pg;
 
@@ -176,7 +227,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
     const rows = await q(
       `UPDATE deliveries
           SET expired_at = ${NOW_MS_SQL}
-        WHERE id IN (SELECT id FROM deliveries WHERE ${OVERAGED} FOR UPDATE SKIP LOCKED)
+        WHERE id IN (SELECT id FROM deliveries WHERE ${LIVE_OVERAGED} FOR UPDATE SKIP LOCKED)
         RETURNING *`,
       [maxAgeMs],
     );
@@ -189,8 +240,9 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
   return {
     async enqueue(input) {
       const inserted = await q(
-        `INSERT INTO deliveries (id, idempotency_key, destination, text, attachments, provenance, created_at, shadow)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        `INSERT INTO deliveries
+           (id, idempotency_key, destination, text, attachments, provenance, created_at, shadow, hold, held_until, source_cron_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          ON CONFLICT (tenant_id, idempotency_key) DO UPDATE
            SET destination = EXCLUDED.destination,
                text = EXCLUDED.text,
@@ -198,6 +250,9 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
                provenance = EXCLUDED.provenance,
                created_at = EXCLUDED.created_at,
                shadow = EXCLUDED.shadow,
+               hold = EXCLUDED.hold,
+               held_until = EXCLUDED.held_until,
+               source_cron_id = EXCLUDED.source_cron_id,
                expired_at = NULL,
                claim_expires_at = NULL
            WHERE deliveries.delivered_at IS NULL AND deliveries.expired_at IS NOT NULL
@@ -212,10 +267,13 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
           input.provenance ? JSON.stringify(input.provenance) : null,
           Date.now(),
           input.shadow === true,
+          input.hold?.kind ?? null,
+          input.hold?.until ?? null,
+          input.sourceCronId ?? null,
         ],
       );
       if (inserted[0]) {
-        if (input.shadow !== true) enqueueListeners.emit(input.destination.type);
+        if (input.shadow !== true && !input.hold) enqueueListeners.emit(input.destination.type);
         return rowToDelivery(inserted[0]);
       }
       const existing = await q("SELECT * FROM deliveries WHERE idempotency_key = $1", [input.idempotencyKey]);
@@ -225,7 +283,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
     async pending(type) {
       const rows = await q(
         `SELECT * FROM deliveries
-          WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow AND destination->>'type' = $1
+          WHERE ${UNDELIVERED} AND destination->>'type' = $1
           ORDER BY created_at`,
         [type],
       );
@@ -236,7 +294,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       const rows = await q(
         `UPDATE deliveries SET claim_expires_at = ${NOW_MS_SQL} + $2
           WHERE id IN (
-            SELECT id FROM deliveries WHERE ${CLAIMABLE} AND destination->>'type' = $1
+            SELECT id FROM deliveries WHERE ${LIVE_CLAIMABLE} AND destination->>'type' = $1
              ORDER BY created_at FOR UPDATE SKIP LOCKED)
           RETURNING *`,
         [type, ttlMs],
@@ -252,6 +310,30 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       return claimed.sort((a, b) => a.createdAt - b.createdAt);
     },
     undeliveredTenants: (type) => claimRows(pg, "undelivered_delivery_tenants", [type]),
+    heldTenants: (now) => claimRows(pg, "held_delivery_tenants", [now]),
+    async listHeld() {
+      return (await q("SELECT * FROM deliveries WHERE hold IS NOT NULL ORDER BY created_at")).map(rowToDelivery);
+    },
+    async settleHeld(ids, at, droppedReason) {
+      await query(
+        `UPDATE deliveries
+            SET hold = NULL,
+                delivered_at = CASE WHEN $3::text IS NULL THEN $2::bigint END,
+                expired_at = CASE WHEN $3::text IS NULL THEN NULL ELSE $2::bigint END,
+                failed_reason = $3
+          WHERE id = ANY($1::text[]) AND hold IS NOT NULL`,
+        [ids, at, droppedReason ?? null],
+      );
+    },
+    async lastCronTexts(cronIds) {
+      const rows = await q(
+        `SELECT DISTINCT ON (source_cron_id) source_cron_id, text FROM deliveries
+          WHERE source_cron_id = ANY($1::text[]) AND hold IS NULL
+          ORDER BY source_cron_id, created_at DESC`,
+        [cronIds],
+      );
+      return new Map(rows.map((r) => [r.source_cron_id as string, r.text as string]));
+    },
     async listShadow(opts) {
       const limit = Math.max(1, opts?.limit ?? 100);
       const rows = await q(

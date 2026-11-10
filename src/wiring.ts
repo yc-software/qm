@@ -336,6 +336,7 @@ import { createControlService } from "./api/control-service.ts";
 import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
 import { ambientTenant, boundTenant, currentTenant, withTenant } from "./tenants/context.ts";
 import { claimThenBind } from "./tenants/claim.ts";
+import { sweepHeldDeliveries } from "./cron/handler/held-deliveries.ts";
 import { inboundTenancy } from "./tenants/lookup.ts";
 import type { RunSignalStore } from "./runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "./runs/postgres-run-signal-store.ts";
@@ -2580,6 +2581,26 @@ export function buildApp(
     1_000,
     { label: "session-returns", immediate: true },
   );
+  const heldDeliverySweeper = createSweeper(
+    () =>
+      advisoryLock.tryWithLock("held-deliveries", () =>
+        claimThenBind(
+          () => deliveries.heldTenants(Date.now()),
+          () =>
+            sweepHeldDeliveries(
+              deliveries,
+              async (prompt) => {
+                const reply = await agent.judge?.("Reply with JSON only.", prompt);
+                if (reply === undefined) throw new Error("cron handler: no utility model configured");
+                return reply;
+              },
+              Date.now(),
+            ),
+        ),
+      ),
+    30_000,
+    { label: "held-deliveries" },
+  );
   const runResultSweeper = createSweeper(
     () => advisoryLock.tryWithLock("run-result-sweep", () => runResultRecovery.sweep()),
     60_000,
@@ -3003,6 +3024,7 @@ export function buildApp(
       orphanedSignalSweeper.start();
       sessionReturnSweeper.start();
       runResultSweeper.start();
+      heldDeliverySweeper.start();
       approvalDeliverySweeper.start();
       webTranscriptSweeper.start();
       partnerChatDelivery?.start();
@@ -3041,6 +3063,7 @@ export function buildApp(
       orphanedSignalSweeper.stop(),
       sessionReturnSweeper.stop(),
       runResultSweeper.stop(),
+      heldDeliverySweeper.stop(),
       approvalDeliverySweeper.stop(),
       webTranscriptSweeper.stop(),
       partnerChatDelivery?.stop(),

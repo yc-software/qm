@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import type { DeliveryStore } from "../src/delivery/delivery-store.ts";
+import { HOLD_WINDOW_MS, sweepHeldDeliveries } from "../src/cron/handler/held-deliveries.ts";
+import { DIGEST_HEADING } from "../src/cron/handler/fire-handler.ts";
 
 export async function exerciseDeliveryStore(store: DeliveryStore): Promise<void> {
   const d = await store.enqueue({
@@ -388,4 +390,81 @@ export async function exerciseDeliveryFail(makeStore: (opts: { maxAgeMs: number 
   assert.equal(again.id, card.id);
   assert.equal(again.failedReason, "cannot_dm_bot", "re-enqueuing the same key does not revive a failed row");
   assert.deepEqual(await store.claimPending("principal", 60_000), []);
+}
+
+export async function exerciseHeldCronDeliveries(store: DeliveryStore): Promise<void> {
+  const owner = { type: "principal", target: "U-held", onBehalfOf: "U-held" };
+  const provenance = (title: string) => ({
+    trigger: "cron" as const,
+    surface: "cron",
+    fireKey: `cron:${title}`,
+    sourceScopeId: "personal:U-held" as const,
+    sourceThreadRef: `agent:main:cron:${title}`,
+    sourceTitle: title,
+  });
+  const t0 = Date.now();
+  const earlier = await store.enqueue({
+    destination: owner,
+    text: "Nothing new.",
+    idempotencyKey: "held:a:0",
+    provenance: provenance("Inbox"),
+    sourceCronId: "a",
+  });
+  await store.ack(earlier.id, t0);
+  const fires = [
+    { cron: "a", title: "Inbox", text: "Nothing new." },
+    { cron: "b", title: "PR watch", text: "PR 12 merged." },
+    { cron: "c", title: "Spend", text: "Spend is flat." },
+  ];
+  for (const f of fires)
+    await store.enqueue({
+      destination: owner,
+      text: f.text,
+      idempotencyKey: `held:${f.cron}:1`,
+      provenance: provenance(f.title),
+      sourceCronId: f.cron,
+      hold: { kind: "triage", until: t0 + HOLD_WINDOW_MS },
+    });
+  assert.deepEqual(await store.pending("principal"), [], "held cron replies are not sent on enqueue");
+  assert.deepEqual(await store.claimDue("principal", 60_000), [], "nor claimed by the relay");
+  assert.deepEqual(await store.heldTenants(t0), [], "nothing is due before the window closes");
+
+  const prompts: string[] = [];
+  const model = async (prompt: string) => {
+    prompts.push(prompt);
+    return JSON.stringify({
+      sendNow: ["PR watch: PR 12 merged."],
+      digestItems: ["Spend: flat."],
+      dropped: [],
+    });
+  };
+  const flushAt = t0 + HOLD_WINDOW_MS + 1;
+  assert.equal((await store.heldTenants(flushAt)).length, 1);
+  await sweepHeldDeliveries(store, model, flushAt);
+  assert.equal(prompts.length, 1, "one model call per owner flush");
+  assert.ok(!prompts[0]!.includes("Nothing new."), "an unchanged repeat is dropped before the model sees it");
+  assert.deepEqual(
+    (await store.pending("principal")).map((d) => d.text),
+    ["PR watch: PR 12 merged."],
+  );
+  const held = await store.listHeld();
+  assert.deepEqual(
+    held.map((d) => [d.hold?.kind, d.text]),
+    [["digest", "Spend: flat."]],
+  );
+  const digestAt = held[0]!.hold!.until;
+  const pacific = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Los_Angeles",
+    hour: "numeric",
+    minute: "numeric",
+    hourCycle: "h23",
+  }).format(digestAt);
+  assert.ok(["9:00", "09:00", "17:00"].includes(pacific), `digest lands at 9:00 or 17:00 Pacific, got ${pacific}`);
+  await sweepHeldDeliveries(store, model, digestAt);
+  assert.deepEqual(await store.listHeld(), []);
+  assert.deepEqual(
+    (await store.pending("principal")).map((d) => d.text),
+    ["PR watch: PR 12 merged.", `${DIGEST_HEADING}\n- Spend: flat.`],
+  );
+  assert.equal(prompts.length, 1, "the digest needs no model call");
 }

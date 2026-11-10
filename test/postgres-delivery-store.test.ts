@@ -7,6 +7,7 @@ import {
   exerciseDeliveryExpiryRevive,
   exerciseDeliveryFail,
   exerciseDeliveryStore,
+  exerciseHeldCronDeliveries,
 } from "./delivery-store-contract.ts";
 
 const URL = process.env.DATABASE_URL;
@@ -122,3 +123,7 @@ test(
     for (const id of ids) await store.ack(id, Date.now());
   },
 );
+
+test("pg delivery store: cron replies to their owner are held, triaged and digested", { skip }, async () => {
+  await exerciseHeldCronDeliveries(createPostgresDeliveryStore(URL!));
+});

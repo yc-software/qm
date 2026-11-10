@@ -263,6 +263,11 @@ export interface DeliveryProvenance {
   sourceAssistantEntrySeq?: number;
 }
 
+export interface DeliveryHold {
+  kind: "triage" | "digest";
+  until: number;
+}
+
 export interface Delivery {
   id: string;
   destination: Destination;
@@ -275,6 +280,8 @@ export interface Delivery {
   expiredAt?: number;
   failedReason?: string;
   shadow?: boolean;
+  hold?: DeliveryHold;
+  sourceCronId?: string;
   recipientThreadRef?: string;
   deliverLatencyMs?: number;
   slackApiMs?: number;
