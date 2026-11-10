@@ -1143,7 +1143,7 @@ test("a teamed owner's swarm worker can start its default computer mid-turn", as
   const teams: TeamStore = {
     list: async () => [],
     forTurn: async () => [team],
-    isMember: async (id) => id === "alice",
+    isMember: async (_tenant, id) => id === "alice",
     apply: async () => {},
   };
   const base = createMockAgent();

@@ -13,6 +13,7 @@ import { serverDeps } from "../src/wiring.ts";
 import { buildApp, stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
+import type { Tenant } from "../src/tenants/context.ts";
 
 const SIGNING = "file-content-browser-signing-secret-0123";
 const config = testConfig({ signingSecret: SIGNING });
@@ -57,7 +58,7 @@ await put("playground", "alice", "pg.html", "text/html", PLAYGROUND_HTML);
 
 const app = {
   ...built.app,
-  openFileForViewer: async (id: string, viewer: string) =>
+  openFileForViewer: async (tenant: Tenant, id: string, viewer: string) =>
     id === "cut-off"
       ? {
           name: "cut.pdf",
@@ -71,7 +72,7 @@ const app = {
             })(),
           ),
         }
-      : built.app.openFileForViewer(id, viewer),
+      : built.app.openFileForViewer(tenant, id, viewer),
 };
 
 async function frontDoor(t: TestContext, deps: Partial<ServerDeps> = {}): Promise<string> {
