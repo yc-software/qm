@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { DNS_LABEL_MAX, isDnsLabel } from "../../plugins/chassis/src/dns-label.ts";
 import { gzipSync } from "node:zlib";
 import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider } from "./deploy-provider.ts";
@@ -355,11 +356,8 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
   const checked = recentAppChecks();
 
   function ensureConfigured(): void {
-    if (
-      opts.sharedAppName &&
-      (opts.sharedAppName.length > 63 || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(opts.sharedAppName))
-    )
-      throw new Error("Fly shared app name must be a lowercase DNS label no longer than 63 characters");
+    if (opts.sharedAppName && !isDnsLabel(opts.sharedAppName))
+      throw new Error(`Fly shared app name must be a lowercase DNS label no longer than ${DNS_LABEL_MAX} characters`);
     if (opts.sharedAppName && (!opts.portStore || !opts.dataVolumeSizeGb || !opts.configStore))
       throw new Error("Fly shared apps require persistent port assignments and durable storage");
     if (opts.dataVolumeSizeGb && !opts.configStore)
@@ -374,10 +372,7 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
     if (!opts.appPrefix && !opts.sharedAppName) throw new Error("FLY_DEPLOY_APP_PREFIX not set (DEPLOY_PROVIDER=fly)");
     if (!opts.baseImage) throw new Error("FLY_DEPLOY_BASE_IMAGE not set (DEPLOY_PROVIDER=fly)");
     if (!opts.org) throw new Error("FLY_ORG not set (DEPLOY_PROVIDER=fly)");
-    if (
-      !opts.sharedAppName &&
-      (opts.appPrefix.length > 26 || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(opts.appPrefix))
-    ) {
+    if (!opts.sharedAppName && (opts.appPrefix.length > 26 || !isDnsLabel(opts.appPrefix))) {
       throw new Error("FLY_DEPLOY_APP_PREFIX must be a lowercase DNS label no longer than 26 characters");
     }
   }

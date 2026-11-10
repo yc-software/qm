@@ -1,4 +1,5 @@
 import type { EgressPolicy } from "../types.ts";
+import { isDnsName } from "../../plugins/chassis/src/dns-label.ts";
 
 function normalizeHost(host: string): string {
   const s = host
@@ -33,11 +34,7 @@ export function parseEgressPolicy(input: unknown): { policy: EgressPolicy } | { 
       const colonCount = (candidate.match(/:/g) ?? []).length;
       if (colonCount === 1) return { error: `${candidate} includes a port; enter a host name only` };
       const normalized = normalizeHost(candidate);
-      if (
-        !normalized ||
-        (colonCount < 2 &&
-          !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(normalized))
-      ) {
+      if (!normalized || (colonCount < 2 && !isDnsName(normalized))) {
         return { error: `${candidate} is not a valid host name` };
       }
       if (seen.has(normalized)) return { error: `${name} contains duplicate host ${normalized}` };

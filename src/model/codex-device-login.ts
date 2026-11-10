@@ -3,6 +3,7 @@ import type { AuthEvent, AuthPrompt, OAuthAuth, OAuthCredential } from "@earendi
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 import type { UserOAuthTokens } from "./user-model-credential-store.ts";
 import { chatgptAccountIdFromToken } from "./chatgpt-auth-file.ts";
+import { currentTenant } from "../tenants/context.ts";
 import type { ChatGPTDevicePrompt } from "./subscription-oauth.ts";
 
 const LOGIN_TTL_MS = 15 * 60 * 1000;
@@ -11,6 +12,7 @@ const DEVICE_CODE_METHOD = "device_code";
 
 interface PendingLogin {
   owner: string;
+  tenant: string;
   abort: AbortController;
   expiresAt: number;
   outcome: Promise<UserOAuthTokens>;
@@ -45,6 +47,7 @@ export function createCodexDeviceLogin(opts: { oauth?: OAuthAuth } = {}) {
 
   return {
     async start(owner: string): Promise<ChatGPTDevicePrompt> {
+      const tenant = currentTenant();
       sweep();
       const oauth = opts.oauth ?? openaiCodexProvider().auth.oauth;
       if (!oauth) throw new Error("ChatGPT subscription login is unavailable");
@@ -80,7 +83,7 @@ export function createCodexDeviceLogin(opts: { oauth?: OAuthAuth } = {}) {
         ]);
         const loginId = randomUUID();
         const expiresAt = Date.now() + Math.min(LOGIN_TTL_MS, (event.expiresInSeconds ?? Infinity) * 1000);
-        const login: PendingLogin = { owner, abort, expiresAt, outcome, settled: false };
+        const login: PendingLogin = { owner, tenant, abort, expiresAt, outcome, settled: false };
         void outcome
           .catch(() => undefined)
           .finally(() => {
@@ -103,9 +106,10 @@ export function createCodexDeviceLogin(opts: { oauth?: OAuthAuth } = {}) {
     },
 
     async poll(loginId: string, owner: string): Promise<UserOAuthTokens | "pending" | "unknown"> {
+      const tenant = currentTenant();
       sweep();
       const login = pending.get(loginId);
-      if (!login || login.owner !== owner) return "unknown";
+      if (!login || login.owner !== owner || login.tenant !== tenant) return "unknown";
       if (!login.settled) return "pending";
       try {
         return await login.outcome;

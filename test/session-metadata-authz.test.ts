@@ -9,6 +9,7 @@ import { buildApp } from "./support/build-app.ts";
 import { projectGroupRef, projectScopeId } from "../src/projects/project-store.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { configureCommandRules } from "./support/command-rules.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-session-authz-"));
@@ -42,6 +43,7 @@ test("the single-session read applies the managed-project check the session list
     { principalId: "member", displayName: "Member", type: "internal" },
   ]);
   const project = await built.projects.create({ name: "Launch Cohort", ownerId: "owner" });
+  await configureCommandRules(built.config);
   const groupRef = projectGroupRef(project.id);
 
   assert.equal((await built.app.addProjectMember(project.id, "owner", "member")).status, "ok");

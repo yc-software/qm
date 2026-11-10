@@ -98,9 +98,10 @@ function authFromFiles(files: CredentialFile[]): { path: string; auth: JsonObjec
     if (!AUTH_FILE_PATHS.includes(normalized) && !normalized.endsWith("/auth.json")) continue;
     try {
       const auth = chatgptAuthFromValue(JSON.parse(Buffer.from(file.contentBase64, "base64").toString("utf8")));
-      if (auth) return { path: file.path, auth };
-    } catch {
-      continue;
+      if (!auth) throw new Error("not a ChatGPT login with tokens and an account id");
+      return { path: file.path, auth };
+    } catch (error) {
+      swallow(`chatgpt: unusable auth file ${file.path}`, error);
     }
   }
   return null;
