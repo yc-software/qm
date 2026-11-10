@@ -23,7 +23,7 @@ const merge = (base: CredentialFile[], stored: CredentialFile[], refreshed: Cred
 };
 const TOKEN = ".aws/sso/cache/token.json";
 
-test("expiry is read only from the declared AWS SSO and CLI cache files, warning only on an unparseable value", (t) => {
+test("expiry is read only from the declared AWS SSO and CLI cache files, warning only on an unparseable value or JSON file", (t) => {
   const warn = t.mock.method(console, "warn", () => {});
   const at = Date.parse("2026-11-09T18:00:00Z");
   assert.equal(credentialFileExpiry(file(TOKEN, { expiresAt: "2026-11-09T18:00:00Z" })), at);
@@ -34,11 +34,13 @@ test("expiry is read only from the declared AWS SSO and CLI cache files, warning
     at,
   );
   assert.equal(credentialFileExpiry(file(".config/tool/token.json", { expiresAt: "2026-11-09T18:00:00Z" })), undefined);
-  assert.equal(credentialFileExpiry(file(TOKEN, "not json")), undefined);
   assert.equal(credentialFileExpiry(file(TOKEN, { accessToken: "no expiry field" })), undefined);
   assert.equal(warn.mock.callCount(), 0);
+  assert.equal(credentialFileExpiry(file(".aws/cli/cache/session.db-wal", "not json")), undefined);
+  assert.equal(warn.mock.callCount(), 0);
   assert.equal(credentialFileExpiry(file(TOKEN, { expiresAt: "soon" })), undefined);
-  assert.equal(warn.mock.callCount(), 1);
+  assert.equal(credentialFileExpiry(file(TOKEN, "not json")), undefined);
+  assert.equal(warn.mock.callCount(), 2);
 });
 
 test("each side keeps the files only it changed, including deletions", () => {

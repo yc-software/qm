@@ -197,7 +197,7 @@ async function finishExecutionFiles(
       `cd ${shq(home)} && [ ! -L ${shq(home)} ] && set -- && ` +
         `for p in ${roots.map((root) => shq(`./${root}`)).join(" ")}; do if [ -e "$p" ] || [ -L "$p" ]; then set -- "$@" "$p"; fi; done && ` +
         `: > ${shq(`${directory}/paths`)} && { [ $# -eq 0 ] || find "$@" -type f -print0 > ${shq(`${directory}/paths`)}; } && ` +
-        `: > ${shq(`${directory}/links`)} && for p in ${roots.map((root) => shq(`./${root}`)).join(" ")}; do ` +
+        `printf '\\0' > ${shq(`${directory}/links`)} && for p in ${roots.map((root) => shq(`./${root}`)).join(" ")}; do ` +
         `q=$(dirname "$p"); while [ "$q" != . ]; do if [ -L "$q" ]; then printf '%s\\0' "$q" >> ${shq(`${directory}/links`)}; fi; q=$(dirname "$q"); done; done && ` +
         `{ [ $# -eq 0 ] || find "$@" -type l -print0 >> ${shq(`${directory}/links`)}; } && ` +
         `COPYFILE_DISABLE=1 tar --null -T ${shq(`${directory}/paths`)} -cf ${shq(`${directory}/files.tar`)} && ` +

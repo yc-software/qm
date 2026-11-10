@@ -15,7 +15,11 @@ export function credentialFileExpiry(file: CredentialFile): number | undefined {
       JSON.parse(Buffer.from(file.contentBase64, "base64").toString("utf8")),
     );
   } catch {
-    value = undefined;
+    if (file.path.endsWith(".json"))
+      console.warn(
+        `[credentials] ${file.path}: is not valid JSON, so its expiry could not be read; treating it as having none`,
+      );
+    return undefined;
   }
   const at = typeof value === "string" ? Date.parse(value) : NaN;
   if (Number.isFinite(at)) return at;
