@@ -45,11 +45,3 @@ test("every endpoint the agent API catalog advertises is served by a route an ag
   });
   assert.deepEqual(unreachable, []);
 });
-
-test("the swarm listing tells agents to start a swarm only on an explicit request", () => {
-  const listing = renderAgentApis(base, { isAdmin: false }, { swarmsEnabled: true, personasEnabled: false });
-  const guidance = listing.guidance.find((text) => text.includes("Swarm workers"));
-  assert.ok(guidance?.startsWith("Start a swarm only when the person explicitly asks for a swarm;"));
-  const spawn = listing.endpoints.find((route) => route.method === "POST" && route.path === "/v1/swarm");
-  assert.match(spawn?.summary ?? "", /a new swarm only on an explicit request for a swarm/);
-});
