@@ -6,6 +6,7 @@ import type { AdminGrant, AdminGrantStore, AdminRole } from "./admin-grant-store
 import { personKey, samePerson } from "../directory/person.ts";
 import type { UserStore } from "../identity/user-store.ts";
 import type { Tenant } from "../tenants/context.ts";
+import { bootTenant } from "../tenants/boot.ts";
 
 export type { AdminGrant } from "./admin-grant-store.ts";
 
@@ -70,6 +71,8 @@ export function parseAdminGrants(raw: string | undefined, orgId: string): AdminG
 export interface AdminServiceOptions {
   now?: () => number;
   trustedOidcAdminIssuer?: string;
+  /** Tenants the principal may sign in to. Trusted entry grants admin only in one of these or the boot tenant. */
+  memberTenants?: (principalId: string) => Promise<readonly string[]>;
   users: UserStore;
 }
 
@@ -104,6 +107,8 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
       if (!subject || subject.length > 255 || Buffer.from(subject).toString("utf8") !== subject)
         throw new AdminError(400, "invalid trusted subject");
       const principalId = `oidc:${createHash("sha256").update(issuer).digest("hex")}:${Buffer.from(subject).toString("base64url")}`;
+      if (tenant.id !== bootTenant() && !(await opts.memberTenants?.(principalId))?.includes(tenant.id))
+        throw new AdminError(403, "trusted subject is not a member of this tenant");
       const existing = (await grants.list(tenant)).find((g) => g.principalId === principalId && g.role === "org_admin");
       if (existing) return { grant: existing, created: false };
       const grant: AdminGrant = {

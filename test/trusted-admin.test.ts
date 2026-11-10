@@ -5,6 +5,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
+import { randomUUID } from "node:crypto";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -14,7 +15,10 @@ import { signRequest } from "../src/auth/source-auth.ts";
 import { trustedPrincipal } from "../plugins/portal/src/trusted-entry.ts";
 import { provisionTrustedAdmin } from "../plugins/portal/src/trusted-admin.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testDatabaseUrl, testMigratedDatabaseUrl } from "./support/test-database.ts";
+import { ownerUrl } from "./support/test-tenant.ts";
+import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../src/auth/portal-identity.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { bindBootTenant } from "../src/tenants/boot.ts";
 
@@ -23,9 +27,10 @@ const tenant = withTenant(TEST_TENANT, (t) => t);
 const signingSecret = "core-test-secret".repeat(3);
 const identitySecret = "portal-test-secret".repeat(3);
 const issuer = "https://identity.example.test";
-function start(enabled = true) {
+function start(enabled = true, databaseUrl?: string) {
   const built = buildApp(
     testConfig({
+      ...(databaseUrl ? { databaseUrl } : {}),
       dataDir: mkdtempSync(join(tmpdir(), "trusted-admin-")),
       orgId: "default-org",
       ...(enabled ? { trustedOidcAdminIssuer: issuer } : {}),
@@ -59,15 +64,24 @@ function claims(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
-async function send(base: string, payload: unknown, key = identitySecret, sourceSigned = true) {
+async function send(base: string, payload: unknown, key = identitySecret, sourceSigned = true, tenantId?: string) {
   const path = `/v1/auth/trusted/admin?nonce=${crypto.randomUUID()}`;
   const body = JSON.stringify({ assertion: await mintSignedPayload(payload, key) });
   const ts = Math.floor(Date.now() / 1000);
+  const presented = tenantId
+    ? {
+        [PORTAL_IDENTITY_HEADER]: await mintPortalIdentity(
+          { p: "operator@example.test", t: tenantId, exp: Date.now() + 60_000 },
+          identitySecret,
+        ),
+      }
+    : {};
   return fetch(base + path, {
     method: "POST",
     body,
     headers: {
       "content-type": "application/json",
+      ...presented,
       ...(sourceSigned
         ? { "x-timestamp": String(ts), "x-signature": signRequest(signingSecret, ts, `POST\n${path}\n${body}`) }
         : {}),
@@ -148,4 +162,63 @@ test("on a shared host with no tenant bound, a trusted sign-in grants admin nowh
   const config = { core: s.base, signingSecret, identitySecret, org: "default-org", issuer };
   await withoutTenant(() => provisionTrustedAdmin(config, "founder-shared"));
   assert.deepEqual(await s.built.admin.listGrants(tenant), before);
+});
+
+async function extraTenants(t: { after(fn: () => unknown): void }, databaseUrl: string, count: number) {
+  const owner = createPgPool(ownerUrl(databaseUrl).toString());
+  t.after(() => owner.close());
+  const ids = Array.from({ length: count }, () => randomUUID());
+  await owner.q(`INSERT INTO tenants(id) SELECT unnest($1::uuid[])`, [ids]);
+  return ids;
+}
+
+test("on a shared host, trusted sign-in grants admin only in a tenant the subject belongs to", async (t) => {
+  await bindBootTenant(async () => undefined);
+  t.after(() => bindBootTenant(async () => TEST_TENANT));
+  const databaseUrl = testMigratedDatabaseUrl();
+  const [alpha, beta] = await extraTenants(t, databaseUrl, 2);
+  const s = withoutTenant(() => start(true, databaseUrl));
+  t.after(s.close);
+  const id = trustedPrincipal(issuer, "founder-alpha");
+  await withTenant(alpha!, () => s.built.admin.users.record({ id, source: "invite", at: Date.now() }));
+  const isAdmin = async (tenantId: string) =>
+    (await withTenant(tenantId, (token) => s.built.admin.adminStatusOf(token, { id, type: "internal" }))).isAdmin;
+
+  const elsewhere = await withoutTenant(() =>
+    send(s.base, claims({ subject: "founder-alpha" }), identitySecret, true, beta),
+  );
+  assert.equal(elsewhere.status, 403);
+  assert.deepEqual(await elsewhere.json(), {
+    error: "grant_failed",
+    message: "trusted subject is not a member of this tenant",
+  });
+  assert.equal(await isAdmin(beta!), false);
+  assert.deepEqual(await withTenant(beta!, (token) => s.built.admin.listGrants(token)), []);
+
+  const home = await withoutTenant(() =>
+    send(s.base, claims({ subject: "founder-alpha" }), identitySecret, true, alpha),
+  );
+  assert.equal(home.status, 200);
+  assert.equal(await isAdmin(alpha!), true);
+  assert.equal(await isAdmin(beta!), false);
+  const again = await withoutTenant(() =>
+    send(s.base, claims({ subject: "founder-alpha" }), identitySecret, true, beta),
+  );
+  assert.equal(again.status, 403, "an admin grant in one tenant is not membership in another");
+  assert.equal(await isAdmin(beta!), false);
+});
+
+test("with a boot tenant, trusted sign-in still bootstraps the boot tenant but not another tenant", async (t) => {
+  const databaseUrl = testMigratedDatabaseUrl();
+  const [other] = await extraTenants(t, databaseUrl, 1);
+  const s = start(true, databaseUrl);
+  t.after(s.close);
+  const id = trustedPrincipal(issuer, "founder-boot");
+  const isAdmin = async (tenantId: string) =>
+    (await withTenant(tenantId, (token) => s.built.admin.adminStatusOf(token, { id, type: "internal" }))).isAdmin;
+  assert.equal((await send(s.base, claims({ subject: "founder-boot" }), identitySecret, true, other)).status, 403);
+  assert.equal(await isAdmin(other!), false);
+  assert.equal((await send(s.base, claims({ subject: "founder-boot" }))).status, 200);
+  assert.equal(await isAdmin(TEST_TENANT), true);
+  assert.equal(await isAdmin(other!), false);
 });
