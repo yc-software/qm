@@ -277,8 +277,10 @@ A computer supplied as `forumSandboxId` is otherwise an ordinary computer of its
 the same rule keeps a bot's turn off it, from the swarm's thread or from anywhere else, until
 the swarm's work window ends. Swarms have no work window unless `lifetimeMs` is set, and
 swarm records are kept, so by default a computer that has served as a person's forum stays
-off-limits to those turns permanently. This covers forums named before this rule existed,
-and the forum of a bot-started swarm once the bot loses that swarm.
+off-limits to those turns permanently. This covers forums named before this rule existed.
+It also covers a bot-started swarm's forum: every other bot's turn is kept off it from the
+moment the swarm names it, and the bot that started the swarm loses it once it loses the
+swarm.
 Worker sessions never inherit the root session's command or security-screen
 approval grants; a worker must obtain its own approval. Auto screening receives host-verified swarm delegation provenance, so routine delegated tasks and in-swarm reporting are distinguished from external instructions. Delegation does not authorize credential disclosure, permission changes, or overriding higher-priority instructions; those remain screened. Frozen swarm roster checks
 apply to swarm notifications, not ordinary human follow-ups in the root session.
