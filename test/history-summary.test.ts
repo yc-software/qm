@@ -111,6 +111,16 @@ test("compaction length errors report the output limit and token usage", async (
   );
 });
 
+test("compaction length errors report the output cap the provider payload carried", async () => {
+  await assert.rejects(
+    summarizeHistory([], model, async (_model, _context, options) => {
+      await options!.onPayload!({ max_tokens: 32000 }, model);
+      return response("partial summary", "length", { ...zeroUsage(), output: 32000 });
+    }),
+    /hit the 32000-token output limit \(output tokens 32000, reasoning tokens not reported\)$/,
+  );
+});
+
 test("compaction propagates transport failures and rejects empty output", async () => {
   await assert.rejects(
     summarizeHistory([], model, () => {
