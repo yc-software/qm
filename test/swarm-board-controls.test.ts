@@ -54,6 +54,22 @@ test("pausing holds delivery, resuming releases it, and stopping is terminal", a
   );
 });
 
+test("a pause landing while delivery enqueues holds the run instead of dispatching it", async () => {
+  const fixture = await swarmFixture();
+  const [worker] = await fixture.service.spawn(fixture.caller, { requestId: "one", text: "Work" });
+  const enqueue = fixture.runs.enqueue.bind(fixture.runs);
+  fixture.runs.enqueue = async (input) => {
+    const result = await enqueue(input);
+    if (input.dedupKey?.endsWith(worker!.id))
+      await fixture.service.control(fixture.caller, { memberId: worker!.id, state: "paused" });
+    return result;
+  };
+  await fixture.service.sweep();
+  const notification = (await fixture.store.get(fixture.root.id))!.messages[0]!.notifications[worker!.id]!;
+  assert.equal(notification.state, "pending");
+  assert.equal(await fixture.runs.get(notification.runId!), null);
+});
+
 test("a paused worker's held notification does not keep the swarm in the outbox sweep", async () => {
   const fixture = await swarmFixture();
   const [worker] = await fixture.service.spawn(fixture.caller, { requestId: "one", text: "Work" });

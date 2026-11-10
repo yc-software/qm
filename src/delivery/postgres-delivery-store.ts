@@ -222,12 +222,13 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       if (!existing[0]) throw new Error(`delivery enqueue lost a race for key ${input.idempotencyKey}`);
       return rowToDelivery(existing[0]);
     },
-    async pending(type) {
+    async pending(type, sourceThreadRef) {
       const rows = await q(
         `SELECT * FROM deliveries
           WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow AND destination->>'type' = $1
+            AND ($2::text IS NULL OR provenance->>'sourceThreadRef' = $2)
           ORDER BY created_at`,
-        [type],
+        [type, sourceThreadRef ?? null],
       );
       return rows.map(rowToDelivery);
     },

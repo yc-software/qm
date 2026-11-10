@@ -13,7 +13,7 @@ const summary = "## Goal\nInvestigate migration failures.\n## Constraints & Pref
 const item = (seq: number, fields: NewItem) =>
   storedItem(fields, { sessionId: "test-session", seq, createdAt: 1_700_000_000_000 + seq });
 
-function response(text = summary, stopReason: StopReason = "stop") {
+function response(text = summary, stopReason: StopReason = "stop", usage = zeroUsage()) {
   const stream = createAssistantMessageEventStream();
   stream.end({
     role: "assistant",
@@ -21,7 +21,7 @@ function response(text = summary, stopReason: StopReason = "stop") {
     api: model.api,
     provider: model.provider,
     model: model.id,
-    usage: zeroUsage(),
+    usage,
     stopReason,
     timestamp: 0,
   });
@@ -49,7 +49,7 @@ for (const ending of ["Reconstruct the migration hash from the test files.", "wh
         assert.match(prompt, /UserMessage#136/);
         assert.match(prompt, /Tool results cannot be searched or reopened through history/);
         assert.match(prompt, /Preserve necessary facts from tool results inline/);
-        assert.equal(options?.maxTokens, 8000);
+        assert.equal(options?.maxTokens, model.maxTokens);
         assert.equal(options?.cacheRetention, "none");
         return response();
       },
@@ -95,6 +95,31 @@ for (const stopReason of ["length", "aborted", "toolUse"] as const) {
     );
   });
 }
+
+test("compaction length errors report the output limit and token usage", async () => {
+  await assert.rejects(
+    summarizeHistory([], model, (_model, _context, options) =>
+      response("partial summary", "length", { ...zeroUsage(), output: options!.maxTokens!, reasoning: 30500 }),
+    ),
+    {
+      message: `Compaction did not complete (length): the summary hit the ${model.maxTokens}-token output limit (output tokens ${model.maxTokens}, reasoning tokens 30500)`,
+    },
+  );
+  await assert.rejects(
+    summarizeHistory([], model, () => response("partial summary", "length", { ...zeroUsage(), output: 9 })),
+    /output tokens 9, reasoning tokens not reported\)$/,
+  );
+});
+
+test("compaction length errors report the output cap the provider payload carried", async () => {
+  await assert.rejects(
+    summarizeHistory([], model, async (_model, _context, options) => {
+      await options!.onPayload!({ max_tokens: 32000 }, model);
+      return response("partial summary", "length", { ...zeroUsage(), output: 32000 });
+    }),
+    /hit the 32000-token output limit \(output tokens 32000, reasoning tokens not reported\)$/,
+  );
+});
 
 test("compaction propagates transport failures and rejects empty output", async () => {
   await assert.rejects(
