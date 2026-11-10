@@ -952,7 +952,7 @@ async function postAction(item: InboxItem, kind: string, args?: Record<string, u
     body: JSON.stringify({ kind, ...(args ? { args } : {}) }),
   });
   updateSentChat(next);
-  return { ...toInboxItem(next), detailLoaded: true };
+  return { ...toInboxItem(next), outputs: item.outputs, detailLoaded: true };
 }
 
 const persistQueue = new Map<string, Promise<void>>();
