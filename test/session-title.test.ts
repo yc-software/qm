@@ -319,3 +319,27 @@ test("a flagged first message titled NONE is retitled once from the first exchan
   assert.equal(callsFor("board review").length, 1);
   assert.equal(callsFor("sort this out").length, 1);
 });
+
+test("a manual retitle reads only what the person can see, not hidden wake messages", async () => {
+  const calls: string[] = [];
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ap-title-hidden-")) }), {
+    agent: {
+      ...createMockAgent(),
+      generateTitle: async (transcript: string) => {
+        calls.push(transcript);
+        return "Sidebar fix";
+      },
+    },
+  });
+  const turn = await built.app.turn(dm("Open the PR for the sidebar fix", "web:U1:title-hidden"));
+  await built.sessions.append(
+    { sessionId: turn.sessionId! },
+    { kind: "UserMessage", text: '<wake reason="monitor">job exited</wake>', hidden: true },
+  );
+  calls.length = 0;
+
+  await built.app.regenerateTitle(turn.sessionId!, "U1");
+  assert.equal(calls.length, 1);
+  assert.ok(!calls[0]!.includes("wake reason"));
+  assert.ok(calls[0]!.includes("Open the PR for the sidebar fix"));
+});
