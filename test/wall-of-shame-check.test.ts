@@ -84,9 +84,10 @@ test("over-testing is counted from the diff, whatever the report says", () => {
     "300\t0\tdocs/notes.md",
     "-\t-\tdocs/logo.png",
   ];
-  const moved = ["2\t0\t", "src/old.ts", "plugins/web-ui/test/new.test.ts"];
-  assert.deepEqual(problems(accepted, diff(...source, "9\t0\ttest/a.test.ts", ...moved)), [overTested(11, 10)]);
-  assert.deepEqual(problems(accepted, diff(...source, "8\t0\tios/QMTests/A.swift", ...moved)), []);
+  const tests = ["3\t0\tsrc/a.test.ts", "3\t0\ttest/helpers/a.ts", "3\t0\tios/QMTests/A.swift"];
+  const moved = ["2\t0\t", "src/old.ts", "desktop/desk/tests/new.rs"];
+  assert.deepEqual(problems(accepted, diff(...source, ...tests, ...moved)), [overTested(11, 10)]);
+  assert.deepEqual(problems(accepted, diff(...source, "1\t0\tsrc/b.ts", ...tests, ...moved)), []);
   assert.deepEqual(problems(accepted, diff(...source, "30\t20\ttest/a.test.ts")), []);
   assert.deepEqual(problems("no report", diff("1\t0\ttest/a.test.ts")), [
     "PR description has no `## Wall of shame review report` section.",
