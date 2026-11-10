@@ -15,7 +15,7 @@ import {
   type MemoryProviderProblem,
 } from "../../memory/provider-outcome.ts";
 import { suggestedActivityRoutes } from "./suggested-activities.ts";
-import { runtimeConfigBody, userRuntimeConfigBody, webuiModelEnabled } from "../runtime-config.ts";
+import { runtimeConfigBody, userRuntimeConfigBody, webuiModelEnabled, withAppEditRuntime } from "../runtime-config.ts";
 import { canReadNotebook, searchAcrossScopes } from "../../memory/cross-scope.ts";
 import { sessionSharingRoutes } from "./session-sharing.ts";
 import type { Grant, PendingApproval, ScopeId, Session } from "../../types.ts";
@@ -47,7 +47,7 @@ import {
 } from "../../surfaces/ui-state.ts";
 import { redactWebhook } from "./webhooks.ts";
 import { selfSpend } from "./admin/spend.ts";
-import { withActor, type ApiCtx, type Route } from "./route.ts";
+import { tenantOf, withActor, type ApiCtx, type Route } from "./route.ts";
 import {
   ARTIFACT_TYPES,
   isArtifactType,
@@ -517,31 +517,12 @@ async function listSessions(ctx: ApiCtx): Promise<void> {
     ...(url.searchParams.get("scope") ? { scopeId: url.searchParams.get("scope")! } : {}),
     ...(url.searchParams.get("q")?.trim() ? { titleQuery: url.searchParams.get("q")!.trim() } : {}),
   });
-  const previews = await sidebarPreviews(ctx, principalId, [...page.sessions, ...(page.pinned ?? [])]);
   return sendJson(res, 200, {
-    sessions: withPreviews(page.sessions, previews),
-    ...(page.pinned ? { pinned: withPreviews(page.pinned, previews) } : {}),
+    sessions: page.sessions,
+    ...(page.pinned ? { pinned: page.pinned } : {}),
     ...(page.hasArchived !== undefined ? { hasArchived: page.hasArchived } : {}),
     nextCursor: page.next ? `${page.next.activity}.${page.next.id}` : null,
   });
-}
-
-async function sidebarPreviews(
-  ctx: ApiCtx,
-  principalId: string,
-  rows: readonly Session[],
-): Promise<Map<string, string> | null> {
-  const { featureFlags, sessions } = ctx.deps;
-  if (
-    !sessions ||
-    (await featureFlags?.enabled("sidebar_last_message_titles", makeScopeId("personal", principalId))) !== true
-  )
-    return null;
-  return sessions.lastUserPreviews(rows.map((row) => row.id));
-}
-
-function withPreviews(rows: Session[], previews: Map<string, string> | null): Session[] {
-  return previews ? rows.map((row) => ({ ...row, lastUserPreview: previews.get(row.id) ?? null })) : rows;
 }
 
 function isSessionPageStatus(value: string): value is SessionPageStatus {
@@ -588,8 +569,7 @@ async function getSessionRow(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: "principalId and id or threadRef required" });
   const session = await app.sessionRow(principalId, id ? { id } : { threadRef });
   if (!session) return sendJson(res, 404, { error: "not_found" });
-  const [row] = withPreviews([session], await sidebarPreviews(ctx, principalId, [session]));
-  return sendJson(res, 200, { session: row });
+  return sendJson(res, 200, { session });
 }
 
 async function searchResources(ctx: ApiCtx): Promise<void> {
@@ -717,7 +697,9 @@ async function listAgentApis(ctx: ApiCtx): Promise<void> {
   const { res, deps, capability } = ctx;
   if (!capability) return sendJson(res, 401, { error: "unauthorized", message: "agent capability token required" });
   const admin: { isAdmin: boolean; role?: string } = deps.admin
-    ? await deps.admin.adminStatusOf({ id: capability.actorId, type: "internal" }).catch(() => ({ isAdmin: false }))
+    ? await deps.admin
+        .adminStatusOf(tenantOf(ctx), { id: capability.actorId, type: "internal" })
+        .catch(() => ({ isAdmin: false }))
     : { isAdmin: false };
   audit(deps, {
     principalId: capability.actorId,
@@ -1331,9 +1313,12 @@ async function getRuntimeConfig(ctx: ApiCtx): Promise<void> {
   return sendJson(
     ctx.res,
     200,
-    ctx.url.searchParams.get("account") === "company"
-      ? await runtimeConfigBody(ctx, target.scope)
-      : await userRuntimeConfigBody(ctx, target.scope, target.actorId),
+    await withAppEditRuntime(
+      ctx,
+      ctx.url.searchParams.get("account") === "company"
+        ? await runtimeConfigBody(ctx, target.scope)
+        : await userRuntimeConfigBody(ctx, target.scope, target.actorId),
+    ),
   );
 }
 
@@ -1378,7 +1363,11 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
     resource: "runtime-config",
     scopeLabel: target.scope,
   });
-  return sendJson(ctx.res, 200, await userRuntimeConfigBody(ctx, target.scope, target.actorId));
+  return sendJson(
+    ctx.res,
+    200,
+    await withAppEditRuntime(ctx, await userRuntimeConfigBody(ctx, target.scope, target.actorId)),
+  );
 }
 
 async function getChannelHeaderPin(ctx: ApiCtx): Promise<void> {

@@ -12,6 +12,7 @@ services:
     cpuCores: 1
     ramMegabytes: 2048
     port: 8000
+    terminationGracePeriodSeconds: 60
     livenessCheck:
       enabled: true
       httpPath: /healthz

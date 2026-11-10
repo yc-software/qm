@@ -684,18 +684,6 @@ a.chat-row-open {
   font-weight: 500;
   color: var(--muted-foreground);
 }
-.session-row.last-message-title .session {
-  flex-direction: column;
-  align-items: stretch;
-  gap: 1px;
-}
-.session .row-detail {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11px;
-  color: var(--muted-foreground);
-}
 .group-dm-title {
   display: inline-flex;
   align-items: center;
@@ -2012,6 +2000,18 @@ a.chat-row-open {
 .system-note-text {
   font-style: italic;
 }
+.system-note:has(> .system-note-line) {
+  width: 100%;
+  max-width: var(--content-w);
+  min-width: 0;
+}
+.system-note-line {
+  display: block;
+  text-align: center;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 
 .subagent-chip {
   display: inline-flex;
@@ -2214,9 +2214,6 @@ button.subagent-chip:hover {
 }
 .streaming-text {
   position: relative;
-}
-.streaming-text.live-stream {
-  overflow-anchor: none;
 }
 
 qm-markdown .tok-in {
@@ -3411,6 +3408,26 @@ qm-markdown .tok-in {
 .scroll-bottom-btn:hover {
   color: var(--foreground);
 }
+.scroll-bottom-btn::after {
+  content: "";
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #2f81f7;
+  box-shadow: 0 0 0 2px var(--background);
+  opacity: 0;
+  transform: scale(0.5);
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease;
+}
+.chat-scroll[data-new-below] ~ .chat-bottom-dock .scroll-bottom-btn::after {
+  opacity: 1;
+  transform: none;
+}
 .chat-scroll[data-away-from-bottom] ~ .chat-bottom-dock .scroll-bottom-btn {
   opacity: 1;
   visibility: visible;
@@ -3421,6 +3438,7 @@ qm-markdown .tok-in {
 }
 @media (prefers-reduced-motion: reduce) {
   .scroll-bottom-btn,
+  .scroll-bottom-btn::after,
   .chat-scroll[data-away-from-bottom] ~ .chat-bottom-dock .scroll-bottom-btn {
     transform: none;
     transition: none;
@@ -8506,7 +8524,7 @@ h3.ambient-field-label {
   margin-top: 0;
 }
 
-.split-canvas:not(.single-pane) .split-pane-chat .custom-chat-shell .composer-wrap {
+.split-canvas:not(.single-pane) .split-pane-chat .custom-chat-shell .composer-wrap:not(.side-chat-panel *) {
   --composer-control-size: 28px;
   --composer-font-size: 12px;
   --composer-pad-block: 10px;
@@ -8518,7 +8536,7 @@ h3.ambient-field-label {
   box-shadow: 0 1px 2px rgb(0 0 0 / 0.03);
 }
 @container chat (min-width: 861px) {
-  .split-canvas:not(.single-pane) .split-pane-chat .custom-chat-shell .composer-wrap {
+  .split-canvas:not(.single-pane) .split-pane-chat .custom-chat-shell .composer-wrap:not(.side-chat-panel *) {
     width: var(--content-w);
     margin-inline: auto;
   }

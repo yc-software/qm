@@ -1,21 +1,25 @@
-import { test } from "node:test";
+import { tenantTest as test } from "./support/tenant-test.ts";
+import { TEST_TENANT } from "./support/test-tenant.ts";
 import assert from "node:assert/strict";
 import { createAdminGrantStore, grantKey } from "../src/admin/admin-grant-store.ts";
 import { createPostgresAdminGrantStore } from "../src/admin/postgres-admin-grant-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { withTenant } from "../src/tenants/context.ts";
+
+const tenant = withTenant(TEST_TENANT, (t) => t);
 
 test("grant store: add / list / revoke round-trip on (principal, scope, role)", async () => {
   const store = createAdminGrantStore(createPostgresAdminGrantStore(testDatabaseUrl()));
-  assert.deepEqual(await store.list(), []);
-  await store.add({ principalId: "U1", scopeId: "org:default-org", role: "org_admin" });
-  await store.add({ principalId: "U2", scopeId: "org:default-org", role: "org_admin" });
-  assert.equal((await store.list()).length, 2);
-  await store.add({ principalId: "U1", scopeId: "org:default-org", role: "org_admin", grantedBy: "x" });
-  assert.equal((await store.list()).length, 2);
-  await store.add({ principalId: "U2", scopeId: "org:other", role: "org_admin" });
-  assert.equal((await store.list()).length, 3);
-  await store.revoke("U1", "org:default-org", "org_admin");
-  const list = await store.list();
+  assert.deepEqual(await store.list(tenant), []);
+  await store.add(tenant, { principalId: "U1", scopeId: "org:default-org", role: "org_admin" });
+  await store.add(tenant, { principalId: "U2", scopeId: "org:default-org", role: "org_admin" });
+  assert.equal((await store.list(tenant)).length, 2);
+  await store.add(tenant, { principalId: "U1", scopeId: "org:default-org", role: "org_admin", grantedBy: "x" });
+  assert.equal((await store.list(tenant)).length, 2);
+  await store.add(tenant, { principalId: "U2", scopeId: "org:other", role: "org_admin" });
+  assert.equal((await store.list(tenant)).length, 3);
+  await store.revoke(tenant, "U1", "org:default-org", "org_admin");
+  const list = await store.list(tenant);
   assert.equal(list.length, 2);
   assert.ok(!list.some((g) => g.principalId === "U1"));
 });
@@ -23,22 +27,22 @@ test("grant store: add / list / revoke round-trip on (principal, scope, role)", 
 test("grant store: seed applies only when empty and never undoes a revoke", async () => {
   const persist = createPostgresAdminGrantStore(testDatabaseUrl());
   const seed = [{ principalId: "A", scopeId: "org:default-org", role: "org_admin" as const }];
-  const store = createAdminGrantStore(persist, { seed });
-  assert.equal((await store.list()).length, 1);
-  await store.revoke("A", "org:default-org", "org_admin");
-  assert.equal((await store.list()).length, 0);
+  const store = createAdminGrantStore(persist, { seed, seedsTenant: (t) => t.id === TEST_TENANT });
+  assert.equal((await store.list(tenant)).length, 1);
+  await store.revoke(tenant, "A", "org:default-org", "org_admin");
+  assert.equal((await store.list(tenant)).length, 0);
 
-  await persist.put({ principalId: "B", scopeId: "org:default-org", role: "org_admin" });
-  const store2 = createAdminGrantStore(persist, { seed });
+  await persist.put(tenant, { principalId: "B", scopeId: "org:default-org", role: "org_admin" });
+  const store2 = createAdminGrantStore(persist, { seed, seedsTenant: (t) => t.id === TEST_TENANT });
   assert.deepEqual(
-    (await store2.list()).map((g) => g.principalId),
+    (await store2.list(tenant)).map((g) => g.principalId),
     ["B"],
   );
 });
 
 test("grant store: an empty seed grants no admins (deliberate lock-out)", async () => {
   const store = createAdminGrantStore(createPostgresAdminGrantStore(testDatabaseUrl()), { seed: [] });
-  assert.deepEqual(await store.list(), []);
+  assert.deepEqual(await store.list(tenant), []);
 });
 
 test("grantKey is stable and collision-free across the triple", () => {

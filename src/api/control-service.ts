@@ -30,6 +30,7 @@ import {
   isMultiMemberSkillScope,
 } from "./artifact-share.ts";
 import { actsAsScope, parseScopeId, type Permission, type ScopeId } from "../types.ts";
+import { ambientTenant } from "../tenants/context.ts";
 import { cronRef, encodeRef } from "../acl/resource-ref.ts";
 import type { App, VisibleCron } from "./app.ts";
 
@@ -469,6 +470,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         const refusal = await unattendedGrantRefusal(
           app,
           admin,
+          ambientTenant(),
           { owner: capability.actorId, ownerScopeId },
           capability,
         );
@@ -494,6 +496,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         owner: capability.actorId,
         createdBy: capability.actorId,
         ownerScopeId,
+        ...(capability.botActor ? { botActor: true } : {}),
         ...(typeof req.title === "string" ? { title: req.title } : {}),
         ...(destination ? { destination } : {}),
         ...(req.unattendedGrants !== undefined ? { unattendedGrants: req.unattendedGrants } : {}),
@@ -570,7 +573,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       else if ((before.unattendedGrants?.length ?? 0) > 0) patch.unattendedGrants = before.unattendedGrants;
       if (!cronPatchChanges(before, patch)) return { ok: true, cron: before };
       if ((patch.unattendedGrants?.length ?? 0) > 0) {
-        const refusal = await unattendedGrantRefusal(app, admin, before, capability);
+        const refusal = await unattendedGrantRefusal(app, admin, ambientTenant(), before, capability);
         if (refusal) return { ok: false, ...refusal };
       }
       try {
@@ -635,7 +638,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       }
       const ownFire = capability.threadRef?.startsWith(`cron:${id}:fire:`) === true;
       if (!ownFire && (cron.unattendedGrants?.length ?? 0) > 0) {
-        const refusal = await unattendedGrantRefusal(app, admin, cron, capability);
+        const refusal = await unattendedGrantRefusal(app, admin, ambientTenant(), cron, capability);
         if (refusal) return { ok: false, code: "forbidden", message: refusal.message };
       }
       const fireEntry = ownFire ? await app.latestCronFireForThread(id, capability.threadRef!) : undefined;
@@ -665,7 +668,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       if (!(await canAdministerCron(app, cron, capability.actorId)))
         return { ok: false, code: "forbidden", message: "not your cron" };
       if (enabled && (cron.unattendedGrants?.length ?? 0) > 0) {
-        const refusal = await unattendedGrantRefusal(app, admin, cron, capability);
+        const refusal = await unattendedGrantRefusal(app, admin, ambientTenant(), cron, capability);
         if (refusal) return { ok: false, code: "forbidden", message: refusal.message };
       }
       if (cron.enabled === enabled) return { ok: true, cron };
@@ -681,7 +684,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       if (!(await canAdministerCron(app, cron, capability.actorId)))
         return { ok: false, code: "forbidden", message: "not your cron" };
       if ((cron.unattendedGrants?.length ?? 0) > 0) {
-        const refusal = await unattendedGrantRefusal(app, admin, cron, capability);
+        const refusal = await unattendedGrantRefusal(app, admin, ambientTenant(), cron, capability);
         if (refusal) return { ok: false, code: "forbidden", message: refusal.message };
       }
       if (!scheduler)
@@ -718,7 +721,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         };
       }
       if ((cron.unattendedGrants?.length ?? 0) > 0) {
-        const refusal = await unattendedGrantRefusal(app, admin, cron, capability);
+        const refusal = await unattendedGrantRefusal(app, admin, ambientTenant(), cron, capability);
         if (refusal) return { ok: false, code: "forbidden", message: refusal.message };
       }
       if (isDeepStrictEqual(cron.destination, resolved.destination)) return { ok: true, cron };

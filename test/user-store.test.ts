@@ -4,10 +4,13 @@ import { randomUUID } from "node:crypto";
 import { foldPrincipalId, installPrincipalLinks } from "../src/directory/person.ts";
 import { createPrincipalLinkService } from "../src/identity/principal-links.ts";
 import { createPostgresUserStore, fold, type UserStore } from "../src/identity/user-store.ts";
+import { personLabel, UNKNOWN_PERSON } from "../src/identity/person-names.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { scopeId } from "../src/types.ts";
 import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
+import { appUrl, ownerUrl } from "./support/test-tenant.ts";
+import { withTenant } from "../src/tenants/context.ts";
 
 const url = testDatabaseUrl();
 const store = (): UserStore => createPostgresUserStore(url);
@@ -128,7 +131,35 @@ test("the SQL fold matches foldPrincipalId", async () => {
   }
 });
 
-test("activity is one row per user across every linked sign-in, counting only real user turns", async () => {
+test("the same sign-in is a separate user in each tenant, and a link stays in its tenant", async () => {
+  const owner = createPgPool(ownerUrl(url).toString());
+  const [a, b] = [randomUUID(), randomUUID()];
+  await owner.q("INSERT INTO tenants(id) VALUES ($1), ($2)", [a, b]);
+  const roster = createPostgresUserStore(appUrl(url));
+  const pat = unique("pat");
+  const alias = `U-${randomUUID().slice(0, 8)}`;
+  try {
+    await withTenant(a, () => roster.record({ id: pat, source: "turn", at: Date.now() }));
+    await withTenant(b, () => roster.record({ id: pat, source: "invite", at: Date.now() }));
+    const inA = (await withTenant(a, () => roster.get(pat)))!;
+    const inB = (await withTenant(b, () => roster.get(pat)))!;
+    assert.notEqual(inA.id, inB.id);
+    assert.deepEqual([inA.source, inB.source], ["turn", "invite"]);
+    await withTenant(a, () =>
+      roster.link({ principalId: alias, canonicalId: pat, evidence: "test", linkedBy: "", createdAt: Date.now() }),
+    );
+    const linked = async (tenant: string) =>
+      (await withTenant(tenant, () => roster.links())).filter((l) => l.principalId === alias).map((l) => l.canonicalId);
+    assert.deepEqual(await linked(a), [pat]);
+    assert.deepEqual(await linked(b), []);
+  } finally {
+    await owner.q("DELETE FROM users WHERE tenant_id = ANY($1::uuid[])", [[a, b]]);
+    await owner.q("DELETE FROM tenants WHERE id = ANY($1::uuid[])", [[a, b]]);
+    await owner.close();
+  }
+});
+
+test("activity is one row per user across every linked sign-in, counting only the turns each person wrote", async () => {
   const sessions = createPostgresSessionStore(url);
   const roster = store();
   const pat = unique("pat");
@@ -147,11 +178,20 @@ test("activity is one row per user across every linked sign-in, counting only re
   await sessions.addParticipant(channel.id, pat);
   await sessions.addParticipant(channel.id, slack);
   await sessions.addParticipant(channel.id, quiet);
-  const first = await sessions.append({ sessionId: dm.id }, { kind: "UserMessage", text: "hi" });
+  const first = await sessions.append(
+    { sessionId: dm.id },
+    { kind: "UserMessage", text: "hi", author: pat.toUpperCase() },
+  );
   await sessions.append({ sessionId: dm.id }, { kind: "AgentMessage", text: "hello" });
-  await sessions.append({ sessionId: channel.id }, { kind: "UserMessage", text: "chatter", body: { overheard: true } });
+  await sessions.append(
+    { sessionId: channel.id },
+    { kind: "UserMessage", text: "chatter", author: pat, body: { overheard: true } },
+  );
   await sessions.addParticipant(channel.id, stranger);
-  const last = await sessions.append({ sessionId: channel.id }, { kind: "SteeringMessage", text: "also" });
+  const last = await sessions.append(
+    { sessionId: channel.id },
+    { kind: "SteeringMessage", text: "also", author: slack },
+  );
   await sessions.removeParticipant(channel.id, quiet);
 
   const rows = await roster.activity();
@@ -169,7 +209,7 @@ test("activity is one row per user across every linked sign-in, counting only re
       lastSeenAt: last.createdAt,
       days: undefined,
     },
-    "both sessions once; the channel's turn is credited once, not once per sign-in; agent and overheard excluded",
+    "both sessions once; turns written under either sign-in count once each; agent and overheard excluded",
   );
   assert.deepEqual(mine[0]!.days, [
     ...new Set([first.createdAt, last.createdAt].map((t) => Math.floor(t / 86_400_000))),
@@ -181,8 +221,8 @@ test("activity is one row per user across every linked sign-in, counting only re
   );
   assert.deepEqual(
     rows.filter((r) => r.principalId === stranger).map((r) => [r.userId, r.kind, r.sessions, r.turns]),
-    [[null, "person", 1, 1]],
-    "a participant with no user row still counts, under their own sign-in",
+    [[null, "person", 1, 0]],
+    "a participant with no user row still counts, under their own sign-in, but is not credited with others' turns",
   );
 });
 
@@ -205,4 +245,40 @@ test("resolve and get find a user by any sign-in or by its id, with every sign-i
     ].sort(),
   );
   assert.equal(await roster.get(randomUUID()), null);
+});
+
+test("a person's display name is stored once per user, refreshed when it changes, and shared by every linked sign-in", async () => {
+  const email = unique("named");
+  const oidc = `oidc:issuer:${randomUUID().slice(0, 8)}`;
+  const roster = store();
+  await roster.link({ principalId: oidc, canonicalId: email, evidence: "sso", linkedBy: "", createdAt: 0 });
+  assert.equal((await roster.get(oidc))?.displayName, undefined);
+  assert.equal(await roster.setDisplayName(oidc, "  Ada\u0000 \n Lovelace  "), true);
+  assert.equal((await roster.get(email))?.displayName, "Ada Lovelace");
+  assert.equal(
+    await roster.setDisplayName(email.toUpperCase(), "Ada Lovelace"),
+    false,
+    "an unchanged name is not rewritten",
+  );
+  assert.equal(await roster.setDisplayName(oidc, "   "), false, "a blank name never clears a stored one");
+  assert.equal(await roster.setDisplayName(oidc, "Ada King"), true);
+  assert.equal((await roster.resolve([oidc])).get(oidc)?.displayName, "Ada King");
+  await roster.setDisplayName(oidc, "x".repeat(500));
+  assert.equal((await roster.get(oidc))?.displayName?.length, 200);
+});
+
+test("linking keeps the name a sign-in already had, and labels fall back to an email, never to a raw sign-in", async () => {
+  const email = unique("label");
+  const oidc = `oidc:issuer:${randomUUID().slice(0, 8)}`;
+  const roster = store();
+  await roster.setDisplayName(oidc, "Grace Hopper");
+  await roster.record({ id: email, source: "turn", at: Date.now() });
+  await roster.link({ principalId: oidc, canonicalId: email, evidence: "sso", linkedBy: "", createdAt: 0 });
+  assert.equal(personLabel(email, { user: await roster.get(email) }), "Grace Hopper");
+  const bare = `oidc:issuer:${randomUUID().slice(0, 8)}`;
+  await roster.record({ id: bare, source: "turn", at: Date.now() });
+  assert.equal(personLabel(bare, { user: await roster.get(bare) }), UNKNOWN_PERSON);
+  const mailOnly = unique("mail");
+  await roster.link({ principalId: bare, canonicalId: mailOnly, evidence: "sso", linkedBy: "", createdAt: 0 });
+  assert.equal(personLabel(bare, { user: await roster.get(bare) }), mailOnly);
 });

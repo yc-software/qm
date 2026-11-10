@@ -4,6 +4,8 @@ import { deploymentShareScope } from "../deploy/email-access.ts";
 import { errMessage } from "../util/errors.ts";
 import { DeployAccessError, type Reach } from "../deploy/deploy-service.ts";
 import { mintDeployGitAccess } from "../deploy/access-token.ts";
+import { appHostLabel } from "../tenants/app-handle.ts";
+import { tenantAppHandle } from "../tenants/settings.ts";
 
 import type { App, AppDeps, ViewerDeployment } from "./app-types.ts";
 import { deploymentView } from "./app-types.ts";
@@ -35,6 +37,8 @@ export function createDeploymentMethods(
   | "setDeploymentPublic"
   | "setDeploymentConnectors"
   | "maintainDeployments"
+  | "publishDueLiveEdits"
+  | "deploymentLiveEdit"
   | "reachDeployment"
   | "deploymentLogsFor"
   | "deploymentGitRepoPath"
@@ -82,9 +86,11 @@ export function createDeploymentMethods(
         const grantees = previous.some((g) => g.scope === grantee && g.permission === "read")
           ? previous
           : await deps.deploy.shareDeployment(deployment.id, grantee, "read", { createdBy: actorId }, opts);
-        const appUrl = deps.deployAppsDomain
-          ? `https://${deployment.name ?? deployment.id}.${deps.deployAppsDomain}/`
-          : undefined;
+        const handle = tenantAppHandle();
+        const appUrl =
+          deps.deployAppsDomain && handle
+            ? `https://${appHostLabel(handle, deployment.name ?? deployment.id)}.${deps.deployAppsDomain}/`
+            : undefined;
         if (alreadyShared)
           return { grantees, invitation: { emailSent: false, alreadyShared: true, ...(appUrl ? { appUrl } : {}) } };
         let emailSent = false;
@@ -169,6 +175,12 @@ export function createDeploymentMethods(
     },
     maintainDeployments() {
       return deps.deploy.maintainDeployments();
+    },
+    publishDueLiveEdits() {
+      return deps.deploy.publishDueLiveEdits();
+    },
+    deploymentLiveEdit(id) {
+      return deps.deploy.liveEditOf(id);
     },
     async reachDeployment(id, principalId, opts): Promise<Reach> {
       if (opts?.bypassAcl) return deps.deploy.reachDeployment(id, principalId, opts);

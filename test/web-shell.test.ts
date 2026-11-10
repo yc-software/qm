@@ -184,12 +184,3 @@ test("share pages render the frozen snapshot from core for their audience only",
     404,
   );
 });
-
-test("a legacy connector callback lands on the keychain page with an error when core rejects it", async () => {
-  const page = await fetch(`${coreBase}/connectors/oauth/google/callback?code=forged&state=forged`, {
-    headers: { cookie: browserSessionCookie("alice") },
-  });
-  assert.equal(page.status, 400);
-  assert.equal(page.headers.get("x-frame-options"), "SAMEORIGIN");
-  assert.match(await page.text(), /url=\.\.\/\.\.\/\.\.\/\?view=keychain&amp;connector=google&amp;status=error/);
-});

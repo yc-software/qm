@@ -152,7 +152,6 @@ export interface CoreSession {
   color?: string | null;
   unread?: boolean;
   lastActivityAt?: number;
-  lastUserPreview?: string | null;
   working?: boolean;
   awaitingInput?: boolean;
   lastTurnFailed?: boolean;
@@ -557,6 +556,7 @@ export type AssistantWork = AssistantMessage & {
   sendFailed?: "attachments";
   droppedAttachmentIds?: string[];
   continuing?: string;
+  via?: string;
 };
 
 export interface RunPoll {
@@ -2333,7 +2333,12 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
         ...(typeof workFinishedAt === "number" ? { finishedAt: workFinishedAt } : {}),
       };
       const stopped = e.body.stopped === true;
-      if (text || pending.length || heldPosts.size || stopped) {
+      if (typeof e.body.via === "string" && text.trim()) {
+        spillHeldPosts();
+        flushWork("", e.createdAt);
+        flushWork(text, e.createdAt, true, timing, stopped, [e.seq]);
+        (out.at(-1) as AssistantWork).via = e.body.via;
+      } else if (text || pending.length || heldPosts.size || stopped) {
         spillHeldPosts();
         if (posted && text) {
           pending.push({ ...e, variant: "narration", body: { demoted: true } });

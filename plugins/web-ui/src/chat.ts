@@ -1,8 +1,10 @@
+import { sideChatExcerpt } from "./side-chat-excerpt";
 import { createSideChatController } from "./side-chat";
 import "./slack-reply";
 import type { SlackReply } from "./slack-reply";
 import { assistantSidebar, assistantMessage } from "./assistant-sidebar";
 import { formatMessageTime } from "./message-time.ts";
+import { assistantSpeakerText } from "./via-label.ts";
 import { messageEntrySeqs, highlightMessage } from "./message-link.ts";
 import { appEditSlug } from "../../chassis/src/app-edit";
 import { isConnectionReturn } from "./connection-return";
@@ -155,7 +157,8 @@ import type { ChatSurface, ConvCtx } from "./conv-types";
 import { errMessage, swallow } from "../../chassis/src/errors";
 import { showStateError } from "./error-banner";
 import { splitLinks } from "./linkify";
-import { slackWireToPlain, splitSlackWire, stripSlackDirectives } from "./slack-text";
+import { slackPreviewText, slackWireToPlain, splitSlackWire, stripSlackDirectives } from "./slack-text";
+import { charForName } from "./emoji-picker";
 import { installMarkdownSanitizer } from "./markdown-sanitize";
 import { transcriptModel, defaultEffortForModel } from "./model-options";
 import {
@@ -362,6 +365,10 @@ export function createChatSurface(
     updateSpeakerLabels([...messages, ...[...inlineSteers.values()].map((steer) => steer.message)]);
   }
 
+  function isSideChatSurface(): boolean {
+    return Boolean(ctx.container()?.closest(".side-chat-panel"));
+  }
+
   function updateSpeakerLabels(messages: AgentMessage[]): void {
     const names = new Set<string>();
     for (const m of messages) {
@@ -370,14 +377,16 @@ export function createChatSurface(
         names.add(speaker.trim());
     }
     const viewer = appState.me?.displayName?.trim().toLowerCase();
-    chatState.labelSpeakers = names.size > 1 || (Boolean(viewer) && [...names].some((n) => n.toLowerCase() !== viewer));
+    chatState.labelSpeakers =
+      isSideChatSurface() || names.size > 1 || (Boolean(viewer) && [...names].some((n) => n.toLowerCase() !== viewer));
     chatState.assistantSpeakerLabel = chatState.labelSpeakers ? brandName() : "";
   }
 
   function speakerLabelFor(message: AgentMessage): string | undefined {
     if (!chatState.labelSpeakers) return undefined;
     const speaker = (message as { speaker?: string }).speaker;
-    return typeof speaker === "string" && speaker.trim() ? speaker.trim() : undefined;
+    if (typeof speaker === "string" && speaker.trim()) return speaker.trim();
+    return isSideChatSurface() ? appState.me?.displayName || "You" : undefined;
   }
 
   function speakerMember(message: AgentMessage): { principalId: string; avatarUrl?: string } | undefined {
@@ -389,14 +398,21 @@ export function createChatSurface(
     return { principalId: speakerId, avatarUrl: speakerAvatar(speakerId) };
   }
 
+  function speakerTime(message: AgentMessage): TemplateResult | typeof nothing {
+    const ts = (message as { timestamp?: number }).timestamp;
+    return isSideChatSurface() && ts !== undefined
+      ? html`<time class="speaker-time">${formatMessageTime(ts)}</time>`
+      : nothing;
+  }
+
   function speakerLabelTpl(speaker: string | undefined, message: AgentMessage): TemplateResult | typeof nothing {
     if (!speaker) return nothing;
     const member = speakerMember(message);
     return html`<div class="speaker-label">
       ${avatarTpl({ key: member?.principalId ?? speaker, name: speaker, avatarUrl: member?.avatarUrl })}<span
         title=${speaker}
-        >${speaker.split(/\s+/, 1)[0]!.toLowerCase()}</span
-      >
+        >${isSideChatSurface() ? speaker : speaker.split(/\s+/, 1)[0]!.toLowerCase()}</span
+      >${speakerTime(message)}
     </div>`;
   }
   let transcriptRefreshGeneration = 0;
@@ -753,6 +769,7 @@ export function createChatSurface(
   }
 
   function onDelivery(threadRef: string): void {
+    sideChats.onDelivery(threadRef);
     const ro = readOnlyView;
     if (ro && threadRef === ro.threadRef) {
       void fetchTranscript(ro.id, ro.anchorSeq !== null ? { sinceSeq: ro.anchorSeq } : { tailTurns: TAIL_TURNS })
@@ -1341,9 +1358,6 @@ export function createChatSurface(
                                 anchorSeq !== null ? { beforeSeq: anchorSeq, tailTurns: TAIL_TURNS } : undefined,
                               );
                               if (chatState.sessionId !== s.id) return;
-                              const scroller = container?.querySelector<HTMLElement>(".chat-scroll");
-                              const priorHeight = scroller?.scrollHeight ?? 0;
-                              const priorTop = scroller?.scrollTop ?? 0;
                               const rawRemaining = page.earlierItems ?? 0;
                               const remaining = currentEarlierCount(s, rawRemaining);
                               const split = inheritedTranscript(s, page.items);
@@ -1357,14 +1371,6 @@ export function createChatSurface(
                                   ...chatState.inheritedMessages,
                                 ],
                               );
-                              requestAnimationFrame(() => {
-                                const scrollerNow = container?.querySelector<HTMLElement>(".chat-scroll");
-                                if (!scrollerNow) return;
-                                const prev = scrollerNow.style.scrollBehavior;
-                                scrollerNow.style.scrollBehavior = "auto";
-                                scrollerNow.scrollTop = priorTop + (scrollerNow.scrollHeight - priorHeight);
-                                scrollerNow.style.scrollBehavior = prev;
-                              });
                             } catch {
                               btn.disabled = false;
                               btn.textContent = "Show earlier messages";
@@ -1601,24 +1607,12 @@ export function createChatSurface(
           ...itemsToMessages(split.inherited, transcriptModel()),
           ...chatState.inheritedMessages,
         ];
-      const scroller = chatState.host?.querySelector<HTMLElement>(".chat-scroll");
-      const priorHeight = scroller?.scrollHeight ?? 0;
-      const priorTop = scroller?.scrollTop ?? 0;
       agent.state.messages = [...earlierMessages, ...agent.state.messages];
       const rawRemaining = page.earlierItems ?? 0;
       chatState.transcriptAnchorSeq = rawRemaining > 0 ? (page.items?.[0]?.seq ?? null) : null;
       chatState.earlierCount = currentEarlierCount(chatState.forkSession ?? {}, rawRemaining);
       chatState.loadingEarlier = false;
       drawActiveChat(agent);
-      requestAnimationFrame(() => {
-        const scrollerNow = chatState.host?.querySelector<HTMLElement>(".chat-scroll");
-        if (agent !== chatState.agent || sessionId !== chatState.sessionId || scrollerNow !== scroller || !scrollerNow)
-          return;
-        const prev = scrollerNow.style.scrollBehavior;
-        scrollerNow.style.scrollBehavior = "auto";
-        scrollerNow.scrollTop = priorTop + (scrollerNow.scrollHeight - priorHeight);
-        scrollerNow.style.scrollBehavior = prev;
-      });
     } catch (error) {
       reportHandledError("web:load_earlier", error);
     } finally {
@@ -1714,7 +1708,7 @@ export function createChatSurface(
     if (messages.length) {
       messageContent = messages.map(
         (m, i) =>
-          html`${settledChatMessage(m, i - inheritedOffset, agent.state.isStreaming && m === agent.state.streamingMessage)}${sideChats.markers(messageEntrySeqs(m))}`,
+          html`${settledChatMessage(m, i - inheritedOffset, agent.state.isStreaming && m === agent.state.streamingMessage)}${sideChats.markers(messageEntrySeqs(m), i - inheritedOffset + chatState.inheritedMessages.length)}`,
       );
     }
     const tier = ctx.density();
@@ -1802,7 +1796,9 @@ export function createChatSurface(
               @scroll=${sideChats.onScroll}
             >
               ${pinnedStrip()}
-              <div class="message-stack ${emptyChat ? "empty-stack" : ""}">
+              <div
+                class="message-stack ${emptyChat ? "empty-stack" : ""} ${sideChats.hasChats() ? "with-side-chats" : ""}"
+              >
                 ${showWelcome ? welcomeGreeting(!messages.length) : nothing} ${inheritedHeader()}
                 ${chatState.earlierCount > 0 ? earlierNotice() : nothing} ${messageContent} ${waitingSteerRows(agent)}
                 ${glanceTier ? nothing : liveWorkStatus(agent)}
@@ -1966,8 +1962,8 @@ export function createChatSurface(
     const forking = pendingFork !== null;
     const speaker = speakerLabelFor(message);
     const speakerLabel =
-      message.role === "assistant" && chatState.labelSpeakers
-        ? chatState.assistantSpeakerLabel
+      message.role === "assistant" && (chatState.labelSpeakers || (message as AssistantWork).via)
+        ? assistantSpeakerText(chatState.assistantSpeakerLabel || brandName(), (message as AssistantWork).via)
         : speaker && `${speaker}\n${speakerMember(message)?.avatarUrl ?? ""}`;
     const edited = Boolean((message as { edited?: boolean }).edited);
     const deleted = Boolean((message as { deleted?: boolean }).deleted);
@@ -2040,6 +2036,10 @@ export function createChatSurface(
         `;
       }
 
+      const rawText = messageText(message);
+      const quote = isSideChatSurface() && index === 0 ? chatState.forkSession?.sideChat?.quote : undefined;
+      const excerpt = quote ? sideChatExcerpt(quote) : "";
+      const displayText = excerpt && rawText.startsWith(excerpt) ? rawText.slice(excerpt.length) : rawText;
       const attachments = ((message as UserMessageWithAttachments).attachments ?? []) as UserAttachmentView[];
       const sendFailure = (message as { sendFailure?: string }).sendFailure;
       const steered = Boolean((message as { steered?: boolean }).steered);
@@ -2076,7 +2076,7 @@ export function createChatSurface(
             ?hidden=${!messageText(message).trim() && !edited && !deleted}
           >
             <div class="pin-content">
-              ${isReadOnlySlackView() ? slackWireBubble(messageText(message)) : markdown(messageText(message))}
+              ${isReadOnlySlackView() ? slackWireBubble(displayText) : markdown(displayText)}
               ${edited || deleted ? html`<span class="revision-badge">(${deleted ? "deleted" : "edited"})</span>` : nothing}
             </div>
             <button class="pin-toggle" type="button" hidden aria-expanded="false">
@@ -2134,10 +2134,13 @@ export function createChatSurface(
         return row(html`Goal cancelled: <span class="system-note-text">${goalObjectiveLabel(note.content)}</span>`);
       const who = note.byAgent ? brandName() : (note.speaker ?? "The user");
       const whose = note.byAgent ? "its" : "their";
+      if (note.action === "deleted") return row(html`${who} deleted ${whose} message`);
+      const preview = slackPreviewText(note.content, charForName);
       return row(
-        note.action === "deleted"
-          ? html`${who} deleted ${whose} message`
-          : html`${who} edited ${whose} message: <span class="system-note-text">${note.content}</span>`,
+        html`<span class="system-note-line" title=${preview}
+          >${who} edited ${whose}
+          message${preview ? html`: <span class="system-note-text">${preview}</span>` : nothing}</span
+        >`,
       );
     }
     if (role === "assistant") {
@@ -2194,17 +2197,21 @@ export function createChatSurface(
           ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${msg.errorMessage}</div>` : nothing}`,
           meta: isStreaming ? nothing : messageMeta(msg, index),
         });
+      const via = (msg as AssistantWork).via;
+      const labeled = chatState.labelSpeakers || Boolean(via);
       return html`
         <article
-          class="message-row assistant-row ${chatState.labelSpeakers ? "named-assistant-row" : ""} ${isStreaming ? "streaming" : ""}"
+          class="message-row assistant-row ${labeled ? "named-assistant-row" : ""} ${isStreaming ? "streaming" : ""}"
           data-index=${index}
           data-entry-seqs=${messageEntrySeqs(message)
             .filter((seq) => !inlineSteers.has(seq))
             .join(" ")}
         >
           ${
-            chatState.labelSpeakers
-              ? html`<div class="speaker-label">${brandMark()}<span>${chatState.assistantSpeakerLabel}</span></div>`
+            labeled
+              ? html`<div class="speaker-label">
+                  ${brandMark()}<span>${assistantSpeakerText(chatState.assistantSpeakerLabel || brandName(), via)}</span>${speakerTime(msg)}
+                </div>`
               : nothing
           }
           <div class="assistant-body">
@@ -3279,11 +3286,13 @@ export function createChatSurface(
       (q) =>
         html`<div class="inline-steer waiting-steer" aria-busy="true">
           ${chatMessage(
-            {
-              role: "user",
-              content: q.text || (q.hasAttachments ? "(files)" : ""),
-              steered: true,
-            } as unknown as AgentMessage,
+            (q.attachments?.length
+              ? { role: "user-with-attachments", content: q.text, attachments: q.attachments, steered: true }
+              : {
+                  role: "user",
+                  content: q.text || (q.hasAttachments ? "(files)" : ""),
+                  steered: true,
+                }) as unknown as AgentMessage,
             -1,
             false,
             true,

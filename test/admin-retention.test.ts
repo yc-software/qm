@@ -98,7 +98,7 @@ test("retention endpoint: org-wide, org_admin-gated, audited; non-org scopes rej
     assert.ok(d.active.dau >= 1, "the just-driven turn counts as active today");
     assert.ok(Array.isArray(d.cohorts), "cohorts present");
     assert.ok(d.perUser?.sessions && d.perUser?.turns, "per-user distributions present");
-    assert.match(d.attribution, /approximate/, "the channel-attribution caveat is surfaced");
+    assert.match(d.attribution, /credited to their author/, "the attribution rule is surfaced");
 
     assert.equal((await get(s.base, "/v1/admin/retention?scope=channel:eng")).status, 400);
 

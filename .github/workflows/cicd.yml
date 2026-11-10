@@ -294,6 +294,9 @@ jobs:
       - name: Oxlint
         if: needs.reuse.outputs.reusable != 'true'
         run: npm run lint:ox
+      - name: Tenant ratchet
+        if: needs.reuse.outputs.reusable != 'true'
+        run: npm run lint:tenancy
 
   core-postgres:
     name: Core Postgres tests
@@ -348,7 +351,6 @@ jobs:
           node --test test/e2e/memorable-cli.e2e.test.ts
       - name: Upgrade from the latest published release
         if: needs.reuse.outputs.reusable != 'true'
-        continue-on-error: true
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/qm_upgrade
         run: |

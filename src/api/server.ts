@@ -9,6 +9,8 @@ import {
   type ServerResponse,
   type Server,
 } from "node:http";
+import type { Duplex } from "node:stream";
+import { failUpgrade, isWebSocketUpgrade, responseOnSocket } from "../../plugins/chassis/src/websocket-relay.ts";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest, type HTTPMethods } from "fastify";
 import type { App } from "./app.ts";
 import type { ServerDeps } from "./deps.ts";
@@ -20,11 +22,16 @@ import {
   SOURCE_AUTH_REPLAY_WINDOW_MS,
   type SourceAuth,
 } from "../auth/source-auth.ts";
-import { verifyCapabilityToken, CONTROL_PLANE_AUD, type CapabilityClaims } from "../auth/capability-token.ts";
+import { CONTROL_PLANE_AUD, type CapabilityClaims } from "../auth/capability-token.ts";
+import { bootTenant } from "../tenants/boot.ts";
+import { capabilityToken, identityTenant, requestCapability, withRequestTenant } from "./request-tenant.ts";
+import type { Tenant } from "../tenants/context.ts";
+import { inboundKey, withInboundTenant } from "./inbound-tenant.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } from "../auth/portal-identity.ts";
 import { errMessage } from "../util/errors.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts";
+import { KEEP_ALIVE_TIMEOUT_MS } from "../../plugins/chassis/src/http.ts";
 import { armBodyDeadline, PayloadTooLargeError, readRawBody, sendJson, verifyOrReject } from "./http.ts";
 import {
   findRoute,
@@ -40,7 +47,13 @@ import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
 import { livePersonCapability } from "./artifact-share.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
-import { apiAlias, browserIdentity, withBrowserActor } from "./browser-session.ts";
+import {
+  apiAlias,
+  appHostRequest,
+  browserIdentity,
+  browserSessionTenant,
+  withBrowserActor,
+} from "./browser-session.ts";
 
 async function capabilityAdminDenied(
   access: AdminAccess,
@@ -82,18 +95,6 @@ function canonicalPath(req: IncomingMessage, pathname: string): boolean {
   return (req.url ?? "/").split("?", 1)[0] === pathname && !pathname.split("%").slice(1).some(needlessEscape);
 }
 
-function capabilityFromHeaders(req: IncomingMessage): string | null {
-  const h = req.headers[CAPABILITY_HEADER];
-  return typeof h === "string" && h ? h : null;
-}
-
-function bearerFromHeaders(req: IncomingMessage): string | null {
-  const apiKey = req.headers["x-api-key"];
-  if (typeof apiKey === "string" && apiKey) return apiKey;
-  const bearer = /^Bearer\s+(\S+)$/i.exec(req.headers.authorization ?? "");
-  return bearer?.[1] ?? null;
-}
-
 interface GateResult {
   body: unknown;
   capability: CapabilityClaims | null;
@@ -129,13 +130,12 @@ async function verifyCapability(
   required: { aud: string; bearer?: true } | null,
 ): Promise<CapabilityClaims | null> {
   const requiredAud = required?.aud ?? null;
-  const capToken = capabilityFromHeaders(req) ?? (required?.bearer ? bearerFromHeaders(req) : null);
+  const capToken = capabilityToken(req, required?.bearer === true);
   if (!capToken) {
     sendJson(res, 401, { error: "unauthorized", message: `${requiredAud} capability token required` });
     return null;
   }
-  const capSecret = deps.capabilitySecret ?? secret;
-  const capability = capSecret ? await verifyCapabilityToken(capToken, capSecret) : null;
+  const capability = await requestCapability(req, capToken, deps.capabilitySecret ?? secret);
   if (!capability) {
     sendJson(res, 401, { error: "unauthorized", message: "invalid or expired capability token" });
     return null;
@@ -208,6 +208,7 @@ async function gate(
   raw: string,
   route: Pick<Route, "auth" | "actor" | "admin" | "allowedInStrict" | "browser"> | undefined,
   params: Record<string, string>,
+  tenant: Tenant | undefined,
 ): Promise<GateResult | null> {
   const routeAuth = route?.auth;
   const { deps, secret, auth, requirePortalIdentity, allowUnsignedSourceAuth } = wiring;
@@ -216,7 +217,7 @@ async function gate(
   const requiredAuth = typeof routeAuth === "object" ? routeAuth : null;
   const requiredAud = requiredAuth?.aud ?? null;
   let capability: CapabilityClaims | null = null;
-  const capToken = capabilityFromHeaders(req);
+  const capToken = capabilityToken(req, false);
   if (isPublicRoute) {
     void isPublicRoute;
   } else if (requiredAud || capToken) {
@@ -279,7 +280,7 @@ async function gate(
     const rawToken = req.headers[PORTAL_IDENTITY_HEADER];
     const token = Array.isArray(rawToken) ? rawToken[0] : rawToken;
     if (browser) {
-      const signedIn = await browserIdentity(req, method, deps, route?.browser === "embed");
+      const signedIn = await browserIdentity(req, method, deps, route?.browser === "embed", tenant);
       if ("status" in signedIn) {
         sendJson(res, signedIn.status, { error: signedIn.error, message: signedIn.message });
         return null;
@@ -346,9 +347,21 @@ function assertedActorValues(field: string, url: URL, body: unknown): unknown[] 
   return body && typeof body === "object" && Object.hasOwn(body, name) ? [(body as Record<string, unknown>)[name]] : [];
 }
 
+const requestTenants = new WeakMap<IncomingMessage, Tenant>();
+
 function baseCtx(req: IncomingMessage, res: ServerResponse, wiring: Wiring): BaseCtx {
   const url = new URL(req.url ?? "/", "http://localhost");
-  return { req, res, ...wiring, url, pathname: url.pathname, method: req.method ?? "GET", params: {} };
+  const tenant = requestTenants.get(req);
+  return {
+    req,
+    res,
+    ...wiring,
+    url,
+    pathname: url.pathname,
+    method: req.method ?? "GET",
+    params: {},
+    ...(tenant ? { tenant } : {}),
+  };
 }
 
 function respondError(req: IncomingMessage, res: ServerResponse, err: unknown): void {
@@ -405,6 +418,7 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
         raw,
         found?.route,
         found?.params ?? {},
+        base.tenant,
       );
       if (!g) return;
       if (found) {
@@ -462,6 +476,7 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
       raw,
       request.routeOptions.config.route,
       request.params as Record<string, string>,
+      requestTenants.get(request.raw),
     );
     if (!result) {
       reply.hijack();
@@ -506,6 +521,8 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
 
 type ServerOptions = Omit<ServerDeps, "control">;
 
+type Matched<C extends BaseCtx> = { route: Route<C>; params: Record<string, string> } | null;
+
 function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boolean): Server {
   const requirePortalIdentity = Boolean(deps.requireSignedPortalIdentity || deps.production);
   if (deps.signingSecret && !deps.replayDedupe) throw new Error("source auth requires a replay dedupe store");
@@ -528,17 +545,88 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
       respondError(req, res, err),
     );
   });
+  server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+    socket.on("error", () => socket.destroy());
+    void upgradeFront(req, socket, head).catch((error: unknown) => failUpgrade(socket, "deployment-websocket", error));
+  });
   const { fastify, routing } = buildFastify(wiring, server);
   const ready = Promise.resolve(fastify.ready());
   ready.catch((err: unknown) => console.error("[server] fastify initialization failed:", errMessage(err)));
   server.requestTimeout = 0;
   server.headersTimeout = 10_000;
-  server.keepAliveTimeout = 5_000;
+  server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
   server.maxConnections = 1024;
 
+  const capabilitySecret = deps.capabilitySecret ?? deps.signingSecret;
+  async function upgradeFront(req: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
+    const res = isWebSocketUpgrade(req) ? responseOnSocket(req, socket) : null;
+    if (!res) return void socket.destroy();
+    const base: BaseCtx = { ...baseCtx(req, res, wiring), upgrade: { socket, head } };
+    await withRequestContext("core", req, res, () =>
+      inRequestTenant(req, res, base, null, async () => {
+        if (await proxyDeploymentSubdomain(base)) return nameRequest(base.method, "/deployment-proxy/websocket");
+        sendJson(res, 404, { error: "not_found" });
+      }),
+    );
+  }
+
   async function front(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    armBodyDeadline(req, deps.requestBodyDeadlineMs ?? 30_000);
     let base = baseCtx(req, res, wiring);
+    const alias = appHostRequest(req, deps) ? null : apiAlias(base.method, base.pathname);
+    if (alias && canonicalPath(req, base.pathname)) {
+      req.url = `${alias}${base.url.search}`;
+      base = baseCtx(req, res, wiring);
+    }
+    const raw = findRoute(rawRoutes, base.method, base.pathname);
+    const matched = raw ? null : findRoute(apiRoutes, base.method, base.pathname);
+    await inRequestTenant(req, res, base, raw ?? matched, () => serve(req, res, base, raw, matched));
+  }
+
+  async function inRequestTenant(
+    req: IncomingMessage,
+    res: ServerResponse,
+    base: BaseCtx,
+    found: Matched<BaseCtx> | Matched<ApiCtx>,
+    then: () => Promise<void>,
+  ): Promise<void> {
+    const route = found?.route;
+    const next = (tenant: Tenant | undefined): Promise<void> => {
+      if (tenant) {
+        requestTenants.set(req, tenant);
+        base.tenant = tenant;
+      }
+      return then();
+    };
+    const inbound = inboundKey(req, deps, found, base.url);
+    if (inbound)
+      return withInboundTenant(
+        app,
+        inbound,
+        next,
+        async () =>
+          (await identityTenant(req, deps.portalIdentitySecret ?? deps.signingSecret)) ??
+          (usesBrowserSession(req, route) ? (browserSessionTenant(req, deps) ?? bootTenant()) : undefined),
+      );
+    await withRequestTenant(
+      req,
+      res,
+      route,
+      capabilitySecret,
+      bootTenant(),
+      next,
+      deps.portalIdentitySecret ?? deps.signingSecret,
+      () => (usesBrowserSession(req, route) ? browserSessionTenant(req, deps) : undefined),
+    );
+  }
+
+  async function serve(
+    req: IncomingMessage,
+    res: ServerResponse,
+    base: BaseCtx,
+    raw: Matched<BaseCtx>,
+    matched: Matched<ApiCtx>,
+  ): Promise<void> {
+    armBodyDeadline(req, deps.requestBodyDeadlineMs ?? 30_000);
     if (await proxyDeploymentSubdomain(base)) {
       nameRequest(base.method, "/deployment-proxy/*");
       return;
@@ -547,12 +635,6 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
       sendJson(res, 404, { error: "not_found", message: `${base.method} ${base.pathname}` });
       return void req.resume();
     }
-    const alias = apiAlias(base.method, base.pathname);
-    if (alias) {
-      req.url = `${alias}${base.url.search}`;
-      base = baseCtx(req, res, wiring);
-    }
-    const raw = findRoute(rawRoutes, base.method, base.pathname);
     if (raw) {
       const routeAuth = raw.route.auth;
       if (typeof routeAuth === "object") {
@@ -562,12 +644,12 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
       await run(raw.route, raw.params, base);
       return;
     }
-    const matched = findRoute(apiRoutes, base.method, base.pathname);
+    if (matched && "path" in matched.route) nameRequest(base.method, matched.route.path);
     const routeAuth = matched?.route.auth;
     const acceptsSourceAuth = !matched || routeAuth === "source" || routeAuth === "either";
     if (
       wiring.secret &&
-      !capabilityFromHeaders(req) &&
+      !capabilityToken(req, false) &&
       routeAuth !== "public" &&
       acceptsSourceAuth &&
       !usesBrowserSession(req, matched?.route)

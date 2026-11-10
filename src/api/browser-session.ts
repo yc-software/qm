@@ -6,10 +6,13 @@ import { isStrongSigningSecret, MIN_SIGNING_SECRET_LENGTH } from "../auth/source
 import { orgId } from "../config.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
 import { reportFailure } from "../util/errors.ts";
+import { bootTenant } from "../tenants/boot.ts";
+import { labelOfAppHost } from "../tenants/app-handle.ts";
 import type { ServerDeps } from "./deps.ts";
 import { apiRoutes } from "./routes/index.ts";
 import { compilePath, findRoute, type Route } from "./routes/route.ts";
 import { activePrincipal } from "./routes/shared.ts";
+import type { Tenant } from "../tenants/context.ts";
 
 export const API_ALIASES: ReadonlyMap<string, string> = new Map([
   ["GET /api/sessions", "/v1/sessions"],
@@ -176,7 +179,6 @@ export const API_ALIASES: ReadonlyMap<string, string> = new Map([
   ["GET /share/external/:token", "/v1/web/shares/external/:token"],
   ["GET /share/internal/:token/files/:fileId", "/v1/shared-sessions/:token/files/:fileId"],
   ["GET /share/external/:token/files/:fileId", "/v1/public-shares/:token/files/:fileId"],
-  ["GET /connectors/oauth/:provider/callback", "/v1/web/connectors/oauth/:provider/callback"],
   ...apiRoutes.flatMap((route): Array<[string, string]> =>
     "path" in route && route.browser && route.path.startsWith("/v1/admin/")
       ? [[`${route.method} /api/admin/${route.path.slice("/v1/admin/".length)}`, route.path]]
@@ -202,6 +204,29 @@ export function apiAlias(method: string, pathname: string): string | null {
   return null;
 }
 
+export function appHostRequest(
+  req: IncomingMessage,
+  deps: Pick<ServerDeps, "deployAppsDomain" | "deployGateSecret">,
+): boolean {
+  if (req.headers["x-qm-app-host"] === "1") return true;
+  return !!deps.deployGateSecret && labelOfAppHost(req.headers.host, deps.deployAppsDomain) !== undefined;
+}
+
+export function sessionCookieTenant(req: IncomingMessage, secret: string, maxAgeSeconds: number): string | undefined {
+  return openSession(
+    readCookie(req.headers.cookie, "portal_session"),
+    deriveKey(secret, "portal.session.v1"),
+    Date.now(),
+    orgId(),
+    maxAgeSeconds,
+  )?.t;
+}
+
+export function browserSessionTenant(req: IncomingMessage, deps: BrowserLaneDeps): string | undefined {
+  if (misconfiguration(deps)) return undefined;
+  return sessionCookieTenant(req, deps.portalSession!.secret, deps.portalSession!.maxAgeSeconds);
+}
+
 const RELAY_IDENTITY_HEADERS = ["x-admin-actor", "x-as-principal", "x-consent-clicker", "x-drop-owner"];
 
 interface BrowserRefusal {
@@ -210,7 +235,9 @@ interface BrowserRefusal {
   message: string;
 }
 
-function misconfiguration(deps: ServerDeps): string | null {
+type BrowserLaneDeps = Pick<ServerDeps, "portalSession" | "signingSecret" | "portalUrl">;
+
+function misconfiguration(deps: BrowserLaneDeps): string | null {
   const secret = deps.portalSession?.secret;
   if (!secret?.trim()) return "PORTAL_SESSION_SECRET is not set";
   if (!isStrongSigningSecret(secret))
@@ -223,9 +250,10 @@ function misconfiguration(deps: ServerDeps): string | null {
   return null;
 }
 
-async function isAdmin(deps: ServerDeps, principalId: string): Promise<boolean> {
+async function isAdmin(deps: ServerDeps, tenant: Tenant | undefined, principalId: string): Promise<boolean> {
   if (!deps.admin || !(await activePrincipal(deps, principalId))) return false;
-  return (await deps.admin.adminStatusOf({ id: principalId, type: "internal" })).isAdmin;
+  if (!tenant) throw new Error("No tenant is bound to this request");
+  return (await deps.admin.adminStatusOf(tenant, { id: principalId, type: "internal" })).isAdmin;
 }
 
 export async function browserIdentity(
@@ -233,6 +261,7 @@ export async function browserIdentity(
   method: string,
   deps: ServerDeps,
   embeddable: boolean,
+  tenant: Tenant | undefined,
 ): Promise<PortalIdentity | BrowserRefusal> {
   const now = Date.now();
   const problem = misconfiguration(deps);
@@ -251,6 +280,8 @@ export async function browserIdentity(
   );
   if (!session)
     return { status: 401, error: "unauthorized", message: "a sign-in session for this organization is required" };
+  if ((session.t ?? bootTenant()) !== tenant?.id)
+    return { status: 401, error: "unauthorized", message: "a sign-in session for this organization is required" };
   if (session.appOnly)
     return { status: 403, error: "app_only_session", message: "this sign-in only permits access to shared apps" };
   const listedOrigin =
@@ -264,7 +295,7 @@ export async function browserIdentity(
   const imp = foreign
     ? null
     : impersonationFor({ sub, org: session.org }, cookies, deriveKey(secret, "portal.impersonate.v1"), now);
-  const target = imp && (await isAdmin(deps, sub)) ? imp.target : null;
+  const target = imp && (await isAdmin(deps, tenant, sub)) ? imp.target : null;
   return {
     p: target ?? sub,
     authenticatedAs: session.sub,

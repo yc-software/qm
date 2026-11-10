@@ -1,6 +1,9 @@
+import { PUBLISHED_SESSION_UPGRADE } from "./published-upgrade.ts";
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
-import { TENANCY_BASE } from "../tenants/migrations.ts";
+import { authoredUserTurn } from "./items.ts";
+import { TENANCY, tenantRowSecurity, tenantTables } from "../tenants/migrations.ts";
 import { DROP_TENANT_PREBUILD_INDEXES } from "../tenants/prebuilt-indexes.ts";
+import { claimFunction } from "../tenants/claim.ts";
 
 export const SPEND_INDEXABLE = `(spend_usage_json(usage_json) IS NOT NULL
   AND octet_length(session_id) + octet_length(model) + octet_length(usage_json) <= 2000)`;
@@ -422,6 +425,105 @@ const PARTICIPANT_MEMBERSHIP: PgMigrationDefinition = {
   ],
 };
 
+const SPEND_TRIGGERS = [
+  `CREATE OR REPLACE FUNCTION invalidate_request_spend() RETURNS trigger LANGUAGE plpgsql AS $invalidate_request_spend$
+   BEGIN
+     INSERT INTO session_spend_dirty(tenant_id, day)
+     SELECT DISTINCT tenant, floor(at::numeric / 86400000)::bigint
+       FROM (VALUES
+         (CASE WHEN TG_OP <> 'INSERT' AND OLD.usage_json IS NOT NULL THEN OLD.tenant_id END,
+          CASE WHEN TG_OP <> 'INSERT' AND OLD.usage_json IS NOT NULL THEN OLD.created_at END),
+         (CASE WHEN TG_OP <> 'DELETE' AND NEW.usage_json IS NOT NULL THEN NEW.tenant_id END,
+          CASE WHEN TG_OP <> 'DELETE' AND NEW.usage_json IS NOT NULL THEN NEW.created_at END)
+       ) changed(tenant, at) WHERE at IS NOT NULL
+     ON CONFLICT DO NOTHING;
+     RETURN NULL;
+   END $invalidate_request_spend$`,
+  `CREATE OR REPLACE FUNCTION invalidate_session_spend() RETURNS trigger LANGUAGE plpgsql AS $invalidate_session_spend$
+   BEGIN
+     IF TG_OP = 'UPDATE' AND ROW(OLD.id, OLD.scope_id, OLD.origin, OLD.thread_ref, OLD.parent_session_id)
+          IS NOT DISTINCT FROM ROW(NEW.id, NEW.scope_id, NEW.origin, NEW.thread_ref, NEW.parent_session_id) THEN
+       RETURN NULL;
+     END IF;
+     INSERT INTO session_spend_dirty(tenant_id, session_id)
+     SELECT DISTINCT tenant, id FROM (VALUES (OLD.tenant_id, OLD.id), (NEW.tenant_id, NEW.id)) changed(tenant, id)
+      WHERE id IS NOT NULL;
+     RETURN NULL;
+   END $invalidate_session_spend$`,
+];
+
+const SESSION_TABLES = tenantTables(
+  "sessions/store/0056-tenants",
+  [
+    {
+      table: "sessions",
+      primaryKey: "id",
+      unique: [{ name: "sessions_thread_ref_key", columns: "thread_ref", constraint: true }],
+    },
+    { table: "participants", primaryKey: "session_id, principal_id" },
+    { table: "session_goals", primaryKey: "session_id" },
+    { table: "session_leases", primaryKey: "session_id" },
+    { table: "session_llm_requests", primaryKey: "id" },
+    { table: "session_pins", primaryKey: "id" },
+    { table: "session_spend_days", primaryKey: "day" },
+    {
+      table: "session_spend_dirty",
+      unique: [{ name: "session_spend_dirty_day_writer_key", columns: "day, writer", constraint: true }],
+    },
+    { table: "llm_prompt_envelopes", primaryKey: "hash" },
+  ],
+  {
+    tenanted: ["items", "blobs"],
+    references: [
+      {
+        table: "items",
+        name: "items_session_id_fkey",
+        columns: "session_id",
+        references: "sessions(tenant_id, id)",
+        onDelete: "CASCADE",
+      },
+      {
+        table: "session_goals",
+        name: "session_goals_session_id_fkey",
+        columns: "session_id",
+        references: "sessions(tenant_id, id)",
+        onDelete: "CASCADE",
+      },
+    ],
+    after: [
+      ...SPEND_TRIGGERS,
+      ...["items", "blobs"].flatMap(tenantRowSecurity),
+      `DO $unstamped$
+       BEGIN
+         DELETE FROM tenants WHERE id = (SELECT id FROM qm_tenant) AND settings = '{}'::jsonb;
+       EXCEPTION WHEN foreign_key_violation THEN NULL;
+       END $unstamped$`,
+      `DROP FUNCTION qm_tenant_id()`,
+      `DROP TABLE qm_tenant`,
+    ],
+  },
+);
+
+const SESSION_CLAIMS: PgMigrationDefinition = {
+  id: "sessions/store/0057-claims",
+  statements: [
+    claimFunction(
+      "claim_dirty_spend",
+      "",
+      "SELECT DISTINCT tenant_id, 'spend'::text FROM session_spend_dirty ORDER BY tenant_id",
+    ),
+    claimFunction(
+      "claim_purged_envelopes",
+      "cutoff bigint, lim integer",
+      `DELETE FROM llm_prompt_envelopes
+        WHERE (tenant_id, hash) IN (SELECT tenant_id, hash FROM llm_prompt_envelopes WHERE created_at < $1
+                                     ORDER BY created_at LIMIT $2 FOR UPDATE SKIP LOCKED)
+          AND created_at < $1
+        RETURNING tenant_id, hash`,
+    ),
+  ],
+};
+
 const SESSION_PERSONA: PgMigrationDefinition = {
   id: "sessions/store/0056-persona",
   statements: [`SET LOCAL lock_timeout = '5s'`, `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS persona_id TEXT`],
@@ -446,8 +548,40 @@ const DROP_STOPPED_PLACEHOLDERS: PgMigrationDefinition = {
   ],
 };
 
+const USER_TURNS_BY_AUTHOR: PgMigrationDefinition = {
+  id: "sessions/store/0058-user-turns-by-author",
+  statements: [
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS items_user_turns_by_author ON items(tenant_id, author, created_at)
+      WHERE ${authoredUserTurn("items")}`,
+  ],
+};
+
+export const DROP_SESSION_LEASES: PgMigrationDefinition = {
+  id: "sessions/store/0059-drop-session-leases",
+  statements: [`SET LOCAL lock_timeout = '5s'`, `DROP TABLE IF EXISTS session_leases`],
+};
+
+const DROP_ITEMS_TARGET_SEQ: PgMigrationDefinition = {
+  id: "sessions/store/0060-drop-items-target-seq",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `ALTER TABLE items DROP CONSTRAINT IF EXISTS items_target_seq_kind, DROP COLUMN IF EXISTS target_seq`,
+  ],
+};
+
+const DROP_PARTICIPANT_WINDOWS: PgMigrationDefinition = {
+  id: "sessions/store/0061-drop-participant-windows",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `DELETE FROM participants WHERE valid_to IS NOT NULL OR valid_to_seq IS NOT NULL`,
+    `ALTER TABLE participants DROP COLUMN IF EXISTS valid_from, DROP COLUMN IF EXISTS valid_to,
+       DROP COLUMN IF EXISTS valid_from_seq, DROP COLUMN IF EXISTS valid_to_seq`,
+  ],
+};
+
 export const SESSION_MIGRATIONS = [
-  TENANCY_BASE,
+  ...TENANCY,
+  ...PUBLISHED_SESSION_UPGRADE,
   SESSION_SCHEMA,
   MESSAGE_SEARCH_INDEX,
   DROP_ITEMS_SEARCH,
@@ -457,8 +591,14 @@ export const SESSION_MIGRATIONS = [
   SESSION_FACTS_COPY,
   PARTICIPANT_MEMBERSHIP,
   DROP_TENANT_PREBUILD_INDEXES,
+  ...SESSION_TABLES,
+  SESSION_CLAIMS,
   SESSION_PERSONA,
   DROP_STOPPED_PLACEHOLDERS,
+  USER_TURNS_BY_AUTHOR,
+  DROP_SESSION_LEASES,
+  DROP_ITEMS_TARGET_SEQ,
+  DROP_PARTICIPANT_WINDOWS,
 ];
 
 export const ancestry = (seed: string): string => `ancestry AS (

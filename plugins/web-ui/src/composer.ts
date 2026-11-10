@@ -1,9 +1,10 @@
+import { sideChatExcerpt } from "./side-chat-excerpt";
 import { emojiCompletion } from "./emoji-completion";
 import { composerInput, resizeComposerInput } from "./composer-input";
 import { reportHandledError } from "./browser-errors.ts";
 import { appEditSlug } from "../../chassis/src/app-edit";
 import { runtimeConfigKey, loadRuntimeConfig, saveRuntimeConfig, subscribeRuntimeConfig } from "./runtime-config-store";
-import { getRuntimeConfig } from "./runtime-config-cache.ts";
+import { getRuntimeConfig, type RuntimeConfig } from "./runtime-config-cache.ts";
 import type { Agent, AgentMessage } from "@earendil-works/pi-agent-core";
 import { createFileDragState } from "./file-drag";
 import type { Attachment } from "@earendil-works/pi-web-ui";
@@ -47,7 +48,7 @@ import {
   type ModelOptionValue,
 } from "./model-options";
 import { modelSupportsFastMode } from "./pi-models";
-import type { ComposerSurface, ConvCtx } from "./conv-types";
+import type { ComposerSurface, ConvCtx, SteeringRun } from "./conv-types";
 import { bumpSessionActivity, dropPendingSession, renderList } from "./sessions";
 import { appState } from "./shell";
 import { base64ToText, bytesToBase64, insertIntoDraft, pasteChipLabel } from "./paste-text";
@@ -258,7 +259,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       const effort =
         effortOverride ??
         (restoredLoadout?.value === selected?.value ? restoredLoadout?.effort : undefined) ??
-        (getRuntimeConfig(scopeKey())?.effective.effortLevel as EffortLevel | undefined) ??
+        (defaultRuntime()?.effortLevel as EffortLevel | undefined) ??
         defaultEffortForModel(selected?.model);
       const levels = effortLevelsForModel(selected?.model);
       return levels.some((level) => level.value === effort) ? effort : levels[0]!.value;
@@ -272,7 +273,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       const fast =
         fastModeOverride ??
         (restoredLoadout?.value === selected?.value ? restoredLoadout?.fast : undefined) ??
-        getRuntimeConfig(scopeKey())?.effective.fastMode === true;
+        defaultRuntime()?.fastMode === true;
       return fast && modelSupportsFastMode(scopeKey(), selected?.model.id);
     },
     set fastMode(value: boolean | undefined) {
@@ -303,9 +304,9 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     );
   }
 
-  const steeringRuns = new Map<string, Array<QueuedRun & { ts: string }>>();
+  const steeringRuns = new Map<string, Array<SteeringRun & { ts: string }>>();
 
-  function steeringRunsFor(threadRef: string | null, agent: Agent): QueuedRun[] {
+  function steeringRunsFor(threadRef: string | null, agent: Agent): SteeringRun[] {
     const steering = threadRef ? steeringRuns.get(threadRef) : undefined;
     if (!threadRef || !steering) return [];
     const settled = !agent.state.isStreaming && !ctx.chat.hasLiveRun();
@@ -348,9 +349,23 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     return runtimeConfigKey(runtimeScopeKey(ctx.chat.state.scopeId), options.runtimeAccount);
   }
 
+  function appEditRuntime(key = scopeKey()): RuntimeConfig["appEditRuntime"] {
+    return appEditSlug(ctx.chat.state.threadRef, appState.me?.user) ? getRuntimeConfig(key)?.appEditRuntime : undefined;
+  }
+
+  function defaultRuntime(key = scopeKey()): RuntimeConfig["effective"] | undefined {
+    const effective = getRuntimeConfig(key)?.effective;
+    const appEdit = appEditRuntime(key);
+    return appEdit && effective ? { ...effective, ...appEdit } : effective;
+  }
+
+  function defaultModelId(): ModelOptionValue {
+    return appEditRuntime()?.modelId ?? defaultModelValue(scopeKey());
+  }
+
   function currentModelOption(): ModelOption | undefined {
     const picked = ctx.chat.state.threadRef ? threadModelPicks.get(ctx.chat.state.threadRef) : undefined;
-    return modelOptionFor(picked ?? defaultModelValue(scopeKey()), scopeKey());
+    return modelOptionFor(picked ?? defaultModelId(), scopeKey());
   }
 
   function followsDefault(): boolean {
@@ -358,6 +373,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     const threadRef = ctx.chat.state.threadRef;
     return (
       !!selected &&
+      !appEditRuntime() &&
       !(threadRef && threadModelPicks.has(threadRef)) &&
       effortOverride === undefined &&
       fastModeOverride === undefined &&
@@ -381,13 +397,13 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       runtimeIdentity = identity;
     }
     unsubscribeRuntime?.();
-    let defaults = getRuntimeConfig(key)?.effective;
+    let defaults = defaultRuntime(key);
     unsubscribeRuntime =
       key === null
         ? undefined
         : subscribeRuntimeConfig(key, () => {
             if (key !== scopeKey()) return;
-            const next = getRuntimeConfig(key)?.effective;
+            const next = defaultRuntime(key);
             if (
               (["modelId", "effortLevel", "fastMode"] as const).some((field) => defaults?.[field] !== next?.[field])
             ) {
@@ -425,7 +441,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     loadout = loadLoadout(loadoutKey);
     let selected = currentModelOption();
     const threadRef = ctx.chat.state.threadRef;
-    if (selected && threadRef && !threadModelPicks.has(threadRef)) {
+    if (selected && threadRef && !threadModelPicks.has(threadRef) && !appEditRuntime()) {
       const preferred = modelLoadoutOptions(getModelOptions(scopeKey()), loadout).find(
         (option) => presetModelId(option.value) === presetModelId(selected!.value),
       );
@@ -508,8 +524,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     const selectedModel = currentModelOption();
     if (!selectedModel) {
       const selected =
-        (ctx.chat.state.threadRef ? threadModelPicks.get(ctx.chat.state.threadRef) : undefined) ??
-        defaultModelValue(scopeKey());
+        (ctx.chat.state.threadRef ? threadModelPicks.get(ctx.chat.state.threadRef) : undefined) ?? defaultModelId();
       return html`<div class="composer-wrap">
         ${header} ${composerApprovalPanel(ctx.chat.activePendingApprovals())}
         <p role="status">
@@ -1389,7 +1404,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       return ctx.chat.drawActiveChat(agent);
     }
     const steer = willSteer(agent, flipSteer);
-    if (!(await enqueueTurn(agent, threadRef, text, uploaded, queuedFilesKey(sendable), steer))) {
+    if (!(await enqueueTurn(agent, threadRef, text, uploaded, queuedFilesKey(sendable), steer, sendable))) {
       if (stillHere()) restoreStagedOnFailure(text, sendable, composerState.error);
     }
     ctx.chat.drawActiveChat(agent);
@@ -1410,6 +1425,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     attachments: CoreAttachment[] = [],
     filesKey = "",
     steer = false,
+    staged: Attachment[] = [],
   ): Promise<boolean> {
     const idempotencyKey = queueSendKey(threadRef, text, filesKey);
     try {
@@ -1423,8 +1439,9 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         steer ? "steer" : "queue",
       );
       failedQueueSend = null;
-      bumpSessionActivity(threadRef, text);
-      if (steerTs) markSteering(threadRef, { ...queued, ts: steerTs });
+      bumpSessionActivity(threadRef);
+      if (steerTs)
+        markSteering(threadRef, { ...queued, ts: steerTs, ...(staged.length ? { attachments: staged } : {}) });
       else if (!steered) addQueuedRun(threadRef, queued);
       return true;
     } catch (err) {
@@ -1493,7 +1510,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     setQueuedRuns(threadRef, [...queuedRunsFor(threadRef).filter((r) => r.runId !== queued.runId), queued]);
   }
 
-  function markSteering(threadRef: string, steering: QueuedRun & { ts: string }): void {
+  function markSteering(threadRef: string, steering: SteeringRun & { ts: string }): void {
     steeringRuns.set(threadRef, [
       ...(steeringRuns.get(threadRef) ?? []).filter((run) => run.ts !== steering.ts),
       steering,
@@ -1520,7 +1537,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       steered = outcome.ok;
       if (outcome.ok || outcome.replayed) {
         forgetQueuedRun(threadRef, queued.runId);
-        bumpSessionActivity(threadRef, queued.text);
+        bumpSessionActivity(threadRef);
         if (
           !outcome.ok &&
           outcome.replayed &&
@@ -1596,12 +1613,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       !sideChat.expanded &&
       !agent.state.messages.length &&
       (options.includeSideChatExcerpt?.() ?? true)
-        ? `${sideChat.quote
-            .split("\n")
-            .map((line) => `> ${line}`)
-            .join("\n")}
-
-${draft}`
+        ? sideChatExcerpt(sideChat.quote) + draft
         : draft;
     const submit = options.prepareSubmit?.();
     if (submit) {
@@ -1630,7 +1642,7 @@ ${draft}`
       return;
     }
     if (ctx.chat.state.threadRef) {
-      bumpSessionActivity(ctx.chat.state.threadRef, text);
+      bumpSessionActivity(ctx.chat.state.threadRef);
       ctx.chat.state.pendingSend = ctx.chat.state.threadRef;
       renderList();
     }

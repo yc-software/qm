@@ -49,11 +49,10 @@ export function isSubagentThreadRef(threadRef: string): boolean {
 }
 
 export function requiresDelegation(
-  request: Pick<OrchestratorInput, "surface" | "surfaceTools" | "conversation" | "swarm">,
-  enabled: boolean,
+  request: Pick<OrchestratorInput, "surface" | "surfaceTools" | "conversation" | "swarm" | "surfaceOrigin">,
 ): boolean {
   return (
-    enabled &&
+    request.surfaceOrigin?.audience !== "external" &&
     !request.swarm &&
     !isSubagentThreadRef(request.conversation.threadRef) &&
     (request.surface === "slack" || request.surfaceTools === true)
@@ -196,6 +195,7 @@ export interface SessionOpenInput {
   thinkingLevel?: string;
   fastMode?: boolean;
   isolation?: ChildIsolationMode;
+  persistent?: boolean;
 }
 
 type SessionOpenResult =
@@ -322,7 +322,6 @@ export interface SessionSyscallsFactory {
 export interface SessionSyscallDeps {
   mailbox: SessionMailbox;
   enabled?: (actorId: string) => Promise<boolean>;
-  delegationEnabled?: (actorId: string) => Promise<boolean>;
   sessions: Pick<
     SessionStore,
     | "get"
@@ -689,7 +688,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         if (byThread) return byThread;
         const children = await deps.sessions.childrenOf(binding.session.id);
         const siblings = current?.parentSessionId ? await deps.sessions.childrenOf(current.parentSessionId) : [];
-        return [...children, ...siblings].find((c) => c.title?.trim().toLowerCase() === trimmed.toLowerCase()) ?? null;
+        const named = [...children, ...siblings].filter((c) => c.title?.trim().toLowerCase() === trimmed.toLowerCase());
+        return named.find((c) => !c.spawnMeta?.retired) ?? named[0] ?? null;
       }
 
       function sidebarRefusal(): string | null {
@@ -787,6 +787,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           await deps.mailbox?.acknowledge(binding.session.id, ids);
         },
         async open(input) {
+          if (binding.session.sideChat && !binding.session.sideChat.expanded)
+            return { ok: false, message: "Side chats cannot launch subagents. Open this chat as a session first." };
           return lock
             .withLock("session-tree-admission", async (): Promise<SessionOpenResult> => {
               if (binding.request.swarm || binding.session.threadRef.startsWith("swarm:"))
@@ -859,6 +861,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 openFingerprint: fingerprint,
                 ...(binding.request.surfaceOrigin ? { surfaceOrigin: binding.request.surfaceOrigin } : {}),
                 ...(isolation ? { isolation } : {}),
+                ...(input.persistent ? { persistent: true } : {}),
               };
               if (!existing?.spawnMeta) {
                 await deps.sessions.setParentSession(child.id, binding.session.id);
@@ -913,6 +916,12 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 };
               if (!(await deps.sessions.getForParticipant(target.id, binding.request.actor.id)))
                 return { ok: false, message: "you are not a participant in that session." };
+              if (target.spawnMeta?.retired && target.parentSessionId === binding.session.id)
+                return {
+                  ok: false,
+                  message:
+                    "that subagent finished and retired; open a fresh one with `open` (its result is already in your transcript).",
+                };
               if (deps.authorize && !(await deps.authorize(target, caller.actor.id)))
                 return { ok: false, message: "you no longer have access to the target session" };
               const meta = storedContext(target);

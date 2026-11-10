@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { analyticsHookConfig } from "../../plugins/chassis/src/analytics-config.ts";
 import { browserErrorConfig } from "../../plugins/chassis/src/browser-error-config.ts";
 import { injectBranding, type OrgBranding } from "../../plugins/chassis/src/branding.ts";
-import { escapeHtml, gzipAccepted, json, relayStream, sendBuffered } from "../../plugins/chassis/src/http.ts";
+import { gzipAccepted, json, relayStream, sendBuffered } from "../../plugins/chassis/src/http.ts";
 import { readWebBundleLayout } from "../../cli/src/web-release.ts";
 import type { Config } from "../config.ts";
 import { s3Client } from "../persistence/s3.ts";
@@ -32,7 +32,6 @@ export interface WebShell {
   release(): Promise<string | undefined>;
   serve(req: IncomingMessage, res: ServerResponse): Promise<void>;
   sharePage(res: ServerResponse, status: number, transcript: unknown): Promise<void>;
-  connectorCallbackPage(res: ServerResponse, provider: string, ok: boolean): void;
 }
 
 const BUNDLED_WEB_UI = fileURLToPath(new URL("../../plugins/web-ui/dist-web", import.meta.url));
@@ -242,15 +241,6 @@ export function createWebShell(
       if (path === "/app-edit" && appsDomain && /^[a-z0-9-]{1,63}$/.test(slug))
         return document(res, spaCsp(env, `'self' ${slug}.${appsDomain}`));
       return serveStatic(res, path === "/" ? "/index.html" : path);
-    },
-    connectorCallbackPage(res, provider, ok) {
-      const query = `view=keychain&connector=${encodeURIComponent(provider)}&status=${ok ? "connected" : "error"}`;
-      sendBuffered(
-        res,
-        ok ? 200 : 400,
-        security({ "content-type": "text/html; charset=utf-8" }),
-        `<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=../../../?${escapeHtml(query)}"><title>Connector</title>`,
-      );
     },
     async sharePage(res, status, transcript) {
       let template: string;
