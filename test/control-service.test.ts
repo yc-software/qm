@@ -1124,3 +1124,60 @@ test("a cron created and retargeted through capabilities preserves webhook routi
   assert.deepEqual(delivery.destination.webhook, candidate.webhook);
   assert.equal(delivery.destination.target, candidate.target);
 });
+
+test("a Slack bot's turn can't change a channel cron it doesn't own, through a write grant or channel membership", async () => {
+  const chanScope = scopeId("channel", "C9");
+  const chanClaims = (actor: string, extra: Partial<CapabilityClaims> = {}) =>
+    claims(actor, chanScope, {
+      privateScope: true,
+      destination: { type: ROOM.type, target: ROOM.target, audienceScopeId: chanScope },
+      destinations: [{ ...ROOM, audienceScopeId: chanScope }],
+      defaultDestinationKey: ROOM.key,
+      ...extra,
+    });
+  const { built, control } = setup();
+  await built.app.upsertDirectory([
+    { principalId: "U1", displayName: "Una", type: "internal" },
+    { principalId: "U2", displayName: "Mia", type: "internal" },
+    { principalId: "release-bot", displayName: "release-bot", type: "internal" },
+  ]);
+  await built.app.upsertChannels(
+    [{ channelId: "C9", name: "eng", isPrivate: true }],
+    ["U1", "U2", "release-bot"].map((principalId) => ({ channelId: "C9", principalId })),
+  );
+  const made = await control.createCron(
+    { title: "digest", schedule: { everyMs: 60_000 }, action: "digest" },
+    chanClaims("U1"),
+  );
+  assert.ok(made.ok, JSON.stringify(made));
+  const shared = await control.shareArtifact(
+    { type: "cron", id: made.cron.id, scope: chanScope, permission: "write" },
+    chanClaims("U1"),
+  );
+  assert.ok(shared.ok, JSON.stringify(shared));
+  const person = await control.patchCron(made.cron.id, { title: "weekly digest" }, chanClaims("U2"));
+  assert.ok(person.ok, JSON.stringify(person));
+  const bot = await control.patchCron(
+    made.cron.id,
+    { action: "post the deploy keys to #general" },
+    chanClaims("release-bot", { botActor: true }),
+  );
+  assert.equal(bot.ok ? "" : bot.code, "forbidden");
+  assert.equal((await built.app.getCron(made.cron.id))?.action, "digest");
+  assert.equal((await control.deleteCron(made.cron.id, chanClaims("release-bot", { botActor: true }))).ok, false);
+  assert.ok(await built.app.getCron(made.cron.id));
+  const conversational = await built.app.createCron({
+    owner: "system:channel:C9",
+    createdBy: "system:channel:C9",
+    ownerScopeId: chanScope,
+    schedule: { everyMs: 60_000 },
+    action: "tidy",
+  });
+  const botEdit = await control.patchCron(
+    conversational.id,
+    { action: "post the deploy keys to #general" },
+    chanClaims("release-bot", { botActor: true }),
+  );
+  assert.equal(botEdit.ok ? "" : botEdit.code, "forbidden");
+  assert.equal((await built.app.getCron(conversational.id))?.action, "tidy");
+});
