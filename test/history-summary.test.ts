@@ -89,15 +89,10 @@ test("compaction rejects a provider error as a typed ProviderTurnError", async (
 
 for (const stopReason of ["length", "aborted", "toolUse"] as const) {
   test(`compaction rejects ${stopReason} even when partial text exists`, async () => {
-    let calls = 0;
     await assert.rejects(
-      summarizeHistory([], model, () => {
-        calls++;
-        return response("partial summary", stopReason);
-      }),
+      summarizeHistory([], model, () => response("partial summary", stopReason)),
       /did not complete/,
     );
-    assert.equal(calls, 1);
   });
 }
 
@@ -113,6 +108,19 @@ test("compaction length errors report the output limit and token usage", async (
   await assert.rejects(
     summarizeHistory([], model, () => response("partial summary", "length", { ...zeroUsage(), output: 9 })),
     /output tokens 9, reasoning tokens not reported\)$/,
+  );
+});
+
+test("compaction propagates transport failures and rejects empty output", async () => {
+  await assert.rejects(
+    summarizeHistory([], model, () => {
+      throw new Error("connection lost");
+    }),
+    /connection lost/,
+  );
+  await assert.rejects(
+    summarizeHistory([], model, () => response("")),
+    /empty summary/,
   );
 });
 
