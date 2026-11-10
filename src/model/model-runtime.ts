@@ -85,9 +85,8 @@ function servedTierCard(
       ? ({ ...base, cost: scaleCost(base.cost, getServiceTierCostMultiplier(base, servedTier)) } as Model<Api>)
       : undefined;
   }
-  return fast && !servedTier
-    ? ({ ...model, cost: scaleCost(model.cost, FAST_COST_MULTIPLIER) } as Model<Api>)
-    : undefined;
+  const servedFast = model.api === "anthropic-messages" && servedTier ? servedTier === "fast" : fast && !servedTier;
+  return servedFast ? ({ ...model, cost: scaleCost(model.cost, FAST_COST_MULTIPLIER) } as Model<Api>) : undefined;
 }
 
 export interface ProviderKeys {
