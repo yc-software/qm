@@ -57,6 +57,7 @@ import {
   MessageSquare,
   Paperclip,
   Pause,
+  Play,
   Pencil,
   Pin,
   Radar,
@@ -100,6 +101,7 @@ import {
   forkCutSeq,
   forkSession,
   cancelSessionGoal,
+  resumeSessionGoal,
   inheritedRefreshItems,
   inheritedTranscript,
   loadInheritedTranscript,
@@ -207,7 +209,13 @@ import {
   watchActivityLabel,
 } from "./session-list";
 import { liveTurnThreadRef } from "./working-dot";
-import { goalElapsedLabel, goalObjectiveLabel, goalWorkedLabel, type GoalStripState } from "./goal-strip";
+import {
+  GOAL_RESUME_PROMPT,
+  goalElapsedLabel,
+  goalObjectiveLabel,
+  goalWorkedLabel,
+  type GoalStripState,
+} from "./goal-strip";
 import { ackKey, subagentRows, subagentSummary, visibleSubagents, type SubagentRow } from "./subagent-activity";
 import { createSwarmStrip } from "./swarm-strip.ts";
 import { newChatDraftKey, saveDraft, storedDraft } from "./drafts";
@@ -302,6 +310,7 @@ export function createChatSurface(
   const sessionOpener = dependencies.openSession ?? openSession;
 
   const goalCancels = new Map<string, "pending" | "done">();
+  const goalResumes = new Set<string>();
   const chatState = {
     agent: null as Agent | null,
     host: null as HTMLElement | null,
@@ -2975,11 +2984,31 @@ export function createChatSurface(
     }
   }
 
+  async function resumeGoalFromBar(agent: Agent, goal: GoalStripState): Promise<void> {
+    const sessionId = chatState.sessionId;
+    const key = `${sessionId}:${goal.createdAt}`;
+    if (!sessionId || agent.state.isStreaming || goalResumes.has(key) || goalCancels.has(key)) return;
+    goalResumes.add(key);
+    drawActiveChat(agent);
+    try {
+      const out = await resumeSessionGoal(sessionId);
+      if (agent !== chatState.agent || sessionId !== chatState.sessionId) return;
+      chatState.goal = out.goal;
+      await ctx.composer.sendText(GOAL_RESUME_PROMPT, agent);
+    } catch (err) {
+      ctx.composer.state.error = errMessage(err, "Could not resume the goal.");
+    } finally {
+      goalResumes.delete(key);
+      if (agent === chatState.agent) drawActiveChat(agent);
+    }
+  }
+
   function goalStrip(agent: Agent): TemplateResult | typeof nothing {
     const messages = visibleMessages(agent);
     const goal = currentGoal();
     if (!goal) return nothing;
-    const cancel = goalCancels.get(`${chatState.sessionId}:${goal.createdAt}`);
+    const key = `${chatState.sessionId}:${goal.createdAt}`;
+    const cancel = goalCancels.get(key);
     if (cancel === "done") return nothing;
     const { workedMs, paused: stopped } = goalWorked(messages, goal);
     const paused = goal.status === "paused" || (goal.status === "active" && stopped);
@@ -2989,7 +3018,20 @@ export function createChatSurface(
     else if (agent.state.isStreaming) title = "Pursuing goal";
     return html`
       <section class="goal-strip ${paused ? "paused" : ""}" aria-live="polite" title=${goal.objective}>
-        <span class="goal-strip-icon">${icon(paused ? Pause : Target, 13)}</span>
+        ${
+          agent.state.isStreaming
+            ? html`<span class="goal-strip-icon">${icon(paused ? Pause : Target, 13)}</span>`
+            : html`<button
+                type="button"
+                class="chip-x goal-strip-resume"
+                aria-label="Resume goal"
+                ${tip("Resume goal")}
+                ?disabled=${goalResumes.has(key) || cancel === "pending" || !ctx.composer.readyToSend()}
+                @click=${() => void resumeGoalFromBar(agent, goal)}
+              >
+                ${icon(Play, 13)}
+              </button>`
+        }
         <span class="goal-strip-title">${title}</span>
         <span class="goal-strip-objective" dir="auto">${goalObjectiveLabel(goal.objective)}</span>
         <span class="goal-strip-meta">${goalWorkedLabel(workedMs, goal.floor)}</span>
@@ -2998,7 +3040,7 @@ export function createChatSurface(
           class="chip-x"
           aria-label="Cancel goal"
           ${tip("Cancel goal")}
-          ?disabled=${cancel === "pending"}
+          ?disabled=${cancel === "pending" || goalResumes.has(key)}
           @click=${() => void cancelGoal(agent, goal)}
         >
           ${icon(X, 13)}

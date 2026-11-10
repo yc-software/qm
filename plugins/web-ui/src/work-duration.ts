@@ -46,12 +46,13 @@ interface GoalTurn {
 /**
  * Time actually spent running turns on the goal: the work time of every turn
  * from the one that created it, clamped to the goal's creation. Idle time
- * between turns never counts, and a human stop ends the tally (the goal is
- * paused from then on).
+ * between turns never counts. A human stop pauses the goal until a later turn
+ * picks it up again.
  */
 export function goalWorked(messages: readonly unknown[], goal: GoalStripState): { workedMs: number; paused: boolean } {
   let workedMs = 0;
   let counting = false;
+  let paused = false;
   for (const m of messages as readonly GoalTurn[]) {
     const work = m.role === "assistant" ? m.work : undefined;
     if (!work) continue;
@@ -63,7 +64,7 @@ export function goalWorked(messages: readonly unknown[], goal: GoalStripState): 
       workedMs -= Math.max(0, goal.createdAt - start);
     }
     workedMs += workSeconds(work) * 1000;
-    if (m.stopReason === "aborted") return { workedMs: Math.max(0, workedMs), paused: true };
+    paused = m.stopReason === "aborted";
   }
-  return { workedMs: Math.max(0, workedMs), paused: false };
+  return { workedMs: Math.max(0, workedMs), paused };
 }

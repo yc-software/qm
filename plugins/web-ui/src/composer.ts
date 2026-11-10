@@ -1308,9 +1308,12 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   }
 
   function composerCanSend(): boolean {
+    return Boolean(composerState.draft.trim() || composerState.attachments.length) && readyToSend();
+  }
+
+  function readyToSend(): boolean {
     if (!currentModelOption()) return false;
     return (
-      Boolean(composerState.draft.trim() || composerState.attachments.length) &&
       !composerState.processingFiles &&
       !submitting &&
       getRuntimeConfig(scopeKey()) !== null &&
@@ -1662,18 +1665,33 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       }
       return;
     }
-    if (ctx.chat.state.threadRef) {
-      bumpSessionActivity(ctx.chat.state.threadRef);
-      ctx.chat.state.pendingSend = ctx.chat.state.threadRef;
-      renderList();
-    }
     const attachments = composerState.attachments;
-    const sentFromThread = ctx.chat.state.threadRef;
-    ctx.chat.notePendingSessionOnSend();
+    const sentFromThread = beginSend();
     clearActiveDraft();
     resetComposer();
     ctx.chat.drawActiveChat(agent);
     clearComposerDom(agent);
+    await deliver(agent, sentFromThread, text, draft, attachments);
+  }
+
+  function beginSend(): string | null {
+    const sentFromThread = ctx.chat.state.threadRef;
+    if (sentFromThread) {
+      bumpSessionActivity(sentFromThread);
+      ctx.chat.state.pendingSend = sentFromThread;
+      renderList();
+    }
+    ctx.chat.notePendingSessionOnSend();
+    return sentFromThread;
+  }
+
+  async function deliver(
+    agent: Agent,
+    sentFromThread: string | null,
+    text: string,
+    draft: string,
+    attachments: Attachment[],
+  ): Promise<void> {
     try {
       if (ctx.chat.state.normalStreamFn) agent.streamFn = ctx.chat.state.normalStreamFn;
       ctx.chat.scrollToBottom();
@@ -2165,6 +2183,19 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         return;
       fillSuggestedPrompt(prompt, agent);
       await sendPrompt(agent);
+    },
+    readyToSend: () => !options.prepareSubmit && readyToSend(),
+    sendText: async (text: string, agent: Agent): Promise<void> => {
+      if (agent !== ctx.chat.state.agent || agent.state.isStreaming || options.prepareSubmit || !readyToSend()) return;
+      pendingSubmissions++;
+      try {
+        const sentFromThread = beginSend();
+        ctx.chat.drawActiveChat(agent);
+        await deliver(agent, sentFromThread, text, text, []);
+      } finally {
+        pendingSubmissions--;
+        if (disposed && !pendingSubmissions) window.removeEventListener("qm:prepare-update", preventUnsafeUpdate);
+      }
     },
     resizeComposer,
     currentModelOption,
