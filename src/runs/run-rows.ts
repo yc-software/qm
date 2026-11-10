@@ -28,3 +28,12 @@ export function rowToRun(r: Record<string, unknown>): Run {
     lastStop: r.last_stop != null ? (JSON.parse(r.last_stop as string) as RunStop) : null,
   };
 }
+
+export const parked = (run: string) => `(${run}.claim_priority > 0 AND ${run}.last_stop::jsonb->>'kind' = 'parked')`;
+
+export const turnOrder = (run: string) => `(CASE WHEN ${run}.claim_priority <> 0 THEN 1
+    WHEN EXISTS (
+      SELECT 1 FROM runs ahead WHERE ahead.tenant_id=${run}.tenant_id AND ahead.session_id=${run}.session_id AND ahead.status='pending'
+        AND ahead.claim_priority > 0 AND ${parked("ahead")} IS NOT TRUE
+        AND (ahead.created_at, ahead.seq) < (${run}.created_at, ${run}.seq)
+    ) THEN 1 ELSE 0 END), ${run}.created_at, ${run}.seq`;

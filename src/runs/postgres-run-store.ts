@@ -8,7 +8,8 @@ import { countedClaims, isTerminal, runPriority, stopErrorCode, withTraceCarrier
 import { tenantTables } from "../tenants/migrations.ts";
 import { createRunWatch, NOTIFY_SESSION_AVAILABLE } from "./run-watch.ts";
 import { createRunReturns, PENDING_RETURNS } from "./run-returns.ts";
-import { rowToRun } from "./run-rows.ts";
+import { createRunReads } from "./run-reads.ts";
+import { parked, rowToRun, turnOrder } from "./run-rows.ts";
 import { claimFunction, claimRows, claimThenBind, claimThenLoad, type ClaimedRow } from "../tenants/claim.ts";
 
 export interface PostgresRuntime {
@@ -19,15 +20,6 @@ export interface PostgresRuntime {
 function isUniqueViolation(err: unknown): boolean {
   return isObj(err) && err.code === "23505";
 }
-
-const parked = (run: string) => `(${run}.claim_priority > 0 AND ${run}.last_stop::jsonb->>'kind' = 'parked')`;
-
-const turnOrder = (run: string) => `(CASE WHEN ${run}.claim_priority <> 0 THEN 1
-    WHEN EXISTS (
-      SELECT 1 FROM runs ahead WHERE ahead.tenant_id=${run}.tenant_id AND ahead.session_id=${run}.session_id AND ahead.status='pending'
-        AND ahead.claim_priority > 0 AND ${parked("ahead")} IS NOT TRUE
-        AND (ahead.created_at, ahead.seq) < (${run}.created_at, ${run}.seq)
-    ) THEN 1 ELSE 0 END), ${run}.created_at, ${run}.seq`;
 
 const before = (a: string, b: string) => `(CASE
     WHEN ${parked(a)} IS NOT TRUE AND ${parked(b)} IS NOT TRUE
@@ -254,6 +246,7 @@ END $base_schema$`,
   }
 
   const runs: RunStore = {
+    ...createRunReads(pg),
     ...createRunReturns(pg, loaded),
     ...watch,
     ...(Number.isFinite(maxClaims) ? { maxClaims } : {}),
@@ -282,11 +275,6 @@ END $base_schema$`,
         const existing = await runs.getByDedupKey(dedupKey!);
         if (existing) return { run: existing, deduped: true };
       }
-    },
-
-    async getByDedupKey(dedupKey) {
-      const { rows } = await q(`SELECT * FROM runs WHERE idempotency_key = $1`, [dedupKey]);
-      return rows[0] ? rowToRun(rows[0]) : null;
     },
 
     async claim(workerId, ttlMs, limit = 1) {
@@ -361,40 +349,11 @@ END $base_schema$`,
       return rowCount > 0;
     },
 
-    async activeForThreads(threadRefs) {
-      if (!threadRefs.length) return new Map();
-      const { rows } = await q(
-        `SELECT current.* FROM unnest($1::text[]) AS threads(id)
-         CROSS JOIN LATERAL (
-           SELECT * FROM runs WHERE session_id = threads.id AND status IN ('pending', 'running')
-           ORDER BY status = 'running' DESC, ${turnOrder("runs")} LIMIT 1
-         ) current`,
-        [[...new Set(threadRefs)]],
-      );
-      return new Map(
-        rows.map((row) => {
-          const run = rowToRun(row);
-          return [run.sessionId, run];
-        }),
-      );
-    },
     onTerminal(listener): void {
       terminalListeners.push(listener);
     },
 
     get: getRun,
-
-    async activeForThread(sessionId: string): Promise<Run | null> {
-      return (await runs.activeForThreads([sessionId])).get(sessionId) ?? null;
-    },
-
-    async inFlightForThread(sessionId: string): Promise<Run[]> {
-      const { rows } = await q(
-        `SELECT * FROM runs WHERE session_id = $1 AND status IN ('pending','running') ORDER BY (status = 'running') DESC, ${turnOrder("runs")}`,
-        [sessionId],
-      );
-      return rows.map(rowToRun);
-    },
 
     async editPendingText(runId: string, text: string, expectedText: string): Promise<boolean> {
       const { rowCount } = await q(
@@ -438,21 +397,6 @@ END $base_schema$`,
         ],
       );
       return rows.length > 0;
-    },
-
-    async activeSessionIds(): Promise<string[]> {
-      const { rows } = await q("SELECT DISTINCT session_id FROM runs WHERE status IN ('pending','running')");
-      return rows.map((r) => r.session_id as string);
-    },
-
-    async list({ limit = 200, threadRef }: { limit?: number; threadRef?: string } = {}): Promise<Run[]> {
-      const { rows } = threadRef
-        ? await q(
-            "SELECT * FROM runs WHERE session_id = $1 OR starts_with(session_id, $1 || ':task:') OR starts_with(session_id, $1 || ':status:') ORDER BY created_at DESC, seq DESC LIMIT $2",
-            [threadRef, limit],
-          )
-        : await q("SELECT * FROM runs ORDER BY created_at DESC, seq DESC LIMIT $1", [limit]);
-      return rows.map(rowToRun);
     },
 
     async reapExpired(opts?: {
