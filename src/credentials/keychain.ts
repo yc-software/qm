@@ -1105,7 +1105,13 @@ export function createKeychain(deps: {
         overruled = merged.overruled;
         byExpiry = merged.byExpiry;
         const next = checkedFiles(merged.files);
-        if (!next.length || fingerprint(next) === fingerprint(currentFiles)) return current;
+        if (!next.length) {
+          console.warn(
+            `[credentials] ${materialized.credentialId}: a save would have left no files, so the stored login was kept unchanged`,
+          );
+          return current;
+        }
+        if (fingerprint(next) === fingerprint(currentFiles)) return current;
         const secret = JSON.stringify(next);
         return {
           ...current,
