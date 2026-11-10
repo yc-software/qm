@@ -105,8 +105,8 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
   const termGraceMs = deps.termGraceMs ?? DEFAULT_TERM_GRACE_MS;
   const killGraceMs = deps.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
 
-  const exited = async (handle: SandboxHandle, processId: string) => {
-    await deps.registry.markStatus(processId, "exited");
+  const exited = async (handle: SandboxHandle, processId: string, status: ProcessStatus = "exited") => {
+    await deps.registry.markStatus(processId, status);
     await deps.onExit?.(handle, processId);
   };
   return {
@@ -203,10 +203,14 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
         try {
           await deps.assertComputerUsable?.(sandboxId);
         } catch (error) {
-          await deps.sandbox.signalProcess(handle, processId, "KILL");
-          await deps.registry.markStatus(processId, "reaped");
-          await deps.onExit?.(handle, processId);
-          throw error;
+          const startedProcessId = processId;
+          return withCleanup(
+            () => Promise.reject(error),
+            async () => {
+              await deps.sandbox.signalProcess(handle, startedProcessId, "KILL");
+              await exited(handle, startedProcessId, "reaped");
+            },
+          );
         }
 
         const { output, cursor, status } = await pollProcess(deps.sandbox, handle, processId, {
