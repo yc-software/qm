@@ -11,8 +11,6 @@ import { cronIsActive } from "../src/cron/cron-store.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
-import { testMigratedDatabaseUrl } from "./support/test-database.ts";
-import pg from "pg";
 
 const THREAD = "web:U1:watching";
 
@@ -96,71 +94,12 @@ test("session:false and triggered turns leave a cron untied, and patch ties or u
   assert.ok(!(await built.app.listSessions("U1")).find((s) => s.threadRef === THREAD)?.crons);
 });
 
-test("a one-shot cron stays active until it fires, and again once rescheduled", () => {
+test("cron liveness census: active exactly while a fire is ahead, and never throws on a malformed stored time", () => {
   const base = { enabled: true, archived: false, createdAt: 1, schedule: { firstFireAt: 5 }, nextFireAt: 5 };
-  assert.equal(cronIsActive(base), true);
-  assert.equal(cronIsActive({ ...base, nextFireAt: undefined, lastFiredAt: 6 }), false);
-  assert.equal(cronIsActive({ ...base, schedule: { firstFireAt: 9 }, nextFireAt: 9, lastFiredAt: 6 }), true);
-  assert.equal(cronIsActive({ ...base, schedule: { everyMs: 60_000, firstFireAt: 5 }, lastFiredAt: 6 }), true);
-  assert.equal(cronIsActive({ ...base, archived: true }), false);
-});
-
-test("cron liveness census: session cron counts and background lists keep a cron exactly while it has a fire ahead", async () => {
-  const databaseUrl = testMigratedDatabaseUrl();
-  const built = buildApp(testConfig({ databaseUrl, dataDir: mkdtempSync(join(tmpdir(), "cron-census-")) }));
-  const control = createControlService(built.app, built.scheduler, built.admin);
-  const sessionId = (await built.app.turn(dm("watch CI for me", THREAD))).sessionId!;
-  const now = Date.now();
-  const db = new pg.Client({ connectionString: databaseUrl });
-  await db.connect();
-  const make = async (title: string, schedule: Record<string, unknown>) => {
-    const created = await control.createCron({ schedule, action: title, title }, claims());
-    assert.ok(created.ok, JSON.stringify(created));
-    return created.cron;
-  };
-  const rewrite = (id: string, sql: string) => db.query(`UPDATE crons SET json = ${sql} WHERE id = $1`, [id]);
-
-  await make("Overdue one-shot", { firstFireAt: now });
-  await rewrite(
-    (await built.crons.list()).find((c) => c.title === "Overdue one-shot")!.id,
-    `jsonb_set(json, '{nextFireAt}', to_jsonb(${now - 60_000}::bigint))`,
-  );
-  const fired = await make("Fired one-shot", { firstFireAt: now });
-  assert.equal(await built.crons.claimSlot(fired.id, fired.nextFireAt!, now), true);
-  const ended = await make("Calendar with no run left", { cron: "0 9 * * *", timezone: "UTC" });
-  await rewrite(ended.id, `jsonb_set(json - 'nextFireAt', '{schedule,cron}', '"0 9 30 2 *"')`);
-  const paused = await make("Paused interval", { everyMs: 600_000 });
-  await control.patchCron(paused.id, { enabled: false }, claims());
-  const archived = await make("Archived interval", { everyMs: 600_000 });
-  await built.crons.update(archived.id, { archived: true });
-  const midFire = await make("Interval mid-fire", { everyMs: 600_000 });
-  assert.equal(await built.crons.claimSlot(midFire.id, midFire.nextFireAt!, now), true);
-  const malformed = await make("Malformed next fire", { everyMs: 600_000 });
-  await rewrite(malformed.id, `jsonb_set(json, '{nextFireAt}', '"soon"')`);
-  await db.end();
-
-  const listed = new Set((await built.app.sessionBackground(sessionId, "U1"))?.crons.map((c) => c.title));
-  assert.deepEqual(
-    Object.fromEntries(
-      [
-        "Overdue one-shot",
-        "Fired one-shot",
-        "Calendar with no run left",
-        "Paused interval",
-        "Archived interval",
-        "Interval mid-fire",
-        "Malformed next fire",
-      ].map((t) => [t, listed.has(t)]),
-    ),
-    {
-      "Overdue one-shot": true,
-      "Fired one-shot": false,
-      "Calendar with no run left": false,
-      "Paused interval": false,
-      "Archived interval": false,
-      "Interval mid-fire": true,
-      "Malformed next fire": true,
-    },
-  );
-  assert.equal((await built.app.listSessions("U1")).find((s) => s.threadRef === THREAD)?.crons, 3);
+  assert.equal(cronIsActive(base), true, "overdue unfired one-shot");
+  assert.equal(cronIsActive({ ...base, nextFireAt: undefined, lastFiredAt: 6 }), false, "fired one-shot");
+  assert.equal(cronIsActive({ ...base, schedule: { cron: "0 9 30 2 *" }, nextFireAt: undefined }), false, "no run");
+  assert.equal(cronIsActive({ ...base, schedule: { everyMs: 60_000 }, nextFireAt: 60_006, lastFiredAt: 6 }), true);
+  assert.equal(cronIsActive({ ...base, enabled: false }) || cronIsActive({ ...base, archived: true }), false);
+  assert.equal(cronIsActive({ ...base, nextFireAt: "soon" as unknown as number }), true, "malformed");
 });

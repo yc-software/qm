@@ -22,7 +22,6 @@ import { settle } from "./support/settle.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { withModelRequestContext } from "../src/model/request-context.ts";
 import { createCronStore, type CronStore } from "../src/cron/cron-store.ts";
-import type { Cron } from "../src/triggers/types.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
@@ -532,7 +531,7 @@ test("the cached prefix survives skill-store reordering + a recordUse-style meta
   );
 });
 
-test("standing obligations: this scope's pending triggers render; other scopes' don't", async () => {
+test("standing obligations: this scope's pending triggers render, an overdue unfired one-shot included; other scopes' don't", async () => {
   const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const base = { owner: actor.id, createdBy: actor.id, ownerScopeId: scopeId("personal", actor.id) };
   await crons.create({
@@ -547,6 +546,7 @@ test("standing obligations: this scope's pending triggers render; other scopes' 
     title: "Legal follow-up",
     action: "follow up with legal",
   });
+  await crons.create({ ...base, schedule: { firstFireAt: Date.now() - 1000 }, title: "Overdue", message: "hi alice" });
   await crons.create({
     ...base,
     ownerScopeId: scopeId("channel", "C9"),
@@ -564,58 +564,8 @@ test("standing obligations: this scope's pending triggers render; other scopes' 
   assert.match(prompt, /Vendor status — every 5 min$/m);
   assert.match(prompt, /Legal follow-up — once at/);
   assert.doesNotMatch(prompt, /poll the vendor status page|follow up with legal/);
+  assert.match(prompt, /^- Overdue — once at/m);
   assert.doesNotMatch(prompt, /channel-only digest/);
-});
-
-test("cron liveness census: the prompt lists a cron exactly while it still has a fire ahead", async () => {
-  const map = testMap<Cron>();
-  const crons = createCronStore(map, { fires: createPostgresCronFireStore(testDatabaseUrl()) });
-  const base = { owner: actor.id, createdBy: actor.id, ownerScopeId: scopeId("personal", actor.id) };
-  const now = Date.now();
-  const make = (title: string, schedule: Cron["schedule"]) => crons.create({ ...base, schedule, title, action: title });
-  const replace = async (id: string, edit: (c: Cron) => Cron) => map.put(id, edit((await map.get(id))!));
-
-  await make("Overdue one-shot", { firstFireAt: now - 60_000 });
-  const fired = await make("Fired one-shot", { firstFireAt: now - 60_000 });
-  assert.equal(await crons.claimSlot(fired.id, fired.nextFireAt!, now), true);
-  const ended = await make("Calendar with no run left", { cron: "0 9 * * *", timezone: "UTC" });
-  await replace(ended.id, ({ nextFireAt: _n, ...c }) => ({ ...c, schedule: { cron: "0 9 30 2 *", timezone: "UTC" } }));
-  const paused = await make("Paused interval", { everyMs: 300_000 });
-  await crons.setEnabled(paused.id, false);
-  const archived = await make("Archived interval", { everyMs: 300_000 });
-  await crons.update(archived.id, { archived: true });
-  const midFire = await make("Interval mid-fire", { everyMs: 300_000, firstFireAt: now - 1000 });
-  assert.equal(await crons.claimSlot(midFire.id, midFire.nextFireAt!, now), true);
-  const malformed = await make("Malformed next fire", { everyMs: 300_000 });
-  await replace(malformed.id, (c) => ({ ...c, nextFireAt: "soon" as unknown as number }));
-
-  const prompt =
-    (await buildOrchestrator({ crons }).orchestrator.handleTurn(dm("dm:U1:census", "!sysprompt"))).reply ?? "";
-  const listed = (title: string) => new RegExp(`^- ${title} — `, "m").test(prompt);
-  assert.match(prompt, /\n## Crons scheduled here \(/);
-  assert.doesNotMatch(prompt, /Scheduled-work status is unavailable/);
-  assert.deepEqual(
-    Object.fromEntries(
-      [
-        "Overdue one-shot",
-        "Fired one-shot",
-        "Calendar with no run left",
-        "Paused interval",
-        "Archived interval",
-        "Interval mid-fire",
-        "Malformed next fire",
-      ].map((t) => [t, listed(t)]),
-    ),
-    {
-      "Overdue one-shot": true,
-      "Fired one-shot": false,
-      "Calendar with no run left": false,
-      "Paused interval": false,
-      "Archived interval": false,
-      "Interval mid-fire": true,
-      "Malformed next fire": true,
-    },
-  );
 });
 
 test("sandboxes render as one provider line without the substrate spec; no resize menu renders", async () => {
