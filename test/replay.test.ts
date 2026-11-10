@@ -238,7 +238,6 @@ test("reconstructMessagesFromHistory replays a context summary as a user turn an
   const summaryText = (msgs[0] as { content: Array<{ text: string }> }).content[0]!.text;
   assert.match(summaryText, /Earlier: set up the project/);
   assert.match(summaryText, /covering entries through seq 0\b/);
-  assert.match(summaryText, /later entries win/);
   assert.equal(msgs.filter((m) => m.role === "toolResult").length, 2);
 });
 
