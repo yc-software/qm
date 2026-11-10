@@ -82,7 +82,7 @@ export function waitForClientResult(
     const unsubscribe = signals.onSignal(runId, () => void check());
     if (opts.signal?.aborted) return finish("cancelled");
     opts.signal?.addEventListener("abort", onAbort, { once: true });
-    void check();
+    check().catch(swallowAs("client result check", undefined));
   });
 }
 
