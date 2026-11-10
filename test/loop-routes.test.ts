@@ -113,6 +113,20 @@ test("creating a loop with a schedule creates a bound child cron", async () => {
   assert.equal(cron?.title, "Loop: Sentry triage");
 });
 
+test("a playbook an automated turn wrote is marked, until its owner rewrites it at the keyboard", async () => {
+  const deps = services();
+  const fire = (method: string, path: string, body: unknown) =>
+    call(deps, method, path, body, "josh", "capability", true, true, false, false, true);
+  const made = await fire("POST", "/v1/loops", CREATE);
+  assert.equal(made.status, 200);
+  const loop = (made.body as { loop: Loop }).loop;
+  assert.equal(loop.taskAuthor, "automation");
+  const typed = await call(deps, "PATCH", `/v1/loops/${loop.id}`, { playbook: "Triage Sentry, then summarise." });
+  assert.equal((typed.body as { loop: Loop }).loop.taskAuthor, undefined);
+  const rewritten = await fire("PATCH", `/v1/loops/${loop.id}`, { playbook: "Read every transcript." });
+  assert.equal((rewritten.body as { loop: Loop }).loop.taskAuthor, "automation");
+});
+
 test("create parses and validates schedules before storing the loop", async () => {
   const deps = services();
   const tooFast = await call(deps, "POST", "/v1/loops", { ...CREATE, schedule: { everyMs: 1 } });

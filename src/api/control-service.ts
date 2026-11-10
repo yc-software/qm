@@ -222,15 +222,17 @@ export async function canAdministerCron(
   return (await app.artifactGrantPermission(cron.ownerScopeId, encodeRef(cronRef(cron.id)), actor.actorId)) === "write";
 }
 
-export async function cronTaskTakeover(
+export async function cronTaskRewrite(
   app: Pick<App, "samePerson" | "isCurrentSharedScopeMember" | "membershipControlsScope" | "managesScope">,
   cron: Cron,
   editorId: string,
-  rewritesTask: boolean,
-): Promise<{ owner: string; script?: null } | undefined> {
-  if (!rewritesTask || actsAsScope(cron.owner, cron.ownerScopeId)) return undefined;
-  if (await ownsCron(app, cron, editorId)) return undefined;
-  return { owner: editorId, ...(cron.script ? { script: null } : {}) };
+  atKeyboard: boolean,
+): Promise<Pick<CronPatch, "owner" | "script" | "taskAuthor">> {
+  let authored: Pick<CronPatch, "taskAuthor"> = {};
+  if (!atKeyboard) authored = { taskAuthor: "automation" };
+  else if (cron.taskAuthor) authored = { taskAuthor: null };
+  if (actsAsScope(cron.owner, cron.ownerScopeId) || (await ownsCron(app, cron, editorId))) return authored;
+  return { ...authored, owner: editorId, ...(cron.script ? { script: null } : {}) };
 }
 
 const WEBHOOK_TASK_OWNER_ONLY =
@@ -550,11 +552,8 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         patch.script = script;
       } else if (before.script && (req.script === null || req.text !== undefined)) patch.script = null;
       const rewritesTask = req.action !== undefined || req.text !== undefined;
-      Object.assign(patch, await cronTaskTakeover(app, before, capability.actorId, rewritesTask));
-      if (rewritesTask || patch.script) {
-        if (!personAtKeyboard(capability)) patch.taskAuthor = "automation";
-        else if (before.taskAuthor) patch.taskAuthor = null;
-      }
+      if (rewritesTask || patch.script)
+        Object.assign(patch, await cronTaskRewrite(app, before, capability.actorId, personAtKeyboard(capability)));
       if (!cronPatchChanges(before, patch)) return { ok: true, cron: before };
       try {
         const cron = await app.updateCron(id, patch, trial);

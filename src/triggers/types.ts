@@ -8,6 +8,7 @@ export interface TriggerBase {
   createdBy: string;
   ownerConsentedAt?: number;
   botActor?: boolean;
+  taskAuthor?: "automation";
   destination?: Destination;
   enabled: boolean;
   createdAt: number;
@@ -46,7 +47,6 @@ export interface CronFireNote {
 }
 
 export interface Cron extends TriggerBase {
-  taskAuthor?: "automation";
   runtime?: RuntimeChoice | null;
   schedule: CronSchedule;
   nextFireAt?: number;

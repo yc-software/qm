@@ -57,6 +57,7 @@ export interface LoopPatch {
 interface PlaybookEdit {
   playbook: string;
   by: string;
+  automation?: true;
   note?: string;
 }
 
@@ -223,6 +224,7 @@ export function createLoopStore(backing: DurableMap<Loop>): LoopStore {
         if (patch.playbookEdit !== undefined && patch.playbookEdit.playbook !== loop.playbook) {
           const version = loop.playbookVersion + 1;
           fields.playbook = patch.playbookEdit.playbook;
+          fields.taskAuthor = patch.playbookEdit.automation ? "automation" : undefined;
           fields.playbookVersion = version;
           fields.playbookHistory = [
             ...loop.playbookHistory,

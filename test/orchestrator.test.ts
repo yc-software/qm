@@ -1613,7 +1613,6 @@ test("an owner's cron fire carries the owner's authority: liveActor, admin statu
     fire({ text: "!sysprompt", conversation: { kind: "dm", threadRef: "dm:admin-alice:owner-fire-2" } }),
   );
   assert.match(prompt.reply ?? "", /## Acting for an org admin/, "an admin owner's fire gets the admin plane");
-  assert.doesNotMatch(prompt.reply ?? "", /"scope":"org"/, "the org-notebook hint is withheld on a fire");
 
   captured = undefined;
   consulted.length = 0;

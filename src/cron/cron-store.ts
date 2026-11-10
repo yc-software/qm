@@ -31,7 +31,6 @@ export interface CreateCronInput extends CreateTriggerInput {
   loopId?: string;
   sessionRef?: string;
   script?: CronScript;
-  taskAuthor?: "automation";
 }
 
 export interface CronPatch {
@@ -139,7 +138,6 @@ export function createCronStore(
         ...(input.sessionRef ? { sessionRef: input.sessionRef } : {}),
         ...(input.runtime ? { runtime: input.runtime } : {}),
         ...(input.script ? { script: input.script } : {}),
-        ...(input.taskAuthor ? { taskAuthor: input.taskAuthor } : {}),
       }));
     },
     get: (id) => backing.get(id),

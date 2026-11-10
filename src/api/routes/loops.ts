@@ -273,6 +273,7 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
     createdBy: acting.actorId,
     ownerScopeId,
     ...(ctx.capability?.botActor ? { botActor: true } : {}),
+    ...(acting.liveHuman ? {} : { taskAuthor: "automation" as const }),
     name: b.name,
     ...(b.icon !== undefined ? { icon: b.icon as string | null } : {}),
     playbook: b.playbook,
@@ -382,6 +383,7 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
     patch.playbookEdit = {
       playbook: b.playbook,
       by: acting.actorId,
+      ...(acting.liveHuman ? {} : { automation: true as const }),
       ...(typeof b.note === "string" && b.note.trim() ? { note: b.note.trim() } : {}),
     };
   } else if (b.playbook !== undefined) {

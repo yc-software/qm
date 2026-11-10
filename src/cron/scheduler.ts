@@ -1,4 +1,4 @@
-import { cronOwnerFire, cronTriggerAuthority } from "./authority.ts";
+import { ownerAuthored, cronTriggerAuthority } from "./authority.ts";
 import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
 import { randomUUID } from "node:crypto";
 import { type ScopeId, type TurnRequest, type TurnResult } from "../types.ts";
@@ -322,7 +322,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           fireKey,
           threadRef,
           surface: "cron",
-          ownerFire: cronOwnerFire(cron),
+          ownerFire: ownerAuthored(cron),
           redrivesHandOff: true,
           ...(firesAtMostDaily(cron.schedule, scheduledAt ?? t) ? { infrequentCron: true } : {}),
           ...(cron.runtime && !runtimeProblem ? { runtime: cron.runtime } : {}),
