@@ -47,7 +47,7 @@ export function turnTools(kit: ToolKit) {
         await recordCall(callId, { tool: "finish_silently", ...(params.reason ? { reason: params.reason } : {}) });
         return recordResult(
           callId,
-          { tool: "finish_silently", noop: "not_a_poll_fire" },
+          { tool: "finish_silently", noop: "reply_required" },
           text(
             "[no-op] finish_silently only applies to surface turns, scheduled background fires or subagent wakes; a person is waiting on this turn — just reply.",
           ),
