@@ -47,7 +47,7 @@ export function approvalView(requestId: string, record: PendingApprovalRecord): 
   };
 }
 
-export const APPROVED_CALL_RAN_NOTE =
+const APPROVED_CALL_RAN_NOTE =
   "The requesting human approved the pending call, and QM has already attempted it exactly as approved; its result, or the error that stopped it, is recorded just before this message. Do not call it again. Continue the original task from that result. All other permission and screening checks remain in force.";
 
 export const APPROVAL_DECISION_SIGNAL_TEXT = "[approval decision]";
@@ -56,9 +56,9 @@ export function executesOnApprove(record: Pick<PendingApprovalRecord, "call">): 
   return record.call ? { executesOnApprove: true } : {};
 }
 
-export type ApprovalRefusal = "expired" | "foreign_session" | "not_requester";
+type ApprovalRefusal = "expired" | "foreign_session" | "not_requester";
 
-export function approvalRefusal(
+function approvalRefusal(
   record: PendingApprovalRecord | null | undefined,
   sessionId: string,
   clickerId: string,
@@ -69,7 +69,7 @@ export function approvalRefusal(
   return undefined;
 }
 
-export function approvedToolCall(requestId: string, record: PendingApprovalRecord): ApprovedToolCall | undefined {
+function approvedToolCall(requestId: string, record: PendingApprovalRecord): ApprovedToolCall | undefined {
   return record.call
     ? { callId: approvedCallId(requestId, record.createdAt ?? 0), requestId, ...record.call }
     : undefined;
@@ -172,7 +172,7 @@ export interface EarlierApprovals {
   unstarted: Array<{ call: ApprovedToolCall; approvalKey: string }>;
 }
 
-export function approvedRequestsStarted(items: readonly Item[]): Set<string> {
+function approvedRequestsStarted(items: readonly Item[]): Set<string> {
   return new Set(
     items.flatMap((item) =>
       item.kind === "ToolCall" && typeof item.body.approvedRequestId === "string" ? [item.body.approvedRequestId] : [],
