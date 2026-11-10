@@ -295,11 +295,11 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
       ? {
           async reapDeepIdle(idleMs: number, devIdleMs?: number) {
             let reaped = 0;
+            const held = await resources.heldBackings();
             for (const [name, s] of Object.entries(backends)) {
               if (!s?.reapDeepIdle) continue;
-              const reap = async () =>
-                s.reapDeepIdle!(idleMs, devIdleMs, await resources.heldBackings(name as SandboxBackendName));
-              reaped += (await reap().catch(swallowReap)).reaped ?? 0;
+              const scopes = held.get(name as SandboxBackendName) ?? new Set<string>();
+              reaped += (await s.reapDeepIdle(idleMs, devIdleMs, scopes).catch(swallowReap)).reaped ?? 0;
             }
             return { reaped };
           },

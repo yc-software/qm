@@ -96,7 +96,7 @@ export interface SandboxResources {
   hold(id: string, runId: string): Promise<void>;
   release(id: string, runId: string | undefined): Promise<boolean>;
   inUse(id: string): Promise<boolean>;
-  heldBackings(backend: SandboxBackendName): Promise<Set<string>>;
+  heldBackings(): Promise<Map<SandboxBackendName, Set<string>>>;
   setDefault(actorId: string, scopeId: ScopeId, id: string | null): Promise<void>;
   resolve(scopeId: ScopeId): Promise<SandboxResource | null>;
   get(id: string): Promise<SandboxResource>;
@@ -267,13 +267,17 @@ export function createSandboxResources(opts: {
     },
     async inUse(id) {
       const record = await opts.records.get(id);
-      return !!record?.holders?.length && liveHolders(record);
+      return !!record && liveHolders(record);
     },
-    async heldBackings(backend) {
-      const held = new Set<string>();
-      for (const record of await opts.records.all())
-        if (record.backend === backend && record.holders?.length && (await liveHolders(record)))
-          held.add(record.backingScopeId);
+    async heldBackings() {
+      const held = new Map<SandboxBackendName, Set<string>>();
+      const records = await opts.records.all();
+      const live = await Promise.all(records.map(liveHolders));
+      records.forEach((record, index) => {
+        if (!live[index]) return;
+        const scopes = held.get(record.backend) ?? new Set<string>();
+        held.set(record.backend, scopes.add(record.backingScopeId));
+      });
       return held;
     },
     async retire(actorId, id) {
