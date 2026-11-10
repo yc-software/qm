@@ -40,6 +40,13 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   `gh pr merge <number>` queues it rather than merging it. The queue runs CI on the
   exact commit that will land, reusing the PR's run when `main` has not moved, and
   `main`'s own CI then reuses the queue's run. Never bypass the queue with `--admin`.
+- **Check the plan against the Wall of shame before writing code.** Reviewers judge the
+  finished PR by those lenses, and much of what they catch is decided before the first
+  line: a second store beside an existing one, a hand-written client for something a
+  dependency already does, one more flag. Read the _always reviewed_ lenses and their
+  examples in the [Wall of shame](./docs/SPEC.md#wall-of-shame), search the repo for what
+  already owns the behaviour you are about to add, and build on that. The same finding
+  costs a rewrite at review and nothing in the plan.
 - **Run independent Wall of shame reviews in parallel for every PR.** First triage with
   one fast, cheap model, the latest Haiku: give it the diff and every lens in the current
   [Wall of shame](./docs/SPEC.md#wall-of-shame), and have it mark each lens relevant or
@@ -60,10 +67,15 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   results or substitute the author's self-review. After edits, have independent
   reviewers reassess affected lenses and explicitly carry forward unaffected results.
   These reviews run alongside PR work; before merging, every relevant lens must have accepted
-  and all requested changes must be resolved. The `Wall of shame review` CI check fails
-  until the description's report covers every lens for the PR head: relevant lenses with
-  an Accept verdict, and the rest as `Not relevant` with the triage model as reviewer and
-  its one-line reason as the assessment.
+  and all requested changes must be resolved. Only a human maintainer can waive a lens, for
+  one PR: keep the reviewer's actual score, set the verdict to `Waived`, and write the
+  assessment as `Waived by <name>:` followed by the objection that was waived. Never
+  write a waiver the maintainer did not give, and never record one as Accept. The
+  `Wall of shame review` CI check fails until the description's report covers every lens
+  for the PR head: relevant lenses with an Accept or Waived verdict, and the rest as
+  `Not relevant` with the triage model as reviewer and its one-line reason as the
+  assessment. Lenses marked _checked by CI_ are computed by that check from the diff: skip
+  them in triage and review, and give them a row only to record a waiver.
 - **Disclose configuration changes in the PR description.** Name added, removed,
   or changed settings, flags, modes, and providers, including defaults, precedence,
   and supported combinations. Explain why; keep this proportional to the change.
@@ -86,6 +98,8 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   on the old code through the real path and assert the correct behavior, not the inverse
   of the specific fix. Don't write checks that can't fail — a fixture compared against
   itself, a job that always reports success. When a feature is removed, delete its tests.
+  CI enforces the spec's Over-testing limit on test lines per PR; remove or reshape
+  existing tests to stay within it.
 - **Verify non-trivial behavior changes in a live dev instance before opening a PR.**
   When a change is substantial enough that unit tests alone won't prove it works
   end-to-end — new or changed agent behavior, or anything touching the Slack/web

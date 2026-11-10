@@ -362,7 +362,6 @@ export function createDeliveryTracker(
       const count = (failures.get(id) ?? 0) + 1;
       if (count >= maxAttempts) {
         failures.delete(id);
-        posted.delete(id);
         dead.set(id, Date.now() + giveUpRetryMs);
         capMap(dead, maxTracked);
         return true;
