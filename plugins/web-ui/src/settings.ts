@@ -84,6 +84,10 @@ function publishTheme(): void {
   window.parent.postMessage({ type: "qm:theme", dark: root.classList.contains("dark"), colors }, themeParentOrigin);
 }
 
+export function tellEmbedder(type: string): void {
+  if (themeParentOrigin) window.parent.postMessage({ type }, themeParentOrigin);
+}
+
 export function applyTheme(): void {
   const choice = storedTheme();
   const custom = choice === "custom" ? storedCustomTheme() : null;

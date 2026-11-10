@@ -181,6 +181,7 @@ import {
 import { icon } from "./icons";
 import { checkedReplyStep, createLiveStepLine, currentStep, preStepWork } from "./live-step";
 import { appState, renderSidebarTop, switchView, syncUrlFromState } from "./shell";
+import { tellEmbedder } from "./settings";
 import { contextsState, scopeTitle } from "./contexts";
 import { openProjectPage, scopeToolCount, sessionTopbarTpl, setScopedSession } from "./session-scope";
 import {
@@ -1094,8 +1095,14 @@ export function createChatSurface(
   }
 
   function observeLiveWork(agent: Agent): (work: WorkBlock) => void {
+    let toldThrough = 0;
     return (work: WorkBlock) => {
       if (agent !== chatState.agent) return;
+      const finished = activityItems(work.activity).findLast((item) => item.kind === "ToolResult");
+      if (finished && finished.seq > toldThrough) {
+        toldThrough = finished.seq;
+        tellEmbedder("qm:app-check");
+      }
       appendConsumedSteers(agent.state.messages, work);
       if (work.runtime && switchedDefault(work.runtime) && work.runtime.modelId !== chatState.turnRuntime?.modelId)
         void ctx.composer.followScopeDefault(agent);
