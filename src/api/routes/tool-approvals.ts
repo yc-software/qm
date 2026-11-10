@@ -1,18 +1,17 @@
 import { randomUUID } from "node:crypto";
-import { canonicalJson } from "../../../cli/src/canonical-json.ts";
 import { approvalCardId, toolCallApprovalKey } from "../../core/approval-id.ts";
 import { samePerson } from "../../directory/person.ts";
 import { isTerminal } from "../../runs/run-store.ts";
+import { SIGNAL_POLL_MS } from "../../runs/run-signal-store.ts";
 import { sleep } from "../../util/async.ts";
 import { sendJson } from "../http.ts";
 import { audit, isObj } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
-const TAKE_WAIT_MS = 10_000;
-const TAKE_POLL_MS = 100;
-const RUN_CHECK_MS = 500;
-const MAX_INPUT_CHARS = 16_000;
-const TOOL_NAME = /^[A-Za-z0-9_.:-]{1,200}$/;
+// A live run's signal poll wakes on notify and falls back to polling every SIGNAL_POLL_MS, so two of its rounds is long enough to know no run will take the request.
+const TAKE_WAIT_MS = 2 * SIGNAL_POLL_MS;
+const TAKE_POLL_MS = 200;
+const RUN_CHECK_MS = 1_000;
 
 const NO_LIVE_TURN =
   "this call needs the person's approval, and only a live QM turn can show them an approval card; published apps and commands that outlive their turn can't run it";
@@ -25,16 +24,10 @@ async function requestToolApproval(ctx: ApiCtx): Promise<void> {
   const b = isObj(body) ? body : {};
   const tool = b.tool;
   const input = b.input;
-  if (typeof tool !== "string" || !TOOL_NAME.test(tool) || !isObj(input)) {
+  if (typeof tool !== "string" || !tool || !isObj(input)) {
     return sendJson(res, 400, {
       error: "bad_request",
       message: "pass `tool` (a tool name) and `input` (its arguments)",
-    });
-  }
-  if (canonicalJson(input).length > MAX_INPUT_CHARS) {
-    return sendJson(res, 400, {
-      error: "input_too_long",
-      message: `the arguments are too long to show on an approval card (over ${MAX_INPUT_CHARS} characters); split the work into smaller calls`,
     });
   }
   const runId = capability.runId;

@@ -88,7 +88,7 @@ export function waitForClientResult(
   });
 }
 
-const SIGNAL_POLL_MS = 5_000;
+export const SIGNAL_POLL_MS = 5_000;
 
 export interface SignalPollHandlers {
   onSteer(text: string, ts?: string, request?: TurnRequest, acknowledge?: () => Promise<void>): Promise<void | boolean>;

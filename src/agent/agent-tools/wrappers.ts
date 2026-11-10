@@ -126,9 +126,7 @@ function declaredToolCallApproval(toolName: string, params: Record<string, unkno
   );
 }
 
-const MAX_REQUESTED_APPROVALS = 5;
-
-/** A sandbox command (the ycli CLI) hit a connector tool that needs the person's approval for each call. Raise the same card the agent would get by calling it directly, and pause the turn after the current tool call. False when this turn can't show it: the tool isn't one of this turn's connector tools, it doesn't need approval for these arguments, or too many are already waiting. */
+/** A sandbox command hit a connector tool that needs the person's approval for each call. Raise the same card the agent would get by calling it directly, and pause the turn after the current tool call. False when this turn can't show it: the tool isn't one of this turn's connector tools, or it doesn't need approval for these arguments. */
 export async function raiseRequestedToolApproval(
   ref: ToolContextRef,
   tools: ReadonlyArray<{ name: string }>,
@@ -149,10 +147,7 @@ export async function raiseRequestedToolApproval(
   if (!needed) return false;
   const approval = declaredToolCallApproval(tool, input);
   if (!approval) return false;
-  if (!pending.some((p) => p.approvalKey === approval.approvalKey)) {
-    if (pending.filter((p) => p.call).length >= MAX_REQUESTED_APPROVALS) return false;
-    pending.push(approval);
-  }
+  if (!pending.some((p) => p.approvalKey === approval.approvalKey)) pending.push(approval);
   ref.pausedOnApproval = true;
   return true;
 }

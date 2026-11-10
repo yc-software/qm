@@ -363,7 +363,7 @@ const FAMILIES: AgentApiFamily[] = [
   },
   {
     guidance:
-      "Sandbox commands use this when a connector tool they call needs the person's approval for each call (the ycli CLI does it for you). It raises the same approval card as calling the tool directly; the turn then pauses until they decide, and an approved call runs and lands in the conversation. Only live turns can raise one.",
+      "Sandbox commands use this when a connector tool they call needs the person's approval for each call. It raises the same approval card as calling the tool directly; the turn then pauses until they decide, and an approved call runs and lands in the conversation. Only live turns can raise one.",
     routes: [
       {
         method: "POST",

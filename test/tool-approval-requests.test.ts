@@ -39,7 +39,7 @@ test("a sandbox command's approval request reaches the live run, and is withdraw
       surface: "test",
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: "t-approvals" },
-      text: "update the RSVP labels",
+      text: "archive record 7",
       async: true,
     });
     const runId = ack.runId!;
@@ -63,13 +63,13 @@ test("a sandbox command's approval request reaches the live run, and is withdraw
         headers: { "content-type": "application/json", "x-agent-capability": capability },
         body: JSON.stringify(body),
       });
-    const input = { operation: "invoke", tool: "update_meetup_rsvp_labels", arguments: { meetup_id: 7 } };
+    const input = { operation: "invoke", tool: "archive_record", arguments: { id: 7 } };
 
     const appToken = await token({});
-    const noTurn = await post({ tool: "ycli", input }, appToken);
+    const noTurn = await post({ tool: "records", input }, appToken);
     assert.equal(noTurn.status, 409);
     assert.equal(((await noTurn.json()) as { error: string }).error, "no_live_turn");
-    assert.equal((await post({ tool: "ycli" }, live)).status, 400);
+    assert.equal((await post({ tool: "records" }, live)).status, 400);
 
     const taken: RunSignal[] = [];
     const stopTaking = startSignalPoll(
@@ -82,16 +82,16 @@ test("a sandbox command's approval request reaches the live run, and is withdraw
       },
       { intervalMs: 20 },
     );
-    const raised = await post({ tool: "ycli", input }, live);
+    const raised = await post({ tool: "records", input }, live);
     await stopTaking();
     assert.equal(raised.status, 200);
     assert.deepEqual(await raised.json(), {
       status: "pending_approval",
-      card: approvalCardId(toolCallApprovalKey("ycli", input)),
+      card: approvalCardId(toolCallApprovalKey("records", input)),
     });
     assert.deepEqual(
       taken.map(({ tool, input: args }) => ({ tool, input: args })),
-      [{ tool: "ycli", input }],
+      [{ tool: "records", input }],
     );
 
     const stopDeclining = startSignalPoll(
@@ -100,7 +100,7 @@ test("a sandbox command's approval request reaches the live run, and is withdraw
       { onSteer: async () => {}, onAbort: async () => {}, onApprovalRequest: async () => false },
       { intervalMs: 20 },
     );
-    const refused = post({ tool: "ycli", input }, live);
+    const refused = post({ tool: "records", input }, live);
     await new Promise((resolve) => setTimeout(resolve, 150));
     const claimed = (await built.runs.claim("w1", 60_000))[0]!;
     await built.runs.complete(runId, claimed.leaseToken!, { status: "ok", reply: "done" });
@@ -109,7 +109,7 @@ test("a sandbox command's approval request reaches the live run, and is withdraw
     assert.equal(answer.status, 409);
     assert.equal(((await answer.json()) as { error: string }).error, "not_raised");
     assert.deepEqual(await built.signals.pending(runId), [], "the unanswered request was withdrawn");
-    assert.equal((await post({ tool: "ycli", input }, live)).status, 409, "an ended turn refuses up front");
+    assert.equal((await post({ tool: "records", input }, live)).status, 409, "an ended turn refuses up front");
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }

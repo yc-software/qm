@@ -725,7 +725,7 @@ test("a queued steer remains durable until its native intake acknowledges it", a
 
 test("startSignalPoll: an approval request is taken only when the run raises its card", async () => {
   const store = signalStore();
-  await store.send("ar1", { kind: "approval_request", tool: "ycli", input: { operation: "invoke" } });
+  await store.send("ar1", { kind: "approval_request", tool: "records", input: { operation: "invoke" } });
   const seen: string[] = [];
   const declining = startSignalPoll(
     store,
@@ -739,7 +739,7 @@ test("startSignalPoll: an approval request is taken only when the run raises its
   );
   await until(() => seen.length >= 1);
   await declining();
-  assert.deepEqual(seen, ["ask:ycli"], "declined once, never treated as a steer");
+  assert.deepEqual(seen, ["ask:records"], "declined once, never treated as a steer");
   assert.equal((await store.pending("ar1")).length, 1, "a declined request stays for its sender to withdraw");
   const unhandled = startSignalPoll(
     store,
