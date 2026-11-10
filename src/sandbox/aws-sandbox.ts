@@ -253,14 +253,14 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
 
   async function ensureBody(
     scope: string,
-    held = false,
+    held?: () => Promise<boolean>,
   ): Promise<{ id: string; endpoint: string; coldStart: boolean }> {
     return withScopeLock(scope, async () => {
       const stored = await store.get(scope);
       if (stored) {
         const desc = await api.tryGetMicrovm(stored.microvmId);
         const alive = desc && desc.state !== "TERMINATED" && desc.state !== "TERMINATING";
-        const stale = !held && Date.now() - stored.createdAtMs > rotateAfterMs;
+        const stale = Date.now() - stored.createdAtMs > rotateAfterMs && !(await held?.());
         if (alive && stored.provisioning)
           throw new Error(`AWS sandbox ${stored.microvmId} has incomplete provisioning; retire it before retrying`);
         if (alive && !stale) {
@@ -547,10 +547,10 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
         !(rec.orgId && rec.orgId !== configOrgId()) && !!rec.lastActivityMs && rec.lastActivityMs <= cutoff;
       await claimThenBind(store.claimTenants, async () => {
         for (const [scope, listed] of await store.entries())
-          if (idle(listed) && !held?.has(scope))
+          if (idle(listed))
             await withScopeLock(scope, async () => {
               const rec = await store.get(scope);
-              if (!rec || !idle(rec)) return;
+              if (!rec || !idle(rec) || (await held?.(scope))) return;
               const desc = await api.tryGetMicrovm(rec.microvmId);
               if (!desc || desc.state === "TERMINATED" || desc.state === "TERMINATING") {
                 await store.delete(scope).catch(() => {});

@@ -96,7 +96,7 @@ export interface SandboxResources {
   hold(id: string, runId: string): Promise<void>;
   release(id: string, runId: string | undefined): Promise<boolean>;
   inUse(id: string): Promise<boolean>;
-  heldBackings(): Promise<Map<SandboxBackendName, Set<string>>>;
+  backingInUse(backend: SandboxBackendName, backingScopeId: string): Promise<boolean>;
   setDefault(actorId: string, scopeId: ScopeId, id: string | null): Promise<void>;
   resolve(scopeId: ScopeId): Promise<SandboxResource | null>;
   get(id: string): Promise<SandboxResource>;
@@ -269,16 +269,10 @@ export function createSandboxResources(opts: {
       const record = await opts.records.get(id);
       return !!record && liveHolders(record);
     },
-    async heldBackings() {
-      const held = new Map<SandboxBackendName, Set<string>>();
+    async backingInUse(backend, backingScopeId) {
       const records = await opts.records.all();
-      const live = await Promise.all(records.map(liveHolders));
-      records.forEach((record, index) => {
-        if (!live[index]) return;
-        const scopes = held.get(record.backend) ?? new Set<string>();
-        held.set(record.backend, scopes.add(record.backingScopeId));
-      });
-      return held;
+      const held = records.filter((record) => record.backend === backend && record.backingScopeId === backingScopeId);
+      return (await Promise.all(held.map(liveHolders))).includes(true);
     },
     async retire(actorId, id) {
       await initialize();

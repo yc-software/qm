@@ -102,7 +102,7 @@ export interface ProvisionOptions {
   scratch?: { key: string };
   onStatus?: (text: string) => void;
   memoryGb?: number;
-  held?: boolean;
+  held?: () => Promise<boolean>;
 }
 
 export interface ExecPressure {
@@ -249,7 +249,11 @@ export interface Sandbox {
   restartComputer?(scopeId: string, memoryGb?: number): Promise<void>;
   teardown(handle: SandboxHandle, opts?: TeardownOptions): Promise<void>;
   destroyScope?(scopeId: string): Promise<void>;
-  reapDeepIdle?(idleMs: number, devIdleMs?: number, held?: ReadonlySet<string>): Promise<{ reaped: number }>;
+  reapDeepIdle?(
+    idleMs: number,
+    devIdleMs?: number,
+    held?: (scope: string) => Promise<boolean>,
+  ): Promise<{ reaped: number }>;
 }
 
 export async function removeDirAndList(

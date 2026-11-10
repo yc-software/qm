@@ -148,11 +148,10 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
         return { ...handle, backend, scopeId: scope };
       }
       if (!resource) throw new NoDefaultSandboxError();
-      const held = await resources.inUse(resource.id);
       const sized = {
         ...provOpts,
         ...(resource.memoryGb ? { memoryGb: resource.memoryGb } : {}),
-        ...(held ? { held } : {}),
+        held: () => resources.inUse(resource.id),
       };
       const handle = await resources.use(resource.id, () => provision(resource.backingScopeId, sized));
       return { ...handle, backend: resource.backend, scopeId: resource.ownerScopeId, resourceId: resource.id };
@@ -295,11 +294,10 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
       ? {
           async reapDeepIdle(idleMs: number, devIdleMs?: number) {
             let reaped = 0;
-            const held = await resources.heldBackings();
             for (const [name, s] of Object.entries(backends)) {
               if (!s?.reapDeepIdle) continue;
-              const scopes = held.get(name as SandboxBackendName) ?? new Set<string>();
-              reaped += (await s.reapDeepIdle(idleMs, devIdleMs, scopes).catch(swallowReap)).reaped ?? 0;
+              const held = (scope: string) => resources.backingInUse(name as SandboxBackendName, scope);
+              reaped += (await s.reapDeepIdle(idleMs, devIdleMs, held).catch(swallowReap)).reaped ?? 0;
             }
             return { reaped };
           },
