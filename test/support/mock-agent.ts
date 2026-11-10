@@ -453,6 +453,8 @@ export function createMockAgent(): Agent {
         pausedOnApproval = true;
         usedTool = true;
         reply = `about to run it`;
+      } else if (command0 === "!approval-note") {
+        reply = turn.approvalUnavailable ?? "approvals available";
       } else if (command0.startsWith("!paused-approval-quiet ")) {
         const command = command0.slice("!paused-approval-quiet ".length);
         await record({ kind: "ToolCall", tool: "execute", body: { command, blocked: "needs_approval" } });

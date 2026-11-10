@@ -345,7 +345,7 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
     assert.equal(credential.service, "stripe");
     assert.equal(credential.ownerId, "U_A");
 
-    const grants = await built.keychain!.grantsForScope(scopeId("channel", "C1"));
+    const grants = await built.keychain!.grantsForScope(scopeId("channel", "C1"), { includePersonGrants: true });
     const g = grants.find((x) => x.credential.id === credential.id);
     assert.ok(g, "a standing grant for the asking channel was minted on redeem");
     const m = await materializeGrant(built.keychain!, g!.grant.id, scopeId("channel", "C1"), "U_A");
@@ -468,7 +468,7 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
       { envKey: "DOORDASH_PASSWORD", secret: true },
     ]);
 
-    const grants = await built.keychain!.grantsForScope(scopeId("channel", "C1"));
+    const grants = await built.keychain!.grantsForScope(scopeId("channel", "C1"), { includePersonGrants: true });
     const g = grants.find((x) => x.credential.id === credential.id);
     const m = await materializeGrant(built.keychain!, g!.grant.id, scopeId("channel", "C1"), "U_A");
     assert.ok(m.kind === "env");
@@ -661,6 +661,33 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
     assert.equal(token?.liveActor, true);
     assert.deepEqual(token?.members, members);
     assert.equal((await redeem(dropId, { secret: "bot-secret" }, "B-LEGACY", linkToken(formPath))).status, 200);
+  });
+
+  it("a credential a person drops into a channel is offered to a bot's turns there only when the bot asked for it", async () => {
+    const room = scopeId("channel", "C1");
+    const dropInto = async (cap: string, service: string, owner: string) => {
+      const minted = await post("/v1/keychain/drops", { service, purpose: "deploy" }, cap);
+      assert.equal(minted.status, 200);
+      const { dropId, formPath } = (await minted.json()) as { dropId: string; formPath: string };
+      const res = await redeem(dropId, { secret: `${service}-secret` }, owner, linkToken(formPath));
+      assert.equal(res.status, 200);
+      return ((await res.json()) as { credential: { id: string } }).credential.id;
+    };
+    const personal = await dropInto(await capFor("U_A", room), "persondeploy", "U_A");
+    const asked = await dropInto(
+      await capFor("B-DEPLOY", room, {
+        botActor: true,
+        liveActor: true,
+        members: [{ id: "B-DEPLOY", type: "internal" }],
+      }),
+      "botdeploy",
+      "B-DEPLOY",
+    );
+    const offered = async (includePersonGrants: boolean) =>
+      (await built.keychain!.grantsForScope(room, { includePersonGrants })).map(({ credential }) => credential.id);
+    assert.ok((await offered(true)).includes(personal));
+    assert.ok(!(await offered(false)).includes(personal));
+    assert.ok((await offered(false)).includes(asked));
   });
 });
 

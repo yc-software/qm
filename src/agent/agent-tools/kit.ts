@@ -33,12 +33,21 @@ export const sandboxSelector = (description: string) => Type.Optional(Type.Strin
 export function createToolKit(ref: ToolContextRef, opts?: AgentToolsOptions) {
   const recorder = createRecorder(ref);
   const { recordResult } = recorder;
+  const approvalUnavailableResult = (callId: string, summary: Record<string, unknown>, reason: string) =>
+    recordResult(
+      callId,
+      { ...summary, blocked: "approval_unavailable" },
+      text(`[blocked: approval unavailable] ${reason}\n${ref.approvalUnavailable}`),
+      true,
+    );
   const blockOnApproval = (
     callId: string,
     e: NeedsApproval,
     purpose?: string,
     summary: Record<string, unknown> = { tool: "execute" },
   ) => {
+    if (ref.approvalUnavailable)
+      return approvalUnavailableResult(callId, { ...summary, reason: e.approvalReason }, e.approvalReason);
     ref.pendingApprovals?.push({
       command: e.command,
       reason: e.approvalReason,
@@ -121,6 +130,7 @@ export function createToolKit(ref: ToolContextRef, opts?: AgentToolsOptions) {
     opts,
     ...recorder,
     blockOnApproval,
+    approvalUnavailableResult,
     unavailable,
     isUnavailable,
     resourceTool,
