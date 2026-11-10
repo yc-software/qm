@@ -1003,7 +1003,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
       const delegatedTask = !!input.sessionSenderId && session.parentSessionId === input.sessionSenderId;
       const wakingChild =
-        input.sessionSenderId && !input.surfaceTools && !isSubagentThreadRef(conversation.threadRef)
+        input.sessionSenderId && !input.approval && !input.surfaceTools && !isSubagentThreadRef(conversation.threadRef)
           ? await deps.sessions.get(input.sessionSenderId)
           : null;
       const childWake = wakingChild?.parentSessionId === session.id && isSubagentThreadRef(wakingChild.threadRef);
