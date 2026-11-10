@@ -300,7 +300,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const refusedDelivery =
         previous && cron.destination
           ? (await deps.deliveries.listBySourceSession(previous.sessionId ?? "", previous.threadRef))
-              .filter((d) => d.failedReason && d.destination.target === cron.destination!.target)
+              .filter(
+                (d) => d.failedReason && d.deliveredAt === null && d.destination.target === cron.destination!.target,
+              )
               .at(-1)?.failedReason
           : undefined;
       const notebookOnly = await deps.notebookOnlyMemory?.(cron);

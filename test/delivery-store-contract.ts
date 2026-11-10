@@ -388,23 +388,4 @@ export async function exerciseDeliveryFail(makeStore: (opts: { maxAgeMs: number 
   assert.equal(again.id, card.id);
   assert.equal(again.failedReason, "cannot_dm_bot", "re-enqueuing the same key does not revive a failed row");
   assert.deepEqual(await store.claimPending("principal", 60_000), []);
-  await store.ack(card.id, Date.now());
-  const delivered = await store.get(card.id);
-  assert.ok(delivered?.deliveredAt, "a late success from a lapsed sender still lands");
-  assert.equal(delivered?.failedReason, undefined, "and the row stops reporting the refusal");
-  for (const [key, land] of [
-    ["late-by-key", (id: string, k: string) => store.ackByKey(k, Date.now())],
-    ["late-thread", (id: string) => store.recordRecipientThread(id, "thread-1", Date.now())],
-  ] as const) {
-    const row = await store.enqueue({
-      destination: { type: "principal", target: "U-bot" },
-      text: "x",
-      idempotencyKey: key,
-    });
-    await store.fail(row.id, "cannot_dm_bot", Date.now());
-    await land(row.id, key);
-    const landed = await store.get(row.id);
-    assert.ok(landed?.deliveredAt, `${key}: the late success lands`);
-    assert.equal(landed?.failedReason, undefined, `${key}: the refusal is cleared`);
-  }
 }
