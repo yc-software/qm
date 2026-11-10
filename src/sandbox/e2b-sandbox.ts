@@ -110,6 +110,7 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
     localQueue(scope, () => advisoryLock.withLock(`e2b-provision:${scope}`, action));
 
   const sessionByName = new Map<string, E2bSession>();
+  const pauseFailed = new Set<string>();
   const scopeByName = new Map<string, string>();
   const scratchKeyByName = new Map<string, string>();
   const activeScratch = new Map<string, number>();
@@ -151,13 +152,14 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
     onStatus?: (text: string) => void,
   ): Promise<{ session: E2bSession; coldStart: boolean }> {
     return provisionQueue(scope, async () => {
-      const cached = sessionByName.get(name);
-      if (cached) return { session: cached, coldStart: false };
-
-      const adopt = (session: E2bSession): { session: E2bSession; coldStart: boolean } => {
+      const adopt = async (session: E2bSession, patch: Partial<StoredE2bSandbox>) => {
+        await store.merge(scope, { ...patch, preservationState: "running", preservationError: undefined });
         sessionByName.set(name, session);
         return { session, coldStart: false };
       };
+
+      const cached = sessionByName.get(name);
+      if (cached) return pauseFailed.delete(name) ? adopt(cached, {}) : { session: cached, coldStart: false };
 
       const stored = await store.get(scope);
       if (stored) {
@@ -165,12 +167,7 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
           const session = await client.connect(stored.sandboxId);
           const info = await client.info?.(session.sandboxId);
           noteInfo(info);
-          await store.merge(scope, {
-            preservationState: "running",
-            preservationError: undefined,
-            ...(info ? { nativePause: info.onTimeout === "pause" } : {}),
-          });
-          return adopt(session);
+          return await adopt(session, info ? { nativePause: info.onTimeout === "pause" } : {});
         } catch (err) {
           if (!(err instanceof E2bSandboxGoneError)) throw err;
         }
@@ -182,15 +179,8 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
           const session = await client.connect(summary.sandboxId);
           const info = await client.info?.(session.sandboxId);
           noteInfo(info);
-          await store.put(scope, {
-            ...stored,
-            sandboxId: session.sandboxId,
-            createdAtMs: Date.now(),
-            preservationState: "running",
-            preservationError: undefined,
-            nativePause: info?.onTimeout === "pause",
-          });
-          return adopt(session);
+          await store.put(scope, { ...stored, sandboxId: session.sandboxId, createdAtMs: Date.now() });
+          return await adopt(session, { nativePause: info?.onTimeout === "pause" });
         } catch (err) {
           if (!(err instanceof E2bSandboxGoneError)) throw err;
         }
@@ -214,14 +204,7 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
             cause: e,
           });
         }
-        await store.merge(scope, {
-          sandboxId: session.sandboxId,
-          createdAtMs: Date.now(),
-          preservationState: "running",
-          preservationError: undefined,
-          recoveryError: undefined,
-        });
-        return adopt(session);
+        return adopt(session, { sandboxId: session.sandboxId, createdAtMs: Date.now(), recoveryError: undefined });
       }
       onStatus?.("Creating the sandbox…");
       const session = await client.create({ metadata: { name }, autoPause: true });
@@ -627,7 +610,9 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
       await session.pause();
       await store.merge(scope, { preservationState: "paused", preservationError: undefined });
       sessionByName.delete(handle.id);
+      pauseFailed.delete(handle.id);
     } catch (error) {
+      pauseFailed.add(handle.id);
       await store.merge(scope, { preservationState: "pause_failed", preservationError: errMessage(error) });
       reportError("sandbox_preservation", "pause_failed", errMessage(error), scope);
       throw error;
