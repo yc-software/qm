@@ -9,6 +9,7 @@ import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
 import { countTokens } from "../src/util/tokens.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresErrorLog } from "../src/admin/postgres-error-log.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 
 const modelContext = async (sessions: SessionStore, sessionId: string) =>
@@ -30,6 +31,7 @@ async function fixture() {
   };
   const compaction = createCompaction({
     sessions,
+    errors: createPostgresErrorLog(testDatabaseUrl()),
     agent,
     maxContextTokens: 500,
   } as unknown as OrchestratorDeps);

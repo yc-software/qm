@@ -213,6 +213,13 @@ test(
         ).rows[0];
         assert.deepEqual([Number(row.size), row.days], [Buffer.byteLength(full), 30]);
         assert.match(row.storage_key, /^tool-output\/[0-9a-f-]{36}\/files\/[0-9a-f]{64}$/);
+        await raw.query(
+          "SET session_replication_role = replica; UPDATE items SET created_at = now() - interval '31 days' WHERE call_id = 'toolu_short'; SET session_replication_role = origin",
+        );
+        assert.deepEqual(await outputs.read(session.id, parkedOutputKey("tool-output/toolu_short")!), {
+          expired: true,
+        });
+        assert.deepEqual(await outputs.read(session.id, parkedOutputKey(markerPath)!), { text: full });
       } finally {
         await pool.close();
         await rm(dir, { recursive: true, force: true });

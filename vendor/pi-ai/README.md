@@ -1,9 +1,9 @@
-# Vendored pi-ai 0.82.0 (qm.3)
+# Vendored pi-ai 0.82.0 (qm.4)
 
 qm installs `@earendil-works/pi-ai` from the GitHub release
-[`vendored-pi-ai-0.82.0-qm.3`](https://github.com/yc-software/qm/releases/tag/vendored-pi-ai-0.82.0-qm.3),
-built from stock npm 0.82.0 plus `provider-error.patch` and `served-tier.patch` (dist only; version unchanged; not
-sent upstream).
+[`vendored-pi-ai-0.82.0-qm.4`](https://github.com/yc-software/qm/releases/tag/vendored-pi-ai-0.82.0-qm.4),
+built from stock npm 0.82.0 plus `provider-error.patch`, `served-tier.patch` and `fetch-option.patch` (dist only;
+version unchanged; not sent upstream).
 
 Why: stock pi-ai folds a provider HTTP failure into the display string `errorMessage`, so qm had to
 parse text to tell a budget cap from a rate limit. The patch keeps the structured data next to it:
@@ -25,13 +25,19 @@ as pi-ai does from 0.99.0, and exports `getServiceTierCostMultiplier` from `api/
 Ultrafast call served at another tier with pi-ai's own rates. openai-codex-responses is left out: its backend reports
 `default` for priority and flex requests, which pi-ai corrects from the requested tier that qm doesn't pass it.
 
+`fetch-option.patch`: stock 0.82.0 builds its OpenAI and Anthropic SDK clients with the global fetch, so qm can't
+send a custom model provider's calls through its private-network guard. The patch backports the `fetch` stream option
+pi-ai added upstream (`StreamOptions.fetch`, same name and type) for openai-completions, openai-responses and
+anthropic-messages, the three protocols a custom provider can use, and passes it through `streamSimple`. Unset, the SDKs
+keep the global fetch as before.
+
 The vendored pi-coding-agent (`vendored-pi-coding-agent-0.82.0-security.6`) is security.5 with only its
 `npm-shrinkwrap.json` pi-ai entry repointed at the qm.1 tarball; the root `overrides` entry resolves it to this one,
 so there is one pi-ai in the tree.
 
 Rebuild (both are byte-reproducible and verify their inputs' SHA-256):
 
-    vendor/pi-ai/build.sh                 # earendil-works-pi-ai-0.82.0-qm.3.tgz
+    vendor/pi-ai/build.sh                 # earendil-works-pi-ai-0.82.0-qm.4.tgz
     vendor/pi-ai/repack-coding-agent.sh   # earendil-works-pi-coding-agent-0.82.0-qm-security.6.tgz
 
 Drop this directory when qm upgrades past 0.82.0 to a pi-ai that exposes equivalent fields.

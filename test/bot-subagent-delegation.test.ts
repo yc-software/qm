@@ -22,6 +22,7 @@ import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { Run } from "../src/runs/run-store.ts";
 import type { McpToolService } from "../src/mcp/mcp-tool-service.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { orchestratorTestDeps } from "./support/orchestrator-deps.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
@@ -80,7 +81,7 @@ test("subagents a Slack bot's turns open and message keep the bot marker and its
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const config = testConfigStore("org");
   const orchestrator = createOrchestrator({
-    ...singleProcessDeps(),
+    ...orchestratorTestDeps(),
     config,
     runtime: createRuntimeService(
       { config, baseModelDefault: "claude-opus-5" },

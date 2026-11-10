@@ -96,8 +96,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
     postKeys,
     spine,
   } = ctx;
-  if (strictReadOnly || !(input.surfaceTools && defaultDestination && deps.deliveries)) return undefined;
-  const deliveries = deps.deliveries;
+  if (strictReadOnly || !(input.surfaceTools && defaultDestination)) return undefined;
   const currentDestination = defaultDestination;
   const textOnly = (d: Destination) => deps.surfaces.get(d.type)?.capabilities.textOnly === true;
   const homeSurface = deps.surfaces.get(currentDestination.type);
@@ -132,21 +131,19 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
     ) {
       return { ok: true, destination: { ...currentDestination, target: conversation.channelRef } };
     }
-    if (!deps.directory)
-      return { ok: false, message: "I can't reach a named channel or teammate from here — no directory is available." };
     const r: ReachResolution = await resolveReachTarget(
       {
-        resolveRecipient: (q) => deps.directory!.resolve(q),
-        resolveChannel: (q) => deps.directory!.resolveChannel(q),
-        channelMember: (c, p) => deps.directory!.channelMember(c, p),
-        resolveGroup: (parts) => deps.directory!.resolveGroupByParticipants(parts),
-        groupMember: (g, p) => deps.directory!.groupMember(g, p),
-        directoryMember: (p) => deps.directory!.get(p),
+        resolveRecipient: (q) => deps.directory.resolve(q),
+        resolveChannel: (q) => deps.directory.resolveChannel(q),
+        channelMember: (c, p) => deps.directory.channelMember(c, p),
+        resolveGroup: (parts) => deps.directory.resolveGroupByParticipants(parts),
+        groupMember: (g, p) => deps.directory.groupMember(g, p),
+        directoryMember: (p) => deps.directory.get(p),
         ...(deps.surfaceContext
           ? {
               openGroup: (parts: readonly string[]) =>
                 openGroupViaSurface((query) => deps.surfaceContext!.pull("slack", query), parts),
-              registerGroup: (g: string, parts: readonly string[]) => deps.directory!.upsertGroup(g, parts),
+              registerGroup: (g: string, parts: readonly string[]) => deps.directory.upsertGroup(g, parts),
             }
           : {}),
       },
@@ -171,7 +168,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
     try {
       const idempotencyKey = postKeys.key(destination, seq);
       const delivery = await reachEnqueue({
-        deliveries,
+        deliveries: deps.deliveries,
         destination,
         text: postText,
         ...(attachments?.length ? { attachments } : {}),
@@ -179,7 +176,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         provenance: postProvenance(idempotencyKey),
       });
       spine.surfaceOutboundCount += 1;
-      if (input.runId) deps.turnStream?.markSurfacePosted(input.runId);
+      if (input.runId) deps.turnStream.markSurfacePosted(input.runId);
       return { ok: true, deliveryId: delivery.id };
     } catch (e) {
       return { ok: false, message: errMessage(e) };

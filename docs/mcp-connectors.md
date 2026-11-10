@@ -98,9 +98,9 @@ may reach private addresses; a request to any other origin is refused as describ
 above, and the refusal names this setting. A listed origin is open to every request core's
 guarded fetch makes, including OAuth discovery, registration and token requests to
 endpoints a registered server's OAuth metadata names, so list only services that can
-safely receive such requests. The same list covers the API key check when an admin saves a
-custom model provider, and decision providers that call their own endpoint; model calls to
-a saved custom provider don't go through the guarded fetch. Loopback, unspecified, link-local and cloud metadata
+safely receive such requests. The same list covers custom model providers, both the API key
+check when an admin saves one and every model call to it, and decision providers that call
+their own endpoint. Loopback, unspecified, link-local and cloud metadata
 addresses, including the IPv6 metadata addresses of AWS, Google Cloud, Oracle Cloud, Akamai and
 Scaleway, Tailscale's `100.100.100.100` and `fd7a:115c:a1e0::53`, and Alibaba Cloud's `100.100.100.200`, are never allowed: core refuses to start with one in the list, and refuses a listed
 name that resolves to one. Per-user endpoints still require HTTPS, and redirects stay
