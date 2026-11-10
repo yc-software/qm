@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createServer as createTcpServer, type AddressInfo, type Socket } from "node:net";
 import { test } from "node:test";
-import { setTimeout as sleep } from "node:timers/promises";
 import { createServer } from "../src/api/server.ts";
+import { loadTenant } from "../src/tenants/cache.ts";
 import { serverDeps } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
@@ -13,6 +13,7 @@ import { testConfig } from "./support/test-config.ts";
 async function fixture(checkReadiness?: (signal: AbortSignal) => Promise<void>) {
   const config = testConfig({ signingSecret: "readiness-test-source-secret".repeat(3) });
   const built = buildApp(config);
+  if (!checkReadiness) await loadTenant();
   const server = createServer(built.app, {
     ...serverDeps(config, built),
     ...(checkReadiness ? { checkReadiness } : {}),
@@ -31,12 +32,7 @@ async function fixture(checkReadiness?: (signal: AbortSignal) => Promise<void>) 
 test("readiness is public and ready", async () => {
   const srv = await fixture();
   try {
-    let response = await srv.get("/readyz");
-    for (const deadline = Date.now() + 60_000; response.status === 503 && Date.now() < deadline;) {
-      await response.body?.cancel();
-      await sleep(100);
-      response = await srv.get("/readyz");
-    }
+    const response = await srv.get("/readyz");
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), { ok: true });
     assert.equal((await srv.get("/healthz")).status, 200);
