@@ -13,12 +13,6 @@ export const undeliverableApprovalNote = (failure: string): string =>
 
 export const UNREACHABLE_APPROVAL_DECIDER = "system:approval-unreachable";
 
-export function requesterIsBot(
-  request: { botActor?: boolean; actor?: { isBot?: boolean } | undefined } | undefined,
-): boolean {
-  return request?.botActor === true || request?.actor?.isBot === true;
-}
-
 export async function declineUnreachableApproval(
   deps: { approvals: DurableMap<PendingApprovalRecord>; sessions: Pick<SessionStore, "append"> },
   requestId: string,

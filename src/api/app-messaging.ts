@@ -434,15 +434,10 @@ export function createMessagingMethods(
       await deps.deliveries.ack(id, Date.now(), slackApiMs);
     },
     async failDelivery(id, reason) {
-      const failed = await deps.deliveries.fail(id, reason, Date.now());
-      const approvalId = failed?.destination.commandApprovalId;
+      const approvalId = (await deps.deliveries.get(id))?.destination.commandApprovalId;
       if (approvalId && deps.approvals)
-        await declineUnreachableApproval(
-          { approvals: deps.approvals, sessions: deps.sessions },
-          approvalId,
-          reason,
-        ).catch(reportFailureAs("deliveries: decline undeliverable approval", null));
-      return failed;
+        await declineUnreachableApproval({ approvals: deps.approvals, sessions: deps.sessions }, approvalId, reason);
+      return deps.deliveries.fail(id, reason, Date.now());
     },
     async ackDeliveryByKey(idempotencyKey) {
       await deps.deliveries.ackByKey(idempotencyKey, Date.now());

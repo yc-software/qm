@@ -2753,14 +2753,12 @@ test("dangerous command pauses for HiLO approval, then proceeds when approved", 
 });
 
 test("a bot-requested turn never opens an approval when a command is gated", async () => {
-  for (const extra of [{ botActor: true }, { actor: { ...internalActor, isBot: true } }] as const) {
-    const built = await withCommandRules(freshApp());
-    const res = await built.app.turn(dm("!run git push --force origin main", extra));
-    assert.equal(res.status, "refused");
-    assert.equal(res.reason, BOT_REQUESTER_REFUSAL);
-    assert.equal(res.pendingApprovals, undefined);
-    assert.equal((await built.deliveries.pending("principal")).length, 0);
-  }
+  const built = await withCommandRules(freshApp());
+  const res = await built.app.turn(dm("!run git push --force origin main", { botActor: true }));
+  assert.equal(res.status, "refused");
+  assert.equal(res.reason, BOT_REQUESTER_REFUSAL);
+  assert.equal(res.pendingApprovals, undefined);
+  assert.equal((await built.deliveries.pending("principal")).length, 0);
 });
 
 test("a bot-requested turn that paused on approval finishes without issuing one", async () => {

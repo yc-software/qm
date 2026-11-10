@@ -3,7 +3,6 @@ import test from "node:test";
 import {
   UNREACHABLE_APPROVAL_DECIDER,
   declineUnreachableApproval,
-  requesterIsBot,
   undeliverableApprovalNote,
 } from "../src/core/approval-requester.ts";
 import { botAuthoredActor } from "../src/slack/turn-handler.ts";
@@ -27,13 +26,6 @@ function record(request: Partial<TurnRequest> = {}): PendingApprovalRecord {
     },
   };
 }
-
-test("requesterIsBot reads either the turn's bot flag or the actor's", () => {
-  assert.equal(requesterIsBot(undefined), false);
-  assert.equal(requesterIsBot({ actor: { isBot: false } }), false);
-  assert.equal(requesterIsBot({ botActor: true }), true);
-  assert.equal(requesterIsBot({ actor: { isBot: true } }), true);
-});
 
 test("an undeliverable approval is settled as declined once, with the reason recorded for the agent", async () => {
   const approvals = testMap<PendingApprovalRecord>();
@@ -66,12 +58,17 @@ test("an undeliverable approval is settled as declined once, with the reason rec
   assert.equal(appended.length, 2, "a second failure report changes nothing");
 });
 
-test("bot-authored Slack messages keep bot provenance unless they resolve to an email-identified person", () => {
-  assert.deepEqual(botAuthoredActor({ externalId: "UBOT1", displayName: "Bot" }, true), {
-    externalId: "UBOT1",
-    displayName: "Bot",
-    isBot: true,
+test("bot-authored Slack messages keep bot provenance unless the author resolved to another identity", () => {
+  assert.deepEqual(
+    botAuthoredActor({ externalId: "UBOT1", displayName: "Bot" }, { botAuthored: true, userId: "UBOT1" }),
+    {
+      externalId: "UBOT1",
+      displayName: "Bot",
+      isBot: true,
+    },
+  );
+  assert.deepEqual(botAuthoredActor({ externalId: "U1" }, { userId: "U1" }), { externalId: "U1" });
+  assert.deepEqual(botAuthoredActor({ externalId: "a@example.com" }, { botAuthored: true, userId: "U2" }), {
+    externalId: "a@example.com",
   });
-  assert.deepEqual(botAuthoredActor({ externalId: "U1" }, false), { externalId: "U1" });
-  assert.deepEqual(botAuthoredActor({ externalId: "a@example.com" }, true), { externalId: "a@example.com" });
 });

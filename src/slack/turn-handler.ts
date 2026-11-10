@@ -117,8 +117,13 @@ export interface TurnHandler {
   botHasStakeInThread(client: any, channel: string, threadTs: string, before?: string): Promise<boolean>;
 }
 
-export function botAuthoredActor(actor: ActorAssertion, botAuthored: boolean): ActorAssertion {
-  return botAuthored && !actor.isBot && !actor.externalId.includes("@") ? { ...actor, isBot: true } : actor;
+export function botAuthoredActor(
+  actor: ActorAssertion,
+  inc: { botAuthored?: boolean; userId: string | undefined },
+): ActorAssertion {
+  return inc.botAuthored && inc.userId && !actor.isBot && actor.externalId === inc.userId
+    ? { ...actor, isBot: true }
+    : actor;
 }
 
 function channelType(kind: SlackConversationKind, conversationKind: SlackConversationKind): string {
@@ -218,7 +223,7 @@ export function createTurnHandler(deps: {
       return;
     if (deps.externalAccess && inc.unprompted) inc = { ...inc, unprompted: false };
     if (deps.allowActor && !deps.allowActor(classified.actor)) return;
-    const actor = botAuthoredActor(classified.actor, inc.botAuthored === true);
+    const actor = botAuthoredActor(classified.actor, inc);
     const timezone = classified.timezone;
     const text = resolveMentions(
       decodeSlackEntities(inc.rawText).trim(),
