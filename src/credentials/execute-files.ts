@@ -7,8 +7,7 @@ import { pathUnder } from "../util/paths.ts";
 import { homeRelativePath } from "./paths.ts";
 import { builtInCredentialPaths, type CredentialPathSpec } from "./resident-paths.ts";
 import {
-  credentialFileHashes,
-  sameCredentialFileHashes,
+  credentialFilesFingerprint,
   fileCredentialEnvironment,
   KeychainError,
   MAX_CREDENTIAL_BYTES,
@@ -32,7 +31,7 @@ export interface ExecutionFilePlan {
 
 export interface ProcessCredentialFiles {
   plan: ExecutionFilePlan;
-  sources: Array<FileCredentialSource & { fileHashes: Record<string, string> }>;
+  sources: Array<FileCredentialSource & { fingerprint: string }>;
 }
 
 export function processCredentialFiles(
@@ -43,36 +42,32 @@ export function processCredentialFiles(
     plan,
     sources: credentials.map((credential) => {
       if (!credential.source) throw new Error("Background credentials need a keychain source");
-      return { ...credential.source, fileHashes: credentialFileHashes(credential.files) };
+      return { ...credential.source, fingerprint: credentialFilesFingerprint(credential.files) };
     }),
   };
 }
 
-export type ProcessCredentialDeps = {
-  sandbox: Sandbox;
-  processes: Pick<ProcessRegistry, "credentialFiles" | "setCredentialFiles" | "advanceCredentialFiles">;
-  keychain?: Pick<Keychain, "writebackBaseline" | "updateFiles">;
-};
-
-const saveSource =
-  (keychain: ProcessCredentialDeps["keychain"], { fileHashes, ...source }: ProcessCredentialFiles["sources"][number]) =>
-  async (files: CredentialFile[]) => {
-    if (!keychain) throw new Error("Refreshed credentials cannot be saved without a keychain");
-    return keychain.updateFiles(await keychain.writebackBaseline(source, fileHashes ?? {}), files);
-  };
-
 export async function finishProcessCredentials(
-  deps: ProcessCredentialDeps,
+  deps: {
+    sandbox: Sandbox;
+    processes: Pick<ProcessRegistry, "credentialFiles" | "setCredentialFiles">;
+    keychain?: Pick<Keychain, "writebackBaseline" | "updateFiles">;
+  },
   handle: SandboxHandle,
   processId: string,
 ): Promise<void> {
   const stored = await deps.processes.credentialFiles(processId);
   if (!stored) return;
+  const keychain = deps.keychain;
   const note = await finishExecutionFiles(
     deps.sandbox,
     handle,
     stored.plan,
-    stored.sources.map((source) => saveSource(deps.keychain, source)),
+    stored.sources.map(({ fingerprint, ...source }) => async (files: CredentialFile[]) => {
+      if (credentialFilesFingerprint(files) === fingerprint) return [];
+      if (!keychain) throw new Error("Refreshed credentials cannot be saved without a keychain");
+      return keychain.updateFiles(await keychain.writebackBaseline(source, fingerprint), files);
+    }),
     (retry) =>
       deps.processes.setCredentialFiles(
         processId,
@@ -85,44 +80,6 @@ export async function finishProcessCredentials(
       ),
   );
   if (note) console.warn(`[credentials] background job ${processId}: ${note}`);
-}
-
-export async function syncProcessCredentials(
-  deps: ProcessCredentialDeps,
-  handle: SandboxHandle,
-  processId: string,
-): Promise<void> {
-  const stored = await deps.processes.credentialFiles(processId);
-  if (!stored || !deps.keychain) return;
-  const saved = new Map<number, Record<string, string>>();
-  const note = await finishExecutionFiles(
-    deps.sandbox,
-    handle,
-    stored.plan,
-    stored.sources.map((source, index) => async (files: CredentialFile[]) => {
-      const hashes = credentialFileHashes(files);
-      if (!source.fileHashes || sameCredentialFileHashes(hashes, source.fileHashes)) return [];
-      const overruled = await saveSource(deps.keychain, source)(files);
-      saved.set(index, hashes);
-      return overruled;
-    }),
-    undefined,
-    { keepDirectory: true },
-  );
-  if (note) console.warn(`[credentials] background job ${processId}: ${note}`);
-  if (
-    saved.size &&
-    !(await deps.processes.advanceCredentialFiles(processId, stored, {
-      ...stored,
-      sources: stored.sources.map((source, index) => ({
-        ...source,
-        fileHashes: saved.get(index) ?? source.fileHashes,
-      })),
-    }))
-  )
-    console.warn(
-      `[credentials] background job ${processId}: saved refreshed files, but its baseline changed meanwhile; the exit save will merge against the older baseline`,
-    );
 }
 
 async function runOrThrow(sandbox: Sandbox, handle: SandboxHandle, command: string, failure: string) {
@@ -225,7 +182,6 @@ async function finishExecutionFiles(
   plan: ExecutionFilePlan,
   saves: ReadonlyArray<(files: CredentialFile[]) => Promise<string[] | void>>,
   settle?: (retry: number[]) => Promise<void>,
-  opts?: { keepDirectory?: boolean },
 ): Promise<string | undefined> {
   const { directory } = plan;
   const home = `${directory}/home`;
@@ -283,15 +239,9 @@ async function finishExecutionFiles(
           notes.push(
             `deleted ${removed.join(", ")}; the saved login no longer includes ${removed.length === 1 ? "it" : "them"}`,
           );
-        const keptDeleted = deleted.filter((path) => overruled.includes(path));
-        const lost = overruled.filter((path) => !deleted.includes(path));
-        if (keptDeleted.length)
+        if (overruled.length)
           notes.push(
-            `deleted ${keptDeleted.join(", ")}, but another command changed ${keptDeleted.length === 1 ? "it" : "them"} meanwhile, so the saved login kept ${keptDeleted.length === 1 ? "it" : "them"}`,
-          );
-        if (lost.length)
-          notes.push(
-            `changed ${lost.join(", ")}, but the saved login kept another command's version; rerun this command if its change is needed`,
+            `could not save its changes to ${overruled.join(", ")} because another command saved changes to ${overruled.length === 1 ? "it" : "them"} first; rerun it if they are needed`,
           );
       }),
     );
@@ -307,11 +257,10 @@ async function finishExecutionFiles(
     if (failures.length)
       throw new AggregateError(
         failures.map(({ reason }) => reason),
-        `${retry.length ? "Could not persist refreshed credentials; will retry" : "Could not persist refreshed credentials"}: ${failures.map(({ reason }) => errMessage(reason)).join("; ")}${notes.length ? ` [credentials] This command ${notes.join("; and ")}.` : ""}`,
+        `${retry.length ? "Could not persist refreshed credentials; will retry" : "Could not persist refreshed credentials"}: ${failures.map(({ reason }) => errMessage(reason)).join("; ")}`,
       );
     return notes.length ? `[credentials] This command ${notes.join("; and ")}.` : undefined;
   };
-  if (opts?.keepDirectory) return work();
   return withCleanup(work, async () => {
     await settle?.(retry);
     if (!retry.length) await removeDirectory(sandbox, handle, directory);

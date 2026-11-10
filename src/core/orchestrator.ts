@@ -1971,7 +1971,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         useSkill,
         reclaimBox,
         finishProcess,
-        syncProcess,
         invalidateProvision,
       } = createTurnSandboxes({
         deps: { ...deps, sandboxResources: turnSandboxResources, isCurrentSharedScopeMember },
@@ -2516,7 +2515,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 registry: deps.processes,
                 provisionSandbox: provisionJobSandbox,
                 onExit: finishProcess,
-                onOutput: syncProcess,
                 scopeId: memoryScopeId,
                 sessionRef: conversation.threadRef,
                 ...(deps.backgroundJobTtlMs !== undefined ? { ttlMs: deps.backgroundJobTtlMs } : {}),

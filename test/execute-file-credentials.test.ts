@@ -1,8 +1,4 @@
-import {
-  finishProcessCredentials,
-  prepareExecutionFiles,
-  syncProcessCredentials,
-} from "../src/credentials/execute-files.ts";
+import { finishProcessCredentials, prepareExecutionFiles } from "../src/credentials/execute-files.ts";
 import { createBackgroundBroker } from "../src/connectors/background-exec-broker.ts";
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
@@ -478,8 +474,6 @@ function background(
       pollMs: 10,
       provisionSandbox: async () => f.handle,
       onExit: (h, processId) => finish(h, processId),
-      onOutput: (h, processId) =>
-        syncProcessCredentials({ sandbox, processes: registry, keychain: opts.keychain ?? f.keychain }, h, processId),
     });
   const ctx = (b = broker()) => f.context({ sandbox, backgroundBroker: b });
   const waitForExit = async (processId: string) => {
@@ -576,37 +570,36 @@ test("a background start that fails before launch removes its staging", async (t
   assert.equal((await run("sh", ["-c", "ls -d /tmp/qm-credentials.* 2>/dev/null | wc -l"])).stdout, before);
 });
 
-test("a running background job's login is saved when it prints, and later saves merge with other commands", async (t) => {
+test("a background login merges at exit with refreshes other commands saved while it ran", async (t) => {
   const f = await fixture(t);
   const bg = background(f);
   const ctx = bg.ctx();
+  const login = JSON.stringify({ accessToken: "login", expiresAt: "2026-11-10T02:00:00Z" });
   const started = await ctx.backgroundStart(
-    'printf logged-in > "$HOME/.aws/sso/cache/session.json"; sleep 0.3; echo "Successfully logged in"; sleep 1.5',
+    `sleep 0.5; printf '%s' '${login}' > "$HOME/.aws/sso/cache/session.json"; echo "Successfully logged in"`,
     { purpose: "Log in", credentials: ["aws"] },
   );
-  let output = started.output;
-  while (!output.includes("Successfully")) {
-    const read = await ctx.backgroundPoll(started.processId, { sinceCursor: output.length, waitSeconds: 1 });
-    output += read.chunks;
-  }
-  assert.equal(bg.running(started.processId), true);
-  assert.equal(await savedValue(f), "logged-in");
-  assert.equal(
-    (await ctx.execute('cat "$HOME/.aws/sso/cache/session.json"', { credentials: ["aws"] })).stdout,
-    "logged-in",
-  );
-
   await f.keychain.updateFiles(await startCommand(f), [
-    ...files("logged-in"),
+    ssoFile("refreshed", "2026-11-09T18:00:00Z"),
     textFile(".aws/cli/cache/role.json", "role-from-another-command"),
   ]);
   await bg.waitForExit(started.processId);
   await ctx.backgroundPoll(started.processId);
-  assert.deepEqual(await savedFiles(f), {
-    ".aws/cli/cache/role.json": "role-from-another-command",
-    ".aws/sso/cache/session.json": "logged-in",
-  });
+  const saved = await savedFiles(f);
+  assert.equal(JSON.parse(saved[".aws/sso/cache/session.json"]!).accessToken, "login");
+  assert.equal(saved[".aws/cli/cache/role.json"], "role-from-another-command");
   assert.equal(await bg.registry.credentialFiles(started.processId), null);
+});
+
+test("a background job that changed nothing leaves other commands' saves alone", async (t) => {
+  const f = await fixture(t);
+  const bg = background(f);
+  const ctx = bg.ctx();
+  const started = await ctx.backgroundStart("sleep 0.5", { purpose: "Wait", credentials: ["aws"] });
+  await f.keychain.updateFiles(await startCommand(f), files("saved-meanwhile"));
+  await bg.waitForExit(started.processId);
+  await ctx.backgroundPoll(started.processId);
+  assert.equal(await savedValue(f), "saved-meanwhile");
 });
 
 test("a deletion and a concurrent refresh of another file both survive the merge", async (t) => {
@@ -643,7 +636,7 @@ test("a command whose change loses a conflict says so on stderr", async (t) => {
   assert.equal(result.code, 0);
   assert.match(
     result.stderr,
-    /\[credentials\] This command changed \.aws\/sso\/cache\/session\.json, but the saved login kept another command's version; rerun this command if its change is needed\.$/,
+    /\[credentials\] This command could not save its changes to \.aws\/sso\/cache\/session\.json because another command saved changes to it first; rerun it if they are needed\.$/,
   );
   assert.equal(await savedValue(f), "saved-meanwhile");
 });

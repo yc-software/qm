@@ -1,28 +1,24 @@
 import type { CredentialFile } from "./keychain.ts";
 
-const EXPIRY_FIELDS = [["expiresAt"], ["Credentials", "Expiration"]];
-
-function timestamp(value: unknown): number | undefined {
-  const parsed = typeof value === "string" ? Date.parse(value) : NaN;
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
+const EXPIRY_FIELDS: ReadonlyArray<{ directory: string; field: readonly string[] }> = [
+  { directory: ".aws/sso/cache/", field: ["expiresAt"] },
+  { directory: ".aws/cli/cache/", field: ["Credentials", "Expiration"] },
+];
 
 export function credentialFileExpiry(file: CredentialFile): number | undefined {
-  let json: unknown;
+  const declared = EXPIRY_FIELDS.find(({ directory }) => file.path.startsWith(directory));
+  if (!declared) return undefined;
+  let value: unknown;
   try {
-    json = JSON.parse(Buffer.from(file.contentBase64, "base64").toString("utf8"));
+    value = declared.field.reduce<unknown>(
+      (node, key) => (node && typeof node === "object" ? (node as Record<string, unknown>)[key] : undefined),
+      JSON.parse(Buffer.from(file.contentBase64, "base64").toString("utf8")),
+    );
   } catch {
     return undefined;
   }
-  for (const path of EXPIRY_FIELDS) {
-    const value = path.reduce<unknown>(
-      (node, key) => (node && typeof node === "object" ? (node as Record<string, unknown>)[key] : undefined),
-      json,
-    );
-    const at = timestamp(value);
-    if (at !== undefined) return at;
-  }
-  return undefined;
+  const at = typeof value === "string" ? Date.parse(value) : NaN;
+  return Number.isFinite(at) ? at : undefined;
 }
 
 export interface CredentialFileMerge {
@@ -42,26 +38,16 @@ export function mergeCredentialFiles(input: {
   const merged: CredentialFileMerge = { files: [], overruled: [] };
   for (const path of [...new Set([...stored.keys(), ...refreshed.keys()])].sort()) {
     const ours = refreshed.get(path);
-    const { pick, firstSave } = choose(version, input.baseline.get(path), ours, stored.get(path));
+    const theirs = stored.get(path);
+    const base = input.baseline.get(path);
+    let pick = theirs;
+    if (version(ours) !== version(theirs) && version(ours) !== base) {
+      const a = ours && credentialFileExpiry(ours);
+      const b = theirs && credentialFileExpiry(theirs);
+      if (version(theirs) === base || !theirs || (a !== undefined && b !== undefined && a > b)) pick = ours;
+      else if (a === undefined || b === undefined || a === b) merged.overruled.push(path);
+    }
     if (pick) merged.files.push(pick);
-    if (firstSave) merged.overruled.push(path);
   }
   return merged;
-}
-
-function choose(
-  version: (file: CredentialFile | undefined) => string | undefined,
-  base: string | undefined,
-  ours: CredentialFile | undefined,
-  theirs: CredentialFile | undefined,
-): { pick: CredentialFile | undefined; firstSave?: true } {
-  if (version(ours) === version(theirs) || version(ours) === base) return { pick: theirs };
-  if (version(theirs) === base) return { pick: ours };
-  if (ours && theirs) {
-    const a = credentialFileExpiry(ours);
-    const b = credentialFileExpiry(theirs);
-    if (a !== undefined && b !== undefined && a !== b) return { pick: a > b ? ours : theirs };
-    return { pick: theirs, firstSave: true };
-  }
-  return { pick: theirs ?? ours, ...(ours ? {} : { firstSave: true as const }) };
 }

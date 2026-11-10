@@ -106,7 +106,6 @@ async function agent(opts?: {
   heartbeatMs?: number;
   minFireIntervalMs?: number;
   onRun?: () => Promise<void>;
-  onProcessOutput?: (handle: SandboxHandle, processId: string) => Promise<void>;
 }) {
   const fake = fakeSandbox();
   const monitors = createMonitorStore(testMap());
@@ -131,7 +130,6 @@ async function agent(opts?: {
     ...(opts?.leaderLease ? { leaderLease: opts.leaderLease } : {}),
     ...(opts?.heartbeatMs !== undefined ? { heartbeatMs: opts.heartbeatMs } : {}),
     ...(opts?.minFireIntervalMs !== undefined ? { minFireIntervalMs: opts.minFireIntervalMs } : {}),
-    ...(opts?.onProcessOutput ? { onProcessOutput: opts.onProcessOutput } : {}),
   });
 
   fake.seed("p-1");
@@ -555,30 +553,4 @@ test("watch wakes and Slack notices use the saved purpose with a legacy command 
     const notices = await h.deliveries.pending("slack");
     assert.ok(notices[0]?.text.includes(purpose ?? "bg: npm run build"));
   }
-});
-
-test("a running job's new output saves its credentials before the wake, and a failed save still wakes", async () => {
-  const order: string[] = [];
-  let fail = false;
-  const h = await agent({
-    minFireIntervalMs: 0,
-    onRun: async () => void order.push("wake"),
-    onProcessOutput: async (_handle, processId) => {
-      order.push(`save ${processId}`);
-      if (fail) throw new Error("keychain unavailable");
-    },
-  });
-  const m = await h.arm();
-  h.append("p-1", "Successfully logged in\n");
-  await h.poller.tick();
-  assert.deepEqual(order, ["save p-1", "wake"]);
-
-  await h.poller.tick();
-  assert.deepEqual(order, ["save p-1", "wake"]);
-
-  fail = true;
-  h.append("p-1", "more\n");
-  await h.poller.tick();
-  assert.deepEqual(order, ["save p-1", "wake", "save p-1", "wake"]);
-  assert.match((await h.monitors.get(m.id))?.lastError ?? "", /keychain unavailable/);
 });

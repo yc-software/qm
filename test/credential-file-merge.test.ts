@@ -8,9 +8,9 @@ const file = (path: string, content: unknown): CredentialFile => ({
   contentBase64: Buffer.from(typeof content === "string" ? content : JSON.stringify(content)).toString("base64"),
 });
 const hash = (f: CredentialFile) => `${f.path}:${f.contentBase64}`;
-const merge = (base: CredentialFile[], stored: CredentialFile[], refreshed: CredentialFile[]) => {
+const merge = (base: CredentialFile[] | null, stored: CredentialFile[], refreshed: CredentialFile[]) => {
   const result = mergeCredentialFiles({
-    baseline: new Map(base.map((f) => [f.path, hash(f)])),
+    baseline: new Map((base ?? []).map((f) => [f.path, hash(f)])),
     stored,
     refreshed,
     hash,
@@ -20,18 +20,20 @@ const merge = (base: CredentialFile[], stored: CredentialFile[], refreshed: Cred
     overruled: result.overruled,
   };
 };
+const TOKEN = ".aws/sso/cache/token.json";
 
-test("expiry is read from the AWS SSO token cache and the AWS CLI credential cache", () => {
+test("expiry is read only from the declared AWS SSO and CLI cache files", () => {
+  const at = Date.parse("2026-11-09T18:00:00Z");
+  assert.equal(credentialFileExpiry(file(TOKEN, { expiresAt: "2026-11-09T18:00:00Z" })), at);
   assert.equal(
-    credentialFileExpiry(file("a", { expiresAt: "2026-11-09T18:00:00Z" })),
-    Date.parse("2026-11-09T18:00:00Z"),
+    credentialFileExpiry(
+      file(".aws/cli/cache/role.json", { Credentials: { Expiration: "2026-11-09T18:00:00+00:00" } }),
+    ),
+    at,
   );
-  assert.equal(
-    credentialFileExpiry(file("b", { Credentials: { Expiration: "2026-11-09T19:00:00+00:00" } })),
-    Date.parse("2026-11-09T19:00:00Z"),
-  );
-  assert.equal(credentialFileExpiry(file("d", "[default]\nregion = us-east-1\n")), undefined);
-  assert.equal(credentialFileExpiry(file("e", { expiresAt: "soon" })), undefined);
+  assert.equal(credentialFileExpiry(file(".config/tool/token.json", { expiresAt: "2026-11-09T18:00:00Z" })), undefined);
+  assert.equal(credentialFileExpiry(file(TOKEN, "not json")), undefined);
+  assert.equal(credentialFileExpiry(file(TOKEN, { expiresAt: "soon" })), undefined);
 });
 
 test("each side keeps the files only it changed, including deletions", () => {
@@ -46,20 +48,35 @@ test("each side keeps the files only it changed, including deletions", () => {
   );
 });
 
-test("a deletion never removes a file the other side changed, and is reported as overruled", () => {
+test("a deletion never removes a file the other side changed, and is reported", () => {
   const base = [file("token", "t0")];
   assert.deepEqual(merge(base, [file("token", "t-store")], []), { files: { token: "t-store" }, overruled: ["token"] });
   assert.deepEqual(merge(base, [], [file("token", "t-cmd")]), { files: { token: "t-cmd" }, overruled: [] });
 });
 
-test("true conflicts keep the later expiry, else the stored version, and report what the command lost", () => {
-  const base = [file("token", { expiresAt: "2026-11-09T17:00:00Z" }), file("blob", "b0")];
-  const { files, overruled } = merge(
-    base,
-    [file("token", { v: "store", expiresAt: "2026-11-09T18:00:00Z" }), file("blob", "b-store")],
-    [file("token", { v: "cmd", expiresAt: "2026-11-09T19:00:00Z" }), file("blob", "b-cmd")],
+test("true conflicts keep the later declared expiry without a report, else the stored version with one", () => {
+  const base = [file(TOKEN, { expiresAt: "2026-11-09T17:00:00Z" }), file("blob", "b0")];
+  const later = file(TOKEN, { v: "later", expiresAt: "2026-11-09T19:00:00Z" });
+  const earlier = file(TOKEN, { v: "earlier", expiresAt: "2026-11-09T18:00:00Z" });
+  for (const [stored, ours] of [
+    [earlier, later],
+    [later, earlier],
+  ] as const) {
+    const { files, overruled } = merge(base, [stored, file("blob", "b-store")], [ours, file("blob", "b-cmd")]);
+    assert.equal(JSON.parse(files[TOKEN]!).v, "later");
+    assert.equal(files.blob, "b-store");
+    assert.deepEqual(overruled, ["blob"]);
+  }
+});
+
+test("with an unknown baseline, the stored version wins unless the command's expiry is later", () => {
+  const { files } = merge(
+    null,
+    [file(TOKEN, { v: "store", expiresAt: "2026-11-09T18:00:00Z" }), file("config", "c-store"), file("added", "a")],
+    [file(TOKEN, { v: "login", expiresAt: "2026-11-09T19:00:00Z" }), file("config", "c-launch")],
   );
-  assert.equal(JSON.parse(files.token!).v, "cmd");
-  assert.equal(files.blob, "b-store");
-  assert.deepEqual(overruled, ["blob"]);
+  assert.deepEqual(
+    { ...files, [TOKEN]: JSON.parse(files[TOKEN]!).v },
+    { added: "a", config: "c-store", [TOKEN]: "login" },
+  );
 });

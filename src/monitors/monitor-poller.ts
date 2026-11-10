@@ -12,7 +12,7 @@ import { runTrigger, type TriggerDeps, type TriggerOutcome } from "../triggers/r
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { createSweeper } from "../util/sweeper.ts";
 import { currentTenant, withTenant } from "../tenants/context.ts";
-import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
+import { errMessage, reportFailureAs } from "../util/errors.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { compileMonitorPattern } from "./monitor-broker.ts";
 import { buildEventWakeEnvelope, capForEscaping } from "../wake/wake-envelope.ts";
@@ -47,7 +47,6 @@ export interface MonitorPollerDeps {
   maxFiresPerTick?: number;
   leaderLease: LeaderLease;
   onProcessExit?: (handle: SandboxHandle, processId: string) => Promise<void>;
-  onProcessOutput?: (handle: SandboxHandle, processId: string) => Promise<void>;
   heartbeatMs?: number;
   minFireIntervalMs?: number;
 }
@@ -251,11 +250,6 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
       ev = { kind: "expired" };
       fireKey = `monitor:${m.id}:expired`;
     }
-    if (!exited && !expired)
-      await deps.onProcessOutput?.(handle, m.processId).catch((e) => {
-        reportFailure("monitor: save refreshed credentials", e, m.processId);
-        return deps.monitors.recordError(m.id, errMessage(e));
-      });
     const outcome = await fire(m, fireKey, renderEvent(m, events, ev), true);
     if (outcome.authzFailed) {
       await deps.monitors.setEnabled(m.id, false);

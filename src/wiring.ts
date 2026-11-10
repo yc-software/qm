@@ -351,7 +351,7 @@ import { createMonitorStore, type MonitorStore } from "./monitors/monitor-store.
 import { createMonitorPoller } from "./monitors/monitor-poller.ts";
 import { createSkillSyncEngine } from "./skills/skill-sync-engine.ts";
 import { supportsProcessSessions, type SandboxHandle } from "./sandbox/sandbox.ts";
-import { finishProcessCredentials, syncProcessCredentials } from "./credentials/execute-files.ts";
+import { finishProcessCredentials } from "./credentials/execute-files.ts";
 import { createTurnStream } from "./runs/turn-stream.ts";
 import type { SessionStateBus } from "./runs/session-state-bus.ts";
 import { createPostgresSessionStateBus } from "./runs/postgres-session-state-bus.ts";
@@ -2762,11 +2762,8 @@ export function buildApp(
   orchestratorDeps.validateScheduledRuntime = (scope, choice, purpose) =>
     availableRuntimeError({ deps: runtimeDeps }, scope, choice, purpose);
   orchestratorDeps.runtime = createRuntimeService(runtimeDeps, app);
-  const processCredentialDeps = { sandbox, processes: processes!, ...(keychain ? { keychain } : {}) };
   const finishCredentials = (handle: SandboxHandle, processId: string) =>
-    finishProcessCredentials(processCredentialDeps, handle, processId);
-  const syncCredentials = (handle: SandboxHandle, processId: string) =>
-    syncProcessCredentials(processCredentialDeps, handle, processId);
+    finishProcessCredentials({ sandbox, processes: processes!, ...(keychain ? { keychain } : {}) }, handle, processId);
   const monitorPoller =
     processes && supportsProcessSessions(sandbox)
       ? createMonitorPoller({
@@ -2784,7 +2781,6 @@ export function buildApp(
           resolveRecipient,
           leaderLease,
           onProcessExit: finishCredentials,
-          onProcessOutput: syncCredentials,
           heartbeatMs: config.monitorHeartbeatMs,
         })
       : null;

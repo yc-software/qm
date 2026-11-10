@@ -6,14 +6,13 @@ import { pollProcess } from "../sandbox/process-poll.ts";
 import { ProcessSessionGoneError, redactCommand } from "../sandbox/exec-process-session.ts";
 import { CONFIG_DEFAULTS } from "../config.ts";
 import { createExactSecretValueMasker } from "../security/secret-masking.ts";
-import { reportFailureAs, withCleanup } from "../util/errors.ts";
+import { withCleanup } from "../util/errors.ts";
 
 export interface BackgroundExecBrokerDeps {
   sandbox: ProcessSandbox;
   registry: ProcessRegistry;
   provisionSandbox?: (id: string) => Promise<SandboxHandle>;
   onExit?: (handle: SandboxHandle, processId: string) => Promise<void>;
-  onOutput?: (handle: SandboxHandle, processId: string) => Promise<void>;
   scopeId: string;
   sessionRef?: string;
   ttlMs?: number;
@@ -103,25 +102,9 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
   const termGraceMs = deps.termGraceMs ?? DEFAULT_TERM_GRACE_MS;
   const killGraceMs = deps.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
 
-  const outputSeen = new Map<string, number>();
   const exited = async (handle: SandboxHandle, processId: string) => {
-    outputSeen.delete(processId);
     await deps.registry.markStatus(processId, "exited");
     await deps.onExit?.(handle, processId);
-  };
-  const settle = async (
-    handle: SandboxHandle,
-    processId: string,
-    status: ProcessState,
-    cursor: number,
-    credentials: boolean,
-  ) => {
-    if (status.state === "exited") return exited(handle, processId);
-    if (!credentials || cursor <= (outputSeen.get(processId) ?? 0)) return;
-    outputSeen.set(processId, cursor);
-    await deps
-      .onOutput?.(handle, processId)
-      .catch(reportFailureAs("background job: save refreshed credentials", undefined, processId));
   };
   return {
     async handleFor(processId) {
@@ -217,7 +200,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
         const { output, cursor, status } = await pollProcess(deps.sandbox, handle, processId, {
           deadlineMs: POLL_MS,
         });
-        await settle(handle, processId, status, cursor, !!credentials?.files);
+        if (status.state === "exited") await exited(handle, processId);
         return { processId, output: mask(output), cursor, status, reattached: false };
       } catch (error) {
         return withCleanup(
@@ -243,7 +226,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
         maxBytes: opts?.maxBytes ?? DEFAULT_MAX_BYTES,
         waitMs: opts?.waitMs ?? 0,
       });
-      await settle(handle, processId, read.status, read.cursor, !!rec.credentialsPending);
+      if (read.status.state === "exited") await exited(handle, processId);
       return { processId, chunks: read.chunks, cursor: read.cursor, status: read.status };
     },
 
