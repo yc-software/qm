@@ -603,8 +603,11 @@ export function createTurnMethods(
       const replyComplete = deps.turnStream?.isReplyDone(runId) ?? false;
       const activity = await deps.runActivity?.list(runId);
       const reasoning = deps.turnStream?.reasoning(runId) ?? [];
+      const plannedRequeue = run.lastStop?.kind === "parked" || run.lastStop?.kind === "shutdown";
       const stale =
-        run.status === "pending" ? run.attempts > 0 : !alive && leaseLapsed(run, Date.now() - STALE_LEASE_GRACE_MS);
+        run.status === "pending"
+          ? run.attempts > 0 && !plannedRequeue
+          : !alive && leaseLapsed(run, Date.now() - STALE_LEASE_GRACE_MS);
       return {
         desktopClientId: desktopClientForTurn({ ...run.request, attempt: run.attempts }),
         status: run.status,

@@ -120,7 +120,7 @@ async function webTurnBase(
   const liveEdit = appSlug ? await ctx.app.deploymentLiveEdit(appSlug) : null;
   const failure = liveEdit?.draft?.failure;
   const failedPublish =
-    appSlug && failure && (await ctx.app.canManageDeployment(appSlug, user))
+    appSlug && failure && (await ctx.app.canManageDeployment(appSlug, { actorId: user }))
       ? failure.trimEnd().split("\n").slice(-FAILURE_HEADER_LINES).join("\n")
       : undefined;
   return {

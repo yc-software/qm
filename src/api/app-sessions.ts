@@ -110,6 +110,7 @@ export function createSessionMethods(
   | "detachSession"
   | "cancelSessionGoal"
   | "regenerateTitle"
+  | "suggestNextPrompt"
   | "spawnSession"
   | "discardSession"
   | "forkSession"
@@ -1060,6 +1061,11 @@ export function createSessionMethods(
         principalId,
         parsed.kind === "group" && projectIdFromGroupRef(parsed.ref) !== null,
       );
+    },
+
+    async suggestNextPrompt(sessionId, principalId) {
+      if (!(await sessionForViewer(sessionId, principalId))) return null;
+      return deps.orchestrator.suggestNextPrompt(sessionId, principalId);
     },
 
     async forkSession(sessionId, principalId, opts) {

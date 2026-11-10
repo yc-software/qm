@@ -31,7 +31,7 @@ import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } fro
 import { errMessage } from "../util/errors.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts";
-import { KEEP_ALIVE_TIMEOUT_MS } from "../../plugins/chassis/src/http.ts";
+import { KEEP_ALIVE_TIMEOUT_MS, logUnansweredCloses } from "../../plugins/chassis/src/http.ts";
 import { armBodyDeadline, PayloadTooLargeError, readRawBody, sendJson, verifyOrReject } from "./http.ts";
 import {
   findRoute,
@@ -290,6 +290,8 @@ async function gate(
         return null;
       }
       actor = signedIn;
+      const release = await deps.web?.shell.release();
+      if (release) res.setHeader("x-qm-release", release);
     } else actor = token && psecret ? await verifyPortalIdentity(token, psecret, Date.now()) : null;
     if (actor && deps.identity) {
       const identity = deps.identity;
@@ -554,6 +556,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
   server.headersTimeout = 10_000;
   server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
   server.maxConnections = 1024;
+  logUnansweredCloses(server, "core");
 
   const capabilitySecret = deps.capabilitySecret ?? deps.signingSecret;
   async function upgradeFront(req: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {

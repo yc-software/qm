@@ -118,19 +118,32 @@ export function visibleTitleEntryText(item: Item): string | undefined {
   return value?.trim() || undefined;
 }
 
-export function renderTitleTranscript(items: Item[]): string {
-  const lines: string[] = [];
+function* visibleTurnTexts(items: Item[]): Generator<{ role: "User" | "Assistant"; text: string }> {
   for (const e of items) {
     if (!isUserItem(e) && !isAgentReply(e)) continue;
     if (isOverheard(e)) continue;
     const raw = visibleTitleEntryText(e);
-    if (!raw) continue;
-    const text = isUserItem(e) ? stripTurnBoilerplate(raw) : raw;
-    if (!text) continue;
-    lines.push(`${isUserItem(e) ? "User" : "Assistant"}:\n${text}`);
+    const text = raw && isUserItem(e) ? stripTurnBoilerplate(raw) : raw;
+    if (text) yield { role: isUserItem(e) ? "User" : "Assistant", text };
+  }
+}
+
+export function renderTitleTranscript(items: Item[]): string {
+  const lines: string[] = [];
+  for (const { role, text } of visibleTurnTexts(items)) {
+    lines.push(`${role}:\n${text}`);
     if (lines.length >= 6) break;
   }
   return lines.join("\n\n");
+}
+
+export function renderNextPromptTranscript(items: Item[]): string | undefined {
+  const turns = [...visibleTurnTexts(items)];
+  const reply = turns.at(-1);
+  if (reply?.role !== "Assistant") return undefined;
+  const asked = turns.findLast((turn) => turn.role === "User");
+  const lines = [...(asked ? [`User:\n${asked.text}`] : []), `Assistant:\n${reply.text}`];
+  return `<conversation>\n${lines.join("\n\n")}\n</conversation>`;
 }
 
 const DELIVERY_NOTE_ITEM_MAX_CHARS = 200;

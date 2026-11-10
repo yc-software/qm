@@ -548,6 +548,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       if (!deps.channelPolicy) return { ok: false, message: "standing orders aren't available on this turn" };
       if (conversation.kind === "dm" || !conversation.channelRef)
         return { ok: false, message: "standing orders are per-channel — you can only set one from inside a channel." };
+      if (input.botActor) return { ok: false, message: "a Slack bot's turn cannot change this channel's guidance" };
       let parsedBots: Record<string, BotPolicy> | undefined;
       if (bots !== undefined) {
         const parsed = parseBotLedger(bots);

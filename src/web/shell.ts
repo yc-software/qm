@@ -7,12 +7,12 @@ import { fileURLToPath } from "node:url";
 import { analyticsHookConfig } from "../../plugins/chassis/src/analytics-config.ts";
 import { browserErrorConfig } from "../../plugins/chassis/src/browser-error-config.ts";
 import { injectBranding, type OrgBranding } from "../../plugins/chassis/src/branding.ts";
-import { gzipAccepted, json, relayStream, sendBuffered } from "../../plugins/chassis/src/http.ts";
+import { escapeHtml, gzipAccepted, json, relayStream, sendBuffered } from "../../plugins/chassis/src/http.ts";
 import { readWebBundleLayout } from "../../cli/src/web-release.ts";
 import type { Config } from "../config.ts";
 import { s3Client } from "../persistence/s3.ts";
 import { jitteredBackoffMs } from "../util/async.ts";
-import { errMessage, reportFailure } from "../util/errors.ts";
+import { errMessage, reportFailure, swallowAs } from "../util/errors.ts";
 import {
   createLocalWebReleaseStore,
   createS3WebReleaseStore,
@@ -23,11 +23,13 @@ import {
 } from "./releases.ts";
 
 export interface WebReleases {
+  live(): Promise<string>;
   document(name: string): Promise<string>;
   file(path: string, gzip: boolean): Promise<{ body: Readable; gzip: boolean } | null>;
 }
 
 export interface WebShell {
+  release(): Promise<string | undefined>;
   serve(req: IncomingMessage, res: ServerResponse): Promise<void>;
   sharePage(res: ServerResponse, status: number, transcript: unknown): Promise<void>;
 }
@@ -158,7 +160,9 @@ export function createWebShell(
 
   async function document(res: ServerResponse, policy: string): Promise<void> {
     let html: string;
+    let release: string;
     try {
+      release = await releases.live();
       html = await releases.document("index.html");
     } catch (error) {
       return unavailable(res, "index.html", error);
@@ -169,7 +173,8 @@ export function createWebShell(
     );
     if (policy === csp) headers["x-frame-options"] = framing!;
     else res.removeHeader("x-frame-options");
-    sendBuffered(res, 200, headers, await branded(html));
+    const stamped = html.replace("</head>", () => `<meta name="qm-release" content="${escapeHtml(release)}" /></head>`);
+    sendBuffered(res, 200, headers, await branded(stamped));
   }
 
   async function serveStatic(res: ServerResponse, urlPath: string): Promise<void> {
@@ -226,6 +231,7 @@ export function createWebShell(
   }
 
   return {
+    release: () => releases.live().catch(swallowAs("web: live release lookup", undefined)),
     async serve(req, res) {
       const url = new URL(req.url ?? "/", "http://localhost");
       const path = url.pathname;
