@@ -27,11 +27,7 @@ function stubTurnResponse(status: number, body: Record<string, unknown>): void {
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url.endsWith("/api/turn") && init?.method === "POST") {
-      return {
-        ok: status >= 200 && status < 300,
-        status,
-        text: async () => JSON.stringify(body),
-      } as unknown as Response;
+      return Response.json(body, { status });
     }
     throw new Error(`unexpected fetch: ${url}`);
   }) as typeof fetch;
@@ -106,11 +102,7 @@ test("a send under the Steer preference asks core to steer and reports the steer
   let sent: Record<string, unknown> = {};
   globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     sent = JSON.parse(String(init?.body)) as Record<string, unknown>;
-    return {
-      ok: true,
-      status: 202,
-      text: async () => JSON.stringify({ status: "queued", runId: "live-1", steered: true, steerTs: "1.abc" }),
-    } as unknown as Response;
+    return Response.json({ status: "queued", runId: "live-1", steered: true, steerTs: "1.abc" }, { status: 202 });
   }) as typeof fetch;
   await queueTurn("web:u:t", "keep it short", fakeAgent(), undefined, "key-2");
   assert.equal(sent.midTurn, "queue");

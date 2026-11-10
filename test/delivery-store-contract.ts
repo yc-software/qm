@@ -17,6 +17,26 @@ export async function exerciseDeliveryStore(store: DeliveryStore): Promise<void>
   assert.equal(dup.id, d.id, "same idempotency key returns the original delivery");
   assert.equal(dup.text, "hello");
 
+  const threaded = await store.enqueue({
+    destination: { type: "slack", target: "C1" },
+    text: "reply",
+    idempotencyKey: "fire-threaded",
+    provenance: {
+      trigger: "conversation",
+      surface: "slack",
+      fireKey: "k",
+      sourceScopeId: "channel:C1",
+      sourceThreadRef: "ch:C1:1.0",
+    },
+  });
+  assert.deepEqual(
+    (await store.pending("slack", "ch:C1:1.0")).map((p) => p.id),
+    [threaded.id],
+    "pending can be narrowed to one source thread",
+  );
+  assert.deepEqual(await store.pending("slack", "ch:C1:2.0"), []);
+  await store.ack(threaded.id, 1);
+
   const other = await store.enqueue({
     destination: { type: "principal", target: "U-alice", onBehalfOf: "U-carol" },
     text: "for alice",

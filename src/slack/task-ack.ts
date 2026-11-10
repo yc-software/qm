@@ -3,8 +3,7 @@ import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { sleep, createKeyedQueue } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
 import { isTerminal, type RunStore } from "../runs/run-store.ts";
-import type { DeliveryStore } from "../delivery/delivery-store.ts";
-import { runResultDelivery } from "../delivery/run-result-delivery.ts";
+import type { SessionWorkReader } from "../sessions/session-work.ts";
 
 export interface TaskAckState {
   channel: string;
@@ -25,9 +24,15 @@ interface ReactionClient {
 export function createTaskAcknowledgements(
   store: DurableMap<TaskAckState>,
   lease: LeaderLease,
-  recovery?: { runs: Pick<RunStore, "get">; deliveries: Pick<DeliveryStore, "pending"> },
+  recovery?: { runs: Pick<RunStore, "get">; work?: Pick<SessionWorkReader, "of"> },
 ) {
   const update = store.update.bind(store);
+  const busy = async (runId: string): Promise<boolean | undefined> => {
+    const run = await recovery?.runs.get(runId);
+    if (!run) return undefined;
+    if (!isTerminal(run.status)) return true;
+    return !!recovery?.work && (await recovery.work.of(run.sessionId, "slack")).busy;
+  };
   const queue = createKeyedQueue<string>();
   const change = (
     client: ReactionClient,
@@ -128,20 +133,9 @@ export function createTaskAcknowledgements(
   return {
     reconcile: async (client: ReactionClient) => {
       for (const [runId, state] of await store.entries()) {
-        if (!state.finished && recovery) {
-          const run = await recovery.runs.get(runId);
-          if (run && isTerminal(run.status) && !runResultDelivery(run)) {
-            const pending = await recovery.deliveries.pending("slack");
-            if (
-              !pending.some(
-                (delivery) =>
-                  delivery.idempotencyKey === `ack:${runId}` || delivery.idempotencyKey?.startsWith(`post:${runId}:`),
-              )
-            ) {
-              await change(client, runId).catch(swallowAs("slack: finish recovered task acknowledgement", undefined));
-              continue;
-            }
-          }
+        if (!state.finished && (await busy(runId)) === false) {
+          await change(client, runId).catch(swallowAs("slack: finish settled task acknowledgement", undefined));
+          continue;
         }
         if (!state.synced)
           await change(client, runId, { channel: state.channel, ts: state.target, existing: true }).catch(
@@ -156,7 +150,9 @@ export function createTaskAcknowledgements(
       ts: string,
       pick?: () => Promise<string | undefined>,
     ) => change(client, runId, { channel, ts, pick }),
-    finish: (client: ReactionClient, runId: string) => change(client, runId),
+    finish: async (client: ReactionClient, runId: string) => {
+      if (!(await busy(runId))) await change(client, runId);
+    },
   };
 }
 

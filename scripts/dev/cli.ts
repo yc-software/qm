@@ -17,6 +17,7 @@ import {
   claimPortSlot,
   claimSlotPorts,
   heartbeatFresh,
+  bootingUnderLiveOwner,
   leaseReclaimReason,
   leaseStale,
   leaseStartedEpoch,
@@ -357,7 +358,7 @@ async function cmdUp(): Promise<number> {
         else out(`[fail] reload: ${res.body.reason}`);
         return res.body.ok ? EXIT.ok : EXIT.verificationFailed;
       }
-    } else if (mine.meta.booting === "1" && pidAlive(Number(mine.meta.owner_pid ?? 0))) {
+    } else if (bootingUnderLiveOwner(mine)) {
       out(`an 'up' is already in progress for this worktree (slot ${mine.slot}); not starting another.`);
       return EXIT.ok;
     } else {

@@ -39,17 +39,10 @@ export function workedLabel(prefix: string, secs: number): string {
 
 interface GoalTurn {
   role?: string;
-  stopReason?: string;
   work?: WorkBlock;
 }
 
-/**
- * Time actually spent running turns on the goal: the work time of every turn
- * from the one that created it, clamped to the goal's creation. Idle time
- * between turns never counts, and a human stop ends the tally (the goal is
- * paused from then on).
- */
-export function goalWorked(messages: readonly unknown[], goal: GoalStripState): { workedMs: number; paused: boolean } {
+export function goalWorked(messages: readonly unknown[], goal: GoalStripState): number {
   let workedMs = 0;
   let counting = false;
   for (const m of messages as readonly GoalTurn[]) {
@@ -63,7 +56,6 @@ export function goalWorked(messages: readonly unknown[], goal: GoalStripState): 
       workedMs -= Math.max(0, goal.createdAt - start);
     }
     workedMs += workSeconds(work) * 1000;
-    if (m.stopReason === "aborted") return { workedMs: Math.max(0, workedMs), paused: true };
   }
-  return { workedMs: Math.max(0, workedMs), paused: false };
+  return Math.max(0, workedMs);
 }
