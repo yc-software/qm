@@ -28,6 +28,19 @@ import { SLACK_TENANTS, SLACK_BRIDGE_TENANT, TENANT_LOOKUPS, tenantLookup } from
 export function createPostgresSessionStore(connectionString: string, opts: StoreOptions = {}): SessionStore {
   const now = opts.now ?? (() => Date.now());
 
+  async function getMany({
+    ids,
+    threadRefs,
+  }: {
+    ids: readonly string[];
+    threadRefs: readonly string[];
+  }): Promise<Session[]> {
+    if (!ids.length && !threadRefs.length) return [];
+    return (
+      await q("SELECT * FROM sessions WHERE id = ANY($1::text[]) OR thread_ref = ANY($2::text[])", [ids, threadRefs])
+    ).map(rowToSession);
+  }
+
   const descendantsOf = async (rootIds: readonly string[]): Promise<SessionDescendant[]> => {
     if (!rootIds.length) return [];
     const rows = await q(
@@ -109,21 +122,13 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return heal(rows[0]!);
     },
 
+    getMany,
     async getByThread(threadRef): Promise<Session | null> {
-      const rows = await q("SELECT * FROM sessions WHERE thread_ref = $1", [threadRef]);
-      return rows[0] ? rowToSession(rows[0]) : null;
-    },
-
-    async getMany({ ids, threadRefs }) {
-      if (!ids.length && !threadRefs.length) return [];
-      return (
-        await q("SELECT * FROM sessions WHERE id = ANY($1::text[]) OR thread_ref = ANY($2::text[])", [ids, threadRefs])
-      ).map(rowToSession);
+      return (await getMany({ ids: [], threadRefs: [threadRef] }))[0] ?? null;
     },
 
     async get(id): Promise<Session | null> {
-      const rows = await q("SELECT * FROM sessions WHERE id = $1", [id]);
-      return rows[0] ? rowToSession(rows[0]) : null;
+      return (await getMany({ ids: [id], threadRefs: [] }))[0] ?? null;
     },
 
     async updateTitle(sessionId, title): Promise<void> {
