@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { analyticsHookConfig } from "../../plugins/chassis/src/analytics-config.ts";
 import { browserErrorConfig } from "../../plugins/chassis/src/browser-error-config.ts";
 import { injectBranding, type OrgBranding } from "../../plugins/chassis/src/branding.ts";
-import { gzipAccepted, json, relayStream, sendBuffered } from "../../plugins/chassis/src/http.ts";
+import { escapeHtml, gzipAccepted, json, relayStream, sendBuffered } from "../../plugins/chassis/src/http.ts";
 import { readWebBundleLayout } from "../../cli/src/web-release.ts";
 import type { Config } from "../config.ts";
 import { s3Client } from "../persistence/s3.ts";
