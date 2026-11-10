@@ -10510,6 +10510,9 @@ h3.ambient-field-label {
   flex: none;
   margin-left: auto;
 }
+.goal-strip .goal-strip-resume {
+  margin-left: -2px;
+}
 
 .file-chip-group {
   display: inline-flex;
