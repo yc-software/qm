@@ -62,15 +62,3 @@ test("true conflicts keep the later expiry, else the stored version", () => {
   assert.equal(JSON.parse(out.token!).v, "cmd");
   assert.equal(out.blob, "b-store");
 });
-
-test("an unknown baseline treats every difference as a conflict", () => {
-  const merged = mergeCredentialFiles({
-    baseline: null,
-    stored: [file("token", { v: "store", expiresAt: "2026-11-09T20:00:00Z" }), file("blob", "b-store")],
-    refreshed: [file("token", { v: "cmd", expiresAt: "2026-11-09T19:00:00Z" }), file("blob", "b-cmd")],
-    hash,
-  });
-  const out = text(merged);
-  assert.equal(JSON.parse(out.token!).v, "store");
-  assert.equal(out.blob, "b-store");
-});

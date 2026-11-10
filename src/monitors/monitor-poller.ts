@@ -47,7 +47,6 @@ export interface MonitorPollerDeps {
   maxFiresPerTick?: number;
   leaderLease: LeaderLease;
   onProcessExit?: (handle: SandboxHandle, processId: string) => Promise<void>;
-  /** Runs before firing on new output from a still-running job; failures are recorded, not fatal. */
   onProcessOutput?: (handle: SandboxHandle, processId: string) => Promise<void>;
   heartbeatMs?: number;
   minFireIntervalMs?: number;

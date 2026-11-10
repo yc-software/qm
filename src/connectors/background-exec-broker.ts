@@ -6,14 +6,13 @@ import { pollProcess } from "../sandbox/process-poll.ts";
 import { ProcessSessionGoneError, redactCommand } from "../sandbox/exec-process-session.ts";
 import { CONFIG_DEFAULTS } from "../config.ts";
 import { createExactSecretValueMasker } from "../security/secret-masking.ts";
-import { withCleanup } from "../util/errors.ts";
+import { swallowAs, withCleanup } from "../util/errors.ts";
 
 export interface BackgroundExecBrokerDeps {
   sandbox: ProcessSandbox;
   registry: ProcessRegistry;
   provisionSandbox?: (id: string) => Promise<SandboxHandle>;
   onExit?: (handle: SandboxHandle, processId: string) => Promise<void>;
-  /** Called when a poll finds a running job with new output; failures never fail the poll. */
   onOutput?: (handle: SandboxHandle, processId: string) => Promise<void>;
   scopeId: string;
   sessionRef?: string;
@@ -229,7 +228,10 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
         waitMs: opts?.waitMs ?? 0,
       });
       if (read.status.state === "exited") await exited(handle, processId);
-      else if (read.chunks) await deps.onOutput?.(handle, processId).catch(() => undefined);
+      else if (read.chunks)
+        await deps
+          .onOutput?.(handle, processId)
+          .catch(swallowAs("background poll: save refreshed credentials", undefined));
       return { processId, chunks: read.chunks, cursor: read.cursor, status: read.status };
     },
 

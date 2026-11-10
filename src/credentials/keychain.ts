@@ -367,11 +367,7 @@ interface MaterializedFileCred {
   grantId?: string;
   purpose?: string;
   writeback?: boolean;
-  /**
-   * Path → file hash of what the command started with, when `files` is not that snapshot
-   * (background saves re-read the store). null means the snapshot is unknown.
-   */
-  baseline?: Record<string, string> | null;
+  baseline?: Record<string, string>;
 }
 
 export type MaterializedCred = ({ kind: "env" } & MaterializedEnvCred) | ({ kind: "file" } & MaterializedFileCred);
@@ -396,7 +392,7 @@ export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   writebackBaseline(
     source: FileCredentialSource,
     fingerprint: string,
-    fileHashes?: Record<string, string>,
+    fileHashes: Record<string, string>,
   ): Promise<Extract<MaterializedCred, { kind: "file" }>>;
   listAllMetadata(): Promise<KeychainCredentialMeta[]>;
   listByOwner(ownerId: string): Promise<KeychainCredentialMeta[]>;
@@ -479,7 +475,6 @@ function credentialFileHash(file: CredentialFile): string {
   );
 }
 
-/** Per-file hashes, so a later save can tell which files changed without keeping their contents. */
 export function credentialFileHashes(files: CredentialFile[]): Record<string, string> {
   return Object.fromEntries(files.map((file) => [homeRelativePath(file.path), credentialFileHash(file)]));
 }
@@ -1100,17 +1095,13 @@ export function createKeychain(deps: {
       const normalized = checkedFiles(files.map((file) => ({ ...file, path: keychainFilePath(file.path) })));
       if (!normalized.length) throw new KeychainError(409, "Refreshed credential files are missing");
       const fingerprint = credentialFilesFingerprint;
-      const hashes =
-        materialized.baseline === undefined ? credentialFileHashes(materialized.files) : materialized.baseline;
-      const baseline = hashes ? new Map(Object.entries(hashes)) : null;
+      const baseline = new Map(Object.entries(materialized.baseline ?? credentialFileHashes(materialized.files)));
       if (
-        baseline?.size === normalized.length &&
+        baseline.size === normalized.length &&
         normalized.every((file) => baseline.get(file.path) === credentialFileHash(file))
       )
         return;
 
-      // Another command may have saved since this one started. Merge per file instead of
-      // discarding this command's refresh; the row lock in update() serializes concurrent saves.
       const updated = await deps.creds.update(materialized.credentialId, (current) => {
         if (current.kind !== "file" || !samePerson(current.ownerId, materialized.ownerId))
           throw new KeychainError(409, "Credential changed during execution");
@@ -1143,7 +1134,7 @@ export function createKeychain(deps: {
         ownerId: current.ownerId,
         service: current.service,
         files,
-        ...(unchanged ? {} : { baseline: fileHashes ?? null }),
+        ...(unchanged ? {} : { baseline: fileHashes }),
         ...(source.grantId ? { grantId: source.grantId } : {}),
         ...(source.writeback ? { writeback: true } : {}),
       };

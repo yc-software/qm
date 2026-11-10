@@ -32,8 +32,7 @@ export interface ExecutionFilePlan {
 
 export interface ProcessCredentialFiles {
   plan: ExecutionFilePlan;
-  /** fingerprint/fileHashes describe the job's files as of launch or its last mid-job save. */
-  sources: Array<FileCredentialSource & { fingerprint: string; fileHashes?: Record<string, string> }>;
+  sources: Array<FileCredentialSource & { fingerprint: string; fileHashes: Record<string, string> }>;
 }
 
 export function processCredentialFiles(
@@ -86,11 +85,6 @@ export async function finishProcessCredentials(
   );
 }
 
-/**
- * Saves a still-running background job's credential files when they changed since launch or
- * the last save, so a login the job just completed is usable by other commands right away.
- * Leaves staging in place for the exit hook.
- */
 export async function syncProcessCredentials(
   deps: {
     sandbox: Sandbox;
