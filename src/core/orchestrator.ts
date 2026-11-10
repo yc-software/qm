@@ -71,14 +71,13 @@ import {
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { orgId } from "../config.ts";
 import { currentTenant } from "../tenants/context.ts";
-import { deriveTurnOutcome, approvalBlocksInput } from "./turn-outcome.ts";
+import { deriveTurnOutcome, approvalBlocksInput, heldReplyResult } from "./turn-outcome.ts";
 import { applyPromptVars, loadProtocolFile, type PromptVars } from "../resolution/prompt-vars.ts";
 import { cleanBrandingLabel, resolveBranding } from "../resolution/branding.ts";
 import { resolveTurnContext } from "../resolution/turn-context.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import { interimReplyDelivery, turnGuidance } from "./orchestrator/reply-check.ts";
 import { turnDeliveryProvenance } from "../delivery/delivery-store.ts";
-import { replyEditNote } from "../delivery/run-result-delivery.ts";
 import type { DirectoryStore, DirectoryMember } from "../directory/directory-store.ts";
 import { resolveEnvironmentId } from "../environments/environment-store.ts";
 import type { SessionWriter } from "../sessions/session-store.ts";
@@ -245,7 +244,13 @@ import {
   registerKeychainCredentials,
   registerServiceCredentials,
 } from "./orchestrator/credential-catalog.ts";
-import { createSurfaceToolDeps, type SpineState } from "../surfaces/surface-tools.ts";
+import {
+  createSurfaceToolDeps,
+  enqueueDirectReply,
+  replayRecordedSurfaceAnswer,
+  surfaceToolsActive,
+  type SpineState,
+} from "../surfaces/surface-tools.ts";
 import { createAttachStaging } from "./orchestrator/attach-tool.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "../slack/message-revisions.ts";
 import { type ProviderKeys } from "../model/model-runtime.ts";
@@ -1303,20 +1308,29 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           firstMessageTitle = titles.titleFromFirstMessage(session, scopeId, titleText, descriptiveTitles);
       };
 
+      const postProvenance = (deliveryKey: string): DeliveryProvenance =>
+        turnDeliveryProvenance({
+          origin: input.origin,
+          surface: input.surface,
+          fireKey: deliveryKey,
+          sourceScopeId: scopeId as ScopeId,
+          sourceThreadRef: session.threadRef,
+          sourceSessionId: session.id,
+        });
+
       const isRetry = (input.attempt ?? 1) > 1;
-      const recordedTurnForRun = async (): Promise<RecordedTurn | null> => {
+      const recordedTurnForRun = async (): Promise<{ turn: RecordedTurn | null; items: Item[] } | null> => {
         if (!input.runId || !deps.runs) return null;
         const seq = (await deps.runs.get(input.runId))?.turnUserSeq;
         if (seq == null) return null;
         const items = await deps.sessions.getItems(session.id);
         if (!items.some((item) => item.seq === seq)) return null;
-        return turnAtSeq(
-          items.filter((item) => item.seq >= seq),
-          seq,
-        );
+        const turnItems = items.filter((item) => item.seq >= seq);
+        return { turn: turnAtSeq(turnItems, seq), items: turnItems };
       };
-      const recordedTurn = isRetry ? await recordedTurnForRun() : null;
-      if (recordedTurn?.answer) {
+      const recorded = isRetry ? await recordedTurnForRun() : null;
+      const recordedTurn = recorded?.turn;
+      if (recorded && recordedTurn?.answer) {
         const recordedAnswer = recordedTurn.answer;
         audit({
           action: "turn.already_answered",
@@ -1326,15 +1340,40 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         console.error(
           `[orchestrator] turn.already_answered attempt=${input.attempt} run=${input.runId} thread=${conversation.threadRef} answerSeq=${recordedAnswer.seq}`,
         );
-        return recordedAnswer.text.trim()
+        const stopped = recordedAnswer.stopped ? { stopped: true } : {};
+        const surfaceTools = surfaceToolsActive({ input, strictReadOnly, defaultDestination });
+        const held = heldReplyResult({
+          sessionId: session.id,
+          stopped: recordedAnswer.stopped === true,
+          runCancelled: recordedAnswer.cancelled === true,
+          surfaceTools,
+        });
+        const text = absoluteAppLinks(recordedAnswer.text, deps.publicWebUrl);
+        if (held) {
+          if (surfaceTools && !recordedAnswer.stopped)
+            await replayRecordedSurfaceAnswer({
+              deps,
+              input,
+              session,
+              defaultDestination,
+              surfaceName,
+              turnItems: recorded.items,
+              userSeq: recordedTurn.userSeq,
+              text,
+              postProvenance,
+            });
+          return held;
+        }
+        return text.trim()
           ? {
               status: "ok",
               sessionId: session.id,
-              reply: absoluteAppLinks(recordedAnswer.text, deps.publicWebUrl),
+              reply: text,
               sourceUserSeq: recordedTurn.userSeq,
               sourceAssistantEntrySeq: recordedAnswer.seq,
+              ...stopped,
             }
-          : { status: "silent", sessionId: session.id };
+          : { status: "silent", sessionId: session.id, ...stopped };
       }
 
       audit({
@@ -2237,15 +2276,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               e,
             ),
         };
-        const postProvenance = (deliveryKey: string): DeliveryProvenance =>
-          turnDeliveryProvenance({
-            origin: input.origin,
-            surface: input.surface,
-            fireKey: deliveryKey,
-            sourceScopeId: scopeId as ScopeId,
-            sourceThreadRef: session.threadRef,
-            sourceSessionId: session.id,
-          });
         const earlyTaskAck =
           surface?.capabilities.liveReplies === true &&
           humanInput &&
@@ -2269,7 +2299,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           if (deliberatePost || !ack || !defaultDestination) return;
           spineAckText = ack;
           const runId = input.runId;
-          const ackKey = `ack:${turnKey}`;
+          const ackKey = postKeys.ackKey;
           void reachEnqueue({
             deliveries: deps.deliveries,
             destination: defaultDestination,
@@ -3451,14 +3481,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const primaryReply = stripAckPrefix(result.reply ?? "", spineAckText).trim();
           if (input.addressed && primaryReply && defaultDestination) {
             try {
-              const directKey = postKeys.key(defaultDestination, postKeys.take());
-              const editNote = replyEditNote(result.retracted);
-              await reachEnqueue({
+              await enqueueDirectReply({
                 deliveries: deps.deliveries,
-                destination: editNote ? { ...defaultDestination, editNote } : defaultDestination,
+                destination: defaultDestination,
                 text: primaryReply,
-                idempotencyKey: directKey,
-                provenance: postProvenance(directKey),
+                key: postKeys.key(defaultDestination, postKeys.take()),
+                postProvenance,
+                ...(result.retracted ? { retracted: result.retracted } : {}),
               });
               spine.surfaceOutboundCount += 1;
               if (input.runId) deps.turnStream.markSurfacePosted(input.runId);
@@ -3483,13 +3512,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               const fallback = stripAckPrefix(result.reply ?? "", spineAckText).trim();
               if (fallback && defaultDestination) {
                 try {
-                  const fallbackKey = postKeys.key(defaultDestination, postKeys.take());
-                  await reachEnqueue({
+                  await enqueueDirectReply({
                     deliveries: deps.deliveries,
                     destination: defaultDestination,
                     text: fallback,
-                    idempotencyKey: fallbackKey,
-                    provenance: postProvenance(fallbackKey),
+                    key: postKeys.key(defaultDestination, postKeys.take()),
+                    postProvenance,
                   });
                   spine.surfaceOutboundCount += 1;
                   if (input.runId) deps.turnStream.markSurfacePosted(input.runId);
@@ -3590,8 +3618,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const stopScope = result.stopScope ? { stopScope: result.stopScope } : {};
         const sourceUserSeq = turnUserSeq;
         const sourceAssistantEntrySeq = emittedEntries.findLast(isAgentReply)?.seq;
+        const heldReply = (runCancelled: boolean, surfaceTools: boolean) =>
+          heldReplyResult({
+            sessionId: session.id,
+            stopped: result.stopped === true,
+            ...(result.stopScope ? { stopScope: result.stopScope } : {}),
+            runCancelled,
+            surfaceTools,
+          });
         if (cancelStopped && !result.pendingApprovals?.length) {
-          finalResult = { status: "silent", sessionId: session.id, stopped: true, ...stopScope };
+          finalResult = heldReply(true, false)!;
         } else if (isPollFire && result.silent && !stagedAttachments.length && result.pausedOnApproval !== true) {
           finalResult = { status: "silent", sessionId: session.id };
         } else if (result.pendingApprovals?.length || quarantineReleaseApprovals.length) {
@@ -3650,11 +3686,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         } else if (isPollFire && !stagedAttachments.length && !reply.trim()) {
           finalResult = { status: "silent", sessionId: session.id };
         } else if (input.surfaceTools && surfaceToolDeps && !strictReadOnly) {
-          finalResult = {
-            status: "silent",
-            sessionId: session.id,
-            ...(result.stopped ? { stopped: true, ...stopScope } : {}),
-          };
+          finalResult = heldReply(false, true)!;
         } else {
           finalResult = {
             status: "ok",
