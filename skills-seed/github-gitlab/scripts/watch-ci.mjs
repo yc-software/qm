@@ -163,8 +163,9 @@ for (;;) {
     await pause(pollMs);
     continue;
   }
-  if (counts.skipping || counts.cancel) stop("blocked", 1, { reason: "non_passing_checks", counts });
+  if (counts.cancel || !counts.pass) stop("blocked", 1, { reason: "non_passing_checks", counts });
+  const skipped = checks.filter((check) => check.bucket === "skipping").map((check) => check.name);
   await verifyHead();
   remaining();
-  stop("success", 0, { head: expectedHead, counts });
+  stop("success", 0, { head: expectedHead, counts, ...(skipped.length ? { skipped } : {}) });
 }
