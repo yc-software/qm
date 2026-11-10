@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { ErrorCode } from "@slack/web-api";
 import { test } from "node:test";
 import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import type { Loop, LoopItem } from "../src/loops/types.ts";
@@ -50,6 +51,7 @@ interface SlackWorld {
   search?: Array<Record<string, unknown>>;
   pageSize?: number;
   calls?: string[];
+  gone?: string;
 }
 
 function slackApi(world: SlackWorld) {
@@ -69,6 +71,11 @@ function slackApi(world: SlackWorld) {
         const user = users[String(params.user)];
         return { ok: true, user: { real_name: user?.name, profile: { image_72: user?.avatar } } };
       }
+      if (world.gone && method.startsWith("conversations."))
+        throw Object.assign(new Error(`An API error occurred: ${world.gone}`), {
+          code: ErrorCode.PlatformError,
+          data: { ok: false, error: world.gone },
+        });
       if (method === "conversations.history") {
         const newestFirst = [...world.history].reverse();
         const size = world.pageSize ?? 200;
@@ -755,4 +762,62 @@ test("long message bodies are cut with a visible marker instead of silently", ()
   assert.match(prompt, /x{3000} \[cut 500 chars\]/);
   assert.doesNotMatch(prompt, /x{3001}/);
   assert.match(prompt, /Conversation: Email thread/);
+});
+
+test("a deleted or unreadable source skips the item without an error and stops re-reading it", async () => {
+  const { items, item } = await slackFixture();
+  const world: SlackWorld = { history: [], gone: "channel_not_found", calls: [] };
+  const { model, prompts } = scriptedModel([]);
+  const errors: unknown[] = [];
+  const pass = createInboxPass({
+    items,
+    model,
+    errors: { record: (event: unknown) => void errors.push(event) },
+    fetch: createConversationFetcher(clientsFor(world)),
+    discover: async () => [],
+  });
+  const summary = await pass(loop, { discover: false });
+  assert.deepEqual(summary.failures, []);
+  assert.deepEqual(errors, []);
+  assert.equal(prompts.length, 0);
+  const after = (await items.get(item.id))!;
+  assert.equal(after.status, "skipped");
+  assert.equal(after.parkedReason, "the original conversation was deleted or is no longer accessible");
+  world.calls!.length = 0;
+  assert.equal((await pass(loop, { discover: false })).checked, 0);
+  assert.deepEqual(world.calls, []);
+
+  world.gone = "invalid_auth";
+  await assert.rejects(createConversationFetcher(clientsFor(world))(OWNER, item), /invalid_auth/);
+});
+
+test("Gmail reads the item's own mailbox and treats a missing thread as gone", async () => {
+  const requested: Array<string | undefined> = [];
+  const accountTokens = {
+    connectorAccessToken: async (_host: string, _owner: string, slot?: string) => {
+      requested.push(slot);
+      return slot === "company" ? "company-token" : "personal-token";
+    },
+  };
+  const items = createLoopItemLedger(testMap());
+  await items.ingest([
+    {
+      loopId: mailLoop.id,
+      dedupeKey: "t1",
+      source: "gmail",
+      sourceAt: 1000,
+      sourcePayload: { title: "Hello", gmail: { threadId: "t1", accountType: "company" } },
+    },
+  ]);
+  const item = (await items.byLoop(mailLoop.id))[0]!;
+  const seen: string[] = [];
+  const missing: typeof fetch = async (url, init) => {
+    seen.push(new Headers(init?.headers).get("authorization") ?? "");
+    if (String(url).endsWith("/profile")) return json({ emailAddress: "regan@company.example" });
+    return Response.json({ error: { code: 404, message: "Requested entity was not found." } }, { status: 404 });
+  };
+  const fetcher = createConversationFetcher(createSourceClients({ tokens: accountTokens, fetchImpl: missing }));
+  assert.deepEqual(await fetcher(OWNER, item), { kind: "skipped", reason: "source_gone" });
+  assert.deepEqual(requested, ["company"]);
+  assert.ok(seen.every((header) => header === "Bearer company-token"));
 });
