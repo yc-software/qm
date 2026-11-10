@@ -363,6 +363,28 @@ test("running subagents keep the card open as plan rows showing their latest ste
   assert.deepEqual(f.deleted, ["card.1"]);
 });
 
+test("a turn that hands work to a subagent and finishes before the card starts still gets a card while that work runs", async () => {
+  const f = fixture();
+  await f.enable();
+  const run = f.add("r1");
+  run.status = "done";
+  const child = f.subagent("c1", "Worker");
+  child.status = "done";
+  const job = f.background("sub:c1");
+  job.purpose = "Waiting on CI";
+  await f.start(run.id);
+  assert.deepEqual(line((f.card()[0] as { tasks: Array<Record<string, unknown>> }).tasks[0]), [
+    { type: "text", text: "Waiting on CI" },
+  ]);
+  job.status = "exited";
+  await f.reconcile();
+  assert.deepEqual(f.deleted, ["card.1"]);
+  const quick = f.add("quick");
+  quick.status = "done";
+  await f.start(quick.id);
+  assert.deepEqual(await f.store.all(), []);
+});
+
 test("a finished subagent whose result has not reached the parent yet keeps the card waiting", async () => {
   const f = fixture();
   await f.enable();

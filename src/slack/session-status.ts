@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
-import { isTerminal, type RunStore } from "../runs/run-store.ts";
+import type { RunStore } from "../runs/run-store.ts";
 import type { SessionWork, SessionWorkReader } from "../sessions/session-work.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import { conversationWebUrl } from "../util/conversation-links.ts";
@@ -57,13 +57,7 @@ export function createSlackSessionStatus(
           const anchor = await runs.get((next ?? (await store.get(id)))?.anchorRunId ?? "");
           const scope = anchor && conversationScope(anchor.request.conversation, anchor.request.actor.id);
           const optedIn = !!scope && (await flags.enabled("slack_loading_indicator", scope));
-          if (
-            next &&
-            (!optedIn ||
-              !anchor?.deliveryState?.replying ||
-              anchor.request.privateSessionMessage ||
-              isTerminal(anchor.status))
-          )
+          if (next && (!optedIn || !anchor?.deliveryState?.replying || anchor.request.privateSessionMessage))
             return true;
           if (leaseLost) return true;
           if (next) await store.putIfAbsent(id, { ...next, writer });
