@@ -5,7 +5,7 @@ import type { ItemKind } from "../sessions/items-schema.ts";
 import { countTokens } from "../util/tokens.ts";
 import { SIDE_CHAT_GUIDANCE, sideChatContext } from "./side-chat-context.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
-import { SECURITY_TOOL_RESULT_QUARANTINE, type AuditEvent } from "../audit/audit-log.ts";
+import type { AuditEvent } from "../audit/audit-log.ts";
 import { createAdminCall } from "../tools/admin.ts";
 import { createSelfApiCall } from "../tools/self-api.ts";
 import { scopeTeamsToTurn } from "../teams/teams.ts";
@@ -62,7 +62,6 @@ import {
   introducesUser,
   isPersonAuthored,
   isSessionTurn,
-  midTurnSessionMessage,
   spokenByPerson,
 } from "./turn-origin.ts";
 import { resolveTurnFastMode } from "./turn-options.ts";
@@ -99,14 +98,10 @@ import type {
 } from "../agent/agent.ts";
 import { compactedSinceLastTurn, forModelContext, forSearchView } from "../agent/context-compaction.ts";
 import {
-  quarantineReleaseKey,
   securityScreenChunks,
   securityScreenPayload,
-  toolLabelOf,
   UNSCREENED_REASON,
   unscreenedNotice,
-  type ToolResultScreen,
-  type ToolResultScreenInput,
 } from "../security/security-posture.ts";
 import { commandApprovalId, inputApprovalId } from "./approval-id.ts";
 import {
@@ -115,20 +110,17 @@ import {
   createApprovalDecisions,
   createApprovalLedger,
   grantModesWithin,
-  quarantineFullText,
-  quarantinePreview,
   resolveLiveApproval,
   withdrawCallApprovals,
   type ApprovalDecisionTurn,
 } from "./orchestrator/approvals.ts";
 import {
   intakeOf,
-  midTurnPrompt,
   senderLine,
-  speakerName,
-  wordsToScreen,
   type IncomingMessage,
   type Speaker,
+  createSteerPreparer,
+  recordUser,
 } from "./orchestrator/intake.ts";
 import { createPerTurnStrategy } from "../memory/strategies/per-turn.ts";
 import { DEFAULT_MEMORY_POLICY } from "../memory/policy.ts";
@@ -217,11 +209,11 @@ import {
 import { resolveTurnRuntimeAuth } from "./orchestrator/turn-runtime.ts";
 import { startStallWatchdog } from "./orchestrator/stall-watchdog.ts";
 import {
-  cleanVerdict,
   countSkills,
   createSecurityClassifier,
   screenChunks,
   createSkillScreen,
+  createToolResultScreen,
   screenInboundInput,
   type SecurityScreenContext,
   unscreenedVerdict,
@@ -247,15 +239,6 @@ import { createAttachStaging } from "./orchestrator/attach-tool.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "../slack/message-revisions.ts";
 import { type ProviderKeys } from "../model/model-runtime.ts";
 import { surfaceToolPrompt } from "../surfaces/registry.ts";
-
-async function recordUser(users: OrchestratorDeps["users"], id: string, botActor: boolean | undefined): Promise<void> {
-  try {
-    await users.record({ id, source: "turn", at: Date.now() });
-    if (botActor) await users.markApps([id]);
-  } catch (err) {
-    reportFailure("users: record user", err);
-  }
-}
 
 export { egressClaimAllowingControlPlane, filterConnectorSkills } from "./orchestrator/turn-helpers.ts";
 export type { Orchestrator, OrchestratorDeps, OrchestratorInput, SurfaceContextPuller } from "./orchestrator/types.ts";
@@ -2451,96 +2434,25 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   ),
                 grantOnce,
               }),
-            prepareSteer: async (text, request) => {
-              const steerer = request ? deps.identity.resolve(request.actor) : actor;
-              const author = steerer.id;
-              const speaker: Speaker = request
-                ? {
-                    id: author,
-                    ...(request.actor.displayName ? { name: request.actor.displayName } : {}),
-                    origin: request.origin ?? { kind: "automation", screenData: text },
-                    fromSession: isSessionTurn(request),
-                  }
-                : {
-                    id: author,
-                    ...(actor.displayName ? { name: actor.displayName } : {}),
-                    origin: { kind: "direct" },
-                    fromSession: false,
-                  };
-              const by = {
-                author,
-                ...(samePerson(author, actor.id) ? {} : { authorName: speakerName(speaker, nameOf) }),
-              };
-              let said =
-                request?.sessionSenderId && request.text.trim()
-                  ? midTurnSessionMessage(request.text, request.sessionSenderId === session.parentSessionId)
-                  : [text.trim() ? speakerLine(speaker) : "", text].filter(Boolean).join("\n");
-              const screened = [wordsToScreen(said, speaker, actor.id), ...(request?.inboundNotes ?? [])]
-                .filter(Boolean)
-                .join("\n\n");
-              if (screened) {
-                const screen = await orchestrator
-                  .screenSecuritySteer({ payload: screened, actor: steerer, conversation, sessionId: session.id })
-                  .catch((error: unknown) => {
-                    reportFailure("orchestrator: mid-turn message screen", error);
-                    return undefined;
-                  });
-                if (!screen || screen === "block")
-                  return {
-                    text: screen
-                      ? "A mid-turn message was withheld by the security screen."
-                      : "A mid-turn message was withheld because the security screen could not check it.",
-                    author,
-                    authorName: speakerName(speaker, nameOf),
-                    withheld: true,
-                  };
-                if (screen === "unscreened") said = `${unscreenedNotice("mid-turn message")}\n${said}`;
-              }
-              if (request && introducesUser(speaker.origin, request))
-                await recordUser(deps.users, author, request.botActor);
-              const refreshedInbox =
-                input.surface === "web" &&
-                conversation.kind === "dm" &&
-                /^web:.+:inbox$/.test(conversation.threadRef) &&
-                request?.conversation.threadRef === conversation.threadRef
-                  ? request.conversationHeader?.trim()
-                  : undefined;
-              if (refreshedInbox) {
-                let allowed = true;
-                if (securityPolicy.screening !== "off") {
-                  const verdict = await screenChunks(
-                    securityScreenChunks("conversation-header", refreshedInbox),
-                    classifyAs(
-                      { sessionId: session.id, hook: "user_input", request: text, surface: "steer" },
-                      recordScreenRequest,
-                    ),
-                    { stopUnclean: true },
-                  );
-                  allowed = cleanVerdict(verdict);
-                }
-                said = `${said}\n\n${allowed ? refreshedInbox : "Updated inbox context was withheld by the security screen."}`;
-              }
-              if (!request?.attachments?.length && !request?.inboundNotes?.length) return { text: said, ...by };
-              const intake = await takeIn(
-                {
-                  text,
-                  ...(request.attachments ? { attachments: request.attachments } : {}),
-                  ...(request.actor.displayName ? { sharer: request.actor.displayName } : {}),
-                  ...(request.inboundNotes ? { notes: request.inboundNotes } : {}),
-                },
-                { ...fileRegistration, seed: `${fileRegistration.seed}:steer:${randomUUID()}` },
-                `${turnInboxDir}/${randomUUID()}`,
-              );
-              const steeredDocuments = await ingestDocuments(intake.received.metas, text, initialDocuments);
-              documentInputs.documents.push(...steeredDocuments.documents);
-              return {
-                text: midTurnPrompt(said, intake, steeredDocuments),
-                attachments: intake.received.metas,
-                images: intake.received.images,
-                documents: steeredDocuments.documents,
-                ...by,
-              };
-            },
+            prepareSteer: createSteerPreparer({
+              deps,
+              orchestrator,
+              input,
+              actor,
+              conversation,
+              session,
+              securityPolicy,
+              nameOf,
+              speakerLine,
+              classifyAs,
+              recordScreenRequest,
+              takeIn,
+              fileRegistration,
+              turnInboxDir,
+              ingestDocuments,
+              initialDocuments,
+              documentInputs,
+            }),
             ...(userProviderKeys ? { providerKeys: userProviderKeys } : {}),
             ...(personalAuth && !purposeDefault && !restoredRuntime && runtimeHandoffs === 0
               ? { runtimePinned: true }
@@ -2610,112 +2522,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 : effectiveTurnWallClockMs,
             ...(securityPolicy.screening !== "off"
               ? {
-                  screenToolResult: async ({
-                    tool,
-                    result,
-                    unscreenable,
-                    provenance,
-                    sourceScopeId,
-                    source,
-                  }: ToolResultScreenInput): Promise<ToolResultScreen> => {
-                    if (provenance !== "external") return { outcome: "allow" };
-                    const toolLabel = toolLabelOf(tool);
-                    const sourceLabel = source ? `:${source.replace(/[^A-Za-z0-9_-]/g, "_")}` : "";
-                    const screenChunk = classifyAs(
-                      { sessionId: session.id, hook: "tool_response", request: input.text, surface: toolLabel },
-                      recordScreenRequest,
-                    );
-                    if (!enforceScreen) {
-                      if (!unscreenable)
-                        await Promise.all(
-                          securityScreenChunks(`tool_result:${toolLabel}${sourceLabel}`, result).map(screenChunk),
-                        );
-                      return { outcome: "allow" };
-                    }
-                    if (authorizeCommand(quarantineReleaseKey(tool), quarantineReleaseKey(tool))) {
-                      audit({
-                        action: "security_posture.tool_result_released",
-                        resource: input.surface ?? "unknown",
-                        status: "allowed",
-                        detail: JSON.stringify({ reason: "human_release", tool: toolLabel }),
-                      });
-                      return { outcome: "unscreened" };
-                    }
-                    const verdict = unscreenable
-                      ? undefined
-                      : await screenChunks(
-                          securityScreenChunks(`tool_result:${toolLabel}${sourceLabel}`, result),
-                          screenChunk,
-                          { batch: 4 },
-                        );
-                    if (cleanVerdict(verdict)) return { outcome: "allow" };
-                    if (verdict?.decision === "strict") {
-                      const releaseKey = `security-screen-release:${toolLabel}`;
-                      if (authorizeCommand(releaseKey)) {
-                        audit({
-                          action: "security_posture.tool_result_release",
-                          resource: input.surface ?? "unknown",
-                          status: "allowed",
-                          detail: JSON.stringify({ reason: "human_release", tool: toolLabel }),
-                        });
-                        return { outcome: "allow" };
-                      }
-                      audit({
-                        action: SECURITY_TOOL_RESULT_QUARANTINE,
-                        resource: input.surface ?? "unknown",
-                        status: "refused",
-                        detail: JSON.stringify({
-                          reason: "screen_verdict",
-                          tool: toolLabel,
-                          ...(source ? { source } : {}),
-                          ...(verdict.reason ? { verdict: verdict.reason } : {}),
-                        }),
-                      });
-                      if (
-                        !quarantineReleaseApprovals.some(
-                          (qa) =>
-                            qa.approvalKey === releaseKey &&
-                            qa.screenedOutput?.text === result &&
-                            qa.screenedOutput?.sourceScopeId === sourceScopeId,
-                        )
-                      ) {
-                        quarantineReleaseApprovals.push({
-                          command: `release quarantined ${toolLabel} output`,
-                          reason: verdict.reason
-                            ? `security screen flagged this ${toolLabel} output: ${verdict.reason}`
-                            : `security screen flagged this ${toolLabel} output`,
-                          purpose: `Release the quarantined ${toolLabel} output into the conversation (once), or keep it blocked.`,
-                          summary: `Blocked content preview: ${quarantinePreview(result)}`,
-                          summaryDetail: quarantineFullText(result),
-                          ...(!toolLabel.startsWith("session_message_")
-                            ? {
-                                screenedOutput: {
-                                  tool: toolLabel,
-                                  text: result,
-                                  ...(sourceScopeId ? { sourceScopeId } : {}),
-                                },
-                              }
-                            : {}),
-                          approvalKey: releaseKey,
-                          grantModes: { session: false, always: false },
-                        });
-                      }
-                      return {
-                        outcome: "quarantine",
-                        approvalRequested: true,
-                        ...(verdict.reason ? { reason: verdict.reason } : {}),
-                      };
-                    }
-                    audit({
-                      action: "security_posture.tool_result_failed_open",
-                      resource: input.surface ?? "unknown",
-                      status: "allowed",
-                      detail: JSON.stringify({
-                        reason: unscreenable ? "unscreenable_payload" : UNSCREENED_REASON,
-                      }),
-                    });
-                    return { outcome: "unscreened" };
-                  },
+                  screenToolResult: createToolResultScreen({
+                    input,
+                    session,
+                    classifyAs,
+                    recordScreenRequest,
+                    enforceScreen,
+                    authorizeCommand,
+                    audit,
+                    quarantineReleaseApprovals,
+                  }),
                 }
               : {}),
             toolApprovalGate: (tool: string, callKey?: string) => {
