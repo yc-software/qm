@@ -1817,7 +1817,7 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
     conversation: { kind: "dm", threadRef: "dm:admin-alice:auto2" },
     text: "!sysprompt",
   });
-  assert.doesNotMatch(autoPrompt.reply ?? "", /## Acting for an org admin|System administration is not limited/);
+  assert.doesNotMatch(autoPrompt.reply ?? "", /The sender is an org admin\./);
 
   captured = undefined;
   assert.equal(
@@ -1855,6 +1855,7 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
   });
   assert.match(threadPrompt.reply ?? "", /## Acting for an org admin/);
   assert.match(threadPrompt.reply ?? "", /System administration is not limited to the admin dashboard/);
+  assert.match(threadPrompt.reply ?? "", /The sender is an org admin\./);
 
   assert.equal(
     claims!.liveActor,

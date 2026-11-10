@@ -69,7 +69,9 @@ import { turnDeliveryProvenance } from "../delivery/delivery-store.ts";
 import type { DirectoryStore, DirectoryMember } from "../directory/directory-store.ts";
 import { resolveEnvironmentId } from "../environments/environment-store.ts";
 import type { SessionWriter } from "../sessions/session-store.ts";
-import { sessionOrigin } from "../sessions/session-store.ts";
+import { contextSummary, sessionOrigin } from "../sessions/session-store.ts";
+import { adminStatusFromGrants } from "../admin/admin-service.ts";
+import { promptChanges, systemPromptSnapshot, turnFrameNote } from "./orchestrator/prompt-snapshot.ts";
 import { currentModelRequestContext, withModelRequestContext } from "../model/request-context.ts";
 import { supportsScopeProfile } from "../sandbox/sandbox.ts";
 import { isPollSurface } from "../triggers/run-trigger.ts";
@@ -811,10 +813,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         web: isWeb,
         surfaceStyle: surfaceHints?.[modeName === "mode-conversation" ? "conversationStyle" : "autonomousStyle"] ?? "",
       };
-      if (modeName === "mode-conversation") {
+      if (modeName === "mode-conversation" && conversation.kind === "dm") {
         frameVars.userName = cleanBrandingLabel(actor.displayName, 80) ?? "there";
         frameVars.userEmail = actor.id.includes("@") ? actor.id : undefined;
-      }
+      } else if (modeName === "mode-conversation") frameVars.userName = "the people here";
       const sideChat = (await deps.sessions.getByThread(conversation.threadRef))?.sideChat;
       const focusedSideChat = Boolean(sideChat && !sideChat.expanded);
       const sessionSyscalls = !focusedSideChat && !external ? deps.sessionSyscalls : undefined;
@@ -836,7 +838,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       });
       let personaBlock = persona ? personaPrompt(persona) : "";
       if (typeof personaTurn === "string") personaBlock = `## Persona\n${personaTurn}`;
-      let systemPrompt = `${modeFrame}\n\n${[resolution.systemPrompt, personaBlock].filter(Boolean).join("\n\n")}\n\n${sharedCore}`;
+      let systemPrompt = `${[resolution.systemPrompt, personaBlock].filter(Boolean).join("\n\n")}\n\n${sharedCore}`;
       if (external)
         systemPrompt +=
           "\n\nThis conversation has an external Slack audience. Answer and run code here using only the explicitly provided shared service credentials. Personal memory, files, keychains, connected apps, organization data and administrative tools are unavailable. When personal access is needed, say briefly that you are continuing privately, and include [[continue-private: task]] in your final answer. The continuation goes only to the authenticated requester; never put private results in this channel.";
@@ -1147,7 +1149,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       });
       const {
         actorIsOrgAdmin,
-        orgMemoryWrite,
+        orgMemoryWritable,
+        tenant,
         controlClaims,
         sandboxTokenExpiry,
         scopeAttestation,
@@ -1369,11 +1372,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (appConnections)
           systemPrompt +=
             "\n\n## Connected app access\nComposio is configured in the backend. Load the composio skill and use /v1/composio through the authenticated agent API. Apps that have their own skill work over these connections too; prefer that skill. No Composio project key is delivered to your computer; the backend checks account ownership and context access.";
-        if (actorIsOrgAdmin) {
+        const adminGrants =
+          deps.admin && !external && !strictReadOnly && deps.signingSecret && deps.apiBaseUrl
+            ? await deps.admin.listGrants(tenant).catch(swallowAs("orchestrator: admin grants", []))
+            : [];
+        if (conversation.audience.some((p) => adminStatusFromGrants(adminGrants, p.id).isAdmin)) {
           systemPrompt +=
             "\n\n## Acting for an org admin\n" +
-            "This user is an org admin, and your token inherits that for this turn: anything they could do in the admin dashboard — inspect or govern any scope's config/SOUL, memory, transcripts, files, audit — they can do through you. The admin skill documents the whole API surface; read it before acting" +
-            (orgMemoryWrite
+            "When a turn's context says the sender is an org admin, your token inherits that for that turn: anything they could do in the admin dashboard — inspect or govern any scope's config/SOUL, memory, transcripts, files, audit — they can do through you. The admin skill documents the whole API surface; read it before acting" +
+            (orgMemoryWritable
               ? ', and for plain "remember this org-wide" requests the lighter path is `"scope":"org"` on the memory self-API (memory skill)'
               : "") +
             ". You're acting as them: confirm before any mutation, and say exactly what you changed. Hard limits the API enforces: private-content reads require a DM or an Open conversation on a live admin turn (organization, personal, and conversation sharing restrictions all apply); admin grant changes and impersonation are portal-only. Open admin reads can expose private data to everyone in the conversation: retrieve and report only what the request needs. Admin access to other people's private sessions, memory and files is for running and repairing the system, not a shortcut to answer questions about them: when a request needs something only another person's private context holds, use the hand-off skill even if admin access could reach it." +
@@ -1401,17 +1408,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ),
             )
             .catch(swallowAs("orchestrator: standing-obligations read", null));
-          turnContextBlocks["Scheduled here"] =
+          turnContextBlocks["Crons scheduled here"] =
             obligations ??
-            "## Scheduled here\nScheduled-work status is unavailable; check the live inventories before scheduling.";
+            "## Crons scheduled here\nScheduled-work status is unavailable; check the live inventories before scheduling.";
         }
+        if (actorIsOrgAdmin) turnEvents.push("The sender is an org admin.");
         if (input.origin.kind === "automation" && input.origin.destination && !input.surfaceTools) {
-          systemPrompt +=
-            "\n\nThis turn was fired by a scheduled trigger with a platform-managed destination. " +
-            "Core will deliver your final reply after you finish. Do not call Slack, email, chat, or other send APIs to deliver it yourself; put the exact message to send in your final reply.";
+          turnEvents.push(
+            "This turn was fired by a scheduled trigger with a platform-managed destination. " +
+              "Core will deliver your final reply after you finish. Do not call Slack, email, chat, or other send APIs to deliver it yourself; put the exact message to send in your final reply.",
+          );
         }
         if (automatedTurn && input.surface && isPollSurface(input.surface)) {
-          systemPrompt += `\n\nThis turn was fired by a scheduled trigger, not a person typing. If there's nothing new worth reporting, call \`finish_silently\` to end the turn without sending anything.`;
+          turnEvents.push(
+            "This turn was fired by a scheduled trigger, not a person typing. If there's nothing new worth reporting, call `finish_silently` to end the turn without sending anything.",
+          );
         }
         if (!external && conversation.kind !== "dm") {
           rosterMembers = await (async () => {
@@ -2029,6 +2040,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           deps.swarms && input.runId && !partial && !input.approval
             ? await openSwarmMailbox({ swarms: deps.swarms, input, screen: screenSwarmMessage })
             : undefined;
+        const mcpTools = await mcpToolsReady;
+        const freshBody = [systemPrompt, connectorToolsNote(deferredMcpTools(mcpTools, strictReadOnly))]
+          .filter((s) => s.trim())
+          .join("\n\n");
+        const promptSnapshot = await systemPromptSnapshot(deps.promptSnapshots, session.id, {
+          epoch: history.findLast((item) => contextSummary(item))?.seq ?? 0,
+          frame: modeFrame,
+          body: freshBody,
+        });
         const turnEnvironmentContents = [
           sender,
           timeBlock,
@@ -2037,6 +2057,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           unscreenedNote,
           input.conversationHeader?.trim(),
           ...turnEvents,
+          promptSnapshot.frame === modeFrame ? "" : turnFrameNote(modeFrame),
+          promptChanges(promptSnapshot.body, freshBody),
           sessionTurn || automatedTurn || compactedSinceLastTurn(history) ? await liveNote() : "",
           deps.keychain
             ? await askResolutionEvents(
@@ -2319,7 +2341,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             screenSwarmMessage,
           });
           const mcpTools = await mcpToolsReady;
-          const connectorNote = connectorToolsNote(deferredMcpTools(mcpTools, strictReadOnly));
+
           dispatchTrace ??= startDispatchTrace();
           const turnRun = deps.agent.runTurn({
             session,
@@ -2446,7 +2468,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               if (callKey) return consumeApproval(callKey);
               return securityPolicy.toolApprovals !== "all" || authorizeToolCall(tool);
             },
-            systemPrompt: connectorNote ? `${systemPrompt}\n\n${connectorNote}` : systemPrompt,
+            systemPrompt: `${promptSnapshot.frame}\n\n${promptSnapshot.body}`,
             history: continuation?.history ?? history,
             tools,
             ...(mcpTools ? { mcpTools } : {}),
