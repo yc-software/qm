@@ -6,7 +6,16 @@ const ROOT = resolve(import.meta.dirname, "..");
 const BASELINE = resolve(ROOT, "scripts/tenant-ratchet.json");
 
 const SITES = {
-  implicitQueries: { "src/persistence/pg-pool.ts": ["PgPool.q", "PgPool.query", "withPgTransaction"] },
+  mintSites: { "plugins/chassis/src/tenant.ts": ["withTenant"] },
+  implicitQueries: {
+    "src/persistence/pg-pool.ts": [
+      "PgPool.q",
+      "PgPool.query",
+      "PgPool.pool",
+      "PgPool.sessionPool",
+      "withPgTransaction",
+    ],
+  },
   ambientReads: {
     "plugins/chassis/src/tenant.ts": ["boundTenant", "ambientTenant"],
     "src/tenants/context.ts": ["currentTenant"],
@@ -49,7 +58,7 @@ function countTenantSites(): Record<Metric, Map<string, number>> {
   const roots = config.fileNames.filter((file) => relative(ROOT, file).startsWith("src/"));
   const program = ts.createProgram(roots, config.options);
   const checker = program.getTypeChecker();
-  const counts = { implicitQueries: new Map(), ambientReads: new Map(), ambientCaches: new Map() } as Record<
+  const counts = Object.fromEntries(Object.keys(SITES).map((metric) => [metric, new Map()])) as Record<
     Metric,
     Map<string, number>
   >;
@@ -82,22 +91,27 @@ function main(args: string[]): number {
   if (args.includes("--list"))
     for (const [metric, sites] of Object.entries(counts))
       for (const [file, n] of [...sites].sort((a, b) => b[1] - a[1])) console.log(`${metric}\t${n}\t${file}`);
-  if (args.includes("--update")) {
-    writeFileSync(BASELINE, `${JSON.stringify(totals, null, 2)}\n`);
-    console.log(`tenant ratchet: baseline set to ${JSON.stringify(totals)}`);
-    return 0;
-  }
-  const baseline = JSON.parse(readFileSync(BASELINE, "utf8")) as Record<Metric, number>;
-  const problems = (Object.keys(totals) as Metric[]).flatMap((metric) => {
-    const now = totals[metric];
-    const was = baseline[metric];
-    if (now > was) return [`${metric} rose from ${was} to ${now}: pass a Tenant token explicitly instead`];
-    if (now < was) return [`${metric} fell from ${was} to ${now}: run node scripts/tenant-ratchet.ts --update`];
-    return [];
-  });
+  const baseline = JSON.parse(readFileSync(BASELINE, "utf8")) as Record<string, unknown>;
+  const metrics = Object.keys(totals) as Metric[];
+  const problems = [
+    ...Object.keys(baseline)
+      .filter((key) => !metrics.includes(key as Metric))
+      .map((key) => `${key} is not a metric this script counts; remove it from the baseline`),
+    ...metrics.flatMap((metric) => {
+      const now = totals[metric];
+      const was = baseline[metric];
+      if (typeof was !== "number") return [`${metric} has no baseline; add "${metric}": ${now} by hand`];
+      if (now > was) return [`${metric} rose from ${was} to ${now}; see docs/tenant-tokens.md`];
+      if (now < was && !args.includes("--update"))
+        return [`${metric} fell from ${was} to ${now}: run node scripts/tenant-ratchet.ts --update`];
+      return [];
+    }),
+  ];
   for (const problem of problems) console.error(`tenant ratchet: ${problem}`);
-  if (!problems.length) console.log(`tenant ratchet: ${JSON.stringify(totals)}`);
-  return problems.length ? 1 : 0;
+  if (problems.length) return 1;
+  if (args.includes("--update")) writeFileSync(BASELINE, `${JSON.stringify(totals, null, 2)}\n`);
+  console.log(`tenant ratchet: ${JSON.stringify(totals)}`);
+  return 0;
 }
 
 process.exitCode = main(process.argv.slice(2));
