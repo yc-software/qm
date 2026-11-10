@@ -2004,6 +2004,13 @@ export function buildApp(
     ],
   });
   pgArtifactMap.pool.registerMigration({
+    id: "durable-map/sandbox_resources/0001-drop-machine-id",
+    statements: [
+      "CREATE TABLE IF NOT EXISTS sandbox_resources (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
+      "UPDATE sandbox_resources SET json = json - 'machineId' WHERE json ? 'machineId'",
+    ],
+  });
+  pgArtifactMap.pool.registerMigration({
     id: "durable-map/retired-tables/0001-drop",
     statements: [
       "turn_wall_clock_configs",
