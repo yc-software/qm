@@ -137,7 +137,7 @@ import { BUDGET_MIGRATIONS, createPostgresBudgetTracker } from "./ratelimit/post
 import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
 import { PUBLISHED_ORIGIN_UPGRADE, PUBLISHED_ORIGIN_COMPLETE } from "./surfaces/published-upgrade.ts";
 import { RETIRED_ORIGIN_SWEEP_MIGRATION } from "./surfaces/origin-migration.ts";
-import { DROP_RECIPIENT_CONSENT_MIGRATION } from "./triggers/trigger-store.ts";
+import { BACKFILL_BOT_MARKER_MIGRATION, DROP_RECIPIENT_CONSENT_MIGRATION } from "./triggers/trigger-store.ts";
 import { createPostgresCronFireStore } from "./cron/fire-store.ts";
 import { createLoopStore } from "./loops/loop-store.ts";
 import { createLoopItemLedger } from "./loops/item-ledger.ts";
@@ -334,7 +334,7 @@ import {
 } from "./auth/capability-token.ts";
 import { createControlService } from "./api/control-service.ts";
 import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
-import { boundTenant, currentTenant, withTenant } from "./tenants/context.ts";
+import { ambientTenant, boundTenant, currentTenant, withTenant } from "./tenants/context.ts";
 import { claimThenBind } from "./tenants/claim.ts";
 import { inboundTenancy } from "./tenants/lookup.ts";
 import type { RunSignalStore } from "./runs/run-signal-store.ts";
@@ -1820,7 +1820,7 @@ export function buildApp(
   }
   const adminGrantStore = createAdminGrantStore(createPostgresAdminGrantStore(databaseUrl), {
     seed: parseAdminGrants(config.adminGrants, config.orgId) ?? [],
-    seedTenant: async () => bootTenant(),
+    seedsTenant: (tenant) => tenant.id === bootTenant(),
     beforeSeed: (grants) =>
       Promise.all(grants.map((g) => users.record({ id: g.principalId, source: "admin", at: Date.now() }))),
   });
@@ -1864,7 +1864,7 @@ export function buildApp(
   const personaHandover = createPersonaHandover({
     store: personaStore,
     isActive: isActiveMember,
-    orgAdmins: async () => (await admin.listGrants()).filter((grant) => grant.role === "org_admin"),
+    orgAdmins: async () => (await admin.listGrants(ambientTenant())).filter((grant) => grant.role === "org_admin"),
     auditLog,
   });
   const canReadScope = createCanReadScope({ managedGroups: projects, directory, identity, teams, sessions, personas });
@@ -1880,7 +1880,8 @@ export function buildApp(
   membership.canManageScope = canManageScope;
   membership.canUseSandboxScope = async (actorId, scopeId) =>
     identity.isInternal(identity.classify(actorId)) &&
-    ((await admin.adminStatusOf(identity.classify(actorId))).isAdmin || (await canWriteScope(actorId, scopeId)));
+    ((await admin.adminStatusOf(ambientTenant(), identity.classify(actorId))).isAdmin ||
+      (await canWriteScope(actorId, scopeId)));
   membership.managesArtifactHome = managesArtifactHome;
   const deployGitSecret = config.signingSecret;
   const deployGitBase = config.apiBaseUrl;
@@ -1995,6 +1996,7 @@ export function buildApp(
   pgArtifactMap.pool.registerMigration(PUBLISHED_ORIGIN_COMPLETE);
   pgArtifactMap.pool.registerMigration(RETIRED_ORIGIN_SWEEP_MIGRATION);
   pgArtifactMap.pool.registerMigration(DROP_RECIPIENT_CONSENT_MIGRATION);
+  pgArtifactMap.pool.registerMigration(BACKFILL_BOT_MARKER_MIGRATION);
   pgArtifactMap.pool.registerMigration(STAMP_SWARM_COMPUTERS_MIGRATION);
   pgArtifactMap.pool.registerMigration({
     id: "durable-map/crons/0002-drop-fire-log",
@@ -2603,11 +2605,11 @@ export function buildApp(
       async engagedSessions() {
         return engaged.list();
       },
-      async sweepSession(threadRef) {
+      async sweepSession(threadRef, tenant) {
         const live = await runs.activeForThread(threadRef);
         if (!live) {
           pokeReaper();
-          engaged.settle({ tenantId: currentTenant(), threadRef });
+          engaged.settle({ tenantId: tenant.id, threadRef });
           return 1;
         }
         return 0;
@@ -2811,6 +2813,8 @@ export function buildApp(
           leaderLease,
           onProcessExit: finishCredentials,
           heartbeatMs: config.monitorHeartbeatMs,
+          sandboxResources,
+          ...(swarms ? { swarms } : {}),
         })
       : null;
   const skillSyncEngine = createSkillSyncEngine({

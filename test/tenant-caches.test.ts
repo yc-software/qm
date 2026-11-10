@@ -207,7 +207,7 @@ test("admin seed grants go only to the boot tenant, once", async () => {
     },
     {
       seed: [{ principalId: "admin@example.com", scopeId: scopeId("org", "acme"), role: "org_admin" }],
-      seedTenant: async () => A,
+      seedsTenant: (t) => t.id === A,
     },
   );
   await withTenant(A, (tenant) => grants.list(tenant));

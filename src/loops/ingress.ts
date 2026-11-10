@@ -13,7 +13,7 @@ import { hashId } from "../util/crypto.ts";
 import { errMessage, swallow } from "../util/errors.ts";
 import { isObj } from "./sources/adapter.ts";
 import { claimThenBind } from "../tenants/claim.ts";
-import { currentTenant, withTenant } from "../tenants/context.ts";
+import { withTenant } from "../tenants/context.ts";
 import { slackConversationRef } from "./sources/slack.ts";
 import { isDirectChannelType } from "../slack/payloads.ts";
 import { createGmailPushClient, verifyGmailPush, type GmailCursor, type GmailPushConfig } from "./gmail-push.ts";
@@ -449,10 +449,10 @@ export function createLoopIngress(deps: LoopIngressDeps) {
         );
         nextCleanupAt = Date.now() + 86_400_000;
       }
-      const sources = await claimThenBind(deps.sources.claimTenants, async () => {
+      const sources = await claimThenBind(deps.sources.claimTenants, async (_claim, tenant) => {
         const enabled = (await deps.sources.entries()).filter(([, source]) => source.enabled);
         for (const [, source] of enabled) if (await deps.enabledFor(source.owner)) await renew(source);
-        return enabled.map(([id]) => ({ tenantId: currentTenant(), id }));
+        return enabled.map(([id]) => ({ tenantId: tenant.id, id }));
       });
       for (const source of sources.flat())
         await withTenant(source.tenantId, () => process(source.id)).catch((error) => swallow("Loop ingestion", error));

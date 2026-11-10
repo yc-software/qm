@@ -65,7 +65,7 @@ test("admin grants: a failed seed is retried on the next call (rejection not cac
   };
   const store = createAdminGrantStore(persist, {
     seed: [{ principalId: "p", scopeId: scopeId("personal", "p"), role: "org_admin" }],
-    seedTenant: async () => TEST_TENANT,
+    seedsTenant: (t) => t.id === TEST_TENANT,
   });
   await assert.rejects(() => withTenant(TEST_TENANT, (tenant) => store.list(tenant)), /transient pg failure/);
   const listed = await withTenant(TEST_TENANT, (tenant) => store.list(tenant));

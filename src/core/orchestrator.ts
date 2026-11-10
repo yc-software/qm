@@ -55,31 +55,23 @@ import type {
   PendingApprovalRecord,
 } from "../types.ts";
 import { scopeId as toScopeId, personalScope } from "../types.ts";
-import {
-  desktopClientForTurn,
-  introducesUser,
-  isPersonAuthored,
-  isSessionTurn,
-  spokenByPerson,
-} from "./turn-origin.ts";
+import { desktopClientForTurn, introducesUser, isPersonAuthored, isSessionTurn } from "./turn-origin.ts";
 import { resolveTurnFastMode } from "./turn-options.ts";
 import { orgId } from "../config.ts";
 import { currentTenant } from "../tenants/context.ts";
-import { deriveTurnOutcome, approvalBlocksInput, heldReplyResult } from "./turn-outcome.ts";
+import { deriveTurnOutcome, heldReplyResult } from "./turn-outcome.ts";
 import { applyPromptVars, loadProtocolFile, type PromptVars } from "../resolution/prompt-vars.ts";
 import { cleanBrandingLabel, resolveBranding } from "../resolution/branding.ts";
 import { resolveTurnContext } from "../resolution/turn-context.ts";
 import { reachEnqueue } from "../reach/reach.ts";
-import { interimReplyDelivery, turnGuidance } from "./orchestrator/reply-check.ts";
+import { deliverAddressedReply, interimReplyDelivery, turnGuidance } from "./orchestrator/reply-check.ts";
 import { turnDeliveryProvenance } from "../delivery/delivery-store.ts";
 import type { DirectoryStore, DirectoryMember } from "../directory/directory-store.ts";
 import { resolveEnvironmentId } from "../environments/environment-store.ts";
 import type { SessionWriter } from "../sessions/session-store.ts";
 import { sessionOrigin } from "../sessions/session-store.ts";
 import { currentModelRequestContext, withModelRequestContext } from "../model/request-context.ts";
-import { supportsProcessSessions, supportsScopeProfile } from "../sandbox/sandbox.ts";
-import { createBackgroundBroker } from "../connectors/background-exec-broker.ts";
-import { createMonitorBroker, readBackgroundOutputTail } from "../monitors/monitor-broker.ts";
+import { supportsScopeProfile } from "../sandbox/sandbox.ts";
 import { isPollSurface } from "../triggers/run-trigger.ts";
 import { askResolutionEvents, renderKeychainManifest, type KeychainAsk } from "../credentials/keychain.ts";
 import { configuredConnectorProviders } from "../credentials/connector-status.ts";
@@ -90,7 +82,6 @@ import type {
   DetectResult,
   TurnLlmRequestRecord,
   AgentTurnInput,
-  AgentTurnResult,
   RuntimeChoice,
   SessionRoute,
 } from "../agent/agent.ts";
@@ -126,12 +117,9 @@ import { skillsIndex } from "../skills/materialize.ts";
 import { isIdeasConversation, PROACTIVE_OPENER_PROMPT } from "../onboarding/onboarding.ts";
 import { runCronScript } from "../cron/script.ts";
 import { createToolContext, NeedsApproval, CommandDenied, type CommandCredential } from "../tools/primitives.ts";
-import type { FileArtifact } from "../files/file-artifact-store.ts";
 import { artifactImageLoader } from "../agent/replay-images.ts";
-import { entitledScopes, principalEntitledToScope } from "../resolution/context-filter.ts";
 import { openSessionItem, searchSessionItems } from "../sessions/history-search.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
-import { defaultPublishAudience } from "../resolution/publish-audience.ts";
 import {
   INBOX_DIR,
   TURN_FILES_DIR,
@@ -205,6 +193,8 @@ import {
 import { resolveTurnRuntimeAuth } from "./orchestrator/turn-runtime.ts";
 import { startStallWatchdog } from "./orchestrator/stall-watchdog.ts";
 import { openSegmentGoal, segmentEnvironment } from "./orchestrator/run-segment.ts";
+import { selectTurnResult, startMemoryCapture } from "./orchestrator/settle.ts";
+import { createArtifactAccess, createFileRegistration, createTurnBrokers } from "./orchestrator/turn-tools.ts";
 import {
   countSkills,
   createSecurityClassifier,
@@ -227,7 +217,6 @@ import {
 } from "./orchestrator/credential-catalog.ts";
 import {
   createSurfaceToolDeps,
-  enqueueDirectReply,
   replayRecordedSurfaceAnswer,
   surfaceToolsActive,
   type SpineState,
@@ -1526,53 +1515,20 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           deps.turnStream.begin(input.runId);
         }
 
-        const backgroundBroker =
-          deps.processes && supportsProcessSessions(deps.sandbox)
-            ? createBackgroundBroker({
-                sandbox: deps.sandbox,
-                registry: deps.processes,
-                provisionSandbox: provisionJobSandbox,
-                onExit: finishProcess,
-                scopeId: memoryScopeId,
-                sessionRef: conversation.threadRef,
-                ttlMs: deps.backgroundJobTtlMs,
-                ttlMaxMs: deps.backgroundJobTtlMaxMs,
-              })
-            : undefined;
-
-        const readOutputTail = backgroundBroker
-          ? async (processId: string, maxBytes: number) => {
-              const handle = (await backgroundBroker.handleFor?.(processId)) ?? (await provision());
-              return readBackgroundOutputTail(maxBytes, async (cursor, readMaxBytes) => {
-                const read = await backgroundBroker.poll(handle, processId, {
-                  sinceCursor: cursor,
-                  maxBytes: readMaxBytes,
-                  waitMs: 0,
-                });
-                return {
-                  chunks: read.chunks,
-                  cursor: read.cursor,
-                  ...(read.status.state === "exited" ? { exitCode: read.status.code } : {}),
-                };
-              });
-            }
-          : undefined;
-
-        const monitorBroker =
-          deps.monitors && deps.processes && readOutputTail
-            ? createMonitorBroker({
-                store: deps.monitors,
-                registry: deps.processes,
-                readOutputTail,
-                scopeId: memoryScopeId,
-                owner: actor.id,
-                ownerScopeId: scopeId,
-                ...(input.botActor ? { botActor: true } : {}),
-                threadRef: conversation.threadRef,
-                ...(defaultDestination ? { destination: defaultDestination } : {}),
-                returnsToParent: isSubagentThreadRef(conversation.threadRef) && Boolean(session.parentSessionId),
-              })
-            : undefined;
+        const { backgroundBroker, monitorBroker } = createTurnBrokers({
+          deps,
+          input,
+          actor,
+          conversation,
+          session,
+          scopeId,
+          memoryScopeId,
+          defaultDestination,
+          provision,
+          provisionJobSandbox,
+          finishProcess,
+          assertDefaultUsable,
+        });
 
         const spine: SpineState = {
           surfaceOutboundCount: 0,
@@ -1584,55 +1540,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         let spineFirstBlock = "";
         let spineFirstBlockOpen = true;
         let spineAckText: string | undefined;
-        const fileAudience =
-          !external && resolution.orgScopeId
-            ? defaultPublishAudience({
-                kind: conversation.kind,
-                ...(conversation.isPrivate !== undefined ? { isPrivate: conversation.isPrivate } : {}),
-                ...(conversation.isMpim !== undefined ? { isMpim: conversation.isMpim } : {}),
-                ...(conversation.publishMembers ? { members: conversation.publishMembers } : {}),
-                orgScopeId: resolution.orgScopeId,
-                ownerId: actor.id,
-              }).grantees
-            : [];
-        const fileOwnerScopeId = external ? scopeId : toScopeId("personal", actor.id);
-        const fileGrantees = [...fileAudience];
-        if ((conversation.kind === "group" || conversation.kind === "dm") && scopeId !== fileOwnerScopeId) {
-          fileGrantees.push(scopeId);
-        }
-        const fileRegistration: ArtifactRegistration = {
-          store: deps.files,
-          ownerScopeId: fileOwnerScopeId,
-          createdBy: actor.id,
-          createdInScope: scopeId,
-          seed: input.runId ?? `${session.id}:${Date.now()}`,
-          ...(fileGrantees.length
-            ? {
-                onRegistered: async ({ ownerScopeId, id }) => {
-                  for (const granteeScopeId of fileGrantees) {
-                    await deps.acl.grant({
-                      ownerScopeId,
-                      ref: id,
-                      granteeScopeId,
-                      permission: "read",
-                      grantedBy: actor.id,
-                    });
-                  }
-                },
-              }
-            : {}),
-          onError: (e) =>
-            deps.errors.record(
-              {
-                category: "file_store",
-                code: "register_failed",
-                message: errMessage(e),
-                scopeLabel: scopeId,
-                sessionId: session.id,
-              },
-              e,
-            ),
-        };
+        const fileRegistration = createFileRegistration({
+          deps,
+          input,
+          actor,
+          conversation,
+          session,
+          scopeId,
+          external,
+          resolution,
+        });
         const earlyTaskAck =
           surface?.capabilities.liveReplies === true &&
           humanInput &&
@@ -1667,34 +1584,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             .then(() => deps.turnStream.markSurfacePosted(runId))
             .catch(swallowAs("orchestrator: first-block ack", undefined));
         };
-        let readableHandles: Awaited<ReturnType<typeof deps.acl.handlesForAudience>> | undefined;
-        const mayReadArtifact = async (artifact: FileArtifact, fresh = false): Promise<boolean> => {
-          if (
-            conversation.audience.every((principal) =>
-              principalEntitledToScope(principal, artifact.ownerScopeId, scopeId, resolution.orgScopeId),
-            )
-          )
-            return true;
-          let handles = fresh ? undefined : readableHandles;
-          handles ??= await deps.acl.handlesForAudience(
-            conversation.audience,
-            scopeId,
-            resolution.orgScopeId,
-            entitledScopes,
-          );
-          if (!fresh) readableHandles = handles;
-          return handles.some(
-            (handle) => handle.ownerScopeId === artifact.ownerScopeId && handle.fileId === artifact.id,
-          );
-        };
-        const provisionOutbound = (sandboxId?: string) =>
-          sandboxId !== undefined ? provisionResource(sandboxId) : provision();
-        const openStoredOutbound = async (id: string) => {
-          const artifact = await deps.files.get(id);
-          if (!artifact || !(await mayReadArtifact(artifact, true))) return null;
-          const opened = await deps.files.open(id);
-          return opened ? { ...artifact, sizeBytes: opened.sizeBytes, stream: opened.stream } : null;
-        };
+        const { mayReadArtifact, provisionOutbound, openStoredOutbound } = createArtifactAccess({
+          deps,
+          conversation,
+          scopeId,
+          resolution,
+          provision,
+          provisionResource,
+        });
         const surfaceToolDeps = createSurfaceToolDeps({
           deps,
           input,
@@ -2632,74 +2529,29 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(inbound.metas.length ? { attachments: inbound.metas } : {}),
           ...(inbound.images.length ? { images: inbound.images } : {}),
         });
-        if (replyCheck && !replyCheck.enforce && result.reply.trim() && !result.silent && !result.stopped)
-          void replyCheck.check(result.reply).catch(swallowAs("orchestrator: observed reply check", undefined));
-        const followedUpByPerson = !input.addressed && spokenByPerson(input.origin) && !sessionTurn;
-        if (
-          (input.addressed || followedUpByPerson) &&
-          !strictReadOnly &&
-          input.surfaceTools &&
-          surfaceToolDeps &&
-          !input.cancel?.aborted &&
-          spine.surfaceOutboundCount === 0 &&
-          !result.silent &&
-          !result.stopped
-        ) {
-          const primaryReply = stripAckPrefix(result.reply ?? "", spineAckText).trim();
-          if (input.addressed && primaryReply && defaultDestination) {
-            try {
-              await enqueueDirectReply({
-                deliveries: deps.deliveries,
-                destination: defaultDestination,
-                text: primaryReply,
-                key: postKeys.key(defaultDestination, postKeys.take()),
-                postProvenance,
-                ...(result.retracted ? { retracted: result.retracted } : {}),
-              });
-              spine.surfaceOutboundCount += 1;
-              if (input.runId) deps.turnStream.markSurfacePosted(input.runId);
-            } catch (e) {
-              reportFailure("orchestrator: direct reply delivery", e, `session=${session.id}`);
-            }
-          }
-          if (
-            spine.surfaceOutboundCount === 0 &&
-            !result.pendingApprovals?.length &&
-            (primaryReply || (input.addressed && !isPollFire))
-          ) {
-            const nudgeHistory = filterHistory(forModelContext((await historyWindow()).items));
-            result = await runAgentTurn(
-              input.addressed
-                ? `[system] You were addressed directly. Reply with the \`${surfaceName}\` tool's \`post\` action, or decline explicitly with finish_silently — ending the turn without either is not allowed here.`
-                : `[system] Your text above was not delivered: in this thread only the \`${surfaceName}\` tool's \`post\` action reaches people. Post your reply with \`post\`, or decline explicitly with finish_silently.`,
-              inbound.images.length ? { images: inbound.images } : {},
-              { history: nudgeHistory },
-            );
-            if (input.addressed && spine.surfaceOutboundCount === 0 && !result.silent && !result.stopped) {
-              const fallback = stripAckPrefix(result.reply ?? "", spineAckText).trim();
-              if (fallback && defaultDestination) {
-                try {
-                  await enqueueDirectReply({
-                    deliveries: deps.deliveries,
-                    destination: defaultDestination,
-                    text: fallback,
-                    key: postKeys.key(defaultDestination, postKeys.take()),
-                    postProvenance,
-                  });
-                  spine.surfaceOutboundCount += 1;
-                  if (input.runId) deps.turnStream.markSurfacePosted(input.runId);
-                } catch (e) {
-                  console.error(
-                    `[orchestrator] shed-reply fallback delivery failed session=${session.id}:`,
-                    errMessage(e),
-                  );
-                }
-              } else {
-                console.error(`[orchestrator] addressed turn ended silent after nudge session=${session.id}`);
-              }
-            }
-          }
-        }
+        result = await deliverAddressedReply(
+          {
+            deps,
+            input,
+            session,
+            strictReadOnly,
+            sessionTurn,
+            surfaceToolDeps,
+            spine,
+            ackText: () => spineAckText,
+            defaultDestination,
+            postKeys,
+            postProvenance,
+            isPollFire,
+            surfaceName,
+            inbound,
+            replyCheck,
+            filterHistory,
+            historyWindow,
+            runAgentTurn,
+          },
+          result,
+        );
 
         const stagedAttachments = attachStaging.staged();
         const harvestedAck = (() => {
@@ -2722,47 +2574,26 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (input.runId && !pausing && reply && reply.trim()) deps.turnStream.markReplyDone(input.runId);
         const turnUserSeq = partial?.userSeq ?? emittedEntries.find(isUserItem)?.seq;
         const onTurnEnd = memoryStrategy.onTurnEnd?.bind(memoryStrategy);
-        if (
-          !pausing &&
-          !cancelStopped &&
-          personConversationTurn &&
-          useMemory &&
-          memoryPolicy.capture !== "off" &&
-          onTurnEnd
-        ) {
-          const prior = pendingCaptures.get(memoryScopeId);
-          const capture = (async () => {
-            if (prior) await prior.catch(swallowAs("prior memory capture", undefined));
-            try {
-              await onTurnEnd({
-                scopeId: memoryScopeId,
-                conversationScopeId: scopeId,
-                ...(audienceScopeId ? { audienceScopeId } : {}),
-                inheritedFacts: captureDependencies(),
-                input: turnInput,
-                reply,
-                actorId: actor.id,
-                sessionId: session.id,
-                idempotencyKey: input.runId ?? `${session.id}:${spine.turnUserEntrySeq ?? "turn"}`,
-              });
-            } catch (e) {
-              deps.errors.record(
-                {
-                  category: "memory",
-                  code: "capture_failed",
-                  message: errMessage(e),
-                  scopeLabel: scopeId,
-                  sessionId: session.id,
-                },
-                e,
-              );
-            }
-          })();
-          pendingCaptures.set(memoryScopeId, capture);
-          void capture.finally(() => {
-            if (pendingCaptures.get(memoryScopeId) === capture) pendingCaptures.delete(memoryScopeId);
-          });
-        }
+        startMemoryCapture({
+          deps,
+          input,
+          actor,
+          session,
+          scopeId,
+          memoryScopeId,
+          audienceScopeId,
+          memoryPolicy,
+          pendingCaptures,
+          onTurnEnd,
+          pausing,
+          cancelStopped,
+          personConversationTurn,
+          useMemory,
+          captureDependencies,
+          turnInput,
+          reply,
+          spine,
+        });
 
         const tail = async (): Promise<void> => {
           try {
@@ -2781,92 +2612,27 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           }
         };
 
-        let finalResult: TurnResult;
-        const stopScope = result.stopScope ? { stopScope: result.stopScope } : {};
-        const sourceUserSeq = turnUserSeq;
-        const sourceAssistantEntrySeq = emittedEntries.findLast(isAgentReply)?.seq;
-        const heldReply = (runCancelled: boolean, surfaceTools: boolean) =>
-          heldReplyResult({
-            sessionId: session.id,
-            stopped: result.stopped === true,
-            ...(result.stopScope ? { stopScope: result.stopScope } : {}),
-            runCancelled,
-            surfaceTools,
-          });
-        if (cancelStopped && !result.pendingApprovals?.length) {
-          finalResult = heldReply(true, false)!;
-        } else if (isPollFire && result.silent && !stagedAttachments.length && result.pausedOnApproval !== true) {
-          finalResult = { status: "silent", sessionId: session.id };
-        } else if (result.pendingApprovals?.length || quarantineReleaseApprovals.length) {
-          const issued: Array<[string, Omit<PendingApprovalRecord, "createdAt" | "request">]> = [];
-          const turnApprovals: Array<
-            NonNullable<AgentTurnResult["pendingApprovals"]>[number] & {
-              summary?: string;
-              summaryDetail?: string;
-              screenedOutput?: PendingApprovalRecord["screenedOutput"];
-              grantModes?: { session: boolean; always: boolean };
-            }
-          > = [...(result.pendingApprovals ?? []), ...quarantineReleaseApprovals];
-          for (const pa of turnApprovals) {
-            const requestId = commandApprovalId(
-              session.id,
-              pa.screenedOutput
-                ? `${pa.command}:${hashId([pa.screenedOutput.tool, pa.screenedOutput.text, pa.screenedOutput.sourceScopeId ?? scopeId], 64)}`
-                : pa.command,
-              pa.approvalKey,
-            );
-            issued.push([
-              requestId,
-              {
-                sessionId: session.id,
-                command: pa.command,
-                reason: pa.reason,
-                blocksInput: approvalBlocksInput(pa.kind, outcome),
-                grantModes: pa.grantModes,
-                matched: pa.matched,
-                purpose: pa.purpose,
-                summary: pa.summary ?? (await approvalSummary(scopeId, pa.command, pa.reason, pa.purpose)),
-                summaryDetail: pa.summaryDetail,
-                screenedOutput: pa.screenedOutput,
-                approvalKey: pa.approvalKey,
-                kind: pa.kind,
-                call: pa.call,
-              },
-            ]);
-          }
-          const approvals = await withManagedRosterVersion(async () => {
-            const issuedApprovals: PendingApproval[] = [];
-            for (const [requestId, fields] of issued) issuedApprovals.push(await issueApproval(requestId, fields));
-            return issuedApprovals;
-          });
-          finalResult = turnCompleted
-            ? {
-                status: "ok",
-                sessionId: session.id,
-                reply,
-                pendingApprovals: approvals,
-                ...(stagedAttachments.length ? { attachments: stagedAttachments } : {}),
-                ...(sourceUserSeq !== undefined ? { sourceUserSeq } : {}),
-                ...(sourceAssistantEntrySeq !== undefined ? { sourceAssistantEntrySeq } : {}),
-              }
-            : { status: "pending_approval", sessionId: session.id, pendingApprovals: approvals };
-        } else if (isPollFire && !stagedAttachments.length && !reply.trim()) {
-          finalResult = { status: "silent", sessionId: session.id };
-        } else if (input.surfaceTools && surfaceToolDeps && !strictReadOnly) {
-          finalResult = heldReply(false, true)!;
-        } else {
-          finalResult = {
-            status: "ok",
-            sessionId: session.id,
-            reply,
-            ...(result.retracted?.length ? { retracted: result.retracted } : {}),
-            ...(wornPersona ? { persona: wornPersona } : {}),
-            ...(result.stopped ? { stopped: true, ...stopScope } : {}),
-            ...(stagedAttachments.length ? { attachments: stagedAttachments } : {}),
-            ...(sourceUserSeq !== undefined ? { sourceUserSeq } : {}),
-            ...(sourceAssistantEntrySeq !== undefined ? { sourceAssistantEntrySeq } : {}),
-          };
-        }
+        let finalResult: TurnResult = await selectTurnResult({
+          input,
+          session,
+          scopeId,
+          result,
+          outcome,
+          reply,
+          turnCompleted,
+          cancelStopped,
+          isPollFire,
+          stagedAttachments,
+          quarantineReleaseApprovals,
+          surfaceToolDeps,
+          strictReadOnly,
+          wornPersona,
+          turnUserSeq,
+          emittedEntries,
+          approvalSummary,
+          issueApproval,
+          withManagedRosterVersion,
+        });
 
         if (turnRuntime) finalResult = { ...finalResult, runtime: turnRuntime };
         if (cronScript) finalResult = { ...finalResult, scriptVerdict: cronScript.verdict };

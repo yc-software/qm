@@ -2000,6 +2000,18 @@ a.chat-row-open {
 .system-note-text {
   font-style: italic;
 }
+.system-note:has(> .system-note-line) {
+  width: 100%;
+  max-width: var(--content-w);
+  min-width: 0;
+}
+.system-note-line {
+  display: block;
+  text-align: center;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 
 .subagent-chip {
   display: inline-flex;

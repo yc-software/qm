@@ -32,7 +32,6 @@ import { FRAME_SESSION_COOKIE, portalSession, portalSessionFrom } from "../../de
 import { appHostLabel, appNameFromLabel, labelOfAppHost } from "../../tenants/app-handle.ts";
 import { isDnsLabel } from "../../../plugins/chassis/src/dns-label.ts";
 import { tenantAppHandle } from "../../tenants/settings.ts";
-import { boundTenant } from "../../tenants/context.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "../../deploy/embed-ancestors.ts";
 import { proxyHeaders } from "../../util/http-proxy.ts";
 import { relayWebSocket } from "../../../plugins/chassis/src/websocket-relay.ts";
@@ -155,7 +154,10 @@ async function proxyAdminDeployment(ctx: BaseCtx): Promise<void> {
     return;
   const found = await app.getDeployment(parts.id);
   const deployment = found?.id === parts.id ? found : undefined;
-  const actor = await authorizeAdmin({ req, res, deps, capability: null }, deployment?.ownerScopeId ?? orgScope(deps));
+  const actor = await authorizeAdmin(
+    { req, res, deps, capability: null, tenant: ctx.tenant },
+    deployment?.ownerScopeId ?? orgScope(deps),
+  );
   if (!actor) return;
   if (!deployment) return sendJson(res, 404, { error: "not_found" });
   audit(deps, {
@@ -874,7 +876,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
   if (!session && sessionSecret && embedAncestors.length) {
     session = portalSessionFrom(req.headers.cookie, FRAME_SESSION_COOKIE, sessionSecret, Date.now());
   }
-  if (session?.t !== undefined && session.t !== boundTenant()) {
+  if (session?.t !== undefined && session.t !== ctx.tenant?.id) {
     sendJson(res, 404, { error: "not_found" });
     return true;
   }

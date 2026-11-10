@@ -157,7 +157,8 @@ import type { ChatSurface, ConvCtx } from "./conv-types";
 import { errMessage, swallow } from "../../chassis/src/errors";
 import { showStateError } from "./error-banner";
 import { splitLinks } from "./linkify";
-import { slackWireToPlain, splitSlackWire, stripSlackDirectives } from "./slack-text";
+import { slackPreviewText, slackWireToPlain, splitSlackWire, stripSlackDirectives } from "./slack-text";
+import { charForName } from "./emoji-picker";
 import { installMarkdownSanitizer } from "./markdown-sanitize";
 import { transcriptModel, defaultEffortForModel } from "./model-options";
 import {
@@ -2133,10 +2134,13 @@ export function createChatSurface(
         return row(html`Goal cancelled: <span class="system-note-text">${goalObjectiveLabel(note.content)}</span>`);
       const who = note.byAgent ? brandName() : (note.speaker ?? "The user");
       const whose = note.byAgent ? "its" : "their";
+      if (note.action === "deleted") return row(html`${who} deleted ${whose} message`);
+      const preview = slackPreviewText(note.content, charForName);
       return row(
-        note.action === "deleted"
-          ? html`${who} deleted ${whose} message`
-          : html`${who} edited ${whose} message: <span class="system-note-text">${note.content}</span>`,
+        html`<span class="system-note-line" title=${preview}
+          >${who} edited ${whose}
+          message${preview ? html`: <span class="system-note-text">${preview}</span>` : nothing}</span
+        >`,
       );
     }
     if (role === "assistant") {
