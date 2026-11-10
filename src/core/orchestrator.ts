@@ -29,12 +29,12 @@ import {
   documentText,
   type DocumentInput,
   type ExtractedDocumentText,
-  historicalDocumentMetas,
   loadDocumentInputs,
   MAX_DOCUMENT_BYTES,
   MAX_DOCUMENT_TEXT_CHARS,
   MAX_DOCUMENTS,
   estimateDocumentTokens,
+  turnDocumentMetas,
   isDocumentAttachment,
   isTextDocument,
 } from "./documents.ts";
@@ -3040,8 +3040,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           documentRoom.maxTokens -= loaded.tokens;
           return { ...loaded, unscreened };
         };
+        const pausedTurnUserEntry =
+          input.approval && approvalRecord?.kind !== "input"
+            ? visibleHistory.findLast((e) => isUserItem(e) && !isOverheard(e))
+            : undefined;
+        const approvalReplay = !!pausedTurnUserEntry && (pausedTurnUserEntry.text ?? "").trim() === input.text.trim();
         const documentInputs = await ingestDocuments(
-          [...historicalDocumentMetas(history), ...inbound.metas],
+          [
+            ...turnDocumentMetas(history, partial?.userSeq ?? (approvalReplay ? pausedTurnUserEntry.seq : undefined)),
+            ...inbound.metas,
+          ],
           input.text,
         );
         const lastUserAt = visibleHistory.findLast((e) => isUserItem(e) && !isOverheard(e))?.createdAt;
@@ -3094,11 +3102,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           .filter((s) => s && s.trim())
           .join("\n\n");
         const baseText = input.proactiveOpener && !input.text.trim() ? PROACTIVE_OPENER_PROMPT : input.text;
-        const pausedTurnUserEntry =
-          input.approval && approvalRecord?.kind !== "input"
-            ? visibleHistory.findLast((e) => isUserItem(e) && !isOverheard(e))
-            : undefined;
-        const approvalReplay = !!pausedTurnUserEntry && (pausedTurnUserEntry.text ?? "").trim() === input.text.trim();
         if (partial) {
           const posted = completedSurfaceEnqueues(
             filterHistory(await deps.sessions.getItems(session.id, { sinceSeq: partial.userSeq })),

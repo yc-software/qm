@@ -8,8 +8,8 @@ import {
   isDocumentAttachment,
   documentFallbackText,
   documentText,
-  historicalDocumentMetas,
   loadDocumentInputs,
+  turnDocumentMetas,
   type DocumentInput,
 } from "../src/core/documents.ts";
 import { mimeFromName } from "../src/core/attachments.ts";
@@ -278,7 +278,7 @@ test("restores stopped/restarted turns from durable document metadata and dedupl
     storedItem({ kind: "UserMessage", body: { attachments: [meta] } }, { sessionId: "s", seq: 0, createdAt: 0 }),
     storedItem({ kind: "AgentMessage", text: "stopped" }, { sessionId: "s", seq: 1, createdAt: 0 }),
   ];
-  const inputs = await loadDocumentInputs(store, [...historicalDocumentMetas(history), meta], () => true);
+  const inputs = await loadDocumentInputs(store, [...turnDocumentMetas(history, 0), meta], () => true);
   assert.equal(inputs.documents.length, 1);
   assert.equal(opens(), 1);
   assert.match(await documentFallbackText(inputs.documents[0]!), /QUARTZ-731/);
@@ -348,17 +348,19 @@ test("later turns reuse verified document bytes but still check current access",
   assert.equal(opens(), 2);
 });
 
-test("document replay follows compaction boundaries", () => {
+test("only the current turn's user messages contribute documents", () => {
   const { meta } = storeFor();
-  const recent = { ...meta, artifactId: "recent" };
+  const earlier = { ...meta, artifactId: "earlier" };
+  const steered = { ...meta, artifactId: "steered" };
   const at = (seq: number) => ({ sessionId: "s", seq, createdAt: 0 });
   const history = [
-    storedItem({ kind: "UserMessage", body: { attachments: [meta] } }, at(0)),
-    storedItem({ kind: "UserMessage", body: { attachments: [recent] } }, at(1)),
-    storedItem({ kind: "ContextCompaction", text: "Prior upload", throughSeq: 0 }, at(2)),
+    storedItem({ kind: "UserMessage", body: { attachments: [earlier] } }, at(0)),
+    storedItem({ kind: "AgentMessage", text: "read it" }, at(1)),
+    storedItem({ kind: "UserMessage", body: { attachments: [meta] } }, at(2)),
+    storedItem({ kind: "UserMessage", body: { attachments: [steered] } }, at(3)),
   ];
-  assert.deepEqual(historicalDocumentMetas(history), [recent]);
-  assert.deepEqual(history[0]!.body.attachments, [meta]);
+  assert.deepEqual(turnDocumentMetas(history, undefined), []);
+  assert.deepEqual(turnDocumentMetas(history, 2), [meta, steered]);
 });
 
 test("document restoration checks current access and budgets before opening bytes", async () => {

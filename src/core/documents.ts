@@ -5,7 +5,6 @@ import type { AttachmentMeta } from "../types.ts";
 import { isUserItem, type Item } from "../sessions/items.ts";
 import type { FileArtifact, FileArtifactStore } from "../files/file-artifact-store.ts";
 import { cachedArtifactData } from "../files/artifact-data-cache.ts";
-import { forModelContext } from "../agent/context-compaction.ts";
 import { collectBytes } from "../util/bytes.ts";
 
 export const MAX_DOCUMENT_BYTES = 8_000_000;
@@ -112,10 +111,6 @@ export function replayableDocumentMetas(payload: unknown): AttachmentMeta[] {
   );
 }
 
-export function documentAttachmentTokens(payload: unknown): number {
-  return replayableDocumentMetas(payload).reduce((sum, file) => sum + estimateDocumentTokens(file), 0);
-}
-
 export function fileContentRequest(artifactId: string): string {
   return `GET $AGENT_API_URL/v1/files/${artifactId}/content (header x-agent-capability: $AGENT_API_TOKEN)`;
 }
@@ -134,16 +129,11 @@ export interface DocumentInput {
   artifactId?: string;
 }
 
-export function historicalDocumentMetas(history: readonly Item[]): AttachmentMeta[] {
-  return forModelContext([...history]).flatMap((item) => {
-    if (!isUserItem(item)) return [];
-    const attachments = item.body.attachments;
-    return Array.isArray(attachments)
-      ? (attachments as AttachmentMeta[]).filter(
-          (file) => file.direction === "in" && typeof file.name === "string" && isDocumentAttachment(file),
-        )
-      : [];
-  });
+export function turnDocumentMetas(history: readonly Item[], turnStartSeq: number | undefined): AttachmentMeta[] {
+  if (turnStartSeq === undefined) return [];
+  return history.flatMap((item) =>
+    item.seq >= turnStartSeq && isUserItem(item) ? replayableDocumentMetas(item.body) : [],
+  );
 }
 
 export async function loadDocumentInputs(
