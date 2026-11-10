@@ -202,7 +202,9 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
       throw e;
     });
     if (status?.phase === "running") return stored;
-    await store.delete(d.id).catch((e) => swallow("porter-deploy: drop dead body pointer", e));
+    await store
+      .deleteIf(d.id, (cur) => cur.sandboxId === stored.sandboxId)
+      .catch((e) => swallow("porter-deploy: drop dead body pointer", e));
     return null;
   }
 

@@ -33,10 +33,7 @@ import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap, testUserStore } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { TEST_TENANT } from "./support/test-tenant.ts";
-import { withTenant } from "../src/tenants/context.ts";
-
-const tenant = withTenant(TEST_TENANT, (t) => t);
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const EMAIL = "jordan@acme.test";
 const SLACK = "U0JORDAN";

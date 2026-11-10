@@ -8,6 +8,7 @@ import { parseBlockAction, parseInteractionBody } from "./payloads.ts";
 import { updateSlackMessage } from "./messaging.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { uuidSchema } from "../util/ids.ts";
+import type { Tenant } from "../tenants/context.ts";
 
 const ACTIONS = ["deploy_access_approve", "deploy_access_decline"] as const;
 type Request = NonNullable<Destination["deploymentAccess"]>;
@@ -52,6 +53,7 @@ export function deployAccessMessage(
 }
 
 export async function decideDeploymentAccess(
+  tenant: Tenant,
   app: App,
   identity: IdentityService,
   value: string,
@@ -78,7 +80,7 @@ export async function decideDeploymentAccess(
     const existing = (await app.deploymentGrantees(deploymentId)).find(
       (g) => g.scope === grantee && g.permission === "write",
     );
-    await app.grant({
+    await app.grant(tenant, {
       ownerScopeId: home.ownerScopeId,
       ref: home.grantRef,
       granteeScopeId: grantee,

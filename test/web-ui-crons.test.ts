@@ -12,6 +12,7 @@ import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
@@ -254,7 +255,7 @@ test("a channel member sees a teammate's cron read-only via the web until the ow
   const carolPriv = await fetch(`${coreBase}/api/crons/${privCron.id}`, asUser("carol", { method: "DELETE" }));
   assert.equal(carolPriv.status, 404, "a non-member is denied");
 
-  await built.app.grant({
+  await built.app.grant(tenant, {
     ownerScopeId: "channel:PRIV",
     ref: `cron:${privCron.id}`,
     granteeScopeId: "personal:alice",

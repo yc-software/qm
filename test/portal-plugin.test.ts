@@ -9,10 +9,7 @@ import { createAdminGrantStore } from "../src/admin/admin-grant-store.ts";
 import { scopeId } from "../src/types.ts";
 import { createPostgresAdminGrantStore } from "../src/admin/postgres-admin-grant-store.ts";
 import { testDatabaseUrl, testUsers } from "./support/test-database.ts";
-import { TEST_TENANT } from "./support/test-tenant.ts";
-import { withTenant } from "../src/tenants/context.ts";
-
-const tenant = withTenant(TEST_TENANT, (t) => t);
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 test("portal signs /d/ ingress with the principal as the canonical tail (core-verifiable)", () => {
   const secret = "portal-source-auth-secret";
