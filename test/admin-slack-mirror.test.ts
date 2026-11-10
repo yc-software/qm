@@ -264,11 +264,11 @@ test("ambient rows with no stored name resolve U…/C… ids from the directory 
         createdAt: 9000,
       },
     ]);
-    await s.built.directory.replace([
+    await s.built.directory.replace(testTenant, [
       { principalId: "U9", displayName: "Taylor", type: "internal", slackId: "U9" },
       { principalId: "U8", displayName: "Ada", type: "internal", slackId: "U8" },
     ]);
-    await s.built.directory.replaceChannels([{ channelId: "C9", name: "watercooler" }]);
+    await s.built.directory.replaceChannels(testTenant, [{ channelId: "C9", name: "watercooler" }]);
 
     const idx = await getJson(s.base, "/v1/admin/slack-mirror");
     const c9 = idx.containers.find((c: any) => c.container === "C9");

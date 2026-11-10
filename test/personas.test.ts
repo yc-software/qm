@@ -21,6 +21,7 @@ import { TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import type { ProvisionOptions } from "../src/sandbox/sandbox.ts";
 import { runNowSettled } from "./support/settle.ts";
 import { resolveCapabilityDestination } from "../src/api/capability-destination.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const ALICE = "U_ALICE";
 const BOB = "U_BOB";
@@ -463,7 +464,7 @@ test("what a persona conversation posts carries the persona, so Slack can name i
   ok(await personas.assign(ALICE, (await built.sessions.get(opened.sessionId))!, ada.id));
   const claims = await run();
   assert.deepEqual(claims.destination?.persona, { id: ada.id, name: "Ada" });
-  await built.app.upsertDirectory([{ principalId: BOB, displayName: "Bob", type: "internal" }]);
+  await built.app.upsertDirectory(testTenant, [{ principalId: BOB, displayName: "Bob", type: "internal" }]);
   const reached = await built.app.reachNow({
     senderId: ALICE,
     senderScope: claims.scopeId,

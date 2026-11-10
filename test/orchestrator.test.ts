@@ -32,6 +32,7 @@ import type { ScopeId } from "../src/types.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
 import { runTrigger } from "../src/triggers/run-trigger.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
+import { directoryFor } from "../src/directory/directory-store.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { isAgentReply, isHidden, isUserItem, messageTs, type Item, USER_ITEM_KINDS } from "../src/sessions/items.ts";
@@ -321,7 +322,7 @@ test("a silent cron source run stays out of normal human chat history", async ()
 
 test("a cron-delivered digest lands as a delivery event with origin, not recipient transcript history", async () => {
   const built = freshApp();
-  await built.app.upsertDirectory([
+  await built.app.upsertDirectory(tenant, [
     { principalId: "U-carol", displayName: "Carol", type: "internal" },
     { principalId: "U-alice", displayName: "Alice", type: "internal" },
   ]);
@@ -735,6 +736,7 @@ test("a connector set to attest in any audience serves every person's channel tu
   await built.mcpToolService.refresh();
   assert.equal((await built.app.turn(channel("hello"))).status, "ok");
   await built.directory.replaceChannels(
+    tenant,
     [{ channelId: "C1", name: "c1", isPrivate: false }],
     [{ channelId: "C1", principalId: "U1" }],
   );
@@ -1245,11 +1247,12 @@ test("a channel cron receives env credentials only when the directory proves an 
     return realProvision(owner, opts);
   };
   const directory = createPostgresDirectoryStore(testDatabaseUrl());
-  await directory.replace([
+  await directory.replace(tenant, [
     { principalId: "U1", displayName: "One", type: "internal" },
     { principalId: "U2", displayName: "Two", type: "internal" },
   ]);
   await directory.replaceChannels(
+    tenant,
     [
       { channelId: "C-internal", name: "internal" },
       { channelId: "C-unsynced", name: "unsynced" },
@@ -1274,7 +1277,7 @@ test("a channel cron receives env credentials only when the directory proves an 
         idempotency: createIdempotencyStore(testMap()),
         identity,
         run: (req) => app.turn(req),
-        directory,
+        directory: directoryFor(directory, tenant),
       },
       {
         owner: "U1",
@@ -1632,7 +1635,7 @@ test("the egress claim keeps the control-plane host reachable under an allowlist
 
 test("identity grounding: the roster lists this conversation's participants by their canonical directory name", async () => {
   const { app, directory } = freshApp();
-  await directory.replace([
+  await directory.replace(tenant, [
     { principalId: "U1", displayName: "Alice Example", type: "internal" },
     { principalId: "U2", displayName: "Renee Mars", type: "internal" },
     { principalId: "U3", displayName: "taylor", type: "internal" },
@@ -1664,7 +1667,7 @@ test("identity grounding: the roster is bounded (caps at ROSTER_CAP and reports 
     displayName: `Person ${i}`,
     type: "internal" as const,
   }));
-  await directory.replace(many);
+  await directory.replace(tenant, many);
   const prompt = await app.turn({
     surface: "slack",
     actor: { externalId: "U0" },
@@ -1684,7 +1687,7 @@ test("identity grounding: the roster is bounded (caps at ROSTER_CAP and reports 
 
 test("identity grounding: a participant who hasn't synced into the directory still grounds from the surface name", async () => {
   const { app, directory } = freshApp();
-  await directory.replace([{ principalId: "U1", displayName: "Alice Example", type: "internal" }]);
+  await directory.replace(tenant, [{ principalId: "U1", displayName: "Alice Example", type: "internal" }]);
   const prompt = await app.turn({
     surface: "slack",
     actor: internalActor,
@@ -1703,7 +1706,7 @@ test("identity grounding: a participant who hasn't synced into the directory sti
 
 test("identity grounding: a cased-vs-lowercase duplicate participant resolves to the single real directory member", async () => {
   const { app, directory } = freshApp();
-  await directory.replace([
+  await directory.replace(tenant, [
     { principalId: "U1", displayName: "Jordan Lee", type: "internal" },
     { principalId: "alice@acme.com", displayName: "Alice Wonderland", type: "internal" },
   ]);
@@ -4923,11 +4926,12 @@ test("inventories ride a byte-stable system prompt; a warm turn's environment ca
 
 test("an isolated channel environment does not disclose the actor's private sandbox", async () => {
   const built = freshApp({ sharingPosture: "isolated" });
-  await built.directory.replace([
+  await built.directory.replace(tenant, [
     { principalId: "U1", displayName: "One", type: "internal" },
     { principalId: "U2", displayName: "Two", type: "internal" },
   ]);
   await built.directory.replaceChannels(
+    tenant,
     [{ channelId: "C1", name: "team" }],
     [
       { channelId: "C1", principalId: "U1" },

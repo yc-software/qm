@@ -22,6 +22,7 @@ import { getDeploymentShares, resolveShareTarget, shareDeployment } from "../src
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import type { RecipientResolution } from "../src/directory/directory-store.ts";
+import type { Tenant } from "../src/tenants/context.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
 import type { FeatureFlagStore } from "../src/feature-flags.ts";
@@ -38,7 +39,7 @@ import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const externalSharingOn = { enabled: async () => true } as unknown as FeatureFlagStore;
 
-type Dir = { resolve: (orgId: string, q: string) => Promise<RecipientResolution> };
+type Dir = { resolve: (tenant: Tenant, q: string) => Promise<RecipientResolution> };
 
 function makeDeploy(
   canManageEmail?: (email: string) => Promise<boolean>,
@@ -270,7 +271,7 @@ test('share endpoint: "everyone" grants org reach — a non-owner can reach it; 
 
 test("share endpoint: recipient resolves a teammate via the directory → only that person reaches", async () => {
   const directory: Dir = {
-    resolve: async (q) => (q.toLowerCase() === "carol" ? one("U-carol", "Carol") : { kind: "none" }),
+    resolve: async (_tenant, q) => (q.toLowerCase() === "carol" ? one("U-carol", "Carol") : { kind: "none" }),
   };
   const { app, deploy } = apiHarness(directory);
   await app.deploy({
@@ -354,7 +355,7 @@ test("share endpoint: access:manage grants write (reach + manage)", async () => 
 
 test('resolveShareTarget: scope "org"→org, scope id verbatim, recipient→personal, none/ambiguous/invalid', async () => {
   const directory: Dir = {
-    resolve: async (q) => {
+    resolve: async (_tenant, q) => {
       if (q === "ann") return one("U-ann", "Ann");
       if (q === "j") {
         return {

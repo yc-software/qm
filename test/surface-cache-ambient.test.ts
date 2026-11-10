@@ -864,10 +864,11 @@ test("a solicited ambient wake runs as the asking person, not the system actor",
   built.runtime.start();
   try {
     const container = "C-solicited";
-    await built.directory.replace([
+    await built.directory.replace(testTenant, [
       { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U1" },
     ]);
     await built.directory.replaceChannels(
+      testTenant,
       [{ channelId: container, name: "solicited-chan", isPrivate: false }],
       [{ channelId: container, principalId: "alice@acme.com" }],
     );
@@ -896,11 +897,12 @@ test("a solicited ambient wake carries the complete channel roster", async () =>
   built.runtime.start();
   try {
     const container = "C-solicited-roster";
-    await built.directory.replace([
+    await built.directory.replace(testTenant, [
       { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U1" },
       { principalId: "bob@acme.com", displayName: "Bob", type: "internal", slackId: "U2" },
     ]);
     await built.directory.replaceChannels(
+      testTenant,
       [{ channelId: container, name: "solicited-roster", isPrivate: false }],
       [
         { channelId: container, principalId: "alice@acme.com" },
@@ -954,10 +956,10 @@ test("a solicited ask in a group DM runs as the asking person via group-membersh
   built.runtime.start();
   try {
     const container = "C-mpim-solicited";
-    await built.directory.replace([
+    await built.directory.replace(testTenant, [
       { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U1" },
     ]);
-    await built.directory.replaceGroups([{ groupId: container, principalId: "alice@acme.com" }]);
+    await built.directory.replaceGroups(testTenant, [{ groupId: container, principalId: "alice@acme.com" }]);
     await built.app.setChannelPolicy(container, "!engage-asked", "U-admin");
     await built.app.ingestSurfaceEvents([
       {
@@ -988,7 +990,7 @@ test("a solicited ask in a group DM whose author is NOT a pushed member degrades
   built.runtime.start();
   try {
     const container = "C-mpim-nonmember";
-    await built.directory.replace([
+    await built.directory.replace(testTenant, [
       { principalId: "mallory@acme.com", displayName: "Mallory", type: "internal", slackId: "U9" },
     ]);
     await built.app.setChannelPolicy(container, "!engage-asked !post proactive fallback", "U-admin");
@@ -1019,11 +1021,13 @@ test("a solicited verdict for a message that isn't the newest speaker's degrades
   built.runtime.start();
   try {
     const container = "C-disarmed";
-    await built.directory.replace([
+    await built.directory.replace(testTenant, [
       { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U1" },
       { principalId: "mallory@acme.com", displayName: "Mallory", type: "internal", slackId: "U2" },
     ]);
-    await built.directory.replaceChannels([{ channelId: container, name: "disarmed-chan", isPrivate: false }]);
+    await built.directory.replaceChannels(testTenant, [
+      { channelId: container, name: "disarmed-chan", isPrivate: false },
+    ]);
     await built.app.setChannelPolicy(container, "!engage-asked !post disarmed reply", "U-admin");
     await built.app.ingestSurfaceEvents([
       {
@@ -1053,10 +1057,11 @@ test("a solicited wake in a private channel requires the asker in the pre-pushed
   built.runtime.start();
   try {
     const container = "C-private";
-    await built.directory.replace([
+    await built.directory.replace(testTenant, [
       { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U1" },
     ]);
     await built.directory.replaceChannels(
+      testTenant,
       [{ channelId: container, name: "private-chan", isPrivate: true }],
       [{ channelId: container, principalId: "alice@acme.com" }],
     );
@@ -1176,10 +1181,11 @@ test("a Slack bot cannot be the asker of a solicited ambient wake, and its wake 
   built.runtime.start();
   try {
     const container = "C-bot-asks";
-    await built.directory.replace([
+    await built.directory.replace(testTenant, [
       { principalId: "U-deploybot", displayName: "DeployBot", type: "internal", slackId: "U-deploybot", isBot: true },
     ]);
     await built.directory.replaceChannels(
+      testTenant,
       [{ channelId: container, name: "bot-asks", isPrivate: false }],
       [{ channelId: container, principalId: "U-deploybot" }],
     );
@@ -1403,10 +1409,11 @@ test("with an external Slack account configured, an internal channel's solicited
   built.runtime.start();
   try {
     const container = "C-internal-solicited";
-    await built.directory.replace([
+    await built.directory.replace(testTenant, [
       { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U1" },
     ]);
     await built.directory.replaceChannels(
+      testTenant,
       [{ channelId: container, name: "internal-solicited", isPrivate: false }],
       [{ channelId: container, principalId: "alice@acme.com" }],
     );

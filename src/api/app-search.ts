@@ -97,12 +97,12 @@ function fileBackend(deps: AppDeps, app: App, helpers: AppHelpers): SearchBacken
     },
   };
 }
-function slackBackend(deps: AppDeps, app: App): SearchBackend | null {
+function slackBackend(deps: AppDeps, app: App, helpers: AppHelpers): SearchBackend | null {
   if (!deps.surfaceCache) return null;
   const canSee = async (principal: Principal, container: string): Promise<boolean> => {
     const state = await deps.surfaceCache!.containerState(container);
     if (!state) return false;
-    if (state.kind === "group") return deps.directory.groupMember(container, principal.id);
+    if (state.kind === "group") return helpers.directory.groupMember(container, principal.id);
     if (state.kind === "dm") {
       const members = await deps.surfaceCache!.members(container);
       return members.some((member) => samePerson(member, principal.id));
@@ -141,7 +141,7 @@ export function createSearchMethods(
   app: App,
   helpers: AppHelpers,
 ): Pick<App, "search" | "searchConversations"> {
-  const slack = slackBackend(deps, app);
+  const slack = slackBackend(deps, app, helpers);
   const options = {
     onBackendError: (backend: string, error: unknown) =>
       console.error(

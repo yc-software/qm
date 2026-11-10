@@ -161,11 +161,12 @@ test("retained cron runs are private to people who can manage the cron", async (
 });
 
 test("list splits owned crons from ones visible through shared scopes, and visibility never grants administration", async () => {
-  await built.app.upsertDirectory([
+  await built.app.upsertDirectory(tenant, [
     { principalId: "alice", displayName: "Alice", type: "internal" },
     { principalId: "bob", displayName: "Bob", type: "internal" },
   ]);
   await built.app.upsertChannels(
+    tenant,
     [
       { channelId: "C9", name: "general", isPrivate: false },
       { channelId: "P1", name: "secret", isPrivate: true },
@@ -224,11 +225,12 @@ test("list splits owned crons from ones visible through shared scopes, and visib
 });
 
 test("a channel member sees a teammate's cron read-only via the web until the owner shares write access", async () => {
-  await built.app.upsertDirectory([
+  await built.app.upsertDirectory(tenant, [
     { principalId: "alice", displayName: "Alice", type: "internal" },
     { principalId: "bob", displayName: "Bob", type: "internal" },
   ]);
   await built.app.upsertChannels(
+    tenant,
     [{ channelId: "PRIV", name: "secret", isPrivate: true }],
     [
       { channelId: "PRIV", principalId: "alice" },

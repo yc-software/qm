@@ -159,7 +159,7 @@ import { uuidSchema } from "./util/ids.ts";
 import { withWebTranscriptDeliveries } from "./delivery/web-transcript-delivery.ts";
 import { WEBHOOK_CLAIM_MS, webhookSender } from "./delivery/webhook-delivery.ts";
 import { createDeliveryRelay } from "./delivery/relay.ts";
-import type { DirectoryStore } from "./directory/directory-store.ts";
+import { directoryInBinding, type DirectoryStore } from "./directory/directory-store.ts";
 import { createPostgresDirectoryStore } from "./directory/postgres-directory-store.ts";
 import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environments/environment-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
@@ -1839,13 +1839,14 @@ export function buildApp(
     onCaptureError: (e, scope) =>
       recordAmbientError({ category: "memory", code: "capture_failed", message: errMessage(e), scopeLabel: scope }, e),
   });
+  const ambientDirectory = directoryInBinding(directory);
   const vouchedInternalEmail = async (email: string): Promise<boolean> => {
     await identity.refresh();
     return (
       identity.isInternal(identity.classify(email)) &&
       (config.emailAuthPrincipals?.includes(email) === true ||
         Boolean(config.emailAuthDomain && email.endsWith(`@${config.emailAuthDomain}`)) ||
-        (await directory.get(email))?.type === "internal")
+        (await ambientDirectory.get(email))?.type === "internal")
     );
   };
   const isActiveMember = (principalId: string) => identity.isInternal(identity.classify(principalId));
@@ -1869,15 +1870,42 @@ export function buildApp(
     orgAdmins: async () => (await admin.listGrants(ambientTenant())).filter((grant) => grant.role === "org_admin"),
     auditLog,
   });
-  const canReadScope = createCanReadScope({ managedGroups: projects, directory, identity, teams, sessions, personas });
-  const canWriteScope = createCanWriteScope({ managedGroups: projects, directory, identity, teams, personas });
-  const canManageScope = createCanManageScope({ managedGroups: projects, directory, identity, sessions, personas });
+  const canReadScope = createCanReadScope({
+    managedGroups: projects,
+    directory: ambientDirectory,
+    identity,
+    teams,
+    sessions,
+    personas,
+  });
+  const canWriteScope = createCanWriteScope({
+    managedGroups: projects,
+    directory: ambientDirectory,
+    identity,
+    teams,
+    personas,
+  });
+  const canManageScope = createCanManageScope({
+    managedGroups: projects,
+    directory: ambientDirectory,
+    identity,
+    sessions,
+    personas,
+  });
   const managesArtifactHome = createManagesArtifactHome(
-    { managedGroups: projects, directory, identity, teams, personas },
+    { managedGroups: projects, directory: ambientDirectory, identity, teams, personas },
     canManageScope,
   );
-  const currentScopeMembers = createCurrentScopeMembers({ managedGroups: projects, directory, identity });
-  const isCurrentSharedScopeMember = createIsCurrentSharedScopeMember({ managedGroups: projects, directory, identity });
+  const currentScopeMembers = createCurrentScopeMembers({
+    managedGroups: projects,
+    directory: ambientDirectory,
+    identity,
+  });
+  const isCurrentSharedScopeMember = createIsCurrentSharedScopeMember({
+    managedGroups: projects,
+    directory: ambientDirectory,
+    identity,
+  });
   membership.canReadScope = canReadScope;
   membership.canManageScope = canManageScope;
   membership.canUseSandboxScope = async (actorId, scopeId) =>
@@ -2260,7 +2288,10 @@ export function buildApp(
     resolveSessionRuntime,
     directory,
     isCurrentSharedScopeMember,
-    currentScopeMembers: createCurrentScopeMembers({ managedGroups: projects, directory, identity }, true),
+    currentScopeMembers: createCurrentScopeMembers(
+      { managedGroups: projects, directory: ambientDirectory, identity },
+      true,
+    ),
     managedGroups: projects,
     projects,
     personas,
@@ -2663,7 +2694,7 @@ export function buildApp(
             idempotency,
             identity,
             run: runTriggered,
-            directory,
+            directory: ambientDirectory,
             currentScopeMembers,
             sessions,
             resolveRecipient,
@@ -2677,7 +2708,10 @@ export function buildApp(
     : undefined;
   const dropResolution = keychain
     ? (drop: DropResolution) =>
-        fireDropResolution({ deliveries, idempotency, identity, run: runTriggered, directory, resolveRecipient }, drop)
+        fireDropResolution(
+          { deliveries, idempotency, identity, run: runTriggered, directory: ambientDirectory, resolveRecipient },
+          drop,
+        )
     : undefined;
   const inboxClients =
     keychain &&
@@ -2714,7 +2748,7 @@ export function buildApp(
                 });
               },
             },
-            ownerName: async (owner) => (await directory.get(owner))?.displayName || undefined,
+            ownerName: async (owner) => (await ambientDirectory.get(owner))?.displayName || undefined,
           }),
         }
       : {}),
@@ -2723,7 +2757,7 @@ export function buildApp(
       idempotency,
       identity,
       run: runTriggered,
-      directory,
+      directory: ambientDirectory,
       currentScopeMembers,
       sessions,
       resolveRecipient,
@@ -2777,7 +2811,7 @@ export function buildApp(
     identity,
     run: runTriggered,
     leaderLease,
-    directory,
+    directory: ambientDirectory,
     currentScopeMembers,
     sessions,
     resolveRecipient,
@@ -2820,7 +2854,7 @@ export function buildApp(
           idempotency,
           identity,
           run: runTriggered,
-          directory,
+          directory: ambientDirectory,
           currentScopeMembers,
           sessions,
           resolveRecipient,
@@ -2843,7 +2877,7 @@ export function buildApp(
     idempotency,
     identity,
     run: runTriggered,
-    directory,
+    directory: ambientDirectory,
     currentScopeMembers,
     resolveRecipient,
   });

@@ -285,8 +285,9 @@ test("managed groups override Slack membership and historical sessions grant no 
 
 test("capability scope checks follow current shared rosters", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "capability-roster-")) }));
-  await built.app.upsertDirectory([{ principalId: "member", displayName: "Member", type: "internal" }]);
+  await built.app.upsertDirectory(tenant, [{ principalId: "member", displayName: "Member", type: "internal" }]);
   await built.directory.replaceChannels(
+    tenant,
     [
       { channelId: "C-public", name: "public" },
       { channelId: "C-private", name: "private", isPrivate: true },
@@ -298,7 +299,7 @@ test("capability scope checks follow current shared rosters", async () => {
     ],
     1,
   );
-  await built.directory.replaceGroups([{ groupId: "G1", principalId: "member" }], 1);
+  await built.directory.replaceGroups(tenant, [{ groupId: "G1", principalId: "member" }], 1);
 
   assert.equal(await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: "channel:C-private" }), true);
   assert.equal(await built.app.authorizesCapabilityScope({ actorId: "B1", scopeId: "channel:C-private" }), true);
@@ -306,6 +307,7 @@ test("capability scope checks follow current shared rosters", async () => {
   assert.equal(await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: "channel:C-public" }), true);
 
   await built.directory.replaceChannels(
+    tenant,
     [
       { channelId: "C-public", name: "public" },
       { channelId: "C-private", name: "private", isPrivate: true },
@@ -313,7 +315,7 @@ test("capability scope checks follow current shared rosters", async () => {
     [],
     2,
   );
-  await built.directory.replaceGroups([], 2);
+  await built.directory.replaceGroups(tenant, [], 2);
 
   assert.equal(await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: "channel:C-private" }), false);
   assert.equal(await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: "group:G1" }), false);
@@ -322,15 +324,16 @@ test("capability scope checks follow current shared rosters", async () => {
 
 test("capability scope checks honor a linked identity's room membership", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "capability-linked-")) }));
-  await built.app.upsertDirectory([
+  await built.app.upsertDirectory(tenant, [
     { principalId: "slack-person@example.com", displayName: "Person", type: "internal" },
   ]);
   await built.directory.replaceChannels(
+    tenant,
     [{ channelId: "C-private", name: "private", isPrivate: true }],
     [{ channelId: "C-private", principalId: "slack-person@example.com" }],
     1,
   );
-  await built.directory.replaceGroups([{ groupId: "G1", principalId: "slack-person@example.com" }], 1);
+  await built.directory.replaceGroups(tenant, [{ groupId: "G1", principalId: "slack-person@example.com" }], 1);
   const check = (actorId: string, scopeId: string) => built.app.authorizesCapabilityScope({ actorId, scopeId });
 
   assert.equal(await check("web-person", "channel:C-private"), false);
@@ -344,7 +347,7 @@ test("capability scope checks honor a linked identity's room membership", async 
   assert.equal(await check("web-person", "group:G1"), true);
   assert.equal(await check("someone-else", "channel:C-private"), false);
 
-  await built.directory.replaceChannels([{ channelId: "C-private", name: "private", isPrivate: true }], [], 2);
+  await built.directory.replaceChannels(tenant, [{ channelId: "C-private", name: "private", isPrivate: true }], [], 2);
   assert.equal(await check("web-person", "channel:C-private"), false);
   await built.principalLinks.unlink("slack-person@example.com");
   assert.equal(await check("web-person", "group:G1"), false);
@@ -352,8 +355,8 @@ test("capability scope checks honor a linked identity's room membership", async 
 
 test("channel capabilities bridge legacy public rosters but still honor deactivation", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "capability-transition-")) }));
-  await built.app.upsertDirectory([{ principalId: "member", displayName: "Member", type: "internal" }]);
-  await built.directory.replaceChannels([{ channelId: "C-public", name: "public" }], []);
+  await built.app.upsertDirectory(tenant, [{ principalId: "member", displayName: "Member", type: "internal" }]);
+  await built.directory.replaceChannels(tenant, [{ channelId: "C-public", name: "public" }], []);
   assert.equal(await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: "channel:C-public" }), true);
   await built.identity.deactivate("member");
   assert.equal(await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: "channel:C-public" }), false);
@@ -372,7 +375,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   const base = await listen(server);
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
 
-  await built.app.upsertDirectory([
+  await built.app.upsertDirectory(tenant, [
     { principalId: "owner", displayName: "Owner", type: "internal" },
     { principalId: "member", displayName: "Member", type: "internal" },
     { principalId: "outsider", displayName: "Outsider", type: "internal" },
@@ -737,7 +740,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
 
 test("a member added mid-turn sees the thread but never the prior roster's output", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "project-roster-race-")) }));
-  await built.app.upsertDirectory([
+  await built.app.upsertDirectory(tenant, [
     { principalId: "owner", displayName: "Owner", type: "internal" },
     { principalId: "late-member", displayName: "Late Member", type: "internal" },
   ]);
@@ -806,7 +809,7 @@ test("a member added mid-turn sees the thread but never the prior roster's outpu
 
 test("Project turns rebuild the full thread for a member who joined later", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "project-tenure-")) }));
-  await built.app.upsertDirectory([
+  await built.app.upsertDirectory(tenant, [
     { principalId: "owner", displayName: "Owner", type: "internal" },
     { principalId: "late-member", displayName: "Late Member", type: "internal" },
   ]);
@@ -841,7 +844,7 @@ test("Project turns rebuild the full thread for a member who joined later", asyn
 
 test("Auto quarantine honors the current Project roster epoch", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "project-auto-race-")) }));
-  await built.app.upsertDirectory([
+  await built.app.upsertDirectory(tenant, [
     { principalId: "owner", displayName: "Owner", type: "internal" },
     { principalId: "member", displayName: "Member", type: "internal" },
     { principalId: "late-member", displayName: "Late Member", type: "internal" },
@@ -925,7 +928,7 @@ test("Auto quarantine honors the current Project roster epoch", async () => {
 
 test("a member added to a Project inherits the chats that predate them", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "project-backfill-")) }));
-  await built.app.upsertDirectory([
+  await built.app.upsertDirectory(tenant, [
     { principalId: "owner", displayName: "Owner", type: "internal" },
     { principalId: "member", displayName: "Member", type: "internal" },
   ]);
@@ -968,7 +971,7 @@ test("a member added to a Project inherits the chats that predate them", async (
 
 test("leaving a Project still cuts off everything after the member left", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "project-departure-")) }));
-  await built.app.upsertDirectory([
+  await built.app.upsertDirectory(tenant, [
     { principalId: "owner", displayName: "Owner", type: "internal" },
     { principalId: "member", displayName: "Member", type: "internal" },
   ]);
@@ -995,8 +998,9 @@ test("leaving a Project still cuts off everything after the member left", async 
 });
 test("linking a just-created channel refreshes the surface directory and retries", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-fresh-chan-")) }));
-  await built.app.upsertDirectory([{ principalId: "owner", displayName: "Owner", type: "internal" }]);
+  await built.app.upsertDirectory(tenant, [{ principalId: "owner", displayName: "Owner", type: "internal" }]);
   await built.app.upsertChannels(
+    tenant,
     [{ channelId: "C-OLD", name: "old", isPrivate: false }],
     [{ channelId: "C-OLD", principalId: "owner" }],
   );
@@ -1007,6 +1011,7 @@ test("linking a just-created channel refreshes the surface directory and retries
     if (!r.query.syncDirectory) return;
     void built.app
       .upsertChannels(
+        tenant,
         [
           { channelId: "C-OLD", name: "old", isPrivate: false },
           { channelId: "C-NEW", name: "brand-new", isPrivate: false },
@@ -1033,7 +1038,7 @@ test("Project slack-channel routes gate on visibility and workspace use, and syn
   const base = await listen(server);
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
 
-  await built.app.upsertDirectory([
+  await built.app.upsertDirectory(tenant, [
     { principalId: "owner", displayName: "Owner", type: "internal" },
     { principalId: "member", displayName: "Member", type: "internal" },
     { principalId: "outsider", displayName: "Outsider", type: "internal" },
@@ -1044,7 +1049,7 @@ test("Project slack-channel routes gate on visibility and workspace use, and syn
     { channelId: "C-SECRET", name: "war-room", isPrivate: true },
     { channelId: "C-BUSY", name: "busy", isPrivate: false },
   ];
-  await built.app.upsertChannels(channels, [
+  await built.app.upsertChannels(tenant, channels, [
     { channelId: "C-SECRET", principalId: "member" },
     { channelId: "C-ENG", principalId: "owner" },
     { channelId: "C-ENG", principalId: "chan-pal" },
@@ -1115,12 +1120,12 @@ test("Project slack-channel routes gate on visibility and workspace use, and syn
   assert.ok((await built.app.listSessions("chan-pal")).some((s) => s.scopeId === scope));
 
   // the roster keeps following the channel through directory syncs
-  await built.app.upsertChannels(channels, [
+  await built.app.upsertChannels(tenant, channels, [
     { channelId: "C-SECRET", principalId: "member" },
     { channelId: "C-ENG", principalId: "owner" },
   ]);
   assert.equal(await built.projects.membership(groupRef, "chan-pal"), false, "leaving the channel leaves the project");
-  await built.app.upsertChannels(channels, [
+  await built.app.upsertChannels(tenant, channels, [
     { channelId: "C-SECRET", principalId: "member" },
     { channelId: "C-ENG", principalId: "owner" },
     { channelId: "C-ENG", principalId: "chan-pal" },
@@ -1172,13 +1177,13 @@ test("a project can add a signed-in principal on a deployment whose directory is
 
 test("Slack-linked project turns use the inherited channel roster", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-linked-roster-")) }));
-  await built.app.upsertDirectory([
+  await built.app.upsertDirectory(tenant, [
     { principalId: "owner", displayName: "Owner", type: "internal" },
     { principalId: "chan-pal", displayName: "Channel Pal", type: "internal" },
     { principalId: "chan-gone", displayName: "Channel Gone", type: "internal" },
   ]);
   const channels = [{ channelId: "C-ENG", name: "eng", isPrivate: false }];
-  await built.app.upsertChannels(channels, [
+  await built.app.upsertChannels(tenant, channels, [
     { channelId: "C-ENG", principalId: "owner" },
     { channelId: "C-ENG", principalId: "chan-pal" },
   ]);
@@ -1255,7 +1260,7 @@ test("Slack-linked project turns use the inherited channel roster", async () => 
   assert.equal(linkedCron.fire.status, "ok");
   assert.deepEqual(linkedCron.participants, new Set(["owner", "chan-pal"]));
 
-  await built.app.upsertChannels(channels, [{ channelId: "C-ENG", principalId: "owner" }]);
+  await built.app.upsertChannels(tenant, channels, [{ channelId: "C-ENG", principalId: "owner" }]);
   assert.equal(await built.projects.membership(groupRef, "chan-pal"), false);
   assert.equal((await turn("chan-pal", "web:chan-pal:revoked")).status, "refused");
   assert.equal((await turn("owner", "web:owner:after-revoke")).status, "ok");
@@ -1268,7 +1273,7 @@ test("Slack-linked project turns use the inherited channel roster", async () => 
   await runNowSettled(built.scheduler, inheritedCron.id);
   assert.equal(await built.crons.get(inheritedCron.id), null, "leaving the project deletes the member's cron");
 
-  await built.app.upsertChannels(channels, [
+  await built.app.upsertChannels(tenant, channels, [
     { channelId: "C-ENG", principalId: "owner" },
     { channelId: "C-ENG", principalId: "chan-gone" },
   ]);

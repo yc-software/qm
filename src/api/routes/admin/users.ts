@@ -15,6 +15,7 @@ import { normalizeInboundExpiresAt } from "../../expiry.ts";
 import { detectOnboardingStatus, setOnboardingStatus, type OnboardingStatus } from "../../../onboarding/onboarding.ts";
 import { sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, isObj, orgScope } from "../shared.ts";
+import type { Tenant } from "../../../tenants/context.ts";
 import { tenantOf, type ApiCtx } from "../route.ts";
 import { personNamer } from "./common.ts";
 import { trimTrailingSlashes } from "../../../util/text.ts";
@@ -96,7 +97,7 @@ async function orgMember(ctx: ApiCtx, email: string, includeSessions: boolean): 
   const { deps } = ctx;
   if (deps.emailAuthDomain && email.endsWith(`@${deps.emailAuthDomain}`)) return true;
   if ((deps.emailAuthPrincipals ?? []).some((principal) => samePerson(principal, email))) return true;
-  if (await deps.directory?.get(email)) return true;
+  if (await deps.directory?.get(tenantOf(ctx), email)) return true;
   if (!includeSessions) return false;
   const participants = (await deps.sessions?.listParticipants()) ?? [];
   return participants.some((participant) => samePerson(participant.principalId, email));
@@ -312,7 +313,7 @@ export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
 
   const requested = ctx.url.searchParams.get("principal")?.trim();
   if (requested) {
-    const { principalId } = await resolveAdminUser(deps, requested);
+    const { principalId } = await resolveAdminUser(deps, tenantOf(ctx), requested);
     const [credentials, grants] = await Promise.all([
       deps.keychain.listByOwner(principalId),
       deps.keychain.listGrants({ ownerId: principalId }),
@@ -383,9 +384,9 @@ export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { scopeId: scope, people, credentials, grants, asks, enabled: true });
 }
 
-export async function resolveAdminUser(deps: ApiCtx["deps"], requested: string) {
+export async function resolveAdminUser(deps: ApiCtx["deps"], tenant: Tenant, requested: string) {
   const user = (await deps.admin?.users.get(requested)) ?? null;
-  const member = await deps.directory?.get(user?.principalId ?? requested);
+  const member = await deps.directory?.get(tenant, user?.principalId ?? requested);
   return { member, user, principalId: member?.principalId ?? user?.principalId ?? personKey(requested) };
 }
 
@@ -394,7 +395,7 @@ export async function getUserDetail(ctx: ApiCtx): Promise<void> {
   const org = orgScope(deps);
   const actor = await authorizeAdmin(ctx, org);
   if (!actor) return;
-  const { member, user, principalId } = await resolveAdminUser(deps, params.principalId!);
+  const { member, user, principalId } = await resolveAdminUser(deps, tenantOf(ctx), params.principalId!);
   const personal = makeScopeId("personal", principalId);
   audit(ctx, { principalId: actor.id, action: "user.read", resource: principalId, scopeLabel: org });
 
@@ -459,7 +460,7 @@ export async function setUserOnboarding(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, orgScope(deps));
   if (!actor) return;
   if (!deps.memory) return sendJson(res, 404, { error: "not_found" });
-  const { principalId } = await resolveAdminUser(deps, params.principalId!);
+  const { principalId } = await resolveAdminUser(deps, tenantOf(ctx), params.principalId!);
   const status = (body as { status?: unknown }).status;
   if (typeof status !== "string" || !ONBOARDING_STATUSES.has(status as OnboardingStatus)) {
     return sendJson(res, 400, {
@@ -487,7 +488,7 @@ export async function resetUserToBrandNew(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, orgScope(deps));
   if (!actor) return;
   if (!deps.memory) return sendJson(res, 404, { error: "not_found" });
-  const { principalId } = await resolveAdminUser(deps, params.principalId!);
+  const { principalId } = await resolveAdminUser(deps, tenantOf(ctx), params.principalId!);
   const personal = makeScopeId("personal", principalId);
   const today = new Date().toISOString().slice(0, 10);
   await setOnboardingStatus(deps.memory, personal, "not_started", today, { actorId: actor.id, context: "admin" });

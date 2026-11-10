@@ -13,6 +13,7 @@ import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import type { Item } from "../src/sessions/items.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const SECRET = "agent-conversations-secret".repeat(2);
 
@@ -138,8 +139,9 @@ describe("agent conversations self-API", async () => {
   });
 
   it("new sessions in a channel seed their turn on that channel", async () => {
-    await built.app.upsertDirectory([{ principalId: "U1", displayName: "User One", type: "internal" }]);
+    await built.app.upsertDirectory(testTenant, [{ principalId: "U1", displayName: "User One", type: "internal" }]);
     await built.app.upsertChannels(
+      testTenant,
       [{ channelId: "C1", name: "engineering", isPrivate: true }],
       [{ channelId: "C1", principalId: "U1" }],
     );

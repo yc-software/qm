@@ -18,6 +18,7 @@ import { createPostgresFileArtifactStore } from "../src/files/postgres-file-arti
 import { testAdvisoryLock, testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import type { Tenant } from "../src/tenants/context.ts";
 
 const ORG = "default-org";
 const OWNER = "owner";
@@ -49,11 +50,11 @@ function makeDeps(overrides: { config?: ScopedConfigStore; advisoryLock?: Adviso
     isInternal: (p: { type: string }) => p.type === "internal",
   };
   const directory = {
-    listChannelsFor: async () => [] as { channelId: string; name: string; isPrivate?: boolean }[],
-    channelMember: async (c: string, p: string) =>
+    listChannelsFor: async (_tenant: Tenant) => [] as { channelId: string; name: string; isPrivate?: boolean }[],
+    channelMember: async (_tenant: Tenant, c: string, p: string) =>
       (c === PRIV && privMembers.has(p)) || (c === PUB && pubMembers.has(p)),
-    groupMember: async (g: string, p: string) => g === GROUP && groupMembers.has(p),
-    channelPrivacy: async (c: string): Promise<boolean | undefined> => {
+    groupMember: async (_tenant: Tenant, g: string, p: string) => g === GROUP && groupMembers.has(p),
+    channelPrivacy: async (_tenant: Tenant, c: string): Promise<boolean | undefined> => {
       if (c === PRIV) return true;
       if (c === PUB) return false;
       return undefined;

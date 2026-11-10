@@ -1,14 +1,15 @@
 import type { App } from "../../app.ts";
 import { sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
-import { type ApiCtx } from "../route.ts";
+import type { Tenant } from "../../../tenants/context.ts";
+import { tenantOf, type ApiCtx } from "../route.ts";
 import { mentionedUserIds } from "../../../slack/mrkdwn.ts";
 
 const SLACK_MIRROR_PAGE_MAX = 400;
 const SLACK_MIRROR_PAGE_DEFAULT = 200;
 
-async function mirrorNames(deps: ApiCtx["deps"]) {
-  const members = deps.directory ? await deps.directory.list() : [];
+async function mirrorNames(deps: ApiCtx["deps"], tenant: Tenant) {
+  const members = deps.directory ? await deps.directory.list(tenant) : [];
   const byId = new Map<string, string>();
   for (const m of members) {
     if (!m.displayName) continue;
@@ -63,7 +64,7 @@ export async function listSlackMirrorMessages(ctx: ApiCtx): Promise<void> {
     resource: container || `search:${q}`,
     scopeLabel: scope,
   });
-  const names = await mirrorNames(deps);
+  const names = await mirrorNames(deps, tenantOf(ctx));
   const withNames = (rows: Awaited<ReturnType<App["readSurfaceMessages"]>>) =>
     rows.map((m) => ({
       ...m,
@@ -106,7 +107,7 @@ export async function listAmbientJudgments(ctx: ApiCtx): Promise<void> {
   if (id) {
     const judgment = await store.get(id);
     if (!judgment) return sendJson(res, 404, { error: "not_found" });
-    const workspaceUrl = deps.directory ? (await deps.directory.meta()).workspaceUrl : null;
+    const workspaceUrl = deps.directory ? (await deps.directory.meta(tenantOf(ctx))).workspaceUrl : null;
     return sendJson(res, 200, { scopeId: scope, judgment, workspaceUrl });
   }
   const decision = (url.searchParams.get("decision") ?? "")
@@ -149,7 +150,7 @@ export async function listAckEmojiPicks(ctx: ApiCtx): Promise<void> {
   if (id) {
     const pick = await store.get(id);
     if (!pick) return sendJson(res, 404, { error: "not_found" });
-    const workspaceUrl = deps.directory ? (await deps.directory.meta()).workspaceUrl : null;
+    const workspaceUrl = deps.directory ? (await deps.directory.meta(tenantOf(ctx))).workspaceUrl : null;
     return sendJson(res, 200, { scopeId: scope, pick, workspaceUrl });
   }
   const outcome = (url.searchParams.get("outcome") ?? "")

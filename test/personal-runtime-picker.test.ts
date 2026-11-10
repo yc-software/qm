@@ -8,6 +8,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { userRuntimeConfigBody } from "../src/api/runtime-config.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const buildApp = (...args: Parameters<typeof buildProductionApp>) => stopAtEnd(buildProductionApp(...args));
 
@@ -93,7 +94,7 @@ test("personal picker keeps org restrictions and shared-scope caller isolation",
     await s.built.userModelCredentials.setApiKey("U2", "anthropic", "synthetic-anthropic");
     await s.built.config.setPersonalModelAuth("U1", true, "openai");
     await s.built.config.setPersonalModelAuth("U2", true, "anthropic");
-    await s.built.directory.replaceGroups([
+    await s.built.directory.replaceGroups(testTenant, [
       { groupId: "room", principalId: "U1" },
       { groupId: "room", principalId: "U2" },
     ]);

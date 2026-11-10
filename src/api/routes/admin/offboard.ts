@@ -1,9 +1,10 @@
+import { directoryFor } from "../../../directory/directory-store.ts";
 import { samePerson, samePersonMatcher } from "../../../directory/person.ts";
 import { parseScopeId, scopeId as makeScopeId, type ScopeId } from "../../../types.ts";
 import { errMessage } from "../../../util/errors.ts";
 import { sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, isObj, orgScope } from "../shared.ts";
-import { type ApiCtx } from "../route.ts";
+import { tenantOf, type ApiCtx } from "../route.ts";
 import { resolveAdminUser } from "./users.ts";
 import { syncLoopSchedule } from "../loops.ts";
 
@@ -21,7 +22,7 @@ type Step = Change & { run: () => Promise<unknown> };
 async function plan(ctx: ApiCtx, actorId: string, principalId: string): Promise<Step[]> {
   const { app, deps } = ctx;
   const isThem = deps.directory
-    ? await samePersonMatcher(deps.directory, principalId)
+    ? await samePersonMatcher(directoryFor(deps.directory, tenantOf(ctx)), principalId)
     : async (id: string) => samePerson(id, principalId);
   const personal = async (scope: ScopeId) => {
     const { kind, ref } = parseScopeId(scope);
@@ -69,7 +70,7 @@ async function plan(ctx: ApiCtx, actorId: string, principalId: string): Promise<
       });
   const personas = app.personaHandover;
   for (const handover of (await personas?.handovers(isThem)) ?? []) {
-    const to = (await deps.directory?.get(handover.to))?.displayName || handover.to;
+    const to = (await deps.directory?.get(tenantOf(ctx), handover.to))?.displayName || handover.to;
     step("persona", handover.persona.id, `${handover.persona.name} → ${to}`, "transfer_owner", () =>
       personas!.handOver(handover, actorId),
     );
@@ -88,7 +89,7 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
     !["boolean", "undefined"].includes(typeof input.apply)
   )
     return sendJson(res, 400, { error: "bad_request", message: "body is { apply?: boolean }; omit apply to preview" });
-  const { principalId } = await resolveAdminUser(deps, params.principalId!);
+  const { principalId } = await resolveAdminUser(deps, tenantOf(ctx), params.principalId!);
   if (samePerson(principalId, actor.id))
     return sendJson(res, 400, { error: "bad_request", message: "you cannot offboard yourself" });
   const steps = await plan(ctx, actor.id, principalId);
@@ -121,7 +122,7 @@ export async function reactivateUser(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, orgScope(deps));
   if (!actor) return;
   if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
-  const { principalId } = await resolveAdminUser(deps, params.principalId!);
+  const { principalId } = await resolveAdminUser(deps, tenantOf(ctx), params.principalId!);
   const user = await deps.admin!.users.markReactivated(principalId);
   await deps.identity.reactivate(principalId);
   audit(ctx, {

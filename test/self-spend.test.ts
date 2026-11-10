@@ -29,11 +29,12 @@ async function start(options: { sessions?: false } = {}) {
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  await built.app.upsertDirectory([
+  await built.app.upsertDirectory(testTenant, [
     { principalId: "alice", displayName: "Alice", type: "internal" },
     { principalId: "bob", displayName: "Bob", type: "internal" },
   ]);
   await built.app.upsertChannels(
+    testTenant,
     [
       { channelId: "C1", name: "general", isPrivate: false },
       { channelId: "P1", name: "bobs-room", isPrivate: true },
@@ -74,7 +75,7 @@ test("self spend: your personal scope plus the shared scopes you can see, nothin
     await bill(sessions, "ch:P2:t1", "channel", scopeId("channel", "P2"), { costUsd: 5 });
     const project = (await s.built.app.createProject("alice", "Launch"))!;
     await bill(sessions, "web:alice:launch", "group", project.scopeId, { costUsd: 6 });
-    await s.built.app.upsertGroups([
+    await s.built.app.upsertGroups(testTenant, [
       { groupId: "G1", principalId: "alice" },
       { groupId: "G1", principalId: "bob" },
       { groupId: "G2", principalId: "bob" },
@@ -150,7 +151,7 @@ test("self spend: your crons are split from the crons others made that you can s
       for (const cron of [yours, yoursInChannel, shared, toYou, bobsOwn, bobsPrivate, bobsGroup])
         await s.built.app.deleteCron(cron.id);
     });
-    await s.built.app.upsertGroups([
+    await s.built.app.upsertGroups(testTenant, [
       { groupId: "G1", principalId: "alice" },
       { groupId: "G1", principalId: "bob" },
     ]);

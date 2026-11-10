@@ -9,7 +9,7 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import type { LeaderLease } from "../src/persistence/leader-lease.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
-import { type DirectoryStore } from "../src/directory/directory-store.ts";
+import { directoryFor, type DirectoryStore } from "../src/directory/directory-store.ts";
 import type { Cron } from "../src/triggers/types.ts";
 import type { CronFireJob, CronJobQueue } from "../src/cron/job-queue.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
@@ -17,7 +17,7 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
-import { TEST_TENANT } from "./support/test-tenant.ts";
+import { TEST_TENANT, testTenant } from "./support/test-tenant.ts";
 import { withTenant } from "../src/tenants/context.ts";
 
 const automationOrigin = (request?: { origin?: TurnOrigin }) =>
@@ -54,7 +54,7 @@ function agent(
     idempotency: createIdempotencyStore(testMap()),
     identity,
     run,
-    ...(directory ? { directory } : {}),
+    ...(directory ? { directory: directoryFor(directory, testTenant) } : {}),
     ...(maxFiresPerTick !== undefined ? { maxFiresPerTick } : {}),
     ...(now ? { now } : {}),
     ...extra,
@@ -144,11 +144,12 @@ test("a group-DM cron composed at another scope delivers verbatim (person-keyed 
 
 test("a channel cron fire gives the agent the people-here roster with real <@…> mention ids", async () => {
   const directory = createPostgresDirectoryStore(testDatabaseUrl());
-  await directory.replace([
+  await directory.replace(testTenant, [
     { principalId: "eve@acme.com", displayName: "Eve", type: "internal", slackId: "U9" },
     { principalId: "U5", displayName: "Dana", type: "internal" },
   ]);
   await directory.replaceChannels(
+    testTenant,
     [{ channelId: "C1", name: "general", isPrivate: false }],
     [
       { channelId: "C1", principalId: "eve@acme.com" },
@@ -174,7 +175,7 @@ test("a channel cron fire gives the agent the people-here roster with real <@…
 
 test("a DM cron fire carries no mention roster (DMs already notify their owner)", async () => {
   const directory = createPostgresDirectoryStore(testDatabaseUrl());
-  await directory.replace([{ principalId: "U1", displayName: "Ann", type: "internal", slackId: "U1" }]);
+  await directory.replace(testTenant, [{ principalId: "U1", displayName: "Ann", type: "internal", slackId: "U1" }]);
   const { crons, calls, scheduler } = agent("done", directory);
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
@@ -393,11 +394,12 @@ test("a conversation-owned cron keeps running as the conversation, whoever creat
 
 test("a person-owned cron is deleted once its owner has left the conversation", async () => {
   const directory = createPostgresDirectoryStore(testDatabaseUrl());
-  await directory.replace([
+  await directory.replace(testTenant, [
     { principalId: "U1", displayName: "Ann", type: "internal" },
     { principalId: "U2", displayName: "Bo", type: "internal" },
   ]);
   await directory.replaceChannels(
+    testTenant,
     [{ channelId: "C1", name: "eng", isPrivate: true }],
     [{ channelId: "C1", principalId: "U2" }],
   );

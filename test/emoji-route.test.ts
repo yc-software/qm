@@ -17,6 +17,7 @@ import {
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const SECRET = "emoji-route-secret".repeat(3);
 const ACTOR = "U_E1";
@@ -44,7 +45,7 @@ describe("POST /v1/emoji", async () => {
     });
     await sessions.put(ACTOR, JSON.stringify({ cookies: [] }));
     const directory = createPostgresDirectoryStore(testDatabaseUrl());
-    await directory.setWorkspaceUrl("https://acme.slack.com/");
+    await directory.setWorkspaceUrl(testTenant, "https://acme.slack.com/");
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,

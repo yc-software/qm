@@ -10,7 +10,7 @@ import { createServer } from "../src/api/server.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore, type AclStore } from "../src/acl/acl-store.ts";
-import { type DirectoryStore } from "../src/directory/directory-store.ts";
+import { directoryFor, type DirectoryStore } from "../src/directory/directory-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createCanReadScope, createCanWriteScope } from "../src/resolution/scope-membership.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
@@ -44,8 +44,8 @@ async function fixture() {
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
     acl,
     deployDir: mkdtempSync(join(tmpdir(), "createdin-deploy-")),
-    canReadScope: createCanReadScope({ directory }),
-    canWriteScope: createCanWriteScope({ directory }),
+    canReadScope: createCanReadScope({ directory: directoryFor(directory, tenant) }),
+    canWriteScope: createCanWriteScope({ directory: directoryFor(directory, tenant) }),
   });
   const app = createApp({
     deploy,
@@ -117,6 +117,7 @@ async function pushStatus(url: string): Promise<number> {
 async function setup() {
   const f = await fixture();
   await f.directory.replaceChannels(
+    tenant,
     [
       { channelId: CH, name: "built", isPrivate: true },
       { channelId: CH_OTHER, name: "shared", isPrivate: true },
@@ -195,7 +196,7 @@ test("an explicit public-channel write grant retains write permission", async ()
   const f = await fixture();
   try {
     const publicScope = scopeId("channel", "CPUBLIC");
-    await f.directory.replaceChannels([{ channelId: "CPUBLIC", name: "public", isPrivate: false }], []);
+    await f.directory.replaceChannels(tenant, [{ channelId: "CPUBLIC", name: "public", isPrivate: false }], []);
     const session = await f.sessions.getOrCreateByThread("public-history", "channel", publicScope);
     await f.sessions.addParticipant(session.id, "U2");
     const d = await f.app.deploy({
@@ -298,6 +299,7 @@ test("removed channel members keep stale-session read reach but lose write and m
     await f.sessions.addParticipant(session.id, "U2");
     const beforeRemovalUrl = await gitUrl(f.base, d.id, "U2");
     await f.directory.replaceChannels(
+      tenant,
       [
         { channelId: CH, name: "built", isPrivate: true },
         { channelId: CH_OTHER, name: "shared", isPrivate: true },
@@ -346,6 +348,7 @@ test("a Slack bot's turn in the creation channel gets neither git write nor mana
   const { f, d } = await setup();
   try {
     await f.directory.replaceChannels(
+      tenant,
       [{ channelId: CH, name: "built", isPrivate: true }],
       ["U1", "U2", "release-bot"].map((principalId) => ({ channelId: CH, principalId })),
     );

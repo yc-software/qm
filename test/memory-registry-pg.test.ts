@@ -608,6 +608,7 @@ test("an agent reaches every registry route only where the registry may be shown
   });
   const built = buildApp(config);
   await built.directory.replaceChannels(
+    testTenant,
     [{ channelId: "C1", name: "registry-admin", isPrivate: false }],
     [{ channelId: "C1", principalId: "admin-alice" }],
   );

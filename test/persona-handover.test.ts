@@ -37,7 +37,7 @@ async function setup() {
       apiBaseUrl: "http://core.example.test",
     }),
   );
-  await built.app.upsertDirectory([
+  await built.app.upsertDirectory(testTenant, [
     { principalId: ANN, displayName: "Ann", type: "internal" },
     { principalId: BOB, displayName: "Bob", type: "internal" },
     { principalId: CY, displayName: "Cy", type: "internal" },
@@ -132,8 +132,8 @@ test("a persona's last active owner leaving hands it to the default admin, and o
 
 test("offboarding skips a leaving default admin, and a persona with an owner who stays is not handed over", async () => {
   const { built, personas } = await setup();
-  await built.app.upsertDirectory([
-    ...(await built.directory.list()),
+  await built.app.upsertDirectory(testTenant, [
+    ...(await built.directory.list(testTenant)),
     { principalId: "admin-bob", displayName: "Bob Admin", type: "internal" },
   ]);
   const solo = ok(await personas.create(ADMIN, { name: "Solo" }));

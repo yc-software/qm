@@ -80,7 +80,7 @@ export function createTurnMethods(
   } = h;
   const { shouldRouteToSpine, markTriggerHandled, addressedWakeText } = ambient;
   async function viewerSteerRequest(run: Run, viewer: string, text: string): Promise<TurnRequest> {
-    const displayName = (await deps.directory.get(viewer).catch(swallowAs("signal: steer author display name", null)))
+    const displayName = (await h.directory.get(viewer).catch(swallowAs("signal: steer author display name", null)))
       ?.displayName;
     const { surface, scopeVersion, deliveryTarget, deliveryCandidates, surfaceOrigin, conversation } =
       replayableRequest(run.request);

@@ -145,11 +145,12 @@ test("every unattended read grant type is accepted on create", async () => {
 
 test("a grant-carrying cron lives in its owner's DM, and only the live owner chooses where its output goes", async () => {
   const { built, control } = setup();
-  await built.app.upsertDirectory([
+  await built.app.upsertDirectory(tenant, [
     { principalId: "admin-alice", displayName: "Alice", type: "internal" },
     { principalId: "U2", displayName: "User Two", type: "internal" },
   ]);
   await built.app.upsertChannels(
+    tenant,
     [{ channelId: "C-spend", name: "spend", isPrivate: false }],
     [{ channelId: "C-spend", principalId: "admin-alice" }],
   );
@@ -305,7 +306,7 @@ test("cron create rejects unfurlLinks when there is no delivery destination", as
 
 test("cron create with `recipient` resolves a teammate by name and runs at the sender's personal scope", async () => {
   const { built, control } = setup();
-  await built.app.upsertDirectory([
+  await built.app.upsertDirectory(tenant, [
     { principalId: "U1", displayName: "Alice", type: "internal" },
     { principalId: "U2", displayName: "Bob Jones", type: "internal" },
   ]);
@@ -324,7 +325,7 @@ test("cron create with `recipient` resolves a teammate by name and runs at the s
 
 test("a recurring cron addressed to a teammate targets them directly and sends nothing at creation", async () => {
   const { built, control } = setup();
-  await built.app.upsertDirectory([
+  await built.app.upsertDirectory(tenant, [
     { principalId: "U1", displayName: "Alice", type: "internal" },
     { principalId: "U2", displayName: "Bob Jones", type: "internal" },
   ]);
@@ -344,7 +345,7 @@ test("a recurring cron addressed to a teammate targets them directly and sends n
 
 test("a recurring teammate cron stops delivering once the recipient is no longer an addressable teammate", async () => {
   const { built, control } = setup();
-  await built.app.upsertDirectory([
+  await built.app.upsertDirectory(tenant, [
     { principalId: "U1", displayName: "Alice", type: "internal" },
     { principalId: "U2", displayName: "Bob", type: "internal" },
   ]);
@@ -358,7 +359,7 @@ test("a recurring teammate cron stops delivering once the recipient is no longer
     (await built.deliveries.pending("principal")).map((d) => [d.destination.target, d.text]),
     [["U2", "standup notes are due"]],
   );
-  await built.app.upsertDirectory([
+  await built.app.upsertDirectory(tenant, [
     { principalId: "U1", displayName: "Alice", type: "internal" },
     { principalId: "U2", displayName: "Bob", type: "guest" },
   ]);
@@ -369,7 +370,7 @@ test("a recurring teammate cron stops delivering once the recipient is no longer
 
 test("a teammate-addressed cron runs in the OWNER's scope; the recipient is delivery-only (run scope ⊆ owner-accessible)", async () => {
   const { built, control } = setup();
-  await built.app.upsertDirectory([
+  await built.app.upsertDirectory(tenant, [
     { principalId: "U1", displayName: "Alice", type: "internal" },
     { principalId: "U2", displayName: "Bob", type: "internal" },
   ]);
@@ -389,7 +390,7 @@ test("a teammate-addressed cron runs in the OWNER's scope; the recipient is deli
 
 test("an ambiguous recipient name returns candidates, not a created cron", async () => {
   const { built, control } = setup();
-  await built.app.upsertDirectory([
+  await built.app.upsertDirectory(tenant, [
     { principalId: "U2", displayName: "Sam Lee", type: "internal" },
     { principalId: "U3", displayName: "Sam Park", type: "internal" },
   ]);
@@ -414,11 +415,12 @@ test("an unknown recipient is recipient_not_found", async () => {
 
 test("cron create with `channel` resolves a public channel; a private channel needs membership", async () => {
   const { built, control } = setup();
-  await built.app.upsertDirectory([
+  await built.app.upsertDirectory(tenant, [
     { principalId: "U1", displayName: "User One", type: "internal" },
     { principalId: "U2", displayName: "User Two", type: "internal" },
   ]);
   await built.app.upsertChannels(
+    tenant,
     [
       { channelId: "C-pub", name: "general", isPrivate: false },
       { channelId: "C-priv", name: "secret", isPrivate: true },
@@ -526,11 +528,12 @@ test("a channel cron belongs to its creator: members see it, only the owner or a
       defaultDestinationKey: ROOM.key,
     });
   const { built, control } = setup();
-  await built.app.upsertDirectory([
+  await built.app.upsertDirectory(tenant, [
     { principalId: "U1", displayName: "Una", type: "internal" },
     { principalId: "U2", displayName: "Mia", type: "internal" },
   ]);
   await built.app.upsertChannels(
+    tenant,
     [{ channelId: "C9", name: "eng", isPrivate: true }],
     ["U1", "U2"].map((principalId) => ({ channelId: "C9", principalId })),
   );
@@ -1148,12 +1151,13 @@ test("a Slack bot's turn can't change a channel cron or webhook it doesn't own, 
       ...extra,
     });
   const { built, control } = setup();
-  await built.app.upsertDirectory([
+  await built.app.upsertDirectory(tenant, [
     { principalId: "U1", displayName: "Una", type: "internal" },
     { principalId: "U2", displayName: "Mia", type: "internal" },
     { principalId: "release-bot", displayName: "release-bot", type: "internal" },
   ]);
   await built.app.upsertChannels(
+    tenant,
     [{ channelId: "C9", name: "eng", isPrivate: true }],
     ["U1", "U2", "release-bot"].map((principalId) => ({ channelId: "C9", principalId })),
   );

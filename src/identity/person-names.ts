@@ -1,4 +1,4 @@
-import type { DirectoryStore } from "../directory/directory-store.ts";
+import type { TenantDirectory } from "../directory/directory-store.ts";
 import { samePerson } from "../directory/person.ts";
 import { swallowAs } from "../util/errors.ts";
 import type { UserRecord, UserStore } from "./user-store.ts";
@@ -35,7 +35,7 @@ export interface PersonNames {
 
 export function createPersonNames(deps: {
   users?: Pick<UserStore, "resolve">;
-  directory?: Pick<DirectoryStore, "get">;
+  directory?: Pick<TenantDirectory, "get">;
 }): PersonNames {
   const resolve = async (ids: readonly string[]): Promise<Map<string, UserRecord>> =>
     ids.length && deps.users

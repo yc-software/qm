@@ -10,6 +10,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import type { ContextSummary } from "../src/api/app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "webctx-")) }));
@@ -41,6 +42,7 @@ test("GET /v1/contexts: personal always; public channels and current private mem
     assert.equal(before[0]!.kind, "personal");
 
     await s.built.app.upsertChannels(
+      testTenant,
       [
         { channelId: "C1", name: "eng", isPrivate: false },
         { channelId: "C2", name: "sekrit", isPrivate: true },
@@ -67,11 +69,12 @@ test("GET /v1/contexts: personal always; public channels and current private mem
 test("web turns into a shared scope are membership-checked; sessions then count toward the context", async () => {
   const s = start();
   try {
-    await s.built.app.upsertDirectory([
+    await s.built.app.upsertDirectory(testTenant, [
       { principalId: "alice", displayName: "Alice", type: "internal" },
       { principalId: "bob", displayName: "Bob", type: "internal" },
     ]);
     await s.built.app.upsertChannels(
+      testTenant,
       [
         { channelId: "C1", name: "eng", isPrivate: false },
         { channelId: "C2", name: "sekrit", isPrivate: true },
@@ -174,6 +177,7 @@ test("a web turn can't pair an authorized scope claim with a thread living elsew
   const s = start();
   try {
     await s.built.app.upsertChannels(
+      testTenant,
       [{ channelId: "C2", name: "sekrit", isPrivate: true }],
       [
         { channelId: "C2", principalId: "alice" },

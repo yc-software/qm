@@ -5,11 +5,13 @@ import { projectGroupRef } from "../src/projects/project-store.ts";
 import type { Conversation, Principal } from "../src/types.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 test("human child replay keeps one receipt across acknowledgement failure and a project roster change", async (t) => {
   const built = buildApp(testConfig({ openaiApiKey: "test-openai-key" }));
   t.after(() => built.runtime.stop());
   await built.app.upsertDirectory(
+    testTenant,
     ["owner", "sender", "new-member"].map((principalId) => ({
       principalId,
       displayName: principalId,

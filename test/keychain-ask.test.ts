@@ -42,6 +42,7 @@ import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-datab
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { USER_ITEM_KINDS } from "../src/sessions/items.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const KEY = deriveConnectorKey("keychain-ask-test-key");
 const SECRET = "keychain-ask-route-secret".repeat(3);
@@ -633,12 +634,13 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
 
   before(async () => {
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "kc-asks-")), signingSecret: SECRET }));
-    await built.app.upsertDirectory([
+    await built.app.upsertDirectory(testTenant, [
       { principalId: "U_ALICE", displayName: "Alice", type: "internal" },
       { principalId: "U_BOB", displayName: "Bob", type: "internal" },
       { principalId: "U_RELEASE_BOT", displayName: "Release bot", type: "internal" },
     ]);
     await built.app.upsertChannels(
+      testTenant,
       [
         { channelId: "C_INFRA", name: "infra", isPrivate: true },
         { channelId: "C_NOALICE", name: "no-alice", isPrivate: true },
@@ -1037,7 +1039,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
         let scopeVersion: string | undefined;
         if (kind === "group") {
           scope = "group:G_SHARED";
-          await built.app.upsertGroups([
+          await built.app.upsertGroups(testTenant, [
             { groupId: "G_SHARED", principalId: "U_ALICE" },
             { groupId: "G_SHARED", principalId: "U_BOB" },
           ]);
@@ -1119,13 +1121,13 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
       secret: "dummy",
       envKey: "QA_TOKEN",
     });
-    await built.app.upsertDirectory([
+    await built.app.upsertDirectory(testTenant, [
       { principalId: "U_ALICE", displayName: "Alice", type: "internal" },
       { principalId: "U_BOB", displayName: "Bob", type: "internal" },
       { principalId: "U_EVE", displayName: "Eve", type: "internal" },
       { principalId: "U_EXTERNAL", displayName: "External", type: "guest" },
     ]);
-    await built.app.upsertGroups([
+    await built.app.upsertGroups(testTenant, [
       { groupId: "G_GUEST_QA", principalId: "U_ALICE" },
       { groupId: "G_GUEST_QA", principalId: "U_EXTERNAL" },
     ]);

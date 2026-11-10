@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import type { DirectoryStore } from "../../src/directory/directory-store.ts";
+import type { TenantDirectory } from "../../src/directory/directory-store.ts";
 
-export async function directoryObservationCases(store: DirectoryStore): Promise<void> {
+export async function directoryObservationCases(store: TenantDirectory): Promise<void> {
   const room = { channelId: "C_OBS", name: "room", isPrivate: true };
   const other = { channelId: "C_OTHER", name: "other", isPrivate: true };
   const member = { channelId: room.channelId, principalId: "U_ONE" };

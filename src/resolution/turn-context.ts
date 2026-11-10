@@ -1,5 +1,5 @@
 import { memoryRecallLabels } from "../memory/recall-labels.ts";
-import type { DirectoryStore } from "../directory/directory-store.ts";
+import { directoryFor, type DirectoryStore } from "../directory/directory-store.ts";
 import type { ProjectStore } from "../projects/project-store.ts";
 import { disclosedMemory, type MemoryDisclosure } from "../memory/disclosure.ts";
 import { readNotebook, recallAcrossScopes, searchNotebooks } from "../memory/cross-scope.ts";
@@ -90,7 +90,11 @@ export async function resolveTurnContext(input: ContextInput) {
     ...(input.audienceScopeId ? { audienceScopeId: input.audienceScopeId } : {}),
   };
   const handles = [...resolution.grantedHandles, ...(await carriedFileHandles(sharingSources, input.files))];
-  const memoryLabels = await memoryRecallLabels(read, input.directory, input.projects);
+  const memoryLabels = await memoryRecallLabels(
+    read,
+    input.directory && directoryFor(input.directory, input.tenant),
+    input.projects,
+  );
   return {
     sharingSources,
     memoryScopeId,

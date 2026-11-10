@@ -43,7 +43,7 @@ import type { RuntimeChoice } from "../agent/agent.ts";
 import { modelDisplayName } from "../model/pi-models.ts";
 import type { ConversationEvent } from "../loops/sources/adapter.ts";
 import { slackConversationRef } from "../loops/sources/slack.ts";
-import { ambientTenant } from "../tenants/context.ts";
+import { ambientTenant, type Tenant } from "../tenants/context.ts";
 
 interface SlackRunHooks {
   onReplying?(): void;
@@ -107,7 +107,7 @@ export interface SlackCoreClient {
   ackRunDelivery(runId: string): Promise<void>;
   reportRunEditRef(runId: string, editRef: string): Promise<void>;
   getApproval(requestId: string): Promise<StoredApprovalView | null>;
-  pushDirectory(body: DirectoryPush): Promise<boolean>;
+  pushDirectory(tenant: Tenant, body: DirectoryPush): Promise<boolean>;
   claimDeliveries(type: string, claimMs: number): Promise<Delivery[]>;
   ackDelivery(id: string, body?: { recipientThreadRef?: string; slackApiMs?: number }): Promise<void>;
   reportSlowDeliveryDrain?(info: { durationMs: number; rows: number }): Promise<void>;
@@ -403,13 +403,15 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       };
     },
 
-    async pushDirectory(body) {
-      if (body.workspaceUrl) await deps.app.setDirectoryWorkspaceUrl(body.workspaceUrl);
+    async pushDirectory(tenant, body) {
+      if (body.workspaceUrl) await deps.app.setDirectoryWorkspaceUrl(tenant, body.workspaceUrl);
       let applied = true;
-      if (body.members) applied = (await deps.app.upsertDirectory(body.members, body.membersSyncedAt)) && applied;
+      if (body.members)
+        applied = (await deps.app.upsertDirectory(tenant, body.members, body.membersSyncedAt)) && applied;
       if (body.channels) {
         applied =
           (await deps.app.upsertChannels(
+            tenant,
             body.channels,
             body.channelMembers,
             body.channelsSyncedAt,
@@ -420,8 +422,13 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       }
       if (body.groupMembers) {
         applied =
-          (await deps.app.upsertGroups(body.groupMembers, body.groupsSyncedAt, body.groupIds, body.groupRosterIds)) &&
-          applied;
+          (await deps.app.upsertGroups(
+            tenant,
+            body.groupMembers,
+            body.groupsSyncedAt,
+            body.groupIds,
+            body.groupRosterIds,
+          )) && applied;
       }
       return applied;
     },

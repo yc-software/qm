@@ -6,10 +6,11 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 test("Slack group DM contexts list the other members with their Slack photos", async () => {
   const { app, directory } = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ctx-group-")) }));
-  await directory.replace([
+  await directory.replace(testTenant, [
     { principalId: "U1", displayName: "sam", type: "internal", slackId: "U1" },
     {
       principalId: "U2",
@@ -26,7 +27,7 @@ test("Slack group DM contexts list the other members with their Slack photos", a
       avatarUrl: "http://insecure.example.com/b.png",
     },
   ]);
-  await directory.upsertGroup("G1", ["U1", "U2", "U3"]);
+  await directory.upsertGroup(testTenant, "G1", ["U1", "U2", "U3"]);
   await app.turn({
     surface: "test",
     actor: { externalId: "U1" },

@@ -9,6 +9,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 import { testConfig } from "./support/test-config.ts";
 import { cachedModelCatalog, selectableModelCatalog } from "../src/model/model-catalog.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const ADMIN = { "x-admin-actor": "admin-alice@default-org" };
 
@@ -32,7 +33,7 @@ test("settings projections preserve values while excluding unrelated payloads", 
   const srv = start();
   t.after(srv.close);
   await srv.built.config.setBranding("org:default-org", { selfLabel: "Test assistant", accent: "#445566" });
-  await srv.built.directory.replaceChannels([{ channelId: "C-settings", name: "settings-test" }]);
+  await srv.built.directory.replaceChannels(testTenant, [{ channelId: "C-settings", name: "settings-test" }]);
   const full = (await (await fetch(srv.base + scopePath, { headers: ADMIN })).json()) as Record<string, unknown>;
   for (const view of [
     "customize",

@@ -244,7 +244,9 @@ test("an address that already belongs to an org member cannot be invited", async
       role: "org_admin",
       scopeId: ORG,
     });
-    await s.built.directory.replace([{ principalId: "dana@slack.example", displayName: "Dana", type: "internal" }]);
+    await s.built.directory.replace(tenant, [
+      { principalId: "dana@slack.example", displayName: "Dana", type: "internal" },
+    ]);
     const dm: TurnRequest = {
       surface: "test",
       actor: { externalId: "seen@elsewhere.example" },

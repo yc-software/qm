@@ -172,7 +172,7 @@ async function setup(
 
 test("an org admin's brain link saves the client secret core-only, from a project whose members change and from a DM", async (t) => {
   const { built, mint, servedSecret } = await setup(t);
-  await built.app.upsertDirectory([
+  await built.app.upsertDirectory(tenant, [
     { principalId: "admin-alice", displayName: "Alice", type: "internal" },
     { principalId: "member-bob", displayName: "Bob", type: "internal" },
   ]);
@@ -212,7 +212,7 @@ test("an org admin's brain link saves the client secret core-only, from a projec
 
 test("a brain link has its own link audience, so a core without brain links refuses it instead of saving the secret into a keychain", async (t) => {
   const { built, mint, servedSecret } = await setup(t);
-  await built.app.upsertDirectory([{ principalId: "admin-alice", displayName: "Alice", type: "internal" }]);
+  await built.app.upsertDirectory(tenant, [{ principalId: "admin-alice", displayName: "Alice", type: "internal" }]);
   const link = await mint("admin-alice", { memoryBrain: "acme-personal", purpose: "connect Acme personal memory" });
   assert.equal(link.status, 200);
   const claims = await verifyCapabilityToken(link.token, SECRET);
@@ -295,6 +295,7 @@ test("an unfilled brain link is never a pending sibling of a keychain drop in th
     },
   });
   await built.directory.replaceChannels(
+    tenant,
     [{ channelId: "C1", name: "drops", isPrivate: false }],
     [{ channelId: "C1", principalId: "admin-alice" }],
   );

@@ -245,16 +245,16 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     const newest = eligible.reduce<CachedMessage | undefined>((max, m) => (!max || m.ts > max.ts ? m : max), undefined);
     if (!asking?.authorId || asking.authorId !== newest?.authorId) return undefined;
     const authorId = asking.authorId;
-    const roster = await deps.directory.list().catch(swallowAs("ambient: roster read", [] as DirectoryMember[]));
+    const roster = await h.directory.list().catch(swallowAs("ambient: roster read", [] as DirectoryMember[]));
     const member = roster.find((r) => samePerson(r.principalId, authorId) || samePerson(r.slackId, authorId));
     if (!member) return undefined;
     if (batch.kind === "group") {
-      const inGroup = await deps.directory.groupMember(batch.container, member.principalId).catch(() => false);
+      const inGroup = await h.directory.groupMember(batch.container, member.principalId).catch(() => false);
       return inGroup ? { message: asking, member } : undefined;
     }
-    const isPrivate = await deps.directory.channelPrivacy(batch.container).catch(() => undefined);
+    const isPrivate = await h.directory.channelPrivacy(batch.container).catch(() => undefined);
     if (isPrivate === undefined) return undefined;
-    if (isPrivate && !(await deps.directory.channelMember(batch.container, member.principalId).catch(() => false)))
+    if (isPrivate && !(await h.directory.channelMember(batch.container, member.principalId).catch(() => false)))
       return undefined;
     return { message: asking, member };
   }
@@ -273,7 +273,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
   }
 
   async function conversationAudience(batch: AmbientBatch): Promise<ActorAssertion[] | undefined> {
-    const members = await deps.directory
+    const members = await h.directory
       .conversationMembers(batch.kind === "group" ? "group" : "channel", batch.container)
       .catch(() => undefined);
     if (!members?.length) return undefined;

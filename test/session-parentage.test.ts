@@ -6,12 +6,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 test("detaching a subagent session requires current channel membership", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-parentage-")) }));
-  await built.app.upsertDirectory([{ principalId: "U1", displayName: "User One", type: "internal" }]);
+  await built.app.upsertDirectory(testTenant, [{ principalId: "U1", displayName: "User One", type: "internal" }]);
   const channels = [{ channelId: "C1", name: "private", isPrivate: true }];
-  await built.app.upsertChannels(channels, [{ channelId: "C1", principalId: "U1" }]);
+  await built.app.upsertChannels(testTenant, channels, [{ channelId: "C1", principalId: "U1" }]);
   const create = async (name: string) => {
     const session = await built.sessions.getOrCreateByThread(`agent:main:subagent:${name}`, "channel", "channel:C1");
     await built.sessions.addParticipant(session.id, "U1");
@@ -20,10 +21,12 @@ test("detaching a subagent session requires current channel membership", async (
   const parent = await create("parent");
   const child = await create("child");
   await built.sessions.setParentSession(child.id, parent.id);
-  await built.app.upsertChannels(channels, [], Date.now() + 1, ["C1"]);
+  await built.app.upsertChannels(testTenant, channels, [], Date.now() + 1, ["C1"]);
   assert.equal(await built.app.detachSession(child.id, "U1"), null);
   assert.equal((await built.sessions.get(child.id))?.parentSessionId, parent.id);
-  await built.app.upsertChannels(channels, [{ channelId: "C1", principalId: "U1" }], Date.now() + 2, ["C1"]);
+  await built.app.upsertChannels(testTenant, channels, [{ channelId: "C1", principalId: "U1" }], Date.now() + 2, [
+    "C1",
+  ]);
   assert.deepEqual(await built.app.detachSession(child.id, "U1"), { detached: true });
 });
 
@@ -57,12 +60,13 @@ test("a replayed steer on a scheduled turn's subagent keeps where its answer goe
 
 test("late human child messages retain their sender and revalidate access", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-human-replay-")) }));
-  await built.app.upsertDirectory([
+  await built.app.upsertDirectory(testTenant, [
     { principalId: "U1", displayName: "User One", type: "internal" },
     { principalId: "U2", displayName: "User Two", type: "internal" },
   ]);
   const channels = [{ channelId: "C1", name: "shared", isPrivate: true }];
   await built.app.upsertChannels(
+    testTenant,
     channels,
     ["U1", "U2"].map((principalId) => ({ channelId: "C1", principalId })),
   );
@@ -100,7 +104,9 @@ test("late human child messages retain their sender and revalidate access", asyn
   assert.equal(replay?.request.actor.id, "U2");
   assert.equal(replay?.request.text, "from second user");
   await built.runs.withdraw(replay!.id);
-  await built.app.upsertChannels(channels, [{ channelId: "C1", principalId: "U1" }], Date.now() + 1, ["C1"]);
+  await built.app.upsertChannels(testTenant, channels, [{ channelId: "C1", principalId: "U1" }], Date.now() + 1, [
+    "C1",
+  ]);
   await send("after revocation");
   assert.equal(await built.runs.activeForThread(child.threadRef), null);
   assert.deepEqual(await built.signals.pending(run.id), []);
@@ -126,7 +132,7 @@ test("ordinary sessions are not subject to the subagent tree queue limit", async
 
 test("a subagent message that missed its running turn replays as a turn from its sender", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-message-replay-")) }));
-  await built.app.upsertDirectory([{ principalId: "U1", displayName: "User One", type: "internal" }]);
+  await built.app.upsertDirectory(testTenant, [{ principalId: "U1", displayName: "User One", type: "internal" }]);
   const parent = await built.sessions.getOrCreateByThread("web:U1:parent", "dm", "personal:U1");
   const child = await built.sessions.getOrCreateByThread("agent:main:subagent:late-message", "dm", "personal:U1");
   for (const session of [parent, child]) await built.sessions.addParticipant(session.id, "U1");

@@ -19,7 +19,7 @@ export type WriteAccess = { ok: true; project?: ProjectAccess } | { ok: false; r
 
 const NOT_A_MEMBER: WriteAccess = { ok: false, reason: "you're not a member of that context" };
 
-async function projectAccess(deps: AppDeps, ref: string, actor: Principal): Promise<WriteAccess> {
+async function projectAccess(deps: AppDeps, h: AppHelpers, ref: string, actor: Principal): Promise<WriteAccess> {
   const id = projectIdFromGroupRef(ref);
   if (!id) return NOT_A_MEMBER;
   const project = await deps.projects?.get(id);
@@ -32,7 +32,7 @@ async function projectAccess(deps: AppDeps, ref: string, actor: Principal): Prom
     memberIds.map(async (memberId) => {
       if (memberId === actor.id) return actor;
       const principal = deps.identity.classify(memberId);
-      const member = await deps.directory.get(memberId).catch(() => null);
+      const member = await h.directory.get(memberId).catch(() => null);
       return member?.displayName ? { ...principal, displayName: member.displayName } : principal;
     }),
   );
@@ -48,7 +48,7 @@ export async function conversationWriteAccess(
   const ref = req.conversation.channelRef;
   let access: WriteAccess = { ok: true };
   if (req.conversation.kind === "group" && ref && isProjectGroupRef(ref)) {
-    access = await projectAccess(deps, ref, actor);
+    access = await projectAccess(deps, h, ref, actor);
   } else if (req.surface === "web" && req.conversation.kind !== "dm") {
     if (!ref || !(await h.mayUseSharedScope(req.conversation.kind, ref, actor))) return NOT_A_MEMBER;
   }

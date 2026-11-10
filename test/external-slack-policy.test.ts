@@ -13,6 +13,7 @@ import { continueInPrivate, PRIVATE_CONTINUATION_ACK } from "../src/slack/privat
 import { createDeliveryPoller } from "../src/slack/deliveries.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import type { TurnRequest } from "../src/types.ts";
+import { testTenant } from "./support/test-tenant.ts";
 import { createDirectory } from "../src/slack/directory.ts";
 import { createTurnHandler } from "../src/slack/turn-handler.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
@@ -122,6 +123,7 @@ test("external account directory lookups admit only company workspace DMs", asyn
       users: { info: async () => ({ user }) },
     };
     const directory = createDirectory({
+      tenant: testTenant,
       core: {} as SlackCoreClient,
       ids,
       externalAccess: policy,

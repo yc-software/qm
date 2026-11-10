@@ -61,10 +61,10 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
   });
 
   it("a roster swap that drops a member deactivates them; reappearing reactivates", async () => {
-    await built.app.upsertDirectory([member("U-stay"), member("U-leave")]);
+    await built.app.upsertDirectory(testTenant, [member("U-stay"), member("U-leave")]);
     assert.equal(built.identity.classify("U-leave").type, "internal");
 
-    await built.app.upsertDirectory([member("U-stay")]);
+    await built.app.upsertDirectory(testTenant, [member("U-stay")]);
     assert.equal(built.identity.classify("U-leave").type, "guest");
     assert.equal(built.identity.classify("U-stay").type, "internal");
     assert.ok(
@@ -73,7 +73,7 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
       ),
     );
 
-    await built.app.upsertDirectory([member("U-stay"), member("U-leave")]);
+    await built.app.upsertDirectory(testTenant, [member("U-stay"), member("U-leave")]);
     assert.equal(built.identity.classify("U-leave").type, "internal");
     assert.ok(
       (await built.auditLog.events(testTenant)).some(
@@ -83,8 +83,8 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
   });
 
   it("a Slack roster omission does not deactivate or hide a configured email-auth principal", async () => {
-    await built.app.upsertDirectory([member("U-stay"), member("allowed@example.com")]);
-    await built.app.upsertDirectory([member("U-stay")]);
+    await built.app.upsertDirectory(testTenant, [member("U-stay"), member("allowed@example.com")]);
+    await built.app.upsertDirectory(testTenant, [member("U-stay")]);
 
     assert.equal(built.identity.classify("allowed@example.com").type, "internal");
     const resolved = await built.app.resolveRecipient("allowed@example.com");
@@ -106,7 +106,7 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
     assert.deepEqual(await off.json(), { ok: true, principalId: "U-manual", active: false });
     assert.equal(built.identity.classify("U-manual").type, "guest");
 
-    await built.app.upsertDirectory([member("U-manual")]);
+    await built.app.upsertDirectory(testTenant, [member("U-manual")]);
     assert.equal(built.identity.classify("U-manual").type, "guest");
 
     const on = await signedPost("/v1/principals/U-manual/reactivate");

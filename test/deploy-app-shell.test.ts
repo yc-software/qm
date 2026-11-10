@@ -22,6 +22,7 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { testDatabaseUrl, testMap, testDeployBackings } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { directoryFor } from "../src/directory/directory-store.ts";
 
 const auditLog = { record() {}, events: async () => [], tail: async () => [] };
 const GATE_SECRET = "gate-secret";
@@ -42,8 +43,8 @@ function appServingUpstream(upstreamPort: number) {
     },
     auditLog,
     acl,
-    canReadScope: createCanReadScope({ directory }),
-    canWriteScope: createCanWriteScope({ directory }),
+    canReadScope: createCanReadScope({ directory: directoryFor(directory, tenant) }),
+    canWriteScope: createCanWriteScope({ directory: directoryFor(directory, tenant) }),
     deployDir: mkdtempSync(join(tmpdir(), "app-shell-")),
   });
   const app = createApp({
@@ -365,6 +366,7 @@ test("app shell: a manager from the creation scope can load the app and its asse
   try {
     await f.acl.revoke(tenant, f.d.ownerScopeId, `deployment:${f.d.id}`, scopeId("channel", "CBUILT"), "U1");
     await f.directory.replaceChannels(
+      tenant,
       [{ channelId: "CBUILT", name: "builders", isPrivate: true }],
       [{ channelId: "CBUILT", principalId: "U2" }],
     );
@@ -378,7 +380,7 @@ test("app shell: a manager from the creation scope can load the app and its asse
       assert.equal(resource.status, 200);
       assert.equal(resource.body, "<html><body>APP</body></html>");
     }
-    await f.directory.replaceChannels([{ channelId: "CBUILT", name: "builders", isPrivate: true }], []);
+    await f.directory.replaceChannels(tenant, [{ channelId: "CBUILT", name: "builders", isPrivate: true }], []);
     const denied = await httpGet(f.port, "/", headers);
     assert.equal(denied.status, 403);
   } finally {

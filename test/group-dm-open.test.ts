@@ -7,6 +7,7 @@ import { createSurfaceContextFulfiller } from "../src/slack/surface-context.ts";
 import type { SurfaceContextQuery, SurfaceContextResult } from "../src/reach/reach.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const MEMBERS = [
   { principalId: "alice@acme.dev", displayName: "alice", type: "internal" as const },
@@ -291,7 +292,7 @@ describe("pushing the group roster when Slack won't list group DMs", () => {
   it("omits the roster rather than replacing it with an empty one", async () => {
     const pushes: Array<Record<string, unknown>> = [];
     const core = {
-      pushDirectory: async (body: Record<string, unknown>) => {
+      pushDirectory: async (_tenant: unknown, body: Record<string, unknown>) => {
         pushes.push(body);
         return true;
       },
@@ -314,6 +315,7 @@ describe("pushing the group roster when Slack won't list group DMs", () => {
       },
     };
     const dir = createDirectory({
+      tenant: testTenant,
       core: core as never,
       ids: {
         ownTeamId: "T1",
@@ -339,7 +341,7 @@ describe("the directory crawl when another instance holds the sync lease", () =>
     const pushes: Array<Record<string, unknown>> = [];
     const listedMethods: string[] = [];
     const core = {
-      pushDirectory: async (body: Record<string, unknown>) => {
+      pushDirectory: async (_tenant: unknown, body: Record<string, unknown>) => {
         pushes.push(body);
         return true;
       },
@@ -357,6 +359,7 @@ describe("the directory crawl when another instance holds the sync lease", () =>
       },
     };
     const dir = createDirectory({
+      tenant: testTenant,
       core: core as never,
       ids: {
         ownTeamId: "T1",
@@ -380,7 +383,7 @@ describe("the directory crawl when another instance holds the sync lease", () =>
     const pushes: Array<Record<string, unknown>> = [];
     let locked = true;
     const core = {
-      pushDirectory: async (body: Record<string, unknown>) => {
+      pushDirectory: async (_tenant: unknown, body: Record<string, unknown>) => {
         pushes.push(body);
         return true;
       },
@@ -407,6 +410,7 @@ describe("the directory crawl when another instance holds the sync lease", () =>
       },
     };
     const dir = createDirectory({
+      tenant: testTenant,
       core: core as never,
       syncRetryMs: 5,
       ids: {
@@ -435,7 +439,7 @@ describe("the directory crawl when another instance holds the sync lease", () =>
     const pushes: Array<Record<string, unknown>> = [];
     let refusals = 1;
     const core = {
-      pushDirectory: async (body: Record<string, unknown>) => {
+      pushDirectory: async (_tenant: unknown, body: Record<string, unknown>) => {
         pushes.push(body);
         return refusals-- <= 0;
       },
@@ -461,6 +465,7 @@ describe("the directory crawl when another instance holds the sync lease", () =>
       },
     };
     const dir = createDirectory({
+      tenant: testTenant,
       core: core as never,
       syncRetryMs: 5,
       ids: {
@@ -485,7 +490,7 @@ describe("the directory crawl when another instance holds the sync lease", () =>
   it("discards a crawl whose lease was lost mid-flight instead of pushing it", async () => {
     const pushes: Array<Record<string, unknown>> = [];
     const core = {
-      pushDirectory: async (body: Record<string, unknown>) => {
+      pushDirectory: async (_tenant: unknown, body: Record<string, unknown>) => {
         pushes.push(body);
         return true;
       },
@@ -506,6 +511,7 @@ describe("the directory crawl when another instance holds the sync lease", () =>
       },
     };
     const dir = createDirectory({
+      tenant: testTenant,
       core: core as never,
       ids: {
         ownTeamId: "T1",
@@ -528,11 +534,11 @@ describe("the directory crawl when another instance holds the sync lease", () =>
 describe("directory resolution by Slack id", () => {
   it("resolves a teammate the agent named by their Slack member id", async () => {
     const store = createPostgresDirectoryStore(testDatabaseUrl());
-    await store.replace([
+    await store.replace(testTenant, [
       { principalId: "kai@acme.dev", displayName: "kai", type: "internal", slackId: "U09LKC3KATS" },
       { principalId: "alice@acme.dev", displayName: "alice", type: "internal", slackId: "U07QR5C33S7" },
     ]);
-    assert.deepEqual(await store.resolve("U09LKC3KATS"), {
+    assert.deepEqual(await store.resolve(testTenant, "U09LKC3KATS"), {
       kind: "one",
       member: {
         principalId: "kai@acme.dev",
@@ -541,20 +547,20 @@ describe("directory resolution by Slack id", () => {
         slackId: "U09LKC3KATS",
       },
     });
-    assert.equal((await store.resolve("kai")).kind, "one");
-    assert.equal((await store.resolve("U-nobody")).kind, "none");
+    assert.equal((await store.resolve(testTenant, "kai")).kind, "one");
+    assert.equal((await store.resolve(testTenant, "U-nobody")).kind, "none");
   });
 });
 
 describe("directory group upsert", () => {
   it("makes a just-opened group resolvable and its members visible at once", async () => {
     const store = createPostgresDirectoryStore(testDatabaseUrl());
-    await store.replaceGroups([]);
-    assert.equal((await store.resolveGroupByParticipants(["a", "b"])).kind, "none");
+    await store.replaceGroups(testTenant, []);
+    assert.equal((await store.resolveGroupByParticipants(testTenant, ["a", "b"])).kind, "none");
 
-    await store.upsertGroup("C-new", ["a", "b"]);
-    assert.deepEqual(await store.resolveGroupByParticipants(["b", "a"]), { kind: "one", groupId: "C-new" });
-    assert.equal(await store.groupMember("C-new", "a"), true);
-    assert.equal(await store.groupMember("C-new", "c"), false);
+    await store.upsertGroup(testTenant, "C-new", ["a", "b"]);
+    assert.deepEqual(await store.resolveGroupByParticipants(testTenant, ["b", "a"]), { kind: "one", groupId: "C-new" });
+    assert.equal(await store.groupMember(testTenant, "C-new", "a"), true);
+    assert.equal(await store.groupMember(testTenant, "C-new", "c"), false);
   });
 });

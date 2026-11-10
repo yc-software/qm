@@ -71,6 +71,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
       }),
     );
     await built.directory.replaceChannels(
+      testTenant,
       [{ channelId: "C", name: "eng", isPrivate: false }],
       ["admin-alice", "U1", "U2", "U8"].map((principalId) => ({ channelId: "C", principalId })),
     );
@@ -978,6 +979,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
 
   it("a bot's capability can't list, read the events of, or disable a channel member's webhook", async () => {
     await built.directory.replaceChannels(
+      testTenant,
       [{ channelId: "C", name: "eng", isPrivate: true }],
       ["admin-alice", "U1", "U2", "release-bot"].map((principalId) => ({ channelId: "C", principalId })),
     );
@@ -1003,6 +1005,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
 
   it("a public channel remains available to an active internal principal outside its current roster", async () => {
     await built.directory.replaceChannels(
+      testTenant,
       [{ channelId: "C", name: "eng", isPrivate: false }],
       ["admin-alice", "U1", "U2"].map((principalId) => ({ channelId: "C", principalId })),
     );
@@ -1011,6 +1014,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
 
   it("a live verified bot retains private-channel tools without a Slack user principal", async () => {
     await built.directory.replaceChannels(
+      testTenant,
       [{ channelId: "C", name: "eng", isPrivate: true }],
       ["admin-alice", "U1", "U2"].map((principalId) => ({ channelId: "C", principalId })),
     );

@@ -17,6 +17,7 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const SECRET = "dm-relay-secret".repeat(3);
 
@@ -55,13 +56,14 @@ describe("agent → teammate DM: the cron recipient route (§10)", () => {
         signingSecret: SECRET,
       }),
     );
-    await built.app.upsertDirectory([
+    await built.app.upsertDirectory(testTenant, [
       { principalId: "U-alice", displayName: "Alice", type: "internal" },
       { principalId: "U-carol", displayName: "Carol", type: "internal" },
       { principalId: "U-sam1", displayName: "Sam Lee", type: "internal" },
       { principalId: "U-sam2", displayName: "Sam Park", type: "internal" },
     ]);
     await built.app.upsertChannels(
+      testTenant,
       [
         { channelId: "C", name: "current" },
         { channelId: "C-eng", name: "eng" },
@@ -74,7 +76,7 @@ describe("agent → teammate DM: the cron recipient route (§10)", () => {
         { channelId: "C-secret", principalId: "U-carol" },
       ],
     );
-    await built.app.upsertGroups([
+    await built.app.upsertGroups(testTenant, [
       { groupId: "G-jrs", principalId: "U-carol" },
       { groupId: "G-jrs", principalId: "U-alice" },
       { groupId: "G-jrs", principalId: "U-sam1" },
@@ -408,7 +410,7 @@ describe("agent → teammate DM: delivery events in the recipient's session (ant
     const deliveries = createDeliveryStore();
     const sessions = createPostgresSessionStore(testDatabaseUrl());
     const directory = createPostgresDirectoryStore(testDatabaseUrl());
-    await directory.replace([{ principalId: "U-carol", displayName: "Carol", type: "internal" }]);
+    await directory.replace(testTenant, [{ principalId: "U-carol", displayName: "Carol", type: "internal" }]);
     const app = createApp({ deliveries, sessions, directory } as unknown as AppDeps);
 
     const d = await deliveries.enqueue({

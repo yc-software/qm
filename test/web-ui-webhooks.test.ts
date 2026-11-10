@@ -12,6 +12,7 @@ import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 const PUBLIC = "https://core.public.example";
@@ -99,7 +100,7 @@ test("create scopes the webhook to the user; list, disable, and re-enable are ow
 });
 
 test("removed Project members cannot list or disable their former Project webhook", async () => {
-  await built.app.upsertDirectory([
+  await built.app.upsertDirectory(testTenant, [
     { principalId: "project-owner", displayName: "Project Owner", type: "internal" },
     { principalId: "hook-owner", displayName: "Hook Owner", type: "internal" },
     { principalId: "project-teammate", displayName: "Project Teammate", type: "internal" },

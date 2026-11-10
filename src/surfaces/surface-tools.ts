@@ -200,17 +200,17 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
     }
     const r: ReachResolution = await resolveReachTarget(
       {
-        resolveRecipient: (q) => deps.directory.resolve(q),
-        resolveChannel: (q) => deps.directory.resolveChannel(q),
-        channelMember: (c, p) => deps.directory.channelMember(c, p),
-        resolveGroup: (parts) => deps.directory.resolveGroupByParticipants(parts),
-        groupMember: (g, p) => deps.directory.groupMember(g, p),
-        directoryMember: (p) => deps.directory.get(p),
+        resolveRecipient: (q) => deps.directory.resolve(tenant, q),
+        resolveChannel: (q) => deps.directory.resolveChannel(tenant, q),
+        channelMember: (c, p) => deps.directory.channelMember(tenant, c, p),
+        resolveGroup: (parts) => deps.directory.resolveGroupByParticipants(tenant, parts),
+        groupMember: (g, p) => deps.directory.groupMember(tenant, g, p),
+        directoryMember: (p) => deps.directory.get(tenant, p),
         ...(deps.surfaceContext
           ? {
               openGroup: (parts: readonly string[]) =>
                 openGroupViaSurface((query) => deps.surfaceContext!.pull("slack", query), parts),
-              registerGroup: (g: string, parts: readonly string[]) => deps.directory.upsertGroup(g, parts),
+              registerGroup: (g: string, parts: readonly string[]) => deps.directory.upsertGroup(tenant, g, parts),
             }
           : {}),
       },

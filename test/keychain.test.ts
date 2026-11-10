@@ -31,6 +31,7 @@ import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const KEY = deriveConnectorKey("keychain-test-key");
 
@@ -1043,6 +1044,7 @@ describe("/v1/keychain routes (capability-authed)", () => {
   before(async () => {
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "kc-routes-")), signingSecret: SECRET }));
     await built.directory.replaceChannels(
+      testTenant,
       [
         { channelId: "C_SECONDS", name: "seconds", isPrivate: false },
         { channelId: "C_BAD_EXP", name: "bad-exp", isPrivate: false },
@@ -1064,7 +1066,7 @@ describe("/v1/keychain routes (capability-authed)", () => {
         { channelId: "C8", principalId: "U3" },
       ],
     );
-    await built.directory.replaceGroups([
+    await built.directory.replaceGroups(testTenant, [
       { groupId: "G_CONN", principalId: "alex@conn" },
       { groupId: "G_CONN", principalId: "carol@conn" },
     ]);

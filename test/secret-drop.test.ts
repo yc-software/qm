@@ -32,6 +32,7 @@ import { materializeGrant } from "./support/materialize-grant.ts";
 import { testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { settle } from "./support/settle.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const SECRET = "secret-drop-test-secret".repeat(3);
 const execFileAsync = promisify(execFile);
@@ -239,6 +240,7 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
   before(async () => {
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "secret-drop-")), signingSecret: SECRET }));
     await built.directory.replaceChannels(
+      testTenant,
       [{ channelId: "C1", name: "drops", isPrivate: false }],
       [
         { channelId: "C1", principalId: "U_A" },
@@ -379,7 +381,7 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
   });
 
   it("a Project roster change refuses an unredeemed drop on every attempt", async () => {
-    await built.app.upsertDirectory([
+    await built.app.upsertDirectory(testTenant, [
       { principalId: "U_PROJECT_OWNER", displayName: "Owner", type: "internal" },
       { principalId: "U_PROJECT_MEMBER", displayName: "Member", type: "internal" },
     ]);
@@ -664,6 +666,7 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
 
   it("a live bot attestation survives mint and private-scope redemption", async () => {
     await built.directory.replaceChannels(
+      testTenant,
       [{ channelId: "C1", name: "drops", isPrivate: true }],
       [{ channelId: "C1", principalId: "U_A" }],
     );
@@ -720,6 +723,7 @@ describe("/v1/keychain/drops — sibling-aware resume", () => {
       testConfig({ dataDir: mkdtempSync(join(tmpdir(), "secret-drop-sib-")), signingSecret: SECRET }),
     );
     await built.directory.replaceChannels(
+      testTenant,
       [{ channelId: "C1", name: "drops", isPrivate: false }],
       [{ channelId: "C1", principalId: "U_A" }],
     );

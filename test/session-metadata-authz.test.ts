@@ -10,6 +10,7 @@ import { projectGroupRef, projectScopeId } from "../src/projects/project-store.t
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { configureCommandRules } from "./support/command-rules.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-session-authz-"));
@@ -38,7 +39,7 @@ test("getSessionForViewer withholds metadata from a non-participant (no session-
 
 test("the single-session read applies the managed-project check the session list applies", async () => {
   const built = freshApp();
-  await built.app.upsertDirectory([
+  await built.app.upsertDirectory(testTenant, [
     { principalId: "owner", displayName: "Owner", type: "internal" },
     { principalId: "member", displayName: "Member", type: "internal" },
   ]);
@@ -92,7 +93,7 @@ test("the single-session read applies the managed-project check the session list
 
 test("a dropped project member cannot discard or retitle a session they can no longer read", async () => {
   const built = freshApp();
-  await built.app.upsertDirectory([
+  await built.app.upsertDirectory(testTenant, [
     { principalId: "owner", displayName: "Owner", type: "internal" },
     { principalId: "member", displayName: "Member", type: "internal" },
   ]);

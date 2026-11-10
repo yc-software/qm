@@ -9,7 +9,7 @@ import { userFacingFailureClause } from "../core/failure-copy.ts";
 import { TransientTurnFailure } from "../core/turn-error.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import { isVisible, type VisibilityDirectory } from "../directory/visibility.ts";
-import type { DirectoryMember, DirectoryStore, RecipientResolution } from "../directory/directory-store.ts";
+import type { DirectoryMember, RecipientResolution, TenantDirectory } from "../directory/directory-store.ts";
 import { samePerson } from "../directory/person.ts";
 import { grantsHomedWithOwner } from "../cron/authority.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
@@ -30,7 +30,7 @@ export interface TriggerDeps {
     get(principalId: string): Promise<{ displayName: string; principalId?: string; slackId?: string } | null>;
     channelPrivacy?(channelId: string): Promise<boolean | undefined>;
     groupMembership?(groupId: string, principalId: string): Promise<boolean | undefined>;
-    conversationMembers?: DirectoryStore["conversationMembers"];
+    conversationMembers?: TenantDirectory["conversationMembers"];
   };
   sessions?: { participantScopes(principalId: string): Promise<readonly { scopeId: ScopeId }[]> };
   resolveRecipient?: (query: string) => Promise<RecipientResolution>;

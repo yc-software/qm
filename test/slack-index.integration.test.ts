@@ -326,7 +326,7 @@ class FakeCore implements SlackCoreClient {
     return null;
   }
 
-  async pushDirectory(body: any): Promise<boolean> {
+  async pushDirectory(_tenant: unknown, body: any): Promise<boolean> {
     this.directories.push(body);
     return true;
   }
@@ -394,7 +394,7 @@ async function fixture(
 ) {
   const core = new FakeCore();
   core.externalParticipants = options.externalParticipants ?? false;
-  const started = withTenant(TENANT, () =>
+  const started = withTenant(TENANT, (tenant) =>
     startSlackPlugin(
       {
         botToken: "xoxb-test",
@@ -406,7 +406,7 @@ async function fixture(
         ...(options.webUiPublicUrl ? { webUiPublicUrl: options.webUiPublicUrl } : {}),
       },
       core,
-      TENANT,
+      tenant,
     ),
   );
   const app = FakeApp.instances.at(-1)!;

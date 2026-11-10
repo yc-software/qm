@@ -10,6 +10,7 @@ import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const SECRET = "agent-projects-secret".repeat(2);
 
@@ -43,7 +44,7 @@ describe("agent projects self-API", async () => {
 
   before(async () => {
     built = buildApp(testConfig({ signingSecret: SECRET }));
-    await built.app.upsertDirectory([
+    await built.app.upsertDirectory(testTenant, [
       { principalId: "U1", displayName: "One", type: "internal" },
       { principalId: "U2", displayName: "Two", type: "internal" },
       { principalId: "U3", displayName: "Three", type: "internal" },

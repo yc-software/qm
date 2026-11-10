@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import bolt from "@slack/bolt";
 import { createMirror } from "../src/slack/mirror.ts";
 import { registerSlackEvents } from "../src/slack/events.ts";
+import { testTenant } from "./support/test-tenant.ts";
 import { createDirectory, type BotIdentity } from "../src/slack/directory.ts";
 import { createTurnHandler, type TurnHandler } from "../src/slack/turn-handler.ts";
 import { toEvent } from "../src/api/routes/surface-cache.ts";
@@ -318,7 +319,7 @@ test("unavailable room authorization retries; genuine room denial never ingests"
 });
 
 test("strict directory roster distinguishes unavailable members from denied rooms", async () => {
-  const directory = createDirectory({ core: {} as any, ids });
+  const directory = createDirectory({ tenant: testTenant, core: {} as any, ids });
   const client = {
     conversations: { members: {} },
     paginate: async function* () {
@@ -394,7 +395,7 @@ test("self message deletions reach the mirror without dispatch", async () => {
 });
 
 test("strict roster rejects incomplete user classification rather than treating it as denied", async () => {
-  const directory = createDirectory({ core: {} as any, ids });
+  const directory = createDirectory({ tenant: testTenant, core: {} as any, ids });
   const client = {
     conversations: { members: {} },
     users: {

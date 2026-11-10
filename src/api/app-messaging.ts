@@ -36,11 +36,11 @@ import type { AmbientHelpers } from "./app-ambient.ts";
 import { personLabel } from "../identity/person-names.ts";
 
 export async function cronVisibility(deps: AppDeps, h: AppHelpers, principalId: string) {
-  const viewerKeys = personKeys(await deps.directory.get(principalId).catch(() => null), principalId);
+  const viewerKeys = personKeys(await h.directory.get(principalId).catch(() => null), principalId);
   const viewersOwn = (id: string): boolean => viewerKeys.has(personKey(id));
   const scopeNames = new Map<ScopeId, string | null>([[scopeId("org", orgIdOf()), null]]);
   if (deps.identity.isInternal(deps.identity.classify(principalId))) {
-    for (const c of await deps.directory.listChannelsFor(principalId)) {
+    for (const c of await h.directory.listChannelsFor(principalId)) {
       scopeNames.set(scopeId("channel", c.channelId), c.name);
     }
   }
@@ -163,7 +163,7 @@ export function createMessagingMethods(
     return [...byKey.values()];
   };
   const mergedDirectoryMembers = async () => {
-    const [stored, viaEmail] = await Promise.all([deps.directory.list(), identityMembers()]);
+    const [stored, viaEmail] = await Promise.all([h.directory.list(), identityMembers()]);
     const seen = new Set(stored.map((member) => personKey(member.principalId)));
     return [...stored, ...viaEmail.filter((member) => !seen.has(personKey(member.principalId)))];
   };
@@ -448,9 +448,9 @@ export function createMessagingMethods(
       return found;
     },
 
-    async upsertDirectory(members, syncedAt) {
-      const previous = await deps.directory.list();
-      if (!(await deps.directory.replace(members, syncedAt))) return false;
+    async upsertDirectory(tenant, members, syncedAt) {
+      const previous = await deps.directory.list(tenant);
+      if (!(await deps.directory.replace(tenant, members, syncedAt))) return false;
       const apps = members.filter((m) => m.isBot).map((m) => m.principalId);
       if (apps.length && deps.admin)
         await deps.admin.users.markApps(apps).catch(reportFailureAs("users: mark apps", 0));
@@ -479,8 +479,9 @@ export function createMessagingMethods(
       }
       return true;
     },
-    async upsertChannels(channels, channelMembers, syncedAt, channelRosterIds, revocations, partial) {
+    async upsertChannels(tenant, channels, channelMembers, syncedAt, channelRosterIds, revocations, partial) {
       const applied = await deps.directory.replaceChannels(
+        tenant,
         channels,
         channelMembers,
         syncedAt,
@@ -491,27 +492,27 @@ export function createMessagingMethods(
       await h.syncLinkedProjectRosters();
       return applied;
     },
-    async upsertGroups(groupMembers, syncedAt, groupIds, groupRosterIds) {
-      return deps.directory.replaceGroups(groupMembers, syncedAt, groupIds, groupRosterIds);
+    async upsertGroups(tenant, groupMembers, syncedAt, groupIds, groupRosterIds) {
+      return deps.directory.replaceGroups(tenant, groupMembers, syncedAt, groupIds, groupRosterIds);
     },
-    async setDirectoryWorkspaceUrl(url) {
-      await deps.directory.setWorkspaceUrl(url);
+    async setDirectoryWorkspaceUrl(tenant, url) {
+      await deps.directory.setWorkspaceUrl(tenant, url);
     },
-    directoryMeta() {
-      return deps.directory.meta();
+    directoryMeta(tenant) {
+      return deps.directory.meta(tenant);
     },
     channelMember(channelId, principalId) {
-      return deps.directory.channelMember(channelId, principalId);
+      return h.directory.channelMember(channelId, principalId);
     },
     channelVisibleTo(actorId, channelId, isPrivate) {
-      return isVisible(deps.directory, actorId, {
+      return isVisible(h.directory, actorId, {
         kind: "channel",
         channelId,
         ...(isPrivate !== undefined ? { isPrivate } : {}),
       });
     },
     async resolveRecipient(query) {
-      const stored = await deps.directory.resolve(query);
+      const stored = await h.directory.resolve(query);
       if (stored.kind !== "none") return stored;
       const match = pickMatch(
         await identityMembers(),
@@ -524,23 +525,23 @@ export function createMessagingMethods(
       return { kind: "none" };
     },
     resolveChannel(query) {
-      return deps.directory.resolveChannel(query);
+      return h.directory.resolveChannel(query);
     },
     directoryMembers() {
       return mergedDirectoryMembers();
     },
     directoryChannels() {
-      return deps.directory.listChannels();
+      return h.directory.listChannels();
     },
     directoryChannelsFor(principalId) {
-      return deps.directory.listChannelsFor(principalId);
+      return h.directory.listChannelsFor(principalId);
     },
     async directoryMember(principalId) {
-      const direct = await deps.directory.get(principalId);
+      const direct = await h.directory.get(principalId);
       if (direct) return direct;
       await deps.identity.refresh();
       for (const alias of personIds(principalId).filter((id) => id !== principalId)) {
-        const member = await deps.directory.get(alias);
+        const member = await h.directory.get(alias);
         if (member) return member;
       }
       return (
@@ -548,16 +549,16 @@ export function createMessagingMethods(
       );
     },
     samePerson(a, b) {
-      return samePersonInDirectory(deps.directory, a, b);
+      return samePersonInDirectory(h.directory, a, b);
     },
     personMatcher(actorId) {
-      return samePersonMatcher(deps.directory, actorId);
+      return samePersonMatcher(h.directory, actorId);
     },
     cronAdminUrl(cron) {
       return adminBase ? adminCronHistoryUrl(adminBase, cron.ownerScopeId, cron.id) : undefined;
     },
     async channelName(channelId) {
-      const chan = (await deps.directory.listChannels()).find((c) => c.channelId === channelId);
+      const chan = (await h.directory.listChannels()).find((c) => c.channelId === channelId);
       return chan ? `#${chan.name.replace(/^#/, "")}` : undefined;
     },
     ...(deps.ambientJudge ? { ambientJudge: deps.ambientJudge } : {}),
@@ -635,7 +636,7 @@ export function createMessagingMethods(
         }
         baseDestination = withThread(baseDestination, input.threadTs);
       }
-      const sender = await deps.directory.get(input.senderId).catch(() => null);
+      const sender = await h.directory.get(input.senderId).catch(() => null);
       const persona = input.currentDestination?.persona;
       if (persona && !input.react && !input.delete) baseDestination = { ...baseDestination, persona };
       const delivery = await reachEnqueue({
