@@ -35,8 +35,7 @@ export function titleUserPrompt(transcript: string): string {
   ].join("\n");
 }
 
-const MAX_TITLE_CHARS = 60;
-const MAX_TITLE_WORDS = 8;
+export const MAX_TITLE_CHARS = 60;
 
 export function sanitizeTitle(out = ""): string | undefined {
   let t = (out.trim().split("\n")[0] ?? "").trim();
@@ -48,7 +47,6 @@ export function sanitizeTitle(out = ""): string | undefined {
   t = t.replace(/[\s.,;:!]+$/g, "").trim();
   if (!t) throw new TitleRejected("empty", out);
   if (t.length > MAX_TITLE_CHARS) throw new TitleRejected("too_long", out);
-  if (t.split(/\s+/).length > MAX_TITLE_WORDS) throw new TitleRejected("too_many_words", out);
   if (/\*\*|^#/.test(t)) throw new TitleRejected("markdown", out);
   if (/^(?:i|i['’]\w+|sorry|unfortunately|sure|okay|ok|here['’]?s|as an ai)\b/i.test(t))
     throw new TitleRejected("reply_opener", out);

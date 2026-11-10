@@ -225,7 +225,6 @@ test("sanitizeTitle rejects reply-shaped output and names the rule plus a sample
     "I need to be direct: **I can't actually monitor GitHub CI**, run background jobs, or watch anything.";
   assert.ok(answeredTranscript.length > 80);
   rejects(answeredTranscript, "too_long");
-  rejects("Fix the CI job so it runs on every push to main and also on tags", "too_many_words");
   rejects("Sorry, I can't help with that", "reply_opener");
   rejects("Here's what I found in the logs", "reply_opener");
   rejects("**Fix** the thing", "markdown");
@@ -244,11 +243,10 @@ test("sanitizeTitle rejects reply-shaped output and names the rule plus a sample
   assert.ok(p.trimEnd().endsWith("(one line, or exactly NONE)."));
 });
 
-test("titles keep a trailing question mark and reject titles over eight words", async () => {
+test("titles keep a trailing question mark", async () => {
   const { sanitizeTitle } = await import("../src/agent/session-title-prompt.ts");
   assert.equal(sanitizeTitle("How did Maria sort sessions by activity?"), "How did Maria sort sessions by activity?");
   assert.equal(sanitizeTitle('"Inbox 24 hours behind?!"'), "Inbox 24 hours behind?");
-  assert.throws(() => sanitizeTitle("Why did Maria and Priya not see the DM?"), { rule: "too_many_words" });
 });
 
 test("a first message titled NONE is retitled once from the first exchange", async () => {

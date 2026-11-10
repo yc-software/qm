@@ -1,5 +1,6 @@
 import type { ErrorLog } from "../admin/error-log.ts";
 import type { Agent } from "../agent/agent.ts";
+import { MAX_TITLE_CHARS } from "../agent/session-title-prompt.ts";
 import type { SessionStateBus } from "../runs/session-state-bus.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { ScopeId } from "../types.ts";
@@ -11,7 +12,7 @@ import { TitleRejected } from "./turn-error.ts";
 function fallbackSessionTitle(text: string): string | undefined {
   const clean = stripTurnBoilerplate(text).replace(/\s+/g, " ").trim();
   if (!clean) return undefined;
-  return clean.length > 60 ? `${headSlice(clean, 59).trimEnd()}…` : clean;
+  return clean.length > MAX_TITLE_CHARS ? `${headSlice(clean, MAX_TITLE_CHARS - 1).trimEnd()}…` : clean;
 }
 
 export function createSessionTitles(deps: {
