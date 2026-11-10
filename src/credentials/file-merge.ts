@@ -15,15 +15,18 @@ export function credentialFileExpiry(file: CredentialFile): number | undefined {
       JSON.parse(Buffer.from(file.contentBase64, "base64").toString("utf8")),
     );
   } catch {
-    return undefined;
+    value = undefined;
   }
   const at = typeof value === "string" ? Date.parse(value) : NaN;
-  return Number.isFinite(at) ? at : undefined;
+  if (Number.isFinite(at)) return at;
+  console.warn(`[credentials] ${file.path}: could not read its expiry; treating it as having none`);
+  return undefined;
 }
 
 export interface CredentialFileMerge {
   files: CredentialFile[];
   overruled: string[];
+  byExpiry: Array<{ path: string; kept: "stored" | "refreshed" }>;
 }
 
 export function mergeCredentialFiles(input: {
@@ -35,7 +38,7 @@ export function mergeCredentialFiles(input: {
   const version = (file: CredentialFile | undefined) => (file ? input.hash(file) : undefined);
   const stored = new Map(input.stored.map((file) => [file.path, file]));
   const refreshed = new Map(input.refreshed.map((file) => [file.path, file]));
-  const merged: CredentialFileMerge = { files: [], overruled: [] };
+  const merged: CredentialFileMerge = { files: [], overruled: [], byExpiry: [] };
   for (const path of [...new Set([...stored.keys(), ...refreshed.keys()])].sort()) {
     const ours = refreshed.get(path);
     const theirs = stored.get(path);
@@ -44,8 +47,10 @@ export function mergeCredentialFiles(input: {
     if (version(ours) !== version(theirs) && version(ours) !== base) {
       const a = ours && credentialFileExpiry(ours);
       const b = theirs && credentialFileExpiry(theirs);
-      if (version(theirs) === base || !theirs || (a !== undefined && b !== undefined && a > b)) pick = ours;
-      else if (a === undefined || b === undefined || a === b) merged.overruled.push(path);
+      const decided = version(theirs) !== base && !!theirs && a !== undefined && b !== undefined && a !== b;
+      if (version(theirs) === base || !theirs || (decided && a > b)) pick = ours;
+      else if (!decided) merged.overruled.push(path);
+      if (decided) merged.byExpiry.push({ path, kept: pick === ours ? "refreshed" : "stored" });
     }
     if (pick) merged.files.push(pick);
   }

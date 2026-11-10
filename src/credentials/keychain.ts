@@ -1088,6 +1088,7 @@ export function createKeychain(deps: {
       const ours = Object.entries(credentialFileHashes(normalized));
       if (ours.length === baseline.size && ours.every(([path, hash]) => baseline.get(path) === hash)) return [];
       let overruled: string[] = [];
+      let byExpiry: Array<{ path: string; kept: string }> = [];
 
       const updated = await deps.creds.update(materialized.credentialId, (current) => {
         if (current.kind !== "file" || !samePerson(current.ownerId, materialized.ownerId))
@@ -1100,6 +1101,7 @@ export function createKeychain(deps: {
           hash: (file) => fingerprint([file]),
         });
         overruled = merged.overruled;
+        byExpiry = merged.byExpiry;
         const next = checkedFiles(merged.files);
         if (!next.length || fingerprint(next) === fingerprint(currentFiles)) return current;
         const secret = JSON.stringify(next);
@@ -1115,6 +1117,10 @@ export function createKeychain(deps: {
       if (overruled.length)
         console.warn(
           `[credentials] ${materialized.credentialId}: kept the stored version of ${overruled.join(", ")} over a concurrent change`,
+        );
+      for (const { path, kept } of byExpiry)
+        console.warn(
+          `[credentials] ${materialized.credentialId}: kept the ${kept} version of ${path} over a concurrent change because it expires later`,
         );
       return overruled;
     },

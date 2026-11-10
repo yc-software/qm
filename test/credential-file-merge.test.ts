@@ -18,6 +18,7 @@ const merge = (base: CredentialFile[], stored: CredentialFile[], refreshed: Cred
   return {
     files: Object.fromEntries(result.files.map((f) => [f.path, Buffer.from(f.contentBase64, "base64").toString()])),
     overruled: result.overruled,
+    byExpiry: result.byExpiry,
   };
 };
 const TOKEN = ".aws/sso/cache/token.json";
@@ -44,14 +45,22 @@ test("each side keeps the files only it changed, including deletions", () => {
       [file("config", "c-store"), file("token", "t0"), file("wal", "w0"), file("extra", "x0")],
       [file("config", "c0"), file("token", "t-cmd"), file("extra", "x0"), file("new", "n")],
     ),
-    { files: { config: "c-store", extra: "x0", new: "n", token: "t-cmd" }, overruled: [] },
+    { files: { config: "c-store", extra: "x0", new: "n", token: "t-cmd" }, overruled: [], byExpiry: [] },
   );
 });
 
 test("a deletion never removes a file the other side changed, and is reported", () => {
   const base = [file("token", "t0")];
-  assert.deepEqual(merge(base, [file("token", "t-store")], []), { files: { token: "t-store" }, overruled: ["token"] });
-  assert.deepEqual(merge(base, [], [file("token", "t-cmd")]), { files: { token: "t-cmd" }, overruled: [] });
+  assert.deepEqual(merge(base, [file("token", "t-store")], []), {
+    files: { token: "t-store" },
+    overruled: ["token"],
+    byExpiry: [],
+  });
+  assert.deepEqual(merge(base, [], [file("token", "t-cmd")]), {
+    files: { token: "t-cmd" },
+    overruled: [],
+    byExpiry: [],
+  });
 });
 
 test("true conflicts keep the later declared expiry without a report, else the stored version with one", () => {
@@ -62,9 +71,14 @@ test("true conflicts keep the later declared expiry without a report, else the s
     [earlier, later],
     [later, earlier],
   ] as const) {
-    const { files, overruled } = merge(base, [stored, file("blob", "b-store")], [ours, file("blob", "b-cmd")]);
+    const { files, overruled, byExpiry } = merge(
+      base,
+      [stored, file("blob", "b-store")],
+      [ours, file("blob", "b-cmd")],
+    );
     assert.equal(JSON.parse(files[TOKEN]!).v, "later");
     assert.equal(files.blob, "b-store");
     assert.deepEqual(overruled, ["blob"]);
+    assert.deepEqual(byExpiry, [{ path: TOKEN, kept: stored === later ? "stored" : "refreshed" }]);
   }
 });

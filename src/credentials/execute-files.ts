@@ -253,11 +253,13 @@ async function finishExecutionFiles(
           failure.index === index && !(failure.reason instanceof KeychainError && failure.reason.status < 500),
       ),
     );
-    if (failures.length)
+    if (failures.length) {
+      if (notes.length) console.warn(`[credentials] Before a save failed, this command ${notes.join("; and ")}.`);
       throw new AggregateError(
         failures.map(({ reason }) => reason),
         `${retry.length ? "Could not persist refreshed credentials; will retry" : "Could not persist refreshed credentials"}: ${failures.map(({ reason }) => errMessage(reason)).join("; ")}`,
       );
+    }
     return notes.length ? `[credentials] This command ${notes.join("; and ")}.` : undefined;
   };
   return withCleanup(work, async () => {

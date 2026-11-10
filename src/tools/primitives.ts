@@ -912,7 +912,10 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         async () => {
           credentialNote = await fileExecution?.finish();
         },
-      );
+      ).catch((error: unknown) => {
+        if (credentialNote) console.warn(`${credentialNote} The command itself failed.`);
+        throw error;
+      });
       return {
         ...r,
         ...(credentialNote ? { stderr: r.stderr ? `${r.stderr}\n${credentialNote}` : credentialNote } : {}),
