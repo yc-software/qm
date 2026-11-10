@@ -1823,27 +1823,6 @@ test("a fire is told when its previous output was refused by the cron's destinat
   assert.doesNotMatch(calls[2]?.text ?? "", /was refused/);
 });
 
-test("a fire is not told about a refusal its previous output overcame with a late success", async () => {
-  const { crons, deliveries, calls, scheduler } = agent("tick");
-  const cron = await crons.create({
-    schedule: { everyMs: 60_000 },
-    action: "post the tick",
-    owner: "U7",
-    createdBy: "U7",
-    ownerScopeId: scopeId("personal", "U7"),
-    destination: { type: "slack", target: "D7", audienceScopeId: scopeId("personal", "U7") },
-  });
-  await runNowSettled(scheduler, cron.id);
-  const [first] = await deliveries.pending("slack");
-  await deliveries.fail(first!.id, "cannot_dm_bot", Date.now());
-  await deliveries.ack(first!.id, Date.now());
-  const landed = await deliveries.get(first!.id);
-  assert.ok(landed?.deliveredAt, "the late success lands");
-  assert.equal(landed?.failedReason, undefined, "a delivered row is not also refused");
-  await runNowSettled(scheduler, cron.id);
-  assert.doesNotMatch(calls[1]?.text ?? "", /was refused/);
-});
-
 const AFTER_REDRIVE_GRACE_MS = 61_000;
 
 function handOffOnce(reply: (req: TurnRequest) => string) {

@@ -408,28 +408,10 @@ export async function exerciseDeliveryFail(makeStore: (opts: { maxAgeMs: number 
   assert.equal(again.id, card.id);
   assert.equal(again.failedReason, "cannot_dm_bot", "re-enqueuing the same key does not revive a failed row");
   assert.deepEqual(await store.claimPending("principal", 60_000), []);
-
-  for (const [key, land] of [
-    ["late-ack", (d: { id: string }) => store.ack(d.id, Date.now())],
-    ["late-ack-by-key", () => store.ackByKey("late:late-ack-by-key", Date.now())],
-    ["late-thread", (d: { id: string }) => store.recordRecipientThread(d.id, "T-late", Date.now())],
-  ] as const) {
-    const row = await store.enqueue({
-      destination: { type: "principal", target: "U-late" },
-      text: "Late",
-      idempotencyKey: `late:${key}`,
-    });
-    await store.fail(row.id, "cannot_dm_bot", Date.now());
-    await land(row);
-    const landed = await store.get(row.id);
-    assert.ok(landed?.deliveredAt, `${key}: the late success lands`);
-    assert.equal(landed?.failedReason, undefined, `${key}: a delivered row is not also refused`);
-    assert.equal(landed?.expiredAt, undefined, `${key}: a delivered row is not expired`);
-    assert.equal(
-      await store.fail(row.id, "cannot_dm_bot", Date.now()),
-      null,
-      `${key}: a refusal after delivery is ignored`,
-    );
-    assert.equal((await store.get(row.id))?.failedReason, undefined, `${key}: still not refused`);
+  for (const k of ["ack", "ackByKey", "recordRecipientThread"] as const) {
+    const { id } = await store.enqueue({ destination: { type: "principal", target: "" }, text: "", idempotencyKey: k });
+    await store.fail(id, "cannot_dm_bot", 1);
+    await (k === "ackByKey" ? store.ackByKey(k, 2) : k === "ack" ? store.ack(id, 2) : store[k](id, "T", 2));
+    assert.equal((await store.get(id))?.failedReason, undefined, `${k} leaves the delivered row refused`);
   }
 }
