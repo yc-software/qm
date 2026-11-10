@@ -9,7 +9,7 @@ import { connect, type AddressInfo } from "node:net";
 import { mock, test, type TestContext } from "node:test";
 import { createApp } from "../src/api/app.ts";
 import { createServer } from "../src/api/server.ts";
-import { createDeployStore, type Deployment } from "../src/deploy/deploy-store.ts";
+import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import {
   createRenderDeployArtifacts,
@@ -27,7 +27,7 @@ import { Duplex } from "node:stream";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
-import { testMap, testDatabaseUrl, testPgPool } from "./support/test-database.ts";
+import { testDeployBackings, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 const runner = new URL(process.env.QM_RENDER_RUNNER_MODULE ?? "../deploy/render-runner/start.mjs", import.meta.url);
@@ -44,11 +44,17 @@ const signingSecret = "render-runner-secret".repeat(3);
 async function fixture(t: TestContext, appSource?: string, entrypoint = "node app.cjs") {
   const root = await mkdtemp(join(tmpdir(), "qm-render-runner-"));
   await chmod(root, 0o755);
-  const deployments = testMap<Deployment>();
+  const backings = testDeployBackings();
+  const { deployments, drafts } = backings;
   const archiveStore = testMap<DeployGitArchive>();
   const credentials = testMap<StoredRenderDeployCredential>();
   const gitDir = join(root, "writer");
-  const deployStore = createDeployStore({ deployments, git: { repoRoot: gitDir, archiveStore }, pg: testPgPool() });
+  const deployStore = createDeployStore({
+    deployments,
+    drafts,
+    git: { repoRoot: gitDir, archiveStore },
+    pg: backings.pg,
+  });
   const d = await deployStore.create({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -84,8 +90,9 @@ bypass.listen(Number(process.env.QM_QA_GATEWAY_PORT), "0.0.0.0");`,
   });
   const readerStore = createDeployStore({
     deployments,
+    drafts,
     git: { repoRoot: join(root, "reader"), archiveStore },
-    pg: testPgPool(),
+    pg: backings.pg,
   });
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const deploy = createDeployService({
@@ -107,7 +114,7 @@ bypass.listen(Number(process.env.QM_QA_GATEWAY_PORT), "0.0.0.0");`,
     acl,
     identity,
     directory: createPostgresDirectoryStore(testDatabaseUrl()),
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    sessions: createPostgresSessionStore(backings.databaseUrl),
   } as unknown as Parameters<typeof createApp>[0]);
   const server = createServer(app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),

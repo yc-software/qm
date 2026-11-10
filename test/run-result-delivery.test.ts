@@ -17,6 +17,7 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { holdThread, testRuns } from "./support/live-run.ts";
+import { TEST_TENANT } from "./support/test-tenant.ts";
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
 const turn = (text: string, deliveryTarget?: string): OrchestratorInput => ({
@@ -31,6 +32,7 @@ const turn = (text: string, deliveryTarget?: string): OrchestratorInput => ({
 function run(over: Partial<Run>): Run {
   return {
     id: "r-1",
+    tenantId: TEST_TENANT,
     sessionId: "s-1",
     status: "done",
     request: turn("hi", "C9:171.001"),
@@ -43,6 +45,7 @@ function run(over: Partial<Run>): Run {
     maxAttempts: 3,
     priority: 2,
     preemptions: 0,
+    handbacks: 0,
     leaseToken: null,
     leaseExpiresAt: null,
     workerId: null,

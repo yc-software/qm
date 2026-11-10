@@ -1,3 +1,4 @@
+import { perTenant } from "../tenants/cache.ts";
 import { decryptSecret, encryptSecret, type SecretKey } from "../connectors/connector-client-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { parseScopeId, scopeId, type ScopeId } from "../types.ts";
@@ -450,11 +451,12 @@ export function createMemoryRegistryStore(opts: {
   key: SecretKey;
   overlay?: MemoryProviderConfig;
 }): MemoryRegistryStore {
-  let cached: { version: string; record: unknown } | undefined;
+  const caches = perTenant<{ cached?: { version: string; record: unknown } }>(() => ({}));
   const current = async () => {
+    const slot = caches();
     const version = await opts.map.version();
-    if (cached?.version !== version) cached = { version, record: await opts.map.get(RECORD_ID) };
-    return cached;
+    if (slot.cached?.version !== version) slot.cached = { version, record: await opts.map.get(RECORD_ID) };
+    return slot.cached;
   };
   return {
     overlayIds: new Set(opts.overlay?.providers.map(({ id }) => id) ?? []),
