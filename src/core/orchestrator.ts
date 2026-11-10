@@ -23,9 +23,7 @@ import {
   sessionContextOf,
 } from "../sessions/session-syscalls.ts";
 import {
-  documentText,
   type DocumentInput,
-  type ExtractedDocumentText,
   loadDocumentInputs,
   MAX_DOCUMENT_BYTES,
   MAX_DOCUMENT_TEXT_CHARS,
@@ -34,7 +32,6 @@ import {
   turnDocumentMetas,
   documentIncludedNote,
   isDocumentAttachment,
-  isTextDocument,
 } from "./documents.ts";
 import { recoveredRuntime } from "../agent/runtime-recovery.ts";
 import { withLiveTurnMembership } from "../resolution/scope-membership.ts";
@@ -199,6 +196,7 @@ import {
   countSkills,
   createSecurityClassifier,
   screenChunks,
+  createDocumentScreen,
   createSkillScreen,
   createToolResultScreen,
   screenInboundInput,
@@ -1836,46 +1834,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }),
             );
         contextRecovered = history !== visibleHistory && history.some((item) => item.body.mode === "recent");
-        const screenDocuments = async (
-          documentInputs: Awaited<ReturnType<typeof loadDocumentInputs>>,
-          requestText: string,
-        ): Promise<boolean> => {
-          let documentsUnscreened = false;
-          if (securityPolicy.screening !== "off") {
-            for (const document of documentInputs.documents.slice()) {
-              documentsUnscreened ||= !isTextDocument(document);
-              if (!(deps.securityScreener || deps.agent.screenSecurity)) {
-                documentsUnscreened = true;
-                continue;
-              }
-              let extracted: ExtractedDocumentText;
-              try {
-                extracted = await documentText(document, turnAbort.signal);
-              } catch {
-                turnAbort.signal.throwIfAborted();
-                documentsUnscreened = true;
-                continue;
-              }
-              const verdict = await screenChunks(
-                securityScreenChunks("tool_result:inbound_document", extracted.text),
-                classifyAs({
-                  sessionId: session.id,
-                  hook: "tool_response",
-                  request: requestText,
-                  surface: "inbound_file",
-                }),
-                { signal: turnAbort.signal },
-              );
-              if (verdict.decision === "strict") {
-                documentInputs.documents.splice(documentInputs.documents.indexOf(document), 1);
-                documentInputs.notices.push(
-                  `${document.name}: document withheld by the external-data security screen.`,
-                );
-              } else if (verdict.unscreened || extracted.truncated) documentsUnscreened = true;
-            }
-          }
-          return enforceScreen && documentsUnscreened;
-        };
+        const screenDocuments = createDocumentScreen({
+          deps,
+          session,
+          securityPolicy,
+          enforceScreen,
+          classifyAs,
+          turnAbort,
+        });
         const documentRoom = {
           maxBytes: MAX_DOCUMENT_BYTES,
           maxDocuments: MAX_DOCUMENTS,
