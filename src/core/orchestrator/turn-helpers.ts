@@ -9,7 +9,7 @@ import type {
   ActorAssertion,
 } from "../../types.ts";
 import { boundWebhook } from "../turn-origin.ts";
-import { isAgentReply, isOverheard, isUserItem, type Item, proseText } from "../../sessions/items.ts";
+import { isAgentReply, isHidden, isOverheard, isUserItem, type Item, proseText } from "../../sessions/items.ts";
 import type { DeliveryStore } from "../../delivery/delivery-store.ts";
 import type { SkillBundle, SkillBundleStore } from "../../skills/skill-bundle-store.ts";
 import type { SkillResolution } from "../../skills/skill-store.ts";
@@ -138,7 +138,7 @@ export function renderTitleTranscript(items: Item[]): string {
 }
 
 export function renderNextPromptTranscript(items: Item[]): string | undefined {
-  const turns = [...visibleTurnTexts(items)];
+  const turns = [...visibleTurnTexts(items.filter((item) => !isHidden(item)))];
   const reply = turns.at(-1);
   if (reply?.role !== "Assistant") return undefined;
   const asked = turns.findLast((turn) => turn.role === "User");
