@@ -911,7 +911,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
   url.searchParams.delete("__qm_no_shell");
   const isTopDocument = String(req.headers["sec-fetch-dest"] ?? "") === "document";
   const isShellRequest = pathname.startsWith(APP_SHELL_PATH_PREFIX);
-  const canManage = sub && !session?.appOnly ? await app.canManageDeployment(slug, sub) : false;
+  const canManage = sub && !session?.appOnly ? await app.canManageDeployment(slug, { actorId: sub }) : false;
   let authenticatedPermission: Permission | null = null;
   if (sub && deployment) {
     if (session?.appOnly) {
@@ -1307,7 +1307,7 @@ async function deploymentGitUrl(ctx: ApiCtx): Promise<void> {
   if (!capability)
     return sendJson(res, 403, { error: "forbidden", message: "a git URL requires an agent capability token" });
   if (!ctx.secret) return sendJson(res, 503, { error: "unavailable", message: "core signing secret not configured" });
-  const result = await app.deploymentGitUrlFor(params.id!, capability.actorId, {
+  const result = await app.deploymentGitUrlFor(params.id!, capability, {
     secret: ctx.secret,
     baseUrl: gitUrlBase(ctx),
   });
@@ -1335,7 +1335,8 @@ async function listDeployments(ctx: ApiCtx): Promise<void> {
   const { res, app, url, secret, capability, actor } = ctx;
   const principalId = capability?.actorId ?? actor?.p ?? url.searchParams.get("principalId");
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
-  const visible = await app.listDeploymentsForViewer(principalId);
+  const viewer = capability ?? { actorId: principalId };
+  const visible = await app.listDeploymentsForViewer(viewer);
   const baseUrl = gitUrlBase(ctx);
   const ownerOf = (d: { ownerScopeId?: string }) =>
     d.ownerScopeId?.startsWith("personal:") ? d.ownerScopeId.slice("personal:".length) : undefined;
@@ -1352,7 +1353,7 @@ async function listDeployments(ctx: ApiCtx): Promise<void> {
         ...(d.createdBy ? { createdByName: names.get(d.createdBy)! } : {}),
       };
       if (!secret) return named;
-      const git = await app.deploymentGitUrlFor(d.id, principalId, { secret, baseUrl });
+      const git = await app.deploymentGitUrlFor(d.id, viewer, { secret, baseUrl });
       return git ? { ...named, gitUrl: git.url } : named;
     }),
   );
@@ -1433,7 +1434,8 @@ export async function getDeployment(ctx: ApiCtx): Promise<void> {
   const principalId = capability?.actorId ?? actor?.p ?? url.searchParams.get("principalId");
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
   const stored = await app.getDeployment(params.id!);
-  const permission = stored ? await app.deploymentGitPermissionFor(stored.id, principalId) : null;
+  const viewer = capability ?? { actorId: principalId };
+  const permission = stored ? await app.deploymentGitPermissionFor(stored.id, viewer) : null;
   if (!stored || !permission) return sendJson(res, 404, { error: "not_found" });
   const draft = permission === "write" ? (await app.deploymentLiveEdit(stored.id))?.draft : null;
   const deployment = {
@@ -1451,7 +1453,7 @@ export async function getDeployment(ctx: ApiCtx): Promise<void> {
       : {}),
   };
   if (!secret) return sendJson(res, 200, { deployment });
-  const git = await app.deploymentGitUrlFor(deployment.id, principalId, { secret, baseUrl: gitUrlBase(ctx) });
+  const git = await app.deploymentGitUrlFor(deployment.id, viewer, { secret, baseUrl: gitUrlBase(ctx) });
   return sendJson(res, 200, { deployment: git ? { ...deployment, gitUrl: git.url } : deployment });
 }
 
@@ -1494,7 +1496,9 @@ async function redeployDeployment(ctx: ApiCtx): Promise<void> {
 
 async function callerMayManageDeployment(ctx: ApiCtx, id: string): Promise<boolean> {
   const principalId = ctx.capability?.actorId ?? ctx.actor?.p;
-  return principalId ? ctx.app.canManageDeployment(id, principalId, ctx.capability?.scopeId) : false;
+  return principalId
+    ? ctx.app.canManageDeployment(id, ctx.capability ?? { actorId: principalId }, ctx.capability?.scopeId)
+    : false;
 }
 
 export async function archiveDeployment(ctx: ApiCtx): Promise<void> {

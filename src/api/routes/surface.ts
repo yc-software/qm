@@ -982,7 +982,10 @@ async function restoreSkill(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 401, { error: "capability_required" });
   }
   if (!principalId) return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId required" });
-  const restored = await ctx.app.restoreOwnedSkill(ctx.params.id!, principalId);
+  const liveActor = ctx.capability ? livePersonCapability(ctx.capability) : true;
+  const restored = await ctx.app.restoreOwnedSkill(ctx.params.id!, principalId, { liveActor });
+  if (restored === "trigger_blocked")
+    return sendJson(ctx.res, 403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
   if (restored === "exists")
     return sendJson(ctx.res, 409, {
       error: "exists",
@@ -1451,9 +1454,9 @@ export async function postSoul(ctx: ApiCtx): Promise<void> {
     content = b.content;
     actorId = b.actorId;
   }
-  const allowSharedScope =
-    Boolean(capability) ||
-    (parseScopeId(scopeIdVal).kind !== "personal" && (await app.managesScope(actorId, scopeIdVal as ScopeId)));
+  const allowSharedScope = capability
+    ? capability.botActor !== true
+    : parseScopeId(scopeIdVal).kind !== "personal" && (await app.managesScope(actorId, scopeIdVal as ScopeId));
   try {
     const version = await app.updateSoul(
       scopeIdVal,

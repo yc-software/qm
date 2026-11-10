@@ -41,7 +41,8 @@ describe("deployment view with saved edits", () => {
     const app = {
       authorizesCapabilityScope: async () => true,
       getDeployment: async () => DEPLOYMENT,
-      deploymentGitPermissionFor: async (_id: string, who: string) => (who === "owner" ? "write" : "read"),
+      deploymentGitPermissionFor: async (_id: string, who: { actorId: string }) =>
+        who.actorId === "owner" ? "write" : "read",
       deploymentGitUrlFor: async () => null,
       deploymentLiveEdit: async () => ({
         draft: {

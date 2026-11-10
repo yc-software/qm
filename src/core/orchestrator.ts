@@ -1697,6 +1697,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           files: deps.files,
           auditLog: deps.auditLog,
           createdBy: actor.id,
+          botActor: input.botActor,
           commandCredentials,
           resolveCommandCredentials: async (handles) => {
             const refreshed = new Map<string, CommandCredential>();

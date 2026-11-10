@@ -280,6 +280,25 @@ test("publish: a different scope claiming a taken name is rejected", async () =>
   await assert.rejects(() => other.publish({ entrypoint: "x", name: "taken" }), /name taken/);
 });
 
+test("publish hands a bot's turn to the deploy service as bot work", async () => {
+  const { deploy, captured } = spyDeploy();
+  const bot = createToolContext({
+    sandbox: fileSandbox(appFile()),
+    provision: async () => ({}) as SandboxHandle,
+    writableScopeId: scopeId("personal", "release-bot"),
+    readOnlyScopeIds: [],
+    commandPolicy: () => ({}) as never,
+    authorizeCommand: () => false,
+    grantedHandles: [],
+    deploy,
+    acl: {} as never,
+    createdBy: "release-bot",
+    botActor: true,
+  });
+  await bot.publish({ entrypoint: "node server.js", name: "bot-app" });
+  assert.equal(captured()?.botActor, true);
+});
+
 test("publish: renameFrom moves the link but keeps the id (and shares ride the id)", async () => {
   const s = svc();
   const created = await ctx(s.deploy, { files: appFile() }).publish({
