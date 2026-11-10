@@ -19,7 +19,6 @@ const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models?supported_par
 const OPENROUTER_MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._:+-]*$/;
 
 const MAX_CATALOG_BYTES = 2 * 1024 * 1024;
-const MAX_CATALOG_MODELS = 1_000;
 const CACHE_TTL_MS = 5 * 60_000;
 const FAILURE_TTL_MS = 30_000;
 
@@ -78,11 +77,9 @@ function parseOpenRouterModel(candidate: unknown): ModelCatalogEntry | undefined
       : undefined;
   if (
     typeof id !== "string" ||
-    id.length > 200 ||
     !OPENROUTER_MODEL_ID_RE.test(id) ||
     typeof name !== "string" ||
     name.length === 0 ||
-    name.length > 200 ||
     !Array.isArray(supportedParameters) ||
     !supportedParameters.includes("tools")
   )
@@ -128,7 +125,7 @@ async function fetchOpenRouterModels(fetcher: typeof fetch): Promise<ModelCatalo
     await readBoundedText(response, MAX_CATALOG_BYTES, () => new Error("OpenRouter catalog is too large")),
   ) as { data?: unknown };
   if (!Array.isArray(body.data)) throw new Error("OpenRouter catalog is invalid");
-  return body.data.slice(0, MAX_CATALOG_MODELS).flatMap((candidate) => {
+  return body.data.flatMap((candidate) => {
     const model = parseOpenRouterModel(candidate);
     return model ? [model] : [];
   });
