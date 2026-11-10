@@ -1,5 +1,5 @@
 import { createPgPool, type PgMigrationDefinition } from "../persistence/pg-pool.ts";
-import { unitVector } from "../model/embeddings.ts";
+import { PGVECTOR_MAX_DIMENSIONS, unitVector } from "../model/embeddings.ts";
 import { MEMORY_FACTS_MIGRATIONS } from "./postgres-memory-service.ts";
 import { tenantTables } from "../tenants/migrations.ts";
 import { claimFunction, claimRows, type ClaimedRow } from "../tenants/claim.ts";
@@ -61,7 +61,7 @@ const batchSize = (limit: number) => Math.max(1, Math.min(256, Math.floor(limit)
 
 function vectorWidth(dimensions: number | undefined): number | null {
   if (dimensions === undefined) return null;
-  if (!Number.isInteger(dimensions) || dimensions < 1 || dimensions > 16000)
+  if (!Number.isInteger(dimensions) || dimensions < 1 || dimensions > PGVECTOR_MAX_DIMENSIONS)
     throw new Error("Invalid memory embedding dimensions");
   return dimensions;
 }

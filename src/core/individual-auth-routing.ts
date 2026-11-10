@@ -9,8 +9,8 @@ import {
   isOverlayModel,
   modelUnavailableReason,
   modelRequestOverrides,
-  type ModelProvider,
 } from "../model/pi-models.ts";
+import type { ModelProvider } from "../model/provider-endpoints.ts";
 import type { UserModelCredential, UserModelCredentialStore } from "../model/user-model-credential-store.ts";
 import type { ProviderKeys } from "../model/model-runtime.ts";
 

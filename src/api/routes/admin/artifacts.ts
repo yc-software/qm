@@ -5,7 +5,7 @@ import { parseScopeId, scopeId, type Destination } from "../../../types.ts";
 import { appUrlOf } from "../../../deploy/deploy-store.ts";
 import { sendJson } from "../../http.ts";
 import { audit, requireScopedAdmin } from "../shared.ts";
-import { type ApiCtx } from "../route.ts";
+import { tenantOf, type ApiCtx } from "../route.ts";
 import { notifyOwnerOfCronEdit } from "../../../triggers/edit-notice.ts";
 import { personNamer, requireScopedResource } from "./common.ts";
 import { unattendedGrantRefusal } from "../../../cron/authority.ts";
@@ -160,6 +160,7 @@ export async function putAdminCronDestination(ctx: ApiCtx): Promise<void> {
     const refusal = await unattendedGrantRefusal(
       app,
       deps.admin,
+      tenantOf(ctx),
       cron,
       ctx.capability ?? { actorId: actor.id, liveActor: true },
     );

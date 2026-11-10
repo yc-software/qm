@@ -26,6 +26,8 @@ import {
 } from "./pages.ts";
 import { createHash } from "node:crypto";
 import { createServer, METHODS, type IncomingMessage, type ServerResponse } from "node:http";
+import { failUpgrade, isWebSocketUpgrade, responseOnSocket } from "../../chassis/src/websocket-relay.ts";
+import type { Duplex } from "node:stream";
 import { ADMIN_LOGIN_SCRIPT, ADMIN_LOGIN_SCRIPT_HASH, openAdminLogin } from "./admin-login.ts";
 import { LRUCache } from "lru-cache";
 import { createCanonicalResolver, IdentityRejected } from "./canonical.ts";
@@ -78,6 +80,7 @@ import {
   proxyToDeployment,
   proxyToUpstream,
   proxyToAppHost,
+  relayUpgradeToAppHost,
   FORWARD_AGENT_API_HEADERS,
   FORWARD_DEPLOYMENT_GIT_HEADERS,
   FORWARD_DEPLOYMENT_LAYER_HEADERS,
@@ -102,6 +105,7 @@ import {
   originOf,
   isLoopbackUrl,
   isSecureOrLoopbackUrl,
+  KEEP_ALIVE_TIMEOUT_MS,
 } from "../../chassis/src/http.ts";
 import {
   CORE_API_URL as CORE,
@@ -705,6 +709,27 @@ const server = createServer((req, res) => {
   });
 });
 
+function appLabelOf(host: string | undefined): string | null {
+  if (!APPS_DOMAIN) return null;
+  const requestHost = (host ?? "").toLowerCase().split(":")[0]!;
+  const apps = APPS_DOMAIN.toLowerCase();
+  if (requestHost === hostOf(PUBLIC_URL)) return null;
+  if (requestHost === apps) return "";
+  return requestHost.endsWith(`.${apps}`) ? requestHost.slice(0, -apps.length - 1) : null;
+}
+
+server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+  socket.on("error", () => socket.destroy());
+  const res = responseOnSocket(req, socket);
+  if (!res) return void socket.destroy();
+  const label = appLabelOf(req.headers.host);
+  if (label !== null && isDnsLabel(label) && isWebSocketUpgrade(req))
+    return relayUpgradeToAppHost(req, res, { socket, head }, CORE, clientIpOf(req));
+  void withRequestContext("portal", req, res, () => handle(req, res)).catch((error: unknown) =>
+    failUpgrade(socket, "portal-websocket", error),
+  );
+});
+
 async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const method = req.method ?? "GET";
   const rawTarget = req.url ?? "/";
@@ -717,12 +742,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   res.setHeader("x-content-type-options", "nosniff");
   res.setHeader("x-frame-options", "DENY");
 
-  const requestHost = (req.headers.host ?? "").toLowerCase().split(":")[0]!;
-  const appSuffix = APPS_DOMAIN ? `.${APPS_DOMAIN.toLowerCase()}` : undefined;
-  const appHost = requestHost.endsWith(appSuffix ?? "\0") || requestHost === APPS_DOMAIN?.toLowerCase();
-  if (appSuffix && appHost && requestHost !== hostOf(PUBLIC_URL)) {
-    const label = requestHost.slice(0, -appSuffix.length);
-    if (!isDnsLabel(label)) return json(res, 404, { error: "not_found" });
+  const appLabel = appLabelOf(req.headers.host);
+  if (appLabel !== null) {
+    if (!isDnsLabel(appLabel)) return json(res, 404, { error: "not_found" });
     if (await appHandoff.redeem(req, res, url)) return;
     return proxyToAppHost(req, res, CORE, clientIpOf(req));
   }
@@ -1716,6 +1738,7 @@ function validEmailDomain(value: string): boolean {
 export async function startServer(options: { port: number; host?: string; core?: CoreHandoff }): Promise<void> {
   bootChecks();
   core = options.core;
+  server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
   if (process.env.AUTH_EMBEDDED === "1") {
     if (AUTH_BROKER_UPSTREAM !== "http://127.0.0.1:8099") {
       throw new Error("Embedded auth requires the loopback broker upstream");
