@@ -1,3 +1,4 @@
+import { validateHeaderValue } from "node:http";
 import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { ModelProviderAvailability } from "./pi-models.ts";
@@ -138,7 +139,9 @@ export function createCustomProviderStore(input: {
     async resolveKey(id: string): Promise<string | null> {
       const saved = await input.backing.get(id);
       if (!saved || saved.disabled || !saved.apiKeyEnc) return null;
-      return decryptSecret(saved.apiKeyEnc, key);
+      const apiKey = decryptSecret(saved.apiKeyEnc, key);
+      validateHeaderValue("apiKey", apiKey);
+      return apiKey;
     },
 
     async upsert(spec: CustomProviderSpec, apiKey: string | undefined, updatedBy: string): Promise<void> {
