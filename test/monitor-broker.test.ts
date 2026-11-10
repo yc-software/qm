@@ -210,3 +210,36 @@ test("unwatch removes own monitors only", async () => {
   assert.equal((await broker.unwatch(r.monitorId)).removed, true);
   assert.equal(await store.get(r.monitorId), null);
 });
+
+test("in a shared conversation, only the person who armed a watch can remove it", async () => {
+  const store = createMonitorStore(testMap());
+  const registry = createPostgresProcessRegistry(testDatabaseUrl());
+  const channel = scopeId("channel", "C1");
+  await registry.register({
+    processId: "p-1",
+    scopeId: SCOPE,
+    sandboxId: "sandbox-1",
+    kind: "background",
+    command: "bg: npm run build",
+    ttlMs: 60_000,
+  });
+  const watcher = (owner: string, botActor?: boolean) =>
+    createMonitorBroker({
+      store,
+      registry,
+      readOutputTail: async () => ({ outputTail: "" }),
+      scopeId: SCOPE,
+      owner,
+      ownerScopeId: channel,
+      ...(botActor ? { botActor } : {}),
+      threadRef: "thread-1",
+      graceMs: 1000,
+    });
+  const alice = watcher("U1");
+  const watch = armed(await alice.watch("p-1", { instructions: "tell alice when it finishes" }));
+  assert.equal((await watcher("release-bot", true).unwatch(watch.monitorId)).removed, false);
+  assert.equal((await watcher("U2").unwatch(watch.monitorId)).removed, false);
+  assert.equal((await store.get(watch.monitorId))?.instructions, "tell alice when it finishes");
+  assert.equal((await alice.unwatch(watch.monitorId)).removed, true);
+  assert.equal(await store.get(watch.monitorId), null);
+});
