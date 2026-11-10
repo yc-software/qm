@@ -1628,7 +1628,7 @@ export function buildApp(
     config.swarmsEnabled !== false
       ? createSwarmService({
           defaults: config.swarmDefaults,
-          store: createSwarmStore(artifactMap<SwarmStorage>("swarms", ["pending"]), {
+          store: createSwarmStore(artifactMap<SwarmStorage>("swarms", ["pending", "scopeId"]), {
             runs,
             sessions,
             pg: pgArtifactMap.pool,
