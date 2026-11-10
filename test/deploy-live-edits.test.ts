@@ -12,6 +12,7 @@ import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import type { AuditEvent } from "../src/audit/audit-log.ts";
 
 const PRODUCTION = "npm install && npm run build && npm start";
 const DEV = "npm install --no-audit --no-fund && npm run dev";
@@ -66,12 +67,13 @@ function harness(opts: { liveEdits?: boolean } = {}) {
           },
         }),
   };
+  const audits: AuditEvent[] = [];
   const deployStore = createDeployStore(testDeployBackings());
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore,
     provider,
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
+    auditLog: { record: (e: AuditEvent) => void audits.push(e), events: async () => [], tail: async () => [] },
     acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
     deployDir: mkdtempSync(join(tmpdir(), "live-edits-")),
   });
@@ -81,7 +83,7 @@ function harness(opts: { liveEdits?: boolean } = {}) {
     const draft = (await deployStore.draftOf(id))!;
     await deployStore.putDraft({ ...draft, publishAt: Date.now() - 1 });
   };
-  return { deploy, deployStore, state, save, dueNow };
+  return { deploy, deployStore, state, save, dueNow, audits };
 }
 
 async function publishApp(h: ReturnType<typeof harness>, name: string, withDev = true) {
@@ -230,6 +232,7 @@ test("a publish whose production build fails keeps the edits running and records
   const failed = (await h.deployStore.draftOf(d.id))!;
   assert.match(failed.failure ?? "", /cannot find module 'left-pad'/);
   assert.equal(failed.publishAt, undefined, "a failed publish is not retried until the next edit");
+  assert.match(h.audits.find((e) => e.status === "failed")?.detail ?? "", /cannot find module 'left-pad'/);
   assert.deepEqual(h.state.reconciles.at(-1), { commit: draft.commit, entrypoint: DEV });
   assert.equal((await h.deployStore.get(d.id))!.versions.length, 1);
   assert.equal(await h.deploy.publishDueLiveEdits(), 0);

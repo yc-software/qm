@@ -154,7 +154,9 @@ export function createLiveEdits(deps: LiveEditDeps) {
       publishAt,
       reloads: (draft?.reloads ?? 0) + (!hot || switched ? 1 : 0),
     };
-    await store.putDraft(saved);
+    await store.putDraft(saved).catch((put: unknown) => {
+      throw edited.status === "rejected" ? new AggregateError([put, edited.reason], "saving the edit failed") : put;
+    });
     deps.auditLog.record({
       at: now,
       principalId: actor,
@@ -200,14 +202,24 @@ export function createLiveEdits(deps: LiveEditDeps) {
         });
         return true;
       } catch (e) {
-        const restored = await deps.applyVersion(id, draftVersion(current, draft)).then(
-          () => "",
-          (restore: unknown) => `; putting the saved edits back also failed: ${errMessage(restore)}`,
+        const restore = await deps.applyVersion(id, draftVersion(current, draft)).then(
+          () => [],
+          (r: unknown) => [r],
         );
+        const failure = [e, ...restore].map(errMessage).join("; putting the saved edits back also failed: ");
+        deps.auditLog.record({
+          at: Date.now(),
+          principalId: draft.savedBy,
+          action: "deploy_version",
+          resource: `${id}@${draft.commit}`,
+          scopeLabel: d.ownerScopeId,
+          status: "failed",
+          detail: failure,
+        });
         await store
-          .putDraft({ ...draft, publishAt: undefined, failure: errMessage(e) + restored, reloads: draft.reloads + 1 })
+          .putDraft({ ...draft, publishAt: undefined, failure, reloads: draft.reloads + 1 })
           .catch((put: unknown) => {
-            throw new AggregateError([e, put], "publishing the saved edits failed and recording the failure failed");
+            throw new AggregateError([e, ...restore, put], "publishing the saved edits failed and recording it failed");
           });
         return false;
       }
