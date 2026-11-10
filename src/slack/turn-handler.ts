@@ -609,9 +609,6 @@ export function createTurnHandler(deps: {
       }
     }
 
-    // This message was folded into a run that was already live. The handler that OWNS that run
-    // delivers its reply; delivering here too is how one answer got posted twice. Settle this
-    // trigger's own ack and stand down.
     if (result.steered) {
       await settleAck();
       if (result.stopped) await postEphemeral("Stopped.", replyThreadTs);

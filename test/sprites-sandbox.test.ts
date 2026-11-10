@@ -180,7 +180,6 @@ test("scope names fit the 63-char provider limit for long prefixes, scratch incl
     }
     assert.notEqual(sandboxScopeName(prefix, scope), sandboxScopeName(`${prefix}-scratch`, scope));
   }
-  // Names that already fit are unchanged, so existing resident computers keep their identity.
   assert.equal(sandboxScopeName("qmt", "person:tester"), "qmt-person-tester-7b537e");
   assert.match(
     sandboxScopeName("qm-long-generic-fleet-tenant-prefix", "person:tester"),

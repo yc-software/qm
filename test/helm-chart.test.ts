@@ -67,7 +67,6 @@ function render(values: object = {}, explicitImages = true): Resource[] {
       { encoding: "utf8" },
     );
     assert.equal(result.status, 0, result.stderr);
-    // Use Helm's YAML parser rather than require a second YAML implementation.
     writeFileSync(join(dir, "Chart.yaml"), "apiVersion: v2\nname: parser\nversion: 0.1.0\n");
     writeFileSync(join(dir, "rendered.yaml"), result.stdout);
     mkdirSync(join(dir, "templates"));

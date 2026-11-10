@@ -1059,8 +1059,6 @@ export async function bootSafely(): Promise<void> {
   }
 }
 
-// Session links nobody else handled (chat messages, markdown) switch the view instead of opening a new
-// tab or desktop window. Modified clicks fall through, so cmd/ctrl-click still opens a new tab.
 document.addEventListener("click", (e) => {
   if (!shellMounted || e.defaultPrevented || !isPlainLeftClick(e)) return;
   const anchor = e.composedPath().find((node): node is HTMLAnchorElement => node instanceof HTMLAnchorElement);

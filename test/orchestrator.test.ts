@@ -3525,13 +3525,10 @@ test("Concurrent flagged inputs get distinct approval requests that release inde
   assert.equal(blockedA.status, "pending_approval");
   const idA = blockedA.pendingApprovals![0]!.requestId;
 
-  // While A's card is pending, a fresh inbound bounces off the blocking gate and re-presents the existing card.
   const bounced = await built.app.turn(requestB);
   assert.equal(bounced.status, "pending_approval");
   assert.equal(bounced.pendingApprovals![0]!.requestId, idA, "the gate re-presents A's card, records nothing for B");
 
-  // The two-click exploit: an approval on A's card whose turn carries B's content must NOT release B.
-  // The content mismatch forces a re-screen; B's flag must land under its OWN id, leaving A's record untouched.
   const crossed = await built.app.turn({
     ...requestB,
     approval: { requestId: idA, approved: true },
@@ -3540,8 +3537,6 @@ test("Concurrent flagged inputs get distinct approval requests that release inde
   const idB = crossed.pendingApprovals![0]!.requestId;
   assert.notEqual(idB, idA, "B's flag gets its own request id instead of overwriting A's record");
 
-  // Second click on A's card with B's content: with colliding ids this used to hit B's overwritten record,
-  // match content, skip the screen, and release B. It must stay blocked forever now.
   const crossedAgain = await built.app.turn({
     ...requestB,
     approval: { requestId: idA, approved: true },
@@ -3553,7 +3548,6 @@ test("Concurrent flagged inputs get distinct approval requests that release inde
     "neither flagged input reached the main agent",
   );
 
-  // A's own approval releases exactly A.
   const approvedA = await built.app.turn({
     ...requestA,
     approval: { requestId: idA, approved: true },
@@ -3561,7 +3555,6 @@ test("Concurrent flagged inputs get distinct approval requests that release inde
   assert.equal(approvedA.status, "ok");
   assert.match(approvedA.reply ?? "", /first-flagged/);
 
-  // B still releases independently, under its own id.
   const approvedB = await built.app.turn({
     ...requestB,
     approval: { requestId: idB, approved: true },

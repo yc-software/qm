@@ -56,9 +56,6 @@ test("user model credential store round-trips api key and oauth per user+provide
   const oai = await store.get("u1", "openai");
   assert.equal(oai?.kind, "oauth");
 
-  // The subscription login is a keychain CONNECTOR token: the keychain owns
-  // encryption, expiry, and central refresh. Callers only ever get derived
-  // material — never the refresh token.
   const derived = await store.derivedOAuth("u1", "openai");
   assert.equal(derived?.accessToken, "acc");
   assert.equal(derived?.idToken, fakeIdToken("acct_1"));
@@ -72,8 +69,6 @@ test("user model credential store round-trips api key and oauth per user+provide
   ]);
   assert.deepEqual(await store.connections("stranger"), []);
 
-  // API keys are ordinary user-owned keychain credentials (admin-visible,
-  // covered by "remove my credentials").
   const owned = await keychain.listByOwner("u1");
   assert.deepEqual(
     owned.map((c) => c.service),
@@ -81,14 +76,11 @@ test("user model credential store round-trips api key and oauth per user+provide
   );
   assert.ok(owned.every((c) => c.origin === "individual-model-auth"));
   assert.ok(!("secretEnc" in owned[0]!));
-  // A stranger cannot read the owner's secret through the store's path.
   assert.equal(await keychain.readOwnSecret("stranger", owned[0]!.id), null);
 
-  // One connection per provider: an API key replaces a subscription login.
   await store.setApiKey("u1", "openai", "sk-oai-xyz");
   assert.equal((await store.get("u1", "openai"))?.kind, "apikey");
   assert.equal(await store.derivedOAuth("u1", "openai"), null);
-  // ...and a subscription login replaces an API key.
   await store.setOAuth("u1", "openai", { accessToken: "acc2", idToken: fakeIdToken("acct_1") });
   assert.equal((await store.get("u1", "openai"))?.kind, "oauth");
 
@@ -135,15 +127,12 @@ test("stale subscription tokens refresh once (single-flight) inside the keychain
     accountId: "acct_1",
     expiresAt: Date.now() - 1_000,
   });
-  // Two concurrent turns for the same user: exactly one provider refresh.
   const [a, b] = await Promise.all([store.derivedOAuth("u1", "openai"), store.derivedOAuth("u1", "openai")]);
   assert.equal(refreshCalls, 1);
   assert.equal(a?.accessToken, "acc-1");
   assert.equal(b?.accessToken, "acc-1");
-  // The rotated id token and preserved account id both survived the refresh.
   assert.equal(a?.idToken, fakeIdToken("acct_1"));
   assert.equal(a?.accountId, "acct_1");
-  // A later read needs no further refresh.
   assert.equal((await store.derivedOAuth("u1", "openai"))?.accessToken, "acc-1");
   assert.equal(refreshCalls, 1);
 });
@@ -183,7 +172,6 @@ test("codex-subscription model ids resolve to pi-ai's openai-codex provider", ()
   assert.equal(String(m?.provider), "openai-codex");
   assert.equal(String((m as { api?: string })?.api), "openai-codex-responses");
   assert.equal(m?.id, "codex/gpt-5.6-sol");
-  // The un-prefixed id keeps resolving to the metered openai provider.
   assert.equal(String(resolveModel("gpt-5.6-sol")?.provider), "openai");
 });
 

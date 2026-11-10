@@ -473,7 +473,7 @@ test("a refusal fallback prices each step on its actual model and tier", async (
       [1, "claude-opus-5"],
     ],
   );
-  assertUsd(rows[0]!.usage!.costUsd, 0.03); // a stop_reason refusal is a billed 200 response
+  assertUsd(rows[0]!.usage!.costUsd, 0.03);
   assertUsd(rows[1]!.usage!.costUsd, 0.15);
 });
 

@@ -95,7 +95,7 @@ test("a duplicate create returns the existing record WITHOUT clobbering its fire
   const store = createWebhookStore(testMap(), testMap());
   const a = await store.create(base);
   await store.recordFire(a.id, { at: 123, deliveryId: "d-9" });
-  const b = await store.create(base); // a blind retry after the webhook already fired
+  const b = await store.create(base);
   assert.equal(b.id, a.id);
   assert.equal(b.lastFiredAt, 123, "the retry must not reset the already-fired webhook");
   assert.equal(b.lastDeliveryId, "d-9");

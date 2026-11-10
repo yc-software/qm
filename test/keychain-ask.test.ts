@@ -1011,7 +1011,6 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     assert.ok(registered.includes("POST /v1/keychain/asks"));
     for (const removed of ["POST /v1/keychain/grants", "POST /v1/keychain/asks/:id/decline"])
       assert.ok(!registered.includes(removed), `${removed} is no longer registered`);
-    // An unregistered path answers exactly like any unknown route: the capability gate refuses it.
     const unknown = await (await post("/v1/keychain/no-such-route", {}, liveOwner)).json();
     for (const [path, body] of [
       ["/v1/keychain/grants", { credential: gh.id, mode: "standing", purpose: "owner says yes" }],
@@ -1308,8 +1307,6 @@ test("turn e2e: trigger-fired turns mint `triggered` into the capability token; 
       apiBaseUrl: "http://core.test",
     }),
   );
-  // The recorded script is the backend's OUTER `sh -c` wrapper, so the export's single quotes
-  // arrive shell-escaped — match the token's own alphabet instead of the quoting around it.
   const extractToken = (since: number): CapabilityClaims | null => {
     for (const script of fakeSprites.execScripts().slice(since)) {
       const m = /export AGENT_API_TOKEN=\W*([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)/.exec(script);
