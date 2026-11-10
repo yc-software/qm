@@ -1336,7 +1336,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             "\n\n## Connected app access\nComposio is configured in the backend. Load the composio skill and use /v1/composio through the authenticated agent API. Apps that have their own skill work over these connections too; prefer that skill. No Composio project key is delivered to your computer; the backend checks account ownership and context access.";
         const adminGrants =
           deps.admin && !external && !strictReadOnly && deps.signingSecret && deps.apiBaseUrl
-            ? await deps.admin.listGrants().catch(swallowAs("orchestrator: admin grants", []))
+            ? await deps.admin.listGrants(currentTenant()).catch(swallowAs("orchestrator: admin grants", []))
             : [];
         if (conversation.audience.some((p) => adminStatusFromGrants(adminGrants, p.id).isAdmin)) {
           systemPrompt +=
@@ -2302,7 +2302,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             screenSwarmMessage,
           });
           const mcpTools = await mcpToolsReady;
-          const connectorNote = connectorToolsNote(deferredMcpTools(mcpTools, strictReadOnly));
 
           dispatchTrace ??= startDispatchTrace();
           const turnRun = deps.agent.runTurn({

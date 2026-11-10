@@ -1641,7 +1641,10 @@ test("a shared thread keeps one byte-identical system prompt until compaction; c
   });
   const admin = {
     adminStatusOf: async (p: Principal) => ({ isAdmin: p.id === actor.id }),
-    listGrants: async () => [{ principalId: actor.id, role: "org_admin", scopeId: scopeId("org", ORG) }],
+    listGrants: async (tenant) => {
+      assert.ok(tenant);
+      return [{ principalId: actor.id, role: "org_admin", scopeId: scopeId("org", ORG) }];
+    },
   } as unknown as AdminService;
   const { orchestrator, sessions } = buildOrchestrator({ crons, keychain, admin });
   const thread = "C1:stable-thread";
