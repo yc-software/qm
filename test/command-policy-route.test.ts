@@ -11,6 +11,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { configureCommandRules } from "./support/command-rules.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
@@ -36,6 +37,7 @@ const putPolicy = (base: string, b: unknown) =>
 test("a pending approval survives a surface restart: GET /v1/approvals/:id returns a replayable request", async () => {
   const srv = start();
   try {
+    await configureCommandRules(srv.built.config);
     await selectDefaultSandbox(srv.built, "U1", "personal:U1");
     const command = "git push --force origin main";
     const turn = {
@@ -110,6 +112,7 @@ test("a pending approval survives a surface restart: GET /v1/approvals/:id retur
 test("GET /v1/sessions/:id/approvals lists the commands the session is still paused on", async () => {
   const srv = start();
   try {
+    await configureCommandRules(srv.built.config);
     const command = "git push --force origin main";
     const turn = {
       surface: "slack",
@@ -180,6 +183,39 @@ test("admin command-policy write validates the body and rejects invalid regexes"
 
     const badShape = await putPolicy(srv.base, { mode: "denylist" });
     assert.equal(badShape.status, 400);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("no command rules ship by default; an admin-configured rule gates the same command", async () => {
+  const srv = start();
+  try {
+    await selectDefaultSandbox(srv.built, "U3", "personal:U3");
+    const turn = (threadRef: string) =>
+      fetch(`${srv.base}/v1/turns`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          surface: "slack",
+          actor: { externalId: "U3", displayName: "Carol" },
+          conversation: { kind: "dm", threadRef },
+          text: "!run rm -rf build",
+        }),
+      }).then((r) => r.json() as Promise<{ status: string; pendingApprovals?: { reason: string }[] }>);
+
+    const unconfigured = await turn("dm:U3:t-default");
+    assert.equal(unconfigured.status, "ok");
+    assert.equal(unconfigured.pendingApprovals, undefined);
+
+    const configured = await putPolicy(srv.base, {
+      mode: "denylist",
+      rules: [{ pattern: "\\brm\\b[^\\n]*-[a-zA-Z]*r", decision: "require_approval", reason: "recursive delete" }],
+    });
+    assert.equal(configured.status, 200);
+    const gated = await turn("dm:U3:t-configured");
+    assert.equal(gated.status, "pending_approval");
+    assert.equal(gated.pendingApprovals?.[0]?.reason, "recursive delete");
   } finally {
     await srv.close();
   }

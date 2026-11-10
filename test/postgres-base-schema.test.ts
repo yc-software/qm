@@ -3,14 +3,14 @@ import assert from "node:assert/strict";
 import pg from "pg";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
-import { migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { migrateRegisteredPgSchemas, registeredPgMigrations } from "../src/persistence/pg-pool.ts";
+import { testBareDatabaseUrl } from "./support/test-database.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 const skip = databaseUrl ? false : "set DATABASE_URL (a Postgres) to run the base schema tests";
 
 async function withDatabase(run: (url: string, admin: pg.Pool) => Promise<void>): Promise<void> {
-  const url = testDatabaseUrl();
+  const url = testBareDatabaseUrl();
   const admin = new pg.Pool({ connectionString: url });
   try {
     await run(url, admin);
@@ -27,6 +27,16 @@ async function migrate(url: string): Promise<void> {
   } finally {
     await runs.close();
   }
+}
+
+async function markTenancyApplied(url: string, admin: pg.Pool): Promise<void> {
+  createPostgresSessionStore(url);
+  await createPostgresRunStore(url).close();
+  const tenancy = registeredPgMigrations(url).filter((m) => /-tenant|claim/.test(m.id));
+  await admin.query("INSERT INTO qm_schema_migrations(id, checksum) SELECT * FROM unnest($1::text[], $2::text[])", [
+    tenancy.map((m) => m.id),
+    tenancy.map((m) => m.checksum),
+  ]);
 }
 
 const present = async (admin: pg.Pool, sql: string) => (await admin.query(`SELECT ${sql} AS v`)).rows[0].v as unknown;
@@ -80,6 +90,7 @@ test("a fully migrated database skips the base schema and drops only the retired
     await admin.query(
       `INSERT INTO participants VALUES ('s1', 'member', 5, NULL, 3, NULL), ('s1', 'removed', 5, 9, 3, 7)`,
     );
+    await markTenancyApplied(url, admin);
     await migrate(url);
     assert.deepEqual(
       (await admin.query("SELECT principal_id FROM participants")).rows.map((row) => row.principal_id),

@@ -1,14 +1,20 @@
+export interface EngagedSession {
+  tenantId: string;
+  threadRef: string;
+}
+
 export interface EngagedRegistry {
-  engage(threadRef: string): void;
-  settle(threadRef: string): void;
-  list(): string[];
+  engage(session: EngagedSession): void;
+  settle(session: EngagedSession): void;
+  list(): EngagedSession[];
 }
 
 export function createEngagedRegistry(): EngagedRegistry {
-  const engaged = new Set<string>();
+  const engaged = new Map<string, EngagedSession>();
+  const key = ({ tenantId, threadRef }: EngagedSession): string => JSON.stringify([tenantId, threadRef]);
   return {
-    engage: (threadRef) => void engaged.add(threadRef),
-    settle: (threadRef) => void engaged.delete(threadRef),
-    list: () => [...engaged],
+    engage: (session) => void engaged.set(key(session), { ...session }),
+    settle: (session) => void engaged.delete(key(session)),
+    list: () => [...engaged.values()],
   };
 }

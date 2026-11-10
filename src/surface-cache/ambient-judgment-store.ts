@@ -1,5 +1,6 @@
 import { orgId as configOrgId } from "../config.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
+import { tenantTables } from "../tenants/migrations.ts";
 
 type AmbientDecisionKind = "act" | "ignore" | "fastlane";
 
@@ -61,6 +62,7 @@ export function createPostgresAmbientJudgmentStore(connectionString: string): Am
         ON ambient_judgments(org_id, decision)`,
       ],
     },
+    ...tenantTables("surface-cache/ambient-judgment/0002-tenants", [{ table: "ambient_judgments", primaryKey: "id" }]),
     {
       id: "surface-cache/ambient-judgment/0003-start-error",
       statements: [`ALTER TABLE ambient_judgments ADD COLUMN IF NOT EXISTS start_error TEXT`],

@@ -687,6 +687,30 @@ for (const command of ["!finish-silent-approval", "!finish-silent-paused"]) {
   });
 }
 
+test("addressed channel turn paused on approval → the approval card reaches the requester, no nudge", async () => {
+  const built = freshApp();
+  built.runtime.start();
+  try {
+    await built.app.turn(mention("!paused-approval-quiet rm -rf /tmp/x", "C-paused", "720.1"));
+    const deadline = Date.now() + 5_000;
+    let card: any;
+    while (!card && Date.now() < deadline) {
+      card = ((await built.deliveries.pending("principal")) as any[]).find((d) => d.destination.commandApprovalId);
+      if (!card) await sleep(50);
+    }
+    assert.ok(card, "the approval card is enqueued for the requester");
+    assert.equal(card.destination.target, "U1");
+    const session = await built.sessions.getByThread("ch:C-paused:720.1");
+    const requests = await built.sessions.listLlmRequests(session!.id);
+    assert.ok(
+      !requests.some((r) => JSON.stringify(r.promptEnvelope).includes("[system] You were addressed directly")),
+      "a turn waiting on approval is not nudged into a forced reply",
+    );
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
 test("a shared web project turn answers with its final text, not surface tools", async () => {
   const built = freshApp();
   built.runtime.start();

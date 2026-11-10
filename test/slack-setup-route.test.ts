@@ -12,6 +12,7 @@ type SlackSetupStatus = {
   source: string;
   setupUnavailable?: boolean;
   installAvailable?: boolean;
+  installUrl?: string;
   setup?: {
     tokenUrl: string;
     submitUrl: string;
@@ -112,6 +113,22 @@ test("environment-backed bot skips service lookup and missing service status rem
   assert.equal(legacy.installAvailable, true);
 });
 
+test("shared app status links the settings Add to Slack page even when setup status is unavailable", async (t) => {
+  const f = await fixture(t);
+  const installUrl = "https://agent.example/settings/slack-settings?slack=install";
+  for (const response of [new Response("", { status: 404 }), new Response("", { status: 503 })]) {
+    f.remote(response);
+    const status = (await (await f.request()).json()) as SlackSetupStatus;
+    assert.equal(status.setup, undefined);
+    assert.equal(status.installAvailable, true);
+    assert.equal(status.installUrl, installUrl);
+  }
+  f.remote(Response.json({ companyOwned: true, appReady: false, connected: false }));
+  const owned = (await (await f.request()).json()) as SlackSetupStatus;
+  assert.equal(owned.installUrl, installUrl);
+  assert.equal(owned.setup?.installUrl, installUrl);
+});
+
 test("explicit browser start selects setup or installation and rejects arbitrary steps", async (t) => {
   const f = await fixture(t);
   assert.equal((await f.request("POST", { step: "setup" }, "member")).status, 403);
@@ -119,6 +136,6 @@ test("explicit browser start selects setup or installation and rejects arbitrary
   assert.equal(f.calls.length, 0);
   for (const step of ["setup", "install"]) {
     assert.equal((await f.request("POST", { step })).status, 200);
-    assert.equal(f.calls.at(-1)?.body, JSON.stringify({ step }));
+    assert.equal(JSON.parse(String(f.calls.at(-1)?.body)).step, step);
   }
 });

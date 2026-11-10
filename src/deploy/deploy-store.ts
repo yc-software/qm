@@ -1,8 +1,12 @@
+import { trimTrailingSlashes } from "../util/text.ts";
 import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
-import { swallow } from "../util/errors.ts";
+import type { ClaimedRow } from "../tenants/claim.ts";
+import { DEPLOYMENT_TABLES, NAME_INDEX } from "./page-views.ts";
+import { tenantAppHandle } from "../tenants/settings.ts";
+import { appHostLabel } from "../tenants/app-handle.ts";
 import {
   createDeployGitStore,
   type DeployGitDiff,
@@ -32,6 +36,17 @@ export interface DeployEndpoint {
   httpVersion?: "1.1" | "2";
   proxyHeaders?: Record<string, string>;
   socksProxyPort?: number;
+}
+
+export function appUrlOf(
+  d: { id: string; name?: string; endpoint?: DeployEndpoint | null },
+  { sharedWebUrl, appsDomain }: { sharedWebUrl: string | undefined; appsDomain: string | undefined },
+): string | undefined {
+  const ref = d.name ?? d.id;
+  const handle = tenantAppHandle();
+  if (appsDomain && handle) return `https://${appHostLabel(handle, ref)}.${appsDomain.toLowerCase()}/`;
+  const path = `/d/${encodeURIComponent(ref)}/`;
+  return publicUrlOf(d.endpoint) ?? (sharedWebUrl ? `${trimTrailingSlashes(sharedWebUrl)}${path}` : undefined);
 }
 
 export function publicUrlOf(endpoint: DeployEndpoint | null | undefined): string | undefined {
@@ -103,6 +118,7 @@ export interface DeployStore {
   get(id: string): Promise<Deployment | null>;
   getByName(name: string): Promise<Deployment | null>;
   list(): Promise<Deployment[]>;
+  claimTenants(): Promise<ClaimedRow[]>;
   setCurrentVersion(id: string, version: number): Promise<void>;
   setVersionImage(id: string, version: number, image: string): Promise<void>;
   setStatus(id: string, status: DeploymentStatus): Promise<void>;
@@ -136,7 +152,6 @@ export interface DeployStoreBackings {
 
 const CURRENT_REF = "refs/heads/current";
 const versionRef = (version: number): string => `refs/versions/${version}`;
-const NAME_INDEX = "deployments_name_unique";
 const TOUCH_DEBOUNCE_MS = 60_000;
 
 interface DeployAccess {
@@ -147,33 +162,12 @@ interface DeployAccess {
 }
 
 function createPgDeployAccess(pg: PgPool): DeployAccess {
-  const migration = {
-    id: "deploy/access/0001",
-    statements: [
-      "CREATE TABLE IF NOT EXISTS deployments (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
-      `CREATE TABLE IF NOT EXISTS deployment_access (
-        id TEXT PRIMARY KEY REFERENCES deployments(id) ON DELETE CASCADE,
-        last_access_at BIGINT NOT NULL
-      )`,
-    ],
-  };
-  pg.registerMigration(migration);
+  for (const migration of DEPLOYMENT_TABLES) pg.registerMigration(migration);
   let readyP: Promise<void> | null = null;
   function ready(): Promise<void> {
     if (!readyP) {
       readyP = (async () => {
-        await pg.migrate(migration);
-        await pg
-          .q(
-            `CREATE UNIQUE INDEX IF NOT EXISTS ${NAME_INDEX}
-             ON deployments ((json->>'name')) WHERE json->>'name' IS NOT NULL`,
-          )
-          .catch((e) =>
-            swallow(
-              "deploy-store: could not create unique name index on deployments (concurrent boot, or duplicate names)",
-              e,
-            ),
-          );
+        for (const migration of DEPLOYMENT_TABLES) await pg.migrate(migration);
       })().catch((e) => {
         readyP = null;
         throw e;
@@ -197,7 +191,7 @@ function createPgDeployAccess(pg: PgPool): DeployAccess {
       const res = await pg.query(
         `INSERT INTO deployment_access (id, last_access_at)
          SELECT d.id, $2::bigint FROM deployments d WHERE d.id = $1
-         ON CONFLICT (id) DO UPDATE SET last_access_at = GREATEST(deployment_access.last_access_at, EXCLUDED.last_access_at)`,
+         ON CONFLICT (tenant_id, id) DO UPDATE SET last_access_at = GREATEST(deployment_access.last_access_at, EXCLUDED.last_access_at)`,
         [id, at],
       );
       return res.rowCount > 0;
@@ -341,6 +335,9 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
         ? await access.findByName(name)
         : ((await backingMap.all()).find((x) => x.name === name) ?? null);
       return d ? withAccess(d, await access.readOne(d.id)) : null;
+    },
+    claimTenants() {
+      return backingMap.claimTenants();
     },
     async list() {
       const [ds, accessAt] = await Promise.all([backingMap.all(), access.readAll()]);

@@ -103,6 +103,7 @@ export interface MonitorBrokerDeps {
   ownerScopeId: ScopeId;
   threadRef: string;
   destination?: Destination;
+  returnsToParent?: boolean;
   graceMs?: number;
 }
 
@@ -147,7 +148,7 @@ export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
         owner: deps.owner,
         createdBy: deps.owner,
         ownerScopeId: deps.ownerScopeId,
-        ...(deps.destination ? { destination: deps.destination } : {}),
+        ...(deps.destination && !deps.returnsToParent ? { destination: deps.destination } : {}),
         processId,
         command: rec.command,
         ...(rec.purpose ? { purpose: rec.purpose } : {}),

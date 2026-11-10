@@ -10,6 +10,8 @@ export interface DeploymentView {
   status?: "running" | "stopped" | "archived" | string;
   ownerScopeId?: string;
   createdBy?: string;
+  ownerName?: string;
+  createdByName?: string;
   createdInScope?: string;
   currentVersion?: number;
   appliedVersion?: number;
@@ -127,6 +129,7 @@ export function filterDeployments(
 export function friendlyPrincipal(principal: string | undefined): string {
   const local = (principal ?? "").split("@")[0]!.trim();
   if (!local) return "Unknown owner";
+  if (local.includes(":")) return "Unknown person";
   return local
     .split(/[._-]+/)
     .filter(Boolean)

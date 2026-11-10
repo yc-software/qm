@@ -146,6 +146,8 @@ test("fatal log and report name the core route and request id in flight", async 
   const { events, code, errors } = await runReporting(`
     const { shutdownOnUncaught } = await import('./src/util/process-guard.ts');
     const { createInsecureTestServer } = await import('./src/api/server.ts');
+    const { bindBootTenant } = await import('./src/tenants/boot.ts');
+    await bindBootTenant(async () => '00000000-0000-4000-8000-0000000000a1');
     shutdownOnUncaught('qm', () => setTimeout(async () => { await flushErrorReporting(); process.exit(1); }, 50));
     const blobTransfer = { open: () => new Promise(() => setTimeout(() => Promise.reject(new TypeError('terminated')), 0)) };
     const server = createInsecureTestServer({}, { blobTransfer });

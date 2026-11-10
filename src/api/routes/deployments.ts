@@ -1,4 +1,6 @@
 import { externalAppSharingAllowed } from "../../feature-flags.ts";
+import { createPersonNames } from "../../identity/person-names.ts";
+import { deploymentAppTenant, deploymentGitTenant } from "./deployment-paths.ts";
 import { SocksProxyAgent } from "socks-proxy-agent";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -27,6 +29,10 @@ import { APP_SHELL_PATH_PREFIX, appShellHtml } from "../../deploy/app-shell.ts";
 import type { AppViewAuthMode } from "../../deploy/page-views.ts";
 import { principalDestination } from "../../reach/reach.ts";
 import { FRAME_SESSION_COOKIE, portalSession, portalSessionFrom } from "../../deploy/viewer-session.ts";
+import { appHostLabel, appNameFromLabel, labelOfAppHost } from "../../tenants/app-handle.ts";
+import { isDnsLabel } from "../../../plugins/chassis/src/dns-label.ts";
+import { tenantAppHandle } from "../../tenants/settings.ts";
+import { boundTenant } from "../../tenants/context.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "../../deploy/embed-ancestors.ts";
 import { proxyHeaders } from "../../util/http-proxy.ts";
 import { deploymentGitParts, isDeploymentGitRoute } from "../../../plugins/chassis/src/deployment-git.ts";
@@ -99,9 +105,10 @@ async function proxyDeployment(ctx: BaseCtx): Promise<void> {
   ) {
     const d = await app.getDeployment(id).catch(swallowAs("deployments: load deployment", null));
     const slug = d?.name ?? d?.id;
-    if (d && slug && /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(slug)) {
+    const handle = tenantAppHandle();
+    if (d && slug && handle && isDnsLabel(appHostLabel(handle, slug))) {
       res.writeHead(302, {
-        location: `https://${slug}.${deps.deployAppsDomain}${subPath}${url.search}`,
+        location: `https://${appHostLabel(handle, slug)}.${deps.deployAppsDomain}${subPath}${url.search}`,
         "cache-control": "no-store",
       });
       res.end();
@@ -799,15 +806,16 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     sendJson(res, 503, { error: "unavailable", message: "app gateway is not configured" });
     return true;
   }
-  const rawHost = (req.headers.host ?? "").split(":")[0]!.toLowerCase();
-  const suffix = `.${appsDomain.toLowerCase()}`;
-  if (!rawHost || !rawHost.endsWith(suffix)) {
+  const label = labelOfAppHost(req.headers.host, appsDomain);
+  if (label === undefined) {
     if (!fromAppHost) return false;
     sendJson(res, 404, { error: "not_found" });
     return true;
   }
-  const slug = rawHost.slice(0, -suffix.length);
-  if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(slug)) {
+  const rawHost = `${label}.${appsDomain.toLowerCase()}`;
+  const handle = tenantAppHandle();
+  const slug = appNameFromLabel(label, handle);
+  if (!slug || !isDnsLabel(label)) {
     sendJson(res, 404, { error: "not_found" });
     return true;
   }
@@ -844,13 +852,17 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
   const sessionSecret = deps.deployAppsSessionSecret;
   const loginUrl = deps.deployAppsLoginUrl;
   const wantsHtml = ctx.method === "GET" && String(req.headers.accept ?? "").includes("text/html");
-  let session = sessionSecret ? portalSession(req.headers.cookie, sessionSecret) : null;
+  let session = sessionSecret ? portalSession(req.headers.cookie, sessionSecret, Date.now()) : null;
   const dest = req.headers["sec-fetch-dest"];
   const site = req.headers["sec-fetch-site"];
   const framed = dest === "iframe" || site === "same-origin";
   const embedAncestors = framed ? (deployment?.embedAncestors ?? []) : [];
   if (!session && sessionSecret && embedAncestors.length) {
-    session = portalSessionFrom(req.headers.cookie, FRAME_SESSION_COOKIE, sessionSecret);
+    session = portalSessionFrom(req.headers.cookie, FRAME_SESSION_COOKIE, sessionSecret, Date.now());
+  }
+  if (session?.t !== undefined && session.t !== boundTenant()) {
+    sendJson(res, 404, { error: "not_found" });
+    return true;
   }
   const sub = session?.sub;
   if (embedAncestors.length) res.setHeader("content-security-policy", frameAncestorsDirective(embedAncestors));
@@ -861,7 +873,9 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
   if (!sub && !isPublic) {
     const qs = url.searchParams.toString();
     const returnTo = `https://${rawHost}${safePathname}?${qs ? `${qs}&` : ""}dpl_signin=1`;
-    const signIn = `${loginUrl}${deps.deployAppsLoginPath ?? "/auth/login"}?returnTo=${encodeURIComponent(returnTo)}`;
+    const signIn = handle
+      ? `${loginUrl}/auth/host?to=${encodeURIComponent(returnTo)}`
+      : `${loginUrl}${deps.deployAppsLoginPath ?? "/auth/login"}?returnTo=${encodeURIComponent(returnTo)}`;
     if (!wantsHtml) {
       sendJson(res, 401, { error: "unauthorized", message: "sign-in required", loginUrl: signIn });
     } else if (signInAttempted) {
@@ -1300,12 +1314,23 @@ async function listDeployments(ctx: ApiCtx): Promise<void> {
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
   const visible = await app.listDeploymentsForViewer(principalId);
   const baseUrl = gitUrlBase(ctx);
+  const ownerOf = (d: { ownerScopeId?: string }) =>
+    d.ownerScopeId?.startsWith("personal:") ? d.ownerScopeId.slice("personal:".length) : undefined;
+  const names = await createPersonNames({ users: ctx.deps.users, directory: ctx.deps.directory }).labels(
+    visible.flatMap((d) => [ownerOf(d), d.createdBy].filter((id): id is string => !!id)),
+  );
   const deployments = await Promise.all(
     visible.map(async (d) => {
-      const listed = { ...d, webUrl: webUrlOf(d.id) };
-      if (!secret) return listed;
+      const owner = ownerOf(d);
+      const named = {
+        ...d,
+        webUrl: webUrlOf(d.id),
+        ...(owner ? { ownerName: names.get(owner)! } : {}),
+        ...(d.createdBy ? { createdByName: names.get(d.createdBy)! } : {}),
+      };
+      if (!secret) return named;
       const git = await app.deploymentGitUrlFor(d.id, principalId, { secret, baseUrl });
-      return git ? { ...listed, gitUrl: git.url } : listed;
+      return git ? { ...named, gitUrl: git.url } : named;
     }),
   );
   return sendJson(res, 200, { deployments });
@@ -1532,7 +1557,7 @@ async function setDeploymentAlwaysOn(ctx: ApiCtx): Promise<void> {
 }
 
 export const deploymentRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
-  { match: isDeploymentGitRoute, auth: "public", handle: serveDeploymentGit },
+  { match: isDeploymentGitRoute, auth: "public", tenant: deploymentGitTenant, handle: serveDeploymentGit },
   {
     match: (m, p) =>
       p.startsWith("/v1/admin/deployments/") &&
@@ -1541,7 +1566,7 @@ export const deploymentRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
     auth: "source",
     handle: proxyAdminDeployment,
   },
-  { match: (_m, p) => p.startsWith("/d/"), auth: "source", handle: proxyDeployment },
+  { match: (_m, p) => p.startsWith("/d/"), auth: "source", tenant: deploymentAppTenant, handle: proxyDeployment },
 ];
 
 export const deploymentRoutes: ReadonlyArray<Route<ApiCtx>> = [

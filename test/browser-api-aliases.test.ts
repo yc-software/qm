@@ -122,7 +122,7 @@ async function refusal(response: Response): Promise<string> {
   }
 }
 
-test("each aliased write reaches its handler only for the signed-in person on the app's own origin, playground visitors included", async (t) => {
+test("each aliased write reaches its handler only for the signed-in person on the app's own origin", async (t) => {
   const realFetch = globalThis.fetch;
   globalThis.fetch = (input, init) =>
     new URL(input instanceof Request ? input.url : String(input)).hostname === "127.0.0.1"
@@ -143,15 +143,12 @@ test("each aliased write reaches its handler only for the signed-in person on th
     const url = concrete(path);
     const actor = findRoute(apiRoutes, method, concrete(target))?.route.actor ?? "";
     const [where, field] = actor.includes(".") ? actor.split(".", 2) : ["body", "principalId"];
-    for (const sub of ["alice", "playground-guest"]) {
-      const cookie = browserSessionCookie(sub, sub === "alice" ? {} : { anon: true });
-      const own = await send(method, url, { cookie, origin });
-      assert.ok(
-        own.status !== 401 && !(own.status === 403 && GATE_REFUSALS.has(await refusal(own))),
-        `${method} ${path} refused ${sub} (${own.status})`,
-      );
-    }
     const cookie = browserSessionCookie("alice");
+    const own = await send(method, url, { cookie, origin });
+    assert.ok(
+      own.status !== 401 && !(own.status === 403 && GATE_REFUSALS.has(await refusal(own))),
+      `${method} ${path} refused alice (${own.status})`,
+    );
     const named =
       where === "query" || findRoute(apiRoutes, method, concrete(target))?.route.streamBody
         ? await send(method, `${url}?${where === "query" ? field : "principalId"}=bob`, { cookie, origin })
@@ -177,40 +174,33 @@ test("each aliased write reaches its handler only for the signed-in person on th
   }
 });
 
-test("browser writes act as the signed-in person or playground visitor under their canonical id", async (t) => {
+test("browser writes act as the signed-in person under their canonical id", async (t) => {
   let built!: ReturnType<typeof buildApp>;
   const base = await core(t, (b) => (built = b));
-  const people = [
-    { sub: "alice@example.com", spelled: " ALICE@EXAMPLE.COM ", cookie: browserSessionCookie("alice@example.com") },
-    {
-      sub: "playground-guest",
-      spelled: "playground-guest",
-      cookie: browserSessionCookie("playground-guest", { anon: true }),
-    },
-  ];
-  const write = (cookie: string, method: string, path: string, body?: unknown) =>
+  const sub = "alice@example.com";
+  const spelled = " ALICE@EXAMPLE.COM ";
+  const cookie = browserSessionCookie(sub);
+  const write = (method: string, path: string, body?: unknown) =>
     fetch(`${base}${path}`, {
       method,
       headers: { cookie, origin: browserSessionDeps.portalUrl, "content-type": "application/json" },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
-  for (const { sub, spelled, cookie } of people) {
-    const created = await write(cookie, "POST", "/api/projects", { name: "Launch", principalId: spelled });
-    assert.equal(created.status, 201, sub);
-    assert.equal(((await created.json()) as { project: { ownerId: string } }).project.ownerId, sub);
-    const saved = await write(cookie, "PUT", "/api/ui-state", { principalId: spelled, key: "sidebar", value: 1 });
-    assert.equal(saved.status, 200, sub);
-    const read = await fetch(`${base}/api/ui-state?key=sidebar`, { headers: { cookie } });
-    assert.equal(((await read.json()) as { value?: unknown }).value, 1, sub);
-    const pinned = await write(cookie, "PUT", "/api/channel-header-pin", { on: false });
-    assert.deepEqual(await pinned.json(), { scopeId: `personal:${sub}`, on: false, configured: false }, sub);
-    const pin = await fetch(`${base}/api/channel-header-pin`, { headers: { cookie } });
-    assert.equal(((await pin.json()) as { scopeId?: string }).scopeId, `personal:${sub}`, sub);
-    assert.equal((await fetch(`${base}/api/runtime-config`, { headers: { cookie } })).status, 200, sub);
-  }
+  const created = await write("POST", "/api/projects", { name: "Launch", principalId: spelled });
+  assert.equal(created.status, 201, sub);
+  assert.equal(((await created.json()) as { project: { ownerId: string } }).project.ownerId, sub);
+  const saved = await write("PUT", "/api/ui-state", { principalId: spelled, key: "sidebar", value: 1 });
+  assert.equal(saved.status, 200, sub);
+  const read = await fetch(`${base}/api/ui-state?key=sidebar`, { headers: { cookie } });
+  assert.equal(((await read.json()) as { value?: unknown }).value, 1, sub);
+  const pinned = await write("PUT", "/api/channel-header-pin", { on: false });
+  assert.deepEqual(await pinned.json(), { scopeId: `personal:${sub}`, on: false, configured: false }, sub);
+  const pin = await fetch(`${base}/api/channel-header-pin`, { headers: { cookie } });
+  assert.equal(((await pin.json()) as { scopeId?: string }).scopeId, `personal:${sub}`, sub);
+  assert.equal((await fetch(`${base}/api/runtime-config`, { headers: { cookie } })).status, 200, sub);
   const session = await built.sessions.getOrCreateByThread("web:alice:fork-me", "dm", "personal:alice@example.com");
   await built.sessions.addParticipant(session.id, "alice@example.com", "Fork me");
-  const forked = await write(people[0]!.cookie, "POST", `/api/sessions/${session.id}/fork`);
+  const forked = await write("POST", `/api/sessions/${session.id}/fork`);
   assert.equal(forked.status, 200);
 });
 

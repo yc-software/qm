@@ -23,8 +23,7 @@ const enqueuer = (store: ReturnType<typeof createPostgresDeliveryStore>) => (tar
 test("only the oldest row of each conversation is claimed, and not while one is out", { skip }, async () => {
   const store = createPostgresDeliveryStore(testDatabaseUrl());
   const enqueue = enqueuer(store);
-  const claim = async () =>
-    (await store.claimPending("webhook", 300, { oldestPerConversation: true })).map((d) => d.text);
+  const claim = async () => (await store.claimDue("webhook", 300)).map((d) => d.text);
   const a1 = await enqueue("a", "a1");
   await enqueue("a", "a2");
   await enqueue("b", "b1");
@@ -71,7 +70,7 @@ test(
       release();
       await until(() => sent.includes("slow2"));
       assert.ok(sent.indexOf("slow1") < sent.indexOf("slow2"));
-      assert.deepEqual(await store.pending("webhook"), []);
+      await until(async () => (await store.pending("webhook")).length === 0);
       assert.equal((await store.get(refused.id))?.failedReason, "receiver returned HTTP 422");
     } finally {
       release();

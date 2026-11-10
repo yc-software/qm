@@ -103,7 +103,7 @@ export function storedItem<K extends ItemKind>(
 
 export const USER_ITEM_KINDS: readonly string[] = ["UserMessage", "SteeringMessage"];
 export const USER_KINDS = `(${USER_ITEM_KINDS.map((kind) => `'${kind}'`).join(", ")})`;
-export const TENANT = "qm_tenant_id()";
+export const TENANT = "qm_bound_tenant()";
 export const userTurn = (col: string): string =>
   `${col}.kind IN ${USER_KINDS} AND NOT (${col}.body @> '{"overheard":true}')`;
 export const authoredUserTurn = (col: string): string =>

@@ -6,6 +6,7 @@ export interface Me {
   browserErrors?: { dsn: string; release?: string; tracesSampleRate?: number };
   analytics?: { module: string; options?: unknown };
   companyName?: string | null;
+  workspace?: string | null;
   welcomeCohort?: string;
   suggestedActivities?: SuggestedActivity[];
   suggestedActivitiesGeneration?: boolean;

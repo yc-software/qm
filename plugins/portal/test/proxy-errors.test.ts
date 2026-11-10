@@ -49,7 +49,6 @@ process.env.PUBLIC_WEB_URL = PUBLIC;
 process.env.PORTAL_SESSION_SECRET = "proxy-errors-test-portal-secret";
 process.env.CORE_SIGNING_SECRET = "proxy-errors-test-core-secret";
 process.env.PORTAL_IDENTITY_SECRET = "proxy-errors-test-identity-secret";
-process.env.PORTAL_DEPLOYMENTS_ENABLED = "1";
 process.env.CORE_API_URL = upstreamUrl;
 
 const { consumeState, consumedStates } = await import("../src/index.ts");
@@ -145,7 +144,13 @@ test("completed portal failures log status, method and duration once without req
     assert.equal(errors.mock.callCount(), before);
   }
   const before = errors.mock.callCount();
-  const status = await new Promise<number | undefined>((resolve, reject) => {
+  const thrown = await fetch(`${base}/connect/%E0/self-connect`, {
+    headers: { cookie: sessionCookie("private@example.com") },
+  });
+  await thrown.text();
+  assert.equal(thrown.status, 500);
+  assert.equal(errors.mock.callCount(), before + 1);
+  const rejected = await new Promise<number | undefined>((resolve, reject) => {
     const req = request(base, { path: "http://[" }, (res) => {
       res.resume();
       res.on("end", () => resolve(res.statusCode));
@@ -153,7 +158,7 @@ test("completed portal failures log status, method and duration once without req
     req.on("error", reject);
     req.end();
   });
-  assert.equal(status, 500);
+  assert.equal(rejected, 400);
   assert.equal(errors.mock.callCount(), before + 1);
 });
 

@@ -173,6 +173,14 @@ test("groupDmDisplayName renders Slack group DMs from internal member display na
     ]),
     "eric",
   );
+  assert.equal(
+    groupDmDisplayName([
+      { externalId: "eric@acme", displayName: "eric" },
+      { externalId: "oidc:issuer:ada" },
+      { externalId: "zoe@acme" },
+    ]),
+    "eric, Unknown person, zoe@acme",
+  );
 });
 
 test("computePublishMembers: all-internal + complete → the deduped membership (incl. actor)", () => {

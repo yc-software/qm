@@ -1,3 +1,4 @@
+import { bootTenant, tenancyBooted } from "../../tenants/boot.ts";
 import { analyticsHookConfig } from "../../../plugins/chassis/src/analytics-config.ts";
 import { browserErrorConfig } from "../../../plugins/chassis/src/browser-error-config.ts";
 import { parseSuggestedActivities, type SuggestedActivity } from "../../../plugins/chassis/src/suggested-activities.ts";
@@ -32,7 +33,9 @@ export function webMeConfig(env: NodeJS.ProcessEnv): WebMeConfig {
 
 async function permissionsOf(ctx: ApiCtx, user: string): Promise<string[]> {
   const [admin, preview] = await Promise.all([
-    adminPermissions(ctx.deps, { id: user, type: "internal" }).catch(swallowAs("web: /me admin status", null)),
+    ctx.actor?.imp
+      ? null
+      : adminPermissions(ctx.deps, { id: user, type: "internal" }).catch(swallowAs("web: /me admin status", null)),
     inboxPreviewEnabled(ctx.deps, user).catch(swallowAs("web: /me inbox preview flag", false)),
   ]);
   const permissions = [...(admin?.permissions ?? [])];
@@ -59,6 +62,7 @@ async function me(ctx: ApiCtx): Promise<void> {
     user,
     org: orgId(),
     companyName: branding.orgName?.trim() || null,
+    workspace: tenancyBooted() && !bootTenant() ? branding.orgName?.trim() || null : null,
     ...(config.analytics && !actor.imp ? { analytics: config.analytics } : {}),
     ...(config.browserErrors && !actor.imp ? { browserErrors: config.browserErrors } : {}),
     mode: "portal",

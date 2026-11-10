@@ -9,6 +9,7 @@ import { conversationScope } from "../resolution/resolution-service.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { turnRecordedFailure } from "./web-transcript-delivery.ts";
 import { reportFailureAs } from "../util/errors.ts";
+import { withTenant } from "../tenants/context.ts";
 
 export interface RunResultDelivery {
   destination: Destination;
@@ -175,6 +176,16 @@ export function wireRunResultDeliveries(
   runs.onTerminal((run) => {
     void recover(run).catch(reportFailureAs("delivery: enqueue recovery delivery", undefined, `run=${run.id}`));
   });
+  const recoverMissing = async (batch: readonly Run[]): Promise<number> => {
+    const existing = await deliveries.existingKeys(batch.map((run) => `run:${run.id}`));
+    let recovered = 0;
+    for (const run of batch) {
+      if (existing.has(`run:${run.id}`) || !(await recover(run))) continue;
+      console.error(`[delivery] terminal run ${run.id} had no outbox row — enqueued its recovery delivery`);
+      recovered += 1;
+    }
+    return recovered;
+  };
   return {
     async sweep(now = Date.now()) {
       const before = now - RUN_RESULT_SWEEP_GRACE_MS;
@@ -182,12 +193,8 @@ export function wireRunResultDeliveries(
       let recovered = 0;
       for (;;) {
         const batch = await runs.terminalFinished(cursor, before, RUN_RESULT_SWEEP_PAGE);
-        const existing = await deliveries.existingKeys(batch.map((run) => `run:${run.id}`));
-        for (const run of batch) {
-          if (existing.has(`run:${run.id}`) || !(await recover(run))) continue;
-          console.error(`[delivery] terminal run ${run.id} had no outbox row — enqueued its recovery delivery`);
-          recovered += 1;
-        }
+        for (const [tenantId, group] of Map.groupBy(batch, (run) => run.tenantId))
+          recovered += await withTenant(tenantId, () => recoverMissing(group));
         const last = batch.at(-1);
         if (!last || batch.length < RUN_RESULT_SWEEP_PAGE) return recovered;
         cursor = { finishedAt: last.finishedAt!, id: last.id };

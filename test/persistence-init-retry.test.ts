@@ -1,4 +1,6 @@
 import { test } from "node:test";
+import { withTenant } from "../src/tenants/context.ts";
+import { TEST_TENANT } from "./support/test-tenant.ts";
 import assert from "node:assert/strict";
 import { createPgPool, type PgPool, type Rows } from "../src/persistence/pg-pool.ts";
 import { createPostgresMap } from "../src/persistence/durable-map.ts";
@@ -33,8 +35,12 @@ function flakyPgPool(failures: number): PgPool {
 
 test("pg map: a failed table-create is retried on the next call (rejection not cached)", async () => {
   const m = createPostgresMap<{ n: number }>(flakyPgPool(1), "retry_widgets");
-  await assert.rejects(() => m.all(), /transient pg failure/);
-  assert.deepEqual(await m.all(), [{ n: 1 }], "second call re-runs the table create and proceeds to the query");
+  await assert.rejects(() => withTenant(TEST_TENANT, () => m.all()), /transient pg failure/);
+  assert.deepEqual(
+    await withTenant(TEST_TENANT, () => m.all()),
+    [{ n: 1 }],
+    "second call re-runs the table create and proceeds to the query",
+  );
 });
 
 test("admin grants: a failed seed is retried on the next call (rejection not cached)", async () => {
@@ -58,9 +64,10 @@ test("admin grants: a failed seed is retried on the next call (rejection not cac
   };
   const store = createAdminGrantStore(persist, {
     seed: [{ principalId: "p", scopeId: scopeId("personal", "p"), role: "org_admin" }],
+    seedTenant: async () => TEST_TENANT,
   });
-  await assert.rejects(() => store.list(), /transient pg failure/);
-  const listed = await store.list();
+  await assert.rejects(() => withTenant(TEST_TENANT, () => store.list()), /transient pg failure/);
+  const listed = await withTenant(TEST_TENANT, () => store.list());
   assert.equal(listed.length, 1, "second call re-runs seeding and lists the seeded grant");
 });
 

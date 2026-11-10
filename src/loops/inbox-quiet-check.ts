@@ -1,4 +1,5 @@
 import { LRUCache } from "lru-cache";
+import { perTenant } from "../tenants/cache.ts";
 import { WebClient } from "@slack/web-api";
 import type { Loop, LoopItem } from "./types.ts";
 import { isObj, type ConnectorTokenSource } from "./sources/adapter.ts";
@@ -89,7 +90,7 @@ function threadOf(match: SlackMessage): string | undefined {
 
 export function createInboxQuietCheck(deps: QuietCheckDeps): InboxQuietCheck {
   const fetchImpl = deps.fetchImpl ?? fetch;
-  const bots = new LRUCache<string, boolean>({ max: 5000, ttl: 24 * 60 * 60 * 1000 });
+  const bots = perTenant(() => new LRUCache<string, boolean>({ max: 5000, ttl: 24 * 60 * 60 * 1000 }));
 
   const slackClient =
     deps.slackClient ??
@@ -121,11 +122,11 @@ export function createInboxQuietCheck(deps: QuietCheckDeps): InboxQuietCheck {
 
   async function isBot(token: string, team: string, user: string): Promise<boolean> {
     const key = `${team}:${user}`;
-    const cached = bots.get(key);
+    const cached = bots().get(key);
     if (cached !== undefined) return cached;
     const body = await slack(token, "users.info", { user });
     const bot = isObj(body.user) && (body.user.is_bot === true || body.user.is_app_user === true);
-    bots.set(key, bot);
+    bots().set(key, bot);
     return bot;
   }
 
