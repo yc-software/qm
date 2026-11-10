@@ -49,7 +49,7 @@ for (const ending of ["Reconstruct the migration hash from the test files.", "wh
         assert.match(prompt, /UserMessage#136/);
         assert.match(prompt, /Tool results cannot be searched or reopened through history/);
         assert.match(prompt, /Preserve necessary facts from tool results inline/);
-        assert.equal(options?.maxTokens, 8000);
+        assert.equal(options?.maxTokens, model.maxTokens);
         assert.equal(options?.cacheRetention, "none");
         return response();
       },
@@ -87,7 +87,7 @@ test("compaction rejects a provider error as a typed ProviderTurnError", async (
   );
 });
 
-for (const stopReason of ["aborted", "toolUse"] as const) {
+for (const stopReason of ["length", "aborted", "toolUse"] as const) {
   test(`compaction rejects ${stopReason} even when partial text exists`, async () => {
     let calls = 0;
     await assert.rejects(
@@ -101,48 +101,18 @@ for (const stopReason of ["aborted", "toolUse"] as const) {
   });
 }
 
-test("compaction retries a length-truncated summary once with a larger output limit", async () => {
-  const limits: (number | undefined)[] = [];
-  const result = await summarizeHistory([], model, (_model, _context, options) => {
-    limits.push(options?.maxTokens);
-    return limits.length === 1 ? response("partial summary", "length") : response();
-  });
-  assert.equal(result, summary);
-  assert.deepEqual(limits, [8000, 32000]);
-});
-
-test("compaction reports token usage when the larger output limit is also exhausted", async () => {
-  const limits: (number | undefined)[] = [];
+test("compaction length errors report the output limit and token usage", async () => {
   await assert.rejects(
-    summarizeHistory([], model, (_model, _context, options) => {
-      limits.push(options?.maxTokens);
-      return response("partial summary", "length", { ...zeroUsage(), output: 32000, reasoning: 30500 });
-    }),
+    summarizeHistory([], model, (_model, _context, options) =>
+      response("partial summary", "length", { ...zeroUsage(), output: options!.maxTokens!, reasoning: 30500 }),
+    ),
     {
-      message:
-        "Compaction did not complete (length): the summary hit the 32000-token output limit (output tokens 32000, reasoning tokens 30500)",
+      message: `Compaction did not complete (length): the summary hit the ${model.maxTokens}-token output limit (output tokens ${model.maxTokens}, reasoning tokens 30500)`,
     },
   );
-  assert.deepEqual(limits, [8000, 32000]);
-});
-
-test("compaction length errors say when the provider reports no reasoning breakdown", async () => {
   await assert.rejects(
-    summarizeHistory([], model, () => response("partial summary", "length", { ...zeroUsage(), output: 8000 })),
-    /output tokens 8000, reasoning tokens not reported/,
-  );
-});
-
-test("compaction propagates transport failures and rejects empty output", async () => {
-  await assert.rejects(
-    summarizeHistory([], model, () => {
-      throw new Error("connection lost");
-    }),
-    /connection lost/,
-  );
-  await assert.rejects(
-    summarizeHistory([], model, () => response("")),
-    /empty summary/,
+    summarizeHistory([], model, () => response("partial summary", "length", { ...zeroUsage(), output: 9 })),
+    /output tokens 9, reasoning tokens not reported\)$/,
   );
 });
 

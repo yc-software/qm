@@ -1,5 +1,5 @@
 import { generateSummary } from "@earendil-works/pi-coding-agent";
-import type { Api, Model, Usage } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { contextSummary } from "../sessions/session-store.ts";
 import type { Item } from "../sessions/items.ts";
 import { compactTranscript, validateCompactSummary } from "./context-compaction.ts";
@@ -21,56 +21,39 @@ const SUMMARY_INSTRUCTIONS = [
   "Do not include secrets or credentials. Keep the summary under 8,000 characters.",
 ].join("\n");
 
-const SUMMARY_RESERVE_TOKENS = [10_000, 40_000] as const;
-
-class SummaryLengthError extends Error {}
-
-function usageNote(usage: Usage | undefined): string {
-  if (!usage) return "no usage reported";
-  const reasoning = usage.reasoning === undefined ? "not reported" : String(usage.reasoning);
-  return `output tokens ${usage.output}, reasoning tokens ${reasoning}`;
-}
-
 export async function summarizeHistory(history: Item[], model: Model<Api>, streamFn: StreamFn): Promise<string> {
   const previous = history.findLast((entry) => contextSummary(entry));
   const previousSummary = previous ? contextSummary(previous) : null;
   const messages = history.filter(
     (entry) => !contextSummary(entry) && (!previousSummary || entry.seq > previousSummary.throughSeq),
   );
-  const summarize = (reserveTokens: number) =>
-    generateSummary(
-      [{ role: "user", content: compactTranscript(messages), timestamp: messages.at(-1)?.createdAt ?? 0 }],
-      model,
-      reserveTokens,
-      undefined,
-      undefined,
-      undefined,
-      SUMMARY_INSTRUCTIONS,
-      previousSummary?.text,
-      "low",
-      async (summaryModel, context, options) => {
-        const stream = await streamFn(summaryModel, context, options);
-        const result = await stream.result();
-        if (result.stopReason === "error") throw providerTurnError(result);
-        if (result.stopReason === "length") {
-          throw new SummaryLengthError(
-            `Compaction did not complete (length): the summary hit the ${options?.maxTokens ?? "unknown"}-token output limit (${usageNote(result.usage)})`,
-          );
-        }
-        if (result.stopReason !== "stop") {
-          throw new Error(
-            `Compaction did not complete (${result.stopReason}): ${result.errorMessage ?? "incomplete summary"}`,
-          );
-        }
-        return stream;
-      },
-    );
-  const [first, retry] = SUMMARY_RESERVE_TOKENS;
-  try {
-    return validateCompactSummary(await summarize(first));
-  } catch (error) {
-    if (!(error instanceof SummaryLengthError)) throw error;
-    console.error(`[compaction] ${error.message}; retrying with a larger output limit`);
-    return validateCompactSummary(await summarize(retry));
-  }
+  const text = await generateSummary(
+    [{ role: "user", content: compactTranscript(messages), timestamp: messages.at(-1)?.createdAt ?? 0 }],
+    model,
+    Number.POSITIVE_INFINITY,
+    undefined,
+    undefined,
+    undefined,
+    SUMMARY_INSTRUCTIONS,
+    previousSummary?.text,
+    "low",
+    async (summaryModel, context, options) => {
+      const stream = await streamFn(summaryModel, context, options);
+      const result = await stream.result();
+      if (result.stopReason === "error") throw providerTurnError(result);
+      if (result.stopReason === "length") {
+        const reasoning = result.usage.reasoning ?? "not reported";
+        throw new Error(
+          `Compaction did not complete (length): the summary hit the ${options?.maxTokens}-token output limit (output tokens ${result.usage.output}, reasoning tokens ${reasoning})`,
+        );
+      }
+      if (result.stopReason !== "stop") {
+        throw new Error(
+          `Compaction did not complete (${result.stopReason}): ${result.errorMessage ?? "incomplete summary"}`,
+        );
+      }
+      return stream;
+    },
+  );
+  return validateCompactSummary(text);
 }
