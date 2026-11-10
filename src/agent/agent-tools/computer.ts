@@ -580,7 +580,7 @@ export function computerTools(kit: ToolKit) {
                       ? jobs
                           .map(
                             (j) =>
-                              `${j.processId}  ${j.registryStatus === "reaped" ? "stopped (ttl)" : fmtStatus(j.status)}  ${new Date(j.startedAt).toISOString()}  ${j.purpose ?? j.command}${j.purpose ? `\n  ${j.command}` : ""}`,
+                              `${j.processId}  ${j.registryStatus === "reaped" ? "stopped (ttl)" : j.registryStatus}  ${new Date(j.startedAt).toISOString()}  ${j.purpose ?? j.command}${j.purpose ? `\n  ${j.command}` : ""}`,
                           )
                           .join("\n")
                       : "(no background jobs)",

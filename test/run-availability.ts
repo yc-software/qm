@@ -17,9 +17,9 @@ const request: OrchestratorInput = {
   origin: { kind: "direct" },
   text: "availability",
 };
-async function until(predicate: () => boolean): Promise<void> {
+async function until(predicate: () => boolean | Promise<boolean>): Promise<void> {
   const deadline = Date.now() + 3_000;
-  while (!predicate()) {
+  while (!(await predicate())) {
     assert.ok(Date.now() < deadline, "condition reached before deadline");
     await sleep(5);
   }
@@ -442,11 +442,9 @@ test("a batch claimed as claiming pauses is handed back, and claiming resumes", 
       });
     worker.start();
     await until(() => claims === 1);
-    await sleep(50);
-    assert.deepEqual(
-      (await runs.list()).map((run) => run.status),
-      ["pending", "pending", "pending"],
-    );
+    const statuses = async () => (await runs.list()).map((run) => run.status);
+    await until(async () => !(await statuses()).includes("running"));
+    assert.deepEqual(await statuses(), ["pending", "pending", "pending"]);
     assert.equal(handled.length, 0);
     open = true;
     await until(() => handled.length === 3);
