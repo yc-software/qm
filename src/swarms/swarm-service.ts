@@ -1,4 +1,4 @@
-import { NonRetryableTurnError } from "../core/turn-error.ts";
+import { HeldTurnError, NonRetryableTurnError } from "../core/turn-error.ts";
 import { assertSwarmRun, type SwarmRunFence } from "./swarm-fence.ts";
 import { createHash, randomUUID } from "node:crypto";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
@@ -1040,6 +1040,8 @@ export function createSwarmService(deps: {
       if (!member || member.state !== "ready" || member.sessionId !== session.id || session.scopeId !== swarm.scopeId)
         throw new NonRetryableTurnError("invalid swarm membership");
       if (controlState(swarm, member.id) === "stopped") throw new NonRetryableTurnError("swarm worker stopped");
+      if (input.swarm && controlState(swarm, member.id) === "paused")
+        throw new HeldTurnError("swarm worker paused", SWARM_LIMITS.pausedRecheckMs);
       if (!input.swarm) {
         if (
           !(await sessions.participantsOf(session.id)).includes(input.actor.id) ||
