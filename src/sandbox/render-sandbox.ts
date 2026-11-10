@@ -262,6 +262,21 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
     resources,
   ];
 
+  async function recordCheckpointFailure(scope: string, error: unknown, snapshot: RenderSnapshot | undefined) {
+    const current = await store.get(scope);
+    if (!current) return;
+    const failed = await store.merge(scope, {
+      homeDirty: true,
+      recoveryError: errMessage(error),
+      ...(snapshot &&
+      current.checkpoint?.id !== snapshot.id &&
+      !current.retiredResources?.some((resources) => resources.checkpoint?.id === snapshot.id)
+        ? { retiredResources: retire(current, { checkpoint: snapshot }) }
+        : {}),
+    });
+    if (failed) await cleanupRetired(scope, failed);
+  }
+
   async function checkpoint(
     scope: string,
     stored: StoredRenderSandbox,
@@ -289,19 +304,9 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
       if (!merged) throw new Error(`Render sandbox checkpoint lost its scope: ${scope}`);
       saved = merged;
     } catch (error) {
-      const current = await store.get(scope);
-      if (current) {
-        const failed = await store.merge(scope, {
-          homeDirty: true,
-          recoveryError: errMessage(error),
-          ...(snapshot &&
-          current.checkpoint?.id !== snapshot.id &&
-          !current.retiredResources?.some((resources) => resources.checkpoint?.id === snapshot?.id)
-            ? { retiredResources: retire(current, { checkpoint: snapshot }) }
-            : {}),
-        });
-        if (failed) await cleanupRetired(scope, failed);
-      }
+      await recordCheckpointFailure(scope, error, snapshot).catch(
+        swallowAs("render-sandbox: record checkpoint failure", undefined),
+      );
       throw error;
     }
     return cleanupRetired(scope, saved);

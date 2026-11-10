@@ -385,7 +385,9 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
       });
       if (previous !== snapshotId) await forgetSnapshot(previous);
     } catch (e) {
-      await store.merge(scope, { recoveryError: errMessage(e) });
+      await store
+        .merge(scope, { recoveryError: errMessage(e) })
+        .catch(swallowAs("e2b-sandbox: record recovery error", undefined));
       throw e;
     }
   }

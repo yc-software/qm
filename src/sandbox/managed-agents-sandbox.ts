@@ -161,7 +161,9 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
     const stored = await store.get(scope);
     const previous = stored?.checkpointId;
     const captured = await session.createCheckpoint(CHECKPOINT_LABEL).catch(async (e: unknown) => {
-      await store.merge(scope, { checkpointError: errMessage(e) });
+      await store
+        .merge(scope, { checkpointError: errMessage(e) })
+        .catch(swallowAs("managed-agents-sandbox: record checkpoint error", undefined));
       throw e;
     });
     const pending = stored?.pendingCheckpointDeletes ?? [];
