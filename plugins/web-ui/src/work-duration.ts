@@ -43,12 +43,6 @@ interface GoalTurn {
   work?: WorkBlock;
 }
 
-/**
- * Time actually spent running turns on the goal: the work time of every turn
- * from the one that created it, clamped to the goal's creation. Idle time
- * between turns never counts. A human stop pauses the goal until a later turn
- * picks it up again.
- */
 export function goalWorked(messages: readonly unknown[], goal: GoalStripState): { workedMs: number; paused: boolean } {
   let workedMs = 0;
   let counting = false;
