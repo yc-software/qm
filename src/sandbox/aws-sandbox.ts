@@ -43,6 +43,7 @@ import {
   type CredentialPathSpec,
 } from "../credentials/resident-paths.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
+import { ACTIVITY_GRACE_MS, ACTIVITY_TOUCH_INTERVAL_MS, usedWithinGrace } from "./sandbox-activity.ts";
 
 const HOME_DIR = "/root";
 const WORKSPACE_BASENAME = "workspace";
@@ -135,9 +136,29 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
   const scopeByMicrovm = new Map<string, string>();
   const scratchByKey = new Map<string, BodyRef>();
   const activeByMicrovm = new Map<string, number>();
+  const heartbeatByMicrovm = new Map<string, ReturnType<typeof setInterval>>();
 
   function reportError(category: string, code: string, message: string, scopeLabel?: string): void {
     onError?.({ category, code, message, ...(scopeLabel ? { scopeLabel } : {}) });
+  }
+
+  function touchActivity(scope: string, id: string): Promise<void> {
+    const now = Date.now();
+    return store
+      .update(scope, (current) => (current.microvmId === id ? { ...current, lastActivityMs: now } : current))
+      .then(() => undefined, swallowAs("aws-sandbox: record activity", undefined));
+  }
+
+  function startHeartbeat(scope: string, id: string): void {
+    if (heartbeatByMicrovm.has(id)) return;
+    const heartbeat = setInterval(() => void touchActivity(scope, id), ACTIVITY_TOUCH_INTERVAL_MS / 2);
+    heartbeat.unref();
+    heartbeatByMicrovm.set(id, heartbeat);
+  }
+
+  function stopHeartbeat(id: string): void {
+    clearInterval(heartbeatByMicrovm.get(id));
+    heartbeatByMicrovm.delete(id);
   }
 
   const s3LeafFor = (scope: string): string => `${scopeStorageKey(scope)}.tar`;
@@ -257,7 +278,11 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
       if (stored) {
         const desc = await api.tryGetMicrovm(stored.microvmId);
         const alive = desc && desc.state !== "TERMINATED" && desc.state !== "TERMINATING";
-        const stale = Date.now() - stored.createdAtMs > rotateAfterMs;
+        const age = Date.now() - stored.createdAtMs;
+        const stale =
+          age > rotateAfterMs &&
+          (!usedWithinGrace(stored.lastActivityMs, Date.now()) ||
+            age > maximumDurationInSeconds * 1000 - ACTIVITY_GRACE_MS);
         if (alive && stored.provisioning)
           throw new Error(`AWS sandbox ${stored.microvmId} has incomplete provisioning; retire it before retrying`);
         if (alive && !stale) {
@@ -407,6 +432,7 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
         endpointById.delete(id);
         scopeByMicrovm.delete(id);
         activeByMicrovm.delete(id);
+        stopHeartbeat(id);
       }
     });
   }
@@ -440,6 +466,7 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
       };
 
       activeByMicrovm.set(id, (activeByMicrovm.get(id) ?? 0) + 1);
+      if (!scratch) startHeartbeat(scope, id);
       try {
         const prepared = await execRaw(
           id,
@@ -492,6 +519,7 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
         return;
       }
       activeByMicrovm.delete(handle.id);
+      stopHeartbeat(handle.id);
 
       if (handle.scratch) {
         for (const [k, ref] of scratchByKey) if (ref.microvmId === handle.id) scratchByKey.delete(k);
@@ -502,9 +530,11 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
         return;
       }
 
-      if (tdOpts?.keepWarm) return;
-
       const scope = scopeByMicrovm.get(handle.id) ?? (await scopeOf(handle.id));
+      if (tdOpts?.keepWarm) {
+        if (scope) await touchActivity(scope, handle.id);
+        return;
+      }
       if (tdOpts?.destroy) {
         if (scope) await destroyStoredScope(scope, handle.id);
         else {
@@ -544,7 +574,7 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
         !(rec.orgId && rec.orgId !== configOrgId()) &&
         !!rec.lastActivityMs &&
         rec.lastActivityMs <= cutoff &&
-        !activeByMicrovm.has(rec.microvmId);
+        !usedWithinGrace(rec.lastActivityMs, Date.now());
       await claimThenBind(store.claimTenants, async () => {
         for (const [scope, listed] of await store.entries())
           if (idle(listed))

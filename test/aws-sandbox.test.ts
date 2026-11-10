@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import { createAwsSandbox } from "../src/sandbox/aws-sandbox.ts";
 import { supportsBlobStaging, supportsProcessSessions } from "../src/sandbox/sandbox.ts";
@@ -8,6 +8,8 @@ import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.
 import { installFakeMicrovm, type FakeMicrovm } from "./support/fake-microvm.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testMap } from "./support/test-database.ts";
+import type { StoredMicrovm } from "../src/sandbox/aws-sandbox.ts";
+import { ACTIVITY_GRACE_MS, ACTIVITY_TOUCH_INTERVAL_MS } from "../src/sandbox/sandbox-activity.ts";
 
 function makeSandbox(fake: FakeMicrovm, opts: Record<string, unknown> = {}) {
   return createAwsSandbox({
@@ -112,12 +114,13 @@ test("durable $HOME: state survives the body dying via the S3 snapshot", async (
 
 test("a body nearing the 8h cap is rotated: snapshot, terminate, relaunch, rehydrate", async () => {
   const fake = installFakeMicrovm();
-  const sb = makeSandbox(fake, { rotateAfterSeconds: 0, snapshotIntervalMs: 0 });
+  const store = testMap<StoredMicrovm>();
+  const sb = makeSandbox(fake, { store, rotateAfterSeconds: 0, snapshotIntervalMs: 0 });
   const scope = scopeId("personal", "U4");
   const h1 = await sb.provision(scope);
   await sb.writeFile(h1, "keep.txt", "v1");
   await sb.teardown(h1);
-  await sleep(3);
+  await store.merge(scope, { lastActivityMs: Date.now() - ACTIVITY_GRACE_MS - 1 });
 
   const h2 = await sb.provision(scope);
   assert.notEqual(h2.id, h1.id);
@@ -127,12 +130,13 @@ test("a body nearing the 8h cap is rotated: snapshot, terminate, relaunch, rehyd
 
 test("reapDeepIdle terminates a parked body but keeps its durable S3 state", async () => {
   const fake = installFakeMicrovm();
-  const sb = makeSandbox(fake, { snapshotIntervalMs: 0 });
+  const store = testMap<StoredMicrovm>();
+  const sb = makeSandbox(fake, { store, snapshotIntervalMs: 0 });
   const scope = scopeId("personal", "U5");
   const h1 = await sb.provision(scope);
   await sb.writeFile(h1, "state.txt", "x");
   await sb.teardown(h1);
-  await sleep(5);
+  await store.merge(scope, { lastActivityMs: Date.now() - ACTIVITY_GRACE_MS - 1 });
 
   const { reaped } = await sb.reapDeepIdle!(1);
   assert.equal(reaped, 1);
@@ -358,4 +362,53 @@ test("a body reused by another process is not deep-idle reaped mid-turn", async 
   const held = await worker.provision(scope);
   assert.equal((await reaper.reapDeepIdle!(60_000)).reaped, 0);
   assert.equal((await worker.run(held, "echo alive")).stdout.trim(), "alive");
+});
+
+function twoProcesses(fake: FakeMicrovm, opts: Record<string, unknown> = {}) {
+  const store = testMap<StoredMicrovm>();
+  const deps = singleProcessDeps();
+  return {
+    store,
+    a: makeSandbox(fake, { store, ...deps, ...opts }),
+    b: makeSandbox(fake, { store, ...deps, ...opts }),
+  };
+}
+
+test("a hold longer than the idle limit keeps its body: the holder's heartbeat refreshes activity", async () => {
+  mock.timers.enable({ apis: ["setInterval"] });
+  try {
+    const fake = installFakeMicrovm();
+    const { store, a: reaper, b: worker } = twoProcesses(fake);
+    const scope = scopeId("personal", "U-long-hold");
+    const held = await worker.provision(scope);
+    await store.merge(scope, { lastActivityMs: 1 });
+    mock.timers.tick(ACTIVITY_TOUCH_INTERVAL_MS / 2);
+    for (let i = 0; i < 100 && (await store.get(scope))!.lastActivityMs === 1; i++) await sleep(5);
+    assert.equal((await reaper.reapDeepIdle!(60_000)).reaped, 0);
+    assert.equal((await worker.run(held, "echo alive")).stdout.trim(), "alive");
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("rotation leaves a stale body alone while another process is using it", async () => {
+  const fake = installFakeMicrovm();
+  const { a: holder, b: other } = twoProcesses(fake, { rotateAfterSeconds: 0 });
+  const scope = scopeId("personal", "U-rotate-held");
+  const held = await holder.provision(scope);
+  const second = await other.provision(scope);
+  assert.equal(second.id, held.id);
+  assert.equal(fake.runCount, 1);
+  assert.equal((await holder.run(held, "echo alive")).stdout.trim(), "alive");
+});
+
+test("a keep-warm release still records activity for other processes' reapers", async () => {
+  const fake = installFakeMicrovm();
+  const { store, a: reaper, b: worker } = twoProcesses(fake);
+  const scope = scopeId("personal", "U-keep-warm");
+  const held = await worker.provision(scope);
+  await store.merge(scope, { lastActivityMs: 1 });
+  await worker.teardown(held, { keepWarm: true });
+  assert.equal((await reaper.reapDeepIdle!(60_000)).reaped, 0);
+  assert.equal(fake.bodies.get(held.id)!.state, "RUNNING");
 });

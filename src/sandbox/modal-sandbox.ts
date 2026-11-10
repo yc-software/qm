@@ -1,4 +1,5 @@
 import { cleanupFailedProvision } from "./sandbox.ts";
+import { ACTIVITY_GRACE_MS, ACTIVITY_TOUCH_INTERVAL_MS, usedWithinGrace } from "./sandbox-activity.ts";
 import { randomUUID } from "node:crypto";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
@@ -53,8 +54,6 @@ const HOME_DIR = "/root";
 const WORKSPACE_BASENAME = "workspace";
 const HOME_TAR = `${HOME_DIR}/.qm-home.tar`;
 const HYDRATED_MARKER = `${HOME_DIR}/.qm-hydrated`;
-const ACTIVITY_TOUCH_INTERVAL_MS = 10 * 60_000;
-const ACTIVITY_GRACE_MS = 2 * ACTIVITY_TOUCH_INTERVAL_MS;
 const activeSince = (row: StoredModalSandbox | null | undefined, cutoffMs: number): boolean =>
   !row?.lastActivityMs || row.lastActivityMs > cutoffMs;
 const swallowGone = (error: unknown): void => {
@@ -560,7 +559,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
           current.hydrationPending ||
           current.nativeSnapshotId !== rec.nativeSnapshotId ||
           !checkpointRenewalDue(current, Date.now()) ||
-          (current.lastActivityMs ?? 0) > Date.now() - ACTIVITY_GRACE_MS
+          usedWithinGrace(current.lastActivityMs, Date.now())
         )
           return;
         try {
