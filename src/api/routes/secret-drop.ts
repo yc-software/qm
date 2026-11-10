@@ -558,6 +558,7 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
           ...(meta.credentialHandle ? { credentialHandle: meta.credentialHandle } : {}),
           granted: !!grantId,
           ...(pending.length ? { pendingSiblings: pending } : {}),
+          ...(attestation?.botActor ? { botActor: true } : {}),
         });
       })().catch((e) => swallow("secret-drop: resolution fire failed", e));
     }
