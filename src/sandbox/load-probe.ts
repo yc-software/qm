@@ -19,7 +19,7 @@ const PROBE = [
 ].join("\n");
 
 export const withLoadProbe = (command: string): string =>
-  `{\n${command}\n}\n__qm_rc=$?\n(set +eu\n${PROBE}\n) 2>/dev/null\n(exit $__qm_rc)`;
+  `(\n${command}\n)\n__qm_rc=$?\n(set +eu\n${PROBE}\n) 2>/dev/null\n(exit $__qm_rc)`;
 
 const num = (raw: string | undefined): number | null => {
   if (raw === undefined || raw === "-") return null;

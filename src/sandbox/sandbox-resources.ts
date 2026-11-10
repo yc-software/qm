@@ -23,8 +23,6 @@ import { JOB_COMPUTER_SCOPE_PREFIX } from "./home-snapshot.ts";
 import { claimThenBind } from "../tenants/claim.ts";
 import type { LoadSample } from "./load-probe.ts";
 
-const LOAD_WRITE_INTERVAL_MS = 10_000;
-
 export interface SandboxResource {
   id: string;
   backend: SandboxBackendName;
@@ -157,7 +155,6 @@ export function createSandboxResources(opts: {
   canUseScope(actorId: string, scopeId: ScopeId): Promise<boolean>;
 }): SandboxResources {
   const upgraded = perTenant<{ done?: Promise<void> }>(() => ({}));
-  const loadWrites = perTenant(() => new Map<string, number>());
   const initialize = async (): Promise<void> => {
     if (!opts.upgrade) return;
     const state = upgraded();
@@ -244,12 +241,7 @@ export function createSandboxResources(opts: {
     initialize,
     get,
     use,
-    async recordLoad(id, sample) {
-      const last = loadWrites().get(id) ?? 0;
-      if (sample.sampledAt - last < LOAD_WRITE_INTERVAL_MS) return;
-      loadWrites().set(id, sample.sampledAt);
-      await opts.loads.put(id, sample);
-    },
+    recordLoad: (id, sample) => opts.loads.put(id, sample),
     load: (id) => opts.loads.get(id),
     async hold(id, runId) {
       await opts.records.update(id, (current) =>

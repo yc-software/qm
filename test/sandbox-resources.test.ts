@@ -1,3 +1,5 @@
+import { spawnSync } from "node:child_process";
+import { defaultSandboxLoadLine, sandboxLoadLine } from "../src/core/orchestrator/prompt-blocks.ts";
 import type { LoadSample } from "../src/sandbox/load-probe.ts";
 import { createBackgroundBroker } from "../src/connectors/background-exec-broker.ts";
 import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
@@ -1120,4 +1122,130 @@ test("a job computer whose destroy fails keeps its record for retry, and is refu
     cannotRetire.create("alice", "personal:alice", "local", "background job", undefined, true),
     /need a computer that local can retire/,
   );
+});
+
+const shellRun = (backend: Sandbox, stdoutOf?: (command: string) => string) => {
+  backend.run = async (_handle, command) => {
+    if (stdoutOf) return { stdout: stdoutOf(command), stderr: "", code: 0, timedOut: false };
+    const r = spawnSync("sh", ["-c", command], { encoding: "utf8" });
+    return { stdout: r.stdout, stderr: r.stderr, code: r.status ?? -1, timedOut: false };
+  };
+};
+
+test("every resource-bound command reports the computer's load without disturbing its output or exit code", async () => {
+  const { router, options } = fixture((backend) => shellRun(backend));
+  const handle = await router.provision("personal:alice");
+  const r = await router.run(handle, "printf 'no newline'; exit 3");
+  assert.equal(r.stdout, "no newline");
+  assert.equal(r.code, 3);
+  assert.ok(r.load && r.load.memTotalMb > 0 && r.load.diskTotalGb > 0 && r.load.load1 >= 0);
+  assert.deepEqual(await options.loads.get(handle.resourceId!), r.load);
+});
+
+test("a computer without an io pressure gauge reports it unavailable rather than a number", async () => {
+  const { router } = fixture((backend) =>
+    shellRun(backend, () => "out\n\n__QM_LOAD__ - 0.42 2048 8192 10485760 104857600\n"),
+  );
+  const r = await router.run(await router.provision("personal:alice"), "true");
+  assert.equal(r.stdout, "out\n");
+  assert.equal(r.load?.ioFull60, null);
+  assert.deepEqual(
+    {
+      load1: r.load?.load1,
+      mem: [r.load?.memUsedMb, r.load?.memTotalMb],
+      disk: [r.load?.diskUsedGb, r.load?.diskTotalGb],
+    },
+    { load1: 0.42, mem: [2048, 8192], disk: [10, 100] },
+  );
+});
+
+test("a garbled load line is dropped without costing the command its output", async () => {
+  const { router } = fixture((backend) => shellRun(backend, () => "survived\n__QM_LOAD__ 5 x\n"));
+  const r = await router.run(await router.provision("personal:alice"), "true");
+  assert.equal(r.stdout, "survived");
+  assert.equal(r.load, undefined);
+});
+
+test("load samples are written at most once per ten seconds per computer", async (t) => {
+  const { router, options } = fixture((backend) => shellRun(backend, () => "\n__QM_LOAD__ 1 1 1 2 1 2\n"));
+  const handle = await router.provision("personal:alice");
+  const puts: number[] = [];
+  const put = options.loads.put.bind(options.loads);
+  options.loads.put = async (id, sample) => {
+    puts.push(sample.sampledAt);
+    await put(id, sample);
+  };
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+  await router.run(handle, "true");
+  t.mock.timers.tick(5_000);
+  await router.run(handle, "true");
+  t.mock.timers.tick(6_000);
+  await router.run(handle, "true");
+  assert.deepEqual(puts, [1_000_000, 1_011_000]);
+});
+
+test("sustained io pressure is reported once per episode, then re-arms after it clears", async () => {
+  let io = "88";
+  const events: string[] = [];
+  const f = fixture((backend) => shellRun(backend, () => `\n__QM_LOAD__ ${io} 25 1 2 1 2\n`));
+  const router = createSandboxRouter({
+    backends: { local: f.backend },
+    defaultBackend: "local",
+    resources: f.resources,
+    onError: (e) => void events.push(e.code),
+  });
+  const handle = await router.provision("personal:alice");
+  await router.run(handle, "a");
+  await router.run(handle, "b");
+  assert.deepEqual(events, ["io_pressure_high"]);
+  io = "5";
+  await router.run(handle, "c");
+  io = "88";
+  await router.run(handle, "d");
+  assert.deepEqual(events, ["io_pressure_high", "io_pressure_high"]);
+});
+
+test("the Sandboxes line counts the sessions holding the default and stays quiet when nothing is notable", async () => {
+  const { router, resources, options } = fixture((backend) =>
+    shellRun(backend, () => "\n__QM_LOAD__ 62.4 7.5 3072 8192 52428800 104857600\n"),
+  );
+  const handle = await router.provision("personal:alice");
+  const id = handle.resourceId!;
+  await resources.hold(id, "run-1");
+  await options.loads.put(id, {
+    sampledAt: Date.now(),
+    ioFull60: 10,
+    load1: 0.5,
+    memUsedMb: 1024,
+    memTotalMb: 8192,
+    diskUsedGb: 10,
+    diskTotalGb: 100,
+  });
+  assert.equal(await defaultSandboxLoadLine(resources, "personal:alice"), "");
+  await resources.hold(id, "run-2");
+  await resources.hold(id, "run-3");
+  await router.run(handle, "true");
+  const name = (await resources.get(id)).name || id.slice(0, 8);
+  assert.equal(
+    await defaultSandboxLoadLine(resources, "personal:alice"),
+    `Sandboxes: default "${name}" (local) — 3 sessions active, io 62% saturated, load 7.5, mem 3.0/8.0 GB, disk 50% full (sampled 0s ago). Scratch: available.`,
+  );
+});
+
+test("a single session still sees the line when the disk is nearly full, without an io gauge, and with a stale sample", () => {
+  const resource = { id: "abcdef123456", name: "", backend: "modal" as const, holders: ["run-1"] };
+  const sample = {
+    sampledAt: 0,
+    ioFull60: null,
+    load1: 1.2,
+    memUsedMb: 512,
+    memTotalMb: 4096,
+    diskUsedGb: 90,
+    diskTotalGb: 100,
+  };
+  assert.equal(
+    sandboxLoadLine(resource, sample, 5 * 60_000),
+    'Sandboxes: default "abcdef12" (modal) — 1 session active, load 1.2, mem 0.5/4.0 GB, disk 90% full (stale, sampled 5m ago). Scratch: available.',
+  );
+  assert.equal(sandboxLoadLine(resource, { ...sample, diskUsedGb: 20 }, 5 * 60_000), "");
 });

@@ -22,6 +22,7 @@ import {
 
 const PRESSURE_RECORD_FULL60 = 75;
 const PRESSURE_CLEAR_FULL60 = 40;
+const LOAD_WRITE_INTERVAL_MS = 10_000;
 
 export type SandboxBackendName =
   | "sprites"
@@ -99,6 +100,7 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
   }
 
   const pressureEpisodes = new Set<string>();
+  const loadWrites = new Map<string, number>();
   const notePressure = (resourceId: string, handle: SandboxHandle, sample: LoadSample): void => {
     const io = sample.ioFull60;
     if (io !== null && io >= PRESSURE_RECORD_FULL60 && !pressureEpisodes.has(resourceId)) {
@@ -182,7 +184,12 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
       const { stdout, sample } = takeLoadSample(result.stdout, Date.now());
       if (!sample) return { ...result, stdout };
       notePressure(resourceId, handle, sample);
-      await resources.recordLoad(resourceId, sample).catch(swallowAs("sandbox router: record load sample", undefined));
+      if (sample.sampledAt - (loadWrites.get(resourceId) ?? 0) >= LOAD_WRITE_INTERVAL_MS) {
+        loadWrites.set(resourceId, sample.sampledAt);
+        await resources
+          .recordLoad(resourceId, sample)
+          .catch(swallowAs("sandbox router: record load sample", undefined));
+      }
       return { ...result, stdout, load: sample };
     },
     readFile(handle, relPath) {
