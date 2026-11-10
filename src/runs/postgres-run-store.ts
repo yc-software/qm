@@ -94,7 +94,7 @@ const runClaims = (id: string, gate: (column: string) => string) => ({
 });
 
 const RUN_CLAIMS = runClaims("runs/store/0013-claims", () => "");
-const SERVING_RUN_CLAIMS = runClaims("runs/store/0014-serving-claims", servingTenant);
+const SERVING_RUN_CLAIMS = runClaims("runs/store/0015-serving-claims", servingTenant);
 
 const FENCE_HOLD_MS = 600_000;
 const PREVIOUS_SCHEMA = "runs/store/0010-drop-turn-metrics";
@@ -171,6 +171,14 @@ END $base_schema$`,
       },
     ]),
     RUN_CLAIMS,
+    {
+      id: "runs/store/0014-handbacks",
+      statements: [
+        `SET LOCAL lock_timeout = '3s'`,
+        `ALTER TABLE runs ADD COLUMN IF NOT EXISTS handbacks INT NOT NULL DEFAULT 0`,
+        `UPDATE runs SET handbacks = preemptions WHERE status IN ('pending', 'running') AND handbacks < preemptions`,
+      ],
+    },
     SERVING_RUN_CLAIMS,
   ]);
   const { query: q, close: closePool } = pg;
@@ -319,7 +327,7 @@ END $base_schema$`,
 
     async releaseLease(runId, leaseToken, stop, retryAfter = 0): Promise<boolean> {
       const { rowCount } = await q(
-        `UPDATE runs SET status='pending', lease_token=NULL, lease_expires_at=NULL, worker_id=NULL, last_stop=COALESCE($3, last_stop), preemptions=preemptions+$4, retry_after=GREATEST(retry_after, $5) WHERE id=$1 AND lease_token=$2 AND status='running' RETURNING ${NOTIFY_SESSION_AVAILABLE}`,
+        `UPDATE runs SET status='pending', lease_token=NULL, lease_expires_at=NULL, worker_id=NULL, last_stop=COALESCE($3, last_stop), preemptions=preemptions+$4, handbacks=handbacks+1, retry_after=GREATEST(retry_after, $5) WHERE id=$1 AND lease_token=$2 AND status='running' RETURNING ${NOTIFY_SESSION_AVAILABLE}`,
         [runId, leaseToken, stop ? JSON.stringify(stop) : null, stop?.kind === "parked" ? 1 : 0, retryAfter],
       );
       return rowCount > 0;

@@ -19,7 +19,7 @@ import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts
 import { createPostgresMap, createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
 import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { createDeployStore, type Deployment } from "../src/deploy/deploy-store.ts";
+import { createDeployStore, type Deployment, type DeploymentDraft } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
 import { DEPLOYMENT_TABLES } from "../src/deploy/page-views.ts";
@@ -312,6 +312,7 @@ describeTwoTenants("background sweeps claim across tenants and work each row und
     const maps = createPostgresMapFactory(db.appDatabaseUrl);
     const deployStore = createDeployStore({
       deployments: maps.map<Deployment>("deployments", undefined, DEPLOYMENT_TABLES),
+      drafts: maps.map<DeploymentDraft>("deployment_drafts"),
       pg: maps.pool,
     });
     const destroyed: string[] = [];

@@ -58,7 +58,7 @@ test("a fresh database gets the base schema without items.target_seq or session_
   });
 });
 
-test("a fully migrated database skips the base schema and drops only the retired objects", { skip }, async () => {
+test("a fully migrated database skips the base schema and drops the retired objects", { skip }, async () => {
   await withDatabase(async (url, admin) => {
     await admin.query(`CREATE TABLE qm_schema_migrations(
       id TEXT PRIMARY KEY, checksum TEXT NOT NULL, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
@@ -68,7 +68,7 @@ test("a fully migrated database skips the base schema and drops only the retired
     await admin.query("CREATE TABLE directory_sync(org_id TEXT PRIMARY KEY, channel_members_synced BOOLEAN)");
     await admin.query("CREATE TABLE sessions(id TEXT PRIMARY KEY, thread_ref TEXT, spawn_meta TEXT)");
     await admin.query(
-      "CREATE TABLE runs(id TEXT PRIMARY KEY, session_id TEXT, request TEXT, result TEXT, created_at BIGINT, seq BIGINT)",
+      "CREATE TABLE runs(id TEXT PRIMARY KEY, session_id TEXT, status TEXT, request TEXT, result TEXT, created_at BIGINT, seq BIGINT, preemptions INT NOT NULL DEFAULT 0)",
     );
     await admin.query("CREATE EXTENSION IF NOT EXISTS btree_gin");
     await admin.query(`CREATE TABLE items(seq BIGINT, tenant_id TEXT, session_id TEXT, kind TEXT, variant TEXT,
@@ -100,25 +100,20 @@ test("a fully migrated database skips the base schema and drops only the retired
       (await admin.query("SELECT principal_id FROM participants")).rows.map((row) => row.principal_id),
       ["member"],
     );
-    await admin.query("INSERT INTO participants(session_id, principal_id) VALUES ('s1', 'joined')");
+    assert.deepEqual(
+      (
+        await admin.query(
+          "SELECT column_name FROM information_schema.columns WHERE table_name = 'participants' ORDER BY ordinal_position",
+        )
+      ).rows.map((row) => row.column_name),
+      ["session_id", "principal_id"],
+    );
     const columns = await admin.query(
       "SELECT column_name FROM information_schema.columns WHERE table_name = 'items' ORDER BY ordinal_position",
     );
     assert.deepEqual(
       columns.rows.map((row) => row.column_name),
-      [
-        "seq",
-        "tenant_id",
-        "session_id",
-        "kind",
-        "variant",
-        "text",
-        "search",
-        "target_seq",
-        "author",
-        "body",
-        "created_at",
-      ],
+      ["seq", "tenant_id", "session_id", "kind", "variant", "text", "search", "author", "body", "created_at"],
     );
     assert.equal(await present(admin, "to_regclass('blobs') IS NULL"), true);
     assert.equal(await present(admin, "to_regclass('tool_calls') IS NULL"), true);

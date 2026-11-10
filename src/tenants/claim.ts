@@ -1,6 +1,6 @@
 import type { PgPool } from "../persistence/pg-pool.ts";
 import { loadTenant } from "./cache.ts";
-import { withTenant } from "./context.ts";
+import { type Tenant, withTenant } from "./context.ts";
 
 export interface ClaimedRow {
   tenantId: string;
@@ -32,12 +32,12 @@ export async function claimRows(pg: Pick<PgPool, "q">, name: string, params: unk
 
 export async function claimThenBind<T>(
   claim: () => Promise<readonly ClaimedRow[]>,
-  work: (id: string) => Promise<T>,
+  work: (id: string, tenant: Tenant) => Promise<T>,
 ): Promise<T[]> {
   const done: T[] = [];
   for (const { tenantId, id } of await claim())
     done.push(
-      await inTenant(tenantId, () => work(id)).catch((e: unknown) => {
+      await inTenant(tenantId, (tenant) => work(id, tenant)).catch((e: unknown) => {
         throw new Error(`tenant ${tenantId}`, { cause: e });
       }),
     );
@@ -46,13 +46,13 @@ export async function claimThenBind<T>(
 
 export async function claimThenLoad<T extends { id: string }>(
   claim: () => Promise<readonly ClaimedRow[]>,
-  load: (ids: string[]) => Promise<T[]>,
+  load: (ids: string[], tenant: Tenant) => Promise<T[]>,
 ): Promise<Array<T & { tenantId: string }>> {
   const claimed = await claim();
   const byKey = new Map<string, T & { tenantId: string }>();
   for (const tenantId of new Set(claimed.map((row) => row.tenantId))) {
     const ids = claimed.filter((row) => row.tenantId === tenantId).map(({ id }) => id);
-    const rows = await inTenant(tenantId, () => load(ids)).catch((e: unknown) => {
+    const rows = await inTenant(tenantId, (tenant) => load(ids, tenant)).catch((e: unknown) => {
       throw new Error(`tenant ${tenantId}`, { cause: e });
     });
     for (const row of rows) byKey.set(`${tenantId} ${row.id}`, { ...row, tenantId });
@@ -60,9 +60,9 @@ export async function claimThenLoad<T extends { id: string }>(
   return claimed.flatMap(({ tenantId, id }) => byKey.get(`${tenantId} ${id}`) ?? []);
 }
 
-export function inTenant<T>(tenant: string, fn: () => Promise<T>): Promise<T> {
-  return withTenant(tenant, async () => {
+export function inTenant<T>(id: string, fn: (tenant: Tenant) => Promise<T>): Promise<T> {
+  return withTenant(id, async (tenant) => {
     await loadTenant();
-    return fn();
+    return fn(tenant);
   });
 }

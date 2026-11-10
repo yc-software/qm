@@ -4,7 +4,7 @@ import { composerInput, resizeComposerInput } from "./composer-input";
 import { reportHandledError } from "./browser-errors.ts";
 import { appEditSlug } from "../../chassis/src/app-edit";
 import { runtimeConfigKey, loadRuntimeConfig, saveRuntimeConfig, subscribeRuntimeConfig } from "./runtime-config-store";
-import { getRuntimeConfig } from "./runtime-config-cache.ts";
+import { getRuntimeConfig, type RuntimeConfig } from "./runtime-config-cache.ts";
 import type { Agent, AgentMessage } from "@earendil-works/pi-agent-core";
 import { createFileDragState } from "./file-drag";
 import type { Attachment } from "@earendil-works/pi-web-ui";
@@ -259,7 +259,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       const effort =
         effortOverride ??
         (restoredLoadout?.value === selected?.value ? restoredLoadout?.effort : undefined) ??
-        (getRuntimeConfig(scopeKey())?.effective.effortLevel as EffortLevel | undefined) ??
+        (defaultRuntime()?.effortLevel as EffortLevel | undefined) ??
         defaultEffortForModel(selected?.model);
       const levels = effortLevelsForModel(selected?.model);
       return levels.some((level) => level.value === effort) ? effort : levels[0]!.value;
@@ -273,7 +273,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       const fast =
         fastModeOverride ??
         (restoredLoadout?.value === selected?.value ? restoredLoadout?.fast : undefined) ??
-        getRuntimeConfig(scopeKey())?.effective.fastMode === true;
+        defaultRuntime()?.fastMode === true;
       return fast && modelSupportsFastMode(scopeKey(), selected?.model.id);
     },
     set fastMode(value: boolean | undefined) {
@@ -349,9 +349,23 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     return runtimeConfigKey(runtimeScopeKey(ctx.chat.state.scopeId), options.runtimeAccount);
   }
 
+  function appEditRuntime(key = scopeKey()): RuntimeConfig["appEditRuntime"] {
+    return appEditSlug(ctx.chat.state.threadRef, appState.me?.user) ? getRuntimeConfig(key)?.appEditRuntime : undefined;
+  }
+
+  function defaultRuntime(key = scopeKey()): RuntimeConfig["effective"] | undefined {
+    const effective = getRuntimeConfig(key)?.effective;
+    const appEdit = appEditRuntime(key);
+    return appEdit && effective ? { ...effective, ...appEdit } : effective;
+  }
+
+  function defaultModelId(): ModelOptionValue {
+    return appEditRuntime()?.modelId ?? defaultModelValue(scopeKey());
+  }
+
   function currentModelOption(): ModelOption | undefined {
     const picked = ctx.chat.state.threadRef ? threadModelPicks.get(ctx.chat.state.threadRef) : undefined;
-    return modelOptionFor(picked ?? defaultModelValue(scopeKey()), scopeKey());
+    return modelOptionFor(picked ?? defaultModelId(), scopeKey());
   }
 
   function followsDefault(): boolean {
@@ -359,6 +373,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     const threadRef = ctx.chat.state.threadRef;
     return (
       !!selected &&
+      !appEditRuntime() &&
       !(threadRef && threadModelPicks.has(threadRef)) &&
       effortOverride === undefined &&
       fastModeOverride === undefined &&
@@ -382,13 +397,13 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       runtimeIdentity = identity;
     }
     unsubscribeRuntime?.();
-    let defaults = getRuntimeConfig(key)?.effective;
+    let defaults = defaultRuntime(key);
     unsubscribeRuntime =
       key === null
         ? undefined
         : subscribeRuntimeConfig(key, () => {
             if (key !== scopeKey()) return;
-            const next = getRuntimeConfig(key)?.effective;
+            const next = defaultRuntime(key);
             if (
               (["modelId", "effortLevel", "fastMode"] as const).some((field) => defaults?.[field] !== next?.[field])
             ) {
@@ -426,7 +441,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     loadout = loadLoadout(loadoutKey);
     let selected = currentModelOption();
     const threadRef = ctx.chat.state.threadRef;
-    if (selected && threadRef && !threadModelPicks.has(threadRef)) {
+    if (selected && threadRef && !threadModelPicks.has(threadRef) && !appEditRuntime()) {
       const preferred = modelLoadoutOptions(getModelOptions(scopeKey()), loadout).find(
         (option) => presetModelId(option.value) === presetModelId(selected!.value),
       );
@@ -509,8 +524,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     const selectedModel = currentModelOption();
     if (!selectedModel) {
       const selected =
-        (ctx.chat.state.threadRef ? threadModelPicks.get(ctx.chat.state.threadRef) : undefined) ??
-        defaultModelValue(scopeKey());
+        (ctx.chat.state.threadRef ? threadModelPicks.get(ctx.chat.state.threadRef) : undefined) ?? defaultModelId();
       return html`<div class="composer-wrap">
         ${header} ${composerApprovalPanel(ctx.chat.activePendingApprovals())}
         <p role="status">

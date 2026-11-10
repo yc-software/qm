@@ -39,7 +39,16 @@ import { parseBotLedger, type BotPolicy, type ChannelPolicy } from "../surface-c
 import { isoFromTs } from "../util/message-tag.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { adminSessionUrl } from "../util/admin-links.ts";
-import { replaceThreadSegment, type TurnPostKeys } from "../core/orchestrator/turn-helpers.ts";
+import {
+  completedSurfaceEnqueues,
+  replaceThreadSegment,
+  stripAckPrefix,
+  turnPostKeys,
+  type TurnPostKeys,
+} from "../core/orchestrator/turn-helpers.ts";
+import { replyEditNote } from "../delivery/run-result-delivery.ts";
+import type { DeliveryStore } from "../delivery/delivery-store.ts";
+import type { Item } from "../sessions/items.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "../core/orchestrator/types.ts";
 
 const SURFACE_READ_MAX = 200;
@@ -79,6 +88,62 @@ function postedFileMetas(attachments: readonly OutgoingAttachment[]): PostedFile
   }));
 }
 
+export function surfaceToolsActive(
+  ctx: Pick<SurfaceToolsContext, "input" | "strictReadOnly" | "defaultDestination">,
+): boolean {
+  return !ctx.strictReadOnly && !!ctx.input.surfaceTools && !!ctx.defaultDestination;
+}
+
+export async function enqueueDirectReply(ctx: {
+  deliveries: DeliveryStore;
+  destination: Destination;
+  text: string;
+  key: string;
+  postProvenance: (deliveryKey: string) => DeliveryProvenance;
+  retracted?: readonly string[];
+}): Promise<void> {
+  const editNote = replyEditNote(ctx.retracted);
+  await reachEnqueue({
+    deliveries: ctx.deliveries,
+    destination: editNote ? { ...ctx.destination, editNote } : ctx.destination,
+    text: ctx.text,
+    idempotencyKey: ctx.key,
+    provenance: ctx.postProvenance(ctx.key),
+  });
+}
+
+export async function replayRecordedSurfaceAnswer(ctx: {
+  deps: Pick<OrchestratorDeps, "deliveries">;
+  input: Pick<OrchestratorInput, "addressed" | "runId">;
+  session: Pick<Session, "id" | "threadRef">;
+  defaultDestination: Destination | undefined;
+  surfaceName: string;
+  turnItems: readonly Item[];
+  userSeq: number;
+  text: string;
+  postProvenance: (deliveryKey: string) => DeliveryProvenance;
+}): Promise<void> {
+  const { deps, input, defaultDestination } = ctx;
+  const posted = completedSurfaceEnqueues(ctx.turnItems, ctx.userSeq, ctx.surfaceName);
+  if (!input.addressed || posted > 0 || !defaultDestination || !input.runId) return;
+  const keys = turnPostKeys(input.runId);
+  const directKey = keys.key(defaultDestination, posted);
+  const fallbackKey = keys.key(defaultDestination, posted + 1);
+  if ((await deps.deliveries.existingKeys([directKey, fallbackKey])).size) return;
+  const ack = (await deps.deliveries.listBySourceSession(ctx.session.id, ctx.session.threadRef)).find(
+    (d) => d.idempotencyKey === keys.ackKey,
+  )?.text;
+  const text = stripAckPrefix(ctx.text, ack).trim();
+  if (!text) return;
+  await enqueueDirectReply({
+    deliveries: deps.deliveries,
+    destination: defaultDestination,
+    text,
+    key: directKey,
+    postProvenance: ctx.postProvenance,
+  });
+}
+
 export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps | undefined {
   const {
     deps,
@@ -87,7 +152,6 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
     conversation,
     session,
     scopeId,
-    strictReadOnly,
     defaultDestination,
     blobTransfer,
     fileRegistration,
@@ -96,7 +160,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
     postKeys,
     spine,
   } = ctx;
-  if (strictReadOnly || !(input.surfaceTools && defaultDestination)) return undefined;
+  if (!surfaceToolsActive(ctx) || !defaultDestination) return undefined;
   const currentDestination = defaultDestination;
   const textOnly = (d: Destination) => deps.surfaces.get(d.type)?.capabilities.textOnly === true;
   const homeSurface = deps.surfaces.get(currentDestination.type);

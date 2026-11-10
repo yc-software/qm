@@ -35,18 +35,19 @@ function tenantBranding(load: () => Promise<OrgBranding>): () => Promise<OrgBran
 function envSlackAccountRuntimes(
   env: NodeJS.ProcessEnv,
   tenant: string | undefined,
-  startPlugin: (config: SlackPluginConfig) => Promise<{ stop(): Promise<void> }>,
+  startPlugin: (config: SlackPluginConfig, tenant: string) => Promise<{ stop(): Promise<void> }>,
 ) {
   const accounts = slackAccountConfigsFromEnv(env);
-  if (accounts.length && !tenant) {
-    console.error("[slack] misconfiguration: env-configured Slack accounts need a single-tenant install; ignored");
+  if (!tenant) {
+    if (accounts.length)
+      console.error("[slack] misconfiguration: env-configured Slack accounts need a single-tenant install; ignored");
     return [];
   }
   return accounts.map((account) =>
     createSlackRuntimeReconciler({
       startPaused: true,
       load: () => Promise.resolve({ version: `environment:${account.accountId}`, config: account }),
-      startPlugin,
+      startPlugin: (config) => startPlugin(config, tenant),
       onError: reportFailureAs("slack account reconciliation", undefined, `account=${account.accountId}`),
     }),
   );
@@ -180,7 +181,7 @@ export async function startQm(
         if (slackConfig && slackTenant === tenant) return { version: "environment", config: slackConfig };
         return null;
       },
-      startPlugin: (desired) => startSlackPlugin(desired, built.slackCore),
+      startPlugin: (desired) => startSlackPlugin(desired, built.slackCore, slackTenant),
       onError: reportFailureAs("slack plugin reconciliation", undefined, `tenant=${slackTenant}`),
     });
   const slackRuntime = createTenantSlackRuntimes({
@@ -192,8 +193,8 @@ export async function startQm(
     () => void slackRuntime.reconcile().catch(reportFailureAs("slack install start", undefined)),
   );
 
-  const slackAccountRuntimes = envSlackAccountRuntimes(env, tenant, (desired) =>
-    startSlackPlugin(desired, built.slackCore),
+  const slackAccountRuntimes = envSlackAccountRuntimes(env, tenant, (desired, accountTenant) =>
+    startSlackPlugin(desired, built.slackCore, accountTenant),
   );
 
   const slackRuntimes = [slackRuntime, ...slackAccountRuntimes];
@@ -217,8 +218,8 @@ export async function startQm(
   return {
     built,
     server,
-    releaseInFlightRuns: () => built.runtime.releaseInFlightRuns(),
-    async stop() {
+    releaseInFlightRuns: (fatal?: boolean) => built.runtime.releaseInFlightRuns(fatal),
+    async stop({ fatal }: { fatal?: boolean } = {}) {
       draining.abort();
       const deadline = sleep(config.shutdownDrainMs);
       void slackRuntime.stop().catch((e: unknown) => console.error("[qm] slack plugin stop failed:", errMessage(e)));
@@ -226,12 +227,15 @@ export async function startQm(
         void runtime.stop().catch((e: unknown) => console.error("[qm] slack account stop failed:", errMessage(e)));
       void built.scheduler.stop().catch((e: unknown) => console.error("[qm] scheduler stop failed:", errMessage(e)));
       built.deploymentLayerRefresh.stop();
-      await built.runtime.stop(async () => {
-        await deadline;
-        frontDoor?.close();
-        await web?.events.stop();
-        server.close();
-        server.closeAllConnections();
+      await built.runtime.stop({
+        fatal,
+        beforeClose: async () => {
+          await deadline;
+          frontDoor?.close();
+          await web?.events.stop();
+          server.close();
+          server.closeAllConnections();
+        },
       });
     },
   };

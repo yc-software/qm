@@ -27,6 +27,7 @@ function flakyPgPool(failures: number): PgPool {
     pool: () => Promise.reject(new Error("not backed by a real pool")),
     query,
     q: async (text, params) => (await query(text, params ?? [])).rows,
+    forTenant: () => ({ query, q: async (text, params) => (await query(text, params ?? [])).rows }),
     registerMigration: () => {},
     migrate: async () => {},
     close: async () => {},
@@ -57,17 +58,17 @@ test("admin grants: a failed seed is retried on the next call (rejection not cac
       }
       return [...rows];
     },
-    async put(g) {
+    async put(_tenant, g) {
       rows.push(g);
     },
     async remove() {},
   };
   const store = createAdminGrantStore(persist, {
     seed: [{ principalId: "p", scopeId: scopeId("personal", "p"), role: "org_admin" }],
-    seedTenant: async () => TEST_TENANT,
+    seedsTenant: (t) => t.id === TEST_TENANT,
   });
-  await assert.rejects(() => withTenant(TEST_TENANT, () => store.list()), /transient pg failure/);
-  const listed = await withTenant(TEST_TENANT, () => store.list());
+  await assert.rejects(() => withTenant(TEST_TENANT, (tenant) => store.list(tenant)), /transient pg failure/);
+  const listed = await withTenant(TEST_TENANT, (tenant) => store.list(tenant));
   assert.equal(listed.length, 1, "second call re-runs seeding and lists the seeded grant");
 });
 

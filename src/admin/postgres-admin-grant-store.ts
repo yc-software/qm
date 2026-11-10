@@ -33,34 +33,41 @@ export function createPostgresAdminGrantStore(connectionString: string): AdminGr
   ]);
 
   return {
-    async all() {
-      const rows = await pg.q("SELECT principal_id, scope_id, role, granted_by, created_at FROM admin_grants");
+    async all(tenant) {
+      const rows = await pg
+        .forTenant(tenant)
+        .q("SELECT principal_id, scope_id, role, granted_by, created_at FROM admin_grants WHERE tenant_id = $1", [
+          tenant.id,
+        ]);
       return rows.map(rowToGrant);
     },
-    async put(g) {
-      await pg.query(
-        `INSERT INTO admin_grants (principal_id, scope_id, role, granted_by, created_at)
-         VALUES ($1, $2, $3, $4, $5)
+    async put(tenant, g) {
+      await pg.forTenant(tenant).query(
+        `INSERT INTO admin_grants (tenant_id, principal_id, scope_id, role, granted_by, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (tenant_id, principal_id, scope_id, role)
          DO UPDATE SET granted_by = EXCLUDED.granted_by, created_at = EXCLUDED.created_at`,
-        [g.principalId, g.scopeId, g.role, g.grantedBy ?? null, g.createdAt ?? null],
+        [tenant.id, g.principalId, g.scopeId, g.role, g.grantedBy ?? null, g.createdAt ?? null],
       );
     },
-    async insertIfAbsent(g) {
-      const result = await pg.query(
-        `INSERT INTO admin_grants (principal_id, scope_id, role, granted_by, created_at)
-         VALUES ($1, $2, $3, $4, $5)
+    async insertIfAbsent(tenant, g) {
+      const result = await pg.forTenant(tenant).query(
+        `INSERT INTO admin_grants (tenant_id, principal_id, scope_id, role, granted_by, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (tenant_id, principal_id, scope_id, role) DO NOTHING`,
-        [g.principalId, g.scopeId, g.role, g.grantedBy ?? null, g.createdAt ?? null],
+        [tenant.id, g.principalId, g.scopeId, g.role, g.grantedBy ?? null, g.createdAt ?? null],
       );
-      return (result.rowCount ?? 0) > 0;
+      return result.rowCount > 0;
     },
-    async remove(principalId, scopeId, role) {
-      await pg.query("DELETE FROM admin_grants WHERE principal_id = $1 AND scope_id = $2 AND role = $3", [
-        principalId,
-        scopeId,
-        role,
-      ]);
+    async remove(tenant, principalId, scopeId, role) {
+      await pg
+        .forTenant(tenant)
+        .query("DELETE FROM admin_grants WHERE tenant_id = $1 AND principal_id = $2 AND scope_id = $3 AND role = $4", [
+          tenant.id,
+          principalId,
+          scopeId,
+          role,
+        ]);
     },
   };
 }

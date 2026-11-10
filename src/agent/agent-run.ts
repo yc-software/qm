@@ -37,20 +37,6 @@ import {
   type ToolResultMessage,
 } from "@earendil-works/pi-ai";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
-
-const TURN_EFFORT_LEVELS = new Set<string>([
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-  "ultracode",
-  "auto",
-  "default",
-  "adaptive",
-]);
 import type { ConversationTurn, StopScope } from "../types.ts";
 import type { Item } from "../sessions/items.ts";
 import type { LlmCallUsage } from "../sessions/session-store.ts";
@@ -67,8 +53,6 @@ import { asError, reportFailure, swallow, swallowAs } from "../util/errors.ts";
 import { startPhase } from "../../plugins/chassis/src/error-reporting.ts";
 import {
   defaultInteractiveThinkingLevel,
-  modelSupportsAdaptiveThinking,
-  modelSupportsProviderDefault,
   resolveModel,
   contextTokenBudgetForModel,
   modelHasPrices,
@@ -121,6 +105,7 @@ import type { TurnSession } from "./turn-session.ts";
 import { recordCapturedRequests, subscribeTurnStream } from "./turn-stream.ts";
 import { settleTurnGoal, turnResult } from "./turn-settle.ts";
 import { openTurnPrompt, replayApprovedCalls, turnToolRef } from "./turn-open.ts";
+import { applyReasoningMode, applyTurnEffort } from "./turn-effort.ts";
 import {
   ACK_EMOJI_PROMPT,
   APPROVAL_SUMMARY_PROMPT,
@@ -373,40 +358,6 @@ async function recordOneShotCall(
   }
 }
 
-export function applyTurnEffort(session: AgentSession, level?: string): void {
-  if (!level || !TURN_EFFORT_LEVELS.has(level)) return;
-  if (level === "adaptive" || level === "default") {
-    session.setThinkingLevel("off");
-    return;
-  }
-  const effectiveLevel =
-    level === "auto" && session.state.model ? defaultInteractiveThinkingLevel(session.state.model) : level;
-  const normalizedLevel = effectiveLevel === "auto" ? "medium" : effectiveLevel;
-  const providerLevel = normalizedLevel === "ultracode" ? "max" : normalizedLevel;
-  session.setThinkingLevel(providerLevel as ModelThinkingLevel);
-}
-
-export function applyReasoningMode<T>(payload: T, model: Model<Api>, level?: string): T {
-  if (level !== "adaptive" && level !== "default") return payload;
-  if (level === "adaptive" ? !modelSupportsAdaptiveThinking(model) : !modelSupportsProviderDefault(model))
-    throw new NonRetryableTurnError(`${level} reasoning is not supported by ${model.id}`);
-  if (!payload || typeof payload !== "object") return payload;
-  const body = payload as Record<string, unknown>;
-  delete body.thinking;
-  delete body.reasoning;
-  delete body.reasoning_effort;
-  if (body.output_config && typeof body.output_config === "object") {
-    const outputConfig = { ...body.output_config } as Record<string, unknown>;
-    delete outputConfig.effort;
-    if (Object.keys(outputConfig).length) body.output_config = outputConfig;
-    else delete body.output_config;
-  }
-  if (model.reasoning && ["openai-responses", "openai-codex-responses"].includes(model.api))
-    body.include = [...new Set([...(Array.isArray(body.include) ? body.include : []), "reasoning.encrypted_content"])];
-  if (level === "adaptive") body.thinking = { type: "adaptive", display: "summarized" };
-  return payload;
-}
-
 export function createAgent(opts?: AgentOptions): Agent {
   const routes = opts?.routes ?? createModelRoutes();
   const baseModelId = routes.baseModelId;
@@ -490,44 +441,39 @@ export function createAgent(opts?: AgentOptions): Agent {
       }
     }
 
-    {
-      const agent = session.agent;
-      if (agent) {
-        agent.onPayload = async (payload, model) => {
-          ref.modelCalls = (ref.modelCalls ?? 0) + 1;
-          ref.onModelRequest?.();
-          ref.stepPhase?.end();
-          ref.stepPhase = undefined;
-          ref.firstTokenPhase?.end();
-          ref.firstTokenPhase = startPhase("model.first_token");
-          applyFastSpeed(payload, ref.fast, (model as { api?: string } | undefined)?.api);
-          applyReasoningMode(payload, model as Model<Api>, ref.effortLevel);
-          const capturedPayload = ref.llmCapture ? sanitizeLlmPayload(payload, model) : undefined;
-          let finalPayload = await withDocumentInputs(
-            payload,
-            model as DocumentModel,
-            ref.documents ?? [],
-            ref.abortSignal,
-            ref.documentsStubbed ? documentsDroppedNote(ref.documents ?? []) : undefined,
-          );
-          const guarded = guardOutputBudget(finalPayload, model);
-          if (guarded.kind === "raised") {
-            console.error(
-              `[pi] output-budget guard raised output cap ${guarded.from} -> ${guarded.to} (estimated prompt ${guarded.estimatedPromptTokens} tokens) session=${sessionId}`,
-            );
-          }
-          try {
-            const gateway = modelGatewayRequest(route.gateway, model as Model<Api>);
-            finalPayload = trimPayloadToByteBudget(finalPayload, gateway ? 9_000_000 : undefined);
-          } catch (e) {
-            swallow("pi: request byte budget", e);
-          }
-          if (capturedPayload) ref.llmCapture?.push(capturedPayload);
-          return finalPayload;
-        };
-        agent.afterToolCall = pauseStampAfterToolCall(ref);
+    session.agent.onPayload = async (payload, model) => {
+      ref.modelCalls = (ref.modelCalls ?? 0) + 1;
+      ref.onModelRequest?.();
+      ref.stepPhase?.end();
+      ref.stepPhase = undefined;
+      ref.firstTokenPhase?.end();
+      ref.firstTokenPhase = startPhase("model.first_token");
+      applyFastSpeed(payload, ref.fast, (model as { api?: string } | undefined)?.api);
+      applyReasoningMode(payload, model as Model<Api>, ref.effortLevel);
+      const capturedPayload = ref.llmCapture ? sanitizeLlmPayload(payload, model) : undefined;
+      let finalPayload = await withDocumentInputs(
+        payload,
+        model as DocumentModel,
+        ref.documents ?? [],
+        ref.abortSignal,
+        ref.documentsStubbed ? documentsDroppedNote(ref.documents ?? []) : undefined,
+      );
+      const guarded = guardOutputBudget(finalPayload, model);
+      if (guarded.kind === "raised") {
+        console.error(
+          `[pi] output-budget guard raised output cap ${guarded.from} -> ${guarded.to} (estimated prompt ${guarded.estimatedPromptTokens} tokens) session=${sessionId}`,
+        );
       }
-    }
+      try {
+        const gateway = modelGatewayRequest(route.gateway, model as Model<Api>);
+        finalPayload = trimPayloadToByteBudget(finalPayload, gateway ? 9_000_000 : undefined);
+      } catch (e) {
+        swallow("pi: request byte budget", e);
+      }
+      if (capturedPayload) ref.llmCapture?.push(capturedPayload);
+      return finalPayload;
+    };
+    session.agent.afterToolCall = pauseStampAfterToolCall(ref);
 
     const entry: TurnSession = {
       agentSession: session,
