@@ -48,7 +48,6 @@ type CapabilityCronBody = {
   participants?: unknown;
   scope?: unknown;
   unfurlLinks?: unknown;
-  unattendedGrants?: unknown;
   session?: unknown;
 };
 
