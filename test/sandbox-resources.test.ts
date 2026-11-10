@@ -19,9 +19,7 @@ import {
 } from "../src/sandbox/sandbox-resource-upgrade.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
-import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
-import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { testAdvisoryLock, testCountedAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 
 async function jobComputers(resources: SandboxResources): Promise<SandboxResource[]> {
@@ -883,15 +881,9 @@ test("a parking teardown keeps the computer warm when another run holds it by th
 });
 
 test("concurrent routed commands hold no Postgres session connection while they run", { timeout: 10000 }, async () => {
-  const { Pool } = await import("pg");
-  const pool = new Pool({ connectionString: testDatabaseUrl(), max: 32 });
-  const pg = createPgPool(testDatabaseUrl());
-  let held = 0;
-  pool.on("acquire", () => held++);
-  pool.on("release", () => held--);
+  const sessions = testCountedAdvisoryLock();
   const { options, backend } = fixture();
-  const lock = createPostgresAdvisoryLock({ ...pg, sessionPool: async () => pool });
-  const resources = createSandboxResources({ ...options, lock });
+  const resources = createSandboxResources({ ...options, lock: sessions.lock });
   const router = createSandboxRouter({ backends: { local: backend }, defaultBackend: "local", resources });
   const parallel = 8;
   let running = 0;
@@ -907,14 +899,13 @@ test("concurrent routed commands hold no Postgres session connection while they 
     const commands = Array.from({ length: parallel }, (_, i) => router.run(handle, `command ${i}`));
     try {
       await allRunning.promise;
-      assert.equal(held, 0);
+      assert.equal(sessions.held(), 0);
     } finally {
       gate.resolve();
     }
     assert.equal((await Promise.all(commands)).length, parallel);
   } finally {
-    await pool.end();
-    await pg.close();
+    await sessions.close();
   }
 });
 

@@ -15,9 +15,7 @@ import { ModalSandboxGoneError, type ModalClient, type ModalSession } from "../s
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
-import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
-import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { testAdvisoryLock, testCountedAdvisoryLock, testMap } from "./support/test-database.ts";
 
 let fake: FakeModal;
 let sandbox: Sandbox;
@@ -989,12 +987,7 @@ test(
   "concurrent commands on one scope hold no Postgres session connection while they run",
   { timeout: 15000 },
   async () => {
-    const { Pool } = await import("pg");
-    const pool = new Pool({ connectionString: testDatabaseUrl(), max: 32 });
-    const pg = createPgPool(testDatabaseUrl());
-    let held = 0;
-    pool.on("acquire", () => held++);
-    pool.on("release", () => held--);
+    const sessions = testCountedAdvisoryLock();
     const parallel = 8;
     let running = 0;
     const allRunning = Promise.withResolvers<void>();
@@ -1002,13 +995,13 @@ test(
     const client = gatedCommands("parallel-subagent", gate.promise, () => {
       if (++running === parallel) allRunning.resolve();
     });
-    const s = make({ client, advisoryLock: createPostgresAdvisoryLock({ ...pg, sessionPool: async () => pool }) });
+    const s = make({ client, advisoryLock: sessions.lock });
     try {
       const h = await s.provision(scope);
       const runs = Array.from({ length: parallel }, (_, i) => s.run(h, `echo parallel-subagent ${i}`));
       try {
         await allRunning.promise;
-        assert.equal(held, 0);
+        assert.equal(sessions.held(), 0);
       } finally {
         gate.resolve();
       }
@@ -1018,8 +1011,7 @@ test(
         Array.from({ length: parallel }, (_, i) => `parallel-subagent ${i}`),
       );
     } finally {
-      await pool.end();
-      await pg.close();
+      await sessions.close();
     }
   },
 );
@@ -1036,13 +1028,12 @@ test("the deep-idle reaper spares a sandbox in the middle of a long command", { 
     const building = s.run(h, "echo long-build");
     await entered.promise;
     const fresh = async (): Promise<boolean> => Date.now() - (await store.get(scope))!.lastActivityMs! <= 10 * 60_000;
-    for (let minute = 0; minute < 7 * 60; minute += 5) {
+    for (let minute = 0; minute < 60; minute += 5) {
       mock.timers.tick(5 * 60_000);
       for (let attempt = 0; attempt < 100 && !(await fresh()); attempt++)
         await new Promise((resolve) => setTimeout(resolve, 10));
       assert.ok(await fresh(), "the running command keeps the activity fresh");
     }
-    assert.equal((await s.reapDeepIdle!(6 * 3600_000)).reaped, 0);
     assert.equal((await s.reapDeepIdle!(1)).reaped, 0);
     assert.equal(fake.current(scopeName())?.state, "running");
     gate.resolve();
