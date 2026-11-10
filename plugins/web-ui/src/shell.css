@@ -5693,18 +5693,6 @@ a.connector-widget:focus-visible {
   .composer-approval .approval-btn {
     width: 100%;
   }
-  .composer-toolbar {
-    flex-wrap: wrap;
-  }
-  .composer-left,
-  .composer-right {
-    width: 100%;
-    justify-content: space-between;
-  }
-  .composer-right {
-    flex-wrap: wrap;
-    justify-content: flex-end;
-  }
   .runtime-upgrade {
     align-items: flex-start;
     flex-wrap: wrap;
@@ -12018,6 +12006,13 @@ body.app-edit-embed .composer-wrap {
   box-shadow: none;
 }
 
+body.app-edit-embed .composer-right {
+  flex: none;
+}
+body.app-edit-embed .composer-toolbar .loadout-button {
+  max-width: min(360px, 100%);
+}
+
 body.app-edit-embed .chat-scroll {
   padding: 12px 0;
   scrollbar-gutter: auto;
@@ -12832,14 +12827,9 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
 .loadout-ultrafast-badge {
   display: inline-flex;
   align-items: center;
+  flex: none;
   gap: 3px;
-  color: var(--ultrafast-accent);
-  font-size: 10px;
-  font-weight: 600;
-}
-.loadout-button.ultrafast-active {
-  background: color-mix(in srgb, var(--ultrafast-accent) 14%, var(--background));
-  border-color: color-mix(in srgb, var(--ultrafast-accent) 45%, var(--background));
+  color: color-mix(in srgb, var(--ultrafast-accent) 70%, white);
 }
 .loadout-ultrafast .loadout-setting-label {
   display: inline-flex;
