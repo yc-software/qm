@@ -129,6 +129,7 @@ export function assertSwarmOpen(swarm: Swarm): void {
 
 export interface SwarmStore {
   get(id: string): Promise<Swarm | null>;
+  withForum(sandboxId: string, scopeId: string): Promise<Swarm[]>;
   create(swarm: Swarm, fence?: SwarmRunFence): Promise<Swarm>;
   update(id: string, mutate: (swarm: Swarm) => void, fence?: SwarmRunFence): Promise<Swarm>;
   pending(afterId?: string): Promise<PendingSwarm[]>;
@@ -219,6 +220,14 @@ export function createSwarmStore(
     async get(id) {
       const row = await backing.get(id);
       return row ? decode(row) : null;
+    },
+    async withForum(sandboxId, scopeId) {
+      const rows = await backing.selectEntries({
+        where: { field: "scopeId", anyOfFold: [scopeId] },
+        omit: ["messages"],
+      });
+      const ids = rows.filter(([, row]) => row.members.some((member) => member.forumSandboxId === sandboxId));
+      return (await Promise.all(ids.map(([id]) => backing.get(id)))).flatMap((row) => (row ? [decode(row)] : []));
     },
     async create(swarm, fence) {
       const create = (current: SwarmStorage | null) => {

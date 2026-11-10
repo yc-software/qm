@@ -90,7 +90,7 @@ export interface SwarmService {
   control(caller: SwarmCaller, input: { memberId: string; state: SwarmControlState }): Promise<SwarmMember>;
   enabledFor(actorId: string): Promise<boolean>;
   botMayUseComputer(
-    computer: Pick<SandboxResource, "swarmId">,
+    computer: Pick<SandboxResource, "id" | "ownerScopeId" | "swarmId">,
     turn: { actorId: string; threadRef: string; sessionId: string },
   ): Promise<boolean>;
   notePersonUse(computer: Pick<SandboxResource, "swarmId">): Promise<void>;
@@ -866,11 +866,13 @@ export function createSwarmService(deps: {
     },
     enabledFor,
     async botMayUseComputer(computer, turn) {
+      const { rootId, memberId } = threadIdentity(turn.threadRef, turn.sessionId);
+      const botMayWork = (swarm: Swarm) => botMayDirect(swarm, rootId === swarm.id ? memberId : swarm.id, turn.actorId);
+      const forums = await store.withForum(computer.id, computer.ownerScopeId);
+      if (!forums.every((swarm) => swarmExpired(swarm) || botMayWork(swarm))) return false;
       if (!computer.swarmId) return true;
       const swarm = await store.get(computer.swarmId);
-      if (!swarm) return false;
-      const { rootId, memberId } = threadIdentity(turn.threadRef, turn.sessionId);
-      return botMayDirect(swarm, rootId === swarm.id ? memberId : swarm.id, turn.actorId);
+      return swarm !== null && botMayWork(swarm);
     },
     async notePersonUse(computer) {
       const swarm = computer.swarmId ? await store.get(computer.swarmId) : null;
