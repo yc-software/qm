@@ -40,6 +40,7 @@ const refusedDirection = "a Slack bot's turn cannot direct a person's swarm";
 const refusedComputer = "a Slack bot's turn cannot use the computers of a person's swarm";
 const refusedForum =
   "a swarm a Slack bot starts cannot take forumSandboxId; spawn without it and the swarm uses its own board computer";
+const forumSpawn = { requestId: "forum", text: "work", forumSandboxId: "shared-notes" };
 
 type Fixture = Awaited<ReturnType<typeof swarmFixture>>;
 
@@ -248,6 +249,7 @@ async function botSwarm(backend?: ProcessSandbox) {
   await f.sessions.addParticipant(f.root.id, releaseBot.id);
   await f.runs.complete(f.caller.claims.runId!, f.caller.claims.runLeaseToken!, { status: "ok", reply: "idle" });
   const first = await f.rootTurn(releaseBot.id, true);
+  await assert.rejects(f.service.spawn(first.caller, forumSpawn), { message: refusedForum });
   await f.service.spawn(first.caller, { requestId: "bot-initial", text: "bot work" });
   await first.done();
   await f.service.sweep();
@@ -371,6 +373,7 @@ test("a worker in a bot-started swarm keeps its swarm's board only while the bot
   const workerTurn = { actorId: releaseBot.id, threadRef: worker.threadRef, sessionId: worker.sessionId! };
   assert.equal(await f.service.botMayUseComputer(board, workerTurn), true);
   const person = await f.rootTurn(alice.id, false);
+  await assert.rejects(f.service.spawn(person.caller, forumSpawn), { message: refusedForum });
   await f.service.send(person.caller, { requestId: "person-send", audience: [worker.id], text: "alice's work" });
   await person.done();
   assert.equal(await f.service.botMayUseComputer(board, workerTurn), false);
@@ -556,47 +559,4 @@ test("a bot's watch of a job in a swarm only it directs stops reading the job on
   assert.equal(computers.reads.length, reads);
   const [monitor] = await monitors.list();
   assert.deepEqual([monitor?.enabled, monitor?.lastError], [false, refusedComputer]);
-});
-
-test("a Slack bot's turn cannot supply a forum computer for its swarm while a person still can", async () => {
-  const f = await channelSwarm();
-  if (f.caller.kind !== "agent") throw new Error("wrong caller");
-  await f.sessions.addParticipant(f.root.id, releaseBot.id);
-  await f.runs.complete(f.caller.claims.runId!, f.caller.claims.runLeaseToken!, { status: "ok", reply: "idle" });
-  const forum = await f.sandboxes.create(alice.id, f.root.scopeId, "modal", "Shared notes");
-  const spawnWithForum = async (actorId: string, botActor: boolean) => {
-    const turn = await f.rootTurn(actorId, botActor);
-    const outcome = await f.service
-      .spawn(turn.caller, { requestId: `${actorId}-forum`, text: "work", forumSandboxId: forum.id })
-      .then(
-        (members) => members.map((member) => member.forumSandboxId),
-        (error: unknown) => errMessage(error),
-      );
-    await turn.done();
-    return outcome;
-  };
-  const bot = await spawnWithForum(releaseBot.id, true);
-  const afterBot = (await f.store.get(f.root.id)) ?? null;
-  const person = await spawnWithForum(alice.id, false);
-  const swarm = (await f.store.get(f.root.id))!;
-  assert.deepEqual(
-    { bot, afterBot, person, board: swarm.board },
-    { bot: refusedForum, afterBot: null, person: [forum.id], board: undefined },
-  );
-});
-
-test("a person's turn cannot supply a forum computer to a swarm a Slack bot started", async () => {
-  const f = await botSwarm();
-  const membersBefore = (await f.store.get(f.root.id))!.members.map((member) => member.id);
-  const forum = await f.sandboxes.create(alice.id, f.root.scopeId, "modal", "Shared notes");
-  const person = await f.rootTurn(alice.id, false);
-  const outcome = await f.service
-    .spawn(person.caller, { requestId: "alice-forum", text: "alice's work", forumSandboxId: forum.id })
-    .then(
-      (members) => members.map((member) => member.forumSandboxId),
-      (error: unknown) => errMessage(error),
-    );
-  await person.done();
-  const membersAfter = (await f.store.get(f.root.id))!.members.map((member) => member.id);
-  assert.deepEqual({ outcome, membersAfter }, { outcome: refusedForum, membersAfter: membersBefore });
 });
