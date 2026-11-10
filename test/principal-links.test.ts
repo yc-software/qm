@@ -109,7 +109,7 @@ describe("principal link service: one person, several sign-ins", () => {
     const links = createPrincipalLinkService(backing, testAdvisoryLock());
     await links.refresh(true);
     assert.equal(links.canonical(OIDC), undefined);
-    await backing.link({
+    await backing.link(tenant, {
       principalId: OIDC,
       canonicalId: EMAIL,
       evidence: EVIDENCE,
@@ -451,7 +451,7 @@ describe("link mutation serialization", () => {
       {
         ...backing,
         async links() {
-          const rows = await backing.links();
+          const rows = await backing.links(tenant);
           if (delay) {
             delay = false;
             started.resolve();
@@ -510,7 +510,7 @@ describe("canonical portal claims retain proof of the original sign-in", () => {
         key === "links"
           ? () => {
               loads++;
-              return target.links();
+              return target.links(tenant);
             }
           : Reflect.get(target, key, receiver),
     });

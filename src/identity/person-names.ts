@@ -1,4 +1,5 @@
-import type { TenantDirectory } from "../directory/directory-store.ts";
+import type { DirectoryStore } from "../directory/directory-store.ts";
+import type { Tenant } from "../tenants/context.ts";
 import { samePerson } from "../directory/person.ts";
 import { swallowAs } from "../util/errors.ts";
 import type { UserRecord, UserStore } from "./user-store.ts";
@@ -33,16 +34,24 @@ export interface PersonNames {
   labels(principalIds: readonly string[]): Promise<Map<string, string>>;
 }
 
-export function createPersonNames(deps: {
-  users?: Pick<UserStore, "resolve">;
-  directory?: Pick<TenantDirectory, "get">;
-}): PersonNames {
+export function createPersonNames(
+  tenant: Tenant,
+  deps: {
+    users?: Pick<UserStore, "resolve">;
+    directory?: Pick<DirectoryStore, "get">;
+  },
+): PersonNames {
   const resolve = async (ids: readonly string[]): Promise<Map<string, UserRecord>> =>
     ids.length && deps.users
-      ? await deps.users.resolve(ids).catch(swallowAs("person names: resolve users", new Map<string, UserRecord>()))
+      ? await deps.users
+          .resolve(tenant, ids)
+          .catch(swallowAs("person names: resolve users", new Map<string, UserRecord>()))
       : new Map();
   const directoryName = async (id: string): Promise<string | undefined> =>
-    realName(id, (await deps.directory?.get(id).catch(swallowAs("person names: directory lookup", null)))?.displayName);
+    realName(
+      id,
+      (await deps.directory?.get(tenant, id).catch(swallowAs("person names: directory lookup", null)))?.displayName,
+    );
   return {
     async storedNames(principalIds) {
       const found = await resolve(principalIds);

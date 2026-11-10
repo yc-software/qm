@@ -252,7 +252,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   async function projectView(project: Project): Promise<ProjectView> {
     const memberIds = (await deps.projects?.members(projectGroupRef(project.id))) ?? project.memberIds;
     const manual = new Set([project.ownerId, ...project.memberIds]);
-    const users = await deps.users?.resolve(memberIds).catch(() => undefined);
+    const users = await deps.users?.resolve(ambientTenant(), memberIds).catch(() => undefined);
     const members = await Promise.all(
       memberIds.map(async (principalId) => {
         const member = await directory.get(principalId).catch(() => null);

@@ -5,6 +5,7 @@ import { constantTimeEqual } from "../../../util/crypto.ts";
 import { contentDispositionAttachment, contentTypeWithUtf8Charset, sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
 import { discoverScopes } from "./common.ts";
+import type { Tenant } from "../../../tenants/context.ts";
 import { tenantOf, type ApiCtx, type BaseCtx } from "../route.ts";
 
 export function cacheHitRatio(s: { cacheRead?: number; cacheWrite?: number; uncachedInput?: number }): number | null {
@@ -531,13 +532,17 @@ async function cronInfoLookup(
   return crons;
 }
 
-async function peopleOf(deps: BaseCtx["deps"], rows: readonly { scopeId: ScopeId }[]): Promise<PersonOf> {
+async function peopleOf(
+  deps: BaseCtx["deps"],
+  tenant: Tenant,
+  rows: readonly { scopeId: ScopeId }[],
+): Promise<PersonOf> {
   const refs = new Set<string>();
   for (const { scopeId } of rows) {
     const parsed = parseScopeId(scopeId);
     if (parsed.kind === "personal" && parsed.ref) refs.add(parsed.ref);
   }
-  const users = (await deps.admin?.users.resolve([...refs])) ?? new Map();
+  const users = (await deps.admin?.users.resolve(tenant, [...refs])) ?? new Map();
   return (ref) => {
     const user = users.get(ref);
     return user ? { userId: user.id, principalId: user.principalId } : { userId: null, principalId: ref };
@@ -564,7 +569,7 @@ export async function spendExport(ctx: BaseCtx): Promise<void> {
   );
   const scope = orgScope(deps);
   const window = { from: isoDay(from / DAY_MS), to: isoDay(to / DAY_MS) };
-  const exported = spendExportRows(rows, (id) => labels.get(id) ?? "", await peopleOf(deps, rows));
+  const exported = spendExportRows(rows, (id) => labels.get(id) ?? "", await peopleOf(deps, tenantOf(ctx), rows));
   const crons: SpendExportCron[] = [...(await cronInfoLookup(app, exported)).values()]
     .sort((a, b) => byCodePoint(a.id, b.id))
     .map(({ id, title, owner, ownerScopeId, schedule, enabled, archived }) => ({
@@ -627,7 +632,7 @@ export async function spend(ctx: ApiCtx): Promise<void> {
     bucket,
     label: (id) => labels.get(id) ?? "",
     cron: (cronId) => crons.get(cronId) ?? null,
-    person: await peopleOf(deps, rows),
+    person: await peopleOf(deps, tenantOf(ctx), rows),
   });
   if (format === "json")
     return sendJson(res, 200, { scopeId: scope, ...report, ...(asOf === undefined ? {} : { asOf }) });
@@ -661,7 +666,7 @@ export async function selfSpend(ctx: ApiCtx): Promise<void> {
     app.listCronsForViewer(principalId),
     loadSpendRows(deps.sessions, days),
   ]);
-  const person = await peopleOf(deps, [...rows, { scopeId: personalScope(principalId) }]);
+  const person = await peopleOf(deps, tenantOf(ctx), [...rows, { scopeId: personalScope(principalId) }]);
   const me = resolveScope(personalScope(principalId), person).key;
   const shared = new Map(
     contexts.flatMap((context) =>

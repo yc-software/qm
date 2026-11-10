@@ -260,7 +260,7 @@ describe("a deployment without the Slack surface (the directory store is never p
     const oidc = "oidc:issuer:ruth";
     const session = await built.sessions.getOrCreateByThread("web:2", "dm", `personal:${oidc}`);
     await built.sessions.addParticipant(session.id, oidc);
-    await built.users.setDisplayName(oidc, "Ruth Founder");
+    await built.users.setDisplayName(testTenant, oidc, "Ruth Founder");
     const res = await get(`/v1/directory/resolve?q=${encodeURIComponent("ruth f")}`);
     const { matches } = (await res.json()) as { matches: Array<{ principalId: string; displayName: string }> };
     assert.deepEqual(

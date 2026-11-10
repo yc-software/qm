@@ -1,5 +1,6 @@
 import { externalSlackRequestAllowed } from "../resolution/external-slack.ts";
 import { createPersonNames } from "../identity/person-names.ts";
+import { ambientTenant } from "../tenants/context.ts";
 import { turnModelRefusal } from "./runtime-config.ts";
 import type { Run } from "../runs/run-store.ts";
 import {
@@ -154,7 +155,7 @@ export function createTurnMethods(
         };
       await deps.refreshModels?.();
       await deps.identity.refresh();
-      const personNames = createPersonNames({ users: deps.users });
+      const personNames = createPersonNames(ambientTenant(), { users: deps.users });
       const withStoredNames = async (people: Principal[]): Promise<Principal[]> => {
         const names = await personNames.storedNames(people.filter((p) => !p.displayName?.trim()).map((p) => p.id));
         return people.map((p) => (names.has(p.id) ? { ...p, displayName: names.get(p.id)! } : p));

@@ -9,6 +9,7 @@ import { buildApp } from "./support/build-app.ts";
 import type { Config } from "../src/config.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 test("renders gateway + location + identifier lines", () => {
   const out = renderGatewayContext("slack", {
@@ -101,7 +102,7 @@ test("a DM names the person by the name stored at sign-in, then by email, never 
     assert.equal(res.status, "ok", JSON.stringify(res));
     return res.reply ?? "";
   };
-  await users.setDisplayName("oidc:issuer:ada", "Ada Founder");
+  await users.setDisplayName(testTenant, "oidc:issuer:ada", "Ada Founder");
   const named = await dmWith("oidc:issuer:ada");
   assert.match(named, /^Web DM with Ada Founder\.$/m);
   assert.doesNotMatch(named, /oidc:issuer:ada\./);

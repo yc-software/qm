@@ -22,7 +22,6 @@ import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from
 import { audit, authorizeAdmin, isObj, orgScope } from "./shared.ts";
 import { scopeId, type Permission } from "../../types.ts";
 import { tenantOf, type ApiCtx, type BaseCtx, type Route } from "./route.ts";
-import { directoryFor } from "../../directory/directory-store.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
 import { verifyDeployGitAccess, viewerIdentityKey } from "../../deploy/access-token.ts";
 import { appAnnotationAsset } from "../../deploy/app-annotate.ts";
@@ -1342,10 +1341,9 @@ async function listDeployments(ctx: ApiCtx): Promise<void> {
   const baseUrl = gitUrlBase(ctx);
   const ownerOf = (d: { ownerScopeId?: string }) =>
     d.ownerScopeId?.startsWith("personal:") ? d.ownerScopeId.slice("personal:".length) : undefined;
-  const names = await createPersonNames({
-    users: ctx.deps.users,
-    ...(ctx.deps.directory ? { directory: directoryFor(ctx.deps.directory, tenantOf(ctx)) } : {}),
-  }).labels(visible.flatMap((d) => [ownerOf(d), d.createdBy].filter((id): id is string => !!id)));
+  const names = await createPersonNames(tenantOf(ctx), { users: ctx.deps.users, directory: ctx.deps.directory }).labels(
+    visible.flatMap((d) => [ownerOf(d), d.createdBy].filter((id): id is string => !!id)),
+  );
   const deployments = await Promise.all(
     visible.map(async (d) => {
       const owner = ownerOf(d);

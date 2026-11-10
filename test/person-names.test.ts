@@ -1,3 +1,4 @@
+import { testTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPersonNames, personLabel, UNKNOWN_PERSON } from "../src/identity/person-names.ts";
@@ -29,10 +30,12 @@ test("a person's label is their name, then an email, and never a raw sign-in id"
 });
 
 test("labels prefer the directory, then the stored name, and survive a failing store", async () => {
-  const names = createPersonNames({
-    directory: { get: async (id) => (id === "U1" ? ({ principalId: "U1", displayName: "Slack Sam" } as never) : null) },
+  const names = createPersonNames(testTenant, {
+    directory: {
+      get: async (_tenant, id) => (id === "U1" ? ({ principalId: "U1", displayName: "Slack Sam" } as never) : null),
+    },
     users: {
-      resolve: async (ids) =>
+      resolve: async (_tenant, ids) =>
         new Map(ids.filter((id) => id === "oidc:issuer:ada").map((id) => [id, user(id, { displayName: "Ada" })])),
     },
   });
@@ -45,6 +48,6 @@ test("labels prefer the directory, then the stored name, and survive a failing s
     ],
   );
   assert.deepEqual([...(await names.storedNames(["oidc:issuer:ada", "U1"]))], [["oidc:issuer:ada", "Ada"]]);
-  const broken = createPersonNames({ users: { resolve: async () => Promise.reject(new Error("down")) } });
+  const broken = createPersonNames(testTenant, { users: { resolve: async () => Promise.reject(new Error("down")) } });
   assert.deepEqual([...(await broken.labels(["bo@example.com"]))], [["bo@example.com", "bo@example.com"]]);
 });

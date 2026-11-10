@@ -107,12 +107,13 @@ function midTurnPrompt(
 
 export async function recordUser(
   users: OrchestratorDeps["users"],
+  tenant: Tenant,
   id: string,
   botActor: boolean | undefined,
 ): Promise<void> {
   try {
-    await users.record({ id, source: "turn", at: Date.now() });
-    if (botActor) await users.markApps([id]);
+    await users.record(tenant, { id, source: "turn", at: Date.now() });
+    if (botActor) await users.markApps(tenant, [id]);
   } catch (err) {
     reportFailure("users: record user", err);
   }
@@ -213,7 +214,8 @@ export function createSteerPreparer(turn: SteerTurn): NonNullable<AgentTurnInput
         };
       if (screen === "unscreened") said = `${unscreenedNotice("mid-turn message")}\n${said}`;
     }
-    if (request && introducesUser(speaker.origin, request)) await recordUser(deps.users, author, request.botActor);
+    if (request && introducesUser(speaker.origin, request))
+      await recordUser(deps.users, tenant, author, request.botActor);
     const refreshedInbox =
       input.surface === "web" &&
       conversation.kind === "dm" &&

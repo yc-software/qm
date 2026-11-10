@@ -93,7 +93,8 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
   if (samePerson(principalId, actor.id))
     return sendJson(res, 400, { error: "bad_request", message: "you cannot offboard yourself" });
   const steps = await plan(ctx, actor.id, principalId);
-  const user = input.apply === true ? await deps.admin!.users.markOffboarded(principalId, actor.id) : undefined;
+  const user =
+    input.apply === true ? await deps.admin!.users.markOffboarded(tenantOf(ctx), principalId, actor.id) : undefined;
   const changes: Change[] = [];
   for (const { run, ...change } of steps) {
     if (input.apply === true) {
@@ -123,7 +124,7 @@ export async function reactivateUser(ctx: ApiCtx): Promise<void> {
   if (!actor) return;
   if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
   const { principalId } = await resolveAdminUser(deps, tenantOf(ctx), params.principalId!);
-  const user = await deps.admin!.users.markReactivated(principalId);
+  const user = await deps.admin!.users.markReactivated(tenantOf(ctx), principalId);
   await deps.identity.reactivate(principalId);
   audit(ctx, {
     principalId: actor.id,

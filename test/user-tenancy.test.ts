@@ -139,8 +139,8 @@ test("a tenanted database builds each tenant's users from that tenant's own link
     );
 
     const users = createPostgresUserStore(appUrl(databaseUrl));
-    assert.equal((await withTenant(a, () => users.get("U1")))?.principalId, "pat@a.test");
-    assert.equal((await withTenant(b, () => users.get("U1")))?.principalId, "quinn@b.test");
+    assert.equal((await withTenant(a, (t) => users.get(t, "U1")))?.principalId, "pat@a.test");
+    assert.equal((await withTenant(b, (t) => users.get(t, "U1")))?.principalId, "quinn@b.test");
 
     const before = await owner.q(`SELECT count(*)::int AS n FROM users`);
     await upgrade(owner);
@@ -212,19 +212,19 @@ test("two tenants keep separate rosters and links under the login that does not 
     await owner.q(`INSERT INTO tenants(id) VALUES ($1), ($2)`, [a, b]);
     const users = createPostgresUserStore(appUrl(databaseUrl));
     const link = { principalId: "U1", evidence: "sso", linkedBy: "", createdAt: 0 };
-    await withTenant(a, () => users.link({ ...link, canonicalId: "pat@a.test" }));
-    await withTenant(b, () => users.link({ ...link, canonicalId: "quinn@b.test" }));
-    await withTenant(b, () => users.record({ id: "quinn@b.test", source: "turn", at: 1 }));
-    await withTenant(a, () => users.markOffboarded("pat@a.test", "admin@a.test"));
+    await withTenant(a, (t) => users.link(t, { ...link, canonicalId: "pat@a.test" }));
+    await withTenant(b, (t) => users.link(t, { ...link, canonicalId: "quinn@b.test" }));
+    await withTenant(b, (t) => users.record(t, { id: "quinn@b.test", source: "turn", at: 1 }));
+    await withTenant(a, (t) => users.markOffboarded(t, "pat@a.test", "admin@a.test"));
     const linked = async (tenant: string) =>
-      (await withTenant(tenant, () => users.links())).map((l) => [l.principalId, l.canonicalId]);
+      (await withTenant(tenant, (t) => users.links(t))).map((l) => [l.principalId, l.canonicalId]);
     assert.deepEqual(await linked(a), [["U1", "pat@a.test"]]);
     assert.deepEqual(await linked(b), [["U1", "quinn@b.test"]]);
-    const roster = async (tenant: string) => (await withTenant(tenant, () => users.list())).map((u) => u.principalId);
+    const roster = async (tenant: string) => (await withTenant(tenant, (t) => users.list(t))).map((u) => u.principalId);
     assert.deepEqual(await roster(a), ["pat@a.test"]);
     assert.deepEqual(await roster(b), ["quinn@b.test"]);
-    assert.equal((await withTenant(b, () => users.unlink("U1")))?.canonicalId, "quinn@b.test");
-    assert.equal((await withTenant(a, () => users.get("U1")))?.principalId, "pat@a.test");
+    assert.equal((await withTenant(b, (t) => users.unlink(t, "U1")))?.canonicalId, "quinn@b.test");
+    assert.equal((await withTenant(a, (t) => users.get(t, "U1")))?.principalId, "pat@a.test");
     await assert.rejects(
       withTenant(a, () =>
         app.q(

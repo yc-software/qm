@@ -36,8 +36,8 @@ export async function listUsers(ctx: ApiCtx): Promise<void> {
   if (!actor) return;
   audit(ctx, { principalId: actor.id, action: "users.read", resource: "users", scopeLabel: scope });
   const [roster, activity, grants] = await Promise.all([
-    deps.admin!.users.list(),
-    deps.admin!.users.activity(),
+    deps.admin!.users.list(tenantOf(ctx)),
+    deps.admin!.users.activity(tenantOf(ctx)),
     deps.admin?.listGrants(tenantOf(ctx)) ?? [],
   ]);
   const now = Date.now();
@@ -178,7 +178,8 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
   };
-  if (member.kind === "teammate") await deps.admin!.users.record({ id: email, source: "invite", at: member.createdAt });
+  if (member.kind === "teammate")
+    await deps.admin!.users.record(tenantOf(ctx), { id: email, source: "invite", at: member.createdAt });
   await deps.identity.putExternalMember(member);
   const action = created || readmitted ? "external_user.invite" : "external_user.update";
   audit(ctx, {
@@ -336,7 +337,7 @@ export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
     deps.keychain.listAllMetadata(),
     deps.keychain.listGrants({}),
     deps.keychain.listAsks({}),
-    deps.admin!.users.list(),
+    deps.admin!.users.list(tenantOf(ctx)),
     deps.admin?.listGrants(tenantOf(ctx)) ?? Promise.resolve([]),
   ]);
   const ids = [
@@ -349,7 +350,7 @@ export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
     ...adminGrants.map((g) => g.principalId),
   ];
   const members = await app.directoryMembers();
-  const users = await deps.admin!.users.resolve([...ids, ...members.map((m) => m.principalId)]);
+  const users = await deps.admin!.users.resolve(tenantOf(ctx), [...ids, ...members.map((m) => m.principalId)]);
   const keyOf = (id: string) => users.get(id)?.id ?? foldPrincipalId(id);
   const byKey = new Map<string, { userId: string | null; principalId: string }>();
   for (const id of ids) {
@@ -385,7 +386,7 @@ export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
 }
 
 export async function resolveAdminUser(deps: ApiCtx["deps"], tenant: Tenant, requested: string) {
-  const user = (await deps.admin?.users.get(requested)) ?? null;
+  const user = (await deps.admin?.users.get(tenant, requested)) ?? null;
   const member = await deps.directory?.get(tenant, user?.principalId ?? requested);
   return { member, user, principalId: member?.principalId ?? user?.principalId ?? personKey(requested) };
 }

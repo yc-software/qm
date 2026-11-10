@@ -189,7 +189,7 @@ test("/v1/admin/keychain: a person's sign-ins are one row under their primary si
       conversation: { kind: "dm", threadRef: "dm:U-PAT:t1" },
       text: "hello",
     });
-    await s.built.admin.users.link({
+    await s.built.admin.users.link(testTenant, {
       principalId: "U-PAT",
       canonicalId: "pat@example.com",
       evidence: "qa",
@@ -199,7 +199,7 @@ test("/v1/admin/keychain: a person's sign-ins are one row under their primary si
     await s.built.app.upsertDirectory(testTenant, [{ principalId: "U-PAT", displayName: "Pat", type: "internal" }]);
     await s.keychain.save({ ownerId: "U-PAT", service: "github", secret: "s1", envKey: "GITHUB_TOKEN" });
     await s.keychain.save({ ownerId: "pat@example.com", service: "linear", secret: "s2", envKey: "LINEAR_KEY" });
-    const user = (await s.built.admin.users.get("pat@example.com"))!;
+    const user = (await s.built.admin.users.get(testTenant, "pat@example.com"))!;
 
     const d: any = await (
       await fetch(`${s.base}/v1/admin/keychain`, { headers: { "x-admin-actor": "admin-alice@default-org" } })
