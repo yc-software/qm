@@ -7,7 +7,7 @@ import { authoredUserTurn, msOf } from "../sessions/items.ts";
 import { foldPrincipalId } from "../directory/person.ts";
 import { PERSONA_MIGRATIONS } from "../personas/persona-schema.ts";
 import { PERSONA_TENANCY } from "../personas/persona-tenancy.ts";
-import { fold, tenantedUsers, ts, USERS_SCHEMA } from "./user-tenancy.ts";
+import { fold, tenantedUsers, ts, userOf as aliasUser, USERS_SCHEMA } from "./user-tenancy.ts";
 
 export { fold };
 
@@ -336,38 +336,32 @@ const onClient =
   async (text, params) =>
     (await client.query(text, params)).rows;
 
-async function findUser(q: Query, alias: string): Promise<string | undefined> {
-  return (await q(`SELECT user_id FROM user_links WHERE alias_id = $1`, [alias]))[0]?.user_id as string | undefined;
-}
-
-async function findUserIn(q: Query, tenant: Tenant, alias: string): Promise<string | undefined> {
+async function findUser(q: Query, tenant: Tenant, alias: string): Promise<string | undefined> {
   return (await q(`SELECT user_id FROM user_links WHERE tenant_id = $1 AND alias_id = $2`, [tenant.id, alias]))[0]
     ?.user_id as string | undefined;
 }
 
-const userIn = (tenant: string, alias: string): string =>
-  `(SELECT l.user_id FROM user_links l WHERE l.tenant_id = ${tenant} AND l.alias_id = ${alias})`;
-
-export async function ensureUserIn(client: PoolClient, alias: string): Promise<string> {
+export async function ensureUserIn(client: PoolClient, tenant: Tenant, alias: string): Promise<string> {
   const q = onClient(client);
-  const found = await findUser(q, alias);
+  const found = await findUser(q, tenant, alias);
   if (found) return found;
   const created = (
     await q(
-      `INSERT INTO users(primary_alias) VALUES ($1) ON CONFLICT (tenant_id, primary_alias) DO NOTHING RETURNING id`,
-      [alias],
+      `INSERT INTO users(tenant_id, primary_alias) VALUES ($1, $2)
+       ON CONFLICT (tenant_id, primary_alias) DO NOTHING RETURNING id`,
+      [tenant.id, alias],
     )
   )[0]?.id as string | undefined;
   if (created) {
     const linked = await q(
-      `INSERT INTO user_links(alias_id, user_id, evidence, created_at) VALUES ($1, $2, 'primary', now())
+      `INSERT INTO user_links(tenant_id, alias_id, user_id, evidence, created_at) VALUES ($1, $2, $3, 'primary', now())
        ON CONFLICT (tenant_id, alias_id) DO NOTHING RETURNING alias_id`,
-      [alias, created],
+      [tenant.id, alias, created],
     );
     if (linked.length) return created;
-    await q(`DELETE FROM users WHERE id = $1`, [created]);
+    await q(`DELETE FROM users WHERE tenant_id = $1 AND id = $2`, [tenant.id, created]);
   }
-  const winner = await findUser(q, alias);
+  const winner = await findUser(q, tenant, alias);
   if (!winner) throw new Error(`users: could not resolve or create a user for ${alias}`);
   return winner;
 }
@@ -377,7 +371,7 @@ async function linkInTransaction(client: PoolClient, tenant: Tenant, link: UserL
   const linkOf = async (alias: string) =>
     toLink((await q(`${LINK_SELECT} WHERE l.tenant_id = $1 AND l.alias_id = $2`, [tenant.id, alias]))[0]!);
   await q(`LOCK TABLE user_links IN SHARE ROW EXCLUSIVE MODE`);
-  const target = await ensureUserIn(client, link.canonicalId);
+  const target = await ensureUserIn(client, tenant, link.canonicalId);
   const current = (
     await q(
       `SELECT l.user_id, u.primary_alias = l.alias_id AS is_primary,
@@ -412,7 +406,7 @@ async function linkInTransaction(client: PoolClient, tenant: Tenant, link: UserL
     await q(`UPDATE persona_versions SET edited_by = $2 WHERE tenant_id = $1 AND edited_by = $3`, args);
     await q(`DELETE FROM users WHERE tenant_id = $1 AND id = $2`, [tenant.id, source]);
   }
-  const linkedBy = link.linkedBy ? await ensureUserIn(client, foldPrincipalId(link.linkedBy)) : null;
+  const linkedBy = link.linkedBy ? await ensureUserIn(client, tenant, foldPrincipalId(link.linkedBy)) : null;
   await q(
     `INSERT INTO user_links(tenant_id, alias_id, user_id, evidence, linked_by, created_at)
      VALUES ($1, $2, $3, $4, $5, ${ts("$6")})`,
@@ -428,8 +422,8 @@ export function createPostgresUserStore(connectionString: string): UserStore {
     ...USER_SCHEMA_MIGRATIONS,
   ]);
   const ensureUser = async (tenant: Tenant, alias: string): Promise<string> =>
-    (await findUserIn(pg.forTenant(tenant).q, tenant, alias)) ??
-    pg.forTenant(tenant).transaction((client) => ensureUserIn(client, alias));
+    (await findUser(pg.forTenant(tenant).q, tenant, alias)) ??
+    pg.forTenant(tenant).transaction((client) => ensureUserIn(client, tenant, alias));
   return {
     async list(tenant) {
       const rows = await pg.forTenant(tenant).q(
@@ -442,8 +436,8 @@ export function createPostgresUserStore(connectionString: string): UserStore {
     async get(tenant, idOrAlias) {
       const rows = await pg.forTenant(tenant).q(
         `SELECT ${COLUMNS} FROM users u
-          WHERE u.tenant_id = $1 AND (u.id = ${userIn("$1", "$2")} OR u.id::text = lower($3))
-          ORDER BY u.id = ${userIn("$1", "$2")} DESC LIMIT 1`,
+          WHERE u.tenant_id = $1 AND (u.id = ${aliasUser("$1", "$2")} OR u.id::text = lower($3))
+          ORDER BY u.id = ${aliasUser("$1", "$2")} DESC LIMIT 1`,
         [tenant.id, foldPrincipalId(idOrAlias), idOrAlias.trim()],
       );
       return rows[0] ? toRecord(rows[0]) : null;
@@ -468,10 +462,10 @@ export function createPostgresUserStore(connectionString: string): UserStore {
       const seen = `UPDATE users u SET first_seen_at = ${ts("$3")}, source = $4
                      WHERE u.tenant_id = $1 AND u.id = $2 AND u.first_seen_at IS NULL RETURNING u.id`;
       const db = pg.forTenant(tenant);
-      const known = await findUserIn(db.q, tenant, alias);
+      const known = await findUser(db.q, tenant, alias);
       if (known) return (await db.q(seen, [tenant.id, known, at, source])).length > 0;
       return db.transaction(async (client) => {
-        const user = await ensureUserIn(client, alias);
+        const user = await ensureUserIn(client, tenant, alias);
         return (await client.query(seen, [tenant.id, user, at, source])).rows.length > 0;
       });
     },
@@ -511,7 +505,7 @@ export function createPostgresUserStore(connectionString: string): UserStore {
     async markReactivated(tenant, id) {
       const rows = await pg.forTenant(tenant).q(
         `UPDATE users u SET offboarded_at = NULL, offboarded_by = NULL
-          WHERE u.tenant_id = $1 AND u.id = ${userIn("$1", "$2")} RETURNING ${COLUMNS}`,
+          WHERE u.tenant_id = $1 AND u.id = ${aliasUser("$1", "$2")} RETURNING ${COLUMNS}`,
         [tenant.id, foldPrincipalId(id)],
       );
       return rows[0] ? toRecord(rows[0]) : null;

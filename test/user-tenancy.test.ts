@@ -223,6 +223,20 @@ test("two tenants keep separate rosters and links under the login that does not 
     const roster = async (tenant: string) => (await withTenant(tenant, (t) => users.list(t))).map((u) => u.principalId);
     assert.deepEqual(await roster(a), ["pat@a.test"]);
     assert.deepEqual(await roster(b), ["quinn@b.test"]);
+    const owned = createPostgresUserStore(ownerUrl(databaseUrl).toString());
+    for (const [tenant, person] of [
+      [a, "pat@a.test"],
+      [b, "quinn@b.test"],
+    ] as const) {
+      assert.deepEqual(
+        await withTenant(tenant, async (t) => [
+          (await owned.list(t)).map((u) => u.principalId),
+          (await owned.get(t, "U1"))?.principalId,
+        ]),
+        [[person], person],
+        "the table owner skips row-level security, so the token alone keeps the tenants apart",
+      );
+    }
     assert.equal((await withTenant(b, (t) => users.unlink(t, "U1")))?.canonicalId, "quinn@b.test");
     assert.equal((await withTenant(a, (t) => users.get(t, "U1")))?.principalId, "pat@a.test");
     await assert.rejects(

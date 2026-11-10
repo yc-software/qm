@@ -1,5 +1,7 @@
 import { claimRows, type ClaimedRow } from "../tenants/claim.ts";
+import { ambientTenant } from "../tenants/context.ts";
 import { randomUUID } from "node:crypto";
+import type { PoolClient } from "pg";
 import { createPgPool, withPgTransaction, type Rows } from "../persistence/pg-pool.ts";
 import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { foldPrincipalId } from "../directory/person.ts";
@@ -101,6 +103,8 @@ const RECORD_VERSION = `INSERT INTO persona_versions
 
 const ms = (value: unknown): number => new Date(value as string).getTime();
 
+const userIn = (db: PoolClient, by: string): Promise<string> => ensureUserIn(db, ambientTenant(), foldPrincipalId(by));
+
 function toPersona(r: Rows[number]): Persona {
   return {
     id: r.id as string,
@@ -152,7 +156,7 @@ export function createPostgresPersonaStore(connectionString: string, opts: { id?
     async create(input, owner, by) {
       const id = nextId();
       return withPgTransaction(await pool(), async (db) => {
-        const user = await ensureUserIn(db, foldPrincipalId(by));
+        const user = await userIn(db, by);
         await db.query(
           `INSERT INTO personas (id, name, description, instructions, icon, created_by)
            VALUES ($1, btrim($2), $3, $4, $5, $6)`,
@@ -172,7 +176,7 @@ export function createPostgresPersonaStore(connectionString: string, opts: { id?
     },
     async update(id, fields, by, restoredFrom) {
       return withPgTransaction(await pool(), async (db) => {
-        const user = await ensureUserIn(db, foldPrincipalId(by));
+        const user = await userIn(db, by);
         const changed = await db.query(
           `UPDATE personas SET
              name = COALESCE(btrim($2), name),
@@ -237,7 +241,7 @@ export function createPostgresPersonaStore(connectionString: string, opts: { id?
       if (!access.some((entry) => entry.role === "owner")) throw new PersonaOwnerRequired();
       await withPgTransaction(await pool(), async (db) => {
         await db.query("SELECT 1 FROM personas WHERE id = $1 FOR UPDATE", [id]);
-        const user = await ensureUserIn(db, foldPrincipalId(by));
+        const user = await userIn(db, by);
         const kept = access.map((entry) => entry.scopeId);
         await db.query("DELETE FROM persona_access WHERE persona_id = $1 AND NOT (grantee_scope_id = ANY($2))", [
           id,
@@ -291,7 +295,7 @@ export function createPostgresPersonaStore(connectionString: string, opts: { id?
     },
     async addOwner(id, owner, by) {
       await withPgTransaction(await pool(), async (db) => {
-        const user = await ensureUserIn(db, foldPrincipalId(by));
+        const user = await userIn(db, by);
         await db.query(
           `INSERT INTO persona_access (persona_id, grantee_scope_id, role, granted_by) VALUES ($1, $2, 'owner', $3)
            ON CONFLICT (tenant_id, persona_id, grantee_scope_id) DO UPDATE
