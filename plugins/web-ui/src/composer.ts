@@ -1045,7 +1045,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         saveLoadout(entries, loadoutKey);
       },
       add: addLoadoutEntry,
-      reselect: applyLoadout,
+      removesSelected: true,
     },
     activeEntry: activeLoadoutEntry,
     apply: applyLoadout,
