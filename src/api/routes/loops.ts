@@ -21,7 +21,7 @@ import type { ScopedConfigStore } from "../../resolution/config-store.ts";
 import { errMessage, reportFailure, swallow } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import { isObj, resolveCapabilityDestination } from "./shared.ts";
-import { withActor, type ApiCtx, type Route } from "./route.ts";
+import { tenantOf, withActor, type ApiCtx, type Route } from "./route.ts";
 
 export interface LoopServiceDeps {
   lock?: AdvisoryLock;
@@ -127,7 +127,7 @@ export async function requireLoopAuthority(ctx: ApiCtx, deps: LoopServiceDeps, l
   if (!cron?.unattendedGrants?.length) return true;
   const principal = ctx.capability ?? (ctx.actor?.p ? { actorId: ctx.actor.p, liveActor: true } : undefined);
   const refusal = principal
-    ? await unattendedGrantRefusal(ctx.app, ctx.deps.admin, cron, principal)
+    ? await unattendedGrantRefusal(ctx.app, ctx.deps.admin, tenantOf(ctx), cron, principal)
     : { message: "a privileged loop requires a live turn started by its owner" };
   if (!refusal) return true;
   sendJson(ctx.res, 403, { error: "forbidden", message: refusal.message });
@@ -282,6 +282,7 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
     owner: acting.actorId,
     createdBy: acting.actorId,
     ownerScopeId,
+    ...(ctx.capability?.botActor ? { botActor: true } : {}),
     name: b.name,
     ...(b.icon !== undefined ? { icon: b.icon as string | null } : {}),
     playbook: b.playbook,
@@ -310,6 +311,7 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
         owner: loop.owner,
         createdBy: loop.createdBy,
         ownerScopeId: loop.ownerScopeId,
+        ...(loop.botActor ? { botActor: true } : {}),
         schedule,
         title: `Loop: ${loop.name}`,
         action: `fire loop ${loop.id}`,
@@ -362,11 +364,6 @@ async function getLoop(ctx: ApiCtx): Promise<void> {
         ? {
             ...item,
             ...(item.sourcePayload ? { sourcePayload: agentSourcePayload(item.sourcePayload, item.source) } : {}),
-            ...(item.inboxPreview
-              ? {
-                  inboxPreview: agentSourcePayload(item.inboxPreview, item.source),
-                }
-              : {}),
           }
         : item,
     ),

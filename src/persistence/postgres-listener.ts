@@ -91,13 +91,12 @@ function createListener(connectionString: string) {
     }
   }
 
-  function sync() {
+  function sync(): void {
     pending = pending.then(reconcile).catch((error) => {
       swallow("postgres listener connection", error);
       drop();
       scheduleRetry();
     });
-    return pending;
   }
 
   return {
@@ -115,7 +114,8 @@ function createListener(connectionString: string) {
           listeners.delete(connectionString);
           clearTimeout(retry);
         }
-        await sync();
+        sync();
+        await pending;
       };
     },
   };

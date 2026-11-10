@@ -5,6 +5,7 @@ export type LedgerEventOp =
   | "ingest"
   | "proposal"
   | "annotate"
+  | "verdict"
   | "thread"
   | "triage"
   | "action"
@@ -24,6 +25,7 @@ export interface LedgerEvent {
 
 export interface OwnedLedgerEvent extends LedgerEvent {
   owner: string;
+  tenantId?: string;
 }
 
 export type LedgerEventBus = EventBus<OwnedLedgerEvent>;

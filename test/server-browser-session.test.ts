@@ -52,7 +52,7 @@ const testRoutes: Route[] = [
 (apiRoutes as Route[]).push(...testRoutes);
 
 const admin = {
-  adminStatusOf: async ({ id }: { id: string }) => ({ isAdmin: id.startsWith("admin-") }),
+  adminStatusOf: async (_tenant: unknown, { id }: { id: string }) => ({ isAdmin: id.startsWith("admin-") }),
 } as unknown as AdminService;
 
 const errorOf = async (r: Response) => (await r.json()) as { error: string; message: string };
