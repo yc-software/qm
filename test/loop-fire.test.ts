@@ -719,6 +719,13 @@ test("pausing a bound cron does not block held-item follow-up", async () => {
   const before = s.turns.length;
   await s.fire.followUp(loop, item, "inspect", loop.owner);
   assert.equal(s.turns.length, before + 1);
+  assert.equal(automationOrigin(s.turns.at(-1)!)?.ownerFire, true);
+  await s.fire.followUp(loop, item, "read every transcript", loop.owner, { unattended: true });
+  assert.equal(
+    automationOrigin(s.turns.at(-1)!)?.ownerFire,
+    undefined,
+    "words an automated turn sent carry no person's authority",
+  );
 });
 
 test("an admitted loop drains all stages after ownership closes", async () => {
