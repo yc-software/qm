@@ -71,7 +71,6 @@ export function parseAdminGrants(raw: string | undefined, orgId: string): AdminG
 export interface AdminServiceOptions {
   now?: () => number;
   trustedOidcAdminIssuer?: string;
-  /** Tenants the principal may sign in to. Trusted entry grants admin only in one of these or the boot tenant. */
   memberTenants?: (principalId: string) => Promise<readonly string[]>;
   users: UserStore;
 }
