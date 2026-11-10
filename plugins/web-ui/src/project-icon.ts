@@ -4,7 +4,7 @@ import { Shuffle } from "lucide";
 import { api, type ProjectIcon } from "./core-bridge";
 import { EMOJI_ROWS, filterEmoji, type EmojiRow } from "./emoji-picker";
 import { icon } from "./icons";
-import { errMessage } from "../../chassis/src/errors";
+import { errMessage, swallow } from "../../chassis/src/errors";
 
 interface PickerItem {
   icon: ProjectIcon;
@@ -132,8 +132,8 @@ function rememberRecent(value: ProjectIcon): void {
       RECENT_KEY,
       JSON.stringify([value, ...readRecent().filter((v) => !sameIcon(v, value))].slice(0, RECENT_MAX)),
     );
-  } catch {
-    return;
+  } catch (error) {
+    swallow("web-ui: remember recent icon", error);
   }
 }
 
