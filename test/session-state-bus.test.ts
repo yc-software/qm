@@ -85,7 +85,7 @@ test("a re-established LISTEN connection announces a resync to subscribers", asy
     const foreign = await listenerPids();
     let resyncs = 0;
     const got: SessionStateEvent[] = [];
-    bus.subscribe((e) => got.push(e), { onResync: () => resyncs++ });
+    bus.subscribe((e) => void got.push(e), { onResync: () => void resyncs++ });
     const first = await until(() => newListener(foreign), "the bus never started listening");
     await until(
       () => (resyncs === 1 ? true : null),
