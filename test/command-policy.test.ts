@@ -9,9 +9,25 @@ import {
   scannableCommand,
 } from "../src/policy/command-policy.ts";
 import type { CommandPolicy, CommandRule } from "../src/types.ts";
+import { OPERATOR_COMMAND_RULES } from "./support/command-rules.ts";
 
-test("org floor requires approval for recursive delete and denies fork bomb", () => {
+function operatorPolicy(): CommandPolicy {
+  const parsed = parseCommandPolicy({ mode: "denylist", rules: OPERATOR_COMMAND_RULES });
+  assert.ok("policy" in parsed);
+  return parsed.policy;
+}
+
+test("the built-in org policy has no rules, so destructive commands run without approval", () => {
   const p = defaultOrgPolicy();
+  assert.deepEqual(p, { mode: "denylist", rules: [] });
+  for (const command of ["rm -rf build", "git push --force origin main", 'psql -c "DROP TABLE users"']) {
+    assert.equal(evaluateCommand(command, p).decision, "allow", command);
+  }
+  assert.equal(evaluateCommand("mkfs.ext4 /dev/sda", p).decision, "allow");
+});
+
+test("operator-configured rules gate recursive delete and deny fork bomb", () => {
+  const p = composePolicy(defaultOrgPolicy(), operatorPolicy());
   assert.equal(evaluateCommand("rm -rf build", p).decision, "require_approval");
   assert.equal(evaluateCommand("mkfs.ext4 /dev/sda", p).decision, "deny");
 });
@@ -27,7 +43,7 @@ test("evaluateCommand surfaces the matched rule's identity (its pattern) as the 
 });
 
 test("recursive delete is gated in every flag form and order", () => {
-  const p = defaultOrgPolicy();
+  const p = operatorPolicy();
   const gated = [
     "rm -r build",
     "rm -rf build",
@@ -46,13 +62,13 @@ test("recursive delete is gated in every flag form and order", () => {
 });
 
 test("fork bomb is denied", () => {
-  const p = defaultOrgPolicy();
+  const p = operatorPolicy();
   assert.equal(evaluateCommand(":(){ :|:& };:", p).decision, "deny");
   assert.equal(evaluateCommand(":() { :|:& };:", p).decision, "deny");
 });
 
 test("benign command is allowed in denylist mode", () => {
-  assert.equal(evaluateCommand("echo hello", defaultOrgPolicy()).decision, "allow");
+  assert.equal(evaluateCommand("echo hello", operatorPolicy()).decision, "allow");
 });
 
 test("scope rules can tighten but org floor wins (evaluated first)", () => {
@@ -60,7 +76,7 @@ test("scope rules can tighten but org floor wins (evaluated first)", () => {
     mode: "denylist",
     rules: [{ pattern: "rm -rf", decision: "allow" }],
   };
-  const composed = composePolicy(defaultOrgPolicy(), scope);
+  const composed = composePolicy(operatorPolicy(), scope);
   assert.equal(evaluateCommand("rm -rf build", composed).decision, "require_approval");
 });
 
@@ -89,8 +105,8 @@ test("bare-word unquoting widens allow carve-outs too: a quoted command now matc
   assert.equal(evaluateCommand("git push origin 'staging extra'", policy).decision, "require_approval");
 });
 
-test("force push requires approval in long AND short flag forms (org floor)", () => {
-  const p = defaultOrgPolicy();
+test("force push requires approval in long AND short flag forms (configured rule)", () => {
+  const p = operatorPolicy();
   assert.equal(evaluateCommand("git push --force origin main", p).decision, "require_approval");
   assert.equal(evaluateCommand("git push -f origin feature", p).decision, "require_approval");
   assert.equal(evaluateCommand("git push --force-with-lease", p).decision, "require_approval");
@@ -99,7 +115,7 @@ test("force push requires approval in long AND short flag forms (org floor)", ()
 });
 
 test("deployment rules replace tool-specific hard-coded command denials", () => {
-  const policy = defaultOrgPolicy();
+  const policy = operatorPolicy();
   const layer: CommandRule[] = [
     {
       pattern: "\\bacmecli\\b[^;|&]*\\blogin\\b",
@@ -177,7 +193,7 @@ test("deployment rules replace tool-specific hard-coded command denials", () => 
 });
 
 test("a dangerous-looking pattern inside data (heredoc body, quoted literal) is NOT gated", () => {
-  const p = defaultOrgPolicy();
+  const p = operatorPolicy();
   const writeHeredoc = [
     "cat > test/x.ts <<EOF",
     'const c = "!run git push --force origin main";',
@@ -190,7 +206,7 @@ test("a dangerous-looking pattern inside data (heredoc body, quoted literal) is 
 });
 
 test("quotes, comments, and line continuations are read the way the shell reads them", () => {
-  const p = defaultOrgPolicy();
+  const p = operatorPolicy();
   for (const command of [
     `echo 'a"b'; rm -rf /tmp/x; echo "c'"`,
     "r\\\nm -rf /tmp/x",
@@ -215,7 +231,7 @@ test("quotes, comments, and line continuations are read the way the shell reads 
 });
 
 test("a real dangerous command is still gated even when the turn also writes a heredoc", () => {
-  const p = defaultOrgPolicy();
+  const p = operatorPolicy();
   const cmd = ["cat > note.txt <<EOF", "harmless body", "EOF", "git push --force origin main"].join("\n");
   const r = evaluateCommand(cmd, p);
   assert.equal(r.decision, "require_approval");
@@ -223,19 +239,19 @@ test("a real dangerous command is still gated even when the turn also writes a h
 });
 
 test("command substitution that runs a dangerous command is still gated, even inside quotes", () => {
-  const p = defaultOrgPolicy();
+  const p = operatorPolicy();
   assert.equal(evaluateCommand('echo "$(rm -rf /tmp/x)"', p).decision, "require_approval");
 });
 
 test("a heredoc body fed to a shell stays gated (executed, not a file write)", () => {
-  const p = defaultOrgPolicy();
+  const p = operatorPolicy();
   assert.equal(evaluateCommand("bash <<EOF\nrm -rf /\nEOF", p).decision, "require_approval");
   assert.equal(evaluateCommand("cat <<EOF | bash\nrm -rf /\nEOF", p).decision, "require_approval");
   assert.equal(evaluateCommand("cat > /tmp/s.sh <<EOF\nrm -rf /\nEOF", p).decision, "allow");
 });
 
 test("evaluateCommand surfaces the exact substring that tripped the rule", () => {
-  const p = defaultOrgPolicy();
+  const p = operatorPolicy();
   const r = evaluateCommand("git push --force origin main", p);
   assert.equal(r.decision, "require_approval");
   assert.ok(r.matched?.includes("--force"), `expected matched to include the trigger, got ${r.matched}`);
@@ -293,7 +309,7 @@ test("layer rules cannot be bypassed with shell escapes or empty quote concatena
 });
 
 test("shell-evaluated payloads and ANSI-C words cannot bypass command rules", () => {
-  const org = defaultOrgPolicy();
+  const org = operatorPolicy();
   for (const command of [
     "bash -c 'rm -rf /tmp/x'",
     "eval 'git push --force origin main'",
@@ -318,7 +334,7 @@ test("shell-evaluated payloads and ANSI-C words cannot bypass command rules", ()
 });
 
 test("literal stdin executed by a shell and simple command variables stay inside the gate", () => {
-  const org = defaultOrgPolicy();
+  const org = operatorPolicy();
   for (const command of [
     `printf 'rm -rf /tmp/x\\n' | bash`,
     `printf 'rm %s\\n' '-rf /tmp/x' | bash -`,
@@ -378,7 +394,7 @@ test("a lower scope can tighten an org denylist to an allowlist", () => {
     mode: "allowlist",
     rules: [{ pattern: "^ls\\b", decision: "allow" }],
   };
-  const composed = composePolicy(defaultOrgPolicy(), scope);
+  const composed = composePolicy(operatorPolicy(), scope);
   assert.equal(composed.mode, "allowlist");
   assert.equal(evaluateCommand("cat secrets", composed).decision, "deny");
 });
@@ -431,7 +447,7 @@ test("evaluateCommandWithLayer: a scope decision is final; the layer never widen
 });
 
 test("evaluateCommandWithLayer with no layer rules matches evaluateCommand", () => {
-  const p = defaultOrgPolicy();
+  const p = operatorPolicy();
   assert.deepEqual(
     evaluateCommandWithLayer("git push --force origin main", p, []),
     evaluateCommand("git push --force origin main", p),
@@ -473,7 +489,7 @@ test("parseCommandPolicy rejects regexes with catastrophic repetition", () => {
 });
 
 test("a heredoc fed to a non-interpreter command (cat, gh) is data, not gated", () => {
-  const policy = defaultOrgPolicy();
+  const policy = operatorPolicy();
   const prBody = [
     `gh pr create --title x --body "$(cat <<'EOF'`,
     "Extract SQL payloads safely; previously DROP TABLE users in payloads broke parsing.",
@@ -486,19 +502,19 @@ test("a heredoc fed to a non-interpreter command (cat, gh) is data, not gated", 
 });
 
 test("a heredoc fed to a SQL client or interpreter stays gated", () => {
-  const policy = defaultOrgPolicy();
+  const policy = operatorPolicy();
   const sql = ["psql mydb <<EOF", "drop table users;", "EOF"].join("\n");
   assert.equal(evaluateCommand(sql, policy).decision, "require_approval");
 });
 
 test("an unquoted heredoc's command substitutions still execute and stay gated", () => {
-  const policy = defaultOrgPolicy();
+  const policy = operatorPolicy();
   const sneaky = ["cat <<EOF | gh pr create --body-file -", "hello $(rm -rf /tmp/x)", "EOF"].join("\n");
   assert.equal(evaluateCommand(sneaky, policy).decision, "require_approval");
 });
 
-test("destructive SQL handed to a SQL client fires the floor rule (public #49)", () => {
-  const p = defaultOrgPolicy();
+test("destructive SQL handed to a SQL client fires the configured rule (public #49)", () => {
+  const p = operatorPolicy();
   for (const cmd of [
     'psql -c "DROP TABLE users"',
     "psql --command='drop table users'",
@@ -518,7 +534,7 @@ test("destructive SQL handed to a SQL client fires the floor rule (public #49)",
 });
 
 test("SQL-looking text that is only data still passes (no false positives)", () => {
-  const p = defaultOrgPolicy();
+  const p = operatorPolicy();
   for (const cmd of [
     'git commit -m "drop table users"',
     'echo "DROP TABLE users"',

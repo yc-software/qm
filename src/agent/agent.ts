@@ -221,6 +221,7 @@ export interface ModelUtilities {
   pickAckEmoji?(text: string, candidates: readonly string[]): Promise<string | undefined>;
   generateTitle?(transcript: string, opts?: { descriptive?: boolean }): Promise<string | undefined>;
   summarizeApproval?(command: string, reason: string, purpose?: string): Promise<string | undefined>;
+  suggestNextPrompt?(transcript: string): Promise<string | undefined>;
 }
 
 export interface Agent extends ModelUtilities {

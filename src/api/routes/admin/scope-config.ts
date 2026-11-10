@@ -20,7 +20,8 @@ import {
 import { sendJson } from "../../http.ts";
 import { activePrincipal, adminActorFrom, audit, authorizeAdmin, orgScope } from "../shared.ts";
 import { ADMIN_RESOURCES, ADMIN_RESOURCE_BY_ID, adminResourceManifest } from "../admin-resources.ts";
-import { type ApiCtx } from "../route.ts";
+import { tenantOf, type ApiCtx } from "../route.ts";
+import type { Tenant } from "../../../tenants/context.ts";
 import {
   composePolicy,
   defaultOrgPolicy,
@@ -109,9 +110,9 @@ export async function getAdminResources(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { resources: adminResourceManifest() });
 }
 
-export async function adminPermissions(deps: ApiCtx["deps"], actor: Principal) {
+export async function adminPermissions(deps: ApiCtx["deps"], tenant: Tenant, actor: Principal) {
   if (!deps.admin || !(await activePrincipal(deps, actor.id))) return null;
-  const status = await deps.admin.adminStatusOf(actor);
+  const status = await deps.admin.adminStatusOf(tenant, actor);
   return { ...status, permissions: status.isAdmin ? ["admin"] : [] };
 }
 
@@ -119,7 +120,7 @@ export async function whoami(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
   if (!deps.admin) return sendJson(res, 404, { error: "not_found" });
   const actor = adminActorFrom(ctx);
-  const status = actor ? await adminPermissions(deps, actor) : null;
+  const status = actor ? await adminPermissions(deps, tenantOf(ctx), actor) : null;
   if (!actor || !status) return sendJson(res, 200, { isAdmin: false, permissions: [] });
   audit(deps, {
     principalId: actor.id,
@@ -161,7 +162,7 @@ export async function listAdminScopes(ctx: ApiCtx): Promise<void> {
     ...environments.map((environment) => environment.id),
     ...environments.flatMap((environment) => environment.attachedScopes),
   ];
-  const labels = await discoverScopes(app, deps, owners);
+  const labels = await discoverScopes(app, deps, tenantOf(ctx), owners);
   const activity = scopeActivity(deps.sessions);
   const countBy = (ids: string[]): Map<string, number> => {
     const m = new Map<string, number>();
@@ -246,7 +247,7 @@ const SETTINGS_RESOURCES = {
     "egress",
     "orgAmbient",
   ],
-  customize: ["soul", "branding", "featureFlags", "decisions"],
+  customize: ["soul", "branding", "appHandle", "featureFlags", "decisions"],
   "slack-settings": ["externalSlackParticipants", "channelHeaderPinDefault", "ackEmoji"],
   models: [
     "baseModel",
@@ -254,6 +255,7 @@ const SETTINGS_RESOURCES = {
     "cronRuntime",
     "subagentRuntime",
     "fallbackRuntime",
+    "appEditRuntime",
     "webuiModels",
     "interactiveFastMode",
     "individualModelAuth",
@@ -348,7 +350,12 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
     name: resolvedCurrent?.name ?? currentId + " (configured)",
     provider: resolvedCurrent?.provider ?? "",
   };
-  const purposeRuntimes = [values.cronRuntime, values.subagentRuntime, values.fallbackRuntime].filter(
+  const purposeRuntimes = [
+    values.cronRuntime,
+    values.subagentRuntime,
+    values.fallbackRuntime,
+    values.appEditRuntime,
+  ].filter(
     (value): value is { modelId: string } => !!value && typeof (value as { modelId?: unknown }).modelId === "string",
   );
   const models = selectableCatalog(catalog);

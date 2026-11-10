@@ -9,11 +9,12 @@ import { createCronStore } from "../src/cron/cron-store.ts";
 import { uiStateId } from "../src/surfaces/ui-state.ts";
 import type { PersistedUiState } from "../src/surfaces/ui-state.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
+import type { LoopItemVerdict, LoopVerdictState } from "../src/loops/types.ts";
 import { ensureDefaultInboxLoops } from "../src/loops/inbox-loop.ts";
 import { testConfigStore, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 
-function world(enabled = true, sourceRefresh?: ApiCtx["deps"]["inboxSourceRefresh"]) {
+function world(enabled = true) {
   const deps = {
     store: createLoopStore(testMap()),
     items: createLoopItemLedger(testMap()),
@@ -37,7 +38,6 @@ function world(enabled = true, sourceRefresh?: ApiCtx["deps"]["inboxSourceRefres
         deps: {
           loops: deps,
           uiState,
-          inboxSourceRefresh: sourceRefresh,
           featureFlags: { enabled: async () => enabled },
         },
         app: {
@@ -57,7 +57,22 @@ function world(enabled = true, sourceRefresh?: ApiCtx["deps"]["inboxSourceRefres
       } as unknown as ApiCtx);
     return { status, data };
   };
-  return { deps, uiState, call };
+  const verdict = async (loopId: string, dedupeKey: string, state: LoopVerdictState, sourceAt = 1000) => {
+    const item = (await deps.items.byLoop(loopId)).find((entry) => entry.sourceKey === dedupeKey)!;
+    const value: LoopItemVerdict = {
+      state,
+      reason: `${state} because`,
+      waitingTs: null,
+      lastSeenTs: "1.0",
+      at: sourceAt,
+    };
+    return (await deps.items.recordVerdict(item.id, {
+      verdict: value,
+      sourcePayload: item.sourcePayload ?? {},
+      sourceAt,
+    }))!;
+  };
+  return { deps, uiState, call, verdict };
 }
 
 test("default Loops are distinct, stable, and deliberate empty selections survive refresh", async () => {
@@ -148,7 +163,7 @@ test("pagination is stable across equal timestamps and counts exceed the loaded 
       {
         loopId: loop!.id,
         dedupeKey: String(n),
-        sourcePayload: { title: String(n) },
+        sourcePayload: { title: String(n), snippet: String(n) },
         proposal: { data: {}, by: "agent" },
       },
     ]);
@@ -161,7 +176,7 @@ test("pagination is stable across equal timestamps and counts exceed the loaded 
 });
 
 test("disabled rollout cannot create defaults or update selection", async () => {
-  const w = world(false, async () => assert.fail("disabled Inbox must not refresh sources"));
+  const w = world(false);
   for (const method of ["GET", "POST"]) assert.equal((await w.call(method, { loopIds: [] })).status, 403);
   assert.equal((await w.deps.store.list()).length, 0);
 });
@@ -196,112 +211,74 @@ test("Sent chat items stay out of Inbox counts and handled history remains reada
   );
 });
 
-test("the inbox feed reconciles selected owner Gmail loops before counting summaries", async () => {
-  const refreshed: string[] = [];
-  const w = world(true, async (owner, items) => {
-    assert.equal(owner, "alice");
-    for (const item of items) {
-      refreshed.push(item.id);
-      await w.deps.items.recordAction(item.id, { kind: "replied", outcome: "dismissed" });
-    }
-  });
-  const loops = await ensureDefaultInboxLoops(w.deps.store, "alice");
-  const mail = loops.find((loop) => loop.sources?.includes("gmail"))!;
-  await w.deps.items.ingest([
-    {
-      loopId: mail.id,
-      dedupeKey: "waiting",
-      source: "gmail",
-      sourceAt: 1000,
-      sourcePayload: { gmail: { threadId: "t1" } },
-      proposal: { by: "agent", data: { body: "Draft" } },
-    },
-  ]);
-  const item = (await w.deps.items.byLoop(mail.id))[0]!;
-  const feed = await w.call();
-  assert.deepEqual(refreshed, [item.id]);
-  assert.equal(feed.data.total, 0);
-  assert.deepEqual(feed.data.items, []);
-  refreshed.length = 0;
-  await w.call("POST", { loopIds: [] });
-  await w.call();
-  assert.deepEqual(refreshed, []);
-});
-
-test("email filters leave Slack unchanged while source counts include all open conversations", async () => {
+test("verdicts decide visibility per filter and source counts match what each filter shows", async () => {
   const w = world();
   const [email, slack] = await ensureDefaultInboxLoops(w.deps.store, "alice");
-  for (const [key, payload, draft] of [
-    ["question", {}, true],
-    ["thanks", { probablyResolved: true }, true],
-    ["receipt", { automated: true }, false],
-    ["pending", {}, false],
-    ["handled", {}, true],
+  for (const [key, state, draft] of [
+    ["question", "needs_reply", true],
+    ["thanks", "resolved", true],
+    ["receipt", "noise", false],
+    ["pending", undefined, false],
+    ["unverdicted", undefined, true],
+    ["handled", "needs_reply", true],
   ] as const) {
     await w.deps.items.ingest([
       {
         loopId: email!.id,
         dedupeKey: key,
         source: "gmail",
-        sourcePayload: { title: key, ...payload },
+        sourcePayload: { title: key, ...(key === "pending" ? {} : { snippet: `${key} body` }) },
         ...(draft ? { proposal: { by: "agent" as const, data: { body: "Draft" } } } : {}),
       },
     ]);
+    if (state) await w.verdict(email!.id, key, state);
   }
-  const receiptItem = (await w.deps.items.byLoop(email!.id)).find((item) => item.sourceKey === "receipt")!;
-  const claimed = await w.deps.items.claim(receiptItem.id);
-  await w.deps.items.markReady(receiptItem.id, [], claimed!.claimToken!);
   const handled = (await w.deps.items.byLoop(email!.id)).find((item) => item.sourceKey === "handled")!;
   await w.deps.items.recordAction(handled.id, { kind: "dismiss", outcome: "dismissed" });
   await w.deps.items.ingest([
     { loopId: slack!.id, dedupeKey: "slack-pending", source: "slack", sourcePayload: {} },
-    ...(
-      [
-        ["slack-question", {}],
-        ["slack-resolved", { probablyResolved: true }],
-        ["slack-bot", { automated: true }],
-      ] as const
-    ).map(([key, payload]) => ({
+    ...(["slack-question", "slack-resolved", "slack-bot"] as const).map((key) => ({
       loopId: slack!.id,
-      dedupeKey: String(key),
+      dedupeKey: key,
       source: "slack",
-      sourcePayload: payload,
+      sourcePayload: { snippet: `${key} body` },
       proposal: { by: "agent" as const, data: { body: "Draft" } },
     })),
   ]);
+  await w.verdict(slack!.id, "slack-question", "needs_reply");
+  await w.verdict(slack!.id, "slack-resolved", "resolved");
+  await w.verdict(slack!.id, "slack-bot", "noise");
   const keys = (feed: any) => feed.items.map((item: any) => item.dedupeKey).sort();
   const initial = (await w.call()).data;
   assert.equal(initial.filter, "human");
-  assert.deepEqual(keys(initial), ["pending", "question", "slack-bot", "slack-question", "slack-resolved", "thanks"]);
+  assert.deepEqual(keys(initial), ["question", "slack-question", "slack-resolved", "thanks", "unverdicted"]);
   const triaged = (await w.call("GET", null, "filter=triaged")).data;
   assert.equal(triaged.filter, "triaged");
-  assert.deepEqual(keys(triaged), ["question", "slack-bot", "slack-question", "slack-resolved"]);
-  assert.equal(triaged.total, 8);
+  assert.deepEqual(keys(triaged), ["question", "slack-question", "unverdicted"]);
+  assert.equal(triaged.total, 3);
   const sourceCounts = (feed: any) => feed.selected.map((loop: any) => [loop.id, loop.count]);
   assert.deepEqual(sourceCounts(triaged), [
-    [email!.id, 4],
-    [slack!.id, 4],
+    [email!.id, 2],
+    [slack!.id, 1],
   ]);
   for (const [filter, expected] of [
-    ["triaged", ["question", "slack-bot", "slack-question", "slack-resolved"]],
-    ["human", ["pending", "question", "slack-bot", "slack-question", "slack-resolved", "thanks"]],
-    ["all", ["pending", "question", "receipt", "slack-bot", "slack-question", "slack-resolved", "thanks"]],
+    ["triaged", ["question", "slack-question", "unverdicted"]],
+    ["human", ["question", "slack-question", "slack-resolved", "thanks", "unverdicted"]],
+    ["all", ["question", "receipt", "slack-bot", "slack-question", "slack-resolved", "thanks", "unverdicted"]],
   ] as const) {
     await w.uiState.put(uiStateId("alice", "inbox-filter"), { value: filter, updatedAt: Date.now() });
     const feed = (await w.call()).data;
     assert.equal(feed.filter, filter);
     assert.deepEqual(keys(feed), expected);
-    assert.equal(feed.total, 8);
-    assert.deepEqual(sourceCounts(feed), sourceCounts(triaged));
-    assert.equal(
-      feed.selected.reduce((sum: number, loop: any) => sum + loop.count, 0),
-      8,
-    );
-    assert.deepEqual(keys((await w.call("GET", null, `loopId=${slack!.id}`)).data), [
-      "slack-bot",
-      "slack-question",
-      "slack-resolved",
+    assert.equal(feed.total, expected.length);
+    assert.deepEqual(sourceCounts(feed), [
+      [email!.id, expected.filter((key) => !key.startsWith("slack-")).length],
+      [slack!.id, expected.filter((key) => key.startsWith("slack-")).length],
     ]);
+    assert.deepEqual(
+      keys((await w.call("GET", null, `loopId=${slack!.id}`)).data),
+      expected.filter((key) => key.startsWith("slack-")),
+    );
     assert.deepEqual(keys((await w.call("GET", null, "view=handled")).data), ["handled"]);
     assert.deepEqual(
       keys((await w.call("GET", null, `loopId=${email!.id}`)).data),
@@ -309,38 +286,71 @@ test("email filters leave Slack unchanged while source counts include all open c
     );
     assert.equal((await w.call("GET", null, "", "mallory")).data.filter, "human");
   }
-  const receipt = (await w.call()).data.items.find((item: any) => item.dedupeKey === "receipt");
-  assert.equal(receipt.sourcePayload.automated, true);
+  const feed = (await w.call()).data.items;
+  const receipt = feed.find((item: any) => item.dedupeKey === "receipt");
+  assert.equal(receipt.verdict.state, "noise");
   assert.equal(receipt.state, "held");
   assert.equal(receipt.proposal, undefined);
+  assert.equal(feed.find((item: any) => item.dedupeKey === "thanks").verdict.reason, "resolved because");
+  assert.equal(feed.find((item: any) => item.dedupeKey === "unverdicted").verdict, undefined);
   await w.uiState.put(uiStateId("alice", "inbox-filter"), { value: "invalid", updatedAt: Date.now() });
   assert.equal((await w.call()).data.filter, "human");
   const question = (await w.deps.items.byLoop(email!.id)).find((item) => item.sourceKey === "question")!;
   await w.deps.items.recordAction(question.id, { kind: "dismiss", outcome: "dismissed" });
   const afterDismiss = (await w.call()).data;
-  assert.equal(afterDismiss.total, 7);
+  assert.equal(afterDismiss.total, 4);
   assert.deepEqual(sourceCounts(afterDismiss), [
-    [email!.id, 3],
-    [slack!.id, 4],
+    [email!.id, 2],
+    [slack!.id, 2],
   ]);
 });
 
-test("inbox filters apply before pagination even when automated messages fill multiple pages", async () => {
+test("a loop whose open items are all still queued shows a count of zero beside its empty list", async () => {
+  const w = world();
+  const { loop } = await w.deps.store.create({
+    owner: "alice",
+    createdBy: "alice",
+    ownerScopeId: "personal:alice",
+    name: "Reviews",
+    playbook: "Review things",
+    successCondition: "Reviewed",
+  });
+  await w.deps.items.ingest(
+    Array.from({ length: 25 }, (_, i) => ({
+      loopId: loop.id,
+      dedupeKey: `r${i}`,
+      sourcePayload: { title: `Review ${i}` },
+    })),
+  );
+  assert.equal((await w.call("POST", { loopIds: [loop.id] })).status, 200);
+  const feed = (await w.call("GET", null, `loopId=${loop.id}`)).data;
+  assert.deepEqual(feed.items, []);
+  assert.equal(feed.selected.find((entry: any) => entry.id === loop.id).count, 0);
+  assert.equal(feed.total, 0);
+  const ready = (await w.deps.items.byLoop(loop.id))[0]!;
+  const token = (await w.deps.items.claim(ready.id))!.claimToken!;
+  await w.deps.items.markReady(ready.id, [], token);
+  const after = (await w.call("GET", null, `loopId=${loop.id}`)).data;
+  assert.equal(after.items.length, 1);
+  assert.equal(after.selected.find((entry: any) => entry.id === loop.id).count, 1);
+  assert.equal(after.total, 1);
+});
+
+test("inbox filters apply before pagination even when noise fills multiple pages", async () => {
   const w = world();
   const [loop] = await ensureDefaultInboxLoops(w.deps.store, "alice");
-  for (let n = 0; n < 85; n++) {
-    await w.deps.items.ingest([
-      {
-        loopId: loop!.id,
-        dedupeKey: String(n),
-        source: "gmail",
-        sourcePayload: { automated: n >= 5 },
-        proposal: { by: "agent", data: { body: "Draft" } },
-      },
-    ]);
-  }
+  await w.deps.items.ingest(
+    Array.from({ length: 85 }, (_, n) => ({
+      loopId: loop!.id,
+      dedupeKey: String(n),
+      source: "gmail",
+      sourcePayload: { snippet: String(n) },
+      proposal: { by: "agent" as const, data: { body: "Draft" } },
+    })),
+  );
+  for (let n = 0; n < 85; n++) await w.verdict(loop!.id, String(n), n >= 5 ? "noise" : "needs_reply");
   const triaged = (await w.call("GET", null, "filter=triaged")).data;
-  assert.equal(triaged.total, 85);
+  assert.equal(triaged.total, 5);
   assert.equal(triaged.items.length, 5);
   assert.equal(triaged.nextCursor, null);
   await w.uiState.put(uiStateId("alice", "inbox-filter"), { value: "all", updatedAt: Date.now() });
@@ -356,9 +366,11 @@ test("explicit refresh filters stay consistent across saved preference changes w
   const w = world();
   const [loop] = await ensureDefaultInboxLoops(w.deps.store, "alice");
   await w.deps.items.ingest([
-    { loopId: loop!.id, dedupeKey: "receipt", source: "gmail", sourcePayload: { automated: true } },
-    { loopId: loop!.id, dedupeKey: "question", source: "gmail", sourcePayload: { automated: false } },
+    { loopId: loop!.id, dedupeKey: "receipt", source: "gmail", sourcePayload: { snippet: "Your receipt" } },
+    { loopId: loop!.id, dedupeKey: "question", source: "gmail", sourcePayload: { snippet: "Quick question" } },
   ]);
+  await w.verdict(loop!.id, "receipt", "noise");
+  await w.verdict(loop!.id, "question", "needs_reply");
   await w.uiState.put(uiStateId("alice", "inbox-filter"), { value: "all", updatedAt: Date.now() });
   const first = (await w.call()).data;
   await w.uiState.put(uiStateId("alice", "inbox-filter"), { value: "human", updatedAt: Date.now() + 1 });
@@ -368,28 +380,51 @@ test("explicit refresh filters stay consistent across saved preference changes w
   assert.equal(pinned.items.length, 2);
   const latest = (await w.call()).data;
   assert.equal(latest.filter, "human");
-  assert.equal(latest.total, 2);
+  assert.equal(latest.total, 1);
   assert.equal(latest.items.length, 1);
   assert.equal((await w.call("GET", null, "filter=invalid")).status, 400);
 });
 
-test("email classification is projected only by the flagged inbox endpoint", async (t) => {
+test("the feed projects only summary payload fields and the flag-disabled endpoint reads nothing", async (t) => {
   const w = world();
-  const [loop] = await ensureDefaultInboxLoops(w.deps.store, "alice");
+  const [email, slack] = await ensureDefaultInboxLoops(w.deps.store, "alice");
   await w.deps.items.ingest([
     {
-      loopId: loop!.id,
+      loopId: email!.id,
       dedupeKey: "receipt",
       source: "gmail",
-      sourcePayload: { automated: true, privateDetail: "hidden" },
+      sourcePayload: { snippet: "Your receipt", privateDetail: "hidden" },
+    },
+    {
+      loopId: slack!.id,
+      dedupeKey: "slack-1",
+      source: "slack",
+      sourcePayload: {
+        from: "Alex",
+        snippet: "hello",
+        slack: { channelId: "D1", ts: "1.0", userId: "U1" },
+        participants: [{ id: "U1", name: "Alex", avatarUrl: "https://avatars.slack-edge.com/alex.png" }],
+        context: [{ author: "Alex", text: "private context" }],
+      },
+      proposal: { by: "agent", data: { body: "draft" } },
     },
   ]);
-  const [before] = await w.deps.items.summaries([loop!.id]);
-  assert.equal(before!.inboxPreview!.automated, undefined);
+  await w.verdict(email!.id, "receipt", "noise");
+  const summaries = await w.deps.items.summaries([email!.id, slack!.id]);
+  assert.ok(summaries.every((summary) => summary.sourcePayload?.privateDetail === undefined));
+  assert.ok(summaries.every((summary) => summary.sourcePayload?.context === undefined));
   const feed = (await w.call("GET", null, "filter=all")).data;
-  assert.equal(feed.items[0].sourcePayload.automated, true);
-  assert.equal(feed.items[0].sourcePayload.privateDetail, undefined);
-  assert.deepEqual((await w.deps.items.summaries([loop!.id]))[0], before);
+  const receipt = feed.items.find((item: any) => item.dedupeKey === "receipt");
+  assert.equal(receipt.verdict.state, "noise");
+  assert.equal(receipt.sourcePayload.snippet, "Your receipt");
+  assert.equal(receipt.sourcePayload.privateDetail, undefined);
+  const slackItem = feed.items.find((item: any) => item.dedupeKey === "slack-1");
+  assert.equal(slackItem.sourcePayload.participants[0].avatarUrl, "https://avatars.slack-edge.com/alex.png");
+  assert.equal(slackItem.sourcePayload.from, "Alex");
+  assert.equal(slackItem.sourcePayload.context, undefined);
+  assert.equal(slackItem.sourcePayload.slack, undefined);
+  const detail = (await w.call("GET", null, `itemId=${slackItem.id}`)).data;
+  assert.equal(detail.item.sourcePayload.context[0].text, "private context");
   const disabled = world(false);
   t.mock.method(disabled.deps.items, "byLoop", async () => {
     assert.fail("flag-disabled inbox read payloads");
@@ -400,57 +435,4 @@ test("email classification is projected only by the flagged inbox endpoint", asy
   for (const filter of ["all", "human", "triaged"]) {
     assert.equal((await disabled.call("GET", null, `filter=${filter}`)).status, 403);
   }
-});
-
-test("the visible Slack feed includes fresh and cached avatars without returning message context", async () => {
-  const calls: string[][] = [];
-  const w = world(true, async (owner, items, mode) => {
-    if (mode !== "avatars") return;
-    assert.equal(owner, "alice");
-    calls.push(items.map((item) => item.id));
-    for (const item of items)
-      await w.deps.items.annotate(item.id, {
-        participants: [{ id: "U1", name: "Alex", avatarUrl: "https://avatars.slack-edge.com/alex.png" }],
-        slackAvatarsRefreshAt: Date.now() + 86_400_000,
-      });
-  });
-  const [, slack] = await ensureDefaultInboxLoops(w.deps.store, "alice");
-  await w.deps.items.ingest(
-    Array.from({ length: 45 }, (_, n) => ({
-      loopId: slack!.id,
-      dedupeKey: `slack-${n}`,
-      source: "slack",
-      sourceAt: 1000 + n,
-      sourcePayload: {
-        from: "Alex",
-        slack: { channelId: "D1", ts: `${n}.0`, userId: "U1" },
-        context: [{ author: "Alex", text: "private context" }],
-      },
-      proposal: { by: "agent" as const, data: { body: "draft" } },
-    })),
-  );
-  const feed = await w.call();
-  assert.equal(feed.status, 200);
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0]!.length, 40);
-  assert.equal(feed.data.items.length, 40);
-  assert.deepEqual(new Set(calls[0]), new Set(feed.data.items.map((item: any) => item.id)));
-  assert.equal(feed.data.items[0].sourcePayload.participants[0].avatarUrl, "https://avatars.slack-edge.com/alex.png");
-  assert.equal(feed.data.items[0].sourcePayload.context, undefined);
-  assert.equal(feed.data.items[0].sourcePayload.slack, undefined);
-  await w.call("GET", null, `itemId=${feed.data.items[0].id}`);
-  assert.equal(calls.length, 1);
-  const get = w.deps.items.get.bind(w.deps.items);
-  let fullReads = 0;
-  w.deps.items.get = async (id) => {
-    fullReads++;
-    return get(id);
-  };
-  const cachedFeed = await w.call();
-  assert.equal(
-    cachedFeed.data.items[0].sourcePayload.participants[0].avatarUrl,
-    "https://avatars.slack-edge.com/alex.png",
-  );
-  assert.equal(fullReads, 0);
-  assert.deepEqual(calls.at(-1), []);
 });
