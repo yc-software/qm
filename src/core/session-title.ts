@@ -24,13 +24,13 @@ export function createSessionTitles(deps: {
     sessionId: string,
     scopeId: ScopeId,
     transcript: string,
-    opts: { principalId?: string; fallbackText?: string; descriptive?: boolean } = {},
+    opts: { principalId?: string; fallbackText?: string } = {},
   ): Promise<string | undefined> {
-    const { principalId, fallbackText, descriptive } = opts;
+    const { principalId, fallbackText } = opts;
     if (!transcript.trim()) return undefined;
     let title: string | undefined;
     try {
-      title = await deps.agent.generateTitle?.(transcript, descriptive ? { descriptive } : undefined);
+      title = await deps.agent.generateTitle?.(transcript);
     } catch (e) {
       deps.errors?.record(
         {
@@ -64,7 +64,6 @@ export function createSessionTitles(deps: {
     session: { id: string; threadRef: string },
     scopeId: ScopeId,
     text: string,
-    descriptive = false,
   ): { written: Promise<void>; generated: Promise<string | undefined> } | undefined {
     const fallback = fallbackSessionTitle(text);
     if (!fallback) return undefined;
@@ -73,9 +72,7 @@ export function createSessionTitles(deps: {
       .then(() => announce(session).catch(swallowAs("session title: sidebar refresh", undefined)))
       .then(async () => {
         if (!deps.agent.generateTitle) return undefined;
-        const title = await generateAndStore(session.id, scopeId, `User:\n${stripTurnBoilerplate(text)}`, {
-          descriptive,
-        });
+        const title = await generateAndStore(session.id, scopeId, `User:\n${stripTurnBoilerplate(text)}`);
         if (title) await announce(session);
         return title;
       })

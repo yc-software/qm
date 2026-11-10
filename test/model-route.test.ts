@@ -4,8 +4,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createAgent } from "../src/agent/agent-run.ts";
 import { createModelRoutes } from "../src/model/model-route.ts";
-import { auxiliaryModelFor } from "../src/model/pi-models.ts";
-import { DESCRIPTIVE_TITLE_PROMPT } from "../src/agent/session-title-prompt.ts";
+import { TITLE_GENERATION_PROMPT } from "../src/agent/session-title-prompt.ts";
 import type { AgentTurnInput, CompactInput } from "../src/agent/agent.ts";
 import type { Item, NewItem } from "../src/sessions/items.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
@@ -354,7 +353,7 @@ test("the runtime listing bills an OpenAI model to company ChatGPT access even w
   assert.equal(listed.modelCatalog["gpt-6-astra"]?.billing, "org_key");
 });
 
-test("descriptive titles run the descriptive prompt on Sonnet while plain titles keep the utility model and prompt", async () => {
+test("titles run the title prompt on Sonnet", async () => {
   const agent = createAgent({
     routes: createModelRoutes({
       defaultModelId: "claude-opus-5-5",
@@ -370,22 +369,16 @@ test("descriptive titles run the descriptive prompt on Sonnet while plain titles
     async (calls) => {
       assert.equal(
         await agent.generateTitle!("User:\nmaria has her sessions sorted by activity. how do i get that"),
-        "How did Maria sort by activity",
-      );
-      assert.equal(
-        await agent.generateTitle!("User:\nmaria has her sessions sorted by activity. how do i get that", {
-          descriptive: true,
-        }),
         "How did Maria sort by activity?",
       );
       assert.deepEqual(
         calls.map((call) => call.model),
-        [auxiliaryModelFor("claude-opus-5-5"), "claude-sonnet-5-5"],
+        ["claude-sonnet-5-5"],
       );
     },
   );
   assert.deepEqual(
-    bodies.map((body) => JSON.stringify(body.system).includes(JSON.stringify(DESCRIPTIVE_TITLE_PROMPT).slice(1, -1))),
-    [false, true],
+    bodies.map((body) => JSON.stringify(body.system).includes(JSON.stringify(TITLE_GENERATION_PROMPT).slice(1, -1))),
+    [true],
   );
 });

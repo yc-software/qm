@@ -149,7 +149,6 @@ import {
   turnFailureItem,
 } from "./turn-error.ts";
 import { attestableAudience, personKey, rosterIds, samePerson } from "../directory/person.ts";
-import type { FeatureName } from "../feature-flags.ts";
 import { sleep } from "../util/async.ts";
 import { hashId } from "../util/crypto.ts";
 import { randomUUID } from "node:crypto";
@@ -423,8 +422,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const title = await titles.generateAndStore(session.id, session.scopeId, transcript, {
         ...(personal ? { principalId } : {}),
         ...(fallbackEntry ? { fallbackText: visibleTitleEntryText(fallbackEntry) } : {}),
-        descriptive:
-          (await deps.featureFlags?.enabled("descriptive_session_titles", personalScope(principalId))) === true,
       });
       return { title: title ?? (personal ? null : (session.title ?? null)) };
     },
@@ -508,8 +505,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           (!!conversation.publishMembers?.length && conversation.publishMembers.every((p) => p.type === "internal")));
       const authoredDetection =
         input.origin.kind === "ambient" && input.origin.live === true && conversation.kind !== "dm";
-      const actorFeatures = (await deps.featureFlags?.enabledFor(personalScope(actor.id))) ?? new Set<FeatureName>();
-      const descriptiveTitles = actorFeatures.has("descriptive_session_titles");
       const delegatedOrigin =
         !external && deps.runs
           ? await delegatedAuthorizationOrigin(input, { runs: deps.runs, sessions: deps.sessions })
@@ -999,7 +994,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       let firstMessageTitle: ReturnType<typeof titles.titleFromFirstMessage>;
       const assignSessionTitle = () => {
         if (!session.title && !syntheticInput && !input.approval)
-          firstMessageTitle = titles.titleFromFirstMessage(session, scopeId, titleText, descriptiveTitles);
+          firstMessageTitle = titles.titleFromFirstMessage(session, scopeId, titleText);
       };
 
       const postProvenance = (deliveryKey: string): DeliveryProvenance =>
@@ -2557,11 +2552,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               !pausing &&
               turnCompleted &&
               !session.title &&
-              (!firstMessageTitle || (descriptiveTitles && !(await firstMessageTitle.generated)))
+              (!firstMessageTitle || !(await firstMessageTitle.generated))
             ) {
-              await titles.generateAndStore(session.id, scopeId, `User:\n${titleText}\n\nAssistant:\n${result.reply}`, {
-                descriptive: descriptiveTitles,
-              });
+              await titles.generateAndStore(session.id, scopeId, `User:\n${titleText}\n\nAssistant:\n${result.reply}`);
             }
           } finally {
             await reclaimBox();
