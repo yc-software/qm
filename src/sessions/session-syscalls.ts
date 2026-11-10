@@ -194,6 +194,7 @@ export interface SessionOpenInput {
   thinkingLevel?: string;
   fastMode?: boolean;
   isolation?: ChildIsolationMode;
+  persistent?: boolean;
 }
 
 type SessionOpenResult =
@@ -684,7 +685,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         if (byThread) return byThread;
         const children = await deps.sessions.childrenOf(binding.session.id);
         const siblings = current?.parentSessionId ? await deps.sessions.childrenOf(current.parentSessionId) : [];
-        return [...children, ...siblings].find((c) => c.title?.trim().toLowerCase() === trimmed.toLowerCase()) ?? null;
+        const named = [...children, ...siblings].filter((c) => c.title?.trim().toLowerCase() === trimmed.toLowerCase());
+        return named.find((c) => !c.spawnMeta?.retired) ?? named[0] ?? null;
       }
 
       function sidebarRefusal(): string | null {
@@ -855,6 +857,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 openFingerprint: fingerprint,
                 ...(binding.request.surfaceOrigin ? { surfaceOrigin: binding.request.surfaceOrigin } : {}),
                 ...(isolation ? { isolation } : {}),
+                ...(input.persistent ? { persistent: true } : {}),
               };
               if (!existing?.spawnMeta) {
                 await deps.sessions.setParentSession(child.id, binding.session.id);
@@ -909,6 +912,12 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 };
               if (!(await deps.sessions.getForParticipant(target.id, binding.request.actor.id)))
                 return { ok: false, message: "you are not a participant in that session." };
+              if (target.spawnMeta?.retired && target.parentSessionId === binding.session.id)
+                return {
+                  ok: false,
+                  message:
+                    "that subagent finished and retired; open a fresh one with `open` (its result is already in your transcript).",
+                };
               if (deps.authorize && !(await deps.authorize(target, caller.actor.id)))
                 return { ok: false, message: "you no longer have access to the target session" };
               const meta = storedContext(target);

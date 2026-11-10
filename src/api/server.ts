@@ -9,6 +9,8 @@ import {
   type ServerResponse,
   type Server,
 } from "node:http";
+import type { Duplex } from "node:stream";
+import { failUpgrade, isWebSocketUpgrade, responseOnSocket } from "../../plugins/chassis/src/websocket-relay.ts";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest, type HTTPMethods } from "fastify";
 import type { App } from "./app.ts";
 import type { ServerDeps } from "./deps.ts";
@@ -23,11 +25,13 @@ import {
 import { CONTROL_PLANE_AUD, type CapabilityClaims } from "../auth/capability-token.ts";
 import { bootTenant } from "../tenants/boot.ts";
 import { capabilityToken, identityTenant, requestCapability, withRequestTenant } from "./request-tenant.ts";
+import type { Tenant } from "../tenants/context.ts";
 import { inboundKey, withInboundTenant } from "./inbound-tenant.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } from "../auth/portal-identity.ts";
 import { errMessage } from "../util/errors.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts";
+import { KEEP_ALIVE_TIMEOUT_MS, logUnansweredCloses } from "../../plugins/chassis/src/http.ts";
 import { armBodyDeadline, PayloadTooLargeError, readRawBody, sendJson, verifyOrReject } from "./http.ts";
 import {
   findRoute,
@@ -202,6 +206,7 @@ async function gate(
   raw: string,
   route: Pick<Route, "auth" | "actor" | "admin" | "allowedInStrict" | "browser"> | undefined,
   params: Record<string, string>,
+  tenant: Tenant | undefined,
 ): Promise<GateResult | null> {
   const routeAuth = route?.auth;
   const { deps, secret, auth, requirePortalIdentity, allowUnsignedSourceAuth } = wiring;
@@ -273,7 +278,7 @@ async function gate(
     const rawToken = req.headers[PORTAL_IDENTITY_HEADER];
     const token = Array.isArray(rawToken) ? rawToken[0] : rawToken;
     if (browser) {
-      const signedIn = await browserIdentity(req, method, deps, route?.browser === "embed");
+      const signedIn = await browserIdentity(req, method, deps, route?.browser === "embed", tenant);
       if ("status" in signedIn) {
         sendJson(res, signedIn.status, { error: signedIn.error, message: signedIn.message });
         return null;
@@ -338,9 +343,21 @@ function assertedActorValues(field: string, url: URL, body: unknown): unknown[] 
   return body && typeof body === "object" && Object.hasOwn(body, name) ? [(body as Record<string, unknown>)[name]] : [];
 }
 
+const requestTenants = new WeakMap<IncomingMessage, Tenant>();
+
 function baseCtx(req: IncomingMessage, res: ServerResponse, wiring: Wiring): BaseCtx {
   const url = new URL(req.url ?? "/", "http://localhost");
-  return { req, res, ...wiring, url, pathname: url.pathname, method: req.method ?? "GET", params: {} };
+  const tenant = requestTenants.get(req);
+  return {
+    req,
+    res,
+    ...wiring,
+    url,
+    pathname: url.pathname,
+    method: req.method ?? "GET",
+    params: {},
+    ...(tenant ? { tenant } : {}),
+  };
 }
 
 function respondError(req: IncomingMessage, res: ServerResponse, err: unknown): void {
@@ -397,6 +414,7 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
         raw,
         found?.route,
         found?.params ?? {},
+        base.tenant,
       );
       if (!g) return;
       if (found) {
@@ -454,6 +472,7 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
       raw,
       request.routeOptions.config.route,
       request.params as Record<string, string>,
+      requestTenants.get(request.raw),
     );
     if (!result) {
       reply.hijack();
@@ -522,15 +541,32 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
       respondError(req, res, err),
     );
   });
+  server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+    socket.on("error", () => socket.destroy());
+    void upgradeFront(req, socket, head).catch((error: unknown) => failUpgrade(socket, "deployment-websocket", error));
+  });
   const { fastify, routing } = buildFastify(wiring, server);
   const ready = Promise.resolve(fastify.ready());
   ready.catch((err: unknown) => console.error("[server] fastify initialization failed:", errMessage(err)));
   server.requestTimeout = 0;
   server.headersTimeout = 10_000;
-  server.keepAliveTimeout = 5_000;
+  server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
   server.maxConnections = 1024;
+  logUnansweredCloses(server, "core");
 
   const capabilitySecret = deps.capabilitySecret ?? deps.signingSecret;
+  async function upgradeFront(req: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
+    const res = isWebSocketUpgrade(req) ? responseOnSocket(req, socket) : null;
+    if (!res) return void socket.destroy();
+    const base: BaseCtx = { ...baseCtx(req, res, wiring), upgrade: { socket, head } };
+    await withRequestContext("core", req, res, () =>
+      inRequestTenant(req, res, base, null, async () => {
+        if (await proxyDeploymentSubdomain(base)) return nameRequest(base.method, "/deployment-proxy/websocket");
+        sendJson(res, 404, { error: "not_found" });
+      }),
+    );
+  }
+
   async function front(req: IncomingMessage, res: ServerResponse): Promise<void> {
     let base = baseCtx(req, res, wiring);
     const alias = appHostRequest(req, deps) ? null : apiAlias(base.method, base.pathname);
@@ -540,13 +576,30 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     }
     const raw = findRoute(rawRoutes, base.method, base.pathname);
     const matched = raw ? null : findRoute(apiRoutes, base.method, base.pathname);
-    const route = (raw ?? matched)?.route;
-    const inbound = inboundKey(req, deps, raw ?? matched, base.url);
+    await inRequestTenant(req, res, base, raw ?? matched, () => serve(req, res, base, raw, matched));
+  }
+
+  async function inRequestTenant(
+    req: IncomingMessage,
+    res: ServerResponse,
+    base: BaseCtx,
+    found: Matched<BaseCtx> | Matched<ApiCtx>,
+    then: () => Promise<void>,
+  ): Promise<void> {
+    const route = found?.route;
+    const next = (tenant: Tenant | undefined): Promise<void> => {
+      if (tenant) {
+        requestTenants.set(req, tenant);
+        base.tenant = tenant;
+      }
+      return then();
+    };
+    const inbound = inboundKey(req, deps, found, base.url);
     if (inbound)
       return withInboundTenant(
         app,
         inbound,
-        () => serve(req, res, base, raw, matched),
+        next,
         async () =>
           (await identityTenant(req, deps.portalIdentitySecret ?? deps.signingSecret)) ??
           (usesBrowserSession(req, route) ? (browserSessionTenant(req, deps) ?? bootTenant()) : undefined),
@@ -557,7 +610,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
       route,
       capabilitySecret,
       bootTenant(),
-      () => serve(req, res, base, raw, matched),
+      next,
       deps.portalIdentitySecret ?? deps.signingSecret,
       () => (usesBrowserSession(req, route) ? browserSessionTenant(req, deps) : undefined),
     );

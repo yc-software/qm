@@ -273,6 +273,7 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
     owner: acting.actorId,
     createdBy: acting.actorId,
     ownerScopeId,
+    ...(ctx.capability?.botActor ? { botActor: true } : {}),
     name: b.name,
     ...(b.icon !== undefined ? { icon: b.icon as string | null } : {}),
     playbook: b.playbook,
@@ -301,6 +302,7 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
         owner: loop.owner,
         createdBy: loop.createdBy,
         ownerScopeId: loop.ownerScopeId,
+        ...(loop.botActor ? { botActor: true } : {}),
         schedule,
         title: `Loop: ${loop.name}`,
         action: `fire loop ${loop.id}`,
@@ -353,11 +355,6 @@ async function getLoop(ctx: ApiCtx): Promise<void> {
         ? {
             ...item,
             ...(item.sourcePayload ? { sourcePayload: agentSourcePayload(item.sourcePayload, item.source) } : {}),
-            ...(item.inboxPreview
-              ? {
-                  inboxPreview: agentSourcePayload(item.inboxPreview, item.source),
-                }
-              : {}),
           }
         : item,
     ),

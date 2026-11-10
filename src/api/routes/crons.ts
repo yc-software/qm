@@ -70,7 +70,7 @@ async function gateSourceCron(ctx: ApiCtx, id: string): Promise<Cron | null> {
     return null;
   }
   const principalId = url.searchParams.get("principalId");
-  if (principalId && (await canAdministerCron(app, cron, principalId))) return cron;
+  if (principalId && (await canAdministerCron(app, cron, { actorId: principalId }))) return cron;
   sendJson(res, 404, { error: "not_found" });
   return null;
 }
@@ -83,7 +83,7 @@ async function gateSourceCronRead(ctx: ApiCtx, id: string): Promise<Cron | null>
     return null;
   }
   const principalId = url.searchParams.get("principalId");
-  if (principalId && (await canAdministerCron(app, cron, principalId))) return cron;
+  if (principalId && (await canAdministerCron(app, cron, { actorId: principalId }))) return cron;
   if (principalId && (await app.listCronsForViewer(principalId)).visible.some((candidate) => candidate.id === id))
     return cron;
   sendJson(res, 404, { error: "not_found" });
@@ -228,7 +228,7 @@ async function listCrons(ctx: ApiCtx): Promise<void> {
   const { owned, visible } = await app.listCronsForViewer(viewer);
   const decorate = async (cron: Cron) => ({
     ...cron,
-    permission: (await canAdministerCron(app, cron, viewer)) ? "manage" : "read",
+    permission: (await canAdministerCron(app, cron, { actorId: viewer })) ? "manage" : "read",
   });
   return sendJson(res, 200, {
     crons: await Promise.all(owned.map(decorate)),

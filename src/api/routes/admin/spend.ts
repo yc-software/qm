@@ -5,7 +5,7 @@ import { constantTimeEqual } from "../../../util/crypto.ts";
 import { contentDispositionAttachment, contentTypeWithUtf8Charset, sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
 import { discoverScopes } from "./common.ts";
-import { type ApiCtx, type BaseCtx } from "../route.ts";
+import { tenantOf, type ApiCtx, type BaseCtx } from "../route.ts";
 
 export function cacheHitRatio(s: { cacheRead?: number; cacheWrite?: number; uncachedInput?: number }): number | null {
   const read = s.cacheRead;
@@ -559,6 +559,7 @@ export async function spendExport(ctx: BaseCtx): Promise<void> {
   const labels = await discoverScopes(
     app,
     deps,
+    tenantOf(ctx),
     rows.map((r) => r.scopeId),
   );
   const scope = orgScope(deps);
@@ -615,6 +616,7 @@ export async function spend(ctx: ApiCtx): Promise<void> {
   const labels = await discoverScopes(
     app,
     deps,
+    tenantOf(ctx),
     rows.map((r) => r.scopeId),
   );
   const crons =

@@ -7,12 +7,12 @@ import { orgId } from "../config.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
 import { reportFailure } from "../util/errors.ts";
 import { bootTenant } from "../tenants/boot.ts";
-import { boundTenant } from "../tenants/context.ts";
 import { labelOfAppHost } from "../tenants/app-handle.ts";
 import type { ServerDeps } from "./deps.ts";
 import { apiRoutes } from "./routes/index.ts";
 import { compilePath, findRoute, type Route } from "./routes/route.ts";
 import { activePrincipal } from "./routes/shared.ts";
+import type { Tenant } from "../tenants/context.ts";
 
 export const API_ALIASES: ReadonlyMap<string, string> = new Map([
   ["GET /api/sessions", "/v1/sessions"],
@@ -74,6 +74,7 @@ export const API_ALIASES: ReadonlyMap<string, string> = new Map([
   ["PUT /api/sessions/:id/persona", "/v1/sessions/:id/persona"],
   ["POST /api/sessions/:id/share", "/v1/sessions/:id/share"],
   ["POST /api/sessions/:id/title", "/v1/sessions/:id/title"],
+  ["POST /api/sessions/:id/next-prompt", "/v1/sessions/:id/next-prompt"],
   ["POST /api/sessions/:id/detach", "/v1/sessions/:id/detach"],
   ["POST /api/sessions/:id/goal/cancel", "/v1/sessions/:id/goal/cancel"],
   ["POST /api/sessions/:id/expand", "/v1/sessions/:id/expand"],
@@ -250,9 +251,10 @@ function misconfiguration(deps: BrowserLaneDeps): string | null {
   return null;
 }
 
-async function isAdmin(deps: ServerDeps, principalId: string): Promise<boolean> {
+async function isAdmin(deps: ServerDeps, tenant: Tenant | undefined, principalId: string): Promise<boolean> {
   if (!deps.admin || !(await activePrincipal(deps, principalId))) return false;
-  return (await deps.admin.adminStatusOf({ id: principalId, type: "internal" })).isAdmin;
+  if (!tenant) throw new Error("No tenant is bound to this request");
+  return (await deps.admin.adminStatusOf(tenant, { id: principalId, type: "internal" })).isAdmin;
 }
 
 export async function browserIdentity(
@@ -260,6 +262,7 @@ export async function browserIdentity(
   method: string,
   deps: ServerDeps,
   embeddable: boolean,
+  tenant: Tenant | undefined,
 ): Promise<PortalIdentity | BrowserRefusal> {
   const now = Date.now();
   const problem = misconfiguration(deps);
@@ -278,7 +281,7 @@ export async function browserIdentity(
   );
   if (!session)
     return { status: 401, error: "unauthorized", message: "a sign-in session for this organization is required" };
-  if ((session.t ?? bootTenant()) !== boundTenant())
+  if ((session.t ?? bootTenant()) !== tenant?.id)
     return { status: 401, error: "unauthorized", message: "a sign-in session for this organization is required" };
   if (session.appOnly)
     return { status: 403, error: "app_only_session", message: "this sign-in only permits access to shared apps" };
@@ -293,7 +296,7 @@ export async function browserIdentity(
   const imp = foreign
     ? null
     : impersonationFor({ sub, org: session.org }, cookies, deriveKey(secret, "portal.impersonate.v1"), now);
-  const target = imp && (await isAdmin(deps, sub)) ? imp.target : null;
+  const target = imp && (await isAdmin(deps, tenant, sub)) ? imp.target : null;
   return {
     p: target ?? sub,
     authenticatedAs: session.sub,

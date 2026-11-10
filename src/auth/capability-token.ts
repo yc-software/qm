@@ -40,6 +40,13 @@ interface BlobGrant {
   id?: string;
 }
 
+export async function personOrOwningBot(
+  caller: Pick<CapabilityClaims, "botActor">,
+  owns: () => Promise<boolean>,
+): Promise<boolean> {
+  return caller.botActor !== true || owns();
+}
+
 type BlobTransferClaims = CapabilityClaims & { aud: typeof BLOB_TRANSFER_AUD; blob: BlobGrant };
 
 export interface CapabilityClaims {
@@ -117,7 +124,7 @@ async function readCapabilityClaims(token: string, secret: string | string[]): P
 
 export function isValidCapabilityTimezone(timezone: unknown): timezone is string {
   if (typeof timezone !== "string") return false;
-  if (timezone.length === 0 || timezone.length > 64 || timezone.trim() !== timezone) return false;
+  if (timezone.length === 0 || timezone.trim() !== timezone) return false;
   try {
     new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(0);
     return true;

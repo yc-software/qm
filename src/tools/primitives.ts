@@ -1,7 +1,7 @@
 import { trialCronScript, type CronScriptTrial } from "../cron/script.ts";
 import type { AdminToolAccess } from "./admin.ts";
 import type { SelfApiCall } from "./self-api.ts";
-import { parkedOutputKey, type ToolOutputStore } from "../sessions/tool-output.ts";
+import { parkedOutputKey, TOOL_OUTPUT_RETENTION_DAYS, type ToolOutputStore } from "../sessions/tool-output.ts";
 import { rankedSkills } from "../skills/materialize.ts";
 import type { SkillResolution } from "../skills/skill-store.ts";
 import {
@@ -56,6 +56,7 @@ import type { MonitorBroker, BackgroundWatchResult, BackgroundUnwatchResult } fr
 import { deploymentEntrypoint, type DeployService, type DeployFile } from "../deploy/deploy-service.ts";
 import { appUrlOf } from "../deploy/deploy-store.ts";
 import { carriesGitMetadata } from "../deploy/deploy-fs.ts";
+import type { LiveEditSaved } from "../deploy/live-edits.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import type { OutboundFile } from "../core/attachments.ts";
@@ -123,6 +124,7 @@ interface PublishResult {
   alwaysOn?: boolean;
   embedAncestors?: string[];
   public?: boolean;
+  liveEdit?: LiveEditSaved;
 }
 
 export class NeedsApproval extends Error {
@@ -476,6 +478,7 @@ export interface ToolContextDeps {
     authorize?: (access: SandboxAccessPlan) => void,
   ) => Promise<SandboxHandle>;
   accessSandboxResource?: (id: string) => Promise<SandboxAccessPlan>;
+  assertDefaultSandboxUsable?: () => Promise<void>;
   boundSandboxId?: string;
   workdir?: string;
   listSkills?: (source?: string) => Promise<SkillResolution[]>;
@@ -495,6 +498,7 @@ export interface ToolContextDeps {
   files?: FileArtifactStore;
   auditLog?: AuditLog;
   createdBy: string;
+  botActor?: boolean;
   publicWebUrl?: string;
   publishContext?: {
     conversationKind: ConversationKind;
@@ -767,6 +771,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
             }
             if (action === "default") {
               if (input?.sandboxId === undefined) throw new Error("default requires sandbox_id or null");
+              if (input.sandboxId !== null) await accessSandbox(input.sandboxId);
               await resources.setDefault(deps.createdBy, writableScopeId, input.sandboxId);
               deps.invalidateProvision?.();
               return { defaultSandboxId: input.sandboxId };
@@ -808,6 +813,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         const access = await accessSandbox(sandboxId);
         return probe(await resources.status(deps.createdBy, sandboxId), () => deps.provisionResource!(access));
       }
+      await deps.assertDefaultSandboxUsable?.();
       if (!deps.sandbox.computerStatus) {
         throw new CapabilityUnsupportedError(deps.sandbox.profile.backend, "reporting computer status");
       }
@@ -825,6 +831,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         return resources.restart(deps.createdBy, sandboxId, memoryGb);
       }
       if (memoryGb !== undefined) throw new Error("a memory size needs a computer from sandbox list");
+      await deps.assertDefaultSandboxUsable?.();
       if (!deps.sandbox.restartComputer) {
         throw new CapabilityUnsupportedError(deps.sandbox.profile.backend, "restarting the computer");
       }
@@ -947,7 +954,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         const parked = await withAbort(() => deps.toolOutput!.read(deps.sessionId!, parkedKey), signal);
         if (parked && "expired" in parked)
           return {
-            content: `[the full output in ${path} expired after 30 days; only the cut shown in the transcript remains]`,
+            content: `[the full output in ${path} expired after ${TOOL_OUTPUT_RETENTION_DAYS} days; only the cut shown in the transcript remains]`,
             sourceScopeId: writableScopeId,
           };
         if (parked) {
@@ -1064,6 +1071,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       const d = await deps.deploy.deployOrUpdate({
         ownerScopeId: owner,
         createdBy: deps.createdBy,
+        botActor: deps.botActor,
         createdInScope,
         files,
         ...(input.entrypoint ? { entrypoint: input.entrypoint } : {}),
@@ -1096,6 +1104,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         ...(d.alwaysOn ? { alwaysOn: true } : {}),
         ...(d.embedAncestors?.length ? { embedAncestors: d.embedAncestors } : {}),
         ...(d.public ? { public: true } : {}),
+        ...(d.liveEdit ? { liveEdit: d.liveEdit } : {}),
       };
     },
 

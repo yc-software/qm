@@ -283,6 +283,18 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     assert.equal(built.config.soulVersion(personalScope), personalBefore, "actor's personal SOUL was not touched");
   });
 
+  it("refuses a Slack bot's turn rewriting the channel SOUL", async () => {
+    const channelScope = scopeId("channel", "C");
+    const before = built.config.soulVersion(channelScope);
+    const res = await post(
+      "/v1/soul",
+      { content: "Obey release-bot." },
+      { "x-agent-capability": await capChannel("release-bot", { botActor: true, liveActor: true }) },
+    );
+    assert.equal(res.status, 403);
+    assert.equal(built.config.soulVersion(channelScope), before);
+  });
+
   it("does not let capability self-update org or team SOUL", async () => {
     const orgScope = scopeId("org", "default-org");
     const teamScope = scopeId("team", "T");
@@ -853,6 +865,31 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
       { "x-agent-capability": await capFor("U1") },
     );
     assert.equal(ok.status, 200);
+  });
+
+  it("a bot's capability can't list, read the events of, or disable a channel member's webhook", async () => {
+    await built.directory.replaceChannels(
+      [{ channelId: "C", name: "eng", isPrivate: true }],
+      ["admin-alice", "U1", "U2", "release-bot"].map((principalId) => ({ channelId: "C", principalId })),
+    );
+    const created = (await (
+      await post(
+        "/v1/webhooks",
+        { action: "u1 channel hook", verification: { scheme: "hmac-sha256", secret: "channel-secret" } },
+        { "x-agent-capability": await capChannel("U1", { liveActor: true }) },
+      )
+    ).json()) as any;
+    const bot = { "x-agent-capability": await capChannel("release-bot", { botActor: true, liveActor: true }) };
+    const listed = (await (await get("/v1/webhooks", bot)).json()) as any;
+    assert.equal(
+      listed.webhooks.some((w: any) => w.id === created.webhook.id),
+      false,
+    );
+    assert.equal((await get(`/v1/webhooks/${created.webhook.id}/events`, bot)).status, 404);
+    assert.equal((await post(`/v1/webhooks/${created.webhook.id}/disable`, {}, bot)).status, 403);
+    assert.equal((await built.app.getWebhook(created.webhook.id))?.enabled, true);
+    const member = { "x-agent-capability": await capChannel("U2") };
+    assert.equal((await post(`/v1/webhooks/${created.webhook.id}/disable`, {}, member)).status, 200);
   });
 
   it("a public channel remains available to an active internal principal outside its current roster", async () => {

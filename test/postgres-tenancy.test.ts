@@ -10,7 +10,7 @@ import {
   type PgMigrationDefinition,
   withPgTransaction,
 } from "../src/persistence/pg-pool.ts";
-import { SESSION_MIGRATIONS, TENANT_BACKFILL } from "../src/sessions/session-schema.ts";
+import { DROP_SESSION_LEASES, SESSION_MIGRATIONS, TENANT_BACKFILL } from "../src/sessions/session-schema.ts";
 import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { TENANCY } from "../src/tenants/migrations.ts";
 import { testBareDatabaseUrl, testMigratedDatabaseUrl } from "./support/test-database.ts";
@@ -153,12 +153,13 @@ test("an open transaction refuses work for a different tenant until it has ended
   assert.deepEqual(new Set(seen), new Set(["refused"]));
 });
 
+const preTenancy = (m: PgMigrationDefinition) =>
+  !TENANCY.includes(m) && m !== TENANT_BACKFILL && m !== DROP_SESSION_LEASES && !/-tenant|claim/.test(m.id);
+
 test("upgrading copies the existing tenant into tenants", { skip }, async () => {
   const pool = new pg.Pool({ connectionString: testBareDatabaseUrl(), max: 1 });
   try {
-    const previous = SESSION_MIGRATIONS.filter(
-      (m) => !TENANCY.includes(m) && m !== TENANT_BACKFILL && !/-tenant|claim/.test(m.id),
-    );
+    const previous = SESSION_MIGRATIONS.filter(preTenancy);
     await applyPgMigrations(pool, [...DIRECTORY_MIGRATIONS, ...previous].map(definePgMigration));
     const old = (await pool.query("SELECT qm_tenant_id()::text AS id")).rows[0].id;
     await pool.query(
@@ -173,8 +174,6 @@ test("upgrading copies the existing tenant into tenants", { skip }, async () => 
 
 test("upgrading keeps every table on the existing tenant when another store migrates first", { skip }, async () => {
   const pool = new pg.Pool({ connectionString: testBareDatabaseUrl(), max: 1 });
-  const preTenancy = (m: PgMigrationDefinition) =>
-    !TENANCY.includes(m) && m !== TENANT_BACKFILL && !/-tenant|claim/.test(m.id);
   try {
     await applyPgMigrations(
       pool,

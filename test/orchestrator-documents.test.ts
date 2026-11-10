@@ -8,11 +8,11 @@ import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 
-function freshApp(maxContextTokens?: number) {
-  return buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "document-turn-")), maxContextTokens }));
+function freshApp() {
+  return buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "document-turn-")) }));
 }
 
-test("document uploads survive follow-up turns and stay isolated to their conversation", async () => {
+test("an earlier turn's document is not re-sent on later turns and stays saved in its conversation", async () => {
   const built = freshApp();
   const blob = await built.blobTransfer.put(Buffer.from("QUARTZ-731"));
   const request = {
@@ -30,8 +30,20 @@ test("document uploads survive follow-up turns and stay isolated to their conver
   assert.equal(followup.status, "ok");
   const requests = (await built.sessions.listLlmRequests(followup.sessionId!)).filter((r) => r.model === "mock");
   assert.equal(requests.length, 2);
-  for (const recorded of requests)
-    assert.match(JSON.stringify(recorded.promptEnvelope), /"documents":\[\{"name":"notes.txt"/);
+  assert.match(JSON.stringify(requests[0]!.promptEnvelope), /"documents":\[\{"name":"notes.txt"/);
+  assert.doesNotMatch(JSON.stringify(requests[1]!.promptEnvelope), /"documents":\[\{/);
+  const items = await built.sessions.getItems(first.sessionId!);
+  const upload = items.find((item) => item.kind === "UserMessage")!;
+  const { artifactId } = (upload.body as { attachments: Array<{ artifactId: string }> }).attachments[0]!;
+  assert.match(
+    String(upload.body.environment),
+    new RegExp(`"notes.txt" is included inline with this message only; .* saved as file ${artifactId}`),
+  );
+  const opened = await built.files.open(artifactId);
+  assert.ok(opened);
+  const chunks = [];
+  for await (const chunk of opened.stream) chunks.push(Buffer.from(chunk));
+  assert.equal(Buffer.concat(chunks).toString(), "QUARTZ-731");
   const other = await built.app.turn({
     ...request,
     conversation: { kind: "dm", threadRef: "dm:U1:other" },
@@ -39,91 +51,6 @@ test("document uploads survive follow-up turns and stay isolated to their conver
   });
   const otherRequests = await built.sessions.listLlmRequests(other.sessionId!);
   assert.doesNotMatch(JSON.stringify(otherRequests), /notes.txt/);
-});
-
-test("compaction stops automatic document replay while preserving the original file", async () => {
-  const built = freshApp();
-  const blob = await built.blobTransfer.put(Buffer.from("QUARTZ-731"));
-  const request = {
-    surface: "test" as const,
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm" as const, threadRef: "dm:U1:compacted-docs" },
-  };
-  const first = await built.app.turn({
-    ...request,
-    text: "summarize",
-    attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: blob.sizeBytes, blobId: blob.blobId }],
-  });
-  const items = await built.sessions.getItems(first.sessionId!);
-  const attachment = (
-    items.find((item) => item.kind === "UserMessage")!.body as {
-      attachments: Array<{ artifactId: string }>;
-    }
-  ).attachments[0]!;
-  await built.sessions.append(
-    { sessionId: first.sessionId! },
-    {
-      kind: "ContextCompaction",
-      text: "Earlier user supplied a document.",
-      throughSeq: items.at(-1)!.seq,
-    },
-  );
-  const result = await built.app.turn({ ...request, text: "what was in the document?" });
-  assert.equal(result.status, "ok");
-  const calls = (await built.sessions.listLlmRequests(result.sessionId!)).filter((record) => record.model === "mock");
-  assert.doesNotMatch(JSON.stringify(calls.at(-1)?.promptEnvelope), /"documents":/);
-  const artifact = await built.files.get(attachment.artifactId);
-  assert.equal(artifact?.enabled, true);
-  const opened = await built.files.open(attachment.artifactId);
-  assert.ok(opened);
-  const chunks = [];
-  for await (const chunk of opened.stream) chunks.push(Buffer.from(chunk));
-  assert.equal(Buffer.concat(chunks).toString(), "QUARTZ-731");
-  const original = await built.sessions.getItem(first.sessionId!, items[0]!.seq);
-  assert.deepEqual(original, items[0]);
-});
-
-test("compaction during a turn stops document replay immediately", async () => {
-  const built = freshApp(20_000);
-  const blob = await built.blobTransfer.put(Buffer.from("QUARTZ-731"));
-  const request = {
-    surface: "test" as const,
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm" as const, threadRef: "dm:U1:compacted-docs" },
-  };
-  const first = await built.app.turn({
-    ...request,
-    text: "summarize",
-    attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: blob.sizeBytes, blobId: blob.blobId }],
-  });
-  const items = await built.sessions.getItems(first.sessionId!);
-  const attachment = (
-    items.find((item) => item.kind === "UserMessage")!.body as {
-      attachments: Array<{ artifactId: string }>;
-    }
-  ).attachments[0]!;
-  const writer = { sessionId: first.sessionId! };
-  for (let i = 0; i < 8; i++) {
-    await built.sessions.append(writer, {
-      kind: i % 2 === 0 ? "UserMessage" : "AgentMessage",
-      text: "Synthetic conversation context. ".repeat(2000),
-    });
-  }
-  const result = await built.app.turn({ ...request, text: "what was in the document?" });
-  assert.equal(result.status, "ok");
-  const compacted = await built.sessions.getItems(first.sessionId!);
-  assert.ok(compacted.some((item) => item.kind === "ContextCompaction"));
-  const calls = (await built.sessions.listLlmRequests(result.sessionId!)).filter((record) => record.model === "mock");
-  assert.doesNotMatch(JSON.stringify(calls.at(-1)?.promptEnvelope), /"documents":/);
-  const artifact = await built.files.get(attachment.artifactId);
-  assert.equal(artifact?.enabled, true);
-  const opened = await built.files.open(attachment.artifactId);
-  assert.ok(opened);
-  const chunks = [];
-  for await (const chunk of opened.stream) chunks.push(Buffer.from(chunk));
-  assert.equal(Buffer.concat(chunks).toString(), "QUARTZ-731");
-  const original = await built.sessions.getItem(first.sessionId!, items[0]!.seq);
-  assert.deepEqual(original, items[0]);
 });
 
 for (const extension of ["docx", "pdf"]) {
@@ -162,32 +89,3 @@ for (const extension of ["docx", "pdf"]) {
     assert.doesNotMatch(JSON.stringify(followupCalls.at(-1)?.promptEnvelope), /"documents":/);
   });
 }
-
-test("large documents never push a follow-up turn past the context budget", async () => {
-  const budget = 20_000;
-  const built = freshApp(budget);
-  const request = {
-    surface: "test" as const,
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm" as const, threadRef: "dm:U1:large-docs" },
-  };
-  const sizes = new Map<string, number>();
-  for (const name of ["one.txt", "two.txt", "three.txt"]) {
-    const blob = await built.blobTransfer.put(Buffer.from(`${name} `.repeat(4_000)));
-    sizes.set(name, blob.sizeBytes);
-    const turn = await built.app.turn({
-      ...request,
-      text: `read ${name}`,
-      attachments: [{ name, mimetype: "text/plain", sizeBytes: blob.sizeBytes, blobId: blob.blobId }],
-    });
-    assert.equal(turn.status, "ok");
-  }
-  const followup = await built.app.turn({ ...request, text: "compare the three files" });
-  assert.equal(followup.status, "ok");
-  const calls = (await built.sessions.listLlmRequests(followup.sessionId!)).filter((r) => r.model === "mock");
-  const replayed = (
-    (calls.at(-1)?.promptEnvelope as { documents?: Array<{ name: string }> } | undefined)?.documents ?? []
-  ).map((document) => document.name);
-  const replayedTokens = replayed.reduce((sum, name) => sum + Math.ceil(sizes.get(name)! / 4), 0);
-  assert.ok(replayedTokens <= budget / 2, `replayed ${replayed.join(", ")} (~${replayedTokens} tokens)`);
-});

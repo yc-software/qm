@@ -293,12 +293,6 @@ const FAMILIES: AgentApiFamily[] = [
         summary:
           "chat about one held item — body {message}; the reply lands on the item's thread and may revise its proposal",
       },
-      {
-        method: "POST",
-        path: "/v1/loops/:id/events",
-        summary:
-          'report new messages in conversations already on the ledger — body {events:[{sourceKey, author:"owner"|"other", at, text?, from?}]}; each event is judged by the loop\'s work stage, which may close or redraft the item',
-      },
     ],
   },
   {

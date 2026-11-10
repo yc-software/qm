@@ -1583,9 +1583,9 @@ test("an owner's cron fire carries the owner's authority: liveActor, admin statu
   };
   const consulted: string[] = [];
   const realStatus = admin.adminStatusOf.bind(admin);
-  admin.adminStatusOf = (principal) => {
+  admin.adminStatusOf = (tenant, principal) => {
     consulted.push(principal.id);
-    return realStatus(principal);
+    return realStatus(tenant, principal);
   };
   const alice = { externalId: "admin-alice" };
   const fire = (extra: Partial<TurnRequest> = {}): TurnRequest => ({
