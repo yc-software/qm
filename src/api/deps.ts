@@ -10,7 +10,6 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import type { LoopIngressService } from "../loops/ingress.ts";
 import type { createSuggestedActivityService } from "../suggestions/activities.ts";
 import type { ManagedSlack } from "../surfaces/slack-managed.ts";
-import type { InboxSourceRefresh } from "../loops/inbox-source-refresh.ts";
 import type { BrokerSessionStore } from "../auth/broker-sessions.ts";
 import type { DirectFileUploads } from "../files/direct-file-upload.ts";
 import type { SandboxResources } from "../sandbox/sandbox-resources.ts";
@@ -195,7 +194,6 @@ export interface ServerDeps {
   channelPolicy?: ChannelPolicyStore;
   uiState?: UiStateStore;
   loopSourceTokens?: ConnectorTokenSource;
-  inboxSourceRefresh?: InboxSourceRefresh;
   loopSlackClient?: (token: string) => SlackUserClient;
   sessionShares?: SessionShareStore;
   sessionShareBytes?: DurableByteStore;

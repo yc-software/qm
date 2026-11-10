@@ -7,7 +7,6 @@ import type { Loop, LoopItem } from "./types.ts";
 import type { LoopStore } from "./loop-store.ts";
 import type { IngestEntryInput, LoopItemLedger } from "./item-ledger.ts";
 import type { LoopOutputStore } from "./output-store.ts";
-import { isResolved } from "./ledger-view.ts";
 import type { LoopFireService } from "./loop-fire.ts";
 import { getVerifier, type VerifierInput } from "../webhooks/verifiers.ts";
 import { hashId } from "../util/crypto.ts";
@@ -39,37 +38,17 @@ export interface LoopIngress {
 
 export type IngressEntry = IngestEntryInput & { merge?: boolean };
 
-export interface LatestEvent {
-  author: "owner" | "other";
-  at: number;
-  text?: string;
-  from?: string;
-}
-
-export const EVENT_TEXT_CHARS = 2_000;
-
-export function conversationEvent(
+export function conversationChanged(
   item: { loopId: string; sourceKey: string; source?: string | undefined },
-  event: LatestEvent,
+  at: number,
 ): IngressEntry {
-  const text = event.text?.trim().slice(0, EVENT_TEXT_CHARS);
-  const other = event.author === "other";
-  const from = other ? event.from?.slice(0, 300) : undefined;
   return {
     loopId: item.loopId,
     dedupeKey: item.sourceKey,
     ...(item.source !== undefined ? { source: item.source } : {}),
-    sourceAt: event.at,
+    sourceAt: at,
     merge: true,
-    sourcePayload: {
-      latestEvent: {
-        author: event.author,
-        at: event.at,
-        ...(text && !other ? { text } : {}),
-        ...(from ? { from } : {}),
-      },
-      ...(other ? { receivedAt: event.at, ...(text ? { snippet: text } : {}) } : {}),
-    },
+    sourcePayload: {},
   };
 }
 
@@ -77,8 +56,6 @@ function ledgerEntry(raw: IngressEntry, existing: LoopItem | undefined): IngestE
   const { merge, ...base } = raw;
   if (!merge) return base;
   if (!existing) return null;
-  if (isResolved(existing) && (base.sourcePayload?.latestEvent as LatestEvent | undefined)?.author === "owner")
-    return null;
   return {
     ...base,
     ...(base.source === undefined && existing.source !== undefined ? { source: existing.source } : {}),

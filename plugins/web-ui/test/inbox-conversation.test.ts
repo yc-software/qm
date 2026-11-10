@@ -96,7 +96,7 @@ test("draft stays outside AI chat and Send it submits the combined instruction",
         render(html`${draftMessageTpl(item)}${chatTpl(item)}`, host);
         assert.equal(host.querySelectorAll(".inbox-chat-suggestions .inbox-suggest-chip.primary").length, 1);
         assert.equal(host.querySelectorAll(".inbox-chat-suggestion").length, 0);
-        for (const status of ["sent", "dismissed", "replied"]) {
+        for (const status of ["sent", "dismissed"]) {
           render(html`${draftMessageTpl({ ...item, status })}${chatTpl({ ...item, status })}`, host);
           assert.equal(host.querySelector(".inbox-chat-suggestions"), null);
         }

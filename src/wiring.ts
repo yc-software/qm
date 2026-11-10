@@ -142,12 +142,13 @@ import { createPostgresCronFireStore } from "./cron/fire-store.ts";
 import { createLoopStore } from "./loops/loop-store.ts";
 import { createLoopItemLedger } from "./loops/item-ledger.ts";
 import { createPostgresLedgerEventBus, type LedgerEventBus } from "./loops/ledger-events.ts";
-import { createInboxSourceRefresh } from "./loops/inbox-source-refresh.ts";
+import { createInboxPass } from "./loops/verdict/pass.ts";
+import { createConversationFetcher, createSourceClients } from "./loops/verdict/fetch.ts";
+import { createDiscoverer } from "./loops/verdict/discover.ts";
 import { createInboxRealtime } from "./loops/inbox-realtime.ts";
 import { createLoopOutputStore } from "./loops/output-store.ts";
 import { createShipGrantStore } from "./loops/ship-grant-store.ts";
 import { createLoopFireService, type LoopFireService } from "./loops/loop-fire.ts";
-import { createInboxQuietCheck } from "./loops/inbox-quiet-check.ts";
 import type { LoopServiceDeps } from "./api/routes/loops.ts";
 import type { DeliveryStore } from "./delivery/delivery-store.ts";
 import { createPostgresDeliveryStore } from "./delivery/postgres-delivery-store.ts";
@@ -312,7 +313,7 @@ import { createPostgresToolOutputStore } from "./sessions/tool-output.ts";
 import { LLM_CAPTURE_RETENTION_MS, type SessionStore } from "./sessions/session-store.ts";
 import { keychainCompanyChatGPTAuth, type CompanyChatGPTAuth } from "./model/company-chatgpt-auth.ts";
 import { keychainEnvCredential } from "./credentials/keychain-env-credential.ts";
-import { createAgent, agentConfigOptions } from "./agent/agent-run.ts";
+import { createAgent, agentConfigOptions, oneShot } from "./agent/agent-run.ts";
 import { withResolvedRuntime, resolveRuntimeChoice } from "./agent/runtime-choice.ts";
 import { selectableModelCatalog } from "./model/model-catalog.ts";
 import type { Agent, RuntimeChoice, SessionRoute } from "./agent/agent.ts";
@@ -2654,6 +2655,12 @@ export function buildApp(
     ? (drop: DropResolution) =>
         fireDropResolution({ deliveries, idempotency, identity, run: runTriggered, directory, resolveRecipient }, drop)
     : undefined;
+  const inboxClients =
+    keychain &&
+    createSourceClients({
+      tokens: keychain,
+      ...(config.slack?.apiUrl ? { slackApiUrl: config.slack.apiUrl } : {}),
+    });
   const loopFire: LoopFireService = createLoopFireService({
     admittedWork,
     crons,
@@ -2665,11 +2672,25 @@ export function buildApp(
     outputs: loopOutputs,
     grants: loopGrants,
     files,
-    ...(keychain
+    ...(inboxClients
       ? {
-          inboxQuiet: createInboxQuietCheck({
-            tokens: keychain,
-            ...(config.slack?.apiUrl ? { slackApiUrl: config.slack.apiUrl } : {}),
+          inboxPass: createInboxPass({
+            items: loopItems,
+            errors,
+            fetch: createConversationFetcher(inboxClients),
+            discover: createDiscoverer(inboxClients),
+            model: {
+              verdict: (system, prompt) => agent.oneShot?.(system, prompt, "decision") ?? Promise.resolve(undefined),
+              draft: async (system, prompt) => {
+                const route = modelRoutes.servable(await modelRoutes.route(modelRoutes.baseModelId()));
+                if (!route) return undefined;
+                return oneShot("pi-inbox-draft", route.model, route.keys, system, prompt, {
+                  modelGateway: route.gateway,
+                  purpose: "decision",
+                });
+              },
+            },
+            ownerName: async (owner) => (await directory.get(owner))?.displayName || undefined,
           }),
         }
       : {}),
@@ -3317,20 +3338,7 @@ export function serverDeps(
     channelPolicy: built.channelPolicy,
     ...(built.suggestedActivities ? { suggestedActivities: built.suggestedActivities } : {}),
     uiState: built.uiState,
-    ...(built.keychain
-      ? {
-          loopSourceTokens: built.keychain,
-          inboxSourceRefresh: createInboxSourceRefresh({
-            featureFlags: built.featureFlags,
-            items: built.loops.items,
-            errors: built.errors,
-            enqueue: (loop, entries) => built.loopIngress.enqueueConversation(loop, entries),
-            tokens: built.keychain,
-            directory: built.directory,
-            ...(config.slack?.apiUrl ? { slackApiUrl: config.slack.apiUrl } : {}),
-          }),
-        }
-      : {}),
+    ...(built.keychain ? { loopSourceTokens: built.keychain } : {}),
     loopSlackClient: slackUserClientFactory(config.slack?.apiUrl),
     sessionShares: built.sessionShares,
     sessionShareBytes: built.sessionShareBytes,
