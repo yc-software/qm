@@ -1,4 +1,5 @@
 import { isClaudeSubscriptionToken } from "./model/claude-subscription.ts";
+import { isDnsLabel } from "../plugins/chassis/src/dns-label.ts";
 import {
   deploymentBrokerCredentialsFromEnv,
   type DeploymentBrokerCredential,
@@ -11,10 +12,13 @@ import { isBearerSecret, isStrongSigningSecret } from "./auth/source-auth.ts";
 import { parseSandboxCapabilityTtlMs } from "./auth/capability-token.ts";
 import { existsSync, readdirSync } from "node:fs";
 import {
+  MODEL_PROVIDERS,
   MODEL_REQUEST_CONTEXT_HEADERS,
+  isModelProvider,
   parseProviderBaseUrl,
   providerBaseUrlsFromEnv,
   type ModelGatewayTransportConfig,
+  type ModelProvider,
   type ProviderBaseUrls,
 } from "./model/provider-endpoints.ts";
 import { join, resolve } from "node:path";
@@ -41,11 +45,8 @@ import { parseSharingPosture, type SharingPosture } from "./resolution/sharing-p
 import { slackPluginConfigFromEnv, slackAccountConfigsFromEnv, type SlackPluginConfig } from "./slack/config.ts";
 import {
   DEFAULT_CODEX_MODEL_ID,
-  MODEL_PROVIDERS,
   defaultModelForProvider,
-  isModelProvider,
   onlyProvider,
-  type ModelProvider,
   type ModelProviderAvailability,
 } from "./model/pi-models.ts";
 
@@ -441,7 +442,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (securityScreenClassifier !== "proxy" && hasProxyConfig) {
     throw new Error("SECURITY_SCREEN_PROXY_* requires SECURITY_SCREEN_CLASSIFIER=proxy");
   }
-  if (proxyProvider && (proxyProvider.length > 63 || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(proxyProvider))) {
+  if (proxyProvider && !isDnsLabel(proxyProvider)) {
     throw new Error("SECURITY_SCREEN_PROXY_PROVIDER must be a lowercase DNS label");
   }
   if (proxyProvider === "surface" || proxyProvider === "origin") {

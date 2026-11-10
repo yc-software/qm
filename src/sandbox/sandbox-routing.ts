@@ -1,4 +1,6 @@
 import type { SandboxResources } from "./sandbox-resources.ts";
+import { bootTenant, tenancyBooted } from "../tenants/boot.ts";
+import { boundTenant } from "../tenants/context.ts";
 import type { ScopeId } from "../types.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 import {
@@ -45,6 +47,16 @@ export interface RoutingSandboxOptions {
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
 
+const TENANT_SEPARATED: ReadonlySet<SandboxBackendName> = new Set(["sprites", "modal", "superserve"]);
+
+function requireTenantSeparation(name: SandboxBackendName): void {
+  if (TENANT_SEPARATED.has(name) || !tenancyBooted()) return;
+  const tenant = boundTenant();
+  const boot = bootTenant();
+  if (boot !== undefined && (tenant === undefined || tenant === boot)) return;
+  throw new Error(`sandbox backend ${name} does not keep tenants apart; only a single-tenant deployment can use it`);
+}
+
 export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
   const { backends, resources, defaultBackend } = opts;
   const fallback = ((): Sandbox => {
@@ -54,12 +66,14 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
   })();
 
   const backendFor = (name: SandboxBackendName): Sandbox => {
+    requireTenantSeparation(name);
     const sandbox = backends[name];
     if (!sandbox) throw new Error(`sandbox backend unavailable: ${name}; refusing to use a substitute computer`);
     return sandbox;
   };
 
   const forHandle = (handle: SandboxHandle): Sandbox => {
+    requireTenantSeparation((handle.backend ?? defaultBackend) as SandboxBackendName);
     if (!handle.backend) return fallback;
     const sandbox = backends[handle.backend as SandboxBackendName];
     if (!sandbox) throw new Error(`sandbox backend unavailable: ${handle.backend}`);
@@ -119,7 +133,7 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
     async provision(scope: ScopeId, provOpts?: ProvisionOptions): Promise<SandboxHandle> {
       const resource =
         provOpts?.sandboxId !== undefined ? await resources.get(provOpts.sandboxId) : await resources.resolve(scope);
-      const backend = resource?.backend ?? defaultBackend;
+      const backend = resource?.backend ?? (provOpts?.scratch ? await resources.defaultBackend() : defaultBackend);
       const sandbox = backendFor(backend);
       const provision = async (target: ScopeId, options = provOpts) => {
         try {
@@ -168,14 +182,17 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
       return useHandle(handle, () => removeDirAndList(forHandle(handle), handle, removeRelDir, listRelDir));
     },
     teardown(handle, tdOpts?: TeardownOptions): Promise<void> {
-      const action = () => forHandle(handle).teardown(handle, tdOpts);
-      return handle.resourceId
-        ? resources.use(
-            handle.resourceId,
-            action,
-            !!tdOpts?.destroy || (!tdOpts?.keepWarm && !!forHandle(handle).profile.parksOnTeardown),
-          )
-        : action();
+      const resourceId = handle.resourceId;
+      if (!resourceId) return forHandle(handle).teardown(handle, tdOpts);
+      const parks = !tdOpts?.destroy && !tdOpts?.keepWarm && !!forHandle(handle).profile.parksOnTeardown;
+      return resources.use(
+        resourceId,
+        async () => {
+          const held = parks && !!(await resources.get(resourceId)).holders?.length;
+          return forHandle(handle).teardown(handle, held ? { ...tdOpts, keepWarm: true } : tdOpts);
+        },
+        !!tdOpts?.destroy || parks,
+      );
     },
 
     ...(some(supportsProcessSessions)

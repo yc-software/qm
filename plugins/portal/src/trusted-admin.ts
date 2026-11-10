@@ -26,5 +26,5 @@ export async function provisionTrustedAdmin(
     body,
     signal: AbortSignal.timeout(5_000),
   });
-  if (!response.ok) throw new Error("Trusted administrator provisioning failed");
+  if (!response.ok) throw new Error(`Trusted administrator provisioning failed: HTTP ${response.status}`);
 }

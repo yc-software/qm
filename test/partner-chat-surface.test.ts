@@ -23,6 +23,8 @@ import { scopeId } from "../src/types.ts";
 import { createPartnerChatNotices, partnerChatRunNotice } from "../src/surfaces/partner-chat/notices.ts";
 import { runResultDelivery, wireRunResultDeliveries } from "../src/delivery/run-result-delivery.ts";
 import type { Run } from "../src/runs/run-store.ts";
+import { withTenant } from "../src/tenants/context.ts";
+import { TEST_TENANT } from "./support/test-tenant.ts";
 
 const SECRET = "partner-chat-test-secret-0123456789abcdef";
 const PROVENANCE = { trigger: "cron", surface: "partner-chat", fireKey: "f", sourceScopeId: "s", sourceThreadRef: "t" };
@@ -307,7 +309,7 @@ async function relayUntil(
   until: () => Promise<boolean>,
 ): Promise<void> {
   const relay = createDeliveryRelay(deliveries, { type: "partner-chat", send, claimMs: PARTNER_CHAT_CLAIM_MS });
-  relay.start();
+  withTenant(TEST_TENANT, () => relay.start());
   try {
     await settle(until);
   } finally {
@@ -807,6 +809,7 @@ test("a run-end notice lost before its enqueue is recovered by the run-result sw
   const deliveries = createDeliveryStore();
   const ended = {
     id: "00000000-0000-4000-8000-000000000031",
+    tenantId: TEST_TENANT,
     sessionId: "s",
     status: "done",
     finishedAt: Date.now() - 120_000,

@@ -1,10 +1,17 @@
+import { tenantListeners } from "../tenants/cache.ts";
 import { randomUUID } from "node:crypto";
-import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
 import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
 import { DELIVERY_MAX_AGE_MS, logDeliveryExpiry, type DeliveryStore } from "./delivery-store.ts";
 import { pgTextSafe } from "../util/text.ts";
+import { tenantTables } from "../tenants/migrations.ts";
+import { claimFunction, claimRows, claimThenLoad } from "../tenants/claim.ts";
 
 const NOW_MS_SQL = "(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT";
+const CLAIMABLE = `delivered_at IS NULL AND expired_at IS NULL AND NOT shadow
+  AND (claim_expires_at IS NULL OR claim_expires_at <= ${NOW_MS_SQL})`;
+const OVERAGED = `${CLAIMABLE} AND destination->'webTranscript'->>'kind' IS DISTINCT FROM 'slack_reply'
+  AND created_at <= ${NOW_MS_SQL} - $1`;
 function rowToDelivery(r: Record<string, unknown>): Delivery {
   return {
     id: r.id as string,
@@ -26,7 +33,7 @@ function rowToDelivery(r: Record<string, unknown>): Delivery {
 
 export function createPostgresDeliveryStore(connectionString: string, opts?: { maxAgeMs?: number }): DeliveryStore {
   const maxAgeMs = opts?.maxAgeMs ?? DELIVERY_MAX_AGE_MS;
-  const { q, query, pool } = createPgPool(connectionString, [
+  const pg = createPgPool(connectionString, [
     {
       id: "delivery/store/0001",
       statements: [
@@ -82,23 +89,94 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS failed_reason TEXT`,
       ],
     },
+    ...tenantTables("delivery/store/0008-tenants", [
+      {
+        table: "deliveries",
+        primaryKey: "id",
+        unique: [{ name: "deliveries_idempotency_key_key", columns: "idempotency_key", constraint: true }],
+      },
+    ]),
+    {
+      id: "delivery/store/0009-claims",
+      statements: [
+        claimFunction(
+          "expire_deliveries",
+          "bigint",
+          `UPDATE deliveries SET expired_at = ${NOW_MS_SQL}
+            WHERE (tenant_id, id) IN (SELECT tenant_id, id FROM deliveries WHERE ${OVERAGED} FOR UPDATE SKIP LOCKED)
+            RETURNING tenant_id, id::text`,
+        ),
+        claimFunction(
+          "claim_deliveries",
+          "text, bigint",
+          `SELECT pg_advisory_xact_lock(hashtext('deliveries:claim:' || $1));
+          UPDATE deliveries SET claim_expires_at = ${NOW_MS_SQL} + $2
+            WHERE (tenant_id, id) IN (
+              SELECT tenant_id, id FROM deliveries d
+               WHERE ${CLAIMABLE} AND destination->>'type' = $1
+                 AND NOT EXISTS (
+                   SELECT 1 FROM deliveries o
+                    WHERE o.tenant_id = d.tenant_id AND o.destination->>'type' = $1
+                      AND o.destination->>'target' = d.destination->>'target'
+                      AND o.delivered_at IS NULL AND o.expired_at IS NULL AND NOT o.shadow
+                      AND (o.claim_expires_at > ${NOW_MS_SQL} OR (o.created_at, o.id) < (d.created_at, d.id)))
+               ORDER BY created_at
+               FOR UPDATE SKIP LOCKED)
+            RETURNING tenant_id, id::text`,
+        ),
+      ],
+    },
+    {
+      id: "delivery/store/0010-undelivered-claims",
+      statements: [
+        claimFunction(
+          "undelivered_deliveries",
+          "text",
+          `SELECT tenant_id, id::text FROM deliveries
+            WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow AND destination->>'type' = $1
+            ORDER BY created_at LIMIT 200`,
+        ),
+      ],
+    },
+    {
+      id: "delivery/store/0011-undelivered-uncapped",
+      statements: [
+        claimFunction(
+          "undelivered_deliveries",
+          "text",
+          `SELECT tenant_id, id::text FROM deliveries
+            WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow AND destination->>'type' = $1
+            ORDER BY created_at`,
+        ),
+      ],
+    },
+    {
+      id: "delivery/store/0012-undelivered-tenants",
+      statements: [
+        "DROP FUNCTION IF EXISTS undelivered_deliveries(text)",
+        claimFunction(
+          "undelivered_delivery_tenants",
+          "text",
+          `SELECT DISTINCT tenant_id, $1 FROM deliveries
+            WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow AND destination->>'type' = $1`,
+        ),
+      ],
+    },
   ]);
+  const { q, query } = pg;
 
-  const enqueueListeners = new Set<(type: string) => void>();
+  const enqueueListeners = tenantListeners<[string]>("delivery enqueue");
+
+  async function get(id: string): Promise<Delivery | null> {
+    const rows = await q("SELECT * FROM deliveries WHERE id = $1", [id]);
+    return rows[0] ? rowToDelivery(rows[0]) : null;
+  }
 
   async function expireOveraged(): Promise<void> {
     const rows = await q(
       `UPDATE deliveries
           SET expired_at = ${NOW_MS_SQL}
-        WHERE id IN (
-          SELECT id FROM deliveries
-           WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow
-             AND destination->'webTranscript'->>'kind' IS DISTINCT FROM 'slack_reply'
-             AND created_at <= ${NOW_MS_SQL} - $1
-             AND (claim_expires_at IS NULL
-               OR claim_expires_at <= ${NOW_MS_SQL})
-             FOR UPDATE SKIP LOCKED
-        )
+        WHERE id IN (SELECT id FROM deliveries WHERE ${OVERAGED} FOR UPDATE SKIP LOCKED)
         RETURNING *`,
       [maxAgeMs],
     );
@@ -113,7 +191,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       const inserted = await q(
         `INSERT INTO deliveries (id, idempotency_key, destination, text, attachments, provenance, created_at, shadow)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         ON CONFLICT (idempotency_key) DO UPDATE
+         ON CONFLICT (tenant_id, idempotency_key) DO UPDATE
            SET destination = EXCLUDED.destination,
                text = EXCLUDED.text,
                attachments = EXCLUDED.attachments,
@@ -137,7 +215,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         ],
       );
       if (inserted[0]) {
-        if (input.shadow !== true) for (const l of enqueueListeners) l(input.destination.type);
+        if (input.shadow !== true) enqueueListeners.emit(input.destination.type);
         return rowToDelivery(inserted[0]);
       }
       const existing = await q("SELECT * FROM deliveries WHERE idempotency_key = $1", [input.idempotencyKey]);
@@ -153,36 +231,27 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       );
       return rows.map(rowToDelivery);
     },
-    async claimPending(type, ttlMs, opts) {
+    async claimPending(type, ttlMs) {
       await expireOveraged();
-      const claim = `UPDATE deliveries
-            SET claim_expires_at = ${NOW_MS_SQL} + $2
+      const rows = await q(
+        `UPDATE deliveries SET claim_expires_at = ${NOW_MS_SQL} + $2
           WHERE id IN (
-            SELECT id FROM deliveries d
-             WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow AND destination->>'type' = $1
-               AND (claim_expires_at IS NULL
-                 OR claim_expires_at <= ${NOW_MS_SQL})
-               ${
-                 opts?.oldestPerConversation
-                   ? `AND NOT EXISTS (
-                 SELECT 1 FROM deliveries o
-                  WHERE o.destination->>'type' = $1 AND o.destination->>'target' = d.destination->>'target'
-                    AND o.delivered_at IS NULL AND o.expired_at IS NULL AND NOT o.shadow
-                    AND (o.claim_expires_at > ${NOW_MS_SQL} OR (o.created_at, o.id) < (d.created_at, d.id)))`
-                   : ""
-               }
-             ORDER BY created_at
-               FOR UPDATE SKIP LOCKED
-          )
-          RETURNING *`;
-      const rows = opts?.oldestPerConversation
-        ? await withPgTransaction(await pool(), async (client) => {
-            await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`deliveries:claim:${type}`]);
-            return (await client.query(claim, [type, ttlMs])).rows;
-          })
-        : await q(claim, [type, ttlMs]);
+            SELECT id FROM deliveries WHERE ${CLAIMABLE} AND destination->>'type' = $1
+             ORDER BY created_at FOR UPDATE SKIP LOCKED)
+          RETURNING *`,
+        [type, ttlMs],
+      );
       return rows.map(rowToDelivery).sort((a, b) => a.createdAt - b.createdAt);
     },
+    async claimDue(type, ttlMs) {
+      const load = async (ids: string[]) =>
+        (await q("SELECT * FROM deliveries WHERE id = ANY($1)", [ids])).map(rowToDelivery);
+      for (const d of await claimThenLoad(() => claimRows(pg, "expire_deliveries", [maxAgeMs]), load))
+        logDeliveryExpiry(d, d.expiredAt ?? Date.now());
+      const claimed = await claimThenLoad(() => claimRows(pg, "claim_deliveries", [type, ttlMs]), load);
+      return claimed.sort((a, b) => a.createdAt - b.createdAt);
+    },
+    undeliveredTenants: (type) => claimRows(pg, "undelivered_delivery_tenants", [type]),
     async listShadow(opts) {
       const limit = Math.max(1, opts?.limit ?? 100);
       const rows = await q(
@@ -217,7 +286,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       await query(
         `INSERT INTO deliveries (id, idempotency_key, destination, text, created_at, delivered_at)
          VALUES ($1, $2, '{"type":"ack-tombstone","target":""}', '', $3, $3)
-         ON CONFLICT (idempotency_key)
+         ON CONFLICT (tenant_id, idempotency_key)
          DO UPDATE SET delivered_at = COALESCE(deliveries.delivered_at, EXCLUDED.delivered_at),
                        expired_at = CASE WHEN deliveries.delivered_at IS NULL THEN NULL ELSE deliveries.expired_at END,
                        failed_reason = CASE WHEN deliveries.delivered_at IS NULL THEN NULL ELSE deliveries.failed_reason END`,
@@ -231,10 +300,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         [idempotencyKey, editRef],
       );
     },
-    async get(id) {
-      const rows = await q("SELECT * FROM deliveries WHERE id = $1", [id]);
-      return rows[0] ? rowToDelivery(rows[0]) : null;
-    },
+    get,
     async existingKeys(idempotencyKeys) {
       if (!idempotencyKeys.length) return new Set();
       const rows = await q("SELECT idempotency_key FROM deliveries WHERE idempotency_key = ANY($1::text[])", [
@@ -276,8 +342,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       return rows.map(rowToDelivery).reverse();
     },
     onEnqueue(listener) {
-      enqueueListeners.add(listener);
-      return () => enqueueListeners.delete(listener);
+      return enqueueListeners.add(listener);
     },
   };
 }
