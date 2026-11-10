@@ -1,4 +1,4 @@
-import type { ErrorEvent } from "../admin/error-log.ts";
+import { recordErrorInBinding, type ErrorEvent } from "../admin/error-log.ts";
 import { isSessionTurn } from "../core/turn-origin.ts";
 import { replayableRequest } from "../core/orchestrator/turn-helpers.ts";
 import {
@@ -177,7 +177,7 @@ const RUN_FALLBACK_POLL_MS = 1_000;
 const RUN_STALL_BUDGET_MS = 300_000;
 
 export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClient {
-  const recordDeliveryError = (e: Omit<ErrorEvent, "ts">): void => deps.errors?.record(ambientTenant(), e);
+  const recordDeliveryError = (e: Omit<ErrorEvent, "ts">): void => recordErrorInBinding(deps.errors, e);
   const lease = deps.leaderLease;
   const orgScope: ScopeId = scopeId("org", configOrgId());
 

@@ -1,5 +1,6 @@
 import type { ScopeId } from "../types.ts";
-import type { Tenant } from "../tenants/context.ts";
+import { ambientTenant, boundTenant, type Tenant } from "../tenants/context.ts";
+import { reportFailure } from "../util/errors.ts";
 
 export interface AuditEvent {
   at: number;
@@ -29,3 +30,9 @@ export interface AuditLog {
 
 export const SECURITY_FLAGGED = "security_posture.flagged";
 export const SECURITY_TOOL_RESULT_QUARANTINE = "security_posture.tool_result_quarantine";
+
+export function recordAuditInBinding(auditLog: Pick<AuditLog, "record"> | undefined, e: AuditEvent): void {
+  if (!auditLog) return;
+  if (boundTenant() === undefined) reportFailure("audit: persist event", new Error("No tenant is bound to this work"));
+  else auditLog.record(ambientTenant(), e);
+}

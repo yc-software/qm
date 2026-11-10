@@ -14,7 +14,7 @@ import { normalizeRelPath } from "./deploy-fs.ts";
 import { samePerson } from "../directory/person.ts";
 import { personOrOwningBot, type CapabilityClaims } from "../auth/capability-token.ts";
 import { CONNECTOR_HOSTS } from "../connectors/oauth.ts";
-import type { AuditEvent, AuditLog } from "../audit/audit-log.ts";
+import { recordAuditInBinding, type AuditEvent, type AuditLog } from "../audit/audit-log.ts";
 import {
   appUrlOf,
   currentVersionOf,
@@ -225,7 +225,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     if ((await deps.canManageEmail?.(ref)) || (await externalSharingAllowed(ownerScopeId))) return;
     throw new DeployAccessError("external_sharing_disabled", EXTERNAL_APP_SHARING_OFF);
   }
-  const recordAudit = (e: AuditEvent): void => deps.auditLog.record(ambientTenant(), e);
+  const recordAudit = (e: AuditEvent): void => recordAuditInBinding(deps.auditLog, e);
   async function withdrawLoanUnlessPublisher(d: Deployment, actor: string | undefined): Promise<void> {
     if (!d.connectors || samePerson(actor, d.createdBy)) return;
     await deps.deployStore.setConnectors(d.id, undefined);

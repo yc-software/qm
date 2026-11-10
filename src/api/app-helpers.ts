@@ -1,5 +1,5 @@
-import type { AuditEvent } from "../audit/audit-log.ts";
-import type { ErrorEvent } from "../admin/error-log.ts";
+import { recordAuditInBinding, type AuditEvent } from "../audit/audit-log.ts";
+import { recordErrorInBinding, type ErrorEvent } from "../admin/error-log.ts";
 import { randomUUID } from "node:crypto";
 import { type Tenant, ambientTenant } from "../tenants/context.ts";
 import { executesOnApprove } from "../core/orchestrator/approvals.ts";
@@ -550,11 +550,11 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   }
 
   function recordAudit(e: AuditEvent): void {
-    deps.auditLog.record(ambientTenant(), e);
+    recordAuditInBinding(deps.auditLog, e);
   }
 
   function recordError(e: Omit<ErrorEvent, "ts">, error?: unknown): void {
-    deps.errors?.record(ambientTenant(), e, error);
+    recordErrorInBinding(deps.errors, e, error);
   }
 
   function canManageSkill(skill: Pick<Skill, "scopeId" | "createdBy">, principalId: string): Promise<boolean> {

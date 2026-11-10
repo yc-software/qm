@@ -1,4 +1,4 @@
-import { ambientTenant } from "../../tenants/context.ts";
+import { recordErrorInBinding } from "../../admin/error-log.ts";
 import type { Loop, LoopItem, LoopItemVerdict } from "../types.ts";
 import type { LoopItemLedger } from "../item-ledger.ts";
 import type { ErrorLog } from "../../admin/error-log.ts";
@@ -65,8 +65,8 @@ export function createInboxPass(deps: InboxPassDeps): InboxPass {
   const now = deps.now ?? Date.now;
 
   function record(owner: string, code: string, message: string, error: unknown): void {
-    deps.errors?.record(
-      ambientTenant(),
+    recordErrorInBinding(
+      deps.errors,
       { category: "inbox", code, message: redactSecrets(message), scopeLabel: personalScope(owner) },
       error,
     );
