@@ -318,6 +318,17 @@ test("running subagents keep the card open as plan rows showing their latest ste
   assert.equal(plan.tasks[0]?.title, "Slack status card personality");
   assert.deepEqual(line(plan.tasks[0]), [{ type: "text", text: "Reading Slack docs" }]);
   child.status = "done";
+  const job = f.background("sub:c1");
+  job.purpose = "Waiting on CI";
+  await f.reconcile();
+  assert.equal((f.card()[0] as typeof plan).tasks[0]?.title, "Slack status card personality");
+  assert.deepEqual(line((f.card()[0] as typeof plan).tasks[0]), [{ type: "text", text: "Waiting on CI" }]);
+  const watch = f.watch("sub:c1");
+  watch.purpose = "Watching the deploy";
+  await f.reconcile();
+  assert.deepEqual(line((f.card()[0] as typeof plan).tasks[0]), [{ type: "text", text: "Watching the deploy" }]);
+  job.status = "exited";
+  watch.enabled = false;
   await f.reconcile();
   assert.equal(f.card()[0]?.type, "task_card");
   assert.equal(f.card()[0]?.title, "Done in 10s");

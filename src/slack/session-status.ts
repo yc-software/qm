@@ -94,18 +94,6 @@ export function createSlackSessionStatus(
                 )
               : [];
           const threadRef = anchor?.request.conversation.threadRef;
-          const jobs =
-            optedIn && threadRef
-              ? ((await activity.processes?.liveByScope(scope!, now())) ?? []).filter(
-                  (job) => job.kind === "background" && job.sessionRef === threadRef,
-                )
-              : [];
-          const monitors =
-            optedIn && threadRef
-              ? ((await activity.monitors?.ownedBy(scope!)) ?? []).filter(
-                  (monitor) => monitor.enabled && monitor.threadRef === threadRef && monitor.expiresAt > now(),
-                )
-              : [];
           const session = anchor?.sessionId ? await activity.sessions?.getByThread(anchor.sessionId) : null;
           const children =
             optedIn && session
@@ -113,25 +101,45 @@ export function createSlackSessionStatus(
                   (child) => child.scopeId === session.scopeId,
                 )
               : [];
+          const threads = new Set([threadRef, ...children.map((child) => child.threadRef)]);
+          const jobs =
+            optedIn && threadRef
+              ? ((await activity.processes?.liveByScope(scope!, now())) ?? []).filter(
+                  (job) => job.kind === "background" && threads.has(job.sessionRef),
+                )
+              : [];
+          const monitors =
+            optedIn && threadRef
+              ? ((await activity.monitors?.ownedBy(scope!)) ?? []).filter(
+                  (monitor) => monitor.enabled && threads.has(monitor.threadRef) && monitor.expiresAt > now(),
+                )
+              : [];
           const childRuns = children.length
             ? await runs.activeForThreads(children.map((child) => child.threadRef))
             : new Map<string, Run>();
+          const steps =
+            (await activity.sessions?.latestToolSteps([...active, ...childRuns.values()].map((run) => run.id))) ??
+            new Map<string, { purpose?: string }>();
+          const purposeOf = (run: Run | undefined) => (run ? steps.get(run.id.toLowerCase())?.purpose : undefined);
+          const backgroundOf = (ref: string | undefined): [string, string] | undefined => {
+            const monitor = monitors.find((m) => m.threadRef === ref);
+            if (monitor) return [monitor.purpose ?? "Watching for updates", "Keeping watch"];
+            const job = jobs.find((j) => j.sessionRef === ref);
+            return job && [job.purpose ?? "Background job", "Running in the background"];
+          };
           const helpers = children.flatMap((child) => {
             const run = childRuns.get(child.threadRef);
-            return run ? [{ child, run }] : [];
+            const step = run ? (purposeOf(run) ?? "Thinking it through") : backgroundOf(child.threadRef)?.[0];
+            return step ? [{ child, step }] : [];
           });
-          const steps =
-            (await activity.sessions?.latestToolSteps(
-              [...active, ...helpers.map((h) => h.run)].map((run) => run.id),
-            )) ?? new Map<string, { purpose?: string }>();
-          const purposeOf = (run: Run | undefined) => (run ? steps.get(run.id.toLowerCase())?.purpose : undefined);
+          const background = backgroundOf(threadRef);
           state = {
             ...state,
             startedAt: state.startedAt ?? now(),
             cardId: state.cardId ?? randomUUID(),
           };
           const elapsed = now() - state.startedAt!;
-          const ongoing = active.length > 0 || jobs.length > 0 || monitors.length > 0 || helpers.length > 0;
+          const ongoing = active.length > 0 || helpers.length > 0 || !!background;
           const failed =
             !ongoing &&
             !!anchor &&
@@ -141,8 +149,7 @@ export function createSlackSessionStatus(
             if (running) return [purposeOf(running) ?? "Thinking it through", "Working on it"];
             if (active.length) return [purposeOf(active[0]) ?? "Queued", "Picking back up shortly"];
             if (helpers.length) return ["Waiting on subagents", "Subagents are working"];
-            if (monitors.length) return [monitors[0]!.purpose ?? "Watching for updates", "Keeping watch"];
-            if (jobs.length) return [jobs[0]!.purpose ?? "Background job", "Running in the background"];
+            if (background) return background;
             return [`${failed ? "Stopped after" : "Done in"} ${duration(elapsed)}`, ""];
           })();
           if (elapsed > 5 * 60_000 && session) state.followUrl = conversationWebUrl(activity.publicWebUrl, session.id);
@@ -155,15 +162,12 @@ export function createSlackSessionStatus(
           );
           const headline = snippet(icon ? `${icon} ${title}` : title, 80);
           const status = (failed && "error") || (ongoing && "in_progress") || "complete";
-          const rows = helpers.slice(0, 50).map(({ child, run }) => {
-            const step = richText(undefined, purposeOf(run) ?? "");
-            return {
-              task_id: `${SLACK_STATUS_TASK_PREFIX}${state!.cardId}:${child.id}`,
-              title: snippet(child.title || "Subagent", 80),
-              status: "in_progress",
-              ...(step ? { details: step } : {}),
-            };
-          });
+          const rows = helpers.slice(0, 50).map(({ child, step }) => ({
+            task_id: `${SLACK_STATUS_TASK_PREFIX}${state!.cardId}:${child.id}`,
+            title: snippet(child.title || "Subagent", 80),
+            status: "in_progress",
+            details: richText(undefined, step),
+          }));
           const blocks: Record<string, unknown>[] = [
             rows.length
               ? { type: "plan", title: headline, tasks: rows }
