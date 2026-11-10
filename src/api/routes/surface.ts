@@ -320,7 +320,6 @@ async function listSessionApprovals(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { approvals: [...approvals, ...(await credentialApprovals(ctx, id, viewer))] });
 }
 
-// Pending credential requests from this session or any of its sub-agents, shown inline to their owner.
 async function credentialApprovals(ctx: ApiCtx, sessionId: string, viewer: string): Promise<PendingApproval[]> {
   const kc = ctx.deps.keychain;
   const approvals = ctx.deps.keychainApprovals;
@@ -1264,7 +1263,6 @@ export async function shareArtifact(ctx: ApiCtx): Promise<void> {
   });
 }
 
-/** Workspace custom emoji (name → image URL, aliases resolved), from the catalog the Slack surface publishes. */
 async function getCustomEmoji(ctx: ApiCtx): Promise<void> {
   const catalog = await ctx.deps.config?.getSlackEmojiCatalogDurable(orgScope(ctx.deps));
   const raw = catalog?.emoji ?? {};

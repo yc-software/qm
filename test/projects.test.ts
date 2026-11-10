@@ -204,7 +204,6 @@ test("ProjectStore derives membership from the linked channel roster", async () 
   const project = await projects.create({ name: "Derived", ownerId: "owner" });
   const groupRef = projectGroupRef(project.id);
 
-  // no link yet: sync is refused
   assert.equal((await projects.syncChannelMembers(project.id, ["chan-pal"])).status, "forbidden");
 
   await projects.setSlackChannel(project.id, "owner", { channelId: "C1", channelName: "eng" });
@@ -213,24 +212,20 @@ test("ProjectStore derives membership from the linked channel roster", async () 
   assert.ok(synced.status === "ok" && synced.changed);
   assert.notEqual(await projects.version(groupRef), versionLinked, "derived roster change bumps the scope version");
 
-  // union semantics: manual + derived, deduped
   assert.deepEqual(await projects.members(groupRef), ["owner", "chan-pal"]);
   assert.equal(await projects.membership(groupRef, "chan-pal"), true);
   assert.ok((await projects.listForMember("chan-pal")).some((candidate) => candidate.id === project.id));
 
-  // idempotent re-sync: no version churn
   const versionAfter = await projects.version(groupRef);
   const again = await projects.syncChannelMembers(project.id, ["owner", "chan-pal"]);
   assert.ok(again.status === "ok" && !again.changed);
   assert.equal(await projects.version(groupRef), versionAfter);
 
-  // channel rename flows through without a roster-version bump
   const renamed = await projects.syncChannelMembers(project.id, ["owner", "chan-pal"], "eng-renamed");
   assert.ok(renamed.status === "ok" && renamed.changed);
   assert.equal((await projects.slackChannel(groupRef))?.channelName, "eng-renamed");
   assert.equal(await projects.version(groupRef), versionAfter);
 
-  // unlink drops the derived members with the link
   await projects.setSlackChannel(project.id, "owner", null);
   assert.deepEqual(await projects.members(groupRef), ["owner"]);
   assert.equal(await projects.membership(groupRef, "chan-pal"), false);
@@ -1001,7 +996,6 @@ test("linking a just-created channel refreshes the surface directory and retries
   );
   const project = await built.app.createProject("owner", "Fresh");
   assert.ok(project);
-  // Fulfil the on-demand sync the way the Slack surface would: push the new channel.
   const unlisten = built.app.onContextRequestCreated((r) => {
     if (!r.query.syncDirectory) return;
     void built.app
@@ -1071,7 +1065,6 @@ test("Project slack-channel routes gate on visibility and workspace use, and syn
     body: JSON.stringify({ principalId: "owner", memberId: "member" }),
   });
 
-  // a session predating the link, so channel-derived members should inherit it
   await built.app.turn({
     surface: "web",
     actor: { externalId: "owner" },
@@ -1079,20 +1072,16 @@ test("Project slack-channel routes gate on visibility and workspace use, and syn
     text: "before the link",
   });
 
-  // a non-member of the project can't link even a channel they can see
   assert.equal((await put(project.id, "outsider", "eng")).status, 403);
-  // a private channel the actor can't see reads as invalid
   assert.equal((await put(project.id, "owner", "war-room")).status, 400);
   assert.equal((await put(project.id, "owner", "no-such-channel")).status, 400);
   assert.equal((await put("missing", "owner", "eng")).status, 404);
 
-  // a channel that already has its own workspace can't become a home channel
   await built.sessions.getOrCreateByThread("ch:C-BUSY:1", "channel", "channel:C-BUSY", "busy", "slack");
   const busy = await put(project.id, "owner", "busy");
   assert.equal(busy.status, 409);
   assert.equal(((await busy.json()) as { error: string }).error, "channel_in_use");
 
-  // linking by #name resolves through the directory and pulls in the channel roster
   const linked = await put(project.id, "owner", "#eng");
   assert.equal(linked.status, 200);
   const linkedProject = (
@@ -1110,10 +1099,8 @@ test("Project slack-channel routes gate on visibility and workspace use, and syn
   assert.equal(linkedProject.members.find((m) => m.principalId === "chan-pal")?.viaChannel, true);
   assert.equal(linkedProject.members.find((m) => m.principalId === "member")?.viaChannel, undefined);
   assert.equal(await built.projects.membership(groupRef, "chan-pal"), true);
-  // ...including the conversations that predate the link
   assert.ok((await built.app.listSessions("chan-pal")).some((s) => s.scopeId === scope));
 
-  // the roster keeps following the channel through directory syncs
   await built.app.upsertChannels(channels, [
     { channelId: "C-SECRET", principalId: "member" },
     { channelId: "C-ENG", principalId: "owner" },
@@ -1130,10 +1117,8 @@ test("Project slack-channel routes gate on visibility and workspace use, and syn
     "rejoining the channel rejoins the project",
   );
 
-  // manual members never ride the channel roster
   assert.equal(await built.projects.membership(groupRef, "member"), true);
 
-  // unlink: project members only; derived members leave with the link
   const outsiderUnlink = await fetch(`${base}/v1/projects/${project.id}/slack-channel`, {
     method: "DELETE",
     headers: { "content-type": "application/json" },

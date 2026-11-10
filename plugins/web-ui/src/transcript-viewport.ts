@@ -250,8 +250,6 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
     syncPrompt();
   }
 
-  // The block laid out just above the prompt. A steer sits inside the assistant turn behind a
-  // boxless wrapper, so climb out of boxless ancestors and look past boxless siblings.
   function precedingBlock(): Element | null {
     let node: Element | null = prompt;
     while (node && node !== stack) {
@@ -497,8 +495,6 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
       if (stack) observer?.observe(stack);
     }
     const nextPins = scroller?.querySelector<HTMLElement>(".pinned-strip") ?? null;
-    // The latest prompt may be a steer, which renders inside the running assistant turn rather
-    // than as its own row in the stack; it still earns the sticky treatment.
     const prompts = stack?.querySelectorAll<HTMLElement>(":scope > .user-row, .inline-steer > .user-row");
     const pinPrompt = options.pinPrompt?.() ?? true;
     const nextPrompt = pinPrompt ? (prompts?.item(prompts.length - 1) ?? null) : null;

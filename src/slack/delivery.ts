@@ -578,12 +578,10 @@ export async function postWithVerify(
         const retryAfter = (err as { retryAfter?: number }).retryAfter ?? 1;
         await sleep(retryAfter * 1000);
 
-        try {
-          const found = await findPostedByKey(client, args, idempotencyKey, verifyOldest);
-          if (found) return { ...found, reused: true };
-        } catch {
-          /* verification is best-effort on this path */
-        }
+        const found = await findPostedByKey(client, args, idempotencyKey, verifyOldest).catch(
+          swallowAs("slack: rate-limit verify", null),
+        );
+        if (found) return { ...found, reused: true };
         continue;
       }
       let found: { ts: string; channel: string } | undefined;

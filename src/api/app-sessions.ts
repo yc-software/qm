@@ -231,7 +231,6 @@ export function createSessionMethods(
     });
   };
 
-  /** Sessions whose title matches the query — the entry index only covers message text. */
   const titleSearchHits = async (principalId: string, query: string, capped: number): Promise<SessionSearchHit[]> => {
     const matches = await deps.sessions.searchSessionTitles(principalId, query, capped);
     if (!matches.length) return [];
@@ -845,8 +844,6 @@ export function createSessionMethods(
         };
         let match = await findChannel();
         if (!match) {
-          // The synced directory may not have caught up with a just-created channel;
-          // ask the surface for a fresh sync and look once more before giving up.
           await h.refreshSurfaceDirectory().catch(() => undefined);
           match = await findChannel();
         }

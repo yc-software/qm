@@ -241,8 +241,8 @@ test("a stale show load never lands on the next fork; reset revives the control"
   });
   const firstToggle = controller.toggle();
   assert.equal(pending.length, 1);
-  controller.reset(); // switched to another fork mid-load
-  const secondToggle = controller.toggle(); // new fork's control is live immediately
+  controller.reset();
+  const secondToggle = controller.toggle();
   assert.equal(pending.length, 2, "reset frees the in-flight guard");
   pending[0]!([item("UserMessage", { createdAt: 1, seq: 0, text: "fork A history" }) as Item]);
   await firstToggle;
@@ -277,7 +277,6 @@ test("a failed show load surfaces an error instead of dying silently", async () 
   assert.ok(redraws >= 1);
   assert.equal(state.inheritedExpanded, false, "a failed load never expands");
   assert.equal(state.inheritedLoaded, false);
-  // the control recovers: a later successful load works
   const ok = createForkOriginController<Item>({
     state,
     load: async () => [item("UserMessage", { createdAt: 1, seq: 0, text: "old" }) as Item],
@@ -308,7 +307,6 @@ test("a successful show clears a prior error; an in-flight load survives non-res
   });
   const toggling = controller.toggle();
   assert.equal(error, "", "starting a new attempt clears the stale error");
-  // a same-session remount does NOT reset the controller, so the load lands
   resolveLoad!([item("UserMessage", { createdAt: 1, seq: 0, text: "old" }) as Item]);
   await toggling;
   assert.equal(state.inheritedLoaded, true);

@@ -101,7 +101,6 @@ export interface OrchestratorInput extends Omit<
 }
 
 export interface OrchestratorDeps {
-  /** Tracks each turn's detached tail so shutdown drains it (box reclaim, fallback title). */
   admittedWork?: AdmittedWork;
   externalSlackPolicies?: ExternalSlackPolicies;
   swarms?: SwarmService;

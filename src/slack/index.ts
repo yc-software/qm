@@ -301,9 +301,6 @@ export async function startSlackPlugin(
         return;
       }
       if (!scope.startsWith("org:")) return;
-      // The org-wide default changed: re-ensure every channel the bot is in. The
-      // ensurer re-reads each scope's effective setting, so explicit per-channel
-      // overrides come out unchanged.
       void (async () => {
         try {
           for await (const res of app.client.paginate("conversations.list", {

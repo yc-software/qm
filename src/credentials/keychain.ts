@@ -242,13 +242,10 @@ export interface OAuthToken {
   clientRef?: string;
   accountType?: string;
   orgId?: string;
-  /** OIDC id token, for providers whose API needs it alongside the access token (e.g. Codex). */
   idToken?: string;
-  /** Provider-side account identifier carried with the token (e.g. ChatGPT account id). */
   accountId?: string;
 }
 
-/** Derived, sandbox-safe view of a connector token: never carries the refresh token. */
 export interface DerivedOAuthAuth {
   accessToken: string;
   idToken?: string;
@@ -291,11 +288,6 @@ export interface ConnectorTokenStore {
   deleteConnectorToken(host: string, principalId: string, accountType?: string): Promise<void>;
   connectorTokenStatus(host: string, principalId: string, accountType?: string): Promise<OAuthTokenStatus>;
   connectorAccessToken(host: string, principalId: string, accountType?: string): Promise<string | null>;
-  /**
-   * Fresh derived material for the connector token (access + id token +
-   * account id), refreshing single-flight if stale. The refresh token never
-   * leaves the keychain record.
-   */
   connectorDerivedAuth(host: string, principalId: string, accountType?: string): Promise<DerivedOAuthAuth | null>;
 }
 
@@ -402,7 +394,6 @@ export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   listByOwners(ownerIds: string[]): Promise<Map<string, KeychainCredentialMeta[]>>;
   listConnectorsByOwners(ownerIds: string[]): Promise<Map<string, ConnectorMeta[]>>;
   getCredential(id: string): Promise<KeychainCredentialMeta | null>;
-  /** Decrypt an env credential the caller OWNS — no grant machinery, never someone else's. */
   readOwnSecret(ownerId: string, credentialId: string): Promise<string | null>;
   remove(ownerId: string, id: string): Promise<boolean>;
 
@@ -1491,7 +1482,6 @@ export function createKeychain(deps: {
       if (!rec) return null;
       const accessToken = await connectorTokenForRecord(rec);
       if (accessToken === null) return null;
-      // Re-read: a refresh inside connectorTokenForRecord may have rotated the record.
       const fresh = (await connectorRecord(host, principalId, accountType)) ?? rec;
       const token = tryDecrypt(fresh, recToOAuthToken);
       if (!token) return null;
@@ -1628,7 +1618,6 @@ export function renderAskNotice(
 ): string {
   const { ask, credential } = input;
   const who = input.requesterName ? `${input.requesterName} (${ask.requesterId})` : ask.requesterId;
-  // Never surface a raw Slack scope id to a person — describe the place instead.
   let where: string;
   if (input.channelName) where = `**#${input.channelName.replace(/^#/, "")}**`;
   else if (input.scopeName) where = `**${input.scopeName}**`;
