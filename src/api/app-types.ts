@@ -674,6 +674,14 @@ interface DeploymentGitPrincipals {
   authorizes(deployment: Deployment, principalId: string, permission: "read" | "write"): Promise<boolean | undefined>;
 }
 
+/** Per-channel ambient watermark. `claimTs`/`claimUntil` mark a batch one judge pass owns until it advances the cursor or the claim lapses. */
+export interface AmbientCursor {
+  lastJudgedTs: string;
+  lastJudgedAt?: number;
+  claimTs?: string;
+  claimUntil?: number;
+}
+
 export interface AppDeps {
   personas?: PersonaService;
   personaHandover?: PersonaHandover;
@@ -740,7 +748,7 @@ export interface AppDeps {
   surfaces: SurfaceRegistry;
   channelPolicy?: ChannelPolicyStore;
   ambientJudge?: (systemPrompt: string, prompt: string, signal?: AbortSignal) => Promise<string | undefined>;
-  ambientCursors?: DurableMap<{ lastJudgedTs: string; lastJudgedAt?: number }>;
+  ambientCursors?: DurableMap<AmbientCursor>;
   ambientJudgments?: AmbientJudgmentStore;
   errors?: ErrorLog;
   ackEmojiPicks?: AckEmojiPickStore;

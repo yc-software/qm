@@ -9,6 +9,9 @@ import { buildApp } from "./support/build-app.ts";
 import { settle } from "./support/settle.ts";
 import { testConfig } from "./support/test-config.ts";
 import { amazonQAlarm } from "./support/slack-amazon-q-alarm.ts";
+import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
+import { orgId } from "../src/config.ts";
+import type { AmbientCursor } from "../src/api/app-types.ts";
 import { createMirror } from "../src/slack/mirror.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import type { BotIdentity, Directory } from "../src/slack/directory.ts";
@@ -372,6 +375,51 @@ test("overlapping judge passes for one channel judge a batch once", async () => 
     ]);
     await sleep(200);
     assert.equal((await listFull(built.ambientJudgments!, { container })).length, 1);
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("two core instances on separate pools judge a channel batch once", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "ap-surfcache-"));
+  const config = testConfig({ dataDir });
+  const a = buildApp(config);
+  const b = buildApp(
+    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ap-surfcache-")), databaseUrl: config.databaseUrl }),
+  );
+  try {
+    const container = "C-two-cores";
+    await a.app.setChannelPolicy(container, "flag launch talk", "U-admin");
+    await a.app.ingestSurfaceEvents([{ container, ts: "1.0", authorId: "U1", text: "not a match", createdAt: 1 }]);
+    for (let i = 0; i < 3; i++)
+      await Promise.all([a, b, a, b].map((x) => x.app.judgeAmbientContainer("slack", container)));
+    await sleep(200);
+    assert.equal((await listFull(a.ambientJudgments!, { container })).length, 1);
+  } finally {
+    await Promise.all([a.runtime.stop(), b.runtime.stop()]);
+  }
+});
+
+test("a live claim from another core holds the batch; a lapsed one (core died mid-judge) frees it", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "ap-surfcache-"));
+  const config = testConfig({ dataDir });
+  const built = buildApp(config);
+  const cursors = createPostgresMapFactory(config.databaseUrl!).map<AmbientCursor>("ambient_cursors");
+  try {
+    const container = "C-claimed";
+    const key = `${orgId()}:slack:${container}`;
+    await built.app.setChannelPolicy(container, "flag launch talk", "U-admin");
+    await built.app.ingestSurfaceEvents([{ container, ts: "1.0", authorId: "U1", text: "not a match", createdAt: 1 }]);
+    await cursors.put(key, { lastJudgedTs: "", claimTs: "1.0", claimUntil: Date.now() + 60_000 });
+    await built.app.judgeAmbientContainer("slack", container);
+    assert.equal((await listFull(built.ambientJudgments!, { container })).length, 0, "live claim is respected");
+    await cursors.put(key, { lastJudgedTs: "", claimTs: "1.0", claimUntil: Date.now() - 1 });
+    await built.app.judgeAmbientContainer("slack", container);
+    await sleep(200);
+    assert.equal((await listFull(built.ambientJudgments!, { container })).length, 1, "lapsed claim is re-judged");
+    const cursor = await cursors.get(key);
+    assert.equal(cursor?.lastJudgedTs, "1.0");
+    assert.equal(cursor?.claimTs, undefined, "the winner clears its claim");
   } finally {
     await built.runtime.stop();
   }

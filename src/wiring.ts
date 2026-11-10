@@ -1,3 +1,4 @@
+import type { AmbientCursor } from "./api/app-types.ts";
 import { onTenantLoad, perTenant } from "./tenants/cache.ts";
 import { loadTenantSettings, TENANT_SETTINGS_REFRESH_MS } from "./tenants/settings.ts";
 import { nonDeploymentCredential, withDeploymentCredentials } from "./credentials/deployment-credentials.ts";
@@ -2436,7 +2437,7 @@ export function buildApp(
           ambientJudge: (s: string, pr: string, signal?: AbortSignal) => agent.judge!(s, pr, signal, "ambient_judge"),
         }
       : {}),
-    ambientCursors: artifactMap<{ lastJudgedTs: string; lastJudgedAt?: number }>("ambient_cursors"),
+    ambientCursors: artifactMap<AmbientCursor>("ambient_cursors"),
     ambientJudgments,
     ackEmojiPicks,
     judgeModelId,
