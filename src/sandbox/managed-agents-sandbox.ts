@@ -589,11 +589,7 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
             recovery: { ...recovery, state: "paused" },
           };
         scopeByName.set(name, scopeId);
-        let session = sessionByName.get(name);
-        if (!session) {
-          session = await client.connect(stored.sessionId);
-          sessionByName.set(name, session);
-        }
+        const session = sessionByName.get(name) ?? (await client.connect(stored.sessionId));
         const r = await session.runCommand("echo responsive", { timeoutMs: 30_000 });
         return {
           machine,

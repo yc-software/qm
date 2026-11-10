@@ -294,6 +294,7 @@ test("resuming a session whose pause failed clears the stale pause error", async
   for (const next of [first, make({ client, store })]) {
     await assert.rejects(first.teardown(await first.provision(scope)), /pause unavailable/);
     assert.equal((await store.get(scope))?.preservationState, "pause_failed");
+    await next.computerStatus?.(scope);
     await next.provision(scope);
     assert.equal((await store.get(scope))?.preservationState, "running");
     assert.equal((await store.get(scope))?.preservationError, undefined);

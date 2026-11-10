@@ -454,6 +454,7 @@ test("resuming a sandbox whose pause failed clears the stale pause error", async
   const first = make({ client, store });
   for (const next of [first, make({ client, store })]) {
     await assert.rejects(first.teardown(await first.provision(scope)), /pause unavailable/);
+    await next.computerStatus?.(scope);
     await next.provision(scope);
     assert.equal((await store.get(scope))?.preservationState, "running");
     assert.equal((await store.get(scope))?.preservationError, undefined);

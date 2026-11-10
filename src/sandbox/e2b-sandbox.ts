@@ -515,11 +515,7 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
             };
         }
         scopeByName.set(name, scopeId);
-        let session = sessionByName.get(name);
-        if (!session) {
-          session = await client.connect(stored.sandboxId);
-          sessionByName.set(name, session);
-        }
+        const session = sessionByName.get(name) ?? (await client.connect(stored.sandboxId));
         const r = await session.runCommand("echo responsive", { timeoutMs: 30_000 });
         const metrics = await session.metrics().catch(swallowAs("e2b-sandbox: metrics", null));
         if (metrics?.diskTotalBytes) observed.diskGb = Math.round(metrics.diskTotalBytes / 2 ** 30);
