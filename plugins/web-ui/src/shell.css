@@ -303,7 +303,7 @@ html:not([data-qm-desktop="darwin"]) .layout.sidebar-closed .history-nav {
   flex: 0 0 22px;
   overflow: hidden;
   border-radius: 5px;
-  background: var(--brand-accent) url("./assets/brand-mark.svg") center / cover no-repeat;
+  background: var(--brand-accent) var(--brand-mark-image, url("./assets/brand-mark.svg")) center / cover no-repeat;
   color: white;
   font-size: var(--font-16);
   font-weight: 500;

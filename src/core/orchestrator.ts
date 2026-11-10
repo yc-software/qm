@@ -832,7 +832,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       } else if (modeName === "mode-conversation") frameVars.userName = "the people here";
       const sideChat = (await deps.sessions.getByThread(conversation.threadRef))?.sideChat;
       const focusedSideChat = Boolean(sideChat && !sideChat.expanded);
-      const sessionSyscalls = !focusedSideChat && !external ? deps.sessionSyscalls : undefined;
+      const sessionSyscalls = !external ? deps.sessionSyscalls : undefined;
       const delegateWork = !focusedSideChat && requiresDelegation(input);
       let modeFrame = applyPromptVars(frameMd, frameVars);
       if (delegateWork)
