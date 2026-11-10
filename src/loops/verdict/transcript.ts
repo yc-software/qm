@@ -22,6 +22,7 @@ export interface Conversation {
   label: string;
   externalUrl?: string;
   rootTs?: string;
+  partial?: boolean;
   messages: TranscriptMessage[];
   participants?: Participant[];
   slack?: { channelId: string; threadTs?: string; isDirectMessage: boolean; channelLabel: string };

@@ -29,6 +29,8 @@ export function conversationPayload(
 ): LoopSourcePayload {
   const waiting = waitingMessage(conversation, waitingTs);
   const newest = conversation.messages.at(-1);
+  const transcript = transcriptWindow(conversation);
+  const partial = conversation.partial === true || transcript.length < conversation.messages.length;
   const existingSlack = isObj(existing?.slack) ? existing.slack : {};
   const existingGmail = isObj(existing?.gmail) ? existing.gmail : {};
   return {
@@ -38,7 +40,7 @@ export function conversationPayload(
     snippet: previewText(waiting),
     receivedAt: newest?.at ?? Date.now(),
     ...(conversation.externalUrl ? { externalUrl: conversation.externalUrl } : {}),
-    context: transcriptWindow(conversation).map((message) => ({
+    context: transcript.map((message) => ({
       author: message.author,
       ...(message.authorId ? { authorId: message.authorId } : {}),
       at: message.at,
@@ -46,6 +48,7 @@ export function conversationPayload(
       ...(message.images?.length ? { images: message.images } : {}),
     })),
     ...(waiting?.images?.length ? { images: waiting.images } : {}),
+    ...(partial ? { sourceContextPartial: true } : {}),
     ...(conversation.participants ? { participants: conversation.participants } : {}),
     ...(existing?.sentChat === true ? { sentChat: true } : {}),
     ...(Array.isArray(existing?.reactions) ? { reactions: existing.reactions } : {}),

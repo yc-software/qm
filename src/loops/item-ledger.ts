@@ -425,7 +425,7 @@ export function createLoopItemLedger(
           (item.proposal?.by === "human" && !newer) ||
           (incoming !== undefined && item.proposal?.by === "agent" && sameDraft(item.proposal, incoming));
         const proposal = keepCurrent ? item.proposal : incoming;
-        const reopened = isResolved(item) && newer;
+        const reopened = isResolved(item) && newer && input.verdict.state === "needs_reply";
         return {
           ...item,
           verdict: input.verdict,

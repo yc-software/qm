@@ -224,9 +224,10 @@ export function createConversationFetcher(clients: SourceClients): ConversationF
     channel: string,
     root: string | undefined,
     ownerId: string,
-  ): Promise<Array<Record<string, unknown>>> {
+  ): Promise<{ messages: Array<Record<string, unknown>>; partial: boolean }> {
     const collected: Array<Record<string, unknown>> = [];
     let cursor: string | undefined;
+    let partial = false;
     do {
       const body = await clients.slackCall(owner, token, root ? "conversations.replies" : "conversations.history", {
         channel,
@@ -239,11 +240,15 @@ export function createConversationFetcher(clients: SourceClients): ConversationF
       const next = isObj(body.response_metadata) ? body.response_metadata.next_cursor : undefined;
       cursor = typeof next === "string" && next ? next : undefined;
       const enough = !root && collected.length >= TRANSCRIPT_TAIL && collected.some((m) => m.user === ownerId);
-      if (enough) cursor = undefined;
+      if (enough && cursor) {
+        partial = true;
+        cursor = undefined;
+      }
     } while (cursor);
-    return collected
+    const messages = collected
       .filter((m) => !root || m.ts === root || m.thread_ts === root)
       .sort((a, b) => Number(a.ts) - Number(b.ts));
+    return { messages, partial };
   }
 
   async function slack(owner: string, item: LoopItem): Promise<FetchOutcome> {
@@ -252,7 +257,13 @@ export function createConversationFetcher(clients: SourceClients): ConversationF
     const token = await clients.slackToken(owner);
     if (!token) return { kind: "skipped", reason: "not_connected" };
     const identity = await clients.slackIdentity(owner, token);
-    const raw = await slackMessages(owner, token, target.channelId, target.threadTs, identity.userId);
+    const { messages: raw, partial } = await slackMessages(
+      owner,
+      token,
+      target.channelId,
+      target.threadTs,
+      identity.userId,
+    );
     const meta = isObj(item.sourcePayload?.slack) ? item.sourcePayload.slack : {};
     const channel =
       typeof meta.isDirectMessage === "boolean" && typeof meta.channelLabel === "string"
@@ -297,6 +308,7 @@ export function createConversationFetcher(clients: SourceClients): ConversationF
           ? { externalUrl: slackPermalink(identity.teamUrl, target.channelId, newest.ts, target.threadTs) }
           : {}),
         ...(target.threadTs ? { rootTs: target.threadTs } : {}),
+        ...(partial ? { partial: true } : {}),
         messages,
         participants: [...participants.values()],
         slack: {

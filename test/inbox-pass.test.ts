@@ -193,7 +193,42 @@ test("Slack history pages back until the window holds 30 messages and the owner'
   assert.ok(outcome.kind === "conversation");
   assert.equal(outcome.conversation.messages.length, 71);
   assert.equal(outcome.conversation.messages[0]!.owner, true);
+  assert.equal(outcome.conversation.partial, undefined);
   assert.equal(world.calls!.filter((call) => call === "conversations.history").length, 3);
+  assert.equal(conversationPayload(undefined, outcome.conversation, null).sourceContextPartial, undefined);
+
+  const deep: SlackWorld = {
+    history: [
+      ...Array.from({ length: 80 }, (_, i) => ({
+        ts: `1.${String(i).padStart(6, "0")}`,
+        user: "U_JOSH",
+        text: `old${i}`,
+      })),
+      { ts: "2.000000", user: "U_REGAN", text: "owner" },
+      ...Array.from({ length: 40 }, (_, i) => ({
+        ts: `3.${String(i).padStart(6, "0")}`,
+        user: "U_JOSH",
+        text: `m${i}`,
+      })),
+    ],
+    pageSize: 25,
+  };
+  const cut = await createConversationFetcher(clientsFor(deep))(OWNER, item);
+  assert.ok(cut.kind === "conversation");
+  assert.equal(cut.conversation.partial, true);
+  assert.ok(cut.conversation.messages.length < deep.history.length);
+  assert.equal(conversationPayload(undefined, cut.conversation, null).sourceContextPartial, true);
+  const windowed = conversationPayload(
+    undefined,
+    {
+      source: "slack",
+      label: "DM",
+      messages: deep.history.slice(0, 40).map((m, i) => message(i, false, String(m.text))),
+    },
+    null,
+  );
+  assert.equal((windowed.context as unknown[]).length, 30);
+  assert.equal(windowed.sourceContextPartial, true);
 
   const threaded = await slackFixture({
     slack: { channelId: "C1", ts: "2.000003", threadTs: "2.000003", isDirectMessage: false, channelLabel: "#eng" },
@@ -442,7 +477,70 @@ test("a sent item stays handled when only the owner's own messages arrived since
   await pass(loop, { discover: true });
   assert.equal(prompts.length, 2);
   const after = (await items.get(item.id))!;
+  assert.equal(after.status, "shipped");
+  assert.equal(after.verdict?.state, "resolved");
+});
+
+test("a conversation the owner answered in the source lands in Handled as replied and reopens only on a new ask", async () => {
+  const { items, item } = await slackFixture();
+  const world: SlackWorld = {
+    history: [
+      { ts: "1762275400.000100", user: "U_JOSH", text: "Do you have a link to the repo?" },
+      { ts: "1762275400.000200", user: "U_REGAN", text: "github.com/x/y" },
+    ],
+  };
+  const { model } = scriptedModel([
+    '{"state":"resolved","reason":"owner answered","waiting_ts":null}',
+    '{"state":"resolved","reason":"just thanks","waiting_ts":null}',
+    '{"state":"needs_reply","reason":"new ask","waiting_ts":"1762275400.000400"}',
+  ]);
+  const pass = createInboxPass({
+    items,
+    model,
+    fetch: createConversationFetcher(clientsFor(world)),
+    discover: async () => [{ loopId: loop.id, dedupeKey: "D1", source: "slack", sourcePayload: { title: "DM" } }],
+  });
+  await pass(loop, { discover: true });
+  const replied = (await items.get(item.id))!;
+  assert.equal(replied.status, "skipped");
+  assert.equal(replied.actionKind, "replied");
+  assert.equal(replied.actionResult, "github.com/x/y");
+  assert.equal(replied.verdict?.state, "resolved");
+  assert.equal(replied.proposal, undefined);
+
+  world.history.push({ ts: "1762275400.000300", user: "U_JOSH", text: "thanks!" });
+  await pass(loop, { discover: true });
+  assert.equal((await items.get(item.id))!.status, "skipped");
+
+  world.history.push({ ts: "1762275400.000400", user: "U_JOSH", text: "also, can you review my PR?" });
+  await pass(loop, { discover: true });
+  const reopened = (await items.get(item.id))!;
+  assert.equal(reopened.status, "ready");
+  assert.equal(reopened.actionKind, undefined);
+  assert.equal(reopened.verdict?.state, "needs_reply");
+  assert.equal(reopened.sourcePayload?.snippet, "also, can you review my PR?");
+});
+
+test("a resolved conversation whose newest message is not the owner's stays open as probably resolved", async () => {
+  const { items, item } = await slackFixture();
+  const world: SlackWorld = {
+    history: [
+      { ts: "1762275400.000100", user: "U_JOSH", text: "Do you have a link to the repo?" },
+      { ts: "1762275400.000200", user: "U_REGAN", text: "github.com/x/y" },
+      { ts: "1762275400.000300", user: "U_JOSH", text: "thanks!" },
+    ],
+  };
+  const { model } = scriptedModel(['{"state":"resolved","reason":"owner answered","waiting_ts":null}']);
+  const pass = createInboxPass({
+    items,
+    model,
+    fetch: createConversationFetcher(clientsFor(world)),
+    discover: async () => [],
+  });
+  await pass(loop, { discover: true });
+  const after = (await items.get(item.id))!;
   assert.equal(after.status, "ready");
+  assert.equal(after.actionKind, undefined);
   assert.equal(after.verdict?.state, "resolved");
 });
 

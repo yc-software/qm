@@ -118,7 +118,7 @@ export interface InboxItem {
   proposalData?: Record<string, unknown>;
   outputs?: ReviewOutput[];
   detailLoaded?: boolean;
-  status: "open" | "sent" | "dismissed";
+  status: "open" | "sent" | "dismissed" | "replied";
   title: string;
   from: string;
   fromDetail?: string;
@@ -136,6 +136,9 @@ export interface InboxItem {
   slack?: { channelId: string; channelLabel?: string; ts: string; threadTs?: string; userId?: string };
   sentAt?: number;
   dismissedAt?: number;
+  repliedAt?: number;
+  externalReplyText?: string;
+  sourceContextPartial?: boolean;
   reactions?: string[];
   verdict?: { state: "needs_reply" | "resolved" | "noise"; reason: string };
   images?: string[];
@@ -386,7 +389,8 @@ function draftOf(item: LedgerItem): InboxDraft | undefined {
 
 function resolvedStatus(entry: LedgerItem): InboxItem["status"] {
   if (entry.state === "actioned") return entry.source === "gmail" || entry.source === "slack" ? "sent" : "dismissed";
-  return entry.state === "dismissed" ? "dismissed" : "open";
+  if (entry.state !== "dismissed") return "open";
+  return entry.actionKind === "replied" ? "replied" : "dismissed";
 }
 
 export function verdictVisible(item: Pick<InboxItem, "verdict" | "snippet">, filter: string): boolean {
@@ -452,6 +456,9 @@ export function toInboxItem(entry: LedgerItem): InboxItem {
       : {}),
     ...(resolved === "sent" && entry.actedAt !== undefined ? { sentAt: entry.actedAt } : {}),
     ...(resolved === "dismissed" && entry.actedAt !== undefined ? { dismissedAt: entry.actedAt } : {}),
+    ...(resolved === "replied" && entry.actedAt !== undefined ? { repliedAt: entry.actedAt } : {}),
+    ...(resolved === "replied" && entry.actionResult ? { externalReplyText: entry.actionResult } : {}),
+    ...(payload.sourceContextPartial === true && entry.source === "slack" ? { sourceContextPartial: true } : {}),
   };
 }
 
@@ -1260,6 +1267,7 @@ export function contextTpl(item: InboxItem): TemplateResult | typeof nothing {
           </button>`
         : nothing
     }
+    ${item.sourceContextPartial ? html`<div class="inbox-source-notice">Showing part of this conversation. Open in Slack for the full history.</div>` : nothing}
     ${rows.slice(hidden).map((m) => {
       const participant = item.source === "slack" ? item.participants?.find((p) => p.key === m.authorId) : undefined;
       const author = participant?.name ?? m.author;
@@ -1428,7 +1436,9 @@ function reactionChipTpl(name: string): TemplateResult {
 }
 
 function handledStateLabel(item: InboxItem): string {
-  return item.status === "sent" ? "Sent" : "Dismissed";
+  if (item.status === "sent") return "Sent";
+  if (item.status === "replied") return "Replied";
+  return "Dismissed";
 }
 
 function itemSideMark(item: InboxItem, handled: boolean): TemplateResult | typeof nothing {
@@ -1448,6 +1458,16 @@ export function handledNoteTpl(item: InboxItem): TemplateResult {
   if (item.status === "sent") {
     return html`<div class="inbox-handled-note">
       ${icon(CheckCheck, 13)}<span>Reply sent ${item.sentAt ? relTime(item.sentAt) : ""}</span>
+    </div>`;
+  }
+  if (item.status === "replied") {
+    const where = item.source === "slack" ? "Slack" : "Gmail";
+    return html`<div class="inbox-handled-note inbox-replied-note">
+      <div class="inbox-handled-line">
+        ${icon(CheckCheck, 13)}<span>You replied in ${where} ${item.repliedAt ? relTime(item.repliedAt) : ""}</span>
+        ${reopenButtonTpl(item)}
+      </div>
+      ${item.externalReplyText ? html`<div class="inbox-replied-text">${slackTextTpl(item, item.externalReplyText)}</div>` : nothing}
     </div>`;
   }
   const label = `${handledStateLabel(item)} ${item.dismissedAt ? relTime(item.dismissedAt) : ""}`;
