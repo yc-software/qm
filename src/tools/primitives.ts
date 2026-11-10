@@ -1114,12 +1114,13 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     async memorySearch(q: string, limit?: number, scope?: ScopeId) {
       const context = deps.context;
       const search = context
-        ? (report: OutcomeReport) => context.searchMemory(q, limit, scope, report)
+        ? (report: OutcomeReport) => context.searchMemory(q, limit, scope, report, deps.sessionId)
         : memory &&
           ((report: OutcomeReport) =>
             searchNotebooks(memory, deps.memoryAccess?.read ?? [], q, limit, scope, {
               actorId: deps.createdBy,
               ...(deps.audienceScopeId ? { audienceScopeId: deps.audienceScopeId } : {}),
+              ...(deps.sessionId ? { sessionId: deps.sessionId } : {}),
               report,
             }));
       if (!search) return null;
