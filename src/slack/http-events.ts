@@ -68,6 +68,8 @@ export function createHttpEventsReceiver(opts: HttpEventsReceiverOptions): Recei
     } catch {
       return respond(res, 400, { error: "invalid_json" });
     }
+    if (body === null || typeof body !== "object" || Array.isArray(body))
+      return respond(res, 400, { error: "invalid_payload" });
     if (body.type === "url_verification") return respond(res, 200, { challenge: body.challenge });
 
     const label = describeEnvelope(body);
