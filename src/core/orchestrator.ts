@@ -13,7 +13,6 @@ import { externalSlackRequestAllowed, currentExternalSlackRun } from "../resolut
 import { desktopComputerTool } from "../../plugins/chassis/src/desktop-computer.ts";
 import { startDispatchTrace, tracePhase, type DispatchTrace } from "../../plugins/chassis/src/error-reporting.ts";
 import { externalTools } from "./orchestrator/external-tools.ts";
-import { memoryRecallDelta } from "../memory/recall-delta.ts";
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import type { MemoryProviderOutcome } from "../memory/memory-service.ts";
 import { memoryRecallQuery } from "../memory/semantic-recall.ts";
@@ -40,10 +39,9 @@ import {
 } from "./documents.ts";
 import { recoveredRuntime } from "../agent/runtime-recovery.ts";
 import { withLiveTurnMembership } from "../resolution/scope-membership.ts";
-import { goalView } from "../runs/turn-stream.ts";
-import { assignedGoal, type GoalRecord, openGoal } from "../agent/goal.ts";
+import { openGoal } from "../agent/goal.ts";
 import { connectorToolsNote, deferredMcpTools } from "../agent/deferred-tools.ts";
-import { createSwarmGoalInbox, openSwarmMailbox } from "../swarms/swarm-goal-inbox.ts";
+import { openSwarmMailbox } from "../swarms/swarm-goal-inbox.ts";
 import type {
   AttachmentMeta,
   IncomingAttachment,
@@ -185,8 +183,6 @@ import {
 import {
   currentTimeBlock,
   environmentNote,
-  membershipEvent,
-  guidanceUpdateEvent,
   renderConversationRoster,
   renderGatewayContext,
   renderSandboxProviders,
@@ -208,6 +204,7 @@ import {
 } from "./orchestrator/admit.ts";
 import { resolveTurnRuntimeAuth } from "./orchestrator/turn-runtime.ts";
 import { startStallWatchdog } from "./orchestrator/stall-watchdog.ts";
+import { openSegmentGoal, segmentEnvironment } from "./orchestrator/run-segment.ts";
 import {
   countSkills,
   createSecurityClassifier,
@@ -2280,39 +2277,27 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           },
           continuation?: { history: Item[] },
         ) => {
-          const recall = memoryRecallDelta(
+          const { recall, snapshot, guidance, environment, silentResume } = segmentEnvironment({
             recalled,
-            continuation?.history ?? history,
-            memoryView.held,
-            context.memoryLabels,
+            continuation,
+            history,
+            memoryView,
+            context,
             recallOutcomes,
-          );
-          const snapshot = membershipEvent(rosterMembers, continuation?.history ?? rawEntries, session.id);
-          const guidance = !external
-            ? guidanceUpdateEvent(
-                {
-                  version: deps.config.soulVersion(scopeId),
-                  personal: conversation.kind === "dm",
-                  revisions: deps.config.soulHistory(scopeId),
-                },
-                continuation?.history ?? rawEntries,
-                session.id,
-              )
-            : undefined;
-          const turnEnvironment = environmentNote(
-            [
-              turnEnvironmentContents,
-              continuation ? "" : mailbox?.text,
-              snapshot.text,
-              guidance?.text,
-              recall.text ? `${memoryHeading}${recall.text}` : "",
-              inboundIssuesNote(inboundIssues),
-            ]
-              .filter(Boolean)
-              .join("\n\n"),
-          );
-          const environment = [turnEnvironment, ...documentInputs.notices].filter(Boolean).join("\n");
-          const silentResume = continueTurn && !continuation && !snapshot.text && !guidance?.text && !recall.text;
+            rosterMembers,
+            rawEntries,
+            session,
+            external,
+            deps,
+            scopeId,
+            conversation,
+            turnEnvironmentContents,
+            mailbox,
+            memoryHeading,
+            inboundIssues,
+            documentInputs,
+            continueTurn,
+          });
           let recordedRecall = false;
           const emit: AgentTurnInput["emit"] = async (entry) => {
             stall.progress();
@@ -2389,27 +2374,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             return appended;
           };
           const initialDocuments = [...documentInputs.documents];
-          const storedGoal = (await deps.sessions.goals([session.id])).get(session.id);
-          let sessionGoal = openGoal(storedGoal);
-          const installGoal = input.swarmGoal && swarmBinding ? assignedGoal(storedGoal, input.swarmGoal) : null;
-          if (installGoal) {
-            sessionGoal = installGoal;
-            await deps.sessions.setGoal(writer, installGoal);
-          }
-          const saveGoal = async (goal: GoalRecord): Promise<void> => {
-            await deps.sessions.setGoal(writer, goal);
-            if (input.runId) deps.turnStream.noteGoal(input.runId, goalView(goal));
-          };
-          const swarmHandoff =
-            swarmGoalTurn && deps.swarms && input.runId
-              ? createSwarmGoalInbox({
-                  swarms: deps.swarms,
-                  input,
-                  screen: screenSwarmMessage,
-                  saveGoal,
-                })
-              : undefined;
-          const goalInbox = swarmHandoff?.inbox;
+          const { sessionGoal, saveGoal, swarmHandoff, goalInbox } = await openSegmentGoal({
+            deps,
+            session,
+            input,
+            swarmBinding,
+            writer,
+            swarmGoalTurn,
+            screenSwarmMessage,
+          });
           const mcpTools = await mcpToolsReady;
           const connectorNote = connectorToolsNote(deferredMcpTools(mcpTools, strictReadOnly));
           dispatchTrace ??= startDispatchTrace();
