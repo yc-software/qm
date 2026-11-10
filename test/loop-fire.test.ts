@@ -663,7 +663,7 @@ test("bound scheduled and manual loop turns run as the owner", async () => {
   await s.fire.shipOutput(loop.id, output.id, loop.owner);
   for (const turn of s.turns) {
     assert.equal(turn.actor.externalId, loop.owner);
-    assert.equal(turn.origin?.kind, "automation");
+    assert.equal(automationOrigin(turn)?.ownerFire, true);
     assert.equal(automationOrigin(turn)?.destination, undefined);
     assert.equal(turn.surfaceTools, undefined);
     assert.equal(turn.readOnly, undefined);

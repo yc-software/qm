@@ -20,7 +20,6 @@ import { errMessage } from "../util/errors.ts";
 import { SoulUpdateDeniedError, SoulVersionConflictError } from "./app-types.ts";
 import { AdminError } from "../admin/admin-service.ts";
 import {
-  livePersonCapability,
   personAtKeyboard,
   resolveShareTarget,
   SHARED_SKILL_TRIGGER_REFUSAL,
@@ -233,6 +232,9 @@ export async function cronTaskTakeover(
   return (await ownsCron(app, cron, editorId)) ? undefined : { owner: editorId };
 }
 
+const WEBHOOK_TASK_OWNER_ONLY =
+  "only the webhook's owner can change its task — its fires run as them. Create your own webhook to run a different task as yourself.";
+
 export async function editWebhookTask(
   app: App,
   id: string,
@@ -244,6 +246,8 @@ export async function editWebhookTask(
   if (!webhook) return { ok: false, code: "not_found", message: `no webhook ${id}` };
   if (!(await canAdministerWebhook(app, webhook, { actorId: principalId })))
     return { ok: false, code: "forbidden", message: "not your webhook" };
+  if (!(await app.samePerson(webhook.owner, principalId)))
+    return { ok: false, code: "forbidden", message: WEBHOOK_TASK_OWNER_ONLY };
   const updated = await app.updateWebhook(id, { action });
   return updated ? { ok: true, webhook: updated } : { ok: false, code: "not_found", message: `no webhook ${id}` };
 }
@@ -689,7 +693,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     },
 
     async createWebhook(req, capability, publicBase): Promise<WebhookCreateResult> {
-      if (capability.triggered || !livePersonCapability(capability)) {
+      if (!personAtKeyboard(capability)) {
         return {
           ok: false,
           code: "forbidden",
@@ -745,7 +749,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     },
 
     async updateWebhook(id, patch, capability) {
-      if (capability.triggered || !livePersonCapability(capability))
+      if (!personAtKeyboard(capability))
         return { ok: false, code: "forbidden", message: "editing a webhook requires a live turn started by its owner" };
       return editWebhookTask(app, id, patch.action, capability.actorId);
     },

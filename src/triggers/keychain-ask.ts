@@ -68,6 +68,7 @@ export async function fireAskResolution(
     input: resolutionInput(ask, grant),
     fireKey: `ask:${ask.id}:${ask.status}`,
     surface: "keychain-ask",
+    ...(cron ? { ownerFire: true } : {}),
     ...(cron?.runtime ? { runtime: cron.runtime } : {}),
     ...(destination ? { destination } : {}),
     ...(ask.requesterThreadRef ? { threadRef: ask.requesterThreadRef } : {}),

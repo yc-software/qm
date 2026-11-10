@@ -6,7 +6,7 @@ import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { scopeId } from "../../types.ts";
 import { errMessage, reportFailure } from "../../util/errors.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
-import { livePersonCapability } from "../artifact-share.ts";
+import { personAtKeyboard } from "../artifact-share.ts";
 import { sendJson } from "../http.ts";
 import { ACCOUNT_ID, composioUserId, credential, request } from "./composio.ts";
 import { audit, isObj } from "./shared.ts";
@@ -36,7 +36,7 @@ export function composioCallbackUrl(publicUrl: string | undefined, returnTo: unk
 }
 
 async function authorize(ctx: ApiCtx, linkSlack: boolean, callbackUrl: unknown): Promise<void> {
-  if (ctx.capability && !livePersonCapability(ctx.capability))
+  if (ctx.capability && !personAtKeyboard(ctx.capability))
     return sendJson(ctx.res, 403, { error: "human_consent_required" });
   const access = await credential(ctx);
   if (!access) return;

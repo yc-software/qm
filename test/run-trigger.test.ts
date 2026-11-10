@@ -228,6 +228,12 @@ describe("runTrigger: an autonomous cron does NOT go live (it may be conditional
       requests.map((r) => r.actor.externalId),
       ["U1", "U1", "system:channel:C1", "U1"],
     );
+    await runTrigger(d, { ...base, ownerFire: true, fireKey: "cron:marked" });
+    assert.deepEqual(
+      requests.map((r) => r.origin?.kind === "automation" && r.origin.ownerFire === true),
+      [false, false, false, false, true],
+      "only a caller that declares an owner fire produces one",
+    );
     for (const r of requests) {
       assert.equal(r.origin?.kind, "automation");
       assert.ok(

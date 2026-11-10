@@ -46,11 +46,12 @@ Limits the API enforces (don't offer what it will refuse):
   memory/config reads work anywhere (org content is ambient to every conversation), and
   a cron, webhook or loop fire **carries its owner's authority** (see
   [Scheduling admin-reading work](#scheduling-admin-reading-work)): an org admin's fire
-  can do on the admin plane what the admin's own typed turn could, audited as the owner
+  can read on the admin plane what the admin's own typed turn could, audited as the owner
   and re-checked on every call (revoking their admin grant closes it). The audience
   rule still applies to private-content reads, so such a fire must live in the owner's
-  DM or an Open conversation. Other mutations work anywhere; the room sees what
-  changed, by design.
+  DM or an Open conversation. Admin changes need the admin at the keyboard: a fire that
+  wants one reports it where the run delivers. On a typed turn, mutations work anywhere;
+  the room sees what changed, by design.
 - **Grant changes (promote/revoke) and impersonation are portal-only** through you.
 - Bulk configuration import is not supported. Use the individual configuration resources instead.
 
@@ -281,8 +282,9 @@ through their usual controls.
 ## Scheduling admin-reading work
 
 A cron's fires run as its owner with the owner's own authority, so an org admin's
-scheduled work can read and change what the admin could on a typed turn — no grants to
-set up. Two things still need settling at creation, not after the first fire fails:
+scheduled work can read what the admin could on a typed turn — no grants to set up.
+Changes through the admin API stay with typed turns. Two things still need settling
+at creation, not after the first fire fails:
 
 1. **Audience.** Private-content reads (transcripts, memory, files, the scope directory)
    still require the cron's home to be the owner's own DM or an Open conversation. A
@@ -308,6 +310,9 @@ run with that person's standing, not the original admin's.
 - `403 … carry a person's own authority — this turn runs with none` — a bot actor, an
   external audience, or a session message whose authorization chain could not be
   verified. Report it where the run delivers — never finish silently.
+- `403 admin changes need the admin at the keyboard …` — a fire tried to change
+  something. Report the change you would make where the run delivers; the admin
+  confirms it on a turn they send.
 - `403 … returns private content — ask the agent in a DM` — the shared room does not have effective Open access for this admin;
   tell the admin to ask again in a DM with you (or, for reads they want recurring
   on a schedule, to create the cron from their DM so it is homed there).

@@ -19,6 +19,7 @@ import { memoryRecallQuery } from "../memory/semantic-recall.ts";
 import {
   requiresDelegation,
   delegatedAuthorizationOrigin,
+  isOwnerFire,
   ownsSessionContext,
   isSubagentThreadRef,
   sessionContextOf,
@@ -523,11 +524,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           : undefined;
       const authorizationOrigin = sessionTurn ? (delegatedOrigin ?? { kind: "automation" as const }) : input.origin;
       const ownerFireTurn =
-        authorizationOrigin.kind === "automation" &&
-        authorizationOrigin.ownerFire === true &&
-        !sessionTurn &&
-        !input.swarm &&
-        !input.botActor;
+        isOwnerFire({ origin: authorizationOrigin, botActor: input.botActor }) && !sessionTurn && !input.swarm;
       const liveTurn = (authorizationOrigin.kind === "human" || ownerFireTurn) && allInternal && !external;
       const liveAuthorTurn =
         !external &&
@@ -1669,7 +1666,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           session,
           scopeId: scopeId as ScopeId,
           orgScopeId: resolution.orgScopeId,
-          liveTurn,
+          liveTurn: liveTurn && !automatedTurn,
           request: { ...input, readOnly: strictReadOnly, memoryNotebookOnly: notebookOnly, cancel: turnAbort.signal },
           switchedRuntime: () => switchedRuntime,
         });

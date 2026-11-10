@@ -59,6 +59,7 @@ async function call(
   isAdmin = true,
   managesScope = false,
   botActor = false,
+  triggered = false,
 ): Promise<{ status: number; body: unknown }> {
   const found = findRoute(loopRoutes as ReadonlyArray<Route<ApiCtx>>, method, path);
   assert.ok(found, `no route for ${method} ${path}`);
@@ -78,6 +79,7 @@ async function call(
             scopeId: scopeId("personal", actor),
             ...(liveActor ? { liveActor: true } : {}),
             ...(botActor ? { botActor: true } : {}),
+            ...(triggered ? { triggered: true } : {}),
             destinations: [{ key: "alerts", label: "Alerts", type: "slack", target: "C-alerts" }],
           }
         : null,
@@ -149,6 +151,21 @@ test("create and patch configure a validated escalation destination", async () =
   );
   assert.equal(denied.status, 403);
   assert.equal((denied.body as { error: string }).error, "human_required");
+  const fromFire = await call(
+    deps,
+    "PATCH",
+    `/v1/loops/${loop.id}`,
+    { destinationKey: "alerts" },
+    "josh",
+    "capability",
+    true,
+    true,
+    false,
+    false,
+    true,
+  );
+  assert.equal(fromFire.status, 403, "the owner's own fire carries their authority but is nobody at the keyboard");
+  assert.equal((fromFire.body as { error: string }).error, "human_required");
   const restored = await call(deps, "PATCH", `/v1/loops/${loop.id}`, { destinationKey: "alerts" });
   assert.equal((restored.body as { loop: Loop }).loop.destination?.target, "C-alerts");
 });

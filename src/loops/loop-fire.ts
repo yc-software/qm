@@ -555,6 +555,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       fireKey,
       threadRef,
       surface: "loop",
+      ownerFire: true,
       ...(options?.model ? { model: options.model } : {}),
       ...(options?.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
       ...(typeof options?.fastMode === "boolean" ? { fastMode: options.fastMode } : {}),

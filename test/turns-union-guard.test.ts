@@ -62,7 +62,7 @@ test("POST /v1/turns strips the owner-keychain union from the external body but 
   assert.equal(run?.request.skipMemory, true, "the source-authenticated memory opt-out is forwarded");
 });
 
-test("POST /v1/turns strips nested owner-keychain union from typed automation origin", async () => {
+test("POST /v1/turns strips the owner-keychain union and the owner-fire mark from a typed automation origin", async () => {
   const body = JSON.stringify({
     surface: "cron",
     actor: { externalId: "internal:owner" },
@@ -73,7 +73,7 @@ test("POST /v1/turns strips nested owner-keychain union from typed automation or
       audience: [{ externalId: "internal:owner" }],
     },
     text: "x",
-    origin: { kind: "automation", screenData: "external event", useOwnerKeychain: true },
+    origin: { kind: "automation", screenData: "external event", useOwnerKeychain: true, ownerFire: true },
     async: true,
   });
   const r = await fetch(`${base}/v1/turns`, {

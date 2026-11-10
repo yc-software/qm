@@ -51,6 +51,7 @@ export interface TriggerSpec extends Pick<
   message?: string;
   threadRef?: string;
   personaId?: string;
+  ownerFire?: boolean;
   cronScript?: CronScript;
   shadow?: boolean;
   thinkingLevel?: string;
@@ -296,7 +297,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       text: typeof spec.input === "string" ? spec.input : spec.input(roster),
       origin: {
         kind: "automation",
-        ownerFire: true,
+        ...(spec.ownerFire ? { ownerFire: true as const } : {}),
         ...(spec.securityScreenData !== undefined ? { screenData: spec.securityScreenData } : {}),
         ...(spec.destination ? { destination: spec.destination } : {}),
         ...(scheduled && !runsAsScope && conversation.kind !== "dm" ? { useOwnerKeychain: true } : {}),

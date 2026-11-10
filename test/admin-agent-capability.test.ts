@@ -598,15 +598,20 @@ for (const liveAuthor of [false, true]) {
   });
 }
 
-for (const [name, input, expected] of [
-  ["human thread reply", { origin: { kind: "ambient", live: true } }, 200],
-  ["synthetic ambient wake", { origin: { kind: "ambient" } }, 403],
-  ["bot thread reply", { origin: { kind: "ambient" }, botActor: true }, 403],
-  ["cron", { origin: { kind: "automation", ownerFire: true }, surface: "cron" }, 200],
-  ["webhook", { origin: { kind: "automation", ownerFire: true }, surface: "webhook" }, 200],
-  ["unmarked automation", { origin: { kind: "automation" }, surface: "cron" }, 403],
-  ["bot-actor automation", { origin: { kind: "automation", ownerFire: true }, surface: "cron", botActor: true }, 403],
-] satisfies Array<[string, Partial<TurnRequest>, number]>) {
+for (const [name, input, read, expected] of [
+  ["human thread reply", { origin: { kind: "ambient", live: true } }, 200, 200],
+  ["synthetic ambient wake", { origin: { kind: "ambient" } }, 403, 403],
+  ["bot thread reply", { origin: { kind: "ambient" }, botActor: true }, 403, 403],
+  ["cron", { origin: { kind: "automation", ownerFire: true }, surface: "cron" }, 200, 403],
+  ["webhook", { origin: { kind: "automation", ownerFire: true }, surface: "webhook" }, 200, 403],
+  ["unmarked automation", { origin: { kind: "automation" }, surface: "cron" }, 403, 403],
+  [
+    "bot-actor automation",
+    { origin: { kind: "automation", ownerFire: true }, surface: "cron", botActor: true },
+    403,
+    403,
+  ],
+] satisfies Array<[string, Partial<TurnRequest>, number, number]>) {
   test(`orchestrator-issued ${name} token reaches the HTTP admin gate with the right authority`, async () => {
     const s = await start();
     try {
@@ -633,6 +638,8 @@ for (const [name, input, expected] of [
       });
       assert.equal(result.status, "ok");
       assert.ok(cap);
+      const users = await fetch(`${s.base}/v1/admin/users`, { headers: { "x-agent-capability": cap } });
+      assert.equal(users.status, read);
       const res = await fetch(`${s.base}/v1/admin/scopes/${ORG}/security-posture`, {
         method: "PUT",
         headers: { "x-agent-capability": cap, "content-type": "application/json" },

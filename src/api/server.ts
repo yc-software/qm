@@ -45,7 +45,7 @@ import {
 import { apiRoutes, rawRoutes } from "./routes/index.ts";
 import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
-import { livePersonCapability } from "./artifact-share.ts";
+import { livePersonCapability, personAtKeyboard } from "./artifact-share.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
 import {
   apiAlias,
@@ -55,12 +55,17 @@ import {
   withBrowserActor,
 } from "./browser-session.ts";
 
+const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+const ADMIN_WRITE_NEEDS_PERSON =
+  "admin changes need the admin at the keyboard — a cron, webhook or loop fire carries its owner's authority to read, not to change the org. Report what you would change where the run delivers and let them confirm it on a turn they send.";
+
 async function capabilityAdminDenied(
   access: AdminAccess,
   params: Record<string, string>,
   url: URL,
   claims: CapabilityClaims,
   config: ServerDeps["config"],
+  method: string,
 ): Promise<string | null> {
   if (access.agent === "anyone") return null;
   if (claims.aud !== CONTROL_PLANE_AUD) return "admin routes require the per-turn agent token";
@@ -68,6 +73,7 @@ async function capabilityAdminDenied(
     return "admin actions through the agent carry a person's own authority — this turn runs with none (a bot actor, an external audience, or a session message whose authorization chain could not be verified). Report this failure where the run delivers instead of finishing silently.";
   }
   if (typeof access.agent === "object") return access.agent.portalOnly;
+  if (WRITE_METHODS.has(method) && !personAtKeyboard(claims)) return ADMIN_WRITE_NEEDS_PERSON;
   if (access.privateRead && parseScopeId(claims.scopeId).kind !== "personal") {
     const target =
       access.privateRead === "unless-org-scope" ? (params.scope ?? url.searchParams.get("scope") ?? "") : "";
@@ -81,8 +87,6 @@ async function capabilityAdminDenied(
   }
   return null;
 }
-
-const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 function needlessEscape(escaped: string): boolean {
   const char = String.fromCharCode(Number.parseInt(escaped.slice(0, 2), 16));
@@ -227,7 +231,7 @@ async function gate(
         return null;
       }
       if (route?.admin) {
-        const denied = await capabilityAdminDenied(route.admin, params, url, capability, deps.config);
+        const denied = await capabilityAdminDenied(route.admin, params, url, capability, deps.config, method);
         if (denied) {
           sendJson(res, 403, { error: "forbidden", message: denied });
           return null;

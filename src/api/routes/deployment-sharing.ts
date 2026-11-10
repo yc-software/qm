@@ -6,12 +6,12 @@ import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { parseScopeId, type Permission } from "../../types.ts";
 import type { ApiCtx, Route } from "./route.ts";
-import { livePersonCapability, resolveShareTarget as resolveShareTargetGrammar } from "../artifact-share.ts";
+import { personAtKeyboard, resolveShareTarget as resolveShareTargetGrammar } from "../artifact-share.ts";
 
 async function setDeploymentConnectors(ctx: ApiCtx): Promise<void> {
   const { res, app, params, body, capability, actor } = ctx;
   const principalId = capability ? capability.actorId : actor?.p;
-  if (!principalId || (capability && !livePersonCapability(capability)))
+  if (!principalId || (capability && !personAtKeyboard(capability)))
     return sendJson(res, 403, {
       error: "forbidden",
       message: "only the publisher, in a live conversation or signed in, can lend an app their connectors",

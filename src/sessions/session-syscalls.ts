@@ -59,6 +59,10 @@ export function requiresDelegation(
   );
 }
 
+export function isOwnerFire(request: Pick<OrchestratorInput, "origin" | "botActor">): boolean {
+  return request.origin.kind === "automation" && request.origin.ownerFire === true && !request.botActor;
+}
+
 export async function delegatedAuthorizationOrigin(
   request: OrchestratorInput,
   deps: { runs: Pick<RunStore, "get">; sessions: Pick<SessionStore, "getByThread" | "getForParticipant"> },
@@ -67,6 +71,7 @@ export async function delegatedAuthorizationOrigin(
   let current = request;
   for (let depth = 0; depth < 32; depth++) {
     if (
+      (current.origin.kind === "automation" && current.origin.ownerFire !== true) ||
       current.readOnly ||
       current.privateSessionMessage ||
       current.swarm ||
@@ -117,7 +122,7 @@ export async function delegatedAuthorizationOrigin(
       !isSessionTurn(parent) &&
       internal &&
       (parent.origin.kind === "human" ||
-        (parent.origin.kind === "automation" && parent.origin.ownerFire === true && !parent.botActor) ||
+        isOwnerFire(parent) ||
         (parent.origin.kind === "ambient" && parent.origin.live === true && parent.conversation.kind !== "dm"))
     )
       return parent.origin;

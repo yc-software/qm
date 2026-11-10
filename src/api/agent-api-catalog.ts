@@ -1,5 +1,5 @@
 import type { CapabilityClaims } from "../auth/capability-token.ts";
-import { livePersonCapability } from "./artifact-share.ts";
+import { livePersonCapability, personAtKeyboard } from "./artifact-share.ts";
 
 interface AgentApiRoute {
   method: string;
@@ -510,7 +510,7 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    when: (v) => livePersonCapability(v.claims) && !v.claims.triggered,
+    when: (v) => personAtKeyboard(v.claims),
     routes: [
       {
         method: "GET|PUT|DELETE",
