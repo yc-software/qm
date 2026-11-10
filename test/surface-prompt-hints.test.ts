@@ -100,7 +100,7 @@ function turnCapture(surfaces: readonly Surface[]) {
           ? { kind: "automation", destination: { type: "slack", target: `C${n}` } }
           : { kind: "direct" },
     } as OrchestratorInput);
-    assert.ok(result.status === "ok" || result.status === "silent", (result as { reason?: string }).reason);
+    assert.equal(result.status, shape === "automation" ? "silent" : "ok", (result as { reason?: string }).reason);
     const turn = turns.at(-1)!;
     const name = turn.surfaceName || "slack";
     const tool = createAgentTools(

@@ -97,7 +97,6 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
     spine,
   } = ctx;
   if (strictReadOnly || !(input.surfaceTools && defaultDestination)) return undefined;
-  const deliveries = deps.deliveries;
   const currentDestination = defaultDestination;
   const textOnly = (d: Destination) => deps.surfaces.get(d.type)?.capabilities.textOnly === true;
   const homeSurface = deps.surfaces.get(currentDestination.type);
@@ -169,7 +168,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
     try {
       const idempotencyKey = postKeys.key(destination, seq);
       const delivery = await reachEnqueue({
-        deliveries,
+        deliveries: deps.deliveries,
         destination,
         text: postText,
         ...(attachments?.length ? { attachments } : {}),
