@@ -192,6 +192,11 @@ test("a replaced microVM comes back running the saved edits, not the last publis
   const reach = await h.deploy.reachDeployment(d.id, OWNER);
   assert.equal(reach.status, "ok");
   assert.deepEqual(h.state.reconciles.at(-1), { commit: draft.commit, entrypoint: DEV });
+  assert.equal(
+    await h.deployStore.refOf(d.id, deployCurrentGitRef),
+    draft.commit,
+    "a clone after the microVM comes back starts from the saved edits",
+  );
 
   h.state.body = false;
   await h.save("live-b", tree(true, "v3"));

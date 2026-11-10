@@ -286,7 +286,8 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
   }
 
   async function updateAppliedRef(deploymentId: string, version: DeploymentVersion): Promise<void> {
-    if (version.commit) await git.setRef(deploymentId, CURRENT_REF, version.commit);
+    const commit = (await backing.drafts.get(deploymentId))?.commit ?? version.commit;
+    if (commit) await git.setRef(deploymentId, CURRENT_REF, commit);
     else await git.deleteRef(deploymentId, CURRENT_REF);
   }
 
