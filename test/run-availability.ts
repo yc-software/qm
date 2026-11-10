@@ -9,6 +9,7 @@ import { createWorker } from "../src/runs/worker.ts";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { seedTestTenant } from "./support/test-tenant.ts";
+import { settle } from "./support/settle.ts";
 
 const actor = { id: "internal:U1", type: "internal" as const };
 const request: OrchestratorInput = {
@@ -442,7 +443,7 @@ test("a batch claimed as claiming pauses is handed back, and claiming resumes", 
       });
     worker.start();
     await until(() => claims === 1);
-    await sleep(50);
+    await settle(async () => (await runs.list()).every((run) => run.status === "pending"));
     assert.deepEqual(
       (await runs.list()).map((run) => run.status),
       ["pending", "pending", "pending"],
