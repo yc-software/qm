@@ -1229,7 +1229,14 @@ export function createKeychain(deps: {
       for (const rec of (await deps.asks.all()).reverse().sort((a, b) => b.createdAt - a.createdAt)) {
         const a = await freshAsk(rec, t);
         const sameOrigin = (cronIdOf(a.requesterThreadRef) ?? a.requesterThreadRef) === origin;
-        if (a.credentialId !== cred.id || a.requesterScopeId !== input.requesterScopeId || !sameOrigin) continue;
+        const sameKindOfWork = (a.botActor === true) === (input.botActor === true);
+        if (
+          a.credentialId !== cred.id ||
+          a.requesterScopeId !== input.requesterScopeId ||
+          !sameOrigin ||
+          !sameKindOfWork
+        )
+          continue;
         if (a.status === "pending") return { ask: a, existing: true };
         if (a.status === "approved") break;
         if (input.triggered && (a.status === "declined" || a.status === "expired")) {

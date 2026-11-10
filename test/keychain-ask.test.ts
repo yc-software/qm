@@ -118,6 +118,27 @@ test("createAsk: owner derived from the credential, purpose frozen, dedup per (c
   assert.equal(elsewhere.existing, false, "a different scope is a different ask");
 });
 
+test("a bot's credential request and a person's in the same thread stay separate asks", async () => {
+  const k = kcAt(() => 1_000_000);
+  const cred = await k.save(GH);
+  const base = {
+    credentialId: cred.id,
+    requesterScopeId: "channel:C1" as const,
+    purpose: "deploy the release",
+    requesterThreadRef: "ch:C1-t1",
+  };
+  const person = await k.createAsk({ ...base, requesterId: "U_BOB" });
+  const bot = await k.createAsk({ ...base, requesterId: "U_RELEASEBOT", botActor: true });
+  assert.equal(bot.existing, false);
+  assert.notEqual(bot.ask.id, person.ask.id);
+  assert.equal(bot.ask.requesterId, "U_RELEASEBOT");
+  assert.equal(bot.ask.botActor, true);
+  const botAgain = await k.createAsk({ ...base, requesterId: "U_RELEASEBOT", botActor: true });
+  assert.equal(botAgain.ask.id, bot.ask.id);
+  const personAgain = await k.createAsk({ ...base, requesterId: "U_CAROL" });
+  assert.equal(personAgain.ask.id, person.ask.id);
+});
+
 test("personal cron asks deduplicate recurring fires without combining jobs or re-asking after denial", async () => {
   let now = 1000000;
   const k = kcAt(() => now++);
