@@ -111,7 +111,7 @@ test("over-testing is counted from the diff, whatever the report says", () => {
       diff("9\t0\ttest/a.test.ts"),
       unmarked,
     ),
-    ["Over-testing: no review row.", overTested(9, 0)],
+    ["Over-testing: no review row."],
   );
 });
 

@@ -45,6 +45,8 @@ function overTesting(numstat: string) {
     return `net test lines added (${tests}) exceed source lines added (${source}). Remove or reshape tests until they do not.`;
 }
 
+const computedLenses = new Map([["Over-testing", overTesting]]);
+
 export function wallOfShameProblems(spec: string, body: string, headSha: string, numstat: string) {
   const report = section(lines(body), "## Wall of shame review report");
   const problems = report ? [] : ["PR description has no `## Wall of shame review report` section."];
@@ -61,7 +63,6 @@ export function wallOfShameProblems(spec: string, body: string, headSha: string,
     );
   const always = lensesMarked(spec, "(always reviewed");
   const computed = lensesMarked(spec, "(checked by CI");
-  const waivers: string[] = [];
   for (const lens of wallOfShameLenses(spec)) {
     const matches = rows.filter((cells) => cells[0] === lens);
     if (matches.length > 1) problems.push(`${lens}: ${matches.length} review rows; keep one.`);
@@ -70,12 +71,16 @@ export function wallOfShameProblems(spec: string, body: string, headSha: string,
     const waived = verdict?.toLowerCase() === "waived";
     if (waived) {
       const [who, what] = assessment?.startsWith("Waived by ") ? assessment.slice(10).split(":") : [];
-      if (who?.trim() && what?.trim()) waivers.push(lens);
-      else problems.push(`${lens}: a Waived row's assessment must read "Waived by <name>: <what was waived>".`);
+      if (!who?.trim() || !what?.trim())
+        problems.push(`${lens}: a Waived row's assessment must read "Waived by <name>: <what was waived>".`);
     }
-    if (computed.includes(lens) && lens !== "Over-testing")
-      problems.push(`${lens}: marked checked by CI, but this check does not compute it.`);
-    if (!report || computed.includes(lens)) continue;
+    if (computed.includes(lens)) {
+      const check = computedLenses.get(lens);
+      const finding = check ? !waived && check(numstat) : "marked checked by CI, but this check does not compute it.";
+      if (finding) problems.push(`${lens}: ${finding}`);
+      continue;
+    }
+    if (!report) continue;
     if (!verdict) problems.push(`${lens}: no review row.`);
     else if (skipped && always.includes(lens))
       problems.push(`${lens}: always reviewed; triage cannot mark it Not relevant.`);
@@ -86,8 +91,6 @@ export function wallOfShameProblems(spec: string, body: string, headSha: string,
       problems.push(`${lens}: score missing (expected N/100).`);
     if (verdict && !assessment) problems.push(`${lens}: assessment missing.`);
   }
-  const overTested = overTesting(numstat);
-  if (overTested && !waivers.includes("Over-testing")) problems.push(`Over-testing: ${overTested}`);
   return problems;
 }
 
@@ -96,7 +99,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     readFileSync("docs/SPEC.md", "utf8"),
     process.env.PR_BODY ?? "",
     process.env.HEAD_SHA ?? "",
-    execFileSync("git", ["diff", "--numstat", "-z", "-M", "origin/main...HEAD"], { encoding: "utf8" }),
+    execFileSync("git", ["diff", "--numstat", "-z", "-M", `origin/${process.env.GITHUB_BASE_REF || "main"}...HEAD`], {
+      encoding: "utf8",
+    }),
   );
   if (problems.length) {
     console.error("Wall of shame review incomplete (see AGENTS.md):");
