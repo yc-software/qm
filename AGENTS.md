@@ -62,8 +62,8 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   results or substitute the author's self-review. After edits, have independent
   reviewers reassess affected lenses and explicitly carry forward unaffected results;
   never re-run a reviewer on unchanged code to get a different verdict. When a judge has
-  dropped every finding a reviewer raised, set that lens's verdict to Accept and keep the
-  reviewer's score.
+  dropped every finding a reviewer raised, set that lens's verdict to Accept, keep the
+  reviewer's score, and begin the assessment `Judge dropped:` with the ground.
   These reviews run alongside PR work; before merging, every relevant lens must have
   accepted. Only a human maintainer can waive a lens, for
   one PR: keep the reviewer's actual score, set the verdict to `Waived`, and write the
