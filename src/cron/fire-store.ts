@@ -65,7 +65,8 @@ const HISTORY_FIELDS = [
 const UPSERT_FIRE = `INSERT INTO cron_fires (${FIRE_COLUMNS})
    VALUES (${FIRE_COLUMN_DEFS.map((_c, i) => `$${i + 1}`).join(", ")})
    ON CONFLICT (tenant_id, cron_id, fire_key) DO UPDATE
-     SET ${UPSERT_SET}`;
+     SET ${UPSERT_SET}
+     WHERE cron_fires.ended_at IS NULL OR EXCLUDED.ended_at IS NOT NULL OR EXCLUDED.fired_at > cron_fires.fired_at`;
 
 function fireParams(cronId: string, entry: CronFireLogEntry): unknown[] {
   return FIRE_COLUMN_DEFS.map((c) => c.value(cronId, entry));

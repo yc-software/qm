@@ -1,6 +1,5 @@
-import type { Destination, ScopeId } from "../types.ts";
+import { isSystemActor, type Destination, type ScopeId } from "../types.ts";
 import { samePerson } from "../directory/person.ts";
-import type { Monitor } from "../triggers/types.ts";
 import type { MonitorStore } from "./monitor-store.ts";
 import type { ProcessRegistry, ProcessStatus } from "../processes/process-registry.ts";
 
@@ -31,6 +30,7 @@ export interface BackgroundOutputTail {
 export interface BackgroundUnwatchResult {
   monitorId: string;
   removed: boolean;
+  notYours?: true;
 }
 
 export interface MonitorBroker {
@@ -39,7 +39,6 @@ export interface MonitorBroker {
     opts?: { instructions?: string; pattern?: string; sinceCursor?: number },
   ): Promise<BackgroundWatchResult>;
   unwatch(monitorId: string): Promise<BackgroundUnwatchResult>;
-  list(): Promise<Monitor[]>;
 }
 
 const EXPIRY_GRACE_MS = 5 * 60_000;
@@ -173,11 +172,10 @@ export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
     async unwatch(monitorId) {
       const m = await deps.store.get(monitorId);
       if (!m || m.ownerScopeId !== deps.ownerScopeId) return { monitorId, removed: false };
+      if (isSystemActor(m.owner) ? deps.botActor === true : !samePerson(m.owner, deps.owner))
+        return { monitorId, removed: false, notYours: true };
       await deps.store.delete(monitorId);
       return { monitorId, removed: true };
-    },
-    async list() {
-      return deps.store.ownedBy(deps.ownerScopeId);
     },
   };
 }

@@ -47,7 +47,7 @@ export interface DeliveryStore {
     idempotencyKey: string;
     shadow?: boolean;
   }): Promise<Delivery>;
-  pending(type: string): Promise<Delivery[]>;
+  pending(type: string, sourceThreadRef?: string): Promise<Delivery[]>;
   claimPending(type: string, ttlMs: number): Promise<Delivery[]>;
   claimDue(type: string, ttlMs: number): Promise<ClaimedDelivery[]>;
   undeliveredTenants(type: string): Promise<ClaimedRow[]>;
@@ -140,9 +140,14 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
       if (!delivery.shadow) enqueueListeners.emit(delivery.destination.type);
       return delivery;
     },
-    async pending(type) {
+    async pending(type, sourceThreadRef) {
       return [...deliveries.values()].filter(
-        (d) => d.deliveredAt === null && d.expiredAt === undefined && !d.shadow && d.destination.type === type,
+        (d) =>
+          d.deliveredAt === null &&
+          d.expiredAt === undefined &&
+          !d.shadow &&
+          d.destination.type === type &&
+          (sourceThreadRef === undefined || d.provenance?.sourceThreadRef === sourceThreadRef),
       );
     },
     async claimPending(type, ttlMs) {

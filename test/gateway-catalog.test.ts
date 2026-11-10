@@ -1,6 +1,6 @@
 import { nativeDocumentFormat } from "../src/agent/document-inputs.ts";
 import { runtimeFallback } from "../src/api/runtime-config.ts";
-import { validateWebTurnModelOptions } from "../src/api/runtime-config.ts";
+import { validateRuntimeChoice, validateWebTurnModelOptions } from "../src/api/runtime-config.ts";
 import { resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
 import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
@@ -366,6 +366,21 @@ test("gateway document support uses provider metadata rather than vision alone",
   assert.equal(nativeDocumentFormat(resolveModel("gateway/google-docs")!, pdf), "chat");
   for (const id of ["unknown-docs", "mixed-docs"])
     assert.equal(nativeDocumentFormat(resolveModel(`gateway/${id}`)!, pdf), undefined);
+});
+
+test("the Fast toggle is accepted on a gateway model only when the gateway flags it for Anthropic fast mode", async () => {
+  const f = fixture([
+    group("vendor/flagged", { providers: ["anthropic"], supports_fast_mode: true }),
+    group("vendor/unflagged", { providers: ["anthropic"] }),
+    group("vendor/flagged-openai", { providers: ["openai"], supports_fast_mode: true }),
+  ]);
+  await f.catalog.refresh();
+  assert.equal(safeModelMetadata("gateway/vendor/flagged")?.fastMode, true);
+  assert.equal(validateRuntimeChoice({ modelId: "gateway/vendor/flagged", fastMode: true }), null);
+  for (const id of ["gateway/vendor/unflagged", "gateway/vendor/flagged-openai"]) {
+    assert.equal(safeModelMetadata(id)?.fastMode, false);
+    assert.equal(validateRuntimeChoice({ modelId: id, fastMode: true }), "fast_mode_not_supported");
+  }
 });
 
 test("gateway models send session-affinity headers on every API", async () => {

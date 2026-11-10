@@ -10,7 +10,14 @@ import { createRunWatch, NOTIFY_SESSION_AVAILABLE } from "./run-watch.ts";
 import { createRunReturns, PENDING_RETURNS } from "./run-returns.ts";
 import { createRunReads } from "./run-reads.ts";
 import { parked, rowToRun, turnOrder } from "./run-rows.ts";
-import { claimFunction, claimRows, claimThenBind, claimThenLoad, type ClaimedRow } from "../tenants/claim.ts";
+import {
+  claimFunction,
+  claimRows,
+  claimThenBind,
+  claimThenLoad,
+  servingTenant,
+  type ClaimedRow,
+} from "../tenants/claim.ts";
 
 export interface PostgresRuntime {
   runs: RunStore;
@@ -37,14 +44,14 @@ const claimable = (
     OFFSET 0
   )`;
 
-const RUN_CLAIMS = {
-  id: "runs/store/0013-claims",
+const runClaims = (id: string, gate: (column: string) => string) => ({
+  id,
   statements: [
     claimFunction(
       "claim_runs",
       "lease_until bigint, worker text, now bigint, lim integer",
       `WITH picked AS (
-         SELECT candidate.tenant_id, candidate.id FROM runs candidate WHERE ${claimable("$3")}
+         SELECT candidate.tenant_id, candidate.id FROM runs candidate WHERE ${claimable("$3")}${gate("candidate.tenant_id")}
          ORDER BY candidate.claim_priority ASC, candidate.created_at ASC, candidate.seq ASC FOR UPDATE SKIP LOCKED LIMIT $4
        )
        UPDATE runs SET status='running', lease_token=gen_random_uuid()::text, lease_expires_at=$1, worker_id=$2,
@@ -54,7 +61,7 @@ const RUN_CLAIMS = {
     claimFunction(
       "claim_available_runs",
       "now bigint",
-      `SELECT r.tenant_id, r.id FROM runs r WHERE r.status='pending' AND r.retry_after <= $1
+      `SELECT r.tenant_id, r.id FROM runs r WHERE r.status='pending' AND r.retry_after <= $1${gate("r.tenant_id")}
          AND NOT EXISTS (
            SELECT 1 FROM runs blocked WHERE blocked.tenant_id=r.tenant_id AND blocked.session_id=r.session_id
              AND (blocked.status='running' OR (blocked.status='pending' AND blocked.retry_after > $1))
@@ -63,13 +70,13 @@ const RUN_CLAIMS = {
     claimFunction(
       "claim_waiting_runs",
       "created_before bigint, now bigint",
-      `SELECT candidate.tenant_id, candidate.id FROM runs candidate WHERE ${claimable("$2")}
+      `SELECT candidate.tenant_id, candidate.id FROM runs candidate WHERE ${claimable("$2")}${gate("candidate.tenant_id")}
          AND candidate.claim_priority=0 AND candidate.created_at <= $1 LIMIT 1`,
     ),
     claimFunction(
       "claim_pending_returns",
       "lim integer, after_id text, now bigint",
-      `SELECT tenant_id, id FROM (${PENDING_RETURNS}) due WHERE retry_after <= $3 ORDER BY id LIMIT $1`,
+      `SELECT tenant_id, id FROM (${PENDING_RETURNS}) due WHERE retry_after <= $3${gate("due.tenant_id")} ORDER BY id LIMIT $1`,
     ),
     claimFunction(
       "claim_terminal_runs",
@@ -81,10 +88,13 @@ const RUN_CLAIMS = {
     claimFunction(
       "claim_expired_runs",
       "now bigint",
-      `SELECT tenant_id, id FROM runs WHERE status='running' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $1`,
+      `SELECT tenant_id, id FROM runs WHERE status='running' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $1${gate("tenant_id")}`,
     ),
   ],
-};
+});
+
+const RUN_CLAIMS = runClaims("runs/store/0013-claims", () => "");
+const SERVING_RUN_CLAIMS = runClaims("runs/store/0015-serving-claims", servingTenant);
 
 const FENCE_HOLD_MS = 600_000;
 const PREVIOUS_SCHEMA = "runs/store/0010-drop-turn-metrics";
@@ -169,6 +179,7 @@ END $base_schema$`,
         `UPDATE runs SET handbacks = preemptions WHERE status IN ('pending', 'running') AND handbacks < preemptions`,
       ],
     },
+    SERVING_RUN_CLAIMS,
   ]);
   const { query: q, close: closePool } = pg;
 
