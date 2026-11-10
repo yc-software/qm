@@ -850,6 +850,42 @@ mod activity_watcher_tests {
 mod runner_probe {
     use super::*;
 
+
+    #[test]
+    fn probe_real_timeout_disable_with_two_taps() {
+        use core_foundation::runloop::CFRunLoop;
+        let first_failed = Arc::new(AtomicBool::new(false));
+        let second_failed = Arc::new(AtomicBool::new(false));
+        let first_registry = Arc::new(Registry::default());
+        let first = Tap::create(TapContext { context: None, retained: None, activity: Some((Arc::clone(&first_registry), Arc::clone(&first_failed))), kind: TapKind::Intervention });
+        eprintln!("PROBE2 first tap: {:?}", first.as_ref().map(|_| ()));
+        let quit = Arc::new(AtomicBool::new(false));
+        let q = Arc::clone(&quit);
+        let sf = Arc::clone(&second_failed);
+        let other = thread::spawn(move || {
+            let second = Tap::create(TapContext { context: None, retained: None, activity: Some((Arc::new(Registry::default()), sf)), kind: TapKind::Intervention });
+            eprintln!("PROBE2 second tap: {:?}", second.as_ref().map(|_| ()));
+            while !q.load(Ordering::Acquire) {
+                CFRunLoop::run_in_mode(unsafe { kCFRunLoopDefaultMode }, Duration::from_millis(50), false);
+            }
+        });
+        thread::sleep(Duration::from_millis(300));
+        let source = objc2_core_graphics::CGEventSource::new(objc2_core_graphics::CGEventSourceStateID::HIDSystemState);
+        for i in 0..400 {
+            let point = objc2_core_foundation::CGPoint { x: 100.0 + (i % 50) as f64, y: 100.0 };
+            if let Some(e) = CGEvent::new_mouse_event(source.as_deref(), CGEventType(5), point, objc2_core_graphics::CGMouseButton::Left) {
+                CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&e));
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        eprintln!("PROBE2 first enabled before runloop: {:?}", first.as_ref().map(|t| CGEvent::tap_is_enabled(&t.port)));
+        for _ in 0..20 {
+            CFRunLoop::run_in_mode(unsafe { kCFRunLoopDefaultMode }, Duration::from_millis(50), false);
+        }
+        quit.store(true, Ordering::Release);
+        let _ = other.join();
+        eprintln!("PROBE2 first_failed={} second_failed={}", first_failed.load(Ordering::Acquire), second_failed.load(Ordering::Acquire));
+    }
     #[test]
     fn probe_real_activity_watchers() {
         let a = ActivityWatcher::begin(Arc::new(Registry::default()));
