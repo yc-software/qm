@@ -12,7 +12,7 @@ import { runTrigger, type TriggerDeps, type TriggerOutcome } from "../triggers/r
 import { cronTriggerAuthority } from "../cron/authority.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { createSweeper } from "../util/sweeper.ts";
-import { currentTenant, withTenant } from "../tenants/context.ts";
+import { type Tenant, withTenant } from "../tenants/context.ts";
 import { errMessage, reportFailureAs } from "../util/errors.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { compileMonitorPattern } from "./monitor-broker.ts";
@@ -273,7 +273,13 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
 
   type Handles = Map<string, { tenantId: string; handle: SandboxHandle }>;
 
-  async function pollMonitor(sandbox: ProcessSandbox, handles: Handles, m: Monitor, t: number): Promise<number> {
+  async function pollMonitor(
+    sandbox: ProcessSandbox,
+    handles: Handles,
+    m: Monitor,
+    t: number,
+    tenant: Tenant,
+  ): Promise<number> {
     const rec = await deps.processes.get(m.processId);
     if (!rec?.sandboxId) {
       await reportLost(m);
@@ -295,7 +301,7 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
       await deps.monitors.setEnabled(m.id, false);
       return 0;
     }
-    const tenantId = currentTenant();
+    const tenantId = tenant.id;
     const targetKey = `${tenantId}:${rec.sandboxId}`;
     let handle = handles.get(targetKey)?.handle;
     if (!handle) {
@@ -333,7 +339,7 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
           console.warn(`[monitor] fan-out capped: fired ${fires}/${enabled.length} watched jobs this tick`);
           break;
         }
-        fires += await withTenant(m.tenantId, () => pollMonitor(sandbox, handles, m, t));
+        fires += await withTenant(m.tenantId, (tenant) => pollMonitor(sandbox, handles, m, t, tenant));
       }
     } finally {
       for (const { tenantId, handle } of handles.values()) {

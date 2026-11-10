@@ -120,7 +120,7 @@ export function testAdminGrantStore(
 ): AdminGrantStore {
   return createAdminGrantStore(createPostgresAdminGrantStore(testDatabaseUrl()), {
     seed,
-    seedTenant: async () => boundTenant(),
+    seedsTenant: (t) => t.id === boundTenant(),
   });
 }
 

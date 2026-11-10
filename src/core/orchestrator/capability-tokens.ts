@@ -13,7 +13,8 @@ import {
 import type { MemoryPolicy } from "../../memory/policy.ts";
 import type { resolveTurnContext } from "../../resolution/turn-context.ts";
 import type { EgressPolicy, ScopeId, Session } from "../../types.ts";
-import { swallowAs } from "../../util/errors.ts";
+import { ambientTenant } from "../../tenants/context.ts";
+import { swallow } from "../../util/errors.ts";
 import { trimTrailingSlashes } from "../../util/text.ts";
 import type { SystemContextBlocks } from "./prompt-blocks.ts";
 import { egressClaimAllowingControlPlane, type deliveryCandidatesFor } from "./turn-helpers.ts";
@@ -144,10 +145,11 @@ async function mintControlPlaneTokens(
     const destination = defaultDestination;
     connectorEnv.AGENT_API_URL = deps.apiBaseUrl;
     if (deps.admin && liveAuthorTurn) {
-      const status = await deps.admin
-        .adminStatusOf(actor)
-        .catch(swallowAs("orchestrator: admin status for turn", { isAdmin: false }));
-      actorIsOrgAdmin = status.isAdmin;
+      try {
+        actorIsOrgAdmin = (await deps.admin.adminStatusOf(ambientTenant(), actor)).isAdmin;
+      } catch (e) {
+        swallow("orchestrator: admin status for turn", e);
+      }
       if (
         actorIsOrgAdmin &&
         liveTurn &&
