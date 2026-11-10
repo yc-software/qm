@@ -373,6 +373,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     const threadRef = ctx.chat.state.threadRef;
     return (
       !!selected &&
+      !appEditRuntime() &&
       !(threadRef && threadModelPicks.has(threadRef)) &&
       effortOverride === undefined &&
       fastModeOverride === undefined &&

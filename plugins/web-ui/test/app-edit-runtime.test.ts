@@ -58,7 +58,7 @@ test("app edit chats start on the app edit runtime and keep a person's pick", as
 
     const drawer = await mount("web:tester:app-edit:demo");
     assert.equal(drawer.agent.state.model.id, "gpt-6.1-sol-ultrafast");
-    assert.equal(drawer.composer.followsDefault(), true);
+    assert.equal(drawer.composer.followsDefault(), false, "drawer turns name the app edit model");
     const chat = await mount("web:tester:default");
     assert.equal(chat.agent.state.model.id, "alpha");
     const otherPersonsDrawer = await mount("web:someone-else:app-edit:demo");
