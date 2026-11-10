@@ -73,7 +73,7 @@ export function sessionTools(kit: ToolKit) {
       isolation: Type.Optional(
         Type.Union([Type.Literal("shared"), Type.Literal("worktree"), Type.Literal("sandbox")], {
           description:
-            "open: where its commands run. shared: your computer and starting directory. worktree: a new directory of its own on your computer (a git worktree on a new branch if your starting directory is a git repository). sandbox: a new computer of its own, created on first use; retire it with the sandbox tool once its work is saved. Default: worktree when your own commands start in a subagent directory, otherwise shared.",
+            "open: where its commands run. shared: your computer and starting directory. worktree: a new directory of its own on your computer (a git worktree on a new branch if your starting directory is a git repository). sandbox: a new computer of its own, created on first use; retire it with the sandbox tool once its work is saved. Default: worktree when your own commands start in a subagent directory, otherwise shared. Check the Sandboxes line in the environment: when the default is crowded or saturated, prefer sandbox.",
         }),
       ),
       thinkingLevel: Type.Optional(

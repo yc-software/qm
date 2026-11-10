@@ -108,8 +108,8 @@ export function computerTools(kit: ToolKit) {
         : "";
       const localExec = !route?.scratch && !scratchReroute;
       const pressureNote =
-        localExec && r.pressure && r.pressure.ioFull60 >= PRESSURE_WARN_FULL60
-          ? `\n[pressure] this computer's disk is saturated (io ${r.pressure.ioFull60}%, load ${r.pressure.load1}) — sequence heavy work, move self-contained runs to scope:"scratch", or check sandbox action=status`
+        localExec && r.load && (r.load.ioFull60 ?? 0) >= PRESSURE_WARN_FULL60
+          ? `\n[pressure] this computer's disk is saturated (io ${r.load.ioFull60}%, load ${r.load.load1}) — sequence heavy work, move self-contained runs to scope:"scratch", or check sandbox action=status`
           : "";
       return recordResult(
         callId,
@@ -268,9 +268,8 @@ export function computerTools(kit: ToolKit) {
         const s = await tc.computerStatus(params.sandbox_id);
         const verdict = computerVerdict(s);
         const machineLine = s.listed && s.listed !== s.machine ? `${s.machine} (listed: ${s.listed})` : s.machine;
-        const pressureLine = s.pressure ? `; io pressure: ${s.pressure.ioFull60}% (load ${s.pressure.load1})` : "";
-        const resourcesLine = s.resources
-          ? `; cpu ${s.resources.cpuUsedPct}%, memory ${s.resources.memUsedMb}/${s.resources.memTotalMb} MiB, disk ${s.resources.diskUsedGb}/${s.resources.diskTotalGb} GiB`
+        const loadLine = s.load
+          ? `${s.load.ioFull60 === null ? "" : `; io pressure: ${s.load.ioFull60}%`}; load ${s.load.load1}, memory ${s.load.memUsedMb}/${s.load.memTotalMb} MiB, disk ${s.load.diskUsedGb}/${s.load.diskTotalGb} GiB`
           : "";
         let shellLine = s.guestResponsive ? "answering" : `NOT answering${s.probeError ? ` (${s.probeError})` : ""}`;
         if (s.lifecycleState === "paused") shellLine = "paused (not probed)";
@@ -297,12 +296,7 @@ export function computerTools(kit: ToolKit) {
         return recordResult(
           callId,
           { tool: "sandbox", action: "status", verdict, ...s },
-          text(
-            [
-              `machine: ${machineLine}; shell: ${shellLine}${pressureLine}${resourcesLine}${verdictLine}`,
-              ...recoveryLines,
-            ].join("\n"),
-          ),
+          text([`machine: ${machineLine}; shell: ${shellLine}${loadLine}${verdictLine}`, ...recoveryLines].join("\n")),
         );
       } catch (e) {
         if (e instanceof NeedsApproval) return blockOnApproval(callId, e, params.purpose, { tool: "sandbox" });

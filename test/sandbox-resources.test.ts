@@ -1,3 +1,4 @@
+import type { LoadSample } from "../src/sandbox/load-probe.ts";
 import { createBackgroundBroker } from "../src/connectors/background-exec-broker.ts";
 import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
@@ -89,6 +90,7 @@ function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["person
   const options = {
     upgrade: upgrade(),
     records,
+    loads: testMap<LoadSample>(),
     defaults,
     backends: { local: backend },
     defaultBackend: "local",

@@ -2,7 +2,9 @@ import cronstrue from "cronstrue";
 import { CronPattern } from "croner";
 import { retainedSnapshot } from "../../agent/context-snapshot.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../../cron/schedule.ts";
-import type { CandidateDestination, GatewayContext, GrantedHandle } from "../../types.ts";
+import type { CandidateDestination, GatewayContext, GrantedHandle, ScopeId } from "../../types.ts";
+import type { SandboxResource, SandboxResources } from "../../sandbox/sandbox-resources.ts";
+import type { LoadSample } from "../../sandbox/load-probe.ts";
 import type { Item } from "../../sessions/items.ts";
 import type { Cron, Monitor, Webhook } from "../../triggers/types.ts";
 import type { DirectoryMember } from "../../directory/directory-store.ts";
@@ -318,4 +320,45 @@ export function renderSystemContext(blocks: SystemContextBlocks): string {
   return SYSTEM_CONTEXT_ORDER.map((key) => blocks[key] ?? "")
     .filter((block) => block.trim())
     .join("\n\n");
+}
+
+const LOAD_STALE_MS = 60_000;
+const LOAD_IO_SIGNAL = 50;
+const LOAD_FULL_SIGNAL = 0.85;
+
+const ageText = (ms: number): string => {
+  const sec = Math.max(0, Math.round(ms / 1000));
+  if (sec < 60) return `${sec}s`;
+  if (sec < 3600) return `${Math.round(sec / 60)}m`;
+  return `${Math.round(sec / 3600)}h`;
+};
+
+const gb = (mb: number): string => (mb / 1024).toFixed(1);
+
+export function sandboxLoadLine(
+  resource: Pick<SandboxResource, "id" | "name" | "backend" | "holders">,
+  sample: LoadSample | null,
+  nowMs: number,
+): string {
+  const sessions = resource.holders?.length ?? 0;
+  const memShare = sample ? sample.memUsedMb / sample.memTotalMb : 0;
+  const diskShare = sample ? sample.diskUsedGb / sample.diskTotalGb : 0;
+  const signal =
+    sessions >= 2 ||
+    (sample?.ioFull60 ?? 0) >= LOAD_IO_SIGNAL ||
+    diskShare >= LOAD_FULL_SIGNAL ||
+    memShare >= LOAD_FULL_SIGNAL;
+  if (!signal) return "";
+  const head = `Sandboxes: default "${resource.name || resource.id.slice(0, 8)}" (${resource.backend}) — ${sessions} ${sessions === 1 ? "session" : "sessions"} active`;
+  if (!sample) return `${head} (no load sample yet). Scratch: available.`;
+  const age = nowMs - sample.sampledAt;
+  const io = sample.ioFull60 === null ? "" : `, io ${Math.round(sample.ioFull60)}% saturated`;
+  const when = `${age > LOAD_STALE_MS ? "stale, " : ""}sampled ${ageText(age)} ago`;
+  return `${head}${io}, load ${sample.load1}, mem ${gb(sample.memUsedMb)}/${gb(sample.memTotalMb)} GB, disk ${Math.round(diskShare * 100)}% full (${when}). Scratch: available.`;
+}
+
+export async function defaultSandboxLoadLine(resources: SandboxResources, scopeId: ScopeId): Promise<string> {
+  const resource = await resources.resolve(scopeId);
+  if (!resource) return "";
+  return sandboxLoadLine(resource, await resources.load(resource.id), Date.now());
 }
