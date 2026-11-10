@@ -81,7 +81,9 @@ export async function mintTurnCapabilities(turn: CapabilityTurn) {
     ...(input.botActor ? { botActor: true } : {}),
     ...(actAsActor ? { actAsActor: true } : {}),
   };
+  const tenant = ambientTenant();
   const { actorIsOrgAdmin, orgMemoryWritable, controlClaims } = await mintControlPlaneTokens(
+    tenant,
     turn,
     scopeAttestation,
     sandboxTokenExpiry,
@@ -104,6 +106,7 @@ export async function mintTurnCapabilities(turn: CapabilityTurn) {
   return {
     actorIsOrgAdmin,
     orgMemoryWritable,
+    tenant,
     controlClaims,
     sandboxTokenExpiry,
     scopeAttestation,
@@ -112,6 +115,7 @@ export async function mintTurnCapabilities(turn: CapabilityTurn) {
 }
 
 async function mintControlPlaneTokens(
+  tenant: ReturnType<typeof ambientTenant>,
   turn: CapabilityTurn,
   scopeAttestation: Omit<CapabilityClaims, "exp">,
   sandboxTokenExpiry: number,
@@ -154,7 +158,7 @@ async function mintControlPlaneTokens(
     connectorEnv.AGENT_API_URL = deps.apiBaseUrl;
     if (deps.admin && liveAuthorTurn) {
       try {
-        actorIsOrgAdmin = (await deps.admin.adminStatusOf(ambientTenant(), actor)).isAdmin;
+        actorIsOrgAdmin = (await deps.admin.adminStatusOf(tenant, actor)).isAdmin;
       } catch (e) {
         swallow("orchestrator: admin status for turn", e);
       }

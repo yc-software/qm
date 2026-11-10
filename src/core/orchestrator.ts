@@ -58,7 +58,7 @@ import { scopeId as toScopeId, personalScope } from "../types.ts";
 import { desktopClientForTurn, introducesUser, isPersonAuthored, isSessionTurn } from "./turn-origin.ts";
 import { resolveTurnFastMode } from "./turn-options.ts";
 import { orgId } from "../config.ts";
-import { ambientTenant, currentTenant } from "../tenants/context.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { deriveTurnOutcome, heldReplyResult } from "./turn-outcome.ts";
 import { applyPromptVars, loadProtocolFile, type PromptVars } from "../resolution/prompt-vars.ts";
 import { cleanBrandingLabel, resolveBranding } from "../resolution/branding.ts";
@@ -1113,6 +1113,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const {
         actorIsOrgAdmin,
         orgMemoryWritable,
+        tenant,
         controlClaims,
         sandboxTokenExpiry,
         scopeAttestation,
@@ -1336,7 +1337,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             "\n\n## Connected app access\nComposio is configured in the backend. Load the composio skill and use /v1/composio through the authenticated agent API. Apps that have their own skill work over these connections too; prefer that skill. No Composio project key is delivered to your computer; the backend checks account ownership and context access.";
         const adminGrants =
           deps.admin && !external && !strictReadOnly && deps.signingSecret && deps.apiBaseUrl
-            ? await deps.admin.listGrants(ambientTenant()).catch(swallowAs("orchestrator: admin grants", []))
+            ? await deps.admin.listGrants(tenant).catch(swallowAs("orchestrator: admin grants", []))
             : [];
         if (conversation.audience.some((p) => adminStatusFromGrants(adminGrants, p.id).isAdmin)) {
           systemPrompt +=
