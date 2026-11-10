@@ -203,11 +203,7 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
         try {
           onStatus?.("Resuming the sandbox…");
           const session = await client.connect(stored.sessionId);
-          await store.merge(scope, {
-            preservationState: "running",
-            preservationError: undefined,
-            sandboxId: session.sandboxId,
-          });
+          await store.merge(scope, { preservationState: "running", sandboxId: session.sandboxId });
           return adopt(session);
         } catch (err) {
           if (!(err instanceof ManagedAgentsSandboxGoneError)) throw err;
