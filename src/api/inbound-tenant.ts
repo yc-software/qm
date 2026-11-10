@@ -1,11 +1,8 @@
 import type { IncomingMessage } from "node:http";
-import { withTenant } from "../tenants/context.ts";
 import { inTenant } from "../tenants/claim.ts";
 import type { TenantKey, TenantLookup } from "../tenants/lookup.ts";
 import type { KeyedTenant, Route } from "./routes/route.ts";
 import { labelOfAppHost } from "../tenants/app-handle.ts";
-
-export const EMPTY_TENANT = "00000000-0000-0000-0000-000000000000";
 
 interface InboundKey {
   by: TenantKey;
@@ -42,9 +39,11 @@ export async function withInboundTenant(
   lookup: Pick<TenantLookup, "tenantFor">,
   inbound: InboundKey,
   next: () => Promise<void>,
+  unknown: () => void,
   signedTenant?: () => Promise<string | undefined>,
 ): Promise<void> {
   const signed = inbound.signedTenantFirst ? await signedTenant?.() : undefined;
   const tenant = signed ?? (await lookup.tenantFor(inbound.by, inbound.key));
-  return tenant ? inTenant(tenant, next) : withTenant(EMPTY_TENANT, next);
+  if (!tenant) return unknown();
+  return inTenant(tenant, next);
 }

@@ -553,7 +553,8 @@ export function createTurnMethods(
         ({ tenantId, ...event }) => {
           if (tenant && tenantId && tenantId !== tenant) return;
           const owner = tenantId ?? tenant;
-          queue(async () => cb(await (owner ? withTenant(owner, () => rehydrate(event)) : rehydrate(event))));
+          const deliver = async () => cb(await rehydrate(event));
+          queue(() => (owner ? withTenant(owner, deliver) : deliver()));
         },
         onResync ? { onResync: () => queue(onResync) } : undefined,
       );

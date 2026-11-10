@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import type { IncomingMessage } from "node:http";
 import { after, before, describe, it } from "./support/unbound-test.ts";
-import { EMPTY_TENANT, inboundKey, withInboundTenant } from "../src/api/inbound-tenant.ts";
+import { inboundKey, withInboundTenant } from "../src/api/inbound-tenant.ts";
 import { identityTenant } from "../src/api/request-tenant.ts";
 import { deploymentRawRoutes } from "../src/api/routes/deployments.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../src/auth/portal-identity.ts";
@@ -58,6 +58,9 @@ describe("app paths on a host shared by several tenants", () => {
         const rows = await db.app.q(`SELECT id FROM deployments WHERE id = $1 OR json->>'name' = $1`, [key]);
         seen = { tenant: boundTenant(), ids: rows.map((r) => String(r.id)) };
       },
+      () => {
+        seen = { ids: [] };
+      },
       () => identityTenant(req, SECRET),
     );
     return seen;
@@ -79,6 +82,6 @@ describe("app paths on a host shared by several tenants", () => {
   it("ignores identities signed with another secret and falls back to the app's own tenant", async () => {
     const [a, b] = db.tenants;
     assert.deepEqual(await visit(await request("/d/solo-1/", a, "forged")), { tenant: b, ids: ["solo-1"] });
-    assert.deepEqual(await visit(await request("/d/dash/", a, "forged")), { tenant: EMPTY_TENANT, ids: [] });
+    assert.deepEqual(await visit(await request("/d/dash/", a, "forged")), { ids: [] });
   });
 });

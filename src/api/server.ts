@@ -549,6 +549,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
         app,
         inbound,
         () => serve(req, res, base, raw, matched),
+        () => sendJson(res, 404, { error: "not_found", message: `${base.method} ${base.pathname}` }),
         async () =>
           (await identityTenant(req, deps.portalIdentitySecret ?? deps.signingSecret)) ??
           (usesBrowserSession(req, route) ? (browserSessionTenant(req, deps) ?? bootTenant()) : undefined),
