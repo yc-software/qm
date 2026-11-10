@@ -139,6 +139,28 @@ test("a bot's credential request and a person's in the same thread stay separate
   assert.equal(personAgain.ask.id, person.ask.id);
 });
 
+test("a bot task's declined request survives pruning beside a newer person request in the same thread", async () => {
+  let now = 1_000_000;
+  const k = kcAt(() => now++);
+  const credential = await k.save(GH);
+  const base = {
+    credentialId: credential.id,
+    requesterScopeId: "channel:C1" as const,
+    requesterThreadRef: "ch:C1-t1",
+    purpose: "deploy the release",
+  };
+  const bot = { ...base, requesterId: "U_RELEASEBOT", botActor: true, triggered: true };
+  const { ask } = await k.createAsk(bot);
+  await k.declineAsk({ askId: ask.id, ownerId: "U_ALICE" });
+  await k.createAsk({ ...base, requesterId: "U_BOB" });
+  const sweep = createAskExpirySweep({ keychain: k, fire: async () => undefined });
+  await sweep(now);
+  now += ASK_PRUNE_AFTER_MS + 1;
+  await sweep(now);
+  assert.equal((await k.getAsk(ask.id))?.status, "declined");
+  await assert.rejects(k.createAsk(bot), (e: KeychainError) => e.status === 409);
+});
+
 test("personal cron asks deduplicate recurring fires without combining jobs or re-asking after denial", async () => {
   let now = 1000000;
   const k = kcAt(() => now++);
