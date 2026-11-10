@@ -22,7 +22,7 @@ jobs:
       - run: rustup toolchain install stable --profile minimal --component clippy,rustfmt
       - run: cargo +stable fmt --manifest-path desktop/desk/Cargo.toml --check
       - run: cargo +stable clippy --manifest-path desktop/desk/Cargo.toml --locked -- -D warnings
-      - run: cargo +stable test --manifest-path desktop/desk/Cargo.toml --locked
+      - run: cargo +stable test --manifest-path desktop/desk/Cargo.toml --locked -- --nocapture
       - run: cargo +stable build --manifest-path desktop/desk/Cargo.toml --locked --release
       - run: swiftc desktop/desk/tests/manual/focus-witness.swift -o /tmp/desk-focus-witness
       - run: clang -fobjc-arc -framework ApplicationServices -framework CoreGraphics -framework Foundation desktop/desk/tests/manual/focus-trace.m -o /tmp/desk-focus-trace

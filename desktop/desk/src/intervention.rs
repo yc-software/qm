@@ -844,3 +844,20 @@ mod activity_watcher_tests {
         assert!(third.check().is_ok());
     }
 }
+
+#[cfg(test)]
+mod runner_probe {
+    use super::*;
+
+    #[test]
+    fn probe_real_activity_watchers() {
+        let a = ActivityWatcher::begin(Arc::new(Registry::default()));
+        eprintln!("PROBE first begin: {:?}", a.as_ref().map(|_| ()).map_err(|e| format!("{e:?}")));
+        let b = ActivityWatcher::begin(Arc::new(Registry::default()));
+        eprintln!("PROBE second begin: {:?}", b.as_ref().map(|_| ()).map_err(|e| format!("{e:?}")));
+        if let (Ok(a), Ok(b)) = (&a, &b) {
+            thread::sleep(Duration::from_millis(500));
+            eprintln!("PROBE checks: {:?} {:?}", a.check().is_ok(), b.check().is_ok());
+        }
+    }
+}
