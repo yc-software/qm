@@ -559,6 +559,10 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
       req.url = `${alias}${base.url.search}`;
       base = baseCtx(req, res, wiring);
     }
+    if (!base.pathname.startsWith("/d/") && /%00/.test(req.url ?? "")) {
+      sendJson(res, 400, { error: "bad_request", message: "URL must not contain NUL bytes" });
+      return void req.resume();
+    }
     const raw = findRoute(rawRoutes, base.method, base.pathname);
     const matched = raw ? null : findRoute(apiRoutes, base.method, base.pathname);
     await inRequestTenant(req, res, base, raw ?? matched, () => serve(req, res, base, raw, matched));
