@@ -39,7 +39,15 @@ test("the play button on a paused goal bar resumes the goal and sends the turn t
           session: SESSION,
           items: [
             item("UserMessage", { seq: 1, createdAt: 900, text: "ship the fix" }),
-            item("AgentMessage", { seq: 2, createdAt: 1100, text: "Stopped." }),
+            item("ToolCall", { seq: 2, createdAt: 1000, tool: "goal", callId: "c1", body: { action: "create" } }),
+            item("ToolResult", {
+              seq: 3,
+              createdAt: 1001,
+              tool: "goal",
+              callId: "c1",
+              body: { action: "create", goal: goal("active") },
+            }),
+            item("Stop", { seq: 4, createdAt: 5000, body: { reason: "by user" } }),
           ],
           goal: goal("paused"),
         });
@@ -55,7 +63,10 @@ test("the play button on a paused goal bar resumes the goal and sends the turn t
     assert.match(host.querySelector(".goal-strip")!.textContent ?? "", /Goal paused/);
     const sent: unknown[] = [];
     const agent = chat.state.agent!;
-    agent.prompt = (async (message: unknown) => void sent.push(message)) as typeof agent.prompt;
+    agent.prompt = (async (message: unknown) => {
+      sent.push(message);
+      Object.assign(agent.state, { isStreaming: true });
+    }) as typeof agent.prompt;
 
     const draft = "half-typed thought";
     chat.state.host!.querySelector("textarea")!.value = draft;
@@ -69,10 +80,12 @@ test("the play button on a paused goal bar resumes the goal and sends the turn t
     assert.deepEqual(posts, [`POST /api/sessions/${SESSION.id}/goal/resume`]);
     assert.match(JSON.stringify(sent[0]), /Continue the goal\./);
     assert.equal(chat.state.host!.querySelector("textarea")!.value, draft, "the person's own draft stays put");
-    assert.doesNotMatch(chat.state.host!.querySelector(".goal-strip")!.textContent ?? "", /Goal paused/);
-
-    Object.assign(agent.state, { isStreaming: true });
     chat.drawActiveChat();
+    assert.match(
+      chat.state.host!.querySelector(".goal-strip")!.textContent ?? "",
+      /Pursuing goal/,
+      "the earlier stop no longer marks the goal paused once a reply is running",
+    );
     assert.equal(chat.state.host!.querySelector(".goal-strip-resume"), null, "no play button while a reply runs");
   } finally {
     await h.close();

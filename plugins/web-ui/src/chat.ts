@@ -3011,7 +3011,7 @@ export function createChatSurface(
     const cancel = goalCancels.get(key);
     if (cancel === "done") return nothing;
     const { workedMs, paused: stopped } = goalWorked(messages, goal);
-    const paused = goal.status === "paused" || (goal.status === "active" && stopped);
+    const paused = goal.status === "paused" || (goal.status === "active" && stopped && !agent.state.isStreaming);
     if (goal.status !== "active" && !paused) return nothing;
     let title = "Goal";
     if (paused) title = "Goal paused";
