@@ -5,7 +5,6 @@ import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import pg from "pg";
 import { RETIRED_ORIGIN_SWEEP_MIGRATION } from "../src/surfaces/origin-migration.ts";
-import { dropDatabaseOnceDisconnected } from "./support/test-database.ts";
 import { seedTestTenant } from "./support/test-tenant.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -24,7 +23,7 @@ async function withDatabase(run: (url: string, db: pg.Pool) => Promise<void>): P
     await run(url.toString(), db);
   } finally {
     await db.end();
-    await dropDatabaseOnceDisconnected(parent, name);
+    await parent.query(`DROP DATABASE ${name}`);
     await parent.end();
   }
 }
