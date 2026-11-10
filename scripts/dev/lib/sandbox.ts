@@ -1,8 +1,7 @@
-import { existsSync, openSync, readFileSync } from "node:fs";
+import { existsSync, openSync, readFileSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { writePidFile } from "./lease.ts";
 import { run } from "./proc.ts";
 import { ensureDockerDaemon } from "./postgres.ts";
 import { bestEffortValue, sleep } from "./util.ts";
@@ -28,7 +27,7 @@ export async function resolveSandbox(opts: {
   worktree: string;
   requested: DevSandboxChoice;
   corePort: number;
-  lock: string;
+  tunnel: () => Promise<string | null>;
   baseEnv: Record<string, string>;
   log: (msg: string) => void;
 }): Promise<SandboxResolution> {
@@ -70,7 +69,7 @@ export async function resolveSandbox(opts: {
     if (!e2bKey) throw new Error("--sandbox e2b requires E2B_API_KEY in the environment");
     let e2bApiUrl = opts.baseEnv.PUBLIC_API_URL || null;
     if (!e2bApiUrl) {
-      e2bApiUrl = await startQuickTunnel(opts.corePort, opts.lock, opts.log);
+      e2bApiUrl = await opts.tunnel();
       if (!e2bApiUrl)
         warnings.push(
           "cloudflared tunnel didn't come up -- agent self-API (crons/sends) won't be reachable from the sandbox",
@@ -94,7 +93,7 @@ export async function resolveSandbox(opts: {
       );
     let smolApiUrl = opts.baseEnv.PUBLIC_API_URL || null;
     if (!smolApiUrl) {
-      smolApiUrl = await startQuickTunnel(opts.corePort, opts.lock, opts.log);
+      smolApiUrl = await opts.tunnel();
       if (!smolApiUrl)
         warnings.push(
           "cloudflared tunnel didn't come up -- agent self-API (crons/sends) won't be reachable from the sandbox",
@@ -124,7 +123,7 @@ export async function resolveSandbox(opts: {
       );
     let apiUrl = opts.baseEnv.PUBLIC_API_URL || null;
     if (!apiUrl) {
-      apiUrl = await startQuickTunnel(opts.corePort, opts.lock, opts.log);
+      apiUrl = await opts.tunnel();
       if (!apiUrl)
         warnings.push(
           "cloudflared tunnel didn't come up -- agent self-API (crons/sends) won't be reachable from the sandbox",
@@ -154,7 +153,7 @@ export async function resolveSandbox(opts: {
       );
     let apiUrl = opts.baseEnv.PUBLIC_API_URL || null;
     if (!apiUrl) {
-      apiUrl = await startQuickTunnel(opts.corePort, opts.lock, opts.log);
+      apiUrl = await opts.tunnel();
       if (!apiUrl)
         warnings.push(
           "cloudflared tunnel didn't come up -- agent self-API (crons/sends) won't be reachable from the sandbox",
@@ -189,7 +188,7 @@ export async function resolveSandbox(opts: {
       );
     let apiUrl = opts.baseEnv.PUBLIC_API_URL || null;
     if (!apiUrl) {
-      apiUrl = await startQuickTunnel(opts.corePort, opts.lock, opts.log);
+      apiUrl = await opts.tunnel();
       if (!apiUrl)
         warnings.push(
           "cloudflared tunnel didn't come up -- agent self-API (crons/sends) won't be reachable from the sandbox",
@@ -213,7 +212,7 @@ export async function resolveSandbox(opts: {
       );
     let managedAgentsApiUrl = opts.baseEnv.PUBLIC_API_URL || null;
     if (!managedAgentsApiUrl) {
-      managedAgentsApiUrl = await startQuickTunnel(opts.corePort, opts.lock, opts.log);
+      managedAgentsApiUrl = await opts.tunnel();
       if (!managedAgentsApiUrl)
         warnings.push(
           "cloudflared tunnel didn't come up -- agent self-API (crons/sends) won't be reachable from the sandbox",
@@ -247,7 +246,7 @@ export async function resolveSandbox(opts: {
       );
     let porterApiUrl = opts.baseEnv.PUBLIC_API_URL || null;
     if (!porterApiUrl) {
-      porterApiUrl = await startQuickTunnel(opts.corePort, opts.lock, opts.log);
+      porterApiUrl = await opts.tunnel();
       if (!porterApiUrl)
         warnings.push(
           "cloudflared tunnel didn't come up -- agent self-API (crons/sends) won't be reachable from the sandbox",
@@ -278,7 +277,7 @@ export async function resolveSandbox(opts: {
     throw new Error("--sandbox sprites requires SPRITES_TOKEN in the environment (mint one with `sprite login`)");
   let publicApiUrl = opts.baseEnv.PUBLIC_API_URL || null;
   if (!publicApiUrl) {
-    publicApiUrl = await startQuickTunnel(opts.corePort, opts.lock, opts.log);
+    publicApiUrl = await opts.tunnel();
     if (!publicApiUrl)
       warnings.push(
         "cloudflared tunnel didn't come up -- agent self-API (crons/sends) won't be reachable from the sandbox",
@@ -293,28 +292,36 @@ export async function resolveSandbox(opts: {
   return { backend: "sprites", env, detail: "Fly Sprites (api.sprites.dev)", publicApiUrl, warnings };
 }
 
-async function startQuickTunnel(corePort: number, lock: string, log: (msg: string) => void): Promise<string | null> {
+export async function startQuickTunnel(
+  corePort: number,
+  lock: string,
+  log: (msg: string) => void,
+): Promise<{ pid: number; url: string | null } | null> {
   if ((await run("cloudflared", ["--version"], { timeoutMs: 15_000 })).code !== 0) return null;
   const logPath = join(lock, "tunnel.log");
   const fd = openSync(logPath, "a");
+  const logStart = statSync(logPath).size;
   const child = spawn("cloudflared", ["tunnel", "--url", `http://localhost:${corePort}`, "--no-autoupdate"], {
     detached: true,
     stdio: ["ignore", fd, fd],
   });
   child.unref();
   if (!child.pid) return null;
-  writePidFile(lock, "tunnel.pid", child.pid);
   for (let i = 0; i < 20; i++) {
     const url = bestEffortValue(
-      () => readFileSync(logPath, "utf8").match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/)?.[0] ?? "",
+      () =>
+        readFileSync(logPath)
+          .subarray(logStart)
+          .toString("utf8")
+          .match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/)?.[0] ?? "",
     );
     if (url) {
       log(`agent self-API tunnel: ${url} -> :${corePort} (lets the sandbox reach this core for crons/sends)`);
-      return url;
+      return { pid: child.pid, url };
     }
     await sleep(1000);
   }
-  return null;
+  return { pid: child.pid, url: null };
 }
 
 export async function destroyLocalDevSandboxes(log: (msg: string) => void): Promise<void> {
