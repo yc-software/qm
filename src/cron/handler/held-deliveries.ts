@@ -2,11 +2,11 @@ import type { DeliveryStore } from "../../delivery/delivery-store.ts";
 import type { Delivery, DeliveryHold, Destination } from "../../types.ts";
 import { parseScopeId } from "../../types.ts";
 import { samePerson } from "../../directory/person.ts";
+import { advanceNextFireAt } from "../schedule.ts";
 import { combineSendNow, createFireHandler, UNCHANGED_REASON, type FireReport } from "./fire-handler.ts";
 
 export const HOLD_WINDOW_MS = 10 * 60_000;
-const DIGEST_HOURS = [9, 17];
-const DIGEST_TIME_ZONE = "America/Los_Angeles";
+const DIGEST_SCHEDULE = { cron: "0 9,17 * * *", timezone: "America/Los_Angeles" };
 const URGENT_MARKER = "[urgent]";
 
 export function isOwnInbox(owner: string, destination: Destination): boolean {
@@ -23,18 +23,6 @@ export function holdReply(text: string, now: number): { text: string; hold: Deli
   return urgent
     ? { text: trimmed.slice(URGENT_MARKER.length).trimStart(), hold: { kind: "triage", until: now } }
     : { text, hold: { kind: "triage", until: now + HOLD_WINDOW_MS } };
-}
-
-function zonedHour(at: number): number {
-  const hour = new Intl.DateTimeFormat("en-US", { timeZone: DIGEST_TIME_ZONE, hour: "numeric", hourCycle: "h23" })
-    .formatToParts(at)
-    .find((p) => p.type === "hour")!.value;
-  return Number(hour);
-}
-
-function nextDigestAt(now: number): number {
-  const startOfHour = Math.floor(now / 3_600_000) * 3_600_000;
-  for (let at = startOfHour + 3_600_000; ; at += 3_600_000) if (DIGEST_HOURS.includes(zonedHour(at))) return at;
 }
 
 function report(d: Delivery): FireReport {
@@ -88,7 +76,7 @@ export async function sweepHeldDeliveries(
         await deliveries.enqueue(
           handlerSend(first, latest, `cron-handler:${first.id}:now`, combineSendNow(decision.sendNow)),
         );
-      const digestHold: DeliveryHold = { kind: "digest", until: nextDigestAt(now) };
+      const digestHold: DeliveryHold = { kind: "digest", until: advanceNextFireAt(DIGEST_SCHEDULE, now)! };
       for (const [i, item] of decision.digestItems.entries())
         await deliveries.enqueue(handlerSend(first, latest, `cron-handler:${first.id}:digest:${i}`, item, digestHold));
       const reasons = new Map(decision.dropped.map((d) => [d.cronId, d.reason || UNCHANGED_REASON]));

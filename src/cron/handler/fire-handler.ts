@@ -15,7 +15,7 @@ Put every report in exactly one bucket:
 - sendNow: the person should see it within the hour: something needs their decision or action, something failed or broke, or a result they are clearly waiting on arrived.
 - digestItems: worth knowing but not time-sensitive; it waits for the next twice-daily digest.
 - dropped: it says nothing happened, nothing changed, or only restates routine status.
-For sendNow and digestItems, write the line the person will read: start with the task title and a colon, keep the report's substance, links and numbers, and stay under 600 characters.
+For sendNow and digestItems, write the line the person will read: start with the task title and a colon, and keep the report's substance, links and numbers.
 Reply with JSON only: {"sendNow": string[], "digestItems": string[], "dropped": [{"cronId": string, "reason": string}]}
 
 Reports:
