@@ -329,6 +329,19 @@ test("reapDeepIdle leaves recently active scopes alone and keeps the checkpoint 
   assert.ok((await store.get(scope))?.nativeSnapshotId, "a gone box keeps its checkpoint reference");
 });
 
+test("a reaper holding a stale record never forgets the replacement another core recorded", async () => {
+  const store = testMap<StoredModalSandbox>();
+  await make({ store }).provision(scope);
+  await store.merge(scope, { nativeSnapshotId: undefined });
+  const live = (await store.get(scope))!;
+  const stale: DurableMap<StoredModalSandbox> = {
+    ...store,
+    entries: async () => [[scope, { ...live, sandboxId: "sb-retired" }]],
+  };
+  await make({ store: stale }).reapDeepIdle!(72 * 3600_000);
+  assert.equal((await store.get(scope))?.sandboxId, live.sandboxId);
+});
+
 test("computerStatus probes the guest", async () => {
   await sandbox.provision(scope);
   assert.ok(sandbox.computerStatus);
