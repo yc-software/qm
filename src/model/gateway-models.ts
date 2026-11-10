@@ -5,7 +5,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 export const GATEWAY_PROVIDER = "qm:gateway";
 export const GATEWAY_MODEL_PREFIX = "gateway/";
 
-export type GatewayModel = Model<Api> & { documentInput?: "pdf" | "files" };
+export type GatewayModel = Model<Api> & { documentInput?: "pdf" | "files"; fastMode?: boolean };
 
 const gateway: {
   models: Map<string, GatewayModel | EmbeddingModel>;
@@ -38,6 +38,10 @@ export function setGatewayModels(
 export function resolveGatewayModel(id: string): GatewayModel | undefined {
   const model = gateway.models.get(id);
   return model && !isEmbeddingModel(model) ? model : undefined;
+}
+
+export function gatewayFastModeModelIds(): string[] {
+  return [...gateway.models.values()].flatMap((m) => (!isEmbeddingModel(m) && m.fastMode === true ? [m.id] : []));
 }
 
 export function gatewayModelCatalog(includeAliased = false): Array<{ id: string; name: string; provider: string }> {
