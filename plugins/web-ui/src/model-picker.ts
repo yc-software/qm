@@ -437,7 +437,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
       }}
     >
       <button
-        class="menu-button loadout-button ${ultrafastOn ? "ultrafast-active" : ""}"
+        class="menu-button loadout-button"
         data-focus-key=${`${loadoutMenuId}-trigger`}
         type="button"
         aria-label=${triggerLabel}
@@ -474,7 +474,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
       >
         <span class="menu-label">${routed ? routedName : settingLabel}</span>
         ${suffix ? html`<span class="menu-suffix">${suffix}</span>` : nothing}
-        ${ultrafastOn ? html`<span class="loadout-ultrafast-badge">${icon(Zap, 12)} Ultrafast</span>` : nothing}
+        ${ultrafastOn ? html`<span class="loadout-ultrafast-badge" ${tip("Ultrafast")}>${icon(Zap, 13)}</span>` : nothing}
         ${fastOn ? html`<span class="loadout-bolt">${icon(Zap, 13)}</span>` : nothing}${icon(ChevronDown, 13)}
       </button>
       ${
