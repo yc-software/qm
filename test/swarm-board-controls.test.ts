@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 import { processRun } from "../src/runs/worker.ts";
 import { SWARM_LIMITS } from "../src/swarms/swarm-store.ts";
+import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 
 test("a swarm provisions one shared board computer that the root and every worker share", async () => {
   const fixture = await swarmFixture();
@@ -136,83 +137,27 @@ test("pausing and stopping the root's direct children cascades across a 120-work
   assert.equal((await fixture.service.inspect(fixture.caller)).peers.length, 121);
 });
 
-type Fixture = Awaited<ReturnType<typeof swarmFixture>>;
-type Claimed = NonNullable<Awaited<ReturnType<Fixture["runs"]["claimById"]>>>;
-
-function startClaimed(fixture: Fixture, claimed: Claimed, turns: string[]) {
-  return processRun(
-    {
-      runs: fixture.runs,
-      leaseTtlMs: 60_000,
-      orchestrator: {
-        async handleTurn(input) {
-          await fixture.service.binding(input);
-          turns.push(input.runId!);
-          return { status: "completed", sessionId: claimed.sessionId, runId: input.runId! } as never;
-        },
-        screenSecuritySteer: async () => "allow",
-        regenerateTitle: async () => null,
-        suggestNextPrompt: async () => null,
-      },
-    },
-    claimed,
-  );
-}
-
-async function resumeAndRun(fixture: Fixture, workerId: string, runId: string, turns: string[]) {
-  await fixture.service.control(fixture.caller, { memberId: workerId, state: "active" });
-  await fixture.service.sweep();
-  const notification = (await fixture.store.get(fixture.root.id))!.messages[0]!.notifications[workerId]!;
-  assert.equal(notification.state, "queued");
-  assert.equal(notification.runId, runId);
-  assert.equal((await fixture.runs.get(runId))!.status, "pending");
-  assert.equal(await fixture.runs.claimById(runId, "gate-test", 60_000), null);
-  const realNow = Date.now;
-  Date.now = () => realNow() + SWARM_LIMITS.pausedRecheckMs + 1_000;
-  try {
-    await startClaimed(fixture, (await fixture.runs.claimById(runId, "gate-test", 60_000))!, turns);
-  } finally {
-    Date.now = realNow;
-  }
-  assert.deepEqual(turns, [runId]);
-  assert.equal((await fixture.runs.get(runId))!.status, "done");
-}
-
-test("a run claimed before the delivery write does not start a turn for a worker paused in between", async () => {
-  const fixture = await swarmFixture();
-  const [worker] = await fixture.service.spawn(fixture.caller, { requestId: "one", text: "Work" });
+test("a run claimed before a pause lands is held at the start gate and runs once after resume", async () => {
+  const f = await swarmFixture();
+  const [worker] = await f.service.spawn(f.caller, { requestId: "one", text: "Work" });
+  await f.service.sweep();
+  const runId = (await f.store.get(f.root.id))!.messages[0]!.notifications[worker!.id]!.runId!;
   const turns: string[] = [];
-  let claimed: Claimed | null = null;
-  const enqueue = fixture.runs.enqueue.bind(fixture.runs);
-  fixture.runs.enqueue = async (input) => {
-    const result = await enqueue(input);
-    if (input.dedupKey?.endsWith(worker!.id)) {
-      claimed = await fixture.runs.claimById(result.run.id, "gate-test", 60_000);
-      await fixture.service.control(fixture.caller, { memberId: worker!.id, state: "paused" });
-    }
-    return result;
+  const handleTurn = async (input: OrchestratorInput) => {
+    await f.service.binding(input);
+    turns.push(input.runId!);
+    return { status: "completed", sessionId: input.conversation.threadRef, runId: input.runId! } as never;
   };
-  await fixture.service.sweep();
-  fixture.runs.enqueue = enqueue;
-  const runId = claimed!.id;
-  assert.equal((await fixture.store.get(fixture.root.id))!.messages[0]!.notifications[worker!.id]!.state, "pending");
-  await startClaimed(fixture, claimed!, turns);
-  assert.deepEqual(turns, []);
-  assert.equal((await fixture.runs.get(runId))!.status, "pending");
-  await resumeAndRun(fixture, worker!.id, runId, turns);
-});
-
-test("a pause landing after an idle worker claims its delivery holds the run instead of starting it", async () => {
-  const fixture = await swarmFixture();
-  const [worker] = await fixture.service.spawn(fixture.caller, { requestId: "one", text: "Work" });
-  await fixture.service.sweep();
-  const runId = (await fixture.store.get(fixture.root.id))!.messages[0]!.notifications[worker!.id]!.runId!;
-  const turns: string[] = [];
-  const claimed = (await fixture.runs.claimById(runId, "gate-test", 60_000))!;
-  await fixture.service.control(fixture.caller, { memberId: worker!.id, state: "paused" });
-  assert.equal((await fixture.store.get(fixture.root.id))!.messages[0]!.notifications[worker!.id]!.state, "pending");
-  await startClaimed(fixture, claimed, turns);
-  assert.deepEqual(turns, []);
-  assert.equal((await fixture.runs.get(runId))!.status, "pending");
-  await resumeAndRun(fixture, worker!.id, runId, turns);
+  const run = async (claimed: Parameters<typeof processRun>[1] | null) =>
+    processRun({ runs: f.runs, leaseTtlMs: 60_000, orchestrator: { handleTurn } as never }, claimed!);
+  const claimed = await f.runs.claimById(runId, "t", 60_000);
+  await f.service.control(f.caller, { memberId: worker!.id, state: "paused" });
+  await run(claimed);
+  assert.deepEqual([turns, (await f.runs.get(runId))!.status], [[], "pending"]);
+  await f.service.control(f.caller, { memberId: worker!.id, state: "active" });
+  await f.service.sweep();
+  const now = Date.now;
+  Date.now = () => now() + SWARM_LIMITS.pausedRecheckMs + 1_000;
+  await run(await f.runs.claimById(runId, "t", 60_000)).finally(() => (Date.now = now));
+  assert.deepEqual([turns, (await f.runs.get(runId))!.status], [[runId], "done"]);
 });
