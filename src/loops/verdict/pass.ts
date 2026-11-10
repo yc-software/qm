@@ -83,7 +83,7 @@ export function createInboxPass(deps: InboxPassDeps): InboxPass {
       if (outcome.reason === "source_gone")
         await deps.items.skip(
           item.id,
-          `the original conversation was deleted or is no longer accessible (${outcome.detail})`,
+          `The conversation is no longer available in ${item.source === "slack" ? "Slack" : "Gmail"}.`,
         );
       return false;
     }

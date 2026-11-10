@@ -30,8 +30,7 @@ export interface SourceClientDeps {
 
 type FetchOutcome =
   | { kind: "conversation"; conversation: Conversation }
-  | { kind: "skipped"; reason: "not_connected" | "not_inbox" | "bad_item" }
-  | { kind: "skipped"; reason: "source_gone"; detail: string };
+  | { kind: "skipped"; reason: "not_connected" | "not_inbox" | "bad_item" | "source_gone" };
 
 export class SourceRateLimited extends TransientTurnFailure {
   constructor(source: string) {
@@ -77,14 +76,13 @@ export function changedSinceLastLook(item: Pick<LoopItem, "verdict">, conversati
   return newest !== undefined && newest !== item.verdict?.lastSeenTs;
 }
 
-const goneSlackErrors = new Set(["channel_not_found", "thread_not_found"]);
+const goneSlackErrors = new Set(["channel_not_found", "thread_not_found", "not_in_channel", "is_archived"]);
 
-function sourceGone(error: unknown, item: LoopItem): string | undefined {
-  if (error instanceof GmailApiError)
-    return error.status === 404 ? `${error.message} for the ${gmailAccountOf(item) ?? "first"} account` : undefined;
+function sourceGone(error: unknown): boolean {
+  if (error instanceof GmailApiError) return error.status === 404;
   const code =
     isObj(error) && error.code === ErrorCode.PlatformError && isObj(error.data) ? error.data.error : undefined;
-  return typeof code === "string" && goneSlackErrors.has(code) ? `Slack ${code}` : undefined;
+  return typeof code === "string" && goneSlackErrors.has(code);
 }
 
 function rateLimitedAfter(error: unknown): number | undefined {
@@ -402,8 +400,7 @@ export function createConversationFetcher(clients: SourceClients): ConversationF
       if (item.source === "slack") return await slack(owner, item);
       if (item.source === "gmail") return await gmail(owner, item);
     } catch (error) {
-      const detail = sourceGone(error, item);
-      if (detail) return { kind: "skipped", reason: "source_gone", detail };
+      if (sourceGone(error)) return { kind: "skipped", reason: "source_gone" };
       throw error;
     }
     return { kind: "skipped", reason: "not_inbox" };

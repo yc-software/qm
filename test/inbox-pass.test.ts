@@ -782,14 +782,18 @@ test("a deleted or unreadable source skips the item without an error and stops r
   assert.equal(prompts.length, 0);
   const after = (await items.get(item.id))!;
   assert.equal(after.status, "skipped");
-  assert.equal(
-    after.parkedReason,
-    "the original conversation was deleted or is no longer accessible (Slack channel_not_found)",
-  );
+  assert.equal(after.parkedReason, "The conversation is no longer available in Slack.");
   world.calls!.length = 0;
   assert.equal((await pass(loop, { discover: false })).checked, 0);
   assert.deepEqual(world.calls, []);
 
+  for (const code of ["thread_not_found", "not_in_channel", "is_archived"]) {
+    world.gone = code;
+    assert.deepEqual(await createConversationFetcher(clientsFor(world))(OWNER, item), {
+      kind: "skipped",
+      reason: "source_gone",
+    });
+  }
   world.gone = "invalid_auth";
   await assert.rejects(createConversationFetcher(clientsFor(world))(OWNER, item), /invalid_auth/);
 });
@@ -823,7 +827,6 @@ test("Gmail reads the item's own mailbox and treats a missing thread as gone", a
   assert.deepEqual(await fetcher(OWNER, item), {
     kind: "skipped",
     reason: "source_gone",
-    detail: "Gmail threads/t1 returned 404 for the company account",
   });
   assert.deepEqual(requested, ["company"]);
   assert.ok(seen.every((header) => header === "Bearer company-token"));

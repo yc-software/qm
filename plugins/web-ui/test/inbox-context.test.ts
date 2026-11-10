@@ -143,6 +143,16 @@ test("a conversation the owner answered in the source shows as replied in Handle
     assert.equal(dismissed.status, "dismissed");
     render(handledNoteTpl(dismissed), host);
     assert.match(host.textContent!, /Dismissed 1m ago/);
+    const gone = toInboxItem({
+      ...base,
+      source: "slack",
+      parkedReason: "The conversation is no longer available in Slack.",
+    });
+    render(handledNoteTpl(gone), host);
+    assert.equal(
+      host.querySelector(".inbox-dismissed-reason")?.textContent,
+      "The conversation is no longer available in Slack.",
+    );
   } finally {
     await vite.close();
     dom.window.close();
