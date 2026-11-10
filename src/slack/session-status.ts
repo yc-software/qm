@@ -7,6 +7,7 @@ import { isTerminal, leaseLapsed, type Run, type RunStore } from "../runs/run-st
 import type { ProcessRegistry } from "../processes/process-registry.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { MonitorStore } from "../monitors/monitor-store.ts";
+import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import type { ScopeId } from "../types.ts";
 import { conversationWebUrl } from "../util/conversation-links.ts";
@@ -25,7 +26,6 @@ export interface SlackSessionStatusState {
   cardId?: string;
   cardTs?: string;
   cardContent?: string;
-  followUrl?: string;
 }
 
 interface StatusClient {
@@ -35,6 +35,7 @@ interface StatusClient {
 export interface SlackStatusActivity {
   sessions?: Pick<SessionStore, "getByThread" | "childrenOf" | "descendantsOf" | "latestToolSteps">;
   processes?: Pick<ProcessRegistry, "liveByScope">;
+  deliveries?: Pick<DeliveryStore, "pending">;
   monitors?: Pick<MonitorStore, "ownedBy">;
   publicWebUrl?: string;
 }
@@ -42,7 +43,7 @@ export interface SlackStatusActivity {
 export function createSlackSessionStatus(
   store: DurableMap<SlackSessionStatusState>,
   lease: LeaderLease,
-  runs: Pick<RunStore, "get" | "inFlightForThread" | "activeForThreads" | "lastFinishedForThreads" | "pendingReturns">,
+  runs: Pick<RunStore, "get" | "inFlightForThread" | "activeForThreads" | "pendingReturns">,
   flags: Pick<FeatureFlagStore, "enabled">,
   now = Date.now,
   activity: SlackStatusActivity = {},
@@ -104,14 +105,17 @@ export function createSlackSessionStatus(
     });
     const background = backgroundOf(threadRef);
     const running = active.find((run) => run.status === "running" && !leaseLapsed(run, now()));
-    const base = { session, helpers, ongoing: true, failed: false };
+    const base = { session, helpers, ongoing: true, landing: false };
     if (running) return { ...base, title: purposeOf(running) ?? "Thinking it through", phrase: "Working on it" };
     if (active.length) return { ...base, title: purposeOf(active[0]) ?? "Queued", phrase: "Picking back up shortly" };
     if (helpers.length || returning) return { ...base, title: "Waiting on subagents", phrase: "" };
     if (background) return { ...base, title: background[0], phrase: background[1] };
-    const failed =
-      !!anchor && (await runs.lastFinishedForThreads([anchor.sessionId])).get(anchor.sessionId)?.status === "failed";
-    return { ...base, ongoing: false, failed, title: "", phrase: "" };
+    const landing =
+      !!anchor &&
+      ((await activity.deliveries?.pending("slack")) ?? []).some(
+        (delivery) => delivery.provenance?.sourceThreadRef === anchor.sessionId,
+      );
+    return { ...base, ongoing: false, landing, title: "", phrase: "" };
   }
   async function sync(client: StatusClient, id: string, next?: SlackSessionStatusState) {
     await queue(id, async () => {
@@ -145,17 +149,14 @@ export function createSlackSessionStatus(
           const startedAt = current.startedAt ?? now();
           const cardId = current.cardId ?? randomUUID();
           const elapsed = now() - startedAt;
-          const followUrl =
-            elapsed > 5 * 60_000 && work.session
-              ? conversationWebUrl(activity.publicWebUrl, work.session.id)
-              : current.followUrl;
+          if (work.landing) return true;
+          const followUrl = work.session ? conversationWebUrl(activity.publicWebUrl, work.session.id) : undefined;
           const { blocks, headline } = renderCard(work, { emoji: current.emoji, cardId, elapsed, followUrl });
           const { ongoing } = work;
           const content = JSON.stringify(blocks);
           const post =
             current.cardContent !== content && (!!current.cardTs || (optedIn && ongoing && elapsed >= SHOW_AFTER_MS));
-          if (!next && ongoing && !post && current.startedAt && current.cardId && current.followUrl === followUrl)
-            return true;
+          if (!next && ongoing && !post && current.startedAt && current.cardId) return true;
           let state = await update(id, (row) =>
             leaseLost ? row : { ...row, writer, ...(next ? { anchorRunId: next.anchorRunId } : {}) },
           );
@@ -166,9 +167,9 @@ export function createSlackSessionStatus(
             state = saved;
             return true;
           };
-          if (!(await persist({ startedAt, cardId, ...(followUrl ? { followUrl } : {}) }))) return true;
+          if (!(await persist({ startedAt, cardId }))) return true;
           try {
-            if (post) {
+            if (post && ongoing) {
               const result = (await client.apiCall(state.cardTs ? "chat.update" : "chat.postMessage", {
                 channel: state.channel,
                 ...(state.cardTs ? { ts: state.cardTs } : { thread_ts: state.threadTs, client_msg_id: state.cardId }),
@@ -186,7 +187,10 @@ export function createSlackSessionStatus(
               }
               if (!(await persist({ cardTs, cardContent: content }))) return true;
             }
-            if (!ongoing) await deleteIf(id, (row) => !leaseLost && row.writer === writer);
+            if (!ongoing) {
+              if (state.cardTs) await client.apiCall("chat.delete", { channel: state.channel, ts: state.cardTs });
+              await deleteIf(id, (row) => !leaseLost && row.writer === writer);
+            }
           } catch (error) {
             const code = (error as { data?: { error?: string } }).data?.error;
             if (
@@ -252,7 +256,7 @@ interface ThreadWork {
   session: { id: string } | null | undefined;
   helpers: { id: string; title: string; step: string }[];
   ongoing: boolean;
-  failed: boolean;
+  landing: boolean;
   title: string;
   phrase: string;
 }
@@ -261,12 +265,12 @@ function renderCard(
   work: ThreadWork,
   card: { emoji?: string | undefined; cardId: string; elapsed: number; followUrl?: string | undefined },
 ) {
-  const title = work.ongoing ? work.title : `${work.failed ? "Stopped after" : "Done in"} ${duration(card.elapsed)}`;
+  const title = work.title;
   const icon = card.emoji ? EMOJI_CHAR_BY_NAME[card.emoji] : undefined;
   const headline = icon ? `${icon} ${title}` : title;
   const details = richText(
     icon ? undefined : card.emoji,
-    work.ongoing && card.elapsed >= 60_000 ? `${work.phrase} · ${duration(card.elapsed, false)}` : work.phrase,
+    card.elapsed >= 60_000 ? `${work.phrase} · ${minutes(card.elapsed)}` : work.phrase,
   );
   const rows = work.helpers.map(({ id, title, step }) => ({
     task_id: `${SLACK_STATUS_TASK_PREFIX}${card.cardId}:${id}`,
@@ -292,7 +296,7 @@ function renderCard(
           type: "task_card",
           task_id: `${SLACK_STATUS_TASK_PREFIX}${card.cardId}`,
           title: headline,
-          status: (work.failed && "error") || (work.ongoing && "in_progress") || "complete",
+          status: "in_progress",
           ...(details ? { details } : {}),
         },
   ];
@@ -301,12 +305,9 @@ function renderCard(
   return { blocks, headline };
 }
 
-function duration(ms: number, seconds = true): string {
-  const total = Math.max(0, Math.round(ms / 1000));
-  const [h, m, sec] = [Math.floor(total / 3600), Math.floor(total / 60) % 60, total % 60];
-  if (h) return `${h}h ${m}m`;
-  if (!seconds) return `${m}m`;
-  return m ? `${m}m ${sec}s` : `${sec}s`;
+function minutes(ms: number): string {
+  const total = Math.floor(ms / 60_000);
+  return total >= 60 ? `${Math.floor(total / 60)}h ${total % 60}m` : `${total}m`;
 }
 
 function richText(emoji: string | undefined, text: string) {

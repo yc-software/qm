@@ -29,6 +29,8 @@ function fixture() {
   const children: Session[] = [];
   const purposes = new Map<string, string>();
   const unreturned = new Set<string>();
+  const outbox: Array<{ provenance?: { sourceThreadRef: string } }> = [];
+  const deleted: string[] = [];
   const runs = {
     get: async (id: string) => records.get(id) ?? null,
     inFlightForThread: async (threadRef: string) =>
@@ -43,28 +45,27 @@ function fixture() {
       [...records.values()].filter(
         (run) => unreturned.has(run.id) && isTerminal(run.status) && threadRefs.includes(run.sessionId),
       ),
-    lastFinishedForThreads: async (threadRefs: readonly string[]) =>
-      new Map(
-        [...records.values()]
-          .filter((run) => threadRefs.includes(run.sessionId) && isTerminal(run.status))
-          .map((run) => [run.sessionId, run]),
-      ),
   };
   const cards: Array<{ method: string; args: Record<string, unknown> }> = [];
   const client = {
     apiCall: async (method: string, args: Record<string, unknown>) => {
-      assert.ok(["chat.postMessage", "chat.update"].includes(method));
+      assert.ok(["chat.postMessage", "chat.update", "chat.delete"].includes(method));
+      if (method === "chat.delete") {
+        deleted.push(String(args.ts));
+        return {};
+      }
       cards.push({ method, args });
       return { ts: method === "chat.update" ? String(args.ts) : `card.${cards.length}` };
     },
   };
-  const manager = () =>
-    createSlackSessionStatus(store, createNoopLeaderLease(), runs, flags, () => at, {
+  const manager = (rows = store) =>
+    createSlackSessionStatus(rows, createNoopLeaderLease(), runs, flags, () => at, {
       processes: {
         liveByScope: async (scope) =>
           jobs.filter((job) => job.scopeId === scope && job.status === "running" && job.expiresAt > at),
       },
       monitors: { ownedBy: async (scope) => watches.filter((watch) => watch.ownerScopeId === scope) },
+      deliveries: { pending: async () => outbox as never },
       publicWebUrl: "https://qm.example.test/web-ui/",
       sessions: {
         getByThread: async (threadRef) =>
@@ -145,6 +146,8 @@ function fixture() {
     records,
     purposes,
     unreturned,
+    outbox,
+    deleted,
     subagent,
     runs,
     cards,
@@ -197,8 +200,7 @@ test("concurrent starts share one card, terminal runs cannot clear active work, 
   assert.equal(f.cards.length, 1);
   next.status = "failed";
   await f.reconcile();
-  assert.equal(f.card()[0]?.title, "Stopped after 40s");
-  assert.equal(f.card()[0]?.status, "error");
+  assert.deepEqual(f.deleted, ["card.1"]);
   assert.deepEqual(await f.store.all(), []);
   const oldCard = f.card()[0]?.task_id;
   f.add("later");
@@ -228,11 +230,15 @@ test("restart preserves card identity and pending or expired-lease work is waiti
   assert.ok(f.cards.slice(1).every((call) => call.args.ts === "card.1"));
 });
 
-test("background lifecycle survives restart and gains a canonical link after five minutes including waits", async () => {
+test("background lifecycle survives restart, links to the web conversation from the start, and vanishes at the end", async () => {
   const f = fixture();
   await f.enable();
   const run = f.add("r1");
   await f.start(run.id);
+  assert.deepEqual(f.card()[1], {
+    type: "context",
+    elements: [{ type: "mrkdwn", text: "<https://qm.example.test/web-ui/s/canonical-uuid|Follow via QM Web>" }],
+  });
   const job = f.background();
   run.status = "done";
   await f.reconcile();
@@ -241,14 +247,6 @@ test("background lifecycle survives restart and gains a canonical link after fiv
   await f.manager().reconcile(f.client, "T1:B1");
   assert.equal(f.card()[0]?.title, "Watching for updates");
   f.advance(290_000);
-  await f.reconcile();
-  assert.equal(f.card().length, 1);
-  f.advance(1);
-  await f.reconcile();
-  assert.deepEqual(f.card()[1], {
-    type: "context",
-    elements: [{ type: "mrkdwn", text: "<https://qm.example.test/web-ui/s/canonical-uuid|Follow via QM Web>" }],
-  });
   const wake = f.add("wake");
   await f.reconcile();
   assert.equal(f.card()[0]?.title, "Thinking it through");
@@ -257,8 +255,8 @@ test("background lifecycle survives restart and gains a canonical link after fiv
   job.status = "exited";
   monitor.enabled = false;
   await f.reconcile();
-  assert.equal(f.card()[0]?.title, "Done in 5m 0s");
-  assert.equal(f.card().length, 2);
+  assert.deepEqual(f.deleted, ["card.1"]);
+  assert.deepEqual(await f.store.all(), []);
   assert.equal(f.cards.filter((call) => call.method === "chat.postMessage").length, 1);
   assert.ok(!JSON.stringify(f.cards).includes("secret-"));
 });
@@ -266,7 +264,7 @@ test("background lifecycle survives restart and gains a canonical link after fiv
 const line = (block: Record<string, unknown> | undefined) =>
   (block?.details as { elements: Array<{ elements: unknown[] }> } | undefined)?.elements[0]?.elements;
 
-test("the card shows the latest step with the ack emoji and ends with how long the work took", async () => {
+test("the card shows the latest step with the ack emoji and vanishes once the reply has landed", async () => {
   const f = fixture();
   await f.enable();
   const run = f.add("r1");
@@ -291,11 +289,15 @@ test("the card shows the latest step with the ack emoji and ends with how long t
   assert.equal(f.card()[0]?.title, "⚙️ Waiting on CI");
   assert.deepEqual(line(f.card()[0]), [{ type: "text", text: "Running in the background · 1m" }]);
   job.status = "exited";
-  f.advance(73_000);
+  f.outbox.push({ provenance: { sourceThreadRef: "ch:C1:1.0" } }, { provenance: { sourceThreadRef: "ch:C1:9.0" } });
+  const shown = f.cards.length;
   await f.reconcile();
-  assert.equal(f.card()[0]?.title, "⚙️ Done in 2m 14s");
-  assert.equal(f.card()[0]?.status, "complete");
-  assert.equal(f.card()[0]?.details, undefined);
+  assert.equal(f.cards.length, shown);
+  assert.deepEqual(f.deleted, []);
+  f.outbox.splice(0, 1);
+  await f.reconcile();
+  assert.deepEqual(f.deleted, ["card.1"]);
+  assert.deepEqual(await f.store.all(), []);
 });
 
 test("custom ack emoji ride in the details, and work that ends before the card is due posts nothing", async () => {
@@ -347,9 +349,7 @@ test("running subagents keep the card open as plan rows showing their latest ste
   job.status = "exited";
   watch.enabled = false;
   await f.reconcile();
-  assert.equal(f.card()[0]?.type, "task_card");
-  assert.equal(f.card()[0]?.title, "Done in 10s");
-  assert.equal(f.card().length, 1);
+  assert.deepEqual(f.deleted, ["card.1"]);
 });
 
 test("a finished subagent whose result has not reached the parent yet keeps the card waiting", async () => {
@@ -366,7 +366,7 @@ test("a finished subagent whose result has not reached the parent yet keeps the 
   assert.equal(f.card()[0]?.status, "in_progress");
   f.unreturned.delete(child.id);
   await f.reconcile();
-  assert.equal(f.card()[0]?.title, "Done in 10s");
+  assert.deepEqual(f.deleted, ["card.1"]);
 });
 
 test("a busy grandchild keeps its subagent row open, and overflow rows are counted rather than dropped", async () => {
@@ -405,7 +405,7 @@ test("an unchanged live card costs no store writes or Slack calls per sweep", as
       return f.store.update(...args);
     },
   };
-  const status = createSlackSessionStatus(counted, createNoopLeaderLease(), f.runs, f.flags, f.now, {});
+  const status = f.manager(counted);
   const calls = f.cards.length;
   await status.reconcile(f.client, "T1:B1");
   await status.reconcile(f.client, "T1:B1");
@@ -434,7 +434,7 @@ test("unrelated, expired, disabled, private and nonengaged work never keeps a ca
   f.add("other").sessionId = "other-thread";
   run.status = "done";
   await f.reconcile();
-  assert.equal(f.card()[0]?.title, "Done in 10s");
+  assert.deepEqual(f.deleted, ["card.1"]);
 });
 
 test("opt-out settles only this account's card without cancelling work", async () => {
@@ -446,8 +446,7 @@ test("opt-out settles only this account's card without cancelling work", async (
   const job = f.background();
   await f.flags.setEnabled("slack_loading_indicator", "channel:C1", false, "admin");
   await f.reconcile();
-  assert.equal(f.card()[0]?.title, "Done in 20s");
-  assert.equal(f.card()[0]?.status, "complete");
+  assert.deepEqual(f.deleted, ["card.1"]);
   assert.equal(job.status, "running");
   assert.deepEqual(
     (await f.store.all()).map((row) => row.account),
@@ -469,7 +468,7 @@ test("transient failures retry the same card after restart; inaccessible threads
   assert.equal((await f.store.all()).length, 1);
   f.client.apiCall = call;
   await f.manager().reconcile(f.client, "T1:B1");
-  assert.equal(f.cards.at(-1)?.args.ts, "card.1");
+  assert.deepEqual(f.deleted, ["card.1"]);
   assert.deepEqual(await f.store.all(), []);
   f.add("new");
   f.client.apiCall = async () => {
@@ -553,7 +552,8 @@ for (const method of ["chat.postMessage", "chat.update"]) {
     await pending;
     await f.reconcile();
     assert.equal(f.cards.filter((call) => call.method === "chat.postMessage").length, 1);
-    assert.equal(f.card()[0]?.title, method === "chat.update" ? "Thinking it through" : "Done in 10s");
+    if (method === "chat.update") assert.equal(f.card()[0]?.title, "Thinking it through");
+    else assert.deepEqual(f.deleted, ["card.1"]);
   });
 }
 
