@@ -385,6 +385,41 @@ async function listFiles(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, page);
 }
 
+type SessionPatch = {
+  title?: string | null;
+  archived?: boolean;
+  pinned?: boolean;
+  color?: string | null;
+  readAt?: number;
+};
+
+function parseSessionPatch(b: Record<string, unknown>): { patch: SessionPatch } | { error: string } {
+  const patch: SessionPatch = {};
+  if ("unread" in b) {
+    if (typeof b.unread !== "boolean") return { error: "unread must be a boolean" };
+    patch.readAt = b.unread ? 0 : Date.now();
+  }
+  if ("title" in b) {
+    if (b.title !== null && typeof b.title !== "string") return { error: "title must be a string or null" };
+    const trimmed = typeof b.title === "string" ? b.title.trim().slice(0, 200) : null;
+    patch.title = trimmed ? trimmed : null;
+  }
+  if ("archived" in b) {
+    if (typeof b.archived !== "boolean") return { error: "archived must be a boolean" };
+    patch.archived = b.archived;
+  }
+  if ("pinned" in b) {
+    if (typeof b.pinned !== "boolean") return { error: "pinned must be a boolean" };
+    patch.pinned = b.pinned;
+  }
+  if ("color" in b) {
+    if (!isConversationColor(b.color)) return { error: "color must be '#rrggbb' or null" };
+    patch.color = typeof b.color === "string" ? b.color.toLowerCase() : null;
+  }
+  if (Object.keys(patch).length === 0) return { error: "title, archived, pinned, color, or unread required" };
+  return { patch };
+}
+
 async function patchSession(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
   const id = ctx.params.id!;
@@ -398,56 +433,9 @@ async function patchSession(ctx: ApiCtx): Promise<void> {
   };
   const principalId = typeof b.principalId === "string" ? b.principalId : null;
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
-  const patch: {
-    title?: string | null;
-    archived?: boolean;
-    pinned?: boolean;
-    color?: string | null;
-    readAt?: number;
-  } = {};
-  if ("unread" in b) {
-    if (typeof b.unread !== "boolean") {
-      return sendJson(res, 400, { error: "bad_request", message: "unread must be a boolean" });
-    }
-    patch.readAt = b.unread ? 0 : Date.now();
-  }
-  if ("title" in b) {
-    if (b.title !== null && typeof b.title !== "string") {
-      return sendJson(res, 400, { error: "bad_request", message: "title must be a string or null" });
-    }
-    const trimmed = typeof b.title === "string" ? b.title.trim().slice(0, 200) : null;
-    patch.title = trimmed ? trimmed : null;
-  }
-  if ("archived" in b) {
-    if (typeof b.archived !== "boolean") {
-      return sendJson(res, 400, { error: "bad_request", message: "archived must be a boolean" });
-    }
-    patch.archived = b.archived;
-  }
-  if ("pinned" in b) {
-    if (typeof b.pinned !== "boolean") {
-      return sendJson(res, 400, { error: "bad_request", message: "pinned must be a boolean" });
-    }
-    patch.pinned = b.pinned;
-  }
-  if ("color" in b) {
-    if (!isConversationColor(b.color)) {
-      return sendJson(res, 400, { error: "bad_request", message: "color must be '#rrggbb' or null" });
-    }
-    patch.color = typeof b.color === "string" ? b.color.toLowerCase() : null;
-  }
-  if (
-    patch.title === undefined &&
-    patch.archived === undefined &&
-    patch.pinned === undefined &&
-    patch.color === undefined &&
-    patch.readAt === undefined
-  ) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "title, archived, pinned, color, or unread required",
-    });
-  }
+  const parsed = parseSessionPatch(b);
+  if ("error" in parsed) return sendJson(res, 400, { error: "bad_request", message: parsed.error });
+  const patch = parsed.patch;
   const session = await app.updateSession(id, principalId, patch);
   if (!session) return sendJson(res, 404, { error: "not_found" });
   return sendJson(res, 200, { session });
@@ -470,45 +458,9 @@ async function patchAgentConversation(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 401, { error: "capability_required", message: "this endpoint is for the agent self-API" });
   }
   const b = isObj(body) ? body : {};
-  const patch: {
-    title?: string | null;
-    archived?: boolean;
-    pinned?: boolean;
-    color?: string | null;
-  } = {};
-  if ("archived" in b) {
-    if (typeof b.archived !== "boolean") {
-      return sendJson(res, 400, { error: "bad_request", message: "archived must be a boolean" });
-    }
-    patch.archived = b.archived;
-  }
-  if ("pinned" in b) {
-    if (typeof b.pinned !== "boolean") {
-      return sendJson(res, 400, { error: "bad_request", message: "pinned must be a boolean" });
-    }
-    patch.pinned = b.pinned;
-  }
-  if ("title" in b) {
-    if (b.title !== null && typeof b.title !== "string") {
-      return sendJson(res, 400, { error: "bad_request", message: "title must be a string or null" });
-    }
-    const trimmed = typeof b.title === "string" ? b.title.trim().slice(0, 200) : null;
-    patch.title = trimmed ? trimmed : null;
-  }
-  if ("color" in b) {
-    if (!isConversationColor(b.color)) {
-      return sendJson(res, 400, { error: "bad_request", message: "color must be '#rrggbb' or null" });
-    }
-    patch.color = typeof b.color === "string" ? b.color.toLowerCase() : null;
-  }
-  if (
-    patch.archived === undefined &&
-    patch.pinned === undefined &&
-    patch.title === undefined &&
-    patch.color === undefined
-  ) {
-    return sendJson(res, 400, { error: "bad_request", message: "archived, pinned, title, or color required" });
-  }
+  const parsed = parseSessionPatch(b);
+  if ("error" in parsed) return sendJson(res, 400, { error: "bad_request", message: parsed.error });
+  const patch = parsed.patch;
   const session = await app.updateSession(ctx.params.id!, capability.actorId, patch);
   if (!session) return sendJson(res, 404, { error: "not_found", message: "not a conversation you can see" });
   audit(ctx.deps, {
