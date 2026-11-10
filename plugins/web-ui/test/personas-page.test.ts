@@ -327,6 +327,20 @@ test("an owner pins the persona in a channel from its row", async () => {
   assert.equal(flash(main), "Pinned in #design.");
 });
 
+test("an owner lets everyone in a channel edit the persona from its row", async () => {
+  const { main } = await openPersonaPage("Ada");
+  calls = [];
+  button(main, "Let members edit").click();
+  await settle();
+  assert.deepEqual(putBody(), {
+    access: [
+      { scopeId: "personal:tester", role: "owner" },
+      { scopeId: "channel:C9", role: "write" },
+    ],
+  });
+  assert.equal(flash(main), "Everyone in #design can edit Ada.");
+});
+
 test("Add channel searches your Slack channels on the page and adds one with chat access", async () => {
   const { main } = await openPersonaPage("Ada");
   button(main, "Add channel").click();
