@@ -99,6 +99,13 @@ test("user model credential store round-trips api key and oauth per user+provide
   assert.deepEqual(await store.connections("u1"), []);
 });
 
+test("an OpenRouter API key the store accepts is reported as a connection", async () => {
+  const { store } = testStore();
+  await store.setApiKey("u1", "openrouter", "sk-or-abc");
+  assert.equal((await store.get("u1", "openrouter"))?.apiKey, "sk-or-abc");
+  assert.deepEqual(await store.connections("u1"), [{ provider: "openrouter", kind: "apikey" }]);
+});
+
 test("stale subscription tokens refresh once (single-flight) inside the keychain", async () => {
   let refreshCalls = 0;
   const keychain = createKeychain({

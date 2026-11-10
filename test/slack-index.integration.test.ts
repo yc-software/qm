@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 import type { SlackCoreClient } from "../src/slack/index.ts";
 import type { TurnResult } from "../src/types.ts";
+import { withTenant } from "../src/tenants/context.ts";
 
 type Handler = (args: any) => Promise<void>;
 
@@ -177,6 +178,8 @@ class FakeApp {
     FakeApp.instances.push(this);
   }
 
+  use(): void {}
+
   message(handler: Handler): void {
     this.messageHandlers.push(handler);
   }
@@ -189,6 +192,8 @@ class FakeApp {
     this.actionHandlers.push({ pattern, handler });
   }
 
+  async init(): Promise<void> {}
+
   async start(): Promise<void> {
     this.started = true;
   }
@@ -199,13 +204,13 @@ class FakeApp {
 
   async emitMessage(message: any, eventId = `Ev-${message.channel}-${message.ts}`, context: any = {}): Promise<void> {
     for (const handler of this.messageHandlers) {
-      await handler({ message, body: { event_id: eventId }, client: this.client, context });
+      await withTenant(TENANT, () => handler({ message, body: { event_id: eventId }, client: this.client, context }));
     }
   }
 
   async emitEvent(name: string, event: any, eventId = `Ev-${name}-${event.channel}-${event.ts}`): Promise<void> {
     for (const handler of this.eventHandlers.get(name) ?? []) {
-      await handler({ event, body: { event_id: eventId }, client: this.client, context: {} });
+      await withTenant(TENANT, () => handler({ event, body: { event_id: eventId }, client: this.client, context: {} }));
     }
   }
 }
@@ -365,6 +370,8 @@ const internalUser = (id: string, name: string) => ({
   profile: { display_name: name, real_name: name, email: `${name.toLowerCase()}@example.com` },
 });
 
+const TENANT = "00000000-0000-4000-8000-000000000001";
+
 async function waitFor(cond: () => boolean, timeoutMs = 2000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!cond()) {
@@ -387,17 +394,20 @@ async function fixture(
 ) {
   const core = new FakeCore();
   core.externalParticipants = options.externalParticipants ?? false;
-  const started = startSlackPlugin(
-    {
-      botToken: "xoxb-test",
-      appToken: "xapp-test",
-      identityEmail: options.identityEmail ?? "0",
-      ...(options.allowFrom ? { allowFrom: options.allowFrom } : {}),
-      ...(options.denyMessage ? { denyMessage: options.denyMessage } : {}),
-      ...(options.coreSingleton === undefined ? {} : { coreSingleton: options.coreSingleton }),
-      ...(options.webUiPublicUrl ? { webUiPublicUrl: options.webUiPublicUrl } : {}),
-    },
-    core,
+  const started = withTenant(TENANT, () =>
+    startSlackPlugin(
+      {
+        botToken: "xoxb-test",
+        appToken: "xapp-test",
+        identityEmail: options.identityEmail ?? "0",
+        ...(options.allowFrom ? { allowFrom: options.allowFrom } : {}),
+        ...(options.denyMessage ? { denyMessage: options.denyMessage } : {}),
+        ...(options.coreSingleton === undefined ? {} : { coreSingleton: options.coreSingleton }),
+        ...(options.webUiPublicUrl ? { webUiPublicUrl: options.webUiPublicUrl } : {}),
+      },
+      core,
+      TENANT,
+    ),
   );
   const app = FakeApp.instances.at(-1)!;
   app.client.membershipDelayMs = options.membershipDelayMs ?? 0;
@@ -550,6 +560,43 @@ test("a mid-turn message that STEERS the live run does not post the reply twice"
       f.client.posts.filter((p) => p.text === "agent reply").length,
       1,
       "the shared run's reply is posted once, by the handler that owns it",
+    );
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a stop with no reply text tells only the person who stopped it, in the thread", async () => {
+  const f = await fixture();
+  try {
+    f.core.holdRun("R5");
+    const ask = { channel: "C1", channel_type: "channel", user: "U1", text: "<@UBOT> long job", ts: "700.1" };
+    f.client.messagesByChannel.set("C1", [ask]);
+    const first = f.app.emitEvent("app_mention", ask);
+    await waitFor(() => f.core.polled.length === 1);
+    f.core.queuedRunId = undefined;
+    f.core.result = { status: "silent", steered: true, stopped: true };
+    const stop = {
+      channel: "C1",
+      channel_type: "channel",
+      user: "U2",
+      text: "<@UBOT> stop",
+      ts: "700.2",
+      thread_ts: "700.1",
+    };
+    f.client.messagesByChannel.set("C1", [ask, stop]);
+    await f.app.emitEvent("app_mention", stop);
+    f.core.finishRun({ status: "ok", reply: "", stopped: true });
+    await first;
+
+    assert.deepEqual(
+      f.client.ephemerals.map((e) => ({ channel: e.channel, user: e.user, text: e.text, thread_ts: e.thread_ts })),
+      [{ channel: "C1", user: "U2", text: "Stopped.", thread_ts: "700.1" }],
+    );
+    assert.equal(
+      f.client.posts.some((p) => /Stopped\.|\(no response\)/.test(String(p.text ?? ""))),
+      false,
+      "nothing about the stop is posted to the thread",
     );
   } finally {
     await f.stop();
@@ -883,7 +930,7 @@ test("flipping the toggle on creates the pinned header; flipping it off removes 
   try {
     assert.equal(f.core.headerPinChangeListeners.length, 1, "the plugin subscribes to toggle changes");
     f.core.headerPinScopes.add("channel:C1");
-    for (const listener of f.core.headerPinChangeListeners) listener("channel:C1");
+    for (const listener of f.core.headerPinChangeListeners) withTenant(TENANT, () => listener("channel:C1"));
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.deepEqual(
       f.client.pinnedByChannel.get("C1")?.map((m) => m.text),
@@ -891,7 +938,7 @@ test("flipping the toggle on creates the pinned header; flipping it off removes 
       "toggle-on posts and pins the header",
     );
     f.core.headerPinScopes.delete("channel:C1");
-    for (const listener of f.core.headerPinChangeListeners) listener("channel:C1");
+    for (const listener of f.core.headerPinChangeListeners) withTenant(TENANT, () => listener("channel:C1"));
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.deepEqual(f.client.pinnedByChannel.get("C1"), [], "toggle-off unpins the header");
     assert.equal(f.client.deletes.length, 1, "and deletes the bot's header message");
@@ -926,7 +973,7 @@ test("a scope's model change rewrites its channel's pinned header without waitin
         text: "Using Claude Sonnet 5 here. <https://claw.example.dev/projects/channel/C1|More settings>",
       },
     ]);
-    for (const listener of f.core.modelChangeListeners) listener("channel:C1");
+    for (const listener of f.core.modelChangeListeners) withTenant(TENANT, () => listener("channel:C1"));
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.deepEqual(
       f.client.updates.map((u) => ({ channel: u.channel, ts: u.ts, text: u.text })),
@@ -938,7 +985,8 @@ test("a scope's model change rewrites its channel's pinned header without waitin
         },
       ],
     );
-    for (const listener of f.core.modelChangeListeners) listener("personal:alice@example.com");
+    for (const listener of f.core.modelChangeListeners)
+      withTenant(TENANT, () => listener("personal:alice@example.com"));
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.deepEqual(f.client.topics, [], "a DM's topic settles on the person's next message, not on a push");
   } finally {
