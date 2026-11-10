@@ -53,6 +53,7 @@ import {
 import type { ParticipantScope } from "../sessions/session-store.ts";
 import type { App, AppDeps, ContextSummary, ProjectView, FileListPage } from "./app-types.ts";
 import { toFileItem } from "./app-types.ts";
+import { personLabel } from "../identity/person-names.ts";
 
 export function createAppHelpers(deps: AppDeps, app: App) {
   const adminBase = deps.publicWebUrl?.replace(/\/$/, "");
@@ -247,12 +248,13 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   async function projectView(project: Project): Promise<ProjectView> {
     const memberIds = (await deps.projects?.members(projectGroupRef(project.id))) ?? project.memberIds;
     const manual = new Set([project.ownerId, ...project.memberIds]);
+    const users = await deps.users?.resolve(memberIds).catch(() => undefined);
     const members = await Promise.all(
       memberIds.map(async (principalId) => {
         const member = await deps.directory.get(principalId).catch(() => null);
         return {
           principalId,
-          displayName: member?.displayName?.trim() || principalId,
+          displayName: personLabel(principalId, { displayName: member?.displayName, user: users?.get(principalId) }),
           ...(member?.avatarUrl ? { avatarUrl: member.avatarUrl } : {}),
           ...(manual.has(principalId) ? {} : { viaChannel: true }),
         };

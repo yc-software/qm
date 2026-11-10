@@ -37,11 +37,8 @@ checksums to bypass this check. A previously completed legacy webhook sweep is
 adopted into the checksum ledger without disabling webhooks that an operator has
 subsequently re-enabled.
 
-The cron journal imports existing `cron_fire_log` history into `cron_fires` and
-continues importing writes from older workers during a rolling upgrade. History
-retention also removes expired entries from the legacy table, preventing a later
-restart from importing them again. The legacy table remains available for older
-binaries.
+The cron journal imports existing `cron_fire_log` history into `cron_fires` once
+and then drops `cron_fire_log`.
 
 Published 0.1.15 databases upgrade directly. Stop all older core and worker processes
 before running the new migrations: this upgrade replaces `session_entries` with

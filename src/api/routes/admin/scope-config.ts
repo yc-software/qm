@@ -246,7 +246,7 @@ const SETTINGS_RESOURCES = {
     "egress",
     "orgAmbient",
   ],
-  customize: ["soul", "branding", "featureFlags", "decisions"],
+  customize: ["soul", "branding", "appHandle", "featureFlags", "decisions"],
   "slack-settings": ["externalSlackParticipants", "channelHeaderPinDefault", "ackEmoji"],
   models: [
     "baseModel",

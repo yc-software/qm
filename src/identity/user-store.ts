@@ -5,6 +5,10 @@ import { SESSION_MIGRATIONS } from "../sessions/session-schema.ts";
 import { authoredUserTurn, msOf, TENANT } from "../sessions/items.ts";
 import { foldPrincipalId } from "../directory/person.ts";
 import { PERSONA_MIGRATIONS } from "../personas/persona-schema.ts";
+import { PERSONA_TENANCY } from "../personas/persona-tenancy.ts";
+import { fold, tenantedUsers, ts, USERS_SCHEMA } from "./user-tenancy.ts";
+
+export { fold };
 
 type UserSource = "turn" | "invite" | "admin";
 type UserKind = "person" | "app";
@@ -18,6 +22,7 @@ export interface UserRecord {
   source?: UserSource;
   offboardedAt?: number;
   offboardedBy?: string;
+  displayName?: string;
 }
 
 export interface UserLink {
@@ -59,10 +64,21 @@ export interface UserStore extends UserLinkStore {
   markOffboarded(id: string, by: string): Promise<UserRecord>;
   markReactivated(id: string): Promise<UserRecord | null>;
   markApps(ids: readonly string[]): Promise<number>;
+  setDisplayName(alias: string, name: string): Promise<boolean>;
 }
 
-export const fold = (expr: string): string =>
-  `CASE WHEN position('@' IN btrim(${expr})) > 0 THEN lower(btrim(${expr})) ELSE btrim(${expr}) END`;
+const DISPLAY_NAME_MAX = 200;
+
+export function cleanDisplayName(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const name = raw
+    .replace(/[\p{Cc}\p{Cf}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, DISPLAY_NAME_MAX)
+    .trim();
+  return name || undefined;
+}
 
 const userOf = (expr: string): string => `(SELECT l.user_id FROM user_links l WHERE l.alias_id = ${expr})`;
 
@@ -78,8 +94,6 @@ const ensureUsers = (aliases: string): string => `
 const knownPerson = (expr: string): string =>
   `(EXISTS (SELECT 1 FROM user_links k WHERE k.alias_id = ${expr}) OR ${expr} IN (SELECT alias FROM admins)
     OR ${expr} LIKE '%@%' OR ${expr} LIKE 'oidc:%')`;
-
-const ts = (param: string): string => `to_timestamp(${param}::double precision / 1000)`;
 
 const TURN_AUTHORS = `
   CREATE TEMP TABLE turn_authors ON COMMIT DROP AS
@@ -136,29 +150,7 @@ export const USER_MIGRATIONS: PgMigrationDefinition[] = [
            END IF;
          END IF;
 
-         CREATE TABLE IF NOT EXISTS users(
-           id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-           primary_alias TEXT NOT NULL UNIQUE,
-           kind          TEXT NOT NULL DEFAULT 'person' CHECK (kind IN ('person', 'app')),
-           first_seen_at TIMESTAMPTZ,
-           source        TEXT CHECK (source IN ('turn', 'invite', 'admin')),
-           offboarded_at TIMESTAMPTZ,
-           offboarded_by UUID REFERENCES users(id) ON DELETE SET NULL,
-           CHECK ((first_seen_at IS NULL) = (source IS NULL)),
-           CHECK (offboarded_at IS NOT NULL OR offboarded_by IS NULL)
-         );
-         CREATE TABLE IF NOT EXISTS user_links(
-           alias_id   TEXT PRIMARY KEY CHECK (alias_id <> ''),
-           user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-           evidence   TEXT NOT NULL,
-           linked_by  UUID REFERENCES users(id) ON DELETE SET NULL,
-           created_at TIMESTAMPTZ NOT NULL,
-           UNIQUE (user_id, alias_id)
-         );
-         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'users_primary_alias_link') THEN
-           ALTER TABLE users ADD CONSTRAINT users_primary_alias_link FOREIGN KEY (id, primary_alias)
-             REFERENCES user_links(user_id, alias_id) DEFERRABLE INITIALLY DEFERRED;
-         END IF;
+         ${USERS_SCHEMA}
 
          DELETE FROM staged_links WHERE coalesce(alias, '') = '' OR coalesce(canonical, '') = '' OR alias = canonical;
          ${ensureUsers("SELECT canonical FROM staged_links")}
@@ -248,11 +240,27 @@ export const USER_MIGRATIONS: PgMigrationDefinition[] = [
   ...PERSONA_MIGRATIONS,
 ];
 
+const TENANTED = tenantedUsers(USER_MIGRATIONS.filter((migration) => !PERSONA_MIGRATIONS.includes(migration)));
+
+export const USER_SCHEMA_MIGRATIONS: PgMigrationDefinition[] = [
+  ...TENANTED.before,
+  ...USER_MIGRATIONS,
+  ...TENANTED.after,
+  ...PERSONA_TENANCY,
+  {
+    id: "users/v2/0006-display-name",
+    statements: [
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT
+         CHECK (display_name IS NULL OR (display_name <> '' AND char_length(display_name) <= ${DISPLAY_NAME_MAX}))`,
+    ],
+  },
+].sort((a, b) => Number(a.id > b.id) - Number(a.id < b.id));
+
 const COLUMNS = `u.id, u.primary_alias, u.kind,
   ARRAY(SELECT a.alias_id FROM user_links a WHERE a.user_id = u.id
          ORDER BY a.alias_id = u.primary_alias DESC, a.created_at, a.alias_id) AS aliases, ${msOf("u.first_seen_at")} AS first_seen_at, u.source,
   ${msOf("u.offboarded_at")} AS offboarded_at,
-  (SELECT b.primary_alias FROM users b WHERE b.id = u.offboarded_by) AS offboarded_by`;
+  (SELECT b.primary_alias FROM users b WHERE b.id = u.offboarded_by) AS offboarded_by, u.display_name`;
 const LINK_SELECT = `SELECT l.alias_id, u.primary_alias AS canonical_id, l.evidence,
     coalesce((SELECT b.primary_alias FROM users b WHERE b.id = l.linked_by), '') AS linked_by,
     ${msOf("l.created_at")} AS created_at
@@ -267,6 +275,7 @@ function toRecord(r: Record<string, unknown>): UserRecord {
     ...(r.first_seen_at != null ? { firstSeenAt: Number(r.first_seen_at), source: r.source as UserSource } : {}),
     ...(r.offboarded_at != null ? { offboardedAt: Number(r.offboarded_at) } : {}),
     ...(r.offboarded_by != null ? { offboardedBy: r.offboarded_by as string } : {}),
+    ...(r.display_name != null ? { displayName: r.display_name as string } : {}),
   };
 }
 
@@ -334,12 +343,15 @@ export async function ensureUserIn(client: PoolClient, alias: string): Promise<s
   const found = await findUser(q, alias);
   if (found) return found;
   const created = (
-    await q(`INSERT INTO users(primary_alias) VALUES ($1) ON CONFLICT (primary_alias) DO NOTHING RETURNING id`, [alias])
+    await q(
+      `INSERT INTO users(primary_alias) VALUES ($1) ON CONFLICT (tenant_id, primary_alias) DO NOTHING RETURNING id`,
+      [alias],
+    )
   )[0]?.id as string | undefined;
   if (created) {
     const linked = await q(
       `INSERT INTO user_links(alias_id, user_id, evidence, created_at) VALUES ($1, $2, 'primary', now())
-       ON CONFLICT (alias_id) DO NOTHING RETURNING alias_id`,
+       ON CONFLICT (tenant_id, alias_id) DO NOTHING RETURNING alias_id`,
       [alias, created],
     );
     if (linked.length) return created;
@@ -374,7 +386,8 @@ async function linkInTransaction(client: PoolClient, link: UserLink): Promise<Us
          source = CASE WHEN a.first_seen_at < c.first_seen_at OR c.first_seen_at IS NULL THEN a.source ELSE c.source END,
          offboarded_at = least(c.offboarded_at, a.offboarded_at),
          offboarded_by = CASE WHEN a.offboarded_at < c.offboarded_at OR c.offboarded_at IS NULL
-                              THEN a.offboarded_by ELSE c.offboarded_by END
+                              THEN a.offboarded_by ELSE c.offboarded_by END,
+         display_name = coalesce(c.display_name, a.display_name)
        FROM users a WHERE c.id = $1 AND a.id = $2`,
       [target, source],
     );
@@ -394,7 +407,11 @@ async function linkInTransaction(client: PoolClient, link: UserLink): Promise<Us
 }
 
 export function createPostgresUserStore(connectionString: string): UserStore {
-  const pg = createPgPool(connectionString, [...DIRECTORY_MIGRATIONS, ...SESSION_MIGRATIONS, ...USER_MIGRATIONS]);
+  const pg = createPgPool(connectionString, [
+    ...DIRECTORY_MIGRATIONS,
+    ...SESSION_MIGRATIONS,
+    ...USER_SCHEMA_MIGRATIONS,
+  ]);
   const { q } = pg;
   const transaction = async <T>(fn: (client: PoolClient) => Promise<T>): Promise<T> =>
     withPgTransaction(await pg.pool(), fn);
@@ -461,6 +478,16 @@ export function createPostgresUserStore(connectionString: string): UserStore {
         [ids.map((id) => foldPrincipalId(id))],
       );
       return rows.length;
+    },
+    async setDisplayName(alias, raw) {
+      const name = cleanDisplayName(raw);
+      if (!name) return false;
+      const user = await ensureUser(foldPrincipalId(alias));
+      const rows = await q(
+        `UPDATE users SET display_name = $2 WHERE id = $1 AND display_name IS DISTINCT FROM $2 RETURNING id`,
+        [user, name],
+      );
+      return rows.length > 0;
     },
     async markReactivated(id) {
       const rows = await q(

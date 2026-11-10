@@ -58,10 +58,11 @@ async function agent(log: AppPageViewLog) {
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const backings = testDeployBackings();
   const deploy = createDeployService({
     ...singleProcessDeps(),
     externalSharingAllowed: async () => true,
-    deployStore: createDeployStore(testDeployBackings()),
+    deployStore: createDeployStore(backings),
     provider: {
       profile: { managedScaleToZero: false },
       apply: async () => ({ host: "127.0.0.1", port: upstreamPort }),
@@ -75,7 +76,7 @@ async function agent(log: AppPageViewLog) {
     deploy,
     acl,
     directory: createPostgresDirectoryStore(testDatabaseUrl()),
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    sessions: createPostgresSessionStore(backings.databaseUrl),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
   } as unknown as Parameters<typeof createApp>[0]);
   const deployed = await app.deploy({

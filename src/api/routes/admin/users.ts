@@ -16,6 +16,7 @@ import { detectOnboardingStatus, setOnboardingStatus, type OnboardingStatus } fr
 import { sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, isObj, orgScope } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
+import { personNamer } from "./common.ts";
 import { trimTrailingSlashes } from "../../../util/text.ts";
 
 const EXTERNAL_ORG_ADMIN_PORTAL_ONLY =
@@ -57,11 +58,17 @@ export async function listUsers(ctx: ApiCtx): Promise<void> {
     ...(signInUrl ? { signInUrl } : {}),
   };
   const actorKey = deps.modelGatewayTransport?.actorKey;
+  const nameOf = await personNamer(ctx.app, deps);
   return sendJson(res, 200, {
     scopeId: scope,
-    users: actorKey
-      ? rows.map((user) => ({ ...user, gatewayActor: gatewayActorId(user.principalId, actorKey) }))
-      : rows,
+    users: rows.map((user) => {
+      const displayName = nameOf(user.principalId);
+      return {
+        ...user,
+        ...(displayName && displayName !== user.principalId ? { displayName } : {}),
+        ...(actorKey ? { gatewayActor: gatewayActorId(user.principalId, actorKey) } : {}),
+      };
+    }),
     grants,
     externalUsers,
     inviteEmail,

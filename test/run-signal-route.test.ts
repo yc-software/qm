@@ -14,6 +14,7 @@ import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal, TurnRequest } from "../src/types.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { configureCommandRules } from "./support/command-rules.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
@@ -582,6 +583,7 @@ test("web: a Project member can resolve their own approval in another member's t
   ]);
   const project = await built.app.createProject("approval-owner", "Shared approvals");
   assert.ok(project);
+  await configureCommandRules(built.config, project.scopeId);
   assert.equal((await built.app.addProjectMember(project.id, "approval-owner", "approval-member")).status, "ok");
   const threadRef = `web:approval-owner:${crypto.randomUUID()}`;
   const channelRef = project.scopeId.slice("group:".length);

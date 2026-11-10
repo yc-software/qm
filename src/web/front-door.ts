@@ -1,6 +1,9 @@
 import type { Server } from "node:http";
 import type { CoreHandoff } from "../../plugins/portal/src/index.ts";
-import { apiAlias } from "../api/browser-session.ts";
+import { apiAlias, sessionCookieTenant } from "../api/browser-session.ts";
+import { sessionLifetime } from "../../plugins/portal/src/session.ts";
+import { bootTenant } from "../tenants/boot.ts";
+import { inTenant } from "../tenants/claim.ts";
 import type { Config } from "../config.ts";
 import type { WebShell } from "./shell.ts";
 
@@ -15,7 +18,8 @@ export async function startFrontDoor(
   core: Server,
   shell: WebShell,
 ): Promise<{ close(): void }> {
-  if (!env.PORTAL_SESSION_SECRET) throw new Error("PORTAL_SESSION_SECRET is required to serve the public port");
+  const secret = env.PORTAL_SESSION_SECRET;
+  if (!secret) throw new Error("PORTAL_SESSION_SECRET is required to serve the public port");
   env.CORE_API_URL = `http://127.0.0.1:${config.port}`;
   env.CORE_ORG_ID = config.orgId;
   env.PUBLIC_WEB_URL = config.publicWebUrl ?? `http://localhost:${config.publicPort}`;
@@ -26,7 +30,10 @@ export async function startFrontDoor(
     core: {
       serves: (method, pathname) => apiAlias(method, pathname) !== null,
       handle: (req, res) => void core.emit("request", req, res),
-      shell: (req, res) => shell.serve(req, res),
+      shell: (req, res) => {
+        const tenant = sessionCookieTenant(req, secret, sessionLifetime(env).max) ?? bootTenant();
+        return tenant ? inTenant(tenant, () => shell.serve(req, res)) : shell.serve(req, res);
+      },
     },
   });
   return {

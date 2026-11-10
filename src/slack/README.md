@@ -174,10 +174,11 @@ the tokens, core simply runs without Slack.
   one message is **collapsed** to a single turn while one is in flight (`reactionsInFlight` guard), so an
   emoji-pile can't wake the agent once per emoji. _(Bounded by design: a reaction on someone else's non-root reply
   inside a followed thread isn't surfaced — the message thread-follow path owns that conversation.)_
-- **Dangerous commands ask for approval in Slack.** When a tool call hits a
-  `require_approval` command-policy rule, the bot posts buttons for **Allow once**,
-  **Allow session**, **Allow always**, and **Deny**. Session/always approvals are exact-command
-  grants; deny rules still cannot be bypassed. This works whether the turn _paused_ awaiting
+- **Commands matching a configured approval rule ask for approval in Slack.** No command-policy
+  rules ship by default. When a tool call hits an administrator-configured `require_approval`
+  rule, the bot posts buttons for **Allow once**, **Allow session**, **Allow always**, and
+  **Deny**. Each grant covers the matched rule, not only the exact command text; deny rules
+  still cannot be bypassed. This works whether the turn _paused_ awaiting
   approval (`pending_approval`) or _finished with a reply but skipped_ the gated command
   (collect-mode `ok` + `pendingApprovals`, what the real agent does) — in the latter case
   the buttons are posted alongside the reply. Clicking re-runs the turn with the command approved.

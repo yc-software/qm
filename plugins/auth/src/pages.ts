@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { HARBOUR_STYLE, harbourScene } from "../../chassis/src/harbour.ts";
 import { escapeHtml } from "../../chassis/src/http.ts";
 
 const CONFIRM_SCRIPT = `(function () {
@@ -18,79 +19,51 @@ const CONFIRM_SCRIPT = `(function () {
 const CONFIRM_SCRIPT_HASH = `sha256-${createHash("sha256").update(CONFIRM_SCRIPT, "utf8").digest("base64")}`;
 
 export const PAGE_CSP =
-  "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+  "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 
 export const CONFIRM_PAGE_CSP = PAGE_CSP.replace(
   "default-src 'none';",
   `default-src 'none'; script-src '${CONFIRM_SCRIPT_HASH}';`,
 );
 
-const STYLE = `<style>
-  :root{
-    --bg:#ffffff; --surface:#ffffff; --text:#0a0a0a; --muted:#737373;
-    --border:#e5e5e5; --secondary:#f5f5f5; --warn:#b42318; --warn-bg:#fdeceb;
-    --radius-md:10px; --radius-lg:16px;
-  }
-  @media (prefers-color-scheme:dark){
-    :root{ --bg:#0a0a0a; --surface:#171717; --text:#fafafa; --muted:#a3a3a3;
-      --border:#2a2a2a; --secondary:#262626; --warn:#ff8a80; --warn-bg:#2a1a1a; }
-  }
-  *{ box-sizing:border-box; }
-  html,body{ height:100%; }
-  body{
-    margin:0; background:var(--bg); color:var(--text); display:flex; min-height:100%;
-    font:14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    -webkit-font-smoothing:antialiased;
-  }
-  main{ margin:auto; padding:32px 20px; width:100%; display:grid; place-items:center; }
-  .card{
-    width:100%; max-width:420px; background:var(--surface); border:1px solid var(--border);
-    border-radius:var(--radius-lg); padding:34px 32px 30px; text-align:center;
-  }
-  .icon{ width:52px; height:52px; margin:0 auto 18px; border-radius:var(--radius-md); background:var(--secondary);
-    display:grid; place-items:center; }
-  .icon svg{ width:26px; height:26px; stroke:var(--text); fill:none; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
-  .icon.warn{ background:var(--warn-bg); }
-  .icon.warn svg{ stroke:var(--warn); stroke-width:2; }
-  h1{ font-size:20px; font-weight:600; margin:0 0 8px; }
-  .msg{ color:var(--muted); margin:0 auto 22px; max-width:40ch; font-size:14px; }
-  .reason{ margin:0 auto 22px; font-size:13px; color:var(--text);
-    background:var(--warn-bg); border:1px solid var(--border); border-radius:var(--radius-md); padding:11px 14px;
-    text-align:left; word-break:break-word; }
-  .reason strong{ display:block; color:var(--warn); font-size:11px; margin-bottom:3px; }
-  form{ display:grid; gap:10px; text-align:left; }
-  label{ font-size:12.5px; font-weight:600; color:var(--muted); }
-  input[type=email],input[type=password]{ width:100%; min-height:44px; padding:0 14px; font:inherit; color:var(--text);
-    background:var(--bg); border:1px solid var(--border); border-radius:var(--radius-md); }
-  input[type=email]:focus-visible,input[type=password]:focus-visible{ outline:2px solid color-mix(in srgb, var(--text) 35%, transparent); outline-offset:1px; }
-  .btn{ display:flex; align-items:center; justify-content:center; min-height:44px; padding:0 18px; width:100%;
-    text-decoration:none; font:inherit; font-weight:600; border-radius:var(--radius-md); cursor:pointer;
-    background:var(--text); color:var(--bg); border:1px solid var(--text); }
-  .btn:hover{ opacity:.9; }
-  .alternative{ background:var(--surface); color:var(--text); border-color:var(--border); }
-  .divider{ display:flex; align-items:center; gap:16px; margin:24px 0; color:var(--muted); font-size:11px; font-weight:600; letter-spacing:.08em; }
-  .divider::before,.divider::after{ content:""; flex:1; height:1px; background:var(--border); }
-  .help{ color:var(--muted); font-size:12.5px; margin:20px 0 0; }
-  .note{ color:var(--muted); font-size:12px; margin:8px 0 0; text-align:left; }
-  .who{ display:block; margin:0 auto 22px; font-size:13px; color:var(--text); background:var(--secondary);
-    border:1px solid var(--border); border-radius:var(--radius-md); padding:11px 14px; word-break:break-word; }
+const STYLE = `${HARBOUR_STYLE}
+<style>
+  .card form{ display:grid; gap:10px; margin:0; }
+  .card h1 + .actions{ margin-top:16px; }
+  .card label{ font-size:11px; font-weight:600; color:var(--muted); }
+  .card input[type=email],.card input[type=password]{ width:100%; padding:11px 14px; font:inherit; font-size:12px;
+    color:var(--ink); background:#fdfdfb; border:1px solid var(--line); border-radius:7px; }
+  .card input[type=email]:focus-visible,.card input[type=password]:focus-visible{ outline:2px solid #8394a0; outline-offset:3px; }
+  .card .btn{ border:none; background:var(--ink); color:#fff; }
+  .card .btn::after{ content:"→"; font-size:19px; line-height:16px; }
+  .card .btn:hover{ background:#29445b; }
+  .card .btn.alternative{ border:1px solid var(--line); background:#fdfdfb; color:var(--ink); }
+  .card .btn.alternative::after{ color:var(--muted); }
+  .card .btn.alternative:hover{ background:#fff; }
+  .card .btn.alternative:hover::after{ color:var(--ink); }
+  .divider{ display:flex; align-items:center; gap:12px; margin:16px 0; color:var(--muted); font-size:10px; font-weight:600; letter-spacing:.08em; }
+  .divider::before,.divider::after{ content:""; flex:1; height:1px; background:var(--line); }
+  .note{ color:var(--muted); font-size:11px; line-height:1.5; margin:4px 0 0; }
+  .who{ display:block; margin:0 0 16px; font-size:12px; color:var(--ink); background:#fdfdfb;
+    border:1px solid var(--line); border-radius:7px; padding:10px 12px; word-break:break-word; }
 </style>`;
 
-const MAIL_ICON = `<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>`;
 const SENT_ICON = `<svg viewBox="0 0 24 24"><path d="M21 4 3 11l7 3 3 7z"/><path d="M21 4 10 14"/></svg>`;
 const ALERT_ICON = `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5M12 16h.01"/></svg>`;
 const LOCK_ICON = `<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>`;
+
+const wordmark = (brandName: string): string => (brandName === "qm" ? "QM" : brandName);
 
 function page(o: {
   title: string;
   brandName: string;
   trustedSignInLabel?: string;
-  icon: string;
+  icon?: string;
   warn?: boolean;
   heading: string;
-  msg: string;
+  msg?: string;
   body?: string;
-  help: string;
+  help?: string;
 }): string {
   return `<!doctype html>
 <html lang="en">
@@ -98,17 +71,18 @@ function page(o: {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<title>${escapeHtml(o.title)} · ${escapeHtml(o.brandName)}</title>
+<title>${escapeHtml(o.title)} · ${escapeHtml(wordmark(o.brandName))}</title>
 ${STYLE}
 </head>
 <body>
   <main>
+    ${harbourScene(wordmark(o.brandName))}
     <section class="card" aria-labelledby="t">
-      <div class="icon${o.warn ? " warn" : ""}" aria-hidden="true">${o.icon}</div>
+      ${o.icon ? `<div class="icon${o.warn ? " warn" : ""}" aria-hidden="true">${o.icon}</div>` : ""}
       <h1 id="t">${escapeHtml(o.heading)}</h1>
-      <p class="msg">${escapeHtml(o.msg)}</p>
+      ${o.msg ? `<p class="msg">${escapeHtml(o.msg)}</p>` : ""}
       ${o.body ?? ""}
-      <p class="help">${escapeHtml(o.help)}</p>
+      ${o.help ? `<p class="help">${escapeHtml(o.help)}</p>` : ""}
       ${o.trustedSignInLabel ? `<div class="divider">OR</div><a class="btn alternative" href="/auth/trusted/login">Sign in with ${escapeHtml(o.trustedSignInLabel)}</a>` : ""}
     </section>
   </main>
@@ -128,9 +102,19 @@ export function signInPage(o: {
   passwordProblem?: string;
 }): string {
   const hidden = `<input type="hidden" name="request" value="${escapeHtml(o.requestToken)}">`;
-  const trusted = o.trustedSignInLabel
-    ? `<a class="btn" href="/auth/trusted/login">Sign in with ${escapeHtml(o.trustedSignInLabel)}</a><div class="divider">OR</div>`
+  const trustedButton = o.trustedSignInLabel
+    ? `<a class="btn" href="/auth/trusted/login">Sign in with ${escapeHtml(o.trustedSignInLabel)}</a>`
     : "";
+  if (trustedButton && !o.emailLink && !o.password) {
+    return page({
+      title: "Sign in",
+      brandName: o.brandName,
+      heading: `Sign in to ${wordmark(o.brandName)}`,
+      msg: "Your team's conversations, connections and scheduled work are waiting.",
+      body: `<div class="actions">${trustedButton.replace('class="btn"', 'class="btn alternative"')}</div>`,
+    });
+  }
+  const trusted = trustedButton ? `${trustedButton}<div class="divider">OR</div>` : "";
   const secondary = Boolean(o.trustedSignInLabel) || (o.emailLink && o.password);
   const emailForm = o.emailLink
     ? `${o.problem ? `<p class="reason"><strong>Try again</strong>${escapeHtml(o.problem)}</p>` : ""}<form method="post" action="${escapeHtml(o.action)}">
@@ -152,7 +136,7 @@ export function signInPage(o: {
         <label for="password">Password</label>
         <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="1024">
         <button class="btn${o.trustedSignInLabel ? " alternative" : ""}" type="submit">Sign in with password</button>
-        <p class="note">Password sign-in is meant for getting started. Once ${escapeHtml(o.brandName)} is set up, your administrator should switch to email links or an identity provider.</p>
+        <p class="note">Password sign-in is meant for getting started. Once ${escapeHtml(wordmark(o.brandName))} is set up, your administrator should switch to email links or an identity provider.</p>
       </form>`
     : "";
   let msg = "Enter your work email and we'll send you a one-time sign-in link.";
@@ -162,8 +146,7 @@ export function signInPage(o: {
   return page({
     title: "Sign in",
     brandName: o.brandName,
-    icon: o.trustedSignInLabel || o.password ? LOCK_ICON : MAIL_ICON,
-    heading: `Sign in to ${o.brandName}`,
+    heading: `Sign in to ${wordmark(o.brandName)}`,
     msg,
     body: `${trusted}${passwordForm}${o.password && o.emailLink ? `<div class="divider">OR</div>` : ""}${emailForm}`,
     help: o.emailLink
@@ -196,7 +179,7 @@ export function confirmSignInPage(o: { brandName: string; trustedSignInLabel?: s
     brandName: o.brandName,
     trustedSignInLabel: o.trustedSignInLabel,
     icon: LOCK_ICON,
-    heading: `Finish signing in to ${o.brandName}`,
+    heading: `Finish signing in to ${wordmark(o.brandName)}`,
     msg: "Confirm below to complete sign-in. Your link is spent the moment you confirm, so do it in the browser you want to be signed in to.",
     body: `<p class="reason" id="no-token" hidden><strong>Nothing to confirm</strong>This page did not receive a sign-in link. Open the link from your email directly, in a browser with JavaScript enabled, or ask for a fresh one.</p>
       <noscript><p class="reason"><strong>JavaScript required</strong>The last step of sign-in reads your link out of the page address so it never reaches a server log. Enable JavaScript for this page, then reopen the link.</p></noscript>

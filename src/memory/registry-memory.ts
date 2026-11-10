@@ -1,3 +1,4 @@
+import { perTenant } from "../tenants/cache.ts";
 import type { Item } from "../sessions/items.ts";
 import { SCOPE_KINDS } from "../types.ts";
 import { reportFailure } from "../util/errors.ts";
@@ -61,15 +62,16 @@ export function createRegistryMemoryService(opts: {
       onError,
     });
   const overlayOnly = opts.overlay ? routed(opts.overlay.routes) : opts.defaultMemory;
-  let snapshot: Snapshot = { service: overlayOnly, disabled: [] };
+  const snapshots = perTenant<{ snapshot: Snapshot }>(() => ({ snapshot: { service: overlayOnly, disabled: [] } }));
 
   async function current(): Promise<Snapshot> {
+    const slot = snapshots();
     const { version, record } = await opts.registry.current();
-    if (version === snapshot.version) return snapshot;
+    if (version === slot.snapshot.version) return slot.snapshot;
     try {
       const registry = readRegistry(record);
       const { config, disabled } = resolveMemoryRegistry(registry, opts.registry);
-      snapshot = {
+      slot.snapshot = {
         version,
         disabled: disabled.filter(({ code }) => code !== "id_taken").map(disabledRoute),
         service: config.routes.length
@@ -81,9 +83,9 @@ export function createRegistryMemoryService(opts: {
       };
     } catch (error) {
       reportFailure(`memory registry: version ${version} is invalid, so the last valid one keeps serving`, error);
-      snapshot = { ...snapshot, version };
+      slot.snapshot = { ...slot.snapshot, version };
     }
-    return snapshot;
+    return slot.snapshot;
   }
 
   function view(accesses: readonly MemoryDisclosure[] = []): MemoryService {

@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { TEST_TENANT } from "./support/test-tenant.ts";
 import { mkdtempSync } from "node:fs";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -47,6 +48,7 @@ async function fixture(): Promise<{
     git: { repoRoot: mkdtempSync(join(tmpdir(), "deploy-git-remote-reader-")), archiveStore },
   });
   const app = {
+    tenantFor: async () => TEST_TENANT,
     listDeployments: async () => [deployment],
     deploymentGitRepoPath: async (id: string) => (id === deployment.id ? await readerStore.repoUrl(id) : null),
   } as unknown as App;

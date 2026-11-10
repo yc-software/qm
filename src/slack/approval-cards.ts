@@ -1,6 +1,7 @@
 import { clip, inlineCode } from "./util.ts";
 import { escapeSlackText, slackSectionBlocks } from "./mrkdwn.ts";
 import { isObj } from "../util/objects.ts";
+import { isSystemActor } from "../types.ts";
 import { parseDeliveryTarget } from "./delivery.ts";
 
 export const APPROVAL_ACTION_IDS = ["hilo_allow_once", "hilo_allow_session", "hilo_allow_always", "hilo_deny"] as const;
@@ -39,6 +40,18 @@ function button(
     value,
     ...(style ? { style } : {}),
   };
+}
+
+export interface ApprovalRequester {
+  actor?: { externalId?: string };
+  surfaceOrigin?: { author?: { surface?: string; id?: string } };
+}
+
+export function approvalDeliveryRecipient(request: ApprovalRequester | undefined): string | undefined {
+  const id = request?.actor?.externalId;
+  if (!id || isSystemActor(id)) return undefined;
+  const author = request?.surfaceOrigin?.author;
+  return author?.surface === "slack" && author.id ? author.id : id;
 }
 
 export interface ApprovalCardDestination {
@@ -280,7 +293,7 @@ export function recoveredApprovalContext(
       ? parseDeliveryTarget(req.deliveryTarget)
       : { channel: click.channel, ...(click.threadTs ? { threadTs: click.threadTs } : {}) };
   return {
-    requesterId: req.actor.externalId,
+    requesterId: approvalDeliveryRecipient(req as ApprovalRequester) ?? req.actor.externalId,
     channel: origin.channel,
     ...(origin.threadTs ? { replyThreadTs: origin.threadTs } : {}),
     threadOnly: kind === "channel",

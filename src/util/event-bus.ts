@@ -1,4 +1,5 @@
 import { swallow } from "./errors.ts";
+import { boundTenant, withTenant } from "../tenants/context.ts";
 
 export interface SubscribeOptions {
   onResync?: () => void;
@@ -28,8 +29,15 @@ export function createMemoryEventBus<T>(label: string): LocalEventBus<T> {
       }
     },
     subscribe(cb, opts = {}) {
-      listeners.set(cb, opts);
-      return () => listeners.delete(cb);
+      const tenant = boundTenant();
+      if (!tenant) {
+        listeners.set(cb, opts);
+        return () => listeners.delete(cb);
+      }
+      const bound = (event: T): void => withTenant(tenant, () => cb(event));
+      const onResync = opts.onResync;
+      listeners.set(bound, onResync ? { onResync: () => withTenant(tenant, onResync) } : {});
+      return () => listeners.delete(bound);
     },
     resync() {
       for (const { onResync } of listeners.values()) {

@@ -40,6 +40,7 @@ test("deployment labels prefer friendly metadata and retain durable fallbacks", 
   assert.equal(deploymentTitle(deployment({ displayName: "", name: "launch", id: "id" })), "launch");
   assert.equal(deploymentSlug(deployment({ name: undefined, id: "stable-id" })), "stable-id");
   assert.equal(friendlyPrincipal("blair.reeves@example.com"), "Blair Reeves");
+  assert.equal(friendlyPrincipal("oidc:5f2a:NzkzOTE"), "Unknown person");
 });
 
 test("deployment context prefers its creation scope and filtering accepts either creation or ownership", () => {
