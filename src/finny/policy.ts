@@ -63,11 +63,21 @@ export function assertFinnyDeterministicAuthority(
   if (
     !authority ||
     authority.reasonSchemaVersion !== "finny.spreadsheet-worker.v2" ||
-    JSON.stringify(authority.evaluator) !== JSON.stringify(evaluator) ||
+    !sameEvaluator(authority.evaluator, evaluator) ||
     authority.reasonCode !== (verdict === "pass" ? "PASS" : expectedBlockCode)
   ) {
     throw new Error("Finny deterministic evidence authority is invalid");
   }
+}
+
+function sameEvaluator(a: FinnyEvaluatorRef, b: FinnyEvaluatorRef): boolean {
+  return (
+    a.id === b.id &&
+    a.revision === b.revision &&
+    a.buildDigest === b.buildDigest &&
+    a.contractVersion === b.contractVersion &&
+    a.configurationDigest === b.configurationDigest
+  );
 }
 
 const invalidatedChecks: Record<FinnyChangeKind, readonly FinnyCheckId[]> = {

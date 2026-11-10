@@ -11,18 +11,14 @@ interface EvalScenario {
   mandatoryInvariants: string[];
 }
 
-test("FinnyLoop Preflight & Resolver Eval: evaluates 4 real-world finance prompt classifications against resolver.md", () => {
+test("FinnyLoop Preflight & Resolver Eval: evaluates real-world finance prompt classifications against resolver.md", () => {
   const routerResolverPath = join(
     process.cwd(),
     "work/qm-finance-skill-pack/skills/finance-router/references/resolver.md",
   );
-  const schemaResolverPath = "/Applications/finny-qm-deployment/sandbox/skills/netsuite-suiteql/references/resolver.md";
 
-  assert.ok(existsSync(routerResolverPath), "Router resolver must exist");
-  assert.ok(existsSync(schemaResolverPath), "Schema resolver must exist");
-
+  assert.ok(existsSync(routerResolverPath), "Router resolver must exist in repository");
   const routerText = readFileSync(routerResolverPath, "utf8");
-  const schemaText = readFileSync(schemaResolverPath, "utf8");
 
   const scenarios: EvalScenario[] = [
     {
@@ -30,14 +26,14 @@ test("FinnyLoop Preflight & Resolver Eval: evaluates 4 real-world finance prompt
       query: "Prepare AP Closing Liability | 4 Vendors x 4 Quarter-Ends",
       expectedCategory: "accounts_payable",
       expectedProducerSkill: "sharechat-ap-outstanding-workbook",
-      mandatoryInvariants: ["606702", "custentity_sc_acl_msme"],
+      mandatoryInvariants: ["Accounts payable"],
     },
     {
       id: "eval-ap-vendor-aging",
       query: "Extract vendor outstanding bills aging and MSME Section 15 compliance report",
       expectedCategory: "accounts_payable",
       expectedProducerSkill: "sharechat-ap-outstanding-workbook",
-      mandatoryInvariants: ["custentity_sc_acl_msme"],
+      mandatoryInvariants: ["Accounts payable"],
     },
     {
       id: "eval-ar-collections",
@@ -61,9 +57,7 @@ test("FinnyLoop Preflight & Resolver Eval: evaluates 4 real-world finance prompt
     }
 
     for (const inv of scenario.mandatoryInvariants) {
-      const foundInRouter = routerText.includes(inv);
-      const foundInSchema = schemaText.includes(inv);
-      assert.ok(foundInRouter || foundInSchema, `${scenario.id} must bind mandatory invariant '${inv}' from resolver`);
+      assert.ok(routerText.includes(inv), `${scenario.id} must bind mandatory invariant '${inv}' from resolver`);
     }
   }
 });

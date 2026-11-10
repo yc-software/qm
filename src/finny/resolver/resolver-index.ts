@@ -61,17 +61,37 @@ export function isFinancialQuery(text: string): boolean {
   return FINANCE_KEYWORDS.some((regex) => regex.test(text));
 }
 
-export function createFinanceResolverIndex(baseDir = process.cwd()): FinanceResolverIndex {
-  const routerPath = join(baseDir, "work/qm-finance-skill-pack/skills/finance-router/references/resolver.md");
-  const schemaPath = "/Applications/finny-qm-deployment/sandbox/skills/netsuite-suiteql/references/resolver.md";
+let cachedContent: string | null = null;
 
-  const rawRouter = existsSync(routerPath) ? readFileSync(routerPath, "utf8") : "";
-  const rawSchema = existsSync(schemaPath) ? readFileSync(schemaPath, "utf8") : "";
-  const combined = `${rawRouter}\n\n${rawSchema}`;
+function loadResolverContent(baseDir: string): string {
+  if (cachedContent !== null) return cachedContent;
+  const candidates = [
+    join(baseDir, "work/qm-finance-skill-pack/skills/finance-router/references/resolver.md"),
+    join(baseDir, "skills-seed/finnyloop/references/resolver.md"),
+    process.env.FINNY_RESOLVER_SCHEMA_PATH,
+  ];
+
+  const loaded: string[] = [];
+  for (const path of candidates) {
+    if (path && existsSync(path)) {
+      try {
+        loaded.push(readFileSync(path, "utf8"));
+      } catch {
+        // Continue if path is unreadable
+      }
+    }
+  }
+
+  cachedContent = loaded.join("\n\n");
+  return cachedContent;
+}
+
+export function createFinanceResolverIndex(baseDir = process.cwd()): FinanceResolverIndex {
+  const content = loadResolverContent(baseDir);
 
   return {
     getRawContent(): string {
-      return combined;
+      return content;
     },
     resolve(query: string): ResolvedFinanceIntent {
       const isAP = AP_PATTERNS.some((p) => p.test(query));
