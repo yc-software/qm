@@ -1,12 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createApprovalStore } from "../src/slack/approval-store.ts";
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import {
-  BOT_REQUESTER_APPROVAL_NOTE,
   UNREACHABLE_APPROVAL_DECIDER,
   declineUnreachableApproval,
   requesterIsBot,
+  undeliverableApprovalNote,
 } from "../src/core/approval-requester.ts";
 import { botAuthoredActor } from "../src/slack/turn-handler.ts";
 import type { NewItem } from "../src/sessions/items.ts";
@@ -37,28 +35,7 @@ test("requesterIsBot reads either the turn's bot flag or the actor's", () => {
   assert.equal(requesterIsBot({ actor: { isBot: true } }), true);
 });
 
-for (const [label, request] of [
-  ["botActor", { botActor: true }],
-  ["actor.isBot", { actor: { externalId: "UBOT1", isBot: true } }],
-] as const) {
-  test(`approval store never DMs a bot requester (${label})`, async () => {
-    const backing = testMap<PendingApprovalRecord>();
-    const deliveries = createDeliveryStore();
-    const approvals = createApprovalStore(backing, deliveries);
-    await approvals.put("A1", record(request));
-    await approvals.deliverPending();
-    assert.equal((await deliveries.pending("principal")).length, 0);
-  });
-}
-
-test("approval store still DMs a person requester", async () => {
-  const deliveries = createDeliveryStore();
-  const approvals = createApprovalStore(testMap<PendingApprovalRecord>(), deliveries);
-  await approvals.put("A1", record({ actor: { externalId: "U1" } }));
-  assert.equal((await deliveries.pending("principal")).length, 1);
-});
-
-test("an unreachable approval is settled as declined once, with the reason recorded for the agent", async () => {
+test("an undeliverable approval is settled as declined once, with the reason recorded for the agent", async () => {
   const approvals = testMap<PendingApprovalRecord>();
   await approvals.put("A1", record());
   const appended: Array<{ sessionId: string; item: NewItem }> = [];
@@ -68,7 +45,7 @@ test("an unreachable approval is settled as declined once, with the reason recor
       return { ...item, seq: appended.length } as never;
     },
   };
-  const declined = await declineUnreachableApproval({ approvals, sessions }, "A1");
+  const declined = await declineUnreachableApproval({ approvals, sessions }, "A1", "cannot_dm_bot");
   assert.equal(declined?.command, record().command);
   assert.equal(await approvals.get("A1"), null, "the approval no longer blocks the session");
   assert.equal(appended.length, 2);
@@ -84,8 +61,8 @@ test("an unreachable approval is settled as declined once, with the reason recor
   const note = appended[1]!.item as NewItem & { hidden?: boolean; text?: string };
   assert.equal(note.kind, "UserMessage");
   assert.equal(note.hidden, true);
-  assert.equal(note.text, `${BOT_REQUESTER_APPROVAL_NOTE}\nThe step: Install a CLI`);
-  assert.equal(await declineUnreachableApproval({ approvals, sessions }, "A1"), null);
+  assert.equal(note.text, `${undeliverableApprovalNote("cannot_dm_bot")}\nThe step: Install a CLI`);
+  assert.equal(await declineUnreachableApproval({ approvals, sessions }, "A1", "cannot_dm_bot"), null);
   assert.equal(appended.length, 2, "a second failure report changes nothing");
 });
 

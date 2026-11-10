@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { buildApp as buildAppRaw } from "./support/build-app.ts";
 import { mockHeldTurns } from "./support/mock-agent.ts";
 import { approvalCardId } from "../src/core/approval-id.ts";
-import { BOT_REQUESTER_APPROVAL_NOTE, BOT_REQUESTER_REFUSAL } from "../src/core/approval-requester.ts";
+import { BOT_REQUESTER_REFUSAL, undeliverableApprovalNote } from "../src/core/approval-requester.ts";
 import { scopeId, type Destination, type TurnRequest } from "../src/types.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 import { runNowSettled, settle } from "./support/settle.ts";
@@ -2772,27 +2772,24 @@ test("a bot-requested turn that paused on approval finishes without issuing one"
   assert.notEqual(follow.status, "pending_approval", "nothing is left blocking the thread");
 });
 
-test("a command-approval card refused with cannot_dm_bot settles the approval as declined", async () => {
+test("a command-approval card that fails terminally settles the approval as declined", async () => {
   const built = await withCommandRules(freshApp());
   const first = await built.app.turn(dm("!run git push --force origin main"));
   assert.equal(first.status, "pending_approval");
   const requestId = first.pendingApprovals![0]!.requestId;
-  const card = (n: string) =>
-    built.deliveries.enqueue({
-      destination: { ...principalDestination("U1", "U1"), commandApprovalId: requestId },
-      text: "Approval needed",
-      idempotencyKey: `test-card:${n}`,
-    });
-  const other = await card("other");
-  await built.app.failDelivery(other.id, "channel_not_found");
-  assert.ok(await built.app.getApproval(requestId), "other terminal failures leave the approval alone");
-  const dead = await card("bot");
-  await built.app.failDelivery(dead.id, "cannot_dm_bot");
+  const card = await built.deliveries.enqueue({
+    destination: { ...principalDestination("U1", "U1"), commandApprovalId: requestId },
+    text: "Approval needed",
+    idempotencyKey: "test-card",
+  });
+  await built.app.failDelivery(card.id, "cannot_dm_bot");
   assert.equal(await built.app.getApproval(requestId), null);
   const items = (await built.app.getSession(first.sessionId!))!.items;
   const decision = items.find((item) => item.kind === "ElicitationResponse" && item.elicitId === requestId);
   assert.equal(decision?.approved, false);
-  assert.ok(items.some((item) => isHidden(item) && (item.text ?? "").startsWith(BOT_REQUESTER_APPROVAL_NOTE)));
+  assert.ok(
+    items.some((item) => isHidden(item) && (item.text ?? "").startsWith(undeliverableApprovalNote("cannot_dm_bot"))),
+  );
   const follow = await built.app.turn(dm("what happened?"));
   assert.notEqual(follow.status, "pending_approval");
 });

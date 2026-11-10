@@ -436,10 +436,12 @@ export function createMessagingMethods(
     async failDelivery(id, reason) {
       const failed = await deps.deliveries.fail(id, reason, Date.now());
       const approvalId = failed?.destination.commandApprovalId;
-      if (approvalId && reason === "cannot_dm_bot" && deps.approvals)
-        await declineUnreachableApproval({ approvals: deps.approvals, sessions: deps.sessions }, approvalId).catch(
-          reportFailureAs("deliveries: decline approval for a bot requester", null),
-        );
+      if (approvalId && deps.approvals)
+        await declineUnreachableApproval(
+          { approvals: deps.approvals, sessions: deps.sessions },
+          approvalId,
+          reason,
+        ).catch(reportFailureAs("deliveries: decline undeliverable approval", null));
       return failed;
     },
     async ackDeliveryByKey(idempotencyKey) {

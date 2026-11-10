@@ -682,13 +682,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         return { status: "refused", reason: spendLimitRefusal(spendLimit), refusalKind: "model_budget" };
       }
       const botRequester = input.botActor === true;
-      const botApprovalRefusal = (sessionId: string, command: string): TurnResult => {
+      const auditBotApproval = (command: string, reason: string): void =>
         audit({
           action: "command_approval.unavailable",
           resource: command,
           status: "refused",
-          detail: JSON.stringify({ approvalOutcome: "requester_is_bot" }),
+          detail: JSON.stringify({ approvalOutcome: "requester_is_bot", reason }),
         });
+      const botApprovalRefusal = (sessionId: string, command: string, reason: string): TurnResult => {
+        auditBotApproval(command, reason);
         return { status: "refused", sessionId, reason: BOT_REQUESTER_REFUSAL, refusalKind: "approval_denied" };
       };
       const issueApproval = async (
@@ -940,7 +942,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await deps.sessions.addParticipant(session.id, actor.id);
         if (input.shutdown?.aborted)
           return { status: "queued", sessionId: session.id, ...(input.runId ? { runId: input.runId } : {}) };
-        if (botRequester) return botApprovalRefusal(session.id, "security-screen");
+        if (botRequester)
+          return botApprovalRefusal(
+            session.id,
+            "security-screen",
+            `${flaggedScreenedInput.reason}; flagged sources: ${flaggedScreenedInput.sources.join(", ") || "message"}`,
+          );
         let approval: PendingApproval;
         try {
           approval = await withManagedRosterVersion(async () => {
@@ -3984,12 +3991,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           finalResult = { status: "silent", sessionId: session.id };
         } else if (botRequester && (result.pendingApprovals?.length || quarantineReleaseApprovals.length)) {
           for (const pa of [...(result.pendingApprovals ?? []), ...quarantineReleaseApprovals])
-            audit({
-              action: "command_approval.unavailable",
-              resource: pa.command,
-              status: "refused",
-              detail: JSON.stringify({ approvalOutcome: "requester_is_bot" }),
-            });
+            auditBotApproval(pa.command, pa.reason);
           finalResult =
             input.surfaceTools && surfaceToolDeps && !strictReadOnly
               ? { status: "silent", sessionId: session.id }
@@ -4084,7 +4086,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       } catch (err) {
         if (err instanceof ProjectRosterChanged) return rosterChanged(session.id);
         if (err instanceof NeedsApproval) {
-          if (botRequester) return botApprovalRefusal(session.id, err.command);
+          if (botRequester) return botApprovalRefusal(session.id, err.command, err.approvalReason);
           const summary = await approvalSummary(scopeId, err.command, err.approvalReason);
           let approval: PendingApproval;
           try {

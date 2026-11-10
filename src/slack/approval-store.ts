@@ -5,7 +5,6 @@ import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import { principalDestination } from "../reach/reach.ts";
 import { claimThenBind } from "../tenants/claim.ts";
 import { approvalDeliveryRecipient } from "./approval-cards.ts";
-import { requesterIsBot } from "../core/approval-requester.ts";
 
 export function approvalDeliveryKey(id: string, record: Pick<PendingApprovalRecord, "createdAt">): string {
   return `command-approval:${id}:${record.createdAt ?? 0}`;
@@ -16,7 +15,7 @@ export function createApprovalStore(
   deliveries: Pick<DeliveryStore, "enqueue">,
 ) {
   async function deliver(id: string, record: PendingApprovalRecord): Promise<void> {
-    if (record.request?.surface !== "slack" || requesterIsBot(record.request)) return;
+    if (record.request?.surface !== "slack") return;
     const actorId = record.request.actor.externalId;
     const recipient = approvalDeliveryRecipient(record.request);
     if (!actorId || !recipient) return;
