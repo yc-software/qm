@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { lstatSync, readFileSync, readlinkSync } from "node:fs";
 import test from "node:test";
+import { gunzipSync } from "node:zlib";
 
 const shortName = ["w", "c"].join("");
 const accessibilityName = [shortName, "ag"].join("");
@@ -130,10 +131,16 @@ function isCompressedMedia(content: Buffer): boolean {
   );
 }
 
+function isGzip(content: Buffer): boolean {
+  return content.subarray(0, 2).equals(Buffer.from([0x1f, 0x8b]));
+}
+
 function readTrackedContent(path: string): Buffer | null {
   try {
     const stat = lstatSync(path);
-    return stat.isSymbolicLink() ? Buffer.from(readlinkSync(path)) : readFileSync(path);
+    if (stat.isSymbolicLink()) return Buffer.from(readlinkSync(path));
+    const content = readFileSync(path);
+    return isGzip(content) ? gunzipSync(content) : content;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;

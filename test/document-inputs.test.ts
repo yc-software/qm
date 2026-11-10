@@ -8,8 +8,8 @@ import {
   isDocumentAttachment,
   documentFallbackText,
   documentText,
-  historicalDocumentMetas,
   loadDocumentInputs,
+  turnDocumentMetas,
   type DocumentInput,
 } from "../src/core/documents.ts";
 import { mimeFromName } from "../src/core/attachments.ts";
@@ -278,7 +278,7 @@ test("restores stopped/restarted turns from durable document metadata and dedupl
     storedItem({ kind: "UserMessage", body: { attachments: [meta] } }, { sessionId: "s", seq: 0, createdAt: 0 }),
     storedItem({ kind: "AgentMessage", text: "stopped" }, { sessionId: "s", seq: 1, createdAt: 0 }),
   ];
-  const inputs = await loadDocumentInputs(store, [...historicalDocumentMetas(history), meta], () => true);
+  const inputs = await loadDocumentInputs(store, [...turnDocumentMetas(history, 0), meta], () => true);
   assert.equal(inputs.documents.length, 1);
   assert.equal(opens(), 1);
   assert.match(await documentFallbackText(inputs.documents[0]!), /QUARTZ-731/);
@@ -348,17 +348,26 @@ test("later turns reuse verified document bytes but still check current access",
   assert.equal(opens(), 2);
 });
 
-test("document replay follows compaction boundaries", () => {
+test("only the current turn's own user messages contribute documents", () => {
   const { meta } = storeFor();
-  const recent = { ...meta, artifactId: "recent" };
-  const at = (seq: number) => ({ sessionId: "s", seq, createdAt: 0 });
+  const doc = (artifactId: string) => ({ ...meta, artifactId });
+  const turn = "00000000-0000-4000-8000-00000000000a";
+  const other = "00000000-0000-4000-8000-00000000000b";
+  const at = (seq: number, turnId = turn) => ({ sessionId: "s", seq, createdAt: 0, turnId });
   const history = [
-    storedItem({ kind: "UserMessage", body: { attachments: [meta] } }, at(0)),
-    storedItem({ kind: "UserMessage", body: { attachments: [recent] } }, at(1)),
-    storedItem({ kind: "ContextCompaction", text: "Prior upload", throughSeq: 0 }, at(2)),
+    storedItem({ kind: "UserMessage", body: { attachments: [doc("earlier")] } }, at(0, other)),
+    storedItem({ kind: "AgentMessage", text: "read it" }, at(1, other)),
+    storedItem({ kind: "UserMessage", body: { attachments: [doc("current")] } }, at(2)),
+    storedItem({ kind: "SteeringMessage", body: { attachments: [doc("steered")] } }, at(3)),
+    storedItem({ kind: "UserMessage", body: { overheard: true, attachments: [doc("overheard")] } }, at(4)),
+    storedItem({ kind: "UserMessage", body: { attachments: [doc("next-turn")] } }, at(5, other)),
+    storedItem({ kind: "UserMessage", body: { attachments: [doc("outside-a-run")] } }, { ...at(6), turnId: undefined }),
   ];
-  assert.deepEqual(historicalDocumentMetas(history), [recent]);
-  assert.deepEqual(history[0]!.body.attachments, [meta]);
+  assert.deepEqual(turnDocumentMetas(history, undefined), []);
+  assert.deepEqual(
+    turnDocumentMetas(history, 2).map((file) => file.artifactId),
+    ["current", "steered"],
+  );
 });
 
 test("document restoration checks current access and budgets before opening bytes", async () => {
