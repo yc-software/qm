@@ -446,7 +446,7 @@ async function followUpOnItem(ctx: ApiCtx): Promise<void> {
       loaded.actorId,
       options,
     );
-    sendJson(ctx.res, 200, { item: ledgerItemView(next ?? item, loop, !!ctx.capability) });
+    sendJson(ctx.res, 200, await itemDetail(ctx, deps, loop, next ?? item));
   } catch (e) {
     sendJson(ctx.res, 502, { error: "followup_failed", message: errMessage(e) });
   }

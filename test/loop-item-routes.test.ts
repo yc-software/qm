@@ -586,6 +586,7 @@ test("follow-up runs an agent turn scoped to the item and lands on its thread", 
     ],
   );
   assert.deepEqual(view.proposal?.data, { body: "shorter" });
+  assert.deepEqual((out.body as { outputs: unknown[] }).outputs, []);
 });
 
 test("follow-up needs a message and a wired fire service", async () => {

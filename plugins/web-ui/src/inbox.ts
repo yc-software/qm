@@ -552,16 +552,19 @@ export async function refreshInbox(
     inboxState.total = metadata.total;
     inboxState.filter = refreshFilter!;
     const next = [...combined.values()];
-    const openId = fullSurface?.selectedId;
-    const detail = openId ? inboxState.items.find((item) => item.id === openId && item.detailLoaded) : undefined;
+    const openIds = new Set([fullSurface, ...surfaces].flatMap((surface) => surface?.selectedId ?? []));
+    const details = inboxState.items.filter((item) => openIds.has(item.id) && item.detailLoaded);
     inboxState.items = next;
-    if (detail && inboxState.selected.some((loop) => loop.id === detail.loopId)) {
-      upsertItem(detail);
-      void loadDetail(detail.id, detail.loopId);
-    }
-    if (openId && !detail) {
-      const entry = inboxState.items.find((item) => item.id === openId);
-      if (entry) void loadDetail(entry.id, entry.loopId);
+    for (const openId of openIds) {
+      const detail = details.find((item) => item.id === openId);
+      if (detail && inboxState.selected.some((loop) => loop.id === detail.loopId)) {
+        upsertItem(detail);
+        void loadDetail(detail.id, detail.loopId);
+      }
+      if (!detail) {
+        const entry = inboxState.items.find((item) => item.id === openId);
+        if (entry) void loadDetail(entry.id, entry.loopId);
+      }
     }
     const localItems = await fetchLocalInboxItems();
     if (localItems.length) inboxState.items = localItems;
@@ -1046,17 +1049,20 @@ export async function askAgent(
       if (!sameDraft(effectiveDraft(current), draft)) {
         throw new Error("The draft changed. Review it before continuing.");
       }
-      const { item: next } = await api<{ item: LedgerItem }>(actionPath(item, "followup"), {
-        method: "POST",
-        body: JSON.stringify({
-          message: text,
-          ...options,
-          ...(current.draftAt !== undefined ? { expectedProposalAt: current.draftAt } : {}),
-        }),
-      });
+      const { item: next, outputs } = await api<{ item: LedgerItem; outputs: ReviewOutput[] }>(
+        actionPath(item, "followup"),
+        {
+          method: "POST",
+          body: JSON.stringify({
+            message: text,
+            ...options,
+            ...(current.draftAt !== undefined ? { expectedProposalAt: current.draftAt } : {}),
+          }),
+        },
+      );
       updateSentChat(next);
+      replaceItem({ ...toInboxItem(next), outputs, detailLoaded: true });
     });
-    await refetchItem(item);
     return true;
   } catch (e) {
     if (isDraftConflict(e)) await refetchItem(item);

@@ -17,11 +17,8 @@ test("a followup replaces the item's review outputs with the server's", async ()
     const output = (title: string) => ({ id: "out-1", title, shipAction: "post", state: "draft" });
     const item = { ...toInboxItem(ledger), outputs: [output("Old report")], detailLoaded: true };
     inboxState.items = [item];
-    globalThis.fetch = (url, init) => {
-      if (init?.method === "POST") return Promise.resolve(Response.json({ item: ledger }));
-      const detail = String(url).endsWith("/api/loops/loop-1/items/item-1");
-      return Promise.resolve(Response.json(detail ? { item: ledger, outputs: [output("New report")] } : {}));
-    };
+    globalThis.fetch = (_url, init) =>
+      Promise.resolve(Response.json(init?.method === "POST" ? { item: ledger, outputs: [output("New report")] } : {}));
     assert.equal(await askAgent(item, "Shorten it"), true);
     assert.deepEqual(
       inboxState.items
