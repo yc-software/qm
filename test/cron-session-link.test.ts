@@ -31,7 +31,7 @@ function dm(text: string, threadRef: string): TurnRequest {
 
 async function setup() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "cron-session-")) }));
-  const control = createControlService(built.app, built.scheduler, built.admin);
+  const control = createControlService(built.app, built.scheduler);
   const session = await built.app.turn(dm("watch CI for me", THREAD));
   await built.app.turn(dm("unrelated", "web:U1:other"));
   return { built, control, sessionId: session.sessionId! };

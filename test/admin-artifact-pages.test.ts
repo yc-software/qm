@@ -101,7 +101,7 @@ test("per-kind artifact reads are scope-filtered, authz-gated, and audited", asy
   }
 });
 
-test("an admin cannot repoint someone else's grant-carrying cron; its owner can", async () => {
+test("an admin can repoint someone else's cron to a room; the fire still runs as its owner", async () => {
   const s = start();
   try {
     const cron = await s.built.app.createCron({
@@ -110,7 +110,6 @@ test("an admin cannot repoint someone else's grant-carrying cron; its owner can"
       createdBy: "U1",
       schedule: { everyMs: 60_000 },
       action: "review spend",
-      unattendedGrants: ["admin.spend.read"],
     });
     const put = (destination: unknown) =>
       fetch(`${s.base}/v1/admin/crons/${encodeURIComponent(cron.id)}/destination?scope=personal:U1`, {
@@ -118,34 +117,13 @@ test("an admin cannot repoint someone else's grant-carrying cron; its owner can"
         headers: { ...ALICE_ADMIN, "content-type": "application/json" },
         body: JSON.stringify({ destination }),
       });
-    assert.equal((await put({ type: "slack", target: "C9", audienceScopeId: "channel:C9" })).status, 409);
-    assert.equal(
-      (await put({ type: "slack", target: "C9", audienceScopeId: "personal:U1" })).status,
-      409,
-      "a caller-supplied audience cannot launder a room destination",
-    );
-    assert.equal((await s.built.app.getCron(cron.id))?.destination, undefined);
-
-    const own = await s.built.app.createCron({
-      ownerScopeId: "personal:admin-alice",
-      owner: "admin-alice",
-      createdBy: "admin-alice",
-      schedule: { everyMs: 60_000 },
-      action: "review spend",
-      unattendedGrants: ["admin.spend.read"],
-    });
-    const moved = await fetch(
-      `${s.base}/v1/admin/crons/${encodeURIComponent(own.id)}/destination?scope=personal:admin-alice`,
-      {
-        method: "PUT",
-        headers: { ...ALICE_ADMIN, "content-type": "application/json" },
-        body: JSON.stringify({ destination: { type: "slack", target: "C9" } }),
-      },
-    );
-    assert.equal(moved.status, 200, "the owner, acting live, chooses where their cron's output goes");
-    const after = await s.built.app.getCron(own.id);
+    const moved = await put({ type: "slack", target: "C9" });
+    assert.equal(moved.status, 200, await moved.clone().text());
+    const after = await s.built.app.getCron(cron.id);
     assert.equal(after?.destination?.target, "C9");
-    assert.deepEqual(after?.unattendedGrants, ["admin.spend.read"]);
+    assert.equal(after?.owner, "U1", "repointing the output does not change whose authority the fire carries");
+    assert.equal(after?.action, "review spend");
+    assert.ok(!("unattendedGrants" in (after ?? {})), "no grant list survives on the record");
   } finally {
     await s.close();
   }
@@ -411,7 +389,6 @@ test("admin cron runtime edits preserve task authority and reject unavailable or
       createdBy: "U1",
       schedule: { everyMs: 60_000 },
       action: "run the existing script",
-      unattendedGrants: ["publish"],
       destination: { type: "principal", target: "U1" },
     });
     const runtime = { modelId: "claude-sonnet-5" };
@@ -433,7 +410,6 @@ test("admin cron runtime edits preserve task authority and reject unavailable or
     assert.deepEqual(updated, { ...cron, runtime });
     const listed = await json(await fetch(`${s.base}/v1/admin/crons?scope=personal:U1`, { headers: ALICE_ADMIN }));
     assert.deepEqual(listed.crons[0].runtime, runtime);
-    assert.deepEqual(listed.crons[0].unattendedGrants, cron.unattendedGrants);
     assert.equal((await put({ runtime: null })).status, 200);
     assert.deepEqual(await s.built.app.getCron(cron.id), { ...cron, runtime: null });
     const audit = (await s.built.auditLog.events()).filter((event) => event.action === "cron.runtime.update");

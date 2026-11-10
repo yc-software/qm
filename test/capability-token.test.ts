@@ -34,7 +34,7 @@ test("large room capabilities fit an 8 KiB header without losing authorization c
     displayName: `Member ${i}`,
     teamIds: ["engineering", `team-${i % 4}`],
   }));
-  const c = claims({ members, keychainMembers: members.filter((p) => p.type === "internal"), grants: ["read"] });
+  const c = claims({ members, keychainMembers: members.filter((p) => p.type === "internal") });
   const value = { orgId: "default-org", ...c, ...tenantClaim() };
   const legacy = await mintSignedPayload(value, SECRET);
   assert.ok(Buffer.byteLength(legacy) > 16 * 1024);
@@ -65,7 +65,7 @@ test("compressed capability envelopes reject malformed and oversized claims", as
     assert.equal(await verifyCapabilityToken(await mintSignedPayload(value, SECRET), SECRET), null);
   }
   await assert.rejects(mintCapabilityToken(claims({ threadRef: "x".repeat(1024 * 1024) }), SECRET), /size limit/);
-  for (const invalid of [{ timezone: "not-a-zone" }, { grants: [1] }, { runAttempt: 0 }]) {
+  for (const invalid of [{ timezone: "not-a-zone" }, { liveActor: "yes" }, { runAttempt: 0 }]) {
     const token = await mintSignedPayload(
       {
         encoding: "deflate-raw",
@@ -81,24 +81,6 @@ test("mint → verify round-trips the claims", async () => {
   const c = claims();
   const got = await verifyCapabilityToken(await mintCapabilityToken(c, SECRET), SECRET);
   assert.deepEqual(got, { orgId: "default-org", ...c, ...tenantClaim() });
-});
-
-test("grants round-trip and reject malformed claims", async () => {
-  const granted = claims({ grants: ["admin.sessions.read"] });
-  assert.deepEqual(await verifyCapabilityToken(await mintCapabilityToken(granted, SECRET), SECRET), {
-    orgId: "default-org",
-    ...tenantClaim(),
-    ...granted,
-  });
-  for (const grants of ["admin.sessions.read", ["admin.sessions.read", 1]]) {
-    assert.equal(
-      await verifyCapabilityToken(
-        await mintCapabilityToken(claims({ grants } as unknown as Partial<CapabilityClaims>), SECRET),
-        SECRET,
-      ),
-      null,
-    );
-  }
 });
 
 test("timezone claims must be valid IANA timezone strings", async () => {

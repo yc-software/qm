@@ -751,16 +751,10 @@ test("only a live human can re-enable an archived loop", async () => {
   assert.equal((revived.body as { loop: Loop }).loop.state, "enabled");
 });
 
-async function privilegedLoop(deps: LoopServiceDeps): Promise<Loop> {
+test("a bound loop's config and manual fires need only its owner, not a live turn", async () => {
+  const deps = services();
   const created = await call(deps, "POST", "/v1/loops", { ...CREATE, schedule: { everyMs: 60_000 } });
   const loop = (created.body as { loop: Loop }).loop;
-  await deps.crons!.update(loop.cronId!, { unattendedGrants: ["admin.sessions.read"] });
-  return loop;
-}
-
-test("privileged loop config and manual fires use the cron live-owner-admin gate", async () => {
-  const deps = services();
-  const loop = await privilegedLoop(deps);
   let fires = 0;
   deps.fire = {
     fire: async () => {
@@ -768,34 +762,25 @@ test("privileged loop config and manual fires use the cron live-owner-admin gate
       return { status: "ok" };
     },
   } as never;
-  for (const [method, suffix, body] of [
-    ["PATCH", "", { playbook: "changed instructions" }],
-    ["PATCH", "", { successCondition: "changed condition" }],
-    ["PATCH", "", { state: "enabled" }],
-    ["POST", "/fire", {}],
-    ["POST", "/autopilot", { enabled: true }],
-    ["POST", "/grants", { shipAction: "open_pr" }],
-    ["POST", "/outputs/output/decide", { decision: "return", note: "new instructions" }],
-  ] as const) {
-    const path = `/v1/loops/${loop.id}${suffix}`;
-    assert.equal((await call(deps, method, path, body, "josh", "capability", false)).status, 403);
-    assert.equal((await call(deps, method, path, body, "josh", "capability", true, false)).status, 403);
-    assert.equal((await call(deps, method, path, body, "mallory", "capability", true, true, true)).status, 403);
-    assert.equal((await call(deps, method, path, body, "josh", "source")).status, 403);
-  }
-  assert.equal(fires, 0);
-  assert.equal((await deps.store.get(loop.id))?.playbook, loop.playbook);
-  const permitted = await call(deps, "PATCH", `/v1/loops/${loop.id}`, { playbook: "owner revision" });
-  assert.equal(permitted.status, 200);
-  assert.deepEqual((await deps.crons!.get(loop.cronId!))?.unattendedGrants, ["admin.sessions.read"]);
-  assert.equal((await call(deps, "POST", `/v1/loops/${loop.id}/fire`, {})).status, 200);
-  assert.equal(fires, 1);
-  await deps.crons!.update(loop.cronId!, { unattendedGrants: [] });
-  assert.equal(
-    (await call(deps, "PATCH", `/v1/loops/${loop.id}`, { playbook: "ordinary revision" }, "josh", "capability", false))
-      .status,
-    200,
+  const revised = await call(
+    deps,
+    "PATCH",
+    `/v1/loops/${loop.id}`,
+    { playbook: "owner revision" },
+    "josh",
+    "capability",
+    false,
   );
+  assert.equal(revised.status, 200);
+  assert.equal((await deps.store.get(loop.id))?.playbook, "owner revision");
+  assert.equal((await call(deps, "POST", `/v1/loops/${loop.id}/fire`, {}, "josh", "capability", false)).status, 200);
+  assert.equal(fires, 1);
+  assert.equal(
+    (await call(deps, "PATCH", `/v1/loops/${loop.id}`, { playbook: "stranger" }, "mallory", "capability", true, true))
+      .status,
+    403,
+  );
+  assert.equal((await deps.store.get(loop.id))?.playbook, "owner revision");
 });
 
 test("loop icons can be set and reset by their owner, reject invalid input and retain authorization", async () => {

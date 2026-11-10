@@ -2657,7 +2657,6 @@ export function buildApp(
   const loopFire: LoopFireService = createLoopFireService({
     admittedWork,
     crons,
-    samePerson: (a, b) => app.samePerson(a, b),
     triageEnabledFor: (owner) => featureFlags.enabled("loop_triage", scopeId("personal", owner)),
     lock: advisoryLock,
     loops: loopStore,

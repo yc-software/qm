@@ -1568,33 +1568,74 @@ for (const hours of [undefined, "72", "0", "none"]) {
   });
 }
 
-test("unattended grants enter capability claims only on non-live turns", async () => {
+test("an owner's cron fire carries the owner's authority: liveActor, admin status consulted, no org-notebook write", async () => {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),
     signingSecret: "test-secret",
     apiBaseUrl: "https://core.example.com",
   });
-  const { app, sandbox } = buildApp(config);
+  const { app, sandbox, admin } = buildApp(config);
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
   sandbox.provision = (owner, opts) => {
     captured = opts;
     return realProvision(owner, opts);
   };
+  const consulted: string[] = [];
+  const realStatus = admin.adminStatusOf.bind(admin);
+  admin.adminStatusOf = (principal) => {
+    consulted.push(principal.id);
+    return realStatus(principal);
+  };
+  const alice = { externalId: "admin-alice" };
+  const fire = (extra: Partial<TurnRequest> = {}): TurnRequest => ({
+    surface: "cron",
+    actor: alice,
+    conversation: { kind: "dm", threadRef: "dm:admin-alice:owner-fire" },
+    text: "!run echo fire",
+    origin: { kind: "automation" },
+    ...extra,
+  });
 
-  await app.turn(dm("!run echo cron", { origin: { kind: "automation" }, unattendedGrants: ["admin.sessions.read"] }));
+  assert.equal((await app.turn(fire())).status, "ok");
   let claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
-  assert.deepEqual(claims?.grants, ["admin.sessions.read"]);
+  assert.equal(claims!.liveActor, true, "an owner's fire attests the owner's authority");
+  assert.equal(claims!.triggered, true, "but it still records that nobody is at the keyboard");
+  assert.deepEqual(consulted, ["admin-alice"], "the fire's admin status is looked up");
+  assert.equal(claims!.memory?.orgWrite, undefined, "org-notebook write stays off for automated turns");
 
-  await app.turn(
-    dm("!run echo live", {
-      origin: { kind: "human" },
-      conversation: { kind: "dm", threadRef: "dm:U1:live-grant" },
-      unattendedGrants: ["admin.sessions.read"],
-    }),
+  const prompt = await app.turn(
+    fire({ text: "!sysprompt", conversation: { kind: "dm", threadRef: "dm:admin-alice:owner-fire-2" } }),
+  );
+  assert.match(prompt.reply ?? "", /## Acting for an org admin/, "an admin owner's fire gets the admin plane");
+  assert.doesNotMatch(prompt.reply ?? "", /"scope":"org"/, "the org-notebook hint is withheld on a fire");
+
+  captured = undefined;
+  consulted.length = 0;
+  assert.equal((await app.turn(fire({ botActor: true }))).status, "ok");
+  claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
+  assert.equal(claims!.liveActor, undefined, "a bot actor's automation turn carries no authority");
+  assert.deepEqual(consulted, [], "and its admin status is never consulted");
+
+  captured = undefined;
+  assert.equal(
+    (
+      await app.turn(
+        fire({
+          actor: { externalId: "U1" },
+          conversation: { kind: "dm", threadRef: "dm:U1:owner-fire" },
+        }),
+      )
+    ).status,
+    "ok",
   );
   claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
-  assert.equal(claims?.grants, undefined);
+  assert.equal(claims!.liveActor, true, "a non-admin owner's fire is live too");
+  assert.equal(claims!.memory?.orgWrite, undefined);
+  const userPrompt = await app.turn(
+    fire({ actor: { externalId: "U1" }, text: "!sysprompt", conversation: { kind: "dm", threadRef: "dm:U1:fire-2" } }),
+  );
+  assert.doesNotMatch(userPrompt.reply ?? "", /## Acting for an org admin/);
 });
 
 test("the egress claim keeps the control-plane host reachable under an allowlist or a matching denylist", () => {
@@ -1763,10 +1804,7 @@ test("an org admin's turn carries org-notebook write (token claim + prompt hint)
   assert.match(adminPrompt.reply ?? "", /including resources owned by other users/);
   assert.match(adminPrompt.reply ?? "", /Ordinary resource-owner restrictions do not by themselves prohibit/);
   assert.match(adminPrompt.reply ?? "", /admin grant changes and impersonation are portal-only/);
-  assert.match(
-    adminPrompt.reply ?? "",
-    /private-content reads require a DM or an Open conversation on a live admin turn/,
-  );
+  assert.match(adminPrompt.reply ?? "", /private-content reads require a DM or an Open conversation \(organization/);
   assert.doesNotMatch(
     adminPrompt.reply ?? "",
     /private-content reads work only from a DM|bulk configuration imports require/,
@@ -1782,7 +1820,7 @@ test("an org admin's turn carries org-notebook write (token claim + prompt hint)
   assert.doesNotMatch(userPrompt.reply ?? "", /## Acting for an org admin|System administration is not limited/);
 });
 
-test("admin reach rides only live, all-internal turns — autonomous and guest-audience turns mint a powerless token", async () => {
+test("admin reach rides live, all-internal turns — direct, detection and guest-audience turns mint a powerless token", async () => {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),
     signingSecret: "test-secret",
@@ -1809,7 +1847,7 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
     "ok",
   );
   let claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
-  assert.equal(claims!.liveActor, undefined, "an autonomous turn must not attest liveness");
+  assert.equal(claims!.liveActor, undefined, "a direct-origin turn must not attest liveness");
   assert.equal(claims!.memory?.orgWrite, undefined);
   const autoPrompt = await app.turn({
     surface: "cron",
@@ -1927,12 +1965,8 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
     "ok",
   );
   claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
-  assert.equal(
-    claims!.liveActor,
-    undefined,
-    "an automated turn must not attest liveness even when a caller also sets liveActor",
-  );
-  assert.equal(claims!.memory?.orgWrite, undefined);
+  assert.equal(claims!.liveActor, true, "an owner's automation fire carries the owner's authority");
+  assert.equal(claims!.memory?.orgWrite, undefined, "but never org-notebook write");
 
   captured = undefined;
   assert.equal(

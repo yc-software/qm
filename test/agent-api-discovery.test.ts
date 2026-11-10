@@ -9,7 +9,7 @@ import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
-import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
+import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
@@ -43,7 +43,9 @@ const capFor = (
     memory?: { write?: ScopeId; orgWrite?: ScopeId; read: ScopeId[] };
     liveActor?: boolean;
     liveAuthor?: boolean;
-    grants?: string[];
+    triggered?: boolean;
+    botActor?: boolean;
+    controlPlane?: boolean;
   } = {},
 ) =>
   mintCapabilityToken(
@@ -54,7 +56,9 @@ const capFor = (
       ...(opts.memory ? { memory: opts.memory } : {}),
       ...(opts.liveActor ? { liveActor: true } : {}),
       ...(opts.liveAuthor ? { liveAuthor: true } : {}),
-      ...(opts.grants ? { grants: opts.grants } : {}),
+      ...(opts.triggered ? { triggered: true } : {}),
+      ...(opts.botActor ? { botActor: true } : {}),
+      ...(opts.controlPlane ? { aud: CONTROL_PLANE_AUD } : {}),
     },
     SECRET,
   );
@@ -126,7 +130,7 @@ test("discovery for an org admin's LIVE turn includes the admin plane (live gran
     assert.ok(p.includes("/v1/admin/users"));
     assert.ok(!p.includes("/v1/admin/grants"), "grant management is portal-only and must not be advertised");
     assert.ok(body.guidance.some((g: string) => g.includes("confirm before any mutation")));
-    assert.match(JSON.stringify(body), /content reads require a DM or effective Open sharing for the live admin/);
+    assert.match(JSON.stringify(body), /content reads require a DM or effective Open sharing for the admin/);
     assert.doesNotMatch(JSON.stringify(body), /DM only|only from a DM|bulk config imports require/);
     assert.equal(p.filter((x: string) => x === "/v1/admin/whoami").length, 1, "whoami listed once, not duplicated");
   } finally {
@@ -134,32 +138,41 @@ test("discovery for an org admin's LIVE turn includes the admin plane (live gran
   }
 });
 
-test("an admin's AUTONOMOUS turn (no liveActor) is shown no admin plane — matching what the gate enforces", async () => {
+test("an admin's token carrying no person's authority is shown no admin plane — matching what the gate enforces", async () => {
   const s = await start();
   try {
-    const { body } = await listApis(s.base, await capFor("admin-alice"));
-    assert.equal(body.admin.isAdmin, true, "status is still reported truthfully");
-    const p = paths(body);
-    assert.ok(!p.includes("/v1/admin/scopes"), "no admin rows without a live-actor token");
-    assert.ok(p.includes("/v1/admin/whoami"), "introspection stays available");
+    for (const opts of [{}, { liveActor: true, botActor: true }]) {
+      const { body } = await listApis(s.base, await capFor("admin-alice", opts));
+      assert.equal(body.admin.isAdmin, true, "status is still reported truthfully");
+      const p = paths(body);
+      assert.ok(
+        !p.includes("/v1/admin/scopes"),
+        `no admin rows without a person's authority (${JSON.stringify(opts)})`,
+      );
+      assert.ok(p.includes("/v1/admin/whoami"), "introspection stays available");
+      assert.ok(!body.guidance.some((g: string) => g.includes("This cron")), "no unattended-grant family remains");
+    }
   } finally {
     await s.close();
   }
 });
 
-test("a granted autonomous turn discovers only the unattended read family", async () => {
+test("a cron fire (liveActor + triggered) discovers the full admin plane and can read spend through the admin door; the unattended families are gone", async () => {
   const s = await start();
   try {
-    const { body } = await listApis(s.base, await capFor("admin-alice", { grants: ["admin.sessions.read"] }));
-    const adminPaths = paths(body).filter((path) => path.startsWith("/v1/admin/"));
-    assert.deepEqual(adminPaths, [
-      "/v1/admin/scopes",
-      "/v1/admin/sessions",
-      "/v1/admin/sessions/:id",
-      "/v1/admin/errors",
-      "/v1/admin/whoami",
-    ]);
-    assert.ok(body.guidance.some((guidance: string) => guidance.includes("flag any other admin action")));
+    const cap = await capFor("admin-alice", { liveActor: true, triggered: true, controlPlane: true });
+    const { body } = await listApis(s.base, cap);
+    assert.deepEqual(body.admin, { isAdmin: true, role: "org_admin" });
+    const p = paths(body);
+    assert.ok(p.includes("/v1/admin/scopes"));
+    assert.ok(p.includes("/v1/admin/users"));
+    assert.ok(!p.includes("/v1/admin/unattended-grants"), "the grant listing route is gone");
+    assert.ok(!p.includes("/v1/admin/grants"), "grant management stays portal-only");
+    assert.equal(p.filter((x: string) => x === "/v1/admin/whoami").length, 1);
+    assert.ok(!body.guidance.some((g: string) => g.includes("This cron") || g.includes("unattended")));
+    assert.match(JSON.stringify(body), /a cron, webhook or loop fire carries its owner's authority/);
+    const spend = await fetch(`${s.base}/v1/admin/spend`, { headers: { "x-agent-capability": cap } });
+    assert.equal(spend.status, 200, "a fire reads a non-private admin report with its owner's authority");
   } finally {
     await s.close();
   }
@@ -195,19 +208,13 @@ test("discovery advertises the deployment share endpoint, with guidance", async 
 test("discovery includes admin routes for a verified human thread reply", async () => {
   const s = await start();
   try {
-    const { body } = await listApis(
-      s.base,
-      await capFor("admin-alice", {
-        liveAuthor: true,
-        grants: ["admin.sessions.read"],
-      }),
-    );
+    const { body } = await listApis(s.base, await capFor("admin-alice", { liveAuthor: true }));
     const p = paths(body);
     assert.ok(p.includes("/v1/admin/scopes/:scopeId/:resource"));
     assert.equal(p.filter((path) => path === "/v1/admin/whoami").length, 1);
     assert.equal(p.filter((path) => path === "/v1/admin/scopes").length, 1);
     assert.ok(body.guidance.some((g: string) => g.includes("confirm before any mutation")));
-    assert.match(JSON.stringify(body), /content reads require a DM or effective Open sharing for the live admin/);
+    assert.match(JSON.stringify(body), /content reads require a DM or effective Open sharing for the admin/);
     assert.doesNotMatch(JSON.stringify(body), /DM only|only from a DM|bulk config imports require/);
     assert.ok(!body.guidance.some((g: string) => g.includes("This cron")));
     const member = await listApis(s.base, await capFor("U1", { liveAuthor: true }));

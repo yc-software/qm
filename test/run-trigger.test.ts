@@ -207,19 +207,13 @@ describe("runTrigger: a monitor fire runs first-class live and delivers its own 
 });
 
 describe("runTrigger: an autonomous cron does NOT go live (it may be conditionally silent by design)", () => {
-  it("threads grants only for crons homed in their owner's own DM, wherever the output goes", async () => {
+  it("every fire runs as its owner, wherever it is homed or delivered, with no grant list on the request", async () => {
     const requests: TurnRequest[] = [];
     const d = deps(async (request) => {
       requests.push(request);
       return { status: "ok" };
     });
-    const base = {
-      owner: "U1",
-      ownerScopeId: scopeId("personal", "U1"),
-      input: "scan",
-      surface: "cron",
-      unattendedGrants: ["admin.sessions.read"],
-    };
+    const base = { owner: "U1", ownerScopeId: scopeId("personal", "U1"), input: "scan", surface: "cron" };
     await runTrigger(d, { ...base, fireKey: "cron:owner" });
     await runTrigger(d, { ...base, ownerScopeId: scopeId("channel", "C1"), fireKey: "cron:channel" });
     await runTrigger(d, {
@@ -229,16 +223,18 @@ describe("runTrigger: an autonomous cron does NOT go live (it may be conditional
       fireKey: "cron:conversation",
     });
     await runTrigger(d, { ...base, destination: toChannel, fireKey: "cron:owner-to-room" });
-    await runTrigger(d, { ...base, ownerScopeId: scopeId("personal", "U2"), fireKey: "cron:foreign-dm" });
-    assert.deepEqual(requests[0]?.unattendedGrants, ["admin.sessions.read"]);
-    assert.equal(requests[1]?.unattendedGrants, undefined);
-    assert.equal(requests[2]?.unattendedGrants, undefined);
+    assert.equal(requests.length, 4);
     assert.deepEqual(
-      requests[3]?.unattendedGrants,
-      ["admin.sessions.read"],
-      "the owner chose where the output goes; the grants stay with the owner's home",
+      requests.map((r) => r.actor.externalId),
+      ["U1", "U1", "system:channel:C1", "U1"],
     );
-    assert.equal(requests[4]?.unattendedGrants, undefined, "a cron homed in someone else's DM carries no grants");
+    for (const r of requests) {
+      assert.equal(r.origin?.kind, "automation");
+      assert.ok(
+        !("unattendedGrants" in r),
+        `${r.conversation.threadRef}: a fire carries its owner's authority, not grants`,
+      );
+    }
   });
 
   it("a failed fire's error notice carries friendly copy while the fire history keeps the raw reason", async () => {

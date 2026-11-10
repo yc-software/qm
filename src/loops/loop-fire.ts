@@ -63,7 +63,6 @@ export interface LoopFireDeps {
   lock?: import("../persistence/advisory-lock.ts").AdvisoryLock;
   loops: LoopStore;
   crons?: Pick<CronStore, "get">;
-  samePerson?: (a: string, b: string) => Promise<boolean>;
   triageEnabledFor?: (owner: string) => Promise<boolean>;
   items: LoopItemLedger;
   outputs: LoopOutputStore;

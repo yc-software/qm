@@ -94,7 +94,6 @@ test("the session facts migration copies each conversation's facts from its late
     surfaceTools: true,
     deliveryTarget: "D1",
     deliveryCandidates: [{ target: "D1", label: "DM" }],
-    unattendedGrants: ["admin.audit.read"],
     model: "m1",
     fastMode: false,
     readOnly: false,
