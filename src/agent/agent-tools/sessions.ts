@@ -241,7 +241,7 @@ export function sessionTools(kit: ToolKit) {
         return recordResult(
           callId,
           { tool: "subagents", action: "read", children: result.children.length },
-          text(lines.length ? lines.join("\n") : "[no subagents opened from this conversation]"),
+          text(lines.length ? lines.join("\n") : "[no subagents to list; retired ones can still be read by id]"),
         );
       }
       return recordResult(
