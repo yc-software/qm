@@ -1436,7 +1436,7 @@ test("a silent child mails a completed-without-reply notice without borrowing tr
 async function answeredChild(
   r: Rig,
   result: Parameters<RunStore["complete"]>[2],
-  open: { task: string; persistent?: boolean } = { task: "check the logs" },
+  open: { task: string; name?: string; persistent?: boolean } = { task: "check the logs" },
 ) {
   const syscalls = r.syscallsFor(r.room);
   const opened = await syscalls.open(open);
@@ -1473,6 +1473,15 @@ test("a subagent retires after its final answer: hidden from the list, refused f
   const transcript = await syscalls.read({ target: child.id });
   assert.ok(transcript.ok && transcript.mode === "transcript");
   assert.match(transcript.rendered, /the logs are clean/);
+});
+
+test("a subagent named like a retired one is the one a name reaches", async () => {
+  const r = await rig();
+  const { syscalls } = await answeredChild(r, { status: "ok", reply: "done" }, { task: "review", name: "reviewer" });
+  const fresh = await syscalls.open({ task: "review again", name: "reviewer" });
+  assert.ok(fresh.ok);
+  const sent = await syscalls.write({ target: "reviewer", text: "also the tests", wake: true });
+  assert.ok(sent.ok);
 });
 
 test("a silent subagent retires too", async () => {

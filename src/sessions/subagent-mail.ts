@@ -443,6 +443,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run, quie
   const retired =
     (kind === "final_answer" || kind === "no_reply") &&
     !child.spawnMeta.persistent &&
+    !(await deps.signals?.pending(run.id))?.some(({ signal }) => signal.kind === "steer") &&
     !(await deps.runs.inFlightForThread(child.threadRef)).length &&
     !(await deps.mailbox.pending(child.id)).length;
   const text = renderSubagentMail({
