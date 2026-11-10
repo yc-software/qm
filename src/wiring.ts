@@ -1218,13 +1218,11 @@ export function buildApp(
             awsBodies.entries(),
             superserveBodies.entries(),
           ]);
-          const bind = (backend: SandboxBackendName, rows: Array<[string, { sandboxId: string }]>) =>
-            rows.map(([scopeId, body]) => ({ scopeId, backend, machineId: body.sandboxId }));
           return [
-            ...bind("e2b", e2b),
-            ...bind("modal", modal),
-            ...aws.map(([scopeId, body]) => ({ scopeId, backend: "aws" as const, machineId: body.microvmId })),
-            ...bind("superserve", superserve),
+            ...e2b.map(([scopeId]) => ({ scopeId, backend: "e2b" as const })),
+            ...modal.map(([scopeId]) => ({ scopeId, backend: "modal" as const })),
+            ...aws.map(([scopeId]) => ({ scopeId, backend: "aws" as const })),
+            ...superserve.map(([scopeId]) => ({ scopeId, backend: "superserve" as const })),
           ];
         },
       });
@@ -2005,6 +2003,13 @@ export function buildApp(
     statements: [
       "CREATE TABLE IF NOT EXISTS crons (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
       "UPDATE crons SET json = json - 'fireLog' WHERE json ? 'fireLog'",
+    ],
+  });
+  pgArtifactMap.pool.registerMigration({
+    id: "durable-map/sandbox_resources/0001-drop-machine-id",
+    statements: [
+      "CREATE TABLE IF NOT EXISTS sandbox_resources (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
+      "UPDATE sandbox_resources SET json = json - 'machineId' WHERE json ? 'machineId'",
     ],
   });
   pgArtifactMap.pool.registerMigration({
