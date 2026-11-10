@@ -585,12 +585,14 @@ export function createTurnMethods(
     },
 
     subscribeRun(runId, listener, onResync) {
+      const tenant = boundTenant();
+      const bound = <T>(fn: () => T): T => (tenant ? withTenant(tenant, fn) : fn());
       return (
         deps.runStreamEvents?.subscribe(
           (event) => {
-            if (event.runId === runId) listener(event);
+            if (event.runId === runId) bound(() => listener(event));
           },
-          { onResync },
+          { onResync: onResync && (() => bound(onResync)) },
         ) ?? (() => {})
       );
     },
