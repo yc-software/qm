@@ -132,10 +132,10 @@ these, not through them.
 
 ### Known limitations
 
-- **Command policy is bypassable.** It classifies shell text and catches configured or
-  common dangerous forms, but obfuscation, encoding, or writing and then executing a
-  script can evade it. It is a speed bump against mistakes and injection, not a
-  sandbox boundary.
+- **Command policy is bypassable.** It classifies shell text against the rules an
+  administrator configures, and none ship by default. Obfuscation, encoding, or writing
+  and then executing a script can evade a configured rule. It is a speed bump against
+  mistakes and injection, not a sandbox boundary.
 - **Open sharing relies on model discretion after authorization.** Server-side policy,
   identity, membership, source bounds, and read-only capability checks determine which
   resources can enter a turn, but they cannot ensure the model keeps relevant private data

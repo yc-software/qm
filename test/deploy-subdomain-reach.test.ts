@@ -70,7 +70,7 @@ test("reachDeployment: a provider's resolveEndpoint refreshes (and persists) the
   let applies = 0;
   let resolved: DeployEndpoint | null = null;
   const provider: DeployProvider = {
-    profile: { managedScaleToZero: true, inPlaceReconcile: true },
+    profile: { managedScaleToZero: true },
     apply: async () => {
       applies++;
       return { host: "stored", port: 443, tls: true };
@@ -102,7 +102,7 @@ test("reachDeployment: a provider's resolveEndpoint refreshes (and persists) the
 test("reachDeployment: a null resolveEndpoint re-applies the current version from source", async () => {
   let applies = 0;
   const provider: DeployProvider = {
-    profile: { managedScaleToZero: true, inPlaceReconcile: true },
+    profile: { managedScaleToZero: true },
     apply: async () => {
       applies++;
       return { host: `body-${applies}`, port: 443, tls: true };
@@ -143,7 +143,8 @@ test("reachDeployment: a provider without resolveEndpoint returns the frozen sto
 });
 
 function appServingUpstream(upstreamPort: number) {
-  const deployStore = createDeployStore(testDeployBackings());
+  const backings = testDeployBackings();
+  const deployStore = createDeployStore(backings);
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore,
@@ -160,7 +161,7 @@ function appServingUpstream(upstreamPort: number) {
     deploy,
     acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
     directory: createPostgresDirectoryStore(testDatabaseUrl()),
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    sessions: createPostgresSessionStore(backings.databaseUrl),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
   } as unknown as Parameters<typeof createApp>[0]);
   return app;

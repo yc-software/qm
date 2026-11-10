@@ -7,6 +7,7 @@ import { ProcessSessionGoneError, redactCommand } from "../sandbox/exec-process-
 import { CONFIG_DEFAULTS } from "../config.ts";
 import { createExactSecretValueMasker } from "../security/secret-masking.ts";
 import { withCleanup } from "../util/errors.ts";
+import { SandboxAccessError } from "../sandbox/sandbox-resources.ts";
 
 export interface BackgroundExecBrokerDeps {
   sandbox: ProcessSandbox;
@@ -20,6 +21,7 @@ export interface BackgroundExecBrokerDeps {
   pollMs?: number;
   termGraceMs?: number;
   killGraceMs?: number;
+  assertComputerUsable?: (sandboxId: string | undefined) => Promise<void>;
 }
 
 export interface BackgroundStartResult {
@@ -265,8 +267,20 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
     },
 
     async list(): Promise<BackgroundJobSummary[]> {
-      return (await deps.registry.listByScope(deps.scopeId))
-        .filter((r) => r.kind === "background")
+      const jobs = (await deps.registry.listByScope(deps.scopeId)).filter((r) => r.kind === "background");
+      const usable = await Promise.all(
+        jobs.map((r) =>
+          (deps.assertComputerUsable?.(r.sandboxId) ?? Promise.resolve()).then(
+            () => true,
+            (error: unknown) => {
+              if (error instanceof SandboxAccessError) return false;
+              throw error;
+            },
+          ),
+        ),
+      );
+      return jobs
+        .filter((_, i) => usable[i])
         .map((r) => ({
           processId: r.processId,
           command: r.command,
