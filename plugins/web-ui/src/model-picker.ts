@@ -54,6 +54,7 @@ interface ModelPickerBindings<T> {
     entries(selected: ModelOption): LoadoutEntry[];
     save(entries: LoadoutEntry[]): void;
     add(option: ModelOption, target: T): void;
+    reselect?(entry: LoadoutEntry, target: T): void;
   };
   catalog?: ModelCatalog;
   activeEntry(selected: ModelOption): LoadoutEntry;
@@ -116,8 +117,8 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
     const neighbor = Math.max(0, Math.min(index, next.length - 1));
     if (value === activeLoadoutEntry(selected).value) {
       const successor = next[neighbor];
-      if (!successor) return;
-      applyLoadout(successor, agent);
+      if (!successor || !presets?.reselect) return;
+      presets.reselect(successor, agent);
     }
     presets?.save(next);
     bindings.redraw();
@@ -218,7 +219,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
       }
       ${isDefault && !canMakeDefault ? html`<span class="loadout-default-star" role="img" aria-label="My default" ${tip("My default")}>${icon(Star, 14)}</span>` : nothing}
       ${
-        presets && !(active && onlyPreset)
+        presets && (!active || (presets.reselect && !onlyPreset))
           ? html`<button
               class="loadout-remove"
               type="button"

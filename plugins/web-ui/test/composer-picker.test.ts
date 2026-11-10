@@ -500,6 +500,12 @@ test("the personal-account picker preserves composer choices and saves context d
     assert.ok(contextHost.querySelector('[role="menu"][aria-label="Model settings"]'));
     assert.equal(contextHost.querySelector("select"), null);
     assert.equal(contextHost.querySelector(".loadout-make-default"), null);
+    assert.ok(contextHost.querySelector(".loadout-row:not(.active) .loadout-remove"));
+    assert.equal(
+      contextHost.querySelector(".loadout-row.active .loadout-remove"),
+      null,
+      "a project's selected preset stays put, since removing it would change the project's model",
+    );
     const betaPreset = [...contextHost.querySelectorAll<HTMLButtonElement>(".loadout-pick")].find((item) =>
       item.textContent?.includes("Beta"),
     );
@@ -760,25 +766,6 @@ test("the personal-account picker preserves composer choices and saves context d
     assert.equal(composer!.state.fastMode, true);
     assert.deepEqual(saved(), [{ value: "beta", effort: "high", fast: true }]);
     assert.equal(remove("Beta"), null, "the only preset cannot be removed");
-    context.resetContextModel();
-    localStorage.setItem(
-      "web-ui:loadout",
-      JSON.stringify([
-        { value: "gamma", effort: "medium", fast: false },
-        { value: "alpha", effort: "low", fast: false },
-      ]),
-    );
-    await context.loadContextModel(config.scopeId, drawContext);
-    contextButton(".loadout-button").click();
-    contextButton('[aria-label="Remove Gamma from presets"]').click();
-    await tick();
-    assert.deepEqual(
-      updates.at(-1),
-      { scopeId: config.scopeId, modelId: "alpha", effortLevel: "low", fastMode: false },
-      "removing the project's selected preset saves the preset that takes its place",
-    );
-    assert.equal(context.contextModelState.config.effective.modelId, "alpha");
-    assert.deepEqual(saved(), [{ value: "alpha", effort: "low", fast: false }]);
   } finally {
     resetContext?.();
     composer?.dispose();
