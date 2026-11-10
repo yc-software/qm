@@ -254,22 +254,6 @@ test("app editing adds app context beside the exact message, only on the person'
     assert.equal((await sentTurn({ threadRef, conversationHeader: "injected" })).conversationHeader, undefined);
 });
 
-test("an app edit message without a chosen model runs on the app edit runtime", async (t) => {
-  const at = await serve(
-    { providerKeys: { anthropic: true, openai: true, openrouter: false }, modelCredentials: undefined },
-    t,
-  );
-  const model = async (body: Record<string, unknown>) => {
-    const response = await post("/api/turn", { text: "hello", ...body }, { at });
-    assert.equal(response.status, 202, await response.text());
-    return turns.at(-1)!.model;
-  };
-  assert.equal(await model({ threadRef: "web:alice:app-edit:sample-app" }), "gpt-6.1-sol-ultrafast");
-  assert.equal(await model({ threadRef: "web:alice:app-edit:sample-app", model: "gpt-5.5" }), "gpt-5.5");
-  for (const threadRef of ["web:alice:ordinary", "web:bob:app-edit:sample-app"])
-    assert.equal(await model({ threadRef }), undefined, threadRef);
-});
-
 const scroll = { name: "ui__scroll", description: "Scroll", inputSchema: { type: "object", properties: {} } };
 
 test("client tools and a surface briefing reach the agent only from the person's own private chat", async () => {

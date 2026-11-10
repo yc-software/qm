@@ -1,8 +1,6 @@
 import { clientSurfaceOf } from "../../../plugins/chassis/src/client-surface.ts";
 import { appEditSlug } from "../../../plugins/chassis/src/app-edit.ts";
 import { isSubagentThreadRef } from "../../sessions/session-syscalls.ts";
-import { conversationScope } from "../../resolution/resolution-service.ts";
-import { appEditRuntime, userRuntimeConfigBody } from "../runtime-config.ts";
 import type { TurnRequest } from "../../types.ts";
 import { sendJson } from "../http.ts";
 import { inboxView } from "./inbox.ts";
@@ -192,22 +190,11 @@ async function webTurn(ctx: ApiCtx): Promise<void> {
     typeof p.desktopClientId === "string" && p.desktopClientId.length === 36 ? p.desktopClientId : undefined;
   const surfaceBriefing = isObj(p.surfaceBriefing) && !Array.isArray(p.surfaceBriefing) ? p.surfaceBriefing : undefined;
   const timezone = trimmed(p.timezone, 64);
-  const requestedModel = typeof p.model === "string" && p.model ? p.model : undefined;
-  const appEdit =
-    !requestedModel && appEditSlug(threadRef, user)
-      ? await appEditRuntime(
-          ctx,
-          (await userRuntimeConfigBody(ctx, conversationScope(resolved.conversation, user), user)).models,
-        )
-      : undefined;
-  const model = requestedModel ?? appEdit?.modelId;
-  const thinkingLevel = typeof p.thinkingLevel === "string" && p.thinkingLevel ? p.thinkingLevel : appEdit?.effortLevel;
-  const fastMode = typeof p.fastMode === "boolean" ? p.fastMode : appEdit?.fastMode;
   return submitTurn(ctx, {
     ...(await webTurnBase(ctx, user, resolved.conversation, threadRef, text)),
-    ...(model ? { model } : {}),
-    ...(thinkingLevel ? { thinkingLevel } : {}),
-    ...(typeof fastMode === "boolean" ? { fastMode } : {}),
+    ...(typeof p.model === "string" && p.model ? { model: p.model } : {}),
+    ...(typeof p.thinkingLevel === "string" && p.thinkingLevel ? { thinkingLevel: p.thinkingLevel } : {}),
+    ...(typeof p.fastMode === "boolean" ? { fastMode: p.fastMode } : {}),
     ...(timezone ? { timezone } : {}),
     ...(privateConversation && Array.isArray(p.clientTools) ? { clientTools: p.clientTools } : {}),
     ...(privateConversation && surfaceBriefing ? { surfaceBriefing } : {}),
