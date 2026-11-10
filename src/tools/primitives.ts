@@ -478,6 +478,7 @@ export interface ToolContextDeps {
     authorize?: (access: SandboxAccessPlan) => void,
   ) => Promise<SandboxHandle>;
   accessSandboxResource?: (id: string) => Promise<SandboxAccessPlan>;
+  assertDefaultSandboxUsable?: () => Promise<void>;
   boundSandboxId?: string;
   workdir?: string;
   listSkills?: (source?: string) => Promise<SkillResolution[]>;
@@ -769,6 +770,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
             }
             if (action === "default") {
               if (input?.sandboxId === undefined) throw new Error("default requires sandbox_id or null");
+              if (input.sandboxId !== null) await accessSandbox(input.sandboxId);
               await resources.setDefault(deps.createdBy, writableScopeId, input.sandboxId);
               deps.invalidateProvision?.();
               return { defaultSandboxId: input.sandboxId };
@@ -810,6 +812,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         const access = await accessSandbox(sandboxId);
         return probe(await resources.status(deps.createdBy, sandboxId), () => deps.provisionResource!(access));
       }
+      await deps.assertDefaultSandboxUsable?.();
       if (!deps.sandbox.computerStatus) {
         throw new CapabilityUnsupportedError(deps.sandbox.profile.backend, "reporting computer status");
       }
@@ -827,6 +830,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         return resources.restart(deps.createdBy, sandboxId, memoryGb);
       }
       if (memoryGb !== undefined) throw new Error("a memory size needs a computer from sandbox list");
+      await deps.assertDefaultSandboxUsable?.();
       if (!deps.sandbox.restartComputer) {
         throw new CapabilityUnsupportedError(deps.sandbox.profile.backend, "restarting the computer");
       }

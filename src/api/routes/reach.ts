@@ -6,6 +6,7 @@ import { collectNamedOutbound, parseOutboundFiles, type ArtifactRegistration } f
 import type { SandboxHandle } from "../../sandbox/sandbox.ts";
 import {
   accessConversationSandbox,
+  assertBotMayUseComputer,
   SandboxAccessError,
   type SandboxResource,
 } from "../../sandbox/sandbox-resources.ts";
@@ -176,6 +177,15 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
             ),
         }
       : undefined;
+    const botMayUse =
+      capability.botActor && app.swarms
+        ? (computer: SandboxResource) =>
+            app.swarms!.botMayUseComputer(computer, {
+              actorId: capability.actorId,
+              threadRef: capability.threadRef ?? "",
+              sessionId: capability.sessionId ?? "",
+            })
+        : undefined;
     let resource: SandboxResource | undefined;
     if (requestedSandboxId) {
       try {
@@ -184,6 +194,7 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
           capability.actorId,
           requestedSandboxId,
           (scope) => scope === capability.scopeId || scope === envScope,
+          botMayUse,
         );
       } catch (e) {
         if (!(e instanceof SandboxAccessError)) throw e;
@@ -191,6 +202,13 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
           error: "forbidden",
           message: "sandbox_id isn't a computer this conversation can read files from",
         });
+      }
+    } else if (needsSandbox) {
+      try {
+        await assertBotMayUseComputer(deps.sandboxResources, envScope, undefined, botMayUse);
+      } catch (e) {
+        if (!(e instanceof SandboxAccessError)) throw e;
+        return sendJson(res, 403, { error: "forbidden", message: e.message });
       }
     }
     let provisioned: Promise<SandboxHandle> | undefined;
