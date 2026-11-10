@@ -335,13 +335,16 @@ const ageText = (ms: number): string => {
 const gb = (mb: number): string => (mb / 1024).toFixed(1);
 
 export function sandboxLoadLine(
-  resource: Pick<SandboxResource, "id" | "name" | "backend" | "holders">,
+  resource: Pick<SandboxResource, "id" | "name" | "backend" | "holders" | "spec" | "memoryGb">,
   sample: LoadSample | null,
   nowMs: number,
 ): string {
   const sessions = resource.holders?.length ?? 0;
-  const memShare = sample ? sample.memUsedMb / sample.memTotalMb : 0;
-  const diskShare = sample ? sample.diskUsedGb / sample.diskTotalGb : 0;
+  const memTotalMb =
+    (resource.memoryGb ? resource.memoryGb * 1024 : resource.spec?.memoryMb) || sample?.memTotalMb || 0;
+  const diskTotalGb = resource.spec?.diskGb || sample?.diskTotalGb || 0;
+  const memShare = sample && memTotalMb ? sample.memUsedMb / memTotalMb : 0;
+  const diskShare = sample && diskTotalGb ? sample.diskUsedGb / diskTotalGb : 0;
   const signal =
     sessions >= 2 ||
     (sample?.ioFull60 ?? 0) >= IO_SATURATED_FULL60 ||
@@ -353,7 +356,7 @@ export function sandboxLoadLine(
   const age = nowMs - sample.sampledAt;
   const io = sample.ioFull60 === null ? "" : `, io ${Math.round(sample.ioFull60)}% saturated`;
   const when = `${age > LOAD_STALE_MS ? "stale, " : ""}sampled ${ageText(age)} ago`;
-  return `${head}${io}, load ${sample.load1}, mem ${gb(sample.memUsedMb)}/${gb(sample.memTotalMb)} GB, disk ${Math.round(diskShare * 100)}% full (${when}). Scratch: available.`;
+  return `${head}${io}, load ${sample.load1}, mem ${gb(sample.memUsedMb)}/${gb(memTotalMb)} GB, disk ${Math.round(diskShare * 100)}% full (${when}). Scratch: available.`;
 }
 
 export async function defaultSandboxLoadLine(

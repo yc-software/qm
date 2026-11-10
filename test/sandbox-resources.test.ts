@@ -1259,3 +1259,25 @@ test("a single session still sees the line when the disk is nearly full, without
   );
   assert.equal(sandboxLoadLine(resource, { ...sample, diskUsedGb: 20 }, 5 * 60_000), "");
 });
+
+test("the created size, not the host kernel, is the total for mem and disk when the sandbox record carries one", () => {
+  const sample = {
+    sampledAt: 0,
+    ioFull60: null,
+    load1: 0.4,
+    memUsedMb: 1843,
+    memTotalMb: 336_691,
+    diskUsedGb: 9.5,
+    diskTotalGb: 2000,
+  };
+  const host = { id: "abcdef123456", name: "box", backend: "modal" as const, holders: ["run-1"] };
+  assert.equal(sandboxLoadLine(host, sample, 0), "");
+  assert.equal(
+    sandboxLoadLine({ ...host, spec: { memoryMb: 2048, diskGb: 10 } }, sample, 0),
+    'Sandboxes: default "box" (modal) — 1 session active, load 0.4, mem 1.8/2.0 GB, disk 95% full (sampled 0s ago). Scratch: available.',
+  );
+  assert.equal(
+    sandboxLoadLine({ ...host, spec: { memoryMb: 2048 }, memoryGb: 8 }, { ...sample, memUsedMb: 7500 }, 0),
+    'Sandboxes: default "box" (modal) — 1 session active, load 0.4, mem 7.3/8.0 GB, disk 0% full (sampled 0s ago). Scratch: available.',
+  );
+});

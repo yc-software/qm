@@ -26,7 +26,13 @@ import {
 import { killableScript, killScript } from "./exec-kill.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import { sandboxScopeName } from "./exec-sandbox-base.ts";
-import { ModalNameConflictError, ModalSandboxGoneError, type ModalClient, type ModalSession } from "./modal-client.ts";
+import {
+  DEFAULT_MEMORY_MB,
+  ModalNameConflictError,
+  ModalSandboxGoneError,
+  type ModalClient,
+  type ModalSession,
+} from "./modal-client.ts";
 import {
   attemptSnapshot,
   createHomeSnapshotOps,
@@ -478,6 +484,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
       get notInstalled() {
         return visibleNotInstalled(["gh", "aws", "gcloud", "kubectl", "flyctl", "glab"], opts.extraTools ?? []);
       },
+      memoryMb: DEFAULT_MEMORY_MB,
       homeDir: HOME_DIR,
       workdir: workspaceDir,
     },
