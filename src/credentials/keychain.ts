@@ -512,6 +512,20 @@ function consumedGrant(grant: KeychainGrant): boolean {
   return grant.status === "used" || (grant.mode === "once" && grant.usedAt !== undefined);
 }
 
+function askTask(a: {
+  credentialId: string;
+  requesterScopeId: string;
+  requesterThreadRef?: string;
+  botActor?: boolean;
+}): string {
+  return JSON.stringify([
+    a.credentialId,
+    a.requesterScopeId,
+    cronIdOf(a.requesterThreadRef) ?? a.requesterThreadRef,
+    a.botActor === true,
+  ]);
+}
+
 function expired(rec: { expiresAt?: number }, now: number): boolean {
   return typeof rec.expiresAt === "number" && rec.expiresAt < now;
 }
@@ -1263,11 +1277,10 @@ export function createKeychain(deps: {
       ) {
         throw new KeychainError(403, "personal requests require the credential owner's own conversation");
       }
-      const origin = cronIdOf(input.requesterThreadRef) ?? input.requesterThreadRef;
+      const task = askTask({ ...input, credentialId: cred.id });
       for (const rec of (await deps.asks.all()).reverse().sort((a, b) => b.createdAt - a.createdAt)) {
         const a = await freshAsk(rec, t);
-        const sameOrigin = (cronIdOf(a.requesterThreadRef) ?? a.requesterThreadRef) === origin;
-        if (a.credentialId !== cred.id || a.requesterScopeId !== input.requesterScopeId || !sameOrigin) continue;
+        if (askTask(a) !== task) continue;
         if (a.status === "pending") return { ask: a, existing: true };
         if (a.status === "approved") break;
         if (input.triggered && (a.status === "declined" || a.status === "expired")) {
@@ -1362,9 +1375,9 @@ export function createKeychain(deps: {
         const taskDecisions = new Set<string>();
         for (const rec of (await deps.asks.all()).reverse().sort((a, b) => b.createdAt - a.createdAt)) {
           const a = await freshAsk(rec, nowAt);
-          const origin = cronIdOf(a.requesterThreadRef) ?? a.requesterThreadRef;
-          const task = JSON.stringify([a.credentialId, a.requesterScopeId, origin]);
-          const retain = origin !== undefined && !taskDecisions.has(task) && !!(await deps.creds.get(a.credentialId));
+          const task = askTask(a);
+          const retain =
+            a.requesterThreadRef !== undefined && !taskDecisions.has(task) && !!(await deps.creds.get(a.credentialId));
           taskDecisions.add(task);
           if (a.status === "pending") continue;
           if (a.notifiedAt === undefined) found.push({ ...a, tenantId: currentTenant() });

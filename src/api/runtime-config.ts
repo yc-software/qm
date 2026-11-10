@@ -216,8 +216,7 @@ export async function webuiModelEnabled(
   if (picker == null || picker.includes(modelId)) return true;
   if (picker.length === 0) return false;
   const org = orgScope();
-  const stored = await config.getRuntimeSelectionDurable(org);
-  const orgModel = stored?.modelId ?? (await config.getBaseModelOwnDurable(org)) ?? runtimeFallback(ctx).modelId;
+  const orgModel = (await config.getBaseModelOwnDurable(org)) ?? runtimeFallback(ctx).modelId;
   const purposeModel = purpose ? (await config.getPurposeRuntimeDurable(purpose))?.modelId : undefined;
   return modelId === orgModel || modelId === purposeModel;
 }
@@ -337,11 +336,10 @@ export async function turnModelRefusal(
     : (deps.providerKeys ?? deps.modelProviders);
   const hydrate = async () =>
     deps.modelCredentials && providers?.openrouter ? selectableModelCatalog(deps.modelCredentialFetch) : undefined;
-  const storedOrg = await deps.config.getRuntimeSelectionDurable(org);
   let orgModelId: string;
   let runtime: RuntimeChoice;
   try {
-    const orgModel = storedOrg?.modelId ?? (await deps.config.getBaseModelOwnDurable(org)) ?? fallback.modelId;
+    const orgModel = (await deps.config.getBaseModelOwnDurable(org)) ?? fallback.modelId;
     orgModelId = modelUnavailableReason(orgModel)
       ? orgModel
       : (await resolveRuntimeChoice(deps.config, org, org, fallback, undefined, hydrate)).modelId;
