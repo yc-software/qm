@@ -81,7 +81,9 @@ export async function mintTurnCapabilities(turn: CapabilityTurn) {
     ...(input.botActor ? { botActor: true } : {}),
     ...(actAsActor ? { actAsActor: true } : {}),
   };
-  const { actorIsOrgAdmin, orgMemoryWrite, controlClaims } = await mintControlPlaneTokens(
+  const tenant = ambientTenant();
+  const { actorIsOrgAdmin, orgMemoryWritable, controlClaims } = await mintControlPlaneTokens(
+    tenant,
     turn,
     scopeAttestation,
     sandboxTokenExpiry,
@@ -101,10 +103,19 @@ export async function mintTurnCapabilities(turn: CapabilityTurn) {
       deps.capabilityTokenCompression,
     );
   };
-  return { actorIsOrgAdmin, orgMemoryWrite, controlClaims, sandboxTokenExpiry, scopeAttestation, egressTokenForPolicy };
+  return {
+    actorIsOrgAdmin,
+    orgMemoryWritable,
+    tenant,
+    controlClaims,
+    sandboxTokenExpiry,
+    scopeAttestation,
+    egressTokenForPolicy,
+  };
 }
 
 async function mintControlPlaneTokens(
+  tenant: ReturnType<typeof ambientTenant>,
   turn: CapabilityTurn,
   scopeAttestation: Omit<CapabilityClaims, "exp">,
   sandboxTokenExpiry: number,
@@ -140,26 +151,18 @@ async function mintControlPlaneTokens(
   const securityPolicy = resolution.securityPolicy;
   let actorIsOrgAdmin = false;
   let orgMemoryWrite: ScopeId | undefined;
+  const orgMemoryWritable = useMemory && memoryPolicy.capture !== "off" && resolution.orgScopeId !== memoryScopeId;
   let controlClaims: CapabilityClaims | undefined;
   if (!strictReadOnly && deps.signingSecret && deps.apiBaseUrl) {
     const destination = defaultDestination;
     connectorEnv.AGENT_API_URL = deps.apiBaseUrl;
     if (deps.admin && (liveAuthorTurn || liveTurn)) {
       try {
-        actorIsOrgAdmin = (await deps.admin.adminStatusOf(ambientTenant(), actor)).isAdmin;
+        actorIsOrgAdmin = (await deps.admin.adminStatusOf(tenant, actor)).isAdmin;
       } catch (e) {
         swallow("orchestrator: admin status for turn", e);
       }
-      if (
-        actorIsOrgAdmin &&
-        liveTurn &&
-        !automatedTurn &&
-        useMemory &&
-        memoryPolicy.capture !== "off" &&
-        resolution.orgScopeId !== memoryScopeId
-      ) {
-        orgMemoryWrite = resolution.orgScopeId;
-      }
+      if (actorIsOrgAdmin && liveTurn && !automatedTurn && orgMemoryWritable) orgMemoryWrite = resolution.orgScopeId;
     }
     const memoryClaim = memoryAccess
       ? { ...memoryAccess, read: baseRecallScopes, ...(orgMemoryWrite ? { orgWrite: orgMemoryWrite } : {}) }
@@ -234,5 +237,5 @@ async function mintControlPlaneTokens(
       deps.capabilityTokenCompression,
     );
   }
-  return { actorIsOrgAdmin, orgMemoryWrite, controlClaims };
+  return { actorIsOrgAdmin, orgMemoryWritable, controlClaims };
 }

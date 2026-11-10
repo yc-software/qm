@@ -292,6 +292,8 @@ async function gate(
         return null;
       }
       actor = signedIn;
+      const release = await deps.web?.shell.release();
+      if (release) res.setHeader("x-qm-release", release);
     } else actor = token && psecret ? await verifyPortalIdentity(token, psecret, Date.now()) : null;
     if (actor && deps.identity) {
       const identity = deps.identity;

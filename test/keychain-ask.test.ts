@@ -886,14 +886,15 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     const environment = String(resolution[0]!.body.environment);
     const listSystems = async () =>
       (await built.sessions.listLlmRequests(session!.id)).map((r) => (r.promptEnvelope as { system: string }).system);
-    await waitFor(async () => ((await listSystems()).at(-1)?.includes(`\`github:${gh.id}\``) ? [true] : []));
+    await waitFor(async () => ((await listSystems()).length > 1 ? [true] : []));
     const systems = await listSystems();
     assert.ok(
       !prompt.includes(ask.id) && !prompt.includes(grant.id) && !prompt.includes(gh.id),
       "no ids in the resume text",
     );
     assert.ok(!systems[0]!.includes(`\`github:${gh.id}\``), "no handle before the approval");
-    assert.ok(systems.at(-1)!.includes(`\`github:${gh.id}\``), "the approved handle reaches the system prompt");
+    assert.equal(systems.at(-1), systems[0], "the system prompt stays byte-identical across the approval");
+    assert.ok(environment.includes(`\`github:${gh.id}\``), "the approved handle reaches the turn's environment note");
     assert.ok(
       !environment.includes(grant.id) && !systems.at(-1)!.includes(grant.id),
       "grant ids stay out of the prompt",

@@ -9,6 +9,11 @@ import { join } from "node:path";
 import { buildApp as buildAppRaw } from "./support/build-app.ts";
 import { mockHeldTurns } from "./support/mock-agent.ts";
 import { approvalCardId } from "../src/core/approval-id.ts";
+import {
+  BOT_REQUESTER_APPROVAL_NOTE,
+  BOT_REQUESTER_REFUSAL,
+  undeliverableApprovalNote,
+} from "../src/core/approval-requester.ts";
 import { scopeId, type Destination, type TurnRequest } from "../src/types.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 import { runNowSettled, settle } from "./support/settle.ts";
@@ -1865,7 +1870,7 @@ test("admin reach rides live, all-internal turns — direct, detection and guest
     conversation: { kind: "dm", threadRef: "dm:admin-alice:auto2" },
     text: "!sysprompt",
   });
-  assert.doesNotMatch(autoPrompt.reply ?? "", /## Acting for an org admin|System administration is not limited/);
+  assert.doesNotMatch(autoPrompt.reply ?? "", /The sender is an org admin\./);
 
   captured = undefined;
   assert.equal(
@@ -1903,6 +1908,7 @@ test("admin reach rides live, all-internal turns — direct, detection and guest
   });
   assert.match(threadPrompt.reply ?? "", /## Acting for an org admin/);
   assert.match(threadPrompt.reply ?? "", /System administration is not limited to the admin dashboard/);
+  assert.match(threadPrompt.reply ?? "", /The sender is an org admin\./);
 
   assert.equal(
     claims!.liveActor,
@@ -2793,6 +2799,45 @@ test("dangerous command pauses for HiLO approval, then proceeds when approved", 
     true,
     "the continuation's replay is hidden so the chat never shows the human saying it twice",
   );
+});
+
+test("a bot-requested turn never opens an approval when a command is gated", async () => {
+  const built = await withCommandRules(freshApp());
+  const res = await built.app.turn(dm("!run git push --force origin main", { botActor: true }));
+  assert.equal(res.status, "refused");
+  assert.equal(res.reason, BOT_REQUESTER_REFUSAL);
+  assert.equal(res.pendingApprovals, undefined);
+  assert.equal((await built.deliveries.pending("principal")).length, 0);
+});
+
+test("a bot-requested turn tells the agent that approvals are unavailable", async () => {
+  const { app } = freshApp();
+  const res = await app.turn(dm("!approval-note", { botActor: true }));
+  assert.equal(res.status, "ok");
+  assert.equal(res.reply, BOT_REQUESTER_APPROVAL_NOTE);
+  assert.equal((await app.turn(dm("!approval-note"))).reply, "approvals available");
+});
+
+test("a command-approval card that fails terminally settles the approval as declined", async () => {
+  const built = await withCommandRules(freshApp());
+  const first = await built.app.turn(dm("!run git push --force origin main"));
+  assert.equal(first.status, "pending_approval");
+  const requestId = first.pendingApprovals![0]!.requestId;
+  const card = await built.deliveries.enqueue({
+    destination: { ...principalDestination("U1", "U1"), commandApprovalId: requestId },
+    text: "Approval needed",
+    idempotencyKey: "test-card",
+  });
+  await built.app.failDelivery(card.id, "cannot_dm_bot");
+  assert.equal(await built.app.getApproval(requestId), null);
+  const items = (await built.app.getSession(first.sessionId!))!.items;
+  const decision = items.find((item) => item.kind === "ElicitationResponse" && item.elicitId === requestId);
+  assert.equal(decision?.approved, false);
+  assert.ok(
+    items.some((item) => isHidden(item) && (item.text ?? "").startsWith(undeliverableApprovalNote("cannot_dm_bot"))),
+  );
+  const follow = await built.app.turn(dm("what happened?"));
+  assert.notEqual(follow.status, "pending_approval");
 });
 
 test("a pending command approval blocks unrelated follow-up input in the same thread", async () => {
