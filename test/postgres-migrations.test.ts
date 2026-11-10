@@ -337,3 +337,27 @@ test("an applied migration set is checked against the ledger in one read", { ski
     await pool.end();
   }
 });
+
+test("an upgrade step runs when its predecessor is applied earlier in the same run", { skip }, async () => {
+  const pool = new pg.Pool({ connectionString: databaseUrl });
+  const { id, table } = names();
+  const predecessor = definePgMigration({ id: `${id}/a`, statements: [`CREATE TABLE ${table}(value INT)`] });
+  const upgrade = definePgMigration({
+    id: `${id}/b`,
+    upgradeFrom: predecessor.id,
+    statements: [`INSERT INTO ${table}(value) VALUES (1)`],
+  });
+  const skipped = definePgMigration({
+    id: `${id}/c`,
+    upgradeFrom: `${id}/missing`,
+    statements: [`INSERT INTO ${table}(value) VALUES (2)`],
+  });
+  try {
+    await applyPgMigrations(pool, [predecessor, upgrade, skipped]);
+    assert.deepEqual((await pool.query(`SELECT value FROM ${table}`)).rows, [{ value: 1 }]);
+  } finally {
+    await pool.query(`DROP TABLE IF EXISTS ${table}`);
+    await pool.query(`DELETE FROM ${PG_MIGRATIONS_TABLE} WHERE id LIKE $1`, [`${id}/%`]);
+    await pool.end();
+  }
+});
