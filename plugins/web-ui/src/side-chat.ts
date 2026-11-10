@@ -88,22 +88,28 @@ export function createSideChatController(ctx: ConvCtx) {
       });
       let nextCardTop = 0;
       const gap = Number.parseFloat(getComputedStyle(host).rowGap) || 0;
-      for (const card of host.querySelectorAll<HTMLElement>(":scope > .side-chat-card, :scope > .side-chat-panel")) {
-        const firstLine = shapes.find(({ session }) => session.id === card.dataset.sideChatId)?.line;
-        const draftRange =
-          !card.dataset.sideChatId && pendingAnchor && observedRows.get(host)
-            ? passageRange(observedRows.get(host)!, pendingAnchor.quote, pendingAnchor.occurrence)
-            : null;
-        const top = firstLine?.top ?? draftRange?.getClientRects?.()[0]?.top ?? origin.top;
+      const cards = Array.from(
+        host.querySelectorAll<HTMLElement>(":scope > .side-chat-card, :scope > .side-chat-panel"),
+        (card) => {
+          const firstLine = shapes.find(({ session }) => session.id === card.dataset.sideChatId)?.line;
+          const draftRange =
+            !card.dataset.sideChatId && pendingAnchor && observedRows.get(host)
+              ? passageRange(observedRows.get(host)!, pendingAnchor.quote, pendingAnchor.occurrence)
+              : null;
+          return {
+            card,
+            top: firstLine?.top ?? draftRange?.getClientRects?.()[0]?.top ?? origin.top,
+            height: card.getBoundingClientRect().height,
+            marginBottom: Number.parseFloat(getComputedStyle(card).marginBottom) || 0,
+          };
+        },
+      );
+      for (const { card, top, height, marginBottom } of cards) {
         const offset = Math.max(0, top - origin.top - nextCardTop);
         const value = `${offset}px`;
         if (card.style.getPropertyValue("--side-chat-offset") !== value)
           card.style.setProperty("--side-chat-offset", value);
-        nextCardTop +=
-          offset +
-          card.getBoundingClientRect().height +
-          (Number.parseFloat(getComputedStyle(card).marginBottom) || 0) +
-          gap;
+        nextCardTop += offset + height + marginBottom + gap;
       }
       const existing = new Map(
         Array.from(host.querySelectorAll<HTMLElement>(":scope > .side-chat-highlight")).map((element) => [
