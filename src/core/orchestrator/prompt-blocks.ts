@@ -4,7 +4,7 @@ import { retainedSnapshot } from "../../agent/context-snapshot.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../../cron/schedule.ts";
 import type { CandidateDestination, GatewayContext, GrantedHandle, ScopeId } from "../../types.ts";
 import type { SandboxResource, SandboxResources } from "../../sandbox/sandbox-resources.ts";
-import type { LoadSample } from "../../sandbox/load-probe.ts";
+import { IO_SATURATED_FULL60, type LoadSample } from "../../sandbox/load-probe.ts";
 import type { Item } from "../../sessions/items.ts";
 import type { Cron, Monitor, Webhook } from "../../triggers/types.ts";
 import type { DirectoryMember } from "../../directory/directory-store.ts";
@@ -323,7 +323,6 @@ export function renderSystemContext(blocks: SystemContextBlocks): string {
 }
 
 const LOAD_STALE_MS = 60_000;
-const LOAD_IO_SIGNAL = 50;
 const LOAD_FULL_SIGNAL = 0.85;
 
 const ageText = (ms: number): string => {
@@ -345,7 +344,7 @@ export function sandboxLoadLine(
   const diskShare = sample ? sample.diskUsedGb / sample.diskTotalGb : 0;
   const signal =
     sessions >= 2 ||
-    (sample?.ioFull60 ?? 0) >= LOAD_IO_SIGNAL ||
+    (sample?.ioFull60 ?? 0) >= IO_SATURATED_FULL60 ||
     diskShare >= LOAD_FULL_SIGNAL ||
     memShare >= LOAD_FULL_SIGNAL;
   if (!signal) return "";
@@ -357,8 +356,13 @@ export function sandboxLoadLine(
   return `${head}${io}, load ${sample.load1}, mem ${gb(sample.memUsedMb)}/${gb(sample.memTotalMb)} GB, disk ${Math.round(diskShare * 100)}% full (${when}). Scratch: available.`;
 }
 
-export async function defaultSandboxLoadLine(resources: SandboxResources, scopeId: ScopeId): Promise<string> {
+export async function defaultSandboxLoadLine(
+  resources: SandboxResources,
+  scopeId: ScopeId,
+  runId: string | undefined,
+): Promise<string> {
   const resource = await resources.resolve(scopeId);
   if (!resource) return "";
-  return sandboxLoadLine(resource, await resources.load(resource.id), Date.now());
+  const holders = [...new Set([...(resource.holders ?? []), ...(runId ? [runId] : [])])];
+  return sandboxLoadLine({ ...resource, holders }, await resources.load(resource.id), Date.now());
 }

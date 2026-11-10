@@ -1,4 +1,5 @@
 import { Check } from "typebox/value";
+import { IO_SATURATED_FULL60 } from "../../sandbox/load-probe.ts";
 import { isObj } from "../../util/objects.ts";
 import { MaskedExecutionError } from "../../security/secret-masking.ts";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -15,8 +16,6 @@ import { text, type ToolKit } from "./kit.ts";
 function fmtStatus(s: { state: "running" } | { state: "exited"; code: number }): string {
   return s.state === "exited" ? `exited ${s.code}` : "running";
 }
-
-const PRESSURE_WARN_FULL60 = 50;
 
 export function computerTools(kit: ToolKit) {
   const { ref, opts, logResult, recordCall, recordResult, blockOnApproval } = kit;
@@ -108,7 +107,7 @@ export function computerTools(kit: ToolKit) {
         : "";
       const localExec = !route?.scratch && !scratchReroute;
       const pressureNote =
-        localExec && r.load && (r.load.ioFull60 ?? 0) >= PRESSURE_WARN_FULL60
+        localExec && r.load && (r.load.ioFull60 ?? 0) >= IO_SATURATED_FULL60
           ? `\n[pressure] this computer's disk is saturated (io ${r.load.ioFull60}%, load ${r.load.load1}) — sequence heavy work, move self-contained runs to scope:"scratch", or check sandbox action=status`
           : "";
       return recordResult(

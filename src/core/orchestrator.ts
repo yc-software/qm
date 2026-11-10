@@ -1250,7 +1250,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             scopeProfile.egressEnforcement === "domain" ? [scopeProfile.backend] : [],
           );
       const sandboxLoad = turnSandboxResources
-        ? await defaultSandboxLoadLine(turnSandboxResources, scopeId).catch(
+        ? await defaultSandboxLoadLine(turnSandboxResources, scopeId, input.runId).catch(
             swallowAs("orchestrator: sandbox load line", ""),
           )
         : "";

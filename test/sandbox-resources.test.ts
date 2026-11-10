@@ -1166,6 +1166,17 @@ test("a garbled load line is dropped without costing the command its output", as
   assert.equal(r.load, undefined);
 });
 
+test("output a background job prints after the load line, and an unterminated heredoc, survive the probe", async () => {
+  const { router } = fixture((backend) => shellRun(backend));
+  const handle = await router.provision("personal:alice");
+  const late = await router.run(handle, "(sleep 0.3; echo LATE) & echo early");
+  assert.equal(late.stdout, "early\nLATE\n");
+  assert.ok(late.load);
+  const heredoc = await router.run(handle, "cat <<EOF\nhi");
+  assert.equal(heredoc.stdout.trim(), "hi");
+  assert.equal(heredoc.code, 0);
+});
+
 test("load samples are written at most once per ten seconds per computer", async (t) => {
   const { router, options } = fixture((backend) => shellRun(backend, () => "\n__QM_LOAD__ 1 1 1 2 1 2\n"));
   const handle = await router.provision("personal:alice");
@@ -1205,7 +1216,7 @@ test("sustained io pressure is reported once per episode, then re-arms after it 
   assert.deepEqual(events, ["io_pressure_high", "io_pressure_high"]);
 });
 
-test("the Sandboxes line counts the sessions holding the default and stays quiet when nothing is notable", async () => {
+test("the Sandboxes line counts the asking turn plus the runs holding the default and stays quiet when nothing is notable", async () => {
   const { router, resources, options } = fixture((backend) =>
     shellRun(backend, () => "\n__QM_LOAD__ 62.4 7.5 3072 8192 52428800 104857600\n"),
   );
@@ -1221,13 +1232,12 @@ test("the Sandboxes line counts the sessions holding the default and stays quiet
     diskUsedGb: 10,
     diskTotalGb: 100,
   });
-  assert.equal(await defaultSandboxLoadLine(resources, "personal:alice"), "");
+  assert.equal(await defaultSandboxLoadLine(resources, "personal:alice", "run-1"), "");
   await resources.hold(id, "run-2");
-  await resources.hold(id, "run-3");
   await router.run(handle, "true");
   const name = (await resources.get(id)).name || id.slice(0, 8);
   assert.equal(
-    await defaultSandboxLoadLine(resources, "personal:alice"),
+    await defaultSandboxLoadLine(resources, "personal:alice", "run-3"),
     `Sandboxes: default "${name}" (local) — 3 sessions active, io 62% saturated, load 7.5, mem 3.0/8.0 GB, disk 50% full (sampled 0s ago). Scratch: available.`,
   );
 });

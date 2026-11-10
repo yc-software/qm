@@ -219,6 +219,10 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
     teardown(handle, tdOpts?: TeardownOptions): Promise<void> {
       const resourceId = handle.resourceId;
       if (!resourceId) return forHandle(handle).teardown(handle, tdOpts);
+      if (tdOpts?.destroy) {
+        pressureEpisodes.delete(resourceId);
+        loadWrites.delete(resourceId);
+      }
       const parks = !tdOpts?.destroy && !tdOpts?.keepWarm && !!forHandle(handle).profile.parksOnTeardown;
       return resources.use(
         resourceId,
