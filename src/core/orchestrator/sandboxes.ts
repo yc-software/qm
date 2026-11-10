@@ -344,13 +344,15 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
 
   const isolation = session.spawnMeta?.isolation;
   const boundSandboxId = swarmSandboxId ?? isolation?.sandboxId;
-  const swarms = input.botActor ? deps.swarms : undefined;
-  const botMayUse =
+  const swarms = deps.swarms;
+  const swarmComputerGate =
     swarms &&
     ((resource: SandboxResource) =>
-      swarms.botMayUseComputer(resource, { actorId: actor.id, threadRef: session.threadRef, sessionId: session.id }));
+      input.botActor
+        ? swarms.botMayUseComputer(resource, { actorId: actor.id, threadRef: session.threadRef, sessionId: session.id })
+        : swarms.notePersonUse(resource));
   const assertDefaultUsable = (sandboxId = boundSandboxId): Promise<void> =>
-    assertBotMayUseComputer(deps.sandboxResources, resolution.writableScopeId, sandboxId, botMayUse);
+    assertBotMayUseComputer(deps.sandboxResources, resolution.writableScopeId, sandboxId, swarmComputerGate);
   const turnAccess = {
     env: connectorEnv,
     egress: resolution.egress,
@@ -402,7 +404,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     resolution,
     scopeId,
     openResourceAccess,
-    botMayUse,
+    botMayUse: swarmComputerGate,
   });
   const provisionJobComputer = async (): Promise<SandboxHandle> => {
     const resources = deps.sandboxResources!;

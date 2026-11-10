@@ -92,7 +92,7 @@ async function drive(
       );
       const call: Call = (name, params) =>
         (tools.find((entry) => entry.name === name) as unknown as Tool)
-          .execute(`call-${++calls}`, params)
+          .execute(`${queued.id}:${++calls}`, params)
           .then(textOf, (error: unknown) => `[threw] ${errMessage(error)}`);
       observed = await act(call, (await f.runs.get(queued.id))!);
       return { reply: "done", modelCalls: 1 };
@@ -278,6 +278,35 @@ test("a Slack bot that started a swarm cannot list or use its computers once a p
   const worker = swarm.members.find((member) => member.id !== swarm.id)!;
   await f.service.send(person.caller, { requestId: "person-send", audience: [worker.id], text: "alice's work" });
   await person.done();
+  const observed = await channelTurn(f, releaseBot, true);
+  t.diagnostic(`observed: ${JSON.stringify(observed)}`);
+  assertKeptOut(observed);
+});
+
+test("a Slack bot that started a swarm cannot list or use its computers once a person's turn worked on them", async (t) => {
+  const f = await botSwarm();
+  const swarm = (await f.store.get(f.root.id))!;
+  const worker = swarm.members.find((member) => member.id !== swarm.id)!;
+  const { run } = await f.runs.enqueue({
+    sessionId: f.root.threadRef,
+    request: channelRequest(f, alice, false),
+    maxAttempts: 1,
+  });
+  await drive(f, run, async (call) => ({
+    board: await call("files", {
+      action: "write",
+      path: "board.md",
+      data: "alice's board",
+      sandbox_id: swarm.board!.sandboxId,
+    }),
+    worker: await call("files", {
+      action: "write",
+      path: "plan.md",
+      data: "alice's private plan",
+      sandbox_id: worker.sandboxId,
+    }),
+  }));
+  await f.runs.complete(run.id, (await f.runs.get(run.id))!.leaseToken!, { status: "ok", reply: "done" });
   const observed = await channelTurn(f, releaseBot, true);
   t.diagnostic(`observed: ${JSON.stringify(observed)}`);
   assertKeptOut(observed);
