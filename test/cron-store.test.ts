@@ -516,6 +516,10 @@ test("sweepStrandedFires closes only over-age running rows, as failed with a not
   assert.equal(log.find((e) => e.fireKey === "live")!.status, "running");
   assert.equal(log.find((e) => e.fireKey === "done")!.status, "ok");
   assert.equal(await store.sweepStrandedFires(12_000), 0, "a second sweep finds nothing");
+  await store.beginFire(cron.id, { fireKey: "old", threadRef: "t", firedAt: 1_000, status: "running" });
+  assert.equal((await store.listFires(cron.id)).runs.find((e) => e.fireKey === "old")!.status, "failed");
+  await store.recordFire(cron.id, { fireKey: "old", threadRef: "t", firedAt: 1_000, endedAt: 13_000, status: "ok" });
+  assert.equal((await store.listFires(cron.id)).runs.find((e) => e.fireKey === "old")!.status, "ok");
 });
 
 test("the default staleness bound tracks the run reaper's default max age", () => {
