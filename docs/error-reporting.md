@@ -12,6 +12,12 @@ The SDK preserves existing fatal-error drain handlers. When no rejection handler
 
 After deployment, verify a synthetic backend failure reaches the intended project with the expected release, environment, deployment and service. Check that its message and stack are readable. Test alerts against that event before relying on notifications. Disable reporting by removing `SENTRY_DSN` and redeploying; retain the prior immutable application candidate for code rollback.
 
+Every event carries the reporting instance as `server_name`: the ECS task id when `ECS_CONTAINER_METADATA_URI_V4` is set, otherwise the host name.
+
+## Event loop blocks
+
+With `SENTRY_DSN` set, each service also reports event loop blocks, independent of trace sampling. A watchdog thread from `@sentry/node-native` notices when the main thread has not run for 500 ms and sends an `EventLoopBlocked` error event with the main thread's stack at that moment, so the issue points at the blocking code. The event carries the scope of the blocked request (service, deployment, transaction name, trace id) and a `server_name` tag. If the native module cannot load, the service logs one `[swallowed] event loop block detection` warning and runs without detection.
+
 ## Optional performance tracing
 
 Set `SENTRY_TRACES_SAMPLE_RATE` (a fraction between 0 and 1; unset, 0, or an invalid value keeps tracing off) on a backend service that already has `SENTRY_DSN` to sample transactions. Start with `0.1`. With a sample rate set, the SDK's automatic instrumentation records incoming and outgoing HTTP requests (including `fetch`) and Postgres pool checkouts, connects and queries. Health checks, server-sent event streams (`GET …/events` or `Accept: text/event-stream`) and the SDK's default 401–404 and redirect responses are not traced.

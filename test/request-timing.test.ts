@@ -27,7 +27,7 @@ const collector = createServer(async (req, res) => {
 });
 collector.listen(0, "127.0.0.1");
 await once(collector, "listening");
-initializeErrorReporting(Sentry, "core", {
+initializeErrorReporting(Sentry, "core", undefined, {
   SENTRY_DSN: `http://public@127.0.0.1:${(collector.address() as AddressInfo).port}/1`,
   SENTRY_TRACES_SAMPLE_RATE: "1",
 });

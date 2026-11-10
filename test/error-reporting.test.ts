@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { once } from "node:events";
+import { hostname } from "node:os";
 import { traceStatus } from "../plugins/chassis/src/timing.ts";
 
 async function runReporting(body: string, enabled = true, env: Record<string, string> = {}) {
@@ -39,7 +40,7 @@ async function runReporting(body: string, enabled = true, env: Record<string, st
       `
     import * as Sentry from '@sentry/node';
     import { initializeErrorReporting, reportBackendError, flushErrorReporting, nameRequest, traceCarrier, traceQueued, startDispatchTrace } from './plugins/chassis/src/error-reporting.ts';
-    initializeErrorReporting(Sentry, 'test');
+    initializeErrorReporting(Sentry, 'test', process.env.LOAD_NATIVE ? () => import('@sentry/node-native') : undefined);
     ${body}
   `,
     ],
@@ -455,4 +456,37 @@ test("human turns are always traced while other runs follow the configured rate"
   assert.equal(human.tags["qm.origin"], "human");
   assert.equal(human.tags["qm.surface"], "slack");
   assert.match(human.tags["messaging.message.id"], /^run-\d+$/);
+});
+
+test("event loop blocks report the blocking stack and the instance", async () => {
+  const { events, code } = await runReporting(
+    `
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    function blockEventLoop() { const end = Date.now() + 1500; while (Date.now() < end); }
+    blockEventLoop();
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+  `,
+    true,
+    {
+      LOAD_NATIVE: "1",
+      ECS_CONTAINER_METADATA_URI_V4: "http://169.254.170.2/v4/0123456789abcdef0123456789abcdef-1234567890",
+    },
+  );
+  assert.equal(code, 0);
+  const blocked = events.find((event) => event.exception?.values?.[0]?.type === "EventLoopBlocked");
+  assert.ok(blocked, "no event loop block event was sent");
+  const frames = blocked.exception.values[0].stacktrace.frames.map((frame: { function?: string }) => frame.function);
+  assert.equal(frames.at(-1), "blockEventLoop");
+  assert.equal(blocked.tags.server_name, "0123456789abcdef0123456789abcdef");
+  assert.equal(blocked.tags.service, "test");
+  assert.equal(blocked.release, "test-release");
+});
+
+test("error events carry the instance's host name outside ECS", async () => {
+  const { events, code } = await runReporting(`
+    reportBackendError(new Error('named-server'));
+    await flushErrorReporting();
+  `);
+  assert.equal(code, 0);
+  assert.equal(events[0]!.server_name, hostname());
 });
