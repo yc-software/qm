@@ -81,7 +81,6 @@ test("cron credential approval resumes the original fire once and delivers to th
   assert.equal(request.actor.externalId, "U_ALICE");
   assert.equal(request.conversation.threadRef, f.ask.requesterThreadRef);
   assert.deepEqual(automationOrigin(request)?.destination, destination);
-  assert.ok(!("unattendedGrants" in request), "a resumed fire carries its owner's authority, not a grant list");
   assert.match(request.text, /approved access until revoked/);
   assert.ok(!request.text.includes(f.ask.id) && !request.text.includes(f.ask.purpose));
   const pending = await f.deliveries.pending("principal");

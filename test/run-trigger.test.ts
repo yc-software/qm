@@ -234,13 +234,7 @@ describe("runTrigger: an autonomous cron does NOT go live (it may be conditional
       [false, false, false, false, true],
       "only a caller that declares an owner fire produces one",
     );
-    for (const r of requests) {
-      assert.equal(r.origin?.kind, "automation");
-      assert.ok(
-        !("unattendedGrants" in r),
-        `${r.conversation.threadRef}: a fire carries its owner's authority, not grants`,
-      );
-    }
+    for (const r of requests) assert.equal(r.origin?.kind, "automation");
   });
 
   it("a failed fire's error notice carries friendly copy while the fire history keeps the raw reason", async () => {

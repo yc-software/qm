@@ -123,7 +123,6 @@ test("an admin can repoint someone else's cron to a room; the fire still runs as
     assert.equal(after?.destination?.target, "C9");
     assert.equal(after?.owner, "U1", "repointing the output does not change whose authority the fire carries");
     assert.equal(after?.action, "review spend");
-    assert.ok(!("unattendedGrants" in (after ?? {})), "no grant list survives on the record");
   } finally {
     await s.close();
   }

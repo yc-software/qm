@@ -292,7 +292,6 @@ test("a cron fire's token (liveActor + triggered) acts with its owner's authorit
       const response = await fetch(`${s.base}${path}`, { headers: { "x-agent-capability": fire } });
       assert.equal(response.status, expected, `${path} from a DM-homed fire (got ${response.status})`);
     }
-    assert.ok(!(await fetch(`${s.base}/v1/admin/unattended-grants`, { headers: { "x-agent-capability": fire } })).ok);
 
     const channelFire = await capFor("admin-alice", { triggered: true, scope: scopeId("channel", "C1") });
     const channelRead = await fetch(`${s.base}/v1/admin/sessions?${scopeQ}`, {

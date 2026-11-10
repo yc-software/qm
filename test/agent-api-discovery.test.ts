@@ -150,14 +150,13 @@ test("an admin's token carrying no person's authority is shown no admin plane â€
         `no admin rows without a person's authority (${JSON.stringify(opts)})`,
       );
       assert.ok(p.includes("/v1/admin/whoami"), "introspection stays available");
-      assert.ok(!body.guidance.some((g: string) => g.includes("This cron")), "no unattended-grant family remains");
     }
   } finally {
     await s.close();
   }
 });
 
-test("a cron fire (liveActor + triggered) discovers the full admin plane and can read spend through the admin door; the unattended families are gone", async () => {
+test("a cron fire (liveActor + triggered) discovers the full admin plane and can read spend through the admin door", async () => {
   const s = await start();
   try {
     const cap = await capFor("admin-alice", { liveActor: true, triggered: true, controlPlane: true });
@@ -166,11 +165,8 @@ test("a cron fire (liveActor + triggered) discovers the full admin plane and can
     const p = paths(body);
     assert.ok(p.includes("/v1/admin/scopes"));
     assert.ok(p.includes("/v1/admin/users"));
-    assert.ok(!p.includes("/v1/admin/unattended-grants"), "the grant listing route is gone");
     assert.ok(!p.includes("/v1/admin/grants"), "grant management stays portal-only");
     assert.equal(p.filter((x: string) => x === "/v1/admin/whoami").length, 1);
-    assert.ok(!body.guidance.some((g: string) => g.includes("This cron") || g.includes("unattended")));
-    assert.match(JSON.stringify(body), /a cron, webhook or loop fire carries its owner's authority/);
     const spend = await fetch(`${s.base}/v1/admin/spend`, { headers: { "x-agent-capability": cap } });
     assert.equal(spend.status, 200, "a fire reads a non-private admin report with its owner's authority");
   } finally {

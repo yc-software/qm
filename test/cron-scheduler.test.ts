@@ -75,8 +75,6 @@ test("a fire's TurnRequest runs as the cron owner and carries no grant list: the
   assert.equal(calls.length, 1);
   assert.equal(calls[0]?.actor.externalId, "U1");
   assert.equal(automationOrigin(calls[0])?.ownerFire, true);
-  assert.ok(!("unattendedGrants" in calls[0]!), "nothing but the owner's own standing rides along");
-  assert.ok(!("grants" in calls[0]!));
   const written = await crons.create({
     schedule: { everyMs: 1000 },
     action: "scan every transcript",

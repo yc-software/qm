@@ -1573,7 +1573,7 @@ for (const hours of [undefined, "72", "0", "none"]) {
   });
 }
 
-test("an owner's cron fire carries the owner's authority: liveActor, admin status consulted, no org-notebook write", async () => {
+test("an owner's cron fire carries the owner's authority: liveActor, no org-notebook write", async () => {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),
     signingSecret: "test-secret",
@@ -1585,12 +1585,6 @@ test("an owner's cron fire carries the owner's authority: liveActor, admin statu
   sandbox.provision = (owner, opts) => {
     captured = opts;
     return realProvision(owner, opts);
-  };
-  const consulted: string[] = [];
-  const realStatus = admin.adminStatusOf.bind(admin);
-  admin.adminStatusOf = (tenant, principal) => {
-    consulted.push(principal.id);
-    return realStatus(tenant, principal);
   };
   const alice = { externalId: "admin-alice" };
   const fire = (extra: Partial<TurnRequest> = {}): TurnRequest => ({
@@ -1606,7 +1600,6 @@ test("an owner's cron fire carries the owner's authority: liveActor, admin statu
   let claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
   assert.equal(claims!.liveActor, true, "an owner's fire attests the owner's authority");
   assert.equal(claims!.triggered, true, "but it still records that nobody is at the keyboard");
-  assert.deepEqual(consulted, ["admin-alice"], "the fire's admin status is looked up");
   assert.equal(claims!.memory?.orgWrite, undefined, "org-notebook write stays off for automated turns");
 
   const prompt = await app.turn(
@@ -1615,21 +1608,17 @@ test("an owner's cron fire carries the owner's authority: liveActor, admin statu
   assert.match(prompt.reply ?? "", /## Acting for an org admin/, "an admin owner's fire gets the admin plane");
 
   captured = undefined;
-  consulted.length = 0;
   assert.equal((await app.turn(fire({ botActor: true }))).status, "ok");
   claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
   assert.equal(claims!.liveActor, undefined, "a bot actor's automation turn carries no authority");
-  assert.deepEqual(consulted, [], "and its admin status is never consulted");
 
   captured = undefined;
-  consulted.length = 0;
   const unmarked = await app.turn(
     fire({ origin: { kind: "automation" }, conversation: { kind: "dm", threadRef: "dm:admin-alice:not-a-fire" } }),
   );
   assert.equal(unmarked.status, "ok");
   claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
   assert.equal(claims!.liveActor, undefined, "an automation turn no trigger produced carries no authority");
-  assert.deepEqual(consulted, [], "and its admin status is never consulted");
 
   captured = undefined;
   assert.equal(

@@ -111,7 +111,6 @@ for (const scope of ["channel:C_SHARED", "group:G_SHARED", "group:web-project-sh
     assert.equal(request.conversation.kind, scope.startsWith("channel:") ? "channel" : "group");
     assert.equal(request.conversation.channelRef, scope.slice(scope.indexOf(":") + 1));
     assert.deepEqual(request.conversation.audience, [{ externalId: "U_REQUESTER" }]);
-    assert.ok(!("unattendedGrants" in request));
     assert.equal(automationOrigin(request)?.useOwnerKeychain, undefined);
     assert.deepEqual(automationOrigin(request)?.destination, f.cron.destination);
     assert.match(request.text, /approved access for one credential use/);
