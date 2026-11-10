@@ -28,6 +28,7 @@ export interface ProcessDeps {
   leaseTtlMs: number;
   heartbeatIntervalMs?: number;
   errors?: ErrorLog;
+  crashing?: () => boolean;
 }
 
 export const LEASE_LOST_CONSECUTIVE = 3;
@@ -188,6 +189,10 @@ async function handBack(
   stop: RunStop | undefined,
   stranded: boolean,
 ): Promise<void> {
+  if (deps.crashing?.()) {
+    console.warn(`[worker] run ${run.id} held by a crashing process; leaving its lease to expire`);
+    return;
+  }
   if (!stranded) {
     await deps.runs.releaseLease(run.id, token, stop);
     return;

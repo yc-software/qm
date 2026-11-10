@@ -154,6 +154,7 @@ import { createPostgresDeliveryStore } from "./delivery/postgres-delivery-store.
 import { wireRunResultDeliveries } from "./delivery/run-result-delivery.ts";
 import { adminSessionUrl } from "./util/admin-links.ts";
 import { uuidSchema } from "./util/ids.ts";
+import { fatalShutdown } from "./util/process-guard.ts";
 import { withWebTranscriptDeliveries } from "./delivery/web-transcript-delivery.ts";
 import { WEBHOOK_CLAIM_MS, webhookSender } from "./delivery/webhook-delivery.ts";
 import { createDeliveryRelay } from "./delivery/relay.ts";
@@ -2821,6 +2822,7 @@ export function buildApp(
     slots: config.workers,
     pollMs: 250,
     canClaim: canClaimRuns,
+    crashing: fatalShutdown,
   });
   const preemption = createRunPreemption({ runs, worker, canClaim: canClaimRuns });
   const preemptionSweeper = createSweeper(() => preemption.sweep(), 1_000, { label: "run-preemption" });
