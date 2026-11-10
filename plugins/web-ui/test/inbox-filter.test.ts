@@ -4,10 +4,20 @@ import { readFileSync } from "node:fs";
 import { VirtualConsole } from "jsdom";
 import { createInboxFixture, until } from "./inbox-composer-fixture.ts";
 
+const verdict = (state: "needs_reply" | "resolved" | "noise") => ({ state, reason: `${state} because` });
+
+function visible(item: { verdict?: { state: string }; sourcePayload: { snippet?: string } }, filter: string) {
+  const state = item.verdict?.state;
+  if (!state) return Boolean(item.sourcePayload.snippet);
+  if (state === "needs_reply") return true;
+  if (state === "resolved") return filter !== "triaged";
+  return filter === "all";
+}
+
 const filterNames: Record<string, string> = {
-  all: "All emails",
-  human: "Light filtering — exclude notifications",
-  triaged: "Heavy filtering — only emails that need your attention",
+  all: "Everything",
+  human: "People",
+  triaged: "Needs a reply",
 };
 
 async function inboxUi(t: TestContext) {
@@ -56,10 +66,16 @@ test("inbox filters persist, preserve Sent, and keep refreshes consistent", asyn
   let requests: URL[] = [];
   const writes: unknown[] = [];
   const entries = [
-    { id: "question", state: "held", sourcePayload: { title: "Please review the launch plan" } },
-    { id: "resolved", state: "held", sourcePayload: { title: "Thanks, all set", probablyResolved: true } },
-    { id: "automated", state: "pending", sourcePayload: { title: "Your receipt", automated: true } },
-    { id: "pending", state: "pending", sourcePayload: { title: "Quick question" } },
+    {
+      id: "question",
+      state: "held",
+      verdict: verdict("needs_reply"),
+      sourcePayload: { title: "Please review the launch plan" },
+    },
+    { id: "resolved", state: "held", verdict: verdict("resolved"), sourcePayload: { title: "Thanks, all set" } },
+    { id: "noise", state: "pending", verdict: verdict("noise"), sourcePayload: { title: "Your receipt" } },
+    { id: "unverdicted", state: "pending", sourcePayload: { title: "Quick question", snippet: "Got a minute?" } },
+    { id: "pending", state: "pending", sourcePayload: { title: "Quiet thread" } },
   ].map((item) => ({ loopId: "email", source: "gmail", thread: [], ...item }));
   globalThis.fetch = async (input, options) => {
     const url = new URL(String(input), "http://localhost");
@@ -75,12 +91,7 @@ test("inbox filters persist, preserve Sent, and keep refreshes consistent", asyn
     if (url.pathname.endsWith("/api/inbox")) {
       requests.push(url);
       const filter = race === "mismatch" ? saved : (url.searchParams.get("filter") ?? saved);
-      const items = entries.filter(
-        (item) =>
-          filter === "all" ||
-          (!item.sourcePayload.automated &&
-            (filter === "human" || (item.state === "held" && !item.sourcePayload.probablyResolved))),
-      );
+      const items = entries.filter((item) => visible(item, filter));
       if (race && requests.length === 1) saved = "human";
       const more = race && !url.searchParams.has("cursor") && !url.searchParams.has("view");
       let pageItems = items;
@@ -100,7 +111,7 @@ test("inbox filters persist, preserve Sent, and keep refreshes consistent", asyn
   };
   mount();
   const settled = () => until(() => !inboxState.loading && !inboxState.filterBusy);
-  const filterSelect = () => host.querySelector<HTMLButtonElement>('button[aria-label="Email filter"]')!;
+  const filterSelect = () => host.querySelector<HTMLButtonElement>('button[aria-label="Inbox filter"]')!;
   const filterMenu = () => host.querySelector<HTMLElement>(".inbox-email-filter-control .menu-popover")!;
   const selectedFilter = () => {
     const label = host.querySelector('.inbox-email-filter-control [aria-checked="true"]')!.textContent!.trim();
@@ -118,7 +129,7 @@ test("inbox filters persist, preserve Sent, and keep refreshes consistent", asyn
   const assertTabCounts = () => {
     assert.deepEqual(
       [...host.querySelectorAll(".inbox-chip-count")].map((badge) => badge.textContent?.trim()),
-      ["4", "4"],
+      ["5", "5"],
     );
   };
   await settled();
@@ -127,10 +138,10 @@ test("inbox filters persist, preserve Sent, and keep refreshes consistent", asyn
     [...host.querySelectorAll(".inbox-email-filter-control .menu-option-label")].map((element) =>
       element.textContent?.trim(),
     ),
-    ["All emails", "Light filtering — exclude notifications", "Heavy filtering — only emails that need your attention"],
+    ["Everything", "People", "Needs a reply"],
   );
   assert.equal(selectedFilter(), "triaged");
-  assert.equal(filterSelect().getAttribute("aria-description"), "Emails identified as needing a reply or review");
+  assert.equal(filterSelect().getAttribute("aria-description"), "Only conversations waiting on your reply");
   filterSelect().focus();
   filterSelect().dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
   assert.equal(filterSelect().getAttribute("aria-expanded"), "true");
@@ -140,7 +151,8 @@ test("inbox filters persist, preserve Sent, and keep refreshes consistent", asyn
   assert.equal(filterMenu().hidden, true);
   assert.equal(filterSelect().getAttribute("aria-expanded"), "false");
   assert.equal(document.activeElement, filterSelect());
-  assert.deepEqual(titles(), ["Please review the launch plan"]);
+  assert.deepEqual(titles(), ["Please review the launch plan", "Quick question"]);
+  assert.equal(host.querySelector(".inbox-resolved-list .inbox-item-snippet")?.getAttribute("title") ?? null, null);
   const fetchInbox = globalThis.fetch;
   let resumeRefresh!: () => void;
   const refreshGate = new Promise<void>((resolve) => {
@@ -163,7 +175,12 @@ test("inbox filters persist, preserve Sent, and keep refreshes consistent", asyn
   chooseFilter("human");
   await settled();
   assertTabCounts();
-  assert.deepEqual(titles(), ["Please review the launch plan", "Thanks, all set", "Quick question"]);
+  assert.deepEqual(titles(), ["Please review the launch plan", "Quick question", "Thanks, all set"]);
+  assert.equal(host.querySelectorAll(".inbox-resolved-list .inbox-item").length, 1);
+  assert.equal(
+    host.querySelector(".inbox-resolved-list .inbox-item-snippet")?.getAttribute("title"),
+    "resolved because",
+  );
   chooseFilter("all");
   await settled();
   assertTabCounts();
@@ -180,7 +197,7 @@ test("inbox filters persist, preserve Sent, and keep refreshes consistent", asyn
   await refreshInbox();
   assert.equal(saved, "human");
   assert.equal(inboxState.filter, "all");
-  assert.equal(inboxState.total, 4);
+  assert.equal(inboxState.total, 5);
   assert.equal(titles().length, 4);
   assert.ok(requests.some((url) => url.searchParams.has("cursor")));
   assert.ok(requests.some((url) => url.searchParams.has("view")));
@@ -195,12 +212,12 @@ test("inbox filters persist, preserve Sent, and keep refreshes consistent", asyn
   assert.match(inboxState.error!, /Inbox filter changed/);
   assert.equal(inboxState.items, previousItems);
   assert.equal(inboxState.selected, previousSelected);
-  assert.equal(inboxState.total, 4);
+  assert.equal(inboxState.total, 5);
   assert.equal(inboxState.filter, "all");
   race = undefined;
   await refreshInbox();
   assert.equal(inboxState.filter, "human");
-  assert.equal(inboxState.total, 4);
+  assert.equal(inboxState.total, 5);
   saved = "all";
   await refreshInbox();
   failSave = true;
@@ -214,7 +231,7 @@ test("inbox filters persist, preserve Sent, and keep refreshes consistent", asyn
   chooseFilter("triaged");
   await settled();
   assert.equal(selectedFilter(), "human");
-  assert.deepEqual(titles(), ["Please review the launch plan", "Thanks, all set", "Quick question"]);
+  assert.deepEqual(titles(), ["Please review the launch plan", "Quick question", "Thanks, all set"]);
   assert.deepEqual(writes, ["human", "all"]);
   assert.equal(
     host.querySelector('[role="status"]')?.textContent,
@@ -224,10 +241,10 @@ test("inbox filters persist, preserve Sent, and keep refreshes consistent", asyn
   chooseFilter("triaged");
   await settled();
   assert.equal(selectedFilter(), "triaged");
-  assert.deepEqual(titles(), ["Please review the launch plan"]);
+  assert.deepEqual(titles(), ["Please review the launch plan", "Quick question"]);
   assert.deepEqual(writes, ["human", "all", "triaged"]);
   inboxState.items.push(
-    toInboxItem({ ...entries[0], id: "sent", state: "actioned", sourcePayload: { automated: true } }),
+    toInboxItem({ ...entries[0], id: "sent", state: "actioned", actionKind: "send", verdict: verdict("noise") }),
   );
   for (const filter of ["all", "human", "triaged"]) {
     inboxState.filter = filter;
@@ -239,7 +256,7 @@ test("inbox filters persist, preserve Sent, and keep refreshes consistent", asyn
   resetInboxState();
 });
 
-test("email filters appear only on email views and leave other sources unchanged", async (t) => {
+test("verdicts drive visibility for every inbox source while the filter control stays on email views", async (t) => {
   const {
     host,
     mount,
@@ -249,69 +266,108 @@ test("email filters appear only on email views and leave other sources unchanged
   inboxState.fetchedAt = Date.now();
   inboxState.selected = [
     { id: "email", name: "Email", sources: ["gmail"], count: 3 },
-    { id: "chat", name: "Slack", source: "slack", count: 4 },
+    { id: "chat", name: "Slack", source: "slack", count: 5 },
     { id: "custom", name: "Custom", sources: ["generic"], count: 1 },
     { id: "empty-email", name: "Empty email", source: "gmail", count: 0 },
     { id: "mixed", name: "Mixed", sources: ["gmail", "slack"], count: 0 },
   ];
+  const slack = (id: string, extra: Record<string, unknown>) => ({
+    id,
+    loopId: "chat",
+    source: "slack",
+    state: "held",
+    sourcePayload: {},
+    ...extra,
+  });
   inboxState.items = [
-    { id: "email-ready", loopId: "email", source: "gmail", state: "held", sourcePayload: {} },
+    {
+      id: "email-ready",
+      loopId: "email",
+      source: "gmail",
+      state: "held",
+      verdict: verdict("needs_reply"),
+      sourcePayload: {},
+    },
     {
       id: "email-resolved",
       loopId: "email",
       source: "gmail",
       state: "held",
-      sourcePayload: { probablyResolved: true },
+      verdict: verdict("resolved"),
+      sourcePayload: {},
     },
-    { id: "email-automated", loopId: "email", source: "gmail", state: "pending", sourcePayload: { automated: true } },
-    { id: "slack-ready", loopId: "chat", source: "slack", state: "held", sourcePayload: {} },
-    { id: "slack-bot", loopId: "chat", source: "slack", state: "held", sourcePayload: { automated: true } },
-    { id: "slack-resolved", loopId: "chat", source: "slack", state: "held", sourcePayload: { probablyResolved: true } },
-    { id: "slack-pending", loopId: "chat", source: "slack", state: "pending", sourcePayload: {} },
+    {
+      id: "email-noise",
+      loopId: "email",
+      source: "gmail",
+      state: "pending",
+      verdict: verdict("noise"),
+      sourcePayload: {},
+    },
+    slack("slack-ready", { verdict: verdict("needs_reply") }),
+    slack("slack-bot", { verdict: verdict("noise") }),
+    slack("slack-resolved", { verdict: verdict("resolved") }),
+    slack("slack-unverdicted", { state: "pending", sourcePayload: { snippet: "hey, quick one" } }),
+    slack("slack-pending", { state: "pending" }),
     { id: "generic-pending", loopId: "custom", source: "generic", state: "pending", sourcePayload: {} },
   ].map(toInboxItem);
   const ids = (view: string) => itemsFor(view, "open").map((item: { id: string }) => item.id);
-  for (const [filter, emails] of [
-    ["triaged", ["email-ready"]],
-    ["human", ["email-ready", "email-resolved"]],
-    ["all", ["email-ready", "email-resolved", "email-automated"]],
+  for (const [filter, emails, chats] of [
+    ["triaged", ["email-ready"], ["slack-ready", "slack-unverdicted"]],
+    ["human", ["email-ready", "email-resolved"], ["slack-ready", "slack-resolved", "slack-unverdicted"]],
+    [
+      "all",
+      ["email-ready", "email-resolved", "email-noise"],
+      ["slack-ready", "slack-bot", "slack-resolved", "slack-unverdicted"],
+    ],
   ] as const) {
     inboxState.filter = filter;
-    assert.deepEqual(ids("all"), [...emails, "slack-ready", "slack-bot", "slack-resolved"]);
+    assert.deepEqual(ids("all"), [...emails, ...chats]);
     assert.deepEqual(ids("email"), emails);
-    assert.deepEqual(ids("chat"), ["slack-ready", "slack-bot", "slack-resolved"]);
+    assert.deepEqual(ids("chat"), chats);
     assert.deepEqual(ids("custom"), []);
-    for (const viewId of ["all", "gmail", "email", "empty-email", "mixed"]) {
+    for (const viewId of ["all", "gmail", "email", "empty-email", "mixed", "slack", "chat", "custom"]) {
       mount({ viewId });
-      assert.equal(host.querySelector(".inbox-filter > span")?.textContent, "Emails");
+      assert.equal(host.querySelector(".inbox-filter > span")?.textContent, "Show");
       assert.equal(
         host.querySelector('.inbox-email-filter-control [aria-checked="true"]')?.textContent?.trim(),
         filterNames[filter],
       );
     }
-    for (const viewId of ["slack", "chat", "custom", "sent"]) {
+    mount({ viewId: "sent" });
+    assert.equal(host.querySelector(".inbox-filter"), null);
+    for (const viewId of ["slack", "chat"]) {
       mount({ viewId });
-      assert.equal(host.querySelector(".inbox-filter"), null);
-      if (viewId === "slack" || viewId === "chat") {
-        assert.equal(host.querySelectorAll(".inbox-resolved-list .inbox-item").length, 1);
-        assert.match(host.querySelector(".inbox-resolved-head")!.textContent!, /Probably resolved/);
-        assert.equal(host.querySelectorAll(".inbox-list:not(.inbox-resolved-list) .inbox-item").length, 2);
+      {
+        const resolved = filter === "triaged" ? 0 : 1;
+        assert.equal(host.querySelectorAll(".inbox-resolved-list .inbox-item").length, resolved);
+        if (resolved) {
+          assert.match(host.querySelector(".inbox-resolved-head")!.textContent!, /Probably resolved/);
+          assert.equal(
+            host.querySelector(".inbox-resolved-list .inbox-item-snippet")?.getAttribute("title"),
+            "resolved because",
+          );
+        }
+        assert.equal(
+          host.querySelectorAll(".inbox-list:not(.inbox-resolved-list) .inbox-item").length,
+          chats.length - resolved,
+        );
       }
-      assert.doesNotMatch(host.querySelector(".inbox-zero")?.textContent ?? "", /Choose Light filtering/);
+      assert.doesNotMatch(host.querySelector(".inbox-zero")?.textContent ?? "", /Choose People/);
     }
   }
 });
 
-test("email filters default to Light filtering when the feed omits a preference", async (t) => {
+test("the inbox filter defaults to People when the feed omits a preference", async (t) => {
   const {
     host,
     mount,
     inbox: { inboxState, refreshInbox },
   } = await inboxUi(t);
   const items = [
-    { id: "pending", state: "pending", sourcePayload: { title: "Quick question" } },
-    { id: "resolved", state: "held", sourcePayload: { title: "Thanks, all set", probablyResolved: true } },
-    { id: "automated", state: "pending", sourcePayload: { title: "Your receipt", automated: true } },
+    { id: "pending", state: "pending", sourcePayload: { title: "Quick question", snippet: "Got a minute?" } },
+    { id: "resolved", state: "held", verdict: verdict("resolved"), sourcePayload: { title: "Thanks, all set" } },
+    { id: "noise", state: "pending", verdict: verdict("noise"), sourcePayload: { title: "Your receipt" } },
   ].map((item) => ({ loopId: "email", source: "gmail", thread: [], ...item }));
   globalThis.fetch = async (input) => {
     const url = new URL(String(input), "http://localhost");
@@ -351,4 +407,33 @@ test("the inbox filter is unavailable without Inbox access", async (t) => {
   await inbox.refreshInbox();
   assert.equal(host.querySelector(".inbox-email-filter-control"), null);
   assert.deepEqual(requests, []);
+});
+
+test("the empty state mentions Sync only for views that offer a Sync action", async (t) => {
+  const { host, mount, inbox } = await inboxUi(t);
+  const selected = [
+    {
+      id: "email",
+      name: "Email",
+      sources: ["gmail"],
+      source: "gmail",
+      count: 0,
+      cronId: "c1",
+      syncCron: { id: "c1", enabled: true },
+    },
+    { id: "reviews", name: "Reviews", sources: [], count: 0, syncCron: null },
+  ];
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input), "http://localhost");
+    if (!url.pathname.endsWith("/api/inbox")) return Response.json({});
+    return Response.json({ filter: "all", selected, available: [], items: [], total: 0, nextCursor: null });
+  };
+  await inbox.refreshInbox();
+  const emptyText = () => host.querySelector(".inbox-zero")?.textContent?.trim();
+  mount({ viewId: "email" });
+  assert.equal(emptyText(), "No messages in this view yet. Sync to check for new messages.");
+  assert.ok(host.querySelector(".inbox-sync-line"));
+  mount({ viewId: "reviews" });
+  assert.equal(emptyText(), "Nothing here needs your attention.");
+  assert.equal(host.querySelector(".inbox-sync-line"), null);
 });

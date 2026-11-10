@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { tenantTest as test } from "./support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { createMcpServerStore, type McpServer } from "../src/mcp/mcp-server-store.ts";
 import { createMcpToolService, mcpPublicOAuthClients } from "../src/mcp/mcp-tool-service.ts";

@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import type { Tenant } from "../src/tenants/context.ts";
 
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
@@ -219,9 +220,9 @@ test("an admin upload dropped while its grant check is still running settles and
   let settled: "ok" | "rejected" | null = null;
   const { port, transferDir } = await core(t, (deps) => ({
     admin: Object.assign(Object.create(deps.admin!), {
-      listGrants: async () => {
+      listGrants: async (tenant: Tenant) => {
         await clientGone;
-        return deps.admin!.listGrants();
+        return deps.admin!.listGrants(tenant);
       },
     }),
     blobTransfer: Object.assign(Object.create(deps.blobTransfer!), {
