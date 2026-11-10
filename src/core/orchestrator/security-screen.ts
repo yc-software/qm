@@ -22,6 +22,12 @@ import { isVisionAttachment, safeAttachmentName } from "../attachments.ts";
 import { wordsToScreen } from "./intake.ts";
 import { senderNote } from "./prompt-blocks.ts";
 import { isScreenableTextAttachment, MAX_AUTO_ATTACHMENT_SCREEN_BYTES } from "./turn-helpers.ts";
+import { tracePhase } from "../../../plugins/chassis/src/error-reporting.ts";
+import type { resolveTurnContext } from "../../resolution/turn-context.ts";
+import { securityScreenChunks } from "../../security/security-posture.ts";
+import type { SkillResolution } from "../../skills/skill-store.ts";
+import { hashId } from "../../util/crypto.ts";
+import { filterConnectorSkills, loadActiveBundles } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 
 const DEFAULT_SECURITY_SCREEN_TIMEOUT_MS = 15_000;
@@ -389,4 +395,101 @@ export async function screenInboundInput(turn: InboundScreenTurn) {
     }
   }
   return { flaggedScreenedInput, inputUnscreened };
+}
+
+export const countSkills = (listed: { skills: readonly unknown[] }) => ({ "qm.skills": listed.skills.length });
+
+export interface SkillScreenTurn {
+  deps: OrchestratorDeps;
+  input: OrchestratorInput;
+  actor: OrchestratorInput["actor"];
+  scopeId: ScopeId;
+  context: Awaited<ReturnType<typeof resolveTurnContext>>;
+  configuredProviders: Parameters<typeof filterConnectorSkills>[1];
+  appConnections: boolean;
+  securityPolicy: InboundScreenTurn["resolution"]["securityPolicy"];
+  enforceScreen: boolean;
+  classifyAs: ClassifyAs;
+  recordScreenRequest: (rec: TurnLlmRequestRecord) => Promise<void>;
+  audit: InboundScreenTurn["audit"];
+}
+
+export function createSkillScreen(turn: SkillScreenTurn) {
+  const {
+    deps,
+    input,
+    actor,
+    scopeId,
+    context,
+    configuredProviders,
+    appConnections,
+    securityPolicy,
+    enforceScreen,
+    classifyAs,
+    recordScreenRequest,
+    audit,
+  } = turn;
+  const carriedSkillScreens = new Map<string, Promise<boolean>>();
+  const visibleSkillsForTurn = async (sources?: readonly string[]): Promise<SkillResolution[]> => {
+    const current = await tracePhase("turn.skills", () => context.listSkills(sources), { counts: countSkills });
+    const resolved = filterConnectorSkills(current.skills, configuredProviders, appConnections);
+    const allowed: SkillResolution[] = [];
+    for (const entry of resolved) {
+      const skill = entry.skill;
+      if (!skill || !current.sharingSources.includes(skill.scopeId) || securityPolicy.screening === "off") {
+        allowed.push(entry);
+        continue;
+      }
+      const snapshot = structuredClone(entry);
+      const screenSkill = async () => {
+        const bundles = structuredClone(
+          deps.skillBundles
+            ? await loadActiveBundles(deps.skillBundles, [snapshot]).catch(
+                swallowAs("skill screening: load bundles", null),
+              )
+            : [],
+        );
+        const payload = JSON.stringify({ manifest: snapshot.skill!.manifest, bundles });
+        const key = hashId([skill.scopeId, skill.id, payload], 64);
+        let screen = carriedSkillScreens.get(key);
+        if (!screen) {
+          screen = (async () => {
+            if (bundles === null || Buffer.byteLength(payload, "utf8") > MAX_AUTO_ATTACHMENT_SCREEN_BYTES) return false;
+            const verdict = await screenChunks(
+              securityScreenChunks("tool_result:shared_skill", payload),
+              classifyAs({ hook: "tool_response", request: input.text, surface: "shared_skill" }, recordScreenRequest),
+              { stopUnclean: true },
+            );
+            return cleanVerdict(verdict);
+          })();
+          carriedSkillScreens.set(key, screen);
+        }
+        return { passed: await screen, bundles };
+      };
+      if (!enforceScreen) {
+        allowed.push(entry);
+        void screenSkill().catch(swallowAs("orchestrator: observed skill screen", undefined));
+        continue;
+      }
+      const { passed, bundles } = await screenSkill();
+      if (passed && bundles) allowed.push({ ...snapshot, screenedBundles: bundles });
+      else
+        audit({
+          action: "sharing.skill_screen_blocked",
+          resource: `skill:${skill.id}`,
+          status: "refused",
+          detail: JSON.stringify({ actor: actor.id, source: skill.scopeId, target: scopeId }),
+        });
+    }
+    for (const entry of allowed) {
+      if (!entry.skill || !current.sharingSources.includes(entry.skill.scopeId)) continue;
+      audit({
+        action: "sharing.cross_context_read",
+        resource: `skill:${entry.skill.id}`,
+        detail: JSON.stringify({ actor: actor.id, source: entry.skill.scopeId, target: scopeId }),
+      });
+    }
+    return allowed;
+  };
+  return visibleSkillsForTurn;
 }

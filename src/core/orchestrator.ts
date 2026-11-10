@@ -13,7 +13,6 @@ import { externalSlackRequestAllowed, currentExternalSlackRun } from "../resolut
 import { desktopComputerTool } from "../../plugins/chassis/src/desktop-computer.ts";
 import { startDispatchTrace, tracePhase, type DispatchTrace } from "../../plugins/chassis/src/error-reporting.ts";
 import { externalTools } from "./orchestrator/external-tools.ts";
-import { isBackendCredential } from "../credentials/keychain.ts";
 import { memoryRecallDelta } from "../memory/recall-delta.ts";
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import type { MemoryProviderOutcome } from "../memory/memory-service.ts";
@@ -86,12 +85,7 @@ import { supportsProcessSessions, supportsScopeProfile } from "../sandbox/sandbo
 import { createBackgroundBroker } from "../connectors/background-exec-broker.ts";
 import { createMonitorBroker, readBackgroundOutputTail } from "../monitors/monitor-broker.ts";
 import { isPollSurface } from "../triggers/run-trigger.ts";
-import {
-  askResolutionEvents,
-  renderKeychainManifest,
-  type KeychainAsk,
-  type PublicServiceCredential,
-} from "../credentials/keychain.ts";
+import { askResolutionEvents, renderKeychainManifest, type KeychainAsk } from "../credentials/keychain.ts";
 import { configuredConnectorProviders } from "../credentials/connector-status.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
 import { createSpendLimits, spendLimitNote } from "../ratelimit/spend-limits.ts";
@@ -158,7 +152,6 @@ import {
   type ArtifactRegistration,
   withoutAlreadyIngested,
 } from "./attachments.ts";
-import { parseRef } from "../acl/resource-ref.ts";
 import { findTrailingPartialTurn, overtaken, reconcile, runtimeSwitchNote, turnAtSeq } from "./turn-resume.ts";
 import type { RecordedTurn } from "./turn-resume.ts";
 import {
@@ -184,16 +177,13 @@ import { sleep } from "../util/async.ts";
 import { hashId } from "../util/crypto.ts";
 import { randomUUID } from "node:crypto";
 import { LRUCache } from "lru-cache";
-import type { SkillResolution } from "../skills/skill-store.ts";
 import type { Orchestrator, OrchestratorDeps, OrchestratorInput } from "./orchestrator/types.ts";
 import { personalModelId } from "../model/pi-models.ts";
 import { createSessionTitles } from "./session-title.ts";
 import {
-  MAX_AUTO_ATTACHMENT_SCREEN_BYTES,
   completedSurfaceEnqueues,
   deliveryCandidatesFor,
   filterConnectorSkills,
-  loadActiveBundles,
   recentPrincipalDeliveryNote,
   renderTitleTranscript,
   replayableRequest,
@@ -230,8 +220,10 @@ import { resolveTurnRuntimeAuth } from "./orchestrator/turn-runtime.ts";
 import { startStallWatchdog } from "./orchestrator/stall-watchdog.ts";
 import {
   cleanVerdict,
+  countSkills,
   createSecurityClassifier,
   screenChunks,
+  createSkillScreen,
   screenInboundInput,
   type SecurityScreenContext,
   unscreenedVerdict,
@@ -240,6 +232,7 @@ import { createTurnSandboxes } from "./orchestrator/sandboxes.ts";
 import { isolationBrief } from "../sessions/child-isolation.ts";
 import {
   createCredentialCatalog,
+  loadServiceCredentialGrants,
   registerBrokeredTools,
   registerConnectorCredentials,
   registerKeychainCredentials,
@@ -269,7 +262,6 @@ async function recordUser(users: OrchestratorDeps["users"], id: string, botActor
 export { egressClaimAllowingControlPlane, filterConnectorSkills } from "./orchestrator/turn-helpers.ts";
 export type { Orchestrator, OrchestratorDeps, OrchestratorInput, SurfaceContextPuller } from "./orchestrator/types.ts";
 
-const countSkills = (listed: { skills: readonly unknown[] }) => ({ "qm.skills": listed.skills.length });
 const ACTIVITY_KINDS = new Set<ItemKind>([
   "ToolCall",
   "ToolResult",
@@ -907,106 +899,35 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               swallowAs("orchestrator: configured connector providers", []),
             )
           : [];
-      const orgServiceCreds =
-        !strictReadOnly && deps.serviceCreds
-          ? await deps.serviceCreds.listServiceCredentials(resolution.orgScopeId)
-          : [];
-      const aclGrantedServiceCredSlugs = async (): Promise<Set<string>> =>
-        new Set(
-          (
-            await deps.acl.grantsOfKind(
-              "service-cred",
-              conversation.audience,
-              scopeId,
-              resolution.orgScopeId,
-              entitledScopes,
-            )
-          ).map((g) => parseRef(g.ref).id),
-        );
-      const orgWideAudience =
-        conversation.audience.length > 0 &&
-        conversation.audience.every((p) =>
-          principalEntitledToScope(p, resolution.orgScopeId, scopeId, resolution.orgScopeId),
-        );
-      const grantedServiceCredSlugs = async (records: readonly PublicServiceCredential[]): Promise<Set<string>> => {
-        const granted = await aclGrantedServiceCredSlugs();
-        if (orgWideAudience) for (const record of records) if (record.source === "deployment") granted.add(record.slug);
-        return granted;
-      };
-      const serviceCredRecords: PublicServiceCredential[] = orgServiceCreds.filter((record) =>
-        serviceAllowed(record.slug),
-      );
-      let grantedCredSlugs = new Set<string>();
-      if (serviceCredRecords.length > 0) grantedCredSlugs = await grantedServiceCredSlugs(serviceCredRecords);
-      const appConnections = serviceCredRecords.some(
-        (cred) => isBackendCredential(cred) && cred.enabled && cred.hasSecret && grantedCredSlugs.has(cred.slug),
-      );
-      const carriedSkillScreens = new Map<string, Promise<boolean>>();
-      const visibleSkillsForTurn = async (sources?: readonly string[]): Promise<SkillResolution[]> => {
-        const current = await tracePhase("turn.skills", () => context.listSkills(sources), { counts: countSkills });
-        const resolved = filterConnectorSkills(current.skills, configuredProviders, appConnections);
-        const allowed: SkillResolution[] = [];
-        for (const entry of resolved) {
-          const skill = entry.skill;
-          if (!skill || !current.sharingSources.includes(skill.scopeId) || securityPolicy.screening === "off") {
-            allowed.push(entry);
-            continue;
-          }
-          const snapshot = structuredClone(entry);
-          const screenSkill = async () => {
-            const bundles = structuredClone(
-              deps.skillBundles
-                ? await loadActiveBundles(deps.skillBundles, [snapshot]).catch(
-                    swallowAs("skill screening: load bundles", null),
-                  )
-                : [],
-            );
-            const payload = JSON.stringify({ manifest: snapshot.skill!.manifest, bundles });
-            const key = hashId([skill.scopeId, skill.id, payload], 64);
-            let screen = carriedSkillScreens.get(key);
-            if (!screen) {
-              screen = (async () => {
-                if (bundles === null || Buffer.byteLength(payload, "utf8") > MAX_AUTO_ATTACHMENT_SCREEN_BYTES)
-                  return false;
-                const verdict = await screenChunks(
-                  securityScreenChunks("tool_result:shared_skill", payload),
-                  classifyAs(
-                    { hook: "tool_response", request: input.text, surface: "shared_skill" },
-                    recordScreenRequest,
-                  ),
-                  { stopUnclean: true },
-                );
-                return cleanVerdict(verdict);
-              })();
-              carriedSkillScreens.set(key, screen);
-            }
-            return { passed: await screen, bundles };
-          };
-          if (!enforceScreen) {
-            allowed.push(entry);
-            void screenSkill().catch(swallowAs("orchestrator: observed skill screen", undefined));
-            continue;
-          }
-          const { passed, bundles } = await screenSkill();
-          if (passed && bundles) allowed.push({ ...snapshot, screenedBundles: bundles });
-          else
-            audit({
-              action: "sharing.skill_screen_blocked",
-              resource: `skill:${skill.id}`,
-              status: "refused",
-              detail: JSON.stringify({ actor: actor.id, source: skill.scopeId, target: scopeId }),
-            });
-        }
-        for (const entry of allowed) {
-          if (!entry.skill || !current.sharingSources.includes(entry.skill.scopeId)) continue;
-          audit({
-            action: "sharing.cross_context_read",
-            resource: `skill:${entry.skill.id}`,
-            detail: JSON.stringify({ actor: actor.id, source: entry.skill.scopeId, target: scopeId }),
-          });
-        }
-        return allowed;
-      };
+      const {
+        aclGrantedServiceCredSlugs,
+        orgWideAudience,
+        grantedServiceCredSlugs,
+        serviceCredRecords,
+        grantedCredSlugs,
+        appConnections,
+      } = await loadServiceCredentialGrants({
+        deps,
+        conversation,
+        scopeId,
+        resolution,
+        strictReadOnly,
+        serviceAllowed,
+      });
+      const visibleSkillsForTurn = createSkillScreen({
+        deps,
+        input,
+        actor,
+        scopeId,
+        context,
+        configuredProviders,
+        appConnections,
+        securityPolicy,
+        enforceScreen,
+        classifyAs,
+        recordScreenRequest,
+        audit,
+      });
       const skillSourceContext = await tracePhase(
         "turn.skills",
         () => context.listSkills([scopeId, resolution.orgScopeId]),

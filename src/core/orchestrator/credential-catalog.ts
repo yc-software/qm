@@ -14,7 +14,9 @@ import {
   type MaterializedCred,
   type PublicServiceCredential,
 } from "../../credentials/keychain.ts";
+import { parseRef } from "../../acl/resource-ref.ts";
 import { samePerson } from "../../directory/person.ts";
+import { entitledScopes, principalEntitledToScope } from "../../resolution/context-filter.ts";
 import { isOpenScopeMember } from "../../resolution/sharing-access.ts";
 import type { IsCurrentSharedScopeMember } from "../../resolution/scope-membership.ts";
 import type { CommandCredential } from "../../tools/primitives.ts";
@@ -430,4 +432,53 @@ export function registerBrokeredTools(catalog: CredentialCatalog): void {
       );
     }
   }
+}
+
+export async function loadServiceCredentialGrants(turn: {
+  deps: OrchestratorDeps;
+  conversation: OrchestratorInput["conversation"];
+  scopeId: ScopeId;
+  resolution: CredentialCatalogTurn["resolution"];
+  strictReadOnly: boolean;
+  serviceAllowed: (slug: string) => boolean;
+}) {
+  const { deps, conversation, scopeId, resolution, strictReadOnly, serviceAllowed } = turn;
+  const orgServiceCreds =
+    !strictReadOnly && deps.serviceCreds ? await deps.serviceCreds.listServiceCredentials(resolution.orgScopeId) : [];
+  const aclGrantedServiceCredSlugs = async (): Promise<Set<string>> =>
+    new Set(
+      (
+        await deps.acl.grantsOfKind(
+          "service-cred",
+          conversation.audience,
+          scopeId,
+          resolution.orgScopeId,
+          entitledScopes,
+        )
+      ).map((g) => parseRef(g.ref).id),
+    );
+  const orgWideAudience =
+    conversation.audience.length > 0 &&
+    conversation.audience.every((p) =>
+      principalEntitledToScope(p, resolution.orgScopeId, scopeId, resolution.orgScopeId),
+    );
+  const grantedServiceCredSlugs = async (records: readonly PublicServiceCredential[]): Promise<Set<string>> => {
+    const granted = await aclGrantedServiceCredSlugs();
+    if (orgWideAudience) for (const record of records) if (record.source === "deployment") granted.add(record.slug);
+    return granted;
+  };
+  const serviceCredRecords: PublicServiceCredential[] = orgServiceCreds.filter((record) => serviceAllowed(record.slug));
+  let grantedCredSlugs = new Set<string>();
+  if (serviceCredRecords.length > 0) grantedCredSlugs = await grantedServiceCredSlugs(serviceCredRecords);
+  const appConnections = serviceCredRecords.some(
+    (cred) => isBackendCredential(cred) && cred.enabled && cred.hasSecret && grantedCredSlugs.has(cred.slug),
+  );
+  return {
+    aclGrantedServiceCredSlugs,
+    orgWideAudience,
+    grantedServiceCredSlugs,
+    serviceCredRecords,
+    grantedCredSlugs,
+    appConnections,
+  };
 }
