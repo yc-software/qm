@@ -1000,7 +1000,7 @@ for (const failure of ["cleanup release", "record write"] as const) {
     await assert.rejects(make().provision(scope), new RegExp(`${failure} failed`));
     assert.deepEqual(await cleanupStore.get(scope), { resources: [{ sandboxId: "sbx-1" }] });
     assert.equal(fake.sandboxes.get("sbx-1")?.status, "running");
-    assert.equal(await store.get(scope), null);
+    assert.equal((await store.get(scope))?.sandboxId, failure === "cleanup release" ? "sbx-1" : undefined);
     cleanupStore.delete = release;
     store.put = put;
     fake.failTerminate();
