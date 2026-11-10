@@ -100,8 +100,6 @@ function replaceShortcodes(text: string, emojiFor: (name: string) => string | nu
   return out;
 }
 
-/** Plain preview of Slack wire text for one-line notes: links become their labels and known
- *  :shortcodes: become emoji. Line breaks are left for the caller's CSS to collapse. */
 export function slackPreviewText(text: string, emojiFor: (name: string) => string | null): string {
   return replaceShortcodes(slackWireToPlain(stripSlackDirectives(text)), emojiFor).trim();
 }
