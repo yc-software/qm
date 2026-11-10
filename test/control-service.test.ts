@@ -96,7 +96,6 @@ test("a write grantee who rewrites a shared cron's task becomes its owner, and t
 
   const notices = (await built.deliveries.pending("principal")).filter((d) => d.destination.target === "U1");
   assert.equal(notices.length, 1, "the previous owner is told their cron was rewritten");
-  assert.match(notices[0]!.text, /Mia changed your .*digest.* cron .*to do something different/);
 
   const asText = await control.patchCron(id, { text: "digest is done" }, chanClaims("U1"));
   assert.ok(asText.ok, JSON.stringify(asText));

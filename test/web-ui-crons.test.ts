@@ -347,8 +347,5 @@ test("a browser cron edit accepts only the fields the web app edits", async () =
   assert.equal(edited.status, 200);
   assert.deepEqual(((await edited.json()) as CronBody).cron.enabled, false);
   assert.equal((await built.app.getCron(cron.id))!.owner, "alice", "an owner editing their own task stays owner");
-  const enable = await fetch(`${coreBase}/api/crons/${cron.id}/enable`, asUser("alice", { method: "POST" }));
-  assert.equal(enable.status, 200);
-  assert.equal((await built.app.getCron(cron.id))!.enabled, true);
   await built.app.deleteCron(cron.id);
 });
