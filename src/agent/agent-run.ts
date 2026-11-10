@@ -441,44 +441,39 @@ export function createAgent(opts?: AgentOptions): Agent {
       }
     }
 
-    {
-      const agent = session.agent;
-      if (agent) {
-        agent.onPayload = async (payload, model) => {
-          ref.modelCalls = (ref.modelCalls ?? 0) + 1;
-          ref.onModelRequest?.();
-          ref.stepPhase?.end();
-          ref.stepPhase = undefined;
-          ref.firstTokenPhase?.end();
-          ref.firstTokenPhase = startPhase("model.first_token");
-          applyFastSpeed(payload, ref.fast, (model as { api?: string } | undefined)?.api);
-          applyReasoningMode(payload, model as Model<Api>, ref.effortLevel);
-          const capturedPayload = ref.llmCapture ? sanitizeLlmPayload(payload, model) : undefined;
-          let finalPayload = await withDocumentInputs(
-            payload,
-            model as DocumentModel,
-            ref.documents ?? [],
-            ref.abortSignal,
-            ref.documentsStubbed ? documentsDroppedNote(ref.documents ?? []) : undefined,
-          );
-          const guarded = guardOutputBudget(finalPayload, model);
-          if (guarded.kind === "raised") {
-            console.error(
-              `[pi] output-budget guard raised output cap ${guarded.from} -> ${guarded.to} (estimated prompt ${guarded.estimatedPromptTokens} tokens) session=${sessionId}`,
-            );
-          }
-          try {
-            const gateway = modelGatewayRequest(route.gateway, model as Model<Api>);
-            finalPayload = trimPayloadToByteBudget(finalPayload, gateway ? 9_000_000 : undefined);
-          } catch (e) {
-            swallow("pi: request byte budget", e);
-          }
-          if (capturedPayload) ref.llmCapture?.push(capturedPayload);
-          return finalPayload;
-        };
-        agent.afterToolCall = pauseStampAfterToolCall(ref);
+    session.agent.onPayload = async (payload, model) => {
+      ref.modelCalls = (ref.modelCalls ?? 0) + 1;
+      ref.onModelRequest?.();
+      ref.stepPhase?.end();
+      ref.stepPhase = undefined;
+      ref.firstTokenPhase?.end();
+      ref.firstTokenPhase = startPhase("model.first_token");
+      applyFastSpeed(payload, ref.fast, (model as { api?: string } | undefined)?.api);
+      applyReasoningMode(payload, model as Model<Api>, ref.effortLevel);
+      const capturedPayload = ref.llmCapture ? sanitizeLlmPayload(payload, model) : undefined;
+      let finalPayload = await withDocumentInputs(
+        payload,
+        model as DocumentModel,
+        ref.documents ?? [],
+        ref.abortSignal,
+        ref.documentsStubbed ? documentsDroppedNote(ref.documents ?? []) : undefined,
+      );
+      const guarded = guardOutputBudget(finalPayload, model);
+      if (guarded.kind === "raised") {
+        console.error(
+          `[pi] output-budget guard raised output cap ${guarded.from} -> ${guarded.to} (estimated prompt ${guarded.estimatedPromptTokens} tokens) session=${sessionId}`,
+        );
       }
-    }
+      try {
+        const gateway = modelGatewayRequest(route.gateway, model as Model<Api>);
+        finalPayload = trimPayloadToByteBudget(finalPayload, gateway ? 9_000_000 : undefined);
+      } catch (e) {
+        swallow("pi: request byte budget", e);
+      }
+      if (capturedPayload) ref.llmCapture?.push(capturedPayload);
+      return finalPayload;
+    };
+    session.agent.afterToolCall = pauseStampAfterToolCall(ref);
 
     const entry: TurnSession = {
       agentSession: session,

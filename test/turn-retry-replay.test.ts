@@ -11,7 +11,8 @@ import type { Agent } from "../src/agent/agent.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { createDeliveryStore, turnDeliveryProvenance } from "../src/delivery/delivery-store.ts";
+import { turnPostKeys } from "../src/core/orchestrator/turn-helpers.ts";
 import { scopeId, type Conversation, type Principal } from "../src/types.ts";
 import { type Item, type NewItem, USER_ITEM_KINDS } from "../src/sessions/items.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
@@ -80,6 +81,7 @@ function buildScenario(interruptAfterToolResult = false) {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
+  const deliveries = createDeliveryStore();
   const orchestrator = createOrchestrator({
     ...orchestratorTestDeps(),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
@@ -101,7 +103,7 @@ function buildScenario(interruptAfterToolResult = false) {
       acl,
     }),
     acl,
-    deliveries: createDeliveryStore(),
+    deliveries,
   });
   const input = (text: string, extra: Partial<OrchestratorInput> = {}): OrchestratorInput => ({
     surface: "web",
@@ -117,7 +119,19 @@ function buildScenario(interruptAfterToolResult = false) {
       (item) => USER_ITEM_KINDS.includes(item.kind) && (item.text ?? "").startsWith(ASK),
     );
   };
-  return { orchestrator, sessions, runs, turns, continued, environments, histories, sandbox, input, asks };
+  return {
+    orchestrator,
+    sessions,
+    runs,
+    deliveries,
+    turns,
+    continued,
+    environments,
+    histories,
+    sandbox,
+    input,
+    asks,
+  };
 }
 
 test("a retry replays the answer the previous attempt recorded instead of asking again", async () => {
@@ -323,4 +337,193 @@ test("a turn that overtakes a paused one shares its history, and the paused turn
     `UserMessage:${ASK}`,
     "AgentMessage:it runs on this conversation's computer",
   ]);
+});
+
+const slackThread = "ch:C1:100.1";
+const slackInput = (runId: string, attempt: number): OrchestratorInput =>
+  ({
+    surface: "slack",
+    actor,
+    conversation: { kind: "channel", threadRef: slackThread, channelRef: "C1", audience: [actor] } as Conversation,
+    deliveryTarget: "slack:C1:100.1",
+    origin: { kind: "direct" },
+    text: ASK,
+    surfaceTools: true,
+    addressed: true,
+    runId,
+    attempt,
+  }) as OrchestratorInput;
+
+async function seedSlackTurn(
+  scenario: ReturnType<typeof buildScenario>,
+  runId: string,
+  items: NewItem[],
+): Promise<number> {
+  const session = await scenario.sessions.getOrCreateByThread(slackThread, "channel", "channel:C1");
+  const appended = await scenario.sessions.appendMany({ sessionId: session.id, turnId: runId }, items);
+  await scenario.runs.noteTurnUserSeq(runId, appended[0]!.seq);
+  return appended[0]!.seq;
+}
+
+const ANSWER = "it runs on this conversation's computer";
+
+test("a retried surface-tool turn does not post the reply its first attempt already delivered", async () => {
+  const { orchestrator, runs, deliveries, turns } = buildScenario();
+  const run = (await runs.enqueue({ sessionId: slackThread, request: slackInput("", 1) })).run;
+
+  assert.equal((await orchestrator.handleTurn(slackInput(run.id, 1))).status, "silent");
+  const delivered = await deliveries.pending("slack");
+  assert.deepEqual(
+    delivered.map((d) => d.text),
+    [ANSWER],
+    "the first attempt delivers the reply itself",
+  );
+
+  const retry = await orchestrator.handleTurn(slackInput(run.id, 2));
+  assert.equal(retry.status, "silent", "the surface's own reply path gets nothing to post again");
+  assert.equal(retry.reply, undefined);
+  assert.equal(turns.length, 1, "the model is not asked to answer again");
+  assert.deepEqual(await deliveries.pending("slack"), delivered, "the thread still has exactly one reply");
+});
+
+test("a retried surface-tool turn delivers a recorded reply its first attempt died before sending, once", async () => {
+  const scenario = buildScenario();
+  const { orchestrator, runs, deliveries, turns } = scenario;
+  const run = (await runs.enqueue({ sessionId: slackThread, request: slackInput("", 1) })).run;
+  await seedSlackTurn(scenario, run.id, [
+    { kind: "UserMessage", text: ASK },
+    { kind: "AgentMessage", text: ANSWER },
+  ]);
+
+  assert.equal((await orchestrator.handleTurn(slackInput(run.id, 2))).status, "silent");
+  assert.equal((await orchestrator.handleTurn(slackInput(run.id, 3))).status, "silent");
+  assert.deepEqual(
+    (await deliveries.pending("slack")).map((d) => d.text),
+    [ANSWER],
+    "the reply is delivered once across repeated retries",
+  );
+  assert.equal(turns.length, 0);
+});
+
+test("a retried surface-tool turn does not repeat the acknowledgement its first attempt already posted", async () => {
+  const scenario = buildScenario();
+  const { orchestrator, runs, deliveries } = scenario;
+  const run = (await runs.enqueue({ sessionId: slackThread, request: slackInput("", 1) })).run;
+  await seedSlackTurn(scenario, run.id, [
+    { kind: "UserMessage", text: ASK },
+    { kind: "AgentMessage", text: `Checking now. ${ANSWER}` },
+  ]);
+  await deliveries.enqueue({
+    destination: { type: "slack", target: "C1:100.1" },
+    text: "Checking now.",
+    idempotencyKey: `ack:${run.id}`,
+    provenance: turnDeliveryProvenance({
+      origin: { kind: "direct" },
+      surface: "slack",
+      fireKey: `ack:${run.id}`,
+      sourceScopeId: scopeId("channel", "C1"),
+      sourceThreadRef: slackThread,
+    }),
+  });
+
+  assert.equal((await orchestrator.handleTurn(slackInput(run.id, 2))).status, "silent");
+  assert.deepEqual(
+    (await deliveries.pending("slack")).map((d) => d.text),
+    ["Checking now.", ANSWER],
+    "the replayed reply leaves out the acknowledgement already in the thread",
+  );
+});
+
+test("a retried surface-tool turn whose model already posted does not deliver its trailing text", async () => {
+  const scenario = buildScenario();
+  const { orchestrator, runs, deliveries, turns } = scenario;
+  const run = (await runs.enqueue({ sessionId: slackThread, request: slackInput("", 1) })).run;
+  await seedSlackTurn(scenario, run.id, [
+    { kind: "UserMessage", text: ASK },
+    { kind: "ToolCall", tool: "slack", callId: "p1", body: { action: "post", text: "posted answer" } },
+    { kind: "ToolResult", tool: "slack", callId: "p1", text: "[sent]", body: { action: "post", ok: true } },
+    { kind: "AgentMessage", text: "trailing text the surface-tool rules withhold" },
+  ]);
+
+  const retry = await orchestrator.handleTurn(slackInput(run.id, 2));
+  assert.equal(retry.status, "silent");
+  assert.equal(retry.reply, undefined);
+  assert.deepEqual(await deliveries.pending("slack"), []);
+  assert.equal(turns.length, 0);
+});
+
+async function seedWebTurn(scenario: ReturnType<typeof buildScenario>, runId: string, items: NewItem[]) {
+  const session = await scenario.sessions.getOrCreateByThread(conversation.threadRef, "dm", "personal:U1");
+  const appended = await scenario.sessions.appendMany({ sessionId: session.id, turnId: runId }, items);
+  await scenario.runs.noteTurnUserSeq(runId, appended[0]!.seq);
+}
+
+test("a retry of a person-stopped turn replays the stop with its partial, as the first attempt reported it", async () => {
+  const scenario = buildScenario();
+  const { orchestrator, runs, turns, input } = scenario;
+  const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+  await seedWebTurn(scenario, run.id, [
+    { kind: "UserMessage", text: ASK },
+    { kind: "AgentMessage", text: "it runs on", body: { stopped: true } },
+    { kind: "Stop", body: { reason: "by user" } },
+  ]);
+
+  const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
+  assert.equal(retry.stopped, true, "the replay keeps the stop the first attempt recorded");
+  assert.equal(retry.reply, "it runs on", "the partial is reported as a stopped reply, not a finished one");
+  assert.equal(turns.length, 0, "the stopped turn is not run again");
+});
+
+test("a retry of a turn stopped by its run being cancelled replays silent and stopped", async () => {
+  const scenario = buildScenario();
+  const { orchestrator, runs, turns, input } = scenario;
+  const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+  await seedWebTurn(scenario, run.id, [
+    { kind: "UserMessage", text: ASK },
+    { kind: "AgentMessage", text: "it runs on", body: { stopped: true, cancelled: true } },
+    { kind: "Stop", body: { reason: "because the run was cancelled" } },
+  ]);
+
+  const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
+  assert.equal(retry.status, "silent", "the cancelled partial is not handed out as a reply");
+  assert.equal(retry.stopped, true);
+  assert.equal(turns.length, 0);
+});
+
+test("a retried surface-tool turn does not re-send a reply its first attempt delivered through the fallback post", async () => {
+  const scenario = buildScenario();
+  const { orchestrator, runs, deliveries, turns } = scenario;
+  const run = (await runs.enqueue({ sessionId: slackThread, request: slackInput("", 1) })).run;
+  await seedSlackTurn(scenario, run.id, [
+    { kind: "UserMessage", text: ASK },
+    { kind: "AgentMessage", text: ANSWER },
+  ]);
+  const destination = { type: "slack", target: "slack:C1:100.1" };
+  const fallbackKey = turnPostKeys(run.id).key(destination, 1);
+  await deliveries.enqueue({ destination, text: ANSWER, idempotencyKey: fallbackKey });
+
+  assert.equal((await orchestrator.handleTurn(slackInput(run.id, 2))).status, "silent");
+  assert.deepEqual(
+    (await deliveries.pending("slack")).map((d) => d.idempotencyKey),
+    [fallbackKey],
+    "the reply already sent as the fallback is not sent again",
+  );
+  assert.equal(turns.length, 0);
+});
+
+test("a retry of a stopped surface-tool turn stays silent, keeps the stop, and posts nothing", async () => {
+  const scenario = buildScenario();
+  const { orchestrator, runs, deliveries, turns } = scenario;
+  const run = (await runs.enqueue({ sessionId: slackThread, request: slackInput("", 1) })).run;
+  await seedSlackTurn(scenario, run.id, [
+    { kind: "UserMessage", text: ASK },
+    { kind: "AgentMessage", text: "it runs on", body: { stopped: true } },
+    { kind: "Stop", body: { reason: "because the run was cancelled" } },
+  ]);
+
+  const retry = await orchestrator.handleTurn(slackInput(run.id, 2));
+  assert.equal(retry.status, "silent");
+  assert.equal(retry.stopped, true);
+  assert.equal(turns.length, 0);
+  assert.deepEqual(await deliveries.pending("slack"), []);
 });
