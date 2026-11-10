@@ -41,7 +41,7 @@ function overTesting(numstat: string) {
     else if (!lockfiles.includes(name)) source += Number(added) || 0;
   }
   if (tests > source)
-    return `${tests} net test lines added against ${source} source lines added. Remove or reshape tests until test lines do not exceed source lines.`;
+    return `net test lines added (${tests}) exceed source lines added (${source}). Remove or reshape tests until they do not.`;
 }
 
 export function wallOfShameProblems(spec: string, body: string, headSha: string, numstat: string) {

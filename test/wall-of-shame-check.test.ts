@@ -14,7 +14,7 @@ const reviewed = ["Overengineering", "Regex", "Honorable mentions"];
 const problems = (description: string, numstat = "", against = spec) =>
   wallOfShameProblems(against, description, head, numstat);
 const overTested = (tests: number, source: number) =>
-  `Over-testing: ${tests} net test lines added against ${source} source lines added. Remove or reshape tests until test lines do not exceed source lines.`;
+  `Over-testing: net test lines added (${tests}) exceed source lines added (${source}). Remove or reshape tests until they do not.`;
 
 test("lenses come from the spec's Wall of shame headings", () => {
   assert.deepEqual(wallOfShameLenses(spec), ["Overengineering", "Regex", "Over-testing", "Honorable mentions"]);
