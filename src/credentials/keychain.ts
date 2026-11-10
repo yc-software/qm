@@ -1112,6 +1112,10 @@ export function createKeychain(deps: {
         };
       });
       if (!updated) throw new KeychainError(410, "Credential was removed during execution");
+      if (overruled.length)
+        console.warn(
+          `[credentials] ${materialized.credentialId}: kept the stored version of ${overruled.join(", ")} over a concurrent change`,
+        );
       return overruled;
     },
 

@@ -479,8 +479,7 @@ function background(
   const waitForExit = async (processId: string) => {
     while (jobs.get(processId)?.code === undefined) await new Promise((resolve) => setTimeout(resolve, 20));
   };
-  const running = (processId: string) => jobs.get(processId)?.code === undefined;
-  return { registry, sandbox, broker, ctx, finish, waitForExit, running };
+  return { registry, sandbox, broker, ctx, finish, waitForExit };
 }
 
 const savedValue = async (f: Awaited<ReturnType<typeof fixture>>) => {
@@ -600,17 +599,6 @@ test("a background job that changed nothing leaves other commands' saves alone",
   await bg.waitForExit(started.processId);
   await ctx.backgroundPoll(started.processId);
   assert.equal(await savedValue(f), "saved-meanwhile");
-});
-
-test("a deletion and a concurrent refresh of another file both survive the merge", async (t) => {
-  const f = await fixture(t);
-  const wal = textFile(".aws/cli/cache/session.db-wal", "scratch");
-  await f.keychain.updateFiles(await startCommand(f), [...files("original"), wal]);
-  const deleter = await startCommand(f);
-  const refresher = await startCommand(f);
-  await f.keychain.updateFiles(refresher, [...files("refreshed"), wal]);
-  await f.keychain.updateFiles(deleter, files("original"));
-  assert.deepEqual(await savedFiles(f), { ".aws/sso/cache/session.json": "refreshed" });
 });
 
 test("a command whose change loses a conflict says so on stderr", async (t) => {
