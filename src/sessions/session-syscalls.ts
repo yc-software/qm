@@ -195,6 +195,7 @@ export interface SessionOpenInput {
   thinkingLevel?: string;
   fastMode?: boolean;
   isolation?: ChildIsolationMode;
+  persistent?: boolean;
 }
 
 type SessionOpenResult =
@@ -859,6 +860,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 openFingerprint: fingerprint,
                 ...(binding.request.surfaceOrigin ? { surfaceOrigin: binding.request.surfaceOrigin } : {}),
                 ...(isolation ? { isolation } : {}),
+                ...(input.persistent ? { persistent: true } : {}),
               };
               if (!existing?.spawnMeta) {
                 await deps.sessions.setParentSession(child.id, binding.session.id);
@@ -911,8 +913,14 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   ok: false,
                   message: "that session lives in a different context and cannot be reached from here.",
                 };
-              if (!(await deps.sessions.getForParticipant(target.id, binding.request.actor.id)))
-                return { ok: false, message: "you are not a participant in that session." };
+              const view = await deps.sessions.getForParticipant(target.id, binding.request.actor.id);
+              if (!view) return { ok: false, message: "you are not a participant in that session." };
+              if (view.archived && isSubagentThreadRef(target.threadRef))
+                return {
+                  ok: false,
+                  message:
+                    "that subagent finished and retired; open a fresh one with `open` (its result is already in your transcript).",
+                };
               if (deps.authorize && !(await deps.authorize(target, caller.actor.id)))
                 return { ok: false, message: "you no longer have access to the target session" };
               const meta = storedContext(target);
