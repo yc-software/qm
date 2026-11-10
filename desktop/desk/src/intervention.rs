@@ -808,3 +808,39 @@ mod retained_tests {
         assert!(!state.focused);
     }
 }
+
+#[cfg(test)]
+mod activity_watcher_tests {
+    use super::*;
+
+    fn watcher(failed: &Arc<AtomicBool>) -> (ActivityWatcher, Box<TapContext>) {
+        let context = Box::new(TapContext {
+            context: None,
+            retained: None,
+            activity: Some((Arc::new(Registry::default()), Arc::clone(failed))),
+            kind: TapKind::Intervention,
+        });
+        (ActivityWatcher { stop: Arc::new(AtomicBool::new(false)), failed: Arc::clone(failed), thread: None }, context)
+    }
+
+    #[test]
+    fn disabling_one_overlapping_watcher_tap_does_not_fail_the_other() {
+        let first_failed = Arc::new(AtomicBool::new(false));
+        let second_failed = Arc::new(AtomicBool::new(false));
+        let (first, first_tap) = watcher(&first_failed);
+        let (second, second_tap) = watcher(&second_failed);
+        let event = CGEvent::new(None).unwrap();
+        let pointer = NonNull::from(&*event);
+        let info = |tap: &TapContext| (tap as *const TapContext).cast_mut().cast();
+        let returned = unsafe { receive(std::ptr::null_mut(), CGEventType(1), pointer, info(&second_tap)) };
+        assert_eq!(returned, pointer.as_ptr());
+        assert!(first.check().is_ok() && second.check().is_ok());
+        unsafe { receive(std::ptr::null_mut(), CGEventType(u32::MAX - 1), pointer, info(&first_tap)) };
+        assert!(first.check().is_err());
+        assert!(second.check().is_ok());
+        unsafe { receive(std::ptr::null_mut(), CGEventType(u32::MAX), pointer, info(&second_tap)) };
+        assert!(second.check().is_err());
+        let (third, _third_tap) = watcher(&Arc::new(AtomicBool::new(false)));
+        assert!(third.check().is_ok());
+    }
+}
