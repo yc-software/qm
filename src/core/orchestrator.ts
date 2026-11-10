@@ -1661,6 +1661,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 sessionRef: conversation.threadRef,
                 ttlMs: deps.backgroundJobTtlMs,
                 ttlMaxMs: deps.backgroundJobTtlMaxMs,
+                assertComputerUsable: assertDefaultUsable,
               })
             : undefined;
 
@@ -1695,6 +1696,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 threadRef: conversation.threadRef,
                 ...(defaultDestination ? { destination: defaultDestination } : {}),
                 returnsToParent: isSubagentThreadRef(conversation.threadRef) && Boolean(session.parentSessionId),
+                assertComputerUsable: assertDefaultUsable,
               })
             : undefined;
 
