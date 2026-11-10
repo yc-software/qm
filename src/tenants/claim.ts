@@ -9,6 +9,8 @@ export interface ClaimedRow {
 
 const NAME = /^[a-z_][a-z0-9_]*$/;
 
+export const servingTenant = (column: string): string => ` AND ${column} IN (SELECT qm_serving_tenants())`;
+
 export function claimFunction(name: string, args: string, body: string): string {
   if (!NAME.test(name)) throw new Error(`invalid claim function name: ${name}`);
   return `DO $claim_function$

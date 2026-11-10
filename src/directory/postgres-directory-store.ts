@@ -248,7 +248,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
         withTenant(String(id), async () => {
           const [tenant] = await q(
             `SELECT settings->>'brandName' AS brand, qm_tenant_handle(settings) AS handle,
-                    settings->>'serving' IS DISTINCT FROM 'false' OR qm_boot_tenant() IS NOT NULL AS serving
+                    id IN (SELECT qm_serving_tenants()) AS serving
                FROM tenants WHERE id = $1`,
             [id],
           );

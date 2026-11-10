@@ -77,6 +77,19 @@ const DROP_TENANT_HOSTS: PgMigrationDefinition = {
   ],
 };
 
+const SERVING_TENANTS: PgMigrationDefinition = {
+  id: "0000-tenancy/serving-tenants",
+  statements: [
+    `DO $serving$ BEGIN EXECUTE format($sql$CREATE OR REPLACE FUNCTION qm_serving_tenants() RETURNS SETOF uuid
+      LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = %1$I, pg_temp AS $f$
+      BEGIN
+        RETURN QUERY SELECT id FROM tenants
+          WHERE settings->>'serving' IS DISTINCT FROM 'false' OR qm_boot_tenant() IS NOT NULL;
+      END $f$$sql$, current_schema()); END $serving$`,
+    `GRANT EXECUTE ON FUNCTION qm_serving_tenants() TO PUBLIC`,
+  ],
+};
+
 export const TENANCY: readonly PgMigrationDefinition[] = [
   TENANCY_BASE,
   retire0116Tenancy(TENANCY_BASE.statements[1]!),
@@ -90,6 +103,7 @@ export const TENANCY: readonly PgMigrationDefinition[] = [
   TENANT_APP_HANDLE_DNS_BOUND,
   TENANT_APP_HOSTS_BY_HANDLE,
   TENANT_APP_HOSTS_LEGACY_NAMES,
+  SERVING_TENANTS,
 ];
 
 interface TenantKey {
