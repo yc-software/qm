@@ -19,7 +19,8 @@ const PROBE = [
   `ld=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null)`,
   `lim=$(cat /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null | head -n1)`,
   `cur=$(cat /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory/memory.usage_in_bytes 2>/dev/null | head -n1)`,
-  `mem=$(awk -v l="$lim" -v c="$cur" '/^MemTotal:/{t=$2}/^MemAvailable:/{a=$2}END{if(!t)exit;u=(t-a)*1024;t*=1024;if(l~/^[0-9]+$/&&l<t&&c~/^[0-9]+$/){t=l;u=c}print int(u/1048576), int(t/1048576)}' /proc/meminfo 2>/dev/null)`,
+  `ina=$(awk '/^(total_)?inactive_file /{print $2;exit}' /sys/fs/cgroup/memory.stat /sys/fs/cgroup/memory/memory.stat 2>/dev/null)`,
+  `mem=$(awk -v l="$lim" -v c="$cur" -v i="\${ina:-0}" '/^MemTotal:/{t=$2}/^MemAvailable:/{a=$2}END{if(!t)exit;u=(t-a)*1024;t*=1024;if(l~/^[0-9]+$/&&l<t&&c~/^[0-9]+$/){t=l;u=c-i}print int(u/1048576), int(t/1048576)}' /proc/meminfo 2>/dev/null)`,
   `dsk=$(df -Pk . 2>/dev/null | awk 'NR==2{print $3, $2}')`,
   `printf '\\n${MARKER} %s %s %s %s\\n' "\${io:--}" "\${ld:--}" "\${mem:-- -}" "\${dsk:-- -}"`,
 ].join("\n");
