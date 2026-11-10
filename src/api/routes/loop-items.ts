@@ -17,17 +17,16 @@ import {
   inboxPreviewEnabled,
   type LoopServiceDeps,
 } from "./loops.ts";
-import { scopeId, parseScopeId } from "../../types.ts";
-import { isResolved, isLedgerState, ledgerItemView, ledgerState, sortLedgerItems } from "../../loops/ledger-view.ts";
+import { parseScopeId } from "../../types.ts";
+import { isLedgerState, ledgerItemView, ledgerState, sortLedgerItems } from "../../loops/ledger-view.ts";
 import { loopItemId, type IngestEntryInput } from "../../loops/item-ledger.ts";
 import { LOOP_ITEM_PRIORITIES, removeFromGroup, settleGroup } from "../../loops/triage.ts";
 import { addressList } from "../../loops/sources/adapter.ts";
 import { adapterForItem, sourceAdapter } from "../../loops/sources/index.ts";
 import {
   ensureDefaultInboxLoops,
-  renderSourceInboxTask,
-  INBOX_LEDGER_MAX_ITEMS,
-  INBOX_LEDGER_RETENTION_MS,
+  inboxSyncCronAction,
+  inboxSource,
   INBOX_SYNC_DEFAULT_EVERY_MS,
 } from "../../loops/inbox-loop.ts";
 import { THINKING_LEVELS } from "../../model/pi-models.ts";
@@ -112,10 +111,6 @@ async function listItems(ctx: ApiCtx): Promise<void> {
   if (wanted !== null && !isLedgerState(wanted)) {
     return sendJson(ctx.res, 400, { error: "bad_request", message: "unknown state filter" });
   }
-  if (loop.surface?.startsWith("inbox:") && loop.owner === loaded.acting.actorId) {
-    const openMail = (await deps.items.byLoop(loop.id)).filter((item) => !isResolved(item) && item.source === "gmail");
-    await ctx.deps.inboxSourceRefresh?.(loop.owner, openMail);
-  }
   const all = sortLedgerItems(await deps.items.byLoop(loop.id), loop);
   const items = wanted === null ? all : all.filter((item) => ledgerState(item) === wanted);
   const counts: Record<string, number> = {};
@@ -144,25 +139,15 @@ async function ingestItems(ctx: ApiCtx): Promise<void> {
   const sessionId = ctx.capability.threadRef
     ? ((await ctx.deps.sessions?.getByThread(ctx.capability.threadRef))?.id ?? undefined)
     : undefined;
-  const classifyInboxEmail =
-    loop.surface === "inbox:gmail" &&
-    loop.ownerScopeId === scopeId("personal", loop.owner) &&
-    (await inboxPreviewEnabled(ctx.deps, loop.owner));
   const entries: IngestEntryInput[] = [];
   for (const [at, raw] of body.items.entries()) {
     const parsed = parseIngestEntry(loop, raw);
     if ("error" in parsed) {
       return sendJson(ctx.res, 400, { error: "bad_request", message: `items[${at}]: ${parsed.error}` });
     }
-    if (classifyInboxEmail && parsed.source === "gmail" && isObj(raw)) {
-      for (const key of ["automated", "probablyResolved"])
-        if (typeof raw[key] === "boolean") parsed.sourcePayload[key] = raw[key];
-    }
     entries.push(sessionId && parsed.proposal ? { ...parsed, proposal: { ...parsed.proposal, sessionId } } : parsed);
   }
-  const outcome = await deps.items.ingest(entries);
-  await deps.items.prune(loop.id, { maxItems: INBOX_LEDGER_MAX_ITEMS, retentionMs: INBOX_LEDGER_RETENTION_MS });
-  sendJson(ctx.res, 200, outcome);
+  sendJson(ctx.res, 200, await deps.items.ingest(entries));
 }
 
 async function loadItem(
@@ -244,12 +229,6 @@ async function serveItemImage(ctx: ApiCtx): Promise<void> {
 async function getItem(ctx: ApiCtx): Promise<void> {
   const loaded = await loadItem(ctx);
   if (!loaded) return;
-  if (
-    ctx.url.searchParams.get("refreshSource") === "1" &&
-    loaded.loop.surface?.startsWith("inbox:") &&
-    loaded.loop.owner === loaded.actorId
-  )
-    await ctx.deps.inboxSourceRefresh?.(loaded.loop.owner, [loaded.item]);
   sendJson(ctx.res, 200, {
     item: ledgerItemView((await loaded.deps.items.get(loaded.item.id)) ?? loaded.item, loaded.loop, !!ctx.capability),
     outputs: (await loaded.deps.outputs.byItem(loaded.item.id)).filter((output) => output.loopId === loaded.loop.id),
@@ -573,8 +552,7 @@ async function ensureInboxSyncCron(ctx: ApiCtx): Promise<void> {
     for (const loop of targets) {
       const sync = async () => {
         const current = (await deps.store.get(loop.id)) ?? loop;
-        const source = current.sources![0]!;
-        const task = renderSourceInboxTask(loop.id, source);
+        const task = inboxSyncCronAction(inboxSource(current) ?? "gmail");
         let cron = current.cronId ? await ctx.app.getCron(current.cronId) : null;
         if (!cron && enable) {
           cron = await ctx.app.createCron({

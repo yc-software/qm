@@ -1,5 +1,4 @@
-import { isModelProvider, type ModelProvider } from "../../../model/model-credential-store.ts";
-import { providerBaseUrl } from "../../../model/provider-endpoints.ts";
+import { isModelProvider, providerBaseUrl, type ModelProvider } from "../../../model/provider-endpoints.ts";
 import { cachedModelCatalog, selectableModelCatalog } from "../../../model/model-catalog.ts";
 import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";

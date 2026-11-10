@@ -1,4 +1,5 @@
 import { externalSlackRequestAllowed } from "../resolution/external-slack.ts";
+import { createPersonNames } from "../identity/person-names.ts";
 import { turnModelRefusal } from "./runtime-config.ts";
 import type { Run } from "../runs/run-store.ts";
 import {
@@ -153,7 +154,12 @@ export function createTurnMethods(
         };
       await deps.refreshModels?.();
       await deps.identity.refresh();
-      const actor: Principal = deps.identity.resolve(req.actor);
+      const personNames = createPersonNames({ users: deps.users });
+      const withStoredNames = async (people: Principal[]): Promise<Principal[]> => {
+        const names = await personNames.storedNames(people.filter((p) => !p.displayName?.trim()).map((p) => p.id));
+        return people.map((p) => (names.has(p.id) ? { ...p, displayName: names.get(p.id)! } : p));
+      };
+      const [actor] = (await withStoredNames([deps.identity.resolve(req.actor)])) as [Principal];
       if (!deps.identity.isInternal(actor)) {
         return {
           status: "refused",
@@ -251,11 +257,13 @@ export function createTurnMethods(
       const rawAudience = req.conversation.audience ?? [req.actor];
       const audience: Principal[] =
         project?.audience ??
-        rawAudience.map((a) => {
-          const p = deps.identity.classify(a.externalId, a.isExternalGuest);
-          if (p.id === actor.id) return actor;
-          return a.displayName ? { ...p, displayName: a.displayName } : p;
-        });
+        (await withStoredNames(
+          rawAudience.map((a) => {
+            const p = deps.identity.classify(a.externalId, a.isExternalGuest);
+            if (p.id === actor.id) return actor;
+            return a.displayName ? { ...p, displayName: a.displayName } : p;
+          }),
+        ));
       if (!audience.some((p) => p.id === actor.id)) audience.push(actor);
 
       const publishMembers =
@@ -510,7 +518,7 @@ export function createTurnMethods(
       const { run, deduped } = enqueued;
       if (deduped && redeliveryKey && run.dedupKey === redeliveryKey) return { status: "silent" };
       if (spineRouted && !deduped) markTriggerHandled(input as OrchestratorInput);
-      if (spineRouted) deps.engaged?.engage(conversation.threadRef);
+      if (spineRouted) deps.engaged?.engage({ tenantId: run.tenantId, threadRef: conversation.threadRef });
       const terminalResult = deduped && isTerminal(run.status) ? run.result : null;
       if (req.async && !terminalResult) return { status: "queued", runId: run.id };
       const result = terminalResult ? await withAdminLink(terminalResult) : await awaitRun(run.id);
@@ -540,7 +548,7 @@ export function createTurnMethods(
       };
       const onResync = opts?.onResync;
       return deps.sessionStateBus.subscribe(
-        (event) => queue(async () => cb(await rehydrate(event))),
+        ({ tenantId: _tenant, ...event }) => queue(async () => cb(await rehydrate(event))),
         onResync ? { onResync: () => queue(onResync) } : undefined,
       );
     },
@@ -571,12 +579,9 @@ export function createTurnMethods(
 
     subscribeRun(runId, listener, onResync) {
       return (
-        deps.runStreamEvents?.subscribe(
-          (event) => {
-            if (event.runId === runId) listener(event);
-          },
-          { onResync },
-        ) ?? (() => {})
+        deps.runStreamEvents?.subscribe((event) => (event.runId === runId ? listener(event) : undefined), {
+          onResync,
+        }) ?? (() => {})
       );
     },
 
@@ -598,8 +603,11 @@ export function createTurnMethods(
       const replyComplete = deps.turnStream?.isReplyDone(runId) ?? false;
       const activity = await deps.runActivity?.list(runId);
       const reasoning = deps.turnStream?.reasoning(runId) ?? [];
+      const plannedRequeue = run.lastStop?.kind === "parked" || run.lastStop?.kind === "shutdown";
       const stale =
-        run.status === "pending" ? run.attempts > 0 : !alive && leaseLapsed(run, Date.now() - STALE_LEASE_GRACE_MS);
+        run.status === "pending"
+          ? run.attempts > 0 && !plannedRequeue
+          : !alive && leaseLapsed(run, Date.now() - STALE_LEASE_GRACE_MS);
       return {
         desktopClientId: desktopClientForTurn({ ...run.request, attempt: run.attempts }),
         status: run.status,

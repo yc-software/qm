@@ -1,9 +1,9 @@
 import { escapeSlackText } from "./mrkdwn.ts";
 import { extractPrivateContinuation } from "./external-access.ts";
 import { deployAccessMessage } from "./deploy-access.ts";
-import { approvalDeliveryKey, approvalDeliveryRecipient } from "./approval-store.ts";
+import { approvalDeliveryKey } from "./approval-store.ts";
 import { samePerson } from "../directory/person.ts";
-import { approvalMessage } from "./approval-cards.ts";
+import { approvalDeliveryRecipient, approvalMessage, type ApprovalRequester } from "./approval-cards.ts";
 import { deliverKeychainCard } from "./keychain-approvals.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { performance } from "node:perf_hooks";
@@ -463,9 +463,7 @@ export function createDeliveryPoller(deps: {
               const commandApproval = d.destination.commandApprovalId
                 ? await core.getApproval(d.destination.commandApprovalId)
                 : null;
-              const requester = approvalDeliveryRecipient(
-                commandApproval?.request?.actor as { externalId?: string } | undefined,
-              );
+              const requester = approvalDeliveryRecipient(commandApproval?.request as ApprovalRequester | undefined);
               if (
                 d.destination.commandApprovalId &&
                 (!commandApproval ||

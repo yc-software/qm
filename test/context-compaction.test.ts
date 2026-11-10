@@ -37,6 +37,7 @@ import { type Item, type NewItem, storedItem } from "../src/sessions/items.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { scopeId, type Conversation, type Principal } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { orchestratorTestDeps } from "./support/orchestrator-deps.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresErrorLog } from "../src/admin/postgres-error-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
@@ -116,7 +117,7 @@ function buildOrchestrator(
     acl,
   });
   const orch = createOrchestrator({
-    ...singleProcessDeps(),
+    ...orchestratorTestDeps(),
     config,
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     resolution: createResolutionService(ORG, config, acl),
@@ -133,7 +134,7 @@ function buildOrchestrator(
     deploy,
     acl,
     maxContextTokens,
-    defaultTurnWallClockMs,
+    ...(defaultTurnWallClockMs !== undefined ? { defaultTurnWallClockMs } : {}),
     runtime: createRuntimeService(
       { config, baseModelDefault: "claude-sonnet-5" },
       { authorizesCapabilityScope: async () => true },

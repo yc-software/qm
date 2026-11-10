@@ -219,15 +219,6 @@ test("bumpActivity is a no-op when no row matches the threadRef", () => {
   assert.deepEqual(bumpActivity(list, "web:u:missing", 999), list);
 });
 
-test("bumpActivity sets the sent text as the last message only on rows that carry previews", () => {
-  const list = [saved("1", "web:u:x"), { ...saved("2", "web:u:y"), lastUserPreview: null }];
-  const plain = bumpActivity(list, "web:u:x", 5, "hello");
-  assert.equal("lastUserPreview" in plain.find((s) => s.id === "1")!, false);
-  const flagged = bumpActivity(list, "web:u:y", 5, "hello there");
-  assert.equal(flagged.find((s) => s.id === "2")!.lastUserPreview, "hello there");
-  assert.equal(bumpActivity(list, "web:u:y", 5, "   ").find((s) => s.id === "2")!.lastUserPreview, null);
-});
-
 test("activityOf prefers lastActivityAt, falling back to createdAt", () => {
   assert.equal(activityOf(saved("1", "web:u:x")), 1, "no lastActivityAt -> createdAt (createdAt is 1 here)");
   assert.equal(activityOf({ ...saved("2", "web:u:y"), lastActivityAt: 999 }), 999, "lastActivityAt wins when present");

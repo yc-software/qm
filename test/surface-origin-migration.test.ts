@@ -6,6 +6,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 import pg from "pg";
 import { RETIRED_ORIGIN_SWEEP_MIGRATION } from "../src/surfaces/origin-migration.ts";
+import { seedTestTenant } from "./support/test-tenant.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 const skip = databaseUrl ? false : "set DATABASE_URL (a Postgres) to run the retired origin sweep tests";
@@ -17,6 +18,7 @@ async function withDatabase(run: (url: string, db: pg.Pool) => Promise<void>): P
   await parent.query(`CREATE DATABASE ${name}`);
   const url = new URL(databaseUrl!);
   url.pathname = `/${name}`;
+  await seedTestTenant(url.toString());
   const db = new pg.Pool({ connectionString: url.toString() });
   try {
     await run(url.toString(), db);
