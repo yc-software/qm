@@ -324,10 +324,10 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
         ).rows[0]?.owns === true;
       if (!owns) throw unmigrated(migration);
     };
-    const ledgerTable = await client.query<{ present: boolean }>("SELECT to_regclass($1) IS NOT NULL AS present", [
+    const ledger = await client.query<{ present: boolean }>("SELECT to_regclass($1) IS NOT NULL AS present", [
       PG_MIGRATIONS_TABLE,
     ]);
-    if (!ledgerTable.rows[0]?.present) {
+    if (!ledger.rows[0]?.present) {
       await mayMigrate(migrations[0]!);
       await client.query(
         `CREATE TABLE IF NOT EXISTS ${PG_MIGRATIONS_TABLE}(
@@ -337,14 +337,24 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
       )`,
       );
     }
-    const ledger = new Map(
+    const known = new Map(
       (
         await client.query<{ id: string; checksum: string }>(`SELECT id, checksum FROM ${PG_MIGRATIONS_TABLE}`)
       ).rows.map((row) => [row.id, row.checksum]),
     );
+    const recorded = async (id: string): Promise<string | undefined> => {
+      if (!known.has(id)) {
+        const row = await client.query<{ checksum: string }>(
+          `SELECT checksum FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`,
+          [id],
+        );
+        if (row.rows[0]) known.set(id, row.rows[0].checksum);
+      }
+      return known.get(id);
+    };
     for (const migration of migrations) {
-      if (migration.upgradeFrom && !ledger.has(migration.upgradeFrom)) continue;
-      const applied = ledger.get(migration.id);
+      if (migration.upgradeFrom && (await recorded(migration.upgradeFrom)) === undefined) continue;
+      const applied = await recorded(migration.id);
       if (applied !== undefined) {
         if (applied !== migration.checksum) {
           throw new Error(
@@ -372,7 +382,6 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
           migration.id,
           migration.checksum,
         ]);
-        ledger.set(migration.id, migration.checksum);
         continue;
       }
       if (migration.statements.some((statement) => concurrentIndexName(statement))) {
@@ -409,7 +418,6 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
           migration.id,
           migration.checksum,
         ]);
-        ledger.set(migration.id, migration.checksum);
         continue;
       }
       await client.query("BEGIN");
@@ -429,7 +437,6 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
           migration.id,
           migration.checksum,
         ]);
-        ledger.set(migration.id, migration.checksum);
         await client.query("COMMIT");
       } catch (error) {
         console.error(`[pg-pool] migration ${migration.id} failed: ${describePgError(error)}`);
