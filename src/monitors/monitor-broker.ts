@@ -1,4 +1,5 @@
 import type { Destination, ScopeId } from "../types.ts";
+import { samePerson } from "../directory/person.ts";
 import type { Monitor } from "../triggers/types.ts";
 import type { MonitorStore } from "./monitor-store.ts";
 import type { ProcessRegistry, ProcessStatus } from "../processes/process-registry.ts";
@@ -139,6 +140,7 @@ export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
           m.enabled &&
           m.processId === processId &&
           m.threadRef === deps.threadRef &&
+          samePerson(m.owner, deps.owner) &&
           Boolean(m.botActor) === Boolean(deps.botActor),
       );
       if (existing) {
