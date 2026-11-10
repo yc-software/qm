@@ -196,3 +196,39 @@ test("the name index migration skips a tenant's duplicate names instead of faili
     }
   }
 });
+
+test(
+  "the current-follows-applied migration points a diverged row's current version back at the applied one",
+  { skip },
+  async () => {
+    const pg = (await import("pg")).default;
+    const owner = new pg.Pool({ connectionString: testBareDatabaseUrl(), max: 1 });
+    try {
+      const reconcile = DEPLOYMENT_TABLES.filter((m) => m.id.endsWith("-current-follows-applied")).map(
+        definePgMigration,
+      );
+      const tables = DEPLOYMENT_TABLES.filter((m) => !m.id.endsWith("-current-follows-applied")).map(definePgMigration);
+      await applyPgMigrations(owner, tables);
+      await owner.query("INSERT INTO tenants DEFAULT VALUES");
+      const tenant = (await owner.query("SELECT id FROM tenants LIMIT 1")).rows[0].id;
+      const rows = { diverged: { currentVersion: 2, appliedVersion: 1 }, legacy: { currentVersion: 3 } };
+      for (const [id, json] of Object.entries(rows))
+        await owner.query("INSERT INTO deployments (tenant_id, id, json) VALUES ($1, $2, $3)", [
+          tenant,
+          `cfa-${id}`,
+          json,
+        ]);
+      await applyPgMigrations(owner, reconcile);
+      const after = await owner.query("SELECT id, json FROM deployments WHERE id LIKE 'cfa-%' ORDER BY id");
+      assert.deepEqual(
+        after.rows.map((r) => [r.id, r.json]),
+        [
+          ["cfa-diverged", { currentVersion: 1, appliedVersion: 1 }],
+          ["cfa-legacy", { currentVersion: 3 }],
+        ],
+      );
+    } finally {
+      await owner.end();
+    }
+  },
+);
