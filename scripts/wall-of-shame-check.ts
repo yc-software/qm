@@ -47,16 +47,11 @@ function overTesting(numstat: string) {
 export function wallOfShameProblems(spec: string, body: string, headSha: string, numstat: string) {
   const computed: Record<string, string | undefined> = { "Over-testing": overTesting(numstat) };
   const report = section(lines(body), "## Wall of shame review report");
-  if (!report)
-    return [
-      "PR description has no `## Wall of shame review report` section.",
-      ...Object.entries(computed).flatMap(([lens, finding]) => (finding ? [`${lens}: ${finding}`] : [])),
-    ];
-  const problems: string[] = [];
-  const reviewed = report.find((line) => line.startsWith("Reviewed commit:"))?.split("`")[1];
-  if (reviewed !== headSha)
+  const problems = report ? [] : ["PR description has no `## Wall of shame review report` section."];
+  const reviewed = report?.find((line) => line.startsWith("Reviewed commit:"))?.split("`")[1];
+  if (report && reviewed !== headSha)
     problems.push(`Reviewed commit is ${reviewed ?? "missing"}, but the PR head is ${headSha}.`);
-  const rows = report
+  const rows = (report ?? [])
     .filter((line) => line.trim().startsWith("|"))
     .map((line) =>
       line
@@ -77,6 +72,7 @@ export function wallOfShameProblems(spec: string, body: string, headSha: string,
       if (computed[lens] && !waived) problems.push(`${lens}: ${computed[lens]}`);
       continue;
     }
+    if (!report) continue;
     if (!verdict) problems.push(`${lens}: no review row.`);
     else if (skipped && always.includes(lens))
       problems.push(`${lens}: always reviewed; triage cannot mark it Not relevant.`);
