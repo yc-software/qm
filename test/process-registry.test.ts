@@ -31,7 +31,7 @@ for (const b of backends()) {
     assert.equal((await reg.liveByScope("personal:U2")).length, 0);
   });
 
-  test(`[${b.name}] expired running sessions are not live; listExpired surfaces them WITHOUT flipping status`, async () => {
+  test(`[${b.name}] expired running sessions are not live; claimExpired surfaces them WITHOUT flipping status`, async () => {
     const reg = b.make();
     await reg.register({
       processId: id(2),
@@ -43,14 +43,14 @@ for (const b of backends()) {
     });
     assert.equal((await reg.liveByScope("s")).length, 0, "an expired session is not live");
 
-    const expired = await reg.listExpired();
+    const expired = await reg.claimExpired();
     assert.equal(expired.length, 1);
-    assert.equal(expired[0]!.processId, id(2));
+    assert.equal(expired[0]!.id, id(2));
     assert.equal((await reg.get(id(2)))!.status, "running", "marking dead happens only after a confirmed kill");
 
     await reg.markStatus(id(2), "reaped");
     assert.equal((await reg.get(id(2)))!.status, "reaped");
-    assert.equal((await reg.listExpired()).length, 0);
+    assert.equal((await reg.claimExpired()).length, 0);
   });
 
   test(`[${b.name}] markStatus and delete`, async () => {
@@ -149,7 +149,7 @@ test("[postgres] honors the registry contract (durable across a restart)", { ski
       ttlMs: -1,
     });
     assert.equal(
-      (await reg2.listExpired()).some((r) => r.processId === id(2)),
+      (await reg2.claimExpired()).some((r) => r.id === id(2)),
       true,
     );
     await reg2.delete(id(1));

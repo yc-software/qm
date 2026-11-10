@@ -1,3 +1,4 @@
+import { externalOrgId } from "../../tenants/external-org.ts";
 import { mintSignedPayload } from "../../auth/signed-token.ts";
 import { orgId } from "../../config.ts";
 import { canonicalPerson } from "../../directory/person.ts";
@@ -62,7 +63,7 @@ async function authorize(ctx: ApiCtx, linkSlack: boolean, callbackUrl: unknown):
       return sendJson(ctx.res, 400, { error: "invalid_callback" });
     }
   }
-  const userId = composioUserId(orgId(), canonicalPerson(access.principal));
+  const userId = composioUserId(externalOrgId(), canonicalPerson(access.principal));
   try {
     const session = await request(ctx, access.key, "/tool_router/session", {
       user_id: userId,
