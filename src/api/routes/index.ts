@@ -1,3 +1,4 @@
+import { bootTenant, inBootTenant } from "../../tenants/boot.ts";
 import { browserModelRoutes } from "./browser-model.ts";
 import { sandboxModelRoutes } from "./sandbox-model.ts";
 import { deploymentLiveSmokeRoutes } from "./deployment-live-smoke.ts";
@@ -60,12 +61,14 @@ export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
     method: "GET",
     path: "/healthz",
     auth: "public",
+    tenant: "none",
     handle: ({ res, deps }) => sendJson(res, deps.draining?.aborted ? 503 : 200, { ok: !deps.draining?.aborted }),
   },
   {
     method: "GET",
     path: "/readyz",
     auth: "public",
+    tenant: "none",
     handle: async ({ res, deps }) => {
       if (deps.draining?.aborted) return sendJson(res, 503, { ok: false });
       const controller = new AbortController();
@@ -77,7 +80,10 @@ export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
         }, 1000);
       });
       try {
-        await Promise.race([Promise.resolve().then(() => deps.checkReadiness?.(controller.signal)), deadline]);
+        await Promise.race([
+          Promise.resolve().then(() => inBootTenant(bootTenant(), () => deps.checkReadiness?.(controller.signal))),
+          deadline,
+        ]);
         sendJson(res, 200, { ok: true });
       } catch {
         sendJson(res, 503, { ok: false });

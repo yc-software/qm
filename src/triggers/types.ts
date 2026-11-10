@@ -7,6 +7,7 @@ export interface TriggerBase {
   owner: string;
   createdBy: string;
   ownerConsentedAt?: number;
+  botActor?: boolean;
   destination?: Destination;
   enabled: boolean;
   createdAt: number;

@@ -31,7 +31,7 @@ export async function swarmFixture(
   const sessions = options.sessions ?? createPostgresSessionStore(testDatabaseUrl());
   const runs = options.runs ?? createPostgresRunStore(testDatabaseUrl()).runs;
   const lock = options.lock ?? testAdvisoryLock();
-  const store = options.store ?? createSwarmStore(testMap(), { runs, sessions });
+  const store = options.store ?? createSwarmStore(testMap(["pending"]), { runs, sessions });
   const records = testMap<SandboxResource>();
   const disks = new Map<string, Map<string, string>>();
   const provisioned: string[] = [];
@@ -134,7 +134,7 @@ export async function swarmFixture(
     return {
       kind: "agent",
       claims: {
-        actorId: actor.id,
+        actorId: run!.request.actor.id,
         scopeId: root.scopeId,
         runId: notification.runId!,
         sessionId: member.sessionId!,
@@ -142,6 +142,7 @@ export async function swarmFixture(
         runLeaseToken: run!.leaseToken!,
         threadRef: member.threadRef,
         exp: Date.now() + 60_000,
+        ...(run!.request.botActor ? { botActor: true } : {}),
       },
     };
   };

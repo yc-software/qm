@@ -4,10 +4,14 @@ import { deploymentShareScope } from "../deploy/email-access.ts";
 import { errMessage } from "../util/errors.ts";
 import { DeployAccessError, type Reach } from "../deploy/deploy-service.ts";
 import { mintDeployGitAccess } from "../deploy/access-token.ts";
+import { appHostLabel } from "../tenants/app-handle.ts";
+import { tenantAppHandle } from "../tenants/settings.ts";
 
 import type { App, AppDeps, ViewerDeployment } from "./app-types.ts";
 import { deploymentView } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
+import type { CapabilityClaims } from "../auth/capability-token.ts";
+import type { Deployment } from "../deploy/deploy-store.ts";
 
 export function createDeploymentMethods(
   deps: AppDeps,
@@ -35,6 +39,8 @@ export function createDeploymentMethods(
   | "setDeploymentPublic"
   | "setDeploymentConnectors"
   | "maintainDeployments"
+  | "publishDueLiveEdits"
+  | "deploymentLiveEdit"
   | "reachDeployment"
   | "deploymentLogsFor"
   | "deploymentGitRepoPath"
@@ -48,6 +54,14 @@ export function createDeploymentMethods(
   | "attachScope"
 > {
   const { effectiveDeploymentPermission, principalCanReadDeployment, principalGitPermission } = h;
+  async function callerGitPermission(
+    d: Deployment,
+    caller: Pick<CapabilityClaims, "actorId" | "botActor">,
+  ): Promise<"read" | "write" | null> {
+    const permission = await principalGitPermission(d, caller.actorId);
+    if (permission !== "write" || caller.botActor !== true) return permission;
+    return (await deps.deploy.canManageDeployment(d.id, caller)) ? "write" : "read";
+  }
   const invitationLock = deps.advisoryLock;
   return {
     deploy(input) {
@@ -82,9 +96,11 @@ export function createDeploymentMethods(
         const grantees = previous.some((g) => g.scope === grantee && g.permission === "read")
           ? previous
           : await deps.deploy.shareDeployment(deployment.id, grantee, "read", { createdBy: actorId }, opts);
-        const appUrl = deps.deployAppsDomain
-          ? `https://${deployment.name ?? deployment.id}.${deps.deployAppsDomain}/`
-          : undefined;
+        const handle = tenantAppHandle();
+        const appUrl =
+          deps.deployAppsDomain && handle
+            ? `https://${appHostLabel(handle, deployment.name ?? deployment.id)}.${deps.deployAppsDomain}/`
+            : undefined;
         if (alreadyShared)
           return { grantees, invitation: { emailSent: false, alreadyShared: true, ...(appUrl ? { appUrl } : {}) } };
         let emailSent = false;
@@ -120,11 +136,11 @@ export function createDeploymentMethods(
     deploymentGrantees(idOrName) {
       return deps.deploy.deploymentGrantees(idOrName);
     },
-    async listDeploymentsForViewer(principalId) {
+    async listDeploymentsForViewer(viewer) {
       const deployments = await deps.deploy.listDeployments();
       const enriched = await Promise.all(
         deployments.map(async (d): Promise<ViewerDeployment | null> => {
-          const permission = await principalGitPermission(d, principalId);
+          const permission = await callerGitPermission(d, viewer);
           return permission ? { ...deploymentView(d), permission } : null;
         }),
       );
@@ -133,15 +149,15 @@ export function createDeploymentMethods(
     effectiveDeploymentPermission(d, principalId) {
       return effectiveDeploymentPermission(d, principalId);
     },
-    async deploymentGitPermissionFor(idOrName, principalId) {
+    async deploymentGitPermissionFor(idOrName, viewer) {
       const deployment = await deps.deploy.getDeployment(idOrName);
-      return deployment ? principalGitPermission(deployment, principalId) : null;
+      return deployment ? callerGitPermission(deployment, viewer) : null;
     },
     rollbackDeployment(id, version, actor) {
       return deps.deploy.rollbackDeployment(id, version, actor ? { actor } : undefined);
     },
-    canManageDeployment(idOrName, callerId, actingScopeId) {
-      return deps.deploy.canManageDeployment(idOrName, callerId, actingScopeId);
+    canManageDeployment(idOrName, caller, actingScopeId) {
+      return deps.deploy.canManageDeployment(idOrName, caller, actingScopeId);
     },
     archiveDeployment(id) {
       return deps.deploy.archiveDeployment(id);
@@ -170,6 +186,12 @@ export function createDeploymentMethods(
     maintainDeployments() {
       return deps.deploy.maintainDeployments();
     },
+    publishDueLiveEdits() {
+      return deps.deploy.publishDueLiveEdits();
+    },
+    deploymentLiveEdit(id) {
+      return deps.deploy.liveEditOf(id);
+    },
     async reachDeployment(id, principalId, opts): Promise<Reach> {
       if (opts?.bypassAcl) return deps.deploy.reachDeployment(id, principalId, opts);
       const deployment = await deps.deploy.getDeployment(id);
@@ -193,15 +215,15 @@ export function createDeploymentMethods(
     runDeploymentGitPush(id, actor, runReceivePack) {
       return deps.deploy.pushGit(id, runReceivePack, actor);
     },
-    async deploymentGitUrlFor(idOrName, principalId, opts) {
+    async deploymentGitUrlFor(idOrName, caller, opts) {
       const d = await deps.deploy.getDeployment(idOrName);
       if (!d) return null;
-      const permission = await principalGitPermission(d, principalId);
+      const permission = await callerGitPermission(d, caller);
       if (!permission) return null;
       const token = await mintDeployGitAccess(opts.secret, {
         deploymentId: d.id,
         permission,
-        principalId,
+        principalId: caller.actorId,
         exp: Date.now() + (opts.ttlMs ?? 60 * 60 * 1000),
       });
       const url = new URL(`/v1/deployments/${encodeURIComponent(d.id)}/git`, opts.baseUrl);

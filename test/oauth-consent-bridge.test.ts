@@ -9,7 +9,7 @@ import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
-import { PROVIDERS, openOAuthState, type FetchLike } from "../src/connectors/oauth.ts";
+import { PROVIDERS, type FetchLike } from "../src/connectors/oauth.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import {
   mintCapabilityToken,
@@ -43,6 +43,7 @@ async function start(
     connectorTokens: built.connectorTokens,
     keychain: built.keychain,
     consentLinks: built.consentLinks,
+    oauthFlows: built.oauthFlows,
     auditLog: built.auditLog,
     oauthEnv,
     oauthFetch: fetchImpl,
@@ -119,9 +120,6 @@ test("mint → intended teammate redeems → callback connects them; the link is
     const consent = new URL(decision.authorizeUrl);
     assert.equal(consent.origin + consent.pathname, PROVIDERS.google!.authUrl);
     assert.equal(consent.searchParams.get("client_id"), "gid");
-    const state = await openOAuthState(consent.searchParams.get("state") ?? "", { secret: SECRET });
-    assert.equal(state.principalId, "U1");
-    assert.equal(state.orgId, "default-org");
 
     const second = await redeem(srv.base, coreRedeemPath(connectPath), "U1");
     assert.equal(

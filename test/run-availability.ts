@@ -8,6 +8,7 @@ import { createMemoryEventBus } from "../src/util/event-bus.ts";
 import { createWorker } from "../src/runs/worker.ts";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { seedTestTenant } from "./support/test-tenant.ts";
 
 const actor = { id: "internal:U1", type: "internal" as const };
 const request: OrchestratorInput = {
@@ -29,8 +30,9 @@ async function isolatedPostgres(): Promise<{ url: string; admin: pg.Pool; cleanu
   const schema = `run_availability_${randomUUID().replaceAll("-", "")}`;
   await admin.query(`CREATE SCHEMA ${schema}`);
   const url = new URL(process.env.DATABASE_URL!);
-  url.searchParams.set("options", `-c search_path=${schema}`);
+  url.searchParams.set("options", `${url.searchParams.get("options") ?? ""} -c search_path=${schema}`.trim());
   url.searchParams.set("application_name", schema);
+  await seedTestTenant(url.toString());
   return {
     url: url.toString(),
     admin,
@@ -136,7 +138,7 @@ test(
     let resyncs = 0;
     const off = reader.runs.subscribeAvailable!(() => notifications++, {
       pollMs: 60_000,
-      onResync: () => resyncs++,
+      onResync: () => void resyncs++,
     });
     const ids: string[] = [];
     try {
