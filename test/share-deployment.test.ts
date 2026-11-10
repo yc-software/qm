@@ -34,6 +34,7 @@ import { bindBootTenant } from "../src/tenants/boot.ts";
 import { TEST_TENANT } from "./support/test-tenant.ts";
 import { companyTest } from "./support/app-handle.ts";
 import { trimTrailingSlashes } from "../src/util/text.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const externalSharingOn = { enabled: async () => true } as unknown as FeatureFlagStore;
 
@@ -459,7 +460,7 @@ test("transferDeploymentOwner re-homes the app to the teammate: they own it, pri
   assert.equal((await deploy.reachDeployment("handover", "U1")).status, "ok", "the giver isn't locked out");
   assert.equal((await deploy.reachDeployment("handover", "U9")).status, "denied");
 
-  assert.equal((await acl.grantsFor(scopeId("personal", "U1"), `deployment:${d.id}`)).length, 0);
+  assert.equal((await acl.grantsFor(tenant, scopeId("personal", "U1"), `deployment:${d.id}`)).length, 0);
 
   await deploy.shareDeployment(d.id, scopeId("personal", "U4"), "read", { createdBy: "V1" });
   assert.equal((await deploy.reachDeployment("handover", "U4")).status, "ok");
@@ -637,7 +638,7 @@ test("with external app sharing off, public links and outside emails are refused
 
   const d = (await app.getDeployment("locked"))!;
   await assert.rejects(
-    app.grant({
+    app.grant(tenant, {
       ownerScopeId: d.ownerScopeId,
       ref: `deployment:${d.id}`,
       granteeScopeId: scopeId("personal", "guest@elsewhere.test"),
@@ -752,6 +753,7 @@ test("exact email read grants admit app-only login and guest reach without membe
     const handle = authBrokerRoutes.find((r) => "path" in r && r.path.endsWith("email-allowed"))!.handle;
     await handle({
       app,
+      tenant,
       deps: { identity, acl, featureFlags },
       url: new URL(`http://core/v1/auth/broker/email-allowed?email=${encodeURIComponent(email)}`),
       res: {
@@ -798,7 +800,7 @@ test("exact email read grants admit app-only login and guest reach without membe
     { ref: "deployment:missing", granteeScopeId: `personal:${email}`, permission: "read" as const },
     { ref: `deployment:${d.id}`, granteeScopeId: "org:default-org" as const, permission: "read" as const },
   ])
-    await acl.grant({ ownerScopeId: "personal:U1", grantedBy: "U1", ...grant });
+    await acl.grant(tenant, { ownerScopeId: "personal:U1", grantedBy: "U1", ...grant });
   assert.deepEqual(
     await allowed(email),
     { allowed: false },

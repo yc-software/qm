@@ -6,6 +6,7 @@ import { createPostgresFileArtifactStore } from "../src/files/postgres-file-arti
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { applyPgMigrations, definePgMigration, migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
 import { seedTestTenant } from "./support/test-tenant.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const BASE = process.env.DATABASE_URL;
 const skip = BASE ? false : "set DATABASE_URL (a Postgres) to run the ACL file-ID migration test";
@@ -70,7 +71,7 @@ test("file grants move from owner paths to enabled Files record IDs", { skip }, 
     await migrateRegisteredPgSchemas(db);
 
     assert.deepEqual(
-      (await grants.find({ ownerScopeId: "personal:U1" })).map((g) => [
+      (await grants.find(tenant, { ownerScopeId: "personal:U1" })).map((g) => [
         g.ref,
         g.granteeScopeId,
         g.permission,

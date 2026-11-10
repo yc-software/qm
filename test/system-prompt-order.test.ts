@@ -51,6 +51,7 @@ import {
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { USER_ITEM_KINDS } from "../src/sessions/items.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
@@ -373,7 +374,7 @@ test("Open advertises the source and audits a carried skill read without grantin
     source: personal,
     target: scopeId("channel", "C1"),
   });
-  assert.deepEqual(await acl.find({ ownerScopeId: personal }), []);
+  assert.deepEqual(await acl.find(tenant, { ownerScopeId: personal }), []);
 });
 
 test("Open keeps unclassified personal memory out of rooms, loads room memory in DMs, and capture stays in the room", async () => {
@@ -906,7 +907,7 @@ test("carried skill and steer screens tell the model gateway which session they 
   );
 
   const steer = () =>
-    orchestrator.screenSecuritySteer({ payload: "[]", actor, conversation, sessionId: result.sessionId });
+    orchestrator.screenSecuritySteer({ tenant, payload: "[]", actor, conversation, sessionId: result.sessionId });
   assert.equal(await steer(), "allow");
   assert.deepEqual(contextHeaders(requests.at(-1)!.headers), turnContext);
   const cron = await sessions.getOrCreateByThread("agent:main:cron:nightly", "channel", scopeId("channel", "C1"));

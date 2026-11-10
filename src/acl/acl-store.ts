@@ -4,6 +4,7 @@ import { parseRef } from "./resource-ref.ts";
 import { samePerson } from "../directory/person.ts";
 import type { ResourceKind } from "./resource-ref.ts";
 import type { FileArtifact, FileArtifactRef } from "../files/file-artifact-store.ts";
+import type { Tenant } from "../tenants/context.ts";
 
 const isFileGrant = (g: Grant) => parseRef(g.ref).kind === "file";
 
@@ -39,8 +40,9 @@ function isMembershipManaged(scopeId: ScopeId): boolean {
 }
 
 export interface AclStore {
-  grant(g: Grant, authoredBy?: string): Promise<void>;
+  grant(tenant: Tenant, g: Grant, authoredBy?: string): Promise<void>;
   revoke(
+    tenant: Tenant,
     ownerScopeId: ScopeId,
     ref: string,
     granteeScopeId: ScopeId,
@@ -48,6 +50,7 @@ export interface AclStore {
     authoredBy?: string,
   ): Promise<void>;
   replaceGrantsIfCurrent(
+    tenant: Tenant,
     ownerScopeId: ScopeId,
     ref: string,
     expected: readonly Grant[],
@@ -55,15 +58,17 @@ export interface AclStore {
     changedBy: string,
     authoredBy?: string,
   ): Promise<boolean>;
-  handlesFor(scopeIds: readonly ScopeId[]): Promise<GrantedHandle[]>;
+  handlesFor(tenant: Tenant, scopeIds: readonly ScopeId[]): Promise<GrantedHandle[]>;
   handlesForAudience(
+    tenant: Tenant,
     audience: readonly Principal[],
     sessionScopeId: ScopeId,
     orgScopeId: ScopeId,
     entitled: ScopeEntitlement,
   ): Promise<GrantedHandle[]>;
-  grantsFor(ownerScopeId: ScopeId, ref: string): Promise<Grant[]>;
+  grantsFor(tenant: Tenant, ownerScopeId: ScopeId, ref: string): Promise<Grant[]>;
   grantsOfKind(
+    tenant: Tenant,
     kind: Exclude<ResourceKind, "file">,
     audience: readonly Principal[],
     sessionScopeId: ScopeId,
@@ -71,13 +76,14 @@ export interface AclStore {
     entitled: ScopeEntitlement,
   ): Promise<Grant[]>;
   sharedOfKindForAudience(
+    tenant: Tenant,
     kind: Exclude<ResourceKind, "file">,
     audience: readonly Principal[],
     sessionScopeId: ScopeId,
     orgScopeId: ScopeId,
     entitled: ScopeEntitlement,
   ): Promise<Grant[]>;
-  find(query: GrantQuery): Promise<Grant[]>;
+  find(tenant: Tenant, query: GrantQuery): Promise<Grant[]>;
 }
 
 type GrantQuery = {
@@ -93,10 +99,11 @@ export interface AclStoreOptions {
 }
 
 export interface GrantPersistence {
-  find(query: GrantQuery): Promise<Grant[]>;
-  put(g: Grant): Promise<void>;
-  remove(g: Grant): Promise<void>;
+  find(tenant: Tenant, query: GrantQuery): Promise<Grant[]>;
+  put(tenant: Tenant, g: Grant): Promise<void>;
+  remove(tenant: Tenant, g: Grant): Promise<void>;
   replaceForResourceIfCurrent(
+    tenant: Tenant,
     ownerScopeId: ScopeId,
     ref: string,
     expected: readonly Grant[],
@@ -162,21 +169,21 @@ export function createAclStore(persist: GrantPersistence, opts: AclStoreOptions 
     return true;
   }
   return {
-    async grant(g, authoredBy) {
+    async grant(tenant, g, authoredBy) {
       if (!(await canManage(g.ownerScopeId, g.grantedBy, authoredBy))) {
         throw new Error("only a manager of this scope may grant access (no transitive re-share)");
       }
       await validateFileGrant(g);
-      await persist.put(g);
+      await persist.put(tenant, g);
     },
-    async revoke(ownerScopeId, ref, granteeScopeId, revokedBy, authoredBy) {
+    async revoke(tenant, ownerScopeId, ref, granteeScopeId, revokedBy, authoredBy) {
       if (!(await canManage(ownerScopeId, revokedBy, authoredBy))) {
         throw new Error("only a manager of this scope may revoke access");
       }
-      const matches = await persist.find({ ownerScopeId, ref, granteeScopeIds: [granteeScopeId] });
-      for (const g of matches) await persist.remove(g);
+      const matches = await persist.find(tenant, { ownerScopeId, ref, granteeScopeIds: [granteeScopeId] });
+      for (const g of matches) await persist.remove(tenant, g);
     },
-    async replaceGrantsIfCurrent(ownerScopeId, ref, expected, replacement, changedBy, authoredBy) {
+    async replaceGrantsIfCurrent(tenant, ownerScopeId, ref, expected, replacement, changedBy, authoredBy) {
       if (!(await canManage(ownerScopeId, changedBy, authoredBy))) {
         throw new Error("only a manager of this scope may replace access grants");
       }
@@ -187,32 +194,32 @@ export function createAclStore(persist: GrantPersistence, opts: AclStoreOptions 
         throw new Error("replacement grants must belong to the selected resource");
       }
       for (const grant of replacement) await validateFileGrant(grant);
-      return persist.replaceForResourceIfCurrent(ownerScopeId, ref, expected, replacement);
+      return persist.replaceForResourceIfCurrent(tenant, ownerScopeId, ref, expected, replacement);
     },
-    async handlesFor(scopeIds) {
-      return handles((await persist.find({ granteeScopeIds: scopeIds })).filter(isFileGrant));
+    async handlesFor(tenant, scopeIds) {
+      return handles((await persist.find(tenant, { granteeScopeIds: scopeIds })).filter(isFileGrant));
     },
-    async handlesForAudience(audience, sessionScopeId, orgScopeId, entitled) {
+    async handlesForAudience(tenant, audience, sessionScopeId, orgScopeId, entitled) {
       if (audience.length === 0) return [];
       const scopes = audienceScopes(audience, sessionScopeId, orgScopeId, entitled);
       const reaches = audienceReaches(scopes);
       return handles(
-        (await persist.find({ granteeScopeIds: union(scopes) })).filter((g) => isFileGrant(g) && reaches(g)),
+        (await persist.find(tenant, { granteeScopeIds: union(scopes) })).filter((g) => isFileGrant(g) && reaches(g)),
       );
     },
-    grantsFor: (ownerScopeId, ref) => persist.find({ ownerScopeId, ref }),
-    async grantsOfKind(kind, audience, sessionScopeId, orgScopeId, entitled) {
+    grantsFor: (tenant, ownerScopeId, ref) => persist.find(tenant, { ownerScopeId, ref }),
+    async grantsOfKind(tenant, kind, audience, sessionScopeId, orgScopeId, entitled) {
       if (audience.length === 0) return [];
       const scopes = audienceScopes(audience, sessionScopeId, orgScopeId, entitled);
-      return (await persist.find({ ownerScopeId: orgScopeId, kind, granteeScopeIds: union(scopes) })).filter((g) =>
-        scopes.every((s) => s.has(g.granteeScopeId)),
+      return (await persist.find(tenant, { ownerScopeId: orgScopeId, kind, granteeScopeIds: union(scopes) })).filter(
+        (g) => scopes.every((s) => s.has(g.granteeScopeId)),
       );
     },
-    async sharedOfKindForAudience(kind, audience, sessionScopeId, orgScopeId, entitled) {
+    async sharedOfKindForAudience(tenant, kind, audience, sessionScopeId, orgScopeId, entitled) {
       if (audience.length === 0) return [];
       const scopes = audienceScopes(audience, sessionScopeId, orgScopeId, entitled);
-      return (await persist.find({ kind, granteeScopeIds: union(scopes) })).filter(audienceReaches(scopes));
+      return (await persist.find(tenant, { kind, granteeScopeIds: union(scopes) })).filter(audienceReaches(scopes));
     },
-    find: (query) => persist.find(query),
+    find: (tenant, query) => persist.find(tenant, query),
   };
 }
