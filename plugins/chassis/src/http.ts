@@ -14,6 +14,7 @@ type ConnectionState = {
   answeredBytes: number;
   served: number;
   error?: string;
+  draining: boolean;
   pending?: { method: string; path: string; trace: string; startedAt: number };
 };
 
@@ -21,13 +22,13 @@ export function logUnansweredCloses(server: Server, label: string): void {
   const states = new WeakMap<Socket, ConnectionState>();
   server.on("connection", (socket: Socket) => {
     const now = Date.now();
-    const state: ConnectionState = { openedAt: now, lastAnsweredAt: now, answeredBytes: 0, served: 0 };
+    const state: ConnectionState = { openedAt: now, lastAnsweredAt: now, answeredBytes: 0, served: 0, draining: false };
     states.set(socket, state);
     socket.on("error", (error: NodeJS.ErrnoException) => (state.error = `${error.code ?? "unknown"} ${error.message}`));
     socket.on("close", () => {
       if (states.get(socket) !== state) return;
       const unreadBytes = socket.bytesRead - state.answeredBytes;
-      if (!state.pending && unreadBytes <= 0) return;
+      if (!state.pending && (unreadBytes <= 0 || state.draining)) return;
       const closedAt = Date.now();
       const request = state.pending
         ? `${state.pending.method} ${state.pending.path} after ${closedAt - state.pending.startedAt}ms trace=${state.pending.trace}`
@@ -58,11 +59,15 @@ export function logUnansweredCloses(server: Server, label: string): void {
       startedAt: Date.now(),
     };
     res.once("finish", () => {
-      if (!req.complete) return void states.delete(req.socket);
       state.pending = undefined;
-      state.answeredBytes = req.socket.bytesRead;
       state.lastAnsweredAt = Date.now();
       state.served += 1;
+      if (req.complete) return void (state.answeredBytes = req.socket.bytesRead);
+      state.draining = true;
+      req.once("end", () => {
+        state.draining = false;
+        state.answeredBytes = req.socket.bytesRead;
+      });
     });
   });
 }

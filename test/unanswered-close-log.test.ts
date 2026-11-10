@@ -11,6 +11,7 @@ async function capture(run: (port: number) => Promise<void>): Promise<string[]> 
   console.warn = (...args: unknown[]) => void lines.push(format(...args));
   const server = createServer((req, res) => {
     if (req.url?.startsWith("/drop")) return void req.socket.destroy();
+    if (req.url === "/unread") return void res.end("answered without reading the body");
     if (req.url === "/too-large") {
       res.writeHead(413, { connection: "close" });
       return void res.end();
@@ -111,4 +112,15 @@ test("upgraded connections and requests answered before their body was read log 
     });
   });
   assert.deepEqual(lines, []);
+});
+
+test("a connection keeps being watched after a request answered without reading its body", async () => {
+  const lines = await capture(async (port) => {
+    await exchange(port, [
+      "POST /unread HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\nhello",
+      "GET /drop HTTP/1.1\r\nHost: x\r\n\r\n",
+    ]);
+  });
+  assert.equal(lines.length, 1);
+  assert.match(lines[0]!, /request=GET \/drop after \d+ms .* served=1 /);
 });
