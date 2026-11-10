@@ -1,4 +1,4 @@
-import { parseProviderBaseUrl, PROVIDER_IDS } from "./provider-endpoints.ts";
+import { isModelProvider, parseProviderBaseUrl } from "./provider-endpoints.ts";
 import { perTenant } from "../tenants/cache.ts";
 import { boundTenant } from "../tenants/context.ts";
 
@@ -24,13 +24,12 @@ export interface CustomProviderSpec {
 }
 
 const SLUG_RE = /^[a-z][a-z0-9-]+$/;
-const RESERVED = new Set<string>(PROVIDER_IDS);
 
 export function validateCustomProviderSpec(spec: CustomProviderSpec): void {
   if (!SLUG_RE.test(spec.id)) {
     throw new Error(`provider id must match ${SLUG_RE} (lowercase slug), got "${spec.id}"`);
   }
-  if (RESERVED.has(spec.id)) throw new Error(`provider id "${spec.id}" is reserved`);
+  if (isModelProvider(spec.id)) throw new Error(`provider id "${spec.id}" is reserved`);
   if (!spec.name.trim()) throw new Error("provider name is required");
   if (!CUSTOM_PROVIDER_PROTOCOLS.includes(spec.protocol)) {
     throw new Error(`protocol must be one of ${CUSTOM_PROVIDER_PROTOCOLS.join(", ")}`);

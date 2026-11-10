@@ -1,9 +1,8 @@
 import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import { MODEL_PROVIDERS, type ModelProvider, type ModelProviderAvailability } from "./pi-models.ts";
+import type { ModelProviderAvailability } from "./pi-models.ts";
+import { MODEL_PROVIDERS, type ModelProvider } from "./provider-endpoints.ts";
 import { validateCustomProviderSpec, type CustomProviderSpec } from "./custom-providers.ts";
-
-export { isModelProvider, type ModelProvider } from "./pi-models.ts";
 
 export interface StoredModelCredential {
   provider: ModelProvider;
