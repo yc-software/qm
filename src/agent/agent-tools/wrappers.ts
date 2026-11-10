@@ -68,6 +68,7 @@ const TOOL_APPROVAL_EXEMPT = new Set(["finish_silently", "tool_search", "mcp_cal
 const STRICT_TOOL_APPROVAL_REASON = "strict posture: this tool call requires human approval";
 const DECLARED_TOOL_APPROVAL_REASON = "this tool asks for approval before each call";
 const APPROVAL_ARGS_MAX_CHARS = 16_000;
+const ARGS_TOO_LONG_REASON = `the arguments are too long to show on an approval card (over ${APPROVAL_ARGS_MAX_CHARS} characters); split the work into smaller calls`;
 
 interface ToolApprovalDeclaration {
   needsApproval?: boolean | ((params: unknown) => boolean | Promise<boolean>);
@@ -126,30 +127,34 @@ function declaredToolCallApproval(toolName: string, params: Record<string, unkno
   );
 }
 
-/** A sandbox command hit a connector tool that needs the person's approval for each call. Raise the same card the agent would get by calling it directly, and pause the turn after the current tool call. False when this turn can't show it: the tool isn't one of this turn's connector tools, or it doesn't need approval for these arguments. */
+export type RequestedApprovalOutcome = { card: string } | { refused: string };
+
+/** A sandbox command hit a connector tool that needs the person's approval for each call. Raise the same card the agent would get by calling it directly, and pause the turn after the current tool call; otherwise say why this turn can't. */
 export async function raiseRequestedToolApproval(
   ref: ToolContextRef,
   tools: ReadonlyArray<{ name: string }>,
   request: { tool?: string; input?: Record<string, unknown> },
-): Promise<boolean> {
+): Promise<RequestedApprovalOutcome> {
   const tc = ref.current;
   const pending = ref.pendingApprovals;
   const { tool, input } = request;
-  if (!tc || !pending || typeof tool !== "string" || !isObj(input)) return false;
-  if (TOOL_APPROVAL_EXEMPT.has(tool) || !tools.some((t) => t.name === tool || t.name === "mcp_call")) return false;
+  if (!tc || !pending) return { refused: "this turn can't show approval cards" };
+  if (typeof tool !== "string" || !isObj(input)) return { refused: "the request names no tool call" };
+  if (TOOL_APPROVAL_EXEMPT.has(tool) || !tools.some((t) => t.name === tool || t.name === "mcp_call"))
+    return { refused: `${tool} isn't one of this turn's connector tools` };
   let needed: boolean;
   try {
     needed = await tc.mcpToolNeedsApproval(tool, input);
   } catch (error) {
-    swallow("tool approval: sandbox-requested approval check", error);
-    return false;
+    reportFailure("tool approval: sandbox-requested approval check", error, tool);
+    return { refused: `could not check whether this call needs approval: ${errMessage(error)}` };
   }
-  if (!needed) return false;
+  if (!needed) return { refused: "this call doesn't need approval" };
   const approval = declaredToolCallApproval(tool, input);
-  if (!approval) return false;
+  if (!approval) return { refused: ARGS_TOO_LONG_REASON };
   if (!pending.some((p) => p.approvalKey === approval.approvalKey)) pending.push(approval);
   ref.pausedOnApproval = true;
-  return true;
+  return { card: approvalCardId(approval.approvalKey!) };
 }
 
 export function withToolApprovalGate(
@@ -194,7 +199,7 @@ export function withToolApprovalGate(
       }
       const callKey = declaredReason ? toolCallApprovalKey(approvalIdentity, params) : undefined;
       if (callKey && canonicalJson(params ?? {}).length > APPROVAL_ARGS_MAX_CHARS) {
-        const reason = `the arguments are too long to show on an approval card (over ${APPROVAL_ARGS_MAX_CHARS} characters); split the work into smaller calls`;
+        const reason = ARGS_TOO_LONG_REASON;
         await recordCall(callId, { tool: tool.name, blocked: "approval_args_too_long" });
         return recordResult(
           callId,

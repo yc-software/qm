@@ -723,41 +723,37 @@ test("a queued steer remains durable until its native intake acknowledges it", a
   assert.deepEqual(await store.pending("intake"), []);
 });
 
-test("startSignalPoll: an approval request is taken only when the run raises its card", async () => {
+test("startSignalPoll: an approval request is answered to its sender, never treated as a steer", async () => {
   const store = signalStore();
-  await store.send("ar1", { kind: "approval_request", tool: "records", input: { operation: "invoke" } });
+  await store.send("ar1", {
+    kind: "approval_request",
+    tool: "records",
+    input: { operation: "invoke" },
+    dedupeKey: "req-1",
+  });
   const seen: string[] = [];
-  const declining = startSignalPoll(
+  const poll = startSignalPoll(
     store,
     "ar1",
     {
       onSteer: async () => void seen.push("steer"),
       onAbort: async () => {},
-      onApprovalRequest: async (request) => (seen.push(`ask:${request.tool}`), false),
+      onApprovalRequest: async (request) => {
+        seen.push(`ask:${request.tool}`);
+        return { content: "approval card abc raised", structured: { card: "abc" } };
+      },
     },
     { intervalMs: 20 },
   );
-  await until(() => seen.length >= 1);
-  await declining();
-  assert.deepEqual(seen, ["ask:records"], "declined once, never treated as a steer");
-  assert.equal((await store.pending("ar1")).length, 1, "a declined request stays for its sender to withdraw");
-  const unhandled = startSignalPoll(
-    store,
-    "ar1",
-    { onSteer: async () => {}, onAbort: async () => {} },
-    { intervalMs: 20 },
-  );
-  await sleep(80);
-  await unhandled();
-  assert.equal((await store.pending("ar1")).length, 1, "a run without a handler leaves it pending");
-  const taking = startSignalPoll(
-    store,
-    "ar1",
-    { onSteer: async () => {}, onAbort: async () => {}, onApprovalRequest: async () => true },
-    { intervalMs: 20 },
-  );
-  const deadline = Date.now() + 3_000;
-  while ((await store.pending("ar1")).length && Date.now() < deadline) await sleep(20);
-  await taking();
-  assert.deepEqual(await store.pending("ar1"), [], "taken requests are consumed");
+  const answer = await waitForClientResult(store, "ar1", "req-1", { timeoutMs: 3_000 });
+  await poll();
+  assert.deepEqual(answer, { content: "approval card abc raised", structured: { card: "abc" } });
+  assert.deepEqual(seen, ["ask:records"]);
+  assert.deepEqual(await store.pending("ar1"), [], "the request and its answer are both consumed");
+
+  await store.send("ar2", { kind: "approval_request", tool: "records", input: {}, dedupeKey: "req-2" });
+  const bare = startSignalPoll(store, "ar2", { onSteer: async () => {}, onAbort: async () => {} }, { intervalMs: 20 });
+  const refused = await waitForClientResult(store, "ar2", "req-2", { timeoutMs: 3_000 });
+  await bare();
+  assert.deepEqual(refused, { content: "this run can't show approval cards", isError: true });
 });

@@ -93,7 +93,8 @@ export const SIGNAL_POLL_MS = 5_000;
 export interface SignalPollHandlers {
   onSteer(text: string, ts?: string, request?: TurnRequest, acknowledge?: () => Promise<void>): Promise<void | boolean>;
   onAbort(stop: RunSignal): Promise<void>;
-  onApprovalRequest?(request: RunSignal): Promise<boolean>;
+  /** Answers a sandbox command's approval request; the answer reaches the waiting sender as a client_result keyed by the request's dedupeKey. */
+  onApprovalRequest?(request: RunSignal): Promise<ClientToolResult>;
 }
 
 export function startSignalPoll(
@@ -136,9 +137,17 @@ export function startSignalPoll(
         if (s.kind === "abort" || s.kind === "client_result" || declined.has(id)) continue;
         if (s.kind === "approval_request") {
           try {
-            if (handlers.onApprovalRequest && (await handlers.onApprovalRequest(s)))
-              await signals.acknowledge(runId, id);
-            else declined.add(id);
+            const answer = handlers.onApprovalRequest
+              ? await handlers.onApprovalRequest(s)
+              : { content: "this run can't show approval cards", isError: true };
+            if (s.dedupeKey)
+              await signals.send(runId, {
+                kind: "client_result",
+                callId: s.dedupeKey,
+                result: answer,
+                dedupeKey: `${s.dedupeKey}:answer`,
+              });
+            await signals.acknowledge(runId, id);
           } catch (e) {
             declined.add(id);
             opts?.onError?.(e);

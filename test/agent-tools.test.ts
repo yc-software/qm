@@ -6,6 +6,7 @@ import { Check } from "typebox/value";
 import { fromJSONSchema, z, type ZodObject } from "zod";
 import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/agent/agent-tools.ts";
 import { raiseRequestedToolApproval } from "../src/agent/agent-tools/wrappers.ts";
+import { approvalCardId } from "../src/core/approval-id.ts";
 import { surfaceToolPrompt } from "../src/surfaces/registry.ts";
 import { reconcile } from "../src/core/turn-resume.ts";
 import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
@@ -4643,9 +4644,10 @@ test("a sandbox-requested approval raises the card the direct call would, and ap
     toolApprovalGate: (_tool, callKey) => !callKey || approved.has(callKey),
   };
   const tools = catalogTools(ref);
-  assert.equal(await raiseRequestedToolApproval(ref, tools, { tool: "records", input: send }), true);
-  assert.equal(await raiseRequestedToolApproval(ref, tools, { tool: "records", input: send }), true);
+  const first = await raiseRequestedToolApproval(ref, tools, { tool: "records", input: send });
+  assert.deepEqual(await raiseRequestedToolApproval(ref, tools, { tool: "records", input: send }), first);
   assert.deepEqual(ref.pendingApprovals, direct.pendingApprovals, "one card, identical to the direct call's");
+  assert.deepEqual(first, { card: approvalCardId(direct.pendingApprovals![0]!.approvalKey!) });
   assert.equal(ref.pausedOnApproval, true);
   assert.deepEqual(calls, [], "raising the card runs nothing");
   const card = ref.pendingApprovals!.at(-1)!;
@@ -4659,23 +4661,28 @@ test("a sandbox-requested approval raises the card the direct call would, and ap
 
   const refused: ToolContextRef = { current: context([]), pendingApprovals: [] };
   const refusedTools = catalogTools(refused);
+  const reasons = [];
   for (const request of [
     { tool: "records", input: { operation: "invoke", tool: "find", arguments: {} } },
     { tool: "elsewhere", input: send },
     { tool: "records" },
     { tool: "records", input: { ...send, arguments: { note: "x".repeat(20_000) } } },
   ])
-    assert.equal(
-      await raiseRequestedToolApproval(refused, refusedTools, request),
-      false,
-      JSON.stringify(request).slice(0, 80),
-    );
+    reasons.push(await raiseRequestedToolApproval(refused, refusedTools, request));
+  assert.deepEqual(reasons, [
+    { refused: "this call doesn't need approval" },
+    { refused: "elsewhere isn't one of this turn's connector tools" },
+    { refused: "the request names no tool call" },
+    {
+      refused:
+        "the arguments are too long to show on an approval card (over 16000 characters); split the work into smaller calls",
+    },
+  ]);
   assert.deepEqual(refused.pendingApprovals, []);
   assert.equal(refused.pausedOnApproval, undefined);
-  assert.equal(
+  assert.deepEqual(
     await raiseRequestedToolApproval({ current: context([]) }, refusedTools, { tool: "records", input: send }),
-    false,
-    "a turn that can't hold approvals refuses",
+    { refused: "this turn can't show approval cards" },
   );
 });
 

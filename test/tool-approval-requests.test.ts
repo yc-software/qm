@@ -12,12 +12,11 @@ import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { CAPABILITY_TTL_MS, CONTROL_PLANE_AUD, mintCapabilityToken } from "../src/auth/capability-token.ts";
 import { startSignalPoll, type RunSignal } from "../src/runs/run-signal-store.ts";
-import { approvalCardId, toolCallApprovalKey } from "../src/core/approval-id.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, type ClientToolResult } from "../src/types.ts";
 
 const SECRET = "tool-approval-requests-secret!!".repeat(2);
 
-test("a sandbox command's approval request reaches the live run, and is withdrawn when no run takes it", async () => {
+test("a sandbox command's approval request reaches the live run, and is refused with the run\'s reason or withdrawn when no run answers", async () => {
   const built = buildApp(
     testConfig({
       signingSecret: SECRET,
@@ -71,45 +70,49 @@ test("a sandbox command's approval request reaches the live run, and is withdraw
     assert.equal(((await noTurn.json()) as { error: string }).error, "no_live_turn");
     assert.equal((await post({ tool: "records" }, live)).status, 400);
 
-    const taken: RunSignal[] = [];
-    const stopTaking = startSignalPoll(
-      built.signals,
-      runId,
-      {
-        onSteer: async () => {},
-        onAbort: async () => {},
-        onApprovalRequest: async (request) => (taken.push(request), true),
-      },
-      { intervalMs: 20 },
-    );
-    const raised = await post({ tool: "records", input }, live);
-    await stopTaking();
-    assert.equal(raised.status, 200);
-    assert.deepEqual(await raised.json(), {
-      status: "pending_approval",
-      card: approvalCardId(toolCallApprovalKey("records", input)),
+    const answering = (answer: (request: RunSignal) => ClientToolResult) =>
+      startSignalPoll(
+        built.signals,
+        runId,
+        { onSteer: async () => {}, onAbort: async () => {}, onApprovalRequest: async (request) => answer(request) },
+        { intervalMs: 20 },
+      );
+    const asked: RunSignal[] = [];
+    const raising = answering((request) => {
+      asked.push(request);
+      return { content: "approval card abc123 raised", structured: { card: "abc123" } };
     });
+    const raised = await post({ tool: "records", input }, live);
+    await raising();
+    assert.equal(raised.status, 200);
+    assert.deepEqual(await raised.json(), { status: "pending_approval", card: "abc123" });
     assert.deepEqual(
-      taken.map(({ tool, input: args }) => ({ tool, input: args })),
+      asked.map(({ tool, input: args }) => ({ tool, input: args })),
       [{ tool: "records", input }],
     );
 
-    const stopDeclining = startSignalPoll(
-      built.signals,
-      runId,
-      { onSteer: async () => {}, onAbort: async () => {}, onApprovalRequest: async () => false },
-      { intervalMs: 20 },
+    const declining = answering(() => ({ content: "this call doesn't need approval", isError: true }));
+    const declined = await post({ tool: "records", input }, live);
+    await declining();
+    assert.equal(declined.status, 409);
+    assert.deepEqual(await declined.json(), {
+      error: "not_raised",
+      message: "QM could not show an approval card for this call: this call doesn't need approval",
+    });
+
+    const unanswered = await post({ tool: "records", input }, live);
+    assert.equal(unanswered.status, 409);
+    assert.equal(
+      ((await unanswered.json()) as { message: string }).message,
+      "QM could not show an approval card for this call: no live turn answered",
     );
-    const refused = post({ tool: "records", input }, live);
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.deepEqual(await built.signals.pending(runId), [], "the unanswered request was withdrawn");
+
     const claimed = (await built.runs.claim("w1", 60_000))[0]!;
     await built.runs.complete(runId, claimed.leaseToken!, { status: "ok", reply: "done" });
-    const answer = await refused;
-    await stopDeclining();
-    assert.equal(answer.status, 409);
-    assert.equal(((await answer.json()) as { error: string }).error, "not_raised");
-    assert.deepEqual(await built.signals.pending(runId), [], "the unanswered request was withdrawn");
-    assert.equal((await post({ tool: "records", input }, live)).status, 409, "an ended turn refuses up front");
+    const ended = await post({ tool: "records", input }, live);
+    assert.equal(ended.status, 409);
+    assert.equal(((await ended.json()) as { error: string }).error, "no_live_turn", "an ended turn refuses up front");
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }

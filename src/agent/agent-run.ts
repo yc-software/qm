@@ -838,8 +838,13 @@ export function createAgent(opts?: AgentOptions): Agent {
                     await entry.agentSession.abort();
                   },
                   onApprovalRequest: async (request) => {
-                    if (!entry.agentSession.isStreaming || toolAbort.signal.aborted) return false;
-                    return raiseRequestedToolApproval(entry.ref, tools, request);
+                    const outcome =
+                      !entry.agentSession.isStreaming || toolAbort.signal.aborted
+                        ? { refused: "this turn has stopped running" }
+                        : await raiseRequestedToolApproval(entry.ref, tools, request);
+                    return "card" in outcome
+                      ? { content: `approval card ${outcome.card} raised`, structured: outcome }
+                      : { content: outcome.refused, isError: true };
                   },
                 },
                 { onError: (e) => swallow("pi: run signal poll", e) },
