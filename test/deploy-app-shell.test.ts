@@ -367,7 +367,7 @@ test("app shell: a manager from the creation scope can load the app and its asse
       [{ channelId: "CBUILT", name: "builders", isPrivate: true }],
       [{ channelId: "CBUILT", principalId: "U2" }],
     );
-    assert.equal(await f.app.canManageDeployment("mysite", "U2"), true);
+    assert.equal(await f.app.canManageDeployment("mysite", { actorId: "U2" }), true);
     assert.equal((await f.app.reachDeployment("mysite", "U2")).status, "denied");
     const headers = { Host: HOST, Cookie: `portal_session=${mintPortalSession("U2")}` };
     const page = await httpGet(f.port, "/", { ...headers, "Sec-Fetch-Dest": "document" });

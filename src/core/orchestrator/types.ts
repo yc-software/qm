@@ -211,4 +211,10 @@ export interface Orchestrator {
     verifiedSwarm?: boolean;
   }): Promise<"allow" | "block" | "unscreened">;
   regenerateTitle(sessionId: string, principalId: string, personal?: boolean): Promise<{ title: string | null } | null>;
+  suggestNextPrompt(sessionId: string, principalId: string): Promise<NextPromptSuggestion | null>;
+}
+
+interface NextPromptSuggestion {
+  enabled: boolean;
+  suggestion: string | null;
 }

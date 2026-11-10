@@ -48,6 +48,7 @@ import {
   sanitizeTitle,
   titleUserPrompt,
 } from "./session-title-prompt.ts";
+import { NEXT_PROMPT_MODEL_ID, NEXT_PROMPT_PROMPT } from "./next-prompt-prompt.ts";
 import { providerTurnError } from "../model/provider-error.ts";
 import { asError, reportFailure, swallow, swallowAs } from "../util/errors.ts";
 import { startPhase } from "../../plugins/chassis/src/error-reporting.ts";
@@ -1171,6 +1172,19 @@ export function createAgent(opts?: AgentOptions): Agent {
         { modelGateway: route.gateway, purpose: "title" },
       );
       return sanitizeTitle(out, descriptive);
+    },
+
+    async suggestNextPrompt(transcript: string): Promise<string | undefined> {
+      const route = await utilityRoute(NEXT_PROMPT_MODEL_ID);
+      if (!route) return undefined;
+      const runtime = await buildModelRuntime(route.keys, route.gateway, "next_prompt");
+      const reply = await runtime.completeSimple(
+        route.model,
+        { systemPrompt: NEXT_PROMPT_PROMPT, messages: [{ role: "user", content: transcript, timestamp: Date.now() }] },
+        { reasoning: "minimal" },
+      );
+      if (reply.stopReason === "error") throw providerTurnError(reply);
+      return reply.content.find((block) => block.type === "text")?.text.trim() || undefined;
     },
 
     async summarizeApproval(command: string, reason: string, purpose?: string): Promise<string | undefined> {

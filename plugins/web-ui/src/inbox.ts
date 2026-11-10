@@ -1801,7 +1801,9 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
   const resolvedItems = allOpen.filter((item) => item.verdict?.state === "resolved");
   const openItems = allOpen.filter((item) => item.verdict?.state !== "resolved");
   const showFilter = surface.viewId !== "sent";
-  let emptyMessage = "No messages in this view yet. Sync to check for new messages.";
+  let emptyMessage = syncLoops(surface.viewId).some((loop) => loop.syncCron)
+    ? "No messages in this view yet. Sync to check for new messages."
+    : "Nothing here needs your attention.";
   if (showFilter && inboxState.filter === "triaged")
     emptyMessage = "Nothing is waiting on you. Choose People or Everything to see more conversations.";
   if (surface.viewId === "sent") emptyMessage = "No sent messages yet. Sent Email and Slack replies will appear here.";

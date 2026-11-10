@@ -417,6 +417,10 @@ export interface App {
     },
   ): Promise<Session | null>;
   regenerateTitle(sessionId: string, principalId: string): Promise<{ title: string | null } | null>;
+  suggestNextPrompt(
+    sessionId: string,
+    principalId: string,
+  ): Promise<{ enabled: boolean; suggestion: string | null } | null>;
   detachSession(sessionId: string, principalId: string): Promise<{ detached: true } | null>;
   cancelSessionGoal(
     sessionId: string,
@@ -564,9 +568,12 @@ export interface App {
   redeploy(id: string, input: RedeployInput): Promise<Deployment>;
   listDeployments(): Promise<Deployment[]>;
   getDeployment(idOrName: string): Promise<Deployment | null>;
-  listDeploymentsForViewer(principalId: string): Promise<ViewerDeployment[]>;
+  listDeploymentsForViewer(viewer: Pick<CapabilityClaims, "actorId" | "botActor">): Promise<ViewerDeployment[]>;
   effectiveDeploymentPermission(d: Deployment, principalId: string): Promise<Permission | null>;
-  deploymentGitPermissionFor(idOrName: string, principalId: string): Promise<"read" | "write" | null>;
+  deploymentGitPermissionFor(
+    idOrName: string,
+    viewer: Pick<CapabilityClaims, "actorId" | "botActor">,
+  ): Promise<"read" | "write" | null>;
   listSkills(): Promise<Skill[]>;
   getSkill(id: string): Promise<Skill | null>;
   archiveSkill(id: string): Promise<Skill>;
@@ -578,7 +585,11 @@ export interface App {
     patch: { description?: string; body?: string },
     opts?: { liveActor?: boolean },
   ): Promise<Skill | "trigger_blocked" | null>;
-  restoreOwnedSkill(id: string, principalId: string): Promise<Skill | "exists" | null>;
+  restoreOwnedSkill(
+    id: string,
+    principalId: string,
+    opts?: { liveActor?: boolean },
+  ): Promise<Skill | "exists" | "trigger_blocked" | null>;
   listSkillPacks(): Promise<SkillPack[]>;
   getSkillPack(id: string): Promise<SkillPack | null>;
   registerSkillPack(input: NewSkillPack): Promise<SkillPack>;
@@ -603,7 +614,11 @@ export interface App {
   rollbackDeployment(id: string, version: number, actor?: string): Promise<void>;
   archiveDeployment(id: string): Promise<void>;
   restoreDeployment(id: string, actorId?: string): Promise<Deployment>;
-  canManageDeployment(idOrName: string, callerId: string, actingScopeId?: ScopeId): Promise<boolean>;
+  canManageDeployment(
+    idOrName: string,
+    caller: Pick<CapabilityClaims, "actorId" | "botActor">,
+    actingScopeId?: ScopeId,
+  ): Promise<boolean>;
   renameDeployment(id: string, name: string): Promise<Deployment>;
   setDeploymentDisplayName(id: string, displayName: string): Promise<Deployment>;
   setDeploymentAlwaysOn(id: string, alwaysOn: boolean): Promise<Deployment>;
@@ -644,7 +659,7 @@ export interface App {
   ): Promise<T>;
   deploymentGitUrlFor(
     idOrName: string,
-    principalId: string,
+    caller: Pick<CapabilityClaims, "actorId" | "botActor">,
     opts: { secret: string; baseUrl: string; ttlMs?: number },
   ): Promise<DeploymentGitUrl | null>;
   authorizesDeploymentGitAccess(id: string, principalId: string, permission: "read" | "write"): Promise<boolean>;

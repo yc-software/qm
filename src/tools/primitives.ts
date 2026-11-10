@@ -498,6 +498,7 @@ export interface ToolContextDeps {
   files?: FileArtifactStore;
   auditLog?: AuditLog;
   createdBy: string;
+  botActor?: boolean;
   publicWebUrl?: string;
   publishContext?: {
     conversationKind: ConversationKind;
@@ -1081,6 +1082,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       const d = await deps.deploy.deployOrUpdate({
         ownerScopeId: owner,
         createdBy: deps.createdBy,
+        botActor: deps.botActor,
         createdInScope,
         files,
         ...(input.entrypoint ? { entrypoint: input.entrypoint } : {}),
