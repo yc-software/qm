@@ -66,12 +66,7 @@ test("reconcile (git bundle): checks the commit out via git, writes home, no fil
       commit: "a".repeat(40),
       homeDir: localSnapshot(".ssh/id", "KEY"),
     }),
-    {
-      gitBundle: Buffer.from("bundle"),
-      allPaths: ["server.js"],
-      changedPaths: ["server.js"],
-      deletedPaths: [],
-    },
+    Buffer.from("bundle"),
   );
   assert.ok(
     execs.some((c) => c.includes("git fetch --force") && c.includes("refs/deploy-commits/")),
@@ -90,12 +85,7 @@ test("reconcile (relaunch): a missing ephemeral snapshot/home dir is tolerated â
     commit: "a".repeat(40),
     homeDir: "/data/deployments/also-gone",
   });
-  const endpoint = await provider(api, fetchImpl).reconcile!(d, ver, {
-    gitBundle: Buffer.from("bundle"),
-    allPaths: ["server.js"],
-    changedPaths: ["server.js"],
-    deletedPaths: [],
-  });
+  const endpoint = await provider(api, fetchImpl).reconcile!(d, ver, Buffer.from("bundle"));
   assert.equal(endpoint.tls, true, "endpoint returned despite the missing local dirs");
   assert.ok(
     execs.some((c) => c.includes("git fetch --force")),
@@ -489,12 +479,7 @@ test("reconcile: a reused body whose port stays held fails the deploy â€” it nev
 
   wedged = true;
   await assert.rejects(
-    () =>
-      p.reconcile!(d, version(localSnapshot("a", "v2"), { version: 2 }), {
-        changedPaths: ["a"],
-        deletedPaths: [],
-        allPaths: ["a"],
-      }),
+    () => p.apply(d, version(localSnapshot("a", "v2"), { version: 2 })),
     /still held by a process this body cannot account for/,
     "a body already running the old code must not be reported as carrying the new version",
   );
@@ -534,12 +519,11 @@ test("destroy: terminates the body and clears its pointer", async () => {
   assert.equal(await store.get(ID), null, "the pointer is cleared");
 });
 
-test("profile: scale-to-zero is platform-managed and reconcile is in place", () => {
+test("profile: scale-to-zero is platform-managed", () => {
   const { api } = fakeApi();
   const { fetchImpl } = fakeDaemon();
   const p = provider(api, fetchImpl);
   assert.equal(p.profile.managedScaleToZero, true);
-  assert.equal(p.profile.inPlaceReconcile, true);
 });
 
 test("app data: a fresh body hydrates /data from the S3 snapshot before the app starts", async () => {
@@ -1021,4 +1005,48 @@ test("profile: advertises the durable dataDir only when persistence is wired", (
     provider(api, fetchImpl, testMap<StoredDeployBody>(), { dataBucket: "bkt", s3 }).profile.dataDir,
     "/data",
   );
+});
+
+test("liveEdit: writes changed files into the running app, removes deleted ones, and restarts only when asked", async () => {
+  const { api, counts } = fakeApi();
+  const { fetchImpl, execs, writes } = fakeDaemon();
+  const p = provider(api, fetchImpl);
+  const d = deployment(ID);
+  await p.apply(d, version(localSnapshot("src/App.jsx", "v1")));
+  const startsBefore = execs.filter((c) => c.includes("setsid")).length;
+
+  const edited = await p.liveEdit!(d, version("/unused", { entrypoint: "npm run dev" }), {
+    files: [{ path: "src/App.jsx", data: Buffer.from("v2") }],
+    deletedPaths: ["old.css"],
+    restart: false,
+  });
+  assert.equal(edited, true);
+  assert.equal(Buffer.from(writes.findLast((w) => w.path === "/app/src/App.jsx")!.b64, "base64").toString(), "v2");
+  assert.ok(
+    execs.some((c) => c.startsWith("rm -f") && c.includes("'/app/old.css'")),
+    "deleted file removed",
+  );
+  assert.equal(execs.filter((c) => c.includes("setsid")).length, startsBefore, "no restart without one asked for");
+
+  await p.liveEdit!(d, version("/unused", { entrypoint: "npm run dev" }), {
+    files: [],
+    deletedPaths: [],
+    restart: true,
+  });
+  assert.ok(
+    execs.some((c) => c.includes("setsid") && c.includes("npm run dev")),
+    "the app restarts with the given entrypoint",
+  );
+  assert.equal(counts.run, 1, "edits reuse the running microVM");
+});
+
+test("liveEdit: reports false when no microVM is running the app", async () => {
+  const { api } = fakeApi();
+  const { fetchImpl } = fakeDaemon();
+  const edited = await provider(api, fetchImpl).liveEdit!(deployment(ID), version("/unused"), {
+    files: [{ path: "a.js", data: Buffer.from("x") }],
+    deletedPaths: [],
+    restart: false,
+  });
+  assert.equal(edited, false);
 });

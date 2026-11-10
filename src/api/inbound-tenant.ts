@@ -1,5 +1,5 @@
 import type { IncomingMessage } from "node:http";
-import { withTenant } from "../tenants/context.ts";
+import { type Tenant, withTenant } from "../tenants/context.ts";
 import { inTenant } from "../tenants/claim.ts";
 import type { TenantKey, TenantLookup } from "../tenants/lookup.ts";
 import type { KeyedTenant, Route } from "./routes/route.ts";
@@ -41,7 +41,7 @@ export function inboundKey(
 export async function withInboundTenant(
   lookup: Pick<TenantLookup, "tenantFor">,
   inbound: InboundKey,
-  next: () => Promise<void>,
+  next: (tenant: Tenant) => Promise<void>,
   signedTenant?: () => Promise<string | undefined>,
 ): Promise<void> {
   const signed = inbound.signedTenantFirst ? await signedTenant?.() : undefined;

@@ -1,6 +1,7 @@
 import type { App } from "../../app.ts";
 import type { ServerDeps } from "../../deps.ts";
 import { parseScopeId, scopeId as makeScopeId, type Principal } from "../../../types.ts";
+import type { Tenant } from "../../../tenants/context.ts";
 import { foldPrincipalId, personIds } from "../../../directory/person.ts";
 import { sendJson } from "../../http.ts";
 import { orgScope, requireScopedAdmin } from "../shared.ts";
@@ -56,13 +57,14 @@ export function threadRefLabel(
 export async function discoverScopes(
   app: App,
   deps: ServerDeps,
+  tenant: Tenant,
   extraScopeIds: Iterable<string> = [],
 ): Promise<Map<string, string>> {
   const labels = new Map<string, string>([[orgScope(deps), "org-wide"]]);
   const [scopes, participants, grants] = await Promise.all([
     deps.sessions?.distinctScopes() ?? [],
     deps.sessions?.distinctParticipants() ?? [],
-    deps.admin?.listGrants() ?? [],
+    deps.admin?.listGrants(tenant) ?? [],
   ]);
   for (const s of scopes) {
     if (!labels.has(s.scopeId) || (s.channelName && !labels.get(s.scopeId))) {

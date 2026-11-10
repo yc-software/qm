@@ -19,7 +19,7 @@ import {
 } from "../src/sandbox/sandbox-resource-upgrade.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
-import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock, testCountedAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 
 async function jobComputers(resources: SandboxResources): Promise<SandboxResource[]> {
@@ -320,7 +320,7 @@ test("turn default changes invalidate cached provisioning while explicit calls d
   assert.deepEqual(released.sort(), [a.backingScopeId, b.backingScopeId].sort());
 });
 
-test("retirement refuses the default, waits for an active command, and prevents future execution", async () => {
+test("retirement refuses the default, does not queue behind an in-flight command, and prevents future execution", async () => {
   const { resources, router, backend } = fixture();
   const record = await resources.create("alice", "personal:alice", "local");
   await resources.setDefault("alice", "personal:alice", record.id);
@@ -345,12 +345,13 @@ test("retirement refuses the default, waits for an active command, and prevents 
   };
   const command = router.run(handle, "work");
   await running;
-  const retiring = resources.retire("alice", record.id);
-  assert.equal(destroyed, false);
-  finish();
-  await command;
-  await retiring;
-  assert.equal(destroyed, true);
+  try {
+    await resources.retire("alice", record.id);
+    assert.equal(destroyed, true);
+  } finally {
+    finish();
+    await command;
+  }
   await assert.rejects(router.run(handle, "no resurrection"), /retired/);
   await assert.rejects(resources.setDefault("alice", "personal:alice", record.id), /retired/);
 });
@@ -729,7 +730,7 @@ for (const [kind, waiting] of [
   ["sprites", "command"],
   ["sprites", "checkpoint"],
 ] as const) {
-  test(`${kind} ${waiting} allows other tools while restart waits`, { timeout: 10000 }, async () => {
+  test(`${kind} restart never queues behind an in-flight ${waiting}`, { timeout: 10000 }, async () => {
     const { options, backend } = fixture();
     const resources = createSandboxResources({ ...options, backends: { [kind]: backend }, defaultBackend: kind });
     const router = createSandboxRouter({ backends: { [kind]: backend }, defaultBackend: kind, resources });
@@ -752,72 +753,61 @@ for (const [kind, waiting] of [
     backend.restartComputer = async () => {
       restarted = true;
     };
-    let restarting: Promise<void> | undefined;
-    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await entered.promise;
-      const result = await Promise.race([
-        router.run(handle, "responsive"),
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error("ordinary tool was serialized")), 1000);
-        }),
-      ]);
-      assert.equal(result.stdout, "responsive");
+      assert.equal((await router.run(handle, "responsive")).stdout, "responsive");
       assert.equal((await resources.status("alice", record.id)).guestResponsive, true);
-      restarting =
-        waiting === "command" ? resources.restart("alice", record.id) : router.restartComputer!("personal:alice");
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      assert.equal(restarted, false);
+      if (waiting === "command") await resources.restart("alice", record.id);
+      else await router.restartComputer!("personal:alice");
+      assert.equal(restarted, true);
     } finally {
-      clearTimeout(timer);
       release.resolve();
       await long;
-      await restarting;
     }
-    assert.equal(restarted, true);
     await resources.setDefault("alice", "personal:alice", null);
     await resources.retire("alice", record.id);
     await assert.rejects(router.run(handle, "retired"), /retired/);
   });
 }
 
-test("Modal provisioning and destructive cleanup wait for active operations", { timeout: 10000 }, async () => {
-  const { options, backend } = fixture();
-  const resources = createSandboxResources({ ...options, backends: { modal: backend }, defaultBackend: "modal" });
-  const router = createSandboxRouter({ backends: { modal: backend }, defaultBackend: "modal", resources });
-  const record = await resources.create("alice", "personal:alice", "modal");
-  const handle = await router.provision("personal:alice", { sandboxId: record.id });
-  const entered = Promise.withResolvers<void>();
-  const release = Promise.withResolvers<void>();
-  backend.run = async () => {
-    entered.resolve();
-    await release.promise;
-    return { stdout: "done", stderr: "", code: 0, timedOut: false };
-  };
-  const running = router.run(handle, "long");
-  await entered.promise;
-  let provisioned = false;
-  let destroyed = false;
-  backend.provision = async () => {
-    provisioned = true;
-    return handle;
-  };
-  backend.teardown = async () => {
-    destroyed = true;
-  };
-  const provision = router.provision("personal:alice", { sandboxId: record.id });
-  const teardown = router.teardown(handle, { destroy: true });
-  try {
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.equal(provisioned, false);
-    assert.equal(destroyed, false);
-  } finally {
-    release.resolve();
-    await Promise.all([running, provision, teardown]);
-  }
-  assert.equal(provisioned, true);
-  assert.equal(destroyed, true);
-});
+test(
+  "Modal provisioning and destructive cleanup proceed while a command is in flight",
+  { timeout: 10000 },
+  async () => {
+    const { options, backend } = fixture();
+    const resources = createSandboxResources({ ...options, backends: { modal: backend }, defaultBackend: "modal" });
+    const router = createSandboxRouter({ backends: { modal: backend }, defaultBackend: "modal", resources });
+    const record = await resources.create("alice", "personal:alice", "modal");
+    const handle = await router.provision("personal:alice", { sandboxId: record.id });
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    backend.run = async () => {
+      entered.resolve();
+      await release.promise;
+      return { stdout: "done", stderr: "", code: 0, timedOut: false };
+    };
+    const running = router.run(handle, "long");
+    await entered.promise;
+    let provisioned = false;
+    let destroyed = false;
+    backend.provision = async () => {
+      provisioned = true;
+      return handle;
+    };
+    backend.teardown = async () => {
+      destroyed = true;
+    };
+    try {
+      await router.provision("personal:alice", { sandboxId: record.id });
+      await router.teardown(handle, { destroy: true });
+      assert.equal(provisioned, true);
+      assert.equal(destroyed, true);
+    } finally {
+      release.resolve();
+      await running;
+    }
+  },
+);
 
 test("concurrent commands on one Sprites computer run together", { timeout: 10000 }, async () => {
   const { options, backend } = fixture();
@@ -843,7 +833,7 @@ test("concurrent commands on one Sprites computer run together", { timeout: 1000
   assert.equal(peak, 3);
 });
 
-test("parking teardown waits for active commands on the computer", { timeout: 10000 }, async () => {
+test("parking teardown does not queue behind an in-flight command", { timeout: 10000 }, async () => {
   const { options, backend } = fixture();
   const parking: Sandbox = { ...backend, profile: { ...backend.profile, parksOnTeardown: true } };
   const resources = createSandboxResources({ ...options, backends: { e2b: parking }, defaultBackend: "e2b" });
@@ -863,15 +853,60 @@ test("parking teardown waits for active commands on the computer", { timeout: 10
   };
   const running = router.run(handle, "long");
   await entered.promise;
-  const teardown = router.teardown(handle);
   try {
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.equal(parked, false);
+    await router.teardown(handle);
+    assert.equal(parked, true);
   } finally {
     release.resolve();
-    await Promise.all([running, teardown]);
+    await running;
   }
-  assert.equal(parked, true);
+});
+
+test("a parking teardown keeps the computer warm when another run holds it by the time it parks", async () => {
+  const { options, backend } = fixture();
+  const parking: Sandbox = { ...backend, profile: { ...backend.profile, parksOnTeardown: true } };
+  const resources = createSandboxResources({ ...options, backends: { e2b: parking }, defaultBackend: "e2b" });
+  const router = createSandboxRouter({ backends: { e2b: parking }, defaultBackend: "e2b", resources });
+  const record = await resources.create("alice", "personal:alice", "e2b");
+  const handle = await router.provision("personal:alice", { sandboxId: record.id });
+  const teardowns: unknown[] = [];
+  parking.teardown = async (_handle, opts) => {
+    teardowns.push(opts ?? {});
+  };
+  await resources.hold(record.id, "late-run");
+  await router.teardown(handle);
+  await resources.release(record.id, "late-run", async () => false);
+  await router.teardown(handle);
+  assert.deepEqual(teardowns, [{ keepWarm: true }, {}]);
+});
+
+test("concurrent routed commands hold no Postgres session connection while they run", { timeout: 10000 }, async () => {
+  const sessions = testCountedAdvisoryLock();
+  const { options, backend } = fixture();
+  const resources = createSandboxResources({ ...options, lock: sessions.lock });
+  const router = createSandboxRouter({ backends: { local: backend }, defaultBackend: "local", resources });
+  const parallel = 8;
+  let running = 0;
+  const allRunning = Promise.withResolvers<void>();
+  const gate = Promise.withResolvers<void>();
+  backend.run = async (_handle, command) => {
+    if (++running === parallel) allRunning.resolve();
+    await gate.promise;
+    return { stdout: command, stderr: "", code: 0, timedOut: false };
+  };
+  try {
+    const handle = await router.provision("personal:alice");
+    const commands = Array.from({ length: parallel }, (_, i) => router.run(handle, `command ${i}`));
+    try {
+      await allRunning.promise;
+      assert.equal(sessions.held(), 0);
+    } finally {
+      gate.resolve();
+    }
+    assert.equal((await Promise.all(commands)).length, parallel);
+  } finally {
+    await sessions.close();
+  }
 });
 
 test("a verified live turn can create only its own new scope computer without directory mutations", async () => {
