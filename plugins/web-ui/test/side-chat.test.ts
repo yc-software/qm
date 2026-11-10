@@ -81,6 +81,7 @@ test("select a passage, discuss beside the source, reopen, and expand the same s
           return Response.json({ session: fork, items });
         });
       }
+      if (path === "/api/sessions/side?tailTurns=1") return Response.json({ session: fork, items });
       if (path.startsWith("/api/sessions/side?") || path === "/api/sessions/side") {
         if (failOpen) {
           failOpen = false;
@@ -138,8 +139,30 @@ test("select a passage, discuss beside the source, reopen, and expand the same s
     assert.equal(document.querySelector(".side-chat-discuss"), null);
     paragraph.dispatchEvent(new window.MouseEvent("mouseup", { bubbles: true }));
     discuss = document.querySelector<HTMLButtonElement>(".side-chat-discuss")!;
-    discuss.click();
+    for (const options of [
+      { key: "c", metaKey: true },
+      { key: "c", ctrlKey: true },
+      { key: "e", altKey: true },
+      { key: "ArrowLeft" },
+      { key: "e", isComposing: true },
+      { key: "Dead" },
+    ]) {
+      const key = new window.KeyboardEvent("keydown", { ...options, bubbles: true, cancelable: true });
+      document.body.dispatchEvent(key);
+      assert.equal(key.defaultPrevented, false);
+      assert.equal(document.querySelector(".side-chat-panel"), null);
+    }
+    const composerInput = document.querySelector("textarea")!;
+    const editableKey = new window.KeyboardEvent("keydown", { key: "E", bubbles: true, cancelable: true });
+    composerInput.dispatchEvent(editableKey);
+    assert.equal(editableKey.defaultPrevented, false);
+    assert.equal(document.querySelector(".side-chat-panel"), null);
+    const firstKey = new window.KeyboardEvent("keydown", { key: "E", bubbles: true, cancelable: true });
+    document.body.dispatchEvent(firstKey);
+    assert.equal(firstKey.defaultPrevented, true);
     assert.ok(document.querySelector(".side-chat-panel"));
+    assert.equal(document.querySelector<HTMLTextAreaElement>(".side-chat-draft textarea")!.value, "E");
+    assert.equal(document.activeElement, document.querySelector(".side-chat-draft textarea"));
     const pendingInput = document.querySelector<HTMLTextAreaElement>(".side-chat-draft textarea")!;
     pendingInput.value = "Explain this";
     pendingInput.dispatchEvent(new window.Event("input", { bubbles: true }));
@@ -185,7 +208,13 @@ test("select a passage, discuss beside the source, reopen, and expand the same s
       .dispatchEvent(new window.Event("pointerdown", { bubbles: true, composed: true }));
     assert.ok(document.querySelector(".side-chat-panel"));
     paragraph.dispatchEvent(new window.Event("pointerdown", { bubbles: true, composed: true }));
+    assert.ok(document.querySelector(".side-chat-panel"));
+    const composer = document.querySelector(".side-chat-conversation textarea");
+    document.querySelector(".chat-scroll")!.dispatchEvent(new window.Event("scroll"));
+    assert.equal(document.querySelector(".side-chat-conversation textarea"), composer);
+    document.querySelector<HTMLButtonElement>('[aria-label="Close side chat"]')!.click();
     assert.equal(document.querySelector(".side-chat-panel"), null);
+    assert.ok(document.querySelector(".side-chat-card"));
     await until(() => Boolean(document.querySelector(".side-chat-marker")));
     assert.equal(document.querySelector(".side-chat-marker")!.getAttribute("aria-expanded"), "false");
     document.querySelector<HTMLButtonElement>(".side-chat-markers button")!.click();

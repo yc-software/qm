@@ -1,5 +1,5 @@
 import type { ModelUtilities } from "../../agent/agent.ts";
-import { type MemoryService, type MemoryCaptureContext, isSystemActor } from "../memory-service.ts";
+import type { MemoryService, MemoryCaptureContext } from "../memory-service.ts";
 import type { MemoryStrategy } from "../strategy.ts";
 import type { ScopeId } from "../../types.ts";
 import { bullets } from "../notebook.ts";
@@ -60,6 +60,7 @@ async function extractFacts(
 interface Burst extends MemoryCaptureMetadata {
   scopeId: ScopeId;
   actorId?: string;
+  audienceScopeId?: ScopeId;
   conversationScopeId: ScopeId;
   sessionId?: string;
   idempotencyKey?: string;
@@ -72,7 +73,7 @@ type TurnEndCtx = MemoryCaptureMetadata & {
   input: string;
   reply: string;
   actorId?: string;
-  autonomous?: boolean;
+  audienceScopeId?: ScopeId;
   conversationScopeId?: ScopeId;
   sessionId?: string;
   idempotencyKey?: string;
@@ -90,25 +91,25 @@ function createBurstBuffer(
     input,
     reply,
     actorId,
-    autonomous,
+    audienceScopeId,
     conversationScopeId,
     sessionId,
     idempotencyKey,
     inheritedFacts,
   }) => {
-    if (autonomous === true || isSystemActor(actorId)) return;
     const burst: Burst = {
       scopeId,
       conversationScopeId: conversationScopeId ?? scopeId,
       turns: [{ input, reply }],
       ...(inheritedFacts !== undefined ? { inheritedFacts: structuredClone(inheritedFacts) } : {}),
       ...(actorId !== undefined ? { actorId } : {}),
+      ...(audienceScopeId !== undefined ? { audienceScopeId } : {}),
       ...(sessionId !== undefined ? { sessionId } : {}),
       ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
     };
     if (quietMs <= 0) return flush(burst);
 
-    const key = `${scopeId}\0${burst.conversationScopeId}\0${actorId ?? ""}\0${sessionId ?? ""}`;
+    const key = `${scopeId}\0${burst.conversationScopeId}\0${actorId ?? ""}\0${sessionId ?? ""}\0${audienceScopeId ?? ""}`;
     const pending = bursts.get(key);
     if (pending) {
       pending.turns.push({ input, reply });
@@ -138,7 +139,7 @@ function burstCaptureContext(burst: Burst): MemoryCaptureContext {
   return {
     mode: "automatic",
     ...(burst.inheritedFacts !== undefined ? { inheritedFacts: burst.inheritedFacts } : {}),
-    ...(burst.actorId ? { actorId: burst.actorId } : {}),
+    ...(burst.audienceScopeId ? { audienceScopeId: burst.audienceScopeId } : {}),
     conversationScopeId: burst.conversationScopeId,
     input: burst.turns.map((turn) => turn.input).join("\n\n"),
     reply: burst.turns.map((turn) => turn.reply).join("\n\n"),
@@ -158,7 +159,13 @@ export function createPerTurnStrategy(deps: {
     const { facts, sensitivity } = await extractFacts(deps.agent, burst.turns);
     if (!facts.length) return;
     const at = Date.now();
-    await deps.memory.capture(burst.scopeId, facts, at, burst.actorId, { ...burstCaptureContext(burst), sensitivity });
+    await deps.memory.capture(
+      burst.scopeId,
+      facts,
+      at,
+      burst.actorId ? { actorId: burst.actorId, context: "conversation" } : undefined,
+      { ...burstCaptureContext(burst), sensitivity },
+    );
   }
 
   return {

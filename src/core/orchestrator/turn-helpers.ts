@@ -16,7 +16,9 @@ import type { SkillResolution } from "../../skills/skill-store.ts";
 import { hostMatches } from "../../resolution/egress-policy.ts";
 import { swallow } from "../../util/errors.ts";
 import { hashId } from "../../util/crypto.ts";
-import type { OrchestratorInput } from "./types.ts";
+import type { PersonaForTurn } from "../../personas/persona-service.ts";
+import { deliveryMenu } from "./prompt-blocks.ts";
+import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 
 export const MAX_AUTO_ATTACHMENT_SCREEN_BYTES = 12_000;
 
@@ -41,27 +43,28 @@ export function stripAckPrefix(text: string, ack: string | undefined): string {
   return lead.slice(ack.length).trimStart();
 }
 
-const CONNECTOR_SKILL_PROVIDERS: Readonly<Record<string, string>> = {
-  dropbox: "dropbox",
-  "email-draft-in-voice": "google",
-  "email-voice-profile": "google",
-  "google-drive-sheets": "google",
-  "google-workspace": "google",
-  linear: "linear",
-  "morning-digest": "x",
-  "slack-drafts": "slack",
-  x: "x",
-  zoom: "zoom",
+const CONNECTOR_SKILLS: Readonly<Record<string, { provider: string; appConnection?: true }>> = {
+  dropbox: { provider: "dropbox", appConnection: true },
+  "email-draft-in-voice": { provider: "google" },
+  "email-voice-profile": { provider: "google" },
+  "google-drive-sheets": { provider: "google", appConnection: true },
+  "google-workspace": { provider: "google", appConnection: true },
+  linear: { provider: "linear", appConnection: true },
+  "morning-digest": { provider: "x" },
+  "slack-drafts": { provider: "slack" },
+  x: { provider: "x" },
+  zoom: { provider: "zoom", appConnection: true },
 };
 
 export function filterConnectorSkills(
   resolved: SkillResolution[],
   availableProviders: readonly string[],
+  appConnections: boolean,
 ): SkillResolution[] {
   const available = new Set(availableProviders);
   return resolved.filter((entry) => {
-    const provider = entry.skill ? CONNECTOR_SKILL_PROVIDERS[entry.skill.manifest.name] : undefined;
-    return !provider || available.has(provider);
+    const skill = CONNECTOR_SKILLS[entry.skill?.manifest.name ?? ""];
+    return !skill || available.has(skill.provider) || (appConnections && skill.appConnection === true);
   });
 }
 
@@ -115,29 +118,41 @@ export function visibleTitleEntryText(item: Item): string | undefined {
   return value?.trim() || undefined;
 }
 
-export function renderTitleTranscript(items: Item[]): string {
-  const lines: string[] = [];
+function* visibleTurnTexts(items: Item[]): Generator<{ role: "User" | "Assistant"; text: string }> {
   for (const e of items) {
     if (!isUserItem(e) && !isAgentReply(e)) continue;
     if (isOverheard(e)) continue;
     const raw = visibleTitleEntryText(e);
-    if (!raw) continue;
-    const text = isUserItem(e) ? stripTurnBoilerplate(raw) : raw;
-    if (!text) continue;
-    lines.push(`${isUserItem(e) ? "User" : "Assistant"}:\n${text}`);
+    const text = raw && isUserItem(e) ? stripTurnBoilerplate(raw) : raw;
+    if (text) yield { role: isUserItem(e) ? "User" : "Assistant", text };
+  }
+}
+
+export function renderTitleTranscript(items: Item[]): string {
+  const lines: string[] = [];
+  for (const { role, text } of visibleTurnTexts(items)) {
+    lines.push(`${role}:\n${text}`);
     if (lines.length >= 6) break;
   }
   return lines.join("\n\n");
 }
 
+export function renderNextPromptTranscript(items: Item[]): string | undefined {
+  const turns = [...visibleTurnTexts(items)];
+  const reply = turns.at(-1);
+  if (reply?.role !== "Assistant") return undefined;
+  const asked = turns.findLast((turn) => turn.role === "User");
+  const lines = [...(asked ? [`User:\n${asked.text}`] : []), `Assistant:\n${reply.text}`];
+  return `<conversation>\n${lines.join("\n\n")}\n</conversation>`;
+}
+
 const DELIVERY_NOTE_ITEM_MAX_CHARS = 200;
 
 export async function recentPrincipalDeliveryNote(
-  deliveries: DeliveryStore | undefined,
+  deliveries: DeliveryStore,
   threadRef: string,
   since = 0,
 ): Promise<string> {
-  if (!deliveries) return "";
   const recent = (await deliveries.listByRecipientThread(threadRef, { limit: 5 })).filter(
     (d) => (d.deliveredAt ?? d.createdAt) > since,
   );
@@ -188,9 +203,9 @@ export function replayableRequest(input: OrchestratorInput): TurnRequest {
     },
     text: input.text,
     ...(input.gatewayContext ? { gatewayContext: input.gatewayContext } : {}),
-    ...(input.analyticsSuppressed ? { analyticsSuppressed: true } : {}),
     ...(input.proactiveOpener ? { proactiveOpener: true } : {}),
     origin: input.origin,
+    ...(input.botActor ? { botActor: true } : {}),
     ...(input.conversationHeader ? { conversationHeader: input.conversationHeader } : {}),
     ...(input.priorTurns?.length ? { priorTurns: input.priorTurns } : {}),
     ...(input.overheard?.length ? { overheard: input.overheard } : {}),
@@ -201,10 +216,10 @@ export function replayableRequest(input: OrchestratorInput): TurnRequest {
     ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
     ...(input.fastMode !== undefined ? { fastMode: input.fastMode } : {}),
     ...(input.readOnly ? { readOnly: true } : {}),
-    ...(input.privateSessionMessage
-      ? { privateSessionMessage: true as const, sessionMessageDepth: input.sessionMessageDepth }
-      : {}),
+    ...(input.privateSessionMessage ? { privateSessionMessage: true as const } : {}),
+    ...(input.sessionMessageDepth !== undefined ? { sessionMessageDepth: input.sessionMessageDepth } : {}),
     ...(input.skipMemory ? { skipMemory: true } : {}),
+    ...(input.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
     ...(input.surfaceTools ? { surfaceTools: true } : {}),
     ...(input.addressed ? { addressed: true } : {}),
     ...(input.envelopeWrapped ? { envelopeWrapped: true } : {}),
@@ -250,11 +265,13 @@ export interface TurnPostKeys {
   seed(completed: number): void;
   take(): number;
   key(destination: Destination, seq: number): string;
+  readonly ackKey: string;
 }
 
 export function turnPostKeys(turnKey: string): TurnPostKeys {
   let next = 0;
   return {
+    ackKey: `ack:${turnKey}`,
     seed(completed) {
       next = completed;
     },
@@ -299,4 +316,43 @@ export function deliveryCandidatesFor(
   }
   const defaultKey = candidates.find((c) => c.target === deliveryTarget)?.key ?? candidates[0]?.key;
   return { candidates, ...(defaultKey ? { defaultKey } : {}) };
+}
+
+export function resolveTurnDelivery(turn: {
+  deps: Pick<OrchestratorDeps, "signingSecret" | "apiBaseUrl">;
+  input: OrchestratorInput;
+  scopeId: ScopeId;
+  persona: PersonaForTurn | null;
+}) {
+  const { deps, input, scopeId, persona } = turn;
+  const delivery = deliveryCandidatesFor(input, scopeId);
+  if (input.surfaceOrigin)
+    for (const candidate of delivery.candidates)
+      candidate.account = { id: input.surfaceOrigin.author.account, workspace: input.surfaceOrigin.workspace };
+  const defaultCandidate = delivery.candidates.find((c) => c.key === delivery.defaultKey);
+  let defaultDestination: Destination | undefined;
+  if (defaultCandidate) {
+    defaultDestination = {
+      ...(defaultCandidate.webhook ? { webhook: defaultCandidate.webhook } : {}),
+      type: defaultCandidate.type,
+      target: defaultCandidate.target,
+      ...(defaultCandidate.account ? { account: defaultCandidate.account } : {}),
+      ...(defaultCandidate.audienceScopeId ? { audienceScopeId: defaultCandidate.audienceScopeId } : {}),
+    };
+  } else if (input.surfaceTools && input.origin.kind === "automation" && input.origin.destination) {
+    defaultDestination = input.origin.destination;
+  }
+  const wornPersona = persona
+    ? {
+        id: persona.persona.id,
+        name: persona.persona.name,
+        ...(persona.persona.icon ? { icon: persona.persona.icon } : {}),
+      }
+    : undefined;
+  if (defaultDestination && wornPersona) defaultDestination = { ...defaultDestination, persona: wornPersona };
+  const cronBlock =
+    delivery.candidates.length > 1 && deps.signingSecret && deps.apiBaseUrl
+      ? `\n\n${deliveryMenu(delivery.candidates, delivery.defaultKey)}`
+      : "";
+  return { delivery, defaultDestination, wornPersona, cronBlock };
 }

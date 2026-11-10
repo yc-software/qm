@@ -20,6 +20,7 @@ export interface Incoming {
   modelAccount?: string;
   dedupKey?: string;
   routed: boolean;
+  bot?: boolean;
 }
 
 export type LiveTurn =
@@ -30,11 +31,12 @@ export type LiveTurn =
       modelAccount?: string;
       dedupKey?: string | null;
       handlesThisMessage: boolean;
+      bot?: boolean;
     }
   | { kind: "descendants"; actorIds: string[] };
 
 export interface IncomingPrefs {
-  midTurn: "steer" | "queue";
+  midTurn?: "steer" | "queue";
 }
 
 type TurnReason =
@@ -45,7 +47,8 @@ type TurnReason =
   | "account"
   | "automation-live"
   | "unprompted-live"
-  | "queue-preference";
+  | "queue-preference"
+  | "bot-message";
 
 export type IncomingRoute =
   { kind: "turn"; reason: TurnReason } | { kind: "steer" } | { kind: "abort" } | { kind: "drop"; reason: "empty" };
@@ -69,6 +72,7 @@ export function liveTurnOf(run: Run, handlesThisMessage = false): LiveTurn {
     ...(run.request.modelAccount ? { modelAccount: run.request.modelAccount } : {}),
     dedupKey: run.dedupKey ?? null,
     handlesThisMessage,
+    ...(run.request.botActor ? { bot: true } : {}),
   };
 }
 
@@ -78,7 +82,9 @@ export function routeIncoming(message: Incoming, live: LiveTurn | null, prefs: I
   if (live.kind === "run" && message.dedupKey && message.dedupKey === live.dedupKey)
     return { kind: "turn", reason: "duplicate" };
   const starters = live.kind === "run" ? [live.actorId] : live.actorIds;
+  const botIntoPersonsWork = message.bot && !(live.kind === "run" && live.bot);
   if (
+    !botIntoPersonsWork &&
     stopsLiveWork(
       message,
       starters.some((id) => samePerson(message.actorId, id)),
@@ -92,8 +98,10 @@ export function routeIncoming(message: Incoming, live: LiveTurn | null, prefs: I
     message.modelAccount === live.modelAccount &&
     (message.modelAccount === "company" || message.actorId === live.actorId);
   if (!sameAccount) return { kind: "turn", reason: "account" };
+  if (botIntoPersonsWork) return { kind: "turn", reason: "bot-message" };
   if (!live.handlesThisMessage) {
-    if (live.origin === "automation" && message.person) return { kind: "turn", reason: "automation-live" };
+    if (live.origin === "automation" && message.person && prefs.midTurn !== "steer")
+      return { kind: "turn", reason: "automation-live" };
     if (live.origin === "ambient" && message.origin === "human") return { kind: "turn", reason: "unprompted-live" };
     if (prefs.midTurn === "queue") return { kind: "turn", reason: "queue-preference" };
   }

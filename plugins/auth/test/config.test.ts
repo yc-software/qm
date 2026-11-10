@@ -76,6 +76,22 @@ test("production refuses cleartext endpoints and cleartext SMTP", () => {
   assert.equal(bootProblems(readConfig(testEnv({ AUTH_ISSUER: "http://localhost:8099" })), false).join(" | "), "");
 });
 
+test("production accepts cleartext endpoints only on a loopback host", () => {
+  const signing = { CORE_SIGNING_SECRET: "a".repeat(48) };
+  for (const host of ["localhost:8082", "127.0.0.1:8082", "[::1]:8082", "qm.localhost"])
+    assert.equal(
+      problemsFor({ ...signing, AUTH_ISSUER: `http://${host}/idp`, AUTH_REDIRECT_URI: `http://${host}/auth/callback` }),
+      "",
+      host,
+    );
+  for (const host of ["core:8000", "10.0.0.5:8000", "localhost.example.test"])
+    assert.match(
+      problemsFor({ ...signing, AUTH_ISSUER: `http://${host}/idp` }),
+      /AUTH_ISSUER must be https in production unless it is a loopback address/,
+      host,
+    );
+});
+
 test("production requires the core signing secret that makes links single-use", () => {
   assert.match(problemsFor({}), /CORE_SIGNING_SECRET is required/);
   assert.equal(problemsFor({ CORE_SIGNING_SECRET: "a".repeat(48) }), "");
@@ -176,9 +192,9 @@ test("`node src/index.ts` refuses to boot on a placeholder configuration and ser
       [
         "--input-type=module",
         "-e",
-        `import('./src/index.ts').then(async (m) => { await m.startServer(); const r = await fetch('http://127.0.0.1:${PORT}/healthz'); console.log(r.status); process.exit(0); })`,
+        `import('./src/index.ts').then(async (m) => { await m.startServer({ port: ${PORT}, host: '127.0.0.1' }); const r = await fetch('http://127.0.0.1:${PORT}/healthz'); console.log(r.status); process.exit(0); })`,
       ],
-      { cwd: process.cwd(), env: { ...base, ...email, PORT }, encoding: "utf8" },
+      { cwd: process.cwd(), env: { ...base, ...email }, encoding: "utf8" },
     );
     assert.equal(child.status, 0, child.stderr);
     assert.match(child.stdout, /200/);

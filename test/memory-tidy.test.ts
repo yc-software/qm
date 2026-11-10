@@ -43,6 +43,7 @@ function fixture() {
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     idempotency: createIdempotencyStore(testMap()),
     skipFire: (cron) => service.skipFire(cron),
+    notebookOnlyMemory: (cron) => service.manages(cron),
     run: async (request) => {
       calls.push(request);
       return { status: "silent" };
@@ -137,6 +138,34 @@ test("a scheduled fire runs the tidy only when the notebook changed since the la
   f.notebooks.set(alice, [f.fact(1), f.fact(Date.now() + 300_000)]);
   await f.fireAt(alice, Date.now() + 360_000);
   assert.equal(f.calls.length, 2);
+});
+
+test("only the claimed tidy job's turns see the notebook alone, whatever its title or task says", async () => {
+  const f = fixture();
+  f.notebooks.set(alice, [f.fact(Date.now())]);
+  await f.service.ensure(alice);
+  const tidy = await f.cronOf(alice);
+  const copy = await f.crons.create({
+    owner: "alice",
+    createdBy: "alice",
+    ownerScopeId: alice,
+    title: tidy.title!,
+    schedule: { ...tidy.schedule, cron: "0 4 * * *" },
+    action: tidy.action!,
+  });
+
+  await f.fireAt(alice, Date.now() + 120_000);
+  await f.crons.update(tidy.id, { action: "Summarize my week." });
+  for (const id of [tidy.id, copy.id]) {
+    const fired = await f.scheduler.runNow(id);
+    assert.ok(fired.started);
+    await fired.settled;
+  }
+
+  assert.deepEqual(
+    f.calls.map((call) => call.memoryNotebookOnly === true),
+    [true, true, false],
+  );
 });
 
 test("a failed tidy does not count, and run-now always runs", async () => {

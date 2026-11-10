@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { PgPool } from "../persistence/pg-pool.ts";
-import { claimAcrossTenants } from "../tenants/claim.ts";
+import { claimRows } from "../tenants/claim.ts";
 import type { ScopeId } from "../types.ts";
 import type { LlmRequestRecord, NewLlmRequest, SessionStore } from "./session-store.ts";
 import { promptEnvelopeBody } from "./session-store.ts";
@@ -107,16 +107,9 @@ export function createLlmCaptures(deps: {
       const deadline = opts?.deadline ?? Infinity;
       let envelopes = 0;
       while (Date.now() < deadline && !opts?.stop?.()) {
-        const deleted = await claimAcrossTenants(
-          db,
-          `DELETE FROM llm_prompt_envelopes
-            WHERE (tenant_id, hash) IN (SELECT tenant_id, hash FROM llm_prompt_envelopes WHERE created_at < $1
-                            ORDER BY created_at LIMIT $2 FOR UPDATE SKIP LOCKED)
-              AND created_at < $1`,
-          [cutoff, LLM_CAPTURE_PURGE_BATCH],
-        );
-        envelopes += deleted.rowCount;
-        if (deleted.rowCount < LLM_CAPTURE_PURGE_BATCH) break;
+        const deleted = await claimRows(db, "claim_purged_envelopes", [cutoff, LLM_CAPTURE_PURGE_BATCH]);
+        envelopes += deleted.length;
+        if (deleted.length < LLM_CAPTURE_PURGE_BATCH) break;
       }
       return envelopes;
     },

@@ -10,6 +10,7 @@ import {
   CONFIG_DEFAULTS,
 } from "../src/config.ts";
 import { boolEnv, numEnv } from "../src/util/env.ts";
+import { withoutTenant } from "../src/tenants/context.ts";
 import { enabledSandboxBackends } from "../src/sandbox/sandbox-settings.ts";
 
 const RENDER_IMAGE = `ghcr.io/yc-software/qm/sandbox-base:${"c".repeat(40)}@sha256:${"d".repeat(64)}`;
@@ -23,7 +24,14 @@ const productionEnv = {
   CONNECTOR_SECRET_KEY: "connector-secret-0123456789abcdef",
   SANDBOX_BACKEND: "local",
   DATABASE_URL: "postgres://qm@localhost/qm",
+  PUBLIC_PORT: "8000",
 } as const;
+
+test("production refuses to boot without the public front door port", () => {
+  const { PUBLIC_PORT: _, ...withoutFrontDoor } = productionEnv;
+  assert.throws(() => loadConfig(withoutFrontDoor), /PUBLIC_PORT is required in production/);
+  assert.equal(loadConfig(productionEnv).publicPort, 8000);
+});
 
 test("Sprites proxy transition URLs are optional and parsed independently of the primary", () => {
   assert.equal(loadConfig({}).spritesSandbox.egressProxyAdditionalUrls, undefined);
@@ -543,14 +551,12 @@ test("SANDBOX_BACKEND: unset defaults to local (dev only); the retired secondary
   );
 });
 
-test("Fly identity and Slack runtime settings are parsed once into Config", () => {
+test("Slack runtime settings are parsed once into Config", () => {
   const config = loadConfig({
-    FLY_APP_NAME: "qm-core",
     SLACK_BOT_TOKEN: "xoxb-test",
     SLACK_APP_TOKEN: "xapp-test",
     SLACK_API_URL: "https://slack.example/api",
   });
-  assert.equal(config.flyAppName, "qm-core");
   assert.deepEqual(config.slack, {
     botToken: "xoxb-test",
     appToken: "xapp-test",
@@ -568,6 +574,16 @@ test("MODEL_PROVIDER declares the vendor that bills the base model", () => {
   assert.equal(loadConfig({}).modelProvider, undefined);
   assert.equal(loadConfig({ MODEL_PROVIDER: " openrouter ", OPENROUTER_API_KEY: "k" }).modelProvider, "openrouter");
   assert.throws(() => loadConfig({ MODEL_PROVIDER: "bedrock" }), /MODEL_PROVIDER.*not recognized/);
+});
+
+test("MODEL_PROVIDER loads at boot before any tenant is bound", () => {
+  for (const [provider, key] of [
+    ["anthropic", "ANTHROPIC_API_KEY"],
+    ["openai", "OPENAI_API_KEY"],
+    ["openrouter", "OPENROUTER_API_KEY"],
+  ] as const) {
+    assert.equal(withoutTenant(() => loadConfig({ MODEL_PROVIDER: provider, [key]: "k" })).modelProvider, provider);
+  }
 });
 
 test("baseModelProviders constrains the base model only when a provider is declared", () => {
@@ -911,6 +927,33 @@ test("a background deployment id requires an independent deployment control secr
   assert.throws(() => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: " ".repeat(32) }), /DEPLOYMENT_CONTROL_SECRET/);
 });
 
+test("the spend export token is optional, strong, trimmed and never shared with another environment value", () => {
+  const env = {
+    CORE_SIGNING_SECRET: "source-signing-secret-0123456789abcdef",
+    CAPABILITY_SECRET: "capability-secret-0123456789abcdef0123",
+    PORTAL_IDENTITY_SECRET: "portal-identity-secret-0123456789abcdef",
+    SPEND_EXPORT_TOKEN: "spend-export-token-0123456789abcdef01234",
+  };
+  assert.equal(loadConfig(env).spendExportToken, env.SPEND_EXPORT_TOKEN);
+  assert.equal(loadConfig({ ...env, SPEND_EXPORT_TOKEN: undefined }).spendExportToken, undefined);
+  assert.equal(loadConfig({ ...env, SPEND_EXPORT_TOKEN: "" }).spendExportToken, undefined);
+  assert.throws(() => loadConfig({ ...env, SPEND_EXPORT_TOKEN: "short" }), /SPEND_EXPORT_TOKEN/);
+  assert.throws(() => loadConfig({ ...env, SPEND_EXPORT_TOKEN: " ".repeat(40) }), /SPEND_EXPORT_TOKEN/);
+  assert.throws(() => loadConfig({ ...env, SPEND_EXPORT_TOKEN: `${env.SPEND_EXPORT_TOKEN}\n` }), /SPEND_EXPORT_TOKEN/);
+  for (const name of [
+    "CORE_SIGNING_SECRET",
+    "QM_SLACK_SERVICE_TOKEN",
+    "DEPLOY_APPS_SESSION_SECRET",
+    "SLACK_SIGNING_SECRET",
+  ]) {
+    assert.throws(
+      () => loadConfig({ ...env, [name]: env.SPEND_EXPORT_TOKEN }),
+      /SPEND_EXPORT_TOKEN/,
+      `${name} must not share the export token`,
+    );
+  }
+});
+
 test("sandbox capability TTL is deployment-configurable with a 48-hour default", () => {
   assert.equal(loadConfig({}).sandboxCapabilityTtlMs, 48 * 3_600_000);
   assert.equal(loadConfig({ SANDBOX_CAPABILITY_TTL_HOURS: "168" }).sandboxCapabilityTtlMs, 168 * 3_600_000);
@@ -971,5 +1014,24 @@ test("The Render sandbox backend needs a tagged, digest-pinned RENDER_SANDBOX_IM
   assert.ok(!enabledSandboxBackends(loadConfig(secondary)).includes("render"));
   assert.ok(
     enabledSandboxBackends(loadConfig({ ...secondary, RENDER_SANDBOX_IMAGE: RENDER_IMAGE })).includes("render"),
+  );
+});
+
+test("PRIVATE_NETWORK_ALLOWED_ORIGINS is parsed at startup and a bad entry stops core without echoing it", () => {
+  assert.equal(loadConfig({}).privateNetworkAllowedOrigins.size, 0);
+  assert.deepEqual(
+    [
+      ...loadConfig({ PRIVATE_NETWORK_ALLOWED_ORIGINS: "http://gbrain:8787,https://brain.example-tailnet.ts.net" })
+        .privateNetworkAllowedOrigins,
+    ],
+    ["http://gbrain:8787", "https://brain.example-tailnet.ts.net"],
+  );
+  assert.throws(
+    () => loadConfig({ PRIVATE_NETWORK_ALLOWED_ORIGINS: "http://gbrain:8787,http://admin:PASSWORD@localhost:8787" }),
+    (e: unknown) => {
+      assert.match(String(e), /PRIVATE_NETWORK_ALLOWED_ORIGINS entry 2 \(http:\/\/localhost:8787\)/);
+      assert.doesNotMatch(String(e), /PASSWORD|admin/);
+      return true;
+    },
   );
 });

@@ -124,3 +124,35 @@ test("non-2xx responses exit with the status and body excerpt", { skip: !havePyt
   assert.ok(res.stderr.includes("gmail api 403"));
   assert.ok(res.stderr.includes("nope"));
 });
+
+test("app-connection calls reuse the account the proxy resolved on the first call", { skip: !havePython }, () => {
+  const dir = mkdtempSync(join(tmpdir(), "gmail-proxy-"));
+  const log = join(dir, "calls.jsonl");
+  const stub = join(dir, "curl");
+  writeFileSync(
+    stub,
+    `#!/usr/bin/env python3\nimport json, sys\nargs = sys.argv[1:]\nbody = sys.stdin.read() if "@-" in args else ""\n` +
+      `open(${JSON.stringify(log)}, "a").write(body + "\\n")\n` +
+      `open(args[args.index("-D") + 1], "w").write("HTTP/1.1 200 OK\\r\\nX-Composio-Account: ca_resolved1\\r\\n\\r\\n")\n` +
+      `print(json.dumps({"messages": [{"id": "m1"}, {"id": "m2"}], "threadId": "t1", "payload": {"headers": []}}) + "\\n200", end="")\n`,
+  );
+  chmodSync(stub, 0o755);
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    PATH: `${dir}:${process.env.PATH}`,
+    AGENT_API_URL: "http://qm.test",
+    AGENT_API_TOKEN: "cap",
+  };
+  delete env.VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM;
+  execFileSync("python3", [SCRIPT, "search", "is:unread", "--limit", "2"], { encoding: "utf8", env });
+  const calls = readFileSync(log, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  assert.equal(calls.length, 3);
+  assert.equal(calls[0].accountId, undefined);
+  assert.deepEqual(
+    calls.slice(1).map((c: { accountId?: string }) => c.accountId),
+    ["ca_resolved1", "ca_resolved1"],
+  );
+});

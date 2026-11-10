@@ -5,7 +5,7 @@ import { awaitProcessExit } from "../sandbox/await-process-exit.ts";
 import { ProcessSessionGoneError } from "../sandbox/exec-process-session.ts";
 import type { ProcessSandbox, SandboxHandle } from "../sandbox/sandbox.ts";
 import { errMessage, swallow } from "../util/errors.ts";
-import { inTenantOf } from "../tenants/claim.ts";
+import { claimThenBind } from "../tenants/claim.ts";
 
 const PROCESS_REAPER_LEASE_KEY = "processes:reaper";
 
@@ -70,27 +70,31 @@ export interface ProcessReaperOptions {
 export function createProcessReaper(registry: ProcessRegistry, opts: ProcessReaperOptions): ProcessReaper {
   const leaderLease = opts.leaderLease;
   async function sweep(): Promise<{ reaped: number }> {
-    const expired = await registry.listExpired();
     let reaped = 0;
-    for (const rec of expired) if (await inTenantOf(rec.tenantId, () => reap(rec))) reaped++;
+    await claimThenBind(
+      () => registry.claimExpired(),
+      async (id) => {
+        const rec = await registry.get(id);
+        if (rec?.status !== "running") return;
+        if (opts.kill) {
+          try {
+            await opts.kill(rec);
+          } catch (error) {
+            swallow(`process reaper: kill ${rec.processId}`, error);
+            return;
+          }
+        }
+        const flipped = await registry.markStatus(rec.processId, "reaped");
+        if (!flipped) return;
+        reaped++;
+        if (opts.onReaped)
+          await opts
+            .onReaped(rec)
+            .catch((err) => console.error("[process-reaper] onReaped hook failed:", errMessage(err)));
+      },
+    );
     await opts.afterSweep?.();
     return { reaped };
-  }
-
-  async function reap(rec: ProcessRecord): Promise<boolean> {
-    if (opts.kill) {
-      try {
-        await opts.kill(rec);
-      } catch (error) {
-        swallow(`process reaper: kill ${rec.processId}`, error);
-        return false;
-      }
-    }
-    const flipped = await registry.markStatus(rec.processId, "reaped");
-    if (!flipped) return false;
-    if (opts.onReaped)
-      await opts.onReaped(rec).catch((err) => console.error("[process-reaper] onReaped hook failed:", errMessage(err)));
-    return true;
   }
 
   const sweeper = createSweeper(() => leaderLease.hold(PROCESS_REAPER_LEASE_KEY, sweep), opts.intervalMs);

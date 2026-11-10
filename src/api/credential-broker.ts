@@ -1,15 +1,11 @@
 import { isComposioHost } from "../credentials/keychain.ts";
 import { errMessage } from "../util/errors.ts";
-import { attestableActor, UNATTESTABLE_ACTOR_FIX } from "../directory/person.ts";
+import { attestableActor, attestsInAudience, OutsideAudience, UNATTESTABLE_ACTOR_FIX } from "../directory/person.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { ScopeId } from "../types.ts";
 import type { CredentialUsageSink } from "../admin/credential-usage-sink.ts";
-import {
-  credentialInjectionError,
-  credentialRequestHeaders,
-  type DecryptedServiceCredential,
-  type ServiceCredentialReader,
-} from "../credentials/keychain.ts";
+import type { DecryptedServiceCredential, ServiceCredentialReader } from "../credentials/keychain.ts";
+import { credentialInjectionError, credentialRequestHeaders } from "../credentials/credential-injection.ts";
 
 export interface BrokerFetchResponse {
   status: number;
@@ -208,6 +204,18 @@ export async function brokerCredentialCall(opts: {
   const actor = attestableActor(claims.actorId);
   if (rec.injection?.actor && !actor) {
     return deny(403, "invalid_actor", `actor identity cannot be attested. ${UNATTESTABLE_ACTOR_FIX}`, rec.host);
+  }
+  if (
+    rec.injection?.actor &&
+    !attestsInAudience(
+      rec.injection.audience,
+      actor,
+      claims.deployment ? claims.scopeId : claims.audienceScopeId,
+      claims.actAsActor,
+    )
+  ) {
+    const refusal = new OutsideAudience("this credential");
+    return deny(403, refusal.code, refusal.message, rec.host);
   }
   let parsed: URL;
   try {

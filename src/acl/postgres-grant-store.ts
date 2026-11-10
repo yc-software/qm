@@ -1,9 +1,9 @@
-import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
+import { createPgPool, withPgTransaction, type PgMigrationDefinition } from "../persistence/pg-pool.ts";
 import type { Grant, Permission, ScopeId } from "../types.ts";
 import { sameGrantSet, type GrantPersistence } from "./acl-store.ts";
 import { refPrefix } from "./resource-ref.ts";
 import { likeEscape } from "../persistence/like.ts";
-import { TENANCY, tenantTables } from "../tenants/migrations.ts";
+import { tenantTables } from "../tenants/migrations.ts";
 
 export function rowToGrant(r: Record<string, unknown>): Grant {
   return {
@@ -15,13 +15,11 @@ export function rowToGrant(r: Record<string, unknown>): Grant {
   };
 }
 
-export function createPostgresGrantStore(connectionString: string): GrantPersistence {
-  const db = createPgPool(connectionString, [
-    ...TENANCY,
-    {
-      id: "acl/grants/0001",
-      statements: [
-        `CREATE TABLE IF NOT EXISTS acl_grants(
+export const ACL_GRANT_MIGRATIONS: PgMigrationDefinition[] = [
+  {
+    id: "acl/grants/0001",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS acl_grants(
         owner_scope_id   TEXT NOT NULL,
         path             TEXT NOT NULL,
         grantee_scope_id TEXT NOT NULL,
@@ -29,33 +27,33 @@ export function createPostgresGrantStore(connectionString: string): GrantPersist
         granted_by       TEXT NOT NULL,
         PRIMARY KEY (owner_scope_id, path, grantee_scope_id, permission)
       )`,
-      ],
-    },
-    {
-      id: "acl/grants/0002",
-      statements: [
-        `CREATE TABLE IF NOT EXISTS acl_grants_version(
+    ],
+  },
+  {
+    id: "acl/grants/0002",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS acl_grants_version(
         only_row BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (only_row),
         v        BIGINT NOT NULL
       )`,
-        `INSERT INTO acl_grants_version(only_row, v) VALUES (TRUE, 0) ON CONFLICT (only_row) DO NOTHING`,
-        `CREATE OR REPLACE FUNCTION acl_grants_bump_version() RETURNS trigger LANGUAGE plpgsql AS $fn$
+      `INSERT INTO acl_grants_version(only_row, v) VALUES (TRUE, 0) ON CONFLICT (only_row) DO NOTHING`,
+      `CREATE OR REPLACE FUNCTION acl_grants_bump_version() RETURNS trigger LANGUAGE plpgsql AS $fn$
       BEGIN
         INSERT INTO acl_grants_version(only_row, v) VALUES (TRUE, 1)
         ON CONFLICT (only_row) DO UPDATE SET v = acl_grants_version.v + 1;
         RETURN NULL;
       END
       $fn$`,
-        `DROP TRIGGER IF EXISTS acl_grants_bump ON acl_grants`,
-        `CREATE TRIGGER acl_grants_bump
+      `DROP TRIGGER IF EXISTS acl_grants_bump ON acl_grants`,
+      `CREATE TRIGGER acl_grants_bump
       AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON acl_grants
       FOR EACH STATEMENT EXECUTE FUNCTION acl_grants_bump_version()`,
-      ],
-    },
-    {
-      id: "acl/grants/0003-file-ids",
-      statements: [
-        `DO $migrate$
+    ],
+  },
+  {
+    id: "acl/grants/0003-file-ids",
+    statements: [
+      `DO $migrate$
       BEGIN
         LOCK TABLE acl_grants IN SHARE ROW EXCLUSIVE MODE;
         CREATE TEMP TABLE acl_file_grant_ids ON COMMIT DROP AS
@@ -82,48 +80,37 @@ export function createPostgresGrantStore(connectionString: string): GrantPersist
           ON CONFLICT (owner_scope_id, path, grantee_scope_id, permission) DO NOTHING;
       END
       $migrate$`,
-      ],
-    },
+    ],
+  },
+  {
+    id: "acl/grants/0004-grantee-index",
+    statements: [
+      `CREATE INDEX CONCURRENTLY IF NOT EXISTS acl_grants_by_grantee ON acl_grants(grantee_scope_id, path text_pattern_ops)`,
+    ],
+  },
+  ...tenantTables(
+    "acl/grants/0005-tenants",
+    [
+      { table: "acl_grants", primaryKey: "owner_scope_id, path, grantee_scope_id, permission" },
+      { table: "acl_grants_version", primaryKey: "only_row" },
+    ],
     {
-      id: "acl/grants/0004-grantee-index",
-      statements: [
-        `CREATE INDEX CONCURRENTLY IF NOT EXISTS acl_grants_by_grantee ON acl_grants(grantee_scope_id, path text_pattern_ops)`,
-      ],
-    },
-    ...tenantTables(
-      "acl/grants/0005-tenants",
-      [
-        { table: "acl_grants", primaryKey: "owner_scope_id, path, grantee_scope_id, permission" },
-        { table: "acl_grants_version", primaryKey: "only_row" },
-      ],
-      {
-        before: [`DELETE FROM acl_grants_version`],
-        after: [
-          `CREATE OR REPLACE FUNCTION acl_grants_bump_version() RETURNS trigger LANGUAGE plpgsql AS $fn$
+      before: [`DELETE FROM acl_grants_version`],
+      after: [
+        `CREATE OR REPLACE FUNCTION acl_grants_bump_version() RETURNS trigger LANGUAGE plpgsql AS $fn$
       BEGIN
-        IF TG_LEVEL = 'STATEMENT' THEN
-          UPDATE acl_grants_version SET v = v + 1;
-        ELSE
-          INSERT INTO acl_grants_version(tenant_id, only_row, v)
-          SELECT DISTINCT tenant, TRUE, 1
-            FROM (VALUES (CASE WHEN TG_OP <> 'INSERT' THEN OLD.tenant_id END),
-                         (CASE WHEN TG_OP <> 'DELETE' THEN NEW.tenant_id END)) changed(tenant)
-           WHERE tenant IS NOT NULL
-          ON CONFLICT (tenant_id, only_row) DO UPDATE SET v = acl_grants_version.v + 1;
-        END IF;
+        INSERT INTO acl_grants_version(only_row, v) VALUES (TRUE, 1)
+        ON CONFLICT (tenant_id, only_row) DO UPDATE SET v = acl_grants_version.v + 1;
         RETURN NULL;
       END
       $fn$`,
-          `DROP TRIGGER IF EXISTS acl_grants_bump ON acl_grants`,
-          `CREATE TRIGGER acl_grants_bump AFTER INSERT OR UPDATE OR DELETE ON acl_grants
-      FOR EACH ROW EXECUTE FUNCTION acl_grants_bump_version()`,
-          `DROP TRIGGER IF EXISTS acl_grants_truncate ON acl_grants`,
-          `CREATE TRIGGER acl_grants_truncate AFTER TRUNCATE ON acl_grants
-      FOR EACH STATEMENT EXECUTE FUNCTION acl_grants_bump_version()`,
-        ],
-      },
-    ),
-  ]);
+      ],
+    },
+  ),
+];
+
+export function createPostgresGrantStore(connectionString: string): GrantPersistence {
+  const db = createPgPool(connectionString, ACL_GRANT_MIGRATIONS);
   const { q } = db;
 
   return {

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import type { IncomingMessage } from "node:http";
 
-process.env.PORTAL_PUBLIC_URL = "https://agent.example.test";
+process.env.PUBLIC_WEB_URL = "https://agent.example.test";
 process.env.PORTAL_SESSION_SECRET = "client-ip-test-portal-secret";
 process.env.CORE_SIGNING_SECRET = "client-ip-test-core-secret";
 process.env.PORTAL_XFF_TRUSTED_HOPS = "2";
@@ -36,7 +36,7 @@ test("with two trusted proxies the client is the hop the inner proxy recorded, n
 test("on Fly the edge header is the identity and a client-supplied X-Forwarded-For is ignored", async () => {
   const onFly = { ...process.env, FLY_APP_NAME: "acme-portal", PORTAL_XFF_TRUSTED_HOPS: "2" };
   const script = `
-    process.env.PORTAL_PUBLIC_URL = "https://agent.example.test";
+    process.env.PUBLIC_WEB_URL = "https://agent.example.test";
     process.env.PORTAL_SESSION_SECRET = "client-ip-test-portal-secret";
     process.env.CORE_SIGNING_SECRET = "client-ip-test-core-secret";
     const { clientIpOf } = await import("./src/index.ts");

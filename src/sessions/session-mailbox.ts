@@ -1,11 +1,15 @@
 import type { DurableMap } from "../persistence/durable-map.ts";
+import type { ClaimedRow } from "../tenants/claim.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 
+export const PEER_TASK_BANNER =
+  "Task handed to you by another conversation (see from/fromSessionId below). Decide whether to do it now, after your current task, or not at all; if you defer or decline it, tell the sender with sessions send_message and wake:false:";
 export interface SessionMessage {
   id: string;
   recipientId: string;
   senderId: string;
   actor: OrchestratorInput["actor"];
+  botActor?: boolean;
   text: string;
   sourceEntrySeq?: number;
   audience: OrchestratorInput["conversation"]["audience"];
@@ -15,6 +19,7 @@ export interface SessionMessage {
   senderRunId?: string;
   resultOf?: string;
   delegatingRunId?: string;
+  peerDepth?: number;
 }
 
 export function createSessionMailbox(backing: DurableMap<SessionMessage>) {
@@ -36,6 +41,9 @@ export function createSessionMailbox(backing: DurableMap<SessionMessage>) {
       return rows
         .filter((row) => recipients.has(row.recipientId) && !row.consumed)
         .sort((a, b) => a.createdAt - b.createdAt);
+    },
+    async claimWakeTenants(): Promise<ClaimedRow[]> {
+      return backing.claimTenantsWhere("wake", "true");
     },
     async awaitingWake(afterId?: string): Promise<SessionMessage[]> {
       return backing.select({ where: { field: "wake", anyOfFold: ["true"] }, limit: 100, afterId });

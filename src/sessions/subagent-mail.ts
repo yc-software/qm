@@ -11,10 +11,12 @@ import type { SessionStore } from "./session-store.ts";
 import type { SessionMailbox, SessionMessage } from "./session-mailbox.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
 import { swallowAs } from "../util/errors.ts";
+import { claimThenBind } from "../tenants/claim.ts";
 import { type Item, proseText } from "./items.ts";
 import {
   ANCESTOR_STOP,
   assertAudienceCompatible,
+  isSidebarSession,
   isSubagentThreadRef,
   PARENT_INTERRUPT,
   requiresDelegation,
@@ -31,6 +33,9 @@ const COMPLETION_WAKE =
 const MESSAGE_WAKE =
   "A subagent sent you a message. Check internal messages with subagents wait (timeoutMs: 0) and decide whether it affects the user's request; report only what is relevant. If it does not, end without posting.";
 const MESSAGE_DISPLAY = "Subagent sent a message";
+const PEER_WAKE =
+  "Another conversation handed you a task. Read it with subagents wait (timeoutMs: 0), then do it, or decline it and tell the sender with sessions send_message and wake:false.";
+const PEER_DISPLAY = "Another conversation handed over a task";
 const RESULT_MAIL = "subagent-mail-";
 const returnWakeKey = (runId: string) => `subagent-return:${runId}`;
 
@@ -43,6 +48,7 @@ export function renderSubagentMail(input: {
   kind: SubagentMailKind;
   body: string;
   stopScope?: StopScope;
+  retired?: boolean;
 }): string {
   const why: Record<SubagentMailKind, string> = {
     final_answer: "finished a turn and sent back its result",
@@ -62,7 +68,7 @@ export function renderSubagentMail(input: {
     `<wake reason="subagent" name="${xmlAttrEscape(input.title)}" sessionId="${input.sessionId}" kind="${input.kind}" at="${new Date().toISOString()}">`,
     `  <why>Your subagent session "${xmlEscape(input.title)}" ${why[input.kind]}${xmlEscape(stopReason)}.</why>`,
     `  <content>${xmlEscape(input.body)}</content>`,
-    `  <instructions>If the person who asked for this work is waiting on it, relay what matters in your own words. Otherwise act on it internally without acknowledging it. Never repeat a result already reported or send a no-action-needed update. The subagent's full transcript is kept with it; use the subagents tool to read it or give it another task.</instructions>`,
+    `  <instructions>If the person who asked for this work is waiting on it, relay what matters in your own words. Otherwise act on it internally without acknowledging it. Never repeat a result already reported or send a no-action-needed update. The subagent's full transcript is kept with it; ${input.retired ? "it has retired, so read it with the subagents tool and open a fresh subagent for new work" : "use the subagents tool to read it or give it another task"}.</instructions>`,
     "</wake>",
   ].join("\n");
 }
@@ -70,24 +76,25 @@ export function renderSubagentMail(input: {
 export interface SubagentMailDeps {
   signals?: Pick<RunSignalStore, "pending">;
   deliveries?: Pick<DeliveryStore, "enqueue">;
-  delegationEnabled?: (actorId: string) => Promise<boolean>;
   mailbox: SessionMailbox;
-  sessions: Pick<SessionStore, "get" | "getByThread" | "latestItemSeq" | "visibleItems" | "childrenOf">;
+  sessions: Pick<
+    SessionStore,
+    "get" | "getByThread" | "latestItemSeq" | "visibleItems" | "childrenOf" | "setSpawnMeta"
+  >;
   runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "withdraw"> & Partial<Pick<RunStore, "get">>;
   maxAttempts: number;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
 }
 
-type ParentMailDeps = Pick<
-  SubagentMailDeps,
-  "mailbox" | "runs" | "maxAttempts" | "prepareRequest" | "delegationEnabled"
->;
+type ParentMailDeps = Pick<SubagentMailDeps, "mailbox" | "runs" | "maxAttempts" | "prepareRequest">;
 
 interface ParentSource {
   actor: Principal;
+  botActor?: boolean;
   conversation: Pick<OrchestratorInput["conversation"], "audience">;
   runId?: string;
   delegatingRunId?: string;
+  peerDepth?: number;
 }
 
 interface ParentWake {
@@ -98,14 +105,20 @@ interface ParentWake {
 
 type ParentMail = Pick<
   SessionMessage,
-  "id" | "text" | "sourceEntrySeq" | "wake" | "senderRunId" | "delegatingRunId" | "resultOf"
+  "id" | "text" | "sourceEntrySeq" | "wake" | "senderRunId" | "delegatingRunId" | "resultOf" | "peerDepth"
 >;
 
-const messageWake = (id: string): ParentWake => ({
+const messageWake = (id: string, peer = false): ParentWake => ({
   dedupKey: `subagent-followup:${id}`,
-  text: MESSAGE_WAKE,
-  displayText: MESSAGE_DISPLAY,
+  text: peer ? PEER_WAKE : MESSAGE_WAKE,
+  displayText: peer ? PEER_DISPLAY : MESSAGE_DISPLAY,
 });
+
+export const isPeerMessage = (sender: Session, recipient: Session): boolean =>
+  sender.id !== recipient.id &&
+  sender.scopeId === recipient.scopeId &&
+  isSidebarSession(sender) &&
+  isSidebarSession(recipient);
 
 async function delegatingRun(
   runs: ParentMailDeps["runs"],
@@ -159,14 +172,15 @@ async function parentTurn(
 ) {
   if (parent.threadRef.startsWith("swarm:")) throw new Error("subagent returns cannot enter swarm workers");
   if (parent.scopeId !== child.scopeId) throw new Error("parent and child contexts no longer match");
-  const initiatingRun = await delegatingRun(deps.runs, child, source.delegatingRunId);
+  const peer = source.peerDepth !== undefined;
+  const initiatingRun = peer ? undefined : await delegatingRun(deps.runs, child, source.delegatingRunId);
   const initiatingContext = initiatingRun?.request ?? child.spawnMeta;
-  if (!initiatingContext) throw new Error("the subagent has no verified runtime context yet");
+  if (!peer && !initiatingContext) throw new Error("the subagent has no verified runtime context yet");
   const currentContext = storedContext(parent);
-  const originalParent = parent.threadRef === initiatingContext.conversation.threadRef;
+  const originalParent = !peer && parent.threadRef === initiatingContext!.conversation.threadRef;
   if (!originalParent && !currentContext) throw new Error("the current parent has no verified runtime context yet");
   const meta = originalParent
-    ? initiatingContext
+    ? initiatingContext!
     : {
         ...currentContext!,
         actor: source.actor,
@@ -177,6 +191,7 @@ async function parentTurn(
             : {}),
         },
         unattendedGrants: undefined,
+        botActor: source.botActor,
       };
   const { openFingerprint: _openFingerprint, ...request }: OrchestratorInput & Pick<SpawnMeta, "openFingerprint"> = {
     ...meta,
@@ -217,9 +232,12 @@ async function parentTurn(
     "detectOpener",
     "conversationHeader",
     "cronScript",
+    "infrequentCron",
+    "personaId",
   ] as const)
     delete request[key];
   if (!originalParent) request.addressed = false;
+  if (peer) request.sessionMessageDepth = source.peerDepth;
   const prepared = deps.prepareRequest ? await deps.prepareRequest(request) : request;
   assertAudienceCompatible(source, prepared);
   return { meta, prepared, ...(originalParent && initiatingRun ? { delegatingRunId: initiatingRun.id } : {}) };
@@ -240,9 +258,7 @@ async function wakeParent(
   }
   if (existing && (existing.status === "done" || existing.status === "failed")) return "settled";
   if ((await deps.runs.inFlightForThread(parent.threadRef)).length) return "busy";
-  const surfaceTools =
-    meta.surfaceTools === true ||
-    requiresDelegation(prepared, (await deps.delegationEnabled?.(prepared.actor.id)) === true);
+  const surfaceTools = meta.surfaceTools === true || requiresDelegation(prepared);
   await deps.runs.enqueue({
     sessionId: parent.threadRef,
     dedupKey: wake.dedupKey,
@@ -272,6 +288,7 @@ async function mailParent(
     recipientId: parent.id,
     senderId: child.id,
     actor: turn.prepared.actor,
+    ...(turn.prepared.botActor ? { botActor: true } : {}),
     audience: turn.prepared.conversation.audience,
     createdAt: Date.now(),
   });
@@ -298,6 +315,24 @@ export async function wakeOwnParent(
   return mailParent(deps, sender, parent, turn, marked, messageWake(mail.id));
 }
 
+export async function wakePeer(
+  deps: ParentMailDeps,
+  sender: Session,
+  recipient: Session,
+  source: ParentSource & { peerDepth: number },
+  mail: Pick<SessionMessage, "id" | "text" | "sourceEntrySeq">,
+): Promise<"woken" | "busy" | "settled" | undefined> {
+  if (!isPeerMessage(sender, recipient)) return undefined;
+  const turn = await parentTurn(deps, sender, recipient, source, mail.text, PEER_DISPLAY);
+  const marked: ParentMail = {
+    ...mail,
+    wake: true,
+    peerDepth: source.peerDepth,
+    ...(source.runId ? { senderRunId: source.runId } : {}),
+  };
+  return mailParent(deps, sender, recipient, turn, marked, messageWake(mail.id, true));
+}
+
 type UnreadMailDeps = ParentMailDeps & {
   sessions: Pick<SessionStore, "get" | "getByThread">;
   signals: Pick<RunSignalStore, "pending">;
@@ -314,14 +349,16 @@ export async function wakeForUnreadMail(
 }
 
 export async function sweepUnreadMailWakes(deps: UnreadMailDeps): Promise<void> {
-  for (let page = await deps.mailbox.awaitingWake(); page.length;) {
-    for (const recipientId of new Set(page.map((message) => message.recipientId))) {
-      const parent = await deps.sessions.get(recipientId);
-      if (parent && !(await deps.runs.inFlightForThread(parent.threadRef)).length)
-        await wakeParentForMail(deps, parent).catch(swallowAs("sessions: recover unread mail wake", undefined));
+  await claimThenBind(deps.mailbox.claimWakeTenants, async () => {
+    for (let page = await deps.mailbox.awaitingWake(); page.length;) {
+      for (const recipientId of new Set(page.map((message) => message.recipientId))) {
+        const parent = await deps.sessions.get(recipientId);
+        if (parent && !(await deps.runs.inFlightForThread(parent.threadRef)).length)
+          await wakeParentForMail(deps, parent).catch(swallowAs("sessions: recover unread mail wake", undefined));
+      }
+      page = await deps.mailbox.awaitingWake(page.at(-1)?.id);
     }
-    page = await deps.mailbox.awaitingWake(page.at(-1)?.id);
-  }
+  });
 }
 
 async function wakeParentForMail(
@@ -331,24 +368,26 @@ async function wakeParentForMail(
   if (!deps.runs.get) return undefined;
   const runs = { get: deps.runs.get };
   for (const message of await deps.mailbox.wakesFor(parent.id)) {
-    const wake = messageWake(message.id);
-    const existing = await deps.runs.getByDedupKey(wake.dedupKey);
     const child = await deps.sessions.get(message.senderId);
+    const peer = !!child && isPeerMessage(child, parent);
+    const wake = messageWake(message.id, peer);
+    const existing = await deps.runs.getByDedupKey(wake.dedupKey);
     const outcome =
       existing?.status === "done" ||
       existing?.status === "failed" ||
       !child ||
-      child.parentSessionId !== parent.id ||
-      !isSubagentThreadRef(child.threadRef)
+      (!peer && (child.parentSessionId !== parent.id || !isSubagentThreadRef(child.threadRef)))
         ? "settled"
         : await deps.advisoryLock.withLock("session-tree-admission", async () => {
             if (await runStopped(runs, deps.signals, message.senderRunId ?? message.delegatingRunId)) return "settled";
             const source = {
               actor: message.actor,
+              ...(message.botActor ? { botActor: true } : {}),
               conversation: { audience: message.audience },
               ...(message.delegatingRunId ? { delegatingRunId: message.delegatingRunId } : {}),
+              ...(peer ? { peerDepth: message.peerDepth ?? 1 } : {}),
             };
-            const turn = await parentTurn(deps, child, parent, source, message.text, MESSAGE_DISPLAY).catch(
+            const turn = await parentTurn(deps, child, parent, source, message.text, wake.displayText).catch(
               swallowAs("sessions: unread mail wake", undefined),
             );
             return turn ? wakeParent(deps, parent, turn, message.id, wake) : "settled";
@@ -401,10 +440,17 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run, quie
   const resent = await deps.mailbox.unread(parent.id, resultId);
   const waiting = result?.stopped || failed || resent ? 0 : await pendingWork(deps, child);
   const { kind, body } = mailOf(run, failed, quotes ? turnText(views[0] ?? [], shared, run) : undefined, waiting);
+  const retired =
+    (kind === "final_answer" || kind === "no_reply") &&
+    !child.spawnMeta.persistent &&
+    !(await deps.signals?.pending(run.id))?.some(({ signal }) => signal.kind === "steer") &&
+    !(await deps.runs.inFlightForThread(child.threadRef)).length &&
+    !(await deps.mailbox.pending(child.id)).length;
   const text = renderSubagentMail({
     title,
     sessionId: child.id,
     kind,
+    retired,
     body:
       body.length > 16_000 ? `${body.slice(0, 16_000)}\n[truncated; read the child session for the full result]` : body,
     ...(result?.stopped && result.stopScope ? { stopScope: result.stopScope } : {}),
@@ -442,7 +488,9 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run, quie
     kind !== "in_progress" &&
     (!stopped ||
       (stopped === "self" && result?.stopped === true && ["tree", "session"].includes(result.stopScope ?? "tree")));
-  return (await mailParent(deps, child, parent, turn, mail, wakes ? wake : undefined)) === "settled";
+  const outcome = await mailParent(deps, child, parent, turn, mail, wakes ? wake : undefined);
+  if (retired) await deps.sessions.setSpawnMeta(child.id, { ...child.spawnMeta, retired: true });
+  return outcome === "settled";
 }
 
 export async function returnSubagentRun(
@@ -464,13 +512,15 @@ export async function settleTreeWakes(
     runs: Pick<RunStore, "pendingReturns" | "markReturned" | "deferReturn">;
   },
   root: Session,
+  botRunsOnly = false,
 ): Promise<void> {
   const tree = (await treeSessions(deps.sessions, root)).filter((session) => session.scopeId === root.scopeId);
   for (const message of await deps.mailbox.wakesFor(...tree.map((session) => session.id)))
-    await deps.mailbox.settle(message.recipientId, message.id);
+    if (!botRunsOnly || message.botActor) await deps.mailbox.settle(message.recipientId, message.id);
   const threadRefs = tree.map((session) => session.threadRef);
   for (const run of await deps.runs.pendingReturns(Number.MAX_SAFE_INTEGER, "", threadRefs))
-    await returnSubagentRun(deps, run, true).catch(swallowAs("sessions: settle tree return", undefined));
+    if (!botRunsOnly || run.request.botActor)
+      await returnSubagentRun(deps, run, true).catch(swallowAs("sessions: settle tree return", undefined));
 }
 
 function turnText(items: readonly Item[], shared: (seq: number) => boolean, run: Run): string | undefined {

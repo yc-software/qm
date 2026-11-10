@@ -6,8 +6,6 @@ import { gzipSync } from "node:zlib";
 import emojiSource from "emoji-datasource/emoji.json" with { type: "json" };
 import { emojiTableModule } from "./src/emoji-source.ts";
 
-const SERVER = process.env.WEB_UI_SERVER_URL ?? "http://localhost:8096";
-
 const here = (rel: string): string => fileURLToPath(new URL(rel, import.meta.url));
 
 const PRECOMPRESS_EXTENSIONS = new Set([".js", ".mjs", ".css", ".svg", ".json", ".map", ".wasm", ".txt"]);
@@ -89,13 +87,6 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
-    port: Number(process.env.VITE_PORT ?? 5173),
     fs: { allow: [fileURLToPath(new URL("..", import.meta.url))] },
-    proxy: {
-      "/signin": SERVER,
-      "/share": SERVER,
-      "/me": SERVER,
-      "/api": SERVER,
-    },
   },
 });

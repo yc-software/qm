@@ -3,15 +3,14 @@ import { parseEnv } from "node:util";
 import { mkdtempSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { startQm } from "../src/start.ts";
 import { loadConfig } from "../src/config.ts";
 import { PROVIDERS } from "../src/connectors/oauth.ts";
 import { scopeId } from "../src/types.ts";
 import { buildGoogleWorkspaceReadSmokeCommand } from "./google-workspace-read-smoke-command.ts";
-import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../plugins/chassis/src/portal-identity.ts";
+import { deriveKey, seal } from "../plugins/portal/src/session.ts";
 
 type Json = Record<string, unknown>;
 
@@ -132,17 +131,6 @@ async function probeGoogleTokenEndpoint(redirectUri: string): Promise<string> {
   return error || `http_${res.status}`;
 }
 
-function stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
-  if (child.exitCode !== null || child.killed) return Promise.resolve();
-  return new Promise((resolveStop) => {
-    child.once("exit", () => resolveStop());
-    child.kill("SIGTERM");
-    setTimeout(() => {
-      if (child.exitCode === null) child.kill("SIGKILL");
-    }, 2_000).unref();
-  });
-}
-
 const loadedEnv = loadEnvFallbacks();
 const missing = ["GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET"].filter((name) => !process.env[name]);
 if (missing.length > 0) {
@@ -163,9 +151,8 @@ const orgId = process.env.ORG_ID ?? "acme";
 const secret = process.env.CORE_SIGNING_SECRET ?? `google-oauth-smoke-${randomUUID()}`;
 const corePort = await freePort();
 const webPort = await freePort();
-const coreBase = `http://127.0.0.1:${corePort}`;
 const webBase = `http://127.0.0.1:${webPort}`;
-const redirectUri = `${webBase}/connectors/oauth/google/callback`;
+const redirectUri = `${webBase}/v1/connectors/oauth/google/callback`;
 const expectedRedirect = process.env.GOOGLE_OAUTH_REDIRECT_URI ?? process.env.GOOGLE_OAUTH_REGISTERED_REDIRECT_URI;
 
 if (expectedRedirect && expectedRedirect !== redirectUri) {
@@ -175,39 +162,28 @@ if (expectedRedirect && expectedRedirect !== redirectUri) {
   process.exit(2);
 }
 
-const { built, stop } = await startQm({
-  ...loadConfig({}),
-  databaseUrl: process.env.DATABASE_URL,
-  port: corePort,
-  dataDir: process.env.DATA_DIR ?? mkdtempSync(join(tmpdir(), "qm-google-oauth-smoke-")),
-  orgId,
-  signingSecret: secret,
-});
+const sessionSecret = randomBytes(32).toString("hex");
+const { built, stop } = await startQm(
+  {
+    ...loadConfig({}),
+    databaseUrl: process.env.DATABASE_URL,
+    port: corePort,
+    publicPort: webPort,
+    publicWebUrl: webBase,
+    dataDir: process.env.DATA_DIR ?? mkdtempSync(join(tmpdir(), "qm-google-oauth-smoke-")),
+    orgId,
+    signingSecret: secret,
+  },
+  { env: { ...process.env, CORE_SIGNING_SECRET: secret, PORTAL_SESSION_SECRET: sessionSecret } },
+);
 
-let web: ChildProcessWithoutNullStreams | null = null;
 try {
-  web = spawn(process.execPath, ["plugins/web-ui/server/index.ts"], {
-    cwd: process.cwd(),
-    env: {
-      PATH: process.env.PATH ?? "",
-      HOME: process.env.HOME ?? "",
-      NODE_OPTIONS: process.env.NODE_OPTIONS ?? "",
-      CORE_API_URL: coreBase,
-      CORE_ORG_ID: orgId,
-      CORE_SIGNING_SECRET: secret,
-      PORT: String(webPort),
-      WEB_UI_PUBLIC_URL: webBase,
-      WEB_UI_PRINCIPALS: actor,
-    },
-  });
-  web.stderr.on("data", (chunk) => {
-    const text = String(chunk);
-    if (!/WEB_UI_PRINCIPALS unset/.test(text)) process.stderr.write(`[web-ui] ${text}`);
-  });
   await waitFor(`${webBase}/healthz`, 10_000);
-
+  const issuedAt = Math.floor(Date.now() / 1000);
+  const session = { k: "session", sub: actor, org: orgId, iat: issuedAt, exp: issuedAt + 600 };
   const identity = {
-    [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: actor, exp: Date.now() + 10 * 60_000 }, secret),
+    cookie: `portal_session=${encodeURIComponent(seal(session, deriveKey(sessionSecret, "portal.session.v1")))}`,
+    origin: webBase,
   };
 
   const statusBefore = await fetch(`${webBase}/api/connectors`, { headers: identity });
@@ -228,7 +204,7 @@ try {
   if (!state) throw new Error("Google consent URL is missing state");
 
   const forged = await fetch(
-    `${webBase}/connectors/oauth/google/callback?code=forged-smoke-code&state=forged-smoke-state`,
+    `${webBase}/v1/connectors/oauth/google/callback?code=forged-smoke-code&state=forged-smoke-state`,
     { redirect: "manual" },
   );
   if (forged.status !== 400)
@@ -274,6 +250,5 @@ try {
     console.log("google oauth smoke complete: live Google callback stored a token without printing it");
   }
 } finally {
-  if (web) await stopChild(web);
   await stop();
 }

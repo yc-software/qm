@@ -1,5 +1,5 @@
 import { pollProcess } from "../src/sandbox/process-poll.ts";
-import { test, after, beforeEach } from "node:test";
+import { test, after, beforeEach, mock } from "node:test";
 import assert from "node:assert/strict";
 import { createModalSandbox, type StoredModalSandbox } from "../src/sandbox/modal-sandbox.ts";
 import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
@@ -15,7 +15,7 @@ import { ModalSandboxGoneError, type ModalClient, type ModalSession } from "../s
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
-import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock, testCountedAdvisoryLock, testMap } from "./support/test-database.ts";
 
 let fake: FakeModal;
 let sandbox: Sandbox;
@@ -39,6 +39,24 @@ function checkpointing(around: (snapshot: () => Promise<Checkpoint>) => Promise<
   const wrap = (session: ModalSession): ModalSession => ({
     ...session,
     snapshotHome: () => around(() => session.snapshotHome()),
+  });
+  return {
+    ...fake.client,
+    create: async (options) => wrap(await fake.client.create(options)),
+    fromId: async (id) => wrap(await fake.client.fromId(id)),
+  };
+}
+
+function gatedCommands(marker: string, gate: Promise<void>, onEnter: () => void): ModalClient {
+  const wrap = (session: ModalSession): ModalSession => ({
+    ...session,
+    runCommand: async (command, runOpts) => {
+      if (command.includes(marker)) {
+        onEnter();
+        await gate;
+      }
+      return session.runCommand(command, runOpts);
+    },
   });
   return {
     ...fake.client,
@@ -926,7 +944,7 @@ test("failed native checkpoints wait for the interval across cleanup and mainten
   assert.equal(attempts, 3);
 });
 
-test("deep idle termination excludes writes from another core until recovery", { timeout: 10000 }, async () => {
+test("a write landing during a deep-idle checkpoint keeps the sandbox running", { timeout: 10000 }, async () => {
   const store = testMap<StoredModalSandbox>();
   const advisoryLock = testAdvisoryLock();
   const entered = Promise.withResolvers<void>();
@@ -940,28 +958,90 @@ test("deep idle termination excludes writes from another core until recovery", {
     }
     return checkpoint;
   });
-  const first = make({ store, client, advisoryLock });
-  const second = make({ store, client, advisoryLock });
-  const one = await first.provision(scope);
-  const two = await second.provision(scope);
-  await first.teardown(one);
-  await store.merge(scope, { lastActivityMs: Date.now() - 7 * 3600_000 });
-  block = true;
-  const reaping = first.reapDeepIdle!(6 * 3600_000);
-  await entered.promise;
-  let completed = false;
-  const writing = second.writeFile(two, "after-checkpoint.txt", "must survive").then(() => {
-    completed = true;
-  });
+  mock.timers.enable({ apis: ["Date"], now: Date.now() });
   try {
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    assert.equal(completed, false);
+    const first = make({ store, client, advisoryLock });
+    const second = make({ store, client, advisoryLock });
+    const one = await first.provision(scope);
+    const two = await second.provision(scope);
+    await first.teardown(one);
+    mock.timers.tick(7 * 3600_000);
+    block = true;
+    const reaping = first.reapDeepIdle!(6 * 3600_000);
+    await entered.promise;
+    try {
+      await second.writeFile(two, "after-checkpoint.txt", "must survive");
+    } finally {
+      release.resolve();
+    }
+    assert.equal((await reaping).reaped, 0);
+    assert.equal(fake.current(scopeName())?.state, "running");
+    assert.equal(await second.readFile(two, "after-checkpoint.txt"), "must survive");
+    assert.equal(fake.createdCount(scopeName()), 1);
   } finally {
-    release.resolve();
-    await Promise.all([reaping, writing]);
+    mock.timers.reset();
   }
-  assert.equal(await second.readFile(two, "after-checkpoint.txt"), "must survive");
-  assert.equal(fake.createdCount(scopeName()), 2);
+});
+
+test(
+  "concurrent commands on one scope hold no Postgres session connection while they run",
+  { timeout: 15000 },
+  async () => {
+    const sessions = testCountedAdvisoryLock();
+    const parallel = 8;
+    let running = 0;
+    const allRunning = Promise.withResolvers<void>();
+    const gate = Promise.withResolvers<void>();
+    const client = gatedCommands("parallel-subagent", gate.promise, () => {
+      if (++running === parallel) allRunning.resolve();
+    });
+    const s = make({ client, advisoryLock: sessions.lock });
+    try {
+      const h = await s.provision(scope);
+      const runs = Array.from({ length: parallel }, (_, i) => s.run(h, `echo parallel-subagent ${i}`));
+      try {
+        await allRunning.promise;
+        assert.equal(sessions.held(), 0);
+      } finally {
+        gate.resolve();
+      }
+      const outputs = await Promise.all(runs);
+      assert.deepEqual(
+        outputs.map((r) => r.stdout.trim()),
+        Array.from({ length: parallel }, (_, i) => `parallel-subagent ${i}`),
+      );
+    } finally {
+      await sessions.close();
+    }
+  },
+);
+
+test("the deep-idle reaper spares a sandbox in the middle of a long command", { timeout: 10000 }, async () => {
+  const store = testMap<StoredModalSandbox>();
+  const entered = Promise.withResolvers<void>();
+  const gate = Promise.withResolvers<void>();
+  const s = make({ store, client: gatedCommands("long-build", gate.promise, () => entered.resolve()) });
+  mock.timers.enable({ apis: ["Date", "setInterval"], now: Date.now() });
+  try {
+    const h = await s.provision(scope);
+    await s.teardown(h);
+    const building = s.run(h, "echo long-build");
+    await entered.promise;
+    const fresh = async (): Promise<boolean> => Date.now() - (await store.get(scope))!.lastActivityMs! <= 10 * 60_000;
+    for (let minute = 0; minute < 60; minute += 5) {
+      mock.timers.tick(5 * 60_000);
+      for (let attempt = 0; attempt < 100 && !(await fresh()); attempt++)
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.ok(await fresh(), "the running command keeps the activity fresh");
+    }
+    assert.equal((await s.reapDeepIdle!(1)).reaped, 0);
+    assert.equal(fake.current(scopeName())?.state, "running");
+    gate.resolve();
+    assert.equal((await building).stdout.trim(), "long-build");
+  } finally {
+    gate.resolve();
+    mock.timers.reset();
+  }
 });
 
 test("turn env reaches commands through the exec env parameter, never as inlined exports", async () => {
@@ -1078,4 +1158,26 @@ test("released scratch handles cannot recreate a persistent sandbox", async () =
   const handle = await sandbox.provision(scope, { scratch: { key: "released-handle" } });
   await sandbox.teardown(handle, { destroy: true });
   await assert.rejects(sandbox.run(handle, "true"), /handle has been released/);
+});
+
+test("a computer's memory size reaches every Modal create, and a resize restart recreates at once or keeps the old size", async () => {
+  const sizes: Array<number | undefined> = [];
+  const s = make({
+    client: {
+      ...fake.client,
+      create: async (options: Parameters<ModalClient["create"]>[0]) => {
+        sizes.push(options.memoryGb);
+        if (options.memoryGb === 999) throw new Error("memory exceeds the largest worker");
+        return fake.client.create(options);
+      },
+    },
+  });
+  const h = await s.provision(scope, { memoryGb: 4 });
+  fake.terminate(h.id);
+  assert.equal((await s.run(h, "true")).code, 0);
+  await s.restartComputer!(scope, 8);
+  await assert.rejects(s.restartComputer!(scope, 999), /largest worker/);
+  assert.equal((await s.run(h, "true")).code, 0);
+  assert.deepEqual(sizes, [4, 4, 8, 999, 8]);
+  assert.equal(s.profile.sizesMemory, true);
 });

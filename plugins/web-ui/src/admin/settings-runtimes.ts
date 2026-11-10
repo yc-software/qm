@@ -8,7 +8,7 @@ import { states, type SettingsState } from "./settings.ts";
 
 const rows: [key: string, label: string, inherit?: string][] = [
   ["runtime", "Conversation runtime"],
-  ["cron-runtime", "Cron runtime", "Job's scope default"],
+  ["cron-runtime", "Cron runtime (more than daily)", "Job's scope default"],
   ["subagent-runtime", "Subagent runtime", "Child's scope default"],
   ["fallback-runtime", "Fallback runtime", "No fallback"],
 ];

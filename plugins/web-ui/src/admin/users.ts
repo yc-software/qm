@@ -4,7 +4,7 @@ import { formatMessageTime } from "../message-time.ts";
 import type { AdminPage } from "./sections.ts";
 import { pageHeader, table, card, badge, subline, matches } from "./shared.ts";
 import { keychain } from "./keychain.ts";
-import { detail, labelRole } from "./user-detail.ts";
+import { detail, labelRole, userHref } from "./user-detail.ts";
 
 const failure = (r: any, fallback: string) =>
   r.status === 403 ? "You don't administer this scope." : r.data?.message || `${fallback} (${r.status}).`;
@@ -24,7 +24,6 @@ function users(page: AdminPage, initial: any) {
   let showOffboarded = false;
   let [email, role, message, inviteLink, inviteWarning] = ["", "member", "", "", ""];
   let busy = false;
-  const userHref = (principal: string) => page.href("user", { principal });
   const confirmAdmin = (id: string) =>
     window.confirm(
       "Make " + id + " an org admin?\n\nThey will be able to manage users, permissions, and organization settings.",
@@ -90,7 +89,14 @@ function users(page: AdminPage, initial: any) {
     const roster = (data.users || []).filter(
       (u: any) =>
         (showOffboarded || !u.offboarded) &&
-        matches(filter, u.principalId, u.admin?.role || "", u.admin?.scopeId || "member"),
+        matches(
+          filter,
+          ...(u.aliases?.length ? u.aliases : [u.principalId]),
+          u.displayName || "",
+          u.admin?.role || "",
+          u.admin?.scopeId || "member",
+          u.kind === "app" ? "app" : "",
+        ),
     );
     const hidden = showOffboarded ? 0 : offboarded;
     const admins = (data.grants || []).filter((g: any) => g.role === "org_admin").length;
@@ -107,7 +113,11 @@ function users(page: AdminPage, initial: any) {
             { label: "Users", href: page.href("users"), active: true },
             { label: "Keychain", href: page.href("keychain") },
           ],
-          search: { value: filter, placeholder: "principal, role, or scope", onInput: (v) => ((filter = v), draw()) },
+          search: {
+            value: filter,
+            placeholder: "sign-in, role, scope, or app",
+            onInput: (v) => ((filter = v), draw()),
+          },
         })}
         <div class="list-root">
           ${card(
@@ -149,9 +159,12 @@ function users(page: AdminPage, initial: any) {
                 ["Principal", "Role", "Last seen", "Sessions", "Turns", ""],
                 roster.map((u: any) => [
                   {
-                    node: html`<a href=${userHref(u.principalId)}>${u.principalId}</a>
-                      ${u.offboarded || u.deactivated ? badge(u.offboarded ? "offboarded" : "deactivated", "warn") : ""}`,
-                    cls: "mono",
+                    node: html`<a href=${userHref(page, u)} title=${u.principalId}
+                        >${u.displayName || html`<span class="mono">${u.principalId}</span>`}</a
+                      >
+                      ${u.kind === "app" ? badge("app") : ""}
+                      ${u.offboarded || u.deactivated ? badge(u.offboarded ? "offboarded" : "deactivated", "warn") : ""}
+                      ${u.aliases?.length > 1 ? subline(u.aliases.filter((a: string) => a !== u.principalId).join(", ")) : ""}`,
                   },
                   { node: subline(u.admin?.isAdmin ? labelRole(u.admin.role) : "member") },
                   { text: u.lastSeenAt ? relTime(u.lastSeenAt) : "-", cls: "num" },

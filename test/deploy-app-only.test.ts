@@ -11,7 +11,7 @@ import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { portalSession, type ViewerTenant } from "../src/deploy/viewer-session.ts";
+import { portalSession } from "../src/deploy/viewer-session.ts";
 import { deriveKey, seal } from "../plugins/portal/src/session.ts";
 import { scopeId } from "../src/types.ts";
 import { deployRef, encodeRef } from "../src/acl/resource-ref.ts";
@@ -22,8 +22,11 @@ import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-
-const UNTENANTED: ViewerTenant = { bound: undefined, legacy: true };
+import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { onTenantLoad } from "../src/tenants/cache.ts";
+import { loadTenantSettings } from "../src/tenants/settings.ts";
+import { TEST_APP_HANDLE } from "./support/app-handle.ts";
+import { ownerUrl, TEST_TENANT } from "./support/test-tenant.ts";
 
 const externalSharingOn = { enabled: async () => true } as unknown as FeatureFlagStore;
 
@@ -35,9 +38,9 @@ function token(appOnly: unknown = true) {
   return seal({ k: "session", sub: guest, org: "acme", iat: now, exp: now + 3600, appOnly }, key);
 }
 test("gateway parser keeps app-only authority and rejects malformed signed markers", () => {
-  assert.deepEqual(portalSession(`portal_session=${token()}`, secret, UNTENANTED), { sub: guest, appOnly: true });
+  assert.deepEqual(portalSession(`portal_session=${token()}`, secret), { sub: guest, appOnly: true });
   for (const marker of ["false", null, 0, {}])
-    assert.equal(portalSession(`portal_session=${token(marker)}`, secret, UNTENANTED), null);
+    assert.equal(portalSession(`portal_session=${token(marker)}`, secret), null);
 });
 
 test("app-only gateway checks exact current personal read grants without inherited or management authority", async () => {
@@ -50,10 +53,18 @@ test("app-only gateway checks exact current personal read grants without inherit
   });
   await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const backings = testDeployBackings({ git: { repoRoot: join(dir, "repos") } });
+  const owner = createPgPool(ownerUrl(backings.databaseUrl).toString());
+  const appPool = createPgPool(backings.databaseUrl);
+  await owner.q(`UPDATE tenants SET settings = settings || jsonb_build_object('handle', $2::text) WHERE id = $1`, [
+    TEST_TENANT,
+    TEST_APP_HANDLE,
+  ]);
+  const stopLoad = onTenantLoad(() => loadTenantSettings(appPool));
   const deploy = createDeployService({
     ...singleProcessDeps(),
     externalSharingAllowed: async () => true,
-    deployStore: createDeployStore(testDeployBackings({ git: { repoRoot: join(dir, "repos") } })),
+    deployStore: createDeployStore(backings),
     provider: {
       profile: { managedScaleToZero: false },
       apply: async () => ({ host: "127.0.0.1", port: (upstream.address() as AddressInfo).port }),
@@ -68,7 +79,7 @@ test("app-only gateway checks exact current personal read grants without inherit
     deploy,
     acl,
     directory: createPostgresDirectoryStore(testDatabaseUrl()),
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    sessions: createPostgresSessionStore(backings.databaseUrl),
     identity,
   } as unknown as Parameters<typeof createApp>[0]);
   const ownerScopeId = scopeId("personal", "owner@example.test");
@@ -114,7 +125,7 @@ test("app-only gateway checks exact current personal read grants without inherit
           path,
           method,
           headers: {
-            host: `${name}.apps.example.test`,
+            host: `${TEST_APP_HANDLE}-${name}.apps.example.test`,
             cookie,
             "sec-fetch-dest": "document",
             accept: "application/json",
@@ -186,6 +197,10 @@ test("app-only gateway checks exact current personal read grants without inherit
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    stopLoad();
+    await owner.q(`UPDATE tenants SET settings = settings - 'handle' WHERE id = $1`, [TEST_TENANT]);
+    await owner.close();
+    await appPool.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });

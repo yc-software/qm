@@ -1,17 +1,18 @@
+import { trimTrailingSlashes } from "../util/text.ts";
 import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import type { Claimed } from "../tenants/claim.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
+import type { ClaimedRow } from "../tenants/claim.ts";
+import { DEPLOYMENT_TABLES, NAME_INDEX } from "./page-views.ts";
+import { tenantAppHandle } from "../tenants/settings.ts";
+import { appHostLabel } from "../tenants/app-handle.ts";
 import {
   createDeployGitStore,
-  type DeployGitDiff,
   type DeployGitInputFile,
   type DeployGitStoreOptions,
   type DeployGitTreeFile,
 } from "./deploy-git-store.ts";
-import { TENANCY, createIfParentTenantKeyed, tenantTables } from "../tenants/migrations.ts";
-import { durableMapTenancy } from "../persistence/durable-map.ts";
 
 export interface DeploymentVersion {
   version: number;
@@ -34,6 +35,17 @@ export interface DeployEndpoint {
   httpVersion?: "1.1" | "2";
   proxyHeaders?: Record<string, string>;
   socksProxyPort?: number;
+}
+
+export function appUrlOf(
+  d: { id: string; name?: string; endpoint?: DeployEndpoint | null },
+  { sharedWebUrl, appsDomain }: { sharedWebUrl: string | undefined; appsDomain: string | undefined },
+): string | undefined {
+  const ref = d.name ?? d.id;
+  const handle = tenantAppHandle();
+  if (appsDomain && handle) return `https://${appHostLabel(handle, ref)}.${appsDomain.toLowerCase()}/`;
+  const path = `/d/${encodeURIComponent(ref)}/`;
+  return publicUrlOf(d.endpoint) ?? (sharedWebUrl ? `${trimTrailingSlashes(sharedWebUrl)}${path}` : undefined);
 }
 
 export function publicUrlOf(endpoint: DeployEndpoint | null | undefined): string | undefined {
@@ -77,6 +89,18 @@ export interface Deployment {
   versions: DeploymentVersion[];
 }
 
+export interface DeploymentDraft {
+  deploymentId: string;
+  commit: string;
+  entrypoint: string;
+  hot: boolean;
+  savedBy: string;
+  savedAt: number;
+  publishAt?: number;
+  reloads: number;
+  failure?: string;
+}
+
 export function currentVersionOf(d: Deployment | null): DeploymentVersion | undefined {
   return d?.versions.find((v) => v.version === d.currentVersion);
 }
@@ -105,7 +129,7 @@ export interface DeployStore {
   get(id: string): Promise<Deployment | null>;
   getByName(name: string): Promise<Deployment | null>;
   list(): Promise<Deployment[]>;
-  acrossTenants(): Promise<Array<Claimed<Deployment>>>;
+  claimTenants(): Promise<ClaimedRow[]>;
   setCurrentVersion(id: string, version: number): Promise<void>;
   setVersionImage(id: string, version: number, image: string): Promise<void>;
   setStatus(id: string, status: DeploymentStatus): Promise<void>;
@@ -118,20 +142,27 @@ export interface DeployStore {
   setConnectors(id: string, connectors: string[] | undefined): Promise<void>;
   setPublic(id: string, isPublic: boolean): Promise<void>;
   setDefaultAudience(id: string, snapshot: DefaultAudienceSnapshot): Promise<void>;
-  setAppliedVersion(id: string, version: number): Promise<void>;
+  setAppliedVersion(id: string, version: number, placedCommit?: string): Promise<void>;
   touch(id: string, at: number): Promise<void>;
   versionOf(id: string, version: number): Promise<DeploymentVersion | null>;
   treeOf(id: string, version: number): Promise<DeployGitTreeFile[] | null>;
   commitTreeOf(id: string, commit: string): Promise<DeployGitTreeFile[]>;
-  filesOf(id: string, version: number, paths?: string[]): Promise<DeployGitInputFile[] | null>;
-  diffVersions(id: string, fromVersion: number | undefined, toVersion: number): Promise<DeployGitDiff | null>;
-  bundleOf(id: string, version: number): Promise<Uint8Array | null>;
+  filesOf(id: string, commit: string, paths?: string[]): Promise<DeployGitInputFile[]>;
+  bundleOf(id: string, commit: string): Promise<Uint8Array>;
+  commitDraft(id: string, files: DeployGitInputFile[], parent: string): Promise<string>;
+  keepCommit(id: string, commit: string): Promise<void>;
+  draftOf(id: string): Promise<DeploymentDraft | null>;
+  putDraft(draft: DeploymentDraft): Promise<void>;
+  deleteDraft(id: string): Promise<void>;
+  drafts(): Promise<DeploymentDraft[]>;
+  claimDraftTenants(): Promise<ClaimedRow[]>;
   refOf(id: string, ref: string): Promise<string | null>;
   repoUrl(id: string): Promise<string>;
 }
 
 export interface DeployStoreBackings {
   deployments: DurableMap<Deployment>;
+  drafts: DurableMap<DeploymentDraft>;
   git?: DeployGitStoreOptions;
   pg: PgPool;
   touchDebounceMs?: number;
@@ -139,7 +170,6 @@ export interface DeployStoreBackings {
 
 const CURRENT_REF = "refs/heads/current";
 const versionRef = (version: number): string => `refs/versions/${version}`;
-const NAME_INDEX = "deployments_name_unique";
 const TOUCH_DEBOUNCE_MS = 60_000;
 
 interface DeployAccess {
@@ -149,63 +179,14 @@ interface DeployAccess {
   findByName?(name: string): Promise<Deployment | null>;
 }
 
-const NAME_LOOKUP = {
-  id: "durable-map/deployments/0011-access-tenants-name-lookup",
-  statements: [
-    `CREATE INDEX CONCURRENTLY IF NOT EXISTS deployments_name_lookup ON deployments ((json->>'name')) WHERE json->>'name' IS NOT NULL`,
-  ],
-};
-
-const ACCESS_TENANCY = tenantTables(
-  "durable-map/deployments/0011-access-tenants",
-  [{ table: "deployment_access", primaryKey: "id" }],
-  {
-    foreignKeys: [
-      {
-        table: "deployment_access",
-        name: "deployment_access_id_fkey",
-        columns: "id",
-        references: "deployments(tenant_id, id)",
-        onDelete: "CASCADE",
-      },
-    ],
-    after: [
-      `DROP INDEX IF EXISTS ${NAME_INDEX}`,
-      `CREATE UNIQUE INDEX ${NAME_INDEX} ON deployments (tenant_id, (json->>'name')) WHERE json->>'name' IS NOT NULL`,
-    ],
-  },
-);
-
 function createPgDeployAccess(pg: PgPool): DeployAccess {
-  const migration = {
-    id: "deploy/access/0001",
-    statements: [
-      "CREATE TABLE IF NOT EXISTS deployments (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
-      `CREATE TABLE IF NOT EXISTS deployment_access (
-        id TEXT PRIMARY KEY REFERENCES deployments(id) ON DELETE CASCADE,
-        last_access_at BIGINT NOT NULL
-      )`,
-    ],
-  };
-  const preKeyed = createIfParentTenantKeyed(
-    "deploy/access/0000-tenant-keyed-deployments",
-    "deployments",
-    "deployment_access",
-    "CREATE TABLE deployment_access (id TEXT NOT NULL, last_access_at BIGINT NOT NULL)",
-  );
-  const migrations = [
-    ...TENANCY,
-    preKeyed,
-    migration,
-    ...durableMapTenancy("deployments"),
-    ...ACCESS_TENANCY,
-    NAME_LOOKUP,
-  ];
-  for (const definition of migrations) pg.registerMigration(definition);
+  for (const migration of DEPLOYMENT_TABLES) pg.registerMigration(migration);
   let readyP: Promise<void> | null = null;
   function ready(): Promise<void> {
     if (!readyP) {
-      readyP = pg.migrate(...migrations).catch((e) => {
+      readyP = (async () => {
+        for (const migration of DEPLOYMENT_TABLES) await pg.migrate(migration);
+      })().catch((e) => {
         readyP = null;
         throw e;
       });
@@ -304,8 +285,8 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
     await git.setRef(deploymentId, `refs/deploy-commits/${version.commit}`, version.commit);
   }
 
-  async function updateAppliedRef(deploymentId: string, version: DeploymentVersion): Promise<void> {
-    if (version.commit) await git.setRef(deploymentId, CURRENT_REF, version.commit);
+  async function updateAppliedRef(deploymentId: string, commit: string | undefined): Promise<void> {
+    if (commit) await git.setRef(deploymentId, CURRENT_REF, commit);
     else await git.deleteRef(deploymentId, CURRENT_REF);
   }
 
@@ -373,12 +354,12 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
         : ((await backingMap.all()).find((x) => x.name === name) ?? null);
       return d ? withAccess(d, await access.readOne(d.id)) : null;
     },
+    claimTenants() {
+      return backingMap.claimTenants();
+    },
     async list() {
       const [ds, accessAt] = await Promise.all([backingMap.all(), access.readAll()]);
       return ds.map((d) => withAccess(d, accessAt.get(d.id)));
-    },
-    async acrossTenants() {
-      return (await backingMap.acrossTenants()).map(({ tenantId, value }) => ({ ...value, tenantId }));
     },
     async setCurrentVersion(id, version) {
       const d = await backingMap.get(id);
@@ -451,14 +432,14 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
         await backingMap.put(id, d);
       }
     },
-    async setAppliedVersion(id, version) {
+    async setAppliedVersion(id, version, placedCommit) {
       const d = await backingMap.get(id);
       if (!d) return;
       const v = d.versions.find((x) => x.version === version);
       if (!v) throw new Error(`no such version ${version}`);
       d.appliedVersion = version;
       await backingMap.put(id, d);
-      await updateAppliedRef(id, v);
+      await updateAppliedRef(id, placedCommit ?? v.commit);
     },
     async touch(id, at) {
       const prev = lastTouch.get(id);
@@ -473,21 +454,16 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
       return v?.commit ? git.treeOf(id, v.commit) : null;
     },
     commitTreeOf: (id, commit) => git.treeOf(id, commit),
-    async filesOf(id, version, paths) {
-      const v = (await backingMap.get(id))?.versions.find((x) => x.version === version);
-      return v?.commit ? git.filesOf(id, v.commit, paths) : null;
-    },
-    async diffVersions(id, fromVersion, toVersion) {
-      const d = await backingMap.get(id);
-      if (!d) return null;
-      const from = fromVersion === undefined ? undefined : d.versions.find((v) => v.version === fromVersion)?.commit;
-      const to = d.versions.find((v) => v.version === toVersion)?.commit;
-      return to ? git.diff(id, from, to) : null;
-    },
-    async bundleOf(id, version) {
-      const v = (await backingMap.get(id))?.versions.find((x) => x.version === version);
-      return v?.commit ? git.bundle(id, v.commit) : null;
-    },
+    filesOf: (id, commit, paths) => git.filesOf(id, commit, paths),
+    bundleOf: (id, commit) => git.bundle(id, commit),
+    keepCommit: (id, commit) => git.setRef(id, `refs/deploy-commits/${commit}`, commit),
+    commitDraft: (id, files, parent) =>
+      git.commit({ deploymentId: id, version: 0, files, parent, message: "live edit", ref: CURRENT_REF }),
+    draftOf: (id) => backing.drafts.get(id),
+    putDraft: (draft) => backing.drafts.put(draft.deploymentId, draft),
+    deleteDraft: (id) => backing.drafts.delete(id),
+    drafts: () => backing.drafts.all(),
+    claimDraftTenants: () => backing.drafts.claimTenants(),
     refOf: (id, ref) => git.refOf(id, ref),
     repoUrl: (id) => git.repoUrl(id),
   };

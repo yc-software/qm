@@ -1,87 +1,100 @@
-import { randomBytes } from "node:crypto";
-import pg from "pg";
-import { configurePgPooling, migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
-import { useOwnerDatabase } from "../../src/tenants/owner-pool.ts";
-import { testDatabaseUrl } from "./test-database.ts";
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { after, before, describe } from "node:test";
+import { createPostgresMapFactory } from "../../src/persistence/durable-map.ts";
+import { createPgPool, type PgPool } from "../../src/persistence/pg-pool.ts";
+import { withoutTenant } from "../../src/tenants/context.ts";
+import { testMigratedDatabaseUrl } from "./test-database.ts";
+import { appUrl, ownerUrl } from "./test-tenant.ts";
 
-export const TENANT_A = "00000000-0000-4000-8000-0000000000a1";
-export const TENANT_B = "00000000-0000-4000-8000-0000000000b2";
-
-export interface TwoTenantDatabase {
-  ownerUrl: string;
-  appUrl: string;
-  owner: pg.Pool;
+export interface TwoTenants {
+  owner: PgPool;
+  app: PgPool;
+  appDatabaseUrl: string;
+  ownerDatabaseUrl: string;
+  tenants: readonly [string, string];
   close(): Promise<void>;
 }
 
-const pooledUrl = process.env.DATABASE_POOL_URL;
-
-export function twoTenantTestSkip(): string | false {
-  return process.env.DATABASE_URL ? false : "set DATABASE_URL (a Postgres) to run the two-tenant tests";
-}
-
-function withLogin(url: string, role: string): string {
-  const next = new URL(url);
-  next.username = role;
-  next.password = role;
-  return next.toString();
-}
-
-export async function twoTenantDatabase(registerStores: (ownerUrl: string) => unknown): Promise<TwoTenantDatabase> {
-  const ownerUrl = pooledUrl ? process.env.DATABASE_URL! : testDatabaseUrl();
-  registerStores(ownerUrl);
-  await migrateRegisteredPgSchemas(ownerUrl);
-  const owner = new pg.Pool({ connectionString: ownerUrl, max: 2 });
-  const role = pooledUrl ? "qm_app" : `qmt_app_${randomBytes(6).toString("hex")}`;
-  const database = new URL(ownerUrl).pathname.slice(1);
-  if (pooledUrl)
-    await owner.query(
-      `DO $clear$ DECLARE t text; BEGIN
-         FOR t IN SELECT tablename FROM pg_tables
-           WHERE schemaname = 'public' AND tablename NOT IN ('qm_schema_migrations', 'tenants', 'qm_tenant') LOOP
-           EXECUTE format('TRUNCATE %I CASCADE', t);
-         END LOOP;
-       END $clear$`,
-    );
-  await owner.query("INSERT INTO tenants(id) VALUES ($1), ($2) ON CONFLICT (id) DO NOTHING", [TENANT_A, TENANT_B]);
-  const grants = await owner.connect();
-  await grants.query("SELECT pg_advisory_lock(hashtext('qm-test:two-tenant-grants'))");
-  try {
-    await grants.query(
-      `DO $role$ BEGIN
-         IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${role}') THEN
-           CREATE ROLE ${role} LOGIN PASSWORD '${role}' NOBYPASSRLS;
-         END IF;
-       END $role$`,
-    );
-    await grants.query(`GRANT CONNECT ON DATABASE "${database}" TO ${role}`);
-    await grants.query(`GRANT USAGE, CREATE ON SCHEMA public TO ${role}`);
-    await grants.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${role}`);
-    await grants.query(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${role}`);
-  } finally {
-    await grants.query("SELECT pg_advisory_unlock(hashtext('qm-test:two-tenant-grants'))");
-    grants.release();
-  }
-  const appUrl = withLogin(ownerUrl, role);
-  if (pooledUrl)
-    configurePgPooling({
-      databaseUrl: appUrl,
-      poolUrl: withLogin(pooledUrl, role),
-      ...(process.env.DATABASE_POOL_CA_CERT ? { caCert: process.env.DATABASE_POOL_CA_CERT } : {}),
-      queryMax: 4,
-    });
-  useOwnerDatabase(ownerUrl);
+export async function twoTenants(): Promise<TwoTenants> {
+  const databaseUrl = testMigratedDatabaseUrl();
+  const ownerDatabaseUrl = ownerUrl(databaseUrl).toString();
+  const appDatabaseUrl = appUrl(databaseUrl);
+  const owner = createPgPool(ownerDatabaseUrl);
+  const app = createPgPool(appDatabaseUrl);
+  const tenants = [randomUUID(), randomUUID()] as const;
+  await owner.q("INSERT INTO tenants(id) VALUES ($1), ($2)", [...tenants]);
   return {
-    ownerUrl,
-    appUrl,
     owner,
+    app,
+    appDatabaseUrl,
+    ownerDatabaseUrl,
+    tenants,
     async close() {
-      useOwnerDatabase(undefined);
-      if (!pooledUrl) {
-        await owner.query(`DROP OWNED BY ${role}`);
-        await owner.query(`DROP ROLE ${role}`);
-      }
-      await owner.end();
+      await app.close();
+      await owner.close();
     },
   };
+}
+
+export interface TwoTenantSuite extends Omit<TwoTenants, "close"> {
+  readonly maps: ReturnType<typeof createPostgresMapFactory>;
+  pairs(): Array<[string, string]>;
+}
+
+export function describeTwoTenants(name: string, fn: (db: TwoTenantSuite) => void): void {
+  let db: TwoTenants | undefined;
+  let maps: ReturnType<typeof createPostgresMapFactory> | undefined;
+  const ready = (): TwoTenants => {
+    if (!db) throw new Error("two-tenant database is not ready");
+    return db;
+  };
+  const suite: TwoTenantSuite = {
+    get owner() {
+      return ready().owner;
+    },
+    get app() {
+      return ready().app;
+    },
+    get appDatabaseUrl() {
+      return ready().appDatabaseUrl;
+    },
+    get ownerDatabaseUrl() {
+      return ready().ownerDatabaseUrl;
+    },
+    get tenants() {
+      return ready().tenants;
+    },
+    get maps() {
+      maps ??= createPostgresMapFactory(ready().appDatabaseUrl);
+      return maps;
+    },
+    pairs: () => [
+      [ready().tenants[0], "a"],
+      [ready().tenants[1], "b"],
+    ],
+  };
+  withoutTenant(() =>
+    describe(name, () => {
+      before(async () => {
+        db = await twoTenants();
+      });
+      fn(suite);
+      after(async () => {
+        await maps?.pool.close();
+        await db?.close();
+      });
+    }),
+  );
+}
+
+export async function assertRowsByTenant(
+  owner: PgPool,
+  query: string,
+  expected: unknown[][],
+  params: unknown[] = [],
+): Promise<void> {
+  const byKey = (a: unknown[], b: unknown[]) => JSON.stringify(a).localeCompare(JSON.stringify(b));
+  const rows = (await owner.q(query, params)).map((row) => Object.values(row));
+  assert.deepEqual(rows.toSorted(byKey), expected.toSorted(byKey));
 }

@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { perTenant } from "../tenants/context.ts";
 
 const price = z.number().finite().nonnegative();
 const tokens = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
@@ -61,27 +60,22 @@ export function parseRegisteredModel(value: unknown): RegisteredModel {
     : parseModelOverlay(value);
 }
 
-const overlayState = perTenant(() => ({
+const overlayState = {
   overlays: new Map<string, RegisteredModel>(),
   unavailable: new Map<string, string>(),
-  version: 0,
   snapshot: JSON.stringify([[], [], []]),
-}));
+};
 
 export function overlayModel(id: string): RegisteredModel | undefined {
-  return overlayState().overlays.get(id);
+  return overlayState.overlays.get(id);
 }
 
 export function overlayModels(): RegisteredModel[] {
-  return [...overlayState().overlays.values()];
+  return [...overlayState.overlays.values()];
 }
 
 export function overlayUnavailableReason(id: string): string | undefined {
-  return overlayState().unavailable.get(id);
-}
-
-export function overlaysVersion(): number {
-  return overlayState().version;
+  return overlayState.unavailable.get(id);
 }
 
 export function publishModelOverlays(
@@ -89,11 +83,10 @@ export function publishModelOverlays(
   unavailable: Map<string, string>,
   deleted: readonly string[],
 ): void {
-  const state = overlayState();
+  const state = overlayState;
   const nextSnapshot = JSON.stringify([[...next], [...unavailable], deleted]);
   if (nextSnapshot === state.snapshot) return;
   state.overlays = next;
   state.unavailable = unavailable;
   state.snapshot = nextSnapshot;
-  state.version += 1;
 }

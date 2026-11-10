@@ -2,6 +2,7 @@ import test, { mock } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
+import { startWithFakeCore, type CoreHit } from "./fake-core.ts";
 
 let whoamiProbes = 0;
 let lastWhoamiActor: string | null = null;
@@ -15,7 +16,27 @@ let deploymentLayerRequests = 0;
 const VALID_SOURCE_SIGNATURE = "v0=valid-source-signature";
 
 const upstream = createServer((req: IncomingMessage, res) => {
-  if (req.url?.startsWith("/v1/deployment-layer") || req.url?.startsWith("/v1/deployment/live-session")) {
+  if (req.url === "/readyz" || req.url?.startsWith("/slack/events") || req.url?.startsWith("/v1/spend/export")) {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    return void req.on("end", () => {
+      res.writeHead(req.url === "/readyz" ? 503 : 200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ url: req.url, headers: req.headers, body: Buffer.concat(chunks).toString("utf8") }));
+    });
+  }
+  if (req.url?.startsWith("/v1/deployments/app-1/git/")) {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    return void req.on("end", () => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ url: req.url, headers: req.headers, body: Buffer.concat(chunks).toString("utf8") }));
+    });
+  }
+  if (
+    req.url?.startsWith("/v1/deployment-layer") ||
+    req.url?.startsWith("/v1/deployment/live-session") ||
+    req.url === "/v1/egress-audit"
+  ) {
     deploymentLayerRequests++;
     if (req.headers["x-timestamp"] !== "123" || req.headers["x-signature"] !== VALID_SOURCE_SIGNATURE) {
       res.writeHead(401, { "content-type": "application/json" });
@@ -110,18 +131,15 @@ await new Promise<void>((r) => upstream.listen(0, r));
 const upstreamUrl = `http://localhost:${(upstream.address() as AddressInfo).port}`;
 
 const PUBLIC = "http://portal.test";
-process.env.PORTAL_PUBLIC_URL = PUBLIC;
+process.env.PUBLIC_WEB_URL = PUBLIC;
 process.env.PORTAL_SESSION_SECRET = "router-test-portal-secret";
 process.env.CORE_SIGNING_SECRET = "router-test-core-secret";
-process.env.WEB_UI_UPSTREAM = upstreamUrl;
 process.env.CORE_API_URL = upstreamUrl;
 const SESSION_TTL_S = 28800;
 process.env.PORTAL_SESSION_TTL_S = String(SESSION_TTL_S);
 
-const { server } = await import("../src/index.ts");
 const { deriveKey, seal, open } = await import("../src/session.ts");
-await new Promise<void>((r) => server.listen(0, r));
-const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+const { base, hits, close } = await startWithFakeCore((method, pathname) => pathname.startsWith("/api/aliased/"));
 
 const sessionKey = deriveKey("router-test-portal-secret", "portal.session.v1");
 function sessionCookie(sub: string, ageS = 0): string {
@@ -131,7 +149,7 @@ function sessionCookie(sub: string, ageS = 0): string {
 }
 
 test.after(() => {
-  server.close();
+  close();
   upstream.close();
 });
 
@@ -185,29 +203,28 @@ test("legacy /web-ui prefix redirects permanently to the same path at the root",
   assert.equal(bare.headers.get("location"), "/");
 });
 
-test("valid session: upstream receives ONLY the synthesized cookie, prefix stripped, forged identity dropped", async () => {
-  const r = await fetch(`${base}/web-ui/api/x?q=1`, {
-    headers: {
-      cookie: `${sessionCookie("U1")}; webuiuser=EVIL; admin=EVIL`,
-      "x-as-principal": "EVIL",
-      "x-admin-actor": "EVIL@acme",
-    },
-  });
+test("valid session: the browser request reaches core's web shell with its own session cookie", async () => {
+  const r = await fetch(`${base}/api/x?q=1`, { headers: { cookie: sessionCookie("U1") } });
   assert.equal(r.status, 200);
-  const body = (await r.json()) as { url: string; cookie: string; headers: Record<string, string> };
-  assert.equal(body.url, "/api/x?q=1");
-  assert.equal(body.cookie, "webuiuser=U1");
-  assert.equal(body.headers["x-as-principal"], undefined);
-  assert.equal(body.headers["x-admin-actor"], undefined);
+  const hit = (await r.json()) as CoreHit;
+  assert.equal(hit.lane, "shell");
+  assert.equal(hit.method, "GET");
+  assert.equal(hit.url, "/api/x?q=1");
+  const { openSession, readCookie } = await import("../src/session.ts");
+  assert.match(hit.cookie ?? "", /^portal_session=[^;]+$/);
+  assert.equal(
+    openSession(readCookie(hit.cookie!, "portal_session"), sessionKey, Date.now(), "acme", SESSION_TTL_S)?.sub,
+    "U1",
+  );
 });
 
-test("a session whose subject core links to another principal is proxied as that canonical principal", async () => {
-  const r = await fetch(`${base}/api/x`, { headers: { cookie: sessionCookie("U-alias") } });
+test("a route core serves is handed to core's router, not the shell", async () => {
+  const r = await fetch(`${base}/api/aliased/thing?x=2`, { headers: { cookie: sessionCookie("U1") } });
   assert.equal(r.status, 200);
-  const body = (await r.json()) as { cookie: string };
-  assert.equal(body.cookie, "webuiuser=U1");
-  const unlinked = await fetch(`${base}/api/x`, { headers: { cookie: sessionCookie("U-solo") } });
-  assert.equal(((await unlinked.json()) as { cookie: string }).cookie, "webuiuser=U-solo");
+  const hit = (await r.json()) as CoreHit;
+  assert.equal(hit.lane, "handle");
+  assert.equal(hit.url, "/api/aliased/thing?x=2");
+  assert.match(hit.cookie ?? "", /^portal_session=/);
 });
 
 test("when core cannot resolve the session subject the portal refuses to proxy instead of guessing", async () => {
@@ -226,12 +243,13 @@ test("a signed-in user keeps their last known identity while core cannot answer 
   mock.timers.enable({ apis: ["Date"], now: Date.now() });
   try {
     const first = await fetch(`${base}/api/x`, { headers: { cookie: sessionCookie("U-flaky") } });
-    assert.equal(((await first.json()) as { cookie: string }).cookie, "webuiuser=U1");
+    assert.equal(first.status, 200);
+    assert.equal(((await first.json()) as CoreHit).lane, "shell");
     mock.timers.tick(61_000);
     for (let i = 0; i < 2; i++) {
       const r = await fetch(`${base}/api/x`, { headers: { cookie: sessionCookie("U-flaky") } });
       assert.equal(r.status, 200);
-      assert.equal(((await r.json()) as { cookie: string }).cookie, "webuiuser=U1");
+      assert.equal(((await r.json()) as CoreHit).lane, "shell");
     }
     const drop = await fetch(`${base}/drop/abc/form`, { headers: { cookie: sessionCookie("U-flaky") } });
     assert.equal(drop.status, 503, "routes core does not re-verify never act on a stale identity");
@@ -247,41 +265,28 @@ test("a signed-in user keeps their last known identity while core cannot answer 
   }
 });
 
-test("web-ui /app-edit drops x-frame-options so its own frame-ancestors CSP can allow the app origin", async () => {
-  const editPage = await fetch(`${base}/app-edit?slug=demo`, { headers: { cookie: sessionCookie("U1") } });
-  assert.equal(editPage.status, 200);
-  assert.equal(editPage.headers.get("x-frame-options"), null, "/app-edit must not carry the blanket DENY");
-  const normal = await fetch(`${base}/api/x`, { headers: { cookie: sessionCookie("U1") } });
-  assert.equal(normal.headers.get("x-frame-options"), "DENY", "every other surface path keeps DENY");
-});
-
-test("a surface that declares frame-ancestors keeps it; the blanket DENY stays on everything else", async () => {
-  const file = await fetch(`${base}/api/files/f1/content/demo.html`, { headers: { cookie: sessionCookie("U1") } });
-  assert.equal(file.status, 200);
-  assert.equal(file.headers.get("x-frame-options"), null, "DENY would defeat the surface's own frame-ancestors");
-  assert.match(file.headers.get("content-security-policy") ?? "", /frame-ancestors 'self' \*\.apps\.test/);
-  const normal = await fetch(`${base}/api/x`, { headers: { cookie: sessionCookie("U1") } });
-  assert.equal(normal.headers.get("x-frame-options"), "DENY");
-});
-
 test("/settings reaches the web UI as the signed-in user without an admin probe", async () => {
   const before = whoamiProbes;
   for (const path of ["/settings/users"]) {
-    const r = await fetch(`${base}${path}`, { headers: { cookie: `${sessionCookie("U1")}; admin=EVIL` } });
+    const cookie = sessionCookie("U1");
+    const r = await fetch(`${base}${path}`, { headers: { cookie } });
     assert.equal(r.status, 200);
-    const body = (await r.json()) as { url: string; cookie: string };
-    assert.equal(body.url, path);
-    assert.equal(body.cookie, "webuiuser=U1");
+    const hit = (await r.json()) as CoreHit;
+    assert.equal(hit.lane, "shell");
+    assert.equal(hit.url, path);
+    assert.equal(hit.cookie, cookie);
   }
   assert.equal(whoamiProbes, before);
 });
 
 test("an unclaimed prefix falls through to the web UI surface (its SPA owns unknown paths)", async () => {
-  const r = await fetch(`${base}/nope/x`, { headers: { cookie: sessionCookie("U1") } });
+  const cookie = sessionCookie("U1");
+  const r = await fetch(`${base}/nope/x`, { headers: { cookie } });
   assert.equal(r.status, 200);
-  const body = (await r.json()) as { url: string; cookie: string };
-  assert.equal(body.url, "/nope/x");
-  assert.equal(body.cookie, "webuiuser=U1");
+  const hit = (await r.json()) as CoreHit;
+  assert.equal(hit.lane, "shell");
+  assert.equal(hit.url, "/nope/x");
+  assert.equal(hit.cookie, cookie);
 });
 
 test("an unmatched /v1 path is a hard 404, never the SPA shell", async () => {
@@ -292,23 +297,36 @@ test("an unmatched /v1 path is a hard 404, never the SPA shell", async () => {
 });
 
 test("path confusion: encoded separators are rejected, and a normalized traversal reaches only the web UI as the signed-in user", async () => {
+  const before = hits.length;
   for (const p of ["/web-ui/..%2fadmin/x", "//admin/x", "/web-ui/%2e%2e%2fadmin", "/web-ui/%5cadmin"]) {
     const r = await fetch(`${base}${p}`, { headers: { cookie: sessionCookie("U1") }, redirect: "manual" });
     assert.equal(r.status, 400, `expected 400 for ${p}, got ${r.status}`);
   }
-  const collapsed = await fetch(`${base}/web-ui/%2e%2e/admin/api/me`, { headers: { cookie: sessionCookie("U1") } });
+  assert.equal(hits.length, before);
+  const cookie = sessionCookie("U1");
+  const collapsed = await fetch(`${base}/web-ui/%2e%2e/admin/api/me`, { headers: { cookie } });
   assert.equal(collapsed.status, 200);
-  assert.equal(((await collapsed.json()) as { cookie: string }).cookie, "webuiuser=U1");
+  const hit = (await collapsed.json()) as CoreHit;
+  assert.equal(hit.lane, "shell");
+  assert.equal(hit.url, "/admin/api/me");
+  assert.equal(hit.cookie, cookie);
 });
 
 test("CSRF: a non-GET without a same-origin Origin is refused", async () => {
-  const noOrigin = await fetch(`${base}/web-ui/api/turn`, { method: "POST", headers: { cookie: sessionCookie("U1") } });
+  const before = hits.length;
+  const noOrigin = await fetch(`${base}/api/turn`, { method: "POST", headers: { cookie: sessionCookie("U1") } });
   assert.equal(noOrigin.status, 403);
-  const sameOrigin = await fetch(`${base}/web-ui/api/turn`, {
+  assert.equal(hits.length, before);
+  const sameOrigin = await fetch(`${base}/api/turn`, {
     method: "POST",
     headers: { cookie: sessionCookie("U1"), origin: PUBLIC },
+    body: "{}",
   });
   assert.equal(sameOrigin.status, 200);
+  const hit = (await sameOrigin.json()) as CoreHit;
+  assert.equal(hit.method, "POST");
+  assert.equal(hit.url, "/api/turn");
+  assert.equal(hit.body, "{}");
 });
 
 test("inbound webhooks pass through to the core with NO session, signature headers preserved, no synthesized cookie", async () => {
@@ -490,9 +508,9 @@ test("new human path /drop/:id: form GET reaches the core /v1 drop form with x-d
   assert.equal(ob.headers["x-drop-owner"], "owner@acme");
 });
 
-test("deployments are ON by default — /d/ proxies to core for a signed-in session", async () => {
+test("/d/ proxies to core for a signed-in session", async () => {
   const r = await fetch(`${base}/d/some-app/`, { headers: { cookie: sessionCookie("U1") } });
-  assert.notEqual(r.status, 404, "the /d/ route exists without PORTAL_DEPLOYMENTS_ENABLED");
+  assert.notEqual(r.status, 404, "the /d/ route exists");
 });
 
 test("auth/login sets the tmp cookie and 302s to the IdP with PKCE+state+nonce", async () => {
@@ -532,15 +550,19 @@ test("auth/logout: a no-JS HTML form POST gets a 303 redirect to / (cookies stil
 });
 
 test("root: a signed-in session proxies straight to the web UI; signed-out bounces to login", async () => {
-  const r = await fetch(`${base}/`, { headers: { cookie: sessionCookie("U1"), accept: "text/html" } });
+  const cookie = sessionCookie("U1");
+  const r = await fetch(`${base}/`, { headers: { cookie, accept: "text/html" } });
   assert.equal(r.status, 200);
-  const body = (await r.json()) as { url: string; cookie: string };
-  assert.equal(body.url, "/");
-  assert.equal(body.cookie, "webuiuser=U1");
+  const hit = (await r.json()) as CoreHit;
+  assert.equal(hit.lane, "shell");
+  assert.equal(hit.url, "/");
+  assert.equal(hit.cookie, cookie);
 
+  const before = hits.length;
   const out = await fetch(`${base}/`, { headers: { accept: "text/html" }, redirect: "manual" });
   assert.equal(out.status, 302);
   assert.match(out.headers.get("location") ?? "", /^\/auth\/login\?returnTo=/);
+  assert.equal(hits.length, before);
 });
 
 test("retired credential import routes are not public", async () => {
@@ -674,6 +696,33 @@ test("the exact deployment-layer route carries source auth to core without widen
   assert.equal(deploymentLayerRequests, before + 2, "nearby source-auth paths never reach core");
 });
 
+test("the egress proxy's signed audit POST reaches core through the front door, and nothing nearby does", async () => {
+  const before = deploymentLayerRequests;
+  const payload = JSON.stringify({ records: [{ host: "example.com", verdict: "ok" }] });
+  const relayed = await fetch(`${base}/v1/egress-audit`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-timestamp": "123",
+      "x-signature": VALID_SOURCE_SIGNATURE,
+      cookie: "portal_session=must-not-cross",
+    },
+    body: payload,
+  });
+  assert.equal(relayed.status, 200);
+  const body = (await relayed.json()) as { body: string; headers: Record<string, string> };
+  assert.equal(body.body, payload);
+  assert.equal(body.headers["x-signature"], VALID_SOURCE_SIGNATURE);
+  assert.equal(body.headers.cookie, undefined);
+  assert.equal(deploymentLayerRequests, before + 1);
+
+  const read = await fetch(`${base}/v1/egress-audit`, {
+    headers: { "x-timestamp": "123", "x-signature": VALID_SOURCE_SIGNATURE },
+  });
+  assert.equal(read.status, 404);
+  assert.equal(deploymentLayerRequests, before + 1, "only the POST is passed through");
+});
+
 test("agent capabilities do not bypass the connect/drop browser session gates", async () => {
   const headers = { "x-agent-capability": VALID_AGENT_CAPABILITY };
   const oauth = await fetch(`${base}/connect/redeem/abc?p=google`, { headers, redirect: "manual" });
@@ -685,11 +734,11 @@ test("agent capabilities do not bypass the connect/drop browser session gates", 
 });
 
 test("sliding renewal: a fresh session is NOT re-stamped, an aged one is re-issued with a full TTL (and survives the proxy)", async () => {
-  const fresh = await fetch(`${base}/web-ui/api/x`, { headers: { cookie: sessionCookie("U1") } });
+  const fresh = await fetch(`${base}/api/x`, { headers: { cookie: sessionCookie("U1") } });
   assert.equal(fresh.status, 200);
   assert.doesNotMatch(fresh.headers.get("set-cookie") ?? "", /portal_session=/, "a fresh session is not re-stamped");
 
-  const aged = await fetch(`${base}/web-ui/api/x`, { headers: { cookie: sessionCookie("U1", 20000) } });
+  const aged = await fetch(`${base}/api/x`, { headers: { cookie: sessionCookie("U1", 20000) } });
   assert.equal(aged.status, 200);
   const setCookie = aged.headers.get("set-cookie") ?? "";
   const m = setCookie.match(/portal_session=([^;]+)/);
@@ -739,7 +788,7 @@ test("impersonate start: non-admin is refused; cross-origin is refused; self-tar
   assert.equal(self.status, 400);
 });
 
-test("impersonate: an admin starts it; the web-ui hop carries target + impersonator; cookie is bound to the admin", async () => {
+test("impersonate: an admin starts it, gets a cookie, and can stop it", async () => {
   const start = await fetch(`${base}/auth/impersonate?target=alice@acme`, {
     method: "POST",
     headers: { cookie: sessionCookie("U-admin"), origin: PUBLIC, accept: "application/json" },
@@ -752,12 +801,6 @@ test("impersonate: an admin starts it; the web-ui hop carries target + impersona
   const m = (start.headers.get("set-cookie") ?? "").match(/portal_impersonate=([^;]+)/);
   assert.ok(m, "the impersonation cookie is set");
   const impCookie = `portal_impersonate=${m![1]}`;
-
-  const web = await fetch(`${base}/web-ui/api/x`, { headers: { cookie: `${sessionCookie("U-admin")}; ${impCookie}` } });
-  assert.equal(((await web.json()) as { cookie: string }).cookie, "webuiuser=alice%40acme; webui_impersonator=U-admin");
-
-  const other = await fetch(`${base}/web-ui/api/x`, { headers: { cookie: `${sessionCookie("U1")}; ${impCookie}` } });
-  assert.equal(((await other.json()) as { cookie: string }).cookie, "webuiuser=U1");
 
   const stop = await fetch(`${base}/auth/impersonate/stop`, {
     method: "POST",
@@ -805,6 +848,61 @@ test("the deployment live session forwards both credentials only on its exact ro
   }
 });
 
+test("core's readiness, Slack HTTP events and the spend export reach core through the front door", async () => {
+  assert.equal((await fetch(`${base}/readyz`)).status, 503);
+  const events = await fetch(`${base}/slack/events`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-slack-signature": "v0=sig",
+      "x-slack-request-timestamp": "123",
+      "x-slack-retry-num": "1",
+      cookie: "portal_session=x",
+    },
+    body: '{"type":"event_callback"}',
+  });
+  assert.equal(events.status, 200);
+  const event = (await events.json()) as { headers: Record<string, string>; body: string };
+  assert.equal(event.body, '{"type":"event_callback"}');
+  assert.equal(event.headers["x-slack-signature"], "v0=sig");
+  assert.equal(event.headers["x-slack-retry-num"], "1");
+  assert.equal(event.headers.cookie, undefined);
+  const spend = await fetch(`${base}/v1/spend/export?from=2026-10-01&to=2026-11-01`, {
+    headers: { authorization: "Bearer spend-token" },
+  });
+  assert.equal(spend.status, 200);
+  const exported = (await spend.json()) as { url: string; headers: Record<string, string> };
+  assert.equal(exported.url, "/v1/spend/export?from=2026-10-01&to=2026-11-01");
+  assert.equal(exported.headers.authorization, "Bearer spend-token");
+  assert.equal((await fetch(`${base}/slack/events`)).status === 200, false);
+});
+
+test("deployment git requests reach core with their token and without browser credentials", async () => {
+  const refs = await fetch(`${base}/v1/deployments/app-1/git/info/refs?service=git-upload-pack`, {
+    headers: { authorization: "Bearer deploy-git-token", cookie: "portal_session=x", "git-protocol": "version=2" },
+  });
+  assert.equal(refs.status, 200);
+  const refsBody = (await refs.json()) as { url: string; headers: Record<string, string> };
+  assert.equal(refsBody.url, "/v1/deployments/app-1/git/info/refs?service=git-upload-pack");
+  assert.equal(refsBody.headers.authorization, "Bearer deploy-git-token");
+  assert.equal(refsBody.headers["git-protocol"], "version=2");
+  assert.equal(refsBody.headers.cookie, undefined);
+  const pack = await fetch(`${base}/v1/deployments/app-1/git/git-upload-pack`, {
+    method: "POST",
+    headers: { authorization: "Bearer deploy-git-token", "content-type": "application/x-git-upload-pack-request" },
+    body: "0032want",
+  });
+  assert.equal(pack.status, 200);
+  assert.equal(((await pack.json()) as { body: string }).body, "0032want");
+  for (const [method, path] of [
+    ["POST", "/v1/deployments/app-1/git/info/refs"],
+    ["GET", "/v1/deployments/app-1/git/git-upload-pack"],
+    ["GET", "/v1/deployments/app-1/git/HEAD"],
+    ["GET", "/v1/deployments/app-1/versions"],
+  ] as const)
+    assert.equal((await fetch(`${base}${path}`, { method })).status, 404, `${method} ${path}`);
+});
+
 test("Loop ingress forwards signed events and Google identity without a portal session", async () => {
   const response = await fetch(`${base}/v1/loop-ingress/gmail`, {
     method: "POST",
@@ -825,17 +923,11 @@ test("Loop ingress forwards signed events and Google identity without a portal s
   assert.equal((await fetch(`${base}/v1/loop-ingress/gmail/extra`, { method: "POST" })).status, 404);
 });
 
-test("linked administrator impersonation follows the target", async () => {
+test("an administrator signed in under a linked alias can start impersonation", async () => {
   const start = await fetch(`${base}/auth/impersonate?target=alice@acme`, {
     method: "POST",
     headers: { cookie: sessionCookie("U-admin-alias"), origin: PUBLIC },
   });
   assert.equal(start.status, 200);
-  const imp = (start.headers.get("set-cookie") ?? "").match(/portal_impersonate=([^;]+)/);
-  assert.ok(imp);
-  const web = await fetch(`${base}/api/x`, {
-    headers: { cookie: `${sessionCookie("U-admin-alias")}; portal_impersonate=${imp[1]}` },
-  });
-  const body = (await web.json()) as { cookie: string };
-  assert.match(body.cookie, /webuiuser=alice%40acme/);
+  assert.match(start.headers.get("set-cookie") ?? "", /portal_impersonate=[^;]+/);
 });

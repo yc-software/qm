@@ -6,6 +6,8 @@ import { createAgent } from "../src/agent/agent-run.ts";
 import { createModelRoutes } from "../src/model/model-route.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { isAgentReply, stepMessage, storedItem, type Item } from "../src/sessions/items.ts";
+import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const RUN_ID = "00000000-0000-4000-8000-000000000001";
 
@@ -60,7 +62,7 @@ test("a mid-prompt cancel takes the stopped exit and persists the stopped partia
     const result = await agent.runTurn(cancelTurn("cancel-exit-stop", controller.signal, sink));
 
     assert.equal(result.stopped, true, "the cancelled turn reports itself stopped");
-    assert.equal(result.reply, "(stopped)");
+    assert.equal(result.reply, "");
     assert.equal(
       sink.entries.filter(isAgentReply).length,
       0,
@@ -93,9 +95,36 @@ test("a cancel that lands before the model request starts still stops the turn",
     const result = await agent.runTurn(cancelTurn("cancel-before-request", controller.signal, sink));
 
     assert.equal(result.stopped, true);
-    assert.equal(result.reply, "(stopped)");
+    assert.equal(result.reply, "");
   } finally {
     globalThis.fetch = realFetch;
+  }
+});
+
+test("a user Stop before the model writes anything records only the Stop and replies with nothing", async () => {
+  const signals = createPostgresRunSignalStore(testDatabaseUrl());
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }), signals });
+  const sink = { entries: [] as Item[] };
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = ((_url: string | URL | Request, init?: RequestInit) =>
+    new Promise((_resolve, reject) => {
+      void signals.send("user-stop-silent", { kind: "abort", reason: "by user" });
+      init?.signal?.addEventListener("abort", () => reject(abortShapedError()), { once: true });
+    })) as typeof globalThis.fetch;
+  try {
+    const result = await agent.runTurn(
+      cancelTurn("user-stop-silent", new AbortController().signal, sink, { runId: "user-stop-silent" }),
+    );
+
+    assert.equal(result.stopped, true);
+    assert.equal(result.reply, "");
+    assert.deepEqual(
+      sink.entries.filter((entry) => entry.kind !== "UserMessage").map((entry) => [entry.kind, entry.body]),
+      [["Stop", { reason: "by user" }]],
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+    await agent.close?.();
   }
 });
 
@@ -121,9 +150,9 @@ test("a genuine provider error racing a cancel still fails the turn instead of c
     );
     assert.equal(controller.signal.aborted, true, "the cancel landed before the turn chose its exit");
     assert.equal(
-      sink.entries.some((entry) => isAgentReply(entry) && entry.text === "(stopped)"),
+      sink.entries.some((entry) => entry.kind === "Stop"),
       false,
-      "no stopped partial is fabricated for a turn that genuinely failed",
+      "a turn that genuinely failed is not recorded as stopped",
     );
   } finally {
     globalThis.fetch = realFetch;
@@ -172,9 +201,9 @@ test("a cancel landing after the turn completed takes the normal exit, not the s
     assert.equal(result.stopped, undefined, "a completed turn is never rewritten into a stopped one");
     assert.equal(result.reply, "the finished answer");
     assert.equal(
-      sink.entries.some((entry) => isAgentReply(entry) && entry.text === "(stopped)"),
+      sink.entries.some((entry) => entry.kind === "Stop"),
       false,
-      "no fabricated stopped partial",
+      "a completed turn is not recorded as stopped",
     );
   } finally {
     globalThis.fetch = realFetch;
@@ -345,6 +374,36 @@ test("reasoning streams before its thinking entry is persisted, and a cancel mid
       new Set(streamed.map((s) => `${s.step}:${s.index}`)),
       new Set([`${String(stepMessage(thinking)?.id)}:${thinking.step}`]),
     );
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("a cancel after the model has written some text records the partial as stopped by the run's cancel", async () => {
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
+  const controller = new AbortController();
+  const sink = { entries: [] as Item[] };
+  const realFetch = globalThis.fetch;
+  const head = textReplyEvents("the first half of an answer").slice(0, 3);
+  globalThis.fetch = ((_url: string | URL | Request, init?: RequestInit) => {
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(stream) {
+        for (const event of head)
+          stream.enqueue(encoder.encode(`event: ${event.type as string}\ndata: ${JSON.stringify(event)}\n\n`));
+        init?.signal?.addEventListener("abort", () => stream.error(abortShapedError()), { once: true });
+        setTimeout(() => controller.abort(), 100);
+      },
+    });
+    return Promise.resolve(new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } }));
+  }) as typeof globalThis.fetch;
+  try {
+    const result = await agent.runTurn(cancelTurn("cancel-exit-partial", controller.signal, sink));
+    assert.equal(result.stopped, true);
+    const partial = sink.entries.find(isAgentReply);
+    assert.equal(partial?.text, "the first half of an answer");
+    assert.equal(partial?.body.stopped, true);
+    assert.equal(partial?.body.cancelled, true, "the partial records that the run's cancel stopped it");
   } finally {
     globalThis.fetch = realFetch;
   }

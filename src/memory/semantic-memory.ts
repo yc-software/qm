@@ -17,7 +17,7 @@ export function createSemanticMemory(opts: {
 }) {
   const { databaseUrl } = opts;
   let store: MemoryVectorStore | undefined;
-  const vectors = (): MemoryVectorStore => (store ??= createPostgresVectorStore(databaseUrl));
+  const vectors = () => (store ??= createPostgresVectorStore(databaseUrl));
   const resolve = async () => {
     const id = await opts.embeddingModel();
     if (!id) return undefined;
@@ -31,8 +31,8 @@ export function createSemanticMemory(opts: {
     { onError: (error) => reportFailure("memory semantic recall; using recent facts", error) },
   );
   const indexer = createMemoryVectorIndexer({
+    claim: () => vectors().claimTenants(),
     resolve,
-    eachTenant: (fn) => vectors().eachTenant(fn),
     leaderLease: opts.leaderLease,
   });
   const sweeper = opts.createSweeper(() => indexer.tick(), 30_000, { label: "memory-vector-index", immediate: true });

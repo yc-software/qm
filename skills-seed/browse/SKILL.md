@@ -68,11 +68,11 @@ becoming the default):
   org key for creating the stealth browser.
 - Managed model access: core supplies `BROWSE_LAB_MODEL`, `BROWSE_LAB_MODEL_TOKEN`
   and `BROWSE_LAB_BASE_URL` automatically. All browser model calls use this route;
-  never request a separate browser model key. Company access uses the deployment's
-  default model credentials, through its gateway when configured or directly otherwise.
-  Personal access uses the person's connected account. Claude subscription access is
-  unsupported. If model access is missing or fails, report the error and ask the person
-  to correct their AI access in Settings; never switch accounts or models yourself.
+  never request a separate browser model key. The browser runs on the session's own
+  model and account, so it bills whatever the turn bills. Claude subscription access is
+  unsupported. If model access is missing or fails, report the error (it names the model
+  and the account it billed) and ask the person to correct their AI access in Settings;
+  never switch accounts or models yourself.
 - The person's OWN browser-profile name, under the env key your provider doc names. The
   provider doc's header has an `export PROFILE_ENV=… PROFILE_SERVICE=…` line the profile
   snippets below depend on — run it first. **The profile name is the credential that decides

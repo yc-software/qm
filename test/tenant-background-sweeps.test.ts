@@ -1,77 +1,162 @@
-import { test, after, before } from "node:test";
 import assert from "node:assert/strict";
-import { randomBytes } from "node:crypto";
-import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
-import { createProcessReaper } from "../src/processes/process-reaper.ts";
-import { createJobComputerSweep } from "../src/processes/job-computers.ts";
-import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { createPostgresVectorStore } from "../src/memory/postgres-vector-store.ts";
-import { createMemoryVectorIndexer } from "../src/memory/vector-indexer.ts";
-import { createPostgresFileUploadStore } from "../src/files/file-upload-store.ts";
-import { createPostgresDeliveryStore } from "../src/delivery/postgres-delivery-store.ts";
-import { createDeliveryRelay } from "../src/delivery/relay.ts";
-import { createPostgresMap, createPostgresMapFactory } from "../src/persistence/durable-map.ts";
-import { createPgPool } from "../src/persistence/pg-pool.ts";
-import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
-import { createDeployStore, type Deployment } from "../src/deploy/deploy-store.ts";
-import { createDeployService } from "../src/deploy/deploy-service.ts";
-import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
-import { createAclStore } from "../src/acl/acl-store.ts";
-import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-import { scopeId } from "../src/types.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { before, it } from "node:test";
+import { createPostgresDeliveryStore } from "../src/delivery/postgres-delivery-store.ts";
+import { createDeliveryRelay } from "../src/delivery/relay.ts";
+import { wireRunResultDeliveries } from "../src/delivery/run-result-delivery.ts";
+import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
+import { createProcessReaper } from "../src/processes/process-reaper.ts";
+import { createJobComputerSweep } from "../src/processes/job-computers.ts";
+import { createSandboxResources, type SandboxResource, type SandboxDefault } from "../src/sandbox/sandbox-resources.ts";
+import type { ProcessSandbox, Sandbox } from "../src/sandbox/sandbox.ts";
+import { createPostgresFileUploadStore, type FileUpload } from "../src/files/file-upload-store.ts";
+import { createDirectFileUploads } from "../src/files/direct-file-upload.ts";
+import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
+import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
+import { createPostgresMap, createPostgresMapFactory } from "../src/persistence/durable-map.ts";
+import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
+import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { createDeployStore, type Deployment, type DeploymentDraft } from "../src/deploy/deploy-store.ts";
+import { createDeployService } from "../src/deploy/deploy-service.ts";
+import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
+import { DEPLOYMENT_TABLES } from "../src/deploy/page-views.ts";
+import { createAclStore } from "../src/acl/acl-store.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import type { OrchestratorInput } from "../src/core/orchestrator.ts";
+import { scopeId } from "../src/types.ts";
+import { boundTenant, currentTenant, withTenant } from "../src/tenants/context.ts";
+import { onTenantLoad } from "../src/tenants/cache.ts";
+import { loadTenantSettings } from "../src/tenants/settings.ts";
+import { createModalSandbox, type StoredModalSandbox } from "../src/sandbox/modal-sandbox.ts";
+import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
+import { installFakeModal } from "./support/fake-modal.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { boundTenant, withoutTenant, withTenant } from "../src/tenants/context.ts";
-import type { SandboxResource } from "../src/sandbox/sandbox-resources.ts";
-import type { ProcessSandbox } from "../src/sandbox/sandbox.ts";
-import {
-  TENANT_A as A,
-  TENANT_B as B,
-  twoTenantDatabase,
-  twoTenantTestSkip,
-  type TwoTenantDatabase,
-} from "./support/two-tenants.ts";
+import { assertRowsByTenant, describeTwoTenants } from "./support/two-tenants.ts";
 
-let db: TwoTenantDatabase | undefined;
-const skip = twoTenantTestSkip();
+type Pair = [string, string];
+const sorted = (rows: Pair[]): Pair[] => [...rows].sort(([l], [r]) => l.localeCompare(r));
 
-before(async () => {
-  if (skip) return;
-  db = await twoTenantDatabase((url) => {
-    createPostgresProcessRegistry(url);
-    createPostgresSessionStore(url);
-    createPostgresVectorStore(url);
-    createPostgresFileUploadStore(url);
-    createPostgresDeliveryStore(url);
+describeTwoTenants("background sweeps claim across tenants and work each row under its own tenant", (db) => {
+  let a: string;
+  let b: string;
+
+  before(async () => {
+    [a, b] = db.tenants;
   });
-});
 
-after(() => db?.close());
-
-async function grantTables(): Promise<void> {
-  const role = new URL(db!.appUrl).username;
-  await db!.owner.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${role}`);
-  await db!.owner.query(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${role}`);
-  await db!.owner.query(`GRANT CREATE ON SCHEMA public TO ${role}`);
-}
-
-const processSandbox: ProcessSandbox = {
-  provision: async () => assert.fail("no provisioning expected"),
-  teardown: async () => {},
-  signalProcess: async () => {},
-} as unknown as ProcessSandbox;
-
-test(
-  "under the restricted login, the process reaper reaps each tenant's expired process under that tenant",
-  { skip },
-  async () => {
-    const owner = createPostgresProcessRegistry(db!.ownerUrl);
-    const register = (tenant: string, processId: string) =>
+  it("the webhook relay claims each tenant's conversation head and sends and acks it under that tenant", async () => {
+    const deliveries = createPostgresDeliveryStore(db.appDatabaseUrl);
+    const enqueue = (tenant: string) =>
       withTenant(tenant, () =>
-        owner.register({
-          processId,
+        deliveries.enqueue({
+          destination: { type: "webhook", target: "shared-conversation" },
+          text: tenant,
+          idempotencyKey: `hook-${tenant}`,
+        }),
+      );
+    const sentA = await enqueue(a);
+    const sentB = await enqueue(b);
+    const sent: Pair[] = [];
+    let settle!: () => void;
+    const bothSent = new Promise<void>((resolve) => (settle = resolve));
+    const relay = createDeliveryRelay(deliveries, {
+      type: "webhook",
+      claimMs: 60_000,
+      send: async (d) => {
+        sent.push([d.id, currentTenant()]);
+        if (sent.length === 2) settle();
+      },
+    });
+    assert.equal(boundTenant(), undefined);
+    relay.start();
+    await bothSent;
+    await relay.stop();
+    assert.deepEqual(
+      sorted(sent),
+      sorted([
+        [sentA.id, a],
+        [sentB.id, b],
+      ]),
+    );
+    await assertRowsByTenant(
+      db.owner,
+      "SELECT id::text, tenant_id::text, delivered_at IS NOT NULL FROM deliveries WHERE id = ANY($1)",
+      [
+        [sentA.id, a, true],
+        [sentB.id, b, true],
+      ],
+      [[sentA.id, sentB.id]],
+    );
+  });
+
+  it("overaged deliveries are expired across tenants and never handed out", async () => {
+    const deliveries = createPostgresDeliveryStore(db.appDatabaseUrl, { maxAgeMs: 1 });
+    const stale = [];
+    for (const tenant of [a, b])
+      stale.push(
+        await withTenant(tenant, () =>
+          deliveries.enqueue({
+            destination: { type: "group", target: "stale" },
+            text: "late",
+            idempotencyKey: `stale-${tenant}`,
+          }),
+        ),
+      );
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.deepEqual(await deliveries.claimDue("group", 60_000), []);
+    await assertRowsByTenant(
+      db.owner,
+      "SELECT tenant_id::text FROM deliveries WHERE id = ANY($1) AND expired_at IS NOT NULL",
+      [[a], [b]],
+      [stale.map((d) => d.id)],
+    );
+  });
+
+  it("the run-result sweep recovers each tenant's terminal run under that tenant", async () => {
+    const { runs, close } = createPostgresRunStore(db.appDatabaseUrl);
+    const deliveries = createPostgresDeliveryStore(db.appDatabaseUrl);
+    const actor = { id: "internal:U1", type: "internal" as const };
+    const request: OrchestratorInput = {
+      surface: "slack",
+      deliveryTarget: "C9:171.001",
+      actor,
+      conversation: { kind: "dm", threadRef: "t", audience: [actor] },
+      origin: { kind: "direct" },
+      text: "hi",
+    };
+    try {
+      const finished: Pair[] = [];
+      for (const tenant of [a, b])
+        await withTenant(tenant, async () => {
+          const run = (await runs.enqueue({ sessionId: `s-${tenant}`, request })).run;
+          const claimed = await runs.claimById(run.id, "w", 5_000);
+          await runs.complete(run.id, claimed?.leaseToken ?? "", { status: "ok", reply: `reply ${tenant}` });
+          finished.push([run.id, tenant]);
+        });
+      const recovery = wireRunResultDeliveries(runs, deliveries);
+      assert.equal(await recovery.sweep(Date.now() + 120_000), 2);
+      for (const [runId, tenant] of finished)
+        await withTenant(tenant, async () =>
+          assert.deepEqual(
+            (await deliveries.pending("slack")).map((d) => [d.idempotencyKey, d.text]),
+            [[`run:${runId}`, `reply ${tenant}`]],
+          ),
+        );
+      assert.equal(await recovery.sweep(Date.now() + 120_000), 0);
+    } finally {
+      await close();
+    }
+  });
+
+  it("the process reaper reaps each tenant's expired process under that tenant", async () => {
+    const registry = createPostgresProcessRegistry(db.appDatabaseUrl);
+    for (const tenant of [a, b])
+      await withTenant(tenant, () =>
+        registry.register({
+          processId: `p-${tenant}`,
           scopeId: "personal:U1",
           sandboxId: "",
           kind: "background",
@@ -79,335 +164,217 @@ test(
           ttlMs: -1,
         }),
       );
-    await register(A, "p-a");
-    await register(B, "p-b");
-    await grantTables();
-    const app = createPostgresProcessRegistry(db!.appUrl);
-    const killed: Array<[string, string | undefined]> = [];
-    const reaper = createProcessReaper(app, {
+    const killed: Pair[] = [];
+    const reaper = createProcessReaper(registry, {
       intervalMs: 60_000,
       leaderLease: createNoopLeaderLease(),
-      kill: async (rec) => {
-        killed.push([rec.processId, boundTenant()]);
-      },
+      kill: async (rec) => void killed.push([rec.processId, currentTenant()]),
     });
-    try {
-      await assert.rejects(
-        withTenant(A, () => reaper.sweep()),
-        /cannot run while a tenant is bound/,
-      );
-      assert.deepEqual(await withoutTenant(() => reaper.sweep()), { reaped: 2 });
-      assert.deepEqual(killed.sort(), [
-        ["p-a", A],
-        ["p-b", B],
-      ]);
-      assert.deepEqual(
-        (await db!.owner.query("SELECT process_id, tenant_id, status FROM process_sessions ORDER BY process_id")).rows,
-        [
-          { process_id: "p-a", tenant_id: A, status: "reaped" },
-          { process_id: "p-b", tenant_id: B, status: "reaped" },
-        ],
-      );
-    } finally {
-      app.close?.();
-      owner.close?.();
-    }
-  },
-);
-
-test("job computers are swept each under the tenant that owns the computer record", { skip }, async () => {
-  const pool = createPgPool(db!.ownerUrl);
-  const records = createPostgresMap<SandboxResource>(pool, `t_jobs_${randomBytes(4).toString("hex")}`);
-  const computer = (id: string): SandboxResource => ({
-    id,
-    backend: "local",
-    ownerScopeId: "personal:U1",
-    backingScopeId: `sandbox-${id}`,
-    name: "background job",
-    createdBy: "U1",
-    createdAt: new Date(0).toISOString(),
-    legacy: false,
-    state: "retired",
-    jobOnly: true,
-  });
-  await withTenant(A, () => records.put("c-a", computer("c-a")));
-  await withTenant(B, () => records.put("c-b", computer("c-b")));
-  const retired: Array<[string, string | undefined]> = [];
-  const sweep = createJobComputerSweep({
-    resources: {
-      jobComputers: async () => (await records.acrossTenants()).map(({ tenantId, value }) => ({ ...value, tenantId })),
-      retireJobComputer: async (id) => {
-        retired.push([id, boundTenant()]);
-        await records.delete(id);
-      },
-    },
-    sandbox: processSandbox,
-    processes: createPostgresProcessRegistry(db!.ownerUrl),
-    finish: async () => {},
-    onError: (error) => assert.fail(String(error)),
-  });
-  try {
-    await withoutTenant(sweep);
-    assert.deepEqual(retired.sort(), [
-      ["c-a", A],
-      ["c-b", B],
-    ]);
-    assert.deepEqual(await records.acrossTenants(), []);
-  } finally {
-    await pool.close();
-  }
-});
-
-test(
-  "under the restricted login, spend refresh rolls up each tenant's days under that tenant and retention purges across tenants in one pass",
-  { skip },
-  async () => {
-    const owner = createPostgresSessionStore(db!.ownerUrl);
-    await withTenant(A, () => owner.listParticipants());
-    await db!.owner.query("INSERT INTO session_spend_dirty(tenant_id, day) VALUES ($1, 100), ($2, 100), ($2, 101)", [
-      A,
-      B,
-    ]);
-    await db!.owner.query(
-      "INSERT INTO llm_prompt_envelopes(tenant_id, hash, body, created_at) VALUES ($1, 'old-a', '', 1), ($2, 'old-b', '', 1), ($2, 'new-b', '', 5000)",
-      [A, B],
-    );
-    await grantTables();
-    const app = createPostgresSessionStore(db!.appUrl);
-    await assert.rejects(
-      withTenant(A, () => app.refreshSpendRollup!()),
-      /cannot run while a tenant is bound/,
-    );
-    await withoutTenant(() => app.refreshSpendRollup!());
+    assert.deepEqual(await reaper.sweep(), { reaped: 2 });
     assert.deepEqual(
-      (await db!.owner.query("SELECT tenant_id, day FROM session_spend_days ORDER BY tenant_id, day")).rows.map(
-        (row) => [row.tenant_id, Number(row.day)],
-      ),
+      sorted(killed),
+      sorted([
+        [`p-${a}`, a],
+        [`p-${b}`, b],
+      ]),
+    );
+    await assertRowsByTenant(
+      db.owner,
+      "SELECT process_id::text, tenant_id::text, status FROM process_sessions WHERE process_id = ANY($1)",
       [
-        [A, 100],
-        [B, 100],
-        [B, 101],
+        [`p-${a}`, a, "reaped"],
+        [`p-${b}`, b, "reaped"],
       ],
+      [[`p-${a}`, `p-${b}`]],
     );
-    assert.equal((await db!.owner.query("SELECT count(*)::int AS n FROM session_spend_dirty")).rows[0].n, 0);
-    assert.equal(await withoutTenant(() => app.purgeLlmCaptures!(1000)), 2);
-    assert.deepEqual((await db!.owner.query("SELECT tenant_id, hash FROM llm_prompt_envelopes")).rows, [
-      { tenant_id: B, hash: "new-b" },
-    ]);
-  },
-);
+  });
 
-test(
-  "under the restricted login, the memory indexer embeds each tenant's facts and writes their vectors under that tenant",
-  { skip },
-  async () => {
-    const owner = createPostgresVectorStore(db!.ownerUrl);
-    await withoutTenant(() => owner.prune("m", 1));
-    await db!.owner.query(
-      `INSERT INTO memory_facts(tenant_id, scope_id, text, sensitivity, source_unknown, created_at, updated_at)
-     VALUES ($1, 'personal:U1', 'fact a', 'normal', false, 1, 1), ($2, 'personal:U1', 'fact b', 'normal', false, 1, 1)`,
-      [A, B],
-    );
-    await grantTables();
-    const store = createPostgresVectorStore(db!.appUrl);
-    const putUnder: Array<string | undefined> = [];
-    const indexer = createMemoryVectorIndexer({
-      resolve: async () => ({
-        embedder: { id: "m", embed: async (texts: string[]) => texts.map(() => [1, 0, 0]) },
-        store: {
-          missing: store.missing,
-          prune: store.prune,
-          put: (rows, signal) => {
-            putUnder.push(boundTenant());
-            return store.put(rows, signal);
-          },
-        },
-      }),
-      eachTenant: store.eachTenant,
-      leaderLease: createNoopLeaderLease(),
+  it("job computers are swept each under the tenant that owns the computer record", async () => {
+    for (const table of ["t_tenant_job_computers", "t_tenant_job_defaults"])
+      await createPostgresMap(db.owner, table).claimIds();
+    const records = createPostgresMap<SandboxResource>(db.app, "t_tenant_job_computers");
+    const destroyed: Pair[] = [];
+    const backend = {
+      profile: { backend: "local", writablePersistence: "resident_disk", processSessions: false },
+      async destroyScope(id: string) {
+        destroyed.push([id, currentTenant()]);
+      },
+    } as unknown as Sandbox;
+    const resources = createSandboxResources({
+      records,
+      defaults: createPostgresMap<SandboxDefault>(db.app, "t_tenant_job_defaults"),
+      backends: { local: backend },
+      defaultBackend: "local",
+      lock: createPostgresAdvisoryLock(db.app),
+      canUseScope: async () => true,
+    });
+    for (const tenant of [a, b])
+      await withTenant(tenant, () =>
+        records.put(`c-${tenant}`, {
+          id: `c-${tenant}`,
+          backend: "local",
+          ownerScopeId: scopeId("personal", "U1"),
+          backingScopeId: `job-${tenant}`,
+          name: "background job",
+          createdBy: "U1",
+          createdAt: new Date(0).toISOString(),
+          legacy: false,
+          state: "retired",
+          jobOnly: true,
+        }),
+      );
+    const sweep = createJobComputerSweep({
+      resources,
+      sandbox: {} as ProcessSandbox,
+      processes: createPostgresProcessRegistry(db.appDatabaseUrl),
+      finish: async () => {},
       onError: (error) => assert.fail(String(error)),
     });
-    try {
-      await withTenant(A, () => indexer.tick());
-      assert.deepEqual(putUnder.sort(), [A, B]);
-      assert.deepEqual(
-        (
-          await db!.owner.query(
-            "SELECT v.tenant_id, f.text FROM memory_fact_vectors v JOIN memory_facts f ON f.tenant_id = v.tenant_id AND f.id = v.fact_id ORDER BY f.text",
-          )
-        ).rows,
-        [
-          { tenant_id: A, text: "fact a" },
-          { tenant_id: B, text: "fact b" },
-        ],
-      );
-    } finally {
-      await store.close();
-      await owner.close();
-    }
-  },
-);
+    await sweep();
+    assert.deepEqual(
+      sorted(destroyed),
+      sorted([
+        [`job-${a}`, a],
+        [`job-${b}`, b],
+      ]),
+    );
+    assert.deepEqual(await records.claimIds(), []);
+  });
 
-test(
-  "under the restricted login, expired uploads are claimed across tenants and each is finished under its own tenant",
-  { skip },
-  async () => {
-    const owner = createPostgresFileUploadStore(db!.ownerUrl);
-    const upload = (id: string) => ({
+  it("expired uploads are settled under their tenant and an orphaned S3 upload is checked against its owner", async () => {
+    const store = createPostgresFileUploadStore(db.appDatabaseUrl);
+    const upload = (id: string, state: FileUpload["state"], expiresAt: number): FileUpload => ({
       id,
       actorId: "U1",
-      scopeId: "personal:U1",
+      scopeId: scopeId("personal", "U1"),
       name: "f",
       mimetype: "text/plain",
       sizeBytes: 1,
       partSize: 1,
       checksums: [],
       uploadId: `u-${id}`,
-      state: "pending" as const,
-      expiresAt: 1,
+      state,
+      expiresAt,
       createdAt: 1,
       lastActivityAt: 1,
     });
-    await withTenant(A, () => owner.insert(upload("a".repeat(32))));
-    await withTenant(B, () => owner.insert(upload("b".repeat(32))));
-    await grantTables();
-    const app = createPostgresFileUploadStore(db!.appUrl);
-    const expired = await withoutTenant(() => app.expired(10));
-    assert.deepEqual(expired.map((row) => [row.id[0], row.tenantId]).sort(), [
-      ["a", A],
-      ["b", B],
-    ]);
-    for (const row of expired)
-      await withTenant(row.tenantId!, async () => {
-        assert.equal(await app.transition(row.id, ["pending"], "aborted"), true);
-        assert.equal((await app.get(row.id))?.state, "aborted");
-      });
-    await withTenant(A, async () => assert.equal(await app.get("b".repeat(32)), null));
-  },
-);
+    const expiredA = "a".repeat(32);
+    const expiredB = "b".repeat(32);
+    const heldB = "c".repeat(32);
+    const orphan = "d".repeat(32);
+    await withTenant(a, () => store.insert(upload(expiredA, "pending", 1)));
+    await withTenant(b, () => store.insert(upload(expiredB, "pending", 1)));
+    await withTenant(b, () => store.insert(upload(heldB, "completing", Date.now() + 3_600_000)));
+    const aborted: Pair[] = [];
+    const service = createDirectFileUploads({
+      bucket: "bucket",
+      store,
+      files: createPostgresFileArtifactStore(db.appDatabaseUrl, createMemoryDurableByteStore()),
+      client: {
+        async send(command: { constructor: { name: string }; input: { Key?: string } }) {
+          if (command.constructor.name === "ListMultipartUploadsCommand")
+            return {
+              Uploads: [heldB, orphan].map((id) => ({
+                Key: `files/uploads/${id}`,
+                UploadId: `u-${id}`,
+                Initiated: new Date(0),
+              })),
+            };
+          if (command.constructor.name === "AbortMultipartUploadCommand")
+            aborted.push([command.input.Key!.slice("files/uploads/".length), boundTenant() ?? "unbound"]);
+          return {};
+        },
+      } as never,
+      presign: async () => "https://upload.test/",
+    });
+    await service.sweep();
+    assert.deepEqual(
+      sorted(aborted),
+      sorted([
+        [expiredA, a],
+        [expiredB, b],
+        [orphan, "unbound"],
+      ]),
+    );
+    await assertRowsByTenant(
+      db.owner,
+      "SELECT id::text, tenant_id::text, state FROM file_uploads WHERE id = ANY($1)",
+      [
+        [expiredA, a, "aborted"],
+        [expiredB, b, "aborted"],
+        [heldB, b, "completing"],
+      ],
+      [[expiredA, expiredB, heldB]],
+    );
+  });
 
-test(
-  "deployment keep-warm and idle reaping read every tenant's apps and act on each under its tenant",
-  { skip },
-  async () => {
-    const maps = createPostgresMapFactory(db!.ownerUrl);
-    const deployStore = createDeployStore({ deployments: maps.map<Deployment>("deployments"), pg: maps.pool });
-    await withTenant(A, () => deployStore.getByName("none"));
-    const destroyed: Array<string | undefined> = [];
+  it("deployment keep-warm and idle reaping act on each tenant's apps under that tenant", async () => {
+    const maps = createPostgresMapFactory(db.appDatabaseUrl);
+    const deployStore = createDeployStore({
+      deployments: maps.map<Deployment>("deployments", undefined, DEPLOYMENT_TABLES),
+      drafts: maps.map<DeploymentDraft>("deployment_drafts"),
+      pg: maps.pool,
+    });
+    const destroyed: string[] = [];
     const provider: DeployProvider = {
       profile: { managedScaleToZero: false },
       apply: async () => ({ host: "127.0.0.1", port: 5000 }),
-      destroy: async () => {
-        destroyed.push(boundTenant());
-      },
+      destroy: async () => void destroyed.push(currentTenant()),
     };
     const deploy = createDeployService({
       ...singleProcessDeps(),
       deployStore,
       provider,
       auditLog: { record() {}, events: async () => [], tail: async () => [] },
-      acl: createAclStore(createPostgresGrantStore(db!.ownerUrl)),
+      acl: createAclStore(createPostgresGrantStore(db.appDatabaseUrl)),
       deployDir: mkdtempSync(join(tmpdir(), "tenant-reap-")),
     });
     const publish = (tenant: string) =>
       withTenant(tenant, () =>
         deploy.deploy({ ownerScopeId: scopeId("personal", "U1"), createdBy: "U1", entrypoint: "x", files: [] }),
       );
-    const a = await publish(A);
-    const b = await publish(B);
-    assert.deepEqual(
-      (await withoutTenant(() => deployStore.acrossTenants())).map((d) => [d.id, d.tenantId]).sort(),
-      [
-        [a.id, A],
-        [b.id, B],
-      ].sort(),
-    );
-    await assert.rejects(
-      withTenant(A, () => deploy.reapIdleDeployments(60_000, Date.now() + 1_000_000)),
-      /cannot run while a tenant is bound/,
-    );
-    assert.equal(await withoutTenant(() => deploy.maintainDeployments()), 0);
-    assert.equal(await withoutTenant(() => deploy.reapIdleDeployments(60_000, Date.now() + 1_000_000)), 2);
-    assert.deepEqual(destroyed.sort(), [A, B]);
-    assert.equal((await withTenant(A, () => deployStore.get(a.id)))?.status, "stopped");
-    assert.equal((await withTenant(B, () => deployStore.get(b.id)))?.status, "stopped");
-  },
-);
+    const deployedA = await publish(a);
+    const deployedB = await publish(b);
+    assert.equal(await deploy.maintainDeployments(), 0);
+    assert.equal(await deploy.reapIdleDeployments(60_000, Date.now() + 1_000_000), 2);
+    assert.deepEqual(destroyed.sort(), [a, b].sort());
+    assert.equal((await withTenant(a, () => deployStore.get(deployedA.id)))?.status, "stopped");
+    assert.equal((await withTenant(b, () => deployStore.get(deployedB.id)))?.status, "stopped");
+  });
 
-test(
-  "under the restricted login, pending web deliveries are read across tenants and each is acked under its own tenant",
-  { skip },
-  async () => {
-    await grantTables();
-    const app = createPostgresDeliveryStore(db!.appUrl);
-    const enqueue = (tenant: string, key: string) =>
-      withTenant(tenant, () =>
-        app.enqueue({ destination: { type: "web", target: `web:${key}` }, text: key, idempotencyKey: key }),
-      );
-    const a = await enqueue(A, "web-a");
-    const b = await enqueue(B, "web-b");
-    await assert.rejects(
-      withTenant(A, () => app.pendingAcrossTenants("web")),
-      /cannot run while a tenant is bound/,
-    );
-    const pending = await withoutTenant(() => app.pendingAcrossTenants("web"));
-    assert.deepEqual(
-      pending.map((d) => [d.id, d.tenantId]).sort(),
-      [
-        [a.id, A],
-        [b.id, B],
-      ].sort(),
-    );
-    assert.deepEqual(
-      (await withTenant(A, () => app.pending("web"))).map((d) => d.id),
-      [a.id],
-    );
-    for (const d of pending) await withTenant(d.tenantId!, () => app.ack(d.id, Date.now()));
-    assert.deepEqual(await withoutTenant(() => app.pendingAcrossTenants("web")), []);
-  },
-);
-
-test(
-  "under the restricted login, the webhook relay claims each tenant's conversation head and sends and acks it under that tenant",
-  { skip },
-  async () => {
-    await grantTables();
-    const app = createPostgresDeliveryStore(db!.appUrl);
-    const enqueue = (tenant: string, key: string) =>
-      withTenant(tenant, () =>
-        app.enqueue({
-          destination: {
-            type: "webhook",
-            target: "shared-conversation",
-            webhook: { binding: "b1", url: "https://receiver.test/" },
-          },
-          text: key,
-          idempotencyKey: key,
-        }),
-      );
-    const a = await enqueue(A, "hook-a");
-    const b = await enqueue(B, "hook-b");
-    const sent: [string, string | undefined][] = [];
-    let settle!: () => void;
-    const bothSent = new Promise<void>((resolve) => (settle = resolve));
-    const relay = createDeliveryRelay(app, {
-      type: "webhook",
-      claimMs: 60_000,
-      send: async (d) => {
-        sent.push([d.id, boundTenant()]);
-        if (sent.length === 2) settle();
-      },
-    });
-    relay.start();
-    await bothSent;
-    await relay.stop();
-    assert.deepEqual(
-      sent.sort(),
-      [
-        [a.id, A],
-        [b.id, B],
-      ].sort(),
-    );
-    assert.deepEqual(await withoutTenant(() => app.pendingAcrossTenants("webhook")), []);
-  },
-);
+  it("modal deep-idle reaping checkpoints each tenant's idle computer under that tenant", async () => {
+    const fake = installFakeModal();
+    const stopSettingsLoad = onTenantLoad(() => loadTenantSettings(db.app));
+    try {
+      await createPostgresMap(db.owner, "t_tenant_modal").claimIds();
+      const store = createPostgresMap<StoredModalSandbox>(db.app, "t_tenant_modal");
+      const modal = createModalSandbox({
+        snapshots: createMemorySnapshotStore(),
+        store,
+        ...singleProcessDeps(),
+        client: fake.client,
+        namePrefix: "qmt",
+      });
+      const scopes: Pair[] = [
+        [scopeId("personal", "alice"), a],
+        [scopeId("personal", "bob"), b],
+      ];
+      for (const [scope, tenant] of scopes)
+        await withTenant(tenant, async () => {
+          const handle = await modal.provision(scope);
+          await modal.writeFile(handle, "work.txt", tenant);
+          await store.merge(scope, { lastActivityMs: 1 });
+        });
+      assert.equal((await modal.reapDeepIdle!(1)).reaped, 2);
+      for (const [scope, tenant] of scopes)
+        await withTenant(tenant, async () => {
+          assert.ok((await store.get(scope))?.nativeSnapshotId);
+          const restored = await modal.provision(scope);
+          assert.equal(await modal.readFile(restored, "work.txt"), tenant);
+        });
+    } finally {
+      stopSettingsLoad();
+      fake.cleanup();
+    }
+  });
+});

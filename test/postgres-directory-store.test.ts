@@ -429,18 +429,27 @@ test("pg directory: removals apply without clearing a failed channel refresh", {
   assert.equal(await store.channelMembership("C-one", "U-keep"), true);
 });
 
-test("pg directory: a private Slack Connect roster is not an ordinary send target", { skip }, async () => {
-  const store = createPostgresDirectoryStore(URL!);
-  await store.replace([{ principalId: "U-member", displayName: "Member", type: "internal" }]);
-  await store.replaceChannels(
-    [{ channelId: "C-connect", name: "connect", isPrivate: true, isExternal: true }],
-    [{ channelId: "C-connect", principalId: "U-member" }],
-  );
-  assert.equal(await store.channelMembership("C-connect", "U-member"), true);
-  assert.equal(await store.channelMember("C-connect", "U-member"), false);
-  assert.equal(await store.conversationMembers("channel", "C-connect"), undefined);
-  assert.deepEqual(await store.listChannelsFor("U-member"), []);
-});
+test(
+  "pg directory: a private Slack Connect roster counts our members but is never a complete audience",
+  { skip },
+  async () => {
+    const store = createPostgresDirectoryStore(URL!);
+    await store.replace([{ principalId: "U-member", displayName: "Member", type: "internal" }]);
+    await store.replaceChannels(
+      [{ channelId: "C-connect", name: "connect", isPrivate: true, isExternal: true }],
+      [{ channelId: "C-connect", principalId: "U-member" }],
+    );
+    assert.equal(await store.channelMembership("C-connect", "U-member"), true);
+    assert.equal(await store.channelMember("C-connect", "U-member"), true);
+    assert.equal(await store.channelMember("C-connect", "U-outsider"), false);
+    assert.equal(await store.rosterCoversAudience("C-connect"), false);
+    assert.equal(await store.conversationMembers("channel", "C-connect"), undefined);
+    assert.deepEqual(
+      (await store.listChannelsFor("U-member")).map((c) => c.channelId),
+      ["C-connect"],
+    );
+  },
+);
 
 test("pg directory: a partial group swap preserves unknown rosters", { skip }, async () => {
   const store = createPostgresDirectoryStore(URL!);

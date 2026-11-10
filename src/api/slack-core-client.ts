@@ -23,7 +23,7 @@ import type { ErrorLog } from "../admin/error-log.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import type { Delivery, PendingApproval, ScopeId, TurnRequest, TurnResult } from "../types.ts";
 import type { SurfaceContextRequest, SurfaceContextResult } from "../reach/reach.ts";
-import { scopeId } from "../types.ts";
+import { scopeActor, scopeId } from "../types.ts";
 import type { MemoryService } from "../memory/memory-service.ts";
 import type { CachedMessage, ReadMessagesOpts, SurfaceCache, IngestEvent } from "../surface-cache/surface-cache.ts";
 import type { AckEmojiPickStore } from "../surface-cache/ack-emoji-pick-store.ts";
@@ -58,7 +58,14 @@ interface StoredApprovalView extends Omit<PendingApproval, "reason"> {
 }
 
 interface DirectoryPush {
-  members?: Array<{ principalId: string; displayName: string; type: "internal"; slackId?: string; avatarUrl?: string }>;
+  members?: Array<{
+    principalId: string;
+    displayName: string;
+    type: "internal";
+    slackId?: string;
+    avatarUrl?: string;
+    isBot?: boolean;
+  }>;
   channels?: Array<{ channelId: string; name: string; isPrivate?: boolean; isExternal?: boolean }>;
   channelMembers?: Array<{ channelId: string; principalId: string }>;
   channelRosterIds?: string[];
@@ -169,7 +176,7 @@ const RUN_STALL_BUDGET_MS = 300_000;
 
 export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClient {
   const lease = deps.leaderLease;
-  const orgScope = (): ScopeId => scopeId("org", configOrgId());
+  const orgScope: ScopeId = scopeId("org", configOrgId());
 
   return {
     decideDeploymentAccess: (value, actor, approve) =>
@@ -191,21 +198,21 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
         }
       : {}),
     async externalSlackParticipants() {
-      return (await deps.config.getExternalSlackParticipantsDurable(orgScope())) === true;
+      return (await deps.config.getExternalSlackParticipantsDurable(orgScope)) === true;
     },
 
     async ackEmojiOverride() {
-      return await deps.config.getAckEmojiDurable(orgScope());
+      return await deps.config.getAckEmojiDurable(orgScope);
     },
 
     async publishEmojiCatalog(emoji) {
-      await deps.config.setSlackEmojiCatalog(orgScope(), emoji);
+      await deps.config.setSlackEmojiCatalog(orgScope, emoji);
     },
 
     async surfaceHeaderFacts(scope) {
       const [choice, branding] = await Promise.all([
-        resolveRuntimeChoice(deps.config, orgScope(), scope, deps.runtimeFallback),
-        resolveBranding(deps.config, orgScope(), deps.brandingDefault),
+        resolveRuntimeChoice(deps.config, orgScope, scope, deps.runtimeFallback),
+        resolveBranding(deps.config, orgScope, deps.brandingDefault),
       ]);
       return {
         ...(branding.selfLabel ? { agentLabel: branding.selfLabel } : {}),
@@ -253,7 +260,8 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     async noteSurfaceHistoryGap(container, note) {
       if (!deps.memory) return;
       const kind = (await deps.surfaceCache?.containerState(container))?.kind;
-      await deps.memory.capture(scopeId(kind === "group" ? "group" : "channel", container), [note], Date.now());
+      const scope = scopeId(kind === "group" ? "group" : "channel", container);
+      await deps.memory.capture(scope, [note], Date.now(), { actorId: scopeActor(scope), context: "maintenance" });
     },
 
     async readSurfaceMessages(container, opts) {

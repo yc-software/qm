@@ -23,6 +23,13 @@ path before starting workers. Memory stores implement the same contract for test
 they are not a production durability substitute. Swarms are unavailable with
 mixed memory/Postgres stores so execution leases and writes share one authority.
 
+Each swarm board and worker computer records its swarm's id (`swarmId`), which is how
+a Slack bot's turn is kept off a person's swarm computers. Releases from before that
+field leave it unset; `durable-map/swarms/0040-stamp-computers` stamps the computers of
+existing swarms once at startup. Drain an older release's cores and workers before
+upgrading from it, because a computer the older release provisions after that migration
+stays unmarked.
+
 ## Agent API
 
 These routes appear in `/v1/apis` and work from every agent turn that can use QM's
@@ -143,7 +150,10 @@ rosters must remain the original roster; changes fail closed. Current scope and
 identity authorization is rechecked before access and execution.
 
 Notification state is persisted as `pending`, `mailbox`, `queued` with a durable
-`runId`, `handed`, or `failed`. A queued notification means the run was accepted, not that the agent has
+`runId`, `handed`, or `failed`. In a swarm a bot started, once anyone else has posted,
+a notification for the root or for a worker the bot may no longer direct is stored as
+`mailbox` instead of waking it, so no bot turn runs for it; a person's next turn in the
+root reads it. A queued notification means the run was accepted, not that the agent has
 finished. Idle recipients wake through the normal durable worker queue. Active
 recipients receive queued unattended turns, not forged human steer signals.
 Notification enqueue uses a stable deduplication key so a crash between enqueue
@@ -233,19 +243,31 @@ with different content fails. Context updates are simple replacements.
 
 ## Human API
 
-Human callers use `GET` and `POST /v1/sessions/:id/swarm` through the existing
-source-authenticated API with a signed portal identity. The caller must already
-be allowed to view that session and belong to the swarm scope. Request actor
-and provenance selector fields are rejected rather than ignored. Arbitrary keys
-inside `context` remain permitted. Bodies and read parameters match the
-agent API. Initializing a root from this endpoint additionally requires a `runId`
-belonging to that session and actor. Human-origin actions are separately recorded;
-their asynchronous notifications still run unattended.
+Human callers use `GET` and `POST /v1/sessions/:id/swarm` (the web app's
+`/api/sessions/:id/swarm`) as the signed-in person. The caller must already be
+allowed to view that session and belong to the swarm scope. People can inspect the
+swarm and send `control` actions; `spawn`, `send`, `context` and message reads are
+agent-only. Request actor and provenance selector fields are rejected rather than
+ignored. Human-origin actions are separately recorded; their asynchronous
+notifications still run unattended.
 
 Agent operations require credentials bound to the exact session, run attempt, and
 unexpired execution lease. Swarm writes recheck that lease inside their database
 transaction; credentials from replaced attempts cannot authorize new work. Completed, failed, queued, and expired runs cannot authorize agent swarm
-operations. Authenticated human initialization may reference a historical run.
+operations. A Slack bot's turn cannot direct a person's swarm: `inspect`, `spawn`,
+`send`, `context`, `control` and message reads refuse it unless a bot's turn started
+the swarm. Once anyone other than that bot has posted a swarm message, the bot's root
+turn and every worker in a branch the bot started lose that access too. Workers in a
+branch someone else started keep it: every mail-woken worker turn in a bot-started
+swarm runs as the bot, so a worker's access comes from who sent the message that
+spawned the top of its branch. The same rule covers the board and worker computers a
+swarm creates: a bot's turn that may not direct the swarm cannot list them, reach them with
+`sandbox_id`, make one the conversation's default, use one a person made the default, or
+run on its own worker computer. The check runs each time the turn uses a computer, so a
+turn that is already running loses that access as soon as someone else posts. Background
+jobs on those computers are covered too: the bot's `background` list leaves them out, it
+cannot watch them, and a watch it armed while it could stops reading the job's output.
+A computer supplied as `forumSandboxId` stays an ordinary computer of its scope.
 Worker sessions never inherit the root session's command or security-screen
 approval grants; a worker must obtain its own approval. Auto screening receives host-verified swarm delegation provenance, so routine delegated tasks and in-swarm reporting are distinguished from external instructions. Delegation does not authorize credential disclosure, permission changes, or overriding higher-priority instructions; those remain screened. Frozen swarm roster checks
 apply to swarm notifications, not ordinary human follow-ups in the root session.

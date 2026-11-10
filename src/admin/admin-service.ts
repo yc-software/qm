@@ -5,6 +5,7 @@ import { parseScopeId, scopeId } from "../types.ts";
 import type { AdminGrant, AdminGrantStore, AdminRole } from "./admin-grant-store.ts";
 import { personKey, samePerson } from "../directory/person.ts";
 import type { UserStore } from "../identity/user-store.ts";
+import type { Tenant } from "../tenants/context.ts";
 
 export type { AdminGrant } from "./admin-grant-store.ts";
 
@@ -34,12 +35,20 @@ export function adminStatusFromGrants(grants: readonly AdminGrant[], principalId
 export interface AdminService {
   users: UserStore;
   resolveActor(header: string | undefined): Principal | null;
-  canAdminister(principal: Principal, target: ScopeId): Promise<boolean>;
-  adminStatusOf(principal: Principal): Promise<AdminStatus>;
-  listGrants(): Promise<AdminGrant[]>;
-  provisionTrustedEntry(issuer: string, subject: string): Promise<{ grant: AdminGrant; created: boolean }>;
-  createGrant(actor: Principal, input: { principalId: string; role: AdminRole; scopeId: ScopeId }): Promise<AdminGrant>;
-  revokeGrant(actor: Principal, principalId: string, scope: ScopeId, role: AdminRole): Promise<void>;
+  canAdminister(tenant: Tenant, principal: Principal, target: ScopeId): Promise<boolean>;
+  adminStatusOf(tenant: Tenant, principal: Principal): Promise<AdminStatus>;
+  listGrants(tenant: Tenant): Promise<AdminGrant[]>;
+  provisionTrustedEntry(
+    tenant: Tenant,
+    issuer: string,
+    subject: string,
+  ): Promise<{ grant: AdminGrant; created: boolean }>;
+  createGrant(
+    tenant: Tenant,
+    actor: Principal,
+    input: { principalId: string; role: AdminRole; scopeId: ScopeId },
+  ): Promise<AdminGrant>;
+  revokeGrant(tenant: Tenant, actor: Principal, principalId: string, scope: ScopeId, role: AdminRole): Promise<void>;
 }
 
 export function parseAdminGrants(raw: string | undefined, orgId: string): AdminGrant[] | undefined {
@@ -65,11 +74,11 @@ export interface AdminServiceOptions {
 }
 
 export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOptions): AdminService {
-  const orgId = configOrgId;
+  const orgId = configOrgId();
   const now = opts.now ?? (() => Date.now());
 
-  async function isOrgAdmin(actor: Principal): Promise<boolean> {
-    return adminStatusFromGrants(await grants.list(), actor.id).role === "org_admin";
+  async function isOrgAdmin(tenant: Tenant, actor: Principal): Promise<boolean> {
+    return adminStatusFromGrants(await grants.list(tenant), actor.id).role === "org_admin";
   }
 
   return {
@@ -80,39 +89,39 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
       if (at <= 0 || at === header.length - 1) return null;
       const id = header.slice(0, at);
       const org = header.slice(at + 1);
-      if (org !== orgId()) return null;
+      if (org !== orgId) return null;
       return { id, type: "internal" };
     },
-    async canAdminister(principal, _target) {
-      return isOrgAdmin(principal);
+    async canAdminister(tenant, principal, _target) {
+      return isOrgAdmin(tenant, principal);
     },
-    async adminStatusOf(principal) {
-      return adminStatusFromGrants(await grants.list(), principal.id);
+    async adminStatusOf(tenant, principal) {
+      return adminStatusFromGrants(await grants.list(tenant), principal.id);
     },
-    async provisionTrustedEntry(issuer, subject) {
+    async provisionTrustedEntry(tenant, issuer, subject) {
       if (!opts.trustedOidcAdminIssuer || issuer !== opts.trustedOidcAdminIssuer)
         throw new AdminError(403, "trusted administrator provisioning is not enabled for this issuer");
       if (!subject || subject.length > 255 || Buffer.from(subject).toString("utf8") !== subject)
         throw new AdminError(400, "invalid trusted subject");
       const principalId = `oidc:${createHash("sha256").update(issuer).digest("hex")}:${Buffer.from(subject).toString("base64url")}`;
-      const existing = (await grants.list()).find((g) => g.principalId === principalId && g.role === "org_admin");
+      const existing = (await grants.list(tenant)).find((g) => g.principalId === principalId && g.role === "org_admin");
       if (existing) return { grant: existing, created: false };
       const grant: AdminGrant = {
         principalId,
         role: "org_admin",
-        scopeId: scopeId("org", orgId()),
+        scopeId: scopeId("org", orgId),
         grantedBy: `trusted-oidc:${issuer}`,
         createdAt: now(),
       };
       await opts.users.record({ id: principalId, source: "admin", at: grant.createdAt ?? Date.now() });
-      const created = await grants.addIfAbsent(grant);
+      const created = await grants.addIfAbsent(tenant, grant);
       return { grant, created };
     },
-    listGrants() {
-      return grants.list();
+    async listGrants(tenant) {
+      return grants.list(tenant);
     },
-    async createGrant(actor, input) {
-      if (!(await isOrgAdmin(actor))) throw new AdminError(403, "only an org admin may grant admin roles");
+    async createGrant(tenant, actor, input) {
+      if (!(await isOrgAdmin(tenant, actor))) throw new AdminError(403, "only an org admin may grant admin roles");
       const principalId = input.principalId?.trim();
       if (!principalId) throw new AdminError(400, "principalId required");
       const { role } = input;
@@ -120,16 +129,16 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
         throw new AdminError(400, "role must be org_admin");
       }
       const parsed = parseScopeId(input.scopeId);
-      if (parsed.kind !== "org" || parsed.ref !== orgId()) {
-        throw new AdminError(400, `org_admin scope must be org:${orgId()}`);
+      if (parsed.kind !== "org" || parsed.ref !== orgId) {
+        throw new AdminError(400, `org_admin scope must be org:${orgId}`);
       }
       const grant: AdminGrant = { principalId, scopeId: input.scopeId, role, grantedBy: actor.id, createdAt: now() };
       await opts.users.record({ id: principalId, source: "admin", at: grant.createdAt ?? Date.now() });
-      await grants.add(grant);
+      await grants.add(tenant, grant);
       return grant;
     },
-    async revokeGrant(actor, principalId, scope, role) {
-      const list = await grants.list();
+    async revokeGrant(tenant, actor, principalId, scope, role) {
+      const list = await grants.list(tenant);
       if (adminStatusFromGrants(list, actor.id).role !== "org_admin") {
         throw new AdminError(403, "only an org admin may revoke admin roles");
       }
@@ -144,7 +153,7 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
           throw new AdminError(400, "cannot revoke the last org admin");
         }
       }
-      for (const g of matched) await grants.revoke(g.principalId, scope, role);
+      for (const g of matched) await grants.revoke(tenant, g.principalId, scope, role);
     },
   };
 }

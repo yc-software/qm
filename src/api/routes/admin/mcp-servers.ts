@@ -10,8 +10,14 @@ import {
   type McpServer,
   type McpServerAuthMode,
 } from "../../../mcp/mcp-server-store.ts";
-import { isAccountType, PROVIDERS } from "../../../connectors/oauth.ts";
-import { discoverOAuth, httpsUrl, parseScopes, type DiscoveredOAuth } from "../../../mcp/oauth-discovery.ts";
+import { isAccountType, oauthCallbackUrl, PROVIDERS } from "../../../connectors/oauth.ts";
+import {
+  discoverOAuth,
+  httpsUrl,
+  parseScopes,
+  registerPublicClient,
+  type DiscoveredOAuth,
+} from "../../../mcp/oauth-discovery.ts";
 import { errMessage } from "../../../util/errors.ts";
 import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
@@ -86,11 +92,14 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
       message: "url must not carry credentials, query, or fragment",
     });
   }
-  const auth = (b.auth ?? "none") as McpServerAuthMode;
+  const existing = await ctx.deps.mcpServers.get(id);
+  let discovered: DiscoveredOAuth | undefined;
+  const discover = async () => (discovered ??= await discoverOAuth(parsed));
+  const probe = !b.auth && !existing && b.validate !== false && parsed.protocol === "https:";
+  const auth = (b.auth ?? (probe && (await discover()).authorize ? "oauth-user" : "none")) as McpServerAuthMode;
   if (!AUTH_MODES.includes(auth)) {
     return sendJson(ctx.res, 400, { error: "bad_request", message: `auth must be one of ${AUTH_MODES.join(", ")}` });
   }
-  const existing = await ctx.deps.mcpServers.get(id);
   const approval = b.approval ?? existing?.approval ?? "annotations";
   if (!APPROVAL_POLICIES.includes(approval)) {
     return sendJson(ctx.res, 400, {
@@ -123,6 +132,13 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
       message:
         "attestActor requires catalog, shared credentials, and bearer or client-credentials auth, so only QM can assert the person",
     });
+  }
+  const attestAudience = b.attestAudience ?? (attestActor ? existing?.attestAudience : undefined) ?? "personal";
+  if (attestAudience !== "personal" && attestAudience !== "any") {
+    return sendJson(ctx.res, 400, { error: "bad_request", message: "attestAudience must be personal or any" });
+  }
+  if (attestAudience === "any" && !attestActor) {
+    return sendJson(ctx.res, 400, { error: "bad_request", message: "attestAudience any requires attestActor" });
   }
   const credentialHost = b.credentialHost ?? existing?.credentialHost ?? (oauthUser ? parsed.hostname : undefined);
   if (
@@ -164,11 +180,10 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
   if (credentialScope === "per-user" && parsed.protocol !== "https:") {
     return sendJson(ctx.res, 400, { error: "bad_request", message: "per-user credentials require HTTPS" });
   }
-  let discovered: DiscoveredOAuth | undefined;
   if (oauthUser && (!oauthAuthorizeUrl || !oauthTokenUrl)) {
-    discovered = await discoverOAuth(parsed);
-    oauthAuthorizeUrl ??= discovered.authorize;
-    oauthTokenUrl ??= discovered.token;
+    const found = await discover();
+    oauthAuthorizeUrl ??= found.authorize;
+    oauthTokenUrl ??= found.token;
   }
   const server: McpServer = {
     id,
@@ -197,7 +212,8 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
     ...(approval === "annotations" ? {} : { approval }),
     ...(catalog ? { catalog } : {}),
     ...(attestActor ? { attestActor } : {}),
-    readOnly: b.readOnly !== false,
+    ...(attestAudience === "any" ? { attestAudience } : {}),
+    readOnly: (b.readOnly ?? existing?.readOnly) === true,
     enabled: b.enabled !== false,
     updatedAt: Date.now(),
     updatedBy: authorized.id,
@@ -211,11 +227,21 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
       message: "client-credentials auth requires clientId and clientSecret",
     });
   }
+  const callbacks = [...new Set([ctx.deps.publicUrl, ctx.deps.portalUrl].filter((u): u is string => !!u))].map((base) =>
+    oauthCallbackUrl(base, id),
+  );
+  if (oauthUser && !server.clientId && callbacks.length) {
+    const found = await discover();
+    if (found.registrable)
+      server.clientId = await registerPublicClient(found.registrable, callbacks).catch(
+        (e) => void found.errors.push(`dynamic registration: ${errMessage(e)}`),
+      );
+  }
   if (oauthUser && (!server.clientId || !server.oauthAuthorizeUrl || !server.oauthTokenUrl)) {
     return sendJson(ctx.res, 400, {
       error: "bad_request",
       message:
-        "oauth-user auth requires clientId plus HTTPS oauthAuthorizeUrl and oauthTokenUrl, or OAuth metadata to discover them" +
+        "oauth-user auth needs a clientId when the server offers no dynamic client registration, plus HTTPS oauthAuthorizeUrl and oauthTokenUrl, or OAuth metadata to discover them" +
         (discovered?.errors.length ? ` (discovery: ${discovered.errors.join("; ")})` : ""),
     });
   }

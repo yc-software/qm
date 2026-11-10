@@ -1,6 +1,6 @@
 import type { ScopeActivity, SessionStore } from "../../../sessions/session-store.ts";
 import { reportFailure } from "../../../util/errors.ts";
-import { perTenant } from "../../../tenants/context.ts";
+import { perTenant } from "../../../tenants/cache.ts";
 
 const REFRESH_MS = 5 * 60_000;
 

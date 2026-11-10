@@ -17,7 +17,7 @@ import {
   type ModelOverlay,
 } from "./model-overlay.ts";
 import { MODEL_REGISTRY, type ModelEntry } from "./model-registry.ts";
-import { providerBaseUrl } from "./provider-endpoints.ts";
+import { MODEL_PROVIDERS, providerBaseUrl, type ModelProvider } from "./provider-endpoints.ts";
 import { type CustomRuntimeModel, isCustomModelId, resolveCustomModel } from "./custom-providers.ts";
 import type { ProviderKeys } from "./model-runtime.ts";
 
@@ -32,10 +32,22 @@ const CODEX_SUBSCRIPTION_PREFIX = "codex/";
 export function codexSubscriptionModelId(id: string): string {
   return id.startsWith(CODEX_SUBSCRIPTION_PREFIX) ? id : CODEX_SUBSCRIPTION_PREFIX + id;
 }
-export function personalModelId(id: string, keys: ProviderKeys): string {
-  if (!keys[CODEX_SUBSCRIPTION_PROVIDER]) return id;
+function subscriptionServedId(id: string): string {
   const subscription = codexSubscriptionModelId(id);
   return resolveModel(subscription, false)?.provider === CODEX_SUBSCRIPTION_PROVIDER ? subscription : id;
+}
+export function personalModelId(id: string, keys: ProviderKeys): string {
+  return keys[CODEX_SUBSCRIPTION_PROVIDER] ? subscriptionServedId(id) : id;
+}
+export function companyModelId(id: string, providers: Pick<ModelProviderAvailability, "codexOAuth">): string {
+  if (
+    !providers.codexOAuth ||
+    resolveModel(id)?.provider !== "openai" ||
+    isOverlayModel(id) ||
+    modelRequestOverrides(id)
+  )
+    return id;
+  return subscriptionServedId(id);
 }
 export function codexProviderModelId(id: string): string {
   return id.startsWith(CODEX_SUBSCRIPTION_PREFIX) ? id.slice(CODEX_SUBSCRIPTION_PREFIX.length) : id;
@@ -76,13 +88,6 @@ export function thinkingLevelsFor(modelId?: string): readonly string[] {
     return true;
   });
 }
-export const MODEL_PROVIDERS = ["anthropic", "openai", "openrouter"] as const;
-export type ModelProvider = (typeof MODEL_PROVIDERS)[number];
-
-export function isModelProvider(value: unknown): value is ModelProvider {
-  return typeof value === "string" && (MODEL_PROVIDERS as readonly string[]).includes(value);
-}
-
 type PiModel = Model<Api>;
 
 export function isOverlayModel(id: string): boolean {
@@ -266,7 +271,10 @@ export function resolveBuiltinModel(id: string): PiModel | undefined {
   return builtinModel(id);
 }
 
-function resolveBaseModel(id: string): PiModel | undefined {
+function resolveBaseModel(
+  id: string,
+  customModel: (id: string) => CustomRuntimeModel | undefined = resolveCustomModel,
+): PiModel | undefined {
   if (isGatewayModelId(id)) return resolveGatewayModel(id);
   if (overlayUnavailableReason(id) !== undefined) return undefined;
   const builtin = resolveBuiltinModel(id);
@@ -275,8 +283,12 @@ function resolveBaseModel(id: string): PiModel | undefined {
   if (overlay && !isEmbeddingModel(overlay)) {
     return modelFromOverlay(overlay, false);
   }
-  const custom = resolveCustomModel(id);
+  const custom = customModel(id);
   return custom ? customPiModel(custom) : OPENROUTER_CATALOG_MODELS.get(id);
+}
+
+export function resolveDeploymentModel(id: string): PiModel | undefined {
+  return resolveBaseModel(id, () => undefined);
 }
 
 function customPiModel(custom: CustomRuntimeModel): PiModel {

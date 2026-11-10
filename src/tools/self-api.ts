@@ -1,5 +1,6 @@
 import { errMessage } from "../util/errors.ts";
 import { CAPABILITY_HEADER } from "../api/contract.ts";
+import { trimTrailingSlashes } from "../util/text.ts";
 
 export interface SelfApiResponse {
   status: number;
@@ -15,7 +16,7 @@ export type SelfApiCall = (
 ) => Promise<SelfApiResponse>;
 
 export function createSelfApiCall(baseUrl: string, capability: string): SelfApiCall {
-  while (baseUrl.endsWith("/")) baseUrl = baseUrl.slice(0, -1);
+  baseUrl = trimTrailingSlashes(baseUrl);
   return async (method, path, body, signal) => {
     const [pathname = ""] = path.split("?");
     if (pathname.split("/").some((segment) => segment === "." || segment === "..")) {

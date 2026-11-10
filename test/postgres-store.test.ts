@@ -3,6 +3,7 @@ import { test, before } from "node:test";
 import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
 import { PARALLEL_EXCEPTION_QUERY } from "../src/deployment/postdeploy-smoke.ts";
+import { createPostgresUserStore } from "../src/identity/user-store.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { rowToSession } from "../src/sessions/session-rows.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
@@ -12,7 +13,7 @@ import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { assertLateJoinerScopes, assertLeanListing } from "./support/participant-scopes.ts";
 import { assertParticipantSessionParity } from "./support/participant-session-parity.ts";
 import { assertSpendRollupParity } from "./support/spend-rollup-parity.ts";
-import { seedInstallTenant } from "./support/tenant-seed.ts";
+import { seedTestTenant } from "./support/test-tenant.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres store tests";
@@ -24,6 +25,7 @@ before(async () => {
   await p.query("DROP SCHEMA public CASCADE");
   await p.query("CREATE SCHEMA public");
   await p.end();
+  await seedTestTenant(URL);
 });
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
@@ -277,8 +279,8 @@ test(
     const schema = `spend_order_${randomUUID().replaceAll("-", "")}`;
     await admin.query(`CREATE SCHEMA ${schema}`);
     const url = new globalThis.URL(URL!);
-    url.searchParams.set("options", `-c search_path=${schema}`);
-    await seedInstallTenant(url.toString());
+    url.searchParams.set("options", `${url.searchParams.get("options") ?? ""} -c search_path=${schema}`.trim());
+    await seedTestTenant(url.toString());
     const day = 86_400_000;
     const base = Date.UTC(2025, 5, 1);
     let clock = base + 3 * day;
@@ -499,10 +501,11 @@ test("pg spend ancestry only visits sessions with usage inside the requested ran
   });
   const pg = (await import("pg")).default;
   const raw = new pg.Pool({ connectionString: URL });
-  const execute = pg.Pool.prototype.query;
+  const execute = pg.Client.prototype.query;
   let query = "";
-  t.mock.method(pg.Pool.prototype, "query", function (this: InstanceType<typeof pg.Pool>, ...args: unknown[]) {
-    if (typeof args[0] === "string" && args[0].startsWith("WITH RECURSIVE")) query = args[0];
+  t.mock.method(pg.Client.prototype, "query", function (this: InstanceType<typeof pg.Client>, ...args: unknown[]) {
+    const text = typeof args[0] === "string" ? args[0] : (args[0] as { text?: unknown } | null)?.text;
+    if (typeof text === "string" && text.startsWith("WITH RECURSIVE")) query = text;
     return Reflect.apply(execute, this, args);
   });
   try {
@@ -1268,61 +1271,6 @@ test("no plpgsql exception handler is marked parallel-safe anywhere in the schem
   }
 });
 
-test("pg attributedTurns: covering join credits only user entries, per principal/session/day", { skip }, async () => {
-  const s = createPostgresSessionStore(URL!);
-  const scope = scopeId("channel", "uet");
-  const a = await s.getOrCreateByThread("uetA", "channel", scope);
-  const b = await s.getOrCreateByThread("uetB", "channel", scope);
-  await s.addParticipant(a.id, "UET1");
-  await s.addParticipant(b.id, "UET1");
-  const writer = { sessionId: a.id };
-  const u0 = await s.append(writer, { kind: "UserMessage", text: "1" });
-  await s.append(writer, { kind: "AgentMessage", text: "ack" });
-  const u1 = await s.append(writer, { kind: "UserMessage", text: "2" });
-
-  const rows = await s.attributedTurns();
-  const forA = rows.filter((r) => r.sessionId === a.id);
-  assert.equal(forA.length, 1, "one (principal, session, day) bucket");
-  assert.equal(forA[0]!.principalId, "UET1");
-  assert.equal(forA[0]!.turns, 2, "only the two user entries; assistant excluded");
-  assert.equal(forA[0]!.firstAt, u0.createdAt);
-  assert.equal(forA[0]!.lastAt, u1.createdAt);
-  assert.equal(forA[0]!.day, Math.floor(u0.createdAt / 86_400_000));
-  assert.equal(
-    rows.some((r) => r.sessionId === b.id),
-    false,
-    "a session with no user entries yields no rows",
-  );
-});
-
-test("pg attributedTurns credits current participants with the session's user turns", { skip }, async () => {
-  const s = createPostgresSessionStore(URL!);
-  const scope = scopeId("channel", "cov");
-  const sess = await s.getOrCreateByThread("covA", "channel", scope);
-  await s.addParticipant(sess.id, "COV1");
-  const writer = { sessionId: sess.id };
-  const early = await s.append(writer, { kind: "UserMessage", text: "early" });
-  await s.addParticipant(sess.id, "COV2");
-  await s.addParticipant(sess.id, "COV3");
-  const late = await s.append(writer, { kind: "UserMessage", text: "late" });
-  await s.removeParticipant(sess.id, "COV3");
-
-  const rows = (await s.attributedTurns()).filter((r) => r.sessionId === sess.id);
-  for (const principalId of ["COV1", "COV2"]) {
-    const mine = rows.filter((r) => r.principalId === principalId);
-    assert.equal(
-      mine.reduce((n, r) => n + r.turns, 0),
-      2,
-    );
-    assert.equal(mine[0]!.firstAt, early.createdAt);
-    assert.equal(mine[0]!.lastAt, late.createdAt);
-  }
-  assert.equal(
-    rows.some((r) => r.principalId === "COV3"),
-    false,
-  );
-});
-
 test(
   "pg overheard catch-up entries are excluded from turns/preview/retention (jsonb payload filter)",
   { skip },
@@ -1352,13 +1300,6 @@ test(
     assert.equal(row.messages, 4, "messages still counts every durable entry");
     assert.equal(row.firstMessage, "the real question", "overheard is not the first message");
     assert.equal(row.lastMessage, "the real question", "overheard is not the last message");
-
-    const attributed = (await s.attributedTurns()).filter((t) => t.sessionId === a.id);
-    assert.equal(
-      attributed.reduce((n, t) => n + t.turns, 0),
-      1,
-      "retention counts only the real user turn",
-    );
   },
 );
 
@@ -1368,7 +1309,7 @@ test("pg null-byte payloads: stripped on write and counted alongside raw items",
   const a = await s.getOrCreateByThread("nulA", "channel", scope);
   await s.addParticipant(a.id, "NUL1");
   const writer = { sessionId: a.id };
-  const e = await s.append(writer, { kind: "UserMessage", text: "a\u0000b" });
+  const e = await s.append(writer, { kind: "UserMessage", text: "a\u0000b", author: "NUL1" });
   assert.equal(e.text, "ab", "append returns the sanitized text, matching what is stored");
   assert.equal((await s.getItems(a.id))[0]!.text, "ab", "null byte stripped at write");
 
@@ -1376,19 +1317,15 @@ test("pg null-byte payloads: stripped on write and counted alongside raw items",
   const raw = new pg.Pool({ connectionString: URL });
   try {
     await raw.query(
-      "INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at) VALUES (qm_tenant_id(),$1,$2,'UserMessage',$3,to_timestamp($4 / 1000.0))",
+      "INSERT INTO items(tenant_id, session_id, seq, kind, author, body, created_at) VALUES (qm_bound_tenant(),$1,$2,'UserMessage','NUL1',$3,to_timestamp($4 / 1000.0))",
       [a.id, 1, { text: "xy" }, Date.now()],
     );
     await raw.query("UPDATE sessions SET messages = NULL, turns = NULL, last_activity = NULL WHERE id = $1", [a.id]);
   } finally {
     await raw.end();
   }
-  const attributed = (await s.attributedTurns()).filter((t) => t.sessionId === a.id);
-  assert.equal(
-    attributed.reduce((n, t) => n + t.turns, 0),
-    2,
-    "both user turns counted",
-  );
+  const activity = (await createPostgresUserStore(URL!).activity()).find((r) => r.principalId === "NUL1");
+  assert.equal(activity?.turns, 2, "both user turns counted");
   const lease2 = { sessionId: a.id };
   await s.append(lease2, { kind: "UserMessage", text: "z" });
   const row = (await s.scopeSessionSummaries(scope, false, { limit: 500 })).find((r) => r.id === a.id)!;
@@ -1434,7 +1371,7 @@ test(
       assert.equal(legacy.lastActivity, entries[entries.length - 1]!.createdAt, "last-activity = newest entry");
 
       await raw.query(
-        "INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at) VALUES (qm_tenant_id(),$1,$2,'UserMessage',$3,to_timestamp($4 / 1000.0))",
+        "INSERT INTO items(tenant_id, session_id, seq, kind, author, body, created_at) VALUES (qm_bound_tenant(),$1,$2,'UserMessage','NUL1',$3,to_timestamp($4 / 1000.0))",
         [a.id, 4, { text: "from the old instance" }, Date.now()],
       );
       const lease2 = { sessionId: a.id };
@@ -1444,7 +1381,7 @@ test(
       assert.equal(healed.turns, 3, "seq/messages mismatch triggers a full turns recount");
 
       await raw.query(
-        "INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at) VALUES (qm_tenant_id(),$1,0,'UserMessage',$2,to_timestamp($3 / 1000.0)), (qm_tenant_id(),$1,1,'AgentMessage',$4,to_timestamp($5 / 1000.0))",
+        "INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at) VALUES (qm_bound_tenant(),$1,0,'UserMessage',$2,to_timestamp($3 / 1000.0)), (qm_bound_tenant(),$1,1,'AgentMessage',$4,to_timestamp($5 / 1000.0))",
         [b.id, { text: "drained turn" }, Date.now(), { text: "reply" }, Date.now() + 1],
       );
       await raw.query("UPDATE sessions SET messages = 0, turns = 0 WHERE id = $1", [b.id]);

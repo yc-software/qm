@@ -9,11 +9,13 @@ import type { AddressInfo } from "node:net";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { afterEach, test } from "node:test";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { oneShot } from "../src/agent/agent-run.ts";
+import { buildModelRuntime } from "../src/model/model-runtime.ts";
+import { configurePublicFetch } from "../src/util/network.ts";
 import { resolveModel, modelSupported, modelServiceable } from "../src/model/pi-models.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
 import { createCustomProviderStore } from "../src/model/model-credential-store.ts";
@@ -22,6 +24,10 @@ import { verificationUpstream } from "./support/model-verification-upstream.ts";
 import { testMap } from "./support/test-database.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
+
+const allowUpstream = (url: string) => configurePublicFetch(new Set([new URL(url).origin]), () => false);
+
+afterEach(() => configurePublicFetch(new Set()));
 
 test("QA: full custom-provider lifecycle against a live fake upstream", async () => {
   // --- fake OpenAI-compatible upstream ---
@@ -60,11 +66,13 @@ test("QA: full custom-provider lifecycle against a live fake upstream", async ()
   const upstreamUrl = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}/v1`;
 
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "qa-custom-")) }));
+  allowUpstream(upstreamUrl);
   const server = createInsecureTestServer(built.app, {
     config: built.config,
     modelCredentials: built.modelCredentials,
     customProviders: built.customProviders,
     refreshCustomProviders: built.refreshCustomProviders,
+    modelCredentialFetch: fetch,
     admin: built.admin,
     auditLog: built.auditLog,
   });
@@ -199,11 +207,13 @@ test("QA: openai-responses custom provider serves a real turn through the genera
   const upstream = await verificationUpstream();
   const upstreamUrl = `${upstream.url}/v1`;
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "qa-responses-")) }));
+  allowUpstream(upstreamUrl);
   const server = createInsecureTestServer(built.app, {
     config: built.config,
     modelCredentials: built.modelCredentials,
     customProviders: built.customProviders,
     refreshCustomProviders: built.refreshCustomProviders,
+    modelCredentialFetch: fetch,
     admin: built.admin,
     auditLog: built.auditLog,
   });
@@ -311,11 +321,13 @@ test("QA: anthropic-protocol custom provider serves a real turn (correct wire sh
   const upstreamUrl = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
 
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "qa-ant-")) }));
+  allowUpstream(upstreamUrl);
   const server = createInsecureTestServer(built.app, {
     config: built.config,
     modelCredentials: built.modelCredentials,
     customProviders: built.customProviders,
     refreshCustomProviders: built.refreshCustomProviders,
+    modelCredentialFetch: fetch,
     admin: built.admin,
     auditLog: built.auditLog,
   });
@@ -425,6 +437,7 @@ test("QA: a custom model named like a built-in registers and sends its own model
   await new Promise<void>((r) => upstream.listen(0, "127.0.0.1", r));
   const upstreamUrl = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}/v1`;
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "qa-custom-own-")) }));
+  allowUpstream(upstreamUrl);
   const server = createInsecureTestServer(built.app, {
     config: built.config,
     modelCredentials: built.modelCredentials,
@@ -460,4 +473,103 @@ test("QA: a custom model named like a built-in registers and sends its own model
     server.close();
     upstream.close();
   }
+});
+
+test("QA: a custom provider saved without a key check cannot reach a loopback address or follow a redirect to one", async (t) => {
+  const logged: string[] = [];
+  t.mock.method(console, "error", (...args: unknown[]) => logged.push(args.map(String).join(" ")));
+  const hits: string[] = [];
+  const listener = createServer((req, res) => {
+    hits.push(`${req.method} ${req.url} ${req.headers.authorization ?? req.headers["x-api-key"] ?? "-"}`);
+    res.writeHead(500).end();
+  });
+  await new Promise<void>((r) => listener.listen(0, "127.0.0.1", r));
+  const listenerOrigin = `http://127.0.0.1:${(listener.address() as AddressInfo).port}`;
+  const redirected: string[] = [];
+  const redirector = createServer((req, res) => {
+    redirected.push(`${req.method} ${req.url}`);
+    res.writeHead(307, { location: `${listenerOrigin}${req.url}` }).end();
+  });
+  await new Promise<void>((r) => redirector.listen(0, "127.0.0.1", r));
+  const redirectorOrigin = `http://127.0.0.1:${(redirector.address() as AddressInfo).port}`;
+
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "qa-custom-loopback-")) }));
+  const server = createInsecureTestServer(built.app, {
+    config: built.config,
+    modelCredentials: built.modelCredentials,
+    customProviders: built.customProviders,
+    refreshCustomProviders: built.refreshCustomProviders,
+    admin: built.admin,
+    auditLog: built.auditLog,
+  });
+  server.listen(0);
+  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  allowUpstream(redirectorOrigin);
+  try {
+    for (const protocol of ["openai", "openai-responses", "anthropic"] as const) {
+      for (const [target, origin] of [
+        ["loopback", listenerOrigin],
+        ["redirect", redirectorOrigin],
+      ] as const) {
+        const id = `${target}-${protocol}`;
+        const saved = await fetch(`${base}/v1/admin/custom-providers/${id}`, {
+          method: "PUT",
+          headers: ADMIN,
+          body: JSON.stringify({
+            name: id,
+            protocol,
+            baseUrl: protocol === "anthropic" ? origin : `${origin}/v1`,
+            apiKey: "sk-saved-unchecked",
+            validate: false,
+            models: [{ id: "m" }],
+          }),
+        });
+        assert.equal(saved.status, 200);
+        const key = await built.customProviders.resolveKey(id);
+        assert.equal(key, "sk-saved-unchecked");
+        const runtime = await buildModelRuntime({ [id]: key! });
+        const reply = await runtime
+          .streamSimple(resolveModel(`custom/${id}/m`) as Model<Api>, {
+            systemPrompt: "terse",
+            messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
+          })
+          .result();
+        assert.equal(reply.stopReason, "error", id);
+      }
+    }
+    assert.deepEqual(hits, []);
+    assert.deepEqual(redirected, ["POST /v1/chat/completions", "POST /v1/responses", "POST /v1/messages"]);
+    assert.deepEqual(
+      [...new Set(logged)],
+      ["openai", "openai-responses", "anthropic"].map(
+        (protocol) =>
+          `[model] custom provider loopback-${protocol}: 127.0.0.1 is a private network address; a deployment operator can allow this exact origin with PRIVATE_NETWORK_ALLOWED_ORIGINS`,
+      ),
+    );
+  } finally {
+    server.close();
+    listener.close();
+    redirector.close();
+  }
+});
+
+test("QA: a stored custom provider key that no HTTP header can carry stays out of model calls and their errors", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "qa-custom-header-key-")) }));
+  await built.customProviders.upsert(
+    { id: "legacy", name: "Legacy", protocol: "openai", baseUrl: "https://llm.example.test/v1", models: [{ id: "m" }] },
+    "sk-legacy-first\nsk-legacy-second",
+    "admin-alice@default-org",
+  );
+  await built.refreshCustomProviders();
+  const route = await built.modelRoutes.route("custom/legacy/m");
+  assert.equal(route.keys.legacy, undefined);
+  const runtime = await buildModelRuntime(route.keys, route.gateway, "turn");
+  const reply = await runtime
+    .streamSimple(route.model, {
+      systemPrompt: "terse",
+      messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
+    })
+    .result();
+  assert.equal(reply.stopReason, "error");
+  assert.doesNotMatch(String(reply.errorMessage), /sk-legacy/);
 });

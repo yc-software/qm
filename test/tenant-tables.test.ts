@@ -1,110 +1,52 @@
 import assert from "node:assert/strict";
-import { randomBytes, randomUUID } from "node:crypto";
-import { after, before, describe, it } from "node:test";
-import pg from "pg";
-import { createPostgresEgressAuditSink } from "../src/admin/postgres-egress-audit-sink.ts";
-import { createPostgresErrorLog } from "../src/admin/postgres-error-log.ts";
-import { createPostgresAppPageViewLog } from "../src/deploy/page-views.ts";
-import { createPostgresFileUploadStore } from "../src/files/file-upload-store.ts";
-import { createPostgresVectorStore } from "../src/memory/postgres-vector-store.ts";
+import { randomUUID } from "node:crypto";
+import { after, before, describe, it } from "./support/unbound-test.ts";
+import { createPostgresAdminGrantStore } from "../src/admin/postgres-admin-grant-store.ts";
 import { createPostgresMap } from "../src/persistence/durable-map.ts";
-import {
-  createPgPool,
-  migrateRegisteredPgSchemas,
-  withPgTransaction,
-  type PgPool,
-} from "../src/persistence/pg-pool.ts";
-import { createPostgresBudgetTracker } from "../src/ratelimit/postgres-budget.ts";
+import { createPgPool, type PgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresInstanceRegistry } from "../src/runs/instance-registry.ts";
-import { installTenantNow, soleTenantNow, TenantUnavailable, withTenant } from "../src/tenants/context.ts";
-import { ownerPgPool, useOwnerDatabase } from "../src/tenants/owner-pool.ts";
-import { refreshTenants, workTenant } from "../src/tenants/work-tenant.ts";
+import { withoutTenant, withTenant } from "../src/tenants/context.ts";
+import { scopeId } from "../src/types.ts";
 import { testMigratedDatabaseUrl } from "./support/test-database.ts";
+import { appUrl, ownerUrl } from "./support/test-tenant.ts";
 
 const UNTENANTED: Record<string, string> = {
   qm_schema_migrations: "records which migrations the whole database has applied",
-  tenants: "is the tenant registry, keyed by the tenant id itself and read only through its own policy",
-  tenant_hosts: "maps globally unique hostnames to tenants before any tenant is bound",
-  retired_tenant_hosts: "remembers the hostnames of deleted tenants so they are refused, not rerouted",
-  qm_tenant: "names the install's own tenant, one row per database",
+  tenants: "is the tenant registry, keyed by the tenant id itself and read through its own policy",
   qm_settings: "holds install-level settings the process reads, no tenant data",
   source_auth_replay: "holds random replay nonces for signed internal calls",
   instance_heartbeats: "records the liveness of core processes",
-  surface_origin_settled_candidates: "is bookkeeping for a one-off origin rewrite",
-  surface_origin_settled_collected: "is bookkeeping for a one-off origin rewrite",
+  auth_broker_sessions: "holds identity-provider sign-in sessions, which exist before a tenant is chosen",
+  deployment_layer: "describes the installation's deployment layer, which the process reads before any tenant binds",
+  render_sandbox_bases: "records the golden snapshot of the release's sandbox image, shared by every tenant",
+  superserve_config_epochs: "numbers the installation's sandbox configuration generations, shared by every tenant",
+  fly_peer_claims: "assigns the installation's WireGuard peers to core processes",
+  fly_deploy_ports: "allocates ports inside the installation's shared Fly app across every tenant's deployments",
 };
-
-async function asAdmin<T>(databaseUrl: string, fn: (client: pg.Client) => Promise<T>): Promise<T> {
-  const client = new pg.Client({ connectionString: databaseUrl });
-  await client.connect();
-  try {
-    return await fn(client);
-  } finally {
-    await client.end();
-  }
-}
-
-async function createAppLogin(databaseUrl: string): Promise<{ url: string; drop: () => Promise<void> }> {
-  const role = `qm_app_${randomBytes(6).toString("hex")}`;
-  const password = randomBytes(12).toString("hex");
-  const url = new URL(databaseUrl);
-  const database = url.pathname.slice(1);
-  await asAdmin(databaseUrl, async (client) => {
-    await client.query(`CREATE ROLE ${role} LOGIN PASSWORD '${password}' NOSUPERUSER NOBYPASSRLS`);
-    await client.query(`GRANT CONNECT ON DATABASE "${database}" TO ${role}`);
-    await client.query(`GRANT USAGE ON SCHEMA public TO ${role}`);
-    await client.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${role}`);
-    await client.query(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${role}`);
-  });
-  url.username = role;
-  url.password = password;
-  return {
-    url: url.toString(),
-    drop: () =>
-      asAdmin(databaseUrl, async (client) => {
-        await client.query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = $1", [role]);
-        await client.query(`DROP OWNED BY ${role}`);
-        await client.query(`DROP ROLE ${role}`);
-      }),
-  };
-}
 
 describe("tenant tables", () => {
   let owner: PgPool;
   let app: PgPool;
-  let dropLogin = async (): Promise<void> => {};
+  let appDatabaseUrl = "";
   const tenantA = randomUUID();
   const tenantB = randomUUID();
-  let install = "";
-  let ownerUrl = "";
 
   before(async () => {
     const databaseUrl = testMigratedDatabaseUrl();
-    ownerUrl = databaseUrl;
-    createPostgresVectorStore(databaseUrl);
-    createPostgresAppPageViewLog(databaseUrl);
-    createPostgresFileUploadStore(databaseUrl);
-    createPostgresBudgetTracker(databaseUrl);
-    createPostgresEgressAuditSink(databaseUrl);
-    createPostgresErrorLog(databaseUrl);
-    owner = createPgPool(databaseUrl);
-    await createPostgresInstanceRegistry(owner, { instanceId: "i", deploymentKey: "b", startedAt: 0 }).beat(false);
-    await migrateRegisteredPgSchemas(databaseUrl);
-    await createPostgresMap<{ n: number }>(owner, "tenant_probe").get("none");
-    await createPostgresMap<{ who: string }>(owner, "tenant_probe_pair").get("none");
-    install = String((await owner.q("SELECT id::text AS id FROM tenants"))[0]?.id);
-    const login = await createAppLogin(databaseUrl);
-    dropLogin = login.drop;
-    app = createPgPool(login.url);
+    owner = createPgPool(ownerUrl(databaseUrl).toString());
+    appDatabaseUrl = appUrl(databaseUrl);
+    app = createPgPool(appDatabaseUrl);
+    await createPostgresInstanceRegistry(owner, { instanceId: "i", deploymentKey: "k", startedAt: 0 }).beat(false);
+    await createPostgresMap<{ who: string }>(owner, "tenant_probe").get("none");
+    await owner.q("INSERT INTO tenants(id) VALUES ($1), ($2)", [tenantA, tenantB]);
   });
 
   after(async () => {
     await app?.close();
     await owner?.close();
-    await dropLogin();
   });
 
-  it("gives every table a tenant column, a tenant-first key and the tenant_isolation policy unless listed", async () => {
+  it("gives every table a tenant column, tenant-first keys and the tenant_isolation policy unless listed", async () => {
     const rows = await owner.q(
       `SELECT c.relname AS name,
               EXISTS (SELECT 1 FROM pg_attribute a
@@ -113,139 +55,30 @@ describe("tenant tables", () => {
               EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = c.oid AND p.polname = 'tenant_isolation') AS policy,
               NOT EXISTS (SELECT 1 FROM pg_index i
                            WHERE i.indrelid = c.oid AND i.indisunique
-                             AND i.indkey[0] <> (SELECT attnum FROM pg_attribute
+                             AND i.indkey[0] IS DISTINCT FROM (SELECT attnum FROM pg_attribute
                                                   WHERE attrelid = c.oid AND attname = 'tenant_id')) AS tenant_first
          FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')`,
+        WHERE n.nspname = current_schema() AND c.relkind IN ('r', 'p')`,
     );
     const names = rows.map((row) => String(row.name));
-    for (const table of ["sessions", "items", "runs", "crons", "memory_fact_vectors", "budget_spend", "file_uploads"])
+    for (const table of ["sessions", "items", "runs", "crons", "budget_spend", "file_uploads", "app_page_views"])
       assert.ok(names.includes(table), `${table} was not created`);
     const gaps = rows
       .filter((row) => !Object.hasOwn(UNTENANTED, String(row.name)))
       .filter((row) => !(row.has_column && row.rls && row.policy && row.tenant_first))
       .map((row) => String(row.name));
     assert.deepEqual(gaps, []);
+    const tenantedListed = rows
+      .filter((row) => Object.hasOwn(UNTENANTED, String(row.name)) && row.has_column)
+      .filter((row) => String(row.name) !== "tenants")
+      .map((row) => String(row.name));
+    assert.deepEqual(tenantedListed, []);
+    assert.ok(names.includes("superserve_config_epochs"));
+    const tenants = rows.find((row) => row.name === "tenants");
+    assert.ok(tenants?.rls && tenants.policy);
   });
 
-  it("binds unbound work to the only tenant, and fails closed once a second tenant exists", async () => {
-    const owned = createPostgresMap<{ n: number }>(owner, "tenant_probe");
-    const appMap = createPostgresMap<{ n: number }>(app, "tenant_probe");
-    await owned.put("solo", { n: 1 });
-    assert.deepEqual(await appMap.get("solo"), { n: 1 });
-    assert.deepEqual(await appMap.all(), [{ n: 1 }]);
-    assert.equal(await workTenant(app), install);
-    assert.equal(soleTenantNow(), undefined);
-    await refreshTenants(app, true);
-    assert.equal(soleTenantNow(), install);
-    const stored = await owner.q("SELECT tenant_id::text AS tenant FROM tenant_probe WHERE id = 'solo'");
-    assert.equal(stored[0]?.tenant, install);
-
-    await owner.q("INSERT INTO tenants(id) VALUES ($1), ($2)", [tenantA, tenantB]);
-    await assert.rejects(appMap.get("solo"), /No tenant is bound to this query/);
-    await assert.rejects(appMap.all(), /No tenant is bound to this query/);
-    await assert.rejects(owned.put("late", { n: 2 }), /No tenant is bound to this query/);
-    await refreshTenants(app, true);
-    assert.equal(soleTenantNow(), undefined);
-    assert.equal(installTenantNow(), install);
-    await assert.rejects(workTenant(app), /No tenant is bound to this work/);
-    assert.deepEqual(await withTenant(install, () => appMap.get("solo")), { n: 1 });
-    assert.equal(await withTenant(tenantA, () => appMap.get("solo")), null);
-  });
-
-  it("refuses an owner login once two tenants exist, and accepts a non-owner login", async () => {
-    await refreshTenants(app, true);
-    assert.deepEqual(await withTenant(install, () => app.q("SELECT 1 AS one")), [{ one: 1 }]);
-    await assert.rejects(refreshTenants(owner, true), /owns the tenant tables or bypasses row-level security/);
-    await assert.rejects(
-      withTenant(install, () => app.q("SELECT 1 AS one")),
-      TenantUnavailable,
-    );
-    await assert.rejects(owner.q("SELECT 1 AS one"), TenantUnavailable);
-    const main = createPgPool(ownerUrl);
-    useOwnerDatabase(ownerUrl);
-    try {
-      assert.deepEqual(await ownerPgPool(main).q("SELECT 1 AS one"), [{ one: 1 }]);
-      const claimed = await withPgTransaction(
-        await ownerPgPool(main).pool(),
-        async (client) => (await client.query("SELECT count(*)::int AS n FROM tenants")).rows,
-      );
-      assert.deepEqual(claimed, [{ n: 3 }]);
-      await assert.rejects(
-        withPgTransaction(await main.pool(), async () => undefined),
-        TenantUnavailable,
-      );
-      await assert.rejects(main.q("SELECT 1 AS one"), TenantUnavailable);
-    } finally {
-      useOwnerDatabase(undefined);
-      await main.close();
-    }
-    await refreshTenants(app, true);
-    assert.deepEqual(await owner.q("SELECT 1 AS one"), [{ one: 1 }]);
-  });
-
-  it("refuses a non-owner login with two tenants while prebuilt legacy keys remain", async () => {
-    const ddl = new pg.Client({ connectionString: ownerUrl });
-    await ddl.connect();
-    try {
-      await ddl.query("CREATE UNIQUE INDEX tenant_probe_legacy_i ON tenant_probe(id)");
-      await assert.rejects(refreshTenants(app, true), /legacy single-tenant unique indexes/);
-      await assert.rejects(
-        withTenant(install, () => app.q("SELECT 1 AS one")),
-        TenantUnavailable,
-      );
-    } finally {
-      await ddl.query("DROP INDEX IF EXISTS tenant_probe_legacy_i");
-      await ddl.end();
-    }
-    await refreshTenants(app, true);
-    assert.deepEqual(await withTenant(install, () => app.q("SELECT 1 AS one")), [{ one: 1 }]);
-  });
-
-  it("keeps two tenants' key-value rows and snapshots apart under the app login", async () => {
-    const appMap = createPostgresMap<{ who: string }>(app, "tenant_probe_pair");
-    await withTenant(tenantA, () => appMap.put("same-id", { who: "a" }));
-    await withTenant(tenantB, () => appMap.put("same-id", { who: "b" }));
-    assert.deepEqual(await withTenant(tenantA, () => appMap.all()), [{ who: "a" }]);
-    assert.deepEqual(await withTenant(tenantB, () => appMap.all()), [{ who: "b" }]);
-    await withTenant(tenantA, () => appMap.put("only-a", { who: "a" }));
-    assert.deepEqual(await withTenant(tenantB, () => appMap.entries()), [["same-id", { who: "b" }]]);
-    assert.equal(await withTenant(tenantB, () => appMap.get("only-a")), null);
-    await withTenant(tenantB, () => appMap.delete("same-id"));
-    assert.deepEqual(await withTenant(tenantA, () => appMap.get("same-id")), { who: "a" });
-  });
-
-  it("hides other tenants' tenant and host rows from the app login and denies it writes", async () => {
-    await owner.q("INSERT INTO tenant_hosts(host, tenant_id) VALUES ('a.example.test', $1), ('b.example.test', $2)", [
-      tenantA,
-      tenantB,
-    ]);
-    const asA = <T>(fn: () => Promise<T>) => withTenant(tenantA, fn);
-    assert.deepEqual(await asA(() => app.q("SELECT id::text AS id FROM tenants")), [{ id: tenantA }]);
-    assert.deepEqual(await asA(() => app.q("SELECT host FROM tenant_hosts")), [{ host: "a.example.test" }]);
-    await assert.rejects(
-      asA(() => app.q("INSERT INTO tenants(id) VALUES ($1)", [randomUUID()])),
-      /row-level security|permission denied/,
-    );
-    await assert.rejects(
-      asA(() => app.q("INSERT INTO tenant_hosts(host, tenant_id) VALUES ('c.example.test', $1)", [tenantA])),
-      /row-level security|permission denied/,
-    );
-    const changed = await Promise.all([
-      asA(() => app.query("UPDATE tenants SET settings = '{}'::jsonb WHERE id = $1", [tenantB]).catch(() => null)),
-      asA(() => app.query("DELETE FROM tenant_hosts WHERE host = 'b.example.test'").catch(() => null)),
-      asA(() =>
-        app.query("UPDATE tenant_hosts SET tenant_id = $1 WHERE host = 'b.example.test'", [tenantA]).catch(() => null),
-      ),
-    ]);
-    assert.ok(changed.every((result) => result === null || result.rowCount === 0));
-    assert.deepEqual(
-      await owner.q("SELECT tenant_id::text AS tenant FROM tenant_hosts WHERE host = 'b.example.test'"),
-      [{ tenant: tenantB }],
-    );
-  });
-
-  it("keeps two tenants' typed rows apart and rejects writes into another tenant", async () => {
+  it("keeps two tenants' rows apart under a login that does not own the tables", async () => {
     const insert = (tenant: string) =>
       withTenant(tenant, () =>
         app.q(
@@ -259,6 +92,18 @@ describe("tenant tables", () => {
       withTenant(tenant, () => app.q("SELECT tenant_id::text AS tenant FROM sessions WHERE id = 'shared-session'"));
     assert.deepEqual(await seen(tenantA), [{ tenant: tenantA }]);
     assert.deepEqual(await seen(tenantB), [{ tenant: tenantB }]);
+    await withTenant(tenantA, () => app.q("UPDATE sessions SET title = 'a' WHERE id = 'shared-session'"));
+    const titles = await owner.q(
+      "SELECT tenant_id::text AS tenant, title FROM sessions WHERE tenant_id = ANY($1::uuid[])",
+      [[tenantA, tenantB]],
+    );
+    assert.deepEqual(Object.fromEntries(titles.map((row) => [String(row.tenant), row.title])), {
+      [tenantA]: "a",
+      [tenantB]: null,
+    });
+  });
+
+  it("rejects a write into another tenant and a read with no tenant bound", async () => {
     await assert.rejects(
       withTenant(tenantA, () =>
         app.q(
@@ -269,17 +114,50 @@ describe("tenant tables", () => {
       ),
       /row-level security/,
     );
-    const updated = await withTenant(tenantA, () =>
-      app.query("UPDATE sessions SET title = 'a' WHERE id = 'shared-session'"),
+    await assert.rejects(
+      withoutTenant(() => app.q("SELECT id FROM sessions")),
+      /No tenant is bound to this query/,
     );
-    assert.equal(updated.rowCount, 1);
-    const titles = await owner.q(
-      "SELECT tenant_id::text AS tenant, title FROM sessions WHERE id = 'shared-session' AND tenant_id = ANY($1::uuid[])",
-      [[tenantA, tenantB]],
+    await assert.rejects(
+      withoutTenant(() => app.q("INSERT INTO teams(team_id, name) VALUES ('t', 't')")),
+      /No tenant is bound/,
     );
-    assert.deepEqual(Object.fromEntries(titles.map((row) => [String(row.tenant), row.title])), {
-      [tenantA]: "a",
-      [tenantB]: null,
-    });
+  });
+
+  it("shows a tenant only its own tenants row and denies the login writes to it", async () => {
+    assert.deepEqual(await withTenant(tenantA, () => app.q("SELECT id::text AS id FROM tenants")), [{ id: tenantA }]);
+    await assert.rejects(
+      withTenant(tenantA, () => app.q("INSERT INTO tenants(id) VALUES ($1)", [randomUUID()])),
+      /permission denied/,
+    );
+  });
+
+  it("keeps two tenants' key-value rows apart", async () => {
+    const map = createPostgresMap<{ who: string }>(app, "tenant_probe");
+    await withTenant(tenantA, () => map.put("same-id", { who: "a" }));
+    await withTenant(tenantB, () => map.put("same-id", { who: "b" }));
+    await withTenant(tenantA, () => map.put("only-a", { who: "a" }));
+    assert.deepEqual(await withTenant(tenantA, () => map.get("same-id")), { who: "a" });
+    assert.deepEqual(await withTenant(tenantB, () => map.get("same-id")), { who: "b" });
+    assert.equal(await withTenant(tenantB, () => map.get("only-a")), null);
+    await withTenant(tenantB, () => map.delete("same-id"));
+    assert.deepEqual(await withTenant(tenantA, () => map.get("same-id")), { who: "a" });
+  });
+
+  it("upserts on tenant-first keys, so the same natural key lives once per tenant", async () => {
+    const grants = createPostgresAdminGrantStore(appDatabaseUrl);
+    const grant = { principalId: "p", scopeId: scopeId("org", "o"), role: "org_admin" as const, grantedBy: "x" };
+    for (const id of [tenantA, tenantB]) {
+      await withTenant(id, (tenant) => grants.put(tenant, grant));
+      await withTenant(id, (tenant) => grants.put(tenant, { ...grant, grantedBy: id }));
+    }
+    assert.deepEqual(
+      (await withTenant(tenantA, (tenant) => grants.all(tenant))).map((g) => g.grantedBy),
+      [tenantA],
+    );
+    assert.deepEqual(
+      (await withTenant(tenantB, (tenant) => grants.all(tenant))).map((g) => g.grantedBy),
+      [tenantB],
+    );
   });
 });

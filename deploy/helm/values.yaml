@@ -14,7 +14,12 @@ serviceAccount:
 nameOverride: ""
 fullnameOverride: ""
 
+additionalLabels: {}
+
 publicUrl: ""
+
+auth:
+  enabled: true
 
 env: {}
 
@@ -41,7 +46,6 @@ secretEnv:
   DEPLOY_APPS_DOMAIN: ""
   PORTER_DEPLOY_APPS_DOMAIN: ""
   AUTH_ALLOWED_EMAILS: ""
-  AUTH_CLIENT_ID: ""
   AUTH_CLIENT_SECRET: ""
   OIDC_CLIENT_ID: ""
   OIDC_CLIENT_SECRET: ""
@@ -53,7 +57,6 @@ secretEnv:
 
 ingress:
   enabled: false
-  service: portal
   className: nginx
   hosts: []
   tls: true
@@ -67,6 +70,7 @@ services:
     image: core
     type: web
     port: 8080
+    publicPort: 8000
     replicas: 1
     command: ["node", "src/index.ts"]
     healthPath: /healthz
@@ -89,51 +93,6 @@ services:
         memory: 1Gi
       limits:
         memory: 2Gi
-    env: {}
-
-  auth:
-    enabled: true
-    image: auth
-    type: web
-    port: 8080
-    replicas: 1
-    command: ["node", "src/index.ts"]
-    resources:
-      requests:
-        cpu: 100m
-        memory: 256Mi
-      limits:
-        memory: 512Mi
-    env: {}
-
-  web-ui:
-    enabled: true
-    image: web-ui
-    type: web
-    port: 8080
-    replicas: 1
-    command: ["node", "server/index.ts"]
-    resources:
-      requests:
-        cpu: 100m
-        memory: 256Mi
-      limits:
-        memory: 512Mi
-    env: {}
-
-  portal:
-    enabled: true
-    image: portal
-    type: web
-    port: 8080
-    replicas: 1
-    command: ["node", "src/index.ts"]
-    resources:
-      requests:
-        cpu: 100m
-        memory: 256Mi
-      limits:
-        memory: 512Mi
     env: {}
 
   egress-proxy:

@@ -6,13 +6,6 @@ variable "public_url" { type = string }
 variable "core_public_hosts" {
   type    = set(string)
   default = []
-  validation {
-    condition = alltrue([
-      for host in var.core_public_hosts :
-      can(regex("^(\\*\\.)?[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$", host))
-    ])
-    error_message = "core_public_hosts entries must be normalized DNS hostnames with an optional leading wildcard"
-  }
 }
 variable "cloud_map_namespace" { type = string }
 variable "secrets_prefix" { type = string }
@@ -71,10 +64,10 @@ variable "certificate_arn" {
     error_message = "certificate_arn must be an ACM certificate ARN in the configured AWS partition"
   }
 }
-check "split_core_hosts_require_direct_tls" {
+check "core_hosts_require_direct_tls" {
   assert {
     condition     = length(var.core_public_hosts) == 0 || var.certificate_arn != ""
-    error_message = "core_public_hosts requires certificate_arn because split host routing uses the public HTTPS ALB instead of the default CloudFront hostname"
+    error_message = "core_public_hosts requires certificate_arn because host routing uses the public HTTPS ALB instead of the default CloudFront hostname"
   }
 }
 variable "db_name" {
@@ -146,6 +139,11 @@ variable "services" {
     assume_role_arns   = optional(set(string))
     manage_task_role   = optional(bool, false)
     public_paths       = optional(list(string), [])
+    public_port        = optional(number)
   }))
+  validation {
+    condition     = try(var.services["core"].public_port, null) != null
+    error_message = "services.core.public_port must be set: core serves the public front door on it"
+  }
 }
 variable "secret_names" { type = set(string) }

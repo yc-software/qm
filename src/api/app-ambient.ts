@@ -1,4 +1,7 @@
 import { scopeId, type ActorAssertion, type TurnRequest } from "../types.ts";
+import { personLabel } from "../identity/person-names.ts";
+import type { TurnSurfaceOrigin } from "../surfaces/contract.ts";
+import { slackSurfaceOrigin } from "../surfaces/slack/adapter.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { samePerson } from "../directory/person.ts";
@@ -6,13 +9,15 @@ import type { DirectoryMember } from "../directory/directory-store.ts";
 import type { CachedMessage } from "../surface-cache/surface-cache.ts";
 import { DEFAULT_ROLLUP_HOURS, type BotPolicy } from "../surface-cache/channel-policy-store.ts";
 import {
+  ambientWindow,
   judgeAmbientBatch,
+  recentWakeMessages,
   renderAmbientPrompt,
   type AmbientBatch,
   type AmbientDecision,
 } from "../surface-cache/ambient-judge.ts";
 import type { AmbientJudgmentStore } from "../surface-cache/ambient-judgment-store.ts";
-import { reportFailureAs } from "../util/errors.ts";
+import { errMessage, reportFailureAs } from "../util/errors.ts";
 import { buildWakeEnvelope } from "../wake/wake-envelope.ts";
 import { liveTurnOf, routeIncoming } from "../wake/route-incoming.ts";
 import type { AppHelpers } from "./app-helpers.ts";
@@ -44,6 +49,20 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
   const recordJudgment = (j: Parameters<AmbientJudgmentStore["record"]>[0]): void => {
     void deps.ambientJudgments?.record(j).catch(reportFailureAs("ambient: record judgment", undefined));
   };
+  async function threadAnchors(
+    surface: string,
+    container: string,
+    triggers: CachedMessage[],
+  ): Promise<CachedMessage[]> {
+    const cache = deps.surfaceCache;
+    const roots = [...new Set(triggers.flatMap((m) => (m.sub ? [m.sub] : [])))];
+    if (!cache || !roots.length) return [];
+    const [parents, ...ownReplies] = await Promise.all([
+      cache.readMessages(container, { surface, timestamps: roots, noFallback: true }),
+      ...roots.map((sub) => cache.readMessages(container, { surface, sub, self: true, limit: 1, noFallback: true })),
+    ]);
+    return [...parents!, ...ownReplies.flat()];
+  }
   async function judgeAmbientContainer(
     surface: string,
     container: string,
@@ -56,16 +75,14 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     const cursor = deps.ambientCursors ? await deps.ambientCursors.get(cursorKey) : null;
     const after = cursor?.lastJudgedTs;
     const all = await deps.surfaceCache.readMessages(container, { surface, limit: 60, noFallback: true });
-    const backdrop = after ? all.filter((m) => m.ts <= after).slice(-10) : [];
     const rawDelta = (after ? all.filter((m) => m.ts > after) : all).filter((m) => !m.self);
     const ledger = new Map<string, BotPolicy>();
     for (const [name, b] of Object.entries(policy?.bots ?? {})) ledger.set(name.toLowerCase(), b);
     const botModeOf = (m: CachedMessage): BotPolicy["mode"] | undefined =>
       m.bot && m.authorName ? ledger.get(m.authorName.toLowerCase())?.mode : undefined;
-    const delta = rawDelta
-      .filter((m) => !m.handled)
-      .filter((m) => botModeOf(m) !== "ignore")
-      .map((m) => (botModeOf(m) === "user" ? { ...m, bot: false } : m));
+    const asPolicy = (ms: CachedMessage[]): CachedMessage[] =>
+      ms.filter((m) => botModeOf(m) !== "ignore").map((m) => (botModeOf(m) === "user" ? { ...m, bot: false } : m));
+    const delta = asPolicy(rawDelta.filter((m) => !m.handled));
     const rawLatestTs = rawDelta.reduce((max, m) => (m.ts > max ? m.ts : max), after ?? "");
     const advanceCursor = async (): Promise<void> => {
       if (deps.ambientCursors && rawDelta.length && rawLatestTs)
@@ -139,31 +156,33 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
       : (policy?.orders ?? "");
     let decision: AmbientDecision = { act: false };
     if (forJudge.length || scheduled) {
-      const containerKind = (await deps.surfaceCache.containerState(container, { surface }).catch(() => null))?.kind;
+      const state = await deps.surfaceCache.containerState(container, { surface });
+      const containerScope = scopeId(state?.kind === "group" ? "group" : "channel", container);
       const judgeBatch: AmbientBatch = {
         container,
         surface,
-        ...(containerKind ? { kind: containerKind } : {}),
+        ...(state?.kind ? { kind: state.kind } : {}),
+        ...(state?.source ? { source: state.source } : {}),
         orders: ordersForJudge,
         ...(self ? { self } : {}),
         messages: forJudge,
-        ...(backdrop.length ? { backdrop } : {}),
+        recent: ambientWindow(
+          asPolicy(all),
+          forJudge,
+          asPolicy(
+            await threadAnchors(surface, container, forJudge).catch(reportFailureAs("ambient: thread anchors", [])),
+          ),
+        ),
         ...(scheduled ? { scheduled: true } : {}),
       };
-      const readable = deps.surfaces.get(surface)?.readableText;
-      if (!readable) throw new Error(`ambient: no registered surface ${surface}`);
-      const prompt = renderAmbientPrompt(judgeBatch, readable);
+      const prompt = renderAmbientPrompt(judgeBatch);
       const startedAt = Date.now();
       const judgeModel = deps.judgeModelId?.();
       const botTs = new Set(rawDelta.filter((m) => m.bot).map((m) => m.ts));
       decision = await judgeAmbientBatch(
         {
           judge: (system, prompt) =>
-            withModelRequestContext(
-              { scopeId: scopeId(judgeBatch.kind === "group" ? "group" : "channel", container) },
-              () => deps.ambientJudge!(system, prompt),
-            ),
-          readable,
+            withModelRequestContext({ scopeId: containerScope }, () => deps.ambientJudge!(system, prompt)),
           spawnWorker: (b: AmbientBatch, d: AmbientDecision) =>
             spawnAmbientWorker(
               { ...b, messages: b.messages.map((m) => (botTs.has(m.ts) && !m.bot ? { ...m, bot: true } : m)) },
@@ -171,13 +190,27 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
             ),
         },
         judgeBatch,
-      ).catch(() => ({ act: false }) as AmbientDecision);
+      ).catch((e: unknown) => {
+        deps.errors?.record(
+          { category: "ambient", code: "judge_failed", message: errMessage(e), scopeLabel: containerScope },
+          e,
+        );
+        return { act: false } as AmbientDecision;
+      });
+      if (decision.startError)
+        deps.errors?.record({
+          category: "ambient",
+          code: "worker_start_failed",
+          message: decision.startError,
+          scopeLabel: containerScope,
+        });
       recordJudgment({
         surface,
         container,
         decision: decision.act ? "act" : "ignore",
         ...(decision.reason ? { reason: decision.reason } : {}),
         ...(decision.askedBy ? { askedBy: decision.askedBy } : {}),
+        ...(decision.startError ? { startError: decision.startError } : {}),
         prompt,
         ...(judgeModel ? { model: judgeModel } : {}),
         latencyMs: Date.now() - startedAt,
@@ -250,7 +283,13 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     }));
   }
 
-  async function spawnAmbientWorker(batch: AmbientBatch, decision: AmbientDecision): Promise<void> {
+  function sourceOrigin(batch: AmbientBatch, asker?: CachedMessage): TurnSurfaceOrigin | undefined {
+    const userId = asker ? asker.authorId : batch.source?.assistant;
+    if (!batch.source || !userId) return undefined;
+    return slackSurfaceOrigin({ accountId: batch.source.account, teamId: batch.source.workspace, userId });
+  }
+
+  async function spawnAmbientWorker(batch: AmbientBatch, decision: AmbientDecision): Promise<string | undefined> {
     const latestTs = batch.messages.reduce((max, m) => (m.ts > max ? m.ts : max), "");
     const threadRef = `${batch.surface}:${batch.container}:ambient:${latestTs}`;
     let solicited = await solicitedAsker(batch, decision);
@@ -265,6 +304,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
         audience = resolved;
       }
     }
+    const surfaceOrigin = sourceOrigin(batch, solicited?.message);
     const conversation = workerConversation(batch, threadRef, audience);
     if (decision.askedBy && !solicited)
       console.error(
@@ -274,6 +314,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     const req: TurnRequest = solicited
       ? {
           surface: batch.surface,
+          ...(surfaceOrigin ? { surfaceOrigin } : {}),
           actor: {
             externalId: solicited.member.principalId,
             ...(solicited.member.displayName ? { displayName: solicited.member.displayName } : {}),
@@ -289,6 +330,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
         }
       : {
           surface: batch.surface,
+          ...(surfaceOrigin ? { surfaceOrigin } : {}),
           actor: { externalId: `system:ambient:${orgIdOf()}` },
           conversation,
           deliveryTarget: batch.container,
@@ -299,8 +341,8 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
             at: new Date(),
             why: decision.reason ?? "The recent messages here may warrant a reply.",
             orders: batch.orders,
-            recentMessages: shown,
-            instructions: `You don't need to have been @mentioned. Respond with the \`${batch.surface}\` tool's \`post\` action — set \`ts\` to the triggering message id to reply in its thread, or \`broadcast: true\` to post at the channel top level — or stay silent if nothing is needed. To include an image or file, name its workspace path in \`post\`'s \`files\` (it uploads with your message, in that thread). Use \`reach\` only to send to a DIFFERENT channel or person. Use the \`read_thread\` or \`search\` action if you need more context than shown.`,
+            recentMessages: recentWakeMessages(batch),
+            instructions: `You don't need to have been @mentioned. Reply about the trigger messages. Messages in other threads are separate conversations: don't carry their facts into your reply unless they are about the same subject. Respond with the \`${batch.surface}\` tool's \`post\` action — set \`ts\` to the triggering message id to reply in its thread, or \`broadcast: true\` to post at the channel top level — or stay silent if nothing is needed. To include an image or file, name its workspace path in \`post\`'s \`files\` (it uploads with your message, in that thread). Use \`reach\` only to send to a DIFFERENT channel or person. Use the \`read_thread\` or \`search\` action if you need more context than shown.`,
           }),
           origin: {
             kind: "automation",
@@ -314,8 +356,11 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
           spawned: true,
           idempotencyKey: `ambient:${orgIdOf()}:${batch.surface}:${batch.container}:${latestTs}`,
         };
-    if (!solicited && (await steerIntoLiveAmbientRun(batch, latestTs, req))) return;
-    await app.turn(req).catch(reportFailureAs("ambient: spawn worker", undefined));
+    if (!solicited && (await steerIntoLiveAmbientRun(batch, latestTs, req))) return undefined;
+    const result = await app.turn(req);
+    return result.status === "refused" || result.status === "failed"
+      ? `${result.status}: ${result.reason ?? "no reason given"}`
+      : undefined;
   }
 
   async function steerIntoLiveAmbientRun(batch: AmbientBatch, latestTs: string, req: TurnRequest): Promise<boolean> {
@@ -340,7 +385,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
         routed: false,
       },
       liveTurnOf(live),
-      { midTurn: "steer" },
+      {},
     );
     if (route.kind !== "steer") return false;
     await h.steerRun(live, {
@@ -357,7 +402,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     const container = input.conversation.channelRef ?? input.conversation.threadRef;
     const policy = deps.channelPolicy ? await deps.channelPolicy.get(container).catch(() => undefined) : undefined;
     const orders = policy?.orders;
-    const sender = input.actor.displayName?.trim() || input.actor.id;
+    const sender = personLabel(input.actor.id, { displayName: input.actor.displayName });
     const surface = input.surface ?? "slack";
     return buildWakeEnvelope({
       reason: "addressed",

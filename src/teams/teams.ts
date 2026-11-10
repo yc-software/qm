@@ -5,7 +5,7 @@ import { conversationScope } from "../resolution/resolution-service.ts";
 import type { SharingPosture } from "../resolution/sharing-posture.ts";
 import type { Conversation, Principal, ScopeId } from "../types.ts";
 import { scopeId } from "../types.ts";
-import { TENANCY, tenantTables } from "../tenants/migrations.ts";
+import { tenantTables } from "../tenants/migrations.ts";
 
 interface Team {
   id: string;
@@ -73,10 +73,9 @@ const onTeam = (team: TurnTeam, principalId: string) => keysOf(principalId).some
 export function createPostgresTeamStore(
   connectionString: string,
   flags: Pick<FeatureFlagStore, "enabled">,
-  orgScope: () => ScopeId,
+  orgScope: ScopeId,
 ): TeamStore {
   const { q, pool } = createPgPool(connectionString, [
-    ...TENANCY,
     { id: "teams/0001", statements: SCHEMA },
     ...tenantTables(
       "teams/0002-tenants",
@@ -86,7 +85,7 @@ export function createPostgresTeamStore(
         { table: "team_rooms", primaryKey: "team_id, scope_id" },
       ],
       {
-        foreignKeys: ["team_members", "team_rooms"].map((table) => ({
+        references: ["team_members", "team_rooms"].map((table) => ({
           table,
           name: `${table}_team_id_fkey`,
           columns: "team_id",
@@ -96,7 +95,7 @@ export function createPostgresTeamStore(
       },
     ),
   ]);
-  const enabled = () => flags.enabled("team_scopes", orgScope());
+  const enabled = () => flags.enabled("team_scopes", orgScope);
   return {
     async list() {
       if (!(await enabled())) return [];

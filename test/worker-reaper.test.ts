@@ -16,7 +16,6 @@ import type { LeaderLease } from "../src/persistence/leader-lease.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal } from "../src/types.ts";
 import type { RunStore } from "../src/runs/run-store.ts";
-import { replayableRequest } from "../src/core/orchestrator/turn-helpers.ts";
 import { settle } from "./support/settle.ts";
 import { testConfig } from "./support/test-config.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
@@ -123,6 +122,59 @@ test("with maxClaims set, repeated lease-expiry reaps PARK the poison pill inste
   assert.equal(parked?.status, "failed", "parked run is terminal failed (loud)");
   assert.equal(parked?.errorAttempts, 0, "the claim-cap park did not need the error budget");
   assert.match(parked?.result?.reason ?? "", /suspected crash loop/);
+});
+
+async function deployCut(runs: RunStore, fatal = false): Promise<void> {
+  const started = Promise.withResolvers<void>();
+  const orchestrator = {
+    async handleTurn(input: OrchestratorInput) {
+      started.resolve();
+      await new Promise((resolve) => input.shutdown!.addEventListener("abort", resolve, { once: true }));
+      return { status: "silent" as const, stopped: true };
+    },
+  } as unknown as Orchestrator;
+  const worker = createWorker({
+    runs,
+    orchestrator,
+    leaseTtlMs: 200,
+    heartbeatIntervalMs: 20,
+    pollMs: 5,
+  });
+  worker.start();
+  await started.promise;
+  await worker.stop(1);
+  await worker.releaseInFlight(fatal);
+}
+
+test("deploy handbacks do not count toward the claim cap; crash reclaims after them still park", async () => {
+  const { runs } = createPostgresRunStore(testDatabaseUrl(), { maxClaims: 2 });
+  const r = (await runs.enqueue({ sessionId: "s-deploys", request: turn, maxAttempts: 99 })).run;
+  const reaper = createReaper(runs, { ...singleProcessDeps(), intervalMs: 60_000 });
+  for (let i = 1; i <= 2; i++) {
+    await deployCut(runs);
+    const handedBack = await runs.get(r.id);
+    assert.deepEqual([handedBack?.status, handedBack?.attempts], ["pending", i], `deploy ${i} hands the run back`);
+  }
+  await runs.claim("dead-worker", 10);
+  await sleep(20);
+  assert.deepEqual(await reaper.sweep(), { requeued: 1, parked: 0 }, "the first crash after the deploys requeues");
+  await runs.claim("dead-worker", 10);
+  await sleep(20);
+  assert.deepEqual(await reaper.sweep(), { requeued: 0, parked: 1 }, "the second crash reaches the cap");
+  const parked = await runs.get(r.id);
+  assert.equal(parked?.attempts, 4);
+  assert.match(parked?.result?.reason ?? "", /parked after 2 claims .*suspected crash loop/);
+});
+
+test("a fatal-error shutdown leaves the lease to expire, so the claim still counts toward the cap", async () => {
+  const { runs } = createPostgresRunStore(testDatabaseUrl(), { maxClaims: 1 });
+  const r = (await runs.enqueue({ sessionId: "s-fatal", request: turn, maxAttempts: 99 })).run;
+  await deployCut(runs, true);
+  assert.equal((await runs.get(r.id))?.status, "running", "a crashing process does not hand the run back");
+  await sleep(250);
+  const reaper = createReaper(runs, { ...singleProcessDeps(), intervalMs: 60_000 });
+  assert.deepEqual(await reaper.sweep(), { requeued: 0, parked: 1 });
+  assert.match((await runs.get(r.id))?.result?.reason ?? "", /suspected crash loop/);
 });
 
 test("a concrete error parks with its own message even when over the claim cap", async () => {
@@ -241,9 +293,8 @@ test("a heartbeat landing between SELECT and retire leaves the run untouched", a
 });
 
 test("shutdown cancels before handback and holds the run until the turn unwinds", async () => {
-  const url = testDatabaseUrl();
-  const { runs } = createPostgresRunStore(url);
-  const sessions = createPostgresSessionStore(url);
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const session = await sessions.getOrCreateByThread("t1", "dm", "personal:U1");
   const enq = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 1 })).run;
   let started!: () => void;
@@ -781,58 +832,6 @@ test("final shutdown waits for an already-started completion instead of releasin
     assert.equal(await reopened(config.databaseUrl, async (runs) => (await runs.get(queued.runId!))?.status), "done");
   } finally {
     release.resolve();
-  }
-});
-
-test("buildApp captures human run outcomes through the shared terminal hook", async (t) => {
-  const events: string[] = [];
-  t.mock.method(globalThis, "fetch", async (_url: string, init: RequestInit) => {
-    events.push(JSON.parse(String(init.body)).event);
-    return new Response("ok");
-  });
-  const built = buildApp(testConfig({ productAnalytics: { apiKey: "test-token" } }));
-  try {
-    const request: OrchestratorInput = { ...turn, origin: { kind: "human" }, surface: "slack" };
-    for (const result of [{ status: "ok" }, { status: "failed" }, { status: "ok", stopped: true }] as const) {
-      await built.runs.enqueue({ sessionId: "t1", request });
-      const run = ((await built.runs.claim("worker", 10_000))[0] ?? null)!;
-      await built.runs.complete(run.id, run.leaseToken!, result);
-    }
-    assert.deepEqual(events, ["response_completed", "response_failed"]);
-  } finally {
-    await built.runtime.stop();
-  }
-});
-
-test("web admission and replay preserve analytics exclusions", async (t) => {
-  const events: string[] = [];
-  t.mock.method(globalThis, "fetch", async (_url: string, init: RequestInit) => {
-    events.push(JSON.parse(String(init.body)).event);
-    return new Response("ok");
-  });
-  const built = buildApp(testConfig({ productAnalytics: { apiKey: "test-token" } }));
-  try {
-    for (const flag of ["analyticsSuppressed", "proactiveOpener"] as const) {
-      for (const status of ["ok", "failed"] as const) {
-        const admitted = await built.app.turn({
-          surface: "web",
-          actor: { externalId: "U1" },
-          conversation: { kind: "dm", threadRef: `excluded-${flag}-${status}` },
-          text: "test message",
-          origin: { kind: "human" },
-          async: true,
-          [flag]: true,
-        });
-        assert.ok(admitted.runId);
-        const run = (await built.runs.claimById(admitted.runId, "worker", 10_000))!;
-        assert.equal(run.request[flag], true);
-        assert.equal(replayableRequest(run.request)[flag], true);
-        await built.runs.complete(run.id, run.leaseToken!, { status });
-      }
-    }
-    assert.deepEqual(events, []);
-  } finally {
-    await built.runtime.stop();
   }
 });
 

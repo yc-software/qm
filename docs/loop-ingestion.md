@@ -8,7 +8,7 @@ Source updates invalidate old held drafts before processing the new conversation
 
 ## Preview rollout
 
-The durable `inbox_loops` feature flag defaults off. Enable it only for the intended `personal:<principal>` scopes in Admin → Feature flags. Existing Web UI `INBOX_USERS` and `LOOPS_USERS` allowlists still apply. Both the UI permissions and server routes enforce the flag. Event receipt and background processing also check the source owner's flag. Revocation retains queued work without accepting or processing more events.
+The durable `inbox_loops` feature flag defaults off. Enable it only for the intended `personal:<principal>` scopes in Admin → Feature flags. It is the only gate for Inbox and Loops in the web UI: both the UI permissions and server routes enforce it. Event receipt and background processing also check the source owner's flag. Revocation retains queued work without accepting or processing more events.
 
 Slack receipt recovery covers events already persisted by QM. There is no Slack history reconciliation yet. Enable Slack's Delayed Events option for extended delivery retries; Gmail has history reconciliation as described below.
 
@@ -57,16 +57,21 @@ The Loop's Ingestion panel shows the last receipt and processing error. A 202 ac
 
 Do not paste webhook signing secrets into chat, playbooks, or committed configuration. The secret is returned only on creation for generic webhooks and is omitted from later listing responses.
 
-## Conversation events (inbox)
+## Inbox conversations
 
-Every new message in a conversation already on an inbox ledger is an event, and
-every event is judged by the Loop's work stage. Nothing resolves an item in code.
+Inbox loops (the per-person Email and Slack reply loops) are kept current by a
+deterministic pass, not by an agent turn. On every fire the pass reads each
+tracked conversation from its source, discovers new ones in the scan window, and
+hands any conversation whose newest message changed since the last look to one
+model verdict (`needs_reply`, `resolved` or `noise`, with a one-line reason and,
+for `needs_reply`, a draft in the owner's voice). The verdict is the only writer
+of an item's needs-reply state; sending or dismissing in the Inbox are the only
+human-set states.
 
-- **Sources.** QM's Slack bot, Gmail history (INBOX and SENT), the inbox open-time
-  source check, and the scheduled sync (`POST /v1/loops/:id/events`).
-- **Queue.** Events land durably in a per-Loop internal `conversation` ingress
-  source, deduplicated by conversation and message time. They merge
-  `sourcePayload.latestEvent` into the existing item and refresh `sourceAt`, which
-  reopens a resolved item. Events never create items.
-- **Decision.** The work stage returns a draft, or
-  `{"resolution":{"kind":"replied"|"no_reply_needed"}}`, which dismisses the item.
+- **Realtime nudges.** QM's Slack bot and Gmail history (INBOX and SENT) bump a
+  tracked conversation's `sourceAt` through the per-Loop internal `conversation`
+  ingress source, which fires the pass early. Nudges never create items and carry
+  no message content; the pass re-reads the conversation itself.
+- **Handled items.** A sent or dismissed item reopens only when someone other
+  than the owner writes after the last look; the owner's own follow-ups never
+  reopen it.

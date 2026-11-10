@@ -1,10 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { createAgent } from "../src/agent/agent-run.ts";
 import { createModelRoutes } from "../src/model/model-route.ts";
+import { auxiliaryModelFor } from "../src/model/pi-models.ts";
+import { DESCRIPTIVE_TITLE_PROMPT } from "../src/agent/session-title-prompt.ts";
 import type { AgentTurnInput, CompactInput } from "../src/agent/agent.ts";
 import type { Item, NewItem } from "../src/sessions/items.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
+import { configurePublicFetch } from "../src/util/network.ts";
 import { ProviderTurnError } from "../src/core/turn-error.ts";
 import { runtimeConfigBody } from "../src/api/runtime-config.ts";
 import { testConfigStore } from "./support/test-database.ts";
@@ -106,16 +111,34 @@ function turn(agent: ReturnType<typeof createAgent>, modelId: string): Promise<u
 }
 
 test("compaction summarizes on the session's own provider while the shared gateway is out of budget", async (t) => {
+  const direct: unknown[] = [];
+  const server = createServer((req, res) => {
+    let raw = "";
+    req.on("data", (chunk) => (raw += chunk));
+    req.on("end", () => {
+      direct.push((JSON.parse(raw) as { model?: unknown }).model);
+      void anthropicReply("summary of the work")
+        .text()
+        .then((body) => res.writeHead(200, { "content-type": "text/event-stream" }).end(body));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  configurePublicFetch(new Set([origin]), () => false);
   setCustomProviders([
     {
       id: "direct",
       name: "Direct",
       protocol: "anthropic",
-      baseUrl: "https://direct.example",
+      baseUrl: origin,
       models: [{ id: "claude-opus-5-5" }],
     },
   ]);
-  t.after(() => setCustomProviders([]));
+  t.after(() => {
+    setCustomProviders([]);
+    configurePublicFetch(new Set());
+    server.close();
+  });
   const agent = createAgent({
     routes: createModelRoutes({
       defaultModelId: "gpt-6-astra",
@@ -128,7 +151,8 @@ test("compaction summarizes on the session's own provider while the shared gatew
     async (calls) => {
       const text = await compact(agent, { runtime: { modelId: "custom/direct/claude-opus-5-5" } });
       assert.match(text, /summary of the work/);
-      assert.deepEqual(calls, [{ host: "direct.example", model: "claude-opus-5-5" }]);
+      assert.deepEqual(calls, []);
+      assert.deepEqual(direct, ["claude-opus-5-5"]);
     },
   );
 });
@@ -229,7 +253,7 @@ test("a summary that fails everywhere names each route it tried and why", async 
       assert.ok(error instanceof ProviderTurnError);
       assert.equal(error.code, "model_budget");
       assert.match(error.message, /shared model gateway.*Budget has been exceeded/s);
-      assert.match(error.message, /fallback .*organization's own provider key.*key revoked/s);
+      assert.match(error.message, /fallback .*organization's own provider key or subscription\).*key revoked/s);
     },
   );
 });
@@ -315,4 +339,53 @@ test("the runtime listing says which account each model bills", async () => {
   const personal = await runtimeConfigBody({ deps }, orgScope(), async () => null);
   assert.equal(personal.modelCatalog["claude-sonnet-5"]?.billing, "personal_account");
   assert.equal(personal.modelCatalog["gpt-6-astra"]?.billing, "personal_account");
+});
+
+test("the runtime listing bills an OpenAI model to company ChatGPT access even when a gateway also serves it", async () => {
+  const deps = {
+    config: testConfigStore("default-org"),
+    baseModelDefault: "claude-sonnet-5",
+    modelCredentials: {
+      availability: async () => ({ anthropic: true, codexOAuth: true, modelIds: new Set(["gpt-6-astra"]) }),
+    },
+  } as unknown as Parameters<typeof runtimeConfigBody>[0]["deps"];
+  await deps.config!.setWebuiModels(orgScope(), ["claude-sonnet-5", "gpt-6-astra"]);
+  const listed = await runtimeConfigBody({ deps }, orgScope());
+  assert.equal(listed.modelCatalog["gpt-6-astra"]?.billing, "org_key");
+});
+
+test("descriptive titles run the descriptive prompt on Sonnet while plain titles keep the utility model and prompt", async () => {
+  const agent = createAgent({
+    routes: createModelRoutes({
+      defaultModelId: "claude-opus-5-5",
+      resolveProviderKeys: async () => ({ anthropic: "sk-anthropic" }),
+    }),
+  });
+  const bodies: Array<Record<string, unknown>> = [];
+  await withFetch(
+    (_url, body) => {
+      bodies.push(body);
+      return anthropicReply("How did Maria sort by activity?");
+    },
+    async (calls) => {
+      assert.equal(
+        await agent.generateTitle!("User:\nmaria has her sessions sorted by activity. how do i get that"),
+        "How did Maria sort by activity",
+      );
+      assert.equal(
+        await agent.generateTitle!("User:\nmaria has her sessions sorted by activity. how do i get that", {
+          descriptive: true,
+        }),
+        "How did Maria sort by activity?",
+      );
+      assert.deepEqual(
+        calls.map((call) => call.model),
+        [auxiliaryModelFor("claude-opus-5-5"), "claude-sonnet-5-5"],
+      );
+    },
+  );
+  assert.deepEqual(
+    bodies.map((body) => JSON.stringify(body.system).includes(JSON.stringify(DESCRIPTIVE_TITLE_PROMPT).slice(1, -1))),
+    [false, true],
+  );
 });

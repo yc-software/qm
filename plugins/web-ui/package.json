@@ -8,12 +8,9 @@
     "node": ">=24.0.0"
   },
   "scripts": {
-    "dev": "vite",
     "build": "vite build",
-    "serve": "node --env-file-if-exists=.env server/index.ts",
-    "start": "npm run build && npm run serve",
-    "test": "NODE_ENV=test ALLOW_UNSIGNED_TEST_IDENTITY=1 node --test \"test/**/*.test.ts\"",
-    "typecheck": "tsrs -p tsconfig.json --noEmit && tsrs -p tsconfig.server.json --noEmit && tsrs -p tsconfig.test.json --noEmit"
+    "test": "node --test \"test/**/*.test.ts\"",
+    "typecheck": "tsrs -p tsconfig.json --noEmit && tsrs -p tsconfig.test.json --noEmit"
   },
   "dependencies": {
     "@codemirror/language": "6.12.4",
@@ -28,7 +25,6 @@
     "@lezer/highlight": "1.2.4",
     "@mariozechner/mini-lit": "^0.2.0",
     "@sentry/browser": "10.75.0",
-    "@sentry/node": "10.75.0",
     "@tanstack/ai-client": "0.31.1",
     "date-fns": "^4.4.0",
     "dockview-core": "^7.0.4",
@@ -42,8 +38,7 @@
     "marked": "^18.0.5",
     "mermaid": "^12.0.0",
     "morphdom": "2.7.8",
-    "papaparse": "5.7.0",
-    "posthog-js": "1.433.10"
+    "papaparse": "5.7.0"
   },
   "devDependencies": {
     "@types/jsdom": "^28.0.3",

@@ -3,7 +3,7 @@ import type { SessionOrigin } from "./session-store.ts";
 import { isWebThread } from "./session-store.ts";
 
 export const LIST_COLUMNS = `s.id, s.type, s.scope_id, s.thread_ref, s.surface, s.created_at, s.title, s.channel_name,
-  s.forked_from_session_id, s.forked_from_title, s.fork_boundary_seq, s.parent_session_id, s.origin, s.side_chat`;
+  s.forked_from_session_id, s.forked_from_title, s.fork_boundary_seq, s.parent_session_id, s.origin, s.side_chat, s.persona_id`;
 const AUTOMATION_SURFACES = "('cron', 'webhook', 'loop')";
 export const OWN_CHAT = (s: string): string =>
   `${s}.parent_session_id IS NULL AND (${s}.surface IS NULL OR ${s}.surface NOT IN ${AUTOMATION_SURFACES})`;
@@ -37,6 +37,7 @@ export function rowToSession(r: Record<string, unknown>): Session {
       ? { surfaceBinding: r.slack_binding as Session["surfaceBinding"] }
       : {}),
     ...(r.runtime != null ? { runtime: r.runtime as Session["runtime"] } : {}),
+    ...(r.persona_id != null ? { personaId: r.persona_id as string } : {}),
   };
 }
 

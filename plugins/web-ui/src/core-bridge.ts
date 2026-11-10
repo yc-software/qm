@@ -1,4 +1,5 @@
-import { desktopTurnId, serveDesktopRun } from "./desktop-computer.ts";
+import { desktopTurnId, serveDesktopRun, webClientSurface } from "./desktop-computer.ts";
+import { CLIENT_SURFACE_HEADER } from "../../chassis/src/client-surface.ts";
 import { reportHandledError, reportRequestTiming, stopBrowserErrors } from "./browser-errors.ts";
 import { captureMessage, stopAnalytics } from "./product-analytics.ts";
 import { streamedAnswer } from "./timeline.ts";
@@ -128,7 +129,6 @@ type WebUserMessage = AgentMessage & {
   role: "user" | "user-with-attachments";
   content: string | Array<{ type: string; text?: string }>;
   attachments?: PiAttachment[];
-  clientTurnId?: string;
   sendFailure?: string;
 };
 
@@ -168,6 +168,7 @@ export interface CoreSession {
   subagents?: { running: number; waiting: number };
   workingSince?: number;
   purpose?: string;
+  personaId?: string;
 }
 
 export interface SessionPageQuery {
@@ -442,8 +443,13 @@ function withItems<T extends { items: Item[] }>(page: T): T {
 
 const resolvedCredentialApprovals = new Set<string>();
 
+const decidedDuringRunApprovals = new Set<string>();
+
 export function unresolvedApprovals(approvals: PendingApproval[]): PendingApproval[] {
-  const pending = approvals.filter((approval) => !resolvedCredentialApprovals.has(approval.requestId));
+  const pending = approvals.filter(
+    (approval) =>
+      !resolvedCredentialApprovals.has(approval.requestId) && !decidedDuringRunApprovals.has(approval.requestId),
+  );
   return pending.length === approvals.length ? approvals : pending;
 }
 
@@ -465,6 +471,12 @@ export async function fetchItem(sessionId: string, seq: number): Promise<Item> {
 
 export async function regenerateTitle(id: string): Promise<{ title: string | null }> {
   return api<{ title: string | null }>(`/api/sessions/${encodeURIComponent(id)}/title`, { method: "POST" });
+}
+
+export async function suggestNextPrompt(id: string): Promise<{ enabled: boolean; suggestion: string | null }> {
+  return api<{ enabled: boolean; suggestion: string | null }>(`/api/sessions/${encodeURIComponent(id)}/next-prompt`, {
+    method: "POST",
+  });
 }
 
 export async function detachSession(id: string): Promise<{ detached: true }> {
@@ -523,6 +535,11 @@ export interface PendingApproval {
   matched?: string;
   grantModes?: { session: boolean; always: boolean };
   blocksInput?: boolean;
+  executesOnApprove?: boolean;
+}
+
+export function approvalDecidableDuringRun(approval: PendingApproval): boolean {
+  return approval.executesOnApprove === true && approval.blocksInput === false;
 }
 
 export function approvalBlocksComposer(approval: PendingApproval): boolean {
@@ -545,6 +562,7 @@ export type AssistantWork = AssistantMessage & {
   sendFailed?: "attachments";
   droppedAttachmentIds?: string[];
   continuing?: string;
+  via?: string;
 };
 
 export interface RunPoll {
@@ -653,8 +671,8 @@ export function continuableMessages(
     return { messages: [...kept, user as AgentMessage], popped };
   }
   while (kept.length && (kept[kept.length - 1] as { role?: string }).role === "assistant") {
-    const work = (kept.at(-1) as AssistantWork).work;
-    if (!input && work && workPausedForApproval(work)) {
+    const last = kept.at(-1) as AssistantWork;
+    if (last.stopReason === "aborted" || (!input && last.work && workPausedForApproval(last.work))) {
       kept.push(resumeAnchor());
       break;
     }
@@ -765,7 +783,6 @@ export class ApiError extends Error {
 
 export interface SigninRequired {
   mode?: "portal" | "dev";
-  reason?: "unauthenticated" | "not_allowed";
 }
 
 let onSigninRequired: ((detail: SigninRequired) => void) | null = null;
@@ -917,7 +934,10 @@ export async function loadChatPrefs(): Promise<void> {
 }
 
 export async function api<T = unknown>(path: string, init?: RequestInit): Promise<T> {
-  const r = await webFetch(withBase(path), { headers: { "content-type": "application/json" }, ...init });
+  const headers = new Headers({ "content-type": "application/json" });
+  new Headers(init?.headers).forEach((value, name) => headers.set(name, value));
+  headers.set(CLIENT_SURFACE_HEADER, webClientSurface());
+  const r = await webFetch(withBase(path), { ...init, headers });
   const text = await r.text();
   let body: unknown = {};
   try {
@@ -1150,15 +1170,19 @@ export async function resolveApproval(decision: ApprovalDecision): Promise<strin
     resolvedCredentialApprovals.add(decision.requestId);
     return "";
   }
-  const submit = await api<{ runId?: string }>(`/api/approvals/${encodeURIComponent(decision.requestId)}`, {
-    method: "POST",
-    body: JSON.stringify({ approved: decision.approved, ...(decision.scope ? { scope: decision.scope } : {}) }),
-  }).catch((err: unknown) => {
+  const submit = await api<{ runId?: string; steered?: boolean }>(
+    `/api/approvals/${encodeURIComponent(decision.requestId)}`,
+    {
+      method: "POST",
+      body: JSON.stringify({ approved: decision.approved, ...(decision.scope ? { scope: decision.scope } : {}) }),
+    },
+  ).catch((err: unknown) => {
     if (err instanceof ApiError && err.status === 404) return null;
     throw err;
   });
   if (!submit) return null;
   if (!submit.runId) throw new Error("Could not continue after the approval.");
+  if (submit.steered) decidedDuringRunApprovals.add(decision.requestId);
   return submit.runId;
 }
 
@@ -2306,8 +2330,13 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
         ...(typeof workStartedAt === "number" ? { startedAt: workStartedAt } : {}),
         ...(typeof workFinishedAt === "number" ? { finishedAt: workFinishedAt } : {}),
       };
-      const stopped = e.body.stopped === true || text.trim() === "(stopped)";
-      if (text || pending.length || heldPosts.size || stopped) {
+      const stopped = e.body.stopped === true;
+      if (typeof e.body.via === "string" && text.trim()) {
+        spillHeldPosts();
+        flushWork("", e.createdAt);
+        flushWork(text, e.createdAt, true, timing, stopped, [e.seq]);
+        (out.at(-1) as AssistantWork).via = e.body.via;
+      } else if (text || pending.length || heldPosts.size || stopped) {
         spillHeldPosts();
         if (posted && text) {
           pending.push({ ...e, variant: "narration", body: { demoted: true } });

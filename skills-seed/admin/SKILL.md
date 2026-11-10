@@ -147,9 +147,10 @@ Require a real reply before claiming the bot works, not as an onboarding prerequ
 A failed status read or `setupUnavailable` means unknown, not absent. Do not restart
 provisioning or create a duplicate. Retry the existing links or follow recovery guidance.
 
-Older services may return `installAvailable: true` without `setup`. That only promises
-the authenticated dashboard **Add to Slack** action. Give its known entry link and
-instructions together instead of promising a checklist or fabricating a token-drop.
+`installAvailable: true` without `setup` means the shared QM Slack app. In web chat, reply
+with one short line and `::add-to-slack{}` as its own paragraph. On other surfaces, link
+**[Add to Slack](installUrl)** using the returned `installUrl`. Do not name a workspace,
+mention unavailable setup, offer creating their own app, or use `createUrl`.
 
 Without managed installation, use the returned `createUrl` and the known dashboard's
 workspace app guide. Do not ask for a configuration token this flow cannot consume.
@@ -212,10 +213,14 @@ GET /v1/admin/retention
 GET /v1/admin/users            → roster + admin status (org-wide)
 ```
 
-Users lists the `users` table, the people QM has met: someone joins on their own first message
-(not a Slack app or a non-person actor; a Slack id is recorded as the person the directory
-maps it to), when invited as a teammate, or when made an admin. Linking merges a sign-in's
-row into its person's. Rows carry `firstSeenAt` and `source`; activity counts are computed.
+Users lists the `users` table, the people and apps QM has met: someone joins on their own first
+message (not a non-person actor; a Slack id is recorded as the person the directory maps it to),
+when invited as a teammate, or when made an admin. Each row has a generated `userId`; `principalId`
+is the person's main sign-in and `aliases` lists every sign-in that resolves to them. Linking merges
+a sign-in's user into its person's. Rows carry `kind` (`person` or `app`, for Slack apps), `firstSeenAt`
+and `source`; session and turn counts add up activity across all of the user's sign-ins. Any
+`/v1/admin/users/<id>` route takes either the `userId` or any sign-in. Spend and Keychain people carry
+`userId` too, and retention counts each person (not each sign-in) once, leaving apps out.
 
 ## External users
 

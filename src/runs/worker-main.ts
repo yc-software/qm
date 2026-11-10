@@ -2,31 +2,26 @@ import "./instrument.ts";
 import { loadConfig } from "../config.ts";
 import { buildApp, stopWithBackstop } from "../wiring.ts";
 import { shutdownOnUncaught } from "../util/process-guard.ts";
-import { useOwnerDatabase } from "../tenants/owner-pool.ts";
-import { createPgPool, migrateRegisteredPgSchemas } from "../persistence/pg-pool.ts";
-import { watchTenants } from "../tenants/work-tenant.ts";
-import { reportFailureAs } from "../util/errors.ts";
+import { migrateRegisteredPgSchemas } from "../persistence/pg-pool.ts";
+import { bindBootTenant, inBootTenant, readBootTenant } from "../tenants/boot.ts";
+import { loadTenant } from "../tenants/cache.ts";
 
 const config = loadConfig();
-useOwnerDatabase(config.databaseOwnerUrl);
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
-if (config.databaseUrl)
-  await watchTenants(createPgPool(config.databaseUrl), reportFailureAs("tenant watch", undefined));
-await built.tenancy.refreshSettings();
-built.tenancy.keepSettingsFresh();
-if (config.backgroundWorkEnabled) await built.ownSharedState();
-await built.loadTenants();
+const tenant = await bindBootTenant(() => readBootTenant(config.databaseUrl!));
+if (config.backgroundWorkEnabled) await inBootTenant(tenant, () => built.ownSharedState());
+if (tenant) await inBootTenant(tenant, loadTenant);
 const { runtime } = built;
-runtime.start();
+inBootTenant(tenant, () => runtime.start());
 console.log(`[qm:worker] draining runs (org=${config.orgId}, workers=${config.workers})`);
 
 let shuttingDown = false;
-function shutdown(signal: string): void {
+function shutdown(signal: string, fatal = false): void {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`[qm:worker] ${signal} received, stopping`);
-  stopWithBackstop(runtime, config.shutdownDrainMs, "qm:worker");
+  stopWithBackstop(runtime, config.shutdownDrainMs, "qm:worker", fatal);
 }
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));

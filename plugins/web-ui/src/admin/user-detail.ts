@@ -5,6 +5,9 @@ import type { AdminPage } from "./sections.ts";
 import { offboardingCard } from "./offboarding.ts";
 import { pageHeader, card, table, badge, stacked, subline } from "./shared.ts";
 
+export const userHref = (page: AdminPage, row: { userId?: string | null; principalId?: string | null }) =>
+  page.href("user", { user: row.userId || row.principalId });
+
 export const labelRole = (role: string) => (role === "org_admin" ? "admin" : String(role || "").replace(/_/g, " "));
 
 const ONBOARDING_KIND: Record<string, string> = {
@@ -31,9 +34,9 @@ async function openWebUiAs(target: string) {
 }
 
 export async function detail(page: AdminPage) {
-  const principal = page.params.get("principal") || "";
+  const requested = page.params.get("user") || "";
   const back = { label: "Users", href: page.href("users") };
-  const show = (body: unknown, title: unknown = principal || "User", context?: unknown) =>
+  const show = (body: unknown, title: unknown = "User", context?: unknown) =>
     render(
       html`${pageHeader({ back, title, context })}
         <div class="detail">${body}</div>`,
@@ -41,8 +44,8 @@ export async function detail(page: AdminPage) {
     );
   show("Loading…");
   const [r, kc] = await Promise.all([
-    page.api("GET", "/api/users/" + encodeURIComponent(principal)),
-    page.api("GET", "/api/keychain?principal=" + encodeURIComponent(principal)),
+    page.api("GET", "/api/users/" + encodeURIComponent(requested)),
+    page.api("GET", "/api/keychain?principal=" + encodeURIComponent(requested)),
   ]);
   if (!page.current()) return;
   if (!r.ok)
@@ -50,6 +53,8 @@ export async function detail(page: AdminPage) {
       r.status === 403 ? "You don't have admin access." : r.data?.message || `Failed to load user (${r.status}).`,
     );
   const d = r.data || {};
+  const principal = d.principalId || requested;
+  const aliases: string[] = d.user?.aliases || [];
   const personalScope = d.scopeId || "personal:" + principal;
   let [onboarding, busy, hint, resetHint] = [d.onboarding || "not_started", false, "", ""];
   const creds = kc.data?.credentials || [];
@@ -84,7 +89,7 @@ export async function detail(page: AdminPage) {
     busy = false;
     draw();
   }
-  const offboarding = offboardingCard(page, d.principalId || principal, d.deactivated === true, d.user, () => draw());
+  const offboarding = offboardingCard(page, principal, d.deactivated === true, d.user, () => draw());
   const keychainCards = () => {
     if (!kc.ok) return html`<p class="empty">${kc.data?.message || "Failed to load credentials and grants."}</p>`;
     if (kc.data?.enabled === false) return html`<p class="empty">Keychain is not enabled.</p>`;
@@ -121,7 +126,7 @@ export async function detail(page: AdminPage) {
   function draw() {
     if (!page.current()) return;
     show(
-      html`<button type="button" class="link" @click=${() => openWebUiAs(d.principalId || principal)}>
+      html`<button type="button" class="link" @click=${() => openWebUiAs(principal)}>
           Open web UI as this person ↗
         </button>
         <div class="user-resource-links" aria-label="Personal workspace">
@@ -135,6 +140,22 @@ export async function detail(page: AdminPage) {
             ["governance", "Governance"],
           ].map(([view, label]) => html`<a href=${page.href(view, { scope: personalScope })}>${label} →</a>`)}
         </div>
+        ${
+          aliases.length
+            ? card(
+                "Sign-ins (" + aliases.length + ")",
+                "Every identity that resolves to this person. Activity, credentials and grants under any of them are theirs.",
+                table(
+                  ["Sign-in", ""],
+                  aliases.map((alias) => [
+                    { text: alias, cls: "mono" },
+                    { node: alias === d.user?.principalId ? badge("primary", "info") : subline("linked") },
+                  ]),
+                  "No sign-ins.",
+                ),
+              )
+            : ""
+        }
         ${keychainCards()}
         ${card(
           "Onboarding",
@@ -162,8 +183,10 @@ export async function detail(page: AdminPage) {
             <p class="hint">${resetHint}</p>`,
         )}
         ${offboarding()}`,
-      d.displayName || d.principalId || principal,
-      [d.admin?.isAdmin ? labelRole(d.admin.role) : "member", d.scopeId].filter(Boolean).join(" · "),
+      d.displayName || principal,
+      [d.user?.kind === "app" ? "app" : "", d.admin?.isAdmin ? labelRole(d.admin.role) : "member", d.scopeId]
+        .filter(Boolean)
+        .join(" · "),
     );
   }
   draw();

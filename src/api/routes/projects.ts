@@ -124,14 +124,41 @@ async function clearProjectSlackChannel(ctx: ApiCtx): Promise<void> {
 
 export const projectRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/projects", actor: "query.principalId", auth: "either", handle: listProjects },
-  { method: "PATCH", path: "/v1/projects/:id", auth: "either", allowedInStrict: true, handle: renameProject },
-  { method: "PUT", path: "/v1/projects/:id/slack-channel", auth: "either", handle: setProjectSlackChannel },
-  { method: "DELETE", path: "/v1/projects/:id/slack-channel", auth: "either", handle: clearProjectSlackChannel },
   ...withActor("body.principalId", [
-    { method: "POST", path: "/v1/projects", auth: "either", allowedInStrict: true, handle: createProject },
+    {
+      method: "PATCH",
+      path: "/v1/projects/:id",
+      browser: true,
+      auth: "either",
+      allowedInStrict: true,
+      handle: renameProject,
+    },
+    {
+      method: "PUT",
+      path: "/v1/projects/:id/slack-channel",
+      browser: true,
+      auth: "either",
+      handle: setProjectSlackChannel,
+    },
+    {
+      method: "DELETE",
+      path: "/v1/projects/:id/slack-channel",
+      browser: true,
+      auth: "either",
+      handle: clearProjectSlackChannel,
+    },
+    {
+      method: "POST",
+      path: "/v1/projects",
+      browser: true,
+      auth: "either",
+      allowedInStrict: true,
+      handle: createProject,
+    },
     {
       method: "POST",
       path: "/v1/projects/:id/members",
+      browser: true,
       auth: "either",
       allowedInStrict: true,
       handle: addProjectMember,
@@ -139,6 +166,7 @@ export const projectRoutes: ReadonlyArray<Route<ApiCtx>> = [
     {
       method: "DELETE",
       path: "/v1/projects/:id/members/:memberId",
+      browser: true,
       auth: "either",
       allowedInStrict: true,
       handle: removeProjectMember,

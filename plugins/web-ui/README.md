@@ -3,46 +3,31 @@
 An end-user web surface with a custom chat shell, connected to the
 platform core. It still uses Pi's `Agent` state machine and selected Pi web utilities
 for markdown, attachment loading, and model metadata, but the visible conversation UI is
-owned by this plugin. Two processes:
-
-- **A zero-dep `node:http` server** (`server/index.ts`) — holds the signed-in principal
-  in an `HttpOnly` cookie, injects it as the turn's actor, and proxies a small set of
-  `/api/*` routes to the core (chat turns, unified history, and **webhook management** —
-  see below). It never imports the core and never sends a model/API key to the browser.
-- **A Vite-bundled front-end** (`src/`) — a custom Lit shell + transcript + composer.
-  Pi's `Agent` LLM-call boundary (`streamFn`) is swapped for a bridge to the core.
-  It `POST`s the turn (`POST /v1/turns?async=1`), then watches the in-flight reply over
-  **SSE** (`GET /api/runs/:id/events`, relayed from the core's `partial`) so tokens are
-  pushed as they arrive instead of discovered on the next poll tick. It falls back to
-  polling `GET /api/runs/:id` where SSE can't be established (old/proxy-hostile
-  environments). The real agent loop (model + the three primitives + memory + audit) runs
-  server-side in the core's sandbox; the browser is a thin chat client.
+owned by this plugin. It is a **Vite-bundled front-end** (`src/`): a custom Lit shell + transcript +
+composer. The built bundle (`dist-web/`) is not read from disk at runtime: core publishes it as a
+content-hashed release to its object store and core's web shell (`src/web/shell.ts`) serves the live
+release, so `qm ui publish` can replace it without a restart (see
+[docs/combined-services.md](../../docs/combined-services.md)). Its `/api/*` calls are aliases of core's
+browser-enabled `/v1` routes; core binds them to the signed-in person.
+Pi's `Agent` LLM-call boundary (`streamFn`) is swapped for a bridge to the core.
+It `POST`s the turn (`POST /v1/turns?async=1`), then watches the in-flight reply over
+**SSE** (`GET /api/runs/:id/events`, relayed from the core's `partial`) so tokens are
+pushed as they arrive instead of discovered on the next poll tick. It falls back to
+polling `GET /api/runs/:id` where SSE can't be established (old/proxy-hostile
+environments). The real agent loop (model + the three primitives + memory + audit) runs
+server-side in the core's sandbox; the browser is a thin chat client.
 
 **Behind the portal.** When fronted by `plugins/portal` (the public SSO front door), this SPA
 is served at the portal root — the default `WEB_UI_BASE=/` build is the one the portal fronts
 (the old `/web-ui/` prefix is gone; the portal 308-redirects `/web-ui/*` to root for stale
 links). The front-end joins its base via `import.meta.env.BASE_URL` (the `withBase()` helper in
-`core-bridge.ts`), so direct/standalone access and `npm run dev` behave identically.
+`core-bridge.ts`), so every base path behaves identically.
 Core binds run reads and signals to the portal-verified actor;
 no run bearer is exposed to browser code or placed in a URL. The active-run resume index
 (`/api/runs/active`) is per-process best-effort with a durable core fallback for personal threads.
 
-```
-npm install --prefix ../admin
-npm install
-npm run build
-npm run serve
-
-npm start
-```
-
-Dev (HMR): run `npm run serve` in one terminal and `npm run dev` in another — Vite serves
-the front-end on :5173 and proxies `/signin`, `/me`, `/api/*` to the node server.
-
-Env (see `.env.example`): `CORE_API_URL` (default `http://localhost:8080`),
-`CORE_ORG_ID` (default `acme`), `PORT` (default 8096), `WEB_UI_PUBLIC_URL`,
-`WEB_UI_PRINCIPALS` (csv allowlist; empty = any id, **dev only**),
-and `CORE_SIGNING_SECRET` (same value as the core when source-auth is enabled).
+Build the bundle with `npm install && npm run build`; see
+[docs/combined-services.md](../../docs/combined-services.md) for publishing it.
 
 ## Suggested activities
 
@@ -248,13 +233,13 @@ the CSS media queries, the composer, and the split canvas.
     per-member grants are sequencing-gated (off until enabled), so those stay owner-only until then.
   - **Connectors** — per-provider OAuth status with Connect / Reconnect / Disconnect. The server
     proxies `GET /api/connectors` → core `/v1/connectors/oauth/status`, `POST /api/connectors/:p/start`
-    → core `/v1/connectors/oauth/:p/start` (redirect URI = this surface's
-    `/connectors/oauth/:p/callback`), and `POST /api/connectors/revoke` → core
+    → core `/v1/connectors/oauth/:p/start` (redirect URI = the portal's
+    `/v1/connectors/oauth/:p/callback`, passed straight to core), and `POST /api/connectors/revoke` → core
     `/v1/connectors/oauth/revoke`. The callback exchanges the code server-side (tokens never reach
     the browser) and bounces back into the SPA via a base-relative redirect.
   - **Deploys** — `GET /api/deployments` → core `/v1/deployments`, grouped into manageable,
     shared, and archived views. Detail and restore routes expose authorized metadata and bring an
-    archived version back online; running apps open through the surface's signed deployment proxy.
+    archived version back online; running apps open through the portal's `/deployments/:id/` proxy to core.
 
 ## Notes
 
@@ -302,31 +287,25 @@ In web chat, an assistant reply can include `::connect-apps{}` as a standalone p
 
 ## Optional product analytics
 
-Set `POSTHOG_API_KEY` to a PostHog project ingestion token to enable browser
-analytics. `POSTHOG_HOST` defaults to `https://us.i.posthog.com` and must be an
-HTTPS origin. The authenticated `/me` response supplies this public configuration;
-the portal serves the same web application, so it needs no separate SDK.
+QM ships no analytics vendor. A deployment plugs its own in by setting
+`WEB_UI_ANALYTICS` on the web UI to a JSON object:
 
-Events are explicit pageviews by navigation view, accepted `message_sent` events,
-and `session_started` for the first user message in a chat. Company grouping uses
-`CORE_ORG_ID`; user identities combine company and authenticated principal. Browser
-analytics is disabled during impersonation. Autocapture, replay, exception capture,
-performance capture and feature flags are disabled. Event properties exclude chat
-content, URLs, query strings, titles and referrers. Delivery is best effort.
+- `module` (required): a same-origin path or HTTPS URL of an ES module the
+  deployment serves. It must export `createAnalytics({ org, user, options })`,
+  returning (or resolving to) an object with optional `page(view)`,
+  `track(event, { insertId })` and `stop()` methods.
+- `connect` (optional): HTTPS origins the module needs to reach; they are added to
+  `connect-src`. A cross-origin `module` URL's origin is added to `script-src`.
+- `options` (optional): any JSON, passed to `createAnalytics` unchanged.
 
-Set the same variables on core to capture `app_published` after a successful new
-application or version deployment. Publications use the application's creator and
-company, matching browser identity. No key means no analytics requests.
-
-Core also captures `response_completed` and `response_failed` when a human turn
-reaches its final run state, including when a separate worker executes it.
-`completion_boundary=run` means processing finished, not confirmed delivery to the
-user. Successful silent or reaction-only results count as completed processing.
-`result_status` distinguishes those results; `surface` identifies web or Slack.
-Automation, automatic openers, impersonated turns, stopped turns, refusals, queued
-results and pending approvals do not emit outcomes. Retries emit only at the final
-run state. Stable insert IDs support deduplication. These best-effort events are
-not a complete reliability ledger and contain no response text or raw errors.
+The authenticated `/me` response supplies this configuration. The web UI loads the
+module after sign-in and never during impersonation, stops the previous instance on
+sign-out or identity change, and isolates module errors. It reports navigation views
+through `page`, and accepted `message_sent` events and `session_started` for the
+first user message in a chat through `track`, with stable insert IDs for
+deduplication. It passes no chat content, URLs, titles or referrers; anything else a
+module collects, such as session replay, and how it masks it, is the deployment's
+choice.
 
 ## Optional browser error reporting
 

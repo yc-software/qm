@@ -1,46 +1,66 @@
-import type { PgPool, PgQueryOptions } from "../persistence/pg-pool.ts";
-import { boundTenant, withoutTenant, withTenant } from "./context.ts";
-import { ownerPgPool } from "./owner-pool.ts";
+import type { PgPool } from "../persistence/pg-pool.ts";
+import { loadTenant } from "./cache.ts";
+import { type Tenant, withTenant } from "./context.ts";
 
-export type Claimed<T> = T & { tenantId?: string };
-
-export async function poolAcrossTenants(store: PgPool): Promise<PgPool> {
-  if (boundTenant() !== undefined) throw new Error("A cross-tenant claim cannot run while a tenant is bound");
-  const owner = ownerPgPool(store);
-  if (owner !== store) await store.pool();
-  return owner;
-}
-
-export async function claimAcrossTenants(
-  store: PgPool,
-  text: string,
-  params: unknown[] = [],
-  options?: PgQueryOptions,
-): ReturnType<PgPool["query"]> {
-  return (await poolAcrossTenants(store)).query(text, params, options);
-}
-
-export function inTenantOf<T>(tenantId: string | undefined, fn: () => T): T {
-  return tenantId === undefined ? withoutTenant(fn) : withTenant(tenantId, fn);
-}
-
-export function rowTenant(row: Record<string, unknown>): { tenantId?: string } {
-  return row.tenant_id == null ? {} : { tenantId: String(row.tenant_id) };
-}
-
-export interface TenantRow {
+export interface ClaimedRow {
+  tenantId: string;
   id: string;
-  install: boolean;
 }
 
-export async function listTenants(store: PgPool): Promise<TenantRow[]> {
-  const { rows } = await claimAcrossTenants(
-    store,
-    "SELECT id::text AS id, id = qm_tenant_id() AS install FROM tenants ORDER BY id",
-  );
-  return rows.map((row) => ({ id: String(row.id), install: row.install === true }));
+const NAME = /^[a-z_][a-z0-9_]*$/;
+
+export function claimFunction(name: string, args: string, body: string): string {
+  if (!NAME.test(name)) throw new Error(`invalid claim function name: ${name}`);
+  return `DO $claim_function$
+BEGIN
+  EXECUTE format(
+    $function$CREATE OR REPLACE FUNCTION ${name}(${args}) RETURNS TABLE(tenant_id uuid, id text)
+      LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path = %I, pg_temp
+      AS $claim$ ${body.replaceAll("%", "%%")} $claim$$function$,
+    current_schema());
+END $claim_function$`;
 }
 
-export async function forEachTenant(store: PgPool, fn: () => Promise<unknown>): Promise<void> {
-  for (const tenant of await listTenants(store)) await withTenant(tenant.id, fn);
+export async function claimRows(pg: Pick<PgPool, "q">, name: string, params: unknown[] = []): Promise<ClaimedRow[]> {
+  if (!NAME.test(name)) throw new Error(`invalid claim function name: ${name}`);
+  const args = params.map((_, i) => `$${i + 1}`).join(", ");
+  const rows = await pg.q(`SELECT tenant_id::text AS tenant_id, id FROM ${name}(${args})`, params);
+  return rows.map((row) => ({ tenantId: String(row.tenant_id), id: String(row.id) }));
+}
+
+export async function claimThenBind<T>(
+  claim: () => Promise<readonly ClaimedRow[]>,
+  work: (id: string, tenant: Tenant) => Promise<T>,
+): Promise<T[]> {
+  const done: T[] = [];
+  for (const { tenantId, id } of await claim())
+    done.push(
+      await inTenant(tenantId, (tenant) => work(id, tenant)).catch((e: unknown) => {
+        throw new Error(`tenant ${tenantId}`, { cause: e });
+      }),
+    );
+  return done;
+}
+
+export async function claimThenLoad<T extends { id: string }>(
+  claim: () => Promise<readonly ClaimedRow[]>,
+  load: (ids: string[], tenant: Tenant) => Promise<T[]>,
+): Promise<Array<T & { tenantId: string }>> {
+  const claimed = await claim();
+  const byKey = new Map<string, T & { tenantId: string }>();
+  for (const tenantId of new Set(claimed.map((row) => row.tenantId))) {
+    const ids = claimed.filter((row) => row.tenantId === tenantId).map(({ id }) => id);
+    const rows = await inTenant(tenantId, (tenant) => load(ids, tenant)).catch((e: unknown) => {
+      throw new Error(`tenant ${tenantId}`, { cause: e });
+    });
+    for (const row of rows) byKey.set(`${tenantId} ${row.id}`, { ...row, tenantId });
+  }
+  return claimed.flatMap(({ tenantId, id }) => byKey.get(`${tenantId} ${id}`) ?? []);
+}
+
+export function inTenant<T>(id: string, fn: (tenant: Tenant) => Promise<T>): Promise<T> {
+  return withTenant(id, async (tenant) => {
+    await loadTenant();
+    return fn(tenant);
+  });
 }

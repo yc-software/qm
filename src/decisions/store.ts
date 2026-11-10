@@ -1,8 +1,8 @@
 import type { PoolClient } from "pg";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { checkRuleSet, type DecisionHook, type DecisionProvider, type DecisionRule } from "./decisions.ts";
-import { TENANCY, tenantTables } from "../tenants/migrations.ts";
-import { perTenant } from "../tenants/context.ts";
+import { perTenant } from "../tenants/cache.ts";
+import { tenantTables } from "../tenants/migrations.ts";
 
 interface DecisionWriter {
   actorId: string;
@@ -58,7 +58,6 @@ const MAX_PROVIDERS = 20;
 
 export function createPostgresDecisionStore(connectionString: string): DecisionStore {
   const { q, pool } = createPgPool(connectionString, [
-    ...TENANCY,
     { id: "decisions/0001", statements: SCHEMA },
     ...tenantTables(
       "decisions/0002-tenants",
@@ -67,7 +66,7 @@ export function createPostgresDecisionStore(connectionString: string): DecisionS
         { table: "decision_rules", primaryKey: "rule_id" },
       ],
       {
-        foreignKeys: [
+        references: [
           {
             table: "decision_rules",
             name: "decision_rules_provider_id_fkey",

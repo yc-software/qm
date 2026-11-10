@@ -1,114 +1,91 @@
 import { z } from "zod";
+import type { PgPool } from "../persistence/pg-pool.ts";
+import { loadTenant, perTenant } from "./cache.ts";
 import { boundTenant } from "./context.ts";
+import { appHandleSchema, appLabelLimitError } from "./app-handle.ts";
+import { SCOPE_KINDS } from "../types.ts";
+import { isDnsLabel } from "../../plugins/chassis/src/dns-label.ts";
 
-const text = z.string().min(1).max(4096);
+const text = z.string().min(1);
 
-const TENANT_ENV_NAMES = [
-  "ADMIN_GRANTS",
-  "ANTHROPIC_API_KEY",
-  "AUTH_ALLOWED_EMAILS",
-  "AUTH_CLIENT_SECRET",
-  "AUTH_EMAIL_FROM",
-  "AWS_PUBLIC_ORIGIN_URL",
-  "BROKER_CREDENTIALS",
-  "CAPABILITY_SECRET",
-  "COMPOSIO_API_KEY",
-  "MODAL_APP_NAME",
-  "MODAL_ENVIRONMENT",
-  "MODAL_NAME_PREFIX",
-  "MODAL_SNAPSHOT_S3_BUCKET",
-  "MODAL_TOKEN_ID",
-  "MODAL_TOKEN_SECRET",
-  "OPENROUTER_API_KEY",
-  "PORTAL_TRUSTED_OIDC",
-  "PORTAL_TRUSTED_OIDC_CLIENT_SECRET",
-  "PUBLIC_API_URL",
-  "ORG_BRAND_ORG_NAME",
-  "PUBLIC_WEB_URL",
-  "RESEND_API_KEY",
-  "S3_BUCKET",
-  "S3_PREFIX",
-  "SANDBOX_BACKEND",
-  "SANDBOX_SCOPE_BACKENDS",
-  "SKILL_SIGNING_SECRET",
-  "SPRITES_NAME_PREFIX",
-  "SPRITES_TOKEN",
-] as const;
+const sandboxBackend = z.enum(["sprites", "modal", "superserve"]);
 
-const BROKER_SECRET_ENV = /^BROKER_SECRET_[A-Z0-9_]{1,64}$/;
+const namePrefix = z.string().regex(/^[a-z0-9][a-z0-9-]{0,49}$/, "expected a lowercase sandbox name prefix");
 
-export type TenantEnvName = (typeof TENANT_ENV_NAMES)[number] | `BROKER_SECRET_${string}`;
-
-const tenantEnvNames: ReadonlySet<string> = new Set(TENANT_ENV_NAMES);
-
-function isTenantEnvName(name: string): name is TenantEnvName {
-  return tenantEnvNames.has(name) || BROKER_SECRET_ENV.test(name);
-}
+const emailOrDomain = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .max(254)
+  .regex(/^[^@\s,;<>"]*@[^@\s,;<>"]+\.[^@\s,;<>"]+$/, "expected an email address or @domain");
 
 export const tenantSettingsSchema = z
   .object({
-    env: z
-      .record(z.string().max(64), text)
-      .refine((env) => Object.keys(env).every(isTenantEnvName), "not a per-tenant env name"),
+    oidcClient: z.object({ clientId: text, clientSecret: text.optional() }).strict(),
+    allowedEmails: z.array(emailOrDomain),
+    brandName: z.string().trim().min(1),
     modelGatewayKey: text,
-    oidcClient: z.object({ issuer: z.url(), clientId: text, clientSecret: text }).strict(),
-    slackBridgeToken: text,
-    connectorSecretKey: z.string().min(32).max(4096),
-    orgId: z.string().min(1).max(200),
+    orgSlug: z.string().refine(isDnsLabel, "expected a lowercase org slug"),
+    handle: appHandleSchema,
+    slackBridgeToken: z.string().regex(/^[\x21-\x7e]{16,}$/, "expected a Slack service bridge token"),
+    spritesToken: text,
+    spritesNamePrefix: namePrefix,
+    modalAppName: text,
+    modalEnvironment: text,
+    modalNamePrefix: namePrefix,
+    superserveApiKey: text,
+    superserveTemplate: text,
+    superserveNamePrefix: namePrefix,
+    sandboxBackend,
+    sandboxScopeBackends: z.partialRecord(z.enum(SCOPE_KINDS), sandboxBackend),
+    serving: z.boolean(),
   })
   .partial()
   .strict();
 
 export type TenantSettings = z.infer<typeof tenantSettingsSchema>;
 
-let loader: ((tenant: string) => Promise<TenantSettings>) | undefined;
-const loaded = new Map<string, TenantSettings>();
+export const TENANT_SETTING_KEYS = Object.keys(tenantSettingsSchema.shape) as (keyof TenantSettings)[];
 
-export function configureTenantSettings(load: ((tenant: string) => Promise<TenantSettings>) | undefined): void {
-  loader = load;
-  loaded.clear();
+export const TENANT_SETTINGS_REFRESH_MS = 30_000;
+
+const loaded = perTenant<{ settings?: TenantSettings; handle?: string }>(() => ({}));
+
+export async function loadTenantSettings(db: Pick<PgPool, "q">): Promise<void> {
+  const rows = await db.q(
+    `SELECT settings, qm_tenant_handle(settings) AS handle FROM tenants WHERE id = qm_bound_tenant()`,
+  );
+  const state = loaded();
+  state.settings = tenantSettingsSchema.parse(rows[0]?.settings ?? {});
+  state.handle = typeof rows[0]?.handle === "string" ? rows[0].handle : undefined;
 }
 
-export async function tenantSettings(): Promise<TenantSettings> {
-  const tenant = boundTenant();
-  if (!tenant || !loader) return {};
-  const settings = await loader(tenant);
-  loaded.set(tenant, settings);
-  return settings;
+export function tenantAppHandle(): string | undefined {
+  return boundTenant() === undefined ? undefined : loaded().handle;
 }
 
-export function replaceLoadedTenantSettings(all: ReadonlyMap<string, TenantSettings>): void {
-  loaded.clear();
-  for (const [tenant, settings] of all) loaded.set(tenant, settings);
+export function assertAppLabelFits(ref: string): void {
+  const problem = appLabelLimitError(tenantAppHandle(), ref);
+  if (problem) throw new Error(problem);
 }
 
-export function loadedTenantSettings(): TenantSettings {
-  const tenant = boundTenant();
-  return (tenant && loaded.get(tenant)) || {};
+export function noteTenantAppHandle(handle: string): void {
+  loaded().handle = handle;
 }
 
-export function tenantSettingsLoaded(): boolean {
-  const tenant = boundTenant();
-  return !tenant || !loader || loaded.has(tenant);
+export function tenantSettings(): TenantSettings {
+  return loaded().settings ?? {};
 }
 
-export async function tenantSetting<K extends keyof TenantSettings>(key: K): Promise<TenantSettings[K]> {
-  return (await tenantSettings())[key];
+export function loadedTenantSettings(): TenantSettings | undefined {
+  return loaded().settings;
 }
 
-export function tenantEnv(name: TenantEnvName): string | undefined {
-  return loadedTenantSettings().env?.[name];
-}
-
-export function tenantAllowedEmails(): string[] | undefined {
-  const raw = tenantEnv("AUTH_ALLOWED_EMAILS");
-  if (raw === undefined) return undefined;
-  return [
-    ...new Set(
-      raw
-        .split(",")
-        .map((email) => email.trim().toLowerCase())
-        .filter(Boolean),
-    ),
-  ];
+export async function tenantAllowsEmail(email: string): Promise<boolean | undefined> {
+  await loadTenant();
+  const allowed = tenantSettings().allowedEmails;
+  if (!allowed) return undefined;
+  const normalized = email.trim().toLowerCase();
+  const domain = normalized.slice(normalized.lastIndexOf("@"));
+  return allowed.some((entry) => entry === normalized || (entry.startsWith("@") && entry === domain));
 }

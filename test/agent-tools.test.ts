@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { PEER_TASK_BANNER } from "../src/sessions/session-mailbox.ts";
 import { createGoalRecord } from "../src/agent/goal.ts";
 import assert from "node:assert/strict";
 import { Check } from "typebox/value";
@@ -512,6 +513,14 @@ test("sandbox creation and default routing remain independent", async () => {
   assert.deepEqual(calls, [{ action: "create", input: { backend: "modal", name: "analysis", sandboxId: undefined } }]);
   await call(sandbox, { action: "set_default", sandbox_id: null, purpose: "p" });
   assert.deepEqual(calls[1], { action: "default", input: { backend: undefined, name: undefined, sandboxId: null } });
+  assert.match(
+    textOut(await call(sandbox, { action: "list", sandbox_id: null, backend: "", name: "", purpose: "p" })),
+    /list doesn't take `sandbox_id`, `backend`, `name`; omit them/,
+  );
+  assert.match(
+    textOut(await call(sandbox, { action: "status", sandbox_id: null, purpose: "p" })),
+    /`sandbox_id: null` only clears the default/,
+  );
 });
 
 test("sandbox management preserves approval handling", async () => {
@@ -1813,6 +1822,19 @@ test("background per-action validation returns a crisp [error] instead of throwi
     /\[error\].*requires `data`/,
   );
   assert.match(textOf(await call(background, { action: "send_input", data: "x" })), /\[error\].*requires `process_id`/);
+  assert.match(textOf(await call(background, { action: "start" })), /unknown action `start`/);
+  const watched = textOf(
+    await call(background, {
+      action: "watch",
+      process_id: "bg-1",
+      data: "",
+      monitor_id: "",
+      wait_seconds: 0,
+      max_bytes: 65536,
+      signal: "TERM",
+    }),
+  );
+  assert.match(watched, /watch doesn't take `data`, `monitor_id`, `wait_seconds`, `max_bytes`, `signal`; omit them/);
 });
 
 test("background surfaces a policy denial/approval as a tool_result, not a throw", async () => {
@@ -2496,6 +2518,44 @@ test("sandbox management and explicit execution preserve independent target argu
     { action: "default", input: { backend: undefined, name: undefined, sandboxId: null } },
   ]);
   assert.equal(sink.lastExecOpts?.sandboxId, "box-a");
+});
+
+test("sandbox offers memory_gib only when a configured provider sizes memory, and names those providers", async () => {
+  const schema = (memorySizedBackends?: string[]) =>
+    createAgentTools(
+      { current: fakeToolContext(), emit: async () => undefined, scopeLabel: "personal:U1" },
+      { sandboxResources: true, ...(memorySizedBackends ? { memorySizedBackends } : {}) },
+    ).find((t) => t.name === "sandbox")!.parameters as { properties: Record<string, { description?: string }> };
+  assert.equal(schema().properties.memory_gib, undefined);
+  assert.equal(schema([]).properties.memory_gib, undefined);
+  assert.match(schema(["porter", "modal"]).properties.memory_gib?.description ?? "", /porter, modal only/);
+});
+
+test("sandbox memory_gib reaches create and restart only", async () => {
+  const operations: unknown[] = [];
+  const restarts: unknown[][] = [];
+  const tc: ToolContext = {
+    ...fakeToolContext(),
+    sandboxResources: async (action, input) => {
+      operations.push({ action, input });
+      return { ok: true };
+    },
+    restartComputer: async (...args) => {
+      restarts.push(args);
+    },
+  };
+  const tools = createAgentTools(
+    { current: tc, emit: async () => undefined, scopeLabel: "personal:U1" },
+    { sandboxResources: true, memorySizedBackends: ["porter"] },
+  );
+  const sandbox = tools.find((t) => t.name === "sandbox")!;
+  await call(sandbox, { action: "create", backend: "porter", name: "big", memory_gib: 6, purpose: "p" });
+  await call(sandbox, { action: "restart", sandbox_id: "box-a", memory_gib: 8, purpose: "p" });
+  await call(sandbox, { action: "retire", sandbox_id: "box-a", memory_gib: 8, purpose: "p" });
+  assert.deepEqual(operations, [
+    { action: "create", input: { backend: "porter", name: "big", sandboxId: undefined, memoryGb: 6 } },
+  ]);
+  assert.deepEqual(restarts, [["box-a", 8]]);
 });
 
 test("execute and background dispatch every process action and preserves cursors, signals, targets and watches", async () => {
@@ -3187,6 +3247,44 @@ test("agent mail is screened separately, logged privately, and delivered once ac
   );
 });
 
+test("a peer task arrives mid-turn as handed-off work while other mail keeps the routine banner", async () => {
+  const tc = fakeToolContext();
+  const mail = (id: string, text: string, peerDepth?: number) => ({
+    id,
+    senderId: "other",
+    recipientId: "here",
+    actor: { id: "U1", type: "internal" as const },
+    audience: [],
+    text,
+    createdAt: 1,
+    ...(peerDepth === undefined ? {} : { peerDepth }),
+  });
+  let pending = [mail("task", "please migrate the table", 1), mail("fyi", "build is green")];
+  tc.sessionSyscalls = {
+    open: async () => ({ ok: false, message: "unused" }),
+    write: async () => ({ ok: false, message: "unused" }),
+    read: async () => ({ ok: false, message: "unused" }),
+    receive: async () => pending,
+    acknowledge: async () => {
+      pending = [];
+    },
+  };
+  tc.read = async () => ({ content: "workspace data", sourceScopeId: "org:default-org" });
+  const ref: ToolContextRef = {
+    current: tc,
+    scopeLabel: "personal:U1",
+    orgScopeId: "org:default-org",
+    emit: sink([]),
+    screenToolResult: async () => ({ outcome: "allow" }),
+  };
+  const read = createAgentTools(ref).find((tool) => tool.name === "files");
+  const result = (await call(read, { action: "read", path: "a.txt" })) as { content: Array<{ text?: string }> };
+  const out = result.content.map((part) => part.text ?? "").join("\n");
+  assert.ok(out.includes(`${PEER_TASK_BANNER}\nplease migrate the table`));
+  assert.ok(out.includes("do not acknowledge routine completions):\nbuild is green"));
+  assert.ok(!out.includes("do not acknowledge routine completions):\nplease migrate the table"));
+});
+
 test("quarantined mail remains pending for release and mailbox failures preserve carrier output", async () => {
   const tc = fakeToolContext();
   let pending = true;
@@ -3361,6 +3459,7 @@ test("subagents send_message wakes by default and says what happened", async () 
   const replies: Array<Awaited<ReturnType<NonNullable<typeof tc.sessionSyscalls>["write"]>>> = [
     { ok: true, sessionId: "child", title: "child", delivered: "queued_turn", busy: false },
     { ok: true, sessionId: "child", title: "child", delivered: "queued_turn", busy: true },
+    { ok: true, sessionId: "child", title: "child", delivered: "steered", busy: true },
     { ok: true, sessionId: "child", title: "child", delivered: "queued_message", busy: false },
     { ok: true, sessionId: "child", title: "child", delivered: "queued_message", busy: true },
     {
@@ -3392,6 +3491,10 @@ test("subagents send_message wakes by default and says what happened", async () 
     /^Queued for "child": it is busy and starts on this when its current turn ends/,
   );
   assert.equal(
+    await send({}),
+    `Delivered into "child"'s running turn; it sees this at its next step. Don't re-send it.`,
+  );
+  assert.equal(
     await send({ wake: false }),
     `Left in "child"'s mailbox. It is idle and won't see this until something wakes it.`,
   );
@@ -3405,6 +3508,7 @@ test("subagents send_message wakes by default and says what happened", async () 
   assert.deepEqual(
     writes.map(({ wake, interrupt }) => [wake, interrupt]),
     [
+      [true, undefined],
       [true, undefined],
       [true, undefined],
       [false, undefined],
@@ -4008,12 +4112,19 @@ test("subagents and sessions are separate tools with one noun each", async () =>
   assert.match(textOut(await call(sessions, { action: "list" })), /peer \(peer\) — idle/);
   assert.match(textOut(await call(sessions, { action: "new", text: "hi", title: "t" })), /Started session "made"/);
   assert.match(textOut(await call(sessions, { action: "fork" })), /Forked this conversation into session "made"/);
-  assert.match(textOut(await call(sessions, { action: "send_message", target: "peer", text: "fyi" })), /queued/);
+  assert.match(
+    textOut(await call(sessions, { action: "send_message", target: "peer", text: "fyi" })),
+    /Left in "peer"'s mailbox/,
+  );
+  await call(sessions, { action: "send_message", target: "peer", text: "later", wake: false });
   assert.match(textOut(await call(sessions, { action: "read" })), /requires `target`/);
   assert.deepEqual(starts, [{ fork: false, text: "hi", title: "t" }, { fork: true }]);
   assert.deepEqual(
     writes.map(({ wake, target, text }) => ({ wake, target, text })),
-    [{ wake: undefined, target: "peer", text: "fyi" }],
+    [
+      { wake: true, target: "peer", text: "fyi" },
+      { wake: false, target: "peer", text: "later" },
+    ],
   );
 });
 

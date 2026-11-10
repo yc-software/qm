@@ -1,10 +1,24 @@
 import { html, nothing, render, type TemplateResult } from "lit";
-import { Box, Brain, Clock, Files, Folder, KeyRound, Repeat, Rocket, ShieldUser, Webhook, type IconNode } from "lucide";
+import {
+  Bot,
+  Box,
+  Brain,
+  Clock,
+  Files,
+  Folder,
+  KeyRound,
+  Repeat,
+  Rocket,
+  ShieldUser,
+  Webhook,
+  type IconNode,
+} from "lucide";
 import { deepLinkPath, isPlainLeftClick, UI_BASE } from "./deep-link";
 import { nextGridIndex } from "./grid-nav";
 import { setScopedSession } from "./session-scope";
 import { ADMIN_HOME_URL, appState, can, switchView } from "./shell";
 import { icon } from "./icons";
+import { personasState } from "./personas";
 import type { View } from "./shell-state";
 
 interface Destination {
@@ -39,6 +53,7 @@ export function destinations(): Destination[] {
     to("memory", Brain, "Memory", "What QM remembers about your work"),
     to("skills", Box, "Skills", "Reusable procedures QM can follow"),
   ];
+  if (personasState.enabled) list.push(to("personas", Bot, "Personas", "Reusable roles you can chat with"));
   if (can("loops")) list.push(to("loops", Repeat, "Loops", "Standing work QM keeps pushing forward"));
   if (can("admin")) {
     list.push({

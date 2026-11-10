@@ -1,25 +1,27 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createConfiguredMemoryService } from "../src/memory/provider-factory.ts";
+import { createRegistryMemoryService } from "../src/memory/registry-memory.ts";
+import { emptyMemoryRegistry } from "./support/memory-registry.ts";
 import { parseMemoryProviderConfig } from "../src/memory/provider-config.ts";
 import { withProviders, writeFacts } from "../src/memory/provider-outcome.ts";
-import { installPrincipalLinks } from "../src/directory/person.ts";
+import { installPrincipalLinks, OutsideAudience } from "../src/directory/person.ts";
 import type { MemoryProviderOutcome, MemoryService } from "../src/memory/memory-service.ts";
 import { startMcpTestServer } from "./support/mcp-test-server.ts";
 import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
 import { searchNotebooks } from "../src/memory/cross-scope.ts";
-import { McpCallError } from "../src/mcp/mcp-client.ts";
+import { createMcpClient, McpCallError } from "../src/mcp/mcp-client.ts";
+import { createMcpMemoryProvider } from "../src/memory/mcp-memory-provider.ts";
 import { recallText } from "./support/recall-text.ts";
 
 const notebook: MemoryService = {
   async recall() {
-    return [{ text: "notebook fact", score: 0.2 }];
+    return [{ text: "notebook fact" }];
   },
   async capture(_scope, facts) {
     return facts.length;
   },
   async query() {
-    return ["notebook hit"];
+    return [{ text: "notebook hit" }];
   },
   async read() {
     return "";
@@ -38,9 +40,10 @@ function configured(
   env: Record<string, string> = ENV,
   defaultMemory: MemoryService = notebook,
 ) {
-  return createConfiguredMemoryService({
+  return createRegistryMemoryService({
+    registry: emptyMemoryRegistry,
     defaultMemory,
-    config: parseMemoryProviderConfig(
+    overlay: parseMemoryProviderConfig(
       JSON.stringify({
         providers: [
           {
@@ -64,6 +67,24 @@ function configured(
       }),
       env,
     ),
+  });
+}
+
+function routedWithTimeout(url: string, timeoutMs: number) {
+  const client = (clientId: string, clientSecret: string) =>
+    createMcpClient({ url, auth: { mode: "client-credentials", clientId, clientSecret }, fetch });
+  return createRoutedMemoryService({
+    providers: {
+      default: notebook,
+      knowledge: createMcpMemoryProvider({
+        read: { client: client("ro", "x"), tool: "search_knowledge", timeoutMs },
+        write: { client: client("rw", "y"), tool: "write_knowledge", idempotencyArg: "request_id", timeoutMs },
+      }),
+    },
+    routes: [
+      { provider: "default", scopes: ["personal"], capture: "automatic" },
+      { provider: "knowledge", scopes: ["personal"], capture: "explicit", manage: false, failOpen: true },
+    ],
   });
 }
 
@@ -91,9 +112,16 @@ test("an attested provider sends the canonical person on every request and the s
     },
   });
   const memory = configured(attested.url, { attestActor: true });
-  await memory.recall("personal:U1", { query: "launch", actorId: "U1" });
-  await memory.recall("personal:U1", { query: "launch", actorId: "u1@acme.test" });
-  await memory.capture("personal:U1", ["fact"], 1, "u1@acme.test", { mode: "explicit", actorId: "u1@acme.test" });
+  const audienceScopeId = "personal:U1";
+  await memory.recall("personal:U1", { query: "launch", actorId: "U1", audienceScopeId });
+  await memory.recall("personal:U1", { query: "launch", actorId: "u1@acme.test", audienceScopeId });
+  await memory.capture(
+    "personal:U1",
+    ["fact"],
+    1,
+    { actorId: "u1@acme.test", context: "conversation" },
+    { mode: "explicit", audienceScopeId },
+  );
 
   assert.ok(attested.requests.length > 0);
   assert.deepEqual(new Set(attested.requests.map((request) => request.actor)), new Set(["U1"]));
@@ -115,14 +143,109 @@ test("an actor QM cannot attest makes no provider call and is recorded as denied
   const memory = configured(mcp.url, { attestActor: true });
   const { outcomes, problems } = await withProviders("search", async (report) => {
     for (const actorId of ["jörg@acme.test", "x".repeat(257), "U 1"]) {
-      assert.equal(recallText(await memory.recall("personal:U1", { actorId, report })), "notebook fact");
+      assert.equal(recallText(await memory.recall(`personal:${actorId}`, { actorId, report })), "notebook fact");
     }
+    assert.equal(recallText(await memory.recall("personal:U1", { report })), "notebook fact");
   });
   assert.deepEqual(mcp.requests, []);
-  assert.deepEqual(external(outcomes), Array(3).fill({ outcome: "denied", code: "invalid_actor" }));
+  assert.deepEqual(external(outcomes), Array(4).fill({ outcome: "denied", code: "invalid_actor" }));
   const [problem] = problems;
   assert.equal(problem?.code, "memory_provider_denied");
   assert.match(problem?.fix ?? "", /POST \/v1\/admin\/principal-links/);
+});
+
+test("an attested provider is called only for the person whose private conversation it is", async (t) => {
+  installPrincipalLinks({
+    canonical: (key) => (key === "system:digest" ? "U1" : undefined),
+    aliases: () => [],
+  });
+  t.after(() => installPrincipalLinks(null));
+  const mcp = await startMcpTestServer(t, { tools: TOOLS, clients: { ro: "x", rw: "y" } });
+  const memory = configured(mcp.url, { attestActor: true });
+  const refused: Array<[string, string | undefined]> = [
+    ["U2", "personal:U1"],
+    ["U1", "personal:U2"],
+    ["U1", "channel:C1"],
+    ["U1", undefined],
+  ];
+  for (const [actorId, audienceScopeId] of refused) {
+    const audience = audienceScopeId ? { audienceScopeId } : {};
+    assert.equal(
+      recallText(await memory.recall("personal:U1", { query: "launch", actorId, ...audience })),
+      "notebook fact",
+    );
+    const write = await writeFacts(
+      memory,
+      "personal:U1",
+      ["fact"],
+      { actorId, context: "conversation" },
+      { mode: "explicit", ...audience },
+      undefined,
+    );
+    assert.equal(write.added, 1);
+    assert.deepEqual(external(write.outcomes), [{ outcome: "denied", code: "private_only" }]);
+    assert.match(write.problems[0]?.fix ?? "", /own private conversation/);
+  }
+  for (const actorId of ["system:personal:U1", "system:digest"]) {
+    const reader = { actorId, audienceScopeId: "personal:U1" };
+    assert.equal(recallText(await memory.recall("personal:U1", { query: "launch", ...reader })), "notebook fact");
+    const skipped = await writeFacts(
+      memory,
+      "personal:U1",
+      ["fact"],
+      { actorId, context: "conversation" },
+      { mode: "explicit", audienceScopeId: reader.audienceScopeId },
+      undefined,
+    );
+    assert.equal(skipped.added, 1);
+    assert.deepEqual(external(skipped.outcomes), []);
+  }
+  const intoAnother = await writeFacts(
+    memory,
+    "personal:U2",
+    ["fact"],
+    { actorId: "U1", context: "conversation" },
+    { mode: "explicit", audienceScopeId: "personal:U1" },
+    undefined,
+  );
+  assert.deepEqual(external(intoAnother.outcomes), [{ outcome: "denied", code: "private_only" }]);
+  assert.equal(mcp.requests.length, 0);
+  await memory.recall("personal:U1", { query: "launch", actorId: "U1", audienceScopeId: "personal:U1" });
+  assert.deepEqual(new Set(mcp.requests.map((request) => request.actor)), new Set(["U1"]));
+});
+
+test("a write refused for its audience is recorded and logged without failing the route", async () => {
+  const refusing: MemoryService = {
+    ...notebook,
+    async capture() {
+      throw new OutsideAudience("memory provider");
+    },
+  };
+  for (const failOpen of [false, true]) {
+    const errors: unknown[] = [];
+    const memory = createRoutedMemoryService({
+      providers: { default: notebook, knowledge: refusing },
+      routes: [
+        { provider: "default", scopes: ["personal"], capture: "explicit" },
+        { provider: "knowledge", scopes: ["personal"], capture: "explicit", manage: false, failOpen },
+      ],
+      onError: (error) => void errors.push(error),
+    });
+    const { outcomes, report } = sink();
+    assert.equal(
+      await memory.capture(
+        "personal:U1",
+        ["fact"],
+        1,
+        { actorId: "admin", context: "conversation" },
+        { mode: "explicit", report },
+      ),
+      1,
+    );
+    assert.deepEqual(external(outcomes), [{ outcome: "denied", code: "private_only" }]);
+    assert.equal(errors.length, 1);
+    assert.ok(errors[0] instanceof OutsideAudience);
+  }
 });
 
 test("provider refusals, codes and failures are told apart", async (t) => {
@@ -268,16 +391,23 @@ test("explicit writes record committed, pending and unknown with a stable UUID i
         : { content: [{ type: "text", text: JSON.stringify({ status: "pending" }) }] };
     },
   });
-  const memory = configured(mcp.url, { timeoutMs: 200 });
+  const memory = routedWithTimeout(mcp.url, 200);
   const write = (facts: string[], turn?: string) =>
-    writeFacts(memory, "personal:U1", facts, "U1", { mode: "explicit", actorId: "U1" }, turn);
+    writeFacts(memory, "personal:U1", facts, { actorId: "U1", context: "conversation" }, { mode: "explicit" }, turn);
 
   const committed = await write(["fact"], "run-1");
   const repeated = await write(["fact"], "run-1");
   const pending = await write(["queued"], "run-1");
   await write(["fact"], "run-2");
   await write(["fact"]);
-  await writeFacts(memory, "personal:U2", ["fact"], "U1", { mode: "explicit", actorId: "U1" }, "run-1");
+  await writeFacts(
+    memory,
+    "personal:U2",
+    ["fact"],
+    { actorId: "U1", context: "conversation" },
+    { mode: "explicit" },
+    "run-1",
+  );
   const unknown = await write(["slow"], "run-1");
   release();
   await settled(mcp, 7);
@@ -310,6 +440,32 @@ test("explicit writes record committed, pending and unknown with a stable UUID i
   assert.match(String(slow), uuid);
 });
 
+test("timeoutMs bounds reads, and a write slower than it still commits", async (t) => {
+  const mcp = await startMcpTestServer(t, {
+    tools: TOOLS,
+    clients: { ro: "x", rw: "y" },
+    call: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      return { content: [{ type: "text", text: "stored" }] };
+    },
+  });
+  const memory = configured(mcp.url, { timeoutMs: 100 });
+  const read = await withProviders("search", (report) => memory.recall("personal:U1", { actorId: "U1", report }));
+  const written = await writeFacts(
+    memory,
+    "personal:U1",
+    ["fact"],
+    { actorId: "U1", context: "conversation" },
+    { mode: "explicit" },
+    "run-1",
+  );
+  await settled(mcp, 2);
+
+  assert.deepEqual(external(read.outcomes), [{ outcome: "timed_out", code: undefined }]);
+  assert.deepEqual(external(written.outcomes), [{ outcome: "committed", code: undefined }]);
+  assert.deepEqual(written.problems, []);
+});
+
 test("a failing built-in notebook write stays QM's own error, not a provider problem", async (t) => {
   const mcp = await startMcpTestServer(t, { tools: TOOLS, clients: { ro: "x", rw: "y" } });
   const broken: MemoryService = {
@@ -320,7 +476,14 @@ test("a failing built-in notebook write stays QM's own error, not a provider pro
   };
   const memory = configured(mcp.url, {}, ENV, broken);
   await assert.rejects(
-    writeFacts(memory, "personal:U1", ["fact"], "U1", { mode: "explicit", actorId: "U1" }, "run-1"),
+    writeFacts(
+      memory,
+      "personal:U1",
+      ["fact"],
+      { actorId: "U1", context: "conversation" },
+      { mode: "explicit" },
+      "run-1",
+    ),
     /notebook disk full/,
   );
 });
@@ -348,7 +511,7 @@ test("a notebook failure in another scope still fails a search that a strict pro
   const notebooks: MemoryService = {
     ...notebook,
     async query(scope) {
-      if (scope !== "org:acme") return ["notebook hit"];
+      if (scope !== "org:acme") return [{ text: "notebook hit" }];
       await new Promise((resolve) => setTimeout(resolve, 30));
       throw new Error("org notebook offline");
     },
@@ -369,9 +532,12 @@ test("a notebook failure in another scope still fails a search that a strict pro
   const { outcomes, report } = sink();
   await assert.rejects(
     withProviders("search", (r) =>
-      searchNotebooks(memory, ["personal:U1", "org:acme"], "deploys", 20, undefined, "U1", (outcome) => {
-        report(outcome);
-        r(outcome);
+      searchNotebooks(memory, ["personal:U1", "org:acme"], "deploys", 20, undefined, {
+        actorId: "U1",
+        report: (outcome) => {
+          report(outcome);
+          r(outcome);
+        },
       }),
     ),
   );

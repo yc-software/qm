@@ -12,19 +12,14 @@ export interface Mailer {
 const RESEND_ENDPOINT = "https://api.resend.com/emails";
 const RESEND_TIMEOUT_MS = 15_000;
 
-export function resendMailer(
-  apiKey: string | (() => string),
-  from: string | (() => string),
-  fetchImpl: typeof fetch = fetch,
-): Mailer {
-  const value = (v: string | (() => string)): string => (typeof v === "function" ? v() : v);
+export function resendMailer(apiKey: string, from: string, fetchImpl: typeof fetch = fetch): Mailer {
   return {
     async send(message) {
       const r = await fetchImpl(RESEND_ENDPOINT, {
         method: "POST",
-        headers: { authorization: `Bearer ${value(apiKey)}`, "content-type": "application/json" },
+        headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
         body: JSON.stringify({
-          from: value(from),
+          from,
           to: [message.to],
           subject: message.subject,
           text: message.text,

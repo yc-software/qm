@@ -3,8 +3,10 @@ import type { MemoryDisclosure } from "./disclosure.ts";
 import {
   MemoryFactsMissing,
   captureProvenance,
+  factCandidate,
   factLine,
   mergeProvenance,
+  normalizeClaim,
   parseFactId,
   recentCandidates,
   renderFacts,
@@ -19,7 +21,7 @@ export const MEMORY_FILE = "memory/MEMORY.md";
 export interface MemoryProviderOutcome {
   provider: string;
   scope: ScopeId;
-  outcome: "ok" | "empty" | "committed" | "pending" | "unknown" | "denied" | "timed_out" | "failed";
+  outcome: "ok" | "empty" | "committed" | "pending" | "unknown" | "denied" | "timed_out" | "failed" | "disabled";
   ms: number;
   code?: string;
   added?: number;
@@ -31,25 +33,38 @@ interface MemoryOutcomeSink {
 
 export interface MemoryRecallContext extends MemoryOutcomeSink {
   query?: string;
-  disclosedFacts?: ReadonlyMap<ScopeId, readonly MemoryFact[]>;
+  input?: string;
+  disclosedFacts?: Promise<ReadonlyMap<ScopeId, readonly MemoryFact[]>>;
   actorId?: string;
+  audienceScopeId?: ScopeId;
   sessionId?: string;
   maxChars?: number;
-  autonomous?: boolean;
 }
 
 export interface MemoryCaptureContext extends MemoryCaptureMetadata, MemoryOutcomeSink {
   mode: "explicit" | "automatic";
-  actorId?: string;
+  audienceScopeId?: ScopeId;
   input?: string;
   reply?: string;
-  autonomous?: boolean;
   idempotencyKey?: string;
 }
 
 export interface MemoryEdit {
   id: string;
   text: string;
+}
+
+export interface MemoryAuthority {
+  actorId: string;
+  context: "conversation" | "self" | "admin" | "maintenance";
+}
+
+export function changesNotebookOnly(by: MemoryAuthority | undefined): boolean {
+  return by?.context !== "conversation" || !by.actorId.trim();
+}
+
+export function turnAuthority(actorId: string, access: { notebookOnly?: true } | undefined): MemoryAuthority {
+  return { actorId, context: access?.notebookOnly ? "maintenance" : "conversation" };
 }
 
 export interface MemoryService {
@@ -60,27 +75,25 @@ export interface MemoryService {
     scopeId: ScopeId,
     facts: string[],
     at: number,
-    author?: string,
+    by?: MemoryAuthority,
     context?: MemoryCaptureContext,
   ): Promise<number>;
-  query(scopeId: ScopeId, q: string, limit?: number, context?: MemoryRecallContext): Promise<string[]>;
+  query(scopeId: ScopeId, q: string, limit?: number, context?: MemoryRecallContext): Promise<MemoryCandidate[]>;
   read(scopeId: ScopeId): Promise<string>;
   facts?(scopeId: ScopeId): Promise<MemoryFact[]>;
-  edit?(scopeId: ScopeId, edits: MemoryEdit[], author?: string, context?: MemoryCaptureMetadata): Promise<void>;
-  delete?(scopeId: ScopeId, ids: string[], author?: string): Promise<void>;
+  edit?(scopeId: ScopeId, edits: MemoryEdit[], by?: MemoryAuthority, context?: MemoryCaptureMetadata): Promise<void>;
+  delete?(scopeId: ScopeId, ids: string[], by?: MemoryAuthority): Promise<void>;
   metadata?(): Promise<Map<ScopeId, { bytes: number; updatedAt?: number }>>;
 }
 
-export function queryFacts(facts: readonly MemoryFact[], q: string, limit: number): string[] {
+export function queryFacts(facts: readonly MemoryFact[], q: string, limit: number): MemoryCandidate[] {
   const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
   if (!terms.length) return [];
   return facts
     .filter((fact) => terms.every((term) => fact.text.toLowerCase().includes(term)))
     .slice(0, limit)
-    .map(factLine);
+    .map((fact) => ({ ...factCandidate(fact), text: factLine(fact) }));
 }
-
-const normalize = (text: string) => text.trim().toLowerCase();
 
 function cleanCapturedFacts(facts: string[]): string[] {
   return facts.flatMap((f) => {
@@ -138,15 +151,15 @@ export function createNotebookMemory(store: FactStore): MemoryService {
       return recentCandidates(await store.list(scopeId));
     },
 
-    async capture(scopeId, facts, at, author, context) {
+    async capture(scopeId, facts, at, by, context) {
       const lines = cleanCapturedFacts(facts);
       if (!lines.length) return 0;
       const provenance = captureProvenance(scopeId, context);
       return store.transact(scopeId, async (tx) => {
-        const existing = new Map((await tx.list()).map((fact) => [normalize(fact.text), fact]));
+        const existing = new Map((await tx.list()).map((fact) => [normalizeClaim(fact.text), fact]));
         let added = 0;
         for (const text of lines) {
-          const key = normalize(text);
+          const key = normalizeClaim(text);
           const duplicate = existing.get(key);
           if (duplicate) {
             const merged = mergeProvenance([duplicate, provenance], duplicate.sensitivity);
@@ -156,7 +169,13 @@ export function createNotebookMemory(store: FactStore): MemoryService {
             }
             continue;
           }
-          const fact = { text, ...provenance, ...(author ? { author } : {}), createdAt: at, updatedAt: at };
+          const fact = {
+            text,
+            ...provenance,
+            ...(by?.actorId ? { author: by.actorId } : {}),
+            createdAt: at,
+            updatedAt: at,
+          };
           await tx.insert(fact);
           existing.set(key, { ...fact, id: "" });
           added++;
@@ -175,7 +194,7 @@ export function createNotebookMemory(store: FactStore): MemoryService {
 
     facts: (scopeId) => store.list(scopeId),
 
-    async edit(scopeId, edits, _author, context) {
+    async edit(scopeId, edits, _by, context) {
       const at = Date.now();
       const exposure = context ? captureProvenance(scopeId, context) : undefined;
       await store.transact(scopeId, async (tx) => {
@@ -206,8 +225,4 @@ export function createNotebookMemory(store: FactStore): MemoryService {
 
     ...(store.metadata ? { metadata: () => store.metadata!() } : {}),
   };
-}
-
-export function isSystemActor(actorId: string | undefined): boolean {
-  return !!actorId?.startsWith("system:");
 }

@@ -33,7 +33,7 @@ max_client_conn = 100
 default_pool_size = 1
 query_wait_timeout = 10
 CONFIG
-printf '"postgres" "test-password"\n"qm_app" "qm_app"\n' > "$fixture/users.txt"
+printf '"postgres" "test-password"\n' > "$fixture/users.txt"
 chmod 755 "$fixture"
 chmod 644 "$fixture"/*
 docker create --name "$name-pool" --network "$name" -p 127.0.0.1::6432 alpine:3.22 sh -c 'apk add --no-cache pgbouncer >/dev/null && adduser -D pool && exec su pool -s /bin/sh -c "pgbouncer /fixture/pgbouncer.ini"' >/dev/null
@@ -49,5 +49,4 @@ for attempt in $(seq 1 60); do
   if docker logs "$name-pool" 2>&1 | grep -q 'process up'; then break; fi
   sleep 1
 done
-node -e 'import("./test/support/tenant-seed.ts").then((m) => m.seedInstallTenant(process.env.DATABASE_URL))'
-node --test test/pg-pool-routing.test.ts test/tenant-background-runs.test.ts
+node --test test/pg-pool-routing.test.ts

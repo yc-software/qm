@@ -3,7 +3,7 @@ import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import type { QmConfig } from "./config.ts";
 import { CliError, errMessage, step, warn } from "./log.ts";
-import { deploymentSecretValue, readEnvFile, sleep } from "./util.ts";
+import { deploymentSecretValue, readEnvFile, sleep, trimTrailingSlashes } from "./util.ts";
 import { parseToolDescriptor } from "./tool-descriptor.ts";
 
 interface DeploymentLayerFile {
@@ -145,7 +145,7 @@ function signingHeaders(secret: string, method: string, path: string, body: stri
 
 function defaultCoreUrl(config: QmConfig): URL {
   const url = new URL(config.publicUrl);
-  url.pathname = `${url.pathname.replace(/\/+$/, "")}/v1/deployment-layer`;
+  url.pathname = `${trimTrailingSlashes(url.pathname)}/v1/deployment-layer`;
   return url;
 }
 

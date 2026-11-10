@@ -1,20 +1,19 @@
+import { isTenantId } from "../tenants/context.ts";
 import { mintSignedPayload, verifySignedPayload } from "./signed-token.ts";
-import { boundTenant, isTenantId } from "../tenants/context.ts";
 
 export interface PortalIdentity {
-  t?: string;
   p: string;
   authenticatedAs?: string;
   n?: string;
   imp?: string;
+  t?: string;
   exp: number;
 }
 
 export const PORTAL_IDENTITY_HEADER = "x-portal-identity";
 
 export function mintPortalIdentity(claims: PortalIdentity, secret: string): Promise<string> {
-  const tenant = claims.t ?? boundTenant();
-  return mintSignedPayload(tenant ? { ...claims, t: tenant } : claims, secret);
+  return mintSignedPayload(claims, secret);
 }
 
 export async function verifyPortalIdentity(
@@ -24,9 +23,9 @@ export async function verifyPortalIdentity(
 ): Promise<PortalIdentity | null> {
   const claims = (await verifySignedPayload(token, secret)) as PortalIdentity | null;
   if (!claims || typeof claims.p !== "string" || !claims.p || typeof claims.exp !== "number") return null;
-  if ((claims.t !== undefined && !isTenantId(claims.t)) || claims.t !== boundTenant()) return null;
   if (claims.authenticatedAs !== undefined && (typeof claims.authenticatedAs !== "string" || !claims.authenticatedAs))
     return null;
+  if (claims.t !== undefined && !isTenantId(claims.t)) return null;
   if (nowMs > claims.exp) return null;
   return claims;
 }

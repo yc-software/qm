@@ -26,7 +26,7 @@ export async function skillVisibilityContext(
     ...new Set(
       homes.filter((sid) => {
         const k = parseScopeId(sid).kind;
-        return k === "channel" || k === "group";
+        return k === "channel" || k === "group" || k === "persona";
       }),
     ),
   ];
@@ -287,9 +287,10 @@ export function createSkillMethods(
       });
       return live;
     },
-    async restoreOwnedSkill(id, principalId) {
+    async restoreOwnedSkill(id, principalId, opts) {
       const skill = await deps.skills.get(id);
       if (!skill || skill.status !== "archived" || !(await canManageSkill(skill, principalId))) return null;
+      if (triggerBlocksSharedSkill(skill.scopeId, opts?.liveActor === true)) return "trigger_blocked";
       return deps.skills.withNameLock(skill.scopeId, skill.manifest.name, async () => {
         const current = await deps.skills.get(id);
         if (!current || current.status !== "archived") return null;
@@ -402,7 +403,7 @@ export function createSkillMethods(
       if (!name || !description || !body) throw new Error("skill requires a non-empty name, description, and body");
       const homeScope = input.homeScope ?? scopeId("personal", input.principalId);
       const homeKind = parseScopeId(homeScope).kind;
-      if (homeKind !== "personal" && homeKind !== "channel" && homeKind !== "group") {
+      if (homeKind !== "personal" && homeKind !== "channel" && homeKind !== "group" && homeKind !== "persona") {
         throw new Error(
           "a skill cannot be created directly in an org or team scope — promote a published skill instead",
         );

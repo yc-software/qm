@@ -59,6 +59,7 @@
     "lint:ox": "oxlint --deny-warnings src plugins scripts cli test",
     "dev-instance:doctor": "bash scripts/dev-instance.sh doctor",
     "lint:knip": "knip",
+    "lint:tenancy": "node scripts/tenant-ratchet.ts",
     "audit:prod": "npm audit --omit=dev --audit-level=moderate",
     "build:app-annotations": "node scripts/build-app-devbar.mjs"
   },
@@ -74,13 +75,13 @@
     "@aws-sdk/client-sts": "^3.1075.0",
     "@aws-sdk/credential-provider-node": "^3.972.70",
     "@aws-sdk/s3-request-presigner": "^3.1061.0",
-    "@earendil-works/pi-ai": "https://github.com/yc-software/qm/releases/download/vendored-pi-ai-0.82.0-qm.3/earendil-works-pi-ai-0.82.0-qm.3.tgz",
+    "@earendil-works/pi-ai": "https://github.com/yc-software/qm/releases/download/vendored-pi-ai-0.82.0-qm.4/earendil-works-pi-ai-0.82.0-qm.4.tgz",
     "@earendil-works/pi-coding-agent": "https://github.com/yc-software/qm/releases/download/vendored-pi-coding-agent-0.82.0-security.6/earendil-works-pi-coding-agent-0.82.0-qm-security.6.tgz",
     "@fly/sprites": "0.2.3",
     "@grpc/grpc-js": "^1.14.5",
     "@grpc/proto-loader": "^0.8.1",
     "@modelcontextprotocol/sdk": "1.32.1",
-    "@renderinc/sdk": "1.6.0",
+    "@renderinc/sdk": "1.8.0",
     "@sentry/node": "10.75.0",
     "@slack/bolt": "^4.7.3",
     "@slack/socket-mode": "^2.0.7",
@@ -106,6 +107,7 @@
     "tar-stream": "^3.2.0",
     "tree-sitter-bash": "^0.25.1",
     "typebox": "^1.1.38",
+    "undici": "8.12.3",
     "web-tree-sitter": "^0.27.0",
     "ws": "^8.21.1",
     "zod": "4.6.7"
@@ -123,7 +125,7 @@
     "fast-json-stringify": {
       "fast-uri": "4.2.3"
     },
-    "undici": "8.12.3",
+    "undici": "$undici",
     "e2b": {
       "undici8": "npm:undici@8.12.3"
     },

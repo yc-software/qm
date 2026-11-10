@@ -9,9 +9,6 @@ import { passwordConfigured, validEmail } from "./config.ts";
 import { verifyPassword } from "./password.ts";
 import { claimOnce, withinRateLimit, ClaimStoreUnavailableError, type ClaimStore } from "../../chassis/src/claims.ts";
 import { coreEmailAllowed } from "../../chassis/src/external-members.ts";
-import type { TenantSignIn, TenantSignInLookup } from "../../chassis/src/tenant-sign-in.ts";
-import { hostnameOf, type HostTenantLookup } from "../../chassis/src/host-tenant.ts";
-import { boundTenant } from "../../chassis/src/tenant.ts";
 import { mintIdToken, pkceMatches, safeEqual, subjectFor, TokenSigner, type AuthRequest } from "./tokens.ts";
 import { ID_TOKEN_ALG, type SigningKey } from "./keys.ts";
 import type { Mailer } from "../../chassis/src/resend.ts";
@@ -32,7 +29,6 @@ export interface AuthDeps {
   brandName?: () => string;
   trustedSignInLabel?: string;
   emailAllowed?: (email: string) => Promise<boolean>;
-  signIn?: TenantSignInLookup;
   now?: () => number;
   onBackgroundTask?: (task: Promise<void>) => void;
 }
@@ -116,64 +112,9 @@ function readAuthorizeRequest(
   };
 }
 
-type AuthHandler = (req: IncomingMessage, res: ServerResponse) => Promise<void>;
-
-const MAX_TENANT_HANDLERS = 256;
-
-function forwardedHost(req: IncomingMessage): string | undefined {
-  const raw = req.headers["x-forwarded-host"];
-  return typeof raw === "string" && raw.trim() ? raw.trim().toLowerCase() : undefined;
-}
-
-export function brokerHostTenants(
-  lookup: HostTenantLookup | undefined,
-  req: IncomingMessage,
-): HostTenantLookup | undefined {
-  const forwarded = forwardedHost(req);
-  return lookup && ((host) => lookup(forwarded ? hostnameOf(forwarded) : host));
-}
-
-function onHost(url: string, host: string): string {
-  const u = new URL(url);
-  return `${u.protocol}//${host}${url.slice(u.origin.length)}`;
-}
-
-function tenantAuthConfig(cfg: AuthConfig, signIn: TenantSignIn, host: string | undefined): AuthConfig {
-  const clientId = signIn.oidcClient?.clientId;
-  const clientSecret = signIn.oidcClient?.clientSecret ?? signIn.clientSecret;
-  if (!signIn.allowedEmails && !clientId && !clientSecret && !host) return cfg;
-  return {
-    ...cfg,
-    ...(host ? { issuer: onHost(cfg.issuer, host), redirectUri: onHost(cfg.redirectUri, host) } : {}),
-    ...(signIn.allowedEmails ? { allowedEmails: signIn.allowedEmails, allowedEmailDomain: undefined } : {}),
-    ...(clientId ? { clientId } : {}),
-    ...(clientSecret ? { clientSecret } : {}),
-  };
-}
-
-export function createAuthHandler(deps: AuthDeps): AuthHandler {
-  const base = buildAuthHandler(deps);
-  const lookup = deps.signIn;
-  if (!lookup) return base;
-  const built = new Map<string, AuthHandler>();
-  return async (req, res) => {
-    const signIn = await lookup();
-    const host = boundTenant() ? forwardedHost(req) : undefined;
-    const cfg = tenantAuthConfig(deps.cfg, signIn, host);
-    if (cfg === deps.cfg) return base(req, res);
-    const key = JSON.stringify([signIn, host]);
-    let handler = built.get(key);
-    if (!handler) {
-      if (built.size >= MAX_TENANT_HANDLERS) built.clear();
-      handler = buildAuthHandler({ ...deps, cfg });
-      built.set(key, handler);
-    }
-    return handler(req, res);
-  };
-}
-
-function buildAuthHandler(deps: AuthDeps): AuthHandler {
-  const { cfg, signer, claims, mailer, signingKey } = deps;
+export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
+  const { cfg, signer, claims, signingKey } = deps;
+  const mailer = cfg.emailSignIn ? deps.mailer : null;
   const sessions = deps.sessions ?? coreRememberedSessions(cfg.coreApiUrl, cfg.coreSigningSecret);
   const brandName = deps.brandName ?? ((): string => cfg.brandName);
   const invited =
@@ -351,7 +292,7 @@ function buildAuthHandler(deps: AuthDeps): AuthHandler {
       res.writeHead(302, noStore({ location: destination.toString() }));
       return void res.end();
     }
-    if (!mailer && !passwords) return emailUnavailable(res);
+    if (!mailer && !passwords && !deps.trustedSignInLabel) return emailUnavailable(res);
     const sealed = await signer.sealRequest(parsed.request, cfg.requestTtlS, now());
     return sendHtml(res, 200, signInForm(sealed.token));
   }

@@ -1,6 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
 import { isBearerSecret, isStrongSigningSecret } from "../../auth/source-auth.ts";
-import { withInstallTenant } from "../../tenants/context.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { uuidSchema } from "../../util/ids.ts";
@@ -82,12 +81,5 @@ async function deploymentLiveSmoke(ctx: ApiCtx): Promise<void> {
 }
 
 export const deploymentLiveSmokeRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  {
-    method: "POST",
-    path: "/v1/deployment/live-session",
-    actor: "system",
-    auth: "source",
-    tenant: "none",
-    handle: (ctx) => withInstallTenant(() => deploymentLiveSmoke(ctx)),
-  },
+  { method: "POST", path: "/v1/deployment/live-session", actor: "system", auth: "source", handle: deploymentLiveSmoke },
 ];

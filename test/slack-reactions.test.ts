@@ -26,6 +26,16 @@ test("normalizeReaction accepts a bare name, strips colons, and lowercases", () 
   assert.equal(normalizeReaction("thumbsup::skin-tone-3"), "thumbsup::skin-tone-3");
 });
 
+test("normalizeReaction strips a long run of trailing colons promptly", () => {
+  assert.equal(normalizeReaction(":smile::"), "smile");
+  assert.equal(normalizeReaction("thumbsup::skin-tone-3::"), "thumbsup::skin-tone-3");
+  const started = performance.now();
+  const name = normalizeReaction(`smile${":".repeat(100_000)}x`);
+  const elapsedMs = performance.now() - started;
+  assert.equal(name, null);
+  assert.ok(elapsedMs < 1_000, `normalizeReaction took ${Math.round(elapsedMs)} ms`);
+});
+
 test("normalizeReaction maps a literal unicode emoji to its Slack short-name", () => {
   assert.equal(normalizeReaction("👀"), "eyes");
   assert.equal(normalizeReaction("✅"), "white_check_mark");

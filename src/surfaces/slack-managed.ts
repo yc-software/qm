@@ -12,31 +12,49 @@ import {
 import { sendJson } from "../api/http.ts";
 import { isBearerSecret } from "../auth/source-auth.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
-import { tenantSetting } from "../tenants/settings.ts";
+import { boundTenant } from "../tenants/context.ts";
+import { tenantSettings } from "../tenants/settings.ts";
 
 export function createManagedSlack(opts: {
   serviceUrl: string;
-  token: string;
+  token?: string;
   appId?: string;
   store: SlackInstallationStore;
   fetchImpl?: typeof fetch;
   reconcile?: () => Promise<void>;
 }) {
   const serviceUrl = new URL(opts.serviceUrl);
-  if (serviceUrl.protocol !== "https:" || serviceUrl.username || serviceUrl.password || !isBearerSecret(opts.token)) {
+  if (
+    serviceUrl.protocol !== "https:" ||
+    serviceUrl.username ||
+    serviceUrl.password ||
+    (opts.token !== undefined && !isBearerSecret(opts.token))
+  ) {
     throw new Error("Managed Slack requires an HTTPS service URL and credential");
   }
-  const active = new Map<string, { app: BoltApp; installId: string; staging?: EnvelopeStaging }>();
-  const bridgeToken = async (): Promise<string> => (await tenantSetting("slackBridgeToken")) ?? opts.token;
-  const authenticated = async (req: IncomingMessage): Promise<boolean> => {
+  type Active = { app: BoltApp; installId: string; staging?: EnvelopeStaging };
+  const active = new Map<string, Active>();
+  const tenantKey = () => boundTenant() ?? "";
+  const bridgeToken = (): string | undefined => tenantSettings().slackBridgeToken ?? opts.token;
+  const credential = (): string => {
+    const token = bridgeToken();
+    if (!token) throw new Error("Slack service credential is not configured");
+    return token;
+  };
+  const bearerMatches = (req: IncomingMessage, token: string | undefined): boolean => {
+    if (!token) return false;
     const actual = Buffer.from(req.headers.authorization ?? "");
-    const expected = Buffer.from(`Bearer ${await bridgeToken()}`);
+    const expected = Buffer.from(`Bearer ${token}`);
     return actual.length === expected.length && timingSafeEqual(actual, expected);
   };
+  const relayed = (req: IncomingMessage): boolean => bearerMatches(req, opts.token);
+  const authenticated = (req: IncomingMessage): boolean => bearerMatches(req, bridgeToken()) || relayed(req);
   return {
+    authenticated,
+    relayed,
     async setupStatus(): Promise<{ companyOwned: boolean; appReady: boolean; connected: boolean } | undefined> {
       const response = await (opts.fetchImpl ?? fetch)(new URL("/install/status", serviceUrl), {
-        headers: { authorization: `Bearer ${await bridgeToken()}` },
+        headers: { authorization: `Bearer ${credential()}` },
         signal: AbortSignal.timeout(5_000),
         redirect: "error",
       });
@@ -51,13 +69,13 @@ export function createManagedSlack(opts: {
         connected: data.connected as boolean,
       };
     },
-    async start(step: "setup" | "install" = "install"): Promise<{ url: string }> {
+    async start(step: "setup" | "install" = "install", origin?: string): Promise<{ url: string }> {
       if (!(await opts.store.enableManaged()))
         throw new Error("Disconnect your own Slack app before installing the managed app");
       const response = await (opts.fetchImpl ?? fetch)(new URL("/install/start", serviceUrl), {
         method: "POST",
-        headers: { authorization: `Bearer ${await bridgeToken()}`, "content-type": "application/json" },
-        body: JSON.stringify({ step }),
+        headers: { authorization: `Bearer ${credential()}`, "content-type": "application/json" },
+        body: JSON.stringify({ step, tenant: boundTenant(), ...(origin ? { origin } : {}) }),
         signal: AbortSignal.timeout(10_000),
         redirect: "error",
       });
@@ -69,28 +87,36 @@ export function createManagedSlack(opts: {
       return { url: data.url };
     },
     receiver(installId: string, staging?: EnvelopeStaging): Receiver {
-      let instance: { app: BoltApp; installId: string; staging?: EnvelopeStaging } | undefined;
+      let instance: Active | undefined;
+      const key = tenantKey();
       return {
         init(app) {
           instance = { app, installId, staging };
         },
         async start() {
-          if (instance) active.set(installId, instance);
+          if (instance) active.set(key, instance);
         },
         async stop() {
-          if (instance && active.get(installId) === instance) active.delete(installId);
+          if (instance && active.get(key) === instance) active.delete(key);
         },
       } as Receiver;
     },
     async handle(req: IncomingMessage, res: ServerResponse, value: unknown): Promise<void> {
-      if (!(await authenticated(req))) return sendJson(res, 401, { error: "unauthorized" });
+      if (!authenticated(req)) return sendJson(res, 401, { error: "unauthorized" });
       if (!value || typeof value !== "object" || Array.isArray(value))
         return sendJson(res, 400, { error: "invalid_body" });
-      const input = value as Record<string, unknown>;
+      const input = { ...(value as Record<string, unknown>) };
+      const stored = await opts.store.get();
+      if (input.installId === undefined && relayed(req) && stored && stored.teamId === input.teamId) {
+        if (req.method === "DELETE") {
+          if (typeof input.eventTime !== "number" || input.eventTime * 1000 <= (stored.installedAt ?? 0))
+            return sendJson(res, 200, { ok: true });
+        }
+        input.installId = stored.installId;
+      }
       if (typeof input.installId !== "string" || !input.installId || input.installId.length > 200) {
         return sendJson(res, 400, { error: "invalid_installation" });
       }
-      const stored = await opts.store.get();
       if ((req.url ?? "").split("?")[0] === "/v1/slack/managed/installation") {
         if (req.method === "DELETE") {
           await opts.store.disableManaged(input.installId);
@@ -122,7 +148,7 @@ export function createManagedSlack(opts: {
         });
         if (!accepted) return sendJson(res, 409, { error: "installation_conflict" });
         void opts.reconcile?.().catch(swallowAs("slack-managed: reconcile installation", undefined));
-        const ready = active.has(input.installId);
+        const ready = active.get(tenantKey())?.installId === input.installId;
         return sendJson(res, ready ? 200 : 202, { ok: true, ready });
       }
       if (!stored || stored.installId !== input.installId || (!!opts.appId && stored.appId !== opts.appId)) {
@@ -138,8 +164,8 @@ export function createManagedSlack(opts: {
       ) {
         return sendJson(res, 400, { error: "workspace_mismatch" });
       }
-      const runtime = active.get(input.installId);
-      if (!runtime) return sendJson(res, 503, { error: "slack_not_ready" });
+      const runtime = active.get(tenantKey());
+      if (!runtime || runtime.installId !== input.installId) return sendJson(res, 503, { error: "slack_not_ready" });
       await new Promise<void>((resolve) => {
         const respond = (status: number, payload: unknown) => {
           sendJson(res, status, payload);

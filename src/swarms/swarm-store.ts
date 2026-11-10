@@ -1,4 +1,3 @@
-import type { Claimed } from "../tenants/claim.ts";
 import type { GoalCreateInput } from "../agent/goal.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { withPgTransaction, type PgPool } from "../persistence/pg-pool.ts";
@@ -7,6 +6,8 @@ import type { SessionStore } from "../sessions/session-store.ts";
 import { assertSwarmRun, type SwarmRunFence } from "./swarm-fence.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { jsonbStringify } from "../util/text.ts";
+import { claimThenBind } from "../tenants/claim.ts";
+import { currentTenant } from "../tenants/context.ts";
 
 import type { SwarmSettings } from "./swarm-settings.ts";
 import type { SandboxBackendName } from "../sandbox/sandbox-routing.ts";
@@ -18,6 +19,26 @@ export const SWARM_LIMITS = {
   reconcileMs: 30_000,
   provisionMs: 10_000,
 } as const;
+
+export const STAMP_SWARM_COMPUTERS_MIGRATION = {
+  id: "durable-map/swarms/0040-stamp-computers",
+  statements: [
+    `DO $$
+    BEGIN
+      IF to_regclass('swarms') IS NOT NULL AND to_regclass('sandbox_resources') IS NOT NULL THEN
+        UPDATE durable_map_versions SET v = v + 1 WHERE tbl = 'sandbox_resources';
+        UPDATE sandbox_resources r SET json = r.json || jsonb_build_object('swarmId', c.swarm_id)
+        FROM (
+          SELECT tenant_id, id AS swarm_id, json #>> '{board,sandboxId}' AS sandbox_id FROM swarms
+          UNION ALL
+          SELECT s.tenant_id, s.id, member ->> 'sandboxId'
+          FROM swarms s, jsonb_array_elements(s.json -> 'members') AS member
+        ) c
+        WHERE r.tenant_id = c.tenant_id AND r.id = c.sandbox_id AND NOT r.json ? 'swarmId';
+      END IF;
+    END $$`,
+  ],
+};
 
 export interface SwarmMember {
   id: string;
@@ -109,8 +130,10 @@ export interface SwarmStore {
   get(id: string): Promise<Swarm | null>;
   create(swarm: Swarm, fence?: SwarmRunFence): Promise<Swarm>;
   update(id: string, mutate: (swarm: Swarm) => void, fence?: SwarmRunFence): Promise<Swarm>;
-  pending(afterId?: string): Promise<Array<Claimed<Swarm>>>;
+  pending(afterId?: string): Promise<PendingSwarm[]>;
 }
+
+export type PendingSwarm = Swarm & { tenantId: string };
 
 export interface SwarmStorage extends Omit<Swarm, "members" | "messages"> {
   members: Array<Omit<SwarmMember, "context"> & { contextJson: string }>;
@@ -224,11 +247,18 @@ export function createSwarmStore(
       return decode(updated);
     },
     async pending(afterId) {
-      return (await backing.acrossTenants())
-        .filter(({ id, value }) => value.pending && (afterId === undefined || id > afterId))
-        .sort((left, right) => (left.id < right.id ? -1 : Number(left.id > right.id)))
-        .slice(0, SWARM_LIMITS.sweepBatch)
-        .map(({ tenantId, value }) => ({ ...decode(value), tenantId }));
+      const query = {
+        where: { field: "pending", anyOfFold: ["true"] },
+        afterId,
+        limit: SWARM_LIMITS.sweepBatch,
+      } as const;
+      const claimed = await claimThenBind(backing.claimTenants, async () =>
+        (await backing.select(query)).map((row) => ({ ...decode(row), tenantId: currentTenant() })),
+      );
+      return claimed
+        .flat()
+        .sort((a, b) => (a.id < b.id ? -1 : Number(a.id > b.id)))
+        .slice(0, SWARM_LIMITS.sweepBatch);
     },
   };
 }

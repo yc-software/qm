@@ -16,11 +16,13 @@ const BASE: readonly EventColumn<keyof Ev & string>[] = [
   ["a", "a", "INT", "number"],
 ];
 const common = { defaultLimit: 10, equalityFilters: {}, persistErrorMessage: "x" };
+const released = (url: string) =>
+  registeredPgMigrations(url).filter((m) => /^admin\/scoped-events\/[a-z_]+\/\d{4}$/.test(m.id));
 
 test("0001 is rendered from the frozen initial columns, not the live column list", () => {
   const frozenUrl = fakeUrl();
   createPostgresEventSink<Ev>({ ...common, connectionString: frozenUrl, table: "ev", columns: BASE });
-  const frozen = registeredPgMigrations(frozenUrl).find(({ id }) => id === "admin/scoped-events/ev/0001")!;
+  const frozen = released(frozenUrl)[0]!;
 
   const grownUrl = fakeUrl();
   createPostgresEventSink<Ev>({
@@ -36,7 +38,7 @@ test("0001 is rendered from the frozen initial columns, not the live column list
       ],
     },
   });
-  const grown = registeredPgMigrations(grownUrl).filter(({ id }) => id.startsWith("admin/scoped-events/ev/"));
+  const grown = released(grownUrl);
   assert.equal(grown[0]!.id, "admin/scoped-events/ev/0001");
   assert.equal(grown[0]!.checksum, frozen.checksum, "adding a follow-up column leaves 0001 untouched");
   assert.equal(grown[1]!.id, "admin/scoped-events/ev/0002");
@@ -76,27 +78,13 @@ test("every released scoped-event sink pins its 0001 checksum", () => {
   createPostgresEgressAuditSink(url);
   createPostgresCredentialUsageSink(url);
   assert.deepEqual(
-    registeredPgMigrations(url)
-      .map((m) => m.id)
-      .filter((id) => id.startsWith("admin/scoped-events/")),
+    released(url).map((m) => m.id),
     [
       "admin/scoped-events/credential_usage/0001",
       "admin/scoped-events/credential_usage/0002",
       "admin/scoped-events/credential_usage/0003",
-      "admin/scoped-events/credential_usage/0004-daily-calls-tenants",
-      "admin/scoped-events/credential_usage/0004-daily-calls-tenants-lookups",
-      "admin/scoped-events/credential_usage/0004-daily-calls-tenants-swap",
-      "admin/scoped-events/credential_usage/0100",
-      "admin/scoped-events/credential_usage/0100-lookups",
-      "admin/scoped-events/credential_usage/0100-swap",
       "admin/scoped-events/egress_events/0001",
-      "admin/scoped-events/egress_events/0100",
-      "admin/scoped-events/egress_events/0100-lookups",
-      "admin/scoped-events/egress_events/0100-swap",
       "admin/scoped-events/error_events/0001",
-      "admin/scoped-events/error_events/0100",
-      "admin/scoped-events/error_events/0100-lookups",
-      "admin/scoped-events/error_events/0100-swap",
     ],
   );
 });

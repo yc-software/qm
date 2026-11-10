@@ -1,9 +1,10 @@
-import type { TenantEnvSubset } from "../tenants/tenant-instances.ts";
+import { createHash } from "node:crypto";
 import { parseRenderSandboxImage, RENDER_SANDBOX_TTL_SEC } from "./render-limits.ts";
 import type { LegacySandboxScopeDefaults } from "./sandbox-resource-upgrade.ts";
 import type { SandboxBackendName } from "./sandbox-routing.ts";
 import { parseScopeId } from "../types.ts";
 import { numEnvStrict, optNum } from "../util/env.ts";
+import { trimTrailingSlashes } from "../util/text.ts";
 
 export interface SandboxSettings {
   sandboxBackend: SandboxBackendName;
@@ -39,7 +40,6 @@ interface AwsSandboxEnv {
   snapshotIntervalMs?: number;
   defaultTimeoutSec?: number;
   cpus?: number;
-  memoryMb?: number;
   diskGb?: number;
 }
 
@@ -71,7 +71,6 @@ function awsSandboxEnv(env: NodeJS.ProcessEnv): AwsSandboxEnv {
     ...optNum(env, "AWS_SANDBOX_SNAPSHOT_INTERVAL_MS", "snapshotIntervalMs"),
     ...optNum(env, "SANDBOX_TIMEOUT_SEC", "defaultTimeoutSec"),
     ...optNum(env, "AWS_SANDBOX_CPUS", "cpus"),
-    ...optNum(env, "AWS_SANDBOX_MEMORY_MB", "memoryMb"),
     ...optNum(env, "AWS_SANDBOX_DISK_GB", "diskGb"),
   };
 }
@@ -80,7 +79,6 @@ interface LocalSandboxEnv {
   image?: string;
   dockerBin?: string;
   cpus?: number;
-  memoryMb?: number;
   coreContainer?: string;
   defaultTimeoutSec?: number;
 }
@@ -90,7 +88,6 @@ function localSandboxEnv(env: NodeJS.ProcessEnv): LocalSandboxEnv {
     ...(env.LOCAL_SANDBOX_IMAGE ? { image: env.LOCAL_SANDBOX_IMAGE } : {}),
     ...(env.LOCAL_SANDBOX_DOCKER_BIN ? { dockerBin: env.LOCAL_SANDBOX_DOCKER_BIN } : {}),
     ...optNum(env, "LOCAL_SANDBOX_CPUS", "cpus"),
-    ...optNum(env, "LOCAL_SANDBOX_MEMORY_MB", "memoryMb"),
     ...(env.QM_CORE_CONTAINER ? { coreContainer: env.QM_CORE_CONTAINER } : {}),
     ...optNum(env, "SANDBOX_TIMEOUT_SEC", "defaultTimeoutSec"),
   };
@@ -103,7 +100,6 @@ interface SpritesSandboxEnv {
   egressProxyUrl?: string;
   egressProxyAdditionalUrls?: string[];
   snapshotS3Bucket?: string;
-  memoryMb?: number;
   defaultTimeoutSec?: number;
 }
 
@@ -161,7 +157,6 @@ function spritesSandboxEnv(env: NodeJS.ProcessEnv): SpritesSandboxEnv {
         }
       : {}),
     ...(env.SPRITES_SNAPSHOT_S3_BUCKET ? { snapshotS3Bucket: env.SPRITES_SNAPSHOT_S3_BUCKET } : {}),
-    ...optNum(env, "SPRITES_MEMORY_MB", "memoryMb"),
     ...optNum(env, "SANDBOX_TIMEOUT_SEC", "defaultTimeoutSec"),
   };
 }
@@ -253,7 +248,6 @@ interface ModalSandboxEnv {
   image?: string;
   namePrefix?: string;
   cpus?: number;
-  memoryMb?: number;
   regions?: string[];
   sandboxTimeoutSec?: number;
   rotateAfterSec?: number;
@@ -274,7 +268,6 @@ function modalSandboxEnv(env: NodeJS.ProcessEnv): ModalSandboxEnv {
     ...(env.MODAL_IMAGE ? { image: env.MODAL_IMAGE } : {}),
     ...(env.MODAL_NAME_PREFIX ? { namePrefix: env.MODAL_NAME_PREFIX } : {}),
     ...optNum(env, "MODAL_CPUS", "cpus"),
-    ...optNum(env, "MODAL_MEMORY_MB", "memoryMb"),
     ...(env.MODAL_REGIONS?.trim()
       ? {
           regions: env.MODAL_REGIONS.split(",")
@@ -297,7 +290,6 @@ interface SmolmachinesSandboxEnv {
   namePrefix?: string;
   image?: string;
   cpus?: number;
-  memoryMb?: number;
   diskGb?: number;
   autoStopSec?: number;
   egressProxyUrl?: string;
@@ -313,7 +305,6 @@ function smolmachinesSandboxEnv(env: NodeJS.ProcessEnv): SmolmachinesSandboxEnv 
     ...(env.SMOLMACHINES_NAME_PREFIX ? { namePrefix: env.SMOLMACHINES_NAME_PREFIX } : {}),
     ...(env.SMOLMACHINES_IMAGE ? { image: env.SMOLMACHINES_IMAGE } : {}),
     ...optNum(env, "SMOLMACHINES_CPUS", "cpus"),
-    ...optNum(env, "SMOLMACHINES_MEMORY_MB", "memoryMb"),
     ...optNum(env, "SMOLMACHINES_DISK_GB", "diskGb"),
     ...optNum(env, "SMOLMACHINES_AUTOSTOP_SEC", "autoStopSec"),
     ...egressProxyFor(env, "smolmachines"),
@@ -339,7 +330,7 @@ export function porterApiBaseUrl(env: NodeJS.ProcessEnv): string | undefined {
   const deployClusterId = numEnvStrict("PORTER_DEPLOY_CLUSTER_ID", env.PORTER_DEPLOY_CLUSTER_ID);
   const derived =
     deployProjectId !== undefined && deployClusterId !== undefined
-      ? `${(env.PORTER_DEPLOY_URL ?? "https://dashboard.porter.run").replace(/\/+$/, "")}/api/v2/alpha/projects/${deployProjectId}/clusters/${deployClusterId}`
+      ? `${trimTrailingSlashes(env.PORTER_DEPLOY_URL ?? "https://dashboard.porter.run")}/api/v2/alpha/projects/${deployProjectId}/clusters/${deployClusterId}`
       : undefined;
   return env.PORTER_SANDBOX_BASE_URL ?? derived;
 }
@@ -369,7 +360,6 @@ interface Agent37SandboxEnv {
   namePrefix?: string;
   template?: string;
   cpus?: number;
-  memoryGb?: number;
   diskGb?: number;
   egressProxyUrl?: string;
   defaultTimeoutSec?: number;
@@ -382,7 +372,6 @@ function agent37SandboxEnv(env: NodeJS.ProcessEnv): Agent37SandboxEnv {
     ...(env.AGENT37_NAME_PREFIX ? { namePrefix: env.AGENT37_NAME_PREFIX } : {}),
     ...(env.AGENT37_TEMPLATE ? { template: env.AGENT37_TEMPLATE } : {}),
     ...optNum(env, "AGENT37_CPUS", "cpus"),
-    ...optNum(env, "AGENT37_MEMORY_GB", "memoryGb"),
     ...optNum(env, "AGENT37_DISK_GB", "diskGb"),
     ...egressProxyFor(env, "agent37"),
     ...optNum(env, "SANDBOX_TIMEOUT_SEC", "defaultTimeoutSec"),
@@ -427,13 +416,36 @@ function superserveSandboxEnv(env: NodeJS.ProcessEnv): SuperserveSandboxEnv {
   };
 }
 
+export function superserveGenerationKey(
+  ss: SuperserveSandboxEnv,
+  buildSha: string | undefined,
+  keepWarmSec: number,
+): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        buildSha ?? "",
+        ss.template,
+        ss.namePrefix ?? "",
+        ss.homeDir ?? "",
+        ss.idlePauseSec ?? null,
+        ss.retentionSec ?? null,
+        keepWarmSec,
+        [...(ss.egressAllow ?? [])].sort(),
+        [...(ss.egressDeny ?? [])].sort(),
+      ]),
+    )
+    .digest("hex")
+    .slice(0, 32);
+}
+
 export function enabledSandboxBackends(config: SandboxSettings): SandboxBackendName[] {
   const credentialed: Record<SandboxBackendName, boolean> = {
     local: Boolean(config.localSandbox?.image),
     sprites: Boolean(config.spritesSandbox?.token),
     smolmachines: Boolean(config.smolmachinesSandbox?.token),
     agent37: Boolean(config.agent37Sandbox?.apiKey),
-    superserve: Boolean(config.superserveSandbox?.apiKey && config.superserveSandbox?.template),
+    superserve: Boolean(config.superserveSandbox?.template),
     e2b: Boolean(config.e2bSandbox?.apiKey),
     "do-managed-agents": Boolean(config.managedAgentsSandbox?.apiToken),
     modal: Boolean(config.modalSandbox?.tokenId && config.modalSandbox?.tokenSecret),
@@ -564,35 +576,5 @@ export function sandboxSettings(env: NodeJS.ProcessEnv): SandboxSettings {
     e2bSandbox: e2bSandboxEnv(env),
     managedAgentsSandbox: managedAgentsSandboxEnv(env),
     modalSandbox: modalSandboxEnv(env),
-  };
-}
-
-export const SPRITES_TENANT_ENV = ["SPRITES_TOKEN", "SPRITES_NAME_PREFIX"] as const;
-export const MODAL_TENANT_ENV = [
-  "MODAL_TOKEN_ID",
-  "MODAL_TOKEN_SECRET",
-  "MODAL_ENVIRONMENT",
-  "MODAL_APP_NAME",
-  "MODAL_NAME_PREFIX",
-  "MODAL_SNAPSHOT_S3_BUCKET",
-] as const;
-
-export function tenantSandboxSettings<S extends SandboxSettings>(base: S, env: TenantEnvSubset): S {
-  return {
-    ...base,
-    spritesSandbox: {
-      ...base.spritesSandbox,
-      ...(env.SPRITES_TOKEN ? { token: env.SPRITES_TOKEN } : {}),
-      ...(env.SPRITES_NAME_PREFIX ? { namePrefix: env.SPRITES_NAME_PREFIX } : {}),
-    },
-    modalSandbox: {
-      ...base.modalSandbox,
-      ...(env.MODAL_TOKEN_ID ? { tokenId: env.MODAL_TOKEN_ID } : {}),
-      ...(env.MODAL_TOKEN_SECRET ? { tokenSecret: env.MODAL_TOKEN_SECRET } : {}),
-      ...(env.MODAL_ENVIRONMENT ? { environment: env.MODAL_ENVIRONMENT } : {}),
-      ...(env.MODAL_APP_NAME ? { appName: env.MODAL_APP_NAME } : {}),
-      ...(env.MODAL_NAME_PREFIX ? { namePrefix: env.MODAL_NAME_PREFIX } : {}),
-      ...(env.MODAL_SNAPSHOT_S3_BUCKET ? { snapshotS3Bucket: env.MODAL_SNAPSHOT_S3_BUCKET } : {}),
-    },
   };
 }

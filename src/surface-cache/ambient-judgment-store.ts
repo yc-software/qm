@@ -1,6 +1,6 @@
 import { orgId as configOrgId } from "../config.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
-import { TENANCY, tenantTables } from "../tenants/migrations.ts";
+import { tenantTables } from "../tenants/migrations.ts";
 
 type AmbientDecisionKind = "act" | "ignore" | "fastlane";
 
@@ -12,6 +12,7 @@ type AmbientJudgment = {
   decision: AmbientDecisionKind;
   reason?: string;
   askedBy?: string;
+  startError?: string;
   prompt?: string;
   model?: string;
   latencyMs?: number;
@@ -43,7 +44,6 @@ const emptyCounts = (): AmbientJudgmentCounts => ({ act: 0, ignore: 0, fastlane:
 export function createPostgresAmbientJudgmentStore(connectionString: string): AmbientJudgmentStore {
   const orgId = configOrgId();
   const { q, close } = createPgPool(connectionString, [
-    ...TENANCY,
     {
       id: "surface-cache/ambient-judgment/0001",
       statements: [
@@ -63,6 +63,10 @@ export function createPostgresAmbientJudgmentStore(connectionString: string): Am
       ],
     },
     ...tenantTables("surface-cache/ambient-judgment/0002-tenants", [{ table: "ambient_judgments", primaryKey: "id" }]),
+    {
+      id: "surface-cache/ambient-judgment/0003-start-error",
+      statements: [`ALTER TABLE ambient_judgments ADD COLUMN IF NOT EXISTS start_error TEXT`],
+    },
   ]);
   const row = (r: Record<string, unknown>): AmbientJudgment => ({
     id: Number(r.id),
@@ -72,6 +76,7 @@ export function createPostgresAmbientJudgmentStore(connectionString: string): Am
     decision: r.decision as AmbientDecisionKind,
     ...(r.reason != null ? { reason: r.reason as string } : {}),
     ...(r.asked_by != null ? { askedBy: r.asked_by as string } : {}),
+    ...(r.start_error != null ? { startError: r.start_error as string } : {}),
     ...(r.prompt != null ? { prompt: r.prompt as string } : {}),
     ...(r.model != null ? { model: r.model as string } : {}),
     ...(r.latency_ms != null ? { latencyMs: Number(r.latency_ms) } : {}),
@@ -82,8 +87,8 @@ export function createPostgresAmbientJudgmentStore(connectionString: string): Am
   return {
     async record(j) {
       await q(
-        `INSERT INTO ambient_judgments(org_id, surface, container, decision, reason, asked_by, prompt, model, latency_ms, ts_from, ts_to, created_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        `INSERT INTO ambient_judgments(org_id, surface, container, decision, reason, asked_by, prompt, model, latency_ms, ts_from, ts_to, created_at, start_error)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
         [
           configOrgId(),
           j.surface,
@@ -97,6 +102,7 @@ export function createPostgresAmbientJudgmentStore(connectionString: string): Am
           j.tsFrom ?? null,
           j.tsTo ?? null,
           j.createdAt,
+          j.startError ?? null,
         ],
       );
     },
@@ -127,7 +133,7 @@ export function createPostgresAmbientJudgmentStore(connectionString: string): Am
       }
       args.push(limit);
       const rows = await q(
-        `SELECT id, org_id, surface, container, decision, reason, asked_by, model, latency_ms, ts_from, ts_to, created_at
+        `SELECT id, org_id, surface, container, decision, reason, asked_by, start_error, model, latency_ms, ts_from, ts_to, created_at
          FROM ambient_judgments WHERE ${where.join(" AND ")} ORDER BY created_at DESC, id DESC LIMIT $${args.length}`,
         args,
       );

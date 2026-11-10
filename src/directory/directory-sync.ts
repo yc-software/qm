@@ -39,7 +39,7 @@ function dedupMemberships(rows: ChannelMembership[]): ChannelMembership[] {
 export function createDirectorySync(deps: {
   q: PgPool["q"];
   pool: PgPool["pool"];
-  orgId: () => string;
+  orgId: string;
 }): Pick<DirectoryStore, "replace" | "replaceChannels" | "setWorkspaceUrl" | "replaceGroups" | "upsertGroup"> {
   const { q, pool, orgId } = deps;
 
@@ -52,9 +52,9 @@ export function createDirectorySync(deps: {
   ): Promise<boolean> {
     const syncedAtCol = hashCol.replace(/_hash$/, "_synced_at");
     return withPgTransaction(await pool(), async (client) => {
-      await client.query("SELECT pg_advisory_xact_lock(hashtext('directory'), hashtext($1))", [orgId()]);
+      await client.query("SELECT pg_advisory_xact_lock(hashtext('directory'), hashtext($1))", [orgId]);
       const sync = await client.query(`SELECT ${hashCol}, ${syncedAtCol} FROM directory_sync WHERE org_id = $1`, [
-        orgId(),
+        orgId,
       ]);
       const row = sync.rows[0];
       if (
@@ -63,7 +63,7 @@ export function createDirectorySync(deps: {
         (partial ? Number(row[syncedAtCol]) >= syncedAt : Number(row[syncedAtCol]) > syncedAt)
       ) {
         console.warn(
-          `[directory] refused stale ${hashCol.replace(/_hash$/, "")} swap for ${orgId()}: stamped ${Number(row[syncedAtCol]) - syncedAt}ms behind`,
+          `[directory] refused stale ${hashCol.replace(/_hash$/, "")} swap for ${orgId}: stamped ${Number(row[syncedAtCol]) - syncedAt}ms behind`,
         );
         return false;
       }
@@ -71,7 +71,7 @@ export function createDirectorySync(deps: {
         if (syncedAt !== undefined) {
           await client.query(
             `UPDATE directory_sync SET ${syncedAtCol} = GREATEST(COALESCE(${syncedAtCol}, 0), $2) WHERE org_id = $1`,
-            [orgId(), syncedAt],
+            [orgId, syncedAt],
           );
         }
         return true;
@@ -83,7 +83,7 @@ export function createDirectorySync(deps: {
          ON CONFLICT (tenant_id, org_id) DO UPDATE SET ${hashCol} = EXCLUDED.${hashCol},
            ${syncedAtCol} = COALESCE(EXCLUDED.${syncedAtCol}, directory_sync.${syncedAtCol}),
            updated_at = EXCLUDED.updated_at`,
-        [orgId(), partial || complete === false ? null : hash, partial ? null : (syncedAt ?? null), Date.now()],
+        [orgId, partial || complete === false ? null : hash, partial ? null : (syncedAt ?? null), Date.now()],
       );
       return true;
     });
@@ -100,13 +100,13 @@ export function createDirectorySync(deps: {
       );
 
       return swapIfChanged("members_hash", hash, syncedAt, async (client) => {
-        await client.query("DELETE FROM directory_members WHERE org_id = $1", [orgId()]);
+        await client.query("DELETE FROM directory_members WHERE org_id = $1", [orgId]);
         if (internal.length) {
           await client.query(
             `INSERT INTO directory_members (org_id, principal_id, display_name, display_name_lc, type, slack_id, avatar_url)
              SELECT $1, * FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[])`,
             [
-              orgId(),
+              orgId,
               internal.map((m) => m.principalId),
               internal.map((m) => m.displayName),
               internal.map((m) => normDirectoryQuery(m.displayName)),
@@ -154,7 +154,7 @@ export function createDirectorySync(deps: {
         async (client) => {
           const protectedRows = await client.query(
             "SELECT channel_id FROM directory_channels WHERE org_id = $1 AND (observed_at > $2 OR ($3 AND observed_at = $2))",
-            [orgId(), syncedAt ?? null, partial],
+            [orgId, syncedAt ?? null, partial],
           );
           const protectedIds = new Set(protectedRows.rows.map((row) => row.channel_id as string));
           if (partial && list.some((channel) => protectedIds.has(channel.channelId))) return false;
@@ -167,11 +167,11 @@ export function createDirectorySync(deps: {
           if (!partial) {
             await client.query(
               "DELETE FROM directory_channels WHERE org_id = $1 AND NOT (channel_id = ANY($2::text[]))",
-              [orgId(), retainedIds],
+              [orgId, retainedIds],
             );
             await client.query(
               "DELETE FROM directory_channel_members WHERE org_id = $1 AND NOT (channel_id = ANY($2::text[]))",
-              [orgId(), retainedIds],
+              [orgId, retainedIds],
             );
           }
           if (list.length) {
@@ -186,7 +186,7 @@ export function createDirectorySync(deps: {
                roster_known = directory_channels.roster_known OR EXCLUDED.roster_known,
                observed_at = EXCLUDED.observed_at`,
               [
-                orgId(),
+                orgId,
                 channelIds,
                 list.map((c) => c.name),
                 list.map((c) => normDirectoryQuery(c.name)),
@@ -200,13 +200,13 @@ export function createDirectorySync(deps: {
           if (membershipRows !== undefined) {
             await client.query(
               "DELETE FROM directory_channel_members WHERE org_id = $1 AND channel_id = ANY($2::text[])",
-              [orgId(), [...rosterIds!]],
+              [orgId, [...rosterIds!]],
             );
             if (membershipRows.length) {
               await client.query(
                 `INSERT INTO directory_channel_members (org_id, channel_id, principal_id)
                SELECT $1, * FROM unnest($2::text[], $3::text[])`,
-                [orgId(), membershipRows.map((m) => m.channelId), membershipRows.map((m) => m.principalId)],
+                [orgId, membershipRows.map((m) => m.channelId), membershipRows.map((m) => m.principalId)],
               );
             }
           }
@@ -216,7 +216,7 @@ export function createDirectorySync(deps: {
              USING unnest($2::text[], $3::text[]) AS revoked(channel_id, principal_id)
              WHERE member.org_id = $1 AND member.channel_id = revoked.channel_id
                AND member.principal_id = revoked.principal_id`,
-              [orgId(), revokedRows.map((m) => m.channelId), revokedRows.map((m) => m.principalId)],
+              [orgId, revokedRows.map((m) => m.channelId), revokedRows.map((m) => m.principalId)],
             );
           }
           return partial || protectedIds.size === 0;
@@ -229,7 +229,7 @@ export function createDirectorySync(deps: {
       await q(
         `INSERT INTO directory_meta (org_id, workspace_url, updated_at) VALUES ($1, $2, $3)
          ON CONFLICT (tenant_id, org_id) DO UPDATE SET workspace_url = EXCLUDED.workspace_url, updated_at = EXCLUDED.updated_at`,
-        [orgId(), url, Date.now()],
+        [orgId, url, Date.now()],
       );
     },
 
@@ -253,10 +253,10 @@ export function createDirectorySync(deps: {
       return swapIfChanged("groups_hash", hash, syncedAt, async (client) => {
         await client.query(
           "DELETE FROM directory_group_members WHERE org_id = $1 AND NOT (group_id = ANY($2::text[]))",
-          [orgId(), listedIds],
+          [orgId, listedIds],
         );
         await client.query("DELETE FROM directory_groups WHERE org_id = $1 AND NOT (group_id = ANY($2::text[]))", [
-          orgId(),
+          orgId,
           listedIds,
         ]);
         if (listedIds.length) {
@@ -265,18 +265,18 @@ export function createDirectorySync(deps: {
              SELECT $1, * FROM unnest($2::text[], $3::boolean[])
              ON CONFLICT (tenant_id, org_id, group_id) DO UPDATE SET
                roster_known = directory_groups.roster_known OR EXCLUDED.roster_known`,
-            [orgId(), listedIds, listedIds.map((groupId) => rostered.has(groupId))],
+            [orgId, listedIds, listedIds.map((groupId) => rostered.has(groupId))],
           );
         }
         await client.query("DELETE FROM directory_group_members WHERE org_id = $1 AND group_id = ANY($2::text[])", [
-          orgId(),
+          orgId,
           rosterIds,
         ]);
         if (rows.length) {
           await client.query(
             `INSERT INTO directory_group_members (org_id, group_id, principal_id)
              SELECT $1, * FROM unnest($2::text[], $3::text[])`,
-            [orgId(), rows.map((m) => m.groupId), rows.map((m) => m.principalId)],
+            [orgId, rows.map((m) => m.groupId), rows.map((m) => m.principalId)],
           );
         }
       });
@@ -286,30 +286,27 @@ export function createDirectorySync(deps: {
       const ids = [...new Set(principalIds.filter(Boolean))];
       if (!groupId || !ids.length) return;
       await withPgTransaction(await pool(), async (client) => {
-        await client.query("SELECT pg_advisory_xact_lock(hashtext('directory'), hashtext($1))", [orgId()]);
+        await client.query("SELECT pg_advisory_xact_lock(hashtext('directory'), hashtext($1))", [orgId]);
         await client.query(
           `INSERT INTO directory_groups (org_id, group_id, roster_known) VALUES ($1, $2, TRUE)
            ON CONFLICT (tenant_id, org_id, group_id) DO UPDATE SET roster_known = TRUE`,
-          [orgId(), groupId],
+          [orgId, groupId],
         );
-        await client.query("DELETE FROM directory_group_members WHERE org_id = $1 AND group_id = $2", [
-          orgId(),
-          groupId,
-        ]);
+        await client.query("DELETE FROM directory_group_members WHERE org_id = $1 AND group_id = $2", [orgId, groupId]);
         await client.query(
           `INSERT INTO directory_group_members (org_id, group_id, principal_id)
            SELECT $1, $2, * FROM unnest($3::text[])`,
-          [orgId(), groupId, ids],
+          [orgId, groupId, ids],
         );
         const all = await client.query("SELECT group_id, principal_id FROM directory_group_members WHERE org_id = $1", [
-          orgId(),
+          orgId,
         ]);
         await client.query(
           `INSERT INTO directory_sync (org_id, groups_hash, groups_synced_at, updated_at) VALUES ($1, $2, $3, $3)
            ON CONFLICT (tenant_id, org_id) DO UPDATE SET groups_hash = EXCLUDED.groups_hash,
              groups_synced_at = GREATEST(COALESCE(directory_sync.groups_synced_at, 0), EXCLUDED.groups_synced_at),
              updated_at = EXCLUDED.updated_at`,
-          [orgId(), hashRoster(all.rows.map((r) => `${r.group_id}|${r.principal_id}`)), Date.now()],
+          [orgId, hashRoster(all.rows.map((r) => `${r.group_id}|${r.principal_id}`)), Date.now()],
         );
       });
     },

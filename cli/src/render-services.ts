@@ -10,9 +10,20 @@ import {
   hostedServiceEnv,
   ordered,
   orgEnv,
+  PUBLIC_PORT,
   runnableServices,
   virtualServiceEnv,
 } from "./services.ts";
+
+const SLACK_SIGN_IN = {
+  OIDC_AUTH_ENDPOINT: "https://slack.com/openid/connect/authorize",
+  OIDC_TOKEN_ENDPOINT: "https://slack.com/api/openid.connect.token",
+  OIDC_USERINFO_ENDPOINT: "https://slack.com/api/openid.connect.userInfo",
+  OIDC_ISSUER: "https://slack.com",
+  OIDC_JWKS_URI: "https://slack.com/openid/connect/keys",
+  OIDC_SCOPES: "openid profile email",
+  OIDC_PRINCIPAL_CLAIM: "email",
+};
 
 export function renderWorkloads(
   config: QmConfig,
@@ -83,7 +94,6 @@ export function renderServiceEnv(
   connections: {
     databaseUrl: string;
     coreUrl: string;
-    webUiUrl?: string;
     projectId?: string;
     environmentId?: string;
     minioServiceId?: string;
@@ -100,19 +110,22 @@ export function renderServiceEnv(
     ...(service === "core" ? virtualServiceEnv(config.services, config.env) : {}),
     ...plugin?.env,
     ...orgEnv(service, config.orgId, config.publicUrl, brandEnvOf(config)),
-    PORT: "8080",
+    PORT: service === "core" ? String(PUBLIC_PORT) : "8080",
     ...(coreAccess ? { CORE_API_URL: connections.coreUrl } : {}),
   };
-  if (config.services.includes("auth"))
+  if (service === "core")
     Object.assign(
       out,
-      brokerWiring(service, {
-        publicUrl: config.publicUrl,
-        authBaseUrl: "http://127.0.0.1:8099",
-        ...(config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN
-          ? { allowedEmailDomain: config.env.auth.AUTH_ALLOWED_EMAIL_DOMAIN }
-          : {}),
-      }),
+      config.services.includes("auth")
+        ? brokerWiring({
+            publicUrl: config.publicUrl,
+            ...(config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN
+              ? { allowedEmailDomain: config.env.auth.AUTH_ALLOWED_EMAIL_DOMAIN }
+              : {}),
+          })
+        : Object.fromEntries(
+            Object.entries(SLACK_SIGN_IN).map(([key, value]) => [key, config.env.core?.[key] ?? value]),
+          ),
     );
   const managedValues: Record<string, string> = {
     ...(coreAccess ? { DATABASE_URL: connections.databaseUrl } : {}),
@@ -151,27 +164,6 @@ export function renderServiceEnv(
       for (const key of ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_SIGNING_SECRET"]) out[key] = "";
     }
     Object.assign(out, renderStorageEnv(connections.storage));
-  }
-  if (service === "portal") {
-    if (connections.webUiUrl) out.WEB_UI_UPSTREAM = connections.webUiUrl;
-    if (config.services.includes("auth")) {
-      for (const key of ["AUTH_ALLOWED_EMAIL_DOMAIN", "OIDC_ALLOWED_EMAIL_DOMAIN"])
-        out[key] = config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN ?? "";
-    } else {
-      out.AUTH_EMBEDDED = "0";
-      for (const [key, value] of Object.entries({
-        AUTH_BROKER_UPSTREAM: "",
-        OIDC_AUTH_ENDPOINT: "https://slack.com/openid/connect/authorize",
-        OIDC_TOKEN_ENDPOINT: "https://slack.com/api/openid.connect.token",
-        OIDC_USERINFO_ENDPOINT: "https://slack.com/api/openid.connect.userInfo",
-        OIDC_ISSUER: "https://slack.com",
-        OIDC_JWKS_URI: "https://slack.com/openid/connect/keys",
-        OIDC_SCOPES: "openid profile email",
-        OIDC_PRINCIPAL_CLAIM: "email",
-        OIDC_ALLOWED_EMAIL_DOMAIN: "",
-      }))
-        out[key] = config.env.portal?.[key] ?? value;
-    }
   }
   return out;
 }

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { addressGuardedFetch } from "../../src/util/network.ts";
+import { addressGuardedFetch, type AddressFetch } from "../../src/util/network.ts";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
@@ -215,3 +215,12 @@ export async function startMcpTestServer(
 }
 
 export const loopbackFetch = addressGuardedFetch(() => false);
+
+export const routedTo =
+  (server: string): AddressFetch =>
+  (input, init) => {
+    const url = new URL(input);
+    const { protocol, host } = new URL(server);
+    Object.assign(url, { protocol, host });
+    return loopbackFetch(url, init);
+  };

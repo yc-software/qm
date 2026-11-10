@@ -11,76 +11,48 @@ import type { ServerDeps } from "../src/api/deps.ts";
 import { gatewayActorId } from "../src/model/provider-endpoints.ts";
 import { buildApp } from "./support/build-app.ts";
 import { computeUsers } from "../src/admin/users.ts";
-import { USER_MIGRATIONS } from "../src/identity/user-store.ts";
+import type { UserRecord } from "../src/identity/user-store.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { testMigratedDatabaseUrl } from "./support/test-database.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 
-test("computeUsers dedupes participants, credits their turns, and joins admin status", () => {
-  const participants = [
-    { sessionId: "s1", principalId: "U1" },
-    { sessionId: "s2", principalId: "U1" },
-    { sessionId: "s1", principalId: "U2" },
-  ];
-  const turns = [
-    { principalId: "U1", sessionId: "s1", day: 0, turns: 2, firstAt: 150, lastAt: 160 },
-    { principalId: "U2", sessionId: "s1", day: 0, turns: 2, firstAt: 150, lastAt: 160 },
-    { principalId: "U1", sessionId: "s2", day: 0, turns: 1, firstAt: 250, lastAt: 250 },
-  ];
-  const grants = [{ principalId: "U2", scopeId: "org:default-org", role: "org_admin" as const }];
-  const rows = computeUsers({ participants, turns, grants, people: ["U1", "U2"] });
-  const byId: Record<string, any> = Object.fromEntries(rows.map((r) => [r.principalId, r]));
-
-  assert.equal(byId.U1.sessionCount, 2);
-  assert.equal(byId.U1.turnCount, 3);
-  assert.equal(byId.U1.lastSeenAt, 250);
-  assert.deepEqual(byId.U1.admin, { isAdmin: false });
-  assert.equal(byId.U2.admin.role, "org_admin");
-  assert.equal(rows[0]!.principalId, "U2");
+const user = (id: string, aliases: string[]): UserRecord => ({ id, principalId: aliases[0]!, aliases, kind: "person" });
+const seen = (userId: string | null, principalId: string, sessions: number, turns: number, lastSeenAt: number) => ({
+  userId,
+  principalId,
+  kind: "person" as const,
+  sessions,
+  turns,
+  lastSeenAt,
+  days: [],
 });
 
-test("computeUsers sums a participant's turn rollup and takes its latest timestamp", () => {
+test("computeUsers lists exactly the roster with each user's activity and admin status", () => {
   const rows = computeUsers({
-    participants: [{ sessionId: "s1", principalId: "U1" }],
-    turns: [{ principalId: "U1", sessionId: "s1", day: 0, turns: 2, firstAt: 100, lastAt: 199 }],
-    grants: [],
-    people: ["U1"],
-  });
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0]!.turnCount, 2, "the participant's two turns");
-  assert.equal(rows[0]!.lastSeenAt, 199);
-});
-
-test("computeUsers lists exactly the roster: a quiet admin gets a row, a participant who is not on it does not", () => {
-  const rows = computeUsers({
-    participants: [{ sessionId: "s1", principalId: "U9" }],
-    turns: [],
-    grants: [{ principalId: "ghost-admin", scopeId: "org:default-org", role: "org_admin" as const }],
-    people: ["ghost-admin"],
-  });
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0]!.principalId, "ghost-admin");
-  assert.equal(rows[0]!.sessionCount, 0);
-  assert.equal(rows[0]!.lastSeenAt, null);
-  assert.equal(rows[0]!.admin.isAdmin, true);
-});
-
-test("computeUsers credits activity to a roster person whatever the case of their id", () => {
-  const rows = computeUsers({
-    participants: [
-      {
-        sessionId: "s1",
-        principalId: "Pat@Example.com",
-      },
+    roster: [
+      user("u-1", ["pat@example.com", "U1"]),
+      user("u-2", ["sam@example.com"]),
+      user("u-3", ["quiet@example.com"]),
     ],
-    turns: [{ principalId: "Pat@Example.com", sessionId: "s1", day: 0, turns: 3, firstAt: 100, lastAt: 150 }],
-    grants: [],
-    people: ["pat@example.com"],
+    activity: [
+      seen("u-1", "pat@example.com", 2, 3, 250),
+      seen("u-2", "sam@example.com", 1, 1, 400),
+      seen(null, "U9", 5, 5, 900),
+    ],
+    grants: [
+      { principalId: "Pat@Example.com", scopeId: "org:default-org", role: "org_admin" },
+      { principalId: "Quiet@Example.com", scopeId: "org:default-org", role: "org_admin" },
+    ],
   });
   assert.deepEqual(
-    rows.map((r) => [r.principalId, r.sessionCount, r.turnCount, r.lastSeenAt]),
-    [["pat@example.com", 1, 3, 150]],
+    rows.map((r) => [r.userId, r.sessionCount, r.turnCount, r.lastSeenAt, r.admin.isAdmin]),
+    [
+      ["u-1", 2, 3, 250, true],
+      ["u-3", 0, 0, null, true],
+      ["u-2", 1, 1, 400, false],
+    ],
+    "admins first, then most recently seen; a participant who is not on the roster gets no row",
   );
 });
 
@@ -144,6 +116,23 @@ test("/v1/admin/users: org_admin sees the roster + grants; a non-admin is denied
       conversation: { kind: "dm", threadRef: "dm:talker:t1" },
     });
 
+    await s.built.app.turn({
+      ...dm,
+      actor: { externalId: "U-app2" },
+      conversation: { kind: "dm", threadRef: "dm:U-app2:t1" },
+    });
+    assert.equal(
+      await s.built.app.upsertDirectory(
+        [
+          { principalId: "Uno@Example.com", displayName: "Uno", type: "internal", slackId: "U1" },
+          { principalId: "Seven@Example.com", displayName: "Seven", type: "internal", slackId: "U7" },
+          { principalId: "U-bot", displayName: "Some App", type: "internal", isBot: true },
+          { principalId: "U-app2", displayName: "Other App", type: "internal", isBot: true },
+        ],
+        Date.now(),
+      ),
+      true,
+    );
     const r = await fetch(`${s.base}/v1/admin/users`, { headers: { "x-admin-actor": "admin-alice@default-org" } });
     assert.equal(r.status, 200);
     const d: any = await r.json();
@@ -157,88 +146,16 @@ test("/v1/admin/users: org_admin sees the roster + grants; a non-admin is denied
       ["U1", "smoke-test"],
       "any author who isn't a bot counts; a Slack id becomes one person with its email only through a link",
     );
+    assert.deepEqual(["U-preloaded", "U-cron"].filter(listed), [], "not someone only added, or an automation's target");
+    const kindOf = (id: string) => d.users.find((u: { principalId: string }) => u.principalId === id)?.kind;
     assert.deepEqual(
-      ["U-preloaded", "U-cron", "U-bot"].filter(listed),
-      [],
-      "not someone only added, an automation's target, or a turn flagged as a bot",
+      ["U1", "talker@example.com", "U-bot", "U-app2"].map(kindOf),
+      ["person", "person", "app", "app"],
+      "a bot-flagged turn records an app, and directory sync marks a known user whose member is a bot",
     );
     assert.ok(
       Array.isArray(d.grants) && d.grants.some((g: { principalId: string }) => g.principalId === "admin-alice"),
       "authoritative grants present",
-    );
-
-    const migration = USER_MIGRATIONS.find((m) => m.id === "users/0002-copy-principal-links")!.statements[0]!;
-    await pg.query("CREATE TABLE principal_links (id TEXT PRIMARY KEY, json JSONB NOT NULL)");
-    await pg.query(
-      `INSERT INTO principal_links VALUES ('u-self', '{"principalId":"U-Self","canonicalId":"u-self","evidence":"qa","linkedBy":"admin-alice","createdAt":2}')`,
-    );
-    await assert.rejects(pg.query(migration), /cannot be copied.*u-self/, "a bad legacy row stops the migration");
-    await pg.query("DROP TABLE principal_links");
-    await pg.query("DELETE FROM users");
-    await pg.query("CREATE TABLE IF NOT EXISTS principal_links (id TEXT PRIMARY KEY, json JSONB NOT NULL)");
-    await pg.query(
-      `INSERT INTO principal_links VALUES ('U1', '{"principalId":"U1","canonicalId":"Pat@Example.com","evidence":"qa","linkedBy":"admin-alice","createdAt":1}')`,
-    );
-    await pg.query(
-      `INSERT INTO sessions(id, type, scope_id, thread_ref, created_at, origin) VALUES ('hist-s', 'channel', 'org:default-org', 'hist:1', 1, 'conversation')`,
-    );
-    await pg.query(
-      `INSERT INTO items(tenant_id, session_id, seq, kind, author, text, body, created_at)
-       VALUES (qm_tenant_id(), 'hist-s', 1, 'UserMessage', 'U7', 'hi', '{}', now() - interval '1 day'),
-              (qm_tenant_id(), 'hist-s', 2, 'UserMessage', 'Seven@Example.com', 'hi', '{}', now()),
-              (qm_tenant_id(), 'hist-s', 3, 'UserMessage', 'U9', 'hi', '{}', now())`,
-    );
-    await pg.query(
-      `INSERT INTO sessions(id, type, scope_id, thread_ref, created_at, origin, spawn_meta)
-       VALUES ('ext-s', 'channel', 'org:default-org', 'ext:1', 1, 'conversation', '{"surfaceOrigin":{"audience":"external"}}')`,
-    );
-    await pg.query(
-      `INSERT INTO items(tenant_id, session_id, seq, kind, author, text, body, created_at)
-       VALUES (qm_tenant_id(), 'ext-s', 1, 'UserMessage', 'U-ext', 'hi', '{}', now())`,
-    );
-    await s.built.identity.putExternalMember({
-      email: "Mate@Example.com",
-      role: "member",
-      expiresAt: null,
-      kind: "teammate",
-      invitedBy: "admin-alice",
-      createdAt: 5,
-      updatedAt: 5,
-    });
-    for (const m of USER_MIGRATIONS.filter((m) => /^users\/000[234]/.test(m.id)))
-      for (const statement of m.statements) await pg.query(statement);
-    assert.deepEqual(
-      (await pg.q("SELECT alias_id, user_id, evidence FROM user_links ORDER BY alias_id")).map((r) => [
-        r.alias_id,
-        r.user_id,
-        r.evidence,
-      ]),
-      [
-        ["U1", "pat@example.com", "qa"],
-        ["U7", "seven@example.com", "slack directory: slack_id→principal_id"],
-      ],
-      "existing links are copied, and a Slack-id author the directory maps to someone else is linked to them",
-    );
-    assert.equal((await pg.q("SELECT to_regclass('principal_links') AS t"))[0]!.t, null, "and the old map is dropped");
-    const users = new Map((await pg.q("SELECT id, source FROM users")).map((r) => [r.id as string, r.source]));
-    assert.equal(users.get("pat@example.com"), "turn", "a linked writer's history lands on their canonical user");
-    assert.equal(users.has("U1"), false, "with no row for the alias");
-    assert.equal(users.get("seven@example.com"), "turn", "the directory-mapped Slack-id author folds into their email");
-    assert.equal(users.has("U7"), false);
-    const [seven] = await pg.q(
-      "SELECT first_seen_at < now() - interval '12 hours' AS early FROM users WHERE id = 'seven@example.com'",
-    );
-    assert.equal(seven!.early, true, "and the email's first-seen includes the Slack-id messages");
-    assert.equal(users.get("U9"), "turn", "an unmapped Slack id is its own person");
-    assert.equal(users.get("U-bot"), "turn", "history keeps no bot flag, so an app that wrote gets a row");
-    assert.equal(users.get("smoke-test"), "turn");
-    assert.equal(users.get("admin-alice"), "admin", "an existing grant holder gets a row");
-    assert.equal(users.get("mate@example.com"), "invite", "as does an existing teammate");
-    const backfilled = [...users.keys()];
-    assert.deepEqual(
-      ["U1", "U-preloaded", "U-cron", "U-ext"].filter((id) => backfilled.includes(id)),
-      [],
-      "no linked alias, automation target, external member or added-only participant",
     );
 
     const denied = await fetch(`${s.base}/v1/admin/users`, { headers: { "x-admin-actor": "user-uma@default-org" } });
@@ -296,7 +213,6 @@ test("/v1/admin/users/:principalId: per-user detail counts personal conversation
       throw new Error("User detail must not load org history or artifact lists");
     };
     t.mock.method(s.built.sessions, "listParticipants", fail);
-    t.mock.method(s.built.sessions, "attributedTurns", fail);
     t.mock.method(s.built.sessions, "scopeSessionSummaries", fail);
     t.mock.method(s.built.files, "listOwnedByScopes", fail);
     t.mock.method(s.built.app, "listCrons", fail);
@@ -552,3 +468,46 @@ for (const canonicalPrincipal of ["alice@example.com", "Alice@example.com"]) {
     }
   });
 }
+
+test("/v1/admin/users: a person with a linked sign-in is one row with every sign-in, and their detail opens by user id", async () => {
+  const s = start();
+  try {
+    const dm: TurnRequest = {
+      surface: "test",
+      actor: { externalId: "pat@example.com" },
+      conversation: { kind: "dm", threadRef: "dm:pat:t1" },
+      text: "hello",
+    };
+    assert.equal((await s.built.app.turn(dm)).status, "ok");
+    await s.built.app.turn({
+      ...dm,
+      actor: { externalId: "U-PAT" },
+      conversation: { kind: "dm", threadRef: "dm:U-PAT:t1" },
+    });
+    await s.built.admin.users.link({
+      principalId: "U-PAT",
+      canonicalId: "pat@example.com",
+      evidence: "qa",
+      linkedBy: "",
+      createdAt: Date.now(),
+    });
+    const headers = { "x-admin-actor": "admin-alice@default-org" };
+    const d: any = await (await fetch(`${s.base}/v1/admin/users`, { headers })).json();
+    const rows = d.users.filter((u: any) => u.aliases.includes("U-PAT") || u.principalId === "U-PAT");
+    assert.deepEqual(
+      rows.map((u: any) => [u.principalId, u.aliases, u.sessionCount, u.turnCount]),
+      [["pat@example.com", ["pat@example.com", "U-PAT"], 2, 2]],
+    );
+    assert.match(rows[0].userId, /^[0-9a-f-]{36}$/);
+
+    const detail: any = await (await fetch(`${s.base}/v1/admin/users/${rows[0].userId}`, { headers })).json();
+    assert.deepEqual(
+      [detail.userId, detail.principalId, detail.scopeId, detail.user.aliases],
+      [rows[0].userId, "pat@example.com", "personal:pat@example.com", ["pat@example.com", "U-PAT"]],
+    );
+    const viaSignIn: any = await (await fetch(`${s.base}/v1/admin/users/U-PAT`, { headers })).json();
+    assert.equal(viaSignIn.userId, rows[0].userId, "any sign-in opens the same user");
+  } finally {
+    await s.close();
+  }
+});

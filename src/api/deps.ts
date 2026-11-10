@@ -1,13 +1,15 @@
+import type { WebEvents } from "./routes/web-events.ts";
+import type { WebShell } from "../web/shell.ts";
+import type { WebMeConfig } from "./routes/web-me.ts";
 import type { SlackWebClientFactory } from "../slack/web-client.ts";
 import type { TeamStore } from "../teams/teams.ts";
 import type { DecisionStore } from "../decisions/store.ts";
 import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
-import type { ModelGatewayTransportConfig } from "../model/provider-endpoints.ts";
+import type { ModelGatewayTransportConfig, ModelProvider } from "../model/provider-endpoints.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { LoopIngressService } from "../loops/ingress.ts";
 import type { createSuggestedActivityService } from "../suggestions/activities.ts";
 import type { ManagedSlack } from "../surfaces/slack-managed.ts";
-import type { InboxSourceRefresh } from "../loops/inbox-source-refresh.ts";
 import type { BrokerSessionStore } from "../auth/broker-sessions.ts";
 import type { DirectFileUploads } from "../files/direct-file-upload.ts";
 import type { SandboxResources } from "../sandbox/sandbox-resources.ts";
@@ -15,22 +17,23 @@ import type { ModelVerifier } from "../model/model-verification.ts";
 import type { DurableByteStore } from "../files/durable-byte-store.ts";
 import type { SessionShareStore } from "../sessions/session-share.ts";
 import type { ModelOverlayStore } from "../model/model-overlay-store.ts";
-import type { ModelProvider, ModelProviderAvailability } from "../model/pi-models.ts";
+import type { ModelProviderAvailability } from "../model/pi-models.ts";
 import type { CustomProviderStore, ModelCredentialStore } from "../model/model-credential-store.ts";
 import type { UserModelCredentialStore } from "../model/user-model-credential-store.ts";
 import type { McpServerStore } from "../mcp/mcp-server-store.ts";
+import type { MemoryRegistryStore } from "../memory/registry.ts";
 import type { McpToolService } from "../mcp/mcp-tool-service.ts";
 import type { ReplayDedupe } from "../auth/replay-dedupe.ts";
 import type { FetchLike, OAuthClientResolver } from "../connectors/oauth.ts";
 import type { ConsentLinkStore } from "../connectors/consent-link.ts";
 import type { OAuthFlowStore } from "../connectors/oauth-flow-store.ts";
-import type { Tenancy } from "../tenants/tenancy.ts";
 import type { OrgBranding, ScopedConfigStore } from "../resolution/config-store.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import type { CredentialUsageSink } from "../admin/credential-usage-sink.ts";
 import type { EgressAuditSink } from "../admin/egress-audit-sink.ts";
 import type { BrokerFetch } from "./credential-broker.ts";
 import type { GitHttpFetch } from "./git-http-broker.ts";
+import type { AddressFetch } from "../util/network.ts";
 import type { KeychainApprovals } from "../credentials/keychain-approval.ts";
 import type { AdminService } from "../admin/admin-service.ts";
 import type { Mailer } from "../../plugins/chassis/src/resend.ts";
@@ -47,6 +50,7 @@ import type { Scheduler } from "../cron/scheduler.ts";
 import type { WebhookReceiver } from "../webhooks/webhook-receiver.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { PrincipalLinkService } from "../identity/principal-links.ts";
+import type { UserStore } from "../identity/user-store.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
 import type {
   ConnectorTokenStore,
@@ -78,14 +82,15 @@ import type { AppPageViewLog } from "../deploy/page-views.ts";
 import type { SlackInstallationStore, SlackSocketAppIdReader } from "../surfaces/slack-installation.ts";
 
 import type { SlackAccountLink, ComposioReturn } from "./routes/composio.ts";
-import { type ProviderKeys } from "../model/model-runtime.ts";
+import type { ModelRoutes } from "../model/model-route.ts";
 
 export interface ServerDeps {
   requestBodyDeadlineMs?: number;
   externalSlackPolicies?: ExternalSlackPolicies;
   checkReadiness?: (signal: AbortSignal) => Promise<void>;
+  draining?: AbortSignal;
   modelGatewayTransport?: ModelGatewayTransportConfig;
-  resolveBrowserCompanyKeys?: (includeSubscription?: boolean) => Promise<ProviderKeys>;
+  modelRoutes?: ModelRoutes;
   slackAccounts?: DurableMap<SlackAccountLink>;
   composioReturns?: DurableMap<ComposioReturn>;
   composioFetch?: typeof fetch;
@@ -93,11 +98,17 @@ export interface ServerDeps {
   production?: boolean;
   allowUnauthenticatedCore?: boolean;
   signingSecret?: string;
-  operatorSigningSecret?: string;
   capabilitySecret?: string;
   capabilityTokenCompression?: boolean;
   portalIdentitySecret?: string;
+  openaiApiKey?: string;
+  portalSession?: {
+    secret: string;
+    maxAgeSeconds: number;
+    apiOrigins?: ReadonlySet<string>;
+  };
   requireSignedPortalIdentity?: boolean;
+  web?: { events: WebEvents; me: WebMeConfig; shell: WebShell };
   control: ControlService;
   replayDedupe?: ReplayDedupe;
   deploymentLiveSmoke?: { deploymentId: string; superseded(): boolean; run(): Promise<void> };
@@ -122,7 +133,6 @@ export interface ServerDeps {
   resolveClient?: OAuthClientResolver;
   consentLinks?: ConsentLinkStore;
   oauthFlows?: OAuthFlowStore;
-  tenancy?: Tenancy;
   apiBaseUrl?: string;
   publicUrl?: string;
   portalUrl?: string;
@@ -135,6 +145,7 @@ export interface ServerDeps {
   egressAudit?: EgressAuditSink;
   brokerFetch?: BrokerFetch;
   gitHttpFetch?: GitHttpFetch;
+  itemImageFetch?: AddressFetch;
   baseModelDefault?: string;
   modelProviders?: ModelProviderAvailability;
   providerKeys?: ModelProviderAvailability;
@@ -142,6 +153,7 @@ export interface ServerDeps {
   userModelCredentials?: UserModelCredentialStore;
   mcpServers?: McpServerStore;
   mcpToolService?: McpToolService;
+  memoryRegistry?: MemoryRegistryStore;
   modelCredentialFetch?: typeof fetch;
   modelRegistry?: ModelOverlayStore;
   modelVerifier?: ModelVerifier;
@@ -182,13 +194,13 @@ export interface ServerDeps {
   channelPolicy?: ChannelPolicyStore;
   uiState?: UiStateStore;
   loopSourceTokens?: ConnectorTokenSource;
-  inboxSourceRefresh?: InboxSourceRefresh;
   loopSlackClient?: (token: string) => SlackUserClient;
   sessionShares?: SessionShareStore;
   sessionShareBytes?: DurableByteStore;
   environments?: EnvironmentStore;
   deploymentLayer?: DeploymentLayerStore;
   deploymentControlSecret?: string;
+  spendExportToken?: string;
   deployDialTimeoutMs?: number;
   deployAppsDomain?: string;
   deployGateSecret?: string;
@@ -201,6 +213,7 @@ export interface ServerDeps {
   loopIngress?: LoopIngressService;
   identity?: IdentityService;
   principalLinks?: PrincipalLinkService;
+  users?: Pick<UserStore, "get" | "resolve" | "setDisplayName">;
   keychain?: Keychain;
   serviceCreds?: ServiceCredentialStore;
   deliveries?: DeliveryStore;

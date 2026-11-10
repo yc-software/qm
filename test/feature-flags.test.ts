@@ -21,21 +21,10 @@ test("the org scope enables a feature everywhere", async () => {
   assert.equal(await store.enabled("inbox_loops", "channel:C1"), true);
 });
 
-test("responsive spine defaults off and can be enabled for individual people", async () => {
-  const store = createFeatureFlagStore(testMap<FeatureFlagRecord>());
-  assert.equal(await store.enabled("responsive_spine", "personal:U2"), false);
-  await store.setEnabled("responsive_spine", "personal:U1", true, "admin");
-  assert.equal(await store.enabled("responsive_spine", "personal:U1"), true);
-  assert.equal(await store.enabled("responsive_spine", "personal:U2"), false);
-  assert.equal(await store.enabled("responsive_spine", "channel:C1"), false);
-  await store.setEnabled("responsive_spine", "personal:U1", false, "admin");
-  assert.equal(await store.enabled("responsive_spine", "personal:U1"), false);
-});
-
 test("retired feature records are not offered as configurable flags", async () => {
   const backing = testMap<FeatureFlagRecord>();
-  await backing.put("persistent_subagents", {
-    featureName: "persistent_subagents",
+  await backing.put("command_scoped_credentials", {
+    featureName: "command_scoped_credentials",
     enabledScopes: ["channel:C1"],
     updatedAt: 1,
     updatedBy: "admin",

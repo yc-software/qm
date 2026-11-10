@@ -190,7 +190,7 @@ test("listDeploymentsForViewer includes owned and ACL-visible deployments only",
     [{ channelId: "C1", principalId: "U2" }],
   );
 
-  const rows = await app.listDeploymentsForViewer("U2");
+  const rows = await app.listDeploymentsForViewer({ actorId: "U2" });
   assert.deepEqual(rows.map((d) => d.id).sort(), [own.id, shared.id].sort());
   assert.ok(!rows.some((d) => d.id === hidden.id));
   assert.equal(rows.find((d) => d.id === own.id)?.permission, "write");
@@ -212,7 +212,7 @@ test("listDeploymentsForViewer: a write grant yields permission write for a non-
     permission: "write",
     grantedBy: "U1",
   });
-  const rows = await app.listDeploymentsForViewer("U2");
+  const rows = await app.listDeploymentsForViewer({ actorId: "U2" });
   assert.equal(rows.find((d) => d.id === shared.id)?.permission, "write");
 });
 
@@ -294,7 +294,7 @@ test("HTTP: /v1/deployments/:id shows a deployment only to principals who can se
     assert.deepEqual(await view(shared.id, "U1"), [200, shared.id, "write"]);
     assert.deepEqual(await view(hidden.id, "U2"), [404, undefined, undefined]);
     assert.deepEqual(await view("hidden-app", "U2"), [404, undefined, undefined]);
-    assert.deepEqual(await view(hidden.id), [200, hidden.id, undefined]);
+    assert.deepEqual(await view(hidden.id), [400, undefined, undefined]);
     assert.deepEqual(await view("missing-app", "U2"), [404, undefined, undefined]);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));

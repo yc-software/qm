@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mock, test } from "node:test";
+import pgBossPackage from "pg-boss/package.json" with { type: "json" };
 
 type Adapter = { executeSql(text: string, values?: unknown[]): Promise<unknown> };
 const pools: { closed: boolean }[] = [];
@@ -35,14 +36,17 @@ mock.module("pg-boss", {
       on(_event: string, listener: (e: Error) => void) {
         emitError = listener;
       }
+      async isInstalled() {
+        return true;
+      }
+      async schemaVersion() {
+        return pgBossPackage.pgboss.schema;
+      }
       async start() {
         await adapter.executeSql("SELECT 1");
         if (failStart) throw new Error("startup failed");
       }
       async createQueue() {}
-      async getQueue() {
-        return { name: "cron-fire" };
-      }
       async work() {
         if (failWork) throw new Error("polling failed");
       }

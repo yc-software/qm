@@ -1,5 +1,5 @@
 import { parseScopeId, scopeId as toScopeId, type ScopeId } from "../types.ts";
-import { perTenant } from "../tenants/context.ts";
+import { perTenant } from "../tenants/cache.ts";
 import type { SpendRow } from "../sessions/session-store.ts";
 
 export interface SpendLimit {

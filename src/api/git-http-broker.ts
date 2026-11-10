@@ -4,7 +4,8 @@ import type { CapabilityClaims } from "../auth/capability-token.ts";
 import { scopeId as makeScopeId } from "../types.ts";
 import { type DecryptedServiceCredential, isValidCredentialSlug, isComposioHost } from "../credentials/keychain.ts";
 import { brokerPathAllowed, brokerRequestHeaders, grantedCredential } from "./credential-broker.ts";
-import { pipeToResponse, sendJson } from "./http.ts";
+import { sendJson } from "./http.ts";
+import { relayStream } from "../../plugins/chassis/src/http.ts";
 import type { BaseCtx } from "./routes/route.ts";
 import { proxyHeaders } from "../util/http-proxy.ts";
 
@@ -206,5 +207,5 @@ export async function brokerGitHttp(ctx: BaseCtx): Promise<void> {
     ctx.res.end();
     return;
   }
-  pipeToResponse(ctx.res, upstreamResp.body, "git upstream stream failed");
+  relayStream(upstreamResp.body, ctx.res);
 }

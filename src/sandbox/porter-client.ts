@@ -4,7 +4,6 @@ import { sleep } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { shortHash } from "../util/crypto.ts";
-import { tenantScopedId } from "../tenants/context.ts";
 import type { ExecResult } from "./sandbox.ts";
 
 const MISSING_RC = 44;
@@ -37,6 +36,7 @@ export interface PorterSandboxSpec {
     internal?: boolean;
     domains?: Array<{ domain?: string; visibility?: "public" | "private" }>;
   }>;
+  resources?: { memory?: string };
   ttl_seconds?: number;
 }
 
@@ -113,8 +113,7 @@ export function createPorterClient(opts: { token?: string; baseUrl?: string }): 
   );
 }
 
-export const porterSlug = (prefix: string, scopeId: string): string => {
-  const id = tenantScopedId(scopeId);
+export const porterSlug = (prefix: string, id: string): string => {
   const cleaned = id
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, "-")

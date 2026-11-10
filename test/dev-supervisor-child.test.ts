@@ -23,7 +23,7 @@ async function freeTcpPort(): Promise<number> {
 
 function spec(lock: string, port: number, extraArgs: string[] = []): ChildSpec {
   return {
-    name: "web",
+    name: "core",
     cwd: lock,
     argv: ["node", FAKE, `--port=${port}`, ...extraArgs],
     env: { PATH: process.env.PATH ?? "" },

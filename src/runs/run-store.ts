@@ -45,6 +45,8 @@ export type RunStop =
 
 export const PARKED: RunStop = { kind: "parked" };
 
+export const CRASHED = { kind: "crashed" } as const;
+
 export interface TurnPark {
   requested(): boolean;
   now(): void;
@@ -60,7 +62,7 @@ export function handbackStop(shutdown: AbortSignal): RunStop {
 
 export interface Run {
   id: string;
-  tenantId?: string;
+  tenantId: string;
   sessionId: string;
   status: RunStatus;
   request: OrchestratorInput;
@@ -73,6 +75,7 @@ export interface Run {
   maxAttempts: number;
   priority: RunPriority;
   preemptions: number;
+  handbacks: number;
   leaseToken: string | null;
   leaseExpiresAt: number | null;
   workerId: string | null;
@@ -205,12 +208,12 @@ export async function waitForNoRunningRun(
   return true;
 }
 
-export function countedClaims(run: Pick<Run, "attempts" | "preemptions">): number {
-  return run.attempts - run.preemptions;
+export function countedClaims(run: Pick<Run, "attempts" | "handbacks">): number {
+  return run.attempts - run.handbacks;
 }
 
 export function errorParks(
-  run: Pick<Run, "errorAttempts" | "maxAttempts" | "attempts" | "preemptions">,
+  run: Pick<Run, "errorAttempts" | "maxAttempts" | "attempts" | "handbacks">,
   maxClaims?: number,
 ): boolean {
   return run.errorAttempts + 1 >= run.maxAttempts || (maxClaims !== undefined && countedClaims(run) >= maxClaims);

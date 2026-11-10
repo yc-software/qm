@@ -4,7 +4,6 @@ import { ProviderTurnError, type ProviderErrorCode } from "../core/turn-error.ts
 import { embeddingModelFromDefinition, modelFromOverlay } from "./pi-models.ts";
 import { isEmbeddingModel, type RegisteredModel } from "./model-overlay.ts";
 import { createMemoryEmbedder } from "./embeddings.ts";
-import { perTenant } from "../tenants/context.ts";
 import type { ModelCredentialStore } from "./model-credential-store.ts";
 import { gatewayKey, ModelUnavailableError, type ModelGatewayTransportConfig } from "./provider-endpoints.ts";
 import { probeModel } from "./model-runtime.ts";
@@ -63,11 +62,11 @@ export function createModelVerifier(input: {
   fetchImpl?: typeof fetch;
 }): ModelVerifier {
   const salt = createHmac("sha256", input.keyMaterial).update("qm:model-verification:credential:v2").digest();
-  const tenantKeys = perTenant(
-    () => new Map<RegisteredModel["provider"] | "gateway", { material: string; derived: Promise<Buffer> }>(),
-  );
+  const credentialKeys = new Map<
+    RegisteredModel["provider"] | "gateway",
+    { material: string; derived: Promise<Buffer> }
+  >();
   function credentialKey(source: RegisteredModel["provider"] | "gateway", material: string): Promise<Buffer> {
-    const credentialKeys = tenantKeys();
     const cached = credentialKeys.get(source);
     if (cached?.material === material) return cached.derived;
     const derived = new Promise<Buffer>((resolve, reject) => {

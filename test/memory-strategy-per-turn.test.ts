@@ -6,6 +6,7 @@ import { createMockAgent } from "./support/mock-agent.ts";
 import type { ModelUtilities } from "../src/agent/agent.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { settle } from "./support/settle.ts";
 
 const SCOPE = "user:U1";
 
@@ -32,23 +33,6 @@ test("per-turn via oneShot sends the extraction prompt + the exact user/reply fr
   assert.match(body, /Prefers terse replies/);
   assert.match(body, /Working on the Q3 launch/);
   assert.doesNotMatch(body, /not a bullet/);
-});
-
-test("autonomous and system-actor turns capture nothing; only a human turn extracts", async () => {
-  const systems: string[] = [];
-  const agent: ModelUtilities = {
-    oneShot(system) {
-      systems.push(system);
-      return Promise.resolve("NONE");
-    },
-  };
-  const { memory } = freshMemory();
-  const strategy = createPerTurnStrategy({ agent, memory });
-  await strategy.onTurnEnd!({ scopeId: SCOPE, input: "trigger", reply: "queued", actorId: "system:ambient:acme" });
-  await strategy.onTurnEnd!({ scopeId: SCOPE, input: "[cron wake]", reply: "done", actorId: "U1", autonomous: true });
-  await strategy.onTurnEnd!({ scopeId: SCOPE, input: "hi", reply: "hello", actorId: "U1" });
-
-  assert.deepEqual(systems, [MEMORY_EXTRACTION_PROMPT], "one extraction, for the human turn only");
 });
 
 test("parseFacts: bullets in, NONE/empty/prose out", () => {
@@ -91,23 +75,6 @@ test("MEMORY_STRATEGY parsing: per-turn is the default, agent-only disables post
   assert.ok(createMemoryStrategy("per-turn", { agent, memory }).strategy.onTurnEnd);
 });
 
-test("debounced: an autonomous turn is skipped and never joins the live actor's burst", async () => {
-  const calls: string[] = [];
-  const agent: ModelUtilities = {
-    oneShot(_system, prompt) {
-      calls.push(prompt);
-      return Promise.resolve("NONE");
-    },
-  };
-  const { memory } = freshMemory();
-  const strategy = createPerTurnStrategy({ agent, memory, captureQuietMs: 30, captureMaxTurns: 10 });
-  await strategy.onTurnEnd!({ scopeId: SCOPE, input: "[cron wake]", reply: "done", actorId: "U1", autonomous: true });
-  await strategy.onTurnEnd!({ scopeId: SCOPE, input: "hi", reply: "hello", actorId: "U1" });
-  await new Promise((r) => setTimeout(r, 120));
-
-  assert.deepEqual(calls, ["User said:\nhi\n\nAssistant replied:\nhello"], "one flush, the live turn only");
-});
-
 test("automatic capture carries the full turn and delivery context", async () => {
   const captures: Array<Parameters<ReturnType<typeof freshMemory>["memory"]["capture"]>> = [];
   const { memory } = freshMemory();
@@ -131,14 +98,44 @@ test("automatic capture carries the full turn and delivery context", async () =>
     input: "question",
     reply: "answer",
   });
+  assert.deepEqual(captures[0]?.[3], { actorId: "U1", context: "conversation" });
   assert.deepEqual(captures[0]?.[4], {
     mode: "automatic",
     sensitivity: "unknown",
-    actorId: "U1",
     conversationScopeId: "channel:C1",
     input: "question",
     reply: "answer",
     sessionId: "session-1",
     idempotencyKey: "run-1",
   });
+});
+test("turns of one session answered to different audiences are captured apart, each under its own audience", async () => {
+  const captures: Array<Parameters<ReturnType<typeof freshMemory>["memory"]["capture"]>> = [];
+  const { memory } = freshMemory();
+  const wrapped = {
+    ...memory,
+    async capture(...args: Parameters<typeof memory.capture>) {
+      captures.push(args);
+      return memory.capture(...args);
+    },
+  };
+  const strategy = createPerTurnStrategy({
+    agent: { oneShot: () => Promise.resolve("- Durable fact") },
+    memory: wrapped,
+    captureQuietMs: 30,
+  });
+  const turn = { scopeId: "personal:U1", actorId: "U1", sessionId: "session-1", reply: "answer" };
+  await strategy.onTurnEnd!({ ...turn, audienceScopeId: "personal:U1", input: "private question" });
+  await strategy.onTurnEnd!({ ...turn, input: "question answered to a channel" });
+  await settle(async () => captures.length === 2);
+
+  assert.deepEqual(
+    captures
+      .map(([, , , , context]) => ({ input: context?.input, audienceScopeId: context?.audienceScopeId }))
+      .sort((x, y) => String(x.input).localeCompare(String(y.input))),
+    [
+      { input: "private question", audienceScopeId: "personal:U1" },
+      { input: "question answered to a channel", audienceScopeId: undefined },
+    ],
+  );
 });

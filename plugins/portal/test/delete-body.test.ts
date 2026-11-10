@@ -1,49 +1,44 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createServer, request as httpRequest, type IncomingMessage } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
+import { startWithFakeCore, type CoreHit } from "./fake-core.ts";
 
-const upstream = createServer(async (req: IncomingMessage, res) => {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) chunks.push(chunk as Buffer);
+const coreApi = createServer((req, res) => {
   res.writeHead(200, { "content-type": "application/json" });
-  res.end(JSON.stringify({ method: req.method, url: req.url, body: Buffer.concat(chunks).toString("utf8") }));
+  res.end("{}");
 });
-await new Promise<void>((r) => upstream.listen(0, r));
-const upstreamUrl = `http://localhost:${(upstream.address() as AddressInfo).port}`;
+await new Promise<void>((r) => coreApi.listen(0, r));
 
 const origin = "http://localhost:18198";
-process.env.PORTAL_PUBLIC_URL = origin;
+process.env.PUBLIC_WEB_URL = origin;
 process.env.PORTAL_SESSION_SECRET = randomUUID();
 process.env.CORE_SIGNING_SECRET = randomUUID();
-process.env.WEB_UI_UPSTREAM = upstreamUrl;
-process.env.CORE_API_URL = upstreamUrl;
+process.env.CORE_API_URL = `http://localhost:${(coreApi.address() as AddressInfo).port}`;
 process.env.PORTAL_LOCAL_AUTH_BYPASS = "1";
 process.env.PORTAL_DEV_PRINCIPAL = "local-user";
 
-const { server } = await import("../src/index.ts");
-await new Promise<void>((r) => server.listen(0, r));
-const port = (server.address() as AddressInfo).port;
-
+const { port, close } = await startWithFakeCore();
 test.after(() => {
-  server.close();
-  upstream.close();
+  close();
+  coreApi.close();
 });
 
 const forget = JSON.stringify({ ids: ["78"] });
 
-test("forgetting a memory fact reaches the web UI with its body", async () => {
+test("forgetting a memory fact reaches core with its body", async () => {
   const res = await fetch(`http://localhost:${port}/api/memory`, {
     method: "DELETE",
     headers: { "content-type": "application/json", origin },
     body: forget,
   });
   assert.equal(res.status, 200);
-  assert.deepEqual(await res.json(), { method: "DELETE", url: "/api/memory", body: forget });
+  const hit = (await res.json()) as CoreHit;
+  assert.deepEqual([hit.method, hit.url, hit.body], ["DELETE", "/api/memory", forget]);
 });
 
-test("a chunked DELETE body reaches the web UI whole", async () => {
+test("a chunked DELETE body reaches core whole", async () => {
   const relayed = await new Promise<{ status: number; body: string }>((resolve, reject) => {
     const req = httpRequest(
       {
@@ -67,5 +62,6 @@ test("a chunked DELETE body reaches the web UI whole", async () => {
     req.end(forget.slice(5));
   });
   assert.equal(relayed.status, 200);
-  assert.deepEqual(JSON.parse(relayed.body), { method: "DELETE", url: "/api/memory", body: forget });
+  const hit = JSON.parse(relayed.body) as CoreHit;
+  assert.deepEqual([hit.method, hit.url, hit.body], ["DELETE", "/api/memory", forget]);
 });

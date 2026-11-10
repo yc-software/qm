@@ -42,6 +42,7 @@ import { ambientPolicySection, loadAmbientPolicy, resetAmbientPolicy } from "./a
 import { contextModelSection, loadContextModel, resetContextModel } from "./context-model";
 import { channelHeaderSection, loadChannelHeader, resetChannelHeader } from "./channel-header";
 import { tip } from "./tooltip";
+import { groupAvatarStackTpl } from "./group-avatars";
 import { onCustomEmojiLoaded, openProjectIconPicker, projectIconTpl } from "./project-icon";
 
 interface ScopeFile {
@@ -409,10 +410,11 @@ function contextRow(c: CoreContext): TemplateResult {
     .filter(Boolean)
     .join(" · ");
   return html`
-    <button class="context-row" type="button" ${tip(sub)} @click=${() => selectContext(c.scopeId)}>
+    <button class="context-row" type="button" @click=${() => selectContext(c.scopeId)}>
       <span class="context-glyph">${projectIconTpl(c.project?.icon, 17) ?? icon(glyph, 15)}</span>
       <span class="context-row-title" dir="auto">${title}</span>
       ${c.isPrivate ? html`<span class="context-lock" ${tip("Private channel")}>${icon(Lock, 12)}</span>` : nothing}
+      ${c.kind === "group" && !c.project ? groupAvatarStackTpl(c.groupMembers ?? [], "context-row-avatars") : nothing}
       <span class="context-row-meta">${meta}</span>
     </button>
   `;

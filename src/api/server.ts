@@ -1,7 +1,7 @@
 import { externalSlackCapabilityAllowed } from "./external-slack-capability.ts";
 import { MemoryDisclosureDenied } from "../memory/disclosure.ts";
 import { MemoryFactsMissing } from "../memory/facts.ts";
-import { nameRequest, reportBackendError } from "../../plugins/chassis/src/error-reporting.ts";
+import { nameRequest, reportBackendError, withRequestContext } from "../../plugins/chassis/src/error-reporting.ts";
 import {
   createServer as createHttpServer,
   type IncomingMessage,
@@ -9,6 +9,8 @@ import {
   type ServerResponse,
   type Server,
 } from "node:http";
+import type { Duplex } from "node:stream";
+import { failUpgrade, isWebSocketUpgrade, responseOnSocket } from "../../plugins/chassis/src/websocket-relay.ts";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest, type HTTPMethods } from "fastify";
 import type { App } from "./app.ts";
 import type { ServerDeps } from "./deps.ts";
@@ -21,18 +23,37 @@ import {
   type SourceAuth,
 } from "../auth/source-auth.ts";
 import { CONTROL_PLANE_AUD, type CapabilityClaims } from "../auth/capability-token.ts";
-import { boundTenant, TenantUnavailable } from "../tenants/context.ts";
-import { capabilityToken, requestCapability, withRequestTenant } from "./tenant-ingress.ts";
+import { bootTenant } from "../tenants/boot.ts";
+import { capabilityToken, identityTenant, requestCapability, withRequestTenant } from "./request-tenant.ts";
+import type { Tenant } from "../tenants/context.ts";
+import { inboundKey, withInboundTenant } from "./inbound-tenant.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } from "../auth/portal-identity.ts";
 import { errMessage } from "../util/errors.ts";
 import { parseScopeId, scopeId } from "../types.ts";
+import { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts";
+import { KEEP_ALIVE_TIMEOUT_MS, logUnansweredCloses } from "../../plugins/chassis/src/http.ts";
 import { armBodyDeadline, PayloadTooLargeError, readRawBody, sendJson, verifyOrReject } from "./http.ts";
-import { findRoute, run, type AdminAccess, type ApiCtx, type BaseCtx, type Route } from "./routes/route.ts";
+import {
+  findRoute,
+  run,
+  usesBrowserSession,
+  type AdminAccess,
+  type ApiCtx,
+  type BaseCtx,
+  type Route,
+} from "./routes/route.ts";
 import { apiRoutes, rawRoutes } from "./routes/index.ts";
 import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
 import { livePersonCapability } from "./artifact-share.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
+import {
+  apiAlias,
+  appHostRequest,
+  browserIdentity,
+  browserSessionTenant,
+  withBrowserActor,
+} from "./browser-session.ts";
 
 async function capabilityAdminDenied(
   access: AdminAccess,
@@ -85,7 +106,6 @@ interface Wiring {
   deps: ServerDeps;
   secret: string | undefined;
   auth: SourceAuth | null;
-  operator: { secret: string; auth: SourceAuth } | null;
   requirePortalIdentity: boolean;
   allowUnsignedSourceAuth: boolean;
 }
@@ -118,10 +138,6 @@ async function verifyCapability(
   const capability = await requestCapability(req, capToken, deps.capabilitySecret ?? secret);
   if (!capability) {
     sendJson(res, 401, { error: "unauthorized", message: "invalid or expired capability token" });
-    return null;
-  }
-  if (capability.tenant !== boundTenant()) {
-    sendJson(res, 401, { error: "unauthorized", message: "capability token belongs to another tenant" });
     return null;
   }
   if (
@@ -190,25 +206,20 @@ async function gate(
   pathname: string,
   url: URL,
   raw: string,
-  route: Pick<Route, "auth" | "actor" | "admin" | "allowedInStrict"> | undefined,
+  route: Pick<Route, "auth" | "actor" | "admin" | "allowedInStrict" | "browser"> | undefined,
   params: Record<string, string>,
+  tenant: Tenant | undefined,
 ): Promise<GateResult | null> {
   const routeAuth = route?.auth;
   const { deps, secret, auth, requirePortalIdentity, allowUnsignedSourceAuth } = wiring;
   const isPublicRoute = routeAuth === "public";
+  const browser = !isPublicRoute && usesBrowserSession(req, route);
   const requiredAuth = typeof routeAuth === "object" ? routeAuth : null;
   const requiredAud = requiredAuth?.aud ?? null;
   let capability: CapabilityClaims | null = null;
   const capToken = capabilityToken(req, false);
   if (isPublicRoute) {
     void isPublicRoute;
-  } else if (routeAuth === "operator") {
-    if (!wiring.operator) {
-      sendJson(res, 503, { error: "operator_auth_unavailable", message: "OPERATOR_SIGNING_SECRET is not configured" });
-      return null;
-    }
-    const signed = { method, path: pathname + url.search, body: raw };
-    if (!(await verifyOrReject(req, res, wiring.operator.secret, wiring.operator.auth, signed, true))) return null;
   } else if (requiredAud || capToken) {
     capability = await verifyCapability(req, res, wiring, method, pathname, requiredAuth);
     if (!capability) return null;
@@ -229,12 +240,13 @@ async function gate(
       return null;
     }
   } else if (
+    !browser &&
     !(await verifyOrReject(
       req,
       res,
       secret,
       auth,
-      { method, path: pathname + url.search, body: raw },
+      canonicalPayload(method, pathname + url.search, raw),
       method !== "GET",
       allowUnsignedSourceAuth,
     ))
@@ -267,7 +279,18 @@ async function gate(
     const psecret = deps.portalIdentitySecret ?? secret;
     const rawToken = req.headers[PORTAL_IDENTITY_HEADER];
     const token = Array.isArray(rawToken) ? rawToken[0] : rawToken;
-    actor = token && psecret ? await verifyPortalIdentity(token, psecret, Date.now()) : null;
+    if (browser) {
+      const signedIn = await browserIdentity(req, method, deps, route?.browser === "embed", tenant);
+      if ("status" in signedIn) {
+        sendJson(res, signedIn.status, { error: signedIn.error, message: signedIn.message });
+        return null;
+      }
+      if ((route?.browser === "self" || route?.admin) && signedIn.imp) {
+        sendJson(res, 403, { error: "forbidden", message: "Unavailable while impersonating." });
+        return null;
+      }
+      actor = signedIn;
+    } else actor = token && psecret ? await verifyPortalIdentity(token, psecret, Date.now()) : null;
     if (actor && deps.identity) {
       const identity = deps.identity;
       const verified = ({ p, imp, authenticatedAs }: PortalIdentity) =>
@@ -280,7 +303,7 @@ async function gate(
     }
     if (actor)
       actor = { ...actor, p: canonicalPerson(actor.p), ...(actor.imp ? { imp: canonicalPerson(actor.imp) } : {}) };
-    if (!isPublicRoute && requirePortalIdentity) {
+    if (!isPublicRoute && (requirePortalIdentity || browser)) {
       const webTurn =
         method === "POST" &&
         pathname === "/v1/turns" &&
@@ -288,19 +311,25 @@ async function gate(
         typeof body === "object" &&
         (body as { surface?: unknown }).surface === "web";
       const routeActor = route?.actor ?? (WRITE_METHODS.has(method) ? "person" : undefined);
-      const needsActor = webTurn || (routeActor !== undefined && routeActor !== "system");
+      const needsActor = browser || webTurn || (routeActor !== undefined && routeActor !== "system");
       if (needsActor) {
-        if (!psecret || !actor) {
-          sendJson(res, 401, { error: "unauthorized", message: "portal identity required" });
+        if (!actor) {
+          const message = browser ? "principal is no longer active" : "portal identity required";
+          sendJson(res, 401, { error: "unauthorized", message });
           return null;
         }
+        if (browser) body = withBrowserActor(route?.actor, req, url, body, actor.p);
         const field = !webTurn && routeActor?.includes(".") ? routeActor : undefined;
-        let asserted: unknown = null;
-        if (webTurn) asserted = (body as { actor?: { externalId?: unknown } }).actor?.externalId ?? null;
-        else if (field) asserted = assertedActorField(field, url, body);
+        const fields = [field, ...(browser && !route?.admin ? ["query.principalId", "body.principalId"] : [])];
+        const claimed = [
+          ...fields.flatMap((f) => (f ? assertedActorValues(f, url, body) : [])),
+          ...(webTurn
+            ? [(body as { actor?: { externalId?: unknown } }).actor?.externalId ?? null].filter((v) => v !== null)
+            : []),
+        ];
         const actorId = actor.p;
         const matchesActor = (value: unknown): boolean => typeof value === "string" && samePerson(value, actorId);
-        if ((field && !matchesActor(asserted)) || (!field && asserted !== null && !matchesActor(asserted))) {
+        if ((field && claimed.length === 0) || !claimed.every(matchesActor)) {
           sendJson(res, 403, { error: "forbidden", message: "portal identity does not match the requested actor" });
           return null;
         }
@@ -310,16 +339,27 @@ async function gate(
   return { body, capability, actor };
 }
 
-function assertedActorField(field: string, url: URL, body: unknown): unknown {
+function assertedActorValues(field: string, url: URL, body: unknown): unknown[] {
   const [where, name] = field.split(".", 2) as [string, string];
-  if (where === "query") return url.searchParams.get(name);
-  const value = body && typeof body === "object" ? (body as Record<string, unknown>)[name] : undefined;
-  return typeof value === "string" ? value : null;
+  if (where === "query") return url.searchParams.getAll(name);
+  return body && typeof body === "object" && Object.hasOwn(body, name) ? [(body as Record<string, unknown>)[name]] : [];
 }
+
+const requestTenants = new WeakMap<IncomingMessage, Tenant>();
 
 function baseCtx(req: IncomingMessage, res: ServerResponse, wiring: Wiring): BaseCtx {
   const url = new URL(req.url ?? "/", "http://localhost");
-  return { req, res, ...wiring, url, pathname: url.pathname, method: req.method ?? "GET", params: {} };
+  const tenant = requestTenants.get(req);
+  return {
+    req,
+    res,
+    ...wiring,
+    url,
+    pathname: url.pathname,
+    method: req.method ?? "GET",
+    params: {},
+    ...(tenant ? { tenant } : {}),
+  };
 }
 
 function respondError(req: IncomingMessage, res: ServerResponse, err: unknown): void {
@@ -327,11 +367,6 @@ function respondError(req: IncomingMessage, res: ServerResponse, err: unknown): 
     const status = err instanceof MemoryFactsMissing ? 404 : 403;
     if (!res.headersSent)
       sendJson(res, status, { error: status === 404 ? "not_found" : "forbidden", message: err.message });
-    else res.destroy();
-    return;
-  }
-  if (err instanceof TenantUnavailable) {
-    if (!res.headersSent) sendJson(res, 503, { error: "tenant_unavailable", message: err.message });
     else res.destroy();
     return;
   }
@@ -381,6 +416,7 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
         raw,
         found?.route,
         found?.params ?? {},
+        base.tenant,
       );
       if (!g) return;
       if (found) {
@@ -438,6 +474,7 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
       raw,
       request.routeOptions.config.route,
       request.params as Record<string, string>,
+      requestTenants.get(request.raw),
     );
     if (!result) {
       reply.hijack();
@@ -482,6 +519,8 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
 
 type ServerOptions = Omit<ServerDeps, "control">;
 
+type Matched<C extends BaseCtx> = { route: Route<C>; params: Record<string, string> } | null;
+
 function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boolean): Server {
   const requirePortalIdentity = Boolean(deps.requireSignedPortalIdentity || deps.production);
   if (deps.signingSecret && !deps.replayDedupe) throw new Error("source auth requires a replay dedupe store");
@@ -489,37 +528,104 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     deps.signingSecret && deps.replayDedupe
       ? createSourceAuth({ signingSecret: deps.signingSecret, dedupe: deps.replayDedupe })
       : null;
-  const operatorSecret = deps.operatorSigningSecret;
-  const operator =
-    isStrongSigningSecret(operatorSecret) && operatorSecret !== deps.signingSecret && deps.replayDedupe
-      ? { secret: operatorSecret, auth: createSourceAuth({ signingSecret: operatorSecret, dedupe: deps.replayDedupe }) }
-      : null;
   const wiring: Wiring = {
     app,
     deps: { ...deps, control: createControlService(app, deps.scheduler, deps.admin) },
     secret: deps.signingSecret,
     auth,
-    operator,
     requirePortalIdentity,
     allowUnsignedSourceAuth,
   };
-  const capabilitySecret = deps.capabilitySecret ?? deps.signingSecret;
   const server = createHttpServer((req, res) => {
     req.on("error", () => res.destroy());
     res.on("error", () => res.destroy());
-    void front(req, res).catch((err: unknown) => respondError(req, res, err));
+    void withRequestContext("core", req, res, () => front(req, res)).catch((err: unknown) =>
+      respondError(req, res, err),
+    );
+  });
+  server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+    socket.on("error", () => socket.destroy());
+    void upgradeFront(req, socket, head).catch((error: unknown) => failUpgrade(socket, "deployment-websocket", error));
   });
   const { fastify, routing } = buildFastify(wiring, server);
   const ready = Promise.resolve(fastify.ready());
   ready.catch((err: unknown) => console.error("[server] fastify initialization failed:", errMessage(err)));
   server.requestTimeout = 0;
   server.headersTimeout = 10_000;
-  server.keepAliveTimeout = 5_000;
+  server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
   server.maxConnections = 1024;
+  logUnansweredCloses(server, "core");
+
+  const capabilitySecret = deps.capabilitySecret ?? deps.signingSecret;
+  async function upgradeFront(req: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
+    const res = isWebSocketUpgrade(req) ? responseOnSocket(req, socket) : null;
+    if (!res) return void socket.destroy();
+    const base: BaseCtx = { ...baseCtx(req, res, wiring), upgrade: { socket, head } };
+    await withRequestContext("core", req, res, () =>
+      inRequestTenant(req, res, base, null, async () => {
+        if (await proxyDeploymentSubdomain(base)) return nameRequest(base.method, "/deployment-proxy/websocket");
+        sendJson(res, 404, { error: "not_found" });
+      }),
+    );
+  }
 
   async function front(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    let base = baseCtx(req, res, wiring);
+    const alias = appHostRequest(req, deps) ? null : apiAlias(base.method, base.pathname);
+    if (alias && canonicalPath(req, base.pathname)) {
+      req.url = `${alias}${base.url.search}`;
+      base = baseCtx(req, res, wiring);
+    }
+    const raw = findRoute(rawRoutes, base.method, base.pathname);
+    const matched = raw ? null : findRoute(apiRoutes, base.method, base.pathname);
+    await inRequestTenant(req, res, base, raw ?? matched, () => serve(req, res, base, raw, matched));
+  }
+
+  async function inRequestTenant(
+    req: IncomingMessage,
+    res: ServerResponse,
+    base: BaseCtx,
+    found: Matched<BaseCtx> | Matched<ApiCtx>,
+    then: () => Promise<void>,
+  ): Promise<void> {
+    const route = found?.route;
+    const next = (tenant: Tenant | undefined): Promise<void> => {
+      if (tenant) {
+        requestTenants.set(req, tenant);
+        base.tenant = tenant;
+      }
+      return then();
+    };
+    const inbound = inboundKey(req, deps, found, base.url);
+    if (inbound)
+      return withInboundTenant(
+        app,
+        inbound,
+        next,
+        async () =>
+          (await identityTenant(req, deps.portalIdentitySecret ?? deps.signingSecret)) ??
+          (usesBrowserSession(req, route) ? (browserSessionTenant(req, deps) ?? bootTenant()) : undefined),
+      );
+    await withRequestTenant(
+      req,
+      res,
+      route,
+      capabilitySecret,
+      bootTenant(),
+      next,
+      deps.portalIdentitySecret ?? deps.signingSecret,
+      () => (usesBrowserSession(req, route) ? browserSessionTenant(req, deps) : undefined),
+    );
+  }
+
+  async function serve(
+    req: IncomingMessage,
+    res: ServerResponse,
+    base: BaseCtx,
+    raw: Matched<BaseCtx>,
+    matched: Matched<ApiCtx>,
+  ): Promise<void> {
     armBodyDeadline(req, deps.requestBodyDeadlineMs ?? 30_000);
-    const base = baseCtx(req, res, wiring);
     if (await proxyDeploymentSubdomain(base)) {
       nameRequest(base.method, "/deployment-proxy/*");
       return;
@@ -528,23 +634,25 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
       sendJson(res, 404, { error: "not_found", message: `${base.method} ${base.pathname}` });
       return void req.resume();
     }
-    const raw = findRoute(rawRoutes, base.method, base.pathname);
     if (raw) {
-      if ("path" in raw.route) nameRequest(base.method, raw.route.path);
       const routeAuth = raw.route.auth;
-      return withRequestTenant(req, res, raw.route, capabilitySecret, deps.tenancy, async () => {
-        if (typeof routeAuth === "object") {
-          base.capability = await verifyCapability(req, res, wiring, base.method, base.pathname, routeAuth);
-          if (!base.capability) return void req.resume();
-        }
-        await run(raw.route, raw.params, base);
-      });
+      if (typeof routeAuth === "object") {
+        base.capability = await verifyCapability(req, res, wiring, base.method, base.pathname, routeAuth);
+        if (!base.capability) return void req.resume();
+      }
+      await run(raw.route, raw.params, base);
+      return;
     }
-    const matched = findRoute(apiRoutes, base.method, base.pathname);
     if (matched && "path" in matched.route) nameRequest(base.method, matched.route.path);
     const routeAuth = matched?.route.auth;
     const acceptsSourceAuth = !matched || routeAuth === "source" || routeAuth === "either";
-    if (wiring.secret && !capabilityToken(req, false) && routeAuth !== "public" && acceptsSourceAuth) {
+    if (
+      wiring.secret &&
+      !capabilityToken(req, false) &&
+      routeAuth !== "public" &&
+      acceptsSourceAuth &&
+      !usesBrowserSession(req, matched?.route)
+    ) {
       const timestamp = Number(req.headers["x-timestamp"] ?? 0);
       if (
         !Number.isFinite(timestamp) ||
@@ -558,9 +666,10 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
         return;
       }
     }
-    rawBodies.set(req, await readRawBody(req, matched?.route.maxBodyBytes));
+    if (!matched?.route.streamBody || !usesBrowserSession(req, matched.route))
+      rawBodies.set(req, await readRawBody(req, matched?.route.maxBodyBytes));
     await ready;
-    await withRequestTenant(req, res, matched?.route, capabilitySecret, deps.tenancy, () => routing(req, res));
+    routing(req, res);
   }
   return server;
 }

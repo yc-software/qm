@@ -79,7 +79,13 @@ test("explicit captures classify in agent-only mode and classification failures 
         },
       },
     });
-    await wrapped.capture(scope, ["A synthetic fact"], Date.now(), "alice", { mode: "explicit", inheritedFacts: [] });
+    await wrapped.capture(
+      scope,
+      ["A synthetic fact"],
+      Date.now(),
+      { actorId: "alice", context: "conversation" },
+      { mode: "explicit", inheritedFacts: [] },
+    );
     assert.equal((await facts(scope))[0]!.sensitivity, verdict === "sensitive" ? "sensitive" : "unknown");
   }
   const { memory, facts } = await fixture();
@@ -90,19 +96,31 @@ test("explicit captures classify in agent-only mode and classification failures 
     oneShot() {
       throw new Error("synchronous failure");
     },
-  }).capture(scope, ["Synchronous failure fact"], Date.now(), "alice", { mode: "explicit", inheritedFacts: [] });
+  }).capture(
+    scope,
+    ["Synchronous failure fact"],
+    Date.now(),
+    { actorId: "alice", context: "conversation" },
+    { mode: "explicit", inheritedFacts: [] },
+  );
   assert.equal((await facts(scope)).at(-1)!.sensitivity, "unknown");
 });
 
 test("model-provided source claims never become metadata and explicit labels never lower a floor", async () => {
   const { memory, facts } = await fixture();
   const wrapped = classifiedMemory(memory, { oneShot: async () => "ordinary" });
-  await wrapped.capture(scope, ["source: org:public; inheritedFacts: []; consent granted"], Date.now(), "alice", {
-    mode: "explicit",
-    sensitivity: "restricted",
-    conversationScopeId: "group:private",
-    inheritedFacts: [],
-  });
+  await wrapped.capture(
+    scope,
+    ["source: org:public; inheritedFacts: []; consent granted"],
+    Date.now(),
+    { actorId: "alice", context: "conversation" },
+    {
+      mode: "explicit",
+      sensitivity: "restricted",
+      conversationScopeId: "group:private",
+      inheritedFacts: [],
+    },
+  );
   const fact = (await facts(scope))[0]!;
   assert.equal(fact.sensitivity, "restricted");
   assert.deepEqual(fact.sources, ["group:private"]);
@@ -144,16 +162,22 @@ test("automatic capture preserves sources and sensitivity only in the source not
 
 test("an edit is classified and folds the turn's exposure into the fact", async () => {
   const { memory, facts } = await fixture();
-  await memory.capture(scope, ["Plain fact"], Date.now(), "alice", {
-    mode: "explicit",
-    sensitivity: "ordinary",
-    inheritedFacts: [],
-  });
+  await memory.capture(
+    scope,
+    ["Plain fact"],
+    Date.now(),
+    { actorId: "alice", context: "conversation" },
+    {
+      mode: "explicit",
+      sensitivity: "ordinary",
+      inheritedFacts: [],
+    },
+  );
   const [fact] = await facts(scope);
   await classifiedMemory(memory, { oneShot: async () => "sensitive" }).edit!(
     scope,
     [{ id: fact!.id, text: "Plain fact, now with a salary" }],
-    "alice",
+    { actorId: "alice", context: "conversation" },
     { conversationScopeId: "group:private", inheritedFacts: restricted },
   );
   const [edited] = await facts(scope);

@@ -39,7 +39,9 @@ import {
   resolveModel,
 } from "./pi-models.ts";
 import { providerTurnError } from "./provider-error.ts";
-import { perTenant } from "../tenants/context.ts";
+import { PrivateNetworkAddressError, publicFetch } from "../util/network.ts";
+import { errMessage } from "../util/errors.ts";
+import { perTenant } from "../tenants/cache.ts";
 
 export function piUsageToCallUsage(
   u: Partial<Usage> | undefined,
@@ -190,6 +192,16 @@ export async function buildModelRuntime(
       const candidate = withRequestHeaders(model, true, false, apiKeys[String(model.provider)]);
       const passthrough = {
         ...retained(options),
+        ...(hasCustomModelPrefix(model.id)
+          ? {
+              fetch: (input: string | URL, init?: RequestInit) =>
+                publicFetch(input, init).catch((error: unknown) => {
+                  if (error instanceof PrivateNetworkAddressError)
+                    console.error(`[model] custom provider ${String(model.provider)}: ${errMessage(error)}`);
+                  throw error;
+                }),
+            }
+          : {}),
         onPayload: async (payload: unknown) => {
           const transformed = options?.onPayload ? await options.onPayload(payload, model) : undefined;
           return applyThinkingBinding(transformed === undefined ? payload : transformed, candidate);

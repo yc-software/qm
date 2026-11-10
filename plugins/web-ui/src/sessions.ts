@@ -72,11 +72,12 @@ import {
   bumpActivity,
   sidebarSessions,
   groupProjectSessions,
+  sidebarProjectSeeds,
   recencyGroup,
-  recentProjectSeeds,
   mergeChildren,
   mergeFirstPage,
   rowIndicators,
+  type RowIndicators,
   surfaceOf,
   splitPinned,
   upsertSessions,
@@ -86,6 +87,7 @@ import {
   type ChatBrowseStatus,
 } from "./session-list";
 import { tip } from "./tooltip";
+import { chatWithPersonaId, personaEditable, personaGlyph, personaSeeds, viewPersona } from "./personas";
 import { errMessage, swallow, swallowAs } from "../../chassis/src/errors";
 import { copyText, menuSelect, relTime, sheenLabel, workingWave } from "./ui";
 import { slackMark } from "./slack-mark";
@@ -101,6 +103,7 @@ import {
   scopeChip,
 } from "./contexts";
 import { groupDmLabel, groupDmText } from "./group-dm-label";
+import { groupAvatarStackTpl } from "./group-avatars";
 import { transcriptModel } from "./model-options";
 import { appState, closeSidebarOnNarrowView, renderSidebarTop, syncDocumentTitle, syncUrlFromState } from "./shell";
 import { beginNavigation, endNavigation } from "./url-history";
@@ -109,7 +112,6 @@ import type { Conversation } from "./conv-types";
 import {
   startNewChatInCanvas,
   mountRestoredCanvas,
-  focusedPaneConversation,
   openBackgroundInCanvas,
   beginSessionDrag,
   endPaneDrag,
@@ -132,6 +134,7 @@ export const sessionsState = {
   renamingId: null as string | null,
   openingKey: null as string | null,
   webOnly: false,
+  groupByActivity: false,
   hasArchived: false,
   collapsedProjectScopes: new Set<string>(),
   expandedProjectScopes: new Set<string>(),
@@ -179,14 +182,26 @@ function visibleRowOrder(): string[] {
     .filter(Boolean);
 }
 
-const WEB_ONLY_KEY = "web-ui:web-only";
-sessionsState.webOnly = ((): boolean => {
+function storedFlag(key: string): boolean {
   try {
-    return localStorage.getItem(WEB_ONLY_KEY) === "1";
+    return localStorage.getItem(key) === "1";
   } catch {
     return false;
   }
-})();
+}
+
+function storeFlag(key: string, value: boolean): void {
+  try {
+    localStorage.setItem(key, value ? "1" : "0");
+  } catch {
+    void 0;
+  }
+}
+
+const WEB_ONLY_KEY = "web-ui:web-only";
+const GROUP_BY_ACTIVITY_KEY = "web-ui:sidebar-group-by-activity";
+sessionsState.webOnly = storedFlag(WEB_ONLY_KEY);
+sessionsState.groupByActivity = storedFlag(GROUP_BY_ACTIVITY_KEY);
 
 let sessionsLoading = false;
 let sessionsNotice = "";
@@ -261,7 +276,7 @@ export function resetSessionsState(): void {
 }
 
 function projectSeedsForRecents() {
-  return recentProjectSeeds(contextsState.list);
+  return [...sidebarProjectSeeds(contextsState.list, sessionsState.groupByActivity), ...personaSeeds()];
 }
 
 function recentItemActivity(item: RecentItem): number {
@@ -458,21 +473,7 @@ function newChatHint(name: string): string {
 function groupAvatars(item: Extract<RecentItem, { kind: "project" }>): TemplateResult | typeof nothing {
   if (item.groupKind !== "group") return nothing;
   const context = contextsState.list.find((candidate) => candidate.scopeId === item.scopeId);
-  const members = context && !context.project ? (context.groupMembers ?? []) : [];
-  if (!members.length) return nothing;
-  const shown = members.length > 3 ? members.slice(0, 2) : members;
-  const overflow = members.length - shown.length;
-  const everyone = members.map((member) => member.displayName).join(", ");
-  return html`<span class="group-avatar-stack" role="img" aria-label=${`With ${everyone}`}>
-    ${shown.map((member) =>
-      member.avatarUrl
-        ? html`<img class="group-avatar" src=${member.avatarUrl} alt="" loading="lazy" referrerpolicy="no-referrer" />`
-        : html`<span class="group-avatar initial" aria-hidden="true"
-            >${[...member.displayName.trim()][0]?.toUpperCase() ?? "?"}</span
-          >`,
-    )}
-    ${overflow ? html`<span class="group-avatar more" aria-hidden="true">+${overflow}</span>` : nothing}
-  </span>`;
+  return groupAvatarStackTpl(context && !context.project ? (context.groupMembers ?? []) : []);
 }
 
 function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): TemplateResult {
@@ -486,16 +487,22 @@ function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): Templa
     glyph = Users;
     glyphSize = 12;
   }
-  let fallbackName = "Project";
+  const personaId = item.groupKind === "persona" ? item.scopeId.slice("persona:".length) : null;
+  if (personaId) glyph = Bot;
+  let fallbackName = personaId ? "Persona" : "Project";
   if (item.groupKind === "channel") fallbackName = "Channel";
   else if (item.groupKind === "group") fallbackName = "Group DM";
   const name = item.name ?? fallbackName;
-  const customGlyph = glyph === Folder ? projectIconTpl(projectOf(item.scopeId)?.icon, 14) : null;
+  let customGlyph = glyph === Folder ? projectIconTpl(projectOf(item.scopeId)?.icon, 14) : null;
+  if (personaId) customGlyph = personaGlyph(personaId, 14);
   const childrenId = `recent-${item.scopeId.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
   const menuKey = projectMenuKey(item.scopeId);
   const menuOpen = sessionsState.openMenuId === menuKey;
   return html`
-    <section class="recent-project ${item.sessions.some(isActiveRow) ? "active" : ""}" aria-label=${`${name} project`}>
+    <section
+      class="recent-project ${item.sessions.some(isActiveRow) ? "active" : ""}"
+      aria-label=${`${name} ${personaId ? "persona" : "project"}`}
+    >
       ${
         sessionsState.renamingId === menuKey
           ? projectRenameRow(item)
@@ -538,7 +545,10 @@ function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): Templa
                 type="button"
                 aria-label=${newChatHint(name)}
                 ${tip(NEW_CHAT_TOOLTIP)}
-                @click=${(event: Event) => startProjectChat(event, item.scopeId, item.name)}
+                @click=${(event: Event) =>
+                  personaId
+                    ? startPersonaChatFromSidebar(event, personaId)
+                    : startProjectChat(event, item.scopeId, item.name)}
               >
                 ${icon(Plus, 15)}
               </button>
@@ -622,18 +632,51 @@ export function openNewChat(scopeId: string | null, name: string | null, threadR
   return conv;
 }
 
-export function startNewChatInLastScope(): void {
-  const mounted = (focusedPaneConversation() ?? mainConversation()).state;
-  const scopeId = mounted.scopeId ?? visibleSessions().find((s) => !s.archived)?.scopeId ?? null;
-  startNewChat(scopeId, scopeId ? projectName(scopeId) : null);
-}
-
 function startProjectChat(event: Event, scopeId: string, name: string | null): void {
   event.stopPropagation();
   startNewChat(scopeId, name);
 }
 
+function startPersonaChatFromSidebar(event: Event, personaId: string): void {
+  event.stopPropagation();
+  void chatWithPersonaId(personaId);
+}
+
+function personaMenuPopover(personaId: string): TemplateResult {
+  return html`
+    <div class="session-menu-popover" role="menu" ${ref(placeSessionMenu)} @click=${(e: Event) => e.stopPropagation()}>
+      <button
+        class="session-menu-option"
+        type="button"
+        role="menuitem"
+        @click=${() => {
+          sessionsState.openMenuId = null;
+          viewPersona(personaId);
+        }}
+      >
+        ${icon(Bot, 15)}<span>View persona</span>
+      </button>
+      ${
+        personaEditable(personaId)
+          ? html`<button
+              class="session-menu-option"
+              type="button"
+              role="menuitem"
+              @click=${() => {
+                sessionsState.openMenuId = null;
+                viewPersona(personaId, true);
+              }}
+            >
+              ${icon(Pencil, 15)}<span>Edit persona</span>
+            </button>`
+          : nothing
+      }
+    </div>
+  `;
+}
+
 function projectMenuPopover(item: Extract<RecentItem, { kind: "project" }>): TemplateResult {
+  if (item.groupKind === "persona") return personaMenuPopover(item.scopeId.slice("persona:".length));
   const owned = projectOf(item.scopeId)?.ownerId === appState.me?.user;
   return html`
     <div class="session-menu-popover" role="menu" ${ref(placeSessionMenu)} @click=${(e: Event) => e.stopPropagation()}>
@@ -889,30 +932,31 @@ function liveThreads(): ReadonlySet<string> {
   return live;
 }
 
-function sessionWorking(s: CoreSession): boolean {
-  return rowIndicators(s, liveThreads()).working;
-}
-
-function statusMarks(s: CoreSession): TemplateResult {
-  const ind = rowIndicators(s, liveThreads());
+function statusMarks(ind: RowIndicators): TemplateResult {
   return html`${ind.working ? html`<span class="working-mark" ${ref(syncWorkingPulse)}>${workingWave()}</span>` : nothing}${
     ind.awaiting ? html`<span class="awaiting-dot" aria-label="Waiting for your reply"></span>` : nothing
-  }${
-    ind.background
-      ? html`<span
-          class="bg-chip"
-          role="button"
-          tabindex="0"
-          aria-label="${ind.background.label}. Click to inspect"
-          ${tip(`${ind.background.label}. Click to inspect`)}
-          @click=${(e: Event) => openBackgroundInspector(e, s)}
-          @keydown=${(e: KeyboardEvent) => (e.key === "Enter" || e.key === " ") && openBackgroundInspector(e, s)}
-          >${ind.background.jobs > 0 ? icon(Cog, 11) : nothing}${
-            ind.background.watches > 0 ? icon(Binoculars, 11) : nothing
-          }${ind.background.crons > 0 ? icon(Clock3, 11) : nothing}${ind.background.subagents > 0 ? icon(Bot, 11) : nothing}${ind.background.goal ? icon(Target, 11) : nothing}</span
-        >`
-      : nothing
   }`;
+}
+
+export function backgroundIcons(background: NonNullable<RowIndicators["background"]>): TemplateResult {
+  return html`${background.jobs > 0 ? icon(Cog, 11) : nothing}${background.watches > 0 ? icon(Binoculars, 11) : nothing}${
+    background.crons > 0 ? icon(Clock3, 11) : nothing
+  }${background.goal ? icon(Target, 11) : nothing}`;
+}
+
+function backgroundChip(s: CoreSession, ind: RowIndicators): TemplateResult | typeof nothing {
+  const background = ind.background;
+  if (!background) return nothing;
+  return html`<span
+    class="bg-chip"
+    role="button"
+    tabindex="0"
+    aria-label="${background.label}. Click to inspect"
+    ${tip(`${background.label}. Click to inspect`)}
+    @click=${(e: Event) => openBackgroundInspector(e, s)}
+    @keydown=${(e: KeyboardEvent) => (e.key === "Enter" || e.key === " ") && openBackgroundInspector(e, s)}
+    >${backgroundIcons(background)}</span
+  >`;
 }
 
 function openBackgroundInspector(e: Event, s: CoreSession): void {
@@ -931,6 +975,7 @@ function isActiveRow(s: CoreSession): boolean {
 }
 
 function chatPageRow(s: CoreSession): TemplateResult {
+  const ind = rowIndicators(s, liveThreads());
   const readOnly = surfaceOf(s) !== "slack" && !s.canContinue;
   const color = displaySessionColor(s.color);
   return html`
@@ -944,7 +989,9 @@ function chatPageRow(s: CoreSession): TemplateResult {
           void openSession(s);
         }}
       >
-        <span class="list-row-title">${statusMarks(s)}<span dir="auto">${groupDmTitle(s)}</span></span>
+        <span class="list-row-title"
+          >${statusMarks(ind)}<span dir="auto">${groupDmTitle(s)}</span>${backgroundChip(s, ind)}</span
+        >
         <span class="list-row-meta">
           ${unreadDot(s)} ${scopeChip(s.scopeId, s.channelName ?? null)}
           ${surfaceOf(s) === "slack" ? html`<span class="surface surface-slack">${slackMark(13, true)}</span>` : nothing}
@@ -1094,7 +1141,7 @@ function surfaceGlyph(s: CoreSession): TemplateResult | typeof nothing {
 }
 
 function rowContext(s: CoreSession): string | null {
-  let label = sharedContextLabel(s.scopeId, s.channelName ?? null);
+  let label = projectName(s.scopeId) ?? sharedContextLabel(s.scopeId, s.channelName ?? null);
   if (surfaceOf(s) === "slack") label = s.type === "group" ? groupDmText(s.channelName) : channelLabel(s);
   return label && label !== sessionTitle(s) ? label : null;
 }
@@ -1111,7 +1158,8 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
   const readOnly = surfaceOf(s) !== "slack" && !s.canContinue;
   const surface = surfaceOf(s);
   const context = projectChild ? null : rowContext(s);
-  const working = sessionWorking(s);
+  const ind = rowIndicators(s, liveThreads());
+  const working = ind.working;
   const color = displaySessionColor(s.color);
   let titleContent: string | TemplateResult = groupDmTitle(s);
   if (refreshingTitle || pendingForkThreads.has(s.threadRef)) {
@@ -1193,8 +1241,8 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
         }}
       >
         <div class="title" aria-live="polite">
-          ${statusMarks(s)}${surfaceGlyph(s)}<span class="tl" dir="auto">${titleContent}</span
-          >${context ? html`<span class="row-context" ${tip(context)}>${context}</span>` : nothing}${unreadDot(s)}
+          ${statusMarks(ind)}${surfaceGlyph(s)}<span class="tl" dir="auto">${titleContent}</span
+          >${backgroundChip(s, ind)}${context ? html`<span class="row-context" ${tip(context)}>${context}</span>` : nothing}${unreadDot(s)}
         </div>
       </a>
       ${
@@ -1492,11 +1540,7 @@ async function loadMoreSessions(kind: "active" | "archived"): Promise<void> {
 export function setWebOnly(webOnly: boolean): void {
   if (sessionsState.webOnly === webOnly) return;
   sessionsState.webOnly = webOnly;
-  try {
-    localStorage.setItem(WEB_ONLY_KEY, webOnly ? "1" : "0");
-  } catch {
-    void 0;
-  }
+  storeFlag(WEB_ONLY_KEY, webOnly);
   activeCursor = null;
   activePaged = false;
   archivedCursor = null;
@@ -1504,6 +1548,13 @@ export function setWebOnly(webOnly: boolean): void {
   if (showArchived) void loadMoreSessions("archived");
   renderList();
   void refreshSessions({ silent: true });
+}
+
+export function setGroupByActivity(groupByActivity: boolean): void {
+  if (sessionsState.groupByActivity === groupByActivity) return;
+  sessionsState.groupByActivity = groupByActivity;
+  storeFlag(GROUP_BY_ACTIVITY_KEY, groupByActivity);
+  renderList();
 }
 
 export function revealSessionSurface(s: CoreSession): void {

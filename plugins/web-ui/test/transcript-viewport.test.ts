@@ -74,11 +74,12 @@ test("scrollbar presentation follows transitions between single and split views"
 
 test("layout mutations preserve bottom following and an earlier reading anchor independently", () => {
   const dom = new JSDOM(
-    '<main><section class="chat-scroll"><div class="message-stack"><p>Reading here</p></div></section><section class="chat-scroll"></section></main>',
+    '<main><section class="chat-scroll"><div class="message-stack"><article data-index="0"><qm-markdown><p>Reading here</p></qm-markdown></article></div></section><section class="chat-scroll"></section></main>',
   );
   const root = dom.window.document.querySelector("main")!;
   const [reading, following] = [...root.querySelectorAll<HTMLElement>("section")];
   const anchor = reading!.querySelector("p")!;
+  reading!.querySelector("article")!.getBoundingClientRect = () => anchor.getBoundingClientRect();
   let height = 1000;
   let anchorTop = 330;
   for (const element of [reading!, following!]) {
@@ -538,14 +539,14 @@ test("disposing cancels queued work and clears sticky presentation", () => {
   }
 });
 
-test("native scroll anchoring is restored when the reader leaves the bottom", () => {
+test("the viewport owns scroll anchoring in every state instead of the engine's native anchoring", () => {
   const f = fixture();
   try {
     assert.equal(f.s.style.overflowAnchor, "none");
     f.scroll(700);
-    assert.equal(f.s.style.overflowAnchor, "");
-    f.scroll(800);
     assert.equal(f.s.style.overflowAnchor, "none");
+    f.viewport.dispose();
+    assert.equal(f.s.style.overflowAnchor, "");
   } finally {
     f.close();
   }
@@ -1144,5 +1145,338 @@ test("a steer rendered inside the running turn is the latest prompt and anchors 
   } finally {
     viewport.dispose();
     if (restore) Object.defineProperty(globalThis, "getComputedStyle", restore);
+  }
+});
+
+test("a redraw holds the transcript's height until the follow frame so a rebuilt reply cannot clamp the scroll", () => {
+  const f = fixture();
+  const stack = f.s.querySelector<HTMLElement>(".message-stack")!;
+  stack.getBoundingClientRect = () => ({ height: 1000 }) as DOMRect;
+  try {
+    f.viewport.beforeRender();
+    assert.equal(stack.style.minHeight, "1000px");
+    f.viewport.afterRender();
+    assert.equal(stack.style.minHeight, "1000px");
+    f.grow();
+    f.flush();
+    assert.equal(stack.style.minHeight, "");
+    assert.equal(f.s.scrollTop, 900);
+    assert.deepEqual(f.writes, [1100]);
+  } finally {
+    f.close();
+  }
+});
+
+test("a held height waits for in-flight content renders before it is released", async () => {
+  const f = fixture();
+  const stack = f.s.querySelector<HTMLElement>(".message-stack")!;
+  stack.getBoundingClientRect = () => ({ height: 1000 }) as DOMRect;
+  try {
+    const completion = Promise.withResolvers<void>();
+    f.viewport.beforeRender();
+    f.s.dispatchEvent(
+      new f.s.ownerDocument.defaultView!.CustomEvent("qm-content-updating", {
+        bubbles: true,
+        detail: completion.promise,
+      }),
+    );
+    f.viewport.afterRender();
+    f.flush();
+    assert.equal(stack.style.minHeight, "1000px");
+    completion.resolve();
+    await completion.promise;
+    await Promise.resolve();
+    f.grow();
+    f.flush();
+    assert.equal(stack.style.minHeight, "");
+    assert.equal(f.s.scrollTop, 900);
+  } finally {
+    f.close();
+  }
+});
+
+test("a reader keeps a rising height floor until following resumes, so no shrink can clamp them", () => {
+  const f = fixture();
+  const stack = f.s.querySelector<HTMLElement>(".message-stack")!;
+  let height = 1000;
+  stack.getBoundingClientRect = () => ({ height: Math.max(height, parseFloat(stack.style.minHeight) || 0) }) as DOMRect;
+  try {
+    f.scroll(600);
+    f.viewport.beforeRender();
+    assert.equal(stack.style.minHeight, "1000px");
+    f.viewport.afterRender();
+    f.flush();
+    assert.equal(stack.style.minHeight, "1000px");
+    height = 700;
+    f.viewport.beforeRender();
+    assert.equal(stack.style.minHeight, "1000px");
+    height = 1200;
+    f.viewport.beforeRender();
+    assert.equal(stack.style.minHeight, "1200px");
+    f.viewport.cancelFollow();
+    assert.equal(stack.style.minHeight, "1200px");
+    f.viewport.follow(true);
+    f.flush();
+    assert.equal(stack.style.minHeight, "");
+  } finally {
+    f.close();
+  }
+});
+
+function readingFixture(rows: number[]) {
+  const dom = new JSDOM('<section class="chat-scroll"><div class="message-stack"></div></section>');
+  const document = dom.window.document;
+  const s = document.querySelector("section")!;
+  const stack = s.querySelector<HTMLElement>(".message-stack")!;
+  const heights: number[] = [];
+  const texts: string[] = [];
+  const seqs = new Map<string, string>();
+  const draw = (): void => {
+    const nodes = [...stack.children] as HTMLElement[];
+    texts.forEach((text, index) => {
+      let row = nodes[index];
+      if (!row) {
+        row = document.createElement("article");
+        row.append(document.createElement("qm-markdown"));
+        row.firstElementChild!.append(document.createElement("p"));
+        stack.append(row);
+      }
+      row.dataset.index = String(index);
+      if (text && !seqs.has(text)) seqs.set(text, String(100 + seqs.size));
+      row.dataset.entrySeqs = text ? seqs.get(text)! : "";
+      row.querySelector("p")!.textContent = text || `Message ${index}`;
+    });
+    for (const extra of nodes.slice(texts.length)) extra.remove();
+  };
+  const above = (element: Element): number => {
+    const row = element.closest<HTMLElement>("[data-index]")!;
+    return heights.slice(0, [...stack.children].indexOf(row)).reduce((sum, h) => sum + h, 0);
+  };
+  let top = 0;
+  const total = (): number => heights.reduce((sum, h) => sum + h, 0);
+  Object.defineProperties(s, {
+    scrollHeight: { get: total },
+    clientHeight: { value: 200 },
+    scrollTop: { get: () => top, set: (value: number) => (top = Math.max(0, Math.min(value, total() - 200))) },
+  });
+  s.getBoundingClientRect = () => ({ top: 20 }) as DOMRect;
+  const rect = (element: Element): DOMRect => {
+    const row = element.closest<HTMLElement>("[data-index]")!;
+    const index = [...stack.children].indexOf(row);
+    const own = (element as HTMLElement).dataset;
+    const y = 20 + above(element) - top + Number(own.y ?? 0);
+    const height = own.h ? Number(own.h) : (heights[index] ?? 0);
+    return { top: y, bottom: y + height, height } as DOMRect;
+  };
+  const originalRect = dom.window.Element.prototype.getBoundingClientRect;
+  dom.window.HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+    if (this.closest("[data-index]")) return rect(this);
+    return originalRect.call(this);
+  };
+  stack.getBoundingClientRect = () => ({ top: 20 - top, height: total() }) as DOMRect;
+  const frames = new Map<number, FrameRequestCallback>();
+  let id = 0;
+  let resize: (entries?: unknown[]) => void = () => {};
+  const restore = ["requestAnimationFrame", "cancelAnimationFrame", "ResizeObserver", "getComputedStyle"].map(
+    (key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const,
+  );
+  Object.assign(globalThis, {
+    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
+    requestAnimationFrame: (cb: FrameRequestCallback) => {
+      frames.set(++id, cb);
+      return id;
+    },
+    cancelAnimationFrame: (n: number) => frames.delete(n),
+    ResizeObserver: class {
+      constructor(cb: (entries?: unknown[]) => void) {
+        resize = cb;
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  });
+  rows.forEach((height, index) => {
+    heights.push(height);
+    texts.push(`Paragraph ${index}`);
+  });
+  draw();
+  const viewport = createTranscriptViewport({ pinPrompt: () => false });
+  viewport.sync(s);
+  const flush = (): void => {
+    const pending = [...frames.values()];
+    frames.clear();
+    for (const cb of pending) cb(0);
+  };
+  const paragraph = (text: string): HTMLElement =>
+    [...stack.querySelectorAll<HTMLElement>("p")].find((node) => node.textContent === text)!;
+  return {
+    s,
+    stack,
+    viewport,
+    heights,
+    texts,
+    draw,
+    flush,
+    paragraph,
+    layout: () => resize([]),
+    scroll: (value: number) => {
+      s.scrollTop = value;
+      s.dispatchEvent(new dom.window.Event("scroll"));
+    },
+    top: (text: string) => paragraph(text).getBoundingClientRect().top,
+    close: () => {
+      viewport.dispose();
+      dom.window.close();
+      for (const [key, descriptor] of restore) {
+        if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+        else Reflect.deleteProperty(globalThis, key);
+      }
+    },
+  };
+}
+
+test("growth above a reader is absorbed so the line being read does not move", () => {
+  const f = readingFixture([300, 300, 300, 300]);
+  try {
+    f.scroll(650);
+    const before = f.top("Paragraph 2");
+    f.heights[1] = 480;
+    f.layout();
+    assert.equal(f.top("Paragraph 2"), before);
+    assert.equal(f.s.scrollTop, 830);
+  } finally {
+    f.close();
+  }
+});
+
+test("earlier messages prepended into reused rows keep the reader on the same text", () => {
+  const f = readingFixture([300, 300, 300]);
+  try {
+    f.scroll(350);
+    const before = f.top("Paragraph 1");
+    f.texts.unshift("Earlier A", "Earlier B");
+    f.heights.unshift(250, 250);
+    f.draw();
+    f.layout();
+    assert.equal(f.top("Paragraph 1"), before);
+    assert.equal(f.s.scrollTop, 850);
+  } finally {
+    f.close();
+  }
+});
+
+test("a reply rebuilt at settle is found again by its text even though its row key changed", () => {
+  const f = readingFixture([300, 300, 600]);
+  try {
+    f.texts[2] = "";
+    f.draw();
+    f.stack.children[2]!.setAttribute("data-entry-seqs", "150");
+    f.scroll(750);
+    const streaming = f.stack.children[2]!.querySelector("p")!;
+    streaming.textContent = "Reply so far";
+    f.scroll(749);
+    f.scroll(750);
+    const before = streaming.getBoundingClientRect().top;
+    f.viewport.beforeRender();
+    const settled = f.stack.ownerDocument.createElement("p");
+    settled.textContent = "Reply so far, now complete";
+    streaming.replaceWith(settled);
+    f.stack.children[2]!.setAttribute("data-entry-seqs", "200 201");
+    f.heights[1] = 340;
+    f.viewport.afterRender();
+    f.flush();
+    assert.equal(settled.getBoundingClientRect().top, before);
+  } finally {
+    f.close();
+  }
+});
+
+test("a scroll the reader made before a layout change is kept rather than undone", () => {
+  const f = readingFixture([300, 300, 300, 300]);
+  try {
+    f.scroll(650);
+    f.s.scrollTop = 500;
+    f.heights[0] = 400;
+    f.layout();
+    assert.equal(f.s.scrollTop, 500);
+  } finally {
+    f.close();
+  }
+});
+
+test("new content below a reader marks the jump control until the reader returns to the bottom", () => {
+  const f = readingFixture([300, 300, 300, 300]);
+  try {
+    f.scroll(300);
+    assert.equal(f.s.hasAttribute("data-new-below"), false);
+    f.heights[3] = 500;
+    f.layout();
+    assert.equal(f.s.scrollTop, 300);
+    assert.equal(f.s.hasAttribute("data-new-below"), true);
+    f.scroll(1200);
+    assert.equal(f.s.hasAttribute("data-new-below"), false);
+    f.scroll(300);
+    f.heights[0] = 200;
+    f.layout();
+    assert.equal(f.s.hasAttribute("data-new-below"), false);
+  } finally {
+    f.close();
+  }
+});
+
+test("following discards the old reading spot so a later pause does not jump back to it", () => {
+  const f = readingFixture([300, 300, 300, 300]);
+  try {
+    f.scroll(300);
+    f.viewport.follow(true);
+    f.flush();
+    assert.equal(f.s.scrollTop, 1000);
+    f.heights.push(300);
+    f.texts.push("Paragraph 4");
+    f.draw();
+    f.viewport.cancelFollow();
+    f.layout();
+    assert.equal(f.s.scrollTop, 1000);
+  } finally {
+    f.close();
+  }
+});
+
+test("work summaries above the reply never become the reading anchor, so reshaping them leaves the reply still", () => {
+  const f = readingFixture([300, 600, 300]);
+  try {
+    const row = f.stack.children[1]!;
+    const doc = f.stack.ownerDocument;
+    const summary = doc.createElement("summary");
+    summary.textContent = "Ran a command";
+    Object.assign(summary.dataset, { y: "0", h: "20" });
+    row.prepend(summary);
+    const reply = row.querySelector("p")!;
+    Object.assign(reply.dataset, { y: "40", h: "560" });
+    f.scroll(290);
+    const before = reply.getBoundingClientRect().top;
+    summary.dataset.y = "20";
+    reply.dataset.y = "80";
+    f.layout();
+    assert.equal(reply.getBoundingClientRect().top, before);
+  } finally {
+    f.close();
+  }
+});
+
+test("the scroll event echoing the viewport's own correction does not re-anchor the reader", () => {
+  const f = readingFixture([300, 300, 300, 300]);
+  try {
+    f.scroll(650);
+    const before = f.top("Paragraph 2");
+    f.heights[1] = 480;
+    f.layout();
+    f.heights[0] = 400;
+    f.s.dispatchEvent(new f.s.ownerDocument.defaultView!.Event("scroll"));
+    f.layout();
+    assert.equal(f.top("Paragraph 2"), before);
+  } finally {
+    f.close();
   }
 });

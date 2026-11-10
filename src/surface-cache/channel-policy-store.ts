@@ -1,6 +1,6 @@
 import { orgId as configOrgId } from "../config.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
-import { TENANCY, tenantTables } from "../tenants/migrations.ts";
+import { tenantTables } from "../tenants/migrations.ts";
 
 export const BOT_MODES = ["ignore", "rollup", "action", "user"] as const;
 export const DEFAULT_ROLLUP_HOURS = 24;
@@ -80,7 +80,6 @@ const HISTORY_DEFAULT_LIMIT = 50;
 export function createPostgresChannelPolicyStore(connectionString: string): ChannelPolicyStore {
   const orgId = configOrgId();
   const { q, close } = createPgPool(connectionString, [
-    ...TENANCY,
     {
       id: "surface-cache/channel-policy/0001",
       statements: [

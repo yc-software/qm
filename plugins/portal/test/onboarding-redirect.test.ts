@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
+import { startWithFakeCore, type CoreHit } from "./fake-core.ts";
 
 let providerConfigured = false;
 
@@ -22,16 +23,13 @@ const upstream = createServer((req: IncomingMessage, res) => {
 await new Promise<void>((r) => upstream.listen(0, r));
 const upstreamUrl = `http://localhost:${(upstream.address() as AddressInfo).port}`;
 
-process.env.PORTAL_PUBLIC_URL = "http://portal.test";
+process.env.PUBLIC_WEB_URL = "http://portal.test";
 process.env.PORTAL_SESSION_SECRET = "onboarding-test-portal-secret";
 process.env.CORE_SIGNING_SECRET = "onboarding-test-core-secret";
-process.env.WEB_UI_UPSTREAM = upstreamUrl;
 process.env.CORE_API_URL = upstreamUrl;
 
-const { server } = await import("../src/index.ts");
 const { deriveKey, seal } = await import("../src/session.ts");
-await new Promise<void>((r) => server.listen(0, r));
-const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+const { base, close } = await startWithFakeCore();
 
 const sessionKey = deriveKey("onboarding-test-portal-secret", "portal.session.v1");
 function sessionCookie(sub: string): string {
@@ -40,7 +38,7 @@ function sessionCookie(sub: string): string {
 }
 
 test.after(() => {
-  server.close();
+  close();
   upstream.close();
 });
 
@@ -62,24 +60,28 @@ test("unconfigured deployment: non-admin HTML navigation gets a not-set-up page,
   assert.match(await r.text(), /isn&#39;t set up yet/);
 });
 
-test("unconfigured deployment: web-ui JSON requests still proxy through untouched", async () => {
+test("unconfigured deployment: web-ui JSON requests still reach core untouched", async () => {
   const r = await fetch(`${base}/api/sessions`, { headers: { cookie: sessionCookie("U-admin") } });
   assert.equal(r.status, 200);
-  assert.equal(((await r.json()) as { url: string }).url, "/api/sessions");
+  const hit = (await r.json()) as CoreHit;
+  assert.equal(hit.lane, "shell");
+  assert.equal(hit.url, "/api/sessions");
 });
 
-test("unconfigured deployment: settings pages reach web-ui, so onboarding never loops", async () => {
+test("unconfigured deployment: settings pages reach the web UI, so onboarding never loops", async () => {
   for (const path of ["/settings/onboarding", "/settings"]) {
     const r = await fetch(`${base}${path}`, {
       headers: { accept: "text/html", cookie: sessionCookie("U-admin") },
       redirect: "manual",
     });
     assert.equal(r.status, 200, path);
-    assert.equal(((await r.json()) as { url: string }).url, path);
+    const hit = (await r.json()) as CoreHit;
+    assert.equal(hit.lane, "shell", path);
+    assert.equal(hit.url, path);
   }
 });
 
-test("once a provider is configured, admin HTML navigation proxies to web-ui again", async () => {
+test("once a provider is configured, admin HTML navigation reaches the web UI again", async () => {
   providerConfigured = true;
   await new Promise((r) => setTimeout(r, 5_200));
   const r = await fetch(`${base}/`, {
@@ -87,5 +89,7 @@ test("once a provider is configured, admin HTML navigation proxies to web-ui aga
     redirect: "manual",
   });
   assert.equal(r.status, 200);
-  assert.equal(((await r.json()) as { url: string }).url, "/");
+  const hit = (await r.json()) as CoreHit;
+  assert.equal(hit.lane, "shell");
+  assert.equal(hit.url, "/");
 });

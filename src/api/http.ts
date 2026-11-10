@@ -2,7 +2,6 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { verifySignature, type SourceAuth, SOURCE_AUTH_REPLAY_WINDOW_MS } from "../auth/source-auth.ts";
 
 import { json as sendJson, sendBuffered } from "../../plugins/chassis/src/http.ts";
-import { canonicalPayload, TENANT_HEADER } from "../../plugins/chassis/src/source-auth-sign.ts";
 
 export { sendJson };
 
@@ -74,17 +73,11 @@ export function contentTypeWithUtf8Charset(contentType: string): string {
   return textual ? `${contentType}; charset=utf-8` : contentType;
 }
 
-export function pipeToResponse(
-  res: ServerResponse,
-  stream: NodeJS.ReadableStream & { destroy?: () => void },
-  errorMessage: string,
-): void {
-  stream.on("error", () => {
-    if (!res.headersSent) sendJson(res, 500, { error: "stream_error", message: errorMessage });
-    else res.destroy();
-  });
-  res.on("close", () => stream.destroy?.());
-  stream.pipe(res);
+export const UNTRUSTED_CONTENT_SANDBOX_CSP =
+  "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads";
+
+export function frameAncestorsDirective(ancestors: readonly string[]): string {
+  return ["frame-ancestors 'self'", ...ancestors].join(" ");
 }
 
 export function sendRedirect(res: ServerResponse, location: string): void {
@@ -117,17 +110,12 @@ export async function readRawBody(req: IncomingMessage, maxBytes = MAX_BODY_BYTE
   return chunks.length === 0 ? "" : Buffer.concat(chunks).toString("utf8");
 }
 
-export function tenantHeader(req: IncomingMessage): string {
-  const value = req.headers[TENANT_HEADER];
-  return typeof value === "string" ? value : "";
-}
-
 export async function verifyOrReject(
   req: IncomingMessage,
   res: ServerResponse,
   secret: string | undefined,
   auth: SourceAuth | null,
-  signed: { method: string; path: string; body: string },
+  payload: string,
   dedup: boolean,
   allowUnsigned = false,
 ): Promise<boolean> {
@@ -136,7 +124,6 @@ export async function verifyOrReject(
     sendJson(res, 401, { error: "unauthorized", message: "source authentication is not configured" });
     return false;
   }
-  const payload = canonicalPayload(signed.method, signed.path, signed.body, tenantHeader(req));
   const signature = String(req.headers["x-signature"] ?? "");
   const timestamp = Number(req.headers["x-timestamp"] ?? NaN);
   const r =

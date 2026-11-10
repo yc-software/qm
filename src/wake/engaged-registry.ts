@@ -1,25 +1,20 @@
-import { boundTenant, cacheTenant } from "../tenants/context.ts";
-
 export interface EngagedSession {
-  tenantId?: string;
+  tenantId: string;
   threadRef: string;
 }
 
 export interface EngagedRegistry {
-  engage(threadRef: string): void;
-  settle(threadRef: string): void;
+  engage(session: EngagedSession): void;
+  settle(session: EngagedSession): void;
   list(): EngagedSession[];
 }
 
 export function createEngagedRegistry(): EngagedRegistry {
   const engaged = new Map<string, EngagedSession>();
-  const key = (threadRef: string) => `${cacheTenant()}\n${threadRef}`;
+  const key = ({ tenantId, threadRef }: EngagedSession): string => JSON.stringify([tenantId, threadRef]);
   return {
-    engage(threadRef) {
-      const tenantId = boundTenant();
-      engaged.set(key(threadRef), { ...(tenantId === undefined ? {} : { tenantId }), threadRef });
-    },
-    settle: (threadRef) => void engaged.delete(key(threadRef)),
+    engage: (session) => void engaged.set(key(session), { ...session }),
+    settle: (session) => void engaged.delete(key(session)),
     list: () => [...engaged.values()],
   };
 }

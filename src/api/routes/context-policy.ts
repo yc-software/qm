@@ -19,7 +19,7 @@ async function memberScope(ctx: ApiCtx, principalId: string, scope: string): Pro
 export async function getContextPolicy(ctx: ApiCtx): Promise<void> {
   const { res, deps, url } = ctx;
   const principalId = (url.searchParams.get("principalId") ?? "").trim();
-  const scope = (url.searchParams.get("scope") ?? "").trim();
+  const scope = (ctx.params.scope ?? "").trim();
   if (!principalId || !scope)
     return sendJson(res, 400, { error: "bad_request", message: "principalId and scope required" });
   const container = channelContainer(scope);
@@ -46,7 +46,7 @@ export async function setContextPolicy(ctx: ApiCtx): Promise<void> {
   const { res, deps, body } = ctx;
   const b = isObj(body) ? body : {};
   const principalId = typeof b.principalId === "string" ? b.principalId.trim() : "";
-  const scope = typeof b.scope === "string" ? b.scope.trim() : "";
+  const scope = (ctx.params.scope ?? "").trim();
   if (!principalId || !scope)
     return sendJson(res, 400, { error: "bad_request", message: "principalId and scope required" });
   const container = channelContainer(scope);
@@ -91,6 +91,20 @@ export async function setContextPolicy(ctx: ApiCtx): Promise<void> {
 }
 
 export const contextPolicyRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "GET", path: "/v1/contexts/policy", actor: "query.principalId", auth: "source", handle: getContextPolicy },
-  { method: "PUT", path: "/v1/contexts/policy", auth: "source", handle: setContextPolicy },
+  {
+    method: "GET",
+    path: "/v1/contexts/:scope/ambient-policy",
+    browser: true,
+    actor: "query.principalId",
+    auth: "source",
+    handle: getContextPolicy,
+  },
+  {
+    method: "PUT",
+    path: "/v1/contexts/:scope/ambient-policy",
+    browser: true,
+    actor: "body.principalId",
+    auth: "source",
+    handle: setContextPolicy,
+  },
 ];

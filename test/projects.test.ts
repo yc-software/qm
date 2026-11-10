@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createInsecureTestServer } from "../src/api/server.ts";
+import { configureCommandRules } from "./support/command-rules.ts";
 import { projectRoutes } from "../src/api/routes/projects.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
@@ -29,7 +30,7 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { testMap, testDeployBackings } from "./support/test-database.ts";
+import { testMap, testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { isAgentReply } from "../src/sessions/items.ts";
 
@@ -364,9 +365,8 @@ async function listen(server: Server): Promise<string> {
 
 test("Project routes use ordinary group sessions with the durable roster as authority", async (t) => {
   assert.ok(projectRoutes.every((route) => route.auth === "either"));
-  const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-lean-")) });
-  const built = buildApp(config);
-  await built.loadTenants();
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-lean-")) }));
+  await configureCommandRules(built.config);
   const server = createInsecureTestServer(built.app, {});
   const base = await listen(server);
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
@@ -496,7 +496,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
     approval: { requestId: pendingApproval.requestId, approved: true },
   });
   assert.equal(forgedApproval.status, "refused");
-  const deployAcl = createAclStore(createPostgresGrantStore(config.databaseUrl!));
+  const deployAcl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore: createDeployStore(testDeployBackings()),
@@ -1171,7 +1171,6 @@ test("a project can add a signed-in principal on a deployment whose directory is
 
 test("Slack-linked project turns use the inherited channel roster", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-linked-roster-")) }));
-  await built.loadTenants();
   await built.app.upsertDirectory([
     { principalId: "owner", displayName: "Owner", type: "internal" },
     { principalId: "chan-pal", displayName: "Channel Pal", type: "internal" },

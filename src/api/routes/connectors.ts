@@ -1,7 +1,6 @@
-import { bindTenant, withRowTenant } from "../tenant-ingress.ts";
 import { getSentEmail, listSentEmails } from "../../connectors/gmail-sent.ts";
 import { GmailApiError } from "../../connectors/gmail-api.ts";
-import { orgId } from "../../config.ts";
+import { orgId as configOrgId } from "../../config.ts";
 import {
   authorizeUrl,
   exchangeCode,
@@ -18,6 +17,7 @@ import {
   type OAuthState,
   ACCOUNT_TYPES,
   isAccountType,
+  oauthCallbackUrl,
 } from "../../connectors/oauth.ts";
 import { providerTokenStatuses } from "../../credentials/connector-status.ts";
 import type { ConnectorTokenStore, DerivedOAuthAuth, OAuthTokenStatus } from "../../credentials/keychain.ts";
@@ -27,9 +27,9 @@ import { personKey, samePerson } from "../../directory/person.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
 import { normalizeInboundExpiresAt } from "../expiry.ts";
 import { sendJson, sendRedirect } from "../http.ts";
-import { tenantClaim } from "../../tenants/context.ts";
-import { audit } from "./shared.ts";
+import { audit, isObj } from "./shared.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
+import { forInboxLoopsPeople } from "./loops.ts";
 
 const OAUTH_STATE_MAX_AGE_MS = 10 * 60_000;
 function oauthStateSecret(deps: ServerDeps, signingSecret: string | undefined): string {
@@ -81,9 +81,10 @@ function parseOAuthRoute(pathname: string): { provider: string; action: "start" 
   return { provider: decodeURIComponent(provider), action };
 }
 
-function safeReturnTo(value: string | null): string | undefined {
-  if (!value || !value.startsWith("/") || value.startsWith("//")) return undefined;
-  return value;
+function safeReturnTo(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.startsWith("/")) return undefined;
+  const url = new URL(value, "http://x");
+  return url.host === "x" && !url.pathname.startsWith("//") ? value : undefined;
 }
 
 function latestRefreshFailure(
@@ -132,16 +133,9 @@ async function connectorProviderStatus(
   return Object.fromEntries(entries);
 }
 
-function oauthCallback(ctx: BaseCtx): Promise<void> {
-  const state = ctx.url.searchParams.get("state");
-  if (!ctx.deps.oauthFlows || !state) return finishOAuthCallback(ctx);
-  return withRowTenant(ctx.req, ctx.res, ctx.deps.tenancy, { table: "oauth_flows", id: state }, () =>
-    finishOAuthCallback(ctx),
-  );
-}
-
-async function finishOAuthCallback(ctx: BaseCtx): Promise<void> {
-  const { res, deps, secret, url } = ctx;
+async function oauthCallback(ctx: BaseCtx): Promise<void> {
+  const { deps, secret, url, res } = ctx;
+  const provider = parseOAuthRoute(ctx.pathname)!.provider;
   if (!deps.connectorTokens)
     return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
   const code = url.searchParams.get("code") ?? "";
@@ -149,28 +143,11 @@ async function finishOAuthCallback(ctx: BaseCtx): Promise<void> {
   const providerError = url.searchParams.get("error");
   if (providerError) return sendJson(res, 400, { error: "oauth_denied", message: providerError });
   if (!code || !stateParam) return sendJson(res, 400, { error: "bad_request", message: "code and state required" });
-  const connectorTokens = deps.connectorTokens;
-  let state: OAuthState;
+  let state;
   try {
     state = await resumeOAuthFlow(deps, secret, stateParam);
-  } catch (e) {
-    return sendJson(res, 400, { error: "oauth_callback_failed", message: errMessage(e) });
-  }
-  const complete = () => completeOAuthCallback(ctx, connectorTokens, code, state);
-  return state.tenant ? bindTenant(state.tenant, complete) : complete();
-}
-
-async function completeOAuthCallback(
-  ctx: BaseCtx,
-  connectorTokens: ConnectorTokenStore,
-  code: string,
-  state: OAuthState,
-): Promise<void> {
-  const { res, deps, pathname } = ctx;
-  const oauthRoute = parseOAuthRoute(pathname)!;
-  try {
-    if (state.provider !== oauthRoute.provider) throw new Error("OAuth provider mismatch");
-    if (state.orgId !== undefined && state.orgId !== orgId()) {
+    if (state.provider !== provider) throw new Error("OAuth provider mismatch");
+    if (state.orgId !== undefined && state.orgId !== configOrgId()) {
       throw new Error("OAuth state is for a different org");
     }
     if (
@@ -180,20 +157,21 @@ async function completeOAuthCallback(
       throw new Error("OAuth state was already used or replay protection is unavailable");
     }
     const accountType = state.accountType ?? "default";
-    const client = await resolverFor(deps)(oauthRoute.provider, { accountType });
-    const { hosts, token } = await exchangeCode(oauthRoute.provider, code, state.redirectUri, {
+    const client = await resolverFor(deps)(provider, { accountType });
+    const { hosts, token } = await exchangeCode(provider, code, state.redirectUri, {
       client,
       fetchImpl: deps.oauthFetch,
       accountType,
       ...(state.codeVerifier ? { codeVerifier: state.codeVerifier } : {}),
     });
     if (!token.accessToken) throw new Error("oauth exchange returned an empty access token");
-    const stamped = { ...token, clientRef: client.clientRef, accountType, orgId: orgId() };
-    for (const host of hosts) await connectorTokens.setConnectorToken(host, state.principalId, stamped, accountType);
+    const stamped = { ...token, clientRef: client.clientRef, accountType, orgId: configOrgId() };
+    for (const host of hosts)
+      await deps.connectorTokens.setConnectorToken(host, state.principalId, stamped, accountType);
     audit(deps, {
       principalId: state.principalId,
       action: "connector.oauth.connected",
-      resource: oauthRoute.provider,
+      resource: provider,
       scopeLabel: state.principalId,
     });
     if (state.consentLinkId && deps.consentLinks) {
@@ -201,11 +179,11 @@ async function completeOAuthCallback(
     }
     if (state.returnTo) {
       const dest = new URL(state.returnTo, "http://localhost");
-      dest.searchParams.set("connector", oauthRoute.provider);
+      dest.searchParams.set("connector", provider);
       dest.searchParams.set("status", "connected");
       return sendRedirect(res, `${dest.pathname}${dest.search}${dest.hash}`);
     }
-    return sendJson(res, 200, { ok: true, provider: oauthRoute.provider, principalId: state.principalId, hosts });
+    return sendJson(res, 200, { ok: true, provider, principalId: state.principalId, hosts });
   } catch (e) {
     return sendJson(res, 400, { error: "oauth_callback_failed", message: errMessage(e) });
   }
@@ -236,7 +214,7 @@ async function consentRedeem(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 200, { status: peeked.reason === "expired" ? "expired" : "invalid" });
   }
   const rec = peeked.rec;
-  if (rec.orgId !== undefined && rec.orgId !== orgId()) return sendJson(res, 200, { status: "invalid" });
+  if (rec.orgId !== undefined && rec.orgId !== configOrgId()) return sendJson(res, 200, { status: "invalid" });
   if (!oauthProvider(rec.provider)) return sendJson(res, 200, { status: "invalid" });
   if (!samePerson(clicker, rec.principalId)) {
     const clickerConnected = await principalHasProvider(deps, rec.provider, clicker);
@@ -267,8 +245,7 @@ async function consentRedeem(ctx: ApiCtx): Promise<void> {
       provider: rec.provider,
       principalId: rec.principalId,
       redirectUri: rec.redirectUri,
-      orgId: orgId(),
-      ...tenantClaim(),
+      orgId: configOrgId(),
       ...(rec.accountType !== "default" ? { accountType: rec.accountType } : {}),
       clientRef: client.clientRef,
       ...(returnTo ? { returnTo } : {}),
@@ -322,7 +299,7 @@ async function consentMint(ctx: ApiCtx): Promise<void> {
     });
   }
   let redirectUri = "";
-  if (base) redirectUri = `${base}/v1/connectors/oauth/${provider}/callback`;
+  if (base) redirectUri = oauthCallbackUrl(base, provider);
   else if (typeof b.redirectUri === "string") redirectUri = b.redirectUri;
   if (!redirectUri)
     return sendJson(res, 400, {
@@ -352,7 +329,7 @@ async function consentMint(ctx: ApiCtx): Promise<void> {
     safeReturnTo(typeof b.returnTo === "string" ? b.returnTo : null) ?? (deps.portalUrl ? "/connectors" : undefined);
   const { linkId } = await deps.consentLinks.mint({
     principalId: capability.actorId,
-    orgId: orgId(),
+    orgId: configOrgId(),
     provider,
     accountType,
     redirectUri,
@@ -373,21 +350,51 @@ async function consentMint(ctx: ApiCtx): Promise<void> {
   });
 }
 
+interface OAuthStart {
+  provider: string;
+  principalId: string;
+  redirectUri: string;
+  returnTo: string | undefined;
+  accountType: AccountType;
+}
+
 async function oauthStart(ctx: ApiCtx): Promise<void> {
-  const { res, deps, secret, url, pathname } = ctx;
-  const oauthRoute = parseOAuthRoute(pathname)!;
+  const { url, pathname } = ctx;
+  return startOAuth(ctx, {
+    provider: parseOAuthRoute(pathname)!.provider,
+    principalId: url.searchParams.get("principalId") ?? "",
+    redirectUri: url.searchParams.get("redirectUri") ?? "",
+    returnTo: safeReturnTo(url.searchParams.get("returnTo")),
+    accountType: parseAccountType(url.searchParams.get("accountType")),
+  });
+}
+
+async function browserOAuthStart(ctx: ApiCtx): Promise<void> {
+  if (!ctx.actor || !ctx.deps.portalUrl)
+    return sendJson(ctx.res, 401, { error: "unauthorized", message: "portal identity required" });
+  const base = ctx.deps.portalUrl.replace(/\/$/, "");
+  const provider = ctx.params.provider!;
+  return startOAuth(ctx, {
+    provider,
+    principalId: ctx.actor.p,
+    redirectUri: `${base}/v1/connectors/oauth/${encodeURIComponent(provider)}/callback`,
+    returnTo: safeReturnTo(isObj(ctx.body) ? ctx.body.returnTo : undefined) ?? "/keychain",
+    accountType: "default",
+  });
+}
+
+async function startOAuth(ctx: ApiCtx, start: OAuthStart): Promise<void> {
+  const { res, deps, secret } = ctx;
   if (!deps.connectorTokens)
     return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
-  const provider = oauthProvider(oauthRoute.provider);
+  const provider = oauthProvider(start.provider);
   if (!provider)
-    return sendJson(res, 404, { error: "not_found", message: `unknown OAuth provider: ${oauthRoute.provider}` });
-  const principalId = url.searchParams.get("principalId") ?? "";
-  const redirectUri = url.searchParams.get("redirectUri") ?? "";
+    return sendJson(res, 404, { error: "not_found", message: `unknown OAuth provider: ${start.provider}` });
+  const { principalId, redirectUri, accountType, returnTo } = start;
   if (!principalId || !redirectUri)
     return sendJson(res, 400, { error: "bad_request", message: "principalId and redirectUri required" });
-  const accountType = parseAccountType(url.searchParams.get("accountType"));
   try {
-    const client = await resolverFor(deps)(oauthRoute.provider, { accountType });
+    const client = await resolverFor(deps)(start.provider, { accountType });
     if (client.redirectAllowlist && !client.redirectAllowlist.includes(redirectUri)) {
       return sendJson(res, 400, {
         error: "redirect_not_allowed",
@@ -396,19 +403,16 @@ async function oauthStart(ctx: ApiCtx): Promise<void> {
     }
     const codeVerifier = provider.pkce ? generateCodeVerifier() : undefined;
     const state = await beginOAuthFlow(deps, secret, {
-      provider: oauthRoute.provider,
+      provider: start.provider,
       principalId,
       redirectUri,
-      orgId: orgId(),
-      ...tenantClaim(),
+      orgId: configOrgId(),
       ...(accountType !== "default" ? { accountType } : {}),
       clientRef: client.clientRef,
-      ...(safeReturnTo(url.searchParams.get("returnTo"))
-        ? { returnTo: safeReturnTo(url.searchParams.get("returnTo")) }
-        : {}),
+      ...(returnTo ? { returnTo } : {}),
       ...(codeVerifier ? { codeVerifier } : {}),
     });
-    const consentUrl = authorizeUrl(oauthRoute.provider, {
+    const consentUrl = authorizeUrl(start.provider, {
       redirectUri,
       state,
       client,
@@ -418,11 +422,11 @@ async function oauthStart(ctx: ApiCtx): Promise<void> {
     audit(deps, {
       principalId,
       action: "connector.oauth.start",
-      resource: oauthRoute.provider,
+      resource: start.provider,
       scopeLabel: principalId,
     });
     return sendJson(res, 200, {
-      provider: oauthRoute.provider,
+      provider: start.provider,
       principalId,
       accountType,
       hosts: provider.hosts,
@@ -521,11 +525,16 @@ async function catalog(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { catalog: entries });
 }
 
+const OAUTH_FLOW_TENANT = {
+  by: "oauth_flow",
+  key: (_params: Record<string, string>, url: URL) => url.searchParams.get("state") ?? undefined,
+} as const;
+
 export const connectorRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
   {
     match: (m, p) => m === "GET" && parseOAuthRoute(p)?.action === "callback",
     auth: "public",
-    tenant: "row",
+    tenant: OAUTH_FLOW_TENANT,
     handle: oauthCallback,
   },
 ];
@@ -579,10 +588,26 @@ export async function gmailSent(ctx: ApiCtx): Promise<void> {
 }
 
 export const connectorRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "GET", path: "/v1/connectors/gmail/sent/:messageId", auth: "source", handle: gmailSent },
-  { method: "GET", path: "/v1/connectors/gmail/sent", auth: "source", handle: gmailSent },
+  ...forInboxLoopsPeople([
+    { method: "GET", path: "/v1/connectors/gmail/sent/:messageId", actor: "person", auth: "source", handle: gmailSent },
+    { method: "GET", path: "/v1/connectors/gmail/sent", actor: "person", auth: "source", handle: gmailSent },
+  ]),
   { method: "POST", path: "/v1/connectors/oauth/consent/mint", auth: { aud: "oauth-consent" }, handle: consentMint },
-  { method: "GET", path: "/v1/connectors/oauth/consent/redeem/:linkId", auth: "source", handle: consentRedeem },
+  {
+    method: "GET",
+    path: "/v1/connectors/oauth/consent/redeem/:linkId",
+    auth: "source",
+    tenant: { by: "consent_link", key: (params) => params.linkId },
+    handle: consentRedeem,
+  },
+  {
+    method: "POST",
+    path: "/v1/connectors/oauth/:provider/start",
+    browser: true,
+    actor: "person",
+    auth: "source",
+    handle: browserOAuthStart,
+  },
   {
     match: (m, p) => m === "GET" && parseOAuthRoute(p)?.action === "start",
     actor: "query.principalId",
@@ -592,6 +617,7 @@ export const connectorRoutes: ReadonlyArray<Route<ApiCtx>> = [
   {
     method: "GET",
     path: "/v1/connectors/oauth/status",
+    browser: true,
     actor: "query.principalId",
     auth: "source",
     handle: oauthStatus,
@@ -599,10 +625,11 @@ export const connectorRoutes: ReadonlyArray<Route<ApiCtx>> = [
   {
     method: "POST",
     path: "/v1/connectors/oauth/revoke",
+    browser: true,
     actor: "body.principalId",
     auth: "either",
     handle: oauthRevoke,
   },
   { method: "POST", path: "/v1/connectors/token", actor: "body.principalId", auth: "source", handle: setToken },
-  { method: "GET", path: "/v1/connectors/catalog", auth: "either", handle: catalog },
+  { method: "GET", path: "/v1/connectors/catalog", browser: "self", actor: "person", auth: "either", handle: catalog },
 ];

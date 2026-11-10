@@ -1,3 +1,4 @@
+import { MIMEType } from "node:util";
 import { likeContains } from "../persistence/like.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { ScopeId } from "../types.ts";
@@ -15,7 +16,7 @@ import {
   type FileSource,
   type ListOwnedOptions,
 } from "./file-artifact-store.ts";
-import { TENANCY, tenantTables } from "../tenants/migrations.ts";
+import { tenantTables } from "../tenants/migrations.ts";
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS file_artifacts(
@@ -44,6 +45,14 @@ const SCHEMA = [
     ON file_artifacts (created_in_scope, created_at DESC, id DESC) WHERE enabled = TRUE`,
 ];
 
+function storedMimetype(mimetype: string): string {
+  try {
+    return new MIMEType(mimetype).toString();
+  } catch {
+    return "application/octet-stream";
+  }
+}
+
 function rowToArtifact(r: Record<string, unknown>): FileArtifact {
   return {
     id: r.id as string,
@@ -69,7 +78,6 @@ export function createPostgresFileArtifactStore(
   byteStore: DurableByteStore,
 ): FileArtifactStore {
   const { q, query, pool } = createPgPool(connectionString, [
-    ...TENANCY,
     { id: "files/artifacts/0001", statements: SCHEMA },
     {
       id: "files/artifacts/0002",
@@ -114,6 +122,10 @@ export function createPostgresFileArtifactStore(
     if (opts?.nameQuery != null) {
       params.push(likeContains(opts.nameQuery));
       filters.push(`name ILIKE $${params.length}::text ESCAPE '\\'`);
+    }
+    if (opts?.name != null) {
+      params.push(opts.name);
+      filters.push(`name = $${params.length}::text`);
     }
     const visible = `SELECT * FROM file_artifacts WHERE ${filters.join(" AND ")}`;
     const documents =
@@ -181,7 +193,7 @@ export function createPostgresFileArtifactStore(
             input.ownerScopeId,
             input.path,
             input.name,
-            input.mimetype,
+            storedMimetype(input.mimetype),
             sizeBytes,
             blobKey,
             sha256,

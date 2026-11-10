@@ -4,21 +4,29 @@ import type { Loop, LoopItem, LoopSourcePayload } from "../../loops/types.ts";
 import { isAccountType } from "../../connectors/oauth.ts";
 import { canonicalJson } from "../../../cli/src/canonical-json.ts";
 import { errMessage } from "../../util/errors.ts";
+import { publicFetch } from "../../util/network.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
-import { requireLoopAuthority, loadAdministrable, loopDeps, actingPrincipal, type LoopServiceDeps } from "./loops.ts";
-import { scopeId, parseScopeId } from "../../types.ts";
-import { isResolved, isLedgerState, ledgerItemView, ledgerState, sortLedgerItems } from "../../loops/ledger-view.ts";
+import {
+  requireLoopAuthority,
+  loadAdministrable,
+  loopDeps,
+  actingPrincipal,
+  forInboxLoopsPeople,
+  inboxPreviewEnabled,
+  type LoopServiceDeps,
+} from "./loops.ts";
+import { parseScopeId } from "../../types.ts";
+import { isLedgerState, ledgerItemView, ledgerState, sortLedgerItems } from "../../loops/ledger-view.ts";
 import { loopItemId, type IngestEntryInput } from "../../loops/item-ledger.ts";
 import { LOOP_ITEM_PRIORITIES, removeFromGroup, settleGroup } from "../../loops/triage.ts";
 import { addressList } from "../../loops/sources/adapter.ts";
 import { adapterForItem, sourceAdapter } from "../../loops/sources/index.ts";
 import {
   ensureDefaultInboxLoops,
-  renderSourceInboxTask,
-  INBOX_LEDGER_MAX_ITEMS,
-  INBOX_LEDGER_RETENTION_MS,
+  inboxSyncCronAction,
+  inboxSource,
   INBOX_SYNC_DEFAULT_EVERY_MS,
 } from "../../loops/inbox-loop.ts";
 import { THINKING_LEVELS } from "../../model/pi-models.ts";
@@ -103,10 +111,6 @@ async function listItems(ctx: ApiCtx): Promise<void> {
   if (wanted !== null && !isLedgerState(wanted)) {
     return sendJson(ctx.res, 400, { error: "bad_request", message: "unknown state filter" });
   }
-  if (loop.surface?.startsWith("inbox:") && loop.owner === loaded.acting.actorId) {
-    const openMail = (await deps.items.byLoop(loop.id)).filter((item) => !isResolved(item) && item.source === "gmail");
-    await ctx.deps.inboxSourceRefresh?.(loop.owner, openMail);
-  }
   const all = sortLedgerItems(await deps.items.byLoop(loop.id), loop);
   const items = wanted === null ? all : all.filter((item) => ledgerState(item) === wanted);
   const counts: Record<string, number> = {};
@@ -135,25 +139,15 @@ async function ingestItems(ctx: ApiCtx): Promise<void> {
   const sessionId = ctx.capability.threadRef
     ? ((await ctx.deps.sessions?.getByThread(ctx.capability.threadRef))?.id ?? undefined)
     : undefined;
-  const classifyInboxEmail =
-    loop.surface === "inbox:gmail" &&
-    loop.ownerScopeId === scopeId("personal", loop.owner) &&
-    (await ctx.deps.featureFlags?.enabled("inbox_loops", scopeId("personal", loop.owner))) === true;
   const entries: IngestEntryInput[] = [];
   for (const [at, raw] of body.items.entries()) {
     const parsed = parseIngestEntry(loop, raw);
     if ("error" in parsed) {
       return sendJson(ctx.res, 400, { error: "bad_request", message: `items[${at}]: ${parsed.error}` });
     }
-    if (classifyInboxEmail && parsed.source === "gmail" && isObj(raw)) {
-      for (const key of ["automated", "probablyResolved"])
-        if (typeof raw[key] === "boolean") parsed.sourcePayload[key] = raw[key];
-    }
     entries.push(sessionId && parsed.proposal ? { ...parsed, proposal: { ...parsed.proposal, sessionId } } : parsed);
   }
-  const outcome = await deps.items.ingest(entries);
-  await deps.items.prune(loop.id, { maxItems: INBOX_LEDGER_MAX_ITEMS, retentionMs: INBOX_LEDGER_RETENTION_MS });
-  sendJson(ctx.res, 200, outcome);
+  sendJson(ctx.res, 200, await deps.items.ingest(entries));
 }
 
 async function loadItem(
@@ -210,13 +204,15 @@ async function serveItemImage(ctx: ApiCtx): Promise<void> {
   }
   let upstream: Response;
   try {
-    upstream = await fetch(url, { headers: authHeader, redirect: "follow" });
+    upstream = await (ctx.deps.itemImageFetch ?? publicFetch)(url, { headers: authHeader, redirect: "follow" });
   } catch (e) {
-    return sendJson(ctx.res, 502, { error: "upstream", message: errMessage(e) });
+    console.warn(`[loops] item image fetch failed: ${errMessage(e)}`);
+    return sendJson(ctx.res, 502, { error: "upstream" });
   }
   const type = upstream.headers.get("content-type") ?? "";
   if (!upstream.ok || !upstream.body || !type.startsWith("image/")) {
-    return sendJson(ctx.res, 502, { error: "upstream", message: `upstream returned ${upstream.status} ${type}` });
+    console.warn(`[loops] item image upstream returned ${upstream.status} ${type}`);
+    return sendJson(ctx.res, 502, { error: "upstream" });
   }
   const bytes = Buffer.from(await upstream.arrayBuffer());
   if (bytes.length > IMAGE_MAX_BYTES) return sendJson(ctx.res, 502, { error: "upstream", message: "image too large" });
@@ -224,6 +220,8 @@ async function serveItemImage(ctx: ApiCtx): Promise<void> {
     "content-type": type,
     "content-length": String(bytes.length),
     "cache-control": "private, max-age=3600",
+    "content-security-policy": "sandbox",
+    "x-content-type-options": "nosniff",
   });
   ctx.res.end(bytes);
 }
@@ -231,12 +229,6 @@ async function serveItemImage(ctx: ApiCtx): Promise<void> {
 async function getItem(ctx: ApiCtx): Promise<void> {
   const loaded = await loadItem(ctx);
   if (!loaded) return;
-  if (
-    ctx.url.searchParams.get("refreshSource") === "1" &&
-    loaded.loop.surface?.startsWith("inbox:") &&
-    loaded.loop.owner === loaded.actorId
-  )
-    await ctx.deps.inboxSourceRefresh?.(loaded.loop.owner, [loaded.item]);
   sendJson(ctx.res, 200, {
     item: ledgerItemView((await loaded.deps.items.get(loaded.item.id)) ?? loaded.item, loaded.loop, !!ctx.capability),
     outputs: (await loaded.deps.outputs.byItem(loaded.item.id)).filter((output) => output.loopId === loaded.loop.id),
@@ -485,8 +477,6 @@ async function getInboxLoop(ctx: ApiCtx): Promise<void> {
 export async function ensureSentChat(ctx: ApiCtx): Promise<void> {
   const owner = ctx.actor?.p;
   if (!owner) return sendJson(ctx.res, 403, { error: "forbidden" });
-  if (!(await ctx.deps.featureFlags?.enabled("inbox_loops", scopeId("personal", owner))))
-    return sendJson(ctx.res, 403, { error: "feature_disabled" });
   const deps = loopDeps(ctx);
   if (!deps) return sendJson(ctx.res, 404, { error: "not_found" });
   const body = isObj(ctx.body) ? ctx.body : {};
@@ -544,7 +534,7 @@ async function ensureInboxSyncCron(ctx: ApiCtx): Promise<void> {
   if (!deps) return sendJson(ctx.res, 404, { error: "not_found", message: "loops are not wired on this deployment" });
   const acting = actingPrincipal(ctx);
   if (!acting) return;
-  if (!(await ctx.deps.featureFlags?.enabled("inbox_loops", scopeId("personal", acting.actorId))))
+  if (!(await inboxPreviewEnabled(ctx.deps, acting.actorId)))
     return sendJson(ctx.res, 403, { error: "feature_disabled" });
   const body = isObj(ctx.body) ? ctx.body : {};
   const everyMs =
@@ -562,8 +552,7 @@ async function ensureInboxSyncCron(ctx: ApiCtx): Promise<void> {
     for (const loop of targets) {
       const sync = async () => {
         const current = (await deps.store.get(loop.id)) ?? loop;
-        const source = current.sources![0]!;
-        const task = renderSourceInboxTask(loop.id, source);
+        const task = inboxSyncCronAction(inboxSource(current) ?? "gmail");
         let cron = current.cronId ? await ctx.app.getCron(current.cronId) : null;
         if (!cron && enable) {
           cron = await ctx.app.createCron({
@@ -611,25 +600,32 @@ function serializeItemAction(handler: (ctx: ApiCtx) => Promise<void>): (ctx: Api
 }
 
 export const loopItemRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "POST", path: "/v1/loops/inbox/sent-chat", auth: "source", handle: ensureSentChat },
-  { method: "GET", path: "/v1/loops/:id/items/:itemId/image", auth: "source", handle: serveItemImage },
+  ...forInboxLoopsPeople([
+    { method: "POST", path: "/v1/loops/inbox/sent-chat", actor: "person", auth: "source", handle: ensureSentChat },
+  ]),
   ...withActor("query.principalId", [
     { method: "GET", path: "/v1/loops/inbox", auth: "either", handle: getInboxLoop },
-    { method: "POST", path: "/v1/loops/inbox/sync-cron", auth: "source", handle: ensureInboxSyncCron },
-    { method: "GET", path: "/v1/loops/:id/items", auth: "either", handle: listItems },
     { method: "POST", path: "/v1/loops/:id/items", auth: "either", handle: ingestItems },
-    { method: "GET", path: "/v1/loops/:id/items/:itemId", auth: "either", handle: getItem },
-    {
-      method: "POST",
-      path: "/v1/loops/:id/items/:itemId/action",
-      auth: "either",
-      handle: serializeItemAction(actOnItem),
-    },
-    {
-      method: "POST",
-      path: "/v1/loops/:id/items/:itemId/followup",
-      auth: "either",
-      handle: serializeItemAction(followUpOnItem),
-    },
   ]),
+  ...withActor(
+    "query.principalId",
+    forInboxLoopsPeople([
+      { method: "GET", path: "/v1/loops/:id/items/:itemId/image", auth: "source", handle: serveItemImage },
+      { method: "POST", path: "/v1/loops/inbox/sync-cron", auth: "source", handle: ensureInboxSyncCron },
+      { method: "GET", path: "/v1/loops/:id/items", auth: "either", handle: listItems },
+      { method: "GET", path: "/v1/loops/:id/items/:itemId", auth: "either", handle: getItem },
+      {
+        method: "POST",
+        path: "/v1/loops/:id/items/:itemId/action",
+        auth: "either",
+        handle: serializeItemAction(actOnItem),
+      },
+      {
+        method: "POST",
+        path: "/v1/loops/:id/items/:itemId/followup",
+        auth: "either",
+        handle: serializeItemAction(followUpOnItem),
+      },
+    ]),
+  ),
 ];

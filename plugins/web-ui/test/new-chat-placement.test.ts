@@ -15,6 +15,9 @@ interface Canvas {
   focusTile: (index: number) => void;
   splitTile: (index: number) => void;
   seededChat: (threadRef?: string) => Conversation | null;
+  scopedChat: (scopeId: string) => Conversation | null;
+  newSessionCommand: () => void;
+  currentScope: () => string | null;
   drag: () => void;
   closeTile: (index: number) => Promise<void>;
   split: () => Promise<void>;
@@ -48,9 +51,9 @@ async function withCanvas(
       unobserve() {}
       disconnect() {}
     },
-    fetch: async () =>
+    fetch: async (input: string) =>
       Response.json({
-        scopeId: "personal:tester",
+        scopeId: new URL(input, "http://localhost").searchParams.get("scopeId") ?? "personal:tester",
         models: [],
         modelCatalog: {},
         fastModeModelIds: [],
@@ -73,6 +76,8 @@ async function withCanvas(
     const { appState } = await vite.ssrLoadModule("/src/shell.ts");
     const split = await vite.ssrLoadModule("/src/split.ts");
     const sessions = await vite.ssrLoadModule("/src/sessions.ts");
+    const conversations = await vite.ssrLoadModule("/src/conversations.ts");
+    const { contextsState } = await vite.ssrLoadModule("/src/contexts.ts");
     appState.me = { user: "tester", org: "test" };
     appState.currentView = "chats";
     appState.mainEl = document.createElement("main");
@@ -151,6 +156,12 @@ async function withCanvas(
       tiles: () => document.querySelectorAll(".dv-groupview").length,
       newChat: () => sessions.startNewChat() !== null,
       seededChat: (threadRef) => sessions.startNewChat(null, null, threadRef),
+      scopedChat: (scopeId) => {
+        contextsState.list.push({ scopeId, kind: "channel", name: "eng" });
+        return sessions.startNewChat(scopeId, "eng");
+      },
+      newSessionCommand: () => window.dispatchEvent(new dom.window.CustomEvent("qm:new-session")),
+      currentScope: () => (split.focusedPaneConversation() ?? conversations.mainConversation()).state.scopeId,
       split: async () => {
         split.beginSessionDrag({ id: "second", threadRef: "web:tester:second" });
         const target = document.querySelector(".split-zone.zone-right");
@@ -357,5 +368,16 @@ test("cycle-tab steps through the focused pane's tabs in order and wraps", async
     canvas.focusTile(0);
     canvas.cycleTab(1);
     assert.deepEqual(canvas.activeTabs(), [0, 0, (start + 2) % 3], "a single-tab pane has nothing to cycle");
+  });
+});
+
+test("New session starts a personal chat even while a scoped chat is open", async () => {
+  await withCanvas(async (canvas) => {
+    canvas.scopedChat("channel:C1");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(canvas.currentScope(), "channel:C1");
+    canvas.newSessionCommand();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(canvas.currentScope(), null);
   });
 });

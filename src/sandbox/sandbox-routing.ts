@@ -1,12 +1,7 @@
 import type { SandboxResources } from "./sandbox-resources.ts";
+import { bootTenant, tenancyBooted } from "../tenants/boot.ts";
+import { boundTenant } from "../tenants/context.ts";
 import type { ScopeId } from "../types.ts";
-import type { TenantEnvSubset } from "../tenants/tenant-instances.ts";
-import {
-  enabledSandboxBackends,
-  MODAL_TENANT_ENV,
-  SPRITES_TENANT_ENV,
-  type SandboxSettings,
-} from "./sandbox-settings.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 import {
   CapabilityUnsupportedError,
@@ -52,6 +47,16 @@ export interface RoutingSandboxOptions {
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
 
+const TENANT_SEPARATED: ReadonlySet<SandboxBackendName> = new Set(["sprites", "modal", "superserve"]);
+
+function requireTenantSeparation(name: SandboxBackendName): void {
+  if (TENANT_SEPARATED.has(name) || !tenancyBooted()) return;
+  const tenant = boundTenant();
+  const boot = bootTenant();
+  if (boot !== undefined && (tenant === undefined || tenant === boot)) return;
+  throw new Error(`sandbox backend ${name} does not keep tenants apart; only a single-tenant deployment can use it`);
+}
+
 export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
   const { backends, resources, defaultBackend } = opts;
   const fallback = ((): Sandbox => {
@@ -61,12 +66,14 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
   })();
 
   const backendFor = (name: SandboxBackendName): Sandbox => {
+    requireTenantSeparation(name);
     const sandbox = backends[name];
     if (!sandbox) throw new Error(`sandbox backend unavailable: ${name}; refusing to use a substitute computer`);
     return sandbox;
   };
 
   const forHandle = (handle: SandboxHandle): Sandbox => {
+    requireTenantSeparation((handle.backend ?? defaultBackend) as SandboxBackendName);
     if (!handle.backend) return fallback;
     const sandbox = backends[handle.backend as SandboxBackendName];
     if (!sandbox) throw new Error(`sandbox backend unavailable: ${handle.backend}`);
@@ -79,7 +86,12 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
   async function computerTarget(scopeId: string) {
     const resource = await resources.resolve(scopeId);
     if (!resource) throw new NoDefaultSandboxError();
-    return { sandbox: backendFor(resource.backend), scopeId: resource.backingScopeId, resourceId: resource.id };
+    return {
+      sandbox: backendFor(resource.backend),
+      scopeId: resource.backingScopeId,
+      resourceId: resource.id,
+      memoryGb: resource.memoryGb,
+    };
   }
 
   const reportedGaps = new Set<string>();
@@ -121,11 +133,11 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
     async provision(scope: ScopeId, provOpts?: ProvisionOptions): Promise<SandboxHandle> {
       const resource =
         provOpts?.sandboxId !== undefined ? await resources.get(provOpts.sandboxId) : await resources.resolve(scope);
-      const backend = resource?.backend ?? defaultBackend;
+      const backend = resource?.backend ?? (provOpts?.scratch ? await resources.defaultBackend() : defaultBackend);
       const sandbox = backendFor(backend);
-      const provision = async (target: ScopeId) => {
+      const provision = async (target: ScopeId, options = provOpts) => {
         try {
-          return await sandbox.provision(target, provOpts);
+          return await sandbox.provision(target, options);
         } catch (error) {
           if (error instanceof SandboxProvisionCleanupError) error.handle.backend = backend;
           throw error;
@@ -136,7 +148,8 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
         return { ...handle, backend, scopeId: scope };
       }
       if (!resource) throw new NoDefaultSandboxError();
-      const handle = await resources.use(resource.id, () => provision(resource.backingScopeId));
+      const sized = resource.memoryGb ? { ...provOpts, memoryGb: resource.memoryGb } : provOpts;
+      const handle = await resources.use(resource.id, () => provision(resource.backingScopeId, sized));
       return { ...handle, backend: resource.backend, scopeId: resource.ownerScopeId, resourceId: resource.id };
     },
 
@@ -169,14 +182,17 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
       return useHandle(handle, () => removeDirAndList(forHandle(handle), handle, removeRelDir, listRelDir));
     },
     teardown(handle, tdOpts?: TeardownOptions): Promise<void> {
-      const action = () => forHandle(handle).teardown(handle, tdOpts);
-      return handle.resourceId
-        ? resources.use(
-            handle.resourceId,
-            action,
-            !!tdOpts?.destroy || (!tdOpts?.keepWarm && !!forHandle(handle).profile.parksOnTeardown),
-          )
-        : action();
+      const resourceId = handle.resourceId;
+      if (!resourceId) return forHandle(handle).teardown(handle, tdOpts);
+      const parks = !tdOpts?.destroy && !tdOpts?.keepWarm && !!forHandle(handle).profile.parksOnTeardown;
+      return resources.use(
+        resourceId,
+        async () => {
+          const held = parks && !!(await resources.get(resourceId)).holders?.length;
+          return forHandle(handle).teardown(handle, held ? { ...tdOpts, keepWarm: true } : tdOpts);
+        },
+        !!tdOpts?.destroy || parks,
+      );
     },
 
     ...(some(supportsProcessSessions)
@@ -247,7 +263,8 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
       ? {
           restartComputer: async (scopeId: string) => {
             const target = await computerTarget(scopeId);
-            const action = () => requireCap(target.sandbox, "restartComputer", scopeId).restartComputer(target.scopeId);
+            const action = () =>
+              requireCap(target.sandbox, "restartComputer", scopeId).restartComputer(target.scopeId, target.memoryGb);
             return resources.use(target.resourceId, action, true);
           },
         }
@@ -289,40 +306,3 @@ const swallowReap = swallowAs("sandbox-router: reapDeepIdle on a backend", { rea
 
 const constructed = (backends: Partial<Record<SandboxBackendName, Sandbox>>): Sandbox[] =>
   Object.values(backends).filter((s): s is Sandbox => !!s);
-
-export function liveBackends(
-  current: () => Partial<Record<SandboxBackendName, Sandbox>>,
-): Partial<Record<SandboxBackendName, Sandbox>> {
-  return new Proxy(
-    {},
-    {
-      get: (_target, key) => Reflect.get(current(), key),
-      has: (_target, key) => Reflect.has(current(), key),
-      ownKeys: () => Reflect.ownKeys(current()),
-      getOwnPropertyDescriptor: (_target, key) => {
-        const value: unknown = Reflect.get(current(), key);
-        return value === undefined ? undefined : { value, enumerable: true, configurable: true, writable: false };
-      },
-    },
-  );
-}
-
-export function tenantSandboxBackends(
-  deployment: Partial<Record<SandboxBackendName, Sandbox>>,
-  settings: SandboxSettings,
-  env: TenantEnvSubset,
-  build: Record<"sprites" | "modal", (settings: SandboxSettings) => Sandbox>,
-): Partial<Record<SandboxBackendName, Sandbox>> {
-  const backends = { ...deployment };
-  const enabled = new Set(enabledSandboxBackends(settings));
-  const touched = {
-    sprites: SPRITES_TENANT_ENV.some((name) => env[name] !== undefined),
-    modal: MODAL_TENANT_ENV.some((name) => env[name] !== undefined),
-  };
-  for (const name of ["sprites", "modal"] as const) {
-    if (!touched[name]) continue;
-    delete backends[name];
-    if (enabled.has(name)) backends[name] = build[name](settings);
-  }
-  return backends;
-}

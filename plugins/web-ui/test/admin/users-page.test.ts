@@ -31,7 +31,7 @@ test("users: make admin confirms before granting, revoke sends the grant target,
   );
   await page.settle();
   const row = page.document.querySelector<HTMLAnchorElement>("td a")!;
-  assert.equal(row.getAttribute("href"), "/settings/user?principal=alex%2Ba%40example.com");
+  assert.equal(row.getAttribute("href"), "/settings/user?user=alex%2Ba%40example.com");
   button(page.host, "Make admin").click();
   await page.settle();
   assert.deepEqual(calls, []);
@@ -57,7 +57,7 @@ test("users: make admin confirms before granting, revoke sends the grant target,
 
 test("user detail: loads profile and keychain, sets onboarding, and links back to the list", async () => {
   const puts: unknown[] = [];
-  const page = await mountPage("/settings/user?principal=alex%40example.com", {
+  const page = await mountPage("/settings/user?user=alex%40example.com", {
     "GET /users/alex@example.com": { principalId: "alex@example.com", onboarding: "pending" },
     "GET /keychain": {
       credentials: [{ id: "c1", service: "github" }],
@@ -89,7 +89,7 @@ test("keychain: lists people with links to their user page", async () => {
   const link = [...page.document.querySelectorAll<HTMLAnchorElement>("a")].find((a) =>
     a.textContent!.includes("alex@"),
   )!;
-  assert.equal(link.getAttribute("href"), "/settings/user?principal=alex%40example.com");
+  assert.equal(link.getAttribute("href"), "/settings/user?user=alex%40example.com");
   page.close();
 });
 
@@ -101,7 +101,7 @@ test("user detail: offboarding previews, applies after confirming, then offers r
     { kind: "cron", id: "cr1", label: "digest", action: "disable_and_archive" },
   ];
   const page = await mountPage(
-    "/settings/user?principal=alex%40example.com",
+    "/settings/user?user=alex%40example.com",
     {
       "GET /users/alex@example.com": { principalId: "alex@example.com", deactivated: false },
       "GET /keychain": { credentials: [], grants: [] },
@@ -171,5 +171,75 @@ test("users: offboarded people are badged and hidden until shown", async () => {
   await page.settle();
   assert.match(page.host.textContent!, /gone@example\.com\s*offboarded/);
   assert.match(page.host.textContent!, /3 users · 1 admins/, "the toggle reveals exactly the hidden count");
+  page.close();
+});
+
+test("users: apps carry an app badge and the search finds them", async () => {
+  const page = await mountPage("/settings/users", {
+    "GET /users": {
+      users: [
+        { principalId: "pat@example.com", kind: "person", sessionCount: 1, turnCount: 1 },
+        { principalId: "U0APP", kind: "app", sessionCount: 1, turnCount: 3 },
+      ],
+      grants: [],
+      externalUsers: [],
+    },
+  });
+  await page.settle();
+  assert.match(page.host.textContent!, /U0APP\s*app/);
+  assert.doesNotMatch(page.host.textContent!, /pat@example\.com\s*app/);
+  const search = page.host.querySelector<HTMLInputElement>("input[type=search], .search input")!;
+  search.value = "app";
+  search.dispatchEvent(new page.window.Event("input"));
+  await page.settle();
+  assert.match(page.host.textContent!, /U0APP/);
+  assert.doesNotMatch(page.host.textContent!, /pat@example\.com/);
+  page.close();
+});
+
+test("users: a person links to their user id, lists their other sign-ins, and the search finds any of them", async () => {
+  const page = await mountPage("/settings/users", {
+    "GET /users": {
+      users: [
+        { userId: "u-1", principalId: "pat@example.com", aliases: ["pat@example.com", "U0PAT"], sessionCount: 2 },
+        { userId: "u-2", principalId: "sam@example.com", aliases: ["sam@example.com"] },
+      ],
+      grants: [],
+      externalUsers: [],
+    },
+  });
+  await page.settle();
+  const links = [...page.document.querySelectorAll<HTMLAnchorElement>("td a")].map((a) => a.getAttribute("href"));
+  assert.deepEqual(links, ["/settings/user?user=u-1", "/settings/user?user=u-2"]);
+  assert.match(page.host.textContent!, /U0PAT/);
+  const search = page.document.querySelector<HTMLInputElement>("input[type=search]")!;
+  search.value = "u0pat";
+  search.dispatchEvent(new page.window.Event("input"));
+  await page.settle();
+  assert.deepEqual(
+    [...page.document.querySelectorAll("td a")].map((a) => a.textContent),
+    ["pat@example.com"],
+  );
+  page.close();
+});
+
+test("user detail: opens by user id, lists every sign-in, and acts on the person's primary sign-in", async () => {
+  const puts: unknown[] = [];
+  const page = await mountPage("/settings/user?user=u-1", {
+    "GET /users/u-1": {
+      userId: "u-1",
+      principalId: "pat@example.com",
+      onboarding: "pending",
+      user: { id: "u-1", principalId: "pat@example.com", aliases: ["pat@example.com", "U0PAT"] },
+    },
+    "GET /keychain": { credentials: [], grants: [] },
+    "PUT /users/pat@example.com/onboarding": ({ body }) => (puts.push(body), { body: { status: body.status } }),
+  });
+  await page.settle();
+  assert.match(page.host.textContent!, /Sign-ins \(2\)/);
+  assert.match(page.host.textContent!, /U0PAT/);
+  button(page.host, "Mark completed").click();
+  await page.settle();
+  assert.deepEqual(puts, [{ status: "completed" }]);
   page.close();
 });

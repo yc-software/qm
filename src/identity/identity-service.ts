@@ -1,7 +1,8 @@
 import type { ActorAssertion, Principal } from "../types.ts";
 import { createKeyedQueue, createTtlRefresh } from "../util/async.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import { cacheTenant, perTenant } from "../tenants/context.ts";
+import { perTenant } from "../tenants/cache.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { canonicalPerson, foldPrincipalId, personIds, personKey } from "../directory/person.ts";
 import { externalMemberActive, type ExternalMember } from "./external-members.ts";
 
@@ -55,7 +56,7 @@ export function createIdentityService(
   const externalStore = opts.externalMembers;
   const directorySyncProtected = opts.directorySyncProtected ?? [];
   const queue = createKeyedQueue();
-  const exclusive = <T>(fn: () => Promise<T>): Promise<T> => queue(cacheTenant(), fn);
+  const exclusive = <T>(fn: () => Promise<T>): Promise<T> => queue(currentTenant(), fn);
 
   const roster = perTenant(() => {
     const state: {

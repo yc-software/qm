@@ -1,6 +1,5 @@
 import type { ProcessSandbox, SandboxHandle } from "../sandbox/sandbox.ts";
-import type { SandboxResource, SandboxResources } from "../sandbox/sandbox-resources.ts";
-import { inTenantOf } from "../tenants/claim.ts";
+import type { SandboxResources } from "../sandbox/sandbox-resources.ts";
 import type { ProcessRecord, ProcessRegistry } from "./process-registry.ts";
 import { reconcileProcesses } from "./reconcile.ts";
 
@@ -11,7 +10,7 @@ const RETRY_EVERY_MS = 5 * 60_000;
 const live = (job: ProcessRecord): boolean => job.status === "running" || Boolean(job.credentialsPending);
 
 export function createJobComputerSweep(deps: {
-  resources: Pick<SandboxResources, "jobComputers" | "retireJobComputer">;
+  resources: Pick<SandboxResources, "eachJobComputer" | "retireJobComputer">;
   sandbox: ProcessSandbox;
   processes: ProcessRegistry;
   finish: (handle: SandboxHandle, processId: string) => Promise<void>;
@@ -23,58 +22,56 @@ export function createJobComputerSweep(deps: {
   const clock = deps.now ?? Date.now;
   return async () => {
     const now = clock();
-    for (const computer of await deps.resources.jobComputers())
-      await inTenantOf(computer.tenantId, () => sweepComputer(computer, now));
-  };
-  async function sweepComputer(computer: SandboxResource, now: number): Promise<void> {
-    try {
-      const retire = async () => {
-        await deps.resources.retireJobComputer(computer.id, computer.state);
-        attemptedAt.delete(computer.id);
-        emptySince.delete(computer.id);
-      };
-      const throttled = now - (attemptedAt.get(computer.id) ?? 0) < RETRY_EVERY_MS;
-      if (computer.state === "provisioning") {
-        if (now - Date.parse(computer.createdAt) < PROVISION_LIMIT_MS || throttled) return;
-        attemptedAt.set(computer.id, now);
-        await retire();
-        return;
-      }
-      if (computer.state === "retired" || computer.error) {
-        if (throttled) return;
-        attemptedAt.set(computer.id, now);
-        await retire();
-        return;
-      }
-      const jobs = async () =>
-        (await deps.processes.listByScope(computer.ownerScopeId)).filter((job) => job.sandboxId === computer.id);
-      let current = await jobs();
-      if (!current.length) {
-        const since = emptySince.get(computer.id) ?? now;
-        emptySince.set(computer.id, since);
-        if (now - since < STARTUP_GRACE_MS) return;
-      }
-      if (current.some(live)) {
-        emptySince.delete(computer.id);
-        if (throttled) return;
-        attemptedAt.set(computer.id, now);
-        const handle = await deps.sandbox.provision(computer.ownerScopeId, {
-          sandboxId: computer.id,
-        });
-        try {
-          await reconcileProcesses(deps.sandbox, handle, deps.processes, computer.ownerScopeId, deps.finish);
-        } finally {
-          await deps.sandbox
-            .teardown(handle, { keepWarm: true })
-            .catch((error: unknown) => deps.onError(error, computer.ownerScopeId));
+    await deps.resources.eachJobComputer(async (computer) => {
+      try {
+        const retire = async () => {
+          await deps.resources.retireJobComputer(computer.id, computer.state);
+          attemptedAt.delete(computer.id);
+          emptySince.delete(computer.id);
+        };
+        const throttled = now - (attemptedAt.get(computer.id) ?? 0) < RETRY_EVERY_MS;
+        if (computer.state === "provisioning") {
+          if (now - Date.parse(computer.createdAt) < PROVISION_LIMIT_MS || throttled) return;
+          attemptedAt.set(computer.id, now);
+          await retire();
+          return;
         }
-        current = await jobs();
-        if (current.some(live)) return;
+        if (computer.state === "retired" || computer.error) {
+          if (throttled) return;
+          attemptedAt.set(computer.id, now);
+          await retire();
+          return;
+        }
+        const jobs = async () =>
+          (await deps.processes.listByScope(computer.ownerScopeId)).filter((job) => job.sandboxId === computer.id);
+        let current = await jobs();
+        if (!current.length) {
+          const since = emptySince.get(computer.id) ?? now;
+          emptySince.set(computer.id, since);
+          if (now - since < STARTUP_GRACE_MS) return;
+        }
+        if (current.some(live)) {
+          emptySince.delete(computer.id);
+          if (throttled) return;
+          attemptedAt.set(computer.id, now);
+          const handle = await deps.sandbox.provision(computer.ownerScopeId, {
+            sandboxId: computer.id,
+          });
+          try {
+            await reconcileProcesses(deps.sandbox, handle, deps.processes, computer.ownerScopeId, deps.finish);
+          } finally {
+            await deps.sandbox
+              .teardown(handle, { keepWarm: true })
+              .catch((error: unknown) => deps.onError(error, computer.ownerScopeId));
+          }
+          current = await jobs();
+          if (current.some(live)) return;
+        }
+        attemptedAt.set(computer.id, now);
+        await retire();
+      } catch (error) {
+        deps.onError(error, computer.ownerScopeId);
       }
-      attemptedAt.set(computer.id, now);
-      await retire();
-    } catch (error) {
-      deps.onError(error, computer.ownerScopeId);
-    }
-  }
+    });
+  };
 }

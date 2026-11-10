@@ -142,5 +142,39 @@ export function turnTools(kit: ToolKit) {
     },
   });
 
-  return { attach, finishSilently, context, runtime };
+  const withdrawApproval = defineTool({
+    name: "withdraw_approval",
+    label: "withdraw_approval",
+    description:
+      "Withdraw a pending approval card you raised in this conversation so it can no longer be approved, e.g. when the person changes their mind before approving. Pass the card id from the blocked call's result.",
+    parameters: Type.Object({
+      card: Type.String({ description: "Card id shown in the blocked call's result." }),
+    }),
+    async execute(callId, params) {
+      await recordCall(callId, { tool: "withdraw_approval", card: params.card });
+      const withdraw = ref.current?.withdrawApproval;
+      if (!withdraw)
+        return recordResult(
+          callId,
+          { tool: "withdraw_approval", ok: false },
+          text("[error] approval cards can't be withdrawn on this turn."),
+          true,
+        );
+      const { withdrawn } = await withdraw(params.card);
+      if (!withdrawn.length)
+        return recordResult(
+          callId,
+          { tool: "withdraw_approval", ok: false },
+          text(`[not found] no pending approval card ${params.card} in this conversation; it may already be resolved.`),
+          true,
+        );
+      return recordResult(
+        callId,
+        { tool: "withdraw_approval", ok: true, withdrawn },
+        text(`[withdrawn] ${withdrawn.join("; ")} — the card can no longer be approved.`),
+      );
+    },
+  });
+
+  return { attach, finishSilently, context, runtime, withdrawApproval };
 }

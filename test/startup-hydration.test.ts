@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 import * as identityModule from "../src/identity/identity-service.ts";
 import * as configModule from "../src/resolution/config-store.ts";
+import { settle } from "./support/settle.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testMap } from "./support/test-database.ts";
 
@@ -41,11 +42,18 @@ mock.module("../src/resolution/config-store.ts", {
 });
 
 const { buildApp } = await import("./support/build-app.ts");
+const { loadTenant } = await import("../src/tenants/cache.ts");
 
-test("explicit startup hydration remains fail-closed", async (t) => {
-  t.mock.method(console, "error", () => {});
+test("tenant load failures are reported and fail closed until the stores recover", async (t) => {
+  const errors = t.mock.method(console, "error", () => {});
   const built = buildApp(testConfig());
   try {
+    const logged = (context: string) =>
+      errors.mock.calls.some(({ arguments: args }) => String(args[0]).includes(context));
+    await assert.rejects(loadTenant());
+    await settle(async () => logged("tenant load: hydrate identity") && logged("tenant load: hydrate configuration"));
+    assert.ok(logged("tenant load: hydrate identity"));
+    assert.ok(logged("tenant load: hydrate configuration"));
     for (let attempt = 0; attempt < 2; attempt++) {
       await assert.rejects(built.identity.refresh(), (error: unknown) => error === identityFailure);
       await assert.rejects(built.config.hydrate!(), (error: unknown) => error === configFailure);

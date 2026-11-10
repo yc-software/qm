@@ -2,8 +2,10 @@ import { fromJSONSchema, z, ZodObject } from "zod";
 import type { ClientToolDeclaration, SurfaceBriefing, TurnOrigin, TurnRequest } from "../../types.ts";
 import { promptText } from "../../util/text.ts";
 import { samePerson } from "../../directory/person.ts";
+import { isTerminal } from "../../runs/run-store.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
+import { isClientSurface } from "../../../plugins/chassis/src/client-surface.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
 function renderSurfaceBriefing(surface: SurfaceBriefing): string {
@@ -133,6 +135,7 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
     spawned: _spawned,
     unattendedGrants: _unattendedGrants,
     cronScript: _cronScript,
+    infrequentCron: _infrequentCron,
     redeliveryKey: _redeliveryKey,
     ...safeBody
   } = body;
@@ -144,6 +147,8 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
     return { error: "midTurn must be steer or queue" };
   if (rest.desktopClientId !== undefined && !z.uuid().safeParse(rest.desktopClientId).success)
     return { error: "desktopClientId must be a UUID" };
+  if (rest.clientSurface !== undefined && !isClientSurface(rest.clientSurface))
+    return { error: "clientSurface must be browser, desktop or ios" };
   let clientTools: ClientToolDeclaration[] | undefined;
   if (rawClientTools !== undefined) {
     const parsed = clientToolsSchema.safeParse(rawClientTools);
@@ -166,7 +171,7 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
   };
 }
 
-async function postTurn(ctx: ApiCtx): Promise<void> {
+export async function postTurn(ctx: ApiCtx): Promise<void> {
   const { res, app, url, body } = ctx;
   if (!isTurnRequest(body)) {
     return sendJson(res, 400, { error: "bad_request", message: "expected a TurnRequest" });
@@ -205,7 +210,7 @@ async function postRunDeliveryState(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { ok: true });
 }
 
-async function postRunSignal(ctx: ApiCtx): Promise<void> {
+export async function postRunSignal(ctx: ApiCtx): Promise<void> {
   const { res, app, body, actor } = ctx;
   const id = ctx.params.id!;
   const kind = isObj(body) && typeof body.kind === "string" ? body.kind : "";
@@ -278,7 +283,9 @@ async function getActiveRunForThread(ctx: ApiCtx): Promise<void> {
   const threadRef = url.searchParams.get("threadRef") ?? "";
   if (!threadRef) return sendJson(res, 400, { error: "bad_request", message: "threadRef required" });
   const active = await app.activeRunForThread(threadRef, actor?.p);
-  return sendJson(res, 200, { runId: active?.runId ?? null, ...(active?.queued ? { queued: active.queued } : {}) });
+  const run = active && (await app.getRun(active.runId, actor?.p));
+  const live = active && run && !isTerminal(run.status) ? { runId: active.runId, run } : { runId: null, run: null };
+  return sendJson(res, 200, { ...live, ...(active?.queued ? { queued: active.queued } : {}) });
 }
 
 async function patchQueuedRun(ctx: ApiCtx): Promise<void> {
@@ -305,13 +312,6 @@ async function listDeliveries(ctx: ApiCtx): Promise<void> {
   const claimMsRaw = Number(url.searchParams.get("claimMs") ?? 0);
   const claimMs = Number.isFinite(claimMsRaw) && claimMsRaw > 0 ? claimMsRaw : 0;
   return sendJson(res, 200, { deliveries: await app.pendingDeliveries(type, claimMs) });
-}
-
-async function listDeliveriesAcrossTenants(ctx: ApiCtx): Promise<void> {
-  const { res, app, url } = ctx;
-  return sendJson(res, 200, {
-    deliveries: await app.pendingDeliveriesAcrossTenants(url.searchParams.get("type") ?? ""),
-  });
 }
 
 async function ackDelivery(ctx: ApiCtx): Promise<void> {
@@ -348,18 +348,25 @@ export const turnRoutes: ReadonlyArray<Route<ApiCtx>> = [
     handle: postRunDeliveryState,
   },
   { method: "POST", path: "/v1/runs/:id/signal", auth: "source", maxBodyBytes: 6_000_000, handle: postRunSignal },
-  { method: "PATCH", path: "/v1/runs/:id/input", auth: "source", handle: patchQueuedRun },
-  { method: "POST", path: "/v1/runs/:id/withdraw", auth: "source", handle: postRunWithdraw },
-  { method: "GET", path: "/v1/runs/:id", actor: "person", auth: "source", handle: getRun },
-  { method: "GET", path: "/v1/runs", actor: "person", auth: "source", handle: getActiveRunForThread },
-  { method: "GET", path: "/v1/deliveries", auth: "source", handle: listDeliveries },
   {
-    method: "GET",
-    path: "/v1/deliveries/across-tenants",
+    method: "PATCH",
+    path: "/v1/runs/:id/input",
+    browser: true,
+    actor: "person",
     auth: "source",
-    tenant: "none",
-    handle: listDeliveriesAcrossTenants,
+    handle: patchQueuedRun,
   },
+  {
+    method: "POST",
+    path: "/v1/runs/:id/withdraw",
+    browser: "embed",
+    actor: "person",
+    auth: "source",
+    handle: postRunWithdraw,
+  },
+  { method: "GET", path: "/v1/runs/:id", browser: true, actor: "person", auth: "source", handle: getRun },
+  { method: "GET", path: "/v1/runs", browser: true, actor: "person", auth: "source", handle: getActiveRunForThread },
+  { method: "GET", path: "/v1/deliveries", auth: "source", handle: listDeliveries },
   { method: "POST", path: "/v1/deliveries/:id/ack", actor: "system", auth: "source", handle: ackDelivery },
   { method: "POST", path: "/v1/deliveries/ack-by-key", actor: "system", auth: "source", handle: ackDeliveryByKey },
 ];

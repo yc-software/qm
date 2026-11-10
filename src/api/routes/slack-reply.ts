@@ -57,6 +57,8 @@ export async function slackReply(ctx: ApiCtx, send: boolean): Promise<void> {
       payload?: Record<string, unknown>,
     ) => Promise<{ ok?: boolean; ts?: string; error?: string } | undefined>;
   }) => {
+    if (!send)
+      return sendJson(ctx.res, 200, { connected: true, user: connection.user, workspace: connection.workspace });
     const conversation = await connection.call("conversations.info", { channel: target.container });
     if (!conversation?.ok) {
       reportFailure(
@@ -69,8 +71,6 @@ export async function slackReply(ctx: ApiCtx, send: boolean): Promise<void> {
         message: "Your Slack account cannot access this conversation. Check its Slack permissions.",
       });
     }
-    if (!send)
-      return sendJson(ctx.res, 200, { connected: true, user: connection.user, workspace: connection.workspace });
     attemptedSend = true;
     const result = await connection.call("chat.postMessage", {
       channel: target.container,

@@ -3,11 +3,18 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { DIRECTORY_MIGRATIONS } from "../src/directory/postgres-directory-store.ts";
-import { applyPgMigrations, createPgPool, definePgMigration, withPgTransaction } from "../src/persistence/pg-pool.ts";
-import { SESSION_MIGRATIONS } from "../src/sessions/session-schema.ts";
+import {
+  applyPgMigrations,
+  createPgPool,
+  definePgMigration,
+  type PgMigrationDefinition,
+  withPgTransaction,
+} from "../src/persistence/pg-pool.ts";
+import { DROP_SESSION_LEASES, SESSION_MIGRATIONS, TENANT_BACKFILL } from "../src/sessions/session-schema.ts";
 import { withoutTenant, withTenant } from "../src/tenants/context.ts";
-import { testDatabaseUrl, testMigratedDatabaseUrl } from "./support/test-database.ts";
-import { RELEASED_SESSION_MIGRATIONS } from "./support/tenant-seed.ts";
+import { TENANCY } from "../src/tenants/migrations.ts";
+import { testBareDatabaseUrl, testMigratedDatabaseUrl } from "./support/test-database.ts";
+import { ownerUrl } from "./support/test-tenant.ts";
 
 const skip = process.env.DATABASE_URL ? false : "set DATABASE_URL (a Postgres) to run the tenancy tests";
 
@@ -26,7 +33,7 @@ const role = `tenant_probe_${randomUUID().slice(0, 8)}`;
 
 before(async () => {
   if (skip) return;
-  url = testMigratedDatabaseUrl();
+  url = ownerUrl(testMigratedDatabaseUrl()).toString();
   owner = new pg.Pool({ connectionString: url });
   await owner.query(`CREATE ROLE ${role} NOLOGIN NOBYPASSRLS`);
   app = new pg.Pool({ connectionString: asRole(url, role) });
@@ -119,51 +126,86 @@ test("an open transaction refuses work for a different tenant until it has ended
   await withoutTenant(() =>
     withPgTransaction(app, async () => assert.throws(() => withTenant(a, () => 0), /already open/)),
   );
-  for (const fails of [false, true]) {
-    const outcomes: string[] = [];
-    let settled = false;
-    let spawned: Promise<string[]> | undefined;
-    const watch = (resolve: (seen: string[]) => void) => {
-      try {
-        withTenant(b, () => outcomes.push("bound"));
-      } catch {
-        outcomes.push("refused");
-      }
-      if (settled) resolve(outcomes);
-      else setImmediate(watch, resolve);
-    };
-    const transaction = withTenant(a, () =>
+  const outcomes: string[] = [];
+  let settled = false;
+  let spawned: Promise<string[]> | undefined;
+  const watch = (resolve: (seen: string[]) => void) => {
+    try {
+      withTenant(b, () => outcomes.push("bound"));
+    } catch {
+      outcomes.push("refused");
+    }
+    if (settled) resolve(outcomes);
+    else setImmediate(watch, resolve);
+  };
+  await assert.rejects(
+    withTenant(a, () =>
       withPgTransaction(app, async () => {
         spawned = new Promise(watch);
-        if (fails) throw new Error("body failed");
+        throw new Error("body failed");
       }),
+    ),
+    /body failed/,
+  );
+  settled = true;
+  const seen = await spawned!;
+  assert.equal(seen.pop(), "bound");
+  assert.deepEqual(new Set(seen), new Set(["refused"]));
+});
+
+const preTenancy = (m: PgMigrationDefinition) =>
+  !TENANCY.includes(m) && m !== TENANT_BACKFILL && m !== DROP_SESSION_LEASES && !/-tenant|claim/.test(m.id);
+
+test("upgrading copies the existing tenant into tenants", { skip }, async () => {
+  const pool = new pg.Pool({ connectionString: testBareDatabaseUrl(), max: 1 });
+  try {
+    const previous = SESSION_MIGRATIONS.filter(preTenancy);
+    await applyPgMigrations(pool, [...DIRECTORY_MIGRATIONS, ...previous].map(definePgMigration));
+    const old = (await pool.query("SELECT qm_tenant_id()::text AS id")).rows[0].id;
+    await pool.query(
+      "INSERT INTO sessions(id, type, scope_id, thread_ref, created_at) VALUES ('s', 'dm', 'personal:u', 's', 0)",
     );
-    try {
-      if (fails) await assert.rejects(transaction, /body failed/);
-      else await transaction;
-    } finally {
-      settled = true;
-    }
-    const seen = await spawned!;
-    assert.equal(seen.pop(), "bound");
-    assert.deepEqual(new Set(seen), new Set(["refused"]));
+    await applyPgMigrations(pool, [...DIRECTORY_MIGRATIONS, ...SESSION_MIGRATIONS].map(definePgMigration));
+    assert.ok((await pool.query("SELECT id::text FROM tenants")).rows.some((row) => row.id === old));
+  } finally {
+    await pool.end();
   }
 });
 
-test("upgrading a released single-tenant database keeps its tenant and stamps its rows", { skip }, async () => {
-  const pool = new pg.Pool({ connectionString: testDatabaseUrl(), max: 1 });
+test("upgrading keeps every table on the existing tenant when another store migrates first", { skip }, async () => {
+  const pool = new pg.Pool({ connectionString: testBareDatabaseUrl(), max: 1 });
   try {
-    await pool.query("DELETE FROM tenants");
-    await applyPgMigrations(pool, RELEASED_SESSION_MIGRATIONS.map(definePgMigration));
-    const old = (await pool.query("SELECT qm_tenant_id()::text AS id")).rows[0].id;
-    await pool.query(
-      "INSERT INTO sessions (id, type, scope_id, thread_ref, created_at) VALUES ('s1', 'chat', 'org:o', 's1', 1)",
+    await applyPgMigrations(
+      pool,
+      [...DIRECTORY_MIGRATIONS.filter(preTenancy), ...SESSION_MIGRATIONS.filter(preTenancy)].map(definePgMigration),
     );
-    await applyPgMigrations(pool, [...DIRECTORY_MIGRATIONS, ...SESSION_MIGRATIONS].map(definePgMigration));
+    const old = (await pool.query("SELECT qm_tenant_id()::text AS id")).rows[0].id;
+    await pool.query("INSERT INTO directory_meta(org_id, updated_at) VALUES ('org', 0)");
+    await pool.query(
+      "INSERT INTO sessions(id, type, scope_id, thread_ref, created_at) VALUES ('s', 'dm', 'personal:u', 's', 0)",
+    );
+    await pool.query(
+      `INSERT INTO items(tenant_id, session_id, seq, kind, text, body, created_at)
+       VALUES ($1, 's', 0, 'UserMessage', 'hi', '{}', now())`,
+      [old],
+    );
+    const all = [...DIRECTORY_MIGRATIONS, ...SESSION_MIGRATIONS].toSorted((x, y) => x.id.localeCompare(y.id));
+    await applyPgMigrations(pool, [...new Map(all.map((m) => [m.id, m])).values()].map(definePgMigration));
     assert.deepEqual((await pool.query("SELECT id::text FROM tenants")).rows, [{ id: old }]);
-    assert.deepEqual((await pool.query("SELECT id, tenant_id::text FROM sessions")).rows, [
-      { id: "s1", tenant_id: old },
-    ]);
+    for (const table of ["directory_meta", "sessions", "items"]) {
+      const { rows } = await pool.query(`SELECT DISTINCT tenant_id::text AS id FROM ${table}`);
+      assert.deepEqual(rows, [{ id: old }], table);
+    }
+  } finally {
+    await pool.end();
+  }
+});
+
+test("migrating an empty database mints no tenant", { skip }, async () => {
+  const pool = new pg.Pool({ connectionString: testBareDatabaseUrl(), max: 1 });
+  try {
+    await applyPgMigrations(pool, [...DIRECTORY_MIGRATIONS, ...SESSION_MIGRATIONS].map(definePgMigration));
+    assert.equal((await pool.query("SELECT count(*)::int AS n FROM tenants")).rows[0].n, 0);
   } finally {
     await pool.end();
   }

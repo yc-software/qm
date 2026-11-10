@@ -249,10 +249,11 @@ test("timeouts beyond the API's sync exec ceiling run detached and poll to compl
   assert.equal(leftovers.stdout.trim(), "0");
 });
 
-test("configured resources are requested at create and advertised in the profile", async () => {
-  const s = make({ cpus: 4, memoryMb: 8192, diskGb: 200 });
-  const h = await s.provision(scope);
-  assert.deepEqual(fake.machine(h.id)?.resources, { cpus: 4, memoryMb: 8192, diskGb: 200 });
+test("configured resources and the computer's memory size are requested at create", async () => {
+  const s = make({ cpus: 4, diskGb: 200 });
+  const h = await s.provision(scope, { memoryGb: 16 });
+  assert.deepEqual(fake.machine(h.id)?.resources, { cpus: 4, memoryMb: 16384, diskGb: 200 });
+  assert.equal(s.profile.sizesMemory, true);
   assert.equal(s.profile.spec?.diskGb, 200);
   assert.equal(s.profile.spec?.memoryMb, 8192);
   assert.equal(s.profile.spec?.cpus, 4);

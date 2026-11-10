@@ -7,7 +7,8 @@ import pg from "pg";
 import { test } from "node:test";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createModelOverlayStore } from "../src/model/model-overlay-store.ts";
-import { seedInstallTenant } from "./support/tenant-seed.ts";
+import { seedTestTenant, TEST_TENANT } from "./support/test-tenant.ts";
+import { withTenant } from "../src/tenants/context.ts";
 
 const databaseUrl = process.env.MODEL_OVERLAY_TEST_DATABASE_URL;
 const headers = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
@@ -58,8 +59,9 @@ test(
     await pool.query(`CREATE SCHEMA ${schema}`);
     const url = new URL(databaseUrl);
     url.searchParams.set("options", `${url.searchParams.get("options") ?? ""} -c search_path=${schema}`.trim());
-    await seedInstallTenant(url.toString());
     const isolatedDatabaseUrl = url.toString();
+    await seedTestTenant(databaseUrl);
+    await seedTestTenant(isolatedDatabaseUrl);
     const factory = createPostgresMapFactory(isolatedDatabaseUrl);
     const processes: ChildProcess[] = [];
     try {
@@ -127,7 +129,9 @@ test(
       assert.equal(coldConfig.effective.modelId, "overlay-pg-model");
       assert.equal(coldConfig.modelCatalog["overlay-pg-model"]?.contextWindow, 600_000);
       const reloaded = createModelOverlayStore(factory.map("model_registry"));
-      const reloadedSpec = (await reloaded.statuses()).find((m) => m.spec.id === "overlay-pg-model")!.spec;
+      const reloadedSpec = (await withTenant(TEST_TENANT, () => reloaded.statuses())).find(
+        (m) => m.spec.id === "overlay-pg-model",
+      )!.spec;
       assert.ok("contextWindow" in reloadedSpec);
       assert.equal(reloadedSpec.contextWindow, 600_000);
       assert.equal((await fetch(path, { method: "DELETE", headers })).status, 200);

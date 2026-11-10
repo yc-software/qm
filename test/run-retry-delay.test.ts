@@ -5,7 +5,7 @@ import type { Pool } from "pg";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { seedInstallTenant } from "./support/tenant-seed.ts";
+import { seedTestTenant } from "./support/test-tenant.ts";
 
 const request: OrchestratorInput = {
   actor: { id: "retry-test", type: "internal" },
@@ -29,8 +29,8 @@ for (const backend of ["memory", "postgres"] as const) {
         admin = new pg.Pool({ connectionString });
         await admin.query(`CREATE SCHEMA ${schema}`);
         const url = new URL(connectionString);
-        url.searchParams.set("options", `-c search_path=${schema}`);
-        await seedInstallTenant(url.toString());
+        url.searchParams.set("options", `${url.searchParams.get("options") ?? ""} -c search_path=${schema}`.trim());
+        await seedTestTenant(url.toString());
         connectionString = url.toString();
       }
       const runtime =
@@ -93,8 +93,8 @@ for (const backend of ["memory", "postgres"] as const) {
         admin = new pg.Pool({ connectionString });
         await admin.query(`CREATE SCHEMA ${schema}`);
         const url = new URL(connectionString);
-        url.searchParams.set("options", `-c search_path=${schema}`);
-        await seedInstallTenant(url.toString());
+        url.searchParams.set("options", `${url.searchParams.get("options") ?? ""} -c search_path=${schema}`.trim());
+        await seedTestTenant(url.toString());
         connectionString = url.toString();
       }
       let { runs } =
@@ -164,8 +164,8 @@ test(
     const schema = `run_history_${randomUUID().replaceAll("-", "")}`;
     await admin.query(`CREATE SCHEMA ${schema}`);
     const url = new URL(process.env.DATABASE_URL!);
-    url.searchParams.set("options", `-c search_path=${schema}`);
-    await seedInstallTenant(url.toString());
+    url.searchParams.set("options", `${url.searchParams.get("options") ?? ""} -c search_path=${schema}`.trim());
+    await seedTestTenant(url.toString());
     const runtime = createPostgresRunStore(url.toString());
     const pool = new pg.Pool({ connectionString: url.toString() });
     try {

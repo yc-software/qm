@@ -19,18 +19,13 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 const SECRET = "layer-routes-secret".repeat(3);
 const PATH = "/v1/deployment-layer";
 
-function start(
-  overrides: { deploymentLayerDir?: string } = {},
-  serverDeps: Record<string, unknown> = {},
-  mappedHosts = false,
-) {
+function start(overrides: { deploymentLayerDir?: string } = {}, serverDeps: Record<string, unknown> = {}) {
   const built = buildApp(testConfig({ signingSecret: SECRET, ...overrides }));
   const server = createServer(built.app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SECRET,
     deploymentLayer: built.deploymentLayerStore,
     auditLog: built.auditLog,
-    ...(mappedHosts ? { tenancy: { ...built.tenancy, hostTenant: async () => ({ multi: true }) } } : {}),
     ...serverDeps,
   });
   server.listen(0);
@@ -209,21 +204,6 @@ test("GET distinguishes a poisoned stored revision from the prior durable revisi
       ["acme v1"],
       "GET reports the prior revision this instance still serves",
     );
-  } finally {
-    await srv.close();
-  }
-});
-
-test("the operator's layer sync still reads and writes once company hosts are mapped to tenants", async () => {
-  const srv = start({}, {}, true);
-  try {
-    const put = await fetch(`${srv.base}${PATH}`, { method: "PUT", headers: signed("PUT", bundle), body: bundle });
-    assert.equal(put.status, 200);
-    const get = await fetch(`${srv.base}${PATH}`, { headers: signed("GET", "") });
-    assert.equal(get.status, 200);
-    assert.equal(((await get.json()) as { source: string }).source, "durable");
-    const unsigned = await fetch(`${srv.base}${PATH}`);
-    assert.equal(unsigned.status, 401);
   } finally {
     await srv.close();
   }

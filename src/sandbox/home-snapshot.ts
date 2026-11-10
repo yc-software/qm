@@ -8,12 +8,13 @@ import {
   UploadPartCommand,
 } from "@aws-sdk/client-s3";
 import { shq } from "../util/shell.ts";
-import { tenantScopedId } from "../tenants/context.ts";
 import { swallowAs } from "../util/errors.ts";
 import { sleep, withTimeout } from "../util/async.ts";
 import { bodyToReadable, isNoSuchKey, s3Client, type S3Send } from "../persistence/s3.ts";
 import { displacedPruneGlobs } from "../credentials/resident-paths.ts";
 import type { TeardownOptions } from "./sandbox.ts";
+import { boundTenant } from "../tenants/context.ts";
+import { bootTenant } from "../tenants/boot.ts";
 
 const SNAPSHOT_PART_BYTES = 64 * 1024 * 1024;
 const SNAPSHOT_MAX_BYTES = 2 * 1024 * 1024 * 1024;
@@ -105,31 +106,48 @@ export interface S3SnapshotStoreOptions {
   prefix: string;
   region?: string;
   s3?: S3Send;
-  keyFor?: (scope: string) => string;
+  leafFor?: (scope: string) => string;
+}
+
+interface HomeSnapshotKeys {
+  key: string;
+  legacy?: string;
+}
+
+export function homeSnapshotKeys(prefix: string, leaf: string): HomeSnapshotKeys {
+  const tenant = boundTenant();
+  if (tenant === undefined) throw new Error("Home snapshots need a bound tenant");
+  return {
+    key: `${prefix}/${tenant}/${leaf}`,
+    ...(bootTenant() === tenant ? { legacy: `${prefix}/${leaf}` } : {}),
+  };
 }
 
 export function createS3SnapshotStore(opts: S3SnapshotStoreOptions): HomeSnapshotStore {
   const s3 = opts.s3 ?? s3Client(opts.region);
-  const keyFor =
-    opts.keyFor ?? ((scope: string): string => `${opts.prefix}/${encodeURIComponent(tenantScopedId(scope))}.tar`);
+  const leafFor = opts.leafFor ?? ((scope: string): string => `${encodeURIComponent(scope)}.tar`);
+  const keysFor = (scope: string): HomeSnapshotKeys => homeSnapshotKeys(opts.prefix, leafFor(scope));
   const Bucket = opts.bucket;
+  async function get(Key: string): Promise<{ Body?: unknown; ContentLength?: number } | null> {
+    try {
+      return (await s3.send(new GetObjectCommand({ Bucket, Key }))) as { Body?: unknown; ContentLength?: number };
+    } catch (e) {
+      if (isNoSuchKey(e)) return null;
+      throw e;
+    }
+  }
   return {
     async open(scope): Promise<StoredSnapshot | null> {
-      let got: { Body?: unknown; ContentLength?: number };
-      try {
-        got = (await s3.send(new GetObjectCommand({ Bucket, Key: keyFor(scope) }))) as typeof got;
-      } catch (e) {
-        if (isNoSuchKey(e)) return null;
-        throw e;
-      }
-      if (!got.Body) return null;
+      const { key, legacy } = keysFor(scope);
+      const got = (await get(key)) ?? (legacy === undefined ? null : await get(legacy));
+      if (!got?.Body) return null;
       return { size: got.ContentLength ?? -1, parts: bodyToReadable(got.Body) };
     },
     async put(scope, data): Promise<void> {
-      await s3.send(new PutObjectCommand({ Bucket, Key: keyFor(scope), Body: data }));
+      await s3.send(new PutObjectCommand({ Bucket, Key: keysFor(scope).key, Body: data }));
     },
     async createUpload(scope): Promise<SnapshotUpload> {
-      const Key = keyFor(scope);
+      const Key = keysFor(scope).key;
       const started = (await s3.send(new CreateMultipartUploadCommand({ Bucket, Key }))) as { UploadId?: string };
       const UploadId = started.UploadId!;
       const parts: Array<{ ETag: string; PartNumber: number }> = [];

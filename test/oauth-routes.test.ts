@@ -12,6 +12,7 @@ import { buildApp } from "./support/build-app.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { PROVIDERS, setPublicOAuthClients, type FetchLike } from "../src/connectors/oauth.ts";
 import { testConfig } from "./support/test-config.ts";
+import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 
 const SECRET = "oauth-route-test-secret".repeat(3);
 const oauthEnv = {
@@ -38,6 +39,7 @@ function start(
     }),
   );
   const server = createServer(built.app, {
+    ...browserSessionDeps,
     signingSecret: SECRET,
     replayDedupe: built.replayDedupe,
     connectorTokens: built.connectorTokens,
@@ -284,6 +286,51 @@ test("OAuth status lists a linked per-user MCP sign-in under its display name", 
     assert.equal(linked?.connected, true);
     assert.equal(linked?.mcpLabel, "Orders");
     assert.equal(linked?.available, true);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("a signed-in browser starts OAuth for itself with this server's callback and an on-origin return page", async () => {
+  const srv = start(async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ access_token: "at-browser", refresh_token: "rt-browser", expires_in: 3600 }),
+  }));
+  try {
+    const browserStart = (body: unknown) =>
+      fetch(`${srv.base}/api/connectors/google/start`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: browserSessionCookie("U1"),
+          origin: browserSessionDeps.portalUrl,
+        },
+        body: JSON.stringify(body),
+      });
+    const callback = `${browserSessionDeps.portalUrl}/v1/connectors/oauth/google/callback`;
+    for (const [returnTo, landed] of [
+      ["/s/chat?layout=single", "/s/chat?layout=single&connector=google&status=connected"],
+      ["https://evil.example/keychain", "/keychain?connector=google&status=connected"],
+      ["//evil.example/keychain", "/keychain?connector=google&status=connected"],
+      ["/.//evil.example/keychain", "/keychain?connector=google&status=connected"],
+      ["/a/..//evil.example", "/keychain?connector=google&status=connected"],
+      ["/\\evil.example", "/keychain?connector=google&status=connected"],
+    ]) {
+      const started = await browserStart({ returnTo, principalId: "U1" });
+      assert.equal(started.status, 200);
+      const body = (await started.json()) as { principalId: string; authorizeUrl: string };
+      assert.equal(body.principalId, "U1");
+      const consent = new URL(body.authorizeUrl);
+      assert.equal(consent.searchParams.get("redirect_uri"), callback);
+      const state = consent.searchParams.get("state")!;
+      const done = await fetch(
+        `${srv.base}/v1/connectors/oauth/google/callback?code=c&state=${encodeURIComponent(state)}`,
+        { redirect: "manual" },
+      );
+      assert.equal(done.headers.get("location"), landed);
+    }
+    assert.equal((await browserStart({ principalId: "U2" })).status, 403);
   } finally {
     await srv.close();
   }

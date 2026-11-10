@@ -23,7 +23,8 @@ test("plan reports the docker plan (network, images, env, layer, plugins) and st
     writeConfig(dir, {
       orgId: org,
       target: "docker",
-      services: ["core", "web-ui"],
+      services: ["core", "auth"],
+      env: { auth: { AUTH_EMAIL_TRANSPORT: "resend" } },
       plugins: [{ name: "ext", image: "ghcr.io/example/ext:1.2" }],
     });
     standInPlugin(dir, "widget");
@@ -33,6 +34,8 @@ test("plan reports the docker plan (network, images, env, layer, plugins) and st
     assert.match(r.out, /DRY RUN/);
     assert.match(r.out, new RegExp(`network: qm-${org}`));
     assert.match(r.out, /core: image registry\.invalid\/qm\/qm-core@sha256:a{64}/);
+    assert.match(r.out, /core: .*\(host :\d+, public :\d+\)/);
+    assert.match(r.out, /env: .*\bAUTH_EMBEDDED\b/);
     assert.match(r.out, /env: .*\bORG_ID\b/);
     assert.match(r.out, /layer:/);
     assert.match(r.out, /plugin widget: build plugins\/widget\/Dockerfile/);
@@ -128,7 +131,7 @@ test("plan honors a host port base from the config", () => {
     writeConfig(dir, { orgId: "acme", target: "docker", services: ["core"], basePort: 31080 });
     const r = runCli(["plan"], { cwd: dir, env: { QM_BASE_PORT: undefined } });
     assert.equal(r.code, 0, r.out);
-    assert.match(r.out, /core: image .*\(host :31080\)/);
+    assert.match(r.out, /core: image .*\(host :31080, public :31082\)/);
   } finally {
     rmDir(dir);
   }
@@ -137,10 +140,16 @@ test("plan honors a host port base from the config", () => {
 test("plan honors QM_BASE_PORT over the config", () => {
   const dir = tmp("plan-portenv");
   try {
-    writeConfig(dir, { orgId: "acme", target: "docker", services: ["core"], basePort: 31080 });
+    writeConfig(dir, {
+      orgId: "acme",
+      target: "docker",
+      services: ["core"],
+      basePort: 31080,
+      publicUrl: "http://localhost:32101",
+    });
     const r = runCli(["plan"], { cwd: dir, env: { QM_BASE_PORT: "32099" } });
     assert.equal(r.code, 0, r.out);
-    assert.match(r.out, /\(host :32099\)/);
+    assert.match(r.out, /\(host :32099, public :32101\)/);
   } finally {
     rmDir(dir);
   }

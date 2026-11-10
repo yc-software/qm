@@ -1,4 +1,5 @@
 import { swallowAs } from "../util/errors.ts";
+import { isSystemActor, parseScopeId } from "../types.ts";
 
 export interface PrincipalLinkResolver {
   canonical(key: string): string | undefined;
@@ -26,11 +27,35 @@ export class UnattestableActor extends Error {
   readonly code = "invalid_actor";
 }
 
+export class OutsideAudience extends Error {
+  readonly code = "private_only";
+  constructor(callee: string) {
+    super(`${callee} acts as the person, so it answers only to them in their own private conversation with QM`);
+  }
+}
+
 export const UNATTESTABLE_ACTOR_FIX =
   "Link this member to a principal id of 1 to 256 visible ASCII characters with POST /v1/admin/principal-links (docs/principal-links.md).";
 
 export function attestableActor(id: unknown): string | undefined {
   return typeof id === "string" && /^[\x21-\x7e]{1,256}$/.test(id) ? id : undefined;
+}
+
+export function attestableAudience(actorId: string | undefined, scope: string | undefined): boolean {
+  const { kind, ref } = parseScopeId(scope ?? "");
+  return kind === "personal" && !isSystemActor(actorId) && samePerson(actorId, ref);
+}
+
+export type AttestAudience = "personal" | "any";
+
+export function attestsInAudience(
+  audience: AttestAudience | undefined,
+  actorId: string | undefined,
+  scope: string | undefined,
+  actAsActor: boolean | undefined,
+): boolean {
+  if (attestableAudience(actorId, scope)) return true;
+  return audience === "any" && actAsActor === true && !!actorId && !isSystemActor(actorId);
 }
 
 export function attestedPerson(id: string | undefined, callee: string): string {

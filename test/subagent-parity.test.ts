@@ -24,6 +24,7 @@ import { scopeId, type Principal, type Session } from "../src/types.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { Run } from "../src/runs/run-store.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { orchestratorTestDeps } from "./support/orchestrator-deps.ts";
 import type { McpToolService } from "../src/mcp/mcp-tool-service.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
@@ -66,12 +67,14 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
   const featureFlags = createFeatureFlagStore(testMap());
   for (const flag of flags) await featureFlags.setEnabled(flag, scope, true, "test");
   const sidebar: Session[] = [];
+  const signals = createPostgresRunSignalStore(testDatabaseUrl());
   const sessionSyscalls = createSessionSyscalls({
     advisoryLock: testAdvisoryLock(),
     sessions,
     runs,
     mailbox: createSessionMailbox(testMap<SessionMessage>()),
-    signals: createPostgresRunSignalStore(testDatabaseUrl()),
+    signals,
+    steerRun: async (run, signal) => ({ sent: await signals.send(run.id, signal) }),
     maxAttempts: 1,
     conversations: {
       list: async () => sidebar,
@@ -143,7 +146,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
   const config = testConfigStore("org");
   await config.setInteractiveFastMode(true);
   const orchestrator = createOrchestrator({
-    ...singleProcessDeps(),
+    ...orchestratorTestDeps(),
     config,
     runtime: createRuntimeService(
       { config, baseModelDefault: "claude-opus-5" },
@@ -232,7 +235,7 @@ test("the sessions tool lists, starts and messages sessions through the real too
 
 for (const [surface, flags] of [
   ["web", []],
-  ["slack", ["responsive_spine"]],
+  ["slack", []],
 ] as const) {
   test(`a ${surface} subagent can do what its parent could, except SUBAGENT_EXCEPTIONS`, async () => {
     const w = await world([...flags], script);

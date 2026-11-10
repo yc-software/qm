@@ -1,4 +1,5 @@
-import type { MemoryEmbedder } from "./model/embeddings.ts";
+import { onTenantLoad, perTenant } from "./tenants/cache.ts";
+import { loadTenantSettings, TENANT_SETTINGS_REFRESH_MS } from "./tenants/settings.ts";
 import { nonDeploymentCredential, withDeploymentCredentials } from "./credentials/deployment-credentials.ts";
 import { resolveEmbeddingModel } from "./model/pi-models.ts";
 import { createPostgresTeamStore, type TeamStore } from "./teams/teams.ts";
@@ -16,6 +17,7 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import {
   createRenderSandbox,
   type StoredRenderCleanup,
+  type StoredRenderNamespace,
   type StoredRenderSandbox,
   type StoredRenderScratch,
 } from "./sandbox/render-sandbox.ts";
@@ -23,7 +25,6 @@ import { createSdkRenderClient } from "./sandbox/render-client.ts";
 import { createRenderBase, type StoredRenderBase } from "./sandbox/render-base.ts";
 import { createKeychainApprovals, type KeychainApprovals } from "./credentials/keychain-approval.ts";
 import { flushErrorReporting, tracePhase } from "../plugins/chassis/src/error-reporting.ts";
-import { createProductAnalytics } from "./util/product-analytics.ts";
 import { createAdmittedWork } from "./util/admitted-work.ts";
 import { runSessionSmoke } from "./deployment/postdeploy-smoke.ts";
 import { loadConnectorSdk } from "./sandbox/connector-sdk.ts";
@@ -52,12 +53,12 @@ import {
   sweepUnreadMailWakes,
   wakeForUnreadMail,
 } from "./sessions/subagent-mail.ts";
-import { createMemoryEmbedder } from "./model/embeddings.ts";
-import { configRouteOptions, createModelRoutes } from "./model/model-route.ts";
+import { createMemoryEmbedder, type MemoryEmbedder } from "./model/embeddings.ts";
+import { configRouteOptions, createModelRoutes, type ModelRoutes } from "./model/model-route.ts";
 import { createSemanticMemory } from "./memory/semantic-memory.ts";
 import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/broker-sessions.ts";
 import { createDirectFileUploads, type DirectFileUploads } from "./files/direct-file-upload.ts";
-import { createPostgresFileUploadStore } from "./files/file-upload-store.ts";
+import { createPostgresFileUploadStore, FILE_UPLOAD_MIGRATIONS } from "./files/file-upload-store.ts";
 import {
   createSandboxResources,
   type SandboxResource,
@@ -70,25 +71,17 @@ import type { SessionShare, SessionShareStore } from "./sessions/session-share.t
 import { createModelOverlayStore, type ModelOverlayStore } from "./model/model-overlay-store.ts";
 import { mkdirSync } from "node:fs";
 import type { StagedEnvelope } from "./slack/envelope-staging.ts";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import {
   baseModelProviders,
   companySubscriptionAuth,
   configuredModel,
-  orgId,
   providerKeysPresent,
   type Config,
 } from "./config.ts";
 import type { ServerDeps } from "./api/deps.ts";
-import { createTenantLoader, registerTenants, withInstallTenant } from "./tenants/context.ts";
-import {
-  enabledSandboxBackends,
-  MODAL_TENANT_ENV,
-  SPRITES_TENANT_ENV,
-  tenantSandboxSettings,
-  type SandboxSettings,
-} from "./sandbox/sandbox-settings.ts";
+import { enabledSandboxBackends, superserveGenerationKey } from "./sandbox/sandbox-settings.ts";
 import {
   actorAssertionActive,
   createIdentityService,
@@ -100,7 +93,7 @@ import { createPostgresUserStore, type UserStore } from "./identity/user-store.t
 import type { SlackAccountLink, ComposioReturn } from "./api/routes/composio.ts";
 import { installPrincipalLinks } from "./directory/person.ts";
 import type { ExternalMember } from "./identity/external-members.ts";
-import { tenantMailer } from "./tenants/tenant-mailer.ts";
+import { resendMailer } from "../plugins/chassis/src/resend.ts";
 import { configStoreMaps, createConfigStore, type ScopedConfigStore } from "./resolution/config-store.ts";
 import { createResolutionService } from "./resolution/resolution-service.ts";
 import { createAclStore, type AclStore } from "./acl/acl-store.ts";
@@ -110,10 +103,18 @@ import { createSkillPackStore, type SkillPack } from "./skills/skill-pack-store.
 import { createSkillBundleStore, type SkillBundle, type SkillBundleStore } from "./skills/skill-bundle-store.ts";
 import { createGitFetcher, resolvePackAuth, type SkillPackFetcher } from "./skills/pack-fetcher.ts";
 import { installSeedSkills } from "./skills/seed.ts";
-import { createPostgresMapFactory, type DurableMap } from "./persistence/durable-map.ts";
+import {
+  createPostgresMap,
+  createPostgresMapFactory,
+  type DurableMap,
+  processLevelMap,
+  durableMapMigrations,
+  processMapMigrations,
+} from "./persistence/durable-map.ts";
 import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
 import { slackUserClientFactory } from "./loops/sources/slack.ts";
 import { configurePgCaTrust, configurePgPooling } from "./persistence/pg-pool.ts";
+import { configurePublicFetch } from "./util/network.ts";
 import { createPostgresLeaderLease, type LeaderLease } from "./persistence/leader-lease.ts";
 import { createPostgresAdvisoryLock, type AdvisoryLock } from "./persistence/advisory-lock.ts";
 import type {
@@ -130,17 +131,20 @@ import type { SurfaceContextRequest } from "./reach/reach.ts";
 import { personalScope, scopeId } from "./types.ts";
 import type { AuditLog } from "./audit/audit-log.ts";
 import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
-import { createPostgresAppPageViewLog, type AppPageViewLog } from "./deploy/page-views.ts";
+import { createPostgresAppPageViewLog, DEPLOYMENT_TABLES, type AppPageViewLog } from "./deploy/page-views.ts";
 import type { BudgetTracker } from "./ratelimit/budget.ts";
-import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
+import { BUDGET_MIGRATIONS, createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
+import { PUBLISHED_ORIGIN_UPGRADE, PUBLISHED_ORIGIN_COMPLETE } from "./surfaces/published-upgrade.ts";
 import { RETIRED_ORIGIN_SWEEP_MIGRATION } from "./surfaces/origin-migration.ts";
-import { DROP_RECIPIENT_CONSENT_MIGRATION } from "./triggers/trigger-store.ts";
+import { BACKFILL_BOT_MARKER_MIGRATION, DROP_RECIPIENT_CONSENT_MIGRATION } from "./triggers/trigger-store.ts";
 import { createPostgresCronFireStore } from "./cron/fire-store.ts";
 import { createLoopStore } from "./loops/loop-store.ts";
 import { createLoopItemLedger } from "./loops/item-ledger.ts";
 import { createPostgresLedgerEventBus, type LedgerEventBus } from "./loops/ledger-events.ts";
-import { createInboxSourceRefresh } from "./loops/inbox-source-refresh.ts";
+import { createInboxPass } from "./loops/verdict/pass.ts";
+import { createConversationFetcher, createSourceClients } from "./loops/verdict/fetch.ts";
+import { createDiscoverer } from "./loops/verdict/discover.ts";
 import { createInboxRealtime } from "./loops/inbox-realtime.ts";
 import { createLoopOutputStore } from "./loops/output-store.ts";
 import { createShipGrantStore } from "./loops/ship-grant-store.ts";
@@ -159,24 +163,15 @@ import { createPostgresDirectoryStore } from "./directory/postgres-directory-sto
 import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environments/environment-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
-import { forEachTenant, inTenantOf, listTenants, type TenantRow } from "./tenants/claim.ts";
-import { withoutTenant, withTenant } from "./tenants/context.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
-import { ownerPgPool } from "./tenants/owner-pool.ts";
-import { createTenancy, type Tenancy } from "./tenants/tenancy.ts";
-import { configureTenantSettings } from "./tenants/settings.ts";
-import { configureTenantCaches } from "./api/tenant-ingress.ts";
-import { perTenantInstance } from "./tenants/tenant-instances.ts";
-import {
-  tenantBlobTransfer,
-  tenantByteStore,
-  tenantFileUploads,
-  tenantStorage,
-  type StorageTarget,
-} from "./tenants/tenant-storage.ts";
 import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-store.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
-import { createDeployStore, deployTouchDebounceMs, type Deployment } from "./deploy/deploy-store.ts";
+import {
+  createDeployStore,
+  deployTouchDebounceMs,
+  type Deployment,
+  type DeploymentDraft,
+} from "./deploy/deploy-store.ts";
 import { viewerIdentityKey } from "./deploy/access-token.ts";
 import { deploymentCredentialSlugs } from "./deploy/deployment-credentials.ts";
 import { createDockerDeployProvider } from "./deploy/docker-deploy-provider.ts";
@@ -204,7 +199,14 @@ import {
 } from "./resolution/scope-membership.ts";
 import type { DeployGitArchive } from "./deploy/deploy-git-store.ts";
 import type { MemoryService } from "./memory/memory-service.ts";
-import { createConfiguredMemoryService } from "./memory/provider-factory.ts";
+import { createRegistryMemoryService } from "./memory/registry-memory.ts";
+import type { AddressFetch } from "./util/network.ts";
+import {
+  createMemoryRegistryStore,
+  MEMORY_REGISTRY_TABLE,
+  type MemoryRegistry,
+  type MemoryRegistryStore,
+} from "./memory/registry.ts";
 import { createPostgresMemoryService } from "./memory/postgres-memory-service.ts";
 import { createMcpServerStore, type McpServer, type McpServerStore } from "./mcp/mcp-server-store.ts";
 import { createMcpToolService, type McpToolService } from "./mcp/mcp-tool-service.ts";
@@ -244,13 +246,9 @@ import { s3Client } from "./persistence/s3.ts";
 import { createS3SnapshotStore } from "./sandbox/home-snapshot.ts";
 import { createModalSandbox, type StoredModalSandbox } from "./sandbox/modal-sandbox.ts";
 import { createSdkModalClient } from "./sandbox/modal-client.ts";
+import { tenantModalClient, tenantSandboxChoice, tenantSuperserveSandbox } from "./sandbox/tenant-sandbox-shape.ts";
 import { createPorterSandbox } from "./sandbox/porter-sandbox.ts";
-import {
-  createSandboxRouter,
-  liveBackends,
-  tenantSandboxBackends,
-  type SandboxBackendName,
-} from "./sandbox/sandbox-routing.ts";
+import { createSandboxRouter, type SandboxBackendName } from "./sandbox/sandbox-routing.ts";
 import {
   upgradeLegacySandboxes,
   legacySandboxBackendForScope,
@@ -263,8 +261,8 @@ import {
   createEnvSecretSource,
   createLayeredSecretSource,
 } from "./credentials/secret-source.ts";
+import { credentialRequestHeaders } from "./credentials/credential-injection.ts";
 import {
-  credentialRequestHeaders,
   createKeychain,
   type ConnectorTokenStore,
   type OAuthToken,
@@ -315,11 +313,12 @@ import { createUserModelCredentialStore, type UserModelCredentialStore } from ".
 import { type ModelGatewayTransportConfig, setProviderBaseUrls } from "./model/provider-endpoints.ts";
 import { setCustomProviders } from "./model/custom-providers.ts";
 import { createPostgresSessionStore } from "./sessions/postgres-session-store.ts";
+import { bootTenant, inBootTenant, tenancyBooted } from "./tenants/boot.ts";
 import { createPostgresToolOutputStore } from "./sessions/tool-output.ts";
 import { LLM_CAPTURE_RETENTION_MS, type SessionStore } from "./sessions/session-store.ts";
 import { keychainCompanyChatGPTAuth, type CompanyChatGPTAuth } from "./model/company-chatgpt-auth.ts";
 import { keychainEnvCredential } from "./credentials/keychain-env-credential.ts";
-import { createAgent, agentConfigOptions } from "./agent/agent-run.ts";
+import { createAgent, agentConfigOptions, oneShot } from "./agent/agent-run.ts";
 import { withResolvedRuntime, resolveRuntimeChoice } from "./agent/runtime-choice.ts";
 import { selectableModelCatalog } from "./model/model-catalog.ts";
 import type { Agent, RuntimeChoice, SessionRoute } from "./agent/agent.ts";
@@ -335,6 +334,9 @@ import {
 } from "./auth/capability-token.ts";
 import { createControlService } from "./api/control-service.ts";
 import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
+import { ambientTenant, boundTenant, currentTenant, withTenant } from "./tenants/context.ts";
+import { claimThenBind } from "./tenants/claim.ts";
+import { inboundTenancy } from "./tenants/lookup.ts";
 import type { RunSignalStore } from "./runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "./runs/postgres-run-signal-store.ts";
 import { isTerminal, type Run, type RunStore } from "./runs/run-store.ts";
@@ -342,6 +344,7 @@ import { createRunPreemption, createWorker, SHUTDOWN_RELEASE_MS } from "./runs/w
 import {
   createNoopInstanceRegistry,
   createPostgresInstanceRegistry,
+  INSTANCE_HEARTBEAT_MIGRATIONS,
   type InstanceRegistry,
 } from "./runs/instance-registry.ts";
 import { createDrainController, type BackgroundServices, type DrainController } from "./runs/drain.ts";
@@ -351,8 +354,8 @@ import { createPostgresProcessRegistry, type ProcessRegistry } from "./processes
 import { createProcessReaper, createReaperKillHook, type ProcessReaper } from "./processes/process-reaper.ts";
 import { createJobComputerSweep } from "./processes/job-computers.ts";
 import { createMonitorStore, type MonitorStore } from "./monitors/monitor-store.ts";
-import { createMonitorPoller, type MonitorPoller } from "./monitors/monitor-poller.ts";
-import { createSkillSyncEngine, type SkillSyncEngine } from "./skills/skill-sync-engine.ts";
+import { createMonitorPoller } from "./monitors/monitor-poller.ts";
+import { createSkillSyncEngine } from "./skills/skill-sync-engine.ts";
 import { supportsProcessSessions, type SandboxHandle } from "./sandbox/sandbox.ts";
 import { finishProcessCredentials } from "./credentials/execute-files.ts";
 import { createTurnStream } from "./runs/turn-stream.ts";
@@ -362,7 +365,7 @@ import type { RunActivityStore } from "./runs/run-activity-store.ts";
 import { createPostgresRunActivityStore } from "./runs/postgres-run-activity-store.ts";
 import { createApp, type App } from "./api/app.ts";
 import { startSession } from "./api/start-session.ts";
-import { createSwarmStore, type SwarmStorage } from "./swarms/swarm-store.ts";
+import { createSwarmStore, STAMP_SWARM_COMPUTERS_MIGRATION, type SwarmStorage } from "./swarms/swarm-store.ts";
 import { createSwarmService } from "./swarms/swarm-service.ts";
 import { createSlackCoreClient, type SlackCoreClient } from "./api/slack-core-client.ts";
 import { createSurfaceContextPuller } from "./api/surface-context-puller.ts";
@@ -377,17 +380,18 @@ import {
 import { createPostgresAckEmojiPickStore, type AckEmojiPickStore } from "./surface-cache/ack-emoji-pick-store.ts";
 import {
   CODEX_SUBSCRIPTION_PROVIDER,
-  codexSubscriptionModelId,
-  isOverlayModel,
-  modelRequestOverrides,
+  companyModelId,
   defaultModel,
-  resolveModel,
+  resolveDeploymentModel,
   modelSupported,
 } from "./model/pi-models.ts";
 import { createAdminService, parseAdminGrants, type AdminService } from "./admin/admin-service.ts";
 import { createAdminGrantStore } from "./admin/admin-grant-store.ts";
 import { createPostgresAdminGrantStore } from "./admin/postgres-admin-grant-store.ts";
 import { createProjectStore, type Project, type ProjectStore } from "./projects/project-store.ts";
+import { createPersonaHandover } from "./personas/persona-handover.ts";
+import { createPersonaService } from "./personas/persona-service.ts";
+import { createPostgresPersonaStore } from "./personas/persona-store.ts";
 import { withErrorReporting, type ErrorLog } from "./admin/error-log.ts";
 import { createPostgresReplayDedupe, type ReplayDedupe } from "./auth/replay-dedupe.ts";
 import {
@@ -404,7 +408,7 @@ import {
   type StoredDeploymentLayer,
 } from "./deployment/deployment-layer-store.ts";
 import { createPostgresErrorLog } from "./admin/postgres-error-log.ts";
-import { errMessage, reportFailureAs, swallowAs } from "./util/errors.ts";
+import { errMessage, reportFailure, reportFailureAs, swallowAs } from "./util/errors.ts";
 import { sleep, withTimeout } from "./util/async.ts";
 import { createSlackInstallationStore, type SlackInstallationStore } from "./surfaces/slack-installation.ts";
 import { createSurfaceRegistry } from "./surfaces/registry.ts";
@@ -417,19 +421,19 @@ import { type probeModel, type ProviderKeys } from "./model/model-runtime.ts";
 
 export interface Runtime {
   start(services?: BackgroundServices): void;
-  stop(): Promise<void>;
-  releaseInFlightRuns(): Promise<void>;
+  stop(opts?: { beforeClose?: () => Promise<void>; fatal?: boolean }): Promise<void>;
+  releaseInFlightRuns(fatal?: boolean): Promise<void>;
 }
 
 export function stopWithBackstop(
   runtime: Pick<Runtime, "stop" | "releaseInFlightRuns">,
   shutdownDrainMs: number,
   label: string,
-  beforeExit?: () => void,
+  fatal = false,
 ): void {
   const hardExit = setTimeout(() => {
     console.error(`[${label}] drain overran; releasing in-flight leases before forced exit`);
-    void Promise.race([runtime.releaseInFlightRuns(), sleep(SHUTDOWN_RELEASE_MS, { unref: true })]).finally(
+    void Promise.race([runtime.releaseInFlightRuns(fatal), sleep(SHUTDOWN_RELEASE_MS, { unref: true })]).finally(
       async () => {
         await flushErrorReporting();
         process.exit();
@@ -437,17 +441,16 @@ export function stopWithBackstop(
     );
   }, shutdownDrainMs + SHUTDOWN_RELEASE_MS);
   hardExit.unref();
-  void runtime.stop().then(
+  void runtime.stop({ fatal }).then(
     async () => {
       await flushErrorReporting();
       clearTimeout(hardExit);
-      beforeExit?.();
       process.exit();
     },
     (e: unknown) => {
       console.error(`[${label}] graceful stop failed: ${errMessage(e)}`);
       clearTimeout(hardExit);
-      void Promise.race([runtime.releaseInFlightRuns(), sleep(SHUTDOWN_RELEASE_MS, { unref: true })]).finally(
+      void Promise.race([runtime.releaseInFlightRuns(fatal), sleep(SHUTDOWN_RELEASE_MS, { unref: true })]).finally(
         async () => {
           await flushErrorReporting();
           process.exit(1);
@@ -459,8 +462,6 @@ export function stopWithBackstop(
 
 export interface BuiltApp {
   checkReadiness: (signal: AbortSignal) => Promise<void>;
-  forEachTenant: (fn: () => Promise<unknown>) => Promise<void>;
-  listTenants: () => Promise<TenantRow[]>;
   drain: DrainController;
   ownSharedState: () => Promise<void>;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
@@ -470,7 +471,6 @@ export interface BuiltApp {
   deploymentLayerStore: DeploymentLayerStore;
   deploymentLayerReady: Promise<unknown>;
   deploymentLayerRefresh: Sweeper;
-  loadTenants: () => Promise<void>;
   sessions: SessionStore;
   runs: RunStore;
   signals: RunSignalStore;
@@ -485,10 +485,9 @@ export interface BuiltApp {
   resolveClient: OAuthClientResolver;
   consentLinks: ConsentLinkStore;
   oauthFlows: OAuthFlowStore;
-  tenancy: Tenancy;
   secretDrops: SecretDropStore;
   modelGatewayTransport?: ModelGatewayTransportConfig;
-  resolveBrowserCompanyKeys: (includeSubscription?: boolean) => Promise<ProviderKeys>;
+  modelRoutes: ModelRoutes;
   modelCredentials: ModelCredentialStore;
   userModelCredentials: UserModelCredentialStore;
   modelRegistry: ModelOverlayStore;
@@ -498,6 +497,7 @@ export interface BuiltApp {
   refreshCustomProviders: () => Promise<void>;
   mcpServers: McpServerStore;
   mcpToolService: McpToolService;
+  memoryRegistry: MemoryRegistryStore;
   acl: AclStore;
   skills: SkillStore;
   skillBundles: SkillBundleStore;
@@ -544,18 +544,29 @@ export interface BuiltApp {
   appPageViews?: AppPageViewLog;
   monitors: MonitorStore;
   browserSessionStore?: BrowserSessionStore;
-  monitorPoller?: MonitorPoller;
   ambientJudgments?: AmbientJudgmentStore;
   ackEmojiPicks?: AckEmojiPickStore;
   channelPolicy: ChannelPolicyStore;
   uiState: UiStateStore;
   sessionShares: SessionShareStore;
   sessionShareBytes: DurableByteStore;
-  skillSyncEngine: SkillSyncEngine;
   slackCore: SlackCoreClient;
 }
 
 const MEMORY_CAPTURE_ENTRY_WINDOW = 2_000;
+
+const CONFIGURED_MAPS = [
+  "sprites_initialization",
+  "sandbox_resource_rollout",
+  "sandbox_routing",
+  "render_deploy_credentials",
+  "render_app_storage",
+  "aws_deploy_bodies",
+  "fly_deploy_configs",
+  "porter_deploy_bodies",
+];
+
+const CONFIGURED_PROCESS_MAPS = ["render_sandbox_bases", "fly_peer_claims", "fly_deploy_ports"];
 
 export function buildApp(
   config: Config,
@@ -564,6 +575,7 @@ export function buildApp(
     decisionBackend?: DecisionBackend;
     credentialBrokers?: Record<string, AwsRoleBroker>;
     modelCredentialFetch?: typeof fetch;
+    memoryRegistryFetch?: AddressFetch;
     modelVerificationProbe?: typeof probeModel;
     agent?: Agent;
     canClaimRuns?: () => boolean;
@@ -585,6 +597,7 @@ export function buildApp(
     ...(config.databaseCaCert ? { cert: config.databaseCaCert } : {}),
     ...(config.databaseCaCertFile ? { certFile: config.databaseCaCertFile } : {}),
   });
+  configurePublicFetch(config.privateNetworkAllowedOrigins);
   const reusedConnectorKey = [
     ["CORE_SIGNING_SECRET", config.signingSecret],
     ["CAPABILITY_SECRET", config.capabilitySecret],
@@ -609,8 +622,22 @@ export function buildApp(
   const pgArtifactMap = createPostgresMapFactory(databaseUrl);
   const artifactMap = <T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> =>
     pgArtifactMap.map<T>(table, indexedFields);
+  const processMap = <T>(table: string): DurableMap<T> =>
+    createPostgresMap<T>(pgArtifactMap.pool, table, [], [], [processLevelMap(table)]);
+  const inboundMap = <T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> =>
+    pgArtifactMap.map<T>(table, indexedFields, inboundTenancy(table));
+  for (const migration of [
+    ...FILE_UPLOAD_MIGRATIONS,
+    ...BUDGET_MIGRATIONS,
+    ...INSTANCE_HEARTBEAT_MIGRATIONS,
+    ...CONFIGURED_MAPS.flatMap(durableMapMigrations),
+    ...CONFIGURED_PROCESS_MAPS.flatMap(processMapMigrations),
+  ])
+    pgArtifactMap.pool.registerMigration(migration);
   setProviderBaseUrls(config.providerBaseUrls);
-  const unknownGatewayModels = Object.keys(config.modelGateway?.models ?? {}).filter((id) => !resolveModel(id));
+  const unknownGatewayModels = Object.keys(config.modelGateway?.models ?? {}).filter(
+    (id) => !resolveDeploymentModel(id),
+  );
   if (unknownGatewayModels.length) {
     throw new Error(`MODEL_GATEWAY_MODELS contains unsupported models: ${unknownGatewayModels.join(", ")}`);
   }
@@ -668,7 +695,7 @@ export function buildApp(
   const skillPacks = createSkillPackStore({ backing: artifactMap<SkillPack>("skill_packs") });
   const skillBundles = createSkillBundleStore({ backing: artifactMap<SkillBundle>("skill_bundles") });
   const featureFlags = createFeatureFlagStore(artifactMap<FeatureFlagRecord>("feature_flags"));
-  const teams = createPostgresTeamStore(databaseUrl, featureFlags, () => scopeId("org", orgId()));
+  const teams = createPostgresTeamStore(databaseUrl, featureFlags, scopeId("org", config.orgId));
   const decisions = createPostgresDecisionStore(databaseUrl);
   const slackInstallation = createSlackInstallationStore(
     config.orgId,
@@ -684,7 +711,7 @@ export function buildApp(
   const auditLog = createPostgresAuditLog(databaseUrl);
   let ownsSharedState = false;
   const deploymentLayerStore = createDeploymentLayerStore({
-    backing: artifactMap<StoredDeploymentLayer>("deployment_layer"),
+    backing: processMap<StoredDeploymentLayer>("deployment_layer"),
     runtime: deploymentLayer,
     skills,
     skillBundles,
@@ -713,20 +740,14 @@ export function buildApp(
         }
       : {}),
   });
-  const installTenant = pgArtifactMap.pool
-    .pool()
-    .then(() => ownerPgPool(pgArtifactMap.pool).q("SELECT qm_tenant_id()::text AS id"))
-    .then((rows) => String(rows[0]?.id));
-  const hydrateDeploymentLayer = () =>
-    installTenant.then((tenant) => withTenant(tenant, () => deploymentLayerStore.hydrate()));
-  const deploymentLayerReady = hydrateDeploymentLayer();
-  const deploymentLayerRefresh = createUntrackedSweeper(
-    () => withInstallTenant(() => deploymentLayerStore.hydrate()),
-    30_000,
-    {
-      label: "deployment layer refresh",
-    },
-  );
+  const layerTenants = new Set<string>();
+  const deploymentLayerReady = boundTenant() ? deploymentLayerStore.hydrate() : Promise.resolve(null);
+  const refreshLayerTenants = async (): Promise<void> => {
+    for (const tenant of layerTenants) await withTenant(tenant, () => deploymentLayerStore.hydrate());
+  };
+  const deploymentLayerRefresh = createUntrackedSweeper(refreshLayerTenants, 30_000, {
+    label: "deployment layer refresh",
+  });
   const installCatalogs = async (): Promise<void> => {
     await installSeedSkills(skills, { dir: config.skillsSeedDir, scopeId: orgScope, respectArchived: true });
     for (const dir of config.pluginSkillDirs) {
@@ -740,6 +761,20 @@ export function buildApp(
       });
     }
   };
+  const seeded = perTenant<{ run?: Promise<void> }>(() => ({}));
+  const seedTenantSkills = (): Promise<void> => {
+    const state = seeded();
+    state.run ??= installCatalogs().catch((e: unknown) => {
+      state.run = undefined;
+      console.error("[seed] failed to install seed skills:", errMessage(e));
+    });
+    return state.run;
+  };
+  const stopLayerLoad = onTenantLoad(async () => {
+    layerTenants.add(currentTenant());
+    await deploymentLayerStore.hydrate();
+    if (config.seedSkills && ownsSharedState) await seedTenantSkills();
+  });
   let skillsReady = deploymentLayerReady.then(
     () => undefined,
     (e) => console.error("[seed] deployment layer not ready:", errMessage(e)),
@@ -760,51 +795,37 @@ export function buildApp(
     config.securityScreen === "off" && overrides.securityScreener ? "enforce" : config.securityScreen,
   );
 
-  const deploymentStorage = (bucket: string): StorageTarget => ({
-    bucket,
-    ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
-  });
   const s3 = config.s3Endpoint ? s3Client(config.s3Region, { endpoint: config.s3Endpoint }) : undefined;
   const s3Override = s3 ? { _client: s3 } : {};
   const blobTransfer: BlobTransferStore =
     config.transferStore === "s3" && config.s3Bucket
-      ? tenantBlobTransfer(
-          tenantStorage(deploymentStorage(config.s3Bucket), (target) =>
-            createS3BlobTransferStore({
-              ...s3Override,
-              ...target,
-              ...(config.s3Region ? { region: config.s3Region } : {}),
-            }),
-          ),
-        )
+      ? createS3BlobTransferStore({
+          ...s3Override,
+          bucket: config.s3Bucket,
+          ...(config.s3Region ? { region: config.s3Region } : {}),
+          ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
+        })
       : createLocalBlobTransferStore(join(config.dataDir, "transfer"));
   const fileBytes: DurableByteStore =
     config.snapshotStore === "s3" && config.s3Bucket
-      ? tenantByteStore(
-          tenantStorage(deploymentStorage(config.s3Bucket), (target) =>
-            createS3DurableByteStore({
-              ...s3Override,
-              ...target,
-              ...(config.s3Region ? { region: config.s3Region } : {}),
-            }),
-          ),
-        )
+      ? createS3DurableByteStore({
+          ...s3Override,
+          bucket: config.s3Bucket,
+          ...(config.s3Region ? { region: config.s3Region } : {}),
+          ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
+        })
       : createLocalDurableByteStore(join(config.dataDir, "docstore"));
   const files: FileArtifactStore = createPostgresFileArtifactStore(databaseUrl, fileBytes);
-  const fileUploadStore = createPostgresFileUploadStore(databaseUrl);
   const fileUploads =
     config.snapshotStore === "s3" && config.s3Bucket
-      ? tenantFileUploads(
-          tenantStorage(deploymentStorage(config.s3Bucket), (target) =>
-            createDirectFileUploads({
-              ...(s3 ? { client: s3, presign: (command, expiresIn) => getSignedUrl(s3, command, { expiresIn }) } : {}),
-              ...target,
-              ...(config.s3Region ? { region: config.s3Region } : {}),
-              store: fileUploadStore,
-              files,
-            }),
-          ),
-        )
+      ? createDirectFileUploads({
+          ...(s3 ? { client: s3, presign: (command, expiresIn) => getSignedUrl(s3, command, { expiresIn }) } : {}),
+          bucket: config.s3Bucket,
+          ...(config.s3Region ? { region: config.s3Region } : {}),
+          ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
+          store: createPostgresFileUploadStore(databaseUrl),
+          files,
+        })
       : undefined;
   const notebookMemory: MemoryService = createPostgresMemoryService(databaseUrl);
   const semanticMemory = createSemanticMemory({
@@ -816,10 +837,17 @@ export function buildApp(
     createSweeper,
   });
   const memorySessions: { store?: SessionStore } = {};
+  const memoryRegistry = createMemoryRegistryStore({
+    map: artifactMap<MemoryRegistry>(MEMORY_REGISTRY_TABLE),
+    key: deriveConnectorKey(config.connectorSecretKey ?? randomBytes(32), "memory-registry"),
+    ...(config.memoryProviderConfig ? { overlay: config.memoryProviderConfig } : {}),
+  });
   const baseMemory: MemoryService = withMemoryTidy(
-    createConfiguredMemoryService({
+    createRegistryMemoryService({
       defaultMemory: semanticMemory.memory,
-      config: config.memoryProviderConfig,
+      ...(config.memoryProviderConfig ? { overlay: config.memoryProviderConfig } : {}),
+      registry: memoryRegistry,
+      ...(overrides.memoryRegistryFetch ? { registryFetch: overrides.memoryRegistryFetch } : {}),
       sessionItems: (sessionId) => {
         if (!memorySessions.store) throw new Error("session store is not ready");
         return memorySessions.store.getItems(sessionId, { limit: MEMORY_CAPTURE_ENTRY_WINDOW });
@@ -847,8 +875,8 @@ export function buildApp(
       ...config.localSandbox,
       onError: sandboxOnError,
     });
-  const buildSprites = (settings: SandboxSettings = config): Sandbox => {
-    const { snapshotS3Bucket, ...sprites } = settings.spritesSandbox;
+  const buildSprites = (): Sandbox => {
+    const { snapshotS3Bucket, ...sprites } = config.spritesSandbox;
     return createSpritesSandbox({
       ...sprites,
       initializationStore: artifactMap<{ pending: boolean }>("sprites_initialization"),
@@ -902,7 +930,7 @@ export function buildApp(
     renderClient && config.renderSandbox.image
       ? createRenderBase({
           client: renderClient,
-          store: artifactMap<StoredRenderBase>("render_sandbox_bases"),
+          store: processMap<StoredRenderBase>("render_sandbox_bases"),
           image: config.renderSandbox.image,
           hold: (work) => leaderLease.hold(`render:sandbox-base:${config.renderSandbox.image}`, work),
           onError: sandboxOnError,
@@ -983,26 +1011,32 @@ export function buildApp(
       onError: sandboxOnError,
     });
   };
-  const buildModal = (settings: SandboxSettings = config): Sandbox => {
-    const modal = settings.modalSandbox;
-    if (!modal.tokenId || !modal.tokenSecret)
+  const buildModal = (): Sandbox => {
+    const modal = config.modalSandbox;
+    const { tokenId, tokenSecret } = modal;
+    if (!tokenId || !tokenSecret)
       throw new Error("SANDBOX_BACKEND=modal requires MODAL_TOKEN_ID and MODAL_TOKEN_SECRET");
     return createModalSandbox({
       advisoryLock,
-      client: createSdkModalClient({
-        tokenId: modal.tokenId,
-        tokenSecret: modal.tokenSecret,
-        appName: modal.appName ?? "qm",
-        ...(modal.image ? { image: modal.image } : {}),
-        ...(modal.environment ? { environment: modal.environment } : {}),
-        ...(modal.cpus !== undefined ? { cpus: modal.cpus } : {}),
-        ...(modal.memoryMb !== undefined ? { memoryMb: modal.memoryMb } : {}),
-        ...(modal.regions?.length ? { regions: modal.regions } : {}),
-        ...(modal.sandboxTimeoutSec ? { sandboxTimeoutMs: modal.sandboxTimeoutSec * 1000 } : {}),
-        ...(modal.reapIdleSec ? { idleTimeoutMs: 2 * modal.reapIdleSec * 1000 } : {}),
-        ...(modal.snapshotRetentionSec !== undefined ? { snapshotRetentionMs: modal.snapshotRetentionSec * 1000 } : {}),
-        ...(modal.egressProxyUrl ? { egressProxyUrl: modal.egressProxyUrl } : {}),
-      }),
+      client: tenantModalClient(
+        { appName: modal.appName ?? "qm", ...(modal.environment ? { environment: modal.environment } : {}) },
+        (shape) =>
+          createSdkModalClient({
+            tokenId,
+            tokenSecret,
+            appName: shape.appName,
+            ...(modal.image ? { image: modal.image } : {}),
+            ...(shape.environment ? { environment: shape.environment } : {}),
+            ...(modal.cpus !== undefined ? { cpus: modal.cpus } : {}),
+            ...(modal.regions?.length ? { regions: modal.regions } : {}),
+            ...(modal.sandboxTimeoutSec ? { sandboxTimeoutMs: modal.sandboxTimeoutSec * 1000 } : {}),
+            ...(modal.reapIdleSec ? { idleTimeoutMs: 2 * modal.reapIdleSec * 1000 } : {}),
+            ...(modal.snapshotRetentionSec !== undefined
+              ? { snapshotRetentionMs: modal.snapshotRetentionSec * 1000 }
+              : {}),
+            ...(modal.egressProxyUrl ? { egressProxyUrl: modal.egressProxyUrl } : {}),
+          }),
+      ),
       ...(modal.namePrefix ? { namePrefix: modal.namePrefix } : {}),
       ...(modal.defaultTimeoutSec ? { defaultTimeoutSec: modal.defaultTimeoutSec } : {}),
       ...(modal.nativeSnapshotIntervalSec !== undefined
@@ -1039,56 +1073,46 @@ export function buildApp(
       onError: sandboxOnError,
     });
   const superserveBodies = artifactMap<StoredSuperserveSandbox>("superserve_sandbox_bodies");
-  const superserveEpochs = artifactMap<StoredConfigEpoch>("superserve_config_epochs");
+  const superserveEpochs = processMap<StoredConfigEpoch>("superserve_config_epochs");
   const buildSuperserve = (): Sandbox => {
     const ss = config.superserveSandbox;
-    if (!ss.apiKey) throw new Error("SANDBOX_BACKEND=superserve requires SUPERSERVE_API_KEY");
+    if (!ss.apiKey && config.sandboxBackend === "superserve")
+      throw new Error("SANDBOX_BACKEND=superserve requires SUPERSERVE_API_KEY");
     if (!ss.template)
       throw new Error("SANDBOX_BACKEND=superserve requires SUPERSERVE_TEMPLATE (a ready qm-agent-<release> template)");
     const keepWarmSec = Math.ceil(config.backgroundJobTtlMaxMs / 1000);
-    const generationKey = createHash("sha256")
-      .update(
-        JSON.stringify([
-          config.buildSha ?? "",
-          ss.template,
-          ss.namePrefix ?? "",
-          ss.homeDir ?? "",
-          ss.idlePauseSec ?? null,
-          ss.retentionSec ?? null,
-          keepWarmSec,
-          [...(ss.egressAllow ?? [])].sort(),
-          [...(ss.egressDeny ?? [])].sort(),
-        ]),
-      )
-      .digest("hex")
-      .slice(0, 32);
-    return createSuperserveSandbox({
-      configEpoch: ss.configGeneration ?? createConfigEpochResolver(superserveEpochs, generationKey, advisoryLock),
-      client: createSdkSuperserveClient({
-        apiKey: ss.apiKey,
-        ...(ss.baseUrl ? { baseUrl: ss.baseUrl } : {}),
-        ...(ss.template ? { template: ss.template } : {}),
-      }),
-      ...(ss.namePrefix ? { namePrefix: ss.namePrefix } : {}),
+    const generationKey = superserveGenerationKey(ss, config.buildSha, keepWarmSec);
+    const configEpoch = ss.configGeneration ?? createConfigEpochResolver(superserveEpochs, generationKey, advisoryLock);
+    const base = {
+      ...(ss.apiKey ? { apiKey: ss.apiKey } : {}),
+      namePrefix: ss.namePrefix ?? "qm",
       template: ss.template,
-      ...(ss.homeDir ? { homeDir: ss.homeDir } : {}),
-      ...(ss.idlePauseSec !== undefined ? { idlePauseSec: ss.idlePauseSec } : {}),
-      keepWarmSec,
-      ...(ss.retentionSec !== undefined ? { retentionSec: ss.retentionSec } : {}),
-      ...(ss.egressAllow ? { egressAllow: ss.egressAllow } : {}),
-      ...(ss.egressDeny ? { egressDeny: ss.egressDeny } : {}),
-      ...(ss.defaultTimeoutSec ? { defaultTimeoutSec: ss.defaultTimeoutSec } : {}),
-      advisoryLock,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
-      layerToolFiles: () => deploymentLayer.installFiles,
-      blobTransfer,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-      store: superserveBodies,
-      onError: sandboxOnError,
-    });
+    };
+    return tenantSuperserveSandbox(base, ({ apiKey, namePrefix, template = ss.template }) =>
+      createSuperserveSandbox({
+        configEpoch,
+        client: createSdkSuperserveClient({ apiKey, ...(ss.baseUrl ? { baseUrl: ss.baseUrl } : {}), template }),
+        namePrefix,
+        template,
+        ...(ss.homeDir ? { homeDir: ss.homeDir } : {}),
+        ...(ss.idlePauseSec !== undefined ? { idlePauseSec: ss.idlePauseSec } : {}),
+        keepWarmSec,
+        ...(ss.retentionSec !== undefined ? { retentionSec: ss.retentionSec } : {}),
+        ...(ss.egressAllow ? { egressAllow: ss.egressAllow } : {}),
+        ...(ss.egressDeny ? { egressDeny: ss.egressDeny } : {}),
+        ...(ss.defaultTimeoutSec ? { defaultTimeoutSec: ss.defaultTimeoutSec } : {}),
+        advisoryLock,
+        extraTools: deploymentLayer.advertisedTools,
+        credentialPaths: deploymentLayer.credentialPaths,
+        layerToolFiles: () => deploymentLayer.installFiles,
+        blobTransfer,
+        ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
+        ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
+        ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
+        store: superserveBodies,
+        onError: sandboxOnError,
+      }),
+    );
   };
   const buildAws = (): Sandbox => {
     if (!config.awsSandbox.s3Bucket) throw new Error("SANDBOX_BACKEND=aws requires AWS_SANDBOX_S3_BUCKET");
@@ -1130,6 +1154,7 @@ export function buildApp(
       store: renderBodies,
       scratchStore: renderScratch,
       cleanupStore: renderCleanup,
+      namespaceStore: artifactMap<StoredRenderNamespace>("render_sandbox_namespace"),
       advisoryLock,
       extraTools: deploymentLayer.advertisedTools,
       credentialPaths: deploymentLayer.credentialPaths,
@@ -1155,34 +1180,30 @@ export function buildApp(
     "do-managed-agents": buildManagedAgents,
   };
   const enabledBackends = new Set(enabledSandboxBackends(config));
-  const deploymentBackends: Partial<Record<SandboxBackendName, Sandbox>> = {
+  const sandboxBackends: Partial<Record<SandboxBackendName, Sandbox>> = {
     [config.sandboxBackend]: buildBackend[config.sandboxBackend](),
   };
   for (const name of Object.keys(buildBackend) as Array<Config["sandboxBackend"]>) {
-    if (name !== config.sandboxBackend && enabledBackends.has(name)) deploymentBackends[name] = buildBackend[name]();
+    if (name !== config.sandboxBackend && enabledBackends.has(name)) sandboxBackends[name] = buildBackend[name]();
   }
-  const tenantBackends = perTenantInstance([...SPRITES_TENANT_ENV, ...MODAL_TENANT_ENV], (env) =>
-    tenantSandboxBackends(deploymentBackends, tenantSandboxSettings(config, env), env, {
-      sprites: buildSprites,
-      modal: buildModal,
-    }),
-  );
-  const sandboxBackends = liveBackends(() => tenantBackends() ?? deploymentBackends);
   const sandboxRecords = artifactMap<SandboxResource>("sandbox_resources");
   const sandboxDefaults = artifactMap<SandboxDefault>("sandbox_defaults");
   const sandboxResources = createSandboxResources({
     records: sandboxRecords,
     defaults: sandboxDefaults,
-    upgrade: () =>
-      upgradeLegacySandboxes({
+    upgrade: async () => {
+      const choice = await tenantSandboxChoice({
+        backend: config.sandboxBackend,
+        scopeBackends: config.legacySandboxScopeDefaults ?? {},
+      });
+      await upgradeLegacySandboxes({
         availableBackends: Object.keys(sandboxBackends) as SandboxBackendName[],
         records: sandboxRecords,
         defaults: sandboxDefaults,
         marker: artifactMap<{ activatedAt: string }>("sandbox_resource_rollout"),
         routes: () => artifactMap<LegacyRoute>("sandbox_routing").entries(),
         lock: advisoryLock,
-        legacyBackend: (scope) =>
-          legacySandboxBackendForScope(scope, config.sandboxBackend, config.legacySandboxScopeDefaults),
+        legacyBackend: (scope) => legacySandboxBackendForScope(scope, choice.backend, choice.scopeBackends),
         specFor: (backend) => sandboxBackends[backend]?.profile.spec,
         legacyScopes: async () => [
           ...(await sessions.distinctScopes()).map((scope) => scope.scopeId),
@@ -1195,18 +1216,17 @@ export function buildApp(
             awsBodies.entries(),
             superserveBodies.entries(),
           ]);
+          const bind = (backend: SandboxBackendName, rows: Array<[string, { sandboxId: string }]>) =>
+            rows.map(([scopeId, body]) => ({ scopeId, backend, machineId: body.sandboxId }));
           return [
-            ...e2b.map(([scopeId, body]) => ({ scopeId, backend: "e2b" as const, machineId: body.sandboxId })),
-            ...modal.map(([scopeId, body]) => ({ scopeId, backend: "modal" as const, machineId: body.sandboxId })),
+            ...bind("e2b", e2b),
+            ...bind("modal", modal),
             ...aws.map(([scopeId, body]) => ({ scopeId, backend: "aws" as const, machineId: body.microvmId })),
-            ...superserve.map(([scopeId, body]) => ({
-              scopeId,
-              backend: "superserve" as const,
-              machineId: body.sandboxId,
-            })),
+            ...bind("superserve", superserve),
           ];
         },
-      }),
+      });
+    },
     backends: sandboxBackends,
     defaultBackend: config.sandboxBackend,
     lock: advisoryLock,
@@ -1311,18 +1331,6 @@ export function buildApp(
     scopeId("org", config.orgId),
     config.brokerCredentials ?? [],
   );
-  if (config.brokerCredentials?.length) {
-    const reserved = new Set(config.brokerCredentials.map((c) => c.slug));
-    void credentialStore.listServiceCredentials(scopeId("org", config.orgId)).then(
-      (stored) => {
-        const shadowed = stored.filter((c) => reserved.has(c.slug)).map((c) => c.slug);
-        if (shadowed.length)
-          console.warn(`[broker-credentials] BROKER_CREDENTIALS overrides stored credentials: ${shadowed.join(", ")}`);
-      },
-      (error) =>
-        console.warn(`[broker-credentials] could not check for overridden stored credentials: ${errMessage(error)}`),
-    );
-  }
   const mcpToolService = createMcpToolService({
     servers: mcpServers,
     audit: auditLog,
@@ -1338,12 +1346,9 @@ export function buildApp(
     ? createBrowserSessionStore({ sessions: artifactMap<StoredBrowserSession>("browser_sessions"), key: credentialKey })
     : undefined;
   const connectorTokens = withOperatorTokenFallback(credentialStore, config.egressServiceHosts ?? [], secretSource);
-  const consentLinks: ConsentLinkStore = createConsentLinkStore(artifactMap<ConsentLinkRecord>("consent_links"));
-  const oauthFlows: OAuthFlowStore = createOAuthFlowStore(artifactMap<OAuthState>("oauth_flows"));
-  const tenancy = createTenancy(pgArtifactMap.pool, ownerPgPool(pgArtifactMap.pool));
-  configureTenantSettings(tenancy.settings);
-  configureTenantCaches(() => tenantLoader.load());
-  const secretDrops: SecretDropStore = createSecretDropStore(artifactMap<SecretDropRecord>("secret_drops"));
+  const consentLinks: ConsentLinkStore = createConsentLinkStore(inboundMap<ConsentLinkRecord>("consent_links"));
+  const oauthFlows: OAuthFlowStore = createOAuthFlowStore(inboundMap<OAuthState>("oauth_flows"));
+  const secretDrops: SecretDropStore = createSecretDropStore(inboundMap<SecretDropRecord>("secret_drops"));
 
   const sessions: SessionStore = createPostgresSessionStore(databaseUrl);
   memorySessions.store = sessions;
@@ -1351,16 +1356,12 @@ export function buildApp(
     pool: pgArtifactMap.pool,
     bytesFor: (prefix) =>
       config.snapshotStore === "s3" && config.s3Bucket
-        ? tenantByteStore(
-            tenantStorage(deploymentStorage(config.s3Bucket), (target) =>
-              createS3DurableByteStore({
-                ...s3Override,
-                bucket: target.bucket,
-                ...(config.s3Region ? { region: config.s3Region } : {}),
-                prefix: `${target.prefix ?? ""}${prefix}`,
-              }),
-            ),
-          )
+        ? createS3DurableByteStore({
+            ...s3Override,
+            bucket: config.s3Bucket,
+            ...(config.s3Region ? { region: config.s3Region } : {}),
+            prefix: `${config.s3Prefix ?? ""}${prefix}`,
+          })
         : createLocalDurableByteStore(join(config.dataDir, prefix)),
   });
   const runSignals: RunSignalStore = createPostgresRunSignalStore(databaseUrl);
@@ -1385,11 +1386,23 @@ export function buildApp(
   const refreshCustomProviders = async () => {
     setCustomProviders(await customProviders.enabled());
   };
-  const tenantLoader = createTenantLoader([
-    () => configStore.hydrate?.() ?? Promise.resolve(),
-    refreshCustomProviders,
-    () => identity.refresh(),
-  ]);
+  const reported =
+    (context: string) =>
+    (e: unknown): never => {
+      reportFailure(context, e);
+      throw e;
+    };
+  const stopTenantLoad = onTenantLoad(() =>
+    Promise.all([
+      configStore.hydrate?.().catch(reported("tenant load: hydrate configuration")),
+      refreshCustomProviders().catch(reported("tenant load: hydrate custom providers")),
+      identity.refresh().catch(reported("tenant load: hydrate identity")),
+    ]),
+  );
+  const stopSettingsLoad = onTenantLoad(
+    () => loadTenantSettings(pgArtifactMap.pool).catch(reported("tenant load: hydrate tenant settings")),
+    TENANT_SETTINGS_REFRESH_MS,
+  );
   const refreshModels = async () => {
     await gatewayCatalog?.refresh();
     await refreshCustomProviders();
@@ -1468,18 +1481,9 @@ export function buildApp(
     ]);
     return { ...claude, ...metered, ...chatgpt };
   };
-  const resolveBrowserCompanyKeys = async (includeSubscription = true): Promise<ProviderKeys> =>
-    includeSubscription ? resolveCompanyProviderKeys() : resolveModelProviderKeys();
-  const companyModelId = (id: string): string => {
-    if (resolveModel(id)?.provider !== "openai" || isOverlayModel(id) || modelRequestOverrides(id)) return id;
-    const subscription = codexSubscriptionModelId(id);
-    return resolveModel(subscription) ? subscription : id;
-  };
-  const runtimeOrgScope = () => scopeId("org", orgId());
+  const runtimeOrgScope = scopeId("org", config.orgId);
   const orgBaseModelId = (): string | undefined =>
-    configStore.getRuntimeSelection(runtimeOrgScope())?.modelId ??
-    configStore.getBaseModel(runtimeOrgScope()) ??
-    undefined;
+    configStore.getRuntimeSelection(runtimeOrgScope)?.modelId ?? configStore.getBaseModel(runtimeOrgScope) ?? undefined;
   const deploymentDefaultModel = () =>
     defaultModel(
       configuredModel(config),
@@ -1494,13 +1498,16 @@ export function buildApp(
     ...(configDefault ? { defaultModelId: configDefault } : {}),
     resolveProviderKeys: resolveCompanyProviderKeys,
     ...(gatewayTransport ? { modelGateway: gatewayTransport } : {}),
-    ...(directProviderAvailability.codexOAuth ? { companyModelId } : {}),
+    companyModelId: (id: string) => companyModelId(id, directProviderAvailability),
     resolveFallbackRuntime: () => configStore.getPurposeRuntime("fallback"),
   });
   const baseAgent =
     overrides.agent ??
     createAgent({
       ...agentConfigOptions(config),
+      memorySizedBackends: Object.entries(sandboxBackends)
+        .filter(([, backend]) => backend?.profile.sizesMemory)
+        .map(([name]) => name),
       routes: modelRoutes,
       signals: runSignals,
     });
@@ -1517,7 +1524,7 @@ export function buildApp(
         ...(modelRoutes.gateway ? { gateway: modelRoutes.gateway } : {}),
         credential: async (slug) => {
           const rec = keychain
-            ? nonDeploymentCredential(await serviceCreds.getServiceCredentialSecret(scopeId("org", orgId()), slug))
+            ? nonDeploymentCredential(await serviceCreds.getServiceCredentialSecret(scopeId("org", config.orgId), slug))
             : null;
           return rec ? { host: rec.host, enabled: rec.enabled, headers: credentialRequestHeaders(rec) } : null;
         },
@@ -1534,8 +1541,8 @@ export function buildApp(
   const resolveRequestedRuntime = (route: SessionRoute, requested: SessionRoute["runtime"]) =>
     resolveRuntimeChoice(
       configStore,
-      runtimeOrgScope(),
-      route.scopeLabel ?? runtimeOrgScope(),
+      runtimeOrgScope,
+      route.scopeLabel ?? runtimeOrgScope,
       fallback,
       requested,
       hydrateModelCatalog,
@@ -1648,8 +1655,6 @@ export function buildApp(
           },
         })
       : undefined;
-  const productAnalytics = createProductAnalytics(orgId, config.productAnalytics);
-  runs.onTerminal((run) => void productAnalytics.responseFinished(run));
 
   let processes: ProcessRegistry | undefined;
   if (supportsProcessSessions(sandbox)) {
@@ -1691,7 +1696,8 @@ export function buildApp(
     },
   };
   const deployStore = createDeployStore({
-    deployments: artifactMap<Deployment>("deployments"),
+    deployments: pgArtifactMap.map<Deployment>("deployments", undefined, DEPLOYMENT_TABLES),
+    drafts: artifactMap<DeploymentDraft>("deployment_drafts"),
     pg: pgArtifactMap.pool,
     touchDebounceMs: deployTouchDebounceMs(config.deployIdleTtlMs),
     git: {
@@ -1768,7 +1774,7 @@ export function buildApp(
     config.deployProvider === "fly" && config.flyDeploy.wireguardPeers
       ? createFlyTunnelManager({
           peers: parseFlyWireguardPeers(config.flyDeploy.wireguardPeers),
-          claims: artifactMap<FlyPeerClaim>("fly_peer_claims"),
+          claims: processMap<FlyPeerClaim>("fly_peer_claims"),
           metadataUri: config.flyDeploy.metadataUri ?? "",
           executable: "wireproxy",
           port: 18096,
@@ -1783,7 +1789,7 @@ export function buildApp(
         ...config.flyDeploy,
         ...(flyTunnel ? { privateTransport: flyTunnel } : {}),
         configStore: artifactMap<FlyMachineConfig>("fly_deploy_configs"),
-        portStore: artifactMap<string>("fly_deploy_ports"),
+        portStore: processMap<string>("fly_deploy_ports"),
         onError: sandboxOnError,
       }),
     porter: () =>
@@ -1812,6 +1818,7 @@ export function buildApp(
   }
   const adminGrantStore = createAdminGrantStore(createPostgresAdminGrantStore(databaseUrl), {
     seed: parseAdminGrants(config.adminGrants, config.orgId) ?? [],
+    seedsTenant: (tenant) => tenant.id === bootTenant(),
     beforeSeed: (grants) =>
       Promise.all(grants.map((g) => users.record({ id: g.principalId, source: "admin", at: Date.now() }))),
   });
@@ -1837,15 +1844,32 @@ export function buildApp(
         (await directory.get(email))?.type === "internal")
     );
   };
+  const isActiveMember = (principalId: string) => identity.isInternal(identity.classify(principalId));
   const projects = createProjectStore(artifactMap<Project>("projects"), {
-    isActiveMember: (principalId) => identity.isInternal(identity.classify(principalId)),
+    isActiveMember,
     advisoryLock,
   });
-  const canReadScope = createCanReadScope({ managedGroups: projects, directory, identity, teams, sessions });
-  const canWriteScope = createCanWriteScope({ managedGroups: projects, directory, identity, teams });
-  const canManageScope = createCanManageScope({ managedGroups: projects, directory, identity, sessions });
+  const personaStore = createPostgresPersonaStore(databaseUrl);
+  const personas = createPersonaService({
+    store: personaStore,
+    flags: featureFlags,
+    orgScope: scopeId("org", config.orgId),
+    teams,
+    sessions,
+    isActive: isActiveMember,
+    ...(keychain ? { keychain } : {}),
+  });
+  const personaHandover = createPersonaHandover({
+    store: personaStore,
+    isActive: isActiveMember,
+    orgAdmins: async () => (await admin.listGrants(ambientTenant())).filter((grant) => grant.role === "org_admin"),
+    auditLog,
+  });
+  const canReadScope = createCanReadScope({ managedGroups: projects, directory, identity, teams, sessions, personas });
+  const canWriteScope = createCanWriteScope({ managedGroups: projects, directory, identity, teams, personas });
+  const canManageScope = createCanManageScope({ managedGroups: projects, directory, identity, sessions, personas });
   const managesArtifactHome = createManagesArtifactHome(
-    { managedGroups: projects, directory, identity, teams },
+    { managedGroups: projects, directory, identity, teams, personas },
     canManageScope,
   );
   const currentScopeMembers = createCurrentScopeMembers({ managedGroups: projects, directory, identity });
@@ -1854,17 +1878,23 @@ export function buildApp(
   membership.canManageScope = canManageScope;
   membership.canUseSandboxScope = async (actorId, scopeId) =>
     identity.isInternal(identity.classify(actorId)) &&
-    ((await admin.adminStatusOf(identity.classify(actorId))).isAdmin || (await canWriteScope(actorId, scopeId)));
+    ((await admin.adminStatusOf(ambientTenant(), identity.classify(actorId))).isAdmin ||
+      (await canWriteScope(actorId, scopeId)));
   membership.managesArtifactHome = managesArtifactHome;
   const deployGitSecret = config.signingSecret;
   const deployGitBase = config.apiBaseUrl;
-  const deliveries = withWebTranscriptDeliveries(createPostgresDeliveryStore(databaseUrl), sessions, runs);
+  const deliveries = withWebTranscriptDeliveries(
+    createPostgresDeliveryStore(databaseUrl),
+    sessions,
+    runs,
+    sessionStateBus,
+  );
+
   const deployService = createDeployService({
     deliveries,
     deployAppsDomain: config.awsDeploy.appsDomain,
     publicLinksAvailable: !!(config.awsDeploy.appsDomain && config.awsDeploy.gateSecret),
     publicWebUrl: config.publicWebUrl,
-    appPublished: productAnalytics.appPublished,
     deployStore,
     provider: deployProvider,
     deployDir: join(config.dataDir, "deployments"),
@@ -1882,7 +1912,7 @@ export function buildApp(
     ...(deployGitSecret && deployGitBase
       ? {
           deploymentEnv: async (deployment: Deployment): Promise<Record<string, string>> => {
-            const orgScope = scopeId("org", orgId());
+            const orgScope = scopeId("org", config.orgId);
             const credentials = await deploymentCredentialSlugs(
               await serviceCreds.listServiceCredentials(orgScope),
               orgScope,
@@ -1915,12 +1945,14 @@ export function buildApp(
   const loopOwnerCache = new Map<string, string>();
   const publishLoopEvent = (event: import("./loops/ledger-events.ts").LedgerEvent): void => {
     void (async () => {
-      let owner = loopOwnerCache.get(event.loopId);
+      const tenantId = boundTenant() ?? bootTenant();
+      const cacheKey = `${tenantId ?? ""}\0${event.loopId}`;
+      let owner = loopOwnerCache.get(cacheKey);
       if (owner === undefined) {
         owner = (await loopStore.get(event.loopId))?.owner ?? "";
-        loopOwnerCache.set(event.loopId, owner);
+        loopOwnerCache.set(cacheKey, owner);
       }
-      if (owner) ledgerEventBus.emit({ ...event, owner });
+      if (owner) ledgerEventBus.emit({ ...event, owner, ...(tenantId ? { tenantId } : {}) });
     })().catch(() => {});
   };
   const loopItems = createLoopItemLedger(loopItemsMap, publishLoopEvent, {
@@ -1957,10 +1989,13 @@ export function buildApp(
       cronChanged.notify?.(id);
     },
   };
-  for (const table of ["sprites_initialization", "sandbox_resource_rollout", "sandbox_routing"]) artifactMap(table);
   pgArtifactMap.pool.registerMigration(DROP_RUN_AS_MIGRATION);
+  pgArtifactMap.pool.registerMigration(PUBLISHED_ORIGIN_UPGRADE);
+  pgArtifactMap.pool.registerMigration(PUBLISHED_ORIGIN_COMPLETE);
   pgArtifactMap.pool.registerMigration(RETIRED_ORIGIN_SWEEP_MIGRATION);
   pgArtifactMap.pool.registerMigration(DROP_RECIPIENT_CONSENT_MIGRATION);
+  pgArtifactMap.pool.registerMigration(BACKFILL_BOT_MARKER_MIGRATION);
+  pgArtifactMap.pool.registerMigration(STAMP_SWARM_COMPUTERS_MIGRATION);
   pgArtifactMap.pool.registerMigration({
     id: "durable-map/crons/0002-drop-fire-log",
     statements: [
@@ -2007,7 +2042,7 @@ export function buildApp(
     ],
   });
   const webhooks = createWebhookStore(
-    artifactMap<Webhook>("webhooks", ["ownerScopeId"]),
+    inboundMap<Webhook>("webhooks", ["ownerScopeId"]),
     artifactMap<WebhookHistory>("webhook_history"),
   );
   pgArtifactMap.pool.registerMigration({
@@ -2078,13 +2113,12 @@ export function buildApp(
     refreshModels,
   };
   const sessionMailbox = createSessionMailbox(artifactMap<SessionMessage>("session_mailbox", ["recipientId", "wake"]));
-  const delegationEnabled = (actorId: string) => featureFlags.enabled("responsive_spine", scopeId("personal", actorId));
   const sessionSyscalls = createSessionSyscalls({
     mailbox: sessionMailbox,
-    delegationEnabled,
     sessions,
     runs,
     signals: runSignals,
+    steerRun: (run, signal) => app.steerRun(run, signal),
     maxAttempts,
     advisoryLock,
     prepareRequest: prepareSessionRequest,
@@ -2103,7 +2137,7 @@ export function buildApp(
       if (Object.keys(requested).length === 0) {
         await resolveRuntimeChoice(
           configStore,
-          runtimeOrgScope(),
+          runtimeOrgScope,
           scope,
           fallback,
           requested,
@@ -2116,7 +2150,7 @@ export function buildApp(
       if (error) throw new Error(error);
     },
     async defaultModel(scope) {
-      return (await resolveRuntimeChoice(configStore, runtimeOrgScope(), scope, fallback, {}, hydrateModelCatalog))
+      return (await resolveRuntimeChoice(configStore, runtimeOrgScope, scope, fallback, {}, hydrateModelCatalog))
         .modelId;
     },
   });
@@ -2182,7 +2216,7 @@ export function buildApp(
     ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),
     ...(config.deployAppsDomain ? { deployAppsDomain: config.deployAppsDomain } : {}),
     ...(config.resendApiKey && config.emailFrom
-      ? { inviteMailer: tenantMailer(config.resendApiKey, config.emailFrom) }
+      ? { inviteMailer: resendMailer(config.resendApiKey, config.emailFrom) }
       : {}),
     ...(config.publicUrl ? { webhookPublicUrl: config.publicUrl } : {}),
     memoryPolicy: { recall: config.memoryRecall, capture: config.memoryCapture },
@@ -2208,13 +2242,15 @@ export function buildApp(
     ...(processes ? { processes } : {}),
     monitors,
     crons,
+    notebookOnlyMemory: (threadRef) => memoryTidy.managesThread(threadRef),
     webhooks,
-    resolveBaseModelId: () => orgBaseModelId() ?? fallback.modelId,
+    resolveSessionRuntime,
     directory,
     isCurrentSharedScopeMember,
     currentScopeMembers: createCurrentScopeMembers({ managedGroups: projects, directory, identity }, true),
     managedGroups: projects,
     projects,
+    personas,
     ...(config.surfaceDebugFooter ? { surfaceDebugFooter: true } : {}),
     ...(decisions ? { replyCheck: createReplyCheck(decisions, decide) } : {}),
     environments,
@@ -2246,7 +2282,7 @@ export function buildApp(
               {
                 serviceCredential: async (slug) => {
                   const record = nonDeploymentCredential(
-                    await serviceCreds.getServiceCredentialSecret(scopeId("org", orgId()), slug),
+                    await serviceCreds.getServiceCredentialSecret(scopeId("org", config.orgId), slug),
                   );
                   return record && record.delivery !== "env" ? record : undefined;
                 },
@@ -2268,18 +2304,17 @@ export function buildApp(
   let reapInFlight = false;
   let lastReapAt = 0;
   const REAP_POKE_COOLDOWN_MS = 1_000;
-  const pokeReaper = (): void =>
-    withoutTenant(() => {
-      if (reapInFlight || Date.now() - lastReapAt < REAP_POKE_COOLDOWN_MS) return;
-      reapInFlight = true;
-      void leaderLease
-        .hold(REAPER_LEASE_KEY, () => reaper.sweep())
-        .catch(swallowAs("wake: reaper poke", null))
-        .finally(() => {
-          reapInFlight = false;
-          lastReapAt = Date.now();
-        });
-    });
+  const pokeReaper = (): void => {
+    if (reapInFlight || Date.now() - lastReapAt < REAP_POKE_COOLDOWN_MS) return;
+    reapInFlight = true;
+    void leaderLease
+      .hold(REAPER_LEASE_KEY, () => reaper.sweep())
+      .catch(swallowAs("wake: reaper poke", null))
+      .finally(() => {
+        reapInFlight = false;
+        lastReapAt = Date.now();
+      });
+  };
   const liveFallback = async (
     container: string,
     opts?: { limit?: number; surface?: string },
@@ -2318,13 +2353,13 @@ export function buildApp(
     maxAttempts,
     mailbox: sessionMailbox,
     prepareRequest: prepareSessionRequest,
-    delegationEnabled,
     deliveries,
     signals: runSignals,
     advisoryLock,
   };
   const app = createApp({
-    settleTreeWakes: (root) => settleTreeWakes(subagentMail, root),
+    errors,
+    settleTreeWakes: (root, botRunsOnly) => settleTreeWakes(subagentMail, root, botRunsOnly),
     teams,
     externalSlackPolicies: config.externalSlackPolicies,
     admittedWork,
@@ -2332,6 +2367,7 @@ export function buildApp(
     resourceSearch: createPostgresResourceSearch(pgArtifactMap.pool),
     swarms,
     identity,
+    users,
     ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),
     sessions,
     orchestrator,
@@ -2374,6 +2410,8 @@ export function buildApp(
         }
       : {}),
     projects,
+    personas,
+    personaHandover,
     environments,
     deploy: deployService,
     deployAppsDomain: config.awsDeploy.appsDomain,
@@ -2449,9 +2487,7 @@ export function buildApp(
   runs.onTerminal((run) => {
     void runs
       .activeForThread(run.sessionId)
-      .then((live) => {
-        if (!live) engaged.settle(run.sessionId);
-      })
+      .then((live) => void (live ?? engaged.settle({ tenantId: run.tenantId, threadRef: run.sessionId })))
       .catch(swallowAs("wake: settle on terminal", undefined));
   });
   runs.onTerminal((run) => {
@@ -2497,11 +2533,9 @@ export function buildApp(
     let afterId: string | undefined;
     for (;;) {
       const batch = await runs.pendingReturns(100, afterId);
-      if (!batch.length) return forEachTenant(pgArtifactMap.pool, () => sweepUnreadMailWakes(subagentMail));
-      for (const run of batch)
-        await inTenantOf(run.tenantId, () => returnSessionRun(run)).catch(
-          swallowAs("sessions: recover return", undefined),
-        );
+      if (!batch.length) return sweepUnreadMailWakes(subagentMail);
+      const recover = swallowAs("sessions: recover return", undefined);
+      for (const run of batch) await withTenant(run.tenantId, () => returnSessionRun(run)).catch(recover);
       afterId = batch.at(-1)!.id;
     }
   };
@@ -2528,6 +2562,9 @@ export function buildApp(
     send: webhookSender(config.signingSecret),
     claimMs: WEBHOOK_CLAIM_MS,
   });
+  const webTranscriptSweeper = createSweeper(() => deliveries.transcribeUndelivered("web"), 5_000, {
+    label: "web transcripts",
+  });
   const approvalDeliverySweeper = createSweeper(
     () => advisoryLock.withLock("approval-deliveries", () => approvals.deliverPending()),
     30_000,
@@ -2548,13 +2585,11 @@ export function buildApp(
   );
   const orphanedSignalSweeper = createSweeper(
     async () => {
-      for (const { runId, tenantId } of await runSignals.pendingRuns()) {
-        await inTenantOf(tenantId, async () => {
-          const run = await runs.get(runId);
-          if (!run || isTerminal(run.status))
-            await app.replayOrphanedRunSignals(runId).catch(swallowAs("sessions: recover signal", undefined));
-        });
-      }
+      await claimThenBind(runSignals.pendingRuns, async (runId) => {
+        const run = await runs.get(runId);
+        if (!run || isTerminal(run.status))
+          await app.replayOrphanedRunSignals(runId).catch(swallowAs("sessions: recover signal", undefined));
+      });
       if (Date.now() - lastSignalPrune > 60 * 60_000) {
         lastSignalPrune = Date.now();
         await runSignals.prune(7 * 24 * 60 * 60_000);
@@ -2568,11 +2603,11 @@ export function buildApp(
       async engagedSessions() {
         return engaged.list();
       },
-      async sweepSession(threadRef) {
+      async sweepSession(threadRef, tenant) {
         const live = await runs.activeForThread(threadRef);
         if (!live) {
           pokeReaper();
-          engaged.settle(threadRef);
+          engaged.settle({ tenantId: tenant.id, threadRef });
           return 1;
         }
         return 0;
@@ -2628,6 +2663,12 @@ export function buildApp(
     ? (drop: DropResolution) =>
         fireDropResolution({ deliveries, idempotency, identity, run: runTriggered, directory, resolveRecipient }, drop)
     : undefined;
+  const inboxClients =
+    keychain &&
+    createSourceClients({
+      tokens: keychain,
+      ...(config.slack?.apiUrl ? { slackApiUrl: config.slack.apiUrl } : {}),
+    });
   const loopFire: LoopFireService = createLoopFireService({
     admittedWork,
     crons,
@@ -2639,6 +2680,28 @@ export function buildApp(
     outputs: loopOutputs,
     grants: loopGrants,
     files,
+    ...(inboxClients
+      ? {
+          inboxPass: createInboxPass({
+            items: loopItems,
+            errors,
+            fetch: createConversationFetcher(inboxClients),
+            discover: createDiscoverer(inboxClients),
+            model: {
+              verdict: (system, prompt) => agent.oneShot?.(system, prompt, "decision") ?? Promise.resolve(undefined),
+              draft: async (system, prompt) => {
+                const route = modelRoutes.servable(await modelRoutes.route(modelRoutes.baseModelId()));
+                if (!route) return undefined;
+                return oneShot("pi-inbox-draft", route.model, route.keys, system, prompt, {
+                  modelGateway: route.gateway,
+                  purpose: "decision",
+                });
+              },
+            },
+            ownerName: async (owner) => (await directory.get(owner))?.displayName || undefined,
+          }),
+        }
+      : {}),
     trigger: {
       deliveries,
       idempotency,
@@ -2652,13 +2715,14 @@ export function buildApp(
   });
   const loopIngress = createLoopIngress({
     enabledFor: (owner) => featureFlags.enabled("inbox_loops", scopeId("personal", owner)),
-    sources: artifactMap<LoopIngress>("loop_ingress", ["loopId"]),
+    sources: inboundMap<LoopIngress>("loop_ingress", ["loopId"]),
     deliveries: artifactMap<IngressDelivery>("loop_ingress_deliveries", ["queueKey"]),
     loops: loopStore,
     items: loopItems,
     outputs: loopOutputs,
     fire: loopFire,
     lock: advisoryLock,
+    tenants: sessions.tenantLookup,
     ...(config.gmailPubSub && keychain
       ? { gmailConfig: config.gmailPubSub, gmailClient: createGmailPushClient(keychain, config.gmailPubSub) }
       : {}),
@@ -2687,6 +2751,7 @@ export function buildApp(
   const scheduler = createScheduler({
     admittedWork,
     skipFire: async (cron) => (await memoryTidy.skipFire(cron)) ?? suggestedActivities.skipFire(cron),
+    notebookOnlyMemory: (cron) => memoryTidy.manages(cron),
     runtimeError: (scope, runtime) => availableRuntimeError({ deps: runtimeDeps }, scope, runtime, "cron"),
     deleteCron: (id) => app.deleteCron(id),
     advisoryLock,
@@ -2728,7 +2793,7 @@ export function buildApp(
   orchestratorDeps.runtime = createRuntimeService(runtimeDeps, app);
   const finishCredentials = (handle: SandboxHandle, processId: string) =>
     finishProcessCredentials({ sandbox, processes: processes!, ...(keychain ? { keychain } : {}) }, handle, processId);
-  const monitorPoller: MonitorPoller | null =
+  const monitorPoller =
     processes && supportsProcessSessions(sandbox)
       ? createMonitorPoller({
           admittedWork,
@@ -2746,6 +2811,8 @@ export function buildApp(
           leaderLease,
           onProcessExit: finishCredentials,
           heartbeatMs: config.monitorHeartbeatMs,
+          sandboxResources,
+          ...(swarms ? { swarms } : {}),
         })
       : null;
   const skillSyncEngine = createSkillSyncEngine({
@@ -2840,6 +2907,20 @@ export function buildApp(
         { label: "llm-capture-retention" },
       )
     : null;
+  const personaOwnerSweeper = createSweeper(
+    () =>
+      leaderLease.hold("personas:owner-handover", async () => {
+        const handOver = async () => {
+          await identity.refresh(true);
+          await personaHandover.adoptOrphans();
+        };
+        const claim = personaStore.claimTenants;
+        if (bootTenant() !== undefined || !tenancyBooted() || !claim) await inBootTenant(bootTenant(), handOver);
+        else await claimThenBind(() => claim(), handOver);
+      }),
+    5 * 60_000,
+    { label: "persona-owner-handover" },
+  );
   const monitorRetentionSweeper = createSweeper(
     () => leaderLease.hold("monitor:retention:sweep", () => monitors.deleteDefunct(Date.now())),
     MONITOR_RETENTION_SWEEP_MS,
@@ -2849,10 +2930,7 @@ export function buildApp(
   const BLOB_TTL_MS = 6 * 60 * 60_000;
   const composioReturns = artifactMap<ComposioReturn>("composio_returns");
   const composioReturnSweeper = createSweeper(
-    async () => {
-      for (const { tenantId, id, value } of await composioReturns.acrossTenants())
-        if (value.expiresAt <= Date.now()) await withTenant(tenantId, () => composioReturns.delete(id));
-    },
+    () => claimThenBind(composioReturns.claimTenants, () => composioReturns.deleteBefore("expiresAt", Date.now() + 1)),
     30 * 60_000,
     { label: "Composio consent returns", immediate: true },
   );
@@ -2869,6 +2947,7 @@ export function buildApp(
       : null;
   const DEPLOY_MAINTENANCE_INTERVAL_MS = 5 * 60_000;
   const deployMaintenanceSweeper = createSweeper(() => app.maintainDeployments(), DEPLOY_MAINTENANCE_INTERVAL_MS);
+  const liveEditPublishSweeper = createSweeper(() => app.publishDueLiveEdits(), 10_000);
   const deepIdleMachineMs = config.deepIdleMachineMs;
   const devIdleMachineMs = config.devIdleMachineMs;
   const SANDBOX_MAINTENANCE_INTERVAL_MS = 5 * 60_000;
@@ -2905,6 +2984,7 @@ export function buildApp(
         })
         .catch(swallowAs("wiring: monitor resume failed", undefined));
       monitorRetentionSweeper.start();
+      personaOwnerSweeper.start();
       spendSweeper?.start();
       llmCaptureSweeper?.start();
       semanticMemory.start();
@@ -2914,6 +2994,7 @@ export function buildApp(
       fileUploads?.start();
       idleSweeper?.start();
       deployMaintenanceSweeper.start();
+      liveEditPublishSweeper.start();
       deepIdleSweeper?.start();
       wakeSweep.start();
       swarms?.start();
@@ -2921,6 +3002,7 @@ export function buildApp(
       sessionReturnSweeper.start();
       runResultSweeper.start();
       approvalDeliverySweeper.start();
+      webTranscriptSweeper.start();
       partnerChatDelivery?.start();
       webhookDelivery.start();
     };
@@ -2940,12 +3022,14 @@ export function buildApp(
       reaper.stop(),
       processReaper?.stop(),
       monitorRetentionSweeper.stop(),
+      personaOwnerSweeper.stop(),
       spendSweeper?.stop(),
       llmCaptureSweeper?.stop(),
       semanticMemory.stop(),
       skillSyncEngine.stop(),
       idleSweeper?.stop(),
       deployMaintenanceSweeper.stop(),
+      liveEditPublishSweeper.stop(),
       deepIdleSweeper?.stop(),
       blobSweeper.stop(),
       composioReturnSweeper.stop(),
@@ -2956,6 +3040,7 @@ export function buildApp(
       sessionReturnSweeper.stop(),
       runResultSweeper.stop(),
       approvalDeliverySweeper.stop(),
+      webTranscriptSweeper.stop(),
       partnerChatDelivery?.stop(),
       preemptionSweeper.stop(),
       worker.stopClaims(),
@@ -2970,13 +3055,13 @@ export function buildApp(
     return draining;
   }
   let releasing: Promise<void> | null = null;
-  function releaseInFlightRuns(): Promise<void> {
+  function releaseInFlightRuns(fatal = false): Promise<void> {
     turnWaitShutdown.abort();
     releasing ??= Promise.all([
       withTimeout(() => admittedWork.drained(), SHUTDOWN_RELEASE_MS, "synchronous turn wait release").catch(
         swallowAs("wiring: synchronous turn wait release failed", undefined),
       ),
-      worker.releaseInFlight(),
+      worker.releaseInFlight(fatal),
     ]).then(() => {});
     return releasing;
   }
@@ -2994,7 +3079,10 @@ export function buildApp(
       drain.start(services);
     },
     releaseInFlightRuns,
-    async stop() {
+    async stop(opts) {
+      stopTenantLoad();
+      stopSettingsLoad();
+      stopLayerLoad();
       renderBasePreparing?.abort();
       const draining = drain.stop();
       await stopBackground();
@@ -3004,8 +3092,9 @@ export function buildApp(
         ),
         worker.stop(config.shutdownDrainMs),
       ]).catch(swallowAs("wiring: worker drain failed", undefined));
-      await releaseInFlightRuns();
+      await releaseInFlightRuns(opts?.fatal);
       await draining;
+      await opts?.beforeClose?.();
       stopStreamSync();
       await Promise.all(
         [
@@ -3023,43 +3112,25 @@ export function buildApp(
       await errors.flush();
     },
   };
-
   return {
     app,
     checkReadiness: async (signal) => {
       await pgArtifactMap.pool.q("SELECT 1", [], { signal });
+      if (boundTenant()) await configStore.hydrate?.();
     },
     deploymentLayer,
     deploymentLayerStore,
     brokeredTools,
     deploymentLayerReady,
     deploymentLayerRefresh,
-    loadTenants: async () => {
-      const install = await installTenant;
-      const rows = await ownerPgPool(pgArtifactMap.pool).q("SELECT id::text AS id FROM tenants ORDER BY id");
-      const tenants = rows.map((row) => String(row.id));
-      registerTenants(install, tenants.length === 1 ? tenants[0] : undefined);
-      for (const tenant of tenants) {
-        const loading = withTenant(tenant, () => tenantLoader.load());
-        if (tenant === install || tenants.length === 1) await loading;
-        else await loading.catch(reportFailureAs("startup: load tenant caches", undefined));
-      }
-    },
-    forEachTenant: (fn) => forEachTenant(pgArtifactMap.pool, fn),
-    listTenants: () => listTenants(pgArtifactMap.pool),
     ownSharedState: async () => {
       ownsSharedState = true;
-      await hydrateDeploymentLayer().catch((error: unknown) => {
+      if (!boundTenant()) return;
+      await deploymentLayerStore.hydrate().catch((error: unknown) => {
         ownsSharedState = false;
         throw error;
       });
-      if (config.seedSkills)
-        skillsReady = Promise.all([
-          skillsReady,
-          withoutTenant(() => forEachTenant(pgArtifactMap.pool, installCatalogs)).catch((e) =>
-            console.error("[seed] failed to install seed skills:", errMessage(e)),
-          ),
-        ]).then(() => undefined);
+      if (config.seedSkills) skillsReady = Promise.all([skillsReady, seedTenantSkills()]).then(() => undefined);
     },
     sessions,
     runs,
@@ -3075,11 +3146,10 @@ export function buildApp(
     resolveClient,
     consentLinks,
     oauthFlows,
-    tenancy,
     secretDrops,
     modelGatewayTransport: gatewayTransport,
+    modelRoutes,
     budget,
-    resolveBrowserCompanyKeys,
     modelCredentials,
     userModelCredentials,
     modelRegistry,
@@ -3089,6 +3159,7 @@ export function buildApp(
     refreshCustomProviders,
     mcpServers,
     mcpToolService,
+    memoryRegistry,
     acl,
     skills,
     skillBundles,
@@ -3134,14 +3205,13 @@ export function buildApp(
     ...(appPageViews ? { appPageViews } : {}),
     monitors,
     ...(browserSessionStore ? { browserSessionStore } : {}),
-    ...(monitorPoller ? { monitorPoller } : {}),
     ...(ambientJudgments ? { ambientJudgments } : {}),
     ...(ackEmojiPicks ? { ackEmojiPicks } : {}),
     channelPolicy,
     ...(config.suggestedActivitiesEnabled && config.backgroundWorkEnabled ? { suggestedActivities } : {}),
     drain,
     uiState,
-    sessionShares: artifactMap<SessionShare>("session_shares"),
+    sessionShares: inboundMap<SessionShare>("session_shares"),
     sessionShareBytes:
       config.snapshotStore === "s3" && config.s3Bucket
         ? createS3DurableByteStore({
@@ -3151,7 +3221,6 @@ export function buildApp(
             prefix: `${config.s3Prefix ?? ""}session-shares/`,
           })
         : createLocalDurableByteStore(join(config.dataDir, "session-shares")),
-    skillSyncEngine,
     slackCore,
   };
 }
@@ -3167,7 +3236,7 @@ export function serverDeps(
   return {
     externalSlackPolicies: config.externalSlackPolicies,
     modelGatewayTransport: built.modelGatewayTransport,
-    resolveBrowserCompanyKeys: built.resolveBrowserCompanyKeys,
+    modelRoutes: built.modelRoutes,
     production: config.production,
     checkReadiness: built.checkReadiness,
     ...(config.backgroundDeploymentId && config.backgroundWorkEnabled
@@ -3181,8 +3250,8 @@ export function serverDeps(
         }
       : {}),
     allowUnauthenticatedCore: config.allowUnauthenticatedCore,
+    ...(config.spendExportToken ? { spendExportToken: config.spendExportToken } : {}),
     ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-    ...(config.operatorSigningSecret ? { operatorSigningSecret: config.operatorSigningSecret } : {}),
     ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
     capabilityTokenCompression: config.capabilityTokenCompression,
     ...(config.portalIdentitySecret ? { portalIdentitySecret: config.portalIdentitySecret } : {}),
@@ -3202,6 +3271,7 @@ export function serverDeps(
     refreshCustomProviders: built.refreshCustomProviders,
     mcpServers: built.mcpServers,
     mcpToolService: built.mcpToolService,
+    memoryRegistry: built.memoryRegistry,
     ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
     ...(subscriptionAuth ? { companySubscriptionAuth: subscriptionAuth } : {}),
     connectorTokens: built.connectorTokens,
@@ -3212,7 +3282,6 @@ export function serverDeps(
     resolveClient: built.resolveClient,
     consentLinks: built.consentLinks,
     oauthFlows: built.oauthFlows,
-    tenancy: built.tenancy,
     secretDrops: built.secretDrops,
     ...(built.fireDropResolution ? { fireDropResolution: built.fireDropResolution } : {}),
     ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
@@ -3223,7 +3292,7 @@ export function serverDeps(
     ...(config.emailAuthDomain ? { emailAuthDomain: config.emailAuthDomain } : {}),
     ...(config.slack ? { slackAllowFrom: config.slack.allowFrom ?? [] } : {}),
     ...(config.resendApiKey && config.emailFrom
-      ? { inviteMailer: tenantMailer(config.resendApiKey, config.emailFrom) }
+      ? { inviteMailer: resendMailer(config.resendApiKey, config.emailFrom) }
       : {}),
     budget: built.budget,
     acl: built.acl,
@@ -3282,20 +3351,7 @@ export function serverDeps(
     channelPolicy: built.channelPolicy,
     ...(built.suggestedActivities ? { suggestedActivities: built.suggestedActivities } : {}),
     uiState: built.uiState,
-    ...(built.keychain
-      ? {
-          loopSourceTokens: built.keychain,
-          inboxSourceRefresh: createInboxSourceRefresh({
-            featureFlags: built.featureFlags,
-            items: built.loops.items,
-            errors: built.errors,
-            enqueue: (loop, entries) => built.loopIngress.enqueueConversation(loop, entries),
-            tokens: built.keychain,
-            directory: built.directory,
-            ...(config.slack?.apiUrl ? { slackApiUrl: config.slack.apiUrl } : {}),
-          }),
-        }
-      : {}),
+    ...(built.keychain ? { loopSourceTokens: built.keychain } : {}),
     loopSlackClient: slackUserClientFactory(config.slack?.apiUrl),
     sessionShares: built.sessionShares,
     sessionShareBytes: built.sessionShareBytes,

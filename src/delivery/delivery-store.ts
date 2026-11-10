@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment, ScopeId } from "../types.ts";
 import type { TurnOrigin } from "../core/turn-origin.ts";
-import { createTenantListeners } from "../tenants/context.ts";
+import { currentTenant } from "../tenants/context.ts";
+import { tenantListeners } from "../tenants/cache.ts";
+import type { ClaimedRow } from "../tenants/claim.ts";
 
 export const DELIVERY_MAX_AGE_MS = 6 * 3_600_000;
 
@@ -34,9 +36,7 @@ export function turnDeliveryProvenance(input: {
   };
 }
 
-export interface ClaimOptions {
-  oldestPerConversation?: boolean;
-}
+type ClaimedDelivery = Delivery & { tenantId: string };
 
 export interface DeliveryStore {
   enqueue(input: {
@@ -48,9 +48,9 @@ export interface DeliveryStore {
     shadow?: boolean;
   }): Promise<Delivery>;
   pending(type: string): Promise<Delivery[]>;
-  pendingAcrossTenants(type: string): Promise<Delivery[]>;
-  claimPending(type: string, ttlMs: number, opts?: ClaimOptions): Promise<Delivery[]>;
-  claimPendingAcrossTenants(type: string, ttlMs: number, opts?: ClaimOptions): Promise<Delivery[]>;
+  claimPending(type: string, ttlMs: number): Promise<Delivery[]>;
+  claimDue(type: string, ttlMs: number): Promise<ClaimedDelivery[]>;
+  undeliveredTenants(type: string): Promise<ClaimedRow[]>;
   listShadow(opts?: { limit?: number }): Promise<Delivery[]>;
   ack(id: string, at: number, slackApiMs?: number): Promise<void>;
   fail(id: string, reason: string, at: number): Promise<Delivery | null>;
@@ -69,7 +69,7 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
   const deliveries = new Map<string, Delivery>();
   const byKey = new Map<string, string>();
   const claimedUntil = new Map<string, number>();
-  const enqueueListeners = createTenantListeners<[string]>("delivery enqueue");
+  const enqueueListeners = tenantListeners<[string]>("delivery enqueue");
 
   const expireOveraged = (now: number): void => {
     for (const d of deliveries.values()) {
@@ -85,6 +85,22 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
       d.expiredAt = now;
       logDeliveryExpiry(d, now);
     }
+  };
+
+  const claim = (type: string, ttlMs: number, oldestPerConversation: boolean): Delivery[] => {
+    const now = Date.now();
+    expireOveraged(now);
+    const open = [...deliveries.values()].filter(
+      (d) => d.deliveredAt === null && d.expiredAt === undefined && !d.shadow && d.destination.type === type,
+    );
+    const seen = new Set<string>();
+    const rows = open.filter((d) => {
+      const first = !seen.has(d.destination.target);
+      seen.add(d.destination.target);
+      return (claimedUntil.get(d.id) ?? 0) <= now && (first || !oldestPerConversation);
+    });
+    for (const d of rows) claimedUntil.set(d.id, now + ttlMs);
+    return rows;
   };
 
   return {
@@ -124,31 +140,22 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
       if (!delivery.shadow) enqueueListeners.emit(delivery.destination.type);
       return delivery;
     },
-    async pendingAcrossTenants(type) {
-      return this.pending(type);
-    },
-    async claimPendingAcrossTenants(type, ttlMs, opts) {
-      return this.claimPending(type, ttlMs, opts);
-    },
     async pending(type) {
       return [...deliveries.values()].filter(
         (d) => d.deliveredAt === null && d.expiredAt === undefined && !d.shadow && d.destination.type === type,
       );
     },
-    async claimPending(type, ttlMs, opts) {
-      const now = Date.now();
-      expireOveraged(now);
-      const open = [...deliveries.values()].filter(
+    async claimPending(type, ttlMs) {
+      return claim(type, ttlMs, false);
+    },
+    async claimDue(type, ttlMs) {
+      return (await claim(type, ttlMs, true)).map((d) => ({ ...d, tenantId: currentTenant() }));
+    },
+    async undeliveredTenants(type) {
+      const waiting = [...deliveries.values()].some(
         (d) => d.deliveredAt === null && d.expiredAt === undefined && !d.shadow && d.destination.type === type,
       );
-      const seen = new Set<string>();
-      const rows = open.filter((d) => {
-        const first = !seen.has(d.destination.target);
-        seen.add(d.destination.target);
-        return (claimedUntil.get(d.id) ?? 0) <= now && (first || !opts?.oldestPerConversation);
-      });
-      for (const d of rows) claimedUntil.set(d.id, now + ttlMs);
-      return rows;
+      return waiting ? [{ tenantId: currentTenant(), id: type }] : [];
     },
     async listShadow(opts) {
       const limit = Math.max(1, opts?.limit ?? 100);

@@ -4,7 +4,6 @@ import { createKeyedQueue } from "../util/async.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { shortHash } from "../util/crypto.ts";
-import { tenantScopedId } from "../tenants/context.ts";
 import { DROPPED_PROXY_ENV, forceThroughProxyEnv, nonInteractiveShellPrefix } from "./sandbox-env.ts";
 import type { LayerToolInstaller } from "./layer-tool-install.ts";
 import { posixJoin } from "./exec-file-ops.ts";
@@ -20,8 +19,7 @@ const PREP_TIMEOUT_SEC = 60;
 const MAX_SANDBOX_NAME = 63;
 const HASH_LEN = 6;
 
-export const sandboxScopeName = (prefix: string, scopeId: string): string => {
-  const id = tenantScopedId(scopeId);
+export const sandboxScopeName = (prefix: string, id: string): string => {
   const cleaned = id
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, "-")
@@ -42,6 +40,7 @@ export const sandboxScopeName = (prefix: string, scopeId: string): string => {
 export interface ExecSandboxBaseDeps {
   label: string;
   prefix: string;
+  instanceName?(scope: string, scratch: boolean): Promise<string>;
   homeDir: string;
   defaultTimeoutSec: number;
   credentialPaths: CredentialPathSpec[];
@@ -80,13 +79,16 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
     throw new Error(`${label}-sandbox: egress proxy url has no hostname: ${deps.egressProxyUrl}`);
   }
   const workspaceDir = `${homeDir}/${WORKSPACE_BASENAME}`;
+  const instanceName =
+    deps.instanceName ??
+    (async (scope: string, scratch: boolean) => sandboxScopeName(scratch ? `${prefix}-scratch` : prefix, scope));
   const provisionQueue = createKeyedQueue<string>();
   const scopeByName = new Map<string, string>();
   const scratchKeyByName = new Map<string, string>();
   const activeScratch = new Map<string, number>();
 
   async function ensureScratch(key: string): Promise<{ name: string; coldStart: boolean }> {
-    const name = sandboxScopeName(`${prefix}-scratch`, key);
+    const name = await instanceName(key, true);
     return provisionQueue(`scratch:${key}`, async () => {
       scratchKeyByName.set(name, key);
       const active = activeScratch.get(name) ?? 0;
@@ -162,7 +164,7 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
     if (scratch) {
       ({ name, coldStart } = await ensureScratch(scratch.key));
     } else {
-      name = sandboxScopeName(prefix, scope);
+      name = await instanceName(scope, false);
       scopeByName.set(name, scope);
       ({ coldStart } = await provisionQueue(scope, () => deps.ensureResident(name, provOpts?.onStatus)));
     }

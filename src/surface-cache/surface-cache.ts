@@ -1,8 +1,16 @@
 import { orgId as configOrgId } from "../config.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { jsonbStringify } from "../util/text.ts";
-import type { CachedMessage, ContainerState, LiveFallback, IngestEvent, SurfaceCache, SurfaceKey } from "./types.ts";
-import { TENANCY, tenantTables } from "../tenants/migrations.ts";
+import type {
+  CachedMessage,
+  ContainerState,
+  LiveFallback,
+  IngestEvent,
+  SurfaceCache,
+  SurfaceKey,
+  SurfaceSource,
+} from "./types.ts";
+import { tenantTables } from "../tenants/migrations.ts";
 
 export type {
   ActiveThread,
@@ -13,6 +21,7 @@ export type {
   ReadMessagesOpts,
   SearchOpts,
   SurfaceCache,
+  SurfaceSource,
 } from "./types.ts";
 
 const DEFAULT_READ_LIMIT = 100;
@@ -45,7 +54,6 @@ export function createPostgresSurfaceCache(
 ): SurfaceCache {
   const orgId = configOrgId();
   const { q, pool, close } = createPgPool(connectionString, [
-    ...TENANCY,
     {
       id: "surface-cache/store/0001",
       statements: [
@@ -166,6 +174,10 @@ export function createPostgresSurfaceCache(
         unique: [{ name: "channel_files_surface_key", columns: "org_id, surface, account, container, ts, file_id" }],
       },
     ]),
+    {
+      id: "surface-cache/store/0011-source",
+      statements: [`ALTER TABLE channel_state ADD COLUMN IF NOT EXISTS source JSONB`],
+    },
   ]);
 
   const liveFallback = opts.liveFallback;
@@ -286,8 +298,8 @@ export function createPostgresSurfaceCache(
             }
           }
           await client.query(
-            `INSERT INTO channel_state(org_id, container, last_ts, oldest_ts, name, kind, members, updated_at, surface, account)
-             VALUES ($1,$2,$3,$3,$4,$5,$6::jsonb,$7,$8,$9)
+            `INSERT INTO channel_state(org_id, container, last_ts, oldest_ts, name, kind, members, updated_at, surface, account, source)
+             VALUES ($1,$2,$3,$3,$4,$5,$6::jsonb,$7,$8,$9,$10::jsonb)
              ON CONFLICT (tenant_id, org_id, surface, account, container) DO UPDATE SET
                last_ts = GREATEST(channel_state.last_ts, EXCLUDED.last_ts),
                oldest_ts = CASE
@@ -296,6 +308,7 @@ export function createPostgresSurfaceCache(
                name = COALESCE(EXCLUDED.name, channel_state.name),
                kind = COALESCE(EXCLUDED.kind, channel_state.kind),
                members = CASE WHEN EXCLUDED.members = '[]'::jsonb THEN channel_state.members ELSE EXCLUDED.members END,
+               source = COALESCE(EXCLUDED.source, channel_state.source),
                updated_at = EXCLUDED.updated_at`,
             [
               orgId,
@@ -307,6 +320,7 @@ export function createPostgresSurfaceCache(
               now,
               surface,
               account,
+              e.source ? JSON.stringify(e.source) : null,
             ],
           );
         }
@@ -479,6 +493,7 @@ export function createPostgresSurfaceCache(
         ...(r.oldest_ts != null ? { oldestTs: r.oldest_ts as string } : {}),
         ...(r.name != null ? { name: r.name as string } : {}),
         ...(r.kind != null ? { kind: r.kind as ContainerState["kind"] } : {}),
+        ...(r.source != null ? { source: r.source as SurfaceSource } : {}),
         updatedAt: Number(r.updated_at),
       };
     },

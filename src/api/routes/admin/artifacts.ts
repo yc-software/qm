@@ -1,24 +1,35 @@
 import { isDeepStrictEqual } from "node:util";
 import { isCronRuntime } from "../../../cron/runtime.ts";
 import { errMessage } from "../../../util/errors.ts";
-import { parseScopeId, type Destination } from "../../../types.ts";
-import { publicUrlOf } from "../../../deploy/deploy-store.ts";
+import { parseScopeId, scopeId, type Destination } from "../../../types.ts";
+import { appUrlOf } from "../../../deploy/deploy-store.ts";
 import { sendJson } from "../../http.ts";
 import { audit, requireScopedAdmin } from "../shared.ts";
-import { type ApiCtx } from "../route.ts";
+import { tenantOf, type ApiCtx } from "../route.ts";
 import { notifyOwnerOfCronEdit } from "../../../triggers/edit-notice.ts";
-import { requireScopedResource } from "./common.ts";
+import { personNamer, requireScopedResource } from "./common.ts";
 import { unattendedGrantRefusal } from "../../../cron/authority.ts";
 
-function isAdminCronDestination(v: unknown): v is Destination {
-  if (typeof v !== "object" || v === null) return false;
+function adminCronDestination(v: unknown, current: Destination | undefined): Destination | null {
+  if (typeof v !== "object" || v === null) return null;
   const d = v as Record<string, unknown>;
-  const keys = Object.keys(d);
-  if (d.type !== "principal" && d.type !== "slack") return false;
-  if (typeof d.target !== "string" || d.target.trim() === "") return false;
-  if (d.audienceScopeId !== undefined && typeof d.audienceScopeId !== "string") return false;
-  if (d.onBehalfOf !== undefined && typeof d.onBehalfOf !== "string") return false;
-  return keys.every((k) => k === "type" || k === "target" || k === "audienceScopeId" || k === "onBehalfOf");
+  if (d.type !== "principal" && d.type !== "slack") return null;
+  if (typeof d.target !== "string" || d.target.trim() === "") return null;
+  if (d.onBehalfOf !== undefined && typeof d.onBehalfOf !== "string") return null;
+  if (!Object.keys(d).every((k) => k === "type" || k === "target" || k === "onBehalfOf")) return null;
+  const channel = d.target.split(":")[0]!;
+  const sameChannel =
+    d.type === "slack" &&
+    (current?.type === "slack" || current?.type === "group") &&
+    current.target.split(":")[0] === channel;
+  const derived = d.type === "principal" ? scopeId("personal", d.target) : scopeId("channel", channel);
+  const audienceScopeId = sameChannel ? current?.audienceScopeId : derived;
+  return {
+    type: d.type,
+    target: d.target,
+    ...(audienceScopeId ? { audienceScopeId } : {}),
+    ...(d.onBehalfOf !== undefined ? { onBehalfOf: d.onBehalfOf } : {}),
+  };
 }
 
 export async function listAdminArtifacts(ctx: ApiCtx): Promise<void> {
@@ -29,6 +40,11 @@ export async function listAdminArtifacts(ctx: ApiCtx): Promise<void> {
   const { actor, scope } = authz;
   audit(deps, { principalId: actor.id, action: `${resource}.read`, resource, scopeLabel: scope });
   const orgWide = parseScopeId(scope).kind === "org";
+  const nameOf = resource === "skills" ? undefined : await personNamer(app, deps);
+  const named = (principalId: string | undefined) => {
+    const name = principalId ? nameOf?.(principalId) : undefined;
+    return name && name !== principalId ? name : undefined;
+  };
   if (resource === "crons") {
     const crons = (await app.listCrons())
       .filter((c) => orgWide || c.ownerScopeId === scope)
@@ -40,6 +56,7 @@ export async function listAdminArtifacts(ctx: ApiCtx): Promise<void> {
         message: c.message,
         owner: c.owner,
         createdBy: c.createdBy,
+        createdByName: named(c.createdBy),
         enabled: c.enabled,
         archived: c.archived,
         schedule: c.schedule,
@@ -63,9 +80,10 @@ export async function listAdminArtifacts(ctx: ApiCtx): Promise<void> {
         currentVersion: d.currentVersion,
         versions: d.versions.length,
         createdBy: d.createdBy,
+        createdByName: named(d.createdBy),
         createdAt: d.versions[0]?.createdAt,
         lastAccessAt: d.lastAccessAt,
-        publicUrl: publicUrlOf(d.endpoint),
+        publicUrl: appUrlOf(d, { sharedWebUrl: deps.portalUrl, appsDomain: deps.deployAppsDomain }),
       }));
     return sendJson(res, 200, { scopeId: scope, deployments });
   }
@@ -142,19 +160,21 @@ export async function putAdminCronDestination(ctx: ApiCtx): Promise<void> {
     const refusal = await unattendedGrantRefusal(
       app,
       deps.admin,
+      tenantOf(ctx),
       cron,
       ctx.capability ?? { actorId: actor.id, liveActor: true },
     );
     if (refusal) return sendJson(res, 409, { error: "conflict", message: refusal.message });
   }
-  const destination = (body as { destination: unknown }).destination;
-  if (destination !== null && !isAdminCronDestination(destination)) {
+  const requested = (body as { destination: unknown }).destination;
+  const next = requested === null ? undefined : adminCronDestination(requested, cron.destination);
+  if (next === null) {
     return sendJson(res, 400, {
       error: "bad_request",
-      message: "destination must be a principal or slack destination with a target",
+      message:
+        "destination must be a principal or slack destination with a target and an optional onBehalfOf; its audience follows the target",
     });
   }
-  const next = destination === null ? undefined : destination;
   if (isDeepStrictEqual(cron.destination, next))
     return sendJson(res, 200, { cron: { id: cron.id, destination: cron.destination } });
   const updated = await app.setCronDestination(id, next);

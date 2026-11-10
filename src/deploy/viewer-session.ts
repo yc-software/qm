@@ -1,57 +1,35 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { boundTenant, soleTenantNow, unboundTenantAllowed } from "../tenants/context.ts";
 
 export const FRAME_SESSION_COOKIE = "portal_session_x";
 
 export interface PortalViewerSession {
   sub: string;
   appOnly: boolean;
-}
-
-export interface ViewerTenant {
-  bound: string | undefined;
-  legacy: boolean;
-}
-
-export function appViewerTenant(): ViewerTenant {
-  const bound = boundTenant();
-  return { bound, legacy: bound === undefined ? unboundTenantAllowed() : soleTenantNow() === bound };
+  t?: string;
 }
 
 export function portalSession(
   cookieHeader: string | undefined,
   secret: string,
-  tenant: ViewerTenant,
   now = Date.now(),
 ): PortalViewerSession | null {
-  return portalSessionFrom(cookieHeader, "portal_session", secret, tenant, now);
+  return portalSessionFrom(cookieHeader, "portal_session", secret, now);
 }
 
 export function portalSessionFrom(
   cookieHeader: string | undefined,
   name: string,
   secret: string,
-  tenant: ViewerTenant,
   now = Date.now(),
 ): PortalViewerSession | null {
   for (const token of readCookies(cookieHeader, name)) {
-    const session = verifySessionToken(token, secret, tenant, now);
+    const session = verifySessionToken(token, secret, now);
     if (session) return session;
   }
   return null;
 }
 
-function servesTenant(claimed: unknown, tenant: ViewerTenant): boolean {
-  if (claimed === undefined) return tenant.bound === undefined || tenant.legacy;
-  return typeof claimed === "string" && claimed === tenant.bound;
-}
-
-function verifySessionToken(
-  token: string,
-  secret: string,
-  tenant: ViewerTenant,
-  now: number,
-): PortalViewerSession | null {
+function verifySessionToken(token: string, secret: string, now: number): PortalViewerSession | null {
   const key = createHmac("sha256", secret).update("portal.session.v1").digest();
   const dot = token.indexOf(".");
   if (dot <= 0 || dot === token.length - 1) return null;
@@ -71,8 +49,12 @@ function verifySessionToken(
   if (typeof claims.sub !== "string" || !claims.sub) return null;
   if (typeof claims.exp !== "number" || now >= claims.exp * 1000) return null;
   if (claims.appOnly !== undefined && typeof claims.appOnly !== "boolean") return null;
-  if (!servesTenant(claims.t, tenant)) return null;
-  return { sub: claims.sub, appOnly: claims.appOnly === true };
+  if (claims.t !== undefined && typeof claims.t !== "string") return null;
+  return {
+    sub: claims.sub,
+    appOnly: claims.appOnly === true,
+    ...(typeof claims.t === "string" ? { t: claims.t } : {}),
+  };
 }
 
 function readCookies(header: string | undefined, name: string): string[] {

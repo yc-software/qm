@@ -1,6 +1,5 @@
 import { isClaudeSubscriptionToken } from "./model/claude-subscription.ts";
-import { cacheTenant, isInstallTenant } from "./tenants/context.ts";
-import { loadedTenantSettings, tenantSettingsLoaded } from "./tenants/settings.ts";
+import { isDnsLabel } from "../plugins/chassis/src/dns-label.ts";
 import {
   deploymentBrokerCredentialsFromEnv,
   type DeploymentBrokerCredential,
@@ -9,14 +8,17 @@ import { boolEnv, boolEnvStrict, numEnvStrict, optNum } from "./util/env.ts";
 import { sandboxSettings, type SandboxSettings } from "./sandbox/sandbox-settings.ts";
 import { deploySettings, type DeploySettings } from "./deploy/deploy-settings.ts";
 import type { ExternalSlackPolicies } from "./resolution/external-slack.ts";
-import { isStrongSigningSecret } from "./auth/source-auth.ts";
+import { isBearerSecret, isStrongSigningSecret } from "./auth/source-auth.ts";
 import { parseSandboxCapabilityTtlMs } from "./auth/capability-token.ts";
 import { existsSync, readdirSync } from "node:fs";
 import {
+  MODEL_PROVIDERS,
   MODEL_REQUEST_CONTEXT_HEADERS,
+  isModelProvider,
   parseProviderBaseUrl,
   providerBaseUrlsFromEnv,
   type ModelGatewayTransportConfig,
+  type ModelProvider,
   type ProviderBaseUrls,
 } from "./model/provider-endpoints.ts";
 import { join, resolve } from "node:path";
@@ -28,6 +30,7 @@ import {
 } from "./memory/policy.ts";
 import { parseMemoryStrategyKind, type MemoryStrategyKind } from "./memory/strategy.ts";
 import { parseMemoryProviderConfig, type MemoryProviderConfig } from "./memory/provider-config.ts";
+import { parsePrivateNetworkOrigins } from "./util/network.ts";
 import { sanitizeBranding } from "./resolution/branding.ts";
 import type { OrgBranding } from "./resolution/config-store.ts";
 import { CORE_SECRET_SPECS, validateCoreSecretEnv } from "./deployment/secret-schema.ts";
@@ -42,18 +45,14 @@ import { parseSharingPosture, type SharingPosture } from "./resolution/sharing-p
 import { slackPluginConfigFromEnv, slackAccountConfigsFromEnv, type SlackPluginConfig } from "./slack/config.ts";
 import {
   DEFAULT_CODEX_MODEL_ID,
-  MODEL_PROVIDERS,
   defaultModelForProvider,
-  isModelProvider,
   onlyProvider,
-  type ModelProvider,
   type ModelProviderAvailability,
 } from "./model/pi-models.ts";
 
 import { resolveSwarmSettings, type SwarmSettings } from "./swarms/swarm-settings.ts";
 
 export interface Config extends SandboxSettings, DeploySettings {
-  productAnalytics?: { apiKey: string; host?: string };
   suggestedActivitiesEnabled?: boolean;
   suggestedActivitiesContext?: string;
   swarmsEnabled?: boolean;
@@ -61,17 +60,18 @@ export interface Config extends SandboxSettings, DeploySettings {
   production: boolean;
   allowUnauthenticatedCore: boolean;
   port: number;
+  publicPort?: number;
   dataDir: string;
   orgId: string;
   databaseUrl?: string;
   databaseCaCert?: string;
   databaseCaCertFile?: string;
-  databaseOwnerUrl?: string;
   databasePoolUrl?: string;
   databasePoolCaCert?: string;
   securityPosture: SecurityPosture;
   sharingPosture: SharingPosture;
   egressServiceHosts?: string[];
+  privateNetworkAllowedOrigins: ReadonlySet<string>;
   brandingDefault?: OrgBranding;
   modelId?: string;
   codexAuthCredential?: string;
@@ -108,12 +108,12 @@ export interface Config extends SandboxSettings, DeploySettings {
   backgroundWorkEnabled: boolean;
   backgroundDeploymentId?: string;
   deploymentControlSecret?: string;
+  spendExportToken?: string;
   buildSha?: string;
   monitorPollMs: number;
   skillSyncPollMs: number;
   monitorHeartbeatMs: number;
   signingSecret?: string;
-  operatorSigningSecret?: string;
   capabilitySecret?: string;
   capabilityTokenCompression?: boolean;
   portalIdentitySecret?: string;
@@ -127,7 +127,6 @@ export interface Config extends SandboxSettings, DeploySettings {
   publicUrl?: string;
   gmailPubSub?: { topic: string; audience: string; serviceAccount: string };
   publicWebUrl?: string;
-  flyAppName?: string;
   slack?: SlackPluginConfig;
   externalSlackPolicies?: ExternalSlackPolicies;
   skillSigningSecret?: string;
@@ -207,16 +206,8 @@ export function companySubscriptionAuth(config: Config): ModelProvider | undefin
 
 const DEFAULT_ORG_ID = "default-org";
 
-export function tenantOrgId(fallback: string): string {
-  const configured = loadedTenantSettings().orgId;
-  if (configured) return configured;
-  if (isInstallTenant()) return fallback;
-  if (!tenantSettingsLoaded()) throw new Error("This tenant's settings are not loaded for this work");
-  return cacheTenant();
-}
-
 export function orgId(): string {
-  return tenantOrgId(process.env.ORG_ID ?? DEFAULT_ORG_ID);
+  return process.env.ORG_ID ?? DEFAULT_ORG_ID;
 }
 
 export function orgScope(): string {
@@ -388,6 +379,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         "AWS_ENDPOINT_URL_S3 must be an HTTP or HTTPS URL without credentials, query parameters, or a fragment",
       );
   }
+  const token = env.SPEND_EXPORT_TOKEN;
+  if (token) {
+    const reused = Object.entries(env).some(([name, value]) => name !== "SPEND_EXPORT_TOKEN" && value === token);
+    if (!isStrongSigningSecret(token) || !isBearerSecret(token) || reused)
+      throw new Error(
+        "SPEND_EXPORT_TOKEN must be at least 32 characters, have no surrounding whitespace and differ from every other environment value",
+      );
+  }
   if (env.BACKGROUND_DEPLOYMENT_ID !== undefined) {
     if (!env.BACKGROUND_DEPLOYMENT_ID.trim() || env.BACKGROUND_DEPLOYMENT_ID.length > 256)
       throw new Error("BACKGROUND_DEPLOYMENT_ID must be nonempty and at most 256 characters");
@@ -416,6 +415,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     });
     throw new Error(`missing or insecure required core secrets: ${described.join(", ")}`);
   }
+  if (env.NODE_ENV === "production" && !env.PUBLIC_PORT?.trim())
+    throw new Error("PUBLIC_PORT is required in production: core serves the web UI and sign-in on it");
+  if (env.PUBLIC_PORT?.trim() && env.PUBLIC_PORT.trim() === (env.PORT?.trim() || "8080"))
+    throw new Error(
+      `PUBLIC_PORT and PORT are both ${env.PUBLIC_PORT.trim()}; core's API and its public front door need separate ports`,
+    );
   const modelProvider = modelProviderEnvStrict(env);
   const sandbox = sandboxSettings(env);
   const dataDir = resolve(env.DATA_DIR ?? "./data");
@@ -437,7 +442,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (securityScreenClassifier !== "proxy" && hasProxyConfig) {
     throw new Error("SECURITY_SCREEN_PROXY_* requires SECURITY_SCREEN_CLASSIFIER=proxy");
   }
-  if (proxyProvider && (proxyProvider.length > 63 || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(proxyProvider))) {
+  if (proxyProvider && !isDnsLabel(proxyProvider)) {
     throw new Error("SECURITY_SCREEN_PROXY_PROVIDER must be a lowercase DNS label");
   }
   if (proxyProvider === "surface" || proxyProvider === "origin") {
@@ -488,6 +493,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   ) {
     throw new Error("SLACK_EVENTS_PORT must be an integer from 1 through 65535");
   }
+  const privateNetworkAllowedOrigins = parsePrivateNetworkOrigins(env.PRIVATE_NETWORK_ALLOWED_ORIGINS);
   const memoryProviderConfig = parseMemoryProviderConfig(env.MEMORY_PROVIDER_CONFIG, env);
   return {
     suggestedActivitiesEnabled: boolEnvStrict("SUGGESTED_ACTIVITIES_ENABLED", env.SUGGESTED_ACTIVITIES_ENABLED) ?? true,
@@ -497,13 +503,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     production: env.NODE_ENV === "production",
     allowUnauthenticatedCore: boolEnvStrict("ALLOW_UNAUTHENTICATED_CORE", env.ALLOW_UNAUTHENTICATED_CORE) ?? false,
     port: numEnvStrict("PORT", env.PORT) ?? CONFIG_DEFAULTS.port,
+    ...optNum(env, "PUBLIC_PORT", "publicPort"),
     dataDir,
     orgId: env.ORG_ID ?? DEFAULT_ORG_ID,
-    ...(env.POSTHOG_API_KEY?.trim()
-      ? { productAnalytics: { apiKey: env.POSTHOG_API_KEY.trim(), host: env.POSTHOG_HOST?.trim() } }
-      : {}),
     ...(env.DATABASE_URL ? { databaseUrl: env.DATABASE_URL } : {}),
-    ...(env.DATABASE_OWNER_URL ? { databaseOwnerUrl: env.DATABASE_OWNER_URL } : {}),
     ...(env.DATABASE_POOL_URL ? { databasePoolUrl: env.DATABASE_POOL_URL } : {}),
     ...(env.DATABASE_POOL_CA_CERT ? { databasePoolCaCert: env.DATABASE_POOL_CA_CERT } : {}),
     ...(env.DATABASE_CA_CERT ? { databaseCaCert: env.DATABASE_CA_CERT } : {}),
@@ -581,13 +584,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.BACKGROUND_DEPLOYMENT_ID
       ? { backgroundDeploymentId: env.BACKGROUND_DEPLOYMENT_ID, deploymentControlSecret: env.DEPLOYMENT_CONTROL_SECRET }
       : {}),
+    ...(env.SPEND_EXPORT_TOKEN ? { spendExportToken: env.SPEND_EXPORT_TOKEN } : {}),
     ...(env.GIT_SHA ? { buildSha: env.GIT_SHA } : {}),
     monitorPollMs: numEnvStrict("MONITOR_POLL_MS", env.MONITOR_POLL_MS) ?? CONFIG_DEFAULTS.monitorPollMs,
     skillSyncPollMs: numEnvStrict("SKILL_SYNC_POLL_MS", env.SKILL_SYNC_POLL_MS) ?? CONFIG_DEFAULTS.skillSyncPollMs,
     monitorHeartbeatMs:
       (numEnvStrict("MONITOR_HEARTBEAT_SEC", env.MONITOR_HEARTBEAT_SEC) ?? CONFIG_DEFAULTS.monitorHeartbeatSec) * 1000,
     ...(env.CORE_SIGNING_SECRET ? { signingSecret: env.CORE_SIGNING_SECRET } : {}),
-    ...(env.OPERATOR_SIGNING_SECRET ? { operatorSigningSecret: env.OPERATOR_SIGNING_SECRET } : {}),
     ...((env.CAPABILITY_SECRET ?? env.CORE_SIGNING_SECRET)
       ? { capabilitySecret: env.CAPABILITY_SECRET ?? env.CORE_SIGNING_SECRET }
       : {}),
@@ -623,7 +626,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         }
       : {}),
     ...(env.PUBLIC_WEB_URL ? { publicWebUrl: env.PUBLIC_WEB_URL } : {}),
-    ...(env.FLY_APP_NAME ? { flyAppName: env.FLY_APP_NAME } : {}),
     ...(slack ? { slack } : {}),
     externalSlackPolicies,
     ...(env.SKILL_SIGNING_SECRET ? { skillSigningSecret: env.SKILL_SIGNING_SECRET } : {}),
@@ -635,6 +637,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     memoryCapture: parseMemoryCaptureMode(env.MEMORY_CAPTURE),
     memoryStrategy: parseMemoryStrategyKind(env.MEMORY_STRATEGY),
     ...(memoryProviderConfig ? { memoryProviderConfig } : {}),
+    privateNetworkAllowedOrigins,
     memoryCaptureQuietMs:
       numEnvStrict("MEMORY_CAPTURE_QUIET_MS", env.MEMORY_CAPTURE_QUIET_MS) ?? DEFAULT_CAPTURE_QUIET_MS,
     ...optNum(env, "MEMORY_CAPTURE_MAX_TURNS", "memoryCaptureMaxTurns"),

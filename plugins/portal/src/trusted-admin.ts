@@ -1,16 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { CompactSign } from "jose";
 import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
-import { boundTenant } from "../../chassis/src/tenant.ts";
 
 export async function provisionTrustedAdmin(
   config: { core: string; signingSecret: string; identitySecret: string; org: string; issuer: string },
   subject: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<void> {
-  const tenant = boundTenant();
   const claims = {
-    ...(tenant ? { tenant } : {}),
     purpose: "trusted-entry-admin",
     issuer: config.issuer,
     subject,
@@ -29,5 +26,5 @@ export async function provisionTrustedAdmin(
     body,
     signal: AbortSignal.timeout(5_000),
   });
-  if (!response.ok) throw new Error("Trusted administrator provisioning failed");
+  if (!response.ok) throw new Error(`Trusted administrator provisioning failed: HTTP ${response.status}`);
 }

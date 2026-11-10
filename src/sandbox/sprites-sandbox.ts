@@ -17,6 +17,7 @@ import type { CredentialPathSpec } from "../credentials/resident-paths.ts";
 import { ephemeralCredLinkPaths } from "../credentials/resident-paths.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import { createExecSandboxBase, sandboxScopeName } from "./exec-sandbox-base.ts";
+import { tenantSpritesShape } from "./tenant-sandbox-shape.ts";
 import { withConnectorSdk, type ConnectorSdkBundle } from "./connector-sdk.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
 import {
@@ -117,7 +118,6 @@ export interface SpritesSandboxOptions extends BlobStagingOptions {
   defaultTimeoutSec?: number;
   egressProxyUrl?: string;
   egressProxyAdditionalUrls?: string[];
-  memoryMb?: number;
   checkpointIntervalMs?: number;
   snapshots?: HomeSnapshotStore;
   initializationStore: DurableMap<{ pending: boolean }>;
@@ -137,9 +137,27 @@ interface RawExec {
 
 export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
   if (!opts.token) throw new Error("SANDBOX_BACKEND=sprites requires SPRITES_TOKEN");
-  const client = new SpritesClient(opts.token, opts.baseUrl ? { baseURL: opts.baseUrl } : {});
-  const sprite = (name: string) => client.sprite(name);
+  const deploymentToken = opts.token;
   const prefix = opts.namePrefix ?? "qm";
+  const clients = new Map<string, SpritesClient>();
+  const clientByName = new Map<string, SpritesClient>();
+  const clientFor = (token: string): SpritesClient => {
+    let found = clients.get(token);
+    if (!found) clients.set(token, (found = new SpritesClient(token, opts.baseUrl ? { baseURL: opts.baseUrl } : {})));
+    return found;
+  };
+  const nameFor = async (scope: string, scratch = false): Promise<string> => {
+    const shape = await tenantSpritesShape({ token: deploymentToken, namePrefix: prefix });
+    const name = sandboxScopeName(scratch ? `${shape.namePrefix}-scratch` : shape.namePrefix, scope);
+    clientByName.set(name, clientFor(shape.token));
+    return name;
+  };
+  const client = (name: string): SpritesClient => {
+    const found = clientByName.get(name);
+    if (!found) throw new Error(`sprites ${name}: no credential has been resolved for this sprite`);
+    return found;
+  };
+  const sprite = (name: string) => client(name).sprite(name);
   const initializationStore = opts.initializationStore;
   const advisoryLock = opts.advisoryLock;
   const withLifecycle = <T>(name: string, fn: () => Promise<T>): Promise<T> =>
@@ -152,7 +170,8 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
   const checkpointIntervalMs = opts.checkpointIntervalMs ?? CHECKPOINT_INTERVAL_MS;
 
   const ensured = new Set<string>();
-  const resourcesApplied = new Set<string>();
+  const sizeByName = new Map<string, number>();
+  const appliedSize = new Map<string, number>();
   const egressPolicyByName = new Map<string, string>();
   const pressureEpisodes = new Set<string>();
   const checkpointBooks = new Map<string, SnapshotBookkeeping>();
@@ -324,16 +343,17 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
   }
 
   async function applyResources(name: string): Promise<void> {
-    if (opts.memoryMb === undefined || resourcesApplied.has(name)) return;
+    const memoryGb = sizeByName.get(name);
+    if (memoryGb === undefined || appliedSize.get(name) === memoryGb) return;
     await attempt(`resources policy ${name}`, () =>
-      sprite(name).updateResourcesPolicy({ memory: { limitMB: opts.memoryMb! } }),
+      sprite(name).updateResourcesPolicy({ memory: { limitMB: memoryGb * 1024 } }),
     );
-    resourcesApplied.add(name);
+    appliedSize.set(name, memoryGb);
   }
 
   async function spriteExists(name: string): Promise<boolean> {
     try {
-      await retrySpritesControl(() => client.getSprite(name));
+      await retrySpritesControl(() => client(name).getSprite(name));
       return true;
     } catch (e) {
       if (isMissing(e)) return false;
@@ -343,7 +363,7 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
 
   async function deleteSprite(name: string): Promise<void> {
     try {
-      await retrySpritesControl(() => client.deleteSprite(name));
+      await retrySpritesControl(() => client(name).deleteSprite(name));
     } catch (e) {
       if (!isMissing(e)) throw new Error(`sprites delete ${name}: ${spritesErrorDetail(e)}`, { cause: e });
     }
@@ -420,7 +440,7 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
 
   const forget = (name: string): void => {
     ensured.delete(name);
-    resourcesApplied.delete(name);
+    appliedSize.delete(name);
     pressureEpisodes.delete(name);
     egressPolicyByName.delete(name);
     checkpointBooks.delete(name);
@@ -429,6 +449,7 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
   const base = createExecSandboxBase({
     label: "sprites",
     prefix,
+    instanceName: nameFor,
     homeDir: HOME_DIR,
     defaultTimeoutSec,
     credentialPaths: opts.credentialPaths ?? [],
@@ -458,7 +479,8 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
         onStatus?.("Preparing the sandbox…");
         const scope = base.scopeFor(name);
         try {
-          if (!exists) await attempt(`create ${name}`, () => client.createSprite(name, { waitForCapacity: true }));
+          if (!exists)
+            await attempt(`create ${name}`, () => client(name).createSprite(name, { waitForCapacity: true }));
           await applyResources(name);
           const hydrated = homeSnapshots && scope ? await homeSnapshots.hydrateHome(scope, name) : false;
           await initializationStore.delete(name);
@@ -477,7 +499,7 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
     isProvisioned: (name) => ensured.has(name),
     async recreateScratch(name) {
       if (await spriteExists(name)) await deleteSprite(name);
-      await attempt(`create ${name}`, () => client.createSprite(name, { waitForCapacity: true }));
+      await attempt(`create ${name}`, () => client(name).createSprite(name, { waitForCapacity: true }));
       await applyResources(name);
       ensured.add(name);
     },
@@ -488,6 +510,7 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
 
   const profile: AgentComputerProfile = {
     backend: "sprites",
+    sizesMemory: true,
     writablePersistence: "resident_disk",
     processSessions: true,
     egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
@@ -501,7 +524,6 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
         return visibleNotInstalled(["gh", "aws", "gcloud", "kubectl", "flyctl", "glab"], opts.extraTools ?? []);
       },
       cpus: SPRITE_CPUS,
-      ...(opts.memoryMb !== undefined ? { memoryMb: opts.memoryMb } : {}),
       diskGb: SPRITE_DISK_GB,
       homeDir: HOME_DIR,
       workdir: base.workspaceDir,
@@ -562,7 +584,14 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
     listProcesses: procSessions.listProcesses,
     ...execFileOps,
     ...blobStaging,
-    provision: base.provision,
+    async provision(scope, provOpts) {
+      if (!provOpts?.scratch) {
+        const name = await nameFor(scope);
+        if (provOpts?.memoryGb) sizeByName.set(name, provOpts.memoryGb);
+        else sizeByName.delete(name);
+      }
+      return base.provision(scope, provOpts);
+    },
     run: base.run,
     writeFileBytes: base.writeFileBytes,
     writeFile: base.writeFile,
@@ -571,7 +600,7 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
     exportFiles: execExport.exportFiles,
 
     async destroyScope(scopeId: string): Promise<void> {
-      const name = sandboxScopeName(prefix, scopeId);
+      const name = await nameFor(scopeId);
       return base.provisionQueue(scopeId, () =>
         withLifecycle(name, async () => {
           if (!(await initializationStore.get(name))?.pending) await exportHome(name, scopeId);
@@ -584,7 +613,7 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
     ...(homeSnapshots
       ? {
           async persistHomeSnapshot(scopeId: string): Promise<void> {
-            const name = sandboxScopeName(prefix, scopeId);
+            const name = await nameFor(scopeId);
             return base.provisionQueue(scopeId, () =>
               withLifecycle(name, async () => {
                 await requireInitialized(name);
@@ -598,7 +627,7 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
       : {}),
 
     async computerStatus(scopeId: string): Promise<ComputerStatus> {
-      const name = sandboxScopeName(prefix, scopeId);
+      const name = await nameFor(scopeId);
       const [checked, latest] = await Promise.allSettled([
         retrySpritesControl(() => sprite(name).check()),
         latestCheckpoint(name),
@@ -638,11 +667,23 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
       };
     },
 
-    restartComputer(scopeId: string): Promise<void> {
-      const name = sandboxScopeName(prefix, scopeId);
+    async restartComputer(scopeId: string, memoryGb?: number): Promise<void> {
+      const name = await nameFor(scopeId);
       return base.provisionQueue(`restart:${name}`, () =>
         withLifecycle(name, async () => {
           await requireInitialized(name);
+          if (memoryGb !== undefined) {
+            const previous = sizeByName.get(name);
+            sizeByName.set(name, memoryGb);
+            appliedSize.delete(name);
+            try {
+              await applyResources(name);
+            } catch (error) {
+              if (previous === undefined) sizeByName.delete(name);
+              else sizeByName.set(name, previous);
+              throw error;
+            }
+          }
           forget(name);
           const s = sprite(name);
           const restartFailure = await s.restart().then(

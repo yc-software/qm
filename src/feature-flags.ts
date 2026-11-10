@@ -8,11 +8,24 @@ export const FEATURES = {
     personalOnly: true,
     hint: "Enables app text comments and annotation tools for the selected people. Applies on the next app page load; app management permission is still required.",
   },
-  responsive_spine: { label: "Responsive spine (delegation)", personalOnly: true },
+  personas: {
+    label: "Personas",
+    hint: "Lets the selected people create, share and chat with personas: reusable agents with their own instructions, skills and credentials.",
+  },
   inbox_loops: { label: "Inbox Loops" },
   slack_loading_indicator: {
     label: "Slack loading indicator (experimental)",
     hint: "Shows an activity card in Slack threads, including background work and monitors. After five minutes, the card links to the web conversation. Everyone in a shared thread can see it. Top-level DMs stay unchanged. Turning this off leaves existing cards.",
+  },
+  descriptive_session_titles: {
+    label: "Descriptive session titles",
+    personalOnly: true,
+    hint: "Titles the selected people's new conversations with a short summary of what they asked, anchored on a name or distinctive word, written by a stronger model. Regenerating a title uses it too.",
+  },
+  next_prompt_suggestions: {
+    label: "Next-message suggestions (experimental)",
+    personalOnly: true,
+    hint: "After each reply in the web app, predicts the selected people's likely next message and shows it in their empty composer; Tab fills it in. Each suggestion is one extra model call on their conversation. Turning it on applies on their next page load.",
   },
   external_app_sharing: { label: "External app sharing (public links, outside emails)" },
   loop_triage: { label: "Loop triage (prioritize and consolidate)" },
@@ -45,14 +58,14 @@ export function createFeatureFlagStore(
   backing: DurableMap<FeatureFlagRecord>,
   opts: { now?: () => number } = {},
 ): FeatureFlagStore {
-  const orgScope = () => scopeId("org", configOrgId());
+  const orgScope = scopeId("org", configOrgId());
   const now = opts.now ?? Date.now;
   const key = (featureName: FeatureName) => featureName;
   const list = async () => (await backing.all()).filter((row) => FEATURE_NAMES.includes(row.featureName));
   const enabledFor = async (scope: ScopeId): Promise<ReadonlySet<FeatureName>> =>
     new Set(
       (await list())
-        .filter((row) => row.enabledScopes.includes(orgScope()) || row.enabledScopes.includes(scope))
+        .filter((row) => row.enabledScopes.includes(orgScope) || row.enabledScopes.includes(scope))
         .map((row) => row.featureName),
     );
   return {

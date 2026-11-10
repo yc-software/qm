@@ -1,24 +1,11 @@
-import { test } from "node:test";
+import { test as nodeTest, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import type { DurableMap } from "../src/persistence/durable-map.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import {
-  boundTenant,
-  cacheTenant,
-  createTenantLoader,
-  isInstallTenant,
-  perTenant,
-  registerTenants,
-  unboundTenantAllowed,
-  withTenant,
-} from "../src/tenants/context.ts";
-import { orgId } from "../src/config.ts";
-import { configureTenantSettings, tenantSettings } from "../src/tenants/settings.ts";
-import { createSlackInstallationStore } from "../src/surfaces/slack-installation.ts";
-import { customModelCatalog, customProvidersVersion, setCustomProviders } from "../src/model/custom-providers.ts";
-import { overlayUnavailableReason, overlaysVersion, publishModelOverlays } from "../src/model/model-overlay.ts";
-import { gatewayModelCatalog, gatewayModelsVersion, setGatewayModels } from "../src/model/gateway-models.ts";
+import { boundTenant, currentTenant, withoutTenant, withTenant } from "../src/tenants/context.ts";
+import { loadTenant, onTenantLoad, perTenant, tenantListeners } from "../src/tenants/cache.ts";
+import { customProvidersVersion, setCustomProviders } from "../src/model/custom-providers.ts";
+import { resolveDeploymentModel } from "../src/model/pi-models.ts";
 import { createMcpToolService } from "../src/mcp/mcp-tool-service.ts";
 import type { McpServer, McpServerStore } from "../src/mcp/mcp-server-store.ts";
 import { createIdentityService, type DeactivationRecord } from "../src/identity/identity-service.ts";
@@ -27,14 +14,20 @@ import { createPrincipalLinkService } from "../src/identity/principal-links.ts";
 import type { UserLink, UserLinkStore } from "../src/identity/user-store.ts";
 import { configStoreMaps, createConfigStore } from "../src/resolution/config-store.ts";
 import { createSpendLimits } from "../src/ratelimit/spend-limits.ts";
-import { createBrandingCache } from "../plugins/chassis/src/branding.ts";
 import { createAdminGrantStore, type AdminGrant } from "../src/admin/admin-grant-store.ts";
+import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { createEngagedRegistry } from "../src/wake/engaged-registry.ts";
 import { scopeId } from "../src/types.ts";
+import { partition, tenantMap } from "./support/tenant-map.ts";
 import type { ScopeActivity, SessionStore, SpendRow } from "../src/sessions/session-store.ts";
 import { selectableModelCatalog } from "../src/model/model-catalog.ts";
 import { scopeActivity } from "../src/api/routes/admin/scope-activity.ts";
 import { setMentionIndex, toSlackMrkdwn } from "../src/slack/mrkdwn.ts";
 import { botIdentityArgs, setDefaultBotIdentity } from "../src/slack/delivery.ts";
+
+function test(name: string, fn: (t: TestContext) => void | Promise<void>): void {
+  void nodeTest(name, (t) => withoutTenant(() => fn(t)));
+}
 
 const noLock: AdvisoryLock = {
   withLock: (_key, fn) => fn(),
@@ -45,15 +38,6 @@ const noLock: AdvisoryLock = {
 
 const A = randomUUID();
 const B = randomUUID();
-
-function partition<T>(rows: Map<string, Map<string, T>>): Map<string, T> {
-  const key = boundTenant() ?? "";
-  const existing = rows.get(key);
-  if (existing) return existing;
-  const fresh = new Map<string, T>();
-  rows.set(key, fresh);
-  return fresh;
-}
 
 function tenantLinks(): UserLinkStore {
   const rows = new Map<string, Map<string, UserLink>>();
@@ -66,116 +50,171 @@ function tenantLinks(): UserLinkStore {
       own().set(link.principalId, link);
       return link;
     },
-    async unlink(id) {
-      const row = own().get(id) ?? null;
-      own().delete(id);
+    async unlink(aliasId) {
+      const row = own().get(aliasId) ?? null;
+      own().delete(aliasId);
       return row;
     },
   };
 }
 
-function tenantMap<T>(): DurableMap<T> & { reads: string[] } {
-  const rows = new Map<string, Map<string, T>>();
-  const reads: string[] = [];
-  const own = () => partition(rows);
-  const unsupported = (): never => {
-    throw new Error("not used by these tests");
-  };
-  return {
-    reads,
-    async all() {
-      reads.push(boundTenant() ?? "");
-      return [...own().values()];
-    },
-    async entries() {
-      return [...own().entries()];
-    },
-    acrossTenants: unsupported,
-    select: unsupported,
-    selectEntries: unsupported,
-    async get(id) {
-      return own().get(id) ?? null;
-    },
-    async put(id, value) {
-      own().set(id, value);
-    },
-    async putIfAbsent(id, value) {
-      const existing = own().get(id);
-      if (existing !== undefined) return existing;
-      own().set(id, value);
-      return value;
-    },
-    async insertIfAbsent(id, value) {
-      if (own().has(id)) return false;
-      own().set(id, value);
-      return true;
-    },
-    merge: unsupported,
-    async update(id, fn) {
-      const existing = own().get(id);
-      if (existing === undefined) return null;
-      const next = fn(existing);
-      own().set(id, next);
-      return next;
-    },
-    mutateMany: unsupported,
-    async deleteIf(id, predicate) {
-      const existing = own().get(id);
-      if (existing === undefined || !predicate(existing)) return false;
-      own().delete(id);
-      return true;
-    },
-    async delete(id) {
-      own().delete(id);
-    },
-    async take(id) {
-      const existing = own().get(id) ?? null;
-      own().delete(id);
-      return existing;
-    },
-  };
-}
-
-test("with no registered tenants, unbound work shares one process slot and bound work gets its own", () => {
-  const slot = perTenant<{ seen: string[] }>(() => ({ seen: [] }));
-  slot().seen.push("unbound");
-  withTenant(A, () => slot().seen.push("a"));
-  assert.deepEqual(slot().seen, ["unbound"]);
-  assert.deepEqual(
-    withTenant(A, () => slot().seen),
-    ["a"],
+test("two tenants reading the same cache get their own values", () => {
+  const slot = perTenant(() => new Map<string, string>());
+  withTenant(A, () => slot().set("key", "a"));
+  withTenant(B, () => slot().set("key", "b"));
+  assert.equal(
+    withTenant(A, () => slot().get("key")),
+    "a",
   );
-  assert.equal(orgId(), process.env.ORG_ID ?? "default-org");
+  assert.equal(
+    withTenant(B, () => slot().get("key")),
+    "b",
+  );
 });
 
-test("each tenant gets its own custom providers, model overlays and gateway models", () => {
+test("a tenant cache read with no tenant bound throws", () => {
+  const slot = perTenant(() => ({}));
+  assert.throws(() => slot(), /No tenant is bound/);
+  assert.throws(() => setCustomProviders([]), /No tenant is bound/);
+  assert.throws(() => toSlackMrkdwn("hi @alice"), /No tenant is bound/);
+});
+
+test("an emit reaches only listeners registered under the same tenant", () => {
+  const listeners = tenantListeners<[string]>("test");
+  const heard: Array<[string, string, string | undefined]> = [];
+  withTenant(A, () => listeners.add((value) => heard.push(["a", value, boundTenant()])));
+  const offB = withTenant(B, () => listeners.add((value) => heard.push(["b", value, boundTenant()])));
+  withTenant(A, () => listeners.emit("one"));
+  withTenant(B, () => listeners.emit("two"));
+  offB();
+  withTenant(B, () => listeners.emit("three"));
+  assert.deepEqual(heard, [
+    ["a", "one", A],
+    ["b", "two", B],
+  ]);
+  assert.throws(() => listeners.emit("unbound"), /No tenant is bound/);
+});
+
+test("a listener registered with no tenant bound hears every tenant, bound to the emitting tenant", () => {
+  const listeners = tenantListeners<[string]>("test");
+  const heard: Array<[string, string | undefined]> = [];
+  const off = listeners.add((value) => heard.push([value, boundTenant()]));
+  withTenant(A, () => listeners.emit("one"));
+  withTenant(B, () => listeners.emit("two"));
+  off();
+  withTenant(A, () => listeners.emit("three"));
+  assert.deepEqual(heard, [
+    ["one", A],
+    ["two", B],
+  ]);
+});
+
+test("a failing listener does not stop the others", () => {
+  const listeners = tenantListeners<[]>("test");
+  let heard = 0;
   withTenant(A, () => {
-    setCustomProviders([
-      { id: "tenant-a", name: "A", protocol: "openai", baseUrl: "https://a.example/v1", models: [{ id: "model-a" }] },
-    ]);
-    publishModelOverlays(new Map(), new Map([["overlay-a", "missing key"]]), []);
-    setGatewayModels([]);
+    listeners.add(() => {
+      throw new Error("boom");
+    });
+    listeners.add(() => (heard += 1));
+    listeners.emit();
   });
-  const versions = () => ({
-    custom: customProvidersVersion(),
-    overlays: overlaysVersion(),
-    gateway: gatewayModelsVersion(),
+  assert.equal(heard, 1);
+});
+
+test("delivery enqueue listeners hear only their own tenant's deliveries", async () => {
+  const store = createDeliveryStore();
+  const heard: string[] = [];
+  withTenant(A, () => store.onEnqueue((type) => heard.push(`a:${type}`)));
+  withTenant(B, () => store.onEnqueue((type) => heard.push(`b:${type}`)));
+  await withTenant(A, () =>
+    store.enqueue({ idempotencyKey: "k1", destination: { type: "slack", target: "C1" } as never, text: "hi" }),
+  );
+  assert.deepEqual(heard, ["a:slack"]);
+});
+
+test("loadTenant runs each registered load once per tenant and retries a failed one", async () => {
+  const loads: string[] = [];
+  let failures = 0;
+  const stopCounting = onTenantLoad(async () => loads.push(currentTenant()));
+  const stopFailing = onTenantLoad(async () => {
+    if (currentTenant() === B && failures++ === 0) throw new Error("load failed");
   });
-  const before = withTenant(B, versions);
-  withTenant(A, () => {
-    assert.equal(customModelCatalog().length, 1);
-    assert.equal(overlayUnavailableReason("overlay-a"), "missing key");
-  });
-  withTenant(B, () => {
-    assert.deepEqual(customModelCatalog(), []);
-    assert.equal(overlayUnavailableReason("overlay-a"), undefined);
-    assert.deepEqual(gatewayModelCatalog(true), []);
-  });
-  withTenant(A, () => {
-    setCustomProviders([]);
-    publishModelOverlays(new Map(), new Map(), []);
-  });
-  assert.deepEqual(withTenant(B, versions), before);
+  await withTenant(A, () => loadTenant());
+  await withTenant(A, () => loadTenant());
+  await assert.rejects(
+    withTenant(B, () => loadTenant()),
+    /load failed/,
+  );
+  await withTenant(B, () => loadTenant());
+  assert.deepEqual(loads, [A, B]);
+  assert.equal(failures, 2);
+  assert.throws(() => loadTenant(), /No tenant is bound/);
+  stopCounting();
+  stopFailing();
+});
+
+test("a load registered with a refresh interval re-runs in the background once its answer is that old", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+  const loads: string[] = [];
+  let release: (() => void) | undefined;
+  const stop = onTenantLoad(async () => {
+    loads.push(currentTenant());
+    if (loads.length === 2) await new Promise<void>((resolve) => (release = resolve));
+  }, 30_000);
+  await withTenant(A, () => loadTenant());
+  t.mock.timers.tick(29_000);
+  await withTenant(A, () => loadTenant());
+  assert.deepEqual(loads, [A]);
+  t.mock.timers.tick(1_000);
+  await withTenant(A, () => loadTenant());
+  await withTenant(A, () => loadTenant());
+  assert.deepEqual(loads, [A, A]);
+  release!();
+  await new Promise((resolve) => setImmediate(resolve));
+  await withTenant(A, () => loadTenant());
+  assert.deepEqual(loads, [A, A]);
+  t.mock.timers.tick(30_000);
+  await withTenant(A, () => loadTenant());
+  assert.deepEqual(loads, [A, A, A]);
+  stop();
+});
+
+test("engaged sessions with the same thread are tracked per tenant", () => {
+  const registry = createEngagedRegistry();
+  registry.engage({ tenantId: A, threadRef: "thread" });
+  registry.engage({ tenantId: B, threadRef: "thread" });
+  registry.settle({ tenantId: A, threadRef: "thread" });
+  assert.deepEqual(registry.list(), [{ tenantId: B, threadRef: "thread" }]);
+});
+
+test("admin seed grants go only to the boot tenant, once", async () => {
+  const persisted = new Map<string, AdminGrant[]>();
+  let puts = 0;
+  const grants = createAdminGrantStore(
+    {
+      async all(tenant) {
+        return persisted.get(tenant.id) ?? [];
+      },
+      async put(tenant, grant) {
+        puts += 1;
+        persisted.set(tenant.id, [...(persisted.get(tenant.id) ?? []), grant]);
+      },
+      async insertIfAbsent() {
+        return true;
+      },
+      async remove() {},
+    },
+    {
+      seed: [{ principalId: "admin@example.com", scopeId: scopeId("org", "acme"), role: "org_admin" }],
+      seedsTenant: (t) => t.id === A,
+    },
+  );
+  await withTenant(A, (tenant) => grants.list(tenant));
+  await withTenant(A, (tenant) => grants.list(tenant));
+  await withTenant(B, (tenant) => grants.list(tenant));
+  assert.equal(puts, 1);
+  assert.deepEqual(persisted.get(B), undefined);
 });
 
 function mcpStore(servers: Record<string, McpServer[]>): McpServerStore & { lists: string[] } {
@@ -184,12 +223,12 @@ function mcpStore(servers: Record<string, McpServer[]>): McpServerStore & { list
   return {
     lists,
     async list() {
-      const tenant = boundTenant() ?? "";
+      const tenant = currentTenant();
       lists.push(tenant);
       return servers[tenant] ?? [];
     },
     async get(id) {
-      return (servers[boundTenant() ?? ""] ?? []).find((server) => server.id === id) ?? null;
+      return (servers[currentTenant()] ?? []).find((server) => server.id === id) ?? null;
     },
     async put() {
       for (const listener of listeners) listener();
@@ -216,6 +255,18 @@ function signInServer(id: string): McpServer {
   };
 }
 
+test("a tenant's custom providers neither bump another tenant's version nor resolve deployment-wide", () => {
+  const before = withTenant(B, customProvidersVersion);
+  withTenant(A, () => {
+    setCustomProviders([
+      { id: "tenant-a", name: "A", protocol: "openai", baseUrl: "https://a.example/v1", models: [{ id: "model-a" }] },
+    ]);
+  });
+  assert.equal(resolveDeploymentModel("model-a"), undefined);
+  withTenant(A, () => setCustomProviders([]));
+  assert.equal(withTenant(B, customProvidersVersion), before);
+});
+
 test("MCP tool lists are loaded and refreshed per tenant", async (t) => {
   const store = mcpStore({ [A]: [signInServer("crm-a")], [B]: [signInServer("crm-b")] });
   const service = createMcpToolService({ servers: store, refreshIntervalMs: 3_600_000 });
@@ -229,6 +280,20 @@ test("MCP tool lists are loaded and refreshed per tenant", async (t) => {
   assert.deepEqual(store.lists, [A, B, A]);
   assert.deepEqual(await servers(B), ["crm-b"]);
   assert.deepEqual(store.lists, [A, B, A]);
+});
+
+test("MCP tool lists start loading when a tenant loads", async (t) => {
+  const store = mcpStore({ [A]: [signInServer("crm-a")] });
+  const service = createMcpToolService({ servers: store, refreshIntervalMs: 3_600_000 });
+  t.after(() => service.close());
+  await withTenant(A, () => loadTenant());
+  for (let i = 0; i < 100 && !store.lists.length; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.deepEqual(store.lists, [A]);
+  assert.deepEqual(
+    [...new Set((await withTenant(A, () => service.toolDefs())).map((tool) => tool.serverId))],
+    ["crm-a"],
+  );
+  assert.deepEqual(store.lists, [A]);
 });
 
 test("identity rosters and principal links are kept and refreshed per tenant", async () => {
@@ -297,7 +362,7 @@ test("spend totals are cached per tenant", async () => {
     orgId: () => "acme",
     getSpendLimit: async () => ({ dailyUsd: 5 }),
     spendReport: async () => {
-      const tenant = boundTenant() ?? "";
+      const tenant = currentTenant();
       reports.push(tenant);
       return { rows: tenant === A ? [spent] : [] };
     },
@@ -353,15 +418,9 @@ test("admin scope activity counts are kept per tenant", async () => {
   assert.deepEqual(scopes(B), [scopeId("org", "b")]);
 });
 
-test("Slack mention names and bot identity stay with their tenant", () => {
-  withTenant(A, () => {
-    setMentionIndex(new Map([["alice", "UA"]]));
-    setDefaultBotIdentity({ username: "Bot A" });
-  });
-  withTenant(B, () => {
-    setMentionIndex(new Map([["alice", "UB"]]));
-    setDefaultBotIdentity({ username: "Bot B" });
-  });
+test("Slack mention names stay with their tenant; the env bot identity is process-wide", () => {
+  withTenant(A, () => setMentionIndex(new Map([["alice", "UA"]])));
+  withTenant(B, () => setMentionIndex(new Map([["alice", "UB"]])));
   assert.equal(
     withTenant(A, () => toSlackMrkdwn("hi @alice")),
     "hi <@UA>",
@@ -370,154 +429,11 @@ test("Slack mention names and bot identity stay with their tenant", () => {
     withTenant(B, () => toSlackMrkdwn("hi @alice")),
     "hi <@UB>",
   );
-  assert.deepEqual(
-    withTenant(A, () => botIdentityArgs()),
-    { username: "Bot A" },
-  );
+  setDefaultBotIdentity({ username: "Bot" });
+  assert.deepEqual(botIdentityArgs(), { username: "Bot" });
   assert.deepEqual(
     withTenant(B, () => botIdentityArgs()),
-    { username: "Bot B" },
+    { username: "Bot" },
   );
-});
-
-test("surface branding is fetched and cached per tenant", async () => {
-  const branding = createBrandingCache(async () => ({ orgName: `Org ${boundTenant() ?? "none"}` }));
-  assert.equal((await withTenant(A, () => branding.forRender())).orgName, `Org ${A}`);
-  assert.equal((await withTenant(B, () => branding.forRender())).orgName, `Org ${B}`);
-  assert.equal(withTenant(A, () => branding.current()).orgName, `Org ${A}`);
-});
-
-test("a tenant loader loads each tenant once and retries a tenant whose load failed", async () => {
-  const loads: string[] = [];
-  const loader = createTenantLoader([async () => loads.push(cacheTenant())]);
-  await withTenant(A, () => loader.load());
-  await withTenant(A, () => loader.load());
-  await withTenant(B, () => loader.load());
-  assert.deepEqual(loads, [A, B]);
-  let attempts = 0;
-  const failing = createTenantLoader([
-    async () => {
-      attempts += 1;
-      throw new Error("load failed");
-    },
-  ]);
-  await assert.rejects(
-    withTenant(A, () => failing.load()),
-    /load failed/,
-  );
-  await assert.rejects(
-    withTenant(A, () => failing.load()),
-    /load failed/,
-  );
-  assert.equal(attempts, 2);
-});
-
-test("each tenant's org label comes from its settings, so it sees its own org-scoped rows and not the other's", async () => {
-  configureTenantSettings(async (tenant) => (tenant === A ? { orgId: "acme" } : { orgId: "globex" }));
-  try {
-    await withTenant(A, () => tenantSettings());
-    await withTenant(B, () => tenantSettings());
-    assert.equal(
-      withTenant(A, () => orgId()),
-      "acme",
-    );
-    assert.equal(
-      withTenant(B, () => orgId()),
-      "globex",
-    );
-    const identity = tenantMap<{ orgId: string }>();
-    const store = createConfigStore("default-org", {
-      ...configStoreMaps(() => tenantMap<never>()),
-      deploymentIdentity: identity,
-    });
-    await withTenant(B, () => identity.put("singleton", { orgId: "globex" }));
-    await withTenant(A, async () => {
-      await store.hydrate?.();
-      await store.setSoul(scopeId("org", "acme"), "Acme instructions");
-    });
-    await withTenant(B, () => store.hydrate?.());
-    withTenant(A, () => assert.equal(store.getSoul(scopeId("org", "acme")), "Acme instructions"));
-    withTenant(B, () => {
-      assert.equal(store.getSoul(scopeId("org", "acme")), null);
-      assert.notEqual(store.getSoul(scopeId("org", "globex")), "Acme instructions");
-    });
-    const installs = createSlackInstallationStore("default-org", tenantMap(), "k".repeat(32));
-    await withTenant(A, () => installs.set({ botToken: "xoxb-acme", updatedBy: "admin" }));
-    assert.equal((await withTenant(A, () => installs.status())).configured, true);
-    assert.equal((await withTenant(B, () => installs.status())).configured, false);
-  } finally {
-    configureTenantSettings(undefined);
-  }
-});
-
-test("with several tenants, unbound cache reads fail closed, org identities differ, and seeds stay with the install", async () => {
-  registerTenants(A, undefined);
-  const slot = perTenant(() => ({}));
-  assert.throws(() => slot(), /No tenant is bound/);
-  assert.equal(unboundTenantAllowed(), false);
-  assert.equal(
-    withTenant(A, () => orgId()),
-    process.env.ORG_ID ?? "default-org",
-  );
-  assert.equal(
-    withTenant(B, () => orgId()),
-    B,
-  );
-  configureTenantSettings(async () => ({}));
-  try {
-    assert.throws(() => withTenant(B, () => orgId()), /settings are not loaded/);
-  } finally {
-    configureTenantSettings(undefined);
-  }
-  assert.equal(
-    withTenant(B, () => isInstallTenant()),
-    false,
-  );
-  const persisted = new Map<string, AdminGrant[]>();
-  const grants = createAdminGrantStore(
-    {
-      async all() {
-        return persisted.get(boundTenant() ?? "") ?? [];
-      },
-      async put(grant) {
-        const tenant = boundTenant() ?? "";
-        persisted.set(tenant, [...(persisted.get(tenant) ?? []), grant]);
-      },
-      async insertIfAbsent() {
-        return true;
-      },
-      async remove() {},
-    },
-    { seed: [{ principalId: "admin@example.com", scopeId: scopeId("org", "acme"), role: "org_admin" }] },
-  );
-  assert.deepEqual(
-    (await withTenant(A, () => grants.list())).map((grant) => grant.principalId),
-    ["admin@example.com"],
-  );
-  assert.deepEqual(await withTenant(B, () => grants.list()), []);
-});
-
-test("with exactly one tenant, unbound work resolves to it", () => {
-  registerTenants(A, A);
-  const slot = perTenant(() => ({ id: randomUUID() }));
-  assert.equal(
-    slot().id,
-    withTenant(A, () => slot().id),
-  );
-  assert.equal(unboundTenantAllowed(), true);
-});
-
-test("a failed configuration load is retried on the next call", async () => {
-  const maps = configStoreMaps(() => tenantMap<never>());
-  const souls = maps.souls;
-  let failures = 1;
-  const flaky: typeof souls = {
-    ...souls,
-    all: () => (failures-- > 0 ? Promise.reject(new Error("connection reset")) : souls.all()),
-  };
-  const store = createConfigStore("acme", { ...maps, souls: flaky });
-  await withTenant(A, async () => {
-    await assert.rejects(store.hydrate?.() ?? Promise.resolve(), /connection reset/);
-    await store.hydrate?.();
-  });
+  setDefaultBotIdentity(undefined);
 });

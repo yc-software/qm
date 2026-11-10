@@ -14,7 +14,6 @@ import { dockerContainerNetworks, ensureDockerNetwork, spawnDockerExec, type Doc
 import { ephemeralCredLinkScript } from "../credentials/resident-paths.ts";
 import { ephemeralCredLinkPaths } from "../credentials/resident-paths.ts";
 import { shortHash } from "../util/crypto.ts";
-import { tenantScopedId } from "../tenants/context.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import { execFailureDetail } from "./sandbox.ts";
 import type {
@@ -41,7 +40,6 @@ export interface LocalSandboxOptions {
   image?: string;
   dockerBin?: string;
   cpus?: number;
-  memoryMb?: number;
   coreContainer?: string;
   defaultTimeoutSec?: number;
   homeDir?: string;
@@ -80,8 +78,7 @@ export const localNetworkName = (containerName: string): string =>
   `qm-net-${containerName.replace(/^qm-(sbx|scratch)-/, "")}`;
 const localScratchName = (key: string): string => `qm-scratch-${localSlug(key)}`;
 
-function localSlug(scopeId: string): string {
-  const id = tenantScopedId(scopeId);
+function localSlug(id: string): string {
   const cleaned = id
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, "-")
@@ -250,7 +247,12 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
     );
   }
 
-  async function runContainer(name: string, scope: string | undefined, withVolume: boolean): Promise<void> {
+  async function runContainer(
+    name: string,
+    scope: string | undefined,
+    withVolume: boolean,
+    memoryGb?: number,
+  ): Promise<void> {
     const net = await ensureNetwork(name);
     const args = [
       "run",
@@ -270,7 +272,7 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
       ...(opts.coreContainer ? [] : ["-p", `127.0.0.1:0:${AGENT_PORT}`]),
       "--add-host=host.docker.internal:host-gateway",
       ...(opts.cpus ? ["--cpus", String(opts.cpus)] : []),
-      ...(opts.memoryMb ? ["--memory", `${opts.memoryMb}m`] : []),
+      ...(memoryGb ? ["--memory", `${memoryGb}g`] : []),
       image,
     ];
     const r = await dexec(args, 120_000);
@@ -280,7 +282,7 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
     await waitDaemon(name);
   }
 
-  async function ensureContainer(scope: string): Promise<{ name: string; coldStart: boolean }> {
+  async function ensureContainer(scope: string, memoryGb?: number): Promise<{ name: string; coldStart: boolean }> {
     return provisionQueue(scope, async () => {
       const imageId = await preflight();
       const name = localContainerName(scope);
@@ -299,7 +301,7 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
         const created = await dexec(["volume", "create", volume]);
         if (created.code !== 0) throw new Error(`docker volume create ${volume} failed: ${created.stderr.trim()}`);
       }
-      await runContainer(name, scope, true);
+      await runContainer(name, scope, true, memoryGb);
       activeByContainer.set(name, (activeByContainer.get(name) ?? 0) + 1);
       return { name, coldStart: !hadVolume };
     });
@@ -333,6 +335,7 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
 
   const profile: AgentComputerProfile = {
     backend: "local-docker",
+    sizesMemory: true,
     writablePersistence: "resident_disk",
     processSessions: true,
     parksOnTeardown: true,
@@ -343,7 +346,6 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
       tools: ["git", "curl", "wget", "jq", "unzip", "gnupg", "python3", "gh", "aws (CLI v2)"],
       notInstalled: ["gcloud", "kubectl", "flyctl", "glab"],
       ...(opts.cpus ? { cpus: opts.cpus } : {}),
-      ...(opts.memoryMb ? { memoryMb: opts.memoryMb } : {}),
       homeDir,
       workdir: workspaceDir,
     },
@@ -383,7 +385,7 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
 
     async provision(scope: string, provOpts?: ProvisionOptions): Promise<SandboxHandle> {
       const scratch = provOpts?.scratch;
-      const body = scratch ? await ensureScratch(scratch.key) : await ensureContainer(scope);
+      const body = scratch ? await ensureScratch(scratch.key) : await ensureContainer(scope, provOpts?.memoryGb);
       const name = body.name;
 
       const env = provOpts?.env && Object.keys(provOpts.env).length ? provOpts.env : undefined;

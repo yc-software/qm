@@ -16,7 +16,7 @@ import { validatePortalTrust, type QmConfig } from "../src/config.ts";
 const config: QmConfig = {
   contract: 1,
   orgId: "acme",
-  publicUrl: "http://localhost:8080",
+  publicUrl: "http://localhost:8082",
   target: "docker",
   services: ["core"],
   plugins: [],
@@ -26,6 +26,8 @@ const config: QmConfig = {
   sandbox: { app: "acme-sandboxes" },
 };
 
+const SIGN_IN = { OIDC_CLIENT_ID: "real-client-id", OIDC_ALLOWED_EMAIL_DOMAIN: "example.com" };
+
 test("Docker doctor rejects missing and placeholder required secrets before external probes", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-doctor-required-"));
   writeFileSync(join(dir, ".env"), "CORE_SIGNING_SECRET=replace-me\n");
@@ -34,7 +36,7 @@ test("Docker doctor rejects missing and placeholder required secrets before exte
   try {
     await assert.rejects(
       dockerDoctor(config, dir),
-      /CAPABILITY_SECRET, CONNECTOR_SECRET_KEY, CORE_SIGNING_SECRET, PORTAL_IDENTITY_SECRET, PUBLIC_API_URL, SKILL_SIGNING_SECRET/,
+      /CAPABILITY_SECRET, CONNECTOR_SECRET_KEY, CORE_SIGNING_SECRET, OIDC_CLIENT_ID, OIDC_CLIENT_SECRET, PORTAL_EXPECTED_TEAM_ID, PORTAL_IDENTITY_SECRET, PORTAL_SESSION_SECRET, PUBLIC_API_URL, SKILL_SIGNING_SECRET/,
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -49,7 +51,7 @@ test("doctor allows deferred Slack setup but rejects a partial token pair", asyn
   const deferredConfig: QmConfig = {
     ...withoutSandbox,
     services: ["core", "slack"],
-    env: { core: {} },
+    env: { core: SIGN_IN },
   };
   const required = new Map([
     ["PUBLIC_API_URL", "https://acme.example.com"],
@@ -66,17 +68,17 @@ test("doctor allows deferred Slack setup but rejects a partial token pair", asyn
   );
 });
 
-test("doctor rejects missing and placeholder portal OIDC client ids and tenant gates", async () => {
+test("doctor rejects missing and placeholder sign-in OIDC client ids and tenant gates", async () => {
   const { sandbox: _sandbox, ...withoutSandbox } = config;
   void _sandbox;
-  const portalConfig: QmConfig = {
+  const signInConfig: QmConfig = {
     ...withoutSandbox,
-    services: ["core", "portal"],
-    env: { portal: { OIDC_CLIENT_ID: "replace-me" } },
+    services: ["core"],
+    env: { core: { OIDC_CLIENT_ID: "replace-me" } },
   };
   for (const oidcClientId of ["", "   ", "replace-me", " replace-me "]) {
     await assert.rejects(
-      doctorCommon({ ...portalConfig, env: { portal: { OIDC_CLIENT_ID: oidcClientId } } }, new Map()),
+      doctorCommon({ ...signInConfig, env: { core: { OIDC_CLIENT_ID: oidcClientId } } }, new Map()),
       /OIDC_CLIENT_ID may not be a placeholder/,
     );
   }
@@ -86,7 +88,7 @@ test("doctor rejects missing and placeholder portal OIDC client ids and tenant g
   ];
   for (const gate of rejectedGates) {
     await assert.rejects(
-      doctorCommon({ ...portalConfig, env: { portal: { OIDC_CLIENT_ID: "real-client-id", ...gate } } }, new Map()),
+      doctorCommon({ ...signInConfig, env: { core: { OIDC_CLIENT_ID: "real-client-id", ...gate } } }, new Map()),
       /must be a valid, non-placeholder email domain|may not be a placeholder/,
     );
   }
@@ -97,12 +99,12 @@ test("doctor rejects missing and placeholder portal OIDC client ids and tenant g
   ];
   for (const gate of acceptedGates) {
     await assert.doesNotReject(
-      doctorCommon({ ...portalConfig, env: { portal: { OIDC_CLIENT_ID: "real-client-id", ...gate } } }, new Map()),
+      doctorCommon({ ...signInConfig, env: { core: { OIDC_CLIENT_ID: "real-client-id", ...gate } } }, new Map()),
     );
   }
   assert.doesNotThrow(() =>
     validatePortalTrust(
-      { ...portalConfig, env: { portal: {} } },
+      { ...signInConfig, env: { core: {} } },
       "config",
       new Map([
         ["OIDC_CLIENT_ID", "secret-client"],
@@ -111,8 +113,8 @@ test("doctor rejects missing and placeholder portal OIDC client ids and tenant g
     ),
   );
   assert.throws(
-    () => validatePortalTrust({ ...portalConfig, env: { portal: {} } }, "config", new Map()),
-    /OIDC_CLIENT_ID in env\.portal or the target secret store/,
+    () => validatePortalTrust({ ...signInConfig, env: { core: {} } }, "config", new Map()),
+    /OIDC_CLIENT_ID in env\.core or the target secret store/,
   );
 });
 
@@ -120,7 +122,7 @@ test("remote doctor keeps missing local email values distinct from disabled emai
   const brokerConfig: QmConfig = {
     ...config,
     sandbox: undefined,
-    services: ["core", "portal", "auth"],
+    services: ["core", "auth"],
     env: {
       core: {},
       auth: { AUTH_EMAIL_TRANSPORT: "resend", AUTH_ALLOWED_EMAIL_DOMAIN: "example.com" },
@@ -151,13 +153,13 @@ test("remote doctor keeps missing local email values distinct from disabled emai
   }
 });
 
-test("doctor requires portal identity and email sender values by default", async () => {
+test("doctor requires sign-in identity and email sender values by default", async () => {
   await assert.rejects(
     doctorCommon(
       {
         ...config,
-        services: ["core", "portal"],
-        env: { portal: { OIDC_ALLOWED_EMAIL_DOMAIN: "example.com" } },
+        services: ["core"],
+        env: { core: { OIDC_ALLOWED_EMAIL_DOMAIN: "example.com" } },
       },
       new Map(),
     ),
@@ -167,7 +169,7 @@ test("doctor requires portal identity and email sender values by default", async
     doctorCommon(
       {
         ...config,
-        services: ["core", "portal", "auth"],
+        services: ["core", "auth"],
         env: {
           auth: {
             AUTH_EMAIL_TRANSPORT: "resend",
@@ -427,7 +429,7 @@ const SLACK_TOKENS = new Map([
 function slackConfig(): QmConfig {
   const { sandbox: _sandbox, ...rest } = config;
   void _sandbox;
-  return { ...rest, services: ["core", "slack"], env: {} };
+  return { ...rest, services: ["core", "slack"], env: { core: SIGN_IN } };
 }
 
 function manifestDir(): string {
@@ -533,7 +535,7 @@ test("Slack doctor validates the bot through its configured API while Socket Mod
 
 test("Slack doctor does not require a Socket Mode token for HTTP events", async () => {
   const dir = manifestDir();
-  const httpConfig = { ...slackConfig(), env: { slack: { SLACK_EVENTS_MODE: "http" } } };
+  const httpConfig = { ...slackConfig(), env: { core: SIGN_IN, slack: { SLACK_EVENTS_MODE: "http" } } };
   try {
     await withStubbedSlack({ auth: authOk("chat:write, users:read") }, () =>
       doctorCommon(httpConfig, new Map([["SLACK_BOT_TOKEN", "xoxb-test"]]), { configDir: dir }),
@@ -606,7 +608,7 @@ test("slackCheck rejects a bad Socket Mode app token even when the bot token pas
 test("doctor treats a missing sandbox block as info (no Fly checks), not a failure", async () => {
   const { sandbox: _sandbox, ...rest } = config;
   void _sandbox;
-  const noSandbox: QmConfig = { ...rest, env: {} };
+  const noSandbox: QmConfig = { ...rest, env: { core: SIGN_IN } };
   const priorFly = process.env.FLY_BIN;
   process.env.FLY_BIN = "/nonexistent/fly-should-never-run";
   const log = console.log;

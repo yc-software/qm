@@ -1,6 +1,9 @@
 import "./support/auto-fake-sprites.ts";
 import { gatewayActorId } from "../src/model/provider-endpoints.ts";
 import assert from "node:assert/strict";
+import { once } from "node:events";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import test from "node:test";
 import {
   checkRuleSet,
@@ -307,6 +310,34 @@ test("a missing, disabled or mismatched credential is an error, so the rule fall
   await assert.rejects(ask(backend(null), { provider: "gone", model: "x" }), /not configured/);
   const noGateway = createDecisionBackend({ providers: () => PROVIDERS, credential: async () => null });
   await assert.rejects(ask(noGateway, { provider: "gw", model: "m" }), /no model gateway/);
+});
+
+test("a custom decision endpoint on a private network address is refused before connecting, and the model gateway is not", async (t) => {
+  for (const host of ["127.0.0.1", "169.254.169.254"]) {
+    const backend = createDecisionBackend({
+      providers: () => [{ id: "oa", protocol: "decisions", baseUrl: `http://${host}/v1`, credential: "dec" }],
+      credential: async () => ({ host, enabled: true, headers: { Authorization: "Bearer x" } }),
+    });
+    await assert.rejects(ask(backend, { provider: "oa", model: "m" }), {
+      message: `${host} is a private network address; a deployment operator can allow this exact origin with PRIVATE_NETWORK_ALLOWED_ORIGINS`,
+    });
+  }
+  const content = JSON.stringify({ answers: { decision: { type: "choice", probabilities: { yes: 1, no: 0 } } } });
+  const gateway = createServer((_req, res) => res.end(JSON.stringify({ choices: [{ message: { content } }] })));
+  gateway.listen(0, "127.0.0.1");
+  await once(gateway, "listening");
+  t.after(() => gateway.close());
+  const backend = createDecisionBackend({
+    providers: () => PROVIDERS,
+    gateway: {
+      url: `http://127.0.0.1:${(gateway.address() as AddressInfo).port}/`,
+      apiKey: "gk",
+      apiKeyHeader: "api-key",
+      actorKey: "test-actor-key",
+    },
+    credential: async () => null,
+  });
+  assert.deepEqual(await ask(backend, { provider: "gw", model: "m" }), { yes: 1, no: 0 });
 });
 
 test("each hook point only accepts its own actions; use_runtime carries a runtime", () => {

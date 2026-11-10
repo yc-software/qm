@@ -222,7 +222,7 @@ test("AWS requires exact ECS/ECR coordinates for discovered plugins", () => {
 test("AWS accepts retained bundled coordinates only when their host is enabled", () => {
   const d = deployment(() => {}, {
     target: "aws",
-    services: ["core", "web-ui", "portal", "auth"],
+    services: ["core", "auth"],
     aws: {
       accountId: "123456789012",
       region: "us-west-2",
@@ -232,7 +232,7 @@ test("AWS accepts retained bundled coordinates only when their host is enabled",
       imageLabel: "release",
       networking: { cloudMapNamespace: "acme.internal" },
       services: Object.fromEntries(
-        ["core", "web-ui", "portal", "auth"].map((name) => [
+        ["core", "auth"].map((name) => [
           name,
           { ecrRepository: name, ecsService: `acme-${name}`, cpu: 512, memory: 1024 },
         ]),
@@ -241,12 +241,8 @@ test("AWS accepts retained bundled coordinates only when their host is enabled",
   });
   try {
     assert.doesNotThrow(() => check(d));
-    delete d.config.aws!.services["web-ui"];
-    assert.throws(() => check(d), /aws\.services\.web-ui/);
     d.config.services = ["core"];
-    delete d.config.aws!.services.portal;
-    assert.throws(() => check(d), /aws\.services\.auth/);
-    delete d.config.aws!.services.auth;
+    assert.doesNotThrow(() => check(d));
     d.config.aws!.services.unused = { ecrRepository: "unused", ecsService: "unused", cpu: 512, memory: 1024 };
     assert.throws(() => check(d), /aws\.services\.unused/);
   } finally {
@@ -522,17 +518,5 @@ test("quiet checks reject invalid supplied sandbox credentials just like human c
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("only public PostHog ingestion tokens may be configured as plaintext", () => {
-  for (const value of ["phc_example123", "phx_personal123", "private-token"]) {
-    const d = deployment(() => {}, { env: { core: { POSTHOG_API_KEY: value } } });
-    try {
-      if (value.startsWith("phc_")) assert.doesNotThrow(() => check(d));
-      else assert.throws(() => check(d), /POSTHOG_API_KEY belongs in the target secret store/);
-    } finally {
-      rmSync(d.dir, { recursive: true, force: true });
-    }
   }
 });

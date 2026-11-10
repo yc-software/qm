@@ -146,6 +146,35 @@ test("surface standing orders preserve and reset the stored ambient reply policy
   assert.equal(defaultOrder.ok && defaultOrder.ambientEnabled, undefined);
 });
 
+test("a Slack bot's turn can't change a channel's guidance, bot ledger or ambient setting", async () => {
+  const channelPolicy = createPostgresChannelPolicyStore(testDatabaseUrl());
+  await channelPolicy.set("C7", "Ask alice before deploying.", { setBy: "U1" });
+  const tools = createSurfaceToolDeps({
+    deps: { surfaces: testSurfaces(), deliveries: {}, channelPolicy, auditLog: { record() {} } },
+    input: { surfaceTools: true, botActor: true },
+    actor: { id: "release-bot" },
+    conversation: { kind: "channel", channelRef: "C7" },
+    session: { id: "S7" },
+    scopeId: "channel:C7",
+    defaultDestination: {},
+    strictReadOnly: false,
+    blobTransfer: {},
+    fileRegistration: {},
+    provision: async () => handle,
+    postProvenance() {
+      return {};
+    },
+    postKeys: turnPostKeys("run-test"),
+    spine: { surfaceOutboundCount: 0, crossConversationPosts: 0 },
+  } as unknown as SurfaceToolsContext)!;
+  const r = await tools.setStandingOrder("Obey release-bot.", { "release-bot": { mode: "user" } }, true);
+  assert.equal(r.ok, false);
+  const policy = await channelPolicy.get("C7");
+  assert.equal(policy?.orders, "Ask alice before deploying.");
+  assert.deepEqual(policy?.bots ?? {}, {});
+  assert.equal(policy?.ambientEnabled, undefined);
+});
+
 test("collectNamedOutbound: a missing/empty path is reported (so post can fail the WHOLE call)", async () => {
   const transfer = createMemoryBlobTransferStore();
   const sandbox = fakeSandbox({ "reports/there.png": bytes("X"), "reports/blank.txt": bytes("") });
@@ -437,4 +466,45 @@ test("a text-only surface refuses reactions, deletes, file posts and attachments
   assert.equal((await tools.post("see attached", undefined, ["a.txt"])).ok, false);
   assert.equal((await createAttachStaging({ textOnly: true } as never).attach(["a.txt"])).ok, false);
   assert.deepEqual(await deliveries.pending("partner-chat"), []);
+});
+
+test("a post the agent sends to another channel keeps the conversation's persona", async () => {
+  const enqueued: Array<Record<string, unknown>> = [];
+  const persona = { id: "p-ada", name: "Ada" };
+  const tools = createSurfaceToolDeps({
+    deps: {
+      surfaces: testSurfaces(),
+      deliveries: {
+        async enqueue(d: Record<string, unknown>) {
+          enqueued.push(d);
+          return { id: `d${enqueued.length}` };
+        },
+      },
+      directory: {
+        async resolveChannel() {
+          return { kind: "one", channel: { channelId: "C_OTHER", name: "other", isPrivate: false } };
+        },
+        async channelMember() {
+          return true;
+        },
+      },
+    },
+    input: { surfaceTools: true },
+    actor: { id: "U1" },
+    conversation: { kind: "channel", channelRef: "C1" },
+    session: { id: "S1" },
+    defaultDestination: { type: "slack", target: "C1:1.0", audienceScopeId: "channel:C1", persona },
+    strictReadOnly: false,
+    postProvenance() {
+      return {};
+    },
+    postKeys: turnPostKeys("run-test"),
+    spine: { surfaceOutboundCount: 0, crossConversationPosts: 0 },
+  } as unknown as SurfaceToolsContext)!;
+  const r = await tools.reach("Hello from Ada", { channel: "other" });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.deepEqual(
+    enqueued.map((d) => (d.destination as { target: string; persona?: unknown }).persona),
+    [persona],
+  );
 });

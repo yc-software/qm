@@ -5,7 +5,6 @@ import { findRoute, type RouteAuth } from "../src/api/routes/route.ts";
 import {
   OAUTH_CONSENT_AUD,
   CREDENTIAL_BROKER_AUD,
-  SPEND_EXPORT_AUD,
   BROWSER_MODEL_AUD,
   SANDBOX_MODEL_AUD,
 } from "../src/auth/capability-token.ts";
@@ -36,7 +35,7 @@ test("raw routes keep their declared auth contracts (front enforces capability a
   const pins: Array<[string, string, RouteAuth]> = [
     ["GET", "/healthz", "public"],
     ["GET", "/readyz", "public"],
-    ["GET", "/v1/spend/export", { aud: SPEND_EXPORT_AUD, bearer: true }],
+    ["GET", "/v1/spend/export", "public"],
     ["GET", "/v1/credentials/git/gitlab/acme/repo.git/info/refs", { aud: CREDENTIAL_BROKER_AUD }],
     ["POST", "/v1/credentials/git/gitlab/acme/repo.git/git-upload-pack", { aud: CREDENTIAL_BROKER_AUD }],
   ];

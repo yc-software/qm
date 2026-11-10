@@ -1,7 +1,9 @@
+import type { ClientSurface } from "../plugins/chassis/src/client-surface.ts";
 import type { ResolvedSecurityPolicy } from "./security/security-posture.ts";
 import type { SharingPosture } from "./resolution/sharing-posture.ts";
 import type { SurfaceAccount, TurnSurfaceOrigin } from "./surfaces/contract.ts";
 import type { SessionOrigin } from "./sessions/session-store.ts";
+import type { ProjectIcon } from "./projects/project-store.ts";
 
 export type PrincipalType = "internal" | "guest";
 
@@ -18,7 +20,7 @@ export interface Principal {
   displayName?: string;
 }
 
-const SCOPE_KINDS = ["personal", "channel", "team", "org", "group"] as const;
+export const SCOPE_KINDS = ["personal", "channel", "team", "org", "group", "persona"] as const;
 export type ScopeKind = (typeof SCOPE_KINDS)[number];
 
 export type ScopeId = string;
@@ -31,6 +33,12 @@ export function scopeId(kind: ScopeKind, ref: string): ScopeId {
   return `${kind}:${ref}`;
 }
 
+export interface WornPersona {
+  id: string;
+  name: string;
+  icon?: ProjectIcon;
+}
+
 export function personalScope(principalId: string): ScopeId {
   return scopeId("personal", principalId);
 }
@@ -41,6 +49,10 @@ export function scopeActor(scope: ScopeId): string {
 
 export function actsAsScope(principalId: string, scope: ScopeId): boolean {
   return principalId === scopeActor(scope);
+}
+
+export function isSystemActor(actorId: string | undefined): boolean {
+  return !!actorId?.startsWith("system:");
 }
 
 export function parseScopeId(id: ScopeId): { kind: ScopeKind | null; ref: string } {
@@ -117,10 +129,14 @@ export interface SpawnMeta {
   deliveryWebhook?: DeliveryWebhook;
   timezone?: string;
   readOnly?: boolean;
+  memoryNotebookOnly?: boolean;
+  botActor?: boolean;
   model?: string;
   thinkingLevel?: string;
   fastMode?: boolean;
   isolation?: ChildIsolation;
+  persistent?: boolean;
+  retired?: boolean;
 }
 
 export interface Session {
@@ -145,6 +161,7 @@ export interface Session {
   spawnMeta?: SpawnMeta;
   surfaceBinding?: TurnSurfaceOrigin;
   runtime?: TurnRuntime;
+  personaId?: string;
   lastActivityAt?: number;
   hasEntries?: boolean;
   working?: boolean;
@@ -208,6 +225,7 @@ export interface Destination {
   audienceScopeId?: ScopeId;
   onBehalfOf?: string;
   relaySender?: string;
+  persona?: WornPersona;
   threadTs?: string;
   editRef?: string;
   unfurlLinks?: boolean;
@@ -247,7 +265,6 @@ export interface DeliveryProvenance {
 
 export interface Delivery {
   id: string;
-  tenantId?: string;
   destination: Destination;
   text: string;
   attachments?: OutgoingAttachment[];
@@ -362,6 +379,7 @@ export interface ClientToolResult {
 
 export interface TurnRequest {
   desktopClientId?: string;
+  clientSurface?: ClientSurface;
   midTurn?: "steer" | "queue";
   surfaceOrigin?: TurnSurfaceOrigin;
   sessionSenderId?: string;
@@ -389,6 +407,8 @@ export interface TurnRequest {
   gatewayContext?: GatewayContext;
   unattendedGrants?: string[];
   cronScript?: import("./triggers/types.ts").CronScript;
+  infrequentCron?: boolean;
+  personaId?: string;
   botActor?: boolean;
   conversationHeader?: string;
   priorTurns?: ConversationTurn[];
@@ -402,6 +422,7 @@ export interface TurnRequest {
   fastMode?: boolean;
   readOnly?: boolean;
   skipMemory?: boolean;
+  memoryNotebookOnly?: boolean;
   surfaceTools?: boolean;
   addressed?: boolean;
   envelopeWrapped?: boolean;
@@ -410,7 +431,6 @@ export interface TurnRequest {
   timezone?: string;
   approval?: { requestId: string; approved: boolean; scope?: ApprovalScope };
   proactiveOpener?: boolean;
-  analyticsSuppressed?: boolean;
   spawned?: boolean;
   idempotencyKey?: string;
   redeliveryKey?: string;
@@ -439,6 +459,12 @@ export interface PendingApproval {
   grantModes?: ApprovalGrantModes;
   blocksInput?: boolean;
   kind?: "approval" | "input";
+  executesOnApprove?: boolean;
+}
+
+export interface ApprovedToolCallSpec {
+  tool: string;
+  input: Record<string, unknown>;
 }
 
 export interface PendingApprovalRecord {
@@ -456,6 +482,7 @@ export interface PendingApprovalRecord {
   request?: TurnRequest;
   blocksInput?: boolean;
   kind?: "approval" | "input";
+  call?: ApprovedToolCallSpec;
 }
 
 type ApprovalScope = "once" | "session" | "always";
@@ -503,4 +530,5 @@ export interface TurnResult {
   runtime?: TurnRuntime;
   scriptVerdict?: string;
   retracted?: string[];
+  persona?: WornPersona;
 }

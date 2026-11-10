@@ -5,6 +5,7 @@ import { parseScopeId } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { assertSafeSkillName, isSafeSkillName } from "./skill-name.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
+import { trimTrailingSlashes } from "../util/text.ts";
 
 type SkillStatus = "draft" | "reviewed" | "published" | "archived";
 
@@ -23,10 +24,7 @@ export interface SkillManifest {
 }
 
 export function safeSkillFilePath(path: string): string {
-  const p = path
-    .replace(/\\/g, "/")
-    .replace(/^\.\/+/, "")
-    .replace(/\/+$/, "");
+  const p = trimTrailingSlashes(path.replace(/\\/g, "/").replace(/^\.\/+/, ""));
   const parts = p.split("/").filter(Boolean);
   if (
     !parts.length ||

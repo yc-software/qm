@@ -1,13 +1,15 @@
 import { disclosedMemory, MemoryRecallWithheld } from "./disclosure.ts";
-import { parseScopeId, type ScopeId, type ScopeKind } from "../types.ts";
+import { isSystemActor, parseScopeId, type ScopeId, type ScopeKind } from "../types.ts";
 import type { McpEnvelope } from "../mcp/mcp-client.ts";
 import {
-  isSystemActor,
+  changesNotebookOnly,
   type MemoryProviderOutcome,
   type MemoryRecallContext,
   type MemoryService,
 } from "./memory-service.ts";
+import type { MemoryCandidate } from "./facts.ts";
 import { failedOutcome, strictFailure, withEnvelope } from "./provider-outcome.ts";
+import { OutsideAudience } from "../directory/person.ts";
 
 export type MemoryCapturePolicy = "off" | "explicit" | "automatic";
 
@@ -42,6 +44,14 @@ export function createRoutedMemoryService(opts: {
     if (!provider) throw new Error(`unknown memory provider: ${route.provider}`);
     return provider;
   };
+  const tagged = (route: MemoryProviderRoute, rows: MemoryCandidate[]): MemoryCandidate[] =>
+    route.provider === "default"
+      ? rows
+      : rows.map((row) => ({
+          ...row,
+          ...(row.ref === undefined ? {} : { ref: `${route.provider}:${row.ref}` }),
+          source: { provider: route.provider, label: route.label ?? route.provider },
+        }));
   const managerFor = (scopeId: ScopeId): MemoryService | undefined => {
     const route = routesFor(scopeId).find((candidate) => candidate.manage !== false);
     return route ? providerFor(route) : undefined;
@@ -65,6 +75,11 @@ export function createRoutedMemoryService(opts: {
     } catch (error) {
       if (error instanceof MemoryRecallWithheld) return { value: fallback };
       const failed = failedOutcome(error);
+      if (error instanceof OutsideAudience) {
+        report(failed);
+        opts.onError?.(error, route.provider, operation);
+        return { value: fallback };
+      }
       report(operation === "capture" && failed.outcome === "timed_out" ? { ...failed, outcome: "unknown" } : failed);
       if (!route.failOpen) return { value: fallback, error };
       opts.onError?.(error, route.provider, operation);
@@ -84,6 +99,9 @@ export function createRoutedMemoryService(opts: {
         providers: Object.fromEntries(
           Object.entries(opts.providers).map(([name, provider]) => [name, disclosedMemory(provider, access)]),
         ),
+        routes: access.notebookOnly
+          ? opts.routes.filter((route) => opts.providers[route.provider]?.facts)
+          : opts.routes,
       });
     },
     async recall(scopeId, context) {
@@ -103,31 +121,27 @@ export function createRoutedMemoryService(opts: {
           ),
         ),
       );
-      return routes.flatMap((route, index) =>
-        batches[index]!.map((row) =>
-          route.provider === "default"
-            ? row
-            : { ...row, source: { provider: route.provider, label: route.label ?? route.provider } },
-        ),
-      );
+      return routes.flatMap((route, index) => tagged(route, batches[index]!));
     },
 
-    async capture(scopeId, facts, at, author, context) {
+    async capture(scopeId, facts, at, by, context) {
       const mode = context?.mode ?? "explicit";
       const routes = routesFor(scopeId).filter((route) => captureAllowed(route.capture, mode));
+      const notebookOnly =
+        changesNotebookOnly(by) ||
+        (context?.conversationScopeId !== undefined && context.conversationScopeId !== scopeId);
       const counts = strict(
         await Promise.all(
           routes.map((route) => {
             const provider = providerFor(route);
-            if (context?.conversationScopeId && context.conversationScopeId !== scopeId && !provider.facts)
-              return { value: 0 };
-            if (provider.attestActor && (!context?.actorId || isSystemActor(context.actorId))) return { value: 0 };
+            if (notebookOnly && !provider.facts) return { value: 0 };
+            if (provider.attestActor && isSystemActor(by?.actorId)) return { value: 0 };
             return attempt(
               route,
               scopeId,
               "capture",
               context,
-              () => provider.capture(scopeId, facts, at, author, context),
+              () => provider.capture(scopeId, facts, at, by, context),
               (added, envelope) => ({ outcome: envelope.status === "pending" ? "pending" : "committed", added }),
               0,
             );
@@ -139,7 +153,7 @@ export function createRoutedMemoryService(opts: {
 
     async query(scopeId, q, limit = 20, context) {
       const routes = routesFor(scopeId).filter((route) => route.recall !== false);
-      const rows = strict(
+      const batches = strict(
         await Promise.all(
           routes.map((route) =>
             attempt(
@@ -154,7 +168,7 @@ export function createRoutedMemoryService(opts: {
           ),
         ),
       );
-      return [...new Set(rows.flat())].slice(0, limit);
+      return routes.flatMap((route, index) => tagged(route, batches[index]!));
     },
 
     async read(scopeId) {
@@ -166,16 +180,16 @@ export function createRoutedMemoryService(opts: {
       return (await managerFor(scopeId)?.facts?.(scopeId)) ?? [];
     },
 
-    async edit(scopeId, edits, author, context) {
+    async edit(scopeId, edits, by, context) {
       const manager = managerFor(scopeId);
       if (!manager?.edit) throw new Error(`memory for ${scopeId} is not directly editable`);
-      await manager.edit(scopeId, edits, author, context);
+      await manager.edit(scopeId, edits, by, context);
     },
 
-    async delete(scopeId, ids, author) {
+    async delete(scopeId, ids, by) {
       const manager = managerFor(scopeId);
       if (!manager?.delete) throw new Error(`memory for ${scopeId} is not directly editable`);
-      await manager.delete(scopeId, ids, author);
+      await manager.delete(scopeId, ids, by);
     },
 
     async metadata() {

@@ -1,5 +1,5 @@
 import type { ScopeId, TurnRequest } from "../types.ts";
-import type { MemoryService } from "../memory/memory-service.ts";
+import type { MemoryAuthority, MemoryService } from "../memory/memory-service.ts";
 
 const ONBOARDING_VERSION = "v2";
 
@@ -31,7 +31,7 @@ export async function setOnboardingStatus(
   scope: ScopeId,
   status: OnboardingStatus,
   today: string,
-  author: string,
+  by: MemoryAuthority,
   version = ONBOARDING_VERSION,
 ): Promise<void> {
   const stale = ((await memory.facts?.(scope)) ?? [])
@@ -39,13 +39,13 @@ export async function setOnboardingStatus(
       (["completed", "dismissed", "pending"] as const).some((s) => markerRe(s, version).test(fact.text)),
     )
     .map((fact) => fact.id);
-  if (stale.length) await memory.delete?.(scope, stale, author);
+  if (stale.length) await memory.delete?.(scope, stale, by);
   if (status === "not_started") return;
   const line =
     status === "pending"
       ? `Onboarding: pending ${version} since ${today}.`
       : `Onboarding: ${status} ${version} on ${today}.`;
-  await memory.capture(scope, [line], Date.now(), author, { mode: "explicit" });
+  await memory.capture(scope, [line], Date.now(), by, { mode: "explicit" });
 }
 
 export function isIdeasConversation(input: {

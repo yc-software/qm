@@ -10,15 +10,13 @@
   "sandbox": {
     "app": "acme-sandboxes",
   },
-  "services": ["core", "slack", "web-ui", "portal", "egress-proxy"],
+  "services": ["core", "slack", "egress-proxy"],
   "env": {
     "core": {
       "SNAPSHOT_STORE": "s3",
       "TRANSFER_STORE": "s3",
       "S3_BUCKET": "acme-data",
       "S3_REGION": "auto",
-    },
-    "portal": {
       "OIDC_ALLOWED_EMAIL_DOMAIN": "example.com",
       "OIDC_AUTH_ENDPOINT": "https://accounts.google.com/o/oauth2/v2/auth",
       "OIDC_TOKEN_ENDPOINT": "https://oauth2.googleapis.com/token",

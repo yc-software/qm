@@ -1,3 +1,5 @@
+import { nameRequest } from "./error-reporting.ts";
+
 export type RouteShape = { method: string; path: string } | { match: (method: string, pathname: string) => boolean };
 
 interface Matcher {
@@ -45,7 +47,9 @@ export function findRoute<R extends RouteShape>(
 ): { route: R; params: Record<string, string> } | null {
   for (const route of routes) {
     const params: Record<string, string> = {};
-    if (matcherFor(route)(method, pathname, params)) return { route, params };
+    if (!matcherFor(route)(method, pathname, params)) continue;
+    if ("path" in route) nameRequest(method, route.path);
+    return { route, params };
   }
   return null;
 }

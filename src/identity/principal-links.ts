@@ -1,7 +1,8 @@
-import { perTenant } from "../tenants/context.ts";
+import { perTenant } from "../tenants/cache.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createTtlRefresh } from "../util/async.ts";
 import { foldPrincipalId, type PrincipalLinkResolver } from "../directory/person.ts";
+import { isSystemActor } from "../types.ts";
 import type { UserLink, UserLinkStore } from "./user-store.ts";
 
 interface PrincipalLinkInput {
@@ -77,13 +78,15 @@ export function createPrincipalLinkService(store: UserLinkStore, lock: AdvisoryL
             400,
             `principalId and canonicalId must be non-empty ids of at most ${MAX_ID_LENGTH} characters`,
           );
-        const evidence = typeof input.evidence === "string" ? input.evidence.trim() : "";
-        if (!evidence || evidence.length > MAX_EVIDENCE_LENGTH)
-          throw new PrincipalLinkError(400, `evidence must say how the two identities were verified as one person`);
         const principalId = input.principalId.trim();
         const canonicalId = input.canonicalId.trim();
         const aliasKey = foldPrincipalId(principalId);
         const canonicalKey = foldPrincipalId(canonicalId);
+        if (isSystemActor(aliasKey) || isSystemActor(canonicalKey))
+          throw new PrincipalLinkError(400, "a system actor is QM itself, not a person, so it cannot be linked to one");
+        const evidence = typeof input.evidence === "string" ? input.evidence.trim() : "";
+        if (!evidence || evidence.length > MAX_EVIDENCE_LENGTH)
+          throw new PrincipalLinkError(400, `evidence must say how the two identities were verified as one person`);
         if (aliasKey === canonicalKey) throw new PrincipalLinkError(400, "a principal cannot be linked to itself");
         await refresh(true);
         const existing = links().byAlias.get(aliasKey);

@@ -1,6 +1,5 @@
 import type { EmbeddingModel } from "./model-overlay.ts";
 import { isEmbeddingModel } from "./model-overlay.ts";
-import { perTenant } from "../tenants/context.ts";
 import type { Api, Model } from "@earendil-works/pi-ai";
 
 export const GATEWAY_PROVIDER = "qm:gateway";
@@ -8,26 +7,26 @@ export const GATEWAY_MODEL_PREFIX = "gateway/";
 
 export type GatewayModel = Model<Api> & { documentInput?: "pdf" | "files" };
 
-const gateway = perTenant<{
+const gateway: {
   models: Map<string, GatewayModel | EmbeddingModel>;
   version: number;
   snapshot: string;
   aliasedIds: Set<string>;
-}>(() => ({ models: new Map(), version: 0, snapshot: "[]", aliasedIds: new Set() }));
+} = { models: new Map(), version: 0, snapshot: "[]", aliasedIds: new Set() };
 
 export function isGatewayModelId(id: string): boolean {
   return id.startsWith(GATEWAY_MODEL_PREFIX);
 }
 
 export function gatewayModelsVersion(): number {
-  return gateway().version;
+  return gateway.version;
 }
 
 export function setGatewayModels(
   next: readonly (GatewayModel | EmbeddingModel)[],
   aliases: readonly string[] = [],
 ): void {
-  const state = gateway();
+  const state = gateway;
   const serialized = JSON.stringify([next, aliases]);
   if (serialized === state.snapshot) return;
   state.models = new Map(next.map((model) => [model.id, model]));
@@ -37,19 +36,19 @@ export function setGatewayModels(
 }
 
 export function resolveGatewayModel(id: string): GatewayModel | undefined {
-  const model = gateway().models.get(id);
+  const model = gateway.models.get(id);
   return model && !isEmbeddingModel(model) ? model : undefined;
 }
 
 export function gatewayModelCatalog(includeAliased = false): Array<{ id: string; name: string; provider: string }> {
-  return [...gateway().models.values()]
+  return [...gateway.models.values()]
     .filter((m): m is GatewayModel => !isEmbeddingModel(m))
-    .filter(({ id }) => includeAliased || !gateway().aliasedIds.has(id))
+    .filter(({ id }) => includeAliased || !gateway.aliasedIds.has(id))
     .map(({ id, name, provider }) => ({ id, name, provider }));
 }
 
 export function gatewayModelsJson(): Record<string, unknown> {
-  const chatModels = [...gateway().models.values()].filter((m): m is GatewayModel => !isEmbeddingModel(m));
+  const chatModels = [...gateway.models.values()].filter((m): m is GatewayModel => !isEmbeddingModel(m));
   const first = chatModels[0];
   if (!first) return {};
   return {
@@ -76,10 +75,10 @@ export function gatewayModelsJson(): Record<string, unknown> {
 }
 
 export function resolveGatewayEmbeddingModel(id: string): EmbeddingModel | undefined {
-  const model = gateway().models.get(id);
+  const model = gateway.models.get(id);
   return model && isEmbeddingModel(model) ? model : undefined;
 }
 
 export function gatewayEmbeddingModelIds(): string[] {
-  return [...gateway().models.values()].filter(isEmbeddingModel).map((model) => model.id);
+  return [...gateway.models.values()].filter(isEmbeddingModel).map((model) => model.id);
 }

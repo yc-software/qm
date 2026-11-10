@@ -148,7 +148,7 @@ describe("agent files self-API", async () => {
     const binary = await get(`/v1/files/${binaryId}/content`, token);
 
     assert.equal(text.headers.get("content-type"), "text/plain; charset=utf-8");
-    assert.equal(encoded.headers.get("content-type"), "application/json; charset=iso-8859-1");
+    assert.equal(encoded.headers.get("content-type"), "application/json;charset=iso-8859-1");
     assert.equal(binary.headers.get("content-type"), "image/png");
     await Promise.all([text.arrayBuffer(), encoded.arrayBuffer(), binary.arrayBuffer()]);
   });

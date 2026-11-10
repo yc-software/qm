@@ -9,9 +9,10 @@ import {
   isOverlayModel,
   modelUnavailableReason,
   modelRequestOverrides,
-  type ModelProvider,
 } from "../model/pi-models.ts";
-import type { UserModelCredential } from "../model/user-model-credential-store.ts";
+import type { ModelProvider } from "../model/provider-endpoints.ts";
+import type { UserModelCredential, UserModelCredentialStore } from "../model/user-model-credential-store.ts";
+import type { ProviderKeys } from "../model/model-runtime.ts";
 
 export type IndividualAuthRouting =
   | { kind: "apikey"; provider: ModelProvider; model: string | undefined; apiKey: string }
@@ -74,4 +75,32 @@ export function resolveIndividualAuthRouting(
     };
   }
   return null;
+}
+
+export async function loadPersonalModelAuth(
+  credentials: UserModelCredentialStore,
+  actorId: string,
+  account: string,
+  requestedModel: string | undefined,
+): Promise<{ keys: ProviderKeys; modelId: string | undefined; subscription?: "anthropic" | "openai" } | undefined> {
+  const [anthCred, oaiCred] = await Promise.all([
+    account === "openai" ? null : credentials.get(actorId, "anthropic"),
+    account === "anthropic" ? null : credentials.get(actorId, "openai"),
+  ]);
+  const routing = resolveIndividualAuthRouting(anthCred ?? null, oaiCred ?? null, requestedModel);
+  if (routing?.kind === "apikey") return { keys: { [routing.provider]: routing.apiKey }, modelId: routing.model };
+  if (routing?.kind !== "oauth") return undefined;
+  const derived = await credentials.derivedOAuth(actorId, routing.provider);
+  if (!derived) return undefined;
+  return routing.provider === "anthropic"
+    ? {
+        keys: { anthropic: derived.accessToken },
+        modelId: routing.model,
+        subscription: "anthropic",
+      }
+    : {
+        keys: { [CODEX_SUBSCRIPTION_PROVIDER]: derived.accessToken },
+        modelId: routing.model,
+        subscription: "openai",
+      };
 }

@@ -11,22 +11,22 @@ test("normal dev commands delegate to the canonical contributor CLI", () => {
 });
 
 test("dev service names map, dedupe, and reject unknown targets before side effects", (t) => {
-  const store = tmp("dev-web-ui-log");
+  const store = tmp("dev-core-log");
   const lock = join(store, "leases", "pool1.lock");
   t.after(() => rmDir(store));
   mkdirSync(lock, { recursive: true });
   writeFileSync(join(lock, "meta"), `worktree=${repoRoot}\n`);
-  writeFileSync(join(lock, "web.log"), "web ui ready\n");
+  writeFileSync(join(lock, "core.log"), "core ready\n");
 
-  const result = runCli(["dev", "logs", "web-ui", "web"], {
+  const result = runCli(["dev", "logs", "core", "core"], {
     cwd: repoRoot,
     env: { QM_POOL_STORE: store },
   });
   assert.equal(result.code, 0);
-  assert.match(result.out, /web ui ready/);
-  assert.equal(result.out.match(/web ui ready/g)?.length, 1);
+  assert.match(result.out, /core ready/);
+  assert.equal(result.out.match(/core ready/g)?.length, 1);
 
-  const unknownLog = runCli(["dev", "logs", "web-ui", "typo"], { cwd: repoRoot, env: { QM_POOL_STORE: store } });
+  const unknownLog = runCli(["dev", "logs", "core", "typo"], { cwd: repoRoot, env: { QM_POOL_STORE: store } });
   assert.equal(unknownLog.code, 2);
   assert.match(unknownLog.out, /unknown service "typo"/);
 

@@ -1,6 +1,6 @@
 import { xmlEscape } from "../util/message-tag.ts";
 import { safeChunks, safeCutIndex } from "./safe-cut.ts";
-import { perTenant } from "../tenants/context.ts";
+import { perTenant } from "../tenants/cache.ts";
 export function escapeSlackText(text: string): string {
   return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }

@@ -106,6 +106,8 @@ export const USER_KINDS = `(${USER_ITEM_KINDS.map((kind) => `'${kind}'`).join(",
 export const TENANT = "qm_bound_tenant()";
 export const userTurn = (col: string): string =>
   `${col}.kind IN ${USER_KINDS} AND NOT (${col}.body @> '{"overheard":true}')`;
+export const authoredUserTurn = (col: string): string =>
+  `${col}.author IS NOT NULL AND ${col}.author NOT LIKE 'system:%' AND ${userTurn(col)}`;
 export const isUserItem = (item: Pick<Item, "kind">): item is Item<"UserMessage" | "SteeringMessage"> =>
   USER_ITEM_KINDS.includes(item.kind);
 export const isAgentReply = (item: { kind: ItemKind; variant?: AgentMessageVariant | null }): boolean =>

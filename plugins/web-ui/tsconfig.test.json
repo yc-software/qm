@@ -2,10 +2,7 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "types": ["node"],
-    "allowImportingTsExtensions": true,
-    "paths": {
-      "@sentry/node": ["./node_modules/@sentry/node/build/types/index.d.ts"]
-    }
+    "allowImportingTsExtensions": true
   },
   "include": ["test/**/*.ts", "src/**/*.ts"]
 }

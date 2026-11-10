@@ -13,9 +13,13 @@ function advertised(): Array<{ method: string; path: string }> {
     renderAgentApis(
       { ...base, liveAuthor: true, memory: { read: ["personal:U1"], write: "personal:U1" } },
       { isAdmin: true },
-      { swarmsEnabled: true },
+      { swarmsEnabled: true, personasEnabled: true },
     ),
-    renderAgentApis({ ...base, grants: [...UNATTENDED_ADMIN_GRANTS] }, { isAdmin: false }, { swarmsEnabled: false }),
+    renderAgentApis(
+      { ...base, grants: [...UNATTENDED_ADMIN_GRANTS] },
+      { isAdmin: false },
+      { swarmsEnabled: false, personasEnabled: false },
+    ),
   ];
   return listings.flatMap((listing) =>
     listing.endpoints.flatMap(({ method, path }) => {
@@ -40,4 +44,12 @@ test("every endpoint the agent API catalog advertises is served by a route an ag
       : [`${method} ${path} (${found ? String(found.route.auth) : "no route"})`];
   });
   assert.deepEqual(unreachable, []);
+});
+
+test("the swarm listing tells agents to start a swarm only on an explicit request", () => {
+  const listing = renderAgentApis(base, { isAdmin: false }, { swarmsEnabled: true, personasEnabled: false });
+  const guidance = listing.guidance.find((text) => text.includes("Swarm workers"));
+  assert.ok(guidance?.startsWith("Start a swarm only when the person explicitly asks for a swarm;"));
+  const spawn = listing.endpoints.find((route) => route.method === "POST" && route.path === "/v1/swarm");
+  assert.match(spawn?.summary ?? "", /a new swarm only on an explicit request for a swarm/);
 });

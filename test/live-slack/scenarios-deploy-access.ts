@@ -5,8 +5,9 @@ import { assert, type Actor, type Env, type Scenario } from "./harness.ts";
 import { sleep, type SlackMessage } from "./slack.ts";
 import { signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../src/auth/portal-identity.ts";
+import { trimTrailingSlashes } from "../../src/util/text.ts";
 
-const CORE = () => (process.env.CORE_API_URL ?? "http://localhost:8181").replace(/\/+$/, "");
+const CORE = () => trimTrailingSlashes(process.env.CORE_API_URL ?? "http://localhost:8181");
 const SECRET = () => process.env.CORE_SIGNING_SECRET ?? "";
 const APPS_DOMAIN = () => process.env.DEPLOY_APPS_DOMAIN ?? "";
 const SESSION_SECRET = () => process.env.DEPLOY_APPS_SESSION_SECRET ?? "";

@@ -32,7 +32,7 @@ runs models from many providers, so a deployment isn't tied to any single vendor
 
 Tell your coding agent of choice `Let's deploy https://github.com/yc-software/qm`. From here, it should follow the deployment guide in this repo.
 
-You can also try out a 3rd-party hosted version of QM [here](https://www.agent37.com/qm).
+For less setup, you can also use a hosted version of QM: [Agent 37](https://www.agent37.com/qm), [E2B](https://e2b.dev/docs/agents/qm), or [DigitalOcean](https://marketplace.digitalocean.com/apps/yc-qm).
 
 If you're an infra provider interested in offering a hosted version of QM, feel free to reach out.
 
@@ -91,9 +91,10 @@ Every turn runs through a central core, which can use a variety of models
 to generate the response. A Postgres persistence layer holds user data, session history,
 and other durable state. The agent has a small, fixed tool surface; one of those tools is
 `execute`, which runs commands in the scope's own isolated sandbox — its durable computer,
-where installed tools stay installed. The web UI, including its administrator settings, is one service; the portal and optional built-in
-auth broker share another. These modules communicate with core over its HTTP API.
-See [combined services](docs/combined-services.md) for configuration and migration;
+where installed tools stay installed. Core also serves the public front door: sign-in, the optional built-in
+auth broker, and the web UI, whose browser bundle ships as a static release that `qm ui publish` can update
+without restarting core. These modules communicate with core over its HTTP API.
+See [the core-hosted front door](docs/combined-services.md) for configuration and migration;
 Slack is an optional in-process plugin that core starts
 and supervises through a direct service client.
 
@@ -125,8 +126,10 @@ posture. `observe` only records verdicts in the audit log. `enforce` quarantines
 flagged content pending release approval, except under Dangerous, which caps
 screening at `observe`.
 
-The predeclared command policy — approval rules and hard denials for things like
-recursive deletes or destructive SQL — applies in every posture, Dangerous included.
+Command policy ships with no rules. An administrator can add approval rules and hard
+denials, for example for recursive deletes or destructive SQL, in the admin Command policy
+card or with `PUT /v1/admin/scopes/<scopeId>/command-policy`. Configured rules apply in
+every posture, Dangerous included.
 
 Sharing posture is independent:
 
@@ -246,7 +249,7 @@ upstream source history to merge.
 - [`.env.example`](./.env.example) — every knob, documented in place
 - [`docs/swarms.md`](./docs/swarms.md) — durable agent pools, scoped messages, and blank Modal workers
 - [`docs/model-gateway.md`](./docs/model-gateway.md) — discover and route models through a gateway
-- [`plugins/`](./plugins) — the surfaces (Slack, web UI, portal)
+- [`plugins/`](./plugins) — the surfaces core hosts (web UI, portal, auth broker)
 
 ## License
 

@@ -9,7 +9,7 @@ import { conversationScope } from "../resolution/resolution-service.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { turnRecordedFailure } from "./web-transcript-delivery.ts";
 import { reportFailureAs } from "../util/errors.ts";
-import { inTenantOf } from "../tenants/claim.ts";
+import { withTenant } from "../tenants/context.ts";
 
 export interface RunResultDelivery {
   destination: Destination;
@@ -103,8 +103,9 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor, notice?: 
   }
   if (run.result?.status === "ok" && (run.result.reply || run.result.attachments?.length)) {
     const editNote = replyEditNote(run.result.retracted);
+    const persona = run.result.persona;
     return {
-      destination: editNote ? { ...destination, editNote } : destination,
+      destination: { ...destination, ...(editNote ? { editNote } : {}), ...(persona ? { persona } : {}) },
       text: run.result.reply ?? "",
       ...(run.result.attachments?.length ? { attachments: run.result.attachments } : {}),
       provenance,
@@ -175,6 +176,16 @@ export function wireRunResultDeliveries(
   runs.onTerminal((run) => {
     void recover(run).catch(reportFailureAs("delivery: enqueue recovery delivery", undefined, `run=${run.id}`));
   });
+  const recoverMissing = async (batch: readonly Run[]): Promise<number> => {
+    const existing = await deliveries.existingKeys(batch.map((run) => `run:${run.id}`));
+    let recovered = 0;
+    for (const run of batch) {
+      if (existing.has(`run:${run.id}`) || !(await recover(run))) continue;
+      console.error(`[delivery] terminal run ${run.id} had no outbox row — enqueued its recovery delivery`);
+      recovered += 1;
+    }
+    return recovered;
+  };
   return {
     async sweep(now = Date.now()) {
       const before = now - RUN_RESULT_SWEEP_GRACE_MS;
@@ -182,16 +193,8 @@ export function wireRunResultDeliveries(
       let recovered = 0;
       for (;;) {
         const batch = await runs.terminalFinished(cursor, before, RUN_RESULT_SWEEP_PAGE);
-        for (const [tenantId, tenantRuns] of Map.groupBy(batch, (run) => run.tenantId)) {
-          await inTenantOf(tenantId, async () => {
-            const existing = await deliveries.existingKeys(tenantRuns.map((run) => `run:${run.id}`));
-            for (const run of tenantRuns) {
-              if (existing.has(`run:${run.id}`) || !(await recover(run))) continue;
-              console.error(`[delivery] terminal run ${run.id} had no outbox row — enqueued its recovery delivery`);
-              recovered += 1;
-            }
-          });
-        }
+        for (const [tenantId, group] of Map.groupBy(batch, (run) => run.tenantId))
+          recovered += await withTenant(tenantId, () => recoverMissing(group));
         const last = batch.at(-1);
         if (!last || batch.length < RUN_RESULT_SWEEP_PAGE) return recovered;
         cursor = { finishedAt: last.finishedAt!, id: last.id };

@@ -3,9 +3,9 @@ import { createPgPool, type Rows } from "../persistence/pg-pool.ts";
 import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 import { subscribePostgresChannel } from "../persistence/postgres-listener.ts";
 import type { RunSignal, RunSignalKind, RunSignalStore } from "./run-signal-store.ts";
-import { claimAcrossTenants, rowTenant } from "../tenants/claim.ts";
 import { spokenByPerson } from "../core/turn-origin.ts";
-import { TENANCY, tenantTables } from "../tenants/migrations.ts";
+import { tenantTables } from "../tenants/migrations.ts";
+import { claimFunction, claimRows } from "../tenants/claim.ts";
 
 const CHANNEL = "run_signals";
 
@@ -24,7 +24,6 @@ function toSignals(rows: Rows): RunSignal[] {
 
 export function createPostgresRunSignalStore(connectionString: string): RunSignalStore {
   const pg = createPgPool(connectionString, [
-    ...TENANCY,
     {
       id: "runs/signals/0001",
       statements: [
@@ -55,6 +54,21 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
         unique: [{ name: "run_signals_by_dedupe_key", columns: "dedupe_key", where: "dedupe_key IS NOT NULL" }],
       },
     ]),
+    {
+      id: "runs/signals/0004-claims",
+      statements: [
+        claimFunction(
+          "claim_signaled_runs",
+          "",
+          "SELECT DISTINCT tenant_id, run_id FROM run_signals WHERE consumed_at IS NULL ORDER BY tenant_id, run_id",
+        ),
+        claimFunction(
+          "claim_pruned_signals",
+          "before bigint",
+          "DELETE FROM run_signals WHERE consumed_at IS NOT NULL AND consumed_at < $1 RETURNING tenant_id, id::text",
+        ),
+      ],
+    },
   ]);
   const q = pg.query;
 
@@ -143,18 +157,10 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
       return toSignals(rows);
     },
 
-    async pendingRuns() {
-      const { rows } = await claimAcrossTenants(
-        pg,
-        `SELECT DISTINCT tenant_id, run_id FROM run_signals WHERE consumed_at IS NULL ORDER BY tenant_id, run_id`,
-      );
-      return rows.map((r) => ({ runId: r.run_id as string, ...rowTenant(r) }));
-    },
+    pendingRuns: () => claimRows(pg, "claim_signaled_runs"),
 
     async prune(olderThanMs) {
-      await claimAcrossTenants(pg, `DELETE FROM run_signals WHERE consumed_at IS NOT NULL AND consumed_at < $1`, [
-        Date.now() - olderThanMs,
-      ]);
+      await claimRows(pg, "claim_pruned_signals", [Date.now() - olderThanMs]);
     },
 
     onSignal(runId, cb) {

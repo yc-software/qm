@@ -4,7 +4,8 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createHash } from "node:crypto";
 import { exportJWK, generateKeyPair, SignJWT, compactVerify } from "jose";
-import { deriveKey, openSession } from "../src/session.ts";
+import { deriveKey, openSession, readCookie } from "../src/session.ts";
+import { verifyPortalIdentity } from "../../chassis/src/portal-identity.ts";
 
 const preferenceEnabled = process.env.TRUSTED_LOGIN_LABEL_TEST !== "0";
 const adminEnabled = process.env.TRUSTED_ADMIN_ROUTE_TEST === "1";
@@ -12,6 +13,12 @@ const claims = new Set<string>();
 let claimAvailable = true;
 let adminAvailable = true;
 let adminRequests = 0;
+let signedInName = "Test Founder";
+let subject = "person-7";
+let storedName: string | null = null;
+let linkedEmail: string | null = null;
+const profiles: Array<{ body: Record<string, unknown>; principal: string | undefined }> = [];
+const surfaceNames: Array<string | undefined> = [];
 const identitySecret = "trusted-route-identity-secret-distinct-32";
 const codes = new Map<string, { nonce: string; challenge: string }>();
 const { privateKey, publicKey } = await generateKeyPair("ES256", { extractable: true });
@@ -38,14 +45,35 @@ const upstream = createServer((req, res) => {
         .setProtectedHeader({ alg: "ES256", kid: "test" })
         .setIssuer(issuer)
         .setAudience("trusted-client")
-        .setSubject("person-7")
+        .setSubject(subject)
         .setIssuedAt()
         .setExpirationTime("1m")
         .sign(privateKey);
       return res.end(JSON.stringify({ access_token: "profile-access", id_token: id }));
     }
     if (url.pathname === "/userinfo")
-      return res.end(JSON.stringify({ sub: "person-7", name: "Test Founder", email: "admin@example.test" }));
+      return res.end(JSON.stringify({ sub: subject, name: signedInName, email: "admin@example.test" }));
+    if (url.pathname === "/v1/principals/profile") {
+      let body = "";
+      for await (const chunk of req) body += chunk;
+      const token = req.headers["x-portal-identity"] as string | undefined;
+      const principal = token ? verifyPortalIdentity(token, identitySecret, Date.now())?.p : undefined;
+      profiles.push({ body: JSON.parse(body) as Record<string, unknown>, principal });
+      return res.end(JSON.stringify({ ok: true }));
+    }
+    const canonical = /^\/v1\/principals\/([^/]+)\/canonical$/.exec(url.pathname);
+    if (canonical)
+      return res.end(
+        JSON.stringify(
+          linkedEmail
+            ? { canonicalId: linkedEmail }
+            : {
+                canonicalId: decodeURIComponent(canonical[1]!),
+                displayName: storedName ?? "Unknown person",
+                ...(storedName ? { storedName } : {}),
+              },
+        ),
+      );
     if (url.pathname === "/v1/auth/trusted/admin") {
       adminRequests++;
       let body = "";
@@ -53,7 +81,7 @@ const upstream = createServer((req, res) => {
       const { payload } = await compactVerify(JSON.parse(body).assertion, Buffer.from(identitySecret));
       const grant = JSON.parse(Buffer.from(payload).toString());
       assert.equal(grant.purpose, "trusted-entry-admin");
-      assert.equal(grant.subject, "person-7");
+      assert.equal(grant.subject, subject);
       assert.equal(grant.issuer, issuer);
       assert.equal(grant.org, "org:test-company");
       res.statusCode = adminAvailable ? 200 : 503;
@@ -82,7 +110,7 @@ issuer = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
 const sessionSecret = "trusted-route-test-session-secret";
 Object.assign(process.env, {
   NODE_ENV: "test",
-  PORTAL_PUBLIC_URL: "http://127.0.0.1:19998",
+  PUBLIC_WEB_URL: "http://127.0.0.1:19998",
   PORTAL_SESSION_SECRET: sessionSecret,
   CORE_ORG_ID: "test-company",
   CORE_API_URL: issuer,
@@ -90,7 +118,6 @@ Object.assign(process.env, {
   PORTAL_IDENTITY_SECRET: identitySecret,
   PORTAL_TRUSTED_OIDC_ADMIN: adminEnabled ? "1" : "0",
   PORTAL_TRUSTED_OIDC_LABEL: preferenceEnabled ? "Company SSO" : "",
-  WEB_UI_UPSTREAM: issuer,
   OIDC_AUTH_ENDPOINT: "https://primary.example.test/authorize",
   OIDC_CLIENT_ID: "primary-client",
   PORTAL_LOCAL_AUTH_BYPASS: "0",
@@ -104,8 +131,27 @@ Object.assign(process.env, {
   }),
   PORTAL_TRUSTED_OIDC_CLIENT_SECRET: "trusted-client-secret-of-at-least-32-characters",
 });
-const { server } = await import("../src/index.ts");
-await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+const { server, startServer } = await import("../src/index.ts");
+await startServer({
+  port: 0,
+  host: "127.0.0.1",
+  core: {
+    serves: (method, pathname) => pathname === "/api/me",
+    handle: (req, res) => {
+      const carried = openSession(
+        readCookie(req.headers.cookie, "portal_session"),
+        deriveKey(sessionSecret, "portal.session.v1"),
+        Date.now(),
+        "test-company",
+      );
+      surfaceNames.push(carried?.name);
+      res.end("{}");
+    },
+    shell: async (_req, res) => {
+      res.end("{}");
+    },
+  },
+});
 const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 test.after(() => {
   server.close();
@@ -195,7 +241,7 @@ test(
     const session = cookies.find((cookie) => cookie.startsWith("portal_session="))!.split(";")[0]!;
     const logout = await fetch(`${base}/auth/logout`, {
       method: "POST",
-      headers: { origin: process.env.PORTAL_PUBLIC_URL!, cookie: session },
+      headers: { origin: process.env.PUBLIC_WEB_URL!, cookie: session },
     });
     assert.equal(logout.status, 200);
     assert.ok(logout.headers.getSetCookie().includes(preference));
@@ -272,4 +318,76 @@ test("trusted launch with a valid session returns to the app without another sig
   assert.equal(relaunch.status, 302);
   assert.equal(relaunch.headers.get("location"), "/s/abc");
   assert.ok(!relaunch.headers.getSetCookie().some((cookie) => cookie.startsWith("portal_trusted_tmp=")));
+});
+
+async function signInSession(): Promise<string> {
+  const login = await start();
+  const signedIn = await fetch(login.callback, { redirect: "manual", headers: { cookie: login.cookie } });
+  assert.equal(signedIn.status, 302);
+  return signedIn.headers
+    .getSetCookie()
+    .find((cookie) => cookie.startsWith("portal_session="))!
+    .split(";")[0]!;
+}
+
+test("trusted sign-in records the provider's name for the signed-in principal before the session starts", async () => {
+  profiles.length = 0;
+  const session = await signInSession();
+  const sub = openSession(
+    session.slice("portal_session=".length),
+    deriveKey(sessionSecret, "portal.session.v1"),
+    Date.now(),
+    "test-company",
+  )!.sub;
+  assert.deepEqual(profiles, [{ body: { principalId: sub, displayName: "Test Founder" }, principal: sub }]);
+});
+
+test("a session without a name shows the name core stored for the person, and an empty provider name is never recorded", async () => {
+  signedInName = "";
+  storedName = "Stored Founder";
+  subject = "person-nameless";
+  profiles.length = 0;
+  try {
+    const nameless = await signInSession();
+    assert.deepEqual(profiles, [], "an empty provider name is never recorded");
+    surfaceNames.length = 0;
+    await fetch(`${base}/api/me`, { headers: { cookie: nameless } });
+    assert.deepEqual(surfaceNames, ["Stored Founder"]);
+  } finally {
+    signedInName = "Test Founder";
+    storedName = null;
+    subject = "person-7";
+  }
+});
+
+test("a named session whose person has no stored name fills it in once", async () => {
+  storedName = null;
+  subject = "person-backfill";
+  const session = await signInSession().finally(() => {
+    subject = "person-7";
+  });
+  profiles.length = 0;
+  surfaceNames.length = 0;
+  await fetch(`${base}/api/me`, { headers: { cookie: session } });
+  await fetch(`${base}/api/me`, { headers: { cookie: session } });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.deepEqual(surfaceNames, ["Test Founder", "Test Founder"]);
+  assert.equal(profiles.length, 1);
+  assert.equal(profiles[0]!.body.displayName, "Test Founder");
+});
+
+test("a nameless session linked to an email shows the email, not the raw sign-in", async () => {
+  signedInName = "";
+  linkedEmail = "founder@example.com";
+  subject = "person-linked";
+  try {
+    const nameless = await signInSession();
+    surfaceNames.length = 0;
+    await fetch(`${base}/api/me`, { headers: { cookie: nameless } });
+    assert.deepEqual(surfaceNames, ["founder@example.com"]);
+  } finally {
+    signedInName = "Test Founder";
+    linkedEmail = null;
+    subject = "person-7";
+  }
 });

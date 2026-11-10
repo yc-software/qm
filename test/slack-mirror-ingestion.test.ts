@@ -50,6 +50,7 @@ function fixture(
     }),
   };
   const mirror = createMirror({
+    account: "default",
     core: {
       ingestSurfaceEvents:
         options.ingest ??
@@ -379,7 +380,16 @@ test("self message deletions reach the mirror without dispatch", async () => {
     deleted_ts: "2",
     previous_message: { user: "UBOT", bot_id: "BBOT", thread_ts: "1" },
   });
-  assert.deepEqual(f.events, [{ container: "D1", ts: "2", deleted: true, sub: "1", self: true }]);
+  assert.deepEqual(f.events, [
+    {
+      container: "D1",
+      ts: "2",
+      deleted: true,
+      sub: "1",
+      self: true,
+      source: { account: "default", workspace: "T1", assistant: "UBOT" },
+    },
+  ]);
   assert.equal(f.dispatches.length, 0);
 });
 
@@ -585,6 +595,7 @@ test("synthetic reaction turns preserve the canonical message snapshot", async (
     }),
   };
   const mirror = createMirror({
+    account: "default",
     core: { ingestSurfaceEvents: cache.ingest } as any,
     ids,
     directory: directory as any,

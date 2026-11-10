@@ -1,7 +1,7 @@
 import { type PgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { jsonbStringify } from "../util/text.ts";
 import { reportFailure } from "../util/errors.ts";
-import { claimAcrossTenants, inTenantOf, rowTenant } from "../tenants/claim.ts";
+import { claimRows, claimThenBind } from "../tenants/claim.ts";
 import type { ScopeId } from "../types.ts";
 import type { SessionOrigin, SessionStore, SpendRow } from "./session-store.ts";
 import { ancestry, SPEND_INDEXABLE } from "./session-schema.ts";
@@ -76,44 +76,41 @@ export function createSessionSpend(deps: {
     const started = Date.now();
     await withPgTransaction(await pool(), async (client) => {
       const changed = await client.query(
-        `DELETE FROM session_spend_dirty WHERE tenant_id = qm_bound_tenant() AND session_id IS NOT NULL RETURNING session_id`,
+        "DELETE FROM session_spend_dirty WHERE session_id IS NOT NULL RETURNING session_id",
       );
       if (!changed.rowCount) return;
       await client.query(
         `WITH RECURSIVE affected(id) AS (
-           SELECT unnest($1::text[])
-           UNION
-           SELECT c.id FROM affected a
-             CROSS JOIN LATERAL (SELECT id FROM sessions WHERE tenant_id = qm_bound_tenant() AND parent_session_id = a.id OFFSET 0) c
-         )
-         INSERT INTO session_spend_dirty(day)
-         SELECT DISTINCT d.day FROM affected a
-           CROSS JOIN LATERAL (
-             SELECT floor(created_at::numeric / 86400000)::bigint AS day FROM session_llm_requests
-              WHERE tenant_id = qm_bound_tenant() AND session_id = a.id AND usage_json IS NOT NULL OFFSET 0
-           ) d
-         ON CONFLICT DO NOTHING`,
+             SELECT unnest($1::text[])
+             UNION
+             SELECT c.id FROM affected a
+               CROSS JOIN LATERAL (SELECT id FROM sessions WHERE parent_session_id = a.id OFFSET 0) c
+           )
+           INSERT INTO session_spend_dirty(day)
+           SELECT DISTINCT d.day FROM affected a
+             CROSS JOIN LATERAL (
+               SELECT floor(created_at::numeric / 86400000)::bigint AS day FROM session_llm_requests
+                WHERE session_id = a.id AND usage_json IS NOT NULL OFFSET 0
+             ) d
+           ON CONFLICT DO NOTHING`,
         [changed.rows.map((r) => r.session_id)],
       );
     });
     const days = await q(
-      `SELECT d.day FROM (SELECT DISTINCT day FROM session_spend_dirty WHERE tenant_id = qm_bound_tenant() AND day IS NOT NULL) d
-       LEFT JOIN session_spend_days c ON c.tenant_id = qm_bound_tenant() AND c.day = d.day
-       ORDER BY d.day = max(d.day) OVER () DESC, c.updated_at NULLS FIRST, d.day DESC`,
+      `SELECT d.day FROM (SELECT DISTINCT day FROM session_spend_dirty WHERE day IS NOT NULL) d
+         LEFT JOIN session_spend_days c ON c.day = d.day
+         ORDER BY d.day = max(d.day) OVER () DESC, c.updated_at NULLS FIRST, d.day DESC`,
     );
     for (const [index, { day }] of days.entries()) {
       try {
         await withPgTransaction(await pool(), async (client) => {
-          const pending = await client.query(
-            `DELETE FROM session_spend_dirty WHERE tenant_id = qm_bound_tenant() AND day = $1 RETURNING day`,
-            [day],
-          );
+          const pending = await client.query("DELETE FROM session_spend_dirty WHERE day = $1 RETURNING day", [day]);
           if (!pending.rowCount) return;
           const updatedAt = now();
           const rows = await client.query(spendSql, [Number(day) * 86_400_000, (Number(day) + 1) * 86_400_000]);
           await client.query(
             `INSERT INTO session_spend_days(day, rows, updated_at) VALUES ($1, $2, $3)
-             ON CONFLICT (tenant_id, day) DO UPDATE SET rows = EXCLUDED.rows, updated_at = EXCLUDED.updated_at`,
+               ON CONFLICT (tenant_id, day) DO UPDATE SET rows = EXCLUDED.rows, updated_at = EXCLUDED.updated_at`,
             [day, jsonbStringify(rows.rows), updatedAt],
           );
         });
@@ -156,8 +153,7 @@ export function createSessionSpend(deps: {
     },
 
     async refreshSpendRollup() {
-      const dirty = await claimAcrossTenants(db, "SELECT DISTINCT tenant_id FROM session_spend_dirty");
-      for (const row of dirty.rows) await inTenantOf(rowTenant(row).tenantId, refreshTenantSpend);
+      await claimThenBind(() => claimRows(db, "claim_dirty_spend"), refreshTenantSpend);
     },
   };
 }

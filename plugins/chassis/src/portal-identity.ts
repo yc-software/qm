@@ -1,12 +1,12 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { boundTenant, isTenantId, withTenant } from "./tenant.ts";
+import { isTenantId } from "./tenant.ts";
 
 export interface PortalIdentity {
-  t?: string;
   p: string;
   authenticatedAs?: string;
   n?: string;
   imp?: string;
+  t?: string;
   exp: number;
 }
 
@@ -15,8 +15,7 @@ function digest(payload: string, secret: string): string {
 }
 
 export function mintPortalIdentity(claims: PortalIdentity, secret: string): string {
-  const tenant = claims.t ?? boundTenant();
-  const payload = Buffer.from(JSON.stringify(tenant ? { ...claims, t: tenant } : claims), "utf8").toString("base64url");
+  const payload = Buffer.from(JSON.stringify(claims), "utf8").toString("base64url");
   return `${payload}.${digest(payload, secret)}`;
 }
 
@@ -34,16 +33,11 @@ export function verifyPortalIdentity(token: string, secret: string, nowMs: numbe
     return null;
   }
   if (!claims || typeof claims.p !== "string" || !claims.p || typeof claims.exp !== "number") return null;
-  if (claims.t !== undefined && !isTenantId(claims.t)) return null;
   if (claims.authenticatedAs !== undefined && (typeof claims.authenticatedAs !== "string" || !claims.authenticatedAs))
     return null;
+  if (claims.t !== undefined && !isTenantId(claims.t)) return null;
   if (nowMs > claims.exp) return null;
   return claims;
 }
 
 export const PORTAL_IDENTITY_HEADER = "x-portal-identity";
-
-export function withIdentityTenant<T>(token: string | undefined, secret: string | undefined, fn: () => T): T {
-  const tenant = token && secret ? verifyPortalIdentity(token, secret, Date.now())?.t : undefined;
-  return tenant ? withTenant(tenant, fn) : fn();
-}

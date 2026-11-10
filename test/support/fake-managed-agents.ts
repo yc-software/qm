@@ -15,6 +15,7 @@ import {
   type ManagedAgentsSessionSummary,
 } from "../../src/sandbox/managed-agents-client.ts";
 import { mkdtempSync } from "node:fs";
+import { trimTrailingSlashes } from "../../src/util/text.ts";
 
 const GUEST_ROOT = "/workspace";
 const GUEST_ROOT_PREFIX = new RegExp(`(?<![A-Za-z0-9._-])${GUEST_ROOT}(?![A-Za-z0-9._-])`, "g");
@@ -108,7 +109,7 @@ export function installFakeManagedAgents(): FakeManagedAgents {
     out.replaceAll(`${r.guestRoot}/tmp/`, "/tmp/").replaceAll(r.guestRoot, GUEST_ROOT);
 
   const hostPathFor = (r: FakeRecord, absPath: string): string => {
-    const clean = absPath.replace(/\/+$/, "");
+    const clean = trimTrailingSlashes(absPath);
     if (clean !== GUEST_ROOT && !clean.startsWith(`${GUEST_ROOT}/`)) throw new FakeOutsideWorkspaceError(absPath);
     if (clean.split("/").includes("..")) throw new FakeOutsideWorkspaceError(absPath);
     return r.guestRoot + clean.slice(GUEST_ROOT.length);

@@ -3,14 +3,13 @@ import assert from "node:assert/strict";
 import {
   createCronStore,
   DEFAULT_FIRE_RUNNING_STALE_MS,
-  FIRE_RETENTION_KEEP_PER_CRON,
   FIRE_RETENTION_MS,
   STRANDED_FIRE_NOTE,
 } from "../src/cron/cron-store.ts";
 import { type DurableMap } from "../src/persistence/durable-map.ts";
 import { scopeId } from "../src/types.ts";
 import type { Cron } from "../src/triggers/types.ts";
-import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { createPostgresCronFireStore, FIRE_RETENTION_KEEP_PER_CRON } from "../src/cron/fire-store.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 
 const base = { action: "x", owner: "U1", createdBy: "U1", ownerScopeId: scopeId("personal", "U1") };
@@ -673,6 +672,7 @@ test("the fire table is the journal of record — a write failure surfaces inste
       sweepStranded: async () => {
         throw new Error("table down");
       },
+      listRunning: async () => [],
       pruneEnded: async () => {
         throw new Error("table down");
       },

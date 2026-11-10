@@ -2,7 +2,7 @@ import { errMessage, swallow } from "../util/errors.ts";
 import { GENERIC_FAILURE_CLAUSE } from "../../plugins/chassis/src/failure-copy.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
-import type { RuntimePurpose } from "../resolution/config-store.ts";
+import type { TurnRuntimePurpose } from "../resolution/config-store.ts";
 import { resolveRuntimeChoice } from "../agent/runtime-choice.ts";
 import { resolveIndividualAuthRouting } from "../core/individual-auth-routing.ts";
 import { gatewayModelCatalog } from "../model/gateway-models.ts";
@@ -21,6 +21,7 @@ import {
   thinkingLevelsFor,
   codexProviderModelId,
   codexSubscriptionModelId,
+  companyModelId,
   defaultWebuiModelIds,
   THINKING_LEVELS,
   modelServiceable,
@@ -45,6 +46,29 @@ export function runtimeFallback(ctx: { deps: RuntimeDeps }): RuntimeChoice {
       ? { ...ctx.deps.providerKeys, modelIds: new Set(gatewayIds) }
       : undefined;
   return { modelId: ctx.deps.baseModelDefault ?? defaultModel(undefined, providers) };
+}
+
+export const APP_EDIT_DEFAULT_RUNTIME: RuntimeChoice = { modelId: "gpt-6.1-sol-ultrafast" };
+const reportedAppEditFallbacks = new Set<string>();
+
+export async function withAppEditRuntime<T extends { models: string[] }>(
+  ctx: { deps: RuntimeDeps },
+  body: T,
+): Promise<T & { appEditRuntime?: RuntimeChoice }> {
+  const configured = (await ctx.deps.config?.getPurposeRuntimeDurable("appEdit")) ?? APP_EDIT_DEFAULT_RUNTIME;
+  if (body.models.includes(configured.modelId)) return { ...body, appEditRuntime: storedChoice(configured) };
+  const reason =
+    modelUnavailableReason(configured.modelId) ??
+    (modelSupported(configured.modelId) ? "not offered to this person on this deployment" : "unknown model");
+  const key = `${orgScope()}:${configured.modelId}:${reason}`;
+  if (!reportedAppEditFallbacks.has(key)) {
+    reportedAppEditFallbacks.add(key);
+    console.warn("[runtime] app edit runtime unavailable; app edit chats use the conversation runtime", {
+      modelId: configured.modelId,
+      reason,
+    });
+  }
+  return body;
 }
 
 export async function userRuntimeConfigBody(ctx: { deps: RuntimeDeps }, scope: ScopeId, actorId: string) {
@@ -87,7 +111,7 @@ export async function runtimeConfigBody(
   ctx: { deps: RuntimeDeps },
   scope: ScopeId,
   authorizeChoice?: (choice: RuntimeChoice) => Promise<string | null>,
-  purpose?: RuntimePurpose,
+  purpose?: TurnRuntimePurpose,
   requested?: Partial<RuntimeChoice>,
 ) {
   if (authorizeChoice)
@@ -147,7 +171,8 @@ export async function runtimeConfigBody(
     );
     models = models.filter((_, index) => !allowed[index]);
   }
-  const billing = (id: string) => modelBilling(!!managedKeys.modelIds?.has(id), !!authorizeChoice);
+  const billing = (id: string) =>
+    modelBilling(!!managedKeys.modelIds?.has(companyModelId(id, managedKeys)), !!authorizeChoice);
   const modelCatalog = Object.fromEntries(
     Object.entries(modelCatalogFor(new Set(models))).map(([id, meta]) => [id, { ...meta, billing: billing(id) }]),
   );
@@ -183,7 +208,7 @@ export function validateRuntimeChoice(choice: RuntimeChoice): string | null {
 export async function webuiModelEnabled(
   ctx: { deps: RuntimeDeps },
   modelId: string,
-  purpose?: RuntimePurpose,
+  purpose?: TurnRuntimePurpose,
 ): Promise<boolean> {
   modelId = codexProviderModelId(modelId);
   const config = ctx.deps.config!;
@@ -201,7 +226,7 @@ export async function availableRuntimeError(
   ctx: { deps: RuntimeDeps },
   scope: ScopeId,
   choice: RuntimeChoice,
-  purpose?: RuntimePurpose,
+  purpose?: TurnRuntimePurpose,
 ): Promise<string | null> {
   await ctx.deps.refreshModels?.();
   let reason: string;
@@ -233,7 +258,7 @@ export async function requestedRuntimeError(
   ctx: { deps: RuntimeDeps },
   scope: ScopeId,
   requested: Partial<RuntimeChoice>,
-  purpose?: RuntimePurpose,
+  purpose?: TurnRuntimePurpose,
 ): Promise<string | null> {
   const { effective } = await runtimeConfigBody(ctx, scope, undefined, purpose, requested).catch((error: unknown) => {
     if (!(error instanceof NonRetryableTurnError)) throw error;
@@ -286,7 +311,7 @@ export async function turnModelRefusal(
   req: TurnRequest,
   actorId: string,
   individualAuth: boolean,
-  purpose: RuntimePurpose | undefined,
+  purpose: TurnRuntimePurpose | undefined,
 ): Promise<string | null> {
   const org = orgScope();
   const scope = conversationScope(req.conversation, actorId);

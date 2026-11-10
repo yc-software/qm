@@ -1,69 +1,46 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
+import { startWithFakeCore, type CoreHit } from "./fake-core.ts";
 
-const calls: Array<{ url: string; cookie: unknown; identity: unknown; encoding: unknown }> = [];
-const upstream = createServer((req, res) => {
-  if (req.url?.startsWith("/v1/operator/hosts/")) {
-    res.writeHead(404).end();
-    return;
-  }
-  calls.push({
-    url: req.url!,
-    cookie: req.headers.cookie,
-    identity: req.headers["x-portal-identity"],
-    encoding: req.headers["accept-encoding"],
-  });
-  res.end("public content");
-});
-await new Promise<void>((resolve) => upstream.listen(0, resolve));
-process.env.PORTAL_PUBLIC_URL = "http://localhost:18197";
+process.env.PUBLIC_WEB_URL = "http://localhost:18197";
 process.env.PORTAL_SESSION_SECRET = "share-test-portal-secret";
 process.env.CORE_SIGNING_SECRET = "share-test-core-secret";
-process.env.WEB_UI_UPSTREAM = `http://localhost:${(upstream.address() as AddressInfo).port}`;
-process.env.CORE_API_URL = process.env.WEB_UI_UPSTREAM;
 process.env.PORTAL_LOCAL_AUTH_BYPASS = "0";
-const { server } = await import("../src/index.ts");
-await new Promise<void>((resolve) => server.listen(0, resolve));
-const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-test.after(() => {
-  server.close();
-  upstream.close();
-});
+const { base, hits, close } = await startWithFakeCore((method, pathname) => pathname.startsWith("/share/external/"));
+test.after(close);
 
-test("anonymous public shares forward no identity and do not open private routes", async () => {
+test("anonymous public shares and app assets reach core without a session and do not open private routes", async () => {
   const token = "11111111-1111-4111-8111-111111111111";
-  for (const path of [
-    `/share/external/${token}`,
-    `/share/external/${token}/files/${token}?inline=1`,
-    "/assets/shared-Abc123.js",
-  ]) {
+  for (const [path, lane] of [
+    [`/share/external/${token}`, "handle"],
+    [`/share/external/${token}/files/${token}?inline=1`, "handle"],
+    ["/assets/shared-Abc123.js", "shell"],
+  ] as const) {
     const response = await fetch(`${base}${path}`, {
-      headers: { cookie: "webuiuser=alice", "x-portal-identity": "forged" },
       redirect: "manual",
+      headers: { "x-portal-identity": "forged", "x-qm-app-host": "1", "x-qm-client-ip": "10.0.0.1" },
     });
     assert.equal(response.status, 200);
-    assert.equal(calls.at(-1)!.url, path);
-    assert.equal(calls.at(-1)!.cookie, undefined);
-    assert.equal(calls.at(-1)!.identity, undefined);
+    const hit = (await response.json()) as CoreHit;
+    assert.equal(hit.lane, lane);
+    assert.equal(hit.method, "GET");
+    assert.equal(hit.url, path);
+    assert.deepEqual(
+      ["x-portal-identity", "x-qm-app-host", "x-qm-client-ip"].filter((name) => name in hit.headers),
+      [],
+    );
   }
-  const before = calls.length;
+  const before = hits.length;
   for (const path of [
     `/share/internal/${token}`,
     "/api/sessions",
     "/src/shared-session.ts",
     "/@fs/etc/passwd",
     `/share/external/${token}/other`,
+    "/assets/nested/x.js",
   ]) {
-    assert.equal((await fetch(`${base}${path}`, { redirect: "manual" })).status, 401);
+    assert.equal((await fetch(`${base}${path}`, { redirect: "manual" })).status, 401, path);
   }
   assert.equal((await fetch(`${base}/share/external/${token}`, { method: "POST", redirect: "manual" })).status, 401);
-  assert.equal(calls.length, before);
-});
-
-test("app assets pass the browser's accept-encoding through so the prebuilt gzip is served", async () => {
-  await fetch(`${base}/assets/index-Abc123.js`, { headers: { "accept-encoding": "gzip" } });
-  assert.equal(calls.at(-1)!.url, "/assets/index-Abc123.js");
-  assert.match(String(calls.at(-1)!.encoding), /gzip/);
+  assert.equal(hits.length, before);
 });

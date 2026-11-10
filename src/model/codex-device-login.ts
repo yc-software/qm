@@ -3,7 +3,7 @@ import type { AuthEvent, AuthPrompt, OAuthAuth, OAuthCredential } from "@earendi
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 import type { UserOAuthTokens } from "./user-model-credential-store.ts";
 import { chatgptAccountIdFromToken } from "./chatgpt-auth-file.ts";
-import { cacheTenant } from "../tenants/context.ts";
+import { currentTenant } from "../tenants/context.ts";
 import type { ChatGPTDevicePrompt } from "./subscription-oauth.ts";
 
 const LOGIN_TTL_MS = 15 * 60 * 1000;
@@ -47,7 +47,7 @@ export function createCodexDeviceLogin(opts: { oauth?: OAuthAuth } = {}) {
 
   return {
     async start(owner: string): Promise<ChatGPTDevicePrompt> {
-      const tenant = cacheTenant();
+      const tenant = currentTenant();
       sweep();
       const oauth = opts.oauth ?? openaiCodexProvider().auth.oauth;
       if (!oauth) throw new Error("ChatGPT subscription login is unavailable");
@@ -106,7 +106,7 @@ export function createCodexDeviceLogin(opts: { oauth?: OAuthAuth } = {}) {
     },
 
     async poll(loginId: string, owner: string): Promise<UserOAuthTokens | "pending" | "unknown"> {
-      const tenant = cacheTenant();
+      const tenant = currentTenant();
       sweep();
       const login = pending.get(loginId);
       if (!login || login.owner !== owner || login.tenant !== tenant) return "unknown";

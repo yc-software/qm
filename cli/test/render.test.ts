@@ -25,7 +25,7 @@ import { renderMinioCommand } from "../src/render-minio.ts";
 import { renderClient, streamRenderLogs } from "../src/render-api.ts";
 import { runChecks } from "../src/commands/check.ts";
 
-function deployment(t: TestContext, portal = false) {
+function deployment(t: TestContext, auth = false) {
   const dir = mkdtempSync(join(tmpdir(), "qm-render-api-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const bin = join(dir, "bin");
@@ -44,13 +44,13 @@ function deployment(t: TestContext, portal = false) {
     renderScaffold.renderConfig("acme", "anthropic", "resend", { repo: "https://github.com/acme/qm", branch: "main" }),
   ) as Record<string, any>;
   raw.render.workspaceId = "tea-acme";
-  raw.services = portal ? ["core", "web-ui", "portal", "auth"] : ["core", "web-ui"];
+  raw.services = auth ? ["core", "auth"] : ["core"];
   raw.sandbox = {
     ...raw.sandbox,
     baseImage: `ghcr.io/yc-software/qm/sandbox-base:${"c".repeat(40)}@sha256:${"d".repeat(64)}`,
   };
   raw.env = {
-    ...(portal ? { auth: { ...raw.env.auth, AUTH_ALLOWED_EMAIL_DOMAIN: "example.com" } } : {}),
+    ...(auth ? { auth: { ...raw.env.auth, AUTH_ALLOWED_EMAIL_DOMAIN: "example.com" } } : {}),
     core: { ...raw.env.core },
   };
   delete raw.modelProvider;
@@ -74,6 +74,10 @@ function deployment(t: TestContext, portal = false) {
   };
 }
 type Deployment = ReturnType<typeof deployment>;
+function addReportsPlugin(d: Deployment): void {
+  mkdirSync(join(d.ctx.configDir, "plugins", "reports"), { recursive: true });
+  writeFileSync(join(d.ctx.configDir, "plugins", "reports", "Dockerfile"), "FROM node:24\n");
+}
 interface Service {
   id: string;
   name: string;
@@ -476,7 +480,7 @@ test("Render accepts null empty lists for projects, Postgres, and services", asy
   assert.deepEqual(received, resources);
   assert.equal(c.projects.size, 1);
   assert.ok(c.database);
-  assert.equal(c.services.size, 3);
+  assert.equal(c.services.size, 2);
 });
 
 test("Render appRegion changes the app creation default without moving deployment resources", async (t) => {
@@ -516,7 +520,7 @@ test("Render creates one project and wires MinIO credentials, URLs, Postgres, an
   const c = cloud(t, d);
   await d.backend.up({ dryRun: false });
   assert.equal(c.projects.size, 1);
-  assert.equal(c.services.size, 3);
+  assert.equal(c.services.size, 2);
   assert.equal(c.services.get("srv-acme-core")!.serviceDetails.healthCheckPath, "/healthz");
   assert.equal(d.saved().environmentId, "evm-acme");
   const minio = c.envs.get("srv-acme-minio")!;
@@ -530,7 +534,7 @@ test("Render creates one project and wires MinIO credentials, URLs, Postgres, an
   assert.equal(core.RENDER_ENVIRONMENT_ID, "evm-acme");
   assert.equal(core.DATABASE_URL, "postgresql://qm:private-password@pg/qm");
   assert.equal(core.PUBLIC_API_URL, "https://acme-core-assigned.onrender.com");
-  assert.equal(minio.MINIO_API_CORS_ALLOW_ORIGIN, "https://acme-web-ui-assigned.onrender.com");
+  assert.equal(minio.MINIO_API_CORS_ALLOW_ORIGIN, "https://acme-core-assigned.onrender.com");
   assert.equal(minio.MINIO_BROWSER, "off");
   assert.equal(
     c.services.get("srv-acme-minio")!.serviceDetails.envSpecificDetails.dockerfilePath,
@@ -797,7 +801,7 @@ test("Render builds QM services and MinIO from Git", async (t) => {
   const c = cloud(t, d);
   await d.backend.up({ dryRun: false });
   const saved = d.saved();
-  assert.equal(c.services.size, 4);
+  assert.equal(c.services.size, 2);
   for (const service of c.services.values()) {
     if (service.id === "srv-acme-minio") continue;
     assert.equal(service.repo, "https://github.com/acme/qm");
@@ -812,10 +816,11 @@ test("Render builds QM services and MinIO from Git", async (t) => {
   );
   assert.equal(c.services.get("srv-acme-minio")!.serviceDetails.runtime, "docker");
   assert.equal(c.services.get("srv-acme-minio")!.repo, "https://github.com/acme/qm");
-  assert.equal(
-    c.services.get("srv-acme-portal")!.serviceDetails.envSpecificDetails.dockerfilePath,
-    "deploy/portal/Dockerfile",
-  );
+  assert.deepEqual(c.services.get("srv-acme-core")!.serviceDetails.envSpecificDetails, {
+    dockerCommand: "env PORT=8080 node src/render/start.ts",
+    dockerfilePath: "deploy/core/Dockerfile",
+    dockerContext: ".",
+  });
   assert.equal(c.envs.get("srv-acme-core")!.RENDER_DEPLOY_REPO, "https://github.com/acme/qm");
   assert.equal(c.envs.get("srv-acme-core")!.RENDER_DEPLOY_BRANCH, "render-test");
   c.services.get("srv-acme-minio")!.serviceDetails.plan = "starter";
@@ -850,8 +855,8 @@ for (const [status, plan] of [
     assert.ok(
       c.calls.slice(mark).some((call) => call.path === "/services/srv-acme-core/deploys" && call.method === "POST"),
     );
-    assert.equal(c.services.size, 3);
-    assert.equal(c.calls.filter((call) => call.path === "/services" && call.method === "POST").length, 3);
+    assert.equal(c.services.size, 2);
+    assert.equal(c.calls.filter((call) => call.path === "/services" && call.method === "POST").length, 2);
   });
 
 test("Render retries after env write failure after a preceding service update succeeds", async (t) => {
@@ -889,7 +894,7 @@ test("Render retains completed resource IDs after a later create fails", async (
   c.intercept = undefined;
   await d.backend.up({ dryRun: false });
   assert.equal(c.projects.size, 1);
-  assert.equal(c.services.size, 3);
+  assert.equal(c.services.size, 2);
 });
 
 for (const status of ["live", "update_failed"]) {
@@ -1088,7 +1093,7 @@ test("Render retries a resource creation rejected by rate limiting", async (t) =
   await d.backend.up({ dryRun: false });
   assert.equal(d.saved().pendingCreate, undefined);
   assert.equal(c.projects.size, 1);
-  assert.equal(c.services.size, 3);
+  assert.equal(c.services.size, 2);
 });
 
 test("Render retries transient API failures for idempotent requests and only rate limits for creations", async (t) => {
@@ -1151,12 +1156,12 @@ test("Render rejects unrecorded same-name resources and changed ownership before
   assert.deepEqual(writes(c.calls), []);
   c.projects.clear();
   await d.backend.up({ dryRun: false });
-  c.services.get("srv-acme-web-ui")!.environmentId = "evm-other";
+  c.services.get("srv-acme-core")!.environmentId = "evm-other";
   const mark = c.calls.length;
   await assert.rejects(d.backend.up({ dryRun: false }), /does not match/);
   assert.deepEqual(writes(c.calls.slice(mark)), []);
   await assert.rejects(async () => d.backend.down({ purge: true }), /does not match/);
-  assert.equal(c.services.size, 3);
+  assert.equal(c.services.size, 2);
 });
 
 test("Render stops services and resumes them while retaining database and disk", async (t) => {
@@ -1166,7 +1171,7 @@ test("Render stops services and resumes them while retaining database and disk",
   await d.backend.down({});
   assert.equal(c.services.get("srv-acme-minio")!.suspended, "suspended");
   assert.ok(c.database);
-  assert.equal(c.services.size, 3);
+  assert.equal(c.services.size, 2);
   const mark = c.calls.length;
   await d.backend.up({ dryRun: false });
   assert.ok([...c.services.values()].every((service) => service.suspended === "not_suspended"));
@@ -1181,7 +1186,7 @@ test("Render shutdown ignores app services outside the saved project", async (t)
   const c = cloud(t, d);
   await d.backend.up({ dryRun: false });
   const app = {
-    ...c.services.get("srv-acme-web-ui")!,
+    ...c.services.get("srv-acme-core")!,
     id: "srv-other-project-app",
     name: "qm-app-other",
     type: "private_service",
@@ -1200,7 +1205,7 @@ test("Render protects published apps in owner environments before shutdown or pu
   const c = cloud(t, d);
   await d.backend.up({ dryRun: false });
   const app = {
-    ...c.services.get("srv-acme-web-ui")!,
+    ...c.services.get("srv-acme-core")!,
     id: "srv-published-app",
     name: "qm-app-a1",
     environmentId: "evm-owner",
@@ -1244,7 +1249,7 @@ test("Render purge resumes partial deletion and retains the project", async (t) 
   assert.deepEqual(d.saved().services, {});
   await d.backend.up({ dryRun: false });
   assert.equal(c.projects.size, 1);
-  assert.equal(c.services.size, 3);
+  assert.equal(c.services.size, 2);
 });
 
 test("Render secret push targets consumers and keeps managed MinIO credentials", async (t) => {
@@ -1258,7 +1263,6 @@ test("Render secret push targets consumers and keeps managed MinIO credentials",
   );
   await d.backend.secretsPush();
   assert.equal(c.envs.get("srv-acme-core")!.AWS_SESSION_TOKEN, "old-session");
-  assert.equal(c.envs.get("srv-acme-web-ui")!.AWS_SECRET_ACCESS_KEY, undefined);
   await d.backend.up({ dryRun: false });
 });
 
@@ -1269,10 +1273,9 @@ test("Render updates retain stored operator secrets for the core", async (t) => 
   c.envs.get("srv-acme-core")!.RESEND_API_KEY = "re_stored_only";
   await d.backend.up({ dryRun: false });
   assert.equal(c.envs.get("srv-acme-core")!.RESEND_API_KEY, "re_stored_only");
-  assert.equal(c.envs.get("srv-acme-web-ui")!.RESEND_API_KEY, undefined);
 });
 
-test("Render rejects disk shrink, plain HTTP URLs, and a shared hostname", async (t) => {
+test("Render rejects disk shrink, plain HTTP URLs, and an apex and www pair", async (t) => {
   const d = deployment(t);
   cloud(t, d);
   await d.backend.up({ dryRun: false });
@@ -1286,7 +1289,7 @@ test("Render rejects disk shrink, plain HTTP URLs, and a shared hostname", async
   }
   d.ctx.config.publicUrl = "https://qm.example.com";
   d.ctx.config.apiUrl = "https://qm.example.com/";
-  assert.ok(renderConfigErrors(d.ctx.config, []).some((error) => /different hostnames/.test(error.message)));
+  assert.deepEqual(renderConfigErrors(d.ctx.config, []), []);
   d.ctx.config.apiUrl = "https://www.qm.example.com";
   assert.ok(renderConfigErrors(d.ctx.config, []).some((error) => /www subdomain/.test(error.message)));
   d.ctx.config.apiUrl = "https://api.qm.example.com";
@@ -1312,7 +1315,7 @@ test("Render binds operator custom domains and checks their verification live", 
   await d.backend.up({ dryRun: false });
   assert.deepEqual(domainWrites(c.calls), [
     ["POST", "/services/srv-acme-core/custom-domains", { name: "api.acme.example" }],
-    ["POST", "/services/srv-acme-portal/custom-domains", { name: "acme.example" }],
+    ["POST", "/services/srv-acme-core/custom-domains", { name: "acme.example" }],
   ]);
   assert.equal(readFileSync(d.ctx.configPath, "utf8"), JSON.stringify(raw));
   assert.equal(d.ctx.config.apiUrl, "https://api.acme.example");
@@ -1322,8 +1325,9 @@ test("Render binds operator custom domains and checks their verification live", 
   assert.deepEqual([...new Set(application(c.calls, "/healthz"))], ["https://acme-core-assigned.onrender.com"]);
   assert.deepEqual(application(c.calls, "/v1/deployment-layer"), ["https://acme-core-assigned.onrender.com"]);
   assert.deepEqual(
-    c.customDomains.get("srv-acme-portal")!.map((domain) => [domain.name, domain.redirectForName]),
+    c.customDomains.get("srv-acme-core")!.map((domain) => [domain.name, domain.redirectForName]),
     [
+      ["api.acme.example", ""],
       ["acme.example", ""],
       ["www.acme.example", "acme.example"],
     ],
@@ -1332,11 +1336,11 @@ test("Render binds operator custom domains and checks their verification live", 
   await d.backend.up({ dryRun: false });
   assert.deepEqual(domainWrites(c.calls.slice(mark)), [
     ["POST", "/services/srv-acme-core/custom-domains/cd/verify", undefined],
-    ["POST", "/services/srv-acme-portal/custom-domains/cd/verify", undefined],
+    ["POST", "/services/srv-acme-core/custom-domains/cd/verify", undefined],
   ]);
   d.ctx.config.publicUrl = "https://www.acme.example";
   const redirected =
-    /acme-portal: www\.acme\.example redirects to acme\.example on Render; configure https:\/\/acme\.example/;
+    /acme-core: www\.acme\.example redirects to acme\.example on Render; configure https:\/\/acme\.example/;
   await assert.rejects(d.backend.up({ dryRun: false }), redirected);
   d.ctx.config.publicUrl = "https://acme.example";
   await assert.rejects(
@@ -1349,28 +1353,31 @@ test("Render binds operator custom domains and checks their verification live", 
   d.ctx.config.publicUrl = "https://acme.example";
   await assert.rejects(
     async () => d.backend.checkLive!(),
-    /acme-portal: custom domain acme\.example is unverified; point acme\.example at acme-portal-assigned\.onrender\.com with an ALIAS or ANAME record/,
+    /acme-core: custom domain acme\.example is unverified; point acme\.example at acme-core-assigned\.onrender\.com with an ALIAS or ANAME record/,
   );
-  c.customDomains.get("srv-acme-portal")![0]!.verificationStatus = "verified";
+  c.customDomains.get("srv-acme-core")![1]!.verificationStatus = "verified";
   mark = c.calls.length;
   await d.backend.checkLive!();
   assert.deepEqual(application(c.calls.slice(mark), "/healthz"), ["https://api.acme.example", "https://acme.example"]);
   assert.deepEqual(application(c.calls.slice(mark), "/v1/deployment-layer"), ["https://api.acme.example"]);
   await d.backend.status();
-  c.customDomains.set("srv-acme-portal", []);
-  await assert.rejects(async () => d.backend.checkLive!(), /acme-portal has no custom domain acme\.example; run qm up/);
+  c.customDomains.set(
+    "srv-acme-core",
+    c.customDomains.get("srv-acme-core")!.filter((domain) => domain.name === "api.acme.example"),
+  );
+  await assert.rejects(async () => d.backend.checkLive!(), /acme-core has no custom domain acme\.example; run qm up/);
   mark = c.calls.length;
   await d.backend.up({ dryRun: false });
   assert.deepEqual(domainWrites(c.calls.slice(mark)), [
-    ["POST", "/services/srv-acme-portal/custom-domains", { name: "acme.example" }],
+    ["POST", "/services/srv-acme-core/custom-domains", { name: "acme.example" }],
   ]);
-  Object.assign(raw, { publicUrl: "https://acme-portal.onrender.com", apiUrl: "https://acme-core.onrender.com" });
+  Object.assign(raw, { publicUrl: "https://acme-core.onrender.com", apiUrl: "https://acme-core.onrender.com" });
   writeFileSync(d.ctx.configPath, JSON.stringify(raw));
   Object.assign(d.ctx.config, { publicUrl: raw.publicUrl, apiUrl: raw.apiUrl });
   mark = c.calls.length;
   await d.backend.up({ dryRun: false });
   assert.deepEqual(domainWrites(c.calls.slice(mark)), []);
-  assert.equal(d.ctx.config.publicUrl, "https://acme-portal-assigned.onrender.com");
+  assert.equal(d.ctx.config.publicUrl, "https://acme-core-assigned.onrender.com");
   assert.equal(loadConfigAt(d.ctx.configPath).config.apiUrl, "https://acme-core-assigned.onrender.com");
 });
 
@@ -1388,7 +1395,7 @@ test("Render reports status, logs, and signed layer health from saved IDs", asyn
     ["PUT", "GET"],
   );
   assert.ok(layerCalls.every((call) => call.url.origin === "https://acme-core-assigned.onrender.com"));
-  assert.equal(d.ctx.config.publicUrl, "https://acme-portal-assigned.onrender.com");
+  assert.equal(d.ctx.config.publicUrl, "https://acme-core-assigned.onrender.com");
   const logCalls = c.calls.filter((call) => call.path === "/logs");
   assert.ok(logCalls.some((call) => call.url.searchParams.get("resource") === "srv-acme-core"));
   for (const call of logCalls) {
@@ -1400,7 +1407,7 @@ test("Render reports status, logs, and signed layer health from saved IDs", asyn
   }
   assert.deepEqual(c.calls.find((call) => call.path === "/services/srv-acme-core/jobs")?.body, {
     startCommand:
-      "timeout -s TERM -k 30 1200 node src/deployment/postdeploy-smoke.ts session http://acme-core-assigned:8080",
+      "env PORT=8080 timeout -s TERM -k 30 1200 node src/deployment/postdeploy-smoke.ts session http://acme-core-assigned:8080",
   });
 });
 
@@ -1618,30 +1625,70 @@ test("Render live checks cancel after a polling failure and report cleanup failu
 test("private Render addresses use the workload port", () => {
   assert.equal(
     renderInternalUrl({
-      name: "web-ui",
+      name: "reports",
       slug: "qm-web-abcd",
     }),
     "http://qm-web-abcd:8080",
   );
   for (const slug of ["", "web.onrender.com", "web:8080", "web/path", "web; command"])
-    assert.throws(() => renderInternalUrl({ name: "web-ui", slug }), /invalid private hostname/);
+    assert.throws(() => renderInternalUrl({ name: "reports", slug }), /invalid private hostname/);
 });
 
-test("Render connects a private web UI to the public portal and copies shared auth secrets", async (t) => {
+test("Render serves the web UI and sign-in from core's public service and wires the embedded broker", async (t) => {
   const d = deployment(t, true);
   const c = cloud(t, d);
   await d.backend.up({ dryRun: false });
-  const portal = c.envs.get("srv-acme-portal")!;
   const core = c.envs.get("srv-acme-core")!;
-  assert.equal(portal.CORE_API_URL, "http://acme-core-assigned:8080");
-  assert.equal(c.envs.get("srv-acme-web-ui")!.CORE_API_URL, "http://acme-core-assigned:8080");
+  assert.equal(c.services.get("srv-acme-core")!.type, "web_service");
+  assert.equal(d.ctx.config.publicUrl, "https://acme-core-assigned.onrender.com");
+  assert.equal(d.ctx.config.apiUrl, "https://acme-core-assigned.onrender.com");
+  assert.equal(core.PORT, "8000");
+  assert.equal(core.PUBLIC_PORT, "8000");
+  assert.equal(core.PUBLIC_WEB_URL, "https://acme-core-assigned.onrender.com");
   assert.equal(core.PUBLIC_API_URL, "https://acme-core-assigned.onrender.com");
-  assert.equal(c.services.get("srv-acme-web-ui")!.type, "private_service");
-  assert.equal(portal.WEB_UI_UPSTREAM, "http://acme-web-ui-assigned:8080");
-  assert.equal(d.ctx.config.publicUrl, "https://acme-portal-assigned.onrender.com");
-  assert.equal(portal.AUTH_CLIENT_SECRET, portal.OIDC_CLIENT_SECRET);
-  assert.equal(portal.CORE_SIGNING_SECRET, core.CORE_SIGNING_SECRET);
+  assert.equal(core.AUTH_ISSUER, "https://acme-core-assigned.onrender.com/idp");
+  assert.equal(core.OIDC_ALLOWED_EMAIL_DOMAIN, "example.com");
+  assert.equal(core.AUTH_CLIENT_SECRET, core.OIDC_CLIENT_SECRET);
   assert.equal(c.envs.get("srv-acme-minio")!.MINIO_BROWSER, "off");
+});
+
+test("Render leaves the old web UI and portal services for the operator to delete and then forgets them", async (t) => {
+  const d = deployment(t, true);
+  const c = cloud(t, d);
+  await d.backend.up({ dryRun: false });
+  const core = c.services.get("srv-acme-core")!;
+  const saved = d.saved();
+  for (const name of ["web-ui", "portal"]) {
+    const id = `srv-acme-${name}`;
+    c.services.set(id, {
+      ...core,
+      id,
+      name: `acme-${name}`,
+      slug: `acme-${name}-assigned`,
+      serviceDetails: { ...core.serviceDetails, url: `https://acme-${name}-assigned.onrender.com` },
+    });
+    saved.services[name] = { id, name: `acme-${name}`, type: "web_service" };
+  }
+  writeFileSync(join(d.ctx.configDir, "render.resources.json"), JSON.stringify(saved));
+  d.ctx.config.publicUrl = "https://acme-portal-assigned.onrender.com";
+  const lines: string[] = [];
+  const log = t.mock.method(console, "log", (message: string) => void lines.push(String(message)));
+  const mark = c.calls.length;
+  await d.backend.up({ dryRun: false });
+  log.mock.restore();
+  assert.equal(
+    c.calls.slice(mark).some((call) => call.method !== "GET" && /srv-acme-(web-ui|portal)/.test(call.path)),
+    false,
+  );
+  assert.ok(
+    lines.some((line) => line.includes("Retained services outside the current config: web-ui, portal")),
+    lines.join("\n"),
+  );
+  assert.equal(d.ctx.config.publicUrl, "https://acme-core-assigned.onrender.com");
+  c.services.delete("srv-acme-web-ui");
+  c.services.delete("srv-acme-portal");
+  await d.backend.up({ dryRun: false });
+  assert.deepEqual(Object.keys(d.saved().services).sort(), ["core", "minio"]);
 });
 
 test("Render restores remote drift and grows storage without replacing resources", async (t) => {
@@ -1669,6 +1716,7 @@ test("Render restores remote drift and grows storage without replacing resources
 
 test("Render rollback deploys the previous commit with current credentials and stored data", async (t) => {
   const d = deployment(t);
+  addReportsPlugin(d);
   const c = cloud(t, d);
   await d.backend.up({ dryRun: false });
   const release = d.saved().releases[0];
@@ -1688,7 +1736,7 @@ test("Render rollback deploys the previous commit with current credentials and s
       .map((call) => [call.path, call.body]),
     [
       ["/services/srv-acme-core/deploys", { clearCache: "do_not_clear", commitId: release.commit }],
-      ["/services/srv-acme-web-ui/deploys", { clearCache: "do_not_clear", commitId: release.commit }],
+      ["/services/srv-acme-reports/deploys", { clearCache: "do_not_clear", commitId: release.commit }],
     ],
   );
   assert.equal(c.envs.get("srv-acme-minio")!.QM_STORAGE_SECRET_KEY, secret);
@@ -1696,7 +1744,6 @@ test("Render rollback deploys the previous commit with current credentials and s
   assert.equal(c.envs.get("srv-acme-core")!.GIT_SHA, d.saved().releases[0].commit);
   assert.equal(c.runtimeEnvs.get("srv-acme-core")!.CORE_SIGNING_SECRET, "f".repeat(64));
   assert.equal(c.runtimeEnvs.get("srv-acme-core")!.GIT_SHA, release.commit);
-  assert.equal(c.runtimeEnvs.get("srv-acme-web-ui")!.CORE_SIGNING_SECRET, "f".repeat(64));
 });
 
 test("Render rejects a live service built from a different source commit", async (t) => {
@@ -1716,16 +1763,21 @@ test("Render rejects a live service built from a different source commit", async
 
 test("Render resumes rollback to the last good release after a partial update", async (t) => {
   const d = deployment(t);
+  addReportsPlugin(d);
   const c = cloud(t, d);
   await d.backend.up({ dryRun: false });
   const successful = d.saved();
   c.intercept = ({ path, method }) =>
-    path === "/services/srv-acme-web-ui/deploys" && method === "POST" ? new Response(null, { status: 500 }) : undefined;
+    path === "/services/srv-acme-reports/deploys" && method === "POST"
+      ? new Response(null, { status: 500 })
+      : undefined;
   await assert.rejects(d.backend.up({ dryRun: false }), /HTTP 500/);
   assert.equal(d.saved().updateInProgress, true);
   assert.equal(d.saved().releases.length, 1);
   c.intercept = ({ path, method }) =>
-    path === "/services/srv-acme-web-ui/deploys" && method === "POST" ? new Response(null, { status: 500 }) : undefined;
+    path === "/services/srv-acme-reports/deploys" && method === "POST"
+      ? new Response(null, { status: 500 })
+      : undefined;
   await assert.rejects(async () => d.backend.rollback(), /HTTP 500/);
   assert.ok(d.saved().rollbackProgress.restored.core);
   const mark = c.calls.length;
@@ -1735,7 +1787,7 @@ test("Render resumes rollback to the last good release after a partial update", 
     writes(c.calls.slice(mark))
       .filter((call) => call.path.endsWith("/deploys"))
       .map((call) => [call.path, call.body]),
-    [["/services/srv-acme-web-ui/deploys", { clearCache: "do_not_clear", commitId: successful.releases[0].commit }]],
+    [["/services/srv-acme-reports/deploys", { clearCache: "do_not_clear", commitId: successful.releases[0].commit }]],
   );
   assert.equal(d.saved().rollbackProgress, undefined);
   assert.equal(d.saved().updateInProgress, undefined);
@@ -1771,8 +1823,8 @@ test("Render creates services with a no-op command and cancels the automatic bui
     return undefined;
   };
   await d.backend.up({ dryRun: false });
-  assert.equal(c.services.size, 4);
-  assert.equal(canceled.size, 4);
+  assert.equal(c.services.size, 3);
+  assert.equal(canceled.size, 3);
 });
 
 test("Render resumes a suspended service with a no-op command and keeps its credentials across an interrupted resume", async (t) => {
@@ -1822,10 +1874,9 @@ test("Render keeps the selected MinIO commit when an interrupted bootstrap retri
   const mark = c.calls.length;
   await d.backend.up({ dryRun: false });
   const pinned = c.calls.slice(mark).filter((call) => call.method === "POST" && call.path.endsWith("/deploys"));
-  assert.equal(pinned.length, 3);
   assert.deepEqual(
     pinned.map((call) => (call.body as { commitId: string }).commitId),
-    ["a".repeat(40), "c".repeat(40), "c".repeat(40)],
+    ["a".repeat(40), "c".repeat(40)],
   );
   assert.equal(d.saved().releases[0].commit, "c".repeat(40));
   assert.equal(c.envs.get("srv-acme-core")!.GIT_SHA, "c".repeat(40));
@@ -1864,7 +1915,7 @@ for (const resource of ["retained", "deleted", "rejected"]) {
       const deploys = calls.filter((call) => call.method === "POST" && call.path.endsWith("/deploys"));
       assert.deepEqual(
         deploys.map((call) => (call.body as { commitId: string }).commitId),
-        [commit, commit],
+        [commit],
       );
       assert.equal(c.deploys.get("srv-acme-minio")!.commit!.id, "a".repeat(40));
       assert.equal(d.saved().releases[0].commit, commit);
@@ -1886,7 +1937,7 @@ for (const resource of ["retained", "deleted", "rejected"]) {
     const deploys = calls.filter((call) => call.method === "POST" && call.path.endsWith("/deploys"));
     assert.deepEqual(
       deploys.map((call) => (call.body as { commitId: string }).commitId),
-      [commit, commit, commit],
+      [commit, commit],
     );
     assert.equal(c.deploys.get("srv-acme-minio")!.commit!.id, "a".repeat(40));
     assert.equal(
@@ -1953,6 +2004,7 @@ test("Render records a service after its creation reply is lost and ignores same
 
 test("Render rollback --to deploys a retained release by label, commit prefix, or deploy ID", async (t) => {
   const d = deployment(t);
+  addReportsPlugin(d);
   const c = cloud(t, d);
   await d.backend.up({ dryRun: false });
   d.setCommit("c".repeat(40));
@@ -1980,7 +2032,7 @@ test("Render rollback --to deploys a retained release by label, commit prefix, o
   await d.backend.rollback("r1");
   assert.deepEqual(restores(mark), [
     ["/services/srv-acme-core/deploys", first!.commit],
-    ["/services/srv-acme-web-ui/deploys", first!.commit],
+    ["/services/srv-acme-reports/deploys", first!.commit],
   ]);
   assert.equal(c.envs.get("srv-acme-core")!.GIT_SHA, "a".repeat(40));
   assert.equal(d.saved().releases[0].label, "r4");
@@ -1990,7 +2042,7 @@ test("Render rollback --to deploys a retained release by label, commit prefix, o
   assert.deepEqual(restores(mark)[0], ["/services/srv-acme-core/deploys", second!.commit]);
   assert.equal(d.saved().releases[0].label, "r5");
   mark = c.calls.length;
-  await d.backend.rollback(third!.services["web-ui"]!);
+  await d.backend.rollback(third!.services["reports"]!);
   assert.deepEqual(restores(mark)[0], ["/services/srv-acme-core/deploys", third!.commit]);
   assert.equal(c.envs.get("srv-acme-core")!.GIT_SHA, "d".repeat(40));
   assert.equal(d.saved().releases.length, 6);
@@ -2019,6 +2071,7 @@ test("Render rollback --to rejects unknown, ambiguous, and short targets and lis
 
 test("Render rollback --to builds a full commit that no retained release recorded", async (t) => {
   const d = deployment(t);
+  addReportsPlugin(d);
   const c = cloud(t, d);
   await d.backend.up({ dryRun: false });
   const mark = c.calls.length;
@@ -2030,7 +2083,7 @@ test("Render rollback --to builds a full commit that no retained release recorde
   );
   assert.deepEqual(
     written.filter((call) => call.path.endsWith("/deploys")).map((call) => [call.path, call.body]),
-    ["core", "web-ui"].map((name) => [
+    ["core", "reports"].map((name) => [
       `/services/srv-acme-${name}/deploys`,
       { clearCache: "do_not_clear", commitId: "f".repeat(40) },
     ]),
@@ -2039,30 +2092,32 @@ test("Render rollback --to builds a full commit that no retained release recorde
   const [latest, previous] = d.saved().releases;
   assert.equal(latest.label, "r2");
   assert.equal(latest.commit, "f".repeat(40));
-  assert.deepEqual(Object.keys(latest.services).sort(), ["core", "web-ui"]);
+  assert.deepEqual(Object.keys(latest.services).sort(), ["core", "reports"]);
   assert.equal(previous.label, "r1");
 });
 
 test("Render rollback can rebuild a release after its provider deploy record is gone", async (t) => {
   const d = deployment(t);
+  addReportsPlugin(d);
   const c = cloud(t, d);
   await d.backend.up({ dryRun: false });
   d.setCommit("c".repeat(40));
   await d.backend.up({ dryRun: false });
   const first = d.saved().releases[1];
-  c.deploysById.delete(first.services["web-ui"]);
+  c.deploysById.delete(first.services["reports"]);
   const mark = c.calls.length;
   await d.backend.rollback("r1");
   assert.equal(
-    c.calls.slice(mark).some((call) => call.path.endsWith(`/${first.services["web-ui"]}`)),
+    c.calls.slice(mark).some((call) => call.path.endsWith(`/${first.services["reports"]}`)),
     false,
   );
   assert.equal(d.saved().rollbackProgress, undefined);
-  assert.equal(c.deploys.get("srv-acme-web-ui")!.commit!.id, first.commit);
+  assert.equal(c.deploys.get("srv-acme-reports")!.commit!.id, first.commit);
 });
 
 test("Render rollback keeps every release and can replace an incomplete target", async (t) => {
   const d = deployment(t);
+  addReportsPlugin(d);
   const c = cloud(t, d);
   for (let index = 0; index < 12; index++) {
     d.setCommit(index.toString(16).repeat(40).slice(0, 40));
@@ -2080,7 +2135,9 @@ test("Render rollback keeps every release and can replace an incomplete target",
   );
   assert.equal(lines.filter((line) => line.startsWith("release r")).length, 12);
   c.intercept = ({ path, method }) =>
-    path === "/services/srv-acme-web-ui/deploys" && method === "POST" ? new Response(null, { status: 500 }) : undefined;
+    path === "/services/srv-acme-reports/deploys" && method === "POST"
+      ? new Response(null, { status: 500 })
+      : undefined;
   await assert.rejects(async () => d.backend.rollback("r5"), /HTTP 500/);
   assert.equal(d.saved().rollbackProgress.label, "r5");
   c.intercept = undefined;
@@ -2089,7 +2146,7 @@ test("Render rollback keeps every release and can replace an incomplete target",
   assert.equal(d.saved().releases[0].label, "r13");
   assert.equal(d.saved().releases[0].commit, "3".repeat(40));
   assert.equal(c.deploys.get("srv-acme-core")!.commit!.id, "3".repeat(40));
-  assert.equal(c.deploys.get("srv-acme-web-ui")!.commit!.id, "3".repeat(40));
+  assert.equal(c.deploys.get("srv-acme-reports")!.commit!.id, "3".repeat(40));
 });
 
 test("Render accepts a corrected target after a rejected rollback request", async (t) => {

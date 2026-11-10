@@ -34,6 +34,7 @@ import { senderNote } from "../src/core/orchestrator/prompt-blocks.ts";
 import type { ManagedGroupDirectory } from "../src/resolution/scope-membership.ts";
 import type { IsCurrentSharedScopeMember } from "../src/resolution/scope-membership.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { orchestratorTestDeps } from "./support/orchestrator-deps.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
@@ -125,7 +126,7 @@ function buildOrchestrator(
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
   const orchestrator = createOrchestrator({
-    ...singleProcessDeps(),
+    ...orchestratorTestDeps(),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     resolution: createResolutionService(ORG, config, acl),
     sessions,
@@ -381,7 +382,7 @@ test("Open keeps unclassified personal memory out of rooms, loads room memory in
   const personal = scopeId("personal", actor.id);
   const channelScope = scopeId("channel", "C1");
   await config.setSharingPosture(scopeId("org", ORG), "open");
-  await memory.capture(personal, ["PERSONAL_OPEN_MEMORY"], Date.now(), actor.id);
+  await memory.capture(personal, ["PERSONAL_OPEN_MEMORY"], Date.now(), { actorId: actor.id, context: "conversation" });
   const channelConversation: Conversation = {
     kind: "channel",
     threadRef: "C1:memory",
@@ -639,7 +640,10 @@ for (const mode of ["off", "writable", "skip"] as const) {
       isCurrentSharedScopeMember: async () => true,
     });
     await config.setSharingPosture(scopeId("org", ORG), "open");
-    await memory.capture(scopeId("personal", actor.id), ["DO_NOT_RECALL_PRIVATE_NOTE"], Date.now(), actor.id);
+    await memory.capture(scopeId("personal", actor.id), ["DO_NOT_RECALL_PRIVATE_NOTE"], Date.now(), {
+      actorId: actor.id,
+      context: "conversation",
+    });
     for (const text of [
       "!sysprompt",
       "!memorysearch DO_NOT_RECALL_PRIVATE_NOTE",
@@ -685,7 +689,7 @@ test("Open source memory is never exported into a reusable sandbox bearer token"
   const personal = scopeId("personal", actor.id);
   const room = scopeId("channel", "C1");
   await config.setSharingPosture(scopeId("org", ORG), "open");
-  await memory.capture(personal, ["OPEN_TOKEN_PRIVATE"], Date.now(), actor.id);
+  await memory.capture(personal, ["OPEN_TOKEN_PRIVATE"], Date.now(), { actorId: actor.id, context: "conversation" });
   const result = await orchestrator.handleTurn({
     surface: "test",
     actor,
@@ -705,7 +709,7 @@ test("Open source memory is never exported into a reusable sandbox bearer token"
   assert.ok(claims);
   assert.ok(claims.memory?.read.includes(room));
   assert.equal(claims.memory?.read.includes(personal), false);
-  await memory.capture(room, ["ROOM_TOKEN_PRIVATE"], Date.now(), actor.id);
+  await memory.capture(room, ["ROOM_TOKEN_PRIVATE"], Date.now(), { actorId: actor.id, context: "conversation" });
   const dmResult = await orchestrator.handleTurn(dm("dm:U1:open-token", "!run echo ok", { origin: { kind: "human" } }));
   assert.equal(dmResult.status, "ok", dmResult.reason);
   const dmClaims = await verifyCapabilityToken(env.AGENT_API_TOKEN, "test-signing-secret");

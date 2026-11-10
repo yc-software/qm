@@ -4,9 +4,9 @@ import { orgId } from "../config.ts";
 import { McpCallError, type McpEnvelope } from "../mcp/mcp-client.ts";
 import { TimeoutError } from "../util/async.ts";
 import { reportFailure } from "../util/errors.ts";
-import { UNATTESTABLE_ACTOR_FIX, UnattestableActor } from "../directory/person.ts";
+import { OutsideAudience, UNATTESTABLE_ACTOR_FIX, UnattestableActor } from "../directory/person.ts";
 import type { ScopeId } from "../types.ts";
-import type { MemoryCaptureContext, MemoryProviderOutcome, MemoryService } from "./memory-service.ts";
+import type { MemoryAuthority, MemoryCaptureContext, MemoryProviderOutcome, MemoryService } from "./memory-service.ts";
 
 export const DENIED_CODES: ReadonlySet<string> = new Set([
   "actor_not_attested",
@@ -24,12 +24,25 @@ export const reportEnvelope = (envelope: McpEnvelope) => envelopes.getStore()?.(
 
 export async function withEnvelope<T>(run: () => Promise<T>): Promise<{ value: T; envelope: McpEnvelope }> {
   let envelope: McpEnvelope = {};
-  const value = await envelopes.run((received) => void (envelope = received), run);
+  const value = await envelopes.run(
+    (received) => void (envelope = envelope.status === "pending" ? { ...received, status: "pending" } : received),
+    run,
+  );
   return { value, envelope };
 }
 
+export class MemoryProviderDisabled extends Error {
+  readonly code: string;
+  constructor(code: string) {
+    super(`memory provider is disabled (${code})`);
+    this.code = code;
+  }
+}
+
 export function failedOutcome(error: unknown): Pick<MemoryProviderOutcome, "outcome" | "code"> {
-  if (error instanceof UnattestableActor) return { outcome: "denied", code: error.code };
+  if (error instanceof MemoryProviderDisabled) return { outcome: "disabled", code: error.code };
+  if (error instanceof UnattestableActor || error instanceof OutsideAudience)
+    return { outcome: "denied", code: error.code };
   if (error instanceof TimeoutError) return { outcome: "timed_out" };
   if (!(error instanceof McpCallError)) return { outcome: "failed" };
   const code = error.code ?? (error.status ? `http_${error.status}` : undefined);
@@ -38,7 +51,7 @@ export function failedOutcome(error: unknown): Pick<MemoryProviderOutcome, "outc
 }
 
 export interface MemoryProviderProblem {
-  code: "memory_provider_denied" | "memory_provider_timeout" | "memory_provider_failed";
+  code: "memory_provider_denied" | "memory_provider_timeout" | "memory_provider_failed" | "memory_provider_disabled";
   provider: string;
   detail: string;
   fix: string;
@@ -46,6 +59,8 @@ export interface MemoryProviderProblem {
 
 function deniedFix(provider: string, code: string | undefined): string {
   if (code === "invalid_actor") return UNATTESTABLE_ACTOR_FIX;
+  if (code === "private_only")
+    return `Save it from the member's own private conversation with QM, the only place ${provider} acts as them.`;
   if (code === "actor_unlinked") return `Link this member's QM principal id to their member in ${provider}.`;
   return `Check ${provider}'s OAuth client and its grant, including the attest right when attestActor is set (${TROUBLESHOOTING}).`;
 }
@@ -68,7 +83,9 @@ function problemOf(outcome: MemoryProviderOutcome, write: boolean): MemoryProvid
         code: "memory_provider_timeout",
         provider,
         detail: `Memory provider ${provider} timed out after ${ms}ms, so ${lost}.`,
-        fix: `Raise ${provider}'s timeoutMs in MEMORY_PROVIDER_CONFIG or check its latency.`,
+        fix: write
+          ? `Check ${provider}'s latency, and whether it stored the facts before sending them again.`
+          : `Raise ${provider}'s timeoutMs in MEMORY_PROVIDER_CONFIG or check its latency.`,
       };
     case "failed":
       return {
@@ -76,6 +93,13 @@ function problemOf(outcome: MemoryProviderOutcome, write: boolean): MemoryProvid
         provider,
         detail: `Memory provider ${provider} failed${reason}, so ${lost}.`,
         fix: `Check ${provider}'s logs, URL and tool names (${TROUBLESHOOTING}).`,
+      };
+    case "disabled":
+      return {
+        code: "memory_provider_disabled",
+        provider,
+        detail: `Memory provider ${provider} is registered for this scope but not serving it${reason}, so QM didn't call it.`,
+        fix: `Look up ${code ?? "the code"} in docs/memory-providers.md#memory-registry; GET /v1/admin/memory-registry shows the entry.`,
       };
     default:
       return undefined;
@@ -138,13 +162,13 @@ export async function writeFacts(
   memory: MemoryService,
   scope: ScopeId,
   facts: string[],
-  author: string | undefined,
+  by: MemoryAuthority,
   context: MemoryCaptureContext,
   turn: string | undefined,
 ): Promise<MemoryWrite> {
   const idempotencyKey = writeKey(turn ?? randomUUID(), scope, facts);
   const { value, outcomes, problems } = await withProviders("write", (report) =>
-    memory.capture(scope, facts, Date.now(), author, { ...context, idempotencyKey, report }),
+    memory.capture(scope, facts, Date.now(), by, { ...context, idempotencyKey, report }),
   );
   return { added: value ?? Math.max(0, ...outcomes.map(({ added }) => added ?? 0)), outcomes, problems };
 }

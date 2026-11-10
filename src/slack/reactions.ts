@@ -2,6 +2,7 @@ import { EMOJI_NAME_BY_CHAR } from "./emoji-map.ts";
 import { sleep } from "./util.ts";
 import { extractDirectives } from "./directives.ts";
 import { slackErrorCode } from "./payloads.ts";
+import { trimTrailing } from "../util/text.ts";
 
 const REACTION_DIRECTIVE = /\[\[react:([^[\]]*)\]\]/gi;
 const TRAILING_OPEN_DIRECTIVE = /\[\[react:[^[\]]*$/i;
@@ -85,7 +86,9 @@ export function normalizeReaction(raw: string): string | null {
   if (!trimmed) return null;
   const fromChar = emojiCharToName(trimmed);
   if (fromChar) return fromChar;
-  const name = trimmed.replace(/^:+/, "").replace(/:+$/, "").trim().toLowerCase();
+  const name = trimTrailing(trimmed.replace(/^:+/, ""), (char) => char === ":")
+    .trim()
+    .toLowerCase();
   if (!/^[a-z0-9_+'-]+(::skin-tone-[2-6])?$/.test(name)) return null;
   return name;
 }

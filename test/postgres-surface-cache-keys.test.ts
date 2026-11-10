@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import pg from "pg";
 import { createPostgresSurfaceCache, type SurfaceCache } from "../src/surface-cache/surface-cache.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { seedReleasedInstall } from "./support/tenant-seed.ts";
 
 async function snapshot(cache: SurfaceCache) {
   return {
@@ -22,28 +21,26 @@ async function snapshot(cache: SurfaceCache) {
   };
 }
 
-const LEGACY_KEYS = {
-  channel_messages: "org_id, container, ts",
-  channel_state: "org_id, container",
-  channel_files: "org_id, container, ts, file_id",
-};
-
 async function downgradeToLegacySchema(url: string): Promise<void> {
   const pool = new pg.Pool({ connectionString: url });
   try {
-    for (const [table, key] of Object.entries(LEGACY_KEYS)) {
-      await pool.query(`ALTER TABLE ${table} DROP COLUMN surface, DROP COLUMN account, DROP COLUMN tenant_id CASCADE`);
-      await pool.query(`ALTER TABLE ${table} ADD PRIMARY KEY (${key}), DISABLE ROW LEVEL SECURITY`);
+    for (const [table, key] of [
+      ["channel_messages", "org_id, container, ts"],
+      ["channel_state", "org_id, container"],
+      ["channel_files", "org_id, container, ts, file_id"],
+    ] as const) {
+      await pool.query(`DROP POLICY tenant_isolation ON ${table}`);
+      await pool.query(`ALTER TABLE ${table} DISABLE ROW LEVEL SECURITY`);
+      await pool.query(`ALTER TABLE ${table} DROP COLUMN tenant_id CASCADE, DROP COLUMN surface, DROP COLUMN account`);
+      await pool.query(`ALTER TABLE ${table} ADD PRIMARY KEY (${key})`);
     }
-    await pool.query("DELETE FROM qm_schema_migrations WHERE id IN ($1, $2) OR id LIKE $3", [
-      "surface-cache/store/0008",
-      "surface-cache/store/0009",
-      "surface-cache/store/0010-tenants%",
-    ]);
+    await pool.query(
+      "DELETE FROM qm_schema_migrations WHERE id IN ($1, $2) OR id LIKE 'surface-cache/store/0010-tenants/%'",
+      ["surface-cache/store/0008", "surface-cache/store/0009"],
+    );
   } finally {
     await pool.end();
   }
-  await seedReleasedInstall(url);
 }
 
 test("legacy mirror rows read identically after the surface-key upgrade", async () => {

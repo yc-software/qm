@@ -133,7 +133,7 @@ test("stopping a steered run preserves earlier singleton tools and labels only i
     item("SteeringMessage", { seq: 3, createdAt: 3000, text: "Change direction" }),
     item("ToolCall", { seq: 4, createdAt: 4000, tool: "execute", callId: "b", body: { command: "echo after" } }),
     item("ToolResult", { seq: 5, createdAt: 5000, tool: "execute", callId: "b", body: { code: 0 } }),
-    item("AgentMessage", { seq: 6, createdAt: 6000, text: "(stopped)", body: { stopped: true } }),
+    item("Stop", { seq: 6, createdAt: 6000, body: { reason: "by user" } }),
   ];
   const h = await harness({ path: `/s/${SESSION.id}`, listSessions: [SESSION], items });
   try {
