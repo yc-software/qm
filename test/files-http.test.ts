@@ -34,6 +34,9 @@ function makeUploadApp(files: FileArtifactStore, acl: ReturnType<typeof createAc
       principalId === "U1" || principalId === "U2" ? [{ channelId: "C1", name: "eng", isPrivate: true }] : [],
     channelMember: async (_tenant: Tenant, channelId: string, principalId: string) =>
       channelId === "C1" && (principalId === "U1" || principalId === "U2"),
+    get: async (_tenant: Tenant, _principalId: string) => null,
+    listGroupsFor: async (_tenant: Tenant, _principalId: string) => [],
+    channelPrivacy: async (_tenant: Tenant, _channelId: string): Promise<boolean | undefined> => undefined,
   };
   const sessions = { listByParticipant: async (_p: string) => [], participantScopes: async (_p: string) => [] };
   const auditLog = { record: () => undefined };
