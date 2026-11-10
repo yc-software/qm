@@ -916,7 +916,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 };
               if (!(await deps.sessions.getForParticipant(target.id, binding.request.actor.id)))
                 return { ok: false, message: "you are not a participant in that session." };
-              if (target.spawnMeta?.retired && target.parentSessionId)
+              if (target.spawnMeta?.retired && target.parentSessionId === binding.session.id)
                 return {
                   ok: false,
                   message:
