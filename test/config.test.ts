@@ -10,6 +10,7 @@ import {
   CONFIG_DEFAULTS,
 } from "../src/config.ts";
 import { boolEnv, numEnv } from "../src/util/env.ts";
+import { withoutTenant } from "../src/tenants/context.ts";
 import { enabledSandboxBackends } from "../src/sandbox/sandbox-settings.ts";
 
 const RENDER_IMAGE = `ghcr.io/yc-software/qm/sandbox-base:${"c".repeat(40)}@sha256:${"d".repeat(64)}`;
@@ -573,6 +574,16 @@ test("MODEL_PROVIDER declares the vendor that bills the base model", () => {
   assert.equal(loadConfig({}).modelProvider, undefined);
   assert.equal(loadConfig({ MODEL_PROVIDER: " openrouter ", OPENROUTER_API_KEY: "k" }).modelProvider, "openrouter");
   assert.throws(() => loadConfig({ MODEL_PROVIDER: "bedrock" }), /MODEL_PROVIDER.*not recognized/);
+});
+
+test("MODEL_PROVIDER loads at boot before any tenant is bound", () => {
+  for (const [provider, key] of [
+    ["anthropic", "ANTHROPIC_API_KEY"],
+    ["openai", "OPENAI_API_KEY"],
+    ["openrouter", "OPENROUTER_API_KEY"],
+  ] as const) {
+    assert.equal(withoutTenant(() => loadConfig({ MODEL_PROVIDER: provider, [key]: "k" })).modelProvider, provider);
+  }
 });
 
 test("baseModelProviders constrains the base model only when a provider is declared", () => {

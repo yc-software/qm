@@ -1,5 +1,6 @@
 import type { ClientToolResult, StopScope, TurnRequest } from "../types.ts";
 import { swallowAs } from "../util/errors.ts";
+import type { ClaimedRow } from "../tenants/claim.ts";
 
 export type RunSignalKind = "abort" | "steer" | "client_result";
 
@@ -23,7 +24,7 @@ export interface RunSignalStore {
   acknowledge(runId: string, id: string): Promise<void>;
   takePending(runId: string): Promise<RunSignal[]>;
   steerAuthors(runId: string): Promise<string[]>;
-  pendingRunIds(): Promise<string[]>;
+  pendingRuns(): Promise<ClaimedRow[]>;
   prune(olderThanMs: number): Promise<void>;
   onSignal(runId: string, cb: () => void): () => void;
   close?(): Promise<void>;

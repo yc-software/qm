@@ -1,4 +1,5 @@
 import type { App } from "../../app.ts";
+import { personLabel } from "../../../identity/person-names.ts";
 import type { ServerDeps } from "../../deps.ts";
 import { parseScopeId, type Delivery, type DeliveryProvenance, type Session } from "../../../types.ts";
 import {
@@ -21,7 +22,9 @@ const SESSIONS_PAGE_LIMIT_DEFAULT = 50;
 const TRANSCRIPT_LIMIT_MAX = 50000;
 const TRANSCRIPT_LIMIT_DEFAULT = 500;
 async function displayNameForPrincipal(app: App, deps: ServerDeps, principalId: string): Promise<string> {
-  return (await app.directoryMember(principalId))?.displayName?.trim() || principalId;
+  const member = await app.directoryMember(principalId);
+  const user = await deps.users?.get(principalId).catch(() => null);
+  return personLabel(principalId, { displayName: member?.displayName, user });
 }
 
 async function inferSingleParticipantName(app: App, deps: ServerDeps, sessionId: string): Promise<string | null> {

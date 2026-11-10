@@ -1,10 +1,13 @@
 import { randomBytes } from "node:crypto";
+import { boundTenant } from "../../src/tenants/context.ts";
 import { MessageChannel, receiveMessageOnPort, Worker, type MessagePort } from "node:worker_threads";
 import { createPostgresAdminGrantStore } from "../../src/admin/postgres-admin-grant-store.ts";
 import { createAdminGrantStore, type AdminGrant, type AdminGrantStore } from "../../src/admin/admin-grant-store.ts";
 import { createPostgresAdvisoryLock, type AdvisoryLock } from "../../src/persistence/advisory-lock.ts";
 import { createPostgresMapFactory, type DurableMap } from "../../src/persistence/durable-map.ts";
 import { createPgPool, type PgPool } from "../../src/persistence/pg-pool.ts";
+import { APP_ROLE, boundUrl, ownerUrl } from "./test-tenant.ts";
+import { DEPLOYMENT_TABLES } from "../../src/deploy/page-views.ts";
 import { configStoreMaps, createConfigStore } from "../../src/resolution/config-store.ts";
 import { orgId } from "../../src/config.ts";
 import { scopeId } from "../../src/types.ts";
@@ -13,12 +16,12 @@ import { createPostgresUserStore } from "../../src/identity/user-store.ts";
 function baseDatabaseUrl(): URL {
   const base = process.env.DATABASE_URL;
   if (!base) throw new Error("Set DATABASE_URL to a Postgres server the tests may create databases on");
-  return new URL(base);
+  return ownerUrl(base);
 }
 
 let databaseWorker: { worker: Worker; signal: Int32Array; port: MessagePort } | undefined;
 
-function createDatabaseSync(request: { template?: string }): string {
+function createDatabaseSync(request: { template?: string; bare?: boolean }): string {
   if (!databaseWorker) {
     const signal = new Int32Array(new SharedArrayBuffer(4));
     const { port1, port2 } = new MessageChannel();
@@ -50,13 +53,17 @@ function databaseUrl(name: string): string {
 }
 
 export function testDatabaseUrl(): string {
-  return databaseUrl(createDatabaseSync({}));
+  return boundUrl(databaseUrl(createDatabaseSync({})));
+}
+
+export function testBareDatabaseUrl(): string {
+  return databaseUrl(createDatabaseSync({ bare: true }));
 }
 
 export function testMigratedDatabaseUrl(): string {
   const template = process.env.QM_TEST_TEMPLATE_DATABASE;
   if (!template) throw new Error("QM_TEST_TEMPLATE_DATABASE is unset: run tests through scripts/run-pg-tests.mjs");
-  return databaseUrl(createDatabaseSync({ template }));
+  return boundUrl(databaseUrl(createDatabaseSync({ template })), APP_ROLE);
 }
 
 let shared: { url: string; maps: ReturnType<typeof createPostgresMapFactory> } | undefined;
@@ -94,15 +101,24 @@ export function testAdminGrantStore(
     role: "org_admin" as const,
   })),
 ): AdminGrantStore {
-  return createAdminGrantStore(createPostgresAdminGrantStore(testDatabaseUrl()), { seed });
+  return createAdminGrantStore(createPostgresAdminGrantStore(testDatabaseUrl()), {
+    seed,
+    seedTenant: async () => boundTenant(),
+  });
 }
 
 export function testDeployBackings(
   backings: Partial<Parameters<typeof import("../../src/deploy/deploy-store.ts").createDeployStore>[0]> = {},
 ) {
-  const maps = createPostgresMapFactory(testDatabaseUrl());
+  const databaseUrl = testDatabaseUrl();
+  const maps = createPostgresMapFactory(databaseUrl);
   return {
-    deployments: maps.map<import("../../src/deploy/deploy-store.ts").Deployment>("deployments"),
+    databaseUrl,
+    deployments: maps.map<import("../../src/deploy/deploy-store.ts").Deployment>(
+      "deployments",
+      undefined,
+      DEPLOYMENT_TABLES,
+    ),
     pg: maps.pool,
     ...backings,
   };

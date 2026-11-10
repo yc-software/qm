@@ -6,6 +6,9 @@ import { isStrongSigningSecret, MIN_SIGNING_SECRET_LENGTH } from "../auth/source
 import { orgId } from "../config.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
 import { reportFailure } from "../util/errors.ts";
+import { bootTenant } from "../tenants/boot.ts";
+import { boundTenant } from "../tenants/context.ts";
+import { labelOfAppHost } from "../tenants/app-handle.ts";
 import type { ServerDeps } from "./deps.ts";
 import { apiRoutes } from "./routes/index.ts";
 import { compilePath, findRoute, type Route } from "./routes/route.ts";
@@ -201,6 +204,29 @@ export function apiAlias(method: string, pathname: string): string | null {
   return null;
 }
 
+export function appHostRequest(
+  req: IncomingMessage,
+  deps: Pick<ServerDeps, "deployAppsDomain" | "deployGateSecret">,
+): boolean {
+  if (req.headers["x-qm-app-host"] === "1") return true;
+  return !!deps.deployGateSecret && labelOfAppHost(req.headers.host, deps.deployAppsDomain) !== undefined;
+}
+
+export function sessionCookieTenant(req: IncomingMessage, secret: string, maxAgeSeconds: number): string | undefined {
+  return openSession(
+    readCookie(req.headers.cookie, "portal_session"),
+    deriveKey(secret, "portal.session.v1"),
+    Date.now(),
+    orgId(),
+    maxAgeSeconds,
+  )?.t;
+}
+
+export function browserSessionTenant(req: IncomingMessage, deps: BrowserLaneDeps): string | undefined {
+  if (misconfiguration(deps)) return undefined;
+  return sessionCookieTenant(req, deps.portalSession!.secret, deps.portalSession!.maxAgeSeconds);
+}
+
 const RELAY_IDENTITY_HEADERS = ["x-admin-actor", "x-as-principal", "x-consent-clicker", "x-drop-owner"];
 
 interface BrowserRefusal {
@@ -209,7 +235,9 @@ interface BrowserRefusal {
   message: string;
 }
 
-function misconfiguration(deps: ServerDeps): string | null {
+type BrowserLaneDeps = Pick<ServerDeps, "portalSession" | "signingSecret" | "portalUrl">;
+
+function misconfiguration(deps: BrowserLaneDeps): string | null {
   const secret = deps.portalSession?.secret;
   if (!secret?.trim()) return "PORTAL_SESSION_SECRET is not set";
   if (!isStrongSigningSecret(secret))
@@ -249,6 +277,8 @@ export async function browserIdentity(
     maxAgeSeconds,
   );
   if (!session)
+    return { status: 401, error: "unauthorized", message: "a sign-in session for this organization is required" };
+  if ((session.t ?? bootTenant()) !== boundTenant())
     return { status: 401, error: "unauthorized", message: "a sign-in session for this organization is required" };
   if (session.appOnly)
     return { status: 403, error: "app_only_session", message: "this sign-in only permits access to shared apps" };

@@ -1,3 +1,4 @@
+import { personLabel } from "../identity/person-names.ts";
 import { LRUCache } from "lru-cache";
 
 export interface ActorAssertion {
@@ -112,7 +113,7 @@ export function groupDmDisplayName(members: readonly ActorAssertion[]): string |
   const seen = new Set<string>();
   for (const member of members) {
     if (member.isExternalGuest) continue;
-    const name = (member.displayName ?? member.externalId).trim();
+    const name = personLabel(member.externalId, { displayName: member.displayName });
     if (!name || seen.has(name)) continue;
     seen.add(name);
     names.push(name);

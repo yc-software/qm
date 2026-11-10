@@ -110,7 +110,7 @@ function ownerLabel(d: DeploymentView): string {
   const me = appState.me?.user;
   if (d.ownerScopeId === `personal:${me}`) return "Owned by you";
   if (d.ownerScopeId?.startsWith("personal:"))
-    return `Owned by ${friendlyPrincipal(d.ownerScopeId.slice("personal:".length))}`;
+    return `Owned by ${d.ownerName ?? friendlyPrincipal(d.ownerScopeId.slice("personal:".length))}`;
   if (d.ownerScopeId?.startsWith("org:")) return "Organization";
   return "Shared context";
 }
@@ -304,7 +304,7 @@ function drawDeployDetail(d: DeploymentView, loading = false): void {
           <div>
             <span>${ownerLabel(d)}</span>
             ${contextScope && contextScope !== d.ownerScopeId ? html`<span class="deploy-secondary-context">Created in ${scopeChip(contextScope)}</span>` : nothing}
-            ${d.createdBy && d.ownerScopeId !== `personal:${d.createdBy}` ? html`<span class="deploy-secondary-context">Created by ${friendlyPrincipal(d.createdBy)}</span>` : nothing}
+            ${d.createdBy && d.ownerScopeId !== `personal:${d.createdBy}` ? html`<span class="deploy-secondary-context">Created by ${d.createdByName ?? friendlyPrincipal(d.createdBy)}</span>` : nothing}
           </div>
           ${d.ownerScopeId === `personal:${appState.me?.user}` ? html`<button class="btn" type="button" @click=${() => void openDeploymentPermissions(d.id, deploymentTitle(d), d.ownerScopeId!)}>Permissions</button>` : permissionBadge(d)}
         </div>
