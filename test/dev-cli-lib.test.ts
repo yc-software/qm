@@ -267,6 +267,26 @@ test("reclaim never touches a lease with a fresh heartbeat and live supervisor",
   rmSync(store, { recursive: true, force: true });
 });
 
+test("reclaim never touches a booting lease whose owner is alive, even from a prior day", () => {
+  const store = tmpStore();
+  claimSlotLock("pool1", store);
+  const lock = lockDir("pool1", store);
+  const worktree = mkdtempSync(join(tmpdir(), "qm-wt-"));
+  const oldEpoch = Math.floor(Date.now() / 1000) - 3 * 86_400;
+  writeMeta(lock, {
+    slot: "pool1",
+    worktree,
+    created_epoch: String(oldEpoch),
+    booting: "1",
+    owner_pid: String(process.pid),
+  });
+  const lease = listLeases(store)[0] as LeaseInfo;
+  assert.equal(leaseStale(lease), false);
+  assert.equal(leaseReclaimReason(lease), null);
+  rmSync(worktree, { recursive: true, force: true });
+  rmSync(store, { recursive: true, force: true });
+});
+
 test("legacy lease (no heartbeat) keeps the not-today age reclaim rule", () => {
   const store = tmpStore();
   claimSlotLock("pool1", store);

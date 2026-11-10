@@ -94,7 +94,7 @@ async function drive(
       );
       const call: Call = (name, params) =>
         (tools.find((entry) => entry.name === name) as unknown as Tool)
-          .execute(`call-${++calls}`, params)
+          .execute(`${queued.id}:${++calls}`, params)
           .then(textOf, (error: unknown) => `[threw] ${errMessage(error)}`);
       observed = await act(call, (await f.runs.get(queued.id))!);
       return { reply: "done", modelCalls: 1 };
@@ -285,11 +285,36 @@ test("a Slack bot that started a swarm cannot list or use its computers once a p
   assertKeptOut(observed);
 });
 
-test("the person keeps their swarm's computers and a bot keeps the computers of a swarm only it directs", async (t) => {
-  const person = await channelTurn(await personSwarm(), alice, false);
-  const bot = await channelTurn(await botSwarm(), releaseBot, true);
-  t.diagnostic(`person: ${JSON.stringify(person)}`);
-  t.diagnostic(`bot-only swarm: ${JSON.stringify(bot)}`);
+test("a Slack bot that started a swarm cannot list or use its computers once a person's turn worked on them", async (t) => {
+  const f = await botSwarm();
+  const swarm = (await f.store.get(f.root.id))!;
+  const worker = swarm.members.find((member) => member.id !== swarm.id)!;
+  const { run } = await f.runs.enqueue({
+    sessionId: f.root.threadRef,
+    request: channelRequest(f, alice, false),
+    maxAttempts: 1,
+  });
+  await drive(f, run, async (call) => ({
+    board: await call("files", {
+      action: "write",
+      path: "board.md",
+      data: "alice's board",
+      sandbox_id: swarm.board!.sandboxId,
+    }),
+    worker: await call("files", {
+      action: "write",
+      path: "plan.md",
+      data: "alice's private plan",
+      sandbox_id: worker.sandboxId,
+    }),
+  }));
+  await f.runs.complete(run.id, (await f.runs.get(run.id))!.leaseToken!, { status: "ok", reply: "done" });
+  const observed = await channelTurn(f, releaseBot, true);
+  t.diagnostic(`observed: ${JSON.stringify(observed)}`);
+  assertKeptOut(observed);
+});
+
+function assertKeptIn(observed: Record<string, unknown>): void {
   const kept = {
     directs: "accepted",
     listed: ["Swarm board", "Swarm worker"],
@@ -304,14 +329,38 @@ test("the person keeps their swarm's computers and a bot keeps the computers of 
     workerState: "retired",
     defaultIsBoard: true,
   };
-  for (const observed of [person, bot]) {
-    const { workerExecute, defaultExecute, defaultRestart, defaultStatus, ...rest } = observed;
-    assert.deepEqual(rest, kept);
-    assert.ok(String(workerExecute).startsWith("alice's private plan"), String(workerExecute));
-    assert.ok(!String(defaultExecute).endsWith(refusedComputer), String(defaultExecute));
-    assert.ok(!String(defaultRestart).endsWith(refusedComputer), String(defaultRestart));
-    assert.ok(!String(defaultStatus).endsWith(refusedComputer), String(defaultStatus));
-  }
+  const { workerExecute, defaultExecute, defaultRestart, defaultStatus, ...rest } = observed;
+  assert.deepEqual(rest, kept);
+  assert.ok(String(workerExecute).startsWith("alice's private plan"), String(workerExecute));
+  assert.ok(!String(defaultExecute).endsWith(refusedComputer), String(defaultExecute));
+  assert.ok(!String(defaultRestart).endsWith(refusedComputer), String(defaultRestart));
+  assert.ok(!String(defaultStatus).endsWith(refusedComputer), String(defaultStatus));
+}
+
+test("the person keeps their swarm's computers and a bot keeps the computers of a swarm only it directs", async (t) => {
+  const person = await channelTurn(await personSwarm(), alice, false);
+  const bot = await channelTurn(await botSwarm(), releaseBot, true);
+  t.diagnostic(`person: ${JSON.stringify(person)}`);
+  t.diagnostic(`bot-only swarm: ${JSON.stringify(bot)}`);
+  assertKeptIn(person);
+  assertKeptIn(bot);
+});
+
+test("a person's turn that only lists computers and background jobs leaves a bot-started swarm's computers to its bot", async (t) => {
+  const f = await botSwarm();
+  const { run } = await f.runs.enqueue({
+    sessionId: f.root.threadRef,
+    request: channelRequest(f, alice, false),
+    maxAttempts: 1,
+  });
+  await drive(f, run, async (call) => ({
+    computers: await call("sandbox", { action: "list", purpose: "Listing computers" }),
+    jobs: await call("background", { action: "list", purpose: "Listing jobs" }),
+  }));
+  await f.runs.complete(run.id, (await f.runs.get(run.id))!.leaseToken!, { status: "ok", reply: "done" });
+  const observed = await channelTurn(f, releaseBot, true);
+  t.diagnostic(`observed: ${JSON.stringify(observed)}`);
+  assertKeptIn(observed);
 });
 
 test("a worker in a bot-started swarm keeps its swarm's board only while the bot may direct it", async () => {

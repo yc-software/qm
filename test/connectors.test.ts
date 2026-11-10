@@ -125,7 +125,7 @@ test("disconnect revokes connector grants so reconnect does not resurrect sharin
   await keychain.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "second" });
 
   assert.equal((await keychain.getGrant(grant.id))?.status, "revoked");
-  assert.deepEqual(await keychain.grantsForScope("channel:C1"), []);
+  assert.deepEqual(await keychain.grantsForScope("channel:C1", { includePersonGrants: true }), []);
 });
 
 test("connector token refresh: concurrent callers single-flight; connection metadata survives the rewrite", async () => {
@@ -326,7 +326,7 @@ test("disconnect revokes connector grants so reconnect cannot restore old access
   await keychain.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "second" });
 
   assert.equal((await keychain.getGrant(grant.id))?.status, "revoked");
-  assert.deepEqual(await keychain.grantsForScope("channel:C1"), []);
+  assert.deepEqual(await keychain.grantsForScope("channel:C1", { includePersonGrants: true }), []);
 });
 
 test("connector tokens are hidden from keychain listings and own-credential materialization", async () => {

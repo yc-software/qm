@@ -283,7 +283,7 @@ export const scenarios: Scenario[] = [
       );
       await sleep(3000);
       await ch.threadReply(root, `Second question (tag ${m2}): also, what is 17 * 23? Answer both questions.`);
-      await ch.waitForBotReply(root, { match: /391/, timeoutMs: 4 * 60_000 });
+      await ch.waitForBotReply(root, { match: /\b391\b/, timeoutMs: 4 * 60_000 });
       const botMsgs = await ch.botMessagesInThread(root);
       const texts = botMsgs.map((m) => m.text ?? "").filter((t) => t.length > 0);
       const dupes = texts.filter((t, i) => texts.indexOf(t) !== i);
