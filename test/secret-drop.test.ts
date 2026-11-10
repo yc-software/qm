@@ -12,6 +12,7 @@ import type { Server } from "node:http";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
+import { KeychainError } from "../src/credentials/keychain.ts";
 import { createSecretDropStore, SECRET_DROP_TTL_MS } from "../src/credentials/secret-drop.ts";
 import { fireDropResolution, type DropResolution } from "../src/triggers/keychain-ask.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
@@ -429,6 +430,28 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
       Object.assign(directory, originals);
     }
     assert.equal((await redeem(dropId, { secret: "sk_outage" }, "U_A", linkToken(formPath))).status, 200);
+  });
+
+  it("a keychain save failure leaves the drop link usable for a retry", async () => {
+    const minted = await post(
+      "/v1/keychain/drops",
+      { service: "save-fail", purpose: "survive a save failure" },
+      await capFor("U_B"),
+    );
+    const { dropId, formPath } = (await minted.json()) as { dropId: string; formPath: string };
+    const keychain = built.keychain! as unknown as Record<string, unknown>;
+    const save = keychain.save;
+    keychain.save = async () => {
+      throw new KeychainError(503, "keychain unavailable");
+    };
+    try {
+      assert.equal((await redeem(dropId, { secret: "sk_retry" }, "U_B", linkToken(formPath))).status, 503);
+      assert.ok((await built.secretDrops.peek(dropId)).ok);
+    } finally {
+      keychain.save = save;
+    }
+    assert.equal((await redeem(dropId, { secret: "sk_retry" }, "U_B", linkToken(formPath))).status, 200);
+    assert.ok(!(await built.secretDrops.peek(dropId)).ok);
   });
 
   it("an agent-declared fields[] drop renders each input, saves them all, and materializes them in order", async () => {
