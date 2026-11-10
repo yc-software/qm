@@ -433,7 +433,7 @@ test("the decisions resource checks the model catalog and lets an admin's agent 
 test("decision hooks load active rules for the hook, decide, and audit every verdict", async () => {
   const { createDecisionHooks } = await import("../src/decisions/hooks.ts");
   const records: { action: string; resource?: string; status?: string }[] = [];
-  const audit = { record: (e: (typeof records)[number]) => void records.push(e) } as never;
+  const audit = { record: (_t: unknown, e: (typeof records)[number]) => void records.push(e) } as never;
   const asked: string[] = [];
   const store = {
     rules: async (_tenant: unknown, hook: string) => (
@@ -469,7 +469,7 @@ test("decision hooks load active rules for the hook, decide, and audit every ver
 test("observe-only rules do not hold up the turn and are still audited", async () => {
   const { createDecisionHooks } = await import("../src/decisions/hooks.ts");
   const records: { resource?: string; status?: string }[] = [];
-  const audit = { record: (e: (typeof records)[number]) => void records.push(e) } as never;
+  const audit = { record: (_t: unknown, e: (typeof records)[number]) => void records.push(e) } as never;
   const shadowModel = { provider: "anthropic", model: "shadow-model" };
   const store = {
     rules: async () => [route(), { ...route(), id: "shadow", mode: "observe" as const, model: shadowModel }],
