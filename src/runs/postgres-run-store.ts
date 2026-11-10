@@ -3,12 +3,12 @@ import { createPgPool } from "../persistence/pg-pool.ts";
 import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 import { isObj } from "../util/objects.ts";
 import type { TurnResult } from "../types.ts";
-import type { OrchestratorInput } from "../core/orchestrator.ts";
-import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, RunStop, RunStore } from "./run-store.ts";
-import type { RunPriority } from "./run-store.ts";
+import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunStop, RunStore } from "./run-store.ts";
 import { countedClaims, isTerminal, runPriority, stopErrorCode, withTraceCarrier } from "./run-store.ts";
 import { tenantTables } from "../tenants/migrations.ts";
 import { createRunWatch, NOTIFY_SESSION_AVAILABLE } from "./run-watch.ts";
+import { createRunReturns, PENDING_RETURNS } from "./run-returns.ts";
+import { rowToRun } from "./run-rows.ts";
 import { claimFunction, claimRows, claimThenBind, claimThenLoad, type ClaimedRow } from "../tenants/claim.ts";
 
 export interface PostgresRuntime {
@@ -18,33 +18,6 @@ export interface PostgresRuntime {
 
 function isUniqueViolation(err: unknown): boolean {
   return isObj(err) && err.code === "23505";
-}
-
-function rowToRun(r: Record<string, unknown>): Run {
-  const request = JSON.parse(r.request as string) as OrchestratorInput;
-  return {
-    id: r.id as string,
-    tenantId: String(r.tenant_id),
-    sessionId: r.session_id as string,
-    status: r.status as Run["status"],
-    request,
-    result: r.result != null ? (JSON.parse(r.result as string) as TurnResult) : null,
-    deliveryState: r.delivery_state != null ? (JSON.parse(r.delivery_state as string) as RunDeliveryState) : null,
-    turnUserSeq: r.turn_user_seq != null ? Number(r.turn_user_seq) : null,
-    dedupKey: (r.idempotency_key as string | null) ?? null,
-    attempts: Number(r.attempts),
-    errorAttempts: Number(r.error_attempts),
-    maxAttempts: Number(r.max_attempts),
-    priority: Number(r.claim_priority) as RunPriority,
-    preemptions: Number(r.preemptions),
-    leaseToken: (r.lease_token as string | null) ?? null,
-    leaseExpiresAt: r.lease_expires_at === null ? null : Number(r.lease_expires_at),
-    workerId: (r.worker_id as string | null) ?? null,
-    createdAt: Number(r.created_at),
-    startedAt: r.started_at === null ? null : Number(r.started_at),
-    finishedAt: r.finished_at === null ? null : Number(r.finished_at),
-    lastStop: r.last_stop != null ? (JSON.parse(r.last_stop as string) as RunStop) : null,
-  };
 }
 
 const parked = (run: string) => `(${run}.claim_priority > 0 AND ${run}.last_stop::jsonb->>'kind' = 'parked')`;
@@ -71,18 +44,6 @@ const claimable = (
         AND (sibling.retry_after > ${now} OR ${before("sibling", "candidate")})))
     OFFSET 0
   )`;
-
-const PENDING_RETURNS = `SELECT * FROM (
-           SELECT * FROM runs WHERE status IN ('done','failed') AND returned_at IS NULL
-           AND session_id LIKE 'agent:main:subagent:%' AND id > $2
-           UNION
-           SELECT child.* FROM runs wake JOIN runs child
-           ON child.tenant_id = wake.tenant_id AND child.id = substring(wake.idempotency_key FROM length('subagent-return:') + 1)
-           WHERE wake.status = 'pending' AND wake.attempts = 0 AND wake.turn_user_seq IS NULL
-           AND wake.idempotency_key LIKE 'subagent-return:%'
-           AND child.status IN ('done','failed') AND child.session_id LIKE 'agent:main:subagent:%'
-           AND child.id > $2
-         ) pending`;
 
 const RUN_CLAIMS = {
   id: "runs/store/0013-claims",
@@ -293,6 +254,7 @@ END $base_schema$`,
   }
 
   const runs: RunStore = {
+    ...createRunReturns(pg, loaded),
     ...watch,
     ...(Number.isFinite(maxClaims) ? { maxClaims } : {}),
 
@@ -399,20 +361,6 @@ END $base_schema$`,
       return rowCount > 0;
     },
 
-    async setDeliveryState(runId: string, leaseToken: string | null, state: RunDeliveryState): Promise<boolean> {
-      const { rowCount } =
-        leaseToken === null
-          ? await q(
-              "UPDATE runs SET delivery_state=(COALESCE(delivery_state, '{}')::jsonb || $1::jsonb)::text WHERE id=$2",
-              [JSON.stringify(state), runId],
-            )
-          : await q(
-              "UPDATE runs SET delivery_state=(COALESCE(delivery_state, '{}')::jsonb || $1::jsonb)::text WHERE id=$2 AND lease_token=$3",
-              [JSON.stringify(state), runId, leaseToken],
-            );
-      return rowCount > 0;
-    },
-
     async activeForThreads(threadRefs) {
       if (!threadRefs.length) return new Map();
       const { rows } = await q(
@@ -430,52 +378,11 @@ END $base_schema$`,
         }),
       );
     },
-    async pendingReturns(limit = 100, afterId = "", threadRefs) {
-      if (threadRefs) {
-        const { rows } = await q(`${PENDING_RETURNS} WHERE session_id = ANY($3) ORDER BY id LIMIT $1`, [
-          limit,
-          afterId,
-          threadRefs,
-        ]);
-        return rows.map(rowToRun);
-      }
-      return loaded(() => claimRows(pg, "claim_pending_returns", [limit, afterId, Date.now()]));
-    },
-    async terminalFinished(after, beforeMs, limit) {
-      return loaded(() => claimRows(pg, "claim_terminal_runs", [beforeMs, after.finishedAt, after.id, limit]));
-    },
-    async markReturned(runId) {
-      await q("UPDATE runs SET returned_at = $2 WHERE id = $1 AND status IN ('done','failed')", [runId, Date.now()]);
-    },
-    async deferReturn(runId, delayMs) {
-      await q("UPDATE runs SET retry_after = $2 WHERE id = $1 AND status IN ('done','failed')", [
-        runId,
-        Date.now() + Math.max(0, delayMs),
-      ]);
-    },
     onTerminal(listener): void {
       terminalListeners.push(listener);
     },
 
     get: getRun,
-
-    async lastFinishedForThreads(threadRefs) {
-      if (!threadRefs.length) return new Map();
-      const { rows } = await q(
-        `SELECT last.* FROM unnest($1::text[]) AS threads(id)
-         CROSS JOIN LATERAL (
-           SELECT * FROM runs WHERE session_id = threads.id AND status IN ('done', 'failed')
-           ORDER BY created_at DESC, seq DESC LIMIT 1
-         ) last`,
-        [[...new Set(threadRefs)]],
-      );
-      return new Map(
-        rows.map((row) => {
-          const run = rowToRun(row);
-          return [run.sessionId, run];
-        }),
-      );
-    },
 
     async activeForThread(sessionId: string): Promise<Run | null> {
       return (await runs.activeForThreads([sessionId])).get(sessionId) ?? null;
