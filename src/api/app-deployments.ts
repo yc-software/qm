@@ -12,7 +12,8 @@ import { deploymentView } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { Deployment } from "../deploy/deploy-store.ts";
-import { samePerson } from "../directory/person.ts";
+import { samePersonInDirectory } from "../directory/person.ts";
+import { personOrOwningBot } from "./artifact-share.ts";
 
 export function createDeploymentMethods(
   deps: AppDeps,
@@ -60,8 +61,10 @@ export function createDeploymentMethods(
     caller: Pick<CapabilityClaims, "actorId" | "botActor">,
   ): Promise<"read" | "write" | null> {
     const permission = await principalGitPermission(d, caller.actorId);
-    if (permission !== "write" || !caller.botActor) return permission;
-    return samePerson(d.createdBy, caller.actorId) ? "write" : "read";
+    if (permission !== "write") return permission;
+    return (await personOrOwningBot(caller, () => samePersonInDirectory(deps.directory, d.createdBy, caller.actorId)))
+      ? "write"
+      : "read";
   }
   const invitationLock = deps.advisoryLock;
   return {
@@ -158,8 +161,11 @@ export function createDeploymentMethods(
       return deps.deploy.rollbackDeployment(id, version, actor ? { actor } : undefined);
     },
     async canManageDeployment(idOrName, caller, actingScopeId) {
-      if (caller.botActor && !samePerson((await deps.deploy.getDeployment(idOrName))?.createdBy, caller.actorId))
-        return false;
+      const createdIt = async () => {
+        const d = await deps.deploy.getDeployment(idOrName);
+        return !!d && samePersonInDirectory(deps.directory, d.createdBy, caller.actorId);
+      };
+      if (!(await personOrOwningBot(caller, createdIt))) return false;
       return deps.deploy.canManageDeployment(idOrName, caller.actorId, actingScopeId);
     },
     archiveDeployment(id) {

@@ -23,6 +23,7 @@ import { AdminError } from "../admin/admin-service.ts";
 import type { AdminService } from "../admin/admin-service.ts";
 import {
   livePersonCapability,
+  personOrOwningBot,
   resolveShareTarget,
   SHARED_SKILL_TRIGGER_REFUSAL,
   type ShareArtifactRequest,
@@ -218,7 +219,8 @@ export async function canAdministerCron(
   actor: Pick<CapabilityClaims, "actorId" | "botActor">,
   isActor?: (id: string) => Promise<boolean>,
 ): Promise<boolean> {
-  if (actor.botActor) return !actsAsScope(cron.owner, cron.ownerScopeId) && ownsCron(app, cron, actor.actorId, isActor);
+  const owns = () => (isActor ? isActor(cron.owner) : app.samePerson(cron.owner, actor.actorId));
+  if (!(await personOrOwningBot(actor, owns))) return false;
   if (await ownsCron(app, cron, actor.actorId, isActor)) return true;
   if (actsAsScope(cron.owner, cron.ownerScopeId) || cron.ownerScopeId.startsWith("personal:")) return false;
   return (await app.artifactGrantPermission(cron.ownerScopeId, encodeRef(cronRef(cron.id)), actor.actorId)) === "write";
@@ -246,7 +248,7 @@ export async function canAdministerWebhook(
   isActor?: (id: string) => Promise<boolean>,
 ): Promise<boolean> {
   const owns = () => (isActor ? isActor(webhook.owner) : app.samePerson(webhook.owner, actor.actorId));
-  if (actor.botActor && !(await owns())) return false;
+  if (!(await personOrOwningBot(actor, owns))) return false;
   if (await app.membershipControlsScope(webhook.ownerScopeId))
     return app.managesScope(actor.actorId, webhook.ownerScopeId);
   return owns();

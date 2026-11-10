@@ -1,7 +1,7 @@
 import { LOOP_ICON_ERROR, validLoopIcon } from "../../loops/loop-store.ts";
 import { boundLoopCron } from "../../loops/authority.ts";
 import { unattendedGrantRefusal } from "../../cron/authority.ts";
-import { livePersonCapability } from "../artifact-share.ts";
+import { livePersonCapability, personOrOwningBot } from "../artifact-share.ts";
 import type { AdvisoryLock } from "../../persistence/advisory-lock.ts";
 import type { Loop, LoopState, LoopTriageConfig } from "../../loops/types.ts";
 import { scopeId, type ScopeId } from "../../types.ts";
@@ -40,7 +40,6 @@ export function loopDeps(ctx: ApiCtx): LoopServiceDeps | null {
 
 interface ActingPrincipal {
   actorId: string;
-  botActor?: boolean;
   scopeId?: ScopeId;
   capability?: CapabilityClaims;
   liveHuman: boolean;
@@ -66,7 +65,6 @@ export function actingPrincipal(ctx: ApiCtx): ActingPrincipal | null {
   if (ctx.capability) {
     return {
       actorId: ctx.capability.actorId,
-      ...(ctx.capability.botActor ? { botActor: true } : {}),
       scopeId: ctx.capability.scopeId as ScopeId,
       capability: ctx.capability,
       liveHuman:
@@ -92,7 +90,7 @@ export async function canAdministerLoop(
   actor: Pick<CapabilityClaims, "actorId" | "botActor">,
 ): Promise<boolean> {
   const owns = () => app.samePerson(loop.owner, actor.actorId);
-  if (actor.botActor && !(await owns())) return false;
+  if (!(await personOrOwningBot(actor, owns))) return false;
   if (await app.membershipControlsScope(loop.ownerScopeId)) return app.managesScope(actor.actorId, loop.ownerScopeId);
   return (await owns()) || app.managesScope(actor.actorId, loop.ownerScopeId);
 }
@@ -112,7 +110,7 @@ export async function loadAdministrable(
     sendJson(ctx.res, 404, { error: "not_found", message: "no such loop" });
     return null;
   }
-  if (!(await canAdministerLoop(ctx.app, loop, acting))) {
+  if (!(await canAdministerLoop(ctx.app, loop, ctx.capability ?? acting))) {
     sendJson(ctx.res, 403, { error: "forbidden", message: "you may not administer this loop" });
     return null;
   }
@@ -340,7 +338,7 @@ async function listLoops(ctx: ApiCtx): Promise<void> {
   const all = await deps.store.list();
   const visible: Loop[] = [];
   for (const loop of all) {
-    if (await canAdministerLoop(ctx.app, loop, acting)) visible.push(loop);
+    if (await canAdministerLoop(ctx.app, loop, ctx.capability ?? acting)) visible.push(loop);
   }
   return sendJson(ctx.res, 200, { loops: visible });
 }
