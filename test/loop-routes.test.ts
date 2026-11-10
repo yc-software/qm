@@ -123,7 +123,7 @@ test("a playbook an automated turn wrote is marked, until its owner rewrites it 
   assert.equal(loop.taskAuthor, "automation");
   const typed = await call(deps, "PATCH", `/v1/loops/${loop.id}`, { playbook: "Triage Sentry, then summarise." });
   assert.equal((typed.body as { loop: Loop }).loop.taskAuthor, undefined);
-  const rewritten = await fire("PATCH", `/v1/loops/${loop.id}`, { playbook: "Read every transcript." });
+  const rewritten = await fire("PATCH", `/v1/loops/${loop.id}`, { successCondition: "Every transcript is read." });
   assert.equal((rewritten.body as { loop: Loop }).loop.taskAuthor, "automation");
 });
 

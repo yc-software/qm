@@ -383,7 +383,6 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
     patch.playbookEdit = {
       playbook: b.playbook,
       by: acting.actorId,
-      ...(acting.liveHuman ? {} : { automation: true as const }),
       ...(typeof b.note === "string" && b.note.trim() ? { note: b.note.trim() } : {}),
     };
   } else if (b.playbook !== undefined) {
@@ -438,6 +437,10 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
   )
     return;
   if (b.shipActions !== undefined) patch.shipActions = shipActions;
+  if (!acting.liveHuman) {
+    if (patch.playbookEdit || patch.name || patch.successCondition || patch.successChecks || patch.shipActions)
+      patch.taskAuthor = "automation";
+  } else if (patch.playbookEdit && loop.taskAuthor) patch.taskAuthor = null;
   const capsResult = capsFromBody(b.caps);
   if (capsResult.invalidField)
     return sendJson(ctx.res, 400, {

@@ -49,6 +49,7 @@ export interface LoopPatch {
   cronId?: string;
   state?: LoopState;
   playbookEdit?: PlaybookEdit;
+  taskAuthor?: "automation" | null;
   restore?: Loop;
   quarantineClearedBy?: string;
   quarantineClearedAt?: number;
@@ -57,7 +58,6 @@ export interface LoopPatch {
 interface PlaybookEdit {
   playbook: string;
   by: string;
-  automation?: true;
   note?: string;
 }
 
@@ -218,13 +218,13 @@ export function createLoopStore(backing: DurableMap<Loop>): LoopStore {
         if (patch.governor !== undefined) fields.governor = patch.governor;
         if (patch.triage !== undefined) fields.triage = mergeTriage(loop.triage, patch.triage);
         if (patch.cronId !== undefined) fields.cronId = patch.cronId;
+        if (patch.taskAuthor !== undefined) fields.taskAuthor = patch.taskAuthor ?? undefined;
         if (patch.state !== undefined) Object.assign(fields, stateFields(patch.state));
         if (patch.quarantineClearedBy !== undefined) fields.quarantineClearedBy = patch.quarantineClearedBy;
         if (patch.quarantineClearedAt !== undefined) fields.quarantineClearedAt = patch.quarantineClearedAt;
         if (patch.playbookEdit !== undefined && patch.playbookEdit.playbook !== loop.playbook) {
           const version = loop.playbookVersion + 1;
           fields.playbook = patch.playbookEdit.playbook;
-          fields.taskAuthor = patch.playbookEdit.automation ? "automation" : undefined;
           fields.playbookVersion = version;
           fields.playbookHistory = [
             ...loop.playbookHistory,

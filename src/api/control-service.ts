@@ -554,6 +554,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       const rewritesTask = req.action !== undefined || req.text !== undefined;
       if (rewritesTask || patch.script)
         Object.assign(patch, await cronTaskRewrite(app, before, capability.actorId, personAtKeyboard(capability)));
+      else if (patch.title !== undefined && !personAtKeyboard(capability)) patch.taskAuthor = "automation";
       if (!cronPatchChanges(before, patch)) return { ok: true, cron: before };
       try {
         const cron = await app.updateCron(id, patch, trial);
