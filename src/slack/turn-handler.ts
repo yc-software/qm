@@ -146,7 +146,7 @@ export function createTurnHandler(deps: {
   externalAccess?: ExternalSlackAccess;
   continuePrivate?: (runId: string, task: string) => Promise<void>;
   rateLimitNotice?: SlackRateLimitNotice;
-  onEngaged?: (runId: string, channel: string, threadTs?: string) => void;
+  onEngaged?: (runId: string, channel: string, threadTs?: string, emoji?: Promise<string>) => void;
   onSettled?: () => void;
   core: SlackCoreClient;
   flow: TurnFlow;
@@ -557,7 +557,8 @@ export function createTurnHandler(deps: {
           : {
               onReplying: () => {
                 if (acknowledges) startAck();
-                if (queuedRunId && replyThreadTs) deps.onEngaged?.(queuedRunId, inc.channel, replyThreadTs);
+                if (queuedRunId && replyThreadTs)
+                  deps.onEngaged?.(queuedRunId, inc.channel, replyThreadTs, ack?.emoji());
               },
             }),
         onQueued: async (runId) => {
@@ -608,9 +609,6 @@ export function createTurnHandler(deps: {
       }
     }
 
-    // This message was folded into a run that was already live. The handler that OWNS that run
-    // delivers its reply; delivering here too is how one answer got posted twice. Settle this
-    // trigger's own ack and stand down.
     if (result.steered) {
       await settleAck();
       if (result.stopped) await postEphemeral("Stopped.", replyThreadTs);
@@ -732,6 +730,7 @@ export function createTurnHandler(deps: {
       if (delivery === "silent") {
         await finishTaskAck();
         if (queuedRunId && result.refusalKind === "security_quarantine") inFlightRuns.delete(queuedRunId);
+        else if (queuedRunId) ackRunDelivery(queuedRunId);
         console.error(
           `[slack-plugin] unprompted turn ${result.status} (staying quiet) ch=${inc.channel} ts=${inc.ts}: ${result.reason ?? "refused"}`,
         );

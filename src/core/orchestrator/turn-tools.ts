@@ -10,6 +10,7 @@ import { errMessage } from "../../util/errors.ts";
 import type { ArtifactRegistration } from "../attachments.ts";
 import type { createTurnSandboxes } from "./sandboxes.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
+import type { Tenant } from "../../tenants/context.ts";
 
 type TurnResolution = Awaited<ReturnType<OrchestratorDeps["resolution"]["resolve"]>>;
 type TurnSandboxes = ReturnType<typeof createTurnSandboxes>;
@@ -96,6 +97,7 @@ export function createTurnBrokers(turn: {
 }
 
 export function createFileRegistration(turn: {
+  tenant: Tenant;
   deps: OrchestratorDeps;
   input: OrchestratorInput;
   actor: OrchestratorInput["actor"];
@@ -105,7 +107,7 @@ export function createFileRegistration(turn: {
   external: boolean;
   resolution: TurnResolution;
 }): ArtifactRegistration {
-  const { deps, input, actor, conversation, session, scopeId, external, resolution } = turn;
+  const { tenant, deps, input, actor, conversation, session, scopeId, external, resolution } = turn;
   const fileAudience =
     !external && resolution.orgScopeId
       ? defaultPublishAudience({
@@ -132,7 +134,7 @@ export function createFileRegistration(turn: {
       ? {
           onRegistered: async ({ ownerScopeId, id }) => {
             for (const granteeScopeId of fileGrantees) {
-              await deps.acl.grant({
+              await deps.acl.grant(tenant, {
                 ownerScopeId,
                 ref: id,
                 granteeScopeId,
@@ -159,6 +161,7 @@ export function createFileRegistration(turn: {
 }
 
 export function createArtifactAccess(turn: {
+  tenant: Tenant;
   deps: OrchestratorDeps;
   conversation: OrchestratorInput["conversation"];
   scopeId: ScopeId;
@@ -166,7 +169,7 @@ export function createArtifactAccess(turn: {
   provision: TurnSandboxes["provision"];
   provisionResource: TurnSandboxes["provisionResource"];
 }) {
-  const { deps, conversation, scopeId, resolution, provision, provisionResource } = turn;
+  const { tenant, deps, conversation, scopeId, resolution, provision, provisionResource } = turn;
   let readableHandles: Awaited<ReturnType<typeof deps.acl.handlesForAudience>> | undefined;
   const mayReadArtifact = async (artifact: FileArtifact, fresh = false): Promise<boolean> => {
     if (
@@ -177,6 +180,7 @@ export function createArtifactAccess(turn: {
       return true;
     let handles = fresh ? undefined : readableHandles;
     handles ??= await deps.acl.handlesForAudience(
+      tenant,
       conversation.audience,
       scopeId,
       resolution.orgScopeId,

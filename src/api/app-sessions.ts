@@ -13,7 +13,7 @@ import { ambientTenant } from "../tenants/context.ts";
 import { fileArtifactId, artifactPath } from "../files/file-artifact-store.ts";
 import { windowedTranscript } from "../sessions/session-store.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
-import { cancelGoal, goalCancelledItem, openGoal } from "../agent/goal.ts";
+import { cancelGoal, goalCancelledItem, openGoal, resumeGoal } from "../agent/goal.ts";
 import { goalView } from "../runs/turn-stream.ts";
 import { SEARCH_HIT_LIMIT, searchSnippet, searchTerms } from "../sessions/entry-search.ts";
 import { supportsProcessSessions } from "../sandbox/sandbox.ts";
@@ -109,6 +109,7 @@ export function createSessionMethods(
   | "updateSession"
   | "detachSession"
   | "cancelSessionGoal"
+  | "resumeSessionGoal"
   | "regenerateTitle"
   | "suggestNextPrompt"
   | "spawnSession"
@@ -230,7 +231,6 @@ export function createSessionMethods(
     });
   };
 
-  /** Sessions whose title matches the query — the entry index only covers message text. */
   const titleSearchHits = async (principalId: string, query: string, capped: number): Promise<SessionSearchHit[]> => {
     const matches = await deps.sessions.searchSessionTitles(principalId, query, capped);
     if (!matches.length) return [];
@@ -511,11 +511,11 @@ export function createSessionMethods(
       return item ? { item } : null;
     },
 
-    listFilesForViewer(principalId, opts, inScope) {
-      return filesForViewer(principalId, opts, inScope);
+    listFilesForViewer(tenant, principalId, opts, inScope) {
+      return filesForViewer(tenant, principalId, opts, inScope);
     },
 
-    async uploadFileForViewer(principalId, input) {
+    async uploadFileForViewer(tenant, principalId, input) {
       const ownerScopeId = scopeId("personal", principalId);
       const createdInScope = input.scopeId ?? ownerScopeId;
       if (!(await canUseContext(principalId, createdInScope))) return null;
@@ -536,7 +536,7 @@ export function createSessionMethods(
         maxBytes: MAX_ATTACHMENT_BYTES,
       });
       if (createdInScope !== ownerScopeId) {
-        await deps.acl.grant({
+        await deps.acl.grant(tenant, {
           ownerScopeId,
           ref: artifact.id,
           granteeScopeId: createdInScope,
@@ -554,13 +554,13 @@ export function createSessionMethods(
       return toFileItem(artifact);
     },
 
-    async openFileForViewer(id, principalId) {
+    async openFileForViewer(tenant, id, principalId) {
       const art = await deps.files.get(id);
       if (!art) return null;
       const myScopes = await currentResourceScopesForViewer(principalId);
       let allowed = myScopes.includes(art.ownerScopeId);
       if (!allowed) {
-        const grants = await deps.acl.grantsFor(art.ownerScopeId, art.id);
+        const grants = await deps.acl.grantsFor(tenant, art.ownerScopeId, art.id);
         allowed = grants.some((g) => myScopes.includes(g.granteeScopeId));
       }
       if (!allowed) return null;
@@ -844,8 +844,6 @@ export function createSessionMethods(
         };
         let match = await findChannel();
         if (!match) {
-          // The synced directory may not have caught up with a just-created channel;
-          // ask the surface for a fresh sync and look once more before giving up.
           await h.refreshSurfaceDirectory().catch(() => undefined);
           match = await findChannel();
         }
@@ -931,10 +929,10 @@ export function createSessionMethods(
       return result;
     },
 
-    async listScopeResources(principalId, scope) {
+    async listScopeResources(tenant, principalId, scope) {
       if (!(await principalCanAccessCurrentScope(principalId, scope))) return null;
       const [page, allCrons, allWebhooks, allDeployments, allSkills] = await Promise.all([
-        filesForViewer(principalId, undefined, scope),
+        filesForViewer(tenant, principalId, undefined, scope),
         deps.crons.list(),
         deps.webhooks.list(),
         deps.deploy.listDeployments(),
@@ -943,7 +941,7 @@ export function createSessionMethods(
       const files = [...page.owned, ...page.shared];
       let cursor = page.nextCursor;
       while (cursor) {
-        const next = await filesForViewer(principalId, { limit: 200, cursor }, scope);
+        const next = await filesForViewer(tenant, principalId, { limit: 200, cursor }, scope);
         files.push(...next.owned, ...next.shared);
         cursor = next.nextCursor;
       }
@@ -1050,6 +1048,20 @@ export function createSessionMethods(
       cancelGoal(goal, "Cancelled from the goal bar.");
       await deps.sessions.setGoal({ sessionId: session.id }, goal, [goalCancelledItem(goal, principalId)]);
       return { cancelled: true as const };
+    },
+
+    async resumeSessionGoal(sessionId, principalId) {
+      const session = await sessionForViewer(sessionId, principalId);
+      if (!session || !(await mayWriteSession(principalId, session))) return null;
+      if (!(await waitForNoRunningRun(deps.runs, session.threadRef, 0)))
+        return { resumed: false as const, reason: "busy" as const };
+      const goal = openGoal((await deps.sessions.goals([session.id])).get(session.id));
+      if (!goal) return { resumed: false as const, reason: "no_open_goal" as const };
+      if (goal.status === "paused") {
+        resumeGoal(goal);
+        await deps.sessions.setGoal({ sessionId: session.id }, goal);
+      }
+      return { resumed: true as const, goal: goalView(goal) };
     },
 
     async regenerateTitle(sessionId, principalId) {
@@ -1187,7 +1199,7 @@ export function createSessionMethods(
       return true;
     },
 
-    async grant(g, opts) {
+    async grant(tenant, g, opts) {
       if (parseRef(g.ref).kind === "deploy") {
         g = {
           ...g,
@@ -1201,7 +1213,7 @@ export function createSessionMethods(
         };
         await deps.deploy.assertShareAllowed(g.ownerScopeId, g.granteeScopeId, g.permission);
       }
-      await deps.acl.grant(g, await artifactAuthor(g.ownerScopeId, g.ref));
+      await deps.acl.grant(tenant, g, await artifactAuthor(g.ownerScopeId, g.ref));
       deps.auditLog.record({
         at: Date.now(),
         principalId: g.grantedBy,
@@ -1219,8 +1231,15 @@ export function createSessionMethods(
           g.grantedBy,
         );
     },
-    async revokeGrant(ownerScopeId, ref, granteeScopeId, revokedBy) {
-      await deps.acl.revoke(ownerScopeId, ref, granteeScopeId, revokedBy, await artifactAuthor(ownerScopeId, ref));
+    async revokeGrant(tenant, ownerScopeId, ref, granteeScopeId, revokedBy) {
+      await deps.acl.revoke(
+        tenant,
+        ownerScopeId,
+        ref,
+        granteeScopeId,
+        revokedBy,
+        await artifactAuthor(ownerScopeId, ref),
+      );
       deps.auditLog.record({
         at: Date.now(),
         principalId: revokedBy,

@@ -136,7 +136,6 @@ test("draft stays outside AI chat and Send it submits the combined instruction",
     assert.equal(staleCalls.filter((url) => url.endsWith("/action")).length, 1);
     assert.equal(staleCalls.filter((url) => url.endsWith("/followup")).length, 0);
     assert.equal(host.querySelector<HTMLTextAreaElement>(".inbox-draft-body")!.value, "My edited reply");
-    // Different items keep separate picks and never rewrite the main composer's defaults.
     const { embeddedComposer } = await vite.ssrLoadModule("/src/embedded-composer.ts");
     const submissions: Array<{ text: string; model: string; fastMode: boolean }> = [];
     let unavailable = false;
@@ -212,7 +211,6 @@ test("draft stays outside AI chat and Send it submits the combined instruction",
       await until(() => Boolean(host.querySelector(".composer-input:not(:disabled)")));
       fill("Send it");
       host.querySelector<HTMLButtonElement>(".send-btn")!.click();
-      // A rerender (or navigation) can happen while files are being uploaded.
       render(pending(nextKey, "new snapshot"), host);
       await until(() => called.length === 1);
       assert.deepEqual(called, ["approved snapshot"]);

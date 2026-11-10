@@ -286,7 +286,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         status: result.status ?? "ok",
         ...(result.note ? { note: truncate(result.note, CRON_FIRE_REPLY_MAX_CHARS) } : {}),
       });
-      if (isOneShotSchedule(cron.schedule)) await deps.crons.setEnabled(cron.id, false);
+      if (isOneShotSchedule(cron.schedule)) await deps.crons.retireOneShot(cron);
       return { authzFailed: false };
     }
     const previous = (await deps.crons.listFires(cron.id, { limit: 2 })).runs
@@ -371,7 +371,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     if (outcome.ownerLeft) await (deps.deleteCron ? deps.deleteCron(cron.id) : deps.crons.delete(cron.id));
     else if (outcome.authzFailed) await deps.crons.setEnabled(cron.id, false);
     if (outcome.authzFailed) return { authzFailed: true };
-    if (isOneShotSchedule(cron.schedule)) await deps.crons.setEnabled(cron.id, false);
+    if (isOneShotSchedule(cron.schedule)) await deps.crons.retireOneShot(cron);
     return { authzFailed: false };
   }
 
@@ -448,7 +448,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           withCronLifecycle(cron.id, true, async () => {
             if (stopped || observed !== epoch) return;
             const { authzFailed } = await fire(cron, t, `cron:${cron.id}:${cron.scheduledAt}`, cron.scheduledAt);
-            if (!authzFailed) await deps.crons.markFired(cron.id, t, cron.scheduledAt);
+            if (!authzFailed) await deps.crons.markFired(cron, t, cron.scheduledAt);
           }),
         );
       } catch (e) {
@@ -520,18 +520,18 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (stopped || observed !== epoch) return;
       if (!(await deps.crons.claimSlot(job.cronId, slot, t))) return;
       if (stopped || observed !== epoch) {
-        await deps.crons.unclaimSlot(job.cronId, slot, t, cron.lastFiredAt);
+        await deps.crons.unclaimSlot(cron, slot, t, cron.lastFiredAt);
         return;
       }
       try {
         const { authzFailed } = await fire(cron, t, `cron:${cron.id}:${slot}`, slot);
         if (authzFailed) {
-          await deps.crons.unclaimSlot(job.cronId, slot, t, cron.lastFiredAt);
+          await deps.crons.unclaimSlot(cron, slot, t, cron.lastFiredAt);
           return;
         }
       } catch (e) {
         reportFailure("scheduler: fire", e);
-        await deps.crons.unclaimSlot(job.cronId, slot, t, cron.lastFiredAt);
+        await deps.crons.unclaimSlot(cron, slot, t, cron.lastFiredAt);
         return;
       }
       await enqueueNext(job.cronId);

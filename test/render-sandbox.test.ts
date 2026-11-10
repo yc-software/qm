@@ -409,6 +409,7 @@ test("Render turns share one computer through the sandbox router", { timeout: 60
   const render = make();
   const resources = createSandboxResources({
     records: testMap(),
+    loads: testMap(),
     defaults: testMap(),
     backends: { render },
     defaultBackend: "render",
@@ -1000,7 +1001,7 @@ for (const failure of ["cleanup release", "record write"] as const) {
     await assert.rejects(make().provision(scope), new RegExp(`${failure} failed`));
     assert.deepEqual(await cleanupStore.get(scope), { resources: [{ sandboxId: "sbx-1" }] });
     assert.equal(fake.sandboxes.get("sbx-1")?.status, "running");
-    assert.equal(await store.get(scope), null);
+    assert.equal((await store.get(scope))?.sandboxId, failure === "cleanup release" ? "sbx-1" : undefined);
     cleanupStore.delete = release;
     store.put = put;
     fake.failTerminate();

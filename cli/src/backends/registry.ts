@@ -61,11 +61,8 @@ type InfraOperation = "render" | "build-image" | "delete-image" | "delete-task-d
 
 export interface HostingProvider {
   id: Target;
-  /** How this target's CLI reaches the deployed core's /v1/deployment-layer endpoint. */
   deploymentLayerTransport: DeploymentLayerTransport;
-  /** Per-target env defaults applied when a service env var is not set explicitly. */
   envDefaults: TargetEnvDefaults;
-  /** Optional `qm infra` operations; targets without managed infra omit this. */
   infra?: Partial<Record<InfraOperation, (ctx: DeployContext) => void | Promise<void>>>;
   upFlags: readonly string[];
   upOptions(ctx: DeployContext, flags: Readonly<Record<string, string | boolean>>, dryRun: boolean): BackendUpOptions;

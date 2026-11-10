@@ -306,8 +306,6 @@ test("a name RESOLVING to link-local / denied IP is denied (rebind guard)", asyn
   }
 });
 
-// A forward proxy dials from ITS namespace, so an allowed `CONNECT 127.0.0.1:<port>` would bridge
-// any caller to the services colocated with the proxy — this decision service, Envoy's admin.
 test("loopback destinations are denied even under an open policy, by literal and by resolved IP", async () => {
   const { server, records } = boot({ lookup: async () => ["127.0.0.1"] });
   const port = await listen(server);

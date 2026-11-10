@@ -324,7 +324,6 @@ export interface CoreProject {
   scopeId: string;
   members: Array<{ principalId: string; displayName: string; avatarUrl?: string; viaChannel?: boolean }>;
   slackChannel?: { channelId: string; channelName: string; linkedBy?: string; linkedAt?: number };
-  /** Sidebar icon; absent shows the folder. */
   icon?: ProjectIcon;
   createdAt?: number;
   updatedAt?: number;
@@ -485,6 +484,11 @@ export async function detachSession(id: string): Promise<{ detached: true }> {
 
 export async function cancelSessionGoal(id: string): Promise<{ cancelled: true }> {
   return api<{ cancelled: true }>(`/api/sessions/${encodeURIComponent(id)}/goal/cancel`, { method: "POST" });
+}
+export async function resumeSessionGoal(id: string): Promise<{ resumed: true; goal: GoalStripState }> {
+  return api<{ resumed: true; goal: GoalStripState }>(`/api/sessions/${encodeURIComponent(id)}/goal/resume`, {
+    method: "POST",
+  });
 }
 type WorkStatus = "thinking" | "working" | "complete" | "failed";
 export interface WorkBlock {
@@ -1058,9 +1062,6 @@ export async function signalLiveRun(
     });
     return { ok: true };
   } catch (err) {
-    // The run ended before (or as) the signal arrived. For a steer, core replays the
-    // text as a fresh turn when it can; surface that outcome instead of failing so the
-    // caller can attach to the replay run or resend, rather than dropping the message.
     if (err instanceof ApiError && (err.status === 409 || err.status === 404)) {
       const body = (err.body ?? {}) as { reason?: string; why?: string; replayed?: boolean };
       return {
@@ -1458,10 +1459,6 @@ async function resumeDrive(
     stream.push({ type: "start", partial });
     stream.push({ type: "text_start", contentIndex: 0, partial });
     const st: Acc = { acc: "", startOffset: 0, lastProgressAt: now() };
-    // Keep any assistant text the transcript already showed for this in-flight
-    // run visible: seed the accumulator with it so attaching the live stream
-    // never blanks text the person has already read. The server's own partial
-    // (when longer) simply replaces it via the normal delta path.
     if (seedText?.trim()) pushDelta(stream, partial, st, seedText);
     if (initialRun && applyRun(stream, partial, st, initialRun, notify) === "terminal") return;
     await followRun(stream, partial, runId, signal, notify, st, slot, gen);
@@ -1810,7 +1807,6 @@ async function streamRunViaSse(
         }
       } else if (event.name === "run") {
         const run = event.value as RunPoll;
-        // Completion must carry the final result, including files and approvals.
         const terminal = run.status === "done" || run.status === "failed" || run.result != null;
         if (applyRun(stream, partial, st, { ...run, replyComplete: terminal }, notify) === "terminal") return "done";
         if (run.alive) st.lastProgressAt = now();

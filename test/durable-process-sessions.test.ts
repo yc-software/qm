@@ -24,6 +24,7 @@ import { createPostgresMemoryService } from "../src/memory/postgres-memory-servi
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
@@ -144,7 +145,7 @@ async function memoryScope(): Promise<string> {
     testConfigStore(ORG),
     createAclStore(createPostgresGrantStore(testDatabaseUrl())),
   );
-  return (await resolution.resolve(conv, actor)).writableScopeId;
+  return (await resolution.resolve(tenant, conv, actor)).writableScopeId;
 }
 
 const turn = (text: string): OrchestratorInput => ({

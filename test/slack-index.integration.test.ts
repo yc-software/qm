@@ -295,8 +295,6 @@ class FakeCore implements SlackCoreClient {
     this.turns.push(body);
     if (this.submitError) throw this.submitError;
     if (this.queuedRunId) {
-      // The first submit enqueues the run; a later one arrives while it is live, so core folds
-      // it in as a steer and answers with the LIVE run's id (src/api/app-turn.ts).
       const steered = this.heldRunClaimed;
       this.heldRunClaimed = true;
       return { status: "queued", runId: this.queuedRunId, ...(steered ? { steered: true as const } : {}) };
@@ -309,8 +307,6 @@ class FakeCore implements SlackCoreClient {
     if (this.runGate) await this.runGate;
     return this.result;
   }
-  /** Enqueue `runId` on the first submit and hold waitRun open; every later submit is a
-   *  mid-turn STEER answered with that same live run's id. `finishRun` releases the waiters. */
   holdRun(runId: string): void {
     this.queuedRunId = runId;
     this.heldRunClaimed = false;
@@ -537,9 +533,6 @@ test("a redelivery of a message still in flight on this instance is not treated 
 test("a mid-turn message that STEERS the live run does not post the reply twice", async () => {
   const f = await fixture();
   try {
-    // Core folds a message that lands mid-run into the LIVE run and answers the steering
-    // request with that run's id, flagged `steered` (src/api/app-turn.ts). Only the handler
-    // that started R1 owns its reply; the one that joined must not deliver it a second time.
     f.core.holdRun("R1");
     const first = f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "first ask", ts: "300.1" });
     await waitFor(() => f.core.polled.length === 1);
@@ -1709,9 +1702,11 @@ test("thread status is detached from reply delivery and steering cannot take own
   const network = new Promise<void>((resolve) => {
     release = resolve;
   });
+  const emojis: unknown[] = [];
   f.core.sessionStatus = {
     start: async (...args) => {
-      starts.push(args.slice(1));
+      starts.push(args.slice(1, 5));
+      emojis.push(await args[5]);
       await network;
     },
     reconcile: async () => {},
@@ -1733,6 +1728,8 @@ test("thread status is detached from reply delivery and steering cannot take own
     await original;
     assert.ok(f.client.posts.some((post) => post.text === "finished" && post.thread_ts === "700.1"));
     assert.equal(starts.length, 1);
+    await waitFor(() => emojis.length === 1, 5_000);
+    assert.equal(typeof emojis[0], "string");
   } finally {
     release();
     await f.stop();
@@ -1789,7 +1786,23 @@ test("own task-card status events never enter the mirror, but ordinary bot edits
       deleted_ts: status.ts,
       ts: "200.3",
     });
-    assert.equal(f.core.ingests.flat().filter((event: any) => event.ts === status.ts).length, 0);
+    await f.app.emitMessage({
+      channel: "C1",
+      channel_type: "channel",
+      ...status,
+      ts: "200.4",
+      blocks: [
+        {
+          type: "plan",
+          title: "Waiting on subagents",
+          tasks: [{ task_id: "qm_status:test:child", title: "Child", status: "in_progress" }],
+        },
+      ],
+    });
+    assert.equal(
+      f.core.ingests.flat().filter((event: any) => event.ts === status.ts || event.ts === "200.4").length,
+      0,
+    );
     assert.equal(f.core.turns.length, 0);
     await f.app.emitMessage({
       channel: "C1",

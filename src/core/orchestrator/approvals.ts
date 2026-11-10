@@ -155,7 +155,7 @@ export async function withdrawCallApprovals(
   for (const [requestId, record] of rows) {
     if (approvalRefusal(record, sessionId, actorId) || !record.call) continue;
     if (approvalCardId(record.approvalKey ?? "") !== cardId) continue;
-    await pending.delete(requestId);
+    if (!(await pending.take(requestId))) continue;
     withdrawn.push(record.summary ?? record.command);
     audit({
       action: "command_approval.withdraw",

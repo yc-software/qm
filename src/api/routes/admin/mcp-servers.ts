@@ -1,9 +1,3 @@
-// Admin CRUD for registered MCP servers.
-//
-// Registration is deliberately admin-only: a registered server is an outbound
-// HTTP destination every scope's agents can call, so it is governed like a
-// model-provider credential, not like a personal connector.
-
 import {
   isValidMcpServerId,
   type McpApprovalPolicy,
@@ -214,7 +208,7 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
     ...(attestActor ? { attestActor } : {}),
     ...(attestAudience === "any" ? { attestAudience } : {}),
     readOnly: (b.readOnly ?? existing?.readOnly) === true,
-    enabled: b.enabled !== false,
+    enabled: (b.enabled ?? existing?.enabled) !== false,
     updatedAt: Date.now(),
     updatedBy: authorized.id,
   };

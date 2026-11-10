@@ -9,7 +9,7 @@ import {
 } from "./pg-pool.ts";
 import { jsonbStringify } from "../util/text.ts";
 import { tenantTables, type TenantTable, type TenantTableOptions } from "../tenants/migrations.ts";
-import { claimFunction, claimRows, type ClaimedRow } from "../tenants/claim.ts";
+import { claimFunction, claimRows, servingTenant, type ClaimedRow } from "../tenants/claim.ts";
 
 export interface DurableMapSelect<T, K extends Extract<keyof T, string>> {
   omit?: readonly K[];
@@ -85,6 +85,21 @@ function mapMigrations(
       claimFunction(`claim_${table}_tenants`, "", `SELECT DISTINCT tenant_id, '${table}'::text FROM ${table}`),
     ],
   };
+  const servingClaims = {
+    id: `durable-map/${table}/0022-serving-claims`,
+    statements: [
+      claimFunction(
+        `claim_${table}`,
+        "",
+        `SELECT tenant_id, id FROM ${table} WHERE true${servingTenant("tenant_id")} ORDER BY tenant_id, id`,
+      ),
+      claimFunction(
+        `claim_${table}_tenants`,
+        "",
+        `SELECT DISTINCT tenant_id, '${table}'::text FROM ${table} WHERE true${servingTenant("tenant_id")}`,
+      ),
+    ],
+  };
   const migration = {
     id: `durable-map/${table}/0001`,
     statements: [
@@ -97,7 +112,7 @@ function mapMigrations(
     ...extraMigrations,
     ...VERSIONS_TENANCY,
     ...tenancy,
-    ...(tenancy.length ? [claim, claimTenants] : []),
+    ...(tenancy.length ? [claim, claimTenants, servingClaims] : []),
     ...indexedFields.flatMap((field) => {
       if (!/^[a-z_][a-z0-9_]*$/i.test(field)) throw new Error(`invalid index field: ${field}`);
       return [
@@ -120,6 +135,17 @@ function mapMigrations(
               `SELECT DISTINCT tenant_id, '${table}'::text FROM ${table} WHERE lower(json->>'${field}') = lower(value)`,
             ),
             `DROP FUNCTION IF EXISTS ${claimWhereName(table, field)}(text)`,
+          ],
+        },
+        {
+          id: `durable-map/${table}/claim-tenants-${field.toLowerCase()}-serving`,
+          statements: [
+            claimFunction(
+              claimTenantsWhereName(table, field),
+              "value text",
+              `SELECT DISTINCT tenant_id, '${table}'::text FROM ${table}
+                WHERE lower(json->>'${field}') = lower(value)${servingTenant("tenant_id")}`,
+            ),
           ],
         },
         {

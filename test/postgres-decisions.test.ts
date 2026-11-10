@@ -2,6 +2,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresDecisionStore } from "../src/decisions/store.ts";
 import type { DecisionRule } from "../src/decisions/decisions.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres decision tests";
@@ -31,36 +32,40 @@ const rule = (id: string, over: Partial<DecisionRule> = {}): DecisionRule => ({
 test("pg decisions: providers and rules are rows; hooks load active rules only", { skip }, async () => {
   const store = createPostgresDecisionStore(URL!);
   const a = { actorId: "admin@x.com" };
-  await store.saveProvider({ id: "gw", protocol: "chat-completions" }, a);
-  await store.saveProvider({ id: "oa", protocol: "decisions", baseUrl: "https://dec.example", credential: "dec" }, a);
-  assert.deepEqual(await store.providers(), [
+  await store.saveProvider(tenant, { id: "gw", protocol: "chat-completions" }, a);
+  await store.saveProvider(
+    tenant,
+    { id: "oa", protocol: "decisions", baseUrl: "https://dec.example", credential: "dec" },
+    a,
+  );
+  assert.deepEqual(await store.providers(tenant), [
     { id: "gw", protocol: "chat-completions" },
     { id: "oa", protocol: "decisions", baseUrl: "https://dec.example", credential: "dec" },
   ]);
 
-  await store.saveRule(rule("router"), a);
-  await store.saveRule(rule("shadow", { mode: "observe" }), a);
-  await store.saveRule(rule("off", { mode: "off" }), a);
+  await store.saveRule(tenant, rule("router"), a);
+  await store.saveRule(tenant, rule("shadow", { mode: "observe" }), a);
+  await store.saveRule(tenant, rule("off", { mode: "off" }), a);
   assert.deepEqual(
-    (await store.rules()).map((r) => r.id),
+    (await store.rules(tenant)).map((r) => r.id),
     ["off", "router", "shadow"],
   );
-  assert.deepEqual(await store.rules("turn_start"), [rule("router"), rule("shadow", { mode: "observe" })]);
+  assert.deepEqual(await store.rules(tenant, "turn_start"), [rule("router"), rule("shadow", { mode: "observe" })]);
 
-  await assert.rejects(store.saveRule(rule("second"), a), /allows one enforcing rule/);
-  await assert.rejects(store.removeProvider("gw"), /still used by a rule/);
+  await assert.rejects(store.saveRule(tenant, rule("second"), a), /allows one enforcing rule/);
+  await assert.rejects(store.removeProvider(tenant, "gw"), /still used by a rule/);
 
-  await store.saveRule(rule("router", { question: "Changed?" }), a);
-  assert.equal((await store.rules("turn_start")).find((r) => r.id === "router")?.question, "Changed?");
+  await store.saveRule(tenant, rule("router", { question: "Changed?" }), a);
+  assert.equal((await store.rules(tenant, "turn_start")).find((r) => r.id === "router")?.question, "Changed?");
 
-  assert.deepEqual(await store.providers(["oa"]), [
+  assert.deepEqual(await store.providers(tenant, ["oa"]), [
     { id: "oa", protocol: "decisions", baseUrl: "https://dec.example", credential: "dec" },
   ]);
 
-  for (const r of await store.rules()) await store.removeRule(r.id);
-  await store.removeProvider("gw");
+  for (const r of await store.rules(tenant)) await store.removeRule(tenant, r.id);
+  await store.removeProvider(tenant, "gw");
   assert.deepEqual(
-    (await store.providers()).map((p) => p.id),
+    (await store.providers(tenant)).map((p) => p.id),
     ["oa"],
   );
 });

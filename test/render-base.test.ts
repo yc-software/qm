@@ -227,6 +227,21 @@ test("Render base polls an import that is still running and stops when the core 
   assert.equal((await store.get(DIGEST_B))!.readyAtMs, undefined);
 });
 
+test("Render base never serves a rebuilt golden that is still being created", async (t) => {
+  const { store, make } = setup(t);
+  await store.put(DIGEST_A, {
+    ref: REF_A,
+    readyAtMs: 1,
+    snapshot: {
+      id: "snap-rebuilding",
+      sandboxGroupId: "group",
+      status: "creating",
+      expiresAtMs: Date.now() + 3_600_000,
+    },
+  });
+  await assert.rejects(make(REF_A).ready(), /still being prepared/);
+});
+
 test(
   "Render base prepared under one tenant serves every tenant from the process-level store",
   { skip: process.env.DATABASE_URL ? false : "set DATABASE_URL (a Postgres) to run the Render base store test" },

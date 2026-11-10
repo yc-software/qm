@@ -283,7 +283,7 @@ export const scenarios: Scenario[] = [
       );
       await sleep(3000);
       await ch.threadReply(root, `Second question (tag ${m2}): also, what is 17 * 23? Answer both questions.`);
-      await ch.waitForBotReply(root, { match: /391/, timeoutMs: 4 * 60_000 });
+      await ch.waitForBotReply(root, { match: /\b391\b/, timeoutMs: 4 * 60_000 });
       const botMsgs = await ch.botMessagesInThread(root);
       const texts = botMsgs.map((m) => m.text ?? "").filter((t) => t.length > 0);
       const dupes = texts.filter((t, i) => texts.indexOf(t) !== i);
@@ -383,23 +383,16 @@ export const scenarios: Scenario[] = [
     },
   },
   {
-    // A second DM sent while the first turn is still running is folded into the LIVE run
-    // (core answers the steering request with that run's id), so a second plugin handler
-    // joins the same run. Both handlers used to post the run's final reply — the user saw
-    // the identical answer twice, milliseconds apart. Exactly one final reply must land.
     name: "dm-midturn-steer-single-reply",
     lane: "dm",
     tags: ["core"],
     async run(ctx) {
       const dm = await ctx.dm();
       const marker = ctx.marker();
-      // A long answer keeps the run demonstrably live while the second message lands (a shell
-      // sleep would be cleaner, but the sandbox isn't guaranteed reachable on a CI instance).
       const first = await dm.send(
         `Write a vivid 500-word description of a storm at sea. End your reply with ${marker}.`,
       );
       await sleep(6_000);
-      // Precondition: the first turn must still be running, or this proves nothing.
       const midRun = await ctx.env.qa.history(dm.id, first);
       assert.equal(
         midRun.filter((m) => m.user === ctx.env.botUserId && m.text?.includes(marker)).length,
@@ -411,8 +404,6 @@ export const scenarios: Scenario[] = [
       const after = await ctx.env.qa.history(dm.id, first);
       const finals = after.filter((m) => m.user === ctx.env.botUserId && m.text?.includes(marker));
       assert.equal(finals.length, 1, `the steered run posted its reply ${finals.length} times`);
-      // One reply is only the right answer if the steer actually landed in it — otherwise a
-      // dropped second message would satisfy the count on its own.
       assert.match(reply.text ?? "", /pelican/i, "the steered text never reached the live run");
     },
   },
