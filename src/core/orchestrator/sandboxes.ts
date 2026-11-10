@@ -1,10 +1,5 @@
 import type { Principal, Resolution, ScopeId, Session } from "../../types.ts";
-import {
-  removeDirAndList,
-  type SandboxHandle,
-  supportsProcessSessions,
-  SandboxProvisionCleanupError,
-} from "../../sandbox/sandbox.ts";
+import { type SandboxHandle, supportsProcessSessions, SandboxProvisionCleanupError } from "../../sandbox/sandbox.ts";
 import { createTurnSandboxAccess, preferredBackend, type SandboxAccessPlan } from "../../sandbox/sandbox-resources.ts";
 import { ensureChildSandbox, prepareChildWorkdir } from "../../sessions/child-isolation.ts";
 import { reconcileProcesses } from "../../processes/reconcile.ts";
@@ -12,13 +7,12 @@ import { leaseLapsed } from "../../runs/run-store.ts";
 import { finishProcessCredentials } from "../../credentials/execute-files.ts";
 import type { SkillResolution } from "../../skills/skill-store.ts";
 import { createTurnSkills } from "../../skills/turn-skills.ts";
-import { TURN_FILES_DIR } from "../attachments.ts";
+import { clearStaleTurnFiles } from "../attachments.ts";
 import { errMessage, swallow, swallowAs } from "../../util/errors.ts";
 import { sleep } from "../../util/async.ts";
 import { tracePhase } from "../../../plugins/chassis/src/error-reporting.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 
-const TURN_FILES_MAX_AGE_MS = 24 * 60 * 60_000;
 const SCOPED = "scoped";
 const SCRATCH = "scratch";
 
@@ -294,25 +288,8 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     retried("turn file cleanup failed", () => deps.sandbox.removeDir(handle, turnFilesDir)).catch((err: unknown) =>
       swallow("orchestrator: turn file cleanup", err),
     );
-  const clearStaleTurnFiles = async (handle: SandboxHandle): Promise<void> => {
-    const cutoff = Date.now() - TURN_FILES_MAX_AGE_MS;
-    const paths = await removeDirAndList(deps.sandbox, handle, turnSessionDir, TURN_FILES_DIR);
-    const stale = new Set<string>();
-    for (const path of paths) {
-      const parts = path.split("/");
-      const startedAt = Number.parseInt(parts[2]?.split("-")[0] ?? "", 36);
-      if (parts[0] === TURN_FILES_DIR && parts[1] && parts[2] && Number.isFinite(startedAt) && startedAt < cutoff) {
-        stale.add(`${TURN_FILES_DIR}/${parts[1]}/${parts[2]}`);
-      }
-    }
-    await Promise.all(
-      [...stale].map((dir) =>
-        deps.sandbox.removeDir(handle, dir).catch(swallowAs("orchestrator: stale turn file cleanup", undefined)),
-      ),
-    );
-  };
   const prepareTurnFiles = async (handle: SandboxHandle): Promise<void> => {
-    await Promise.all([turnSkills.pruneSkills(handle), clearStaleTurnFiles(handle)]);
+    await Promise.all([turnSkills.pruneSkills(handle), clearStaleTurnFiles(deps.sandbox, handle, turnSessionDir)]);
   };
   const releaseHandle = async (
     { handle, scoped, unchanged }: Release,
