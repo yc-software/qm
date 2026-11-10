@@ -171,6 +171,10 @@ test("a git push to a running app is saved live like a republish", async () => {
   });
   assert.equal((await h.deployStore.draftOf(d.id))!.commit, pushed);
   assert.equal((await h.deployStore.get(d.id))!.versions.length, 1, "the push publishes no version yet");
+
+  await h.dueNow(d.id);
+  assert.equal(await h.deploy.publishDueLiveEdits(), 1);
+  assert.equal((await h.deployStore.get(d.id))!.versions.at(-1)!.commit, pushed);
 });
 
 test("a replaced microVM comes back running the saved edits, not the last published version", async () => {

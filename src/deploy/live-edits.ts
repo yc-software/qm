@@ -86,7 +86,10 @@ export function createLiveEdits(deps: LiveEditDeps) {
         tree,
         read: async (paths) =>
           (await store.filesOf(id, source.commit, paths)).map((f) => ({ path: f.path, data: bytes(f.data) })),
-        commit: async () => source.commit,
+        commit: async () => {
+          await store.keepCommit(id, source.commit);
+          return source.commit;
+        },
       };
     }
     const files = source.files.map((f) => ({ path: normalizeRelPath(f.path), data: bytes(f.data) }));
