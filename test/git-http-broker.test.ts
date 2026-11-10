@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { gzipSync, gunzipSync } from "node:zlib";
 import assert from "node:assert/strict";
 import { Readable, PassThrough } from "node:stream";
 import { finished } from "node:stream/promises";
@@ -8,7 +9,7 @@ import { CAPABILITY_TTL_MS, CREDENTIAL_BROKER_AUD } from "../src/auth/capability
 import type { BaseCtx } from "../src/api/routes/route.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 
-function req(headers: Record<string, string>, body = ""): IncomingMessage {
+function req(headers: Record<string, string>, body: string | Buffer = ""): IncomingMessage {
   const r = Readable.from(body ? [body] : []) as IncomingMessage;
   r.headers = headers;
   return r;
@@ -35,17 +36,20 @@ async function text(r: PassThrough): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-function ctx(path: string, method: string, deps: ServerDeps, body = ""): BaseCtx & { res: ReturnType<typeof res> } {
+function ctx(
+  path: string,
+  method: string,
+  deps: ServerDeps,
+  body: string | Buffer = "",
+  headers: Record<string, string> = {
+    "content-type": "application/x-git-receive-pack-request",
+    "git-protocol": "version=2",
+  },
+): BaseCtx & { res: ReturnType<typeof res> } {
   const url = new URL(path, "http://core.test");
   const out = res();
   return {
-    req: req(
-      {
-        "content-type": "application/x-git-receive-pack-request",
-        "git-protocol": "version=2",
-      },
-      body,
-    ),
+    req: req(headers, body),
     res: out,
     app: {} as BaseCtx["app"],
     deps,
@@ -110,6 +114,42 @@ test("git HTTP broker streams a smart-HTTP request through the pinned service cr
     },
     body: "PACK",
   });
+});
+
+test("git HTTP broker forwards a gzipped fetch body with its content encoding", async () => {
+  let seen: { headers: Record<string, string>; body: Buffer } | undefined;
+  const deps: ServerDeps = {
+    control: {} as ServerDeps["control"],
+    serviceCreds: {
+      getServiceCredentialSecret: async () => ({
+        slug: "gitlab",
+        name: "GitLab git",
+        secret: "dXNlcjp0b2tlbg==",
+        host: "gitlab.example",
+        injection: { scheme: "Basic " },
+        allowedMethods: ["GET", "POST"],
+        allowedPathPrefixes: ["/acme/repo.git"],
+        enabled: true,
+      }),
+    } as unknown as ServerDeps["serviceCreds"],
+    gitHttpFetch: async (_url, init) => {
+      const chunks: Buffer[] = [];
+      if (init.body) for await (const chunk of init.body) chunks.push(Buffer.from(chunk as Buffer));
+      seen = { headers: init.headers, body: Buffer.concat(chunks) };
+      return { status: 200, headers: {}, body: Readable.from(["0000"]) };
+    },
+  };
+  const wants = "0032want 0123456789abcdef0123456789abcdef01234567\n".repeat(64) + "0000";
+  const c = ctx("/v1/credentials/git/gitlab/acme/repo.git/git-upload-pack", "POST", deps, gzipSync(wants), {
+    "content-type": "application/x-git-upload-pack-request",
+    "content-encoding": "gzip",
+    "git-protocol": "version=2",
+  });
+  await brokerGitHttp(c);
+
+  assert.equal(c.res.statusCode, 200);
+  assert.equal(seen?.headers["content-encoding"], "gzip");
+  assert.equal(gunzipSync(seen!.body).toString("utf8"), wants);
 });
 
 test("git HTTP broker sends a credential's fixed headers over a caller's case variant", async () => {

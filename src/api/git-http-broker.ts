@@ -11,7 +11,14 @@ import { proxyHeaders } from "../util/http-proxy.ts";
 
 export const GIT_HTTP_BROKER_PREFIX = "/v1/credentials/git/";
 
-const ALLOWED_GIT_HEADERS = new Set(["accept", "content-length", "content-type", "git-protocol", "user-agent"]);
+const ALLOWED_GIT_HEADERS = new Set([
+  "accept",
+  "content-encoding",
+  "content-length",
+  "content-type",
+  "git-protocol",
+  "user-agent",
+]);
 
 interface GitHttpFetchResponse {
   status: number;
