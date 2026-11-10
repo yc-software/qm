@@ -1593,7 +1593,7 @@ test("an owner's cron fire carries the owner's authority: liveActor, admin statu
     actor: alice,
     conversation: { kind: "dm", threadRef: "dm:admin-alice:owner-fire" },
     text: "!run echo fire",
-    origin: { kind: "automation" },
+    origin: { kind: "automation", ownerFire: true },
     ...extra,
   });
 
@@ -1615,6 +1615,16 @@ test("an owner's cron fire carries the owner's authority: liveActor, admin statu
   assert.equal((await app.turn(fire({ botActor: true }))).status, "ok");
   claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
   assert.equal(claims!.liveActor, undefined, "a bot actor's automation turn carries no authority");
+  assert.deepEqual(consulted, [], "and its admin status is never consulted");
+
+  captured = undefined;
+  consulted.length = 0;
+  const unmarked = await app.turn(
+    fire({ origin: { kind: "automation" }, conversation: { kind: "dm", threadRef: "dm:admin-alice:not-a-fire" } }),
+  );
+  assert.equal(unmarked.status, "ok");
+  claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
+  assert.equal(claims!.liveActor, undefined, "an automation turn no trigger produced carries no authority");
   assert.deepEqual(consulted, [], "and its admin status is never consulted");
 
   captured = undefined;
@@ -1959,7 +1969,7 @@ test("admin reach rides live, all-internal turns — direct, detection and guest
         actor: admin,
         conversation: { kind: "dm", threadRef: "dm:admin-alice:trigger-live" },
         text: "!run echo hi",
-        origin: { kind: "automation" },
+        origin: { kind: "automation", ownerFire: true },
       })
     ).status,
     "ok",

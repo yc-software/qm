@@ -117,7 +117,7 @@ export async function delegatedAuthorizationOrigin(
       !isSessionTurn(parent) &&
       internal &&
       (parent.origin.kind === "human" ||
-        (parent.origin.kind === "automation" && !parent.botActor) ||
+        (parent.origin.kind === "automation" && parent.origin.ownerFire === true && !parent.botActor) ||
         (parent.origin.kind === "ambient" && parent.origin.live === true && parent.conversation.kind !== "dm"))
     )
       return parent.origin;

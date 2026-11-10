@@ -14,7 +14,6 @@ function advertised(): Array<{ method: string; path: string }> {
       { isAdmin: true },
       { swarmsEnabled: true, personasEnabled: true },
     ),
-    // A cron fire carries its owner's authority (liveActor) with nobody at the keyboard (triggered).
     renderAgentApis(
       { ...base, liveActor: true, triggered: true, memory: { read: ["personal:U1"], write: "personal:U1" } },
       { isAdmin: true },

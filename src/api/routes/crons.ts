@@ -9,10 +9,9 @@ import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { notifyOwnerOfCronEdit } from "../../triggers/edit-notice.ts";
-import { canAdministerCron } from "../control-service.ts";
+import { canAdministerCron, cronTaskTakeover } from "../control-service.ts";
 import { CRON_PATCH_NOTHING_TO_CHANGE } from "../control-service.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
-import { actsAsScope } from "../../types.ts";
 
 function defaultTimezoneFor(capability: CapabilityClaims | null): string {
   return typeof capability?.timezone === "string" && capability.timezone.trim()
@@ -411,13 +410,9 @@ async function patchCronAsPerson(ctx: ApiCtx, cron: Cron, body: unknown): Promis
     return sendJson(res, 400, { error: "bad_request", message: PERSON_CRON_PATCH_BAD_REQUEST });
   const schedule = body.schedule !== undefined ? userScheduleFromBody(body.schedule)! : undefined;
   const editor = url.searchParams.get("principalId");
-  const takesOver =
-    body.task !== undefined &&
-    !!editor &&
-    !actsAsScope(cron.owner, cron.ownerScopeId) &&
-    !(await app.samePerson(cron.owner, editor));
+  const takeover = editor ? await cronTaskTakeover(app, cron, editor, body.task !== undefined) : undefined;
   const patch: CronPatch = {
-    ...(takesOver ? { owner: editor } : {}),
+    ...takeover,
     ...(body.runtime !== undefined ? { runtime: body.runtime } : {}),
     ...(body.title !== undefined ? { title: body.title } : {}),
     ...(body.task !== undefined ? { action: body.task } : {}),
@@ -435,7 +430,7 @@ async function patchCronAsPerson(ctx: ApiCtx, cron: Cron, body: unknown): Promis
           ...(body.runtime !== undefined ? ["runtime"] : []),
           ...(body.title !== undefined ? ["title"] : []),
           ...(body.task !== undefined ? ["task"] : []),
-          ...(takesOver ? ["owner"] : []),
+          ...(takeover ? ["owner"] : []),
           ...(schedule !== undefined ? ["schedule"] : []),
           ...(body.enabled !== undefined ? [`enabled=${body.enabled}`] : []),
           ...(body.archived !== undefined ? [`archived=${body.archived}`] : []),

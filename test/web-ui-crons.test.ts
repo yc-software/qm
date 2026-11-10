@@ -266,7 +266,6 @@ test("a channel member sees a teammate's cron read-only via the web until the ow
   assert.equal(aliceDisable.status, 200, "a write grantee manages it");
   assert.equal((await built.app.getCron(privCron.id))!.owner, "bob");
 
-  // Fires carry the owner's authority, so a schedule-only edit leaves ownership alone…
   const rescheduled = await fetch(
     `${coreBase}/api/crons/${privCron.id}`,
     asUser("alice", { method: "PATCH", body: JSON.stringify({ schedule: { everyMs: 1_800_000 } }) }),
@@ -275,7 +274,6 @@ test("a channel member sees a teammate's cron read-only via the web until the ow
   const afterSchedule = (await built.app.getCron(privCron.id))!;
   assert.equal(afterSchedule.owner, "bob", "changing when it fires does not change whose words run");
   assert.equal((afterSchedule.schedule as { everyMs?: number }).everyMs, 1_800_000);
-  // …while rewriting the task makes the editor the owner: the words that run are always the runner's own.
   const retasked = await fetch(
     `${coreBase}/api/crons/${privCron.id}`,
     asUser("alice", { method: "PATCH", body: JSON.stringify({ task: "tock" }) }),

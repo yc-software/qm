@@ -221,6 +221,16 @@ export async function canAdministerCron(
   return (await app.artifactGrantPermission(cron.ownerScopeId, encodeRef(cronRef(cron.id)), actorId)) === "write";
 }
 
+export async function cronTaskTakeover(
+  app: Pick<App, "samePerson" | "isCurrentSharedScopeMember" | "membershipControlsScope" | "managesScope">,
+  cron: Cron,
+  editorId: string,
+  rewritesTask: boolean,
+): Promise<{ owner: string } | undefined> {
+  if (!rewritesTask || actsAsScope(cron.owner, cron.ownerScopeId)) return undefined;
+  return (await ownsCron(app, cron, editorId)) ? undefined : { owner: editorId };
+}
+
 export async function editWebhookTask(
   app: App,
   id: string,
@@ -529,12 +539,10 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           return { ok: false, code: "bad_request", message: CRON_SCRIPT_HOME_ONLY };
         patch.script = script;
       } else if (before.script && (req.script === null || req.text !== undefined)) patch.script = null;
-      if (
-        (req.action !== undefined || req.text !== undefined) &&
-        !(await ownsCron(app, before, capability.actorId)) &&
-        !actsAsScope(before.owner, before.ownerScopeId)
-      )
-        patch.owner = capability.actorId;
+      Object.assign(
+        patch,
+        await cronTaskTakeover(app, before, capability.actorId, req.action !== undefined || req.text !== undefined),
+      );
       if (!cronPatchChanges(before, patch)) return { ok: true, cron: before };
       try {
         const cron = await app.updateCron(id, patch, trial);

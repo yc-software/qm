@@ -538,7 +538,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ? await delegatedAuthorizationOrigin(input, { runs: deps.runs, sessions: deps.sessions })
           : undefined;
       const authorizationOrigin = sessionTurn ? (delegatedOrigin ?? { kind: "automation" as const }) : input.origin;
-      const ownerFireTurn = authorizationOrigin.kind === "automation" && !sessionTurn && !input.botActor;
+      const ownerFireTurn =
+        authorizationOrigin.kind === "automation" &&
+        authorizationOrigin.ownerFire === true &&
+        !sessionTurn &&
+        !input.swarm &&
+        !input.botActor;
       const liveTurn = (authorizationOrigin.kind === "human" || ownerFireTurn) && allInternal && !external;
       const liveAuthorTurn =
         !external &&
