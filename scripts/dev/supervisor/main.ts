@@ -309,7 +309,7 @@ async function prepare(spec: BootSpec): Promise<Prepared> {
   try {
     return await assembleAndPrepare(spec, tunnel);
   } catch (err) {
-    await discardTunnel(tunnel.pid);
+    await discardTunnel(tunnel.pid).catch((cleanupErr) => log(`tunnel cleanup failed: ${errMessage(cleanupErr)}`));
     throw err;
   }
 }
@@ -320,9 +320,9 @@ async function discardTunnel(pid: number | null): Promise<void> {
 
 async function commitTunnel(pid: number | null): Promise<void> {
   const previous = readPidFile(lock, "tunnel.pid");
-  if (previous && previous !== pid) await killTree(previous, 3000);
   if (pid) writePidFile(lock, "tunnel.pid", pid);
   else rmSync(join(lock, "tunnel.pid"), { force: true });
+  if (previous && previous !== pid) await killTree(previous, 3000);
 }
 
 async function assembleAndPrepare(spec: BootSpec, tunnel: { pid: number | null }): Promise<Prepared> {
