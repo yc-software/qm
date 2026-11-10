@@ -83,7 +83,7 @@ export function withWebTranscriptDeliveries(
         kind: "UserMessage",
         text: d.text,
         externalId: reply.ts,
-        body: { name: reply.name, slackReplyReceipt: true, deliveryKey: d.idempotencyKey },
+        body: { name: reply.name, speakerId: reply.speakerId, slackReplyReceipt: true, deliveryKey: d.idempotencyKey },
       };
     } else if (failure) {
       item = turnFailureItem(d.text, failure.runId);

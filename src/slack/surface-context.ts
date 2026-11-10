@@ -282,8 +282,8 @@ export function createSurfaceContextFulfiller(deps: {
         throw new Error("Live Slack thread context includes truncated channel history; read the channel separately.");
       if (!raw.length && failure?.status === "rejected") throw failure.reason;
       const note = [...notes].join(" ");
-      const nameById = new Map<string, string>();
-      const shaped = await serializer.shapeRecentMessages(client, raw, "", nameById);
+      const people = { names: new Map<string, string>(), principals: new Map<string, string>() };
+      const shaped = await serializer.shapeRecentMessages(client, raw, "", people);
       if (q.live === true && hasMore && !shaped.length)
         throw new Error("Live Slack history contains only filtered messages; an earlier page could not be located.");
       if (q.live === true) for (const message of shaped) message.reactions ??= [];
@@ -292,7 +292,7 @@ export function createSurfaceContextFulfiller(deps: {
           count,
           ...(typeof q.match === "string" && q.match ? { match: q.match } : {}),
           scanHasMore: hasMore,
-          nameById,
+          nameById: people.names,
         }),
         ...(note ? { note } : {}),
       });
