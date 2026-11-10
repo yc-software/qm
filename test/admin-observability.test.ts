@@ -242,6 +242,33 @@ test("an org admin sees EXACTLY what we sent the model per turn (captured reques
   }
 });
 
+test("batched capture reads retain exact session and turn pairs", async () => {
+  const s = start();
+  try {
+    const sessions = await Promise.all(
+      ["a", "b"].map((id) => s.built.sessions.getOrCreateByThread(`web:batch:${id}`, "dm", "personal:batch")),
+    );
+    for (const session of sessions)
+      for (const turnSeq of [1, 2])
+        await s.built.sessions.recordLlmRequest(session.id, {
+          turnSeq,
+          step: 0,
+          model: "mock",
+          scopeLabel: session.scopeId,
+          promptEnvelope: { model: "mock", messages: [{ role: "user", content: `${session.id}:${turnSeq}` }] },
+        });
+    const wanted = sessions.map((session, i) => ({ sessionId: session.id, turnSeq: i + 1 }));
+    const actual = await s.built.sessions.listLlmRequestsForTurns([...wanted, wanted[0]!]);
+    assert.deepEqual(
+      actual.map(({ sessionId, turnSeq }) => ({ sessionId, turnSeq })),
+      wanted,
+    );
+    assert.deepEqual(await s.built.sessions.listLlmRequestsForTurns([]), []);
+  } finally {
+    await s.close();
+  }
+});
+
 test("recipient delivery rows expose origin provenance and gated origin context", async () => {
   const s = start();
   try {

@@ -115,10 +115,10 @@ async function deliveryProvenanceSidecars(
       return { d, sourceSession, turnSeqs };
     }),
   );
-  const allTurnSeqs = [...new Set(perDelivery.flatMap(({ turnSeqs }) => [...turnSeqs]))];
-  const requests = allTurnSeqs.length
-    ? ((await deps.sessions?.listLlmRequests([...ranges.keys()], { turnSeqs: allTurnSeqs })) ?? [])
-    : [];
+  const turns = perDelivery.flatMap(({ sourceSession, turnSeqs }) =>
+    [...turnSeqs].map((turnSeq) => ({ sessionId: sourceSession.id, turnSeq })),
+  );
+  const requests = (await deps.sessions?.listLlmRequestsForTurns(turns)) ?? [];
   for (const { d, sourceSession, turnSeqs } of perDelivery) {
     const own = requests.filter(
       (r) => r.sessionId === sourceSession.id && r.turnSeq !== null && turnSeqs.has(r.turnSeq),

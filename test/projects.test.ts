@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { configureCommandRules } from "./support/command-rules.ts";
-import { canAdministerLoop } from "../src/api/routes/loops.ts";
+import { canAdministerLoop } from "../src/api/loop-administration.ts";
 import type { Loop } from "../src/loops/types.ts";
 import { projectRoutes } from "../src/api/routes/projects.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";

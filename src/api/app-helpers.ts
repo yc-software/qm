@@ -252,7 +252,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       ...new Set(projects.flatMap((project) => rosters?.get(projectGroupRef(project.id)) ?? project.memberIds)),
     ];
     const [users, directory] = await Promise.all([
-      deps.users?.resolve(ids).catch(() => undefined),
+      deps.users?.resolve(ids).catch(swallowAs("project members: user lookup", undefined)),
       deps.directory
         .getMany(ids)
         .catch(swallowAs("project members: directory lookup", new Map<string, DirectoryMember>())),

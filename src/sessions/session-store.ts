@@ -440,7 +440,8 @@ export interface SessionStore {
   setGoal(writer: SessionWriter, goal: GoalRecord, notices?: readonly NewItem[]): Promise<void>;
 
   recordLlmRequest(sessionId: string, rec: NewLlmRequest): Promise<LlmRequestRecord>;
-  listLlmRequests(sessionId: string | readonly string[], opts?: ListLlmRequestsOptions): Promise<LlmRequestRecord[]>;
+  listLlmRequestsForTurns(turns: readonly { sessionId: string; turnSeq: number }[]): Promise<LlmRequestRecord[]>;
+  listLlmRequests(sessionId: string, opts?: ListLlmRequestsOptions): Promise<LlmRequestRecord[]>;
   purgeLlmCaptures?(cutoff: number, opts?: { deadline?: number; stop?: () => boolean }): Promise<number>;
 
   addParticipant(sessionId: string, principalId: string, title?: string): Promise<void>;

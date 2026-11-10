@@ -150,6 +150,10 @@ export function createProjectStore(
     return [...new Set([...project.memberIds, ...(project.channelMemberIds ?? [])])];
   }
 
+  function activeMemberIds(project: Project): string[] {
+    return isActiveMember(project.ownerId) ? effectiveMemberIds(project).filter(isActiveMember) : [];
+  }
+
   async function mutate(
     id: string,
     actorId: string,
@@ -380,18 +384,13 @@ export function createProjectStore(
       return new Map(
         projects
           .filter((p) => wanted.has(p.id) && p.orgId === configOrgId())
-          .map((p) => [
-            projectGroupRef(p.id),
-            isActiveMember(p.ownerId) ? effectiveMemberIds(p).filter(isActiveMember) : [],
-          ]),
+          .map((p) => [projectGroupRef(p.id), activeMemberIds(p)]),
       );
     },
     async members(groupRef) {
       const project = await projectForGroup(groupRef);
       if (!project) return undefined;
-      return isActiveMember(project.ownerId)
-        ? effectiveMemberIds(project).filter((principalId) => isActiveMember(principalId))
-        : [];
+      return activeMemberIds(project);
     },
     async version(groupRef) {
       const project = await projectForGroup(groupRef);

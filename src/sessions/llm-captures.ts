@@ -29,9 +29,20 @@ function rowToLlmRequest(r: Record<string, unknown>): LlmRequestRecord {
 export function createLlmCaptures(deps: {
   db: PgPool;
   now: () => number;
-}): Pick<SessionStore, "recordLlmRequest" | "listLlmRequests" | "purgeLlmCaptures"> {
+}): Pick<SessionStore, "recordLlmRequest" | "listLlmRequests" | "listLlmRequestsForTurns" | "purgeLlmCaptures"> {
   const { db, now } = deps;
   const { q } = db;
+  async function readRequests(condition: string, args: unknown[], omitRequest = false): Promise<LlmRequestRecord[]> {
+    const cols = omitRequest
+      ? "r.id, r.session_id, r.turn_seq, r.step, r.model, r.scope_label, r.created_at, r.truncated, r.prompt_hash, r.usage_json, r.transport_json"
+      : "r.*, e.body AS prompt_body";
+    const from = omitRequest
+      ? "session_llm_requests r"
+      : "session_llm_requests r LEFT JOIN llm_prompt_envelopes e ON e.hash = r.prompt_hash";
+    return (await q(`SELECT ${cols} FROM ${from} WHERE ${condition} ORDER BY r.created_at ASC, r.step ASC`, args)).map(
+      rowToLlmRequest,
+    );
+  }
   return {
     async recordLlmRequest(sessionId, rec: NewLlmRequest): Promise<LlmRequestRecord> {
       const envelope = promptEnvelopeBody(rec.promptEnvelope);
@@ -77,16 +88,8 @@ export function createLlmCaptures(deps: {
     },
 
     async listLlmRequests(sessionId, opts): Promise<LlmRequestRecord[]> {
-      const cols = opts?.omitRequest
-        ? "r.id, r.session_id, r.turn_seq, r.step, r.model, r.scope_label, r.created_at, r.truncated, r.prompt_hash, r.usage_json, r.transport_json"
-        : "r.*, e.body AS prompt_body";
-      const from = opts?.omitRequest
-        ? "session_llm_requests r"
-        : "session_llm_requests r LEFT JOIN llm_prompt_envelopes e ON e.hash = r.prompt_hash";
-      const ids = typeof sessionId === "string" ? [sessionId] : sessionId;
-      if (!ids.length) return [];
-      const conds = ["r.session_id = ANY($1::text[])"];
-      const args: unknown[] = [ids];
+      const conds = ["r.session_id = $1"];
+      const args: unknown[] = [sessionId];
       const turnSeqs = opts?.turnSeqs;
       if (turnSeqs) {
         args.push(turnSeqs);
@@ -98,11 +101,17 @@ export function createLlmCaptures(deps: {
       } else if (opts?.orphans) {
         conds.push("r.turn_seq IS NULL");
       }
-      const rows = await q(
-        `SELECT ${cols} FROM ${from} WHERE ${conds.join(" AND ")} ORDER BY r.created_at ASC, r.step ASC`,
-        args,
+      return readRequests(conds.join(" AND "), args, opts?.omitRequest);
+    },
+
+    async listLlmRequestsForTurns(turns) {
+      if (!turns.length) return [];
+      return readRequests(
+        `EXISTS (SELECT 1 FROM jsonb_to_recordset($1::jsonb)
+        AS wanted("sessionId" text, "turnSeq" bigint)
+        WHERE r.session_id = wanted."sessionId" AND r.turn_seq = wanted."turnSeq")`,
+        [JSON.stringify(turns)],
       );
-      return rows.map(rowToLlmRequest);
     },
 
     async purgeLlmCaptures(cutoff, opts) {

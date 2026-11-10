@@ -6,7 +6,7 @@ import type { OwnedLedgerEvent } from "../../loops/ledger-events.ts";
 import { canonicalPerson } from "../../directory/person.ts";
 import { reportFailure, swallowAs } from "../../util/errors.ts";
 import { createSweeper } from "../../util/sweeper.ts";
-import { canAdministerLoop } from "./loops.ts";
+import { canAdministerLoop } from "../loop-administration.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { sendJson } from "../http.ts";
 import { bootTenant, tenancyBooted } from "../../tenants/boot.ts";
