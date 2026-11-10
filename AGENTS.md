@@ -40,13 +40,10 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   `gh pr merge <number>` queues it rather than merging it. The queue runs CI on the
   exact commit that will land, reusing the PR's run when `main` has not moved, and
   `main`'s own CI then reuses the queue's run. Never bypass the queue with `--admin`.
-- **Check the plan against the Wall of shame before writing code.** What reviewers catch
-  is often settled before the first line: a second store beside an existing one, a
-  hand-written client for something a dependency already does, one more flag, a fix aimed
-  at the symptom. Before building, hold what you plan to add against each _always
-  reviewed_ lens in the [Wall of shame](./docs/SPEC.md#wall-of-shame) and search the repo
-  for what already owns that behaviour. Changing the plan is free; the same finding at
-  review costs a rewrite.
+- **Check the plan against the Wall of shame before writing code.** Hold what you plan to
+  add against each _always reviewed_ lens in the [Wall of shame](./docs/SPEC.md#wall-of-shame)
+  and search the repo for what already owns that behaviour. Changing the plan is free; the
+  same finding at review costs a rewrite.
 - **Run independent Wall of shame reviews in parallel for every PR.** First triage with
   one fast, cheap model, the latest Haiku: give it the diff and every lens in the current
   [Wall of shame](./docs/SPEC.md#wall-of-shame), and have it mark each lens relevant or
