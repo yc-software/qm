@@ -152,7 +152,9 @@ async function listWebhooks(ctx: ApiCtx): Promise<void> {
   const viewer = capability?.actorId ?? actor?.p ?? url.searchParams.get("viewer");
   if (!viewer) return sendJson(res, 400, { error: "bad_request", message: "viewer required" });
   const isViewer = await app.personMatcher(viewer);
-  const allowed = await Promise.all(all.map((webhook) => canAdministerWebhook(app, webhook, viewer, isViewer)));
+  const allowed = await Promise.all(
+    all.map((webhook) => canAdministerWebhook(app, webhook, capability ?? { actorId: viewer }, isViewer)),
+  );
   const visible = all.filter((_webhook, index) => allowed[index]);
   return sendJson(res, 200, {
     webhooks: visible.map((webhook) => ({ ...redactWebhook(webhook), url: inboundUrl(deps.publicUrl, webhook.id) })),
@@ -163,7 +165,7 @@ async function listWebhookEvents(ctx: ApiCtx): Promise<void> {
   const { res, app, params, capability, actor, url } = ctx;
   const webhook = await app.getWebhook(params.id!);
   const viewer = capability?.actorId ?? actor?.p ?? url.searchParams.get("viewer");
-  if (!viewer || !webhook || !(await canAdministerWebhook(app, webhook, viewer))) {
+  if (!viewer || !webhook || !(await canAdministerWebhook(app, webhook, capability ?? { actorId: viewer }))) {
     return sendJson(res, 404, { error: "not_found" });
   }
   return sendJson(res, 200, { events: await app.listWebhookEvents(webhook.id, viewer) });
@@ -176,7 +178,7 @@ async function setWebhookEnabled(ctx: ApiCtx, enabled: boolean): Promise<void> {
   if (!webhook) return sendJson(res, 404, { error: "not_found" });
   const principalId = capability?.actorId ?? actor?.p ?? url.searchParams.get("principalId");
   if (!principalId) return sendJson(res, 404, { error: "not_found" });
-  if (!(await canAdministerWebhook(app, webhook, principalId))) {
+  if (!(await canAdministerWebhook(app, webhook, capability ?? { actorId: principalId }))) {
     return sendJson(res, capability ? 403 : 404, {
       error: capability ? "forbidden" : "not_found",
       ...(capability ? { message: "not your webhook" } : {}),
@@ -202,7 +204,13 @@ const disableWebhook = (ctx: ApiCtx): Promise<void> => setWebhookEnabled(ctx, fa
 const enableWebhook = (ctx: ApiCtx): Promise<void> => setWebhookEnabled(ctx, true);
 
 export const webhookRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
-  { method: "POST", path: "/v1/webhooks/incoming/:id", auth: "public", handle: incomingWebhook },
+  {
+    method: "POST",
+    path: "/v1/webhooks/incoming/:id",
+    auth: "public",
+    tenant: { by: "webhook", key: (params) => params.id },
+    handle: incomingWebhook,
+  },
 ];
 
 export const webhookRoutes: ReadonlyArray<Route<ApiCtx>> = [

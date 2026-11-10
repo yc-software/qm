@@ -1,227 +1,21 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { createAwsDeployProvider, type StoredDeployBody } from "../src/deploy/aws-deploy-provider.ts";
-import {
-  AwsApiError,
-  type AwsMicrovmApi,
-  type MicrovmDescription,
-  type MicrovmLifecycleState,
-} from "../src/sandbox/aws-microvm-api.ts";
-import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.ts";
-import { scopeId } from "../src/types.ts";
-import { singleProcessDeps } from "./support/single-process.ts";
+import { type StoredDeployBody } from "../src/deploy/aws-deploy-provider.ts";
+import { AwsApiError } from "../src/sandbox/aws-microvm-api.ts";
 import { testMap } from "./support/test-database.ts";
-
-const REGION = "us-west-2";
-
-interface Vm {
-  state: MicrovmLifecycleState;
-  endpoint: string;
-}
-
-function fakeApi() {
-  const vms = new Map<string, Vm>();
-  const counts = { run: 0, resume: 0, terminate: 0, token: 0, describe: 0 };
-  const launches: Array<Parameters<AwsMicrovmApi["runMicrovm"]>[0]> = [];
-  let n = 0;
-  const api: AwsMicrovmApi = {
-    async listImages() {
-      return [{ name: "qm-microvm-sandbox", imageArn: "arn:img", state: "ACTIVE", latestActiveImageVersion: "1" }];
-    },
-    async findImage(name) {
-      return { name, imageArn: "arn:img", state: "ACTIVE", latestActiveImageVersion: "1" };
-    },
-    async createImage() {
-      throw new Error("createImage unused in deploy provider");
-    },
-    async updateImage() {
-      throw new Error("updateImage unused in deploy provider");
-    },
-    async runMicrovm(input) {
-      counts.run++;
-      launches.push(input);
-      const id = `mvm-${++n}`;
-      const endpoint = `${id}.lambda-microvm.${REGION}.on.aws`;
-      vms.set(id, { state: "RUNNING", endpoint });
-      return { microvmId: id, endpoint, state: "RUNNING" };
-    },
-    async getMicrovm(id) {
-      counts.describe++;
-      const v = vms.get(id);
-      if (!v) throw new AwsApiError("not found", 404);
-      return { microvmId: id, ...v };
-    },
-    async tryGetMicrovm(id) {
-      counts.describe++;
-      const v = vms.get(id);
-      return v ? { microvmId: id, ...v } : null;
-    },
-    async createAuthToken(id) {
-      counts.token++;
-      return `tok-${id}-${counts.token}`;
-    },
-    async suspend(id) {
-      const v = vms.get(id);
-      if (v) v.state = "SUSPENDED";
-    },
-    async resume(id) {
-      counts.resume++;
-      const v = vms.get(id);
-      if (v) v.state = "RUNNING";
-    },
-    async terminate(id) {
-      counts.terminate++;
-      const v = vms.get(id);
-      if (v) v.state = "TERMINATED";
-    },
-    async waitForState(id, target): Promise<MicrovmDescription> {
-      const v = vms.get(id);
-      return { microvmId: id, state: v?.state ?? target, ...(v?.endpoint ? { endpoint: v.endpoint } : {}) };
-    },
-  };
-  return { api, vms, counts, launches };
-}
-
-function fakeDaemon(
-  opts: {
-    execCode?: (cmd: string, url: string) => number;
-    execStdout?: (cmd: string) => string;
-    readB64?: (path: string) => string;
-  } = {},
-) {
-  const execs: string[] = [];
-  const writes: Array<{ path: string; b64: string }> = [];
-  const fetchImpl = (async (url: string | URL, init?: { body?: string }) => {
-    const u = String(url);
-    const body = init?.body ? (JSON.parse(init.body) as Record<string, string>) : {};
-    const ok = (data: unknown) => ({
-      status: 200,
-      text: async () => JSON.stringify(data),
-      headers: { get: () => null },
-    });
-    if (u.endsWith("/health")) return ok({ ok: true });
-    if (u.endsWith("/exec")) {
-      execs.push(body.cmd ?? "");
-      return ok({
-        stdout: opts.execStdout?.(body.cmd ?? "") ?? "",
-        stderr: "",
-        code: opts.execCode?.(body.cmd ?? "", u) ?? 0,
-        timedOut: false,
-      });
-    }
-    if (u.endsWith("/write")) {
-      writes.push({ path: body.path!, b64: body.b64! });
-      return ok({ ok: true });
-    }
-    if (u.endsWith("/read")) return ok({ b64: opts.readB64?.(body.path ?? "") ?? "" });
-    return ok({});
-  }) as unknown as typeof fetch;
-  return { fetchImpl, execs, writes };
-}
-
-function fakeS3(objects: Map<string, Uint8Array> = new Map()) {
-  const calls: string[] = [];
-  const s3 = {
-    async send(cmd: { constructor: { name: string }; input: { Key?: string; Body?: Uint8Array } }) {
-      const kind = cmd.constructor.name;
-      const key = cmd.input.Key!;
-      calls.push(`${kind}:${key}`);
-      if (kind === "PutObjectCommand") objects.set(key, cmd.input.Body!);
-      if (kind === "DeleteObjectCommand") objects.delete(key);
-      if (kind === "GetObjectCommand") {
-        const bytes = objects.get(key);
-        if (!bytes) {
-          const e = new Error("no such key") as Error & { name: string };
-          e.name = "NoSuchKey";
-          throw e;
-        }
-        return { Body: { transformToByteArray: async () => bytes } };
-      }
-      if (kind === "ListObjectsV2Command") {
-        const prefix = (cmd.input as { Prefix?: string }).Prefix ?? "";
-        return {
-          Contents: [...objects.keys()].filter((k) => k.startsWith(prefix)).map((k) => ({ Key: k })),
-          IsTruncated: false,
-        };
-      }
-      if (kind === "DeleteObjectsCommand") {
-        for (const o of (cmd.input as unknown as { Delete: { Objects: Array<{ Key: string }> } }).Delete.Objects)
-          objects.delete(o.Key);
-      }
-      return {};
-    },
-  };
-  return { s3: s3 as unknown as Pick<import("@aws-sdk/client-s3").S3Client, "send">, objects, calls };
-}
-
-function fakeSts() {
-  const assumes: Array<{ policy: string; role: string }> = [];
-  const sts = {
-    async send(cmd: { input: { RoleArn?: string; Policy?: string } }) {
-      assumes.push({ policy: cmd.input.Policy ?? "", role: cmd.input.RoleArn ?? "" });
-      return {
-        Credentials: {
-          AccessKeyId: `AKIA${assumes.length}`,
-          SecretAccessKey: "sk",
-          SessionToken: "tok",
-          Expiration: new Date(),
-        },
-      };
-    },
-  };
-  return { sts: sts as unknown as Pick<import("@aws-sdk/client-sts").STSClient, "send">, assumes };
-}
-
-function provider(
-  api: AwsMicrovmApi,
-  fetchImpl: typeof fetch,
-  store = testMap<StoredDeployBody>(),
-  extra: Record<string, unknown> = {},
-) {
-  return createAwsDeployProvider({
-    ...singleProcessDeps(),
-    region: REGION,
-    imageIdentifier: "qm-microvm-sandbox",
-    appPort: 8081,
-    appsDomain: "apps.example.com",
-    api,
-    fetchImpl,
-    store,
-    ...extra,
-  });
-}
-
-function deployment(id: string, name?: string): Deployment {
-  return {
-    id,
-    ownerScopeId: scopeId("personal", "U1"),
-    createdBy: "U1",
-    currentVersion: 1,
-    status: "stopped",
-    endpoint: null,
-    versions: [],
-    ...(name ? { name } : {}),
-  };
-}
-
-function localSnapshot(file: string, contents: string): string {
-  const dir = mkdtempSync(join(tmpdir(), "aws-deploy-"));
-  const target = join(dir, file);
-  mkdirSync(dirname(target), { recursive: true });
-  writeFileSync(target, contents);
-  return dir;
-}
-
-function version(snapshotDir: string, over: Partial<DeploymentVersion> = {}): DeploymentVersion {
-  return { version: 1, createdAt: 0, entrypoint: "node server.js", snapshotDir, env: { API_KEY: "secret" }, ...over };
-}
-
-const ID = "550e8400-e29b-41d4-a716-446655440000";
-const written = (writes: Array<{ path: string }>, p: string): boolean => writes.some((w) => w.path === p);
+import {
+  ID,
+  deployment,
+  fakeApi,
+  fakeDaemon,
+  fakeS3,
+  fakeSts,
+  localSnapshot,
+  provider,
+  version,
+  written,
+} from "./support/aws-deploy-fakes.ts";
 
 test("apply: launches a MicroVM, writes the snapshot into /app, starts the app, returns a TLS endpoint", async () => {
   const { api, counts } = fakeApi();
@@ -272,12 +66,7 @@ test("reconcile (git bundle): checks the commit out via git, writes home, no fil
       commit: "a".repeat(40),
       homeDir: localSnapshot(".ssh/id", "KEY"),
     }),
-    {
-      gitBundle: Buffer.from("bundle"),
-      allPaths: ["server.js"],
-      changedPaths: ["server.js"],
-      deletedPaths: [],
-    },
+    Buffer.from("bundle"),
   );
   assert.ok(
     execs.some((c) => c.includes("git fetch --force") && c.includes("refs/deploy-commits/")),
@@ -296,12 +85,7 @@ test("reconcile (relaunch): a missing ephemeral snapshot/home dir is tolerated â
     commit: "a".repeat(40),
     homeDir: "/data/deployments/also-gone",
   });
-  const endpoint = await provider(api, fetchImpl).reconcile!(d, ver, {
-    gitBundle: Buffer.from("bundle"),
-    allPaths: ["server.js"],
-    changedPaths: ["server.js"],
-    deletedPaths: [],
-  });
+  const endpoint = await provider(api, fetchImpl).reconcile!(d, ver, Buffer.from("bundle"));
   assert.equal(endpoint.tls, true, "endpoint returned despite the missing local dirs");
   assert.ok(
     execs.some((c) => c.includes("git fetch --force")),
@@ -695,12 +479,7 @@ test("reconcile: a reused body whose port stays held fails the deploy â€” it nev
 
   wedged = true;
   await assert.rejects(
-    () =>
-      p.reconcile!(d, version(localSnapshot("a", "v2"), { version: 2 }), {
-        changedPaths: ["a"],
-        deletedPaths: [],
-        allPaths: ["a"],
-      }),
+    () => p.apply(d, version(localSnapshot("a", "v2"), { version: 2 })),
     /still held by a process this body cannot account for/,
     "a body already running the old code must not be reported as carrying the new version",
   );
@@ -740,12 +519,11 @@ test("destroy: terminates the body and clears its pointer", async () => {
   assert.equal(await store.get(ID), null, "the pointer is cleared");
 });
 
-test("profile: scale-to-zero is platform-managed and reconcile is in place", () => {
+test("profile: scale-to-zero is platform-managed", () => {
   const { api } = fakeApi();
   const { fetchImpl } = fakeDaemon();
   const p = provider(api, fetchImpl);
   assert.equal(p.profile.managedScaleToZero, true);
-  assert.equal(p.profile.inPlaceReconcile, true);
 });
 
 test("app data: a fresh body hydrates /data from the S3 snapshot before the app starts", async () => {
@@ -1227,6 +1005,50 @@ test("profile: advertises the durable dataDir only when persistence is wired", (
     provider(api, fetchImpl, testMap<StoredDeployBody>(), { dataBucket: "bkt", s3 }).profile.dataDir,
     "/data",
   );
+});
+
+test("liveEdit: writes changed files into the running app, removes deleted ones, and restarts only when asked", async () => {
+  const { api, counts } = fakeApi();
+  const { fetchImpl, execs, writes } = fakeDaemon();
+  const p = provider(api, fetchImpl);
+  const d = deployment(ID);
+  await p.apply(d, version(localSnapshot("src/App.jsx", "v1")));
+  const startsBefore = execs.filter((c) => c.includes("setsid")).length;
+
+  const edited = await p.liveEdit!(d, version("/unused", { entrypoint: "npm run dev" }), {
+    files: [{ path: "src/App.jsx", data: Buffer.from("v2") }],
+    deletedPaths: ["old.css"],
+    restart: false,
+  });
+  assert.equal(edited, true);
+  assert.equal(Buffer.from(writes.findLast((w) => w.path === "/app/src/App.jsx")!.b64, "base64").toString(), "v2");
+  assert.ok(
+    execs.some((c) => c.startsWith("rm -f") && c.includes("'/app/old.css'")),
+    "deleted file removed",
+  );
+  assert.equal(execs.filter((c) => c.includes("setsid")).length, startsBefore, "no restart without one asked for");
+
+  await p.liveEdit!(d, version("/unused", { entrypoint: "npm run dev" }), {
+    files: [],
+    deletedPaths: [],
+    restart: true,
+  });
+  assert.ok(
+    execs.some((c) => c.includes("setsid") && c.includes("npm run dev")),
+    "the app restarts with the given entrypoint",
+  );
+  assert.equal(counts.run, 1, "edits reuse the running microVM");
+});
+
+test("liveEdit: reports false when no microVM is running the app", async () => {
+  const { api } = fakeApi();
+  const { fetchImpl } = fakeDaemon();
+  const edited = await provider(api, fetchImpl).liveEdit!(deployment(ID), version("/unused"), {
+    files: [{ path: "a.js", data: Buffer.from("x") }],
+    deletedPaths: [],
+    restart: false,
+  });
+  assert.equal(edited, false);
 });
 
 test("resolveEndpoint: a dead body never drops a pointer that a rotation already replaced", async () => {

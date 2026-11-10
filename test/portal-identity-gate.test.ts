@@ -319,7 +319,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     };
     built.app.getDeployment = async (id) => (id === deployment.id ? deployment : null);
     built.app.listDeploymentsForViewer = async () => [];
-    built.app.canManageDeployment = async (_id, principalId) => principalId === "U2";
+    built.app.canManageDeployment = async (_id, caller) => caller.actorId === "U2";
     assert.equal((await fetch(`${base}/v1/deployments?principalId=U2`, { headers: aliceHeaders })).status, 403);
     for (const [suffix, body] of [
       ["name", { name: "stolen" }],

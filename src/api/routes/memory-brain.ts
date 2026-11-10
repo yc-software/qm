@@ -15,7 +15,7 @@ import {
 import { sendJson } from "../http.ts";
 import { registryError, writeRegistry } from "./admin/memory-registry.ts";
 import { parseScopeId, scopeId } from "../../types.ts";
-import type { ApiCtx, Route } from "./route.ts";
+import { tenantOf, type ApiCtx, type Route } from "./route.ts";
 import { adminStanding, audit, orgScope } from "./shared.ts";
 
 const NOT_LIVE = "a member's memory brain can only be managed on a turn that person sent";
@@ -45,7 +45,7 @@ async function member(ctx: ApiCtx) {
     return null;
   }
   const owner = canonicalPerson(capability.actorId);
-  if ((await adminStanding(deps, owner)) === "inactive") {
+  if ((await adminStanding(deps, tenantOf(ctx), owner)) === "inactive") {
     sendJson(res, 403, { error: "forbidden", message: "this principal is no longer active" });
     return null;
   }

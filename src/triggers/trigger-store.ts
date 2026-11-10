@@ -3,6 +3,7 @@ import type { TriggerBase } from "./types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { samePerson } from "../directory/person.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
+import { fold } from "../identity/user-tenancy.ts";
 
 export interface CreateTriggerInput {
   ownerScopeId: ScopeId;
@@ -10,6 +11,7 @@ export interface CreateTriggerInput {
   createdBy: string;
   destination?: Destination;
   ownerConsentedAt?: number;
+  botActor?: boolean;
 }
 
 export function contentPart(value: unknown): string {
@@ -40,6 +42,7 @@ export function buildTriggerBase(input: CreateTriggerInput, id: string, createdA
     createdAt,
     ...(input.destination ? { destination: input.destination } : {}),
     ...(input.ownerConsentedAt ? { ownerConsentedAt: input.ownerConsentedAt } : {}),
+    ...(input.botActor ? { botActor: true } : {}),
   };
 }
 
@@ -63,4 +66,32 @@ export const DROP_RECIPIENT_CONSENT_MIGRATION = {
     `CREATE TABLE IF NOT EXISTS ${table} (id TEXT PRIMARY KEY, json JSONB NOT NULL)`,
     `UPDATE ${table} SET json = json - 'recipientConsent' WHERE json ? 'recipientConsent'`,
   ]),
+};
+
+export const BACKFILL_BOT_MARKER_MIGRATION = {
+  id: "users/v2/0008-bot-marker-backfill",
+  statements: [
+    `DO $$
+    BEGIN
+      IF to_regclass('users') IS NULL OR to_regclass('user_links') IS NULL THEN
+        RETURN;
+      END IF;
+${[
+  ["crons", "createdBy"],
+  ["loops", "createdBy"],
+  ["monitors", "createdBy"],
+  ["keychain_asks", "requesterId"],
+]
+  .map(
+    ([table, creator]) => `      IF to_regclass('${table}') IS NOT NULL THEN
+        UPDATE ${table} t SET json = t.json || '{"botActor": true}'::jsonb
+          FROM user_links l JOIN users u ON u.tenant_id = l.tenant_id AND u.id = l.user_id
+         WHERE u.kind = 'app' AND l.tenant_id = t.tenant_id
+           AND l.alias_id = ${fold(`t.json ->> '${creator}'`)} AND NOT t.json ? 'botActor';
+        UPDATE durable_map_versions SET v = v + 1 WHERE tbl = '${table}';
+      END IF;`,
+  )
+  .join("\n")}
+    END $$`,
+  ],
 };

@@ -39,7 +39,7 @@ export function createResourceSearchMethods(
             return (await helpers.principalGitPermission(row, principalId)) !== null;
           case "webhooks":
             person ??= app.personMatcher(principalId);
-            return canAdministerWebhook(app, row, principalId, await person);
+            return canAdministerWebhook(app, row, { actorId: principalId }, await person);
         }
       };
       const kinds: ResourceKind[] = ["skills", "crons", "deploys", "webhooks"];
