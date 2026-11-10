@@ -202,6 +202,7 @@ describeTwoTenants("background sweeps claim across tenants and work each row und
     } as unknown as Sandbox;
     const resources = createSandboxResources({
       records,
+      loads: db.maps.map("sandbox_loads"),
       defaults: createPostgresMap<SandboxDefault>(db.app, "t_tenant_job_defaults"),
       backends: { local: backend },
       defaultBackend: "local",

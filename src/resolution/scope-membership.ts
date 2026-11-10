@@ -3,6 +3,7 @@ import { atLeast, type PersonaRole } from "../personas/persona-schema.ts";
 import { actsAsScope, parseScopeId, scopeId } from "../types.ts";
 import { samePerson } from "../directory/person.ts";
 import { swallowAs } from "../util/errors.ts";
+import { type Tenant, ambientTenant } from "../tenants/context.ts";
 
 export interface ManagedGroupDirectory {
   recognizes(groupId: string): boolean;
@@ -32,7 +33,7 @@ interface ScopeMembershipDeps {
   identity?: {
     classify(externalId: string, isExternalGuest?: boolean): { type?: string; teamIds?: readonly string[] };
   };
-  teams?: { isMember(principalId: string, teamId: string): Promise<boolean> };
+  teams?: { isMember(tenant: Tenant, principalId: string, teamId: string): Promise<boolean> };
   sessions?: { participantScopes(principalId: string): Promise<readonly { scopeId: ScopeId }[]> };
   personas?: { role(principalId: string, personaId: string): Promise<PersonaRole | null> };
 }
@@ -47,7 +48,9 @@ async function personaRoleAtLeast(
 }
 
 async function teamMember(deps: ScopeMembershipDeps, principalId: string, teamId: string): Promise<boolean> {
-  return activePrincipal(deps, principalId) && (await deps.teams?.isMember(principalId, teamId)) === true;
+  return (
+    activePrincipal(deps, principalId) && (await deps.teams?.isMember(ambientTenant(), principalId, teamId)) === true
+  );
 }
 
 function activePrincipal(deps: ScopeMembershipDeps, principalId: string): boolean {

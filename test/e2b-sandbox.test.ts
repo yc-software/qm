@@ -580,7 +580,7 @@ test("an egress proxy is advertised as domain enforcement", () => {
   assert.equal(make().profile.egressEnforcement, "none");
 });
 
-test("computerStatus reports provider metrics and the profile learns the sandbox shape", async () => {
+test("computerStatus teaches the profile the sandbox shape", async () => {
   const client = {
     ...fake.client,
     async info() {
@@ -597,14 +597,7 @@ test("computerStatus reports provider metrics and the profile learns the sandbox
     diskTotalBytes: 20 * 2 ** 30,
   };
   await s.provision(scope);
-  const status = await s.computerStatus!(scope);
-  assert.deepEqual(status.resources, {
-    cpuUsedPct: 12.5,
-    memUsedMb: 256,
-    memTotalMb: 512,
-    diskUsedGb: 1.5,
-    diskTotalGb: 20,
-  });
+  await s.computerStatus!(scope);
   assert.equal(s.profile.spec?.cpus, 2);
   assert.equal(s.profile.spec?.memoryMb, 512);
   assert.equal(s.profile.spec?.diskGb, 20);

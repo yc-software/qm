@@ -1,3 +1,4 @@
+import type { Tenant } from "../tenants/context.ts";
 const DECISION_HOOK_POINTS = {
   user_input: { actions: ["allow", "block"], decide: "most_restrictive" },
   tool_response: { actions: ["allow", "block"], decide: "most_restrictive" },
@@ -68,6 +69,7 @@ export interface DecisionQuestion {
 
 export interface DecisionBackend {
   choose(input: {
+    tenant: Tenant;
     questions: Record<string, DecisionQuestion>;
     state: string;
     model: DecisionModelRef;
@@ -263,6 +265,7 @@ function settle(rule: DecisionRule, answer: Record<string, number> | Error | und
 }
 
 async function runGroup(
+  tenant: Tenant,
   rules: readonly DecisionRule[],
   state: string,
   backend: DecisionBackend,
@@ -271,6 +274,7 @@ async function runGroup(
   let answers: Record<string, Record<string, number> | Error>;
   try {
     answers = await backend.choose({
+      tenant,
       questions: Object.fromEntries(
         rules.map((r) => [
           r.id,
@@ -307,6 +311,7 @@ export const asError = (error: unknown): Error =>
 export const classifierKey = (rule: DecisionRule): string => JSON.stringify([rule.model.provider, rule.model.model]);
 
 export async function runHook(
+  tenant: Tenant,
   rules: readonly DecisionRule[],
   hook: DecisionHook,
   state: string,
@@ -318,7 +323,9 @@ export async function runHook(
     const key = classifierKey(rule);
     groups.set(key, [...(groups.get(key) ?? []), rule]);
   }
-  const results = (await Promise.all([...groups.values()].map((g) => runGroup(g, state, backend, signal)))).flat();
+  const results = (
+    await Promise.all([...groups.values()].map((g) => runGroup(tenant, g, state, backend, signal)))
+  ).flat();
   const confident = DECISION_HOOK_POINTS[hook].decide === "most_confident";
   const weight = (r: DecisionResult) => {
     if (!confident) return rank(hook, r.action);

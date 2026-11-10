@@ -42,6 +42,7 @@ import type { RuntimeChoice } from "../agent/agent.ts";
 import { modelDisplayName } from "../model/pi-models.ts";
 import type { ConversationEvent } from "../loops/sources/adapter.ts";
 import { slackConversationRef } from "../loops/sources/slack.ts";
+import { ambientTenant } from "../tenants/context.ts";
 
 interface SlackRunHooks {
   onReplying?(): void;
@@ -180,7 +181,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
 
   return {
     decideDeploymentAccess: (value, actor, approve) =>
-      decideDeploymentAccess(deps.app, deps.identity, value, actor, approve),
+      decideDeploymentAccess(ambientTenant(), deps.app, deps.identity, value, actor, approve),
     ...(deps.keychainApprovals ? { keychainApprovals: deps.keychainApprovals } : {}),
     ...(deps.taskAcknowledgements
       ? {
@@ -253,7 +254,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     },
 
     async readFileArtifact(artifactId, viewerId) {
-      const opened = await deps.app.openFileForViewer(artifactId, viewerId);
+      const opened = await deps.app.openFileForViewer(ambientTenant(), artifactId, viewerId);
       if (!opened) throw new Error(`file artifact ${artifactId} not found (or not visible to ${viewerId})`);
       return buffer(opened.stream);
     },

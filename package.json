@@ -4,7 +4,7 @@
   "private": true,
   "license": "MIT",
   "type": "module",
-  "description": "Headless core for the shared org agent (managed-agents architecture).",
+  "description": "An agent harness for teams. In Slack and on the web.",
   "engines": {
     "node": ">=24.22.1",
     "npm": ">=11.10.0"

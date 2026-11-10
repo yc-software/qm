@@ -8,6 +8,7 @@ import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testMap } from "./support/test-database.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 for (const checkResult of ["passed", "failed", "missing"] as const) {
   test(`loop intake executes with granted credentials and ${checkResult} checks gate held outputs`, async () => {
@@ -23,7 +24,7 @@ for (const checkResult of ["passed", "failed", "missing"] as const) {
       secret: "synthetic-error-source-token",
       host: "",
     });
-    await built.acl.grant({
+    await built.acl.grant(tenant, {
       ownerScopeId: org,
       ref: encodeRef(serviceCredRef("error-source")),
       granteeScopeId: org,
