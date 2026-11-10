@@ -105,6 +105,14 @@ test("spec validation rejects reserved ids, bad slugs, bad URLs, and empty model
   assert.throws(() => validateCustomProviderSpec({ ...GATEWAY, models: [{ id: "a" }, { id: "a" }] }), /duplicate/);
 });
 
+test("spec validation accepts large catalogs and long names", () => {
+  const models = Array.from({ length: 201 }, (_, i) => ({
+    id: `model-${i}-${"x".repeat(250)}`,
+    name: "n".repeat(300),
+  }));
+  validateCustomProviderSpec({ ...GATEWAY, id: `acme-${"g".repeat(40)}`, name: "A".repeat(150), models });
+});
+
 test("store round-trip: upsert encrypts the key, statuses never leak it, delete disables", async () => {
   const backing = testMap<StoredCustomProvider>();
   const store = createCustomProviderStore({ backing, keyMaterial: "test-key-material" });

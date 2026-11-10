@@ -12,6 +12,7 @@ import { shutdownOnUncaught } from "./util/process-guard.ts";
 import { numEnv } from "./util/env.ts";
 import type { EgressPolicy, ScopeId } from "./types.ts";
 import { isNeverAllowedHost, isNeverAllowedIp, isPrivateNetworkIp } from "./util/network.ts";
+import { withTenant } from "./tenants/context.ts";
 
 const OPEN: EgressPolicy = { allowedHosts: [], deniedHosts: [] };
 
@@ -114,14 +115,18 @@ export function buildEgressAuthzServer(deps: EgressAuthzDeps): Server {
       ? { allow: false, verdict: "denied" }
       : await decide(host, policy, lookup);
     try {
-      deps.audit.record({
-        source: "proxy",
-        host,
-        allowed: d.allow,
-        verdict: d.verdict,
-        scopeLabel: (claims?.scopeId ?? "unknown") as ScopeId,
-        principalId: claims?.actorId ?? "unknown",
-      });
+      const record = (): void =>
+        deps.audit.record({
+          source: "proxy",
+          host,
+          allowed: d.allow,
+          verdict: d.verdict,
+          scopeLabel: (claims?.scopeId ?? "unknown") as ScopeId,
+          principalId: claims?.actorId ?? "unknown",
+          ...(claims?.tenant ? { tenant: claims.tenant } : {}),
+        });
+      if (claims?.tenant) withTenant(claims.tenant, record);
+      else record();
     } catch (error) {
       swallow("egress-authz: audit record", error);
     }

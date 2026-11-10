@@ -15,14 +15,14 @@ import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { createFeatureFlagStore } from "../src/feature-flags.ts";
 import { createSessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
 import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
-import { scopeId, type Principal } from "../src/types.ts";
+import type { Principal } from "../src/types.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { Run } from "../src/runs/run-store.ts";
 import type { McpToolService } from "../src/mcp/mcp-tool-service.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { orchestratorTestDeps } from "./support/orchestrator-deps.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
@@ -39,7 +39,6 @@ import {
 } from "./support/test-database.ts";
 
 const bot: Principal = { id: "B1", type: "internal", displayName: "Release bot" };
-const scope = scopeId("personal", bot.id);
 const active: RuntimeChoice = { modelId: "claude-opus-5", effortLevel: "high", fastMode: false };
 
 test("subagents a Slack bot's turns open and message keep the bot marker and its limits", async () => {
@@ -47,8 +46,6 @@ test("subagents a Slack bot's turns open and message keep the bot marker and its
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const signals = createPostgresRunSignalStore(testDatabaseUrl());
-  const featureFlags = createFeatureFlagStore(testMap());
-  await featureFlags.setEnabled("responsive_spine", scope, true, "test");
   const runtimes = new Map<string, RuntimeControl | undefined>();
   const actAsActor: Array<boolean | undefined> = [];
   const agent: Agent = {
@@ -84,7 +81,7 @@ test("subagents a Slack bot's turns open and message keep the bot marker and its
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const config = testConfigStore("org");
   const orchestrator = createOrchestrator({
-    ...singleProcessDeps(),
+    ...orchestratorTestDeps(),
     config,
     runtime: createRuntimeService(
       { config, baseModelDefault: "claude-opus-5" },
@@ -109,7 +106,6 @@ test("subagents a Slack bot's turns open and message keep the bot marker and its
     }),
     acl,
     deliveries: createDeliveryStore(),
-    featureFlags,
     sessionSyscalls: createSessionSyscalls({
       advisoryLock: testAdvisoryLock(),
       sessions,

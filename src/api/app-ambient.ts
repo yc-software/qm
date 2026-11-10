@@ -1,4 +1,5 @@
 import { scopeId, type ActorAssertion, type TurnRequest } from "../types.ts";
+import { personLabel } from "../identity/person-names.ts";
 import type { TurnSurfaceOrigin } from "../surfaces/contract.ts";
 import { slackSurfaceOrigin } from "../surfaces/slack/adapter.ts";
 import { orgId as orgIdOf } from "../config.ts";
@@ -8,7 +9,9 @@ import type { DirectoryMember } from "../directory/directory-store.ts";
 import type { CachedMessage } from "../surface-cache/surface-cache.ts";
 import { DEFAULT_ROLLUP_HOURS, type BotPolicy } from "../surface-cache/channel-policy-store.ts";
 import {
+  ambientWindow,
   judgeAmbientBatch,
+  recentWakeMessages,
   renderAmbientPrompt,
   type AmbientBatch,
   type AmbientDecision,
@@ -46,6 +49,20 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
   const recordJudgment = (j: Parameters<AmbientJudgmentStore["record"]>[0]): void => {
     void deps.ambientJudgments?.record(j).catch(reportFailureAs("ambient: record judgment", undefined));
   };
+  async function threadAnchors(
+    surface: string,
+    container: string,
+    triggers: CachedMessage[],
+  ): Promise<CachedMessage[]> {
+    const cache = deps.surfaceCache;
+    const roots = [...new Set(triggers.flatMap((m) => (m.sub ? [m.sub] : [])))];
+    if (!cache || !roots.length) return [];
+    const [parents, ...ownReplies] = await Promise.all([
+      cache.readMessages(container, { surface, timestamps: roots, noFallback: true }),
+      ...roots.map((sub) => cache.readMessages(container, { surface, sub, self: true, limit: 1, noFallback: true })),
+    ]);
+    return [...parents!, ...ownReplies.flat()];
+  }
   async function judgeAmbientContainer(
     surface: string,
     container: string,
@@ -58,16 +75,14 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     const cursor = deps.ambientCursors ? await deps.ambientCursors.get(cursorKey) : null;
     const after = cursor?.lastJudgedTs;
     const all = await deps.surfaceCache.readMessages(container, { surface, limit: 60, noFallback: true });
-    const backdrop = after ? all.filter((m) => m.ts <= after).slice(-10) : [];
     const rawDelta = (after ? all.filter((m) => m.ts > after) : all).filter((m) => !m.self);
     const ledger = new Map<string, BotPolicy>();
     for (const [name, b] of Object.entries(policy?.bots ?? {})) ledger.set(name.toLowerCase(), b);
     const botModeOf = (m: CachedMessage): BotPolicy["mode"] | undefined =>
       m.bot && m.authorName ? ledger.get(m.authorName.toLowerCase())?.mode : undefined;
-    const delta = rawDelta
-      .filter((m) => !m.handled)
-      .filter((m) => botModeOf(m) !== "ignore")
-      .map((m) => (botModeOf(m) === "user" ? { ...m, bot: false } : m));
+    const asPolicy = (ms: CachedMessage[]): CachedMessage[] =>
+      ms.filter((m) => botModeOf(m) !== "ignore").map((m) => (botModeOf(m) === "user" ? { ...m, bot: false } : m));
+    const delta = asPolicy(rawDelta.filter((m) => !m.handled));
     const rawLatestTs = rawDelta.reduce((max, m) => (m.ts > max ? m.ts : max), after ?? "");
     const advanceCursor = async (): Promise<void> => {
       if (deps.ambientCursors && rawDelta.length && rawLatestTs)
@@ -151,12 +166,16 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
         orders: ordersForJudge,
         ...(self ? { self } : {}),
         messages: forJudge,
-        ...(backdrop.length ? { backdrop } : {}),
+        recent: ambientWindow(
+          asPolicy(all),
+          forJudge,
+          asPolicy(
+            await threadAnchors(surface, container, forJudge).catch(reportFailureAs("ambient: thread anchors", [])),
+          ),
+        ),
         ...(scheduled ? { scheduled: true } : {}),
       };
-      const readable = deps.surfaces.get(surface)?.readableText;
-      if (!readable) throw new Error(`ambient: no registered surface ${surface}`);
-      const prompt = renderAmbientPrompt(judgeBatch, readable);
+      const prompt = renderAmbientPrompt(judgeBatch);
       const startedAt = Date.now();
       const judgeModel = deps.judgeModelId?.();
       const botTs = new Set(rawDelta.filter((m) => m.bot).map((m) => m.ts));
@@ -164,7 +183,6 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
         {
           judge: (system, prompt) =>
             withModelRequestContext({ scopeId: containerScope }, () => deps.ambientJudge!(system, prompt)),
-          readable,
           spawnWorker: (b: AmbientBatch, d: AmbientDecision) =>
             spawnAmbientWorker(
               { ...b, messages: b.messages.map((m) => (botTs.has(m.ts) && !m.bot ? { ...m, bot: true } : m)) },
@@ -323,8 +341,8 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
             at: new Date(),
             why: decision.reason ?? "The recent messages here may warrant a reply.",
             orders: batch.orders,
-            recentMessages: shown,
-            instructions: `You don't need to have been @mentioned. Respond with the \`${batch.surface}\` tool's \`post\` action — set \`ts\` to the triggering message id to reply in its thread, or \`broadcast: true\` to post at the channel top level — or stay silent if nothing is needed. To include an image or file, name its workspace path in \`post\`'s \`files\` (it uploads with your message, in that thread). Use \`reach\` only to send to a DIFFERENT channel or person. Use the \`read_thread\` or \`search\` action if you need more context than shown.`,
+            recentMessages: recentWakeMessages(batch),
+            instructions: `You don't need to have been @mentioned. Reply about the trigger messages. Messages in other threads are separate conversations: don't carry their facts into your reply unless they are about the same subject. Respond with the \`${batch.surface}\` tool's \`post\` action — set \`ts\` to the triggering message id to reply in its thread, or \`broadcast: true\` to post at the channel top level — or stay silent if nothing is needed. To include an image or file, name its workspace path in \`post\`'s \`files\` (it uploads with your message, in that thread). Use \`reach\` only to send to a DIFFERENT channel or person. Use the \`read_thread\` or \`search\` action if you need more context than shown.`,
           }),
           origin: {
             kind: "automation",
@@ -384,7 +402,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     const container = input.conversation.channelRef ?? input.conversation.threadRef;
     const policy = deps.channelPolicy ? await deps.channelPolicy.get(container).catch(() => undefined) : undefined;
     const orders = policy?.orders;
-    const sender = input.actor.displayName?.trim() || input.actor.id;
+    const sender = personLabel(input.actor.id, { displayName: input.actor.displayName });
     const surface = input.surface ?? "slack";
     return buildWakeEnvelope({
       reason: "addressed",

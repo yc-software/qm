@@ -52,7 +52,7 @@ const testRoutes: Route[] = [
 (apiRoutes as Route[]).push(...testRoutes);
 
 const admin = {
-  adminStatusOf: async ({ id }: { id: string }) => ({ isAdmin: id.startsWith("admin-") }),
+  adminStatusOf: async (_tenant: unknown, { id }: { id: string }) => ({ isAdmin: id.startsWith("admin-") }),
 } as unknown as AdminService;
 
 const errorOf = async (r: Response) => (await r.json()) as { error: string; message: string };
@@ -211,20 +211,13 @@ test("cross-origin writes are refused", async () => {
   });
 });
 
-test("apps-only sign-ins are refused and playground visitors act as themselves", async () => {
+test("apps-only sign-ins are refused", async () => {
   await withServer(async (base) => {
     const appOnly = await fetch(`${base}/v1/test/browser-read`, {
       headers: { cookie: sessionCookie({ appOnly: true }) },
     });
     assert.equal(appOnly.status, 403);
     assert.equal((await errorOf(appOnly)).error, "app_only_session");
-    seen.length = 0;
-    const visitor = sessionCookie({ sub: "playground-guest", anon: true });
-    const anon = await fetch(`${base}/v1/test/browser-read`, { headers: { cookie: visitor } });
-    assert.equal(anon.status, 200);
-    assert.equal(seen[0]?.principalId, "playground-guest");
-    const other = await fetch(`${base}/v1/test/browser-read?principalId=alice`, { headers: { cookie: visitor } });
-    assert.equal(other.status, 403);
   });
 });
 

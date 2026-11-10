@@ -29,6 +29,7 @@ import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 import { testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { settle } from "./support/settle.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 
 const SECRET = "secret-drop-test-secret".repeat(3);
@@ -253,6 +254,7 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
       runs: built.runs,
       signals: built.signals,
       identity: built.identity,
+      fireDropResolution: built.fireDropResolution!,
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -621,6 +623,20 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
     const html = await (await getForm(dropId, "U_A", t)).text();
     assert.match(html, /location\.search/, "the submit fetch carries location.search");
     assert.ok(!html.includes(t), "the token itself is never embedded in the page body");
+  });
+
+  it("a drop a Slack bot's turn mints resumes as the bot's work", async () => {
+    const threadRef = "dm:release-bot";
+    const minted = await post(
+      "/v1/keychain/drops",
+      { service: "release-signing", purpose: "sign the release" },
+      await capFor("B-RELEASE", scopeId("personal", "B-RELEASE"), { botActor: true, liveActor: true, threadRef }),
+    );
+    const { dropId, formPath } = (await minted.json()) as { dropId: string; formPath: string };
+    assert.equal((await redeem(dropId, { secret: "sig" }, "B-RELEASE", linkToken(formPath))).status, 200);
+    await settle(async () => (await built.runs.list({ threadRef })).length > 0);
+    const [run] = await built.runs.list({ threadRef });
+    assert.equal(run?.request.botActor, true);
   });
 
   it("a live bot attestation survives mint and private-scope redemption", async () => {

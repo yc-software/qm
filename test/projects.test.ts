@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createInsecureTestServer } from "../src/api/server.ts";
+import { configureCommandRules } from "./support/command-rules.ts";
 import { projectRoutes } from "../src/api/routes/projects.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
@@ -365,6 +366,7 @@ async function listen(server: Server): Promise<string> {
 test("Project routes use ordinary group sessions with the durable roster as authority", async (t) => {
   assert.ok(projectRoutes.every((route) => route.auth === "either"));
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-lean-")) }));
+  await configureCommandRules(built.config);
   const server = createInsecureTestServer(built.app, {});
   const base = await listen(server);
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
