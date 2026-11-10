@@ -770,6 +770,7 @@ test("a quarantined result over the inline cap never stores the withheld text", 
   const outputs = createPostgresToolOutputStore({ pool, bytesFor: () => bytes });
   const withheld = Array.from({ length: 2_000 }, (_, i) => `withheld ${i}`).join("\n");
   const blobsBefore = await pool.q("SELECT count(*)::int AS n FROM blobs");
+  const screened: string[] = [];
   const ref: ToolContextRef = {
     current: {
       ...fakeToolContext(),
@@ -778,11 +779,16 @@ test("a quarantined result over the inline cap never stores the withheld text", 
     },
     emit: sink(emitted),
     scopeLabel: "personal:U1",
-    screenToolResult: async () => ({ outcome: "quarantine" }),
+    screenToolResult: async ({ result }) => {
+      screened.push(result);
+      return { outcome: "quarantine" };
+    },
   };
   const [execute] = createAgentTools(ref);
   await call(execute, { command: "seq", purpose: "Run test command" });
   const result = emitted.find((e) => e.kind === "ToolResult")!;
+  assert.ok(screened[0]?.includes("[output cut: showing the first"));
+  assert.ok(!screened[0]?.includes("tool-output/"), "the screened text a release would deliver names no parked file");
   assert.equal(result.body.output, undefined);
   assert.equal(result.blobSha, null);
   assert.ok(!result.text?.includes("withheld"));

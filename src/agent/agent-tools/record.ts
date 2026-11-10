@@ -168,7 +168,7 @@ export function createRecorder(ref: ToolContextRef) {
       const cut = toolOutput ? await cutIfOverCap(toolOutput, t, callId) : null;
       let output: ToolOutputRef | undefined;
       let quarantined = false;
-      let result = cut?.text ?? capResultText(t);
+      let result = cut?.unparkedText ?? capResultText(t);
       const resultTruncated = result !== t;
       if (result !== t) {
         const firstText = ret.content.findIndex((c) => c.type === "text");
@@ -249,11 +249,11 @@ export function createRecorder(ref: ToolContextRef) {
       }
       if (cut && toolOutput && !quarantined) {
         output = (await parkFullText(toolOutput, t, cut)) ?? undefined;
-        if (!output) {
-          result = result.replace(cut.text, cut.unparkedText);
+        if (output) {
+          result = result.replace(cut.unparkedText, cut.text);
           (ret as { content: Array<{ type: string; text?: string }> }).content = ret.content.map((c) =>
-            c.type === "text" && c.text?.includes(cut.text)
-              ? { ...c, text: c.text.replace(cut.text, cut.unparkedText) }
+            c.type === "text" && c.text?.includes(cut.unparkedText)
+              ? { ...c, text: c.text.replace(cut.unparkedText, cut.text) }
               : c,
           );
         }
