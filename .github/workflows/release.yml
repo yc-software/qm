@@ -13,6 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
     outputs:
       tag: ${{ steps.version.outputs.tag }}
       version: ${{ steps.version.outputs.version }}
@@ -20,6 +21,19 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
           persist-credentials: false
+      - name: Require a green CI/CD run on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          run=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/cicd.yml/runs?head_sha=$GITHUB_SHA" \
+            -q '.workflow_runs[0] // empty | "\(.status) \(.conclusion) \(.html_url)"')
+          case "$run" in
+            "") echo "no CI/CD run found for $GITHUB_SHA; refusing to release" >&2; exit 1 ;;
+            "completed success "*) echo "CI/CD passed on $GITHUB_SHA: ${run##* }" ;;
+            completed*) echo "CI/CD did not pass on $GITHUB_SHA ($run); refusing to release" >&2; exit 1 ;;
+            *) echo "CI/CD is still running on $GITHUB_SHA ($run); refusing to release" >&2; exit 1 ;;
+          esac
       - id: version
         name: Resolve the release tag
         env:
