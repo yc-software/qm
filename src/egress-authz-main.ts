@@ -12,7 +12,7 @@ import {
 import { createPostgresEgressAuditSink } from "./admin/postgres-egress-audit-sink.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { createSweeper } from "./util/sweeper.ts";
-import { errMessage, swallow } from "./util/errors.ts";
+import { errMessage, reportFailure, swallow } from "./util/errors.ts";
 import { shutdownOnUncaught } from "./util/process-guard.ts";
 import { numEnv } from "./util/env.ts";
 import type { EgressPolicy, ScopeId } from "./types.ts";
@@ -211,8 +211,12 @@ export function createRelayAuditSink(
 export function tenantRecorder(sink: EgressAuditSink): EgressAuditRecorder {
   return {
     record(r) {
-      if (!r.tenant) throw new Error("egress audit record has no tenant");
-      withTenant(r.tenant, (tenant) => sink.record(tenant, r));
+      if (r.tenant) withTenant(r.tenant, (tenant) => sink.record(tenant, r));
+      else
+        reportFailure(
+          "[egress-audit] failed to persist egress decision:",
+          new Error("egress audit record has no tenant"),
+        );
     },
   };
 }
