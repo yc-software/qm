@@ -80,7 +80,9 @@ const app = {
 } as unknown as App;
 
 const portalSession: NonNullable<ServerDeps["portalSession"]> = { ...browserSessionDeps.portalSession };
-const admin = { adminStatusOf: async ({ id }: { id: string }) => ({ isAdmin: id.startsWith("admin-") }) };
+const admin = {
+  adminStatusOf: async (_tenant: unknown, { id }: { id: string }) => ({ isAdmin: id.startsWith("admin-") }),
+};
 
 async function serve(deps: Partial<ServerDeps> = {}, t?: TestContext): Promise<string> {
   const server = createServer(app, {

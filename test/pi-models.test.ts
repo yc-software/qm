@@ -1,4 +1,4 @@
-import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
+import { MODEL_PROVIDERS, setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -10,7 +10,6 @@ import {
   onlyProvider,
   resolveModel,
   getRequiredModel,
-  MODEL_PROVIDERS,
   SELECTABLE_BASE_MODELS,
   contextTokenBudgetForModel,
   codexProviderModelId,

@@ -253,14 +253,19 @@ export function createTurnHandler(deps: {
       return firstTs;
     };
 
+    const postEphemeral = async (msg: string, threadTs?: string): Promise<void> => {
+      await client.chat
+        .postEphemeral({
+          channel: inc.channel,
+          user: inc.userId,
+          text: msg,
+          ...(threadTs ? { thread_ts: threadTs } : {}),
+        })
+        .catch(swallowAs("slack: chat.postEphemeral", undefined));
+    };
     const ephemeralOrSay = async (msg: string): Promise<void> => {
-      if (inc.kind === "channel") {
-        await client.chat
-          .postEphemeral({ channel: inc.channel, user: inc.userId, text: msg })
-          .catch(swallowAs("slack: chat.postEphemeral", undefined));
-      } else {
-        await postReply(msg);
-      }
+      if (inc.kind === "channel") await postEphemeral(msg);
+      else await postReply(msg);
     };
 
     if (inc.kind === "dm") {
@@ -594,6 +599,7 @@ export function createTurnHandler(deps: {
     // trigger's own ack and stand down.
     if (result.steered) {
       await settleAck();
+      if (result.stopped) await postEphemeral("Stopped.", replyThreadTs);
       return;
     }
 
@@ -625,7 +631,7 @@ export function createTurnHandler(deps: {
       if (inc.kind === "channel" && replyThreadTs) threads.mark(inc.channel, replyThreadTs, true);
       const { text: replyBody, reactions } = cleanAgentReplyForSlack(result.reply ?? "");
       const hasNonText = !!(result.attachments?.length || reactions.length || result.pendingApprovals?.length);
-      let reply = result.stopped ? "Stopped." : "(no response)";
+      let reply = result.stopped ? "" : "(no response)";
       if (replyBody) reply = toSlackMrkdwn(replyBody);
       else if (hasNonText) reply = "";
       const postText = reply;
