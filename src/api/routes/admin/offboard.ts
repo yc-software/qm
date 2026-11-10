@@ -18,7 +18,7 @@ interface Change {
 
 type Step = Change & { run: () => Promise<unknown> };
 
-const signInStep = ({ identity }: ApiCtx["deps"], principalId: string): Step[] =>
+const signInStep = ({ identity }: ApiCtx["deps"], principalId: string, actorId: string): Step[] =>
   identity && identity.deactivationSource(principalId) !== "manual"
     ? [
         {
@@ -26,7 +26,7 @@ const signInStep = ({ identity }: ApiCtx["deps"], principalId: string): Step[] =
           id: principalId,
           label: "sign-in",
           action: "deactivate",
-          run: () => identity.deactivate(principalId),
+          run: () => identity.deactivate(principalId, "manual", actorId),
         },
       ]
     : [];
@@ -102,7 +102,7 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
   const { principalId } = await resolveAdminUser(deps, params.principalId!);
   if (samePerson(principalId, actor.id))
     return sendJson(res, 400, { error: "bad_request", message: "you cannot offboard yourself" });
-  const signIn = signInStep(deps, principalId);
+  const signIn = signInStep(deps, principalId, actor.id);
   const steps = await plan(ctx, actor.id, principalId);
   if (input.apply !== true)
     return sendJson(res, 200, {
@@ -132,14 +132,8 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
   for (const step of signIn)
     if ((await execute(step)).result === "failed")
       return sendJson(res, 502, { error: "deactivate_failed", principalId, applied: false, changes });
-  const user = await deps.admin!.users.markOffboarded(principalId, actor.id);
   for (const step of steps) await execute(step);
-  return sendJson(res, 200, { principalId, applied: true, changes, user });
-}
-
-export async function reactivatePerson(deps: ApiCtx["deps"], principalId: string) {
-  await deps.identity!.reactivate(principalId);
-  return deps.admin?.users.markReactivated(principalId);
+  return sendJson(res, 200, { principalId, applied: true, changes, user: await deps.admin!.users.get(principalId) });
 }
 
 export async function reactivateUser(ctx: ApiCtx): Promise<void> {
@@ -148,7 +142,8 @@ export async function reactivateUser(ctx: ApiCtx): Promise<void> {
   if (!actor) return;
   if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
   const { principalId } = await resolveAdminUser(deps, params.principalId!);
-  const user = await reactivatePerson(deps, principalId);
+  await deps.identity.reactivate(principalId);
+  const user = await deps.admin!.users.get(principalId);
   audit(deps, {
     principalId: actor.id,
     action: "principal.reactivate",

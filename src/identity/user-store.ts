@@ -6,7 +6,7 @@ import { authoredUserTurn, msOf, TENANT } from "../sessions/items.ts";
 import { foldPrincipalId } from "../directory/person.ts";
 import { PERSONA_MIGRATIONS } from "../personas/persona-schema.ts";
 import { PERSONA_TENANCY } from "../personas/persona-tenancy.ts";
-import { fold, tenantedUsers, ts, USERS_SCHEMA } from "./user-tenancy.ts";
+import { fold, MANUAL_DEACTIVATIONS, tenantedUsers, ts, USERS_SCHEMA } from "./user-tenancy.ts";
 
 export { fold };
 
@@ -61,7 +61,7 @@ export interface UserStore extends UserLinkStore {
   resolve(aliases: readonly string[]): Promise<Map<string, UserRecord>>;
   activity(): Promise<UserActivity[]>;
   record(person: SeenPerson): Promise<boolean>;
-  markOffboarded(id: string, by: string): Promise<UserRecord>;
+  markOffboarded(id: string, by?: string): Promise<UserRecord>;
   markReactivated(id: string): Promise<UserRecord | null>;
   markApps(ids: readonly string[]): Promise<number>;
   setDisplayName(alias: string, name: string): Promise<boolean>;
@@ -247,6 +247,7 @@ export const USER_SCHEMA_MIGRATIONS: PgMigrationDefinition[] = [
   ...USER_MIGRATIONS,
   ...TENANTED.after,
   ...PERSONA_TENANCY,
+  MANUAL_DEACTIVATIONS,
   {
     id: "users/v2/0006-display-name",
     statements: [
@@ -460,7 +461,7 @@ export function createPostgresUserStore(connectionString: string): UserStore {
     },
     async markOffboarded(id, by) {
       const user = await ensureUser(foldPrincipalId(id));
-      const actor = await ensureUser(foldPrincipalId(by));
+      const actor = by ? await ensureUser(foldPrincipalId(by)) : null;
       const rows = await q(
         `UPDATE users u SET offboarded_at = coalesce(u.offboarded_at, now()),
            offboarded_by = CASE WHEN u.offboarded_at IS NULL THEN $2::uuid ELSE u.offboarded_by END

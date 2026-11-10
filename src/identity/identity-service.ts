@@ -5,6 +5,7 @@ import { perTenant } from "../tenants/cache.ts";
 import { currentTenant } from "../tenants/context.ts";
 import { canonicalPerson, foldPrincipalId, personIds, personKey } from "../directory/person.ts";
 import { externalMemberActive, type ExternalMember } from "./external-members.ts";
+import type { UserStore } from "./user-store.ts";
 
 interface IdentityProvider {
   resolve(actor: ActorAssertion): Principal;
@@ -17,6 +18,7 @@ export interface DeactivationRecord {
   principalId: string;
   source: DeactivationSource;
   at: number;
+  by?: string;
 }
 
 interface DirectorySyncOutcome {
@@ -27,7 +29,7 @@ interface DirectorySyncOutcome {
 export interface IdentityService extends IdentityProvider {
   isInternal(p: Principal): boolean;
   audienceIsAllInternal(audience: Principal[]): boolean;
-  deactivate(externalId: string, source?: DeactivationSource): Promise<void>;
+  deactivate(externalId: string, source?: DeactivationSource, by?: string): Promise<void>;
   deactivationSource(externalId: string): DeactivationSource | undefined;
   reactivate(externalId: string): Promise<void>;
   recordDirectorySync(removedIds: string[], presentIds: string[]): Promise<DirectorySyncOutcome>;
@@ -45,8 +47,39 @@ export function actorAssertionActive(
   return !!actor?.externalId && identity.isInternal(identity.classify(actor.externalId, actor.isExternalGuest));
 }
 
+type DeactivationStore = Pick<DurableMap<DeactivationRecord>, "all" | "put" | "delete">;
+
+export const deactivationStore = (
+  users: Pick<UserStore, "list" | "markOffboarded" | "markReactivated">,
+  directorySync: DeactivationStore,
+): DeactivationStore => ({
+  all: async () => [
+    ...(await users.list()).flatMap((u): DeactivationRecord[] =>
+      u.offboardedAt === undefined
+        ? []
+        : [
+            {
+              principalId: u.principalId,
+              source: "manual",
+              at: u.offboardedAt,
+              ...(u.offboardedBy ? { by: u.offboardedBy } : {}),
+            },
+          ],
+    ),
+    ...(await directorySync.all()),
+  ],
+  put: async (key, record) => {
+    if (record.source === "directory-sync") return directorySync.put(key, record);
+    await users.markOffboarded(record.principalId, record.by);
+  },
+  delete: async (key) => {
+    await directorySync.delete(key);
+    await users.markReactivated(key);
+  },
+});
+
 export function createIdentityService(
-  store: DurableMap<DeactivationRecord>,
+  store: DeactivationStore,
   opts: {
     directorySyncProtected?: readonly string[];
     externalMembers: DurableMap<ExternalMember>;
@@ -102,12 +135,12 @@ export function createIdentityService(
     return { id, type };
   }
 
-  async function deactivateNow(externalId: string, source: DeactivationSource): Promise<void> {
+  async function deactivateNow(externalId: string, source: DeactivationSource, by?: string): Promise<void> {
     const key = personKey(externalId);
     const { deactivated } = roster();
     const existing = deactivated.get(key);
     if (existing && (existing.source === "manual" || existing.source === source)) return;
-    const record: DeactivationRecord = { principalId: externalId, source, at: Date.now() };
+    const record: DeactivationRecord = { principalId: externalId, source, at: Date.now(), ...(by ? { by } : {}) };
     await store.put(foldPrincipalId(externalId), record);
     deactivated.set(key, record);
   }
@@ -119,7 +152,7 @@ export function createIdentityService(
 
   return {
     classify,
-    deactivate: (externalId, source = "manual") => exclusive(() => deactivateNow(externalId, source)),
+    deactivate: (externalId, source = "manual", by) => exclusive(() => deactivateNow(externalId, source, by)),
     deactivationSource(externalId: string): DeactivationSource | undefined {
       return roster().deactivated.get(personKey(externalId))?.source;
     },

@@ -243,7 +243,7 @@ test("if sign-in can't be turned off, offboarding records nothing and changes no
   }
 });
 
-test("if the offboarding record can't be written, nothing beyond sign-in changes", async () => {
+test("if the offboarding record can't be written, offboarding fails before changing anything", async () => {
   const s = await start();
   try {
     s.built.admin.users.markOffboarded = async () => {
@@ -251,7 +251,7 @@ test("if the offboarding record can't be written, nothing beyond sign-in changes
     };
     const r = await s.offboard("U1", { apply: true });
     assert.notEqual(r.status, 200);
-    assert.deepEqual(s.archivedApps, [], "nothing else runs");
+    assert.equal(s.built.identity.classify("U1").type, "internal", "sign-in stays on");
   } finally {
     await s.close();
   }
