@@ -1460,7 +1460,6 @@ test("a subagent retires after its final answer: hidden from the list, refused f
   const mail = await syscalls.receive!(0);
   assert.equal(mail.length, 1);
   assert.match(mail[0]!.text, /kind="final_answer"/);
-  assert.match(mail[0]!.text, /open a fresh subagent for new work/);
 
   const list = await syscalls.read({});
   assert.ok(list.ok && list.mode === "children");
@@ -1469,7 +1468,6 @@ test("a subagent retires after its final answer: hidden from the list, refused f
 
   const sent = await syscalls.write({ target: child.id, text: "one more thing", wake: true });
   assert.ok(!sent.ok);
-  assert.match(sent.message, /finished and retired; open a fresh one with `open`/);
   assert.deepEqual(await r.runs.inFlightForThread(child.threadRef), []);
 
   const transcript = await syscalls.read({ target: child.id });

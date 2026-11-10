@@ -79,7 +79,7 @@ export interface SubagentMailDeps {
   mailbox: SessionMailbox;
   sessions: Pick<
     SessionStore,
-    "get" | "getByThread" | "latestItemSeq" | "visibleItems" | "childrenOf" | "participantsOf" | "updateParticipantView"
+    "get" | "getByThread" | "latestItemSeq" | "visibleItems" | "childrenOf" | "setSpawnMeta"
   >;
   runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "withdraw"> & Partial<Pick<RunStore, "get">>;
   maxAttempts: number;
@@ -488,9 +488,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run, quie
     (!stopped ||
       (stopped === "self" && result?.stopped === true && ["tree", "session"].includes(result.stopScope ?? "tree")));
   const outcome = await mailParent(deps, child, parent, turn, mail, wakes ? wake : undefined);
-  if (retired)
-    for (const id of await deps.sessions.participantsOf(child.id))
-      await deps.sessions.updateParticipantView(child.id, id, { archived: true });
+  if (retired) await deps.sessions.setSpawnMeta(child.id, { ...child.spawnMeta, retired: true });
   return outcome === "settled";
 }
 

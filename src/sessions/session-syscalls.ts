@@ -913,9 +913,9 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   ok: false,
                   message: "that session lives in a different context and cannot be reached from here.",
                 };
-              const view = await deps.sessions.getForParticipant(target.id, binding.request.actor.id);
-              if (!view) return { ok: false, message: "you are not a participant in that session." };
-              if (view.archived && isSubagentThreadRef(target.threadRef))
+              if (!(await deps.sessions.getForParticipant(target.id, binding.request.actor.id)))
+                return { ok: false, message: "you are not a participant in that session." };
+              if (target.spawnMeta?.retired)
                 return {
                   ok: false,
                   message:
