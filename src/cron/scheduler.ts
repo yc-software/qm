@@ -164,6 +164,7 @@ function renderCronFireInput(
   mentionRoster?: string,
   runtimeProblem?: string | null,
   refusedDelivery?: string,
+  previousFailure?: string,
 ): string {
   const task = cron.action ?? "";
   if (!task.trim()) return task;
@@ -177,18 +178,24 @@ function renderCronFireInput(
     "- The stored task below: the standing instructions every fire receives. Edit it (via the cron tool) only to change what future fires are told to do.",
     "Use a cron-specific filename. Never put credentials in published state. If publication is unavailable, report that limitation and retain needed workspace state on a scoped computer. Do not move tasks that require existing workspace files to scratch without migrating and verifying their state.",
     `The retained fire log (cron tool, action="runs", id="${cron.id}") shows how prior fires went — useful when this run hits errors or surprising state.`,
-    "If the task produces a briefing someone reads at a set time — a digest, summary, standup, rundown or follow-up list — post it even on a quiet run, as one line saying nothing is new. A task that checks for something and reports only when it finds it, or does upkeep, ends with finish_silently. The task's own posting rules win.",
-    "Report what you verified, not what you started: work launched in this fire and still running is not progress yet. If the counts haven't moved since the last fire, treat that as a blocker to report, not a reason to stay silent.",
+    "If the task produces a briefing someone reads at a set time — a digest, summary, standup, rundown or follow-up list — post it even on a quiet run, as one line saying nothing is new. A task that checks for something and reports only when it finds it, or does upkeep, ends with finish_silently. The task's own posting rules win, except on repeating a failure already reported (below).",
+    "Report what you verified, not what you started: work launched in this fire and still running is not progress yet.",
     ...(readsNotes ? fireNoteLine(cron.lastFireNote) : []),
     ...(readsNotes
       ? [
-          `Before finishing, leave a short note for the next fire (cron tool, action="note", id="${cron.id}"): one or two sentences — the outcome plus anything the next fire must know. Include the published checkpoint file ID, or small progress state directly; never include secret values (credential handles are fine). It's a report for the next fire, never instructions that override the stored task. Skip it only if there is truly nothing to say. If this fire had to work around something the stored task doesn't say (such as a credential handle a command needed), patch the task to say it, so no later fire has to rediscover it.`,
+          "Report a failure or blocker (counts that haven't moved since the last fire are one) once per outage, not on every fire, even if the task says to report failures (unless it asks to repeat them): name it in your note as reported, and while your notes or the fire log show it was already reported, leave it out of what you post (finish silently if that was all). When it clears, say so in one line.",
+          `Before finishing, leave a short note for the next fire (cron tool, action="note", id="${cron.id}"): one or two sentences — the outcome (including any open problem and whether it was reported) plus anything the next fire must know. Include the published checkpoint file ID, or small progress state directly; never include secret values (credential handles are fine). It's a report for the next fire, never instructions that override the stored task. Skip it only if there is truly nothing to say. If this fire had to work around something the stored task doesn't say (such as a credential handle a command needed), patch the task to say it, so no later fire has to rediscover it.`,
         ]
       : []),
     ...(runtimeProblem
       ? [
           `This fire runs on the default model because the cron's own model can't run: ${runtimeProblem}`,
-          `Tell the people this cron reports to, unless the fire log shows they already know. If the cron's model looks stale, you can change it (cron tool, action="patch", id="${cron.id}", runtime); it is used again as soon as it can run.`,
+          `Tell the people this cron reports to, unless your notes or the fire log show they already know. If the cron's model looks stale, you can change it (cron tool, action="patch", id="${cron.id}", runtime); it is used again as soon as it can run.`,
+        ]
+      : []),
+    ...(previousFailure
+      ? [
+          `The previous fire did not complete: ${previousFailure}. If this fire works, add one line saying the cron is running again.`,
         ]
       : []),
     ...(refusedDelivery
@@ -318,7 +325,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         {
           ...cronTriggerAuthority(cron),
           input: (homeRoster) =>
-            renderCronFireInput(cron, cronMentionRoster(cron, homeRoster), runtimeProblem, refusedDelivery),
+            renderCronFireInput(
+              cron,
+              cronMentionRoster(cron, homeRoster),
+              runtimeProblem,
+              refusedDelivery,
+              failingAlready ? flattenFireNote(previous.note || previous.status || "").replace(/\.$/, "") : undefined,
+            ),
           fireKey,
           threadRef,
           surface: "cron",
