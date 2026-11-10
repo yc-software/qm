@@ -101,7 +101,7 @@ export function recentWakeMessages(batch: AmbientBatch): WakeMessage[] {
 
 function clipEarlier(m: WakeMessage): WakeMessage {
   const text = m.text ?? "";
-  return m.trigger || text.length <= EARLIER_MESSAGE_CHARS
+  return m.trigger || m.self || text.length <= EARLIER_MESSAGE_CHARS
     ? m
     : { ...m, text: `${headSlice(text, EARLIER_MESSAGE_CHARS).trimEnd()}…` };
 }
