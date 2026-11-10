@@ -96,7 +96,7 @@ enum TapKind {
 struct TapContext {
     context: Option<Arc<Context>>,
     retained: Option<Arc<RetainedState>>,
-    activity: Option<Arc<Registry>>,
+    activity: Option<(Arc<Registry>, Arc<AtomicBool>)>,
     kind: TapKind,
 }
 
@@ -188,9 +188,9 @@ unsafe extern "C-unwind" fn receive(_: CGEventTapProxy, kind: CGEventType, event
     if let Some(retained) = &callback.retained {
         return retained.receive(callback.kind, kind, unsafe { event.as_ref() }, event.as_ptr());
     }
-    if let Some(activity) = &callback.activity {
+    if let Some((activity, failed)) = &callback.activity {
         if kind.0 >= u32::MAX - 1 {
-            activity_failure().store(true, Ordering::Release);
+            failed.store(true, Ordering::Release);
             return event.as_ptr();
         }
         let value = unsafe { event.as_ref() };
@@ -342,25 +342,22 @@ impl Drop for ActivationTransition {
     }
 }
 
-static ACTIVITY_FAILURE: AtomicBool = AtomicBool::new(false);
-
-fn activity_failure() -> &'static AtomicBool {
-    &ACTIVITY_FAILURE
-}
-
 pub struct ActivityWatcher {
     stop: Arc<AtomicBool>,
+    failed: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
 impl ActivityWatcher {
     pub fn begin(activity: Arc<Registry>) -> Result<Self, Failure> {
-        ACTIVITY_FAILURE.store(false, Ordering::Release);
+        let failed = Arc::new(AtomicBool::new(false));
+        let tapped = Arc::clone(&failed);
         let stop = Arc::new(AtomicBool::new(false));
         let quit = Arc::clone(&stop);
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let thread = thread::spawn(move || {
-            let tap = Tap::create(TapContext { context: None, retained: None, activity: Some(activity), kind: TapKind::Intervention });
+            let tap =
+                Tap::create(TapContext { context: None, retained: None, activity: Some((activity, tapped)), kind: TapKind::Intervention });
             let Ok(_tap) = tap else {
                 let _ = ready_tx.send(Err(tap.err().unwrap()));
                 return;
@@ -372,7 +369,7 @@ impl ActivityWatcher {
             }
         });
         match ready_rx.recv_timeout(Duration::from_millis(350)) {
-            Ok(Ok(())) => Ok(Self { stop, thread: Some(thread) }),
+            Ok(Ok(())) => Ok(Self { stop, failed, thread: Some(thread) }),
             result => {
                 stop.store(true, Ordering::Release);
                 let _ = thread.join();
@@ -388,7 +385,7 @@ impl ActivityWatcher {
     }
 
     pub fn check(&self) -> Result<(), Failure> {
-        if ACTIVITY_FAILURE.load(Ordering::Acquire) {
+        if self.failed.load(Ordering::Acquire) {
             Err(Failure::new(ErrorCode::ActionFailed, "Focus protection event tap was disabled; stopped"))
         } else {
             Ok(())
@@ -810,5 +807,41 @@ mod retained_tests {
         assert!(state.focused);
         state.event(13, 2);
         assert!(!state.focused);
+    }
+}
+
+#[cfg(test)]
+mod activity_watcher_tests {
+    use super::*;
+
+    fn watcher(failed: &Arc<AtomicBool>) -> (ActivityWatcher, Box<TapContext>) {
+        let context = Box::new(TapContext {
+            context: None,
+            retained: None,
+            activity: Some((Arc::new(Registry::default()), Arc::clone(failed))),
+            kind: TapKind::Intervention,
+        });
+        (ActivityWatcher { stop: Arc::new(AtomicBool::new(false)), failed: Arc::clone(failed), thread: None }, context)
+    }
+
+    #[test]
+    fn disabling_one_overlapping_watcher_tap_does_not_fail_the_other() {
+        let first_failed = Arc::new(AtomicBool::new(false));
+        let second_failed = Arc::new(AtomicBool::new(false));
+        let (first, first_tap) = watcher(&first_failed);
+        let (second, second_tap) = watcher(&second_failed);
+        let event = CGEvent::new(None).unwrap();
+        let pointer = NonNull::from(&*event);
+        let info = |tap: &TapContext| (tap as *const TapContext).cast_mut().cast();
+        let returned = unsafe { receive(std::ptr::null_mut(), CGEventType(1), pointer, info(&second_tap)) };
+        assert_eq!(returned, pointer.as_ptr());
+        assert!(first.check().is_ok() && second.check().is_ok());
+        unsafe { receive(std::ptr::null_mut(), CGEventType(u32::MAX - 1), pointer, info(&first_tap)) };
+        assert!(first.check().is_err());
+        assert!(second.check().is_ok());
+        unsafe { receive(std::ptr::null_mut(), CGEventType(u32::MAX), pointer, info(&second_tap)) };
+        assert!(second.check().is_err());
+        let (third, _third_tap) = watcher(&Arc::new(AtomicBool::new(false)));
+        assert!(third.check().is_ok());
     }
 }

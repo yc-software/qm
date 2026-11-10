@@ -522,7 +522,6 @@ export function sessionInCanvas(sessionId: string): boolean {
   return splitState.active && paneShowing(sessionId) !== null;
 }
 
-/** Close any pane (and, outside the canvas, the main view) showing this session. */
 export function closeSessionSurfaces(sessionId: string): boolean {
   if (!sessionId) return false;
   if (splitState.active && dockApi) {
@@ -724,7 +723,6 @@ function refreshPaneDrag(): void {
   syncAllZones();
 }
 
-// really add one (not already on the canvas, below the pane ceiling).
 function stripJoinable(drag = paneDrag): boolean {
   return Boolean(drag && !drag.existing() && (dockApi?.panels.length ?? 0) < MAX_PANES);
 }
@@ -1326,10 +1324,6 @@ class PaneTab implements ITabRenderer {
   }
 }
 
-// The strip highlight needs a target behind it: with full-width single tabs dockview's
-// header space is zero-width and a tab only accepts its outer reorder edges, so an
-// external session drag has nothing real to land on. Dockview owns this element's
-// lifecycle, so the zone is mounted and torn down with its group.
 class StripDrop implements IHeaderActionsRenderer {
   readonly element: HTMLElement;
   private group: IDockviewGroupPanel | null = null;

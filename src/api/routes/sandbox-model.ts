@@ -5,7 +5,7 @@ import { reportFailure } from "../../util/errors.ts";
 import { SANDBOX_MODEL_PREFIX } from "../contract.ts";
 import { sendJson } from "../http.ts";
 import { relayStream } from "../../../plugins/chassis/src/http.ts";
-import type { ApiCtx, Route } from "./route.ts";
+import { tenantOf, type ApiCtx, type Route } from "./route.ts";
 
 const FORWARDED_HEADERS = ["accept", "content-type", "anthropic-version", "anthropic-beta"];
 const UPSTREAM_REQUEST_LIMIT_BYTES = 32 * 1024 * 1024;
@@ -34,7 +34,7 @@ async function denied(ctx: ApiCtx): Promise<boolean> {
   }
   const [posture, budget] = await Promise.all([
     deps.config?.getSecurityPostureDurable(capability.scopeId),
-    deps.budget?.check(capability.actorId),
+    deps.budget?.check(tenantOf(ctx), capability.actorId),
   ]);
   if (posture === "strict") {
     sendJson(res, 403, { error: { message: "model requests are disabled in strict posture" } });

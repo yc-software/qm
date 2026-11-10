@@ -21,6 +21,7 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl, testMap, testDeployBackings } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const auditLog = { record() {}, events: async () => [], tail: async () => [] };
 const GATE_SECRET = "gate-secret";
@@ -362,7 +363,7 @@ test("app shell: manage grants are checked on every navigation and version reque
 test("app shell: a manager from the creation scope can load the app and its assets without a read grant", async () => {
   const f = await widgetFixture();
   try {
-    await f.acl.revoke(f.d.ownerScopeId, `deployment:${f.d.id}`, scopeId("channel", "CBUILT"), "U1");
+    await f.acl.revoke(tenant, f.d.ownerScopeId, `deployment:${f.d.id}`, scopeId("channel", "CBUILT"), "U1");
     await f.directory.replaceChannels(
       [{ channelId: "CBUILT", name: "builders", isPrivate: true }],
       [{ channelId: "CBUILT", principalId: "U2" }],

@@ -449,11 +449,6 @@ function proxyReachHttp2(
   start(false);
 }
 
-// --- cold-start warming page -------------------------------------------------
-// AWS microVMs auto-resume on first connect, which can take many seconds. During
-// that window a browser navigation would otherwise hang for the full dial timeout
-// and then land on raw gateway JSON. For document requests we instead answer
-// quickly with a small self-refreshing "warming up" page.
 const WARM_RECENT_MS = 60_000;
 const COLD_FIRST_BYTE_TIMEOUT_MS = 4_000;
 const upstreamLastOk = new Map<string, number>();
@@ -521,7 +516,6 @@ function sendWarmingPage(res: BaseCtx["res"]): void {
   });
   res.end(WARMING_PAGE_HTML);
 }
-// -----------------------------------------------------------------------------
 
 async function proxyReach(
   ctx: BaseCtx,
@@ -1020,11 +1014,9 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
       sendJson(res, 404, { error: "not_found" });
       return true;
     }
-    // The recipient is the app's owner: the personal home scope if it has one, else whoever created it.
     const [ownerKind, ownerRef] = String(d.ownerScopeId).split(":", 2);
     const ownerId = ownerKind === "personal" && ownerRef ? ownerRef : d.createdBy;
     const label = d.displayName ?? d.name ?? slug;
-    // One request per visitor per app per day — the idempotent outbox absorbs button mashing.
     const day = Math.floor(Date.now() / 86_400_000);
     try {
       await app.enqueueDelivery({

@@ -79,7 +79,12 @@ export interface CronStore {
   markAttempted(id: string, at: number): Promise<void>;
   defer(id: string, until: number): Promise<void>;
   claimSlot(id: string, scheduledAt: number, at: number): Promise<boolean>;
-  unclaimSlot(id: string, scheduledAt: number, at: number, priorLastFiredAt: number | undefined): Promise<void>;
+  unclaimSlot(
+    fired: Pick<Cron, "id" | "schedule">,
+    scheduledAt: number,
+    at: number,
+    priorLastFiredAt: number | undefined,
+  ): Promise<void>;
   due(now: number): Promise<Array<Cron & { scheduledAt: number; tenantId: string }>>;
 }
 
@@ -240,9 +245,9 @@ export function createCronStore(
       await backing.update(id, transform);
       return claimed;
     },
-    async unclaimSlot(id, scheduledAt, at, priorLastFiredAt) {
+    async unclaimSlot(fired, scheduledAt, at, priorLastFiredAt) {
       const restore = (cron: Cron): Cron => {
-        if (cron.lastFiredAt !== at) return cron;
+        if (cron.lastFiredAt !== at || !isDeepStrictEqual(cron.schedule, fired.schedule)) return cron;
         const { lastFiredAt: _dropped, ...rest } = cron;
         return {
           ...rest,
@@ -250,7 +255,7 @@ export function createCronStore(
           nextFireAt: scheduledAt,
         };
       };
-      await backing.update(id, restore);
+      await backing.update(fired.id, restore);
     },
     async markAttempted(id, at) {
       await backing.merge(id, { lastAttemptAt: at });

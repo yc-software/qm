@@ -107,7 +107,7 @@ export interface AgentTurnInput {
   surfaceName?: string;
   surfacePrompt?: SurfaceToolPrompt;
   clientTools?: readonly ClientToolDeclaration[];
-  pollFire?: boolean;
+  replyOptional?: boolean;
   turnWallClockMs?: number;
   systemPrompt: string;
   history: Item[];

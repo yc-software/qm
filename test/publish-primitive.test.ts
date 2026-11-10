@@ -14,6 +14,7 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { testConfigStore, testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { trimTrailingSlashes } from "../src/util/text.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 function svc() {
   const deployStore: DeployStore = createDeployStore(testDeployBackings());
@@ -313,7 +314,7 @@ test("publish: renameFrom moves the link but keeps the id (and shares ride the i
   assert.equal((await s.deployStore.getByName("new-name"))!.versions.length, 1, "a pure rename ships no version");
   assert.equal(await s.deployStore.getByName("old-name"), null);
   assert.equal((await s.deployStore.getByName("new-name"))!.id, created.id);
-  assert.equal((await s.acl.grantsFor(scopeId("personal", "U1"), `deployment:${created.id}`)).length, 1);
+  assert.equal((await s.acl.grantsFor(tenant, scopeId("personal", "U1"), `deployment:${created.id}`)).length, 1);
 });
 
 test("publish rejects an entrypoint deploy when no files were collected", async () => {

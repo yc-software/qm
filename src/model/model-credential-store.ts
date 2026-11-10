@@ -151,7 +151,8 @@ export function createCustomProviderStore(input: {
         if (!actor) throw new Error("updatedBy is required");
         const existing = await input.backing.get(spec.id);
         const trimmedKey = apiKey?.trim();
-        const apiKeyEnc = trimmedKey ? encryptSecret(trimmedKey, key) : existing?.apiKeyEnc;
+        const live = existing?.disabled ? undefined : existing;
+        const apiKeyEnc = trimmedKey ? encryptSecret(trimmedKey, key) : live?.apiKeyEnc;
         await input.backing.put(spec.id, {
           ...spec,
           ...(apiKeyEnc ? { apiKeyEnc } : {}),
@@ -166,7 +167,12 @@ export function createCustomProviderStore(input: {
       return write(async () => {
         const existing = await input.backing.get(id);
         if (!existing || existing.disabled) return false;
-        await input.backing.put(id, { ...existing, disabled: true, updatedAt: Date.now(), updatedBy });
+        await input.backing.put(id, {
+          ...customProviderSpec(existing),
+          disabled: true,
+          updatedAt: Date.now(),
+          updatedBy,
+        });
         return true;
       });
     },

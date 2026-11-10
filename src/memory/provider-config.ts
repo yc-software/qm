@@ -43,7 +43,6 @@ interface McpMemoryProviderConfig {
 
 type AnyMemoryProviderConfig = McpMemoryProviderConfig | MemorableMemoryProviderConfig;
 
-/** Which capture policies a route may set against a provider; providers declare this so route checks stay generic. */
 function capturePoliciesOf(provider: AnyMemoryProviderConfig): ReadonlySet<MemoryCapturePolicy> {
   if (provider.type === "mcp") return new Set(provider.write ? ["off", "explicit", "automatic"] : ["off"]);
   return provider.capturePolicies;

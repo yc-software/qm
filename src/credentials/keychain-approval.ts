@@ -27,9 +27,6 @@ export interface KeychainApprovals {
   decide(id: string, actor: ActorAssertion, decision: "once" | "standing" | "deny"): Promise<KeychainApprovalView>;
 }
 
-// The card goes where the request came from: its Slack thread or channel, a cron's destination in
-// that same conversation, or inline in the owner's own web session (no delivery). Anything else,
-// including a destination outside the requesting conversation, falls back to the owner's DM.
 export function approvalCardDestination(ask: KeychainAsk): Destination | null {
   const d = ask.requesterDestination;
   const own = samePerson(ask.ownerId, ask.requesterId);

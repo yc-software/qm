@@ -122,7 +122,6 @@ class EmbeddedComposer extends AsyncDirective {
     rememberStaged(this.key, this.ctx.composer.state.attachments);
     this.ctx.composer.dispose();
     this.ctx.chat.dispose();
-    // An in-flight submit can still fail after navigation; restore its draft under the original key.
     this.ctx.chat.state.threadRef = this.key;
     this.ctx = null;
   }
@@ -131,7 +130,6 @@ class EmbeddedComposer extends AsyncDirective {
     this.unlisten();
     if (this.ctx) rememberStaged(this.key, this.ctx.composer.state.attachments);
     this.ctx?.composer.dispose();
-    // Remove chat's connector hook without destroying the composer's draft.
     const ctx = this.ctx;
     const threadRef = ctx?.chat.state.threadRef;
     ctx?.chat.dispose();

@@ -18,7 +18,6 @@ import { boundUrl, seedTestTenant, TEST_TENANT } from "../support/test-tenant.ts
 
 const DB = process.env.MEMORABLE_E2E_DB_URL;
 const CLI = process.env.MEMORABLE_E2E_BIN;
-// With both set, the run goes to the real extraction service instead of the local stub.
 const REAL = process.env.MEMORABLE_API_URL && process.env.MEMORABLE_API_KEY ? true : false;
 
 function skipReason(): string | false {
@@ -31,7 +30,6 @@ function at(item: NewItem, seq: number): Item {
   return storedItem(item, { sessionId: "s-e2e", seq, createdAt: seq });
 }
 
-// A coding session as QM records it: prompt, failing check, fix, passing check.
 const trace: Item[] = [
   at({ kind: "UserMessage", text: "Fix the failing order tests in osprey" }, 1),
   at(
@@ -123,10 +121,8 @@ describe(
         if (stub) {
           const sent = JSON.stringify(stub.requests);
           assert.ok(!sent.includes("sk-e2e-secret-value-123456"), "secret values are redacted before extraction");
-          // QM redacts before the CLI ever sees the trace; the CLI's own scrubbing may rewrite the marker further.
           assert.ok(sent.includes("./test.sh"), `the command itself still travels: ${sent.slice(0, 400)}`);
         }
-        // The notebook still got the fact; the procedure went to Memorable.
         assert.match(await memory.read(personal), /Osprey/);
       }),
     );

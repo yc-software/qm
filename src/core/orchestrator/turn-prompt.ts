@@ -38,6 +38,7 @@ export async function appendTurnGuidance(turn: {
   actorIsOrgAdmin: TurnCapabilities["actorIsOrgAdmin"];
   orgMemoryWritable: TurnCapabilities["orgMemoryWritable"];
   automatedTurn: boolean;
+  childWake: boolean;
 }): Promise<string> {
   const {
     deps,
@@ -53,6 +54,7 @@ export async function appendTurnGuidance(turn: {
     actorIsOrgAdmin,
     orgMemoryWritable,
     automatedTurn,
+    childWake,
   } = turn;
   let { systemPrompt } = turn;
   if (appConnections)
@@ -101,6 +103,11 @@ export async function appendTurnGuidance(turn: {
   if (automatedTurn && input.surface && isPollSurface(input.surface)) {
     turnEvents.push(
       "This turn was fired by a scheduled trigger, not a person typing. If there's nothing new worth reporting, call `finish_silently` to end the turn without sending anything.",
+    );
+  }
+  if (childWake) {
+    turnEvents.push(
+      "This turn was started by one of your subagents, not a person typing. To end it without posting, call `finish_silently` and write no text; anything you write is shown to the person.",
     );
   }
   return systemPrompt;

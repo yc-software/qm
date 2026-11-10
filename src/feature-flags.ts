@@ -29,7 +29,6 @@ export const FEATURES = {
   },
   external_app_sharing: { label: "External app sharing (public links, outside emails)" },
   loop_triage: { label: "Loop triage (prioritize and consolidate)" },
-  swarms: { label: "Swarms", personalOnly: true },
   team_scopes: { label: "Team scopes" },
   ui_canvas: {
     label: "UI canvas and UI state (agent code runs in the page)",

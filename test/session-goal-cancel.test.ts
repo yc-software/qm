@@ -143,6 +143,21 @@ test("cancelling with no open goal touches nothing", async () => {
   assert.deepEqual(await built.signals.pending(run!.id), []);
 });
 
+test("a run holding a stale active copy cannot write a cancelled goal back to active; a new goal still replaces it", async () => {
+  const built = freshApp();
+  const session = await sessionWithGoal(built, "web:U1:stale", "active");
+  const stale = await sessionGoal(built, session.id);
+  assert.ok(stale);
+  assert.ok(await built.app.cancelSessionGoal(session.id, "U1"));
+
+  await built.sessions.setGoal({ sessionId: session.id }, { ...stale, tokensUsed: 99, updatedAt: Date.now() });
+  assert.equal((await sessionGoal(built, session.id))?.status, "cancelled");
+
+  const next = createGoalRecord({ objective: "old outreach goal", now: stale.createdAt + 1 });
+  await built.sessions.setGoal({ sessionId: session.id }, next);
+  assert.equal((await sessionGoal(built, session.id))?.status, "active");
+});
+
 test("the owner resumes a paused goal from the goal bar; a running reply or a closed goal refuses", async () => {
   const built = freshApp();
   const ref = "web:U1:resume";
