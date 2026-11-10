@@ -16,7 +16,7 @@ import {
   type RunStop,
   type RunStore,
 } from "./run-store.ts";
-import { errMessage, errorAlreadyReported, reportFailure, swallow } from "../util/errors.ts";
+import { errMessage, errorAlreadyReported, reportFailure, swallow, swallowAs } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { retryDelay } from "./retry-delay.ts";
 import { FLUSH_MS, traceQueued } from "../../plugins/chassis/src/error-reporting.ts";
@@ -383,7 +383,7 @@ export function createWorker(deps: WorkerDeps): Worker {
     stopClaims,
     drained,
     async stop(drainMs = STOP_DRAIN_MS) {
-      void stopClaims();
+      stopClaims().catch(swallowAs("worker: stop claims", undefined));
       await Promise.race([drained(), sleep(drainMs, { unref: true })]);
     },
   };

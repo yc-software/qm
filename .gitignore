@@ -14,6 +14,7 @@ plugins/web-ui/public/*.local.json
 .claude/settings.local.json
 .gstack/
 .ci-instance/
+.twin-instance/
 test/live-slack/out/
 .generated/
 __pycache__/

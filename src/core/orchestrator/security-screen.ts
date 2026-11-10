@@ -8,7 +8,21 @@ import type { TurnLlmRequestRecord } from "../../agent/agent.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { sleep } from "../../util/async.ts";
 import { headSlice } from "../../util/text.ts";
-import type { OrchestratorDeps } from "./types.ts";
+import { SECURITY_FLAGGED, type AuditEvent } from "../../audit/audit-log.ts";
+import {
+  recordedMessageTimestamps,
+  renderOverheard,
+  selectOverheardToImport,
+  type OverheardEntryPayload,
+} from "../../agent/replay.ts";
+import { collectBlob } from "../../persistence/blob-transfer.ts";
+import { securityScreenPayload } from "../../security/security-posture.ts";
+import type { CommandApprovalGrant } from "../../types.ts";
+import { isVisionAttachment, safeAttachmentName } from "../attachments.ts";
+import { wordsToScreen } from "./intake.ts";
+import { senderNote } from "./prompt-blocks.ts";
+import { isScreenableTextAttachment, MAX_AUTO_ATTACHMENT_SCREEN_BYTES } from "./turn-helpers.ts";
+import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 
 const DEFAULT_SECURITY_SCREEN_TIMEOUT_MS = 15_000;
 const MAX_SCREEN_REQUEST_CHARS = 2_000;
@@ -186,4 +200,193 @@ export async function screenChunks(
   if (strict) return strict;
   if (verdicts.length < chunks.length || !verdicts.every(cleanVerdict)) return unscreenedVerdict();
   return verdicts[0] ?? { decision: "auto" };
+}
+
+type ClassifyAs = (
+  context: Omit<SecurityScreenContext, "mode" | "thread" | "runId" | "origin">,
+  record?: (rec: TurnLlmRequestRecord) => Promise<void>,
+) => (chunk: string) => Promise<SecurityScreenVerdict | undefined>;
+
+export interface InboundScreenTurn {
+  deps: OrchestratorDeps;
+  input: OrchestratorInput;
+  actor: OrchestratorInput["actor"];
+  conversation: OrchestratorInput["conversation"];
+  scopeId: ScopeId;
+  resolution: Awaited<ReturnType<OrchestratorDeps["resolution"]["resolve"]>>;
+  screenInbound: boolean;
+  enforceScreen: boolean;
+  ambientTurn: boolean;
+  sessionTurn: boolean;
+  swarmBinding: Awaited<ReturnType<NonNullable<OrchestratorDeps["swarms"]>["binding"]>> | undefined;
+  classifyAs: ClassifyAs;
+  recordScreenRequest: (rec: TurnLlmRequestRecord) => Promise<void>;
+  audit: (event: Omit<AuditEvent, "at" | "principalId" | "scopeLabel">) => void;
+  approvalGrantsFor: (actorId: string) => Promise<CommandApprovalGrant[]>;
+}
+
+async function buildInboundScreen(turn: InboundScreenTurn) {
+  const { deps, input, actor, conversation, scopeId, screenInbound, ambientTurn, sessionTurn, swarmBinding } = turn;
+  const blobTransfer = deps.blobTransfer;
+  let overheard: OverheardEntryPayload[] = [];
+  if (screenInbound) {
+    const existingSession = await deps.sessions.getByThread(conversation.threadRef);
+    const recorded = recordedMessageTimestamps(existingSession ? await deps.sessions.getItems(existingSession.id) : []);
+    overheard = conversation.kind === "dm" ? [] : selectOverheardToImport(input.overheard ?? [], recorded);
+  }
+  let hasUnscreenableAttachment = false;
+  const attachmentPromptData: Array<{ source: string; content: string }> = [];
+  if (screenInbound) {
+    for (const attachment of input.attachments ?? []) {
+      attachmentPromptData.push({
+        source: "attachment-metadata",
+        content: JSON.stringify({
+          name: attachment.name,
+          mimetype: attachment.mimetype,
+          author: attachment.author,
+        }),
+      });
+      if (
+        isVisionAttachment(attachment) ||
+        !isScreenableTextAttachment(attachment.mimetype) ||
+        attachment.sizeBytes > MAX_AUTO_ATTACHMENT_SCREEN_BYTES
+      ) {
+        hasUnscreenableAttachment = true;
+        continue;
+      }
+      const opened = await blobTransfer
+        .open(attachment.blobId)
+        .catch(swallowAs("attachment screening: open blob", null));
+      if (!opened || opened.sizeBytes > MAX_AUTO_ATTACHMENT_SCREEN_BYTES) {
+        hasUnscreenableAttachment = true;
+        continue;
+      }
+      const data = await collectBlob(opened.stream).catch(swallowAs("attachment screening: read blob", null));
+      if (!data || data.length > MAX_AUTO_ATTACHMENT_SCREEN_BYTES || data.includes(0)) {
+        hasUnscreenableAttachment = true;
+        continue;
+      }
+      attachmentPromptData.push({
+        source: `attachment:${safeAttachmentName(attachment.name)}`,
+        content: data.toString("utf8"),
+      });
+    }
+  }
+  const externalPromptData = screenInbound
+    ? [
+        ...(ambientTurn && actor.displayName?.trim()
+          ? [{ source: "sender", content: senderNote(actor.displayName) }]
+          : []),
+        ...(input.conversationHeader?.trim()
+          ? [{ source: "conversation-header", content: input.conversationHeader }]
+          : []),
+        ...overheard.map((entry) => ({ source: "overheard", content: renderOverheard(entry) })),
+        ...attachmentPromptData,
+        ...(input.inboundNotes ?? []).map((note) => ({ source: "inbound-file-note", content: note })),
+      ]
+    : [];
+  const sessionSender = input.sessionSenderId ? await deps.sessions.get(input.sessionSenderId) : null;
+  const verifiedSessionMessage = Boolean(
+    sessionSender &&
+    sessionSender.scopeId === scopeId &&
+    (await deps.sessions.getForParticipant(sessionSender.id, actor.id)),
+  );
+  const screenedWords = wordsToScreen(
+    input.text,
+    { id: actor.id, origin: input.origin, fromSession: sessionTurn },
+    actor.id,
+  );
+  const screenPayload = screenInbound
+    ? securityScreenPayload({
+        ...input,
+        ...(screenedWords !== undefined ? { origin: { kind: "automation" as const, screenData: screenedWords } } : {}),
+        overheard: [],
+        externalPromptData,
+        verifiedSwarm: Boolean(input.swarm && swarmBinding),
+        verifiedSessionMessage,
+      })
+    : null;
+  return { hasUnscreenableAttachment, externalPromptData, screenPayload };
+}
+
+export async function screenInboundInput(turn: InboundScreenTurn) {
+  const {
+    deps,
+    input,
+    actor,
+    conversation,
+    resolution,
+    screenInbound,
+    enforceScreen,
+    classifyAs,
+    recordScreenRequest,
+    audit,
+    approvalGrantsFor,
+  } = turn;
+  let flaggedScreenedInput: { reason: string; sources: string[] } | undefined;
+  let inputUnscreened = false;
+  if (screenInbound && !enforceScreen) {
+    void buildInboundScreen(turn)
+      .then(({ screenPayload }) =>
+        screenPayload && !screenPayload.truncated
+          ? classifyAs({ hook: "user_input", surface: input.surface })(screenPayload.content)
+          : undefined,
+      )
+      .catch(swallowAs("orchestrator: observed inbound screen", undefined));
+  } else if (screenInbound) {
+    const { hasUnscreenableAttachment, externalPromptData, screenPayload } = await buildInboundScreen(turn);
+    if (screenPayload || hasUnscreenableAttachment) {
+      const canScreenText =
+        !!screenPayload && !screenPayload.truncated && (!!deps.securityScreener || !!deps.agent.screenSecurity);
+      const verdict = canScreenText
+        ? await screenChunks(
+            [screenPayload!.content],
+            classifyAs({ hook: "user_input", surface: input.surface }, recordScreenRequest),
+          )
+        : undefined;
+      let unscreenableCause: "unscreenable-attachment" | "oversize-input" | "no-screener" | undefined;
+      if (hasUnscreenableAttachment || !screenPayload) unscreenableCause = "unscreenable-attachment";
+      else if (screenPayload.truncated) unscreenableCause = "oversize-input";
+      else if (!deps.securityScreener && !deps.agent.screenSecurity) unscreenableCause = "no-screener";
+      if (verdict?.decision === "strict") {
+        const sources = externalPromptData.map((item) => item.source);
+        flaggedScreenedInput = {
+          reason: verdict.reason ?? "strict security screen verdict",
+          sources,
+        };
+        audit({
+          action: SECURITY_FLAGGED,
+          resource: input.surface ?? "unknown",
+          status: "pending_approval",
+          detail: JSON.stringify({ cause: "strict-verdict", reason: flaggedScreenedInput.reason, source: sources }),
+        });
+      } else if (unscreenableCause || verdict?.unscreened) {
+        inputUnscreened = true;
+        audit({
+          action: "security_posture.input_failed_open",
+          resource: input.surface ?? "unknown",
+          status: "allowed",
+          detail: JSON.stringify({ cause: unscreenableCause ?? UNSCREENED_REASON }),
+        });
+      }
+    }
+  }
+  if (flaggedScreenedInput) {
+    const existing = await deps.sessions.getByThread(conversation.threadRef);
+    const flagGrantKey = `security-screen:${input.surface ?? "unknown"}`;
+    for (const grant of await approvalGrantsFor(actor.id)) {
+      if (!resolution.approvalGrantModes[grant.scope]) continue;
+      if (grant.scope === "session" && grant.sessionId !== existing?.id) continue;
+      if ((grant.approvalKey ?? grant.command) !== flagGrantKey && grant.command !== "security-screen") continue;
+      audit({
+        action: "security_posture.flag_allowed_by_grant",
+        resource: input.surface ?? "unknown",
+        status: "allowed",
+        detail: JSON.stringify({ scope: grant.scope, reason: flaggedScreenedInput.reason }),
+      });
+      flaggedScreenedInput = undefined;
+      break;
+    }
+  }
+  return { flaggedScreenedInput, inputUnscreened };
 }

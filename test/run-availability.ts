@@ -138,7 +138,7 @@ test(
     let resyncs = 0;
     const off = reader.runs.subscribeAvailable!(() => notifications++, {
       pollMs: 60_000,
-      onResync: () => resyncs++,
+      onResync: () => void resyncs++,
     });
     const ids: string[] = [];
     try {

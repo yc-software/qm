@@ -38,7 +38,7 @@ export async function visibleChildren(
   const seen = await Promise.all(
     inScope.map((child) => deps.sessions.getForParticipant(child.id, caller.request.actor.id)),
   );
-  return inScope.filter((_, index) => seen[index]);
+  return inScope.filter((child, index) => seen[index] && !child.spawnMeta?.retired);
 }
 
 export async function subagentActivity(

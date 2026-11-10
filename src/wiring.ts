@@ -1939,7 +1939,7 @@ export function buildApp(
   const loopOwnerCache = new Map<string, string>();
   const publishLoopEvent = (event: import("./loops/ledger-events.ts").LedgerEvent): void => {
     void (async () => {
-      const tenantId = boundTenant();
+      const tenantId = boundTenant() ?? bootTenant();
       const cacheKey = `${tenantId ?? ""}\0${event.loopId}`;
       let owner = loopOwnerCache.get(cacheKey);
       if (owner === undefined) {
