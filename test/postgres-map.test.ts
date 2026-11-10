@@ -87,7 +87,7 @@ test("pg map: an artifact store rides the map (a cron round-trips through Postgr
     owner: "U1",
     createdBy: "U1",
   });
-  await store.markFired(c.id, 123);
+  await store.markFired(c, 123);
   const reader = createCronStore(createPostgresMapFactory(URL!).map<Cron>("map_crons"), {
     fires: createPostgresCronFireStore(testDatabaseUrl()),
   });

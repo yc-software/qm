@@ -168,7 +168,7 @@ for (const [name, make] of [
     const reg = make();
     const credentialFiles = {
       plan: { directory: "/tmp/qm-credentials.abc", credentials: [{ paths: [".aws/config"], roots: [] }] },
-      sources: [{ credentialId: "c1", ownerId: "U1", service: "aws", fingerprint: "f1" }],
+      sources: [{ credentialId: "c1", ownerId: "U1", service: "aws", fileHashes: { ".aws/config": "h1" } }],
     };
     const processId = id(Date.now() % 1_000_000);
     try {

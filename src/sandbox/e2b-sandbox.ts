@@ -33,11 +33,13 @@ import {
   runE2bScript,
 } from "./e2b-client.ts";
 import {
+  attemptSnapshot,
   createHomeSnapshotOps,
   HOME_SNAPSHOT_PRUNE,
   isJobComputerScope,
   snapshotDue,
   type HomeSnapshotStore,
+  type SnapshotBookkeeping,
 } from "./home-snapshot.ts";
 import type {
   AgentComputerProfile,
@@ -58,7 +60,7 @@ const SNAPSHOT_PRUNE = HOME_SNAPSHOT_PRUNE;
 const DEFAULT_KEEP_WARM_SEC = 3600;
 const DEFAULT_NATIVE_SNAPSHOT_INTERVAL_MS = 5 * 60_000;
 
-export interface StoredE2bSandbox {
+export interface StoredE2bSandbox extends SnapshotBookkeeping {
   sandboxId: string;
   nativePause?: boolean;
   preservationState?: "running" | "paused" | "pause_failed";
@@ -66,8 +68,6 @@ export interface StoredE2bSandbox {
   recoverySnapshotId?: string;
   recoveryError?: string;
   createdAtMs: number;
-  lastSnapshotMs?: number;
-  homeDirty?: boolean;
 }
 
 export const E2B_TEMPLATE_TOOLS = ["wget", "unzip", "gh", "aws", "x-api"];
@@ -388,8 +388,10 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
       });
       if (previous !== snapshotId) await forgetSnapshot(previous);
     } catch (e) {
-      await store.merge(scope, { recoveryError: errMessage(e) });
-      reportError("sandbox_snapshot", "recovery_snapshot_failed", errMessage(e), scope);
+      await store
+        .merge(scope, { recoveryError: errMessage(e) })
+        .catch(swallowAs("e2b-sandbox: record recovery error", undefined));
+      throw e;
     }
   }
 
@@ -598,13 +600,14 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
 
     const stored = await store.get(scope);
     if (!tdOpts?.homeUnchanged) await store.merge(scope, { homeDirty: true });
-    if (!stored?.nativePause && snapshotDue(stored, tdOpts, snapshotIntervalMs)) {
-      try {
-        await snapshotHome(scope, session);
-      } catch (e) {
-        reportError("sandbox_snapshot", "teardown_snapshot_failed", errMessage(e), scope);
-      }
-    }
+    const recordAttempt = (patch: SnapshotBookkeeping) => store.merge(scope, patch);
+    if (homeSnapshots && !stored?.nativePause && snapshotDue(stored, tdOpts, snapshotIntervalMs))
+      await attemptSnapshot(
+        stored,
+        recordAttempt,
+        () => snapshotHome(scope, session),
+        (message) => reportError("sandbox_snapshot", "teardown_snapshot_failed", message, scope),
+      );
     if (tdOpts?.keepWarm) {
       try {
         await session.keepAlive(keepWarmMs);
@@ -614,7 +617,12 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
       return;
     }
     if (stored?.nativePause && snapshotDue(stored, tdOpts, nativeSnapshotIntervalMs))
-      await captureRecoverySnapshot(scope, session, stored.recoverySnapshotId);
+      await attemptSnapshot(
+        stored,
+        recordAttempt,
+        () => captureRecoverySnapshot(scope, session, stored.recoverySnapshotId),
+        (message) => reportError("sandbox_snapshot", "recovery_snapshot_failed", message, scope),
+      );
     try {
       await session.pause();
       await store.merge(scope, { preservationState: "paused", preservationError: undefined });
