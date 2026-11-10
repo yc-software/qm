@@ -303,7 +303,7 @@ test("a fallback that fails keeps the original refusal and says what happened to
   );
 });
 
-test("helper calls run on the org's utility model, not the deployment default", async () => {
+test("helper calls run on the org's utility model and titles on Sonnet, not the deployment default", async () => {
   const agent = createAgent({
     routes: createModelRoutes({
       defaultModelId: "claude-opus-5-5",
@@ -318,7 +318,7 @@ test("helper calls run on the org's utility model, not the deployment default", 
       await agent.generateTitle!("a transcript").catch(() => undefined);
       assert.deepEqual(
         calls.map((call) => call.model),
-        ["gpt-5.6-luna", "gpt-5.6-luna"],
+        ["gpt-5.6-luna", "claude-sonnet-5-5"],
       );
     },
   );
@@ -362,7 +362,7 @@ test("titles fall back to the utility model when Sonnet is not servable", async 
     }),
   });
   await withFetch(
-    () => errorReply(500, "api_error", "down"),
+    () => errorReply(400, "invalid_request_error", "stop here"),
     async (calls) => {
       await agent.generateTitle!("User:\nPlan the offsite").catch(() => undefined);
       assert.deepEqual(
