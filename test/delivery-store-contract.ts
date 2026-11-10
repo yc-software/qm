@@ -425,7 +425,11 @@ export async function exerciseDeliveryFail(makeStore: (opts: { maxAgeMs: number 
     assert.ok(landed?.deliveredAt, `${key}: the late success lands`);
     assert.equal(landed?.failedReason, undefined, `${key}: a delivered row is not also refused`);
     assert.equal(landed?.expiredAt, undefined, `${key}: a delivered row is not expired`);
-    assert.equal(await store.fail(row.id, "cannot_dm_bot", Date.now()), null, `${key}: a refusal after delivery is ignored`);
+    assert.equal(
+      await store.fail(row.id, "cannot_dm_bot", Date.now()),
+      null,
+      `${key}: a refusal after delivery is ignored`,
+    );
     assert.equal((await store.get(row.id))?.failedReason, undefined, `${key}: still not refused`);
   }
 }
