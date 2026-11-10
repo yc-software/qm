@@ -399,12 +399,11 @@ test("rotation leaves a stale body alone while a live run in another core holds 
 
 test("a keep-warm release leaves the body to the other core's live holder", async () => {
   const fake = installFakeMicrovm();
-  const { a, b, live, record } = await heldBody(fake);
+  const { b, live, record } = await heldBody(fake);
   const other = await b.router.provision("personal:alice", { sandboxId: record.id });
   live.add("run-b");
   await b.resources.hold(record.id, "run-b");
   await b.router.teardown(other, { keepWarm: await b.resources.release(record.id, "run-b") });
-  await a.resources.hold(record.id, "run-a");
   assert.equal((await b.router.reapDeepIdle!(60_000)).reaped, 0);
   assert.equal(fake.bodies.get(other.id)!.state, "RUNNING");
 });

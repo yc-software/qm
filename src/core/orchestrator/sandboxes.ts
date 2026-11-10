@@ -95,7 +95,7 @@ async function releasePool(t: TurnPool): Promise<void> {
   const { deps, input, session, scopeId, turnFilesDir } = t.ctx;
   const { pool, writableScopeId, scopedUsed, audit } = t;
   const releaseHold = async (handle: SandboxHandle): Promise<boolean> => {
-    if (!handle.resourceId || !deps.runs || !deps.sandboxResources) return false;
+    if (!handle.resourceId || !deps.sandboxResources) return false;
     return deps.sandboxResources.release(handle.resourceId, input.runId);
   };
   const clearTurnFiles = (handle: SandboxHandle): Promise<void> =>
