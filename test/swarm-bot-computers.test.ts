@@ -541,9 +541,17 @@ test("a Slack bot's turn running on its swarm's computer is told to stop once a 
   assert.deepEqual(observed, { status: "running", stops: ["abort"] });
 });
 
-test("a background job a Slack bot started on its swarm's computer stops once a person sends work into the swarm", async () => {
+test("a background job a Slack bot started on its swarm's computer stops once a person's send into the swarm completes", async () => {
   const computers = jobComputers();
-  const processes = createPostgresProcessRegistry(testDatabaseUrl());
+  const registry = createPostgresProcessRegistry(testDatabaseUrl());
+  let expireFailures = 1;
+  const processes: ProcessRegistry = {
+    ...registry,
+    async expire(processId, now) {
+      if (expireFailures-- > 0) throw new Error("process registry unavailable");
+      await registry.expire(processId, now);
+    },
+  };
   const f = await botSwarm({ backend: computers.backend, processes });
   const swarm = (await f.store.get(f.root.id))!;
   const worker = swarm.members.find((member) => member.id !== swarm.id)!;
@@ -591,7 +599,10 @@ test("a background job a Slack bot started on its swarm's computer stops once a 
     ttlMs: 600_000,
     runId: person.caller.claims.runId!,
   });
-  await f.service.send(person.caller, { requestId: "person-send", audience: [worker.id], text: "alice's work" });
+  const personSend = () =>
+    f.service.send(person.caller, { requestId: "person-send", audience: [worker.id], text: "alice's work" });
+  assert.equal(await personSend().then(() => "sent", errMessage), "process registry unavailable");
+  await personSend();
   await person.done();
   await reaper.sweep();
   assert.deepEqual(computers.signals, [botJob.processId]);

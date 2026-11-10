@@ -256,9 +256,7 @@ export function createSwarmService(deps: {
       [...active.values()]
         .filter((run) => run.status === "running" && lostSwarm(run))
         .map((run) =>
-          deps.signals
-            ?.send(run.id, { kind: "abort", reason: "because a person sent work into the swarm" })
-            .catch(swallowAs("swarm: abort a bot's turn that lost the swarm", false)),
+          deps.signals?.send(run.id, { kind: "abort", reason: "because a person sent work into the swarm" }),
         ),
     );
     const { processes } = deps;
@@ -272,7 +270,7 @@ export function createSwarmService(deps: {
       jobs.map(async (job) => {
         if (lostSwarm(await runs.get(job.runId!))) await processes.expire(job.processId);
       }),
-    ).catch(swallowAs("swarm: end a bot's jobs on computers it lost", undefined));
+    );
   };
   const view = (member: SwarmMember): SwarmMember => ({
     ...member,
@@ -683,6 +681,7 @@ export function createSwarmService(deps: {
       const previous = existing?.spawnRequests[key];
       if (previous) {
         if (previous.signature !== fingerprint) throw new Error("requestId reused with different content");
+        await cutOffBot(existing!);
         return existing!.members.filter((member) => previous.memberIds.includes(member.id)).map(view);
       }
       if (existing && input.backend !== undefined) throw new Error("backend is only allowed on initial swarm creation");
@@ -801,6 +800,7 @@ export function createSwarmService(deps: {
       const previous = swarm.messageRequests[key];
       if (previous) {
         if (previous.signature !== fingerprint) throw new Error("requestId reused with different content");
+        await cutOffBot(swarm);
         return swarm.messages.find((message) => message.id === previous.messageId)!;
       }
       const checked = await Promise.all(
