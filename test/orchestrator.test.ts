@@ -9,7 +9,11 @@ import { join } from "node:path";
 import { buildApp as buildAppRaw } from "./support/build-app.ts";
 import { mockHeldTurns } from "./support/mock-agent.ts";
 import { approvalCardId } from "../src/core/approval-id.ts";
-import { BOT_REQUESTER_REFUSAL, undeliverableApprovalNote } from "../src/core/approval-requester.ts";
+import {
+  BOT_REQUESTER_APPROVAL_NOTE,
+  BOT_REQUESTER_REFUSAL,
+  undeliverableApprovalNote,
+} from "../src/core/approval-requester.ts";
 import { scopeId, type Destination, type TurnRequest } from "../src/types.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 import { runNowSettled, settle } from "./support/settle.ts";
@@ -2761,13 +2765,12 @@ test("a bot-requested turn never opens an approval when a command is gated", asy
   assert.equal((await built.deliveries.pending("principal")).length, 0);
 });
 
-test("a bot-requested turn that paused on approval finishes without issuing one", async () => {
+test("a bot-requested turn tells the agent that approvals are unavailable", async () => {
   const { app } = freshApp();
-  const res = await app.turn(dm("!paused-approval git push --force origin main", { botActor: true }));
+  const res = await app.turn(dm("!approval-note", { botActor: true }));
   assert.equal(res.status, "ok");
-  assert.equal(res.pendingApprovals, undefined);
-  const follow = await app.turn(dm("anything else?", { botActor: true }));
-  assert.notEqual(follow.status, "pending_approval", "nothing is left blocking the thread");
+  assert.equal(res.reply, BOT_REQUESTER_APPROVAL_NOTE);
+  assert.equal((await app.turn(dm("!approval-note"))).reply, "approvals available");
 });
 
 test("a command-approval card that fails terminally settles the approval as declined", async () => {
