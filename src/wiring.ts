@@ -154,7 +154,6 @@ import { createPostgresDeliveryStore } from "./delivery/postgres-delivery-store.
 import { wireRunResultDeliveries } from "./delivery/run-result-delivery.ts";
 import { adminSessionUrl } from "./util/admin-links.ts";
 import { uuidSchema } from "./util/ids.ts";
-import { fatalShutdown } from "./util/process-guard.ts";
 import { withWebTranscriptDeliveries } from "./delivery/web-transcript-delivery.ts";
 import { WEBHOOK_CLAIM_MS, webhookSender } from "./delivery/webhook-delivery.ts";
 import { createDeliveryRelay } from "./delivery/relay.ts";
@@ -416,18 +415,19 @@ import { type probeModel, type ProviderKeys } from "./model/model-runtime.ts";
 
 export interface Runtime {
   start(services?: BackgroundServices): void;
-  stop(beforeClose?: () => Promise<void>): Promise<void>;
-  releaseInFlightRuns(): Promise<void>;
+  stop(opts?: { beforeClose?: () => Promise<void>; fatal?: boolean }): Promise<void>;
+  releaseInFlightRuns(fatal?: boolean): Promise<void>;
 }
 
 export function stopWithBackstop(
   runtime: Pick<Runtime, "stop" | "releaseInFlightRuns">,
   shutdownDrainMs: number,
   label: string,
+  fatal = false,
 ): void {
   const hardExit = setTimeout(() => {
     console.error(`[${label}] drain overran; releasing in-flight leases before forced exit`);
-    void Promise.race([runtime.releaseInFlightRuns(), sleep(SHUTDOWN_RELEASE_MS, { unref: true })]).finally(
+    void Promise.race([runtime.releaseInFlightRuns(fatal), sleep(SHUTDOWN_RELEASE_MS, { unref: true })]).finally(
       async () => {
         await flushErrorReporting();
         process.exit();
@@ -435,7 +435,7 @@ export function stopWithBackstop(
     );
   }, shutdownDrainMs + SHUTDOWN_RELEASE_MS);
   hardExit.unref();
-  void runtime.stop().then(
+  void runtime.stop({ fatal }).then(
     async () => {
       await flushErrorReporting();
       clearTimeout(hardExit);
@@ -444,7 +444,7 @@ export function stopWithBackstop(
     (e: unknown) => {
       console.error(`[${label}] graceful stop failed: ${errMessage(e)}`);
       clearTimeout(hardExit);
-      void Promise.race([runtime.releaseInFlightRuns(), sleep(SHUTDOWN_RELEASE_MS, { unref: true })]).finally(
+      void Promise.race([runtime.releaseInFlightRuns(fatal), sleep(SHUTDOWN_RELEASE_MS, { unref: true })]).finally(
         async () => {
           await flushErrorReporting();
           process.exit(1);
@@ -2822,7 +2822,6 @@ export function buildApp(
     slots: config.workers,
     pollMs: 250,
     canClaim: canClaimRuns,
-    crashing: fatalShutdown,
   });
   const preemption = createRunPreemption({ runs, worker, canClaim: canClaimRuns });
   const preemptionSweeper = createSweeper(() => preemption.sweep(), 1_000, { label: "run-preemption" });
@@ -3023,13 +3022,13 @@ export function buildApp(
     return draining;
   }
   let releasing: Promise<void> | null = null;
-  function releaseInFlightRuns(): Promise<void> {
+  function releaseInFlightRuns(fatal = false): Promise<void> {
     turnWaitShutdown.abort();
     releasing ??= Promise.all([
       withTimeout(() => admittedWork.drained(), SHUTDOWN_RELEASE_MS, "synchronous turn wait release").catch(
         swallowAs("wiring: synchronous turn wait release failed", undefined),
       ),
-      worker.releaseInFlight(),
+      worker.releaseInFlight(fatal),
     ]).then(() => {});
     return releasing;
   }
@@ -3047,7 +3046,7 @@ export function buildApp(
       drain.start(services);
     },
     releaseInFlightRuns,
-    async stop(beforeClose) {
+    async stop(opts) {
       stopTenantLoad();
       stopSettingsLoad();
       stopLayerLoad();
@@ -3060,9 +3059,9 @@ export function buildApp(
         ),
         worker.stop(config.shutdownDrainMs),
       ]).catch(swallowAs("wiring: worker drain failed", undefined));
-      await releaseInFlightRuns();
+      await releaseInFlightRuns(opts?.fatal);
       await draining;
-      await beforeClose?.();
+      await opts?.beforeClose?.();
       stopStreamSync();
       await Promise.all(
         [

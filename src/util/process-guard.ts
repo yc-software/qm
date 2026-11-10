@@ -1,11 +1,7 @@
 import { describeActiveRequest } from "../../plugins/chassis/src/error-reporting.ts";
 import { errMessage } from "./errors.ts";
 
-let fatal = false;
-
-export const fatalShutdown = (): boolean => fatal;
-
-export function shutdownOnUncaught(label: string, shutdown: (reason: string) => void): void {
+export function shutdownOnUncaught(label: string, shutdown: (reason: string, fatal: boolean) => void): void {
   const onFatal = (kind: string) => (e: unknown) => {
     const request = describeActiveRequest();
     console.error(
@@ -13,8 +9,7 @@ export function shutdownOnUncaught(label: string, shutdown: (reason: string) => 
       e instanceof Error && e.stack ? e.stack : errMessage(e),
     );
     process.exitCode = 1;
-    fatal = true;
-    shutdown(kind);
+    shutdown(kind, true);
   };
   process.on("uncaughtException", onFatal("uncaught exception"));
   process.on("unhandledRejection", onFatal("unhandled rejection"));

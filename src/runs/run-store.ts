@@ -45,6 +45,8 @@ export type RunStop =
 
 export const PARKED: RunStop = { kind: "parked" };
 
+export const CRASHED = { kind: "crashed" } as const;
+
 export interface TurnPark {
   requested(): boolean;
   now(): void;
