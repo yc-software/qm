@@ -53,6 +53,8 @@ const HOME_TAR = `${HOME_DIR}/.qm-home.tar`;
 const HYDRATED_MARKER = `${HOME_DIR}/.qm-hydrated`;
 const ACTIVITY_TOUCH_INTERVAL_MS = 10 * 60_000;
 const ACTIVITY_GRACE_MS = 2 * ACTIVITY_TOUCH_INTERVAL_MS;
+const activeSince = (row: StoredModalSandbox | null | undefined, cutoffMs: number): boolean =>
+  !row?.lastActivityMs || row.lastActivityMs > cutoffMs;
 const swallowGone = (error: unknown): void => {
   if (!(error instanceof ModalSandboxGoneError)) throw error;
 };
@@ -436,7 +438,10 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
     const now = Date.now();
     if (now - (lastTouchMs.get(scope) ?? 0) < ACTIVITY_TOUCH_INTERVAL_MS) return;
     lastTouchMs.set(scope, now);
-    await store.merge(scope, { lastActivityMs: now }).catch(swallowAs("modal-sandbox: record activity", undefined));
+    await store.merge(scope, { lastActivityMs: now }).catch((error: unknown) => {
+      if (lastTouchMs.get(scope) === now) lastTouchMs.delete(scope);
+      swallowAs("modal-sandbox: record activity", undefined)(error);
+    });
   }
 
   async function runTimed(
@@ -607,10 +612,10 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
       provisionQueue(scope, async (): Promise<number> => {
         const current = await store.get(scope);
         if (!current || current.sandboxId !== rec.sandboxId) return 0;
-        if (idleCutoffMs !== undefined && (!current.lastActivityMs || current.lastActivityMs > idleCutoffMs)) return 0;
+        if (idleCutoffMs !== undefined && activeSince(current, idleCutoffMs)) return 0;
         try {
           await snapshotHome(scope, session);
-          if (idleCutoffMs !== undefined && ((await store.get(scope))?.lastActivityMs ?? 0) > idleCutoffMs) return 0;
+          if (idleCutoffMs !== undefined && activeSince(await store.get(scope), idleCutoffMs)) return 0;
           await session.terminate();
           sessionByName.delete(name);
           return 1;
