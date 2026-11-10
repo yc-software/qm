@@ -823,7 +823,7 @@ test("Gmail reads the item's own mailbox and treats a missing thread as gone", a
   assert.deepEqual(await fetcher(OWNER, item), {
     kind: "skipped",
     reason: "source_gone",
-    detail: "Gmail 404",
+    detail: "Gmail threads/t1 returned 404 for the company account",
   });
   assert.deepEqual(requested, ["company"]);
   assert.ok(seen.every((header) => header === "Bearer company-token"));

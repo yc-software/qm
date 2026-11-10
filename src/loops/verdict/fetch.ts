@@ -77,11 +77,11 @@ export function changedSinceLastLook(item: Pick<LoopItem, "verdict">, conversati
   return newest !== undefined && newest !== item.verdict?.lastSeenTs;
 }
 
-const GMAIL = "gmail.googleapis.com";
 const goneSlackErrors = new Set(["channel_not_found", "thread_not_found"]);
 
-function sourceGone(error: unknown): string | undefined {
-  if (error instanceof GmailApiError) return error.status === 404 ? `Gmail ${error.status}` : undefined;
+function sourceGone(error: unknown, item: LoopItem): string | undefined {
+  if (error instanceof GmailApiError)
+    return error.status === 404 ? `${error.message} for the ${gmailAccountOf(item) ?? "first"} account` : undefined;
   const code =
     isObj(error) && error.code === ErrorCode.PlatformError && isObj(error.data) ? error.data.error : undefined;
   return typeof code === "string" && goneSlackErrors.has(code) ? `Slack ${code}` : undefined;
@@ -158,7 +158,8 @@ export function createSourceClients(deps: SourceClientDeps): SourceClients {
       users().set(userId, resolved);
       return resolved;
     },
-    gmailToken: (owner, item) => (item ? gmailToken(deps.tokens, owner, item) : tokenFor(deps.tokens, GMAIL, owner)),
+    gmailToken: (owner, item) =>
+      item ? gmailToken(deps.tokens, owner, item) : tokenFor(deps.tokens, "gmail.googleapis.com", owner),
     async gmailRead(owner, token, path) {
       if (limited().has(`${owner}:Gmail`)) throw new SourceRateLimited("Gmail");
       try {
@@ -401,7 +402,7 @@ export function createConversationFetcher(clients: SourceClients): ConversationF
       if (item.source === "slack") return await slack(owner, item);
       if (item.source === "gmail") return await gmail(owner, item);
     } catch (error) {
-      const detail = sourceGone(error);
+      const detail = sourceGone(error, item);
       if (detail) return { kind: "skipped", reason: "source_gone", detail };
       throw error;
     }

@@ -47,8 +47,8 @@ function passOrder(a: LoopItem, b: LoopItem): number {
 }
 
 function alwaysRead(item: LoopItem): boolean {
-  if (item.status === "skipped" && item.parkedReason) return false;
-  if (!item.verdict || item.status === "queued") return true;
+  if (!item.verdict) return item.status !== "skipped";
+  if (item.status === "queued") return true;
   const slack = isObj(item.sourcePayload?.slack) ? item.sourcePayload.slack : undefined;
   return slack !== undefined && typeof slack.threadTs === "string" && slack.isDirectMessage !== true;
 }
