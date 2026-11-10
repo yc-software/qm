@@ -23,8 +23,9 @@ export function logUnansweredCloses(server: Server, label: string): void {
     const now = Date.now();
     const state: ConnectionState = { openedAt: now, lastAnsweredAt: now, answeredBytes: 0, served: 0 };
     states.set(socket, state);
-    socket.on("error", (error: NodeJS.ErrnoException) => (state.error = error.code ?? error.message));
+    socket.on("error", (error: NodeJS.ErrnoException) => (state.error = `${error.code ?? "unknown"} ${error.message}`));
     socket.on("close", () => {
+      if (states.get(socket) !== state) return;
       const unreadBytes = socket.bytesRead - state.answeredBytes;
       if (!state.pending && unreadBytes <= 0) return;
       const closedAt = Date.now();
@@ -43,6 +44,7 @@ export function logUnansweredCloses(server: Server, label: string): void {
       );
     });
   });
+  server.on("upgrade", (req: IncomingMessage) => states.delete(req.socket));
   server.on("request", (req: IncomingMessage, res: ServerResponse) => {
     const state = states.get(req.socket);
     if (!state) return;
@@ -56,6 +58,7 @@ export function logUnansweredCloses(server: Server, label: string): void {
       startedAt: Date.now(),
     };
     res.once("finish", () => {
+      if (!req.complete) return void states.delete(req.socket);
       state.pending = undefined;
       state.answeredBytes = req.socket.bytesRead;
       state.lastAnsweredAt = Date.now();

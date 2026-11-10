@@ -11,7 +11,16 @@ async function capture(run: (port: number) => Promise<void>): Promise<string[]> 
   console.warn = (...args: unknown[]) => void lines.push(format(...args));
   const server = createServer((req, res) => {
     if (req.url?.startsWith("/drop")) return void req.socket.destroy();
+    if (req.url === "/too-large") {
+      res.writeHead(413, { connection: "close" });
+      return void res.end();
+    }
     res.end("ok");
+  });
+  server.on("upgrade", (_req, socket) => {
+    socket.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n");
+    socket.on("data", () => undefined);
+    socket.on("end", () => socket.end());
   });
   logUnansweredCloses(server, "test");
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -67,13 +76,39 @@ test("bytes that never became a request are logged as unanswered", async () => {
     });
   });
   assert.equal(lines.length, 1);
-  assert.match(lines[0]!, /request=none parsed unanswered_bytes=\d+ /);
+  assert.match(lines[0]!, /request=none parsed unanswered_bytes=\d+ .* error=HPE_INVALID_EOF_STATE /);
 });
 
 test("answered keep-alive requests and clean closes log nothing", async () => {
   const lines = await capture(async (port) => {
     const received = await exchange(port, ["GET /a HTTP/1.1\r\nHost: x\r\n\r\n", "GET /b HTTP/1.1\r\nHost: x\r\n\r\n"]);
     assert.equal(received.match(/HTTP\/1.1 200/g)?.length, 2);
+  });
+  assert.deepEqual(lines, []);
+});
+
+test("upgraded connections and requests answered before their body was read log nothing", async () => {
+  const lines = await capture(async (port) => {
+    await new Promise<void>((resolve) => {
+      const socket = connect(port, "127.0.0.1", () =>
+        socket.write("GET /ws HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n"),
+      );
+      socket.once("data", () => {
+        socket.write("frame bytes after the upgrade");
+        setTimeout(() => socket.end(), 20);
+      });
+      socket.on("close", () => resolve());
+    });
+    await new Promise<void>((resolve) => {
+      const socket = connect(port, "127.0.0.1", () =>
+        socket.write("POST /too-large HTTP/1.1\r\nHost: x\r\nContent-Length: 100000\r\n\r\nstart of a large body"),
+      );
+      socket.once("data", () => {
+        socket.write("more body bytes");
+        setTimeout(() => socket.destroy(), 20);
+      });
+      socket.on("close", () => resolve());
+    });
   });
   assert.deepEqual(lines, []);
 });
