@@ -453,6 +453,13 @@ export function createMockAgent(): Agent {
         pausedOnApproval = true;
         usedTool = true;
         reply = `about to run it`;
+      } else if (command0.startsWith("!paused-approval-quiet ")) {
+        const command = command0.slice("!paused-approval-quiet ".length);
+        await record({ kind: "ToolCall", tool: "execute", body: { command, blocked: "needs_approval" } });
+        collected.push({ command, reason: "requires approval" });
+        pausedOnApproval = true;
+        usedTool = true;
+        reply = "";
       } else if (command0 === "!finish-silent-paused") {
         usedTool = true;
         silent = turn.pollFire === true || turn.surfaceTools === true;
@@ -879,7 +886,7 @@ export function createMockAgent(): Agent {
       if (/!judge-outage\b/i.test(prompt)) return Promise.reject(new Error("mock judge outage"));
       const asked = /!engage-asked\b[:\s]*(.*)/i.exec(prompt);
       if (asked) {
-        const id = /^\[([^\]]+)\]/m.exec(prompt)?.[1];
+        const id = /<message id="([^"]+)"[^>]*trigger="true"/.exec(prompt)?.[1];
         return Promise.resolve(
           JSON.stringify({
             act: true,

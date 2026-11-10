@@ -86,3 +86,20 @@ export function stripSlackDirectives(text: string): string {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
+
+function replaceShortcodes(text: string, emojiFor: (name: string) => string | null): string {
+  const parts = text.split(":");
+  let out = parts[0] ?? "";
+  for (let i = 1; i < parts.length; i++) {
+    const emoji = i < parts.length - 1 ? emojiFor(parts[i]!) : null;
+    if (emoji) {
+      out += emoji + parts[i + 1]!;
+      i++;
+    } else out += `:${parts[i]}`;
+  }
+  return out;
+}
+
+export function slackPreviewText(text: string, emojiFor: (name: string) => string | null): string {
+  return replaceShortcodes(slackWireToPlain(stripSlackDirectives(text)), emojiFor).trim();
+}

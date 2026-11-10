@@ -1,17 +1,30 @@
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
-import { TENANCY_BASE } from "./migrations.ts";
 
-export const RETIRE_TENANT_KEYS: PgMigrationDefinition = {
-  id: "0000-tenancy/retire-tenant-keys",
-  statements: [
-    `DO $retire_tenant_keys$
+const CONSTRAINT_KEYS = [
+  "deliveries_idempotency_key_key",
+  "runs_idempotency_key_key",
+  "session_spend_dirty_day_writer_key",
+  "sessions_thread_ref_key",
+  "user_links_user_id_alias_id_key",
+  "users_primary_alias_key",
+];
+
+export function retire0116Tenancy(boundTenant: string): PgMigrationDefinition {
+  return {
+    id: "0000-tenancy/base/retire-0116-keys",
+    statements: [
+      `DO $retire_tenant_keys$
 DECLARE
+  constraint_keys CONSTANT text[] := ARRAY[${CONSTRAINT_KEYS.map((name) => `'${name}'`).join(", ")}];
   kept CONSTANT text[] := ARRAY['items', 'blobs'];
   registry CONSTANT text[] := ARRAY['tenants', 'tenant_hosts', 'retired_tenant_hosts'];
   actions CONSTANT jsonb := '{"a": "NO ACTION", "r": "RESTRICT", "c": "CASCADE", "n": "SET NULL", "d": "SET DEFAULT"}';
   t record;
   r record;
 BEGIN
+  IF EXISTS (SELECT 1 FROM qm_schema_migrations WHERE id LIKE '%-tenants/1-column') THEN
+    RETURN;
+  END IF;
   CREATE TEMP TABLE tenant_cols ON COMMIT DROP AS
     SELECT a.attrelid AS rel, a.attnum AS num, c.relname
       FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
@@ -25,7 +38,7 @@ BEGIN
     RETURN;
   END IF;
   IF (SELECT count(*) FROM tenants) > 1 THEN
-    RAISE EXCEPTION 'This database holds % tenants. This release is single-tenant and cannot open it.',
+    RAISE EXCEPTION 'This database holds % tenants from release 0.1.16; only a single-tenant 0.1.16 database can be upgraded.',
       (SELECT count(*) FROM tenants);
   END IF;
 
@@ -80,6 +93,9 @@ BEGIN
       IF r.rebuild THEN
         EXECUTE format('CREATE %s INDEX %I ON %I USING %s (%s)%s', CASE WHEN r.uniq THEN 'UNIQUE' ELSE '' END,
           r.name, t.relname, r.method, r.cols, COALESCE(' WHERE ' || r.pred, ''));
+        IF r.name = ANY(constraint_keys) THEN
+          EXECUTE format('ALTER TABLE %I ADD CONSTRAINT %I UNIQUE USING INDEX %I', t.relname, r.name, r.name);
+        END IF;
       END IF;
     END LOOP;
     EXECUTE format('ALTER TABLE %I DROP COLUMN tenant_id', t.relname);
@@ -90,11 +106,48 @@ BEGIN
   DROP FUNCTION IF EXISTS qm_retire_tenant_hosts(), qm_host_tenant(text), qm_tenant_settings(), qm_sole_tenant();
   ALTER TABLE tenants DROP COLUMN IF EXISTS settings;
   DROP INDEX IF EXISTS deployments_name_lookup;
+  DROP TRIGGER IF EXISTS acl_grants_truncate ON acl_grants;
+  DROP TRIGGER IF EXISTS acl_grants_bump ON acl_grants;
+  CREATE TRIGGER acl_grants_bump AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON acl_grants
+    FOR EACH STATEMENT EXECUTE FUNCTION acl_grants_bump_version();
 
   FOR r IN SELECT conrelid::regclass AS tbl, conname, def FROM retired_fks LOOP
     EXECUTE format('ALTER TABLE %s ADD CONSTRAINT %I %s', r.tbl, r.conname, r.def);
   END LOOP;
 END $retire_tenant_keys$`,
-    TENANCY_BASE.statements[1]!,
+      boundTenant,
+    ],
+  };
+}
+
+export const REPAIR_0116_CONSTRAINTS: PgMigrationDefinition = {
+  id: "0000-tenancy/base/retire-0116-keys/repair",
+  statements: [
+    `DO $repair_0116$
+DECLARE
+  constraint_keys CONSTANT text[] := ARRAY[${CONSTRAINT_KEYS.map((name) => `'${name}'`).join(", ")}];
+  n text;
+  t regclass;
+BEGIN
+  IF EXISTS (SELECT 1 FROM qm_schema_migrations WHERE id LIKE '%-tenants/1-column') THEN
+    RETURN;
+  END IF;
+  FOREACH n IN ARRAY constraint_keys LOOP
+    SELECT i.indrelid::regclass INTO t
+      FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+     WHERE c.relname = n AND c.relnamespace = current_schema()::regnamespace AND i.indisunique
+       AND NOT EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conindid = i.indexrelid);
+    IF t IS NOT NULL THEN
+      EXECUTE format('ALTER TABLE %s ADD CONSTRAINT %I UNIQUE USING INDEX %I', t, n, n);
+    END IF;
+  END LOOP;
+  IF to_regclass('acl_grants') IS NOT NULL
+     AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = to_regclass('acl_grants') AND tgname = 'acl_grants_truncate') THEN
+    DROP TRIGGER acl_grants_truncate ON acl_grants;
+    DROP TRIGGER IF EXISTS acl_grants_bump ON acl_grants;
+    CREATE TRIGGER acl_grants_bump AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON acl_grants
+      FOR EACH STATEMENT EXECUTE FUNCTION acl_grants_bump_version();
+  END IF;
+END $repair_0116$`,
   ],
 };

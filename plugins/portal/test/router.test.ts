@@ -32,7 +32,11 @@ const upstream = createServer((req: IncomingMessage, res) => {
       res.end(JSON.stringify({ url: req.url, headers: req.headers, body: Buffer.concat(chunks).toString("utf8") }));
     });
   }
-  if (req.url?.startsWith("/v1/deployment-layer") || req.url?.startsWith("/v1/deployment/live-session")) {
+  if (
+    req.url?.startsWith("/v1/deployment-layer") ||
+    req.url?.startsWith("/v1/deployment/live-session") ||
+    req.url === "/v1/egress-audit"
+  ) {
     deploymentLayerRequests++;
     if (req.headers["x-timestamp"] !== "123" || req.headers["x-signature"] !== VALID_SOURCE_SIGNATURE) {
       res.writeHead(401, { "content-type": "application/json" });
@@ -690,6 +694,33 @@ test("the exact deployment-layer route carries source auth to core without widen
     404,
   );
   assert.equal(deploymentLayerRequests, before + 2, "nearby source-auth paths never reach core");
+});
+
+test("the egress proxy's signed audit POST reaches core through the front door, and nothing nearby does", async () => {
+  const before = deploymentLayerRequests;
+  const payload = JSON.stringify({ records: [{ host: "example.com", verdict: "ok" }] });
+  const relayed = await fetch(`${base}/v1/egress-audit`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-timestamp": "123",
+      "x-signature": VALID_SOURCE_SIGNATURE,
+      cookie: "portal_session=must-not-cross",
+    },
+    body: payload,
+  });
+  assert.equal(relayed.status, 200);
+  const body = (await relayed.json()) as { body: string; headers: Record<string, string> };
+  assert.equal(body.body, payload);
+  assert.equal(body.headers["x-signature"], VALID_SOURCE_SIGNATURE);
+  assert.equal(body.headers.cookie, undefined);
+  assert.equal(deploymentLayerRequests, before + 1);
+
+  const read = await fetch(`${base}/v1/egress-audit`, {
+    headers: { "x-timestamp": "123", "x-signature": VALID_SOURCE_SIGNATURE },
+  });
+  assert.equal(read.status, 404);
+  assert.equal(deploymentLayerRequests, before + 1, "only the POST is passed through");
 });
 
 test("agent capabilities do not bypass the connect/drop browser session gates", async () => {

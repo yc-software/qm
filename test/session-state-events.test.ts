@@ -6,11 +6,13 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
-import type { TurnRequest } from "../src/types.ts";
+import { scopeId, type TurnRequest } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testConfig } from "./support/test-config.ts";
 import { settle } from "./support/settle.ts";
+import { configureCommandRules } from "./support/command-rules.ts";
 import type { SessionStateEvent } from "../src/runs/session-state-bus.ts";
+import { boundTenant, withoutTenant } from "../src/tenants/context.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-state-"));
@@ -65,6 +67,7 @@ test("a plain turn emits working then idle", async () => {
 
 test("a turn parking a blocking command emits working then awaiting_approval", async () => {
   const built = freshApp();
+  await configureCommandRules(built.config, scopeId("org", "acme"));
   const got = await record(built.sessionStateBus);
   const r = await built.app.turn(dm(`!run ${BLOCKED_CMD}`, "web:U1:park"));
   assert.equal(r.status, "pending_approval");
@@ -73,6 +76,7 @@ test("a turn parking a blocking command emits working then awaiting_approval", a
 
 test("resolving the approval emits working, then idle once the resumed turn settles", async () => {
   const built = freshApp();
+  await configureCommandRules(built.config, scopeId("org", "acme"));
   const parked = await record(built.sessionStateBus);
   const paused = await built.app.turn(dm(`!run ${BLOCKED_CMD}`, "web:U1:resolve"));
   const requestId = paused.pendingApprovals?.[0]?.requestId;
@@ -102,6 +106,7 @@ test("a COLLECTED (non-blocking) approval settles idle — push and snapshot agr
 
 test("the settle event derives from the durable approvals store, exactly what listSessions reads", async () => {
   const built = freshApp();
+  await configureCommandRules(built.config, scopeId("org", "acme"));
   const got = await record(built.sessionStateBus);
   const r = await built.app.turn(dm(`!run ${BLOCKED_CMD}`, "web:U1:agree"));
   assert.equal(r.status, "pending_approval");
@@ -124,7 +129,7 @@ test("the events carry the session UUID and a timestamp", async () => {
 
 async function listen(built: ReturnType<typeof freshApp>): Promise<SessionStateEvent[]> {
   const got: SessionStateEvent[] = [];
-  built.app.subscribeSessionStates((e) => got.push(e));
+  built.app.subscribeSessionStates((e) => void got.push(e));
   await heardProbe(built.sessionStateBus, got);
   return got;
 }
@@ -231,6 +236,7 @@ test("a terminal run with another run still queued on the thread emits no settle
 
 test("a FAILED (parked) run still settles from durable truth: leftover blocking approval wins, UUID intact", async () => {
   const built = freshApp();
+  await configureCommandRules(built.config, scopeId("org", "acme"));
   const thread = "web:U1:failed";
   const parked = await built.app.turn(dm(`!run ${BLOCKED_CMD}`, thread));
   assert.equal(parked.status, "pending_approval");
@@ -311,6 +317,7 @@ test("a parent stays working while a subagent runs after its own turn ends — p
 
 test("a parent parked on a blocking approval keeps awaiting while its subagent runs", async () => {
   const built = freshApp();
+  await configureCommandRules(built.config, scopeId("org", "acme"));
   const parentThread = "web:U1:parked-parent";
   const childThread = "web:U1:parked-child";
   const child = await built.app.turn(dm("hello", childThread));
@@ -332,6 +339,7 @@ test("a parent parked on a blocking approval keeps awaiting while its subagent r
 
 test("a parent whose own turn parks on an approval while its subagent runs settles awaiting at once", async () => {
   const built = freshApp();
+  await configureCommandRules(built.config, scopeId("org", "acme"));
   const parentThread = "web:U1:parks-mid-tree";
   const childThread = "web:U1:parks-mid-tree-child";
   const parent = await built.app.turn(dm("hello", parentThread));
@@ -394,4 +402,24 @@ test("a subagent idle between its own runs is not working while its own subagent
   await built.runs.complete(leafRun.id, leasedLeaf!.leaseToken!, { status: "ok", reply: "done" });
   assert.ok(await waitFor(() => statesFor(got, rootThread).includes("idle")), "the last run settles the root");
   assert.deepEqual(statesFor(got, midThread), ["working", "idle"]);
+});
+
+test("a background subscriber hears each event inside the event's tenant", async () => {
+  const built = freshApp();
+  const tenant = "7a4f7f0e-3c55-4c3e-9d0b-2f1c8a6e5b11";
+  const heard: Array<{ at: number; tenant: string | undefined }> = [];
+  const got: SessionStateEvent[] = [];
+  withoutTenant(() =>
+    built.app.subscribeSessionStates((e) => {
+      got.push(e);
+      heard.push({ at: e.at, tenant: boundTenant() });
+    }),
+  );
+  await heardProbe(built.sessionStateBus, got);
+  built.sessionStateBus.emit({ tenantId: tenant, threadRef: "web:U1:tenanted", state: "working", at: 9 });
+  await received(got, 9);
+  assert.deepEqual(
+    heard.find((h) => h.at === 9),
+    { at: 9, tenant },
+  );
 });

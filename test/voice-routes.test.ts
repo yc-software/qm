@@ -25,7 +25,7 @@ async function serve(deps: Partial<ServerDeps>): Promise<string> {
       signingSecret: "voice-route-signing-secret-0123456789",
       replayDedupe: { claim: async () => true },
       ...browserSessionDeps,
-      admin: { adminStatusOf: async ({ id }: { id: string }) => ({ isAdmin: id === "admin" }) },
+      admin: { adminStatusOf: async (_tenant: unknown, { id }: { id: string }) => ({ isAdmin: id === "admin" }) },
       ...deps,
     } as ServerDeps,
   );
