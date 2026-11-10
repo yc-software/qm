@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { lookup as dnsLookup } from "node:dns/promises";
 import { isIP } from "node:net";
-import { credentialRequestHeaders, type CredentialInjection } from "../credentials/keychain.ts";
+import { credentialRequestHeaders, type CredentialInjection } from "../credentials/credential-injection.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { commitShaPrefixSchema } from "../util/ids.ts";
 import { isPrivateNetworkIp } from "../util/network.ts";

@@ -16,6 +16,7 @@ import { providersCard, useProviders, loadProviders } from "./settings-providers
 import { flagsCard, loadFlags } from "./settings-flags.ts";
 import { decisionsCard, loadDecisions } from "./settings-decisions.ts";
 import { brandingCard } from "./settings-branding.ts";
+import { appHandleCard, appHandleError } from "./settings-app-handle.ts";
 import { runtimesCard } from "./settings-runtimes.ts";
 
 type Model = { id: string; name?: string };
@@ -36,6 +37,12 @@ export class SettingsState extends SettingState {
       return structuredClone(selection);
     }
     if (this.key === "memory-embedding-model") return { modelId: this.draft.modelId || null };
+    if (this.key === "app-handle") {
+      const handle = String(this.draft.handle || "").trim();
+      const error = _validate ? appHandleError(handle) : undefined;
+      if (error) throw new Error(error);
+      return { handle };
+    }
     if (this.key === "branding")
       return Object.fromEntries(Object.entries(this.draft).map(([key, value]) => [key, String(value).trim()]));
     return structuredClone(this.draft);
@@ -71,7 +78,7 @@ export class SettingsState extends SettingState {
   }
 }
 export const states = new Map(
-  [...runtimeKeys, "webui-models", "memory-embedding-model", "soul", "branding"].map((key) => [
+  [...runtimeKeys, "webui-models", "memory-embedding-model", "soul", "branding", "app-handle"].map((key) => [
     key,
     new SettingsState(key),
   ]),
@@ -98,6 +105,9 @@ export function load(data: Data, scope: string, only?: string) {
         markUrl: data.branding?.markUrl || "",
       };
       s.available = scope.startsWith("org:") && "branding" in data;
+    } else if (key === "app-handle") {
+      s.draft = { handle: data.appHandle || "" };
+      s.available = scope.startsWith("org:") && "appHandle" in data;
     } else if (key === "memory-embedding-model") {
       s.draft = { modelId: data.memoryEmbeddingModel || "" };
       s.available = scope.startsWith("org:") && "memoryEmbeddingModel" in data;
@@ -258,6 +268,7 @@ export async function mount(next: AdminPage) {
     savedBranding = r.data.branding || {};
     load(r.data, next.orgScope, "soul");
     load(r.data, next.orgScope, "branding");
+    load(r.data, next.orgScope, "app-handle");
     loadDecisions(r.data, next.orgScope);
     void loadFlags(r.data, next.orgScope);
   }
@@ -279,7 +290,13 @@ function template() {
   const cards: Data = {
     models: () => [runtimesCard(), providersCard(), modelsCard(s("webui-models"))],
     credentials: () => [credentialsCard(), keychainCard()],
-    customize: () => [soulCard(s("soul")), brandingCard(s("branding")), flagsCard(), decisionsCard()],
+    customize: () => [
+      soulCard(s("soul")),
+      brandingCard(s("branding")),
+      appHandleCard(s("app-handle")),
+      flagsCard(),
+      decisionsCard(),
+    ],
   };
   return html`${pageHeader({ actions: view === "credentials" ? addCredential() : nothing })}
     <div id="view-governance">

@@ -24,6 +24,7 @@ export interface LedgerEvent {
 
 export interface OwnedLedgerEvent extends LedgerEvent {
   owner: string;
+  tenantId?: string;
 }
 
 export type LedgerEventBus = EventBus<OwnedLedgerEvent>;

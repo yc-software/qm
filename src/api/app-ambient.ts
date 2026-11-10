@@ -1,4 +1,5 @@
 import { scopeId, type ActorAssertion, type TurnRequest } from "../types.ts";
+import { personLabel } from "../identity/person-names.ts";
 import type { TurnSurfaceOrigin } from "../surfaces/contract.ts";
 import { slackSurfaceOrigin } from "../surfaces/slack/adapter.ts";
 import { orgId as orgIdOf } from "../config.ts";
@@ -384,7 +385,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     const container = input.conversation.channelRef ?? input.conversation.threadRef;
     const policy = deps.channelPolicy ? await deps.channelPolicy.get(container).catch(() => undefined) : undefined;
     const orders = policy?.orders;
-    const sender = input.actor.displayName?.trim() || input.actor.id;
+    const sender = personLabel(input.actor.id, { displayName: input.actor.displayName });
     const surface = input.surface ?? "slack";
     return buildWakeEnvelope({
       reason: "addressed",

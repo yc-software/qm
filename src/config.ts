@@ -1,4 +1,5 @@
 import { isClaudeSubscriptionToken } from "./model/claude-subscription.ts";
+import { isDnsLabel } from "../plugins/chassis/src/dns-label.ts";
 import {
   deploymentBrokerCredentialsFromEnv,
   type DeploymentBrokerCredential,
@@ -441,7 +442,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (securityScreenClassifier !== "proxy" && hasProxyConfig) {
     throw new Error("SECURITY_SCREEN_PROXY_* requires SECURITY_SCREEN_CLASSIFIER=proxy");
   }
-  if (proxyProvider && (proxyProvider.length > 63 || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(proxyProvider))) {
+  if (proxyProvider && !isDnsLabel(proxyProvider)) {
     throw new Error("SECURITY_SCREEN_PROXY_PROVIDER must be a lowercase DNS label");
   }
   if (proxyProvider === "surface" || proxyProvider === "origin") {

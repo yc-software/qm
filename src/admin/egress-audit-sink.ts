@@ -12,6 +12,7 @@ export interface EgressAuditRecord {
   via?: string;
   peerIp?: string;
   principalId?: string;
+  tenant?: string;
 }
 
 interface EgressAuditQuery {

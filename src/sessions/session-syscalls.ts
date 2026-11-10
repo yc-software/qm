@@ -49,11 +49,10 @@ export function isSubagentThreadRef(threadRef: string): boolean {
 }
 
 export function requiresDelegation(
-  request: Pick<OrchestratorInput, "surface" | "surfaceTools" | "conversation" | "swarm">,
-  enabled: boolean,
+  request: Pick<OrchestratorInput, "surface" | "surfaceTools" | "conversation" | "swarm" | "surfaceOrigin">,
 ): boolean {
   return (
-    enabled &&
+    request.surfaceOrigin?.audience !== "external" &&
     !request.swarm &&
     !isSubagentThreadRef(request.conversation.threadRef) &&
     (request.surface === "slack" || request.surfaceTools === true)
@@ -322,7 +321,6 @@ export interface SessionSyscallsFactory {
 export interface SessionSyscallDeps {
   mailbox: SessionMailbox;
   enabled?: (actorId: string) => Promise<boolean>;
-  delegationEnabled?: (actorId: string) => Promise<boolean>;
   sessions: Pick<
     SessionStore,
     | "get"

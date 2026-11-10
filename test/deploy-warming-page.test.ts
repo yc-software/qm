@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { TEST_TENANT } from "./support/test-tenant.ts";
 import assert from "node:assert/strict";
 import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -6,7 +7,10 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import type { App } from "../src/api/app.ts";
 
 function appWith(endpoint: Record<string, unknown>): App {
-  return { reachDeployment: async () => ({ status: "ok", endpoint }) } as unknown as App;
+  return {
+    tenantFor: async () => TEST_TENANT,
+    reachDeployment: async () => ({ status: "ok", endpoint }),
+  } as unknown as App;
 }
 
 test("/d/ proxy serves the warming page to a browser navigation when the deployment hangs", async () => {

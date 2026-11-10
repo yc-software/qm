@@ -29,7 +29,6 @@ test("a subagent shows its delegated tasks while the parent's completion wake st
   const parentRun = (await built.runs.list({ threadRef: threadRef, limit: 1 }).then(([run]) => run))!;
   const parentSession = (await built.sessions.getByThread(threadRef))!;
   await built.config.setPersonalModelAuth("U1", true, "openai");
-  await built.featureFlags.setEnabled("responsive_spine", parentSession.scopeId, true, "U1");
   const syscalls = createSessionSyscalls({
     advisoryLock: testAdvisoryLock(),
     sessions: built.sessions,
