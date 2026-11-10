@@ -91,7 +91,7 @@ test("the judge sees earlier messages cut short, but its own posts and new ones 
     .filter((l) => l.includes("<message "));
   const body = (line: string): string => line.replace(/^.*?>/, "").replace(/<\/message>$/, "");
   assert.ok(body(first!).length < 400, "an earlier message is shortened");
-  assert.ok(body(first!).endsWith("…"));
+  assert.match(body(first!), /… \[\d+ more characters\]$/);
   assert.equal(body(second!), long("own"));
   assert.equal(body(third!), long("fresh"));
   assert.equal(recentWakeMessages(batch)[0]!.text, long("earlier"));

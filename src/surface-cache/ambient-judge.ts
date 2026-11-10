@@ -67,6 +67,9 @@ export interface AmbientBatch {
 }
 
 const EARLIER_CONTEXT = 10;
+// Long earlier bot write-ups crowded new reports out of the judge's attention: in a production replay
+// an actionable multi-post alert drew a reply in 48/60 runs with full-length earlier messages and
+// 59/60 with earlier messages clipped to 300 characters (the opening lines: title, link, first sentence).
 const EARLIER_MESSAGE_CHARS = 300;
 
 export function ambientWindow(
@@ -101,9 +104,9 @@ export function recentWakeMessages(batch: AmbientBatch): WakeMessage[] {
 
 function clipEarlier(m: WakeMessage): WakeMessage {
   const text = m.text ?? "";
-  return m.trigger || m.self || text.length <= EARLIER_MESSAGE_CHARS
-    ? m
-    : { ...m, text: `${headSlice(text, EARLIER_MESSAGE_CHARS).trimEnd()}…` };
+  if (m.trigger || m.self || text.length <= EARLIER_MESSAGE_CHARS) return m;
+  const kept = headSlice(text, EARLIER_MESSAGE_CHARS).trimEnd();
+  return { ...m, text: `${kept}… [${text.length - kept.length} more characters]` };
 }
 
 export function renderAmbientPrompt(batch: AmbientBatch): string {
