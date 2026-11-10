@@ -90,14 +90,14 @@ test("invalid persistence cannot create a loadout or invent an effort level", ()
   );
 });
 
-test("persistence keeps the first valid model settings and eight unique models in order", () => {
+test("persistence keeps the first valid model settings and every unique model in order", () => {
   const saved = [
     entry("first", "high", true),
     entry("second", "medium"),
     entry("first", "low"),
     ...["third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth"].map((id) => entry(id)),
   ];
-  assert.deepEqual(parseLoadout(JSON.stringify(saved)), [saved[0], saved[1], ...saved.slice(3, 9)]);
+  assert.deepEqual(parseLoadout(JSON.stringify(saved)), [saved[0], saved[1], ...saved.slice(3)]);
 });
 
 test("model identity preserves colon-containing model ids", () => {
@@ -120,11 +120,11 @@ test("reconciliation never restores an unavailable active model", () => {
   assert.deepEqual(reconcileLoadout(saved, [], saved[0]!), []);
 });
 
-test("a new active model remains selectable even when eight saved models fill the loadout", () => {
+test("a new active model joins the loadout without displacing any saved model", () => {
   const saved = ["one", "two", "three", "four", "five", "six", "seven", "eight"].map((id) => entry(id));
   const active = entry("nine", "xhigh", true);
   const options = [...saved, active].map(({ value }) => option(value));
-  assert.deepEqual(reconcileLoadout(saved, options, active), [...saved.slice(0, 7), active]);
+  assert.deepEqual(reconcileLoadout(saved, options, active), [...saved, active]);
   assert.deepEqual(reconcileLoadout([], options, active), [active]);
 });
 
@@ -139,11 +139,11 @@ test("editing a setup preserves order and other models' independent effort and f
   assert.deepEqual(parseLoadout(JSON.stringify(next)), next);
 });
 
-test("adding at capacity preserves the newly selected model and never duplicates an existing setup", () => {
+test("adding appends the newly selected model and never duplicates an existing setup", () => {
   const saved = ["one", "two", "three", "four", "five", "six", "seven", "eight"].map((id) => entry(id));
   const active = entry("nine", "xhigh", true);
-  assert.deepEqual(upsertLoadout(saved, active), [...saved.slice(0, 7), active]);
-  assert.deepEqual(upsertLoadout([...saved, active], active), [...saved.slice(0, 7), active]);
+  assert.deepEqual(upsertLoadout(saved, active), [...saved, active]);
+  assert.deepEqual(upsertLoadout([...saved, active], active), [...saved, active]);
   const updated = entry(saved[1]!.value, "max", true);
   assert.deepEqual(upsertLoadout(saved, updated), [saved[0], updated, ...saved.slice(2)]);
   assert.deepEqual(upsertLoadout([saved[0]!, saved[0]!], updated), [saved[0], updated]);

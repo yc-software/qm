@@ -381,19 +381,6 @@
   background: transparent;
   color: var(--muted-foreground);
   cursor: pointer;
-  opacity: 0;
-  pointer-events: none;
-}
-.loadout-row:hover .loadout-remove,
-.loadout-row:has(:focus-visible) .loadout-remove {
-  opacity: 1;
-  pointer-events: auto;
-}
-@media (hover: none) {
-  .loadout-remove {
-    opacity: 1;
-    pointer-events: auto;
-  }
 }
 .loadout-remove:hover,
 .loadout-remove:focus-visible {

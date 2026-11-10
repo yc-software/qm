@@ -14,7 +14,6 @@ import {
 } from "./model-options.ts";
 import { modelSupportsFastMode } from "./pi-models.ts";
 import {
-  LOADOUT_CAP,
   isUltrafastModel,
   ultrafastChoice,
   effortLevelsForModel,
@@ -493,10 +492,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
                 <div class="loadout-list">${entries.map((entry) => loadoutRow(entry, selected, agent))}</div>
                 ${
                   presets
-                    ? html`<div
-                        class="loadout-submenu-anchor"
-                        ${tip(entries.length >= LOADOUT_CAP ? "Remove a preset to add another." : "")}
-                      >
+                    ? html`<div class="loadout-submenu-anchor">
                         <button
                           class="loadout-add ${loadoutSection === "add" ? "open" : ""}"
                           type="button"
@@ -504,9 +500,8 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
                           data-loadout-section="add"
                           aria-haspopup="menu"
                           aria-expanded=${loadoutSection === "add" ? "true" : "false"}
-                          ?disabled=${entries.length >= LOADOUT_CAP}
                           @mouseenter=${() => {
-                            if (isPhone() || entries.length >= LOADOUT_CAP) return;
+                            if (isPhone()) return;
                             loadoutSectionHovered = true;
                             openLoadoutSection("add");
                           }}
