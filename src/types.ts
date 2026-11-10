@@ -472,6 +472,7 @@ export interface PendingApprovalRecord {
   sessionId: string;
   command: string;
   createdAt?: number;
+  runId?: string;
   reason?: string;
   matched?: string;
   purpose?: string;
