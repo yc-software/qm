@@ -51,6 +51,7 @@ test("a migration whose ROLLBACK fails keeps its error and discards the connecti
     query: async (sql: string) => {
       if (sql === "SELECT broken_migration") throw new Error("migration failed");
       if (sql === "ROLLBACK") throw new Error("connection lost");
+      if (sql.includes("pg_has_role")) return { rows: [{ owns: true }], rowCount: 1 };
       return { rows: sql.includes("pg_try_advisory_lock") ? [{ locked: true }] : [], rowCount: 0 };
     },
     release: (value?: unknown) => {

@@ -68,7 +68,9 @@ test("setDeploymentDisplayName sets the label, then clears it (independent of th
 
 test("HTTP: the /name (slug) route does not shadow /display-name", async () => {
   const s = svc();
-  const app = createApp({ deploy: s.deploy } as unknown as Parameters<typeof createApp>[0]);
+  const app = createApp({
+    deploy: s.deploy,
+  } as unknown as Parameters<typeof createApp>[0]);
   const identitySecret = "deployment-route-identity-secret";
   const server = createInsecureTestServer(app, {
     portalIdentitySecret: identitySecret,

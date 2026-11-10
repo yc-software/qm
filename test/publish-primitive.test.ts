@@ -200,7 +200,10 @@ test("publish by name inherits the current entrypoint when redeploying without o
   assert.equal(second.version, 2);
   assert.equal(d.versions[1]!.entrypoint, "node server.js");
   assert.deepEqual(
-    (await s.deployStore.filesOf(d.id, 2))?.map((f) => ({ path: f.path, data: [...f.data] })),
+    (await s.deployStore.filesOf(d.id, (await s.deployStore.versionOf(d.id, 2))!.commit!)).map((f) => ({
+      path: f.path,
+      data: [...f.data],
+    })),
     [{ path: "server.js", data: [...bytes("v2")] }],
   );
 });
@@ -275,6 +278,25 @@ test("publish: a different scope claiming a taken name is rejected", async () =>
     createdBy: "U2",
   });
   await assert.rejects(() => other.publish({ entrypoint: "x", name: "taken" }), /name taken/);
+});
+
+test("publish hands a bot's turn to the deploy service as bot work", async () => {
+  const { deploy, captured } = spyDeploy();
+  const bot = createToolContext({
+    sandbox: fileSandbox(appFile()),
+    provision: async () => ({}) as SandboxHandle,
+    writableScopeId: scopeId("personal", "release-bot"),
+    readOnlyScopeIds: [],
+    commandPolicy: () => ({}) as never,
+    authorizeCommand: () => false,
+    grantedHandles: [],
+    deploy,
+    acl: {} as never,
+    createdBy: "release-bot",
+    botActor: true,
+  });
+  await bot.publish({ entrypoint: "node server.js", name: "bot-app" });
+  assert.equal(captured()?.botActor, true);
 });
 
 test("publish: renameFrom moves the link but keeps the id (and shares ride the id)", async () => {

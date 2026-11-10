@@ -9,6 +9,7 @@ import {
   swallow,
   swallowAs,
   httpFailure,
+  execFailure,
   withRequestId,
 } from "../src/util/errors.ts";
 import { WorkAdmissionClosed } from "../src/util/admitted-work.ts";
@@ -150,16 +151,23 @@ test("swallow logs the cause chain, structured error fields and stack instead of
   assert.match(logged[2]!, /^\[swallowed\] lookup: db down \{stack: /);
 });
 
-test("httpFailure names the status, a clipped body, and the provider request id", async () => {
+test("httpFailure names the status, the whole body, and the provider request id", async () => {
   const res = new Response("x".repeat(300), { status: 502, headers: { "x-request-id": "req-7" } });
   const text = await httpFailure(res);
-  assert.match(text, /^http 502 x{200} \[request id req-7\]$/);
+  assert.match(text, /^http 502 x{300} \[request id req-7\]$/);
   assert.equal(await httpFailure(new Response("plain", { status: 429 })), "http 429 plain");
   assert.equal(
     withRequestId("lambda -> 429: throttled", new Headers({ "x-amzn-requestid": "aws-1" })),
     "lambda -> 429: throttled [request id aws-1]",
   );
   assert.equal(withRequestId("fine", new Headers()), "fine");
+});
+
+test("execFailure keeps the whole command output", () => {
+  const long = execFailure("deploy", { stdout: "", stderr: `${"a".repeat(500)}${"z".repeat(300)}`, code: 1 });
+  assert.equal(long.message, `deploy failed (exit 1); stderr: ${"a".repeat(500)}${"z".repeat(300)}`);
+  const short = execFailure("deploy", { stdout: " ok \n", stderr: "", code: 124 });
+  assert.equal(short.message, "deploy failed (exit 124, timed out); stdout: ok");
 });
 
 test("errDetail preserves browser frames, nested stacks and aggregate errors without cycles", () => {
