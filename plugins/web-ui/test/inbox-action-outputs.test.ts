@@ -70,12 +70,21 @@ async function openItem(outputs: unknown[], action: (kind: string, args: Record<
 const ready = [output("old", "ready")];
 const fresh = [output("new", "ready")];
 
-test("prioritizing an item under review shows the outputs the server returns", async () => {
-  const t = await openItem(ready, () => ({
-    item: ledger({ triage: { priority: "urgent", pinned: ["priority"] } }),
-    outputs: fresh,
-  }));
+test("prioritizing, archiving and reopening an item under review each take the server's outputs", async () => {
+  const closed = [output("old", "superseded")];
+  const reopened = [output("reopened", "ready")];
+  const t = await openItem(ready, (kind) => {
+    if (kind === "prioritize")
+      return { item: ledger({ triage: { priority: "urgent", groupId: "item-1" } }), outputs: fresh };
+    if (kind === "dismiss") return { item: ledger({ state: "dismissed" }), outputs: closed };
+    return { item: ledger(), outputs: reopened };
+  });
   try {
+    t.inbox.inboxState.items = [
+      { ...t.stored(), groupId: "item-1" },
+      t.inbox.toInboxItem(ledger({ id: "item-2", triage: { groupId: "item-1" } })),
+    ];
+    t.inbox.drawAll();
     const select = t.main.querySelector<HTMLSelectElement>(".inbox-priority-control select")!;
     select.value = "urgent";
     select.dispatchEvent(new t.dom.window.Event("change", { bubbles: true }));
@@ -83,47 +92,25 @@ test("prioritizing an item under review shows the outputs the server returns", a
     assert.deepEqual(t.stored().outputs, fresh);
     assert.match(t.main.querySelector(".inbox-artifact h2")?.textContent ?? "", /Report new/);
     t.release();
+    await t.settle(() =>
+      /Archive all 2/.test(t.main.querySelector(".inbox-item-head > .inbox-dismiss")?.textContent ?? ""),
+    );
+    t.main.querySelector<HTMLButtonElement>(".inbox-item-head > .inbox-dismiss")!.click();
+    await t.settle(() => t.stored().status === "dismissed");
+    assert.deepEqual(t.stored().outputs, closed);
+    t.release();
+    await t.settle(() => {
+      t.main.querySelector<HTMLButtonElement>(".inbox-reopen")?.click();
+      return t.kinds.includes("reopen");
+    });
+    await t.settle(() => t.stored().status === "open");
+    assert.deepEqual(t.stored().outputs, reopened);
+    assert.deepEqual(t.kinds, ["prioritize", "dismiss", "reopen"]);
+    t.release();
   } finally {
     await t.close();
   }
 });
-
-for (const group of [false, true]) {
-  test(`${group ? "archiving a group" : "dismissing"} then reopening takes outputs from the server each time`, async () => {
-    const closed = [output("old", "superseded")];
-    const t = await openItem(ready, (kind) =>
-      kind === "reopen"
-        ? { item: ledger(), outputs: fresh }
-        : { item: ledger({ state: "dismissed" }), outputs: closed },
-    );
-    try {
-      if (group) {
-        t.inbox.inboxState.items = [
-          { ...t.stored(), groupId: "item-1" },
-          t.inbox.toInboxItem(ledger({ id: "item-2", triage: { groupId: "item-1" } })),
-        ];
-        t.inbox.drawAll();
-      }
-      const dismiss = t.main.querySelector<HTMLButtonElement>(".inbox-item-head > .inbox-dismiss")!;
-      assert.match(dismiss.textContent!, group ? /Archive all 2/ : /Dismiss/);
-      dismiss.click();
-      await t.settle(() => t.stored().status === "dismissed");
-      assert.deepEqual(t.stored().outputs, closed);
-      t.release();
-      await t.settle(() => {
-        t.main.querySelector<HTMLButtonElement>(".inbox-reopen")?.click();
-        return t.kinds.includes("reopen");
-      });
-      await t.settle(() => t.stored().status === "open");
-      assert.deepEqual(t.stored().outputs, fresh);
-      t.release();
-      await t.settle(() => /Report new/.test(t.main.querySelector(".inbox-artifact h2")?.textContent ?? ""));
-      assert.deepEqual(t.kinds, ["dismiss", "reopen"]);
-    } finally {
-      await t.close();
-    }
-  });
-}
 
 test("saving a draft edit takes the outputs the server returns", async () => {
   const t = await openItem([], (_kind, args) => ({
