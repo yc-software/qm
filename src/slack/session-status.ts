@@ -11,7 +11,6 @@ import { conversationScope } from "../resolution/resolution-service.ts";
 import { conversationWebUrl } from "../util/conversation-links.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
-import { snippet } from "../util/text.ts";
 import { EMOJI_CHAR_BY_NAME } from "./emoji-map.ts";
 
 export interface SlackSessionStatusState {
@@ -160,11 +159,11 @@ export function createSlackSessionStatus(
             icon ? undefined : state.emoji,
             ongoing && elapsed >= 60_000 ? `${phrase} · ${duration(elapsed, false)}` : phrase,
           );
-          const headline = snippet(icon ? `${icon} ${title}` : title, 80);
+          const headline = icon ? `${icon} ${title}` : title;
           const status = (failed && "error") || (ongoing && "in_progress") || "complete";
           const rows = helpers.slice(0, 50).map(({ child, step }) => ({
             task_id: `${SLACK_STATUS_TASK_PREFIX}${state!.cardId}:${child.id}`,
-            title: snippet(child.title || "Subagent", 80),
+            title: child.title || "Subagent",
             status: "in_progress",
             details: richText(undefined, step),
           }));

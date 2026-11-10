@@ -125,7 +125,7 @@ export function createAckPresenter(deps: {
     },
     postedAck: () => ackPosted,
     async emoji() {
-      await Promise.race([deps.emojiPick?.catch(() => undefined), new Promise((done) => setTimeout(done, delayMs))]);
+      await Promise.race([deps.emojiPick, new Promise((done) => setTimeout(done, delayMs))]);
       return choose();
     },
     async drain() {
