@@ -115,7 +115,7 @@ test("execute-turn waits past an acknowledgment for successful execute output", 
     ...(Date.now() >= 120_000 ? [{ ts: "3", user: "BOT", text: output }] : []),
   ];
   ctx.env.core = {
-    findSessionByThread: async () => ({
+    findSessionTreeByThread: async () => ({
       id: "session",
       items: [
         storedItem(
