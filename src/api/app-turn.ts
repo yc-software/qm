@@ -27,6 +27,10 @@ import { desktopClientForTurn, isPersonAuthored, isSessionTurn, spokenByPerson }
 import { isTerminal, leaseLapsed } from "../runs/run-store.ts";
 import type { SessionStateEvent } from "../runs/session-state-bus.ts";
 import { turnRuntimePurpose } from "../core/turn-options.ts";
+import { SEAT_MODEL_ID } from "../model/seat-model.ts";
+import { SEAT_PERSONAL_ONLY } from "../seat/seat.ts";
+import { conversationScope } from "../resolution/resolution-service.ts";
+import { scopeId } from "../types.ts";
 import { turnModelOptions } from "../agent/runtime-choice.ts";
 import { samePerson } from "../directory/person.ts";
 import { swallowAs } from "../util/errors.ts";
@@ -238,7 +242,12 @@ export function createTurnMethods(
         (req.spawned && isSessionTurn(req)) ||
         (sameApprovedMessage && approvedRequest && isSessionTurn(approvedRequest));
 
+      const seatTurn =
+        req.surface === "web" && req.model === SEAT_MODEL_ID && (await deps.seat?.enabled(actor.id)) === true;
+      if (seatTurn && conversationScope(req.conversation, actor.id) !== scopeId("personal", actor.id))
+        return { status: "refused", reason: SEAT_PERSONAL_ONLY };
       const modelAccount =
+        !seatTurn &&
         req.surfaceOrigin?.audience !== "external" &&
         deps.userModelCredentials &&
         origin.kind === "human" &&
@@ -251,7 +260,9 @@ export function createTurnMethods(
         { surface: req.surface, triggered: automated, infrequentCron: req.infrequentCron },
         isSubagentThreadRef(req.conversation.threadRef),
       );
-      const modelRefusal = await turnModelRefusal(deps, req, actor.id, individualAuth, runtimePurpose);
+      const modelRefusal = seatTurn
+        ? undefined
+        : await turnModelRefusal(deps, req, actor.id, individualAuth, runtimePurpose);
       if (modelRefusal) return { status: "refused", reason: modelRefusal };
 
       const rawAudience = req.conversation.audience ?? [req.actor];

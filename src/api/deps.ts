@@ -83,6 +83,7 @@ import type { SlackInstallationStore, SlackSocketAppIdReader } from "../surfaces
 
 import type { SlackAccountLink, ComposioReturn } from "./routes/composio.ts";
 import type { ModelRoutes } from "../model/model-route.ts";
+import type { Seat } from "../seat/seat.ts";
 
 export interface ServerDeps {
   requestBodyDeadlineMs?: number;
@@ -90,6 +91,7 @@ export interface ServerDeps {
   checkReadiness?: (signal: AbortSignal) => Promise<void>;
   draining?: AbortSignal;
   modelGatewayTransport?: ModelGatewayTransportConfig;
+  seat?: Seat;
   modelRoutes?: ModelRoutes;
   slackAccounts?: DurableMap<SlackAccountLink>;
   composioReturns?: DurableMap<ComposioReturn>;

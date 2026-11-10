@@ -418,6 +418,7 @@ import { createPartnerChatInbound } from "./surfaces/partner-chat/inbound.ts";
 import { PARTNER_CHAT_CLAIM_MS, partnerChatSender } from "./surfaces/partner-chat/outbound.ts";
 import { createPartnerChatNotices, partnerChatRunNotice } from "./surfaces/partner-chat/notices.ts";
 import { type probeModel, type ProviderKeys } from "./model/model-runtime.ts";
+import { createSeat, seatAsk, type Seat } from "./seat/seat.ts";
 
 export interface Runtime {
   start(services?: BackgroundServices): void;
@@ -487,6 +488,7 @@ export interface BuiltApp {
   oauthFlows: OAuthFlowStore;
   secretDrops: SecretDropStore;
   modelGatewayTransport?: ModelGatewayTransportConfig;
+  seat: Seat;
   modelRoutes: ModelRoutes;
   modelCredentials: ModelCredentialStore;
   userModelCredentials: UserModelCredentialStore;
@@ -1501,6 +1503,15 @@ export function buildApp(
     companyModelId: (id: string) => companyModelId(id, directProviderAvailability),
     resolveFallbackRuntime: () => configStore.getPurposeRuntime("fallback"),
   });
+  const seat = createSeat(databaseUrl, {
+    enabled: (actorId) => featureFlags.enabled("agent_seat", scopeId("personal", actorId)),
+    signals: runSignals,
+    runLive: async (runId) => {
+      const run = await runStore.runs.get(runId);
+      return Boolean(run && !isTerminal(run.status));
+    },
+    ask: seatAsk(modelRoutes),
+  });
   const baseAgent =
     overrides.agent ??
     createAgent({
@@ -1509,6 +1520,7 @@ export function buildApp(
         .filter(([, backend]) => backend?.profile.sizesMemory)
         .map(([name]) => name),
       routes: modelRoutes,
+      seat,
       signals: runSignals,
     });
   const fallback = {
@@ -2360,6 +2372,7 @@ export function buildApp(
     advisoryLock,
   };
   const app = createApp({
+    seat,
     errors,
     settleTreeWakes: (root, botRunsOnly) => settleTreeWakes(subagentMail, root, botRunsOnly),
     teams,
@@ -3150,6 +3163,7 @@ export function buildApp(
     oauthFlows,
     secretDrops,
     modelGatewayTransport: gatewayTransport,
+    seat,
     modelRoutes,
     budget,
     modelCredentials,
@@ -3238,6 +3252,7 @@ export function serverDeps(
   return {
     externalSlackPolicies: config.externalSlackPolicies,
     modelGatewayTransport: built.modelGatewayTransport,
+    seat: built.seat,
     modelRoutes: built.modelRoutes,
     production: config.production,
     checkReadiness: built.checkReadiness,

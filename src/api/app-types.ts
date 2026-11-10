@@ -105,6 +105,7 @@ import type { ModelProviderAvailability } from "../model/pi-models.ts";
 import type { RuntimeChoice } from "../agent/agent.ts";
 import { type ReachOpts, type ReachResolution, type ReachTarget } from "../reach/reach.ts";
 import { type Project, type ProjectIcon, type ProjectStore } from "../projects/project-store.ts";
+import type { Seat } from "../seat/seat.ts";
 import type { SearchHit } from "../search/core-search.ts";
 import type { ErrorLog } from "../admin/error-log.ts";
 
@@ -664,6 +665,7 @@ interface DeploymentGitPrincipals {
 }
 
 export interface AppDeps {
+  seat?: Pick<Seat, "enabled">;
   personas?: PersonaService;
   personaHandover?: PersonaHandover;
   externalSlackPolicies?: ExternalSlackPolicies;

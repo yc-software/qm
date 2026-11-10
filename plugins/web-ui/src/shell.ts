@@ -113,6 +113,7 @@ import {
 import { openSkillById, renderSkills, resetActiveSkill, routeSkillsHistory } from "./skills";
 import { watchAppAnnotations } from "./app-annotations";
 import { applyTheme, renderSettings, loadOpenNewChat, watchSystemTheme } from "./settings";
+import { mountSeat } from "./seat";
 import { contextsState, ensureContexts, renderContexts, resetContextsState, resolveProjectScope } from "./contexts";
 import { appState, can, canView, isView, type AuthMode, type Me, type View } from "./shell-state";
 import { trapDialogFocus } from "./dialog-focus";
@@ -781,7 +782,17 @@ function showView(v: View): void {
     case "settings":
       renderSettings();
       break;
+    case "seat":
+      renderSeat();
+      break;
   }
+}
+
+function renderSeat(): void {
+  const host = document.createElement("div");
+  host.className = "pane seat-page";
+  replacePanePreservingFocus(host);
+  mountSeat(host);
 }
 
 function resetActiveDetail(v: View): void {

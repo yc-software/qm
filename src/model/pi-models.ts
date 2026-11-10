@@ -446,8 +446,7 @@ export function defaultInteractiveThinkingLevel(model: Pick<PiModel, "api" | "pr
 
 export const DEFAULT_AGENT_INPUT_USD_PER_MTOK = 5;
 
-export function safeModelMetadata(id: string) {
-  const model = resolveModel(id);
+export function safeModelMetadata(id: string, model = resolveModel(id)) {
   if (!model) return undefined;
   const entry = REGISTRY_BY_ID.get(id);
   const name = modelDisplayName(id) === id ? model.name : modelDisplayName(id);

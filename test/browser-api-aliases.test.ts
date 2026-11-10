@@ -90,6 +90,7 @@ test("each aliased path answers a cookie-only browser exactly as its /v1 route d
     flags = built.featureFlags;
   });
   await flags!.setEnabled("inbox_loops", "personal:alice", true, "test");
+  await flags!.setEnabled("agent_seat", "personal:alice", true, "test");
   const cookie = browserSessionCookie("alice");
   for (const { path, target } of aliases.filter(({ method }) => method === "GET")) {
     const query = QUERY[path] ?? "";

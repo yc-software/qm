@@ -9,6 +9,7 @@ import {
   modelUnavailableReason,
 } from "../model/pi-models.ts";
 import type { ScopeId } from "../types.ts";
+import { SEAT_MODEL_ID } from "../model/seat-model.ts";
 import type { Agent, AgentTurnInput, CompactInput, RuntimeChoice, SessionRoute } from "./agent.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { governGoal, type GoalGovernorInput } from "./goal.ts";
@@ -73,6 +74,7 @@ export async function resolveRuntimeChoice(
   hydrateModelCatalog?: () => Promise<unknown>,
   purpose?: TurnRuntimePurpose,
 ): Promise<RuntimeChoice> {
+  if (requested?.modelId === SEAT_MODEL_ID) return { modelId: SEAT_MODEL_ID };
   if (purpose === "infrequentCron") scope = orgScopeId;
   const [orgStored, scopedStored, orgLegacy, scopedLegacy, purposeRuntime] = await Promise.all([
     config.getRuntimeSelectionDurable(orgScopeId),

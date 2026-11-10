@@ -30,6 +30,7 @@ const API_RESOURCES = new Set([
   "runtime-config",
   "scope-resources",
   "search",
+  "seat",
   "sessions",
   "skills",
   "slack-installation",

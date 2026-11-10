@@ -36,6 +36,7 @@ const VIEWS = [
   "skills",
   "personas",
   "settings",
+  "seat",
 ] as const;
 export type View = (typeof VIEWS)[number];
 

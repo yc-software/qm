@@ -13,6 +13,7 @@ import {
 import type { RuntimeChoice } from "../agent/agent.ts";
 import { baseModelProviders, configuredModel, type Config } from "../config.ts";
 import { swallow } from "../util/errors.ts";
+import { SEAT_MODEL_ID, seatModel } from "./seat-model.ts";
 
 export type ModelBilling = "model_gateway" | "org_key" | "personal_account";
 
@@ -105,6 +106,13 @@ export function createModelRoutes(opts: ModelRouteOptions = {}): ModelRoutes {
   const servedId = (id: string, personalKeys?: ProviderKeys) =>
     personalKeys ? personalModelId(id, personalKeys) : companyServedId(id);
   const route = async (requestedId: string, personalKeys?: ProviderKeys): Promise<ModelRoute> => {
+    if (requestedId === SEAT_MODEL_ID)
+      return {
+        modelId: SEAT_MODEL_ID,
+        model: seatModel(),
+        keys: { ...(await companyKeys()), [SEAT_MODEL_ID]: SEAT_MODEL_ID },
+        billing: "org_key",
+      };
     const modelId = personalKeys ? personalModelId(requestedId, personalKeys) : requestedId;
     const model = getRequiredModel(personalKeys ? modelId : companyServedId(modelId), !personalKeys);
     const keys = personalKeys ?? (await companyKeys());
@@ -131,7 +139,7 @@ export function createModelRoutes(opts: ModelRouteOptions = {}): ModelRoutes {
     utility: async (modelId) => servable(await route(utilityModelId(modelId))),
     async fallback(fromModelIds, providerKeys) {
       const runtime = opts.resolveFallbackRuntime?.();
-      if (!runtime) return undefined;
+      if (!runtime || fromModelIds.has(SEAT_MODEL_ID)) return undefined;
       const served = servedId(runtime.modelId, providerKeys);
       if (fromModelIds.has(runtime.modelId) || fromModelIds.has(served) || !resolveModel(served, !providerKeys))
         return undefined;

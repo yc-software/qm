@@ -96,6 +96,8 @@ import { createStepRecorder, recordingTools, type StepRecorder } from "./step-re
 import { restoreReplayImages, type ReplayImageLoader } from "./replay-images.ts";
 import { summarizeHistory } from "./history-summary.ts";
 import { countTokens } from "../util/tokens.ts";
+import { seatRuntime, type Seat } from "../seat/seat.ts";
+import { SEAT_MODEL_ID } from "../model/seat-model.ts";
 import {
   parseSecurityScreenVerdict,
   SECURITY_SCREEN_STEP,
@@ -158,6 +160,7 @@ export interface AgentOptions {
   backgroundJobTtlMs?: number;
   backgroundJobTtlMaxMs?: number;
   signals?: RunSignalStore;
+  seat?: Pick<Seat, "streamSimple">;
 }
 
 export function agentConfigOptions(config: Config): AgentOptions {
@@ -401,10 +404,15 @@ export function createAgent(opts?: AgentOptions): Agent {
     ref: TurnSession["ref"],
     tools: ToolDefinition[],
     loadImage: ReplayImageLoader | undefined,
+    runId: string | undefined,
   ): Promise<{ entry: TurnSession }> {
     const reconstructed = await restoreReplayImages(reconstructMessagesFromHistory(history), loadImage);
 
-    const modelRuntime = await buildModelRuntime(route.keys, route.gateway, "turn", "long");
+    const modelRuntime = seatRuntime(
+      await buildModelRuntime(route.keys, route.gateway, "turn", "long"),
+      opts?.seat,
+      runId,
+    );
     const { resourceLoader, settingsManager, cwd, agentDir, ephemeralCwd } = await createIsolatedResources(
       tempDirPrefix,
       systemPrompt,
@@ -507,6 +515,7 @@ export function createAgent(opts?: AgentOptions): Agent {
         ref,
         tools,
         turn.loadImage,
+        turn.runId,
       );
       try {
         const turnWallClockMs = turn.turnWallClockMs ?? defaultTurnWallClockMs;
@@ -1058,9 +1067,12 @@ export function createAgent(opts?: AgentOptions): Agent {
           return runtime.streamSimple(summaryModel, context, options);
         });
       };
-      const primary = servable(await sessionRoute(input));
+      const summaryInput = input.runtime?.modelId === SEAT_MODEL_ID ? { ...input, runtime: undefined } : input;
+      const primary = servable(await sessionRoute(summaryInput));
       if (!primary)
-        throw new Error(`no configured credential can serve ${input.runtime?.modelId ?? baseModelId()} for a summary`);
+        throw new Error(
+          `no configured credential can serve ${summaryInput.runtime?.modelId ?? baseModelId()} for a summary`,
+        );
       try {
         return await summarize(primary);
       } catch (error) {

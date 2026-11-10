@@ -1,0 +1,208 @@
+.seat-page {
+  --seat-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --seat-accent: var(--warning);
+}
+.seat {
+  max-width: 1180px;
+  margin: 0 auto;
+  font-family: var(--seat-mono);
+  font-size: var(--font-13);
+  line-height: 1.5;
+}
+.seat-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.seat-title {
+  margin: 0;
+  font-size: var(--font-18);
+  font-weight: 600;
+}
+.seat-count,
+.seat-meta,
+.seat-step-age,
+.seat-peek,
+.seat-block-label,
+.seat-draft-note {
+  color: var(--muted-foreground);
+}
+.seat-empty {
+  color: var(--muted-foreground);
+  max-width: 560px;
+  margin: 48px auto;
+  text-align: center;
+}
+.seat-error {
+  color: var(--destructive);
+  white-space: pre-wrap;
+  margin: 8px 0;
+}
+.seat-layout {
+  display: grid;
+  grid-template-columns: 230px minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+.seat-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.seat-step {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.seat-step:hover {
+  background: var(--secondary);
+}
+.seat-step.active {
+  border-color: var(--seat-accent);
+}
+.seat-step.fresh {
+  background: color-mix(in srgb, var(--seat-accent) 16%, var(--background));
+  animation: seat-arrive 1.2s ease-out 2;
+}
+@keyframes seat-arrive {
+  50% {
+    background: color-mix(in srgb, var(--seat-accent) 40%, var(--background));
+  }
+}
+.seat-step-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.seat-meta {
+  margin-bottom: 6px;
+}
+.seat-step-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+.seat-fold {
+  border-left: 2px solid var(--border);
+  padding-left: 10px;
+  margin: 4px 0;
+}
+.seat-fold > summary {
+  cursor: pointer;
+  list-style: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.seat-fold > summary::-webkit-details-marker {
+  display: none;
+}
+.seat-fold > summary::before {
+  content: "▸ ";
+  color: var(--muted-foreground);
+}
+.seat-fold[open] > summary::before {
+  content: "▾ ";
+}
+.seat-fold[open] > summary > .seat-peek {
+  display: none;
+}
+.seat-label {
+  color: var(--markdown-link);
+  font-weight: 600;
+}
+.seat-role-assistant > summary > .seat-label {
+  color: var(--success);
+}
+.seat-text {
+  margin: 2px 0 6px;
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.seat-code {
+  color: var(--muted-foreground);
+}
+.seat-block + .seat-block {
+  margin-top: 6px;
+}
+.seat-move {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.seat-prompt {
+  color: var(--seat-accent);
+  font-weight: 700;
+}
+.seat-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-sm);
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+  resize: vertical;
+}
+.seat-call {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 10px;
+  border-left: 2px solid var(--seat-accent);
+}
+.seat-call-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.seat-call-head select {
+  font: inherit;
+  padding: 3px 6px;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-sm);
+  background: var(--background);
+  color: var(--foreground);
+}
+.seat-actions {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  padding: 8px 0;
+  background: var(--background);
+}
+@media (max-width: 760px) {
+  .seat-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .seat-steps {
+    position: static;
+  }
+}
