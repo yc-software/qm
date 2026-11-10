@@ -865,7 +865,7 @@ export function createSessionMethods(
             resource: link?.channelId ?? existing.slackChannel?.channelId ?? "",
             scopeLabel: projectScopeId(project.id),
           });
-        if (!link) {
+        if (changed && link?.channelId !== existing.slackChannel?.channelId) {
           for (const m of prevDerived) {
             if (manual.has(m)) continue;
             deps.auditLog.record({

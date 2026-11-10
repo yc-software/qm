@@ -1157,6 +1157,24 @@ test("Project slack-channel routes gate on visibility and workspace use, and syn
   assert.equal(await built.projects.membership(groupRef, "chan-pal"), false);
   assert.equal(await built.projects.membership(groupRef, "member"), true);
   assert.ok(!(await built.app.listSessions("chan-pal")).some((s) => s.scopeId === scope));
+
+  const withOps = [...channels, { channelId: "C-OPS", name: "ops", isPrivate: false }];
+  await built.app.upsertChannels(withOps, [
+    { channelId: "C-SECRET", principalId: "member" },
+    { channelId: "C-ENG", principalId: "owner" },
+    { channelId: "C-ENG", principalId: "chan-pal" },
+    { channelId: "C-OPS", principalId: "owner" },
+  ]);
+  assert.equal((await put(project.id, "owner", "#eng")).status, 200);
+  assert.ok((await built.app.listSessions("chan-pal")).some((s) => s.scopeId === scope));
+  assert.equal((await put(project.id, "owner", "#ops")).status, 200);
+  assert.equal(
+    await built.projects.membership(groupRef, "chan-pal"),
+    false,
+    "relinking leaves the old channel's roster",
+  );
+  for (const s of await built.sessions.listByScope(scope))
+    assert.ok(!(await built.sessions.participantsOf(s.id)).includes("chan-pal"), "and its conversations");
 });
 
 test("a project can add a signed-in principal on a deployment whose directory is never populated", async () => {
