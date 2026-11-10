@@ -411,7 +411,8 @@ export async function exerciseDeliveryFail(makeStore: (opts: { maxAgeMs: number 
   for (const k of ["ack", "ackByKey", "recordRecipientThread"] as const) {
     const { id } = await store.enqueue({ destination: { type: "principal", target: "" }, text: "", idempotencyKey: k });
     await store.fail(id, "cannot_dm_bot", 1);
-    await (k === "ackByKey" ? store.ackByKey(k, 2) : k === "ack" ? store.ack(id, 2) : store[k](id, "T", 2));
+    if (k === "ack") await store.ack(id, 2);
+    else await (k === "ackByKey" ? store.ackByKey(k, 2) : store[k](id, "T", 2));
     assert.equal((await store.get(id))?.failedReason, undefined, `${k} leaves the delivered row refused`);
   }
 }
