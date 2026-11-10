@@ -629,15 +629,21 @@ test("recordVerdict reopens sent and dismissed items to ready when sourceAt move
   assert.deepEqual(stale!.verdict, VERDICT);
 });
 
-test("recordVerdict leaves a handled item handled when the new verdict is not needs_reply", async () => {
+test("recordVerdict with a reply marks the item replied in one write and keeps it handled until a new ask", async () => {
   const ledger = createLoopItemLedger(testMap());
   await ledger.ingest([entry({ dedupeKey: "replied" })]);
   const [item] = await ledger.byLoop(LOOP);
-  await ledger.recordAction(item!.id, { kind: "replied", outcome: "dismissed", result: "done" });
-  const resolved = { ...VERDICT, state: "resolved" as const, waitingTs: null, lastSeenTs: "1.3" };
+  const answered = { ...VERDICT, state: "resolved" as const, waitingTs: null, lastSeenTs: "1.2" };
+  const replied = await ledger.recordVerdict(item!.id, verdictInput({ verdict: answered, replied: "done" }));
+  assert.equal(replied!.status, "skipped");
+  assert.equal(replied!.actionKind, "replied");
+  assert.equal(replied!.actionResult, "done");
+  assert.ok(replied!.actedAt);
+  const resolved = { ...answered, lastSeenTs: "1.3" };
   const after = await ledger.recordVerdict(item!.id, verdictInput({ verdict: resolved, sourceAt: 2_000 }));
   assert.equal(after!.status, "skipped");
   assert.equal(after!.actionKind, "replied");
+  assert.equal(after!.actionResult, "done");
   assert.deepEqual(after!.verdict, resolved);
   const asked = await ledger.recordVerdict(
     item!.id,

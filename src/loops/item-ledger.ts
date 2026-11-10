@@ -65,6 +65,7 @@ export interface VerdictInput {
   sourcePayload: LoopSourcePayload;
   sourceAt: number;
   draft?: LoopSourcePayload;
+  replied?: string;
 }
 
 export const INBOX_SUMMARY_FIELDS = [
@@ -426,6 +427,7 @@ export function createLoopItemLedger(
           (incoming !== undefined && item.proposal?.by === "agent" && sameDraft(item.proposal, incoming));
         const proposal = keepCurrent ? item.proposal : incoming;
         const reopened = isResolved(item) && newer && input.verdict.state === "needs_reply";
+        const replied = input.replied !== undefined && !isResolved(item);
         return {
           ...item,
           verdict: input.verdict,
@@ -433,7 +435,18 @@ export function createLoopItemLedger(
           sourceAt: input.sourceAt,
           proposal,
           ...withAgentDraft(item, proposal),
-          ...(reopened || item.status === "queued" || item.status === "failed"
+          ...(replied
+            ? {
+                status: "skipped" as const,
+                actionKind: "replied",
+                actedAt: now,
+                actionResult: input.replied,
+                claimToken: undefined,
+                claimedAt: undefined,
+                parkedReason: undefined,
+              }
+            : {}),
+          ...(!replied && (reopened || item.status === "queued" || item.status === "failed")
             ? {
                 status: "ready" as const,
                 actedAt: undefined,

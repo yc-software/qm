@@ -14,7 +14,7 @@ import { newestTs } from "./transcript.ts";
 import { runVerdict, writeDraft, type VerdictInput, type VerdictModel } from "./verdict.ts";
 
 export interface InboxPassDeps {
-  items: Pick<LoopItemLedger, "byLoop" | "ingest" | "recordVerdict" | "recordAction" | "skip" | "prune">;
+  items: Pick<LoopItemLedger, "byLoop" | "ingest" | "recordVerdict" | "skip" | "prune">;
   fetch: ConversationFetcher;
   discover: Discoverer;
   model: VerdictModel;
@@ -104,15 +104,14 @@ export function createInboxPass(deps: InboxPassDeps): InboxPass {
         draftFailure = error;
       }
     const verdict: LoopItemVerdict = { ...result, lastSeenTs, at: now() };
+    const newest = conversation.messages.at(-1)!;
     await deps.items.recordVerdict(item.id, {
       verdict,
       sourcePayload: conversationPayload(item.sourcePayload, conversation, result.waitingTs),
-      sourceAt: conversation.messages.at(-1)!.at,
+      sourceAt: newest.at,
       ...(draft ? { draft: draftData(conversation, waiting, draft) } : {}),
+      ...(result.state === "resolved" && newest.owner ? { replied: newest.text } : {}),
     });
-    const newest = conversation.messages.at(-1)!;
-    if (result.state === "resolved" && newest.owner && !isResolved(item))
-      await deps.items.recordAction(item.id, { kind: "replied", outcome: "dismissed", result: newest.text });
     if (draftFailure !== undefined)
       record(owner, "draft_failed", `Inbox draft for item ${item.id}: ${errMessage(draftFailure)}`, draftFailure);
     return true;
