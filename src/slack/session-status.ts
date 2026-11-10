@@ -32,7 +32,7 @@ interface StatusClient {
 }
 
 export interface SlackStatusActivity {
-  sessions?: Pick<SessionStore, "getByThread" | "childrenOf" | "latestToolSteps">;
+  sessions?: Pick<SessionStore, "getByThread" | "childrenOf" | "descendantsOf" | "latestToolSteps">;
   processes?: Pick<ProcessRegistry, "liveByScope">;
   monitors?: Pick<MonitorStore, "ownedBy">;
   publicWebUrl?: string;
@@ -76,16 +76,8 @@ export function createSlackSessionStatus(
             await deleteIf(id, (row) => row.writer === writer && !row.cardTs);
             return true;
           }
-          let state = await update(id, (row) =>
-            leaseLost ? row : { ...row, writer, ...(next ? { anchorRunId: next.anchorRunId } : {}) },
-          );
-          if (!state || leaseLost || state.writer !== writer) return true;
-          const persist = async (patch: Partial<SlackSessionStatusState>) => {
-            const saved = await update(id, (row) => (!leaseLost && row.writer === writer ? { ...row, ...patch } : row));
-            if (!saved || leaseLost || saved.writer !== writer) return false;
-            state = saved;
-            return true;
-          };
+          const current = await store.get(id);
+          if (!current || leaseLost) return true;
           const active =
             optedIn && anchor
               ? (await runs.inFlightForThread(anchor.sessionId)).filter(
@@ -100,7 +92,10 @@ export function createSlackSessionStatus(
                   (child) => child.scopeId === session.scopeId,
                 )
               : [];
-          const threads = new Set([threadRef, ...children.map((child) => child.threadRef)]);
+          const descendants = children.length
+            ? ((await activity.sessions?.descendantsOf(children.map((child) => child.id))) ?? [])
+            : [];
+          const threads = new Set([threadRef, ...[...children, ...descendants].map((s) => s.threadRef)]);
           const jobs =
             optedIn && threadRef
               ? ((await activity.processes?.liveByScope(scope!, now())) ?? []).filter(
@@ -114,7 +109,7 @@ export function createSlackSessionStatus(
                 )
               : [];
           const childRuns = children.length
-            ? await runs.activeForThreads(children.map((child) => child.threadRef))
+            ? await runs.activeForThreads([...children, ...descendants].map((s) => s.threadRef))
             : new Map<string, Run>();
           const steps =
             (await activity.sessions?.latestToolSteps([...active, ...childRuns.values()].map((run) => run.id))) ??
@@ -126,18 +121,19 @@ export function createSlackSessionStatus(
             const job = jobs.find((j) => j.sessionRef === ref);
             return job && [job.purpose ?? "Background job", "Running in the background"];
           };
+          const stepOf = (ref: string) => {
+            const run = childRuns.get(ref);
+            return run ? (purposeOf(run) ?? "Thinking it through") : backgroundOf(ref)?.[0];
+          };
           const helpers = children.flatMap((child) => {
-            const run = childRuns.get(child.threadRef);
-            const step = run ? (purposeOf(run) ?? "Thinking it through") : backgroundOf(child.threadRef)?.[0];
+            const lineage = [child, ...descendants.filter((d) => d.rootId === child.id)];
+            const step = lineage.map((s) => stepOf(s.threadRef)).find(Boolean);
             return step ? [{ child, step }] : [];
           });
           const background = backgroundOf(threadRef);
-          state = {
-            ...state,
-            startedAt: state.startedAt ?? now(),
-            cardId: state.cardId ?? randomUUID(),
-          };
-          const elapsed = now() - state.startedAt!;
+          const startedAt = current.startedAt ?? now();
+          const cardId = current.cardId ?? randomUUID();
+          const elapsed = now() - startedAt;
           const ongoing = active.length > 0 || helpers.length > 0 || !!background;
           const failed =
             !ongoing &&
@@ -151,41 +147,69 @@ export function createSlackSessionStatus(
             if (background) return background;
             return [`${failed ? "Stopped after" : "Done in"} ${duration(elapsed)}`, ""];
           })();
-          if (elapsed > 5 * 60_000 && session) state.followUrl = conversationWebUrl(activity.publicWebUrl, session.id);
-          if (leaseLost) return true;
-          if (!(await persist(state))) return true;
-          const icon = state.emoji ? EMOJI_CHAR_BY_NAME[state.emoji] : undefined;
+          const followUrl =
+            elapsed > 5 * 60_000 && session ? conversationWebUrl(activity.publicWebUrl, session.id) : current.followUrl;
+          const icon = current.emoji ? EMOJI_CHAR_BY_NAME[current.emoji] : undefined;
           const details = richText(
-            icon ? undefined : state.emoji,
+            icon ? undefined : current.emoji,
             ongoing && elapsed >= 60_000 ? `${phrase} · ${duration(elapsed, false)}` : phrase,
           );
           const headline = icon ? `${icon} ${title}` : title;
           const status = (failed && "error") || (ongoing && "in_progress") || "complete";
-          const rows = helpers.slice(0, 50).map(({ child, step }) => ({
-            task_id: `${SLACK_STATUS_TASK_PREFIX}${state!.cardId}:${child.id}`,
+          const rows = helpers.map(({ child, step }) => ({
+            task_id: `${SLACK_STATUS_TASK_PREFIX}${cardId}:${child.id}`,
             title: child.title || "Subagent",
             status: "in_progress",
             details: richText(undefined, step),
           }));
           const blocks: Record<string, unknown>[] = [
             rows.length
-              ? { type: "plan", title: headline, tasks: rows }
+              ? {
+                  type: "plan",
+                  title: headline,
+                  tasks:
+                    rows.length > PLAN_TASK_LIMIT
+                      ? [
+                          ...rows.slice(0, PLAN_TASK_LIMIT - 1),
+                          {
+                            task_id: `${SLACK_STATUS_TASK_PREFIX}${cardId}:more`,
+                            title: `${rows.length - PLAN_TASK_LIMIT + 1} more subagents`,
+                            status: "in_progress",
+                          },
+                        ]
+                      : rows,
+                }
               : {
                   type: "task_card",
-                  task_id: `${SLACK_STATUS_TASK_PREFIX}${state.cardId}`,
+                  task_id: `${SLACK_STATUS_TASK_PREFIX}${cardId}`,
                   title: headline,
                   status,
                   ...(details ? { details } : {}),
                 },
           ];
-          if (state.followUrl)
+          if (followUrl)
             blocks.push({
               type: "context",
-              elements: [{ type: "mrkdwn", text: `<${state.followUrl}|Follow via QM Web>` }],
+              elements: [{ type: "mrkdwn", text: `<${followUrl}|Follow via QM Web>` }],
             });
           const content = JSON.stringify(blocks);
+          const post =
+            current.cardContent !== content && (!!current.cardTs || (optedIn && ongoing && elapsed >= SHOW_AFTER_MS));
+          if (!next && ongoing && !post && current.startedAt && current.cardId && current.followUrl === followUrl)
+            return true;
+          let state = await update(id, (row) =>
+            leaseLost ? row : { ...row, writer, ...(next ? { anchorRunId: next.anchorRunId } : {}) },
+          );
+          if (!state || leaseLost || state.writer !== writer) return true;
+          const persist = async (patch: Partial<SlackSessionStatusState>) => {
+            const saved = await update(id, (row) => (!leaseLost && row.writer === writer ? { ...row, ...patch } : row));
+            if (!saved || leaseLost || saved.writer !== writer) return false;
+            state = saved;
+            return true;
+          };
+          if (!(await persist({ startedAt, cardId, ...(followUrl ? { followUrl } : {}) }))) return true;
           try {
-            if (state.cardContent !== content && (state.cardTs || (optedIn && ongoing && elapsed >= SHOW_AFTER_MS))) {
+            if (post) {
               const result = (await client.apiCall(state.cardTs ? "chat.update" : "chat.postMessage", {
                 channel: state.channel,
                 ...(state.cardTs ? { ts: state.cardTs } : { thread_ts: state.threadTs, client_msg_id: state.cardId }),
@@ -263,6 +287,7 @@ export function createSlackSessionStatus(
 }
 
 const SHOW_AFTER_MS = 10_000;
+const PLAN_TASK_LIMIT = 50;
 
 function duration(ms: number, seconds = true): string {
   const total = Math.max(0, Math.round(ms / 1000));

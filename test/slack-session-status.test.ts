@@ -65,6 +65,17 @@ function fixture() {
         getByThread: async (threadRef) =>
           threadRef === "ch:C1:1.0" ? ({ id: "canonical-uuid", scopeId: "channel:C1" } as Session) : null,
         childrenOf: async (id) => children.filter((child) => child.parentSessionId === id),
+        descendantsOf: async (rootIds) => {
+          const found: Array<{ id: string; rootId: string; threadRef: string }> = [];
+          const walk = (rootId: string, parentId: string) => {
+            for (const child of children.filter((c) => c.parentSessionId === parentId)) {
+              found.push({ id: child.id, rootId, threadRef: child.threadRef });
+              walk(rootId, child.id);
+            }
+          };
+          for (const rootId of rootIds) walk(rootId, rootId);
+          return found;
+        },
         latestToolSteps: async (ids) =>
           new Map(
             ids.flatMap((id) => {
@@ -116,8 +127,8 @@ function fixture() {
     watches.push(monitor);
     return monitor;
   };
-  const subagent = (id: string, title: string, scope = "channel:C1") => {
-    const child = { id, title, scopeId: scope, threadRef: `sub:${id}`, parentSessionId: "canonical-uuid" } as Session;
+  const subagent = (id: string, title: string, scope = "channel:C1", parentSessionId = "canonical-uuid") => {
+    const child = { id, title, scopeId: scope, threadRef: `sub:${id}`, parentSessionId } as Session;
     children.push(child);
     const run = add(`${id}-run`);
     run.sessionId = child.threadRef;
@@ -333,6 +344,53 @@ test("running subagents keep the card open as plan rows showing their latest ste
   assert.equal(f.card()[0]?.type, "task_card");
   assert.equal(f.card()[0]?.title, "Done in 10s");
   assert.equal(f.card().length, 1);
+});
+
+test("a busy grandchild keeps its subagent row open, and overflow rows are counted rather than dropped", async () => {
+  const f = fixture();
+  await f.enable();
+  const run = f.add("r1");
+  await f.start(run.id);
+  const child = f.subagent("c1", "Coordinator");
+  child.status = "done";
+  const grandchild = f.subagent("g1", "Worker", "channel:C1", "c1");
+  f.purposes.set(grandchild.id, "Running the test suite");
+  run.status = "done";
+  await f.reconcile();
+  const plan = f.card()[0] as { title: string; tasks: Array<Record<string, unknown>> };
+  assert.deepEqual(
+    plan.tasks.map((task) => [task.title, line(task)]),
+    [["Coordinator", [{ type: "text", text: "Running the test suite" }]]],
+  );
+  for (let i = 0; i < 50; i++) f.subagent(`extra${i}`, `Extra ${i}`);
+  await f.reconcile();
+  const tasks = (f.card()[0] as typeof plan).tasks;
+  assert.equal(tasks.length, 50);
+  assert.equal(tasks.at(-1)?.title, "2 more subagents");
+});
+
+test("an unchanged live card costs no store writes or Slack calls per sweep", async () => {
+  const f = fixture();
+  await f.enable();
+  const run = f.add("r1");
+  await f.start(run.id);
+  let writes = 0;
+  const counted = {
+    ...f.store,
+    update: (...args: Parameters<typeof f.store.update>) => {
+      writes++;
+      return f.store.update(...args);
+    },
+  };
+  const status = createSlackSessionStatus(counted, createNoopLeaderLease(), f.runs, f.flags, f.now, {});
+  const calls = f.cards.length;
+  await status.reconcile(f.client, "T1:B1");
+  await status.reconcile(f.client, "T1:B1");
+  assert.equal(writes, 0);
+  assert.equal(f.cards.length, calls);
+  f.purposes.set("r1", "Reading files");
+  await f.reconcile();
+  assert.equal(f.card()[0]?.title, "Reading files");
 });
 
 test("unrelated, expired, disabled, private and nonengaged work never keeps a card active", async () => {
