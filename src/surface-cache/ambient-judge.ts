@@ -2,6 +2,7 @@ import { outermostJsonObject } from "../util/text.ts";
 import { errMessage } from "../util/errors.ts";
 import { recentMessagesBlock, type WakeMessage } from "../wake/wake-envelope.ts";
 import type { CachedMessage, SurfaceSource } from "./surface-cache.ts";
+import { resolveMentions } from "../slack/mrkdwn.ts";
 
 const AMBIENT_JUDGE_SYSTEM = `You are the ambient mind for a chat container — a thin, cheap observer that decides whether the
 assistant should engage with what was just said. You are given the ASSISTANT'S IDENTITY (its name and
@@ -80,19 +81,9 @@ export function ambientWindow(
   return missing.length ? [...missing, ...window].sort((x, y) => (x.ts < y.ts ? -1 : 1)) : window;
 }
 
-function readableMentions(
-  text: string,
-  mentions: Record<string, string> | undefined,
-  selfId: string | undefined,
-): string {
-  return Object.entries(mentions ?? {}).reduce(
-    (out, [id, name]) => (id === selfId ? out : out.replaceAll(`<@${id}>`, `@${name}`)),
-    text,
-  );
-}
-
 export function recentWakeMessages(batch: AmbientBatch): WakeMessage[] {
   const triggers = new Set(batch.messages.map((m) => m.ts));
+  const self = batch.self?.mentionId;
   return batch.recent.map((m) => ({
     ts: m.ts,
     ...(m.sub ? { thread: m.sub } : {}),
@@ -100,8 +91,7 @@ export function recentWakeMessages(batch: AmbientBatch): WakeMessage[] {
     ...(m.bot ? { bot: true } : {}),
     ...(m.authorName ? { authorName: m.authorName } : {}),
     ...(m.authorId ? { authorId: m.authorId } : {}),
-    text: readableMentions(m.text, m.mentions, batch.self?.mentionId),
-    ...(m.mentions ? { mentions: m.mentions } : {}),
+    text: resolveMentions(m.text, new Map(Object.entries(m.mentions ?? {}).filter(([id]) => id !== self))),
     ...(m.deleted ? { deleted: true } : {}),
     ...(triggers.has(m.ts) ? { trigger: true } : {}),
   }));
