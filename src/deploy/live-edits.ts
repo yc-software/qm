@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { AuditLog } from "../audit/audit-log.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { claimThenBind } from "../tenants/claim.ts";
-import { errMessage, reportFailure, swallow } from "../util/errors.ts";
+import { errMessage, reportFailure } from "../util/errors.ts";
 import { bytes, normalizeRelPath } from "./deploy-fs.ts";
 import type { DeployProvider } from "./deploy-provider.ts";
 import {
@@ -16,6 +16,11 @@ import {
 } from "./deploy-store.ts";
 
 export const LIVE_EDIT_PUBLISH_DELAY_MS = 2 * 60_000;
+const FAILURE_TAIL_CHARS = 600;
+
+export function failureTail(failure: string): string {
+  return failure.length > FAILURE_TAIL_CHARS ? `…${failure.slice(-FAILURE_TAIL_CHARS)}` : failure;
+}
 
 const DEV_INSTALL = "npm install --no-audit --no-fund";
 const DEPENDENCY_MANIFESTS = new Set(["package.json", "package-lock.json", "npm-shrinkwrap.json"]);
@@ -115,7 +120,7 @@ export function createLiveEdits(deps: LiveEditDeps) {
         changed: 0,
         hot: draft?.hot ?? false,
         ...(draft?.publishAt !== undefined ? { publishAt: draft.publishAt } : {}),
-        ...(draft?.failure ? { previousFailure: draft.failure } : {}),
+        ...(draft?.failure ? { previousFailure: failureTail(draft.failure) } : {}),
       };
     const read = await next.read(next.tree.has("package.json") ? [...changedPaths, "package.json"] : changedPaths);
     const changed = read.filter((f) => changedPaths.includes(f.path));
@@ -130,7 +135,13 @@ export function createLiveEdits(deps: LiveEditDeps) {
         .withDeploymentEnv(before, target)
         .then((version) => liveEdit(before, version, { files: changed, deletedPaths, restart })),
     ]);
-    if (committed.status === "rejected") throw committed.reason;
+    if (committed.status === "rejected")
+      throw edited.status === "rejected"
+        ? new AggregateError(
+            [committed.reason, edited.reason],
+            "saving the edit and writing it into the app both failed",
+          )
+        : committed.reason;
     const now = Date.now();
     const publishAt = now + publishDelayMs;
     const saved: DeploymentDraft = {
@@ -160,7 +171,7 @@ export function createLiveEdits(deps: LiveEditDeps) {
       changed: changed.length + deletedPaths.length,
       hot,
       publishAt,
-      ...(draft?.failure ? { previousFailure: draft.failure } : {}),
+      ...(draft?.failure ? { previousFailure: failureTail(draft.failure) } : {}),
     };
   }
 
@@ -189,10 +200,15 @@ export function createLiveEdits(deps: LiveEditDeps) {
         });
         return true;
       } catch (e) {
-        await store.putDraft({ ...draft, publishAt: undefined, failure: errMessage(e), reloads: draft.reloads + 1 });
-        await deps
-          .applyVersion(id, draftVersion(current, draft))
-          .catch((restore) => swallow("deploy: restore live edits after a failed publish", restore));
+        const restored = await deps.applyVersion(id, draftVersion(current, draft)).then(
+          () => "",
+          (restore: unknown) => `; putting the saved edits back also failed: ${errMessage(restore)}`,
+        );
+        await store
+          .putDraft({ ...draft, publishAt: undefined, failure: errMessage(e) + restored, reloads: draft.reloads + 1 })
+          .catch((put: unknown) => {
+            throw new AggregateError([e, put], "publishing the saved edits failed and recording the failure failed");
+          });
         return false;
       }
     });
@@ -200,16 +216,16 @@ export function createLiveEdits(deps: LiveEditDeps) {
   async function publishDue(): Promise<number> {
     const published = await deps.leaderLease.hold("deployments:live-edits", async () => {
       const perTenant = await claimThenBind(store.claimDraftTenants, async () => {
-        let count = 0;
-        for (const draft of await store.drafts()) {
-          if (draft.publishAt === undefined || draft.publishAt > Date.now()) continue;
-          const done = await publish(draft.deploymentId).catch((e: unknown) => {
-            reportFailure("deploy: publish live edits", e, `deployment=${draft.deploymentId}`);
-            return false;
-          });
-          if (done) count++;
-        }
-        return count;
+        const due = (await store.drafts()).filter((d) => d.publishAt !== undefined && d.publishAt <= Date.now());
+        const done = await Promise.all(
+          due.map((draft) =>
+            publish(draft.deploymentId).catch((e: unknown) => {
+              reportFailure("deploy: publish live edits", e, `deployment=${draft.deploymentId}`);
+              return false;
+            }),
+          ),
+        );
+        return done.filter(Boolean).length;
       });
       return perTenant.reduce((sum, n) => sum + n, 0);
     });
