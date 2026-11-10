@@ -47,3 +47,33 @@ test("next-prompt suggestions run only for people with the flag, on the session'
     "no suggestions on a session they cannot read",
   );
 });
+
+test("a hidden wake that ends without a reply leaves the suggestion on the latest visible reply", async () => {
+  const transcripts: string[] = [];
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ap-next-prompt-wake-")) }), {
+    agent: {
+      ...createMockAgent(),
+      suggestNextPrompt: async (transcript: string) => {
+        transcripts.push(transcript);
+        return "merge it";
+      },
+    },
+  });
+  const turn = await built.app.turn({
+    surface: "test",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm", threadRef: "web:U1:next-prompt-wake" },
+    text: "Open the PR for the sidebar fix",
+  });
+  const sessionId = turn.sessionId!;
+  await built.featureFlags.setEnabled("next_prompt_suggestions", scopeId("personal", "U1"), true, "test");
+  await built.sessions.append(
+    { sessionId },
+    { kind: "UserMessage", text: '<wake reason="monitor">job exited</wake>', hidden: true },
+  );
+
+  assert.deepEqual(await built.app.suggestNextPrompt(sessionId, "U1"), { enabled: true, suggestion: "merge it" });
+  assert.equal(transcripts.length, 1);
+  assert.ok(!transcripts[0]!.includes("wake reason"), "the hidden wake is not sent to the model");
+  assert.ok(transcripts[0]!.includes("User:\nOpen the PR for the sidebar fix"));
+});
