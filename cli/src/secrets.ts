@@ -74,7 +74,7 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
         kind: "any",
         conditions: [
           { kind: "target", target: "render" },
-          { kind: "env-equals", service: "core", name: "SANDBOX_BACKEND", value: "render" },
+          { kind: "sandbox-backend", backend: "render" },
           { kind: "env-equals", service: "core", name: "DEPLOY_PROVIDER", value: "render" },
         ],
       },
@@ -534,12 +534,8 @@ function conditionMatches(config: QmConfig, condition: SecretCondition): boolean
   if (condition.kind === "env-all-absent") {
     return condition.names.every((name) => !config.env[condition.service]?.[name]?.trim());
   }
-  const configuredSandboxBackend =
-    condition.service === "core" && condition.name === "SANDBOX_BACKEND" ? config.sandbox?.backend : undefined;
   const value = (
-    config.env[condition.service]?.[condition.name] ??
-    configuredSandboxBackend ??
-    targetEnvDefault(config, condition.service, condition.name)
+    config.env[condition.service]?.[condition.name] ?? targetEnvDefault(config, condition.service, condition.name)
   )?.trim();
   if (condition.kind === "env-absent") return !value;
   if (condition.kind === "env-present") return Boolean(value);
