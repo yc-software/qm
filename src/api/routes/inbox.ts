@@ -134,7 +134,7 @@ export async function inboxView(ctx: ApiCtx): Promise<InboxView | null> {
     return !attentionIds.has(item.id) && groupId && attentionIds.has(groupId) && loop && consolidates(loop);
   });
   const counts = new Map<string, number>();
-  for (const item of open) counts.set(item.loopId, (counts.get(item.loopId) ?? 0) + 1);
+  for (const item of attention) counts.set(item.loopId, (counts.get(item.loopId) ?? 0) + 1);
   let candidates = [...attention, ...members];
   if (sent)
     candidates = summaries.filter(
