@@ -22,7 +22,7 @@ export interface ErrorLog {
   count(t: Tenant, opts?: { scopeId?: string; sessionId?: string }): Promise<number>;
 }
 
-export function reportErrorEvent(event: Omit<ErrorEvent, "ts">, error?: unknown): void {
+function reportErrorEvent(event: Omit<ErrorEvent, "ts">, error?: unknown): void {
   if (errorAlreadyReported(error)) return;
   reportBackendError(error ?? new Error(event.message), `${event.category}:${event.code}`, { ...event });
   markErrorReported(error);
