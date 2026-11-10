@@ -92,6 +92,7 @@ export function recentWakeMessages(batch: AmbientBatch): WakeMessage[] {
     ...(m.authorName ? { authorName: m.authorName } : {}),
     ...(m.authorId ? { authorId: m.authorId } : {}),
     text: resolveMentions(m.text, new Map(Object.entries(m.mentions ?? {}).filter(([id]) => id !== self))),
+    ...(m.mentions ? { mentions: m.mentions } : {}),
     ...(m.deleted ? { deleted: true } : {}),
     ...(triggers.has(m.ts) ? { trigger: true } : {}),
   }));

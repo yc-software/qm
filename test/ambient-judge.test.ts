@@ -78,5 +78,4 @@ test("other people's @-mentions read as @name; only the assistant's own mention 
     .split("\n")
     .find((l) => l.includes("<message "));
   assert.match(line!, />@esther can you remind me\? cc @dave &lt;@U00000009&gt; &lt;@U00000002&gt;</);
-  assert.doesNotMatch(line!, /mentions=/);
 });
