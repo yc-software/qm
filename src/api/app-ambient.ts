@@ -4,6 +4,7 @@ import type { TurnSurfaceOrigin } from "../surfaces/contract.ts";
 import { slackSurfaceOrigin } from "../surfaces/slack/adapter.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
+import { encodeDeliveryTarget } from "../slack/delivery.ts";
 import { samePerson } from "../directory/person.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
 import type { CachedMessage } from "../surface-cache/surface-cache.ts";
@@ -320,7 +321,10 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
             ...(solicited.member.displayName ? { displayName: solicited.member.displayName } : {}),
           },
           conversation,
-          deliveryTarget: batch.container,
+          deliveryTarget:
+            batch.surface === "slack"
+              ? encodeDeliveryTarget(batch.container, solicited.message.sub ?? solicited.message.ts)
+              : batch.container,
           text: solicited.message.text,
           origin: { kind: "human", ...(solicited.message.ts ? { messageTs: solicited.message.ts } : {}) },
           surfaceTools: true,
