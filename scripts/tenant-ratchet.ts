@@ -100,7 +100,7 @@ function main(args: string[]): number {
     ...metrics.flatMap((metric) => {
       const now = totals[metric];
       const was = baseline[metric];
-      if (typeof was !== "number") return [`${metric} has no baseline; add "${metric}": ${now} by hand`];
+      if (typeof was !== "number") return [`${metric} has no numeric baseline; set "${metric}": ${now} by hand`];
       if (now > was) return [`${metric} rose from ${was} to ${now}; see docs/tenant-tokens.md`];
       if (now < was && !args.includes("--update"))
         return [`${metric} fell from ${was} to ${now}: run node scripts/tenant-ratchet.ts --update`];

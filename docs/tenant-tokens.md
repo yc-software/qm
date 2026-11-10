@@ -8,7 +8,7 @@ Tenant separation is moving from an implicit binding to an explicit argument. Po
 
 ## Target
 
-- `Tenant` is a token minted only by `withTenant`, which hands it to its callback: `withTenant(id, (tenant) => …)`. Its constructor is private and refuses any caller but the tenant module, so a token in hand was produced by a `withTenant` call. `withTenant` checks only that the id is well formed; the ratchet counts its call sites so the places that mint tokens stay few and reviewable.
+- `Tenant` is a token minted only by `withTenant`, which hands it to its callback: `withTenant(id, (tenant) => …)`. Its constructor is private and refuses any caller but the tenant module, so a token in hand was produced by a `withTenant` call. `withTenant` checks only that the id is well formed. The ratchet counts its direct call sites; helpers that wrap it, such as `inTenant` and `inBootTenant`, count once, so reviewers check what reaches them.
 - Stores take the token as their first argument and query through `pool.forTenant(tenant)`. Every tenant-scoped statement carries an explicit `tenant_id = $n` predicate or insert value, so the store is correct even for a login that bypasses row security.
 - `forTenant` still sets `qm.tenant_id`, from the token rather than the ambient binding, so row security keeps checking.
 
@@ -27,14 +27,14 @@ Tenant separation is moving from an implicit binding to an explicit argument. Po
 ## Slices
 
 1. Foundation: the token, `forTenant`, the ratchet, and the admin grant stores as the first converted store. `AdminService` bridges with `ambientTenant()`.
-2. Boundaries carry the token: inbound HTTP routes, Slack middleware and the background claimers (cron scheduler, run worker, delivery relay, monitor poller, loop ingress, wake sweep, swarm reconcile, `claimThenLoad`) pass the token from `withTenant` into the work they start. Admin routes then pass it to `AdminService`, removing that bridge. The admin grant seed hooks (`seedTenant`, `beforeSeed`) still read the binding and take the token in the same slice.
-3. Access and audit stores, starting with a token form of `withPgTransaction`, which the ACL grant store needs: ACL grants, audit log, scoped event and credential usage sinks, decisions, rate-limit budgets, teams.
+2. Boundaries carry the token: inbound HTTP routes, Slack middleware and the background claimers (cron scheduler, run worker, delivery relay, monitor poller, loop ingress, wake sweep, swarm reconcile, `claimThenLoad`) pass the token from `withTenant` into the work they start. Admin routes then pass it to `AdminService`, removing that bridge. In the same slice the admin grant seed hooks take the token: `beforeSeed` writes user records through the binding, and `seedTenant` compares against the boot tenant.
+3. Access and audit stores, starting with a token form of `withPgTransaction` that takes the `PgPool` and the token rather than a raw pool, which the ACL grant store needs: ACL grants, audit log, scoped event and credential usage sinks, decisions, rate-limit budgets, teams.
 4. Identity and directory: directory store and sync, user store, broker sessions.
 5. Sessions: session store, participants, items, spend, search, admin reads, LLM captures, tool output.
 6. Runs and processes: run store, reads, returns, signals, activity, process registry, swarm store.
 7. Delivery, surfaces and schedules: delivery store, surface caches and policies, cron fire store, personas, environments.
 8. Files, memory, deploy and search: file artifacts and uploads, vector store and memory service, deploy store and page views, resource search.
-9. Shared persistence primitives: `createPostgresMap` and the stores built on it, advisory locks and the notify bus. The map's six query sites stand for every map-backed store, so this slice is wider than its count suggests.
+9. Shared persistence primitives: `createPostgresMap` and the stores built on it, advisory locks, the notify bus, the cron job queue and the leader lease, which own the remaining raw `pool` and `sessionPool` sites. The map's six query sites stand for every map-backed store, so this slice is wider than its count suggests.
 10. Tables that are not per tenant (the tenant registry, migrations ledger, instance heartbeats and the other tables `test/tenant-tables.test.ts` lists as untenanted) move to an explicit untenanted handle, so the remaining implicit queries are all genuinely tenanted.
 11. Ambient reads and caches: replace the remaining `boundTenant` and `currentTenant` reads and the binding-keyed caches with token-keyed state.
-12. Remove the implicit path: `PgPool.q` and `PgPool.query` stop reading the binding, `withPgTransaction` loses its binding form, and `AsyncLocalStorage`, `boundTenant`, `currentTenant`, `ambientTenant` and `pinTenant` are deleted. `withTenant` remains only as the mint at boundaries, and the ratchet, at zero, is retired.
+12. Remove the implicit path: `PgPool.q` and `PgPool.query` stop reading the binding, `withPgTransaction` loses its binding form, and `AsyncLocalStorage`, `boundTenant`, `currentTenant`, `ambientTenant` and `pinTenant` are deleted. `withTenant` remains only as the mint at boundaries, and the ratchet is retired once the query, read and cache counts reach zero; `mintSites` stays above zero by design.
