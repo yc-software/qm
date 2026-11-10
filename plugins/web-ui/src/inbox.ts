@@ -949,12 +949,12 @@ async function refetchItem(item: InboxItem): Promise<void> {
 }
 
 async function postAction(item: InboxItem, kind: string, args?: Record<string, unknown>): Promise<InboxItem> {
-  const { item: next } = await api<{ item: LedgerItem }>(actionPath(item, "action"), {
+  const { item: next, outputs } = await api<{ item: LedgerItem; outputs: ReviewOutput[] }>(actionPath(item, "action"), {
     method: "POST",
     body: JSON.stringify({ kind, ...(args ? { args } : {}) }),
   });
   updateSentChat(next);
-  return { ...toInboxItem(next), outputs: item.outputs, detailLoaded: true };
+  return { ...toInboxItem(next), outputs, detailLoaded: true };
 }
 
 const persistQueue = new Map<string, Promise<void>>();

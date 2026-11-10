@@ -440,18 +440,35 @@ test("a send with no connected account reads as a conflict, not a crash", async 
 test("dismiss, reopen and the actioned end-state", async () => {
   const w = world();
   const { loop, item } = await seed(w);
+  const output = await w.loops.outputs.capture({
+    loopId: loop.id,
+    itemId: item.id,
+    attemptId: "a",
+    ordinal: 0,
+    shipAction: "send_email",
+    title: "Reply",
+    capturedBy: "agent",
+  });
   const dismissed = await call(w, {
     method: "POST",
     path: `/v1/loops/${loop.id}/items/${item.id}/action`,
     body: { kind: "dismiss" },
   });
   assert.equal((dismissed.body as { item: LedgerItemView }).item.state, "dismissed");
+  assert.deepEqual(
+    (dismissed.body as { outputs: Array<{ id: string }> }).outputs.map((entry) => entry.id),
+    [output.id],
+  );
   const reopened = await call(w, {
     method: "POST",
     path: `/v1/loops/${loop.id}/items/${item.id}/action`,
     body: { kind: "reopen" },
   });
   assert.equal((reopened.body as { item: LedgerItemView }).item.state, "held");
+  assert.deepEqual(
+    (reopened.body as { outputs: Array<{ id: string }> }).outputs.map((entry) => entry.id),
+    [output.id],
+  );
   await w.loops.items.recordAction(item.id, { kind: "send", outcome: "actioned" });
   const again = await call(w, {
     method: "POST",
