@@ -759,7 +759,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const rows = (
           await Promise.all(
             credentialScopes.map(async (grantScope) =>
-              ((await deps.keychain?.grantsForScope(grantScope)) ?? []).map((row) => ({ ...row, grantScope })),
+              (
+                (await deps.keychain?.grantsForScope(grantScope, {
+                  includePersonGrants: input.botActor !== true || grantScope === persona?.scope,
+                })) ?? []
+              ).map((row) => ({ ...row, grantScope })),
             ),
           )
         ).flat();

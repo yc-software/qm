@@ -117,6 +117,7 @@ export interface KeychainGrant {
   usedAt?: number;
   usedBy?: string;
   askId?: string;
+  botActor?: true;
 }
 
 type AskStatus = "pending" | "approved" | "declined" | "expired";
@@ -320,6 +321,7 @@ interface CreateGrantInput {
   purpose: string;
   expiresAt?: number;
   askId?: string;
+  botActor?: boolean;
 }
 
 interface CreateAskInput {
@@ -415,7 +417,10 @@ export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   getGrant(id: string): Promise<KeychainGrant | null>;
   listGrants(filter: GrantListFilter): Promise<KeychainGrant[]>;
   revokeGrant(ownerId: string, grantId: string): Promise<boolean>;
-  grantsForScope(scopeId: ScopeId): Promise<Array<{ grant: KeychainGrant; credential: KeychainCredentialMeta }>>;
+  grantsForScope(
+    scopeId: ScopeId,
+    opts?: { includePersonGrants?: boolean },
+  ): Promise<Array<{ grant: KeychainGrant; credential: KeychainCredentialMeta }>>;
 
   createAsk(input: CreateAskInput): Promise<{ ask: KeychainAsk; existing: boolean }>;
   getAsk(id: string): Promise<KeychainAsk | null>;
@@ -1063,6 +1068,7 @@ export function createKeychain(deps: {
       createdAt: t,
       ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
       ...(input.askId ? { askId: input.askId } : {}),
+      ...(input.botActor ? { botActor: true } : {}),
     };
     if (input.askId) return deps.grants.putIfAbsent(grant.id, grant);
     await deps.grants.put(grant.id, grant);
@@ -1230,9 +1236,10 @@ export function createKeychain(deps: {
       return true;
     },
 
-    async grantsForScope(scopeId) {
+    async grantsForScope(scopeId, opts) {
       const out: Array<{ grant: KeychainGrant; credential: KeychainCredentialMeta }> = [];
       for (const grant of await activeGrantsFor(scopeId)) {
+        if (!opts?.includePersonGrants && grant.botActor !== true) continue;
         const cred = await deps.creds.get(grant.credentialId);
         if (cred && (cred.managed === "connector" || !credExpired(cred, now())))
           out.push({ grant, credential: toMeta(cred) });
@@ -1325,6 +1332,7 @@ export function createKeychain(deps: {
           purpose: input.purpose,
           ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
           askId: ask.id,
+          ...(ask.botActor ? { botActor: true } : {}),
         });
         const patch = { status: "approved" as const, resolvedAt: t, grantId: grant.id, notifiedAt: undefined };
         await deps.asks.merge(ask.id, patch);
