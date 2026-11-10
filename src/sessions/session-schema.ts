@@ -561,6 +561,14 @@ export const DROP_SESSION_LEASES: PgMigrationDefinition = {
   statements: [`SET LOCAL lock_timeout = '5s'`, `DROP TABLE IF EXISTS session_leases`],
 };
 
+const DROP_ITEMS_TARGET_SEQ: PgMigrationDefinition = {
+  id: "sessions/store/0060-drop-items-target-seq",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `ALTER TABLE items DROP CONSTRAINT IF EXISTS items_target_seq_kind, DROP COLUMN IF EXISTS target_seq`,
+  ],
+};
+
 export const SESSION_MIGRATIONS = [
   ...TENANCY,
   ...PUBLISHED_SESSION_UPGRADE,
@@ -579,6 +587,7 @@ export const SESSION_MIGRATIONS = [
   DROP_STOPPED_PLACEHOLDERS,
   USER_TURNS_BY_AUTHOR,
   DROP_SESSION_LEASES,
+  DROP_ITEMS_TARGET_SEQ,
 ];
 
 export const ancestry = (seed: string): string => `ancestry AS (

@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { applyTurnEffort, createAgent } from "../src/agent/agent-run.ts";
+import { createAgent } from "../src/agent/agent-run.ts";
+import { applyTurnEffort } from "../src/agent/turn-effort.ts";
 import { createModelRoutes, type ModelRouteOptions } from "../src/model/model-route.ts";
 import type { TurnLlmRequestRecord, AgentTurnInput } from "../src/agent/agent.ts";
 import { storedItem } from "../src/sessions/items.ts";
