@@ -119,7 +119,6 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
         {
           processId: "bg-1",
           command: "bg: npm test",
-          status: { state: "running" },
           registryStatus: "running",
           startedAt: 0,
         },
