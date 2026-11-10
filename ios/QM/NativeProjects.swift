@@ -63,6 +63,7 @@ final class ProjectsModel {
   let user: String
   var contexts: [WorkspaceContext] = []
   var conversations: [Conversation] = []
+  var loaded = false
   var busy = false
   var error: String?
   private let loader = LoadGuard()
@@ -83,6 +84,7 @@ final class ProjectsModel {
       contexts = result.contexts
       conversations = DraftStore.merging(
         sessions.sessions, account: client.baseURL.absoluteString + user)
+      loaded = true
       error = nil
     } failed: {
       error = $0.localizedDescription
@@ -168,7 +170,9 @@ struct ProjectsView: View {
           }
         }
       }
-      if visibleContexts.isEmpty && !model.loading && model.error == nil && !query.isEmpty {
+      if model.loading && !model.loaded && model.contexts.isEmpty && model.error == nil {
+        NativeCollectionLoading(label: "Loading projects", symbol: "folder")
+      } else if visibleContexts.isEmpty && model.loaded && model.error == nil && !query.isEmpty {
         ContentUnavailableView {
           Label("No matching projects", systemImage: "magnifyingglass")
         } description: {
@@ -176,7 +180,7 @@ struct ProjectsView: View {
         } actions: {
           Button("Clear search") { query = "" }
         }
-      } else if model.contexts.isEmpty && !model.loading && model.error == nil {
+      } else if model.contexts.isEmpty && model.loaded && model.error == nil {
         ContentUnavailableView(
           "A place for shared work", systemImage: "folder",
           description: Text(
@@ -187,7 +191,11 @@ struct ProjectsView: View {
     }
     .scrollContentBackground(.hidden).background(QMTheme.paper)
     .navigationTitle("Projects").navigationBarTitleDisplayMode(.inline).searchable(text: $query)
-    .overlay { if model.loading && model.contexts.isEmpty { ProgressView() } }
+    .modifier(
+      NativeCollectionRefresh(
+        active: model.loading && (model.loaded || !model.contexts.isEmpty || model.error != nil),
+        label: "Refreshing projects")
+    )
     .refreshable { await model.load() }.task { await model.load() }
     .toolbar {
       Button("New project", systemImage: "plus") {
@@ -207,7 +215,7 @@ struct ProjectsView: View {
             Button("Cancel") { creating = false }.disabled(model.busy)
           }
           ToolbarItem(placement: .confirmationAction) {
-            Button(model.busy ? "Creating…" : "Create") {
+            Button {
               Task {
                 if await model.mutate(
                   "api/projects",
@@ -216,6 +224,9 @@ struct ProjectsView: View {
                   creating = false
                 }
               }
+            } label: {
+              NativeActionLabel(
+                title: "Create", busyTitle: "Creating…", busy: model.busy, compact: true)
             }.disabled(
               name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || name.count > 200
                 || model.busy)
@@ -284,6 +295,9 @@ struct ProjectDetailView: View {
     .disabled(model.busy)
     .scrollContentBackground(.hidden).background(QMTheme.paper)
     .navigationTitle(context.title).navigationBarTitleDisplayMode(.inline)
+    .modifier(
+      NativeCollectionRefresh(active: model.loading, label: "Refreshing project")
+    )
     .task { await model.load() }
     .refreshable { await model.load() }
     .toolbar { toolbarContent }
@@ -489,21 +503,29 @@ struct ProjectMemberPicker: View {
   @State private var searching = false
   @State private var error: String?
   @State private var selected: DirectoryPerson?
+  private var matchingPeople: [DirectoryPerson] {
+    matches.filter { !project.memberIds.contains($0.id) }
+  }
 
   var body: some View {
     NavigationStack {
       QMList {
         if let error = error ?? model.error { Text(error).foregroundStyle(.red) }
-        ForEach(matches.filter { person in !project.memberIds.contains(person.id) }) { person in
+        ForEach(matchingPeople) { person in
           Button {
             selected = person
           } label: {
             Label(person.displayName, systemImage: "person.badge.plus")
           }.disabled(model.busy)
         }
-        if matches.isEmpty && !searching {
-          Text(query.count < 2 ? "Search for a person in your workspace." : "No matching people.")
-            .foregroundStyle(.secondary)
+        if matchingPeople.isEmpty && !searching && error == nil && model.error == nil {
+          Text(
+            query.trimmingCharacters(in: .whitespacesAndNewlines).count < 2
+              ? "Search for a person in your workspace."
+              : matches.isEmpty
+                ? "No matching people." : "Everyone found is already in this project."
+          )
+          .foregroundStyle(.secondary)
         }
       }
       .navigationTitle("Add people")

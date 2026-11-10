@@ -35,6 +35,62 @@ for (const count of [1, 2]) {
   });
 }
 
+test("expanded tool calls show structured fields and keep raw JSON on demand", async () => {
+  const entries = [
+    { seq: 0, type: "user", createdAt: 0, payload: { text: "Check the page" } },
+    {
+      seq: 1,
+      type: "tool_call",
+      createdAt: 1000,
+      payload: {
+        tool: "web",
+        action: "fetch",
+        callId: "c1",
+        args: { url: "https://example.com", options: { retries: 2 } },
+        step: { id: "step-1" },
+      },
+    },
+    {
+      seq: 2,
+      type: "tool_result",
+      createdAt: 2000,
+      payload: {
+        tool: "web",
+        callId: "c1",
+        ok: true,
+        result: { title: "Example", items: ["One", "Two"] },
+      },
+    },
+    { seq: 3, type: "assistant", createdAt: 3000, payload: { text: "Done" } },
+  ];
+  const h = await harness({ path: `/s/${SESSION.id}`, listSessions: [SESSION], entries });
+  try {
+    h.releaseSessions();
+    await h.boot();
+    await h.sessionsReady();
+    const tool = document.querySelector<HTMLDetailsElement>(".tool-expandable")!;
+    tool.open = true;
+    tool.dispatchEvent(new Event("toggle"));
+    const cards = tool.querySelectorAll(".tool-payload-card");
+    assert.equal(cards.length, 2);
+    assert.match(cards[0]!.textContent!, /Args.*2 fields.*Url.*https:\/\/example\.com/s);
+    assert.match(cards[1]!.textContent!, /Result.*2 fields.*Title.*Example/s);
+    assert.equal(cards[0]!.querySelector(".tool-payload-raw .tool-payload-body"), null);
+    const options = [...cards[0]!.querySelectorAll<HTMLDetailsElement>(".tool-payload-group")].find((group) =>
+      group.querySelector(":scope > summary")?.textContent?.includes("Options"),
+    )!;
+    options.open = true;
+    options.dispatchEvent(new Event("toggle"));
+    assert.match(options.textContent!, /Retries.*2/s);
+    const raw = cards[0]!.querySelector<HTMLDetailsElement>(".tool-payload-raw")!;
+    raw.open = true;
+    raw.dispatchEvent(new Event("toggle"));
+    assert.match(raw.querySelector("pre")!.textContent!, /"callId": "c1"/);
+  } finally {
+    await h.close();
+  }
+});
+
 test("a subagent header includes its parent title in the breadcrumb", async () => {
   const parent = { ...SESSION, id: "parent", threadRef: "web:tester:parent", title: "Build report" };
   const child = { ...SESSION, type: "dm" as const, createdAt: 1, parentSessionId: parent.id };

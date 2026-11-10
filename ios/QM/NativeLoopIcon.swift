@@ -82,6 +82,9 @@ struct NativeLoopIconPicker: View {
   var body: some View {
     NavigationStack {
       QMList {
+        if model.busy {
+          NativeActionLabel(title: "", busyTitle: "Saving icon...", busy: true)
+        }
         ForEach(NativeLoopIcon.choices) { choice in
           Button {
             Task { await save(choice.id) }

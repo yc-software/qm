@@ -109,6 +109,52 @@ final class QueuedSteerProtocol: URLProtocol, @unchecked Sendable {
 
 @MainActor
 final class QueuedSteerTests: XCTestCase {
+  func testEmptyQueueDoesNotShowAnUnrelatedConnectionError() async throws {
+    let model = try model(outcome: "flaky")
+    model.inputs = []
+    await model.refresh()
+    XCTAssertTrue(model.inputs.isEmpty)
+    XCTAssertNil(model.error)
+    await model.refresh()
+    XCTAssertEqual(model.activeRunID, "active")
+    XCTAssertNil(model.error)
+  }
+
+  func testExplicitRefreshStaysPendingUntilCompletionOrStop() async throws {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [ForegroundSyncProtocol.self]
+    let client = APIClient(
+      baseURL: URL(string: "https://\(UUID().uuidString).example")!, configuration: configuration)
+    try client.saveSession("test")
+    defer { client.signOut() }
+    let model = QueuedInputsModel(
+      client: client, threadRef: "web:test:chat", scopeID: "personal:test", onSnapshot: { _ in })
+    let key = client.url(
+      "api/runs/active", query: [.init(name: "threadRef", value: "web:test:chat")]
+    )
+    .absoluteString
+    ForegroundSyncProtocol.held.withLock { $0[key] = 1 }
+    model.retryRefresh()
+    XCTAssertTrue(model.retrying)
+    model.retryRefresh()
+    for _ in 0..<100 {
+      if ForegroundSyncProtocol.counts.withLock({ $0[key] == 1 }) { break }
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    XCTAssertEqual(ForegroundSyncProtocol.counts.withLock { $0[key] }, 1)
+    XCTAssertTrue(model.retrying)
+    model.stop()
+    XCTAssertFalse(model.retrying)
+    model.retryRefresh()
+    for _ in 0..<100 {
+      if !model.retrying { break }
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    XCTAssertFalse(model.retrying)
+    XCTAssertNil(model.error)
+    XCTAssertEqual(ForegroundSyncProtocol.counts.withLock { $0[key] }, 2)
+  }
+
   func model(outcome: String = "accepted") throws -> QueuedInputsModel {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [QueuedSteerProtocol.self]

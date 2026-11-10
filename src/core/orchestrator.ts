@@ -1361,6 +1361,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               status: "ok",
               sessionId: session.id,
               reply: absoluteAppLinks(recordedAnswer.text, deps.publicWebUrl),
+              ...(recordedAnswer.stopped ? { stopped: true } : {}),
               sourceUserSeq: recordedTurn.userSeq,
               sourceAssistantEntrySeq: recordedAnswer.seq,
             }

@@ -1,6 +1,32 @@
+import QuickLook
+import UIKit
+import UniformTypeIdentifiers
 import XCTest
 
 @testable import QM
+
+private final class FilePreviewProtocol: URLProtocol, @unchecked Sendable {
+  override class func canInit(with request: URLRequest) -> Bool { true }
+  override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+  override func startLoading() {
+    XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "portal_session=preview-test")
+    XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "*/*")
+    XCTAssertEqual(request.url?.path, "/api/files/server-report/content")
+    client?.urlProtocol(
+      self,
+      didReceive: HTTPURLResponse(
+        url: request.url!, statusCode: 200, httpVersion: nil,
+        headerFields: [
+          "Content-Type": "text/plain",
+          "Content-Disposition": "inline; filename*=UTF-8''Server%20Report.txt",
+        ])!, cacheStoragePolicy: .notAllowed)
+    client?.urlProtocol(self, didLoad: Data("A server attachment".utf8))
+    client?.urlProtocolDidFinishLoading(self)
+  }
+
+  override func stopLoading() {}
+}
 
 final class FilePreviewTests: XCTestCase {
   func testAttachmentLinksUseOnlyMatchingDeliveredMetadata() {
@@ -31,6 +57,105 @@ final class FilePreviewTests: XCTestCase {
     }
   }
 
+  func testWorkspaceLinksResolveNamedFilesAndDeliveredMetadata() throws {
+    let base = URL(string: "https://qm.example")!
+    let linked = try XCTUnwrap(
+      FilePreviewResource.attachment(
+        URL(string: "https://qm.example/api/files/report-1/content/Quarterly%20Report.pdf")!,
+        baseURL: base, files: []))
+    XCTAssertEqual(linked.name, "Quarterly Report.pdf")
+    XCTAssertEqual(linked.artifactId, "report-1")
+    let delivered = try XCTUnwrap(
+      FilePreviewResource.attachment(
+        URL(string: "https://qm.example:443/api/files/report-1/content")!, baseURL: base,
+        files: [DeliveredFile(name: "Original.pdf", artifactId: "report-1")]))
+    XCTAssertEqual(delivered.name, "Original.pdf")
+    XCTAssertEqual(delivered.artifactId, "report-1")
+    for raw in [
+      "https://other.example/api/files/report-1/content/report.pdf",
+      "http://qm.example/api/files/report-1/content/report.pdf",
+      "https://qm.example:444/api/files/report-1/content/report.pdf",
+      "https://user@qm.example/api/files/report-1/content/report.pdf",
+      "https://qm.example/api/files/report-1/content/report.pdf?download=1",
+      "https://qm.example/api/files/report-1/content/report.pdf#page=1",
+      "https://qm.example/api/files/a%2Fb/content/report.pdf",
+      "https://qm.example/api/files/report-1/content/report.pdf/extra",
+      "https://qm.example//api/files/report-1/content/report.pdf",
+    ] {
+      XCTAssertNil(
+        FilePreviewResource.attachment(URL(string: raw)!, baseURL: base, files: []), raw)
+    }
+  }
+
+  @MainActor
+  func testAuthenticatedPreviewUsesServerFilenameWhenLinkHasNoName() async throws {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [FilePreviewProtocol.self]
+    let client = APIClient(
+      baseURL: URL(string: "https://\(UUID().uuidString).example.test")!,
+      configuration: configuration)
+    try client.saveSession("preview-test")
+    defer { client.signOut() }
+    let file = try XCTUnwrap(
+      FilePreviewResource.attachment(
+        client.url("api/files/server-report/content"), baseURL: client.baseURL, files: []))
+
+    let preview = try await FilePreviewResource.file(file).load(client: client)
+
+    XCTAssertEqual(preview.url.lastPathComponent, "Server Report.txt")
+    XCTAssertEqual(try String(contentsOf: preview.url, encoding: .utf8), "A server attachment")
+    XCTAssertTrue(QLPreviewController.canPreview(preview.url as NSURL))
+  }
+
+  @MainActor
+  func testDraftPreviewUsesOriginalFilenameAndPreservesCachedUpload() async throws {
+    let client = APIClient(baseURL: URL(string: "https://\(UUID().uuidString).example.test")!)
+    let account = client.baseURL.absoluteString + "test"
+    defer { try? AttachmentCache.removeAccount(account: account) }
+    let data = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 200, height: 200)).pdfData {
+      context in
+      context.beginPage()
+      ("Draft attachment" as NSString).draw(at: CGPoint(x: 20, y: 20), withAttributes: nil)
+    }
+    let source = try TemporaryPreviewFile(data: data, name: "Draft Report.pdf")
+    let prepared = try await AttachmentUpload.prepare(source.url)
+    try AttachmentCache.write(prepared, account: account, generation: AttachmentCache.generation)
+    let attachment = UploadAttachment(
+      name: prepared.name, mimetype: prepared.mimetype, sizeBytes: prepared.size,
+      blobId: "draft-blob", localSHA: prepared.sha)
+
+    var preview: TemporaryPreviewFile? = try await FilePreviewResource.draft(
+      attachment, account: account
+    ).load(client: client)
+    let previewURL = try XCTUnwrap(preview?.url)
+    XCTAssertEqual(previewURL.lastPathComponent, "Draft Report.pdf")
+    XCTAssertEqual(try Data(contentsOf: previewURL), data)
+    XCTAssertTrue(QLPreviewController.canPreview(previewURL as NSURL))
+    preview = nil
+
+    XCTAssertFalse(FileManager.default.fileExists(atPath: previewURL.path))
+    let cached = try AttachmentCache.read(account: account, sha: prepared.sha)
+    XCTAssertEqual(try Data(contentsOf: cached.url), data)
+  }
+
+  @MainActor
+  func testMissingDraftCopyExplainsHowToAttachItAgain() async throws {
+    let client = APIClient(baseURL: URL(string: "https://\(UUID().uuidString).example.test")!)
+    for sha in [nil, String(repeating: "f", count: 64)] as [String?] {
+      let attachment = UploadAttachment(
+        name: "report.pdf", mimetype: "application/pdf", sizeBytes: 3,
+        blobId: "draft-blob", localSHA: sha)
+      do {
+        _ = try await FilePreviewResource.draft(
+          attachment, account: client.baseURL.absoluteString
+        ).load(client: client)
+        XCTFail("A missing cached attachment cannot be previewed")
+      } catch {
+        XCTAssertTrue(error.localizedDescription.contains("attach the file again"))
+      }
+    }
+  }
+
   func testFilenameKeepsExtensionWithoutDirectoryOrControlCharacters() {
     XCTAssertEqual(FilePreviewResource.filename("../../report.pdf"), "report.pdf")
     XCTAssertEqual(FilePreviewResource.filename("C:\\private\\report.pdf"), "report.pdf")
@@ -40,6 +165,18 @@ final class FilePreviewTests: XCTestCase {
     let long = FilePreviewResource.filename(String(repeating: "a", count: 400) + ".pdf")
     XCTAssertLessThanOrEqual(long.utf8.count, 180)
     XCTAssertTrue(long.hasSuffix(".pdf"))
+  }
+
+  func testTransferTypeUsesTheFileExtensionAndFallsBackWithoutInventingAType() {
+    XCTAssertEqual(
+      FilePreviewResource.typeDescription("report.PDF"), UTType.pdf.localizedDescription)
+    XCTAssertEqual(
+      FilePreviewResource.typeDescription("image.png"), UTType.png.localizedDescription)
+    XCTAssertEqual(
+      FilePreviewResource.typeDescription("preview.html"), UTType.html.localizedDescription)
+    XCTAssertEqual(FilePreviewResource.typeDescription("archive.qmunknown"), "QMUNKNOWN file")
+    XCTAssertEqual(FilePreviewResource.typeDescription("README"), "File")
+    XCTAssertEqual(FilePreviewResource.typeDescription(nil), "File")
   }
 
   func testSameNamedPreviewsAreIsolatedAndDeletedAfterRelease() throws {

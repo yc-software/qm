@@ -11,6 +11,7 @@ import "./instrument.ts";
 import { provisionTrustedAdmin } from "./trusted-admin.ts";
 import { createHash } from "node:crypto";
 import { createServer, METHODS, type IncomingMessage, type ServerResponse } from "node:http";
+import { isIP } from "node:net";
 import { pathToFileURL } from "node:url";
 import { ADMIN_LOGIN_SCRIPT, ADMIN_LOGIN_SCRIPT_HASH, openAdminLogin } from "./admin-login.ts";
 import { LRUCache } from "lru-cache";
@@ -100,6 +101,8 @@ const ORIGIN = (() => {
 const API_ALLOWED_ORIGINS = parseAllowedOrigins(process.env.PORTAL_API_ALLOWED_ORIGINS);
 const LOCAL_AUTH_BYPASS_REQUESTED = process.env.PORTAL_LOCAL_AUTH_BYPASS === "1";
 const LOCAL_AUTH_BYPASS = LOCAL_AUTH_BYPASS_REQUESTED && !IS_PROD && isLocalPortalUrl(PUBLIC_URL);
+const LOCAL_AUTH_BYPASS_LAN_REQUESTED = process.env.PORTAL_LOCAL_AUTH_BYPASS_LAN === "1";
+const LOCAL_AUTH_BYPASS_LAN = LOCAL_AUTH_BYPASS && LOCAL_AUTH_BYPASS_LAN_REQUESTED;
 const LOCAL_AUTH_PRINCIPAL = process.env.PORTAL_DEV_PRINCIPAL || process.env.USER || "dev-admin";
 const PLAYGROUND = process.env.PORTAL_PLAYGROUND === "1";
 const DEPLOYMENTS_ENABLED = process.env.PORTAL_DEPLOYMENTS_ENABLED
@@ -361,7 +364,7 @@ function sendHtml(res: ServerResponse, status: number, html: string, csp = PAGE_
   );
 }
 
-const sameOriginRequest = (req: IncomingMessage) => sameOriginFor(req, ORIGIN);
+const sameOriginRequest = (req: IncomingMessage) => sameOriginFor(req, ORIGIN) || privateLanSameOriginRequest(req);
 
 function wantsHtml(req: IncomingMessage): boolean {
   const accept = req.headers.accept;
@@ -440,9 +443,45 @@ export function isLoopbackAddress(address: string | null | undefined): boolean {
   );
 }
 
+export function isPrivateNetworkAddress(address: string | null | undefined): boolean {
+  if (!address) return false;
+  let normalized = address.toLowerCase();
+  if (normalized.startsWith("::ffff:")) normalized = normalized.slice(7);
+  if (isIP(normalized) === 4) {
+    const octets = normalized.split(".").map(Number);
+    return (
+      octets[0] === 10 ||
+      (octets[0] === 172 && octets[1]! >= 16 && octets[1]! <= 31) ||
+      (octets[0] === 192 && octets[1] === 168) ||
+      (octets[0] === 169 && octets[1] === 254)
+    );
+  }
+  return isIP(normalized) === 6 && (/^f[cd][0-9a-f]{2}:/.test(normalized) || normalized.startsWith("fe80:"));
+}
+
+export function privateLanSameOriginRequest(req: IncomingMessage): boolean {
+  if (!LOCAL_AUTH_BYPASS_LAN || !isPrivateNetworkAddress(req.socket.remoteAddress)) return false;
+  const host = req.headers.host;
+  if (!host) return false;
+  let requestOrigin: string;
+  try {
+    requestOrigin = new URL(`${new URL(PUBLIC_URL).protocol}//${host}`).origin;
+  } catch {
+    return false;
+  }
+  return isPrivateNetworkUrl(requestOrigin) && sameOriginFor(req, requestOrigin);
+}
+
+function localAuthAllowed(req: IncomingMessage): boolean {
+  return (
+    isLoopbackAddress(req.socket.remoteAddress) ||
+    (LOCAL_AUTH_BYPASS_LAN && isPrivateNetworkAddress(req.socket.remoteAddress))
+  );
+}
+
 function localDevSession(req: IncomingMessage, nowMs = Date.now(), ignoreLogout = false): SessionClaims | null {
   if (!LOCAL_AUTH_BYPASS) return null;
-  if (!isLoopbackAddress(req.socket.remoteAddress)) return null;
+  if (!localAuthAllowed(req)) return null;
   if (!ignoreLogout && readCookie(req.headers.cookie, LOCAL_LOGOUT_COOKIE) === "1") return null;
   const now = Math.floor(nowMs / 1000);
   return { k: "session", sub: LOCAL_AUTH_PRINCIPAL, org: ORG, iat: now, exp: now + SESSION_TTL_S };
@@ -459,7 +498,7 @@ const CARD_STYLE = `<style>
   :root{
     --bg:#ffffff; --surface:#ffffff; --text:#0a0a0a; --muted:#737373;
     --border:#e5e5e5; --secondary:#f5f5f5; --warn:#b42318; --warn-bg:#fdeceb;
-    --radius-md:10px; --radius-lg:16px;
+    --radius-md:8px; --radius-lg:8px;
   }
   @media (prefers-color-scheme:dark){
     :root{ --bg:#0a0a0a; --surface:#171717; --text:#fafafa; --muted:#a3a3a3;
@@ -527,7 +566,7 @@ function cardPage(o: {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escapeHtml(o.title)} · Portal</title>
+<title>${escapeHtml(o.title)} · QM</title>
 ${CARD_STYLE}
 </head>
 <body>
@@ -945,7 +984,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   const pathname = url.pathname;
 
   res.setHeader("strict-transport-security", "max-age=63072000; includeSubDomains");
-  res.setHeader("referrer-policy", "no-referrer");
+  res.setHeader("referrer-policy", "strict-origin");
   res.setHeader("x-content-type-options", "nosniff");
   res.setHeader("x-frame-options", "DENY");
 
@@ -1048,7 +1087,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         : []),
       clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES),
       ...(AUTH_BROKER_UPSTREAM ? [clearCookie("qm_idp_session", AUTH_BROKER_PREFIX, true)] : []),
-      ...(LOCAL_AUTH_BYPASS && isLoopbackAddress(req.socket.remoteAddress)
+      ...(LOCAL_AUTH_BYPASS && localAuthAllowed(req)
         ? [setCookie(LOCAL_LOGOUT_COOKIE, "1", { path: "/", maxAge: SESSION_TTL_S, secure: SECURE_COOKIES })]
         : []),
     ]);
@@ -1396,12 +1435,12 @@ async function desktopLogin(req: IncomingMessage, res: ServerResponse, url: URL)
       res,
       200,
       cardPage({
-        title: "Open QM Desktop",
-        heading: "Sign in to QM Desktop",
+        title: "Open QM",
+        heading: "Continue to QM",
         icon: LOCK_ICON,
-        msg: `Continue as ${session.sub}.`,
-        actions: `<form method="post" action="${escapeHtml(`${url.pathname}${url.search}`)}"><button class="btn primary" type="submit">Open QM Desktop</button></form>`,
-        help: "Only continue if you just started sign-in in the QM desktop app on this computer.",
+        msg: `Signed in as ${session.sub}.`,
+        actions: `<form method="post" action="${escapeHtml(`${url.pathname}${url.search}`)}"><button class="btn primary" type="submit">Continue</button></form>`,
+        help: "Only continue if you just opened QM on this device.",
       }),
     );
   }
@@ -1412,11 +1451,11 @@ async function desktopLogin(req: IncomingMessage, res: ServerResponse, url: URL)
     res,
     200,
     cardPage({
-      title: "Ready to open QM",
-      heading: "Opening QM Desktop…",
+      title: "Return to QM",
+      heading: "You're signed in",
       icon: LOCK_ICON,
-      msg: "If QM doesn’t open automatically, use the button below.",
-      actions: `<a id="desktop-launch" class="btn primary" href="${escapeHtml(callback.href)}">Open QM Desktop</a><script>${DESKTOP_LAUNCH_SCRIPT}</script>`,
+      msg: "QM should reopen automatically.",
+      actions: `<a id="desktop-launch" class="btn primary" href="${escapeHtml(callback.href)}">Open QM</a><script>${DESKTOP_LAUNCH_SCRIPT}</script>`,
       help: "This link expires in two minutes and works only for the app that requested it.",
     }),
     `${PAGE_CSP}; script-src '${DESKTOP_LAUNCH_SCRIPT_HASH}'`,
@@ -1717,6 +1756,12 @@ export function bootChecks(): void {
   if (LOCAL_AUTH_BYPASS_REQUESTED && !isLocalPortalUrl(PUBLIC_URL)) {
     problems.push("PORTAL_LOCAL_AUTH_BYPASS requires a localhost, 127.0.0.1, or ::1 PORTAL_PUBLIC_URL");
   }
+  if (LOCAL_AUTH_BYPASS_LAN_REQUESTED && !LOCAL_AUTH_BYPASS_REQUESTED) {
+    problems.push("PORTAL_LOCAL_AUTH_BYPASS_LAN requires PORTAL_LOCAL_AUTH_BYPASS=1");
+  }
+  if (LOCAL_AUTH_BYPASS_LAN_REQUESTED && IS_PROD) {
+    problems.push("PORTAL_LOCAL_AUTH_BYPASS_LAN may not be enabled in production");
+  }
   if (PLAYGROUND) {
     if (!Number.isInteger(PLAYGROUND_MINTS_PER_IP) || PLAYGROUND_MINTS_PER_IP < 1 || PLAYGROUND_MINTS_PER_IP > 64) {
       problems.push(
@@ -1878,7 +1923,7 @@ export async function startServer(): Promise<void> {
         console.warn("[portal] PORTAL_PUBLIC_URL is not https, cookies are NOT Secure (dev/test only)");
       if (LOCAL_AUTH_BYPASS)
         console.warn(
-          `[portal] PORTAL_LOCAL_AUTH_BYPASS=1 -- using ${LOCAL_AUTH_PRINCIPAL} as the local session principal (dev/test only)`,
+          `[portal] PORTAL_LOCAL_AUTH_BYPASS=1 -- using ${LOCAL_AUTH_PRINCIPAL} as the local session principal${LOCAL_AUTH_BYPASS_LAN ? " for loopback and private-LAN clients" : ""} (dev/test only)`,
         );
       if (PLAYGROUND)
         console.warn(

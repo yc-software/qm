@@ -100,6 +100,8 @@ final class InboxModel {
   var items: [NativeInboxItem] = []
   var selected: [NativeInboxLoop] = []
   var available: [NativeInboxLoop] = []
+  var loaded = false
+  private(set) var completedFilter = ""
   var nextCursor: String?
   var busy = false
   var error: String?
@@ -107,6 +109,9 @@ final class InboxModel {
   var loading: Bool { loader.loading }
   private var cursors: Set<String> = []
   init(client: APIClient) { self.client = client }
+  func showsEmptyState(view: String, loop: String) -> Bool {
+    items.isEmpty && loaded && error == nil && completedFilter == "\(view)|\(loop)"
+  }
   func load(view: String, loop: String, reset: Bool = true, afterMutation: Bool = false) async {
     guard !busy || afterMutation else { return }
     if !reset && (loading || nextCursor == nil) { return }
@@ -130,8 +135,11 @@ final class InboxModel {
         throw QMError.message("The inbox did not advance. Refresh to try again.")
       }
       nextCursor = result.nextCursor
+      loaded = true
+      completedFilter = "\(view)|\(loop)"
       error = nil
     } failed: {
+      completedFilter = "\(view)|\(loop)"
       error = $0.localizedDescription
     }
   }
@@ -155,6 +163,8 @@ struct NativeInboxView: View {
   @State private var view = "open"
   @State private var loop = "all"
   @State private var managing = false
+  @State private var refreshing = false
+  @State private var loadingMore = false
   @Environment(\.scenePhase) private var phase
   init(client: APIClient, user: String) {
     self.user = user
@@ -173,6 +183,9 @@ struct NativeInboxView: View {
         ForEach(model.selected) { Text($0.name).tag($0.id) }
       }
       if let error = model.error { Text(error).foregroundStyle(.red) }
+      if model.loading && !model.loaded && model.error == nil {
+        NativeCollectionLoading(label: "Loading inbox", symbol: "tray")
+      }
       ForEach(model.items) { item in
         NavigationLink {
           NativeInboxItemView(client: model.client, user: user, original: item)
@@ -188,16 +201,37 @@ struct NativeInboxView: View {
         }
       }
       if model.nextCursor != nil {
-        Button("Load more") { Task { await model.load(view: view, loop: loop, reset: false) } }
-          .disabled(model.loading)
+        if loadingMore && model.loading {
+          NativeCollectionRefreshHeader(label: "Loading more inbox items")
+        }
+        Button("Load more") {
+          Task {
+            loadingMore = true
+            defer { loadingMore = false }
+            await model.load(view: view, loop: loop, reset: false)
+          }
+        }.disabled(model.loading)
       }
-      if model.items.isEmpty && !model.loading && model.error == nil {
+      if model.showsEmptyState(view: view, loop: loop) {
         ContentUnavailableView(
-          "You're caught up", systemImage: "tray",
-          description: Text("Items from your selected loops will appear here."))
+          view == "handled"
+            ? "No handled items"
+            : view == "sent"
+              ? "No sent actions" : loop == "all" ? "You're caught up" : "No open items",
+          systemImage: "tray",
+          description: Text(
+            loop == "all"
+              ? "Items from your selected loops will appear here."
+              : "No items in this source match the selected status."))
       }
     }
     .navigationTitle("Inbox").scrollContentBackground(.hidden).background(QMTheme.paper)
+    .modifier(
+      NativeCollectionRefresh(
+        active: (refreshing || model.completedFilter != "\(view)|\(loop)") && model.loading
+          && (model.loaded || (refreshing && model.error != nil)),
+        label: "Refreshing inbox")
+    )
     .toolbar {
       Button("Manage sources", systemImage: "line.3.horizontal.decrease") { managing = true }
     }
@@ -208,10 +242,16 @@ struct NativeInboxView: View {
         do { try await Task.sleep(for: .seconds(15)) } catch { return }
       }
     }
-    .refreshable { await model.load(view: view, loop: loop) }
+    .refreshable { await refresh() }
     .sheet(
-      isPresented: $managing, onDismiss: { Task { await model.load(view: view, loop: loop) } },
+      isPresented: $managing, onDismiss: { Task { await refresh() } },
       content: { NativeInboxSources(model: model) })
+  }
+
+  private func refresh() async {
+    refreshing = true
+    defer { refreshing = false }
+    await model.load(view: view, loop: loop)
   }
 }
 
@@ -231,6 +271,13 @@ struct NativeInboxSources: View {
               loop.name,
               systemImage: model.selected.contains { $0.id == loop.id }
                 ? "checkmark.circle.fill" : "circle")
+          }
+        }
+        if model.available.isEmpty {
+          if model.loading && !model.loaded && error == nil && model.error == nil {
+            NativeCollectionLoading(label: "Loading sources", symbol: "tray", rows: 3)
+          } else if model.loaded && error == nil && model.error == nil {
+            ContentUnavailableView("No sources available", systemImage: "tray")
           }
         }
         Section("Sync") {
@@ -286,6 +333,7 @@ final class InboxDetailModel {
   var proposalAt: Double?
   private let loader = LoadGuard()
   let drafts: DraftStore
+  var loading: Bool { loader.loading }
   private var restored = false
   var draft: NativeInboxDraft {
     .init(text: text, to: to, cc: cc, subject: subject, proposalAt: proposalAt)
@@ -419,6 +467,7 @@ struct NativeInboxItemView: View {
   @State private var output: NativeLoopOutput?
   @State private var note = ""
   @State private var decision = "ship"
+  @State private var refreshing = false
   init(client: APIClient, user: String, original: NativeInboxItem) {
     self.user = user
     _model = State(initialValue: InboxDetailModel(client: client, user: user, item: original))
@@ -426,6 +475,9 @@ struct NativeInboxItemView: View {
   var body: some View {
     QMForm {
       summarySection
+      if !model.loaded && model.loading && model.error == nil {
+        NativeParagraphLoading(label: "Loading item")
+      }
       contextSection
       draftSection
       proposedActionsSection
@@ -434,25 +486,36 @@ struct NativeInboxItemView: View {
         Text(error).foregroundStyle(.red)
         Text("Your unsaved draft is still here.").font(.caption)
       }
-      Button("Refresh item") { Task { await model.load() } }.disabled(model.dirty)
+      Button("Refresh item") { Task { await refresh() } }.disabled(model.dirty)
       if model.dirty {
         Button("Discard local edits and load latest", role: .destructive) { discarding = true }
       }
     }
     .disabled(model.busy).navigationTitle("Inbox item").navigationBarTitleDisplayMode(.inline)
+    .modifier(
+      NativeCollectionRefresh(
+        active: refreshing && model.loading && (model.loaded || model.error != nil),
+        label: "Refreshing item")
+    )
     .task(id: phase == .active) {
       guard phase == .active else { return }
       while !Task.isCancelled {
         await model.load()
         do { try await Task.sleep(for: .seconds(10)) } catch { return }
       }
-    }.refreshable { await model.load() }
+    }.refreshable { await refresh() }
     .onChange(of: model.followup) { model.persistDraft() }
     .onChange(of: phase) { if phase != .active { model.persistDraft() } }
     .onChange(of: model.draft) { model.persistDraft() }
     .onDisappear { model.persistDraft() }
     .confirmationDialog("Discard your local edits?", isPresented: $discarding) {
-      Button("Discard and reload", role: .destructive) { Task { await model.discardDraft() } }
+      Button("Discard and reload", role: .destructive) {
+        Task {
+          refreshing = true
+          defer { refreshing = false }
+          await model.discardDraft()
+        }
+      }
     }
     .confirmationDialog("Send this reply?", isPresented: $sending) {
       Button("Send reply") { Task { _ = await model.action("send") } }
@@ -467,13 +530,19 @@ struct NativeInboxItemView: View {
     }
   }
 
+  private func refresh() async {
+    refreshing = true
+    defer { refreshing = false }
+    await model.load()
+  }
+
   private var summarySection: some View {
     Section {
       Text(model.item.title).font(.headline)
       if let from = model.item.sourcePayload.from { Text(from) }
       if let detail = model.item.sourcePayload.fromDetail { Text(detail).font(.caption) }
       if let summary = model.item.summary { Text(summary) }
-      if let reason = model.item.parkedReason { Text(reason).foregroundStyle(.orange) }
+      if let reason = model.item.parkedReason { Text(reason).foregroundStyle(QMTheme.warning) }
       if let raw = model.item.sourcePayload.externalUrl,
         let url = NativeModelConnection.httpsURL(raw)
       {
@@ -606,11 +675,16 @@ struct NativeInboxItemView: View {
           Button("Cancel") { output = nil }.disabled(model.busy)
         }
         ToolbarItem(placement: .confirmationAction) {
-          Button(decision == "ship" ? "Approve" : "Return") {
+          Button {
             Task {
               await model.decide(candidate, decision: decision, note: note)
               if model.error == nil { output = nil }
             }
+          } label: {
+            NativeActionLabel(
+              title: decision == "ship" ? "Approve" : "Return",
+              busyTitle: decision == "ship" ? "Approving…" : "Returning…", busy: model.busy,
+              compact: true)
           }.disabled(
             model.busy
               || (decision == "return"

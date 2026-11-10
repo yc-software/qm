@@ -59,7 +59,7 @@ export function findTrailingPartialTurn(
 }
 
 export interface RecordedTurn extends PartialTurn {
-  answer?: { seq: number; text: string };
+  answer?: { seq: number; text: string; stopped?: true };
 }
 
 function isSteerEntry(e: SessionEntry): boolean {
@@ -75,7 +75,11 @@ export function turnAtSeq(entries: readonly SessionEntry[], userSeq: number): Re
     const e = entries[i]!;
     if (e.type !== "user" && differentTurn(e, entries[start]!)) continue;
     if (e.type === "assistant") {
-      answer = { seq: e.seq, text: entryText(e) };
+      answer = {
+        seq: e.seq,
+        text: entryText(e),
+        ...((e.payload as { stopped?: unknown } | null)?.stopped === true ? { stopped: true as const } : {}),
+      };
       continue;
     }
     if (e.type === "tool_call" || e.type === "tool_result") {

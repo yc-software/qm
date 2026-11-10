@@ -164,6 +164,7 @@ struct NativeSentMailPage: Decodable {
 final class SentMailModel {
   let client: APIClient
   var messages: [NativeSentEmail] = []
+  var loaded = false
   var accountEmail = ""
   var accountType: String?
   var nextPage: String?
@@ -203,6 +204,7 @@ final class SentMailModel {
         self.nextPage = nil
         throw QMError.message("The mail list did not advance. Refresh to try again.")
       }
+      loaded = true
       error = nil
     } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
   }
@@ -234,14 +236,19 @@ struct NativeSentMailView: View {
         }
       }
       if let error = model.error { Text(error).foregroundStyle(.red) }
-      if model.busy { ProgressView() }
+      if model.busy && !model.loaded && model.error == nil {
+        NativeCollectionLoading(label: "Loading sent mail", symbol: "paperplane")
+      }
       if model.nextPage != nil {
         Button("Load more") { Task { await model.load(more: true) } }.disabled(model.busy)
       }
-      if model.messages.isEmpty && !model.busy && model.error == nil {
+      if model.messages.isEmpty && model.loaded && model.error == nil {
         ContentUnavailableView("No sent mail", systemImage: "paperplane")
       }
     }.navigationTitle("Sent mail").task { await model.load() }.refreshable { await model.load() }
+      .modifier(
+        NativeCollectionRefresh(
+          active: model.busy && (model.loaded || model.error != nil), label: "Loading sent mail"))
   }
 }
 
@@ -255,6 +262,7 @@ struct NativeSentMailDetail: View {
   @State private var item: NativeInboxItem?
   @State private var error: String?
   @State private var busy = false
+  @State private var loading = false
   @State private var opening = false
   var body: some View {
     QMList {
@@ -287,8 +295,16 @@ struct NativeSentMailDetail: View {
             }
           }
         }
-        Button("Ask QM about this email", systemImage: "bubble.left.and.bubble.right") {
+        Button {
           Task { await openChat(detail) }
+        } label: {
+          HStack {
+            if !busy || loading {
+              Image(systemName: "bubble.left.and.bubble.right").accessibilityHidden(true)
+            }
+            NativeActionLabel(
+              title: "Ask QM about this email", busyTitle: "Opening chat…", busy: busy && !loading)
+          }
         }.disabled(busy)
         if chatTrimmed {
           Text(
@@ -300,8 +316,14 @@ struct NativeSentMailDetail: View {
         Text(error).foregroundStyle(.red)
         Button("Retry") { Task { await load() } }.disabled(busy)
       }
-      if detail == nil && error == nil { ProgressView() }
+      if loading && detail == nil && error == nil {
+        NativeParagraphLoading(label: "Loading email")
+      }
     }.navigationTitle("Sent email").navigationBarTitleDisplayMode(.inline)
+      .modifier(
+        NativeCollectionRefresh(
+          active: loading && (detail != nil || error != nil), label: "Refreshing email")
+      )
       .task { await load() }.refreshable { await load() }
       .navigationDestination(isPresented: $opening) {
         if let item { NativeInboxItemView(client: client, user: user, original: item) }
@@ -310,7 +332,11 @@ struct NativeSentMailDetail: View {
   private func load() async {
     guard !busy else { return }
     busy = true
-    defer { busy = false }
+    loading = true
+    defer {
+      loading = false
+      busy = false
+    }
     do {
       let fetched: NativeSentEmail = try await client.fetch(
         "api/inbox/sent/\(original.id.apiComponent)",

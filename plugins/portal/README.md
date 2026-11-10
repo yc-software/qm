@@ -244,7 +244,10 @@ access is derived from the core (see the security model above).
 see the security model. Boot fails on an entry that is not a bare https origin (plain http only for localhost).
 For local development only, `PORTAL_LOCAL_AUTH_BYPASS=1` mints a local session as
 `PORTAL_DEV_PRINCIPAL` without contacting OIDC. The portal refuses this in production
-and only accepts it when `PORTAL_PUBLIC_URL` is loopback.
+and only accepts it when `PORTAL_PUBLIC_URL` is loopback. Set
+`PORTAL_LOCAL_AUTH_BYPASS_LAN=1` to extend that development session to clients on a
+private LAN, such as a phone testing the local portal. The LAN flag is also refused in
+production and has no effect unless the local bypass is enabled.
 
 Identity: `OIDC_PRINCIPAL_CLAIM` — `email` (default; the org-canonical id: the
 verified work email, lowercased; sign-in fails unless the IdP marks the email verified) or `sub`

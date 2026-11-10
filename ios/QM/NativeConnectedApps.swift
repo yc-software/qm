@@ -24,29 +24,56 @@ final class ConnectedAppsModel {
   var toolkits: [NativeToolkit] = []
   var accounts: [NativeConnectedAccount] = []
   var nextCursor: String?
-  var busy = false
+  var query = ""
+  var loading = false
+  var connecting = false
+  var busy: Bool { loading || connecting }
+  var loadingMore: Bool { loading && loadingCursor != nil }
   var loaded = false
   var error: String?
   private var revision = UUID()
+  private var searchRevision = UUID()
   private var cursors = Set<String>()
+  private var loadingCursor: String?
   private let authorization = ConnectionAuthorization()
   init(client: APIClient) { self.client = client }
+  var matchingToolkits: [NativeToolkit] {
+    toolkits.filter {
+      query.isEmpty || $0.name.localizedCaseInsensitiveContains(query)
+        || $0.description.localizedCaseInsensitiveContains(query)
+    }
+  }
+  func search() async {
+    let current = searchRevision
+    while !Task.isCancelled && current == searchRevision && !connecting {
+      if loading {
+        do { try await Task.sleep(for: .milliseconds(50)) } catch { return }
+        continue
+      }
+      guard error == nil, !loaded || (!query.isEmpty && nextCursor != nil) else { return }
+      guard await load(more: loaded) else { return }
+    }
+  }
   func cancel() {
     revision = UUID()
+    searchRevision = UUID()
+    loading = false
     authorization.cancel()
   }
-  func load(more: Bool = false) async {
-    guard !busy, !more || nextCursor != nil else { return }
-    busy = true
+  @discardableResult
+  func load(more: Bool = false) async -> Bool {
+    guard !Task.isCancelled, !busy, !more || nextCursor != nil else { return false }
+    loading = true
+    loadingCursor = more ? nextCursor : nil
     let current = UUID()
     revision = current
-    defer { busy = false }
+    defer { if current == revision { loading = false } }
     do {
-      let cursor = more ? nextCursor : nil
+      let cursor = loadingCursor
       let page: NativeToolkitPage = try await client.fetch(
         "api/composio/toolkits", query: cursor.map { [.init(name: "cursor", value: $0)] } ?? [])
       try Task.checkCancellation()
-      guard current == revision else { return }
+      guard current == revision else { return false }
       if !more {
         toolkits = []
         cursors = []
@@ -60,11 +87,13 @@ final class ConnectedAppsModel {
         throw QMError.message("The app catalog repeated a page. Refresh to try again.")
       }
       if !more { try await refreshAccounts(current: current) }
-      guard current == revision else { return }
+      guard current == revision else { return false }
       loaded = true
       error = nil
+      return true
     } catch {
       if current == revision && !Task.isCancelled { self.error = error.localizedDescription }
+      return false
     }
   }
   private func refreshAccounts(current: UUID) async throws {
@@ -86,11 +115,14 @@ final class ConnectedAppsModel {
     accounts = result
   }
   func connect(_ toolkit: NativeToolkit) async {
-    guard !busy else { return }
-    busy = true
+    guard !connecting else { return }
+    connecting = true
+    loading = false
+    error = nil
+    searchRevision = UUID()
     let current = UUID()
     revision = current
-    defer { busy = false }
+    defer { connecting = false }
     do {
       struct Start: Decodable {
         let url: String
@@ -128,10 +160,15 @@ final class ConnectedAppsModel {
 
 struct NativeConnectedApps: View {
   @State private var model: ConnectedAppsModel
-  @State private var query = ""
   init(client: APIClient) { _model = State(initialValue: ConnectedAppsModel(client: client)) }
   var body: some View {
     QMList {
+      if model.connecting {
+        VStack(alignment: .leading, spacing: 10) {
+          NativeActionLabel(title: "Connect app", busyTitle: "Connecting app...", busy: true)
+          NativeLoadingRail()
+        }
+      }
       Section {
         Text(
           "Connect an account so QM can work with its apps. Review the provider’s requested permissions during sign-in."
@@ -147,12 +184,7 @@ struct NativeConnectedApps: View {
         }
       }
       Section("Available apps") {
-        ForEach(
-          model.toolkits.filter {
-            query.isEmpty || $0.name.localizedCaseInsensitiveContains(query)
-              || $0.description.localizedCaseInsensitiveContains(query)
-          }
-        ) { toolkit in
+        ForEach(model.matchingToolkits) { toolkit in
           VStack(alignment: .leading, spacing: 8) {
             Text(toolkit.name).font(.headline)
             Text(toolkit.description).font(.caption).lineLimit(4)
@@ -161,21 +193,34 @@ struct NativeConnectedApps: View {
                 ? "Connect another account" : "Connect"
             ) {
               Task { await model.connect(toolkit) }
-            }
+            }.disabled(model.connecting)
           }.padding(.vertical, 6)
         }
-        if model.nextCursor != nil {
-          Button("Load more apps") { Task { await model.load(more: true) } }
+        if model.loading {
+          NativeCatalogLoading(
+            label: !model.query.isEmpty
+              ? "Searching apps..."
+              : model.loadingMore ? "Loading more apps..." : "Loading apps...")
+        } else if model.nextCursor != nil && model.query.isEmpty {
+          Button("Load more apps") { Task { await model.load(more: true) } }.disabled(model.busy)
         }
       }
-      if let error = model.error {
+      if let error = model.error, !model.busy {
         Text(error).foregroundStyle(.red)
-        Button("Retry") { Task { await model.load() } }
+        Button("Retry") {
+          Task {
+            await model.load()
+            await model.search()
+          }
+        }
       }
-      if model.busy { ProgressView() }
-    }.disabled(model.busy).navigationTitle("App connections").navigationBarTitleDisplayMode(.inline)
-      .searchable(text: $query, prompt: "Find an app")
-      .task { await model.load() }.refreshable { await model.load() }
+    }.navigationTitle("App connections").navigationBarTitleDisplayMode(.inline)
+      .searchable(text: $model.query, prompt: "Find an app")
+      .task(id: model.query) { await model.search() }
+      .refreshable {
+        await model.load()
+        await model.search()
+      }
       .onDisappear { model.cancel() }
   }
 }

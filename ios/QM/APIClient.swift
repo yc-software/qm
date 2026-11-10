@@ -93,18 +93,6 @@ final class SameOriginRedirects: NSObject, URLSessionTaskDelegate, Sendable {
     return try JSONDecoder().decode(T.self, from: data)
   }
 
-  func transcribe(file: URL) async throws -> String {
-    let current = generation
-    var request = try request("api/dictation", method: "POST")
-    request.setValue("audio/mp4", forHTTPHeaderField: "Content-Type")
-    request.timeoutInterval = 75
-    let (data, response) = try await session.upload(
-      for: request, fromFile: file, delegate: redirects)
-    try check(response, generation: current, data: data)
-    struct Transcript: Decodable { let text: String }
-    return try JSONDecoder().decode(Transcript.self, from: data).text
-  }
-
   func redeemSignIn(code: String, verifier: String, state: String) async throws -> String {
     let current = generation
     var request = try request("auth/desktop/redeem", method: "POST")
@@ -152,14 +140,14 @@ final class SameOriginRedirects: NSObject, URLSessionTaskDelegate, Sendable {
     return try JSONDecoder().decode(UploadedBlob.self, from: responseData)
   }
 
-  func download(_ path: String) async throws -> URL {
+  func download(_ path: String) async throws -> (url: URL, suggestedFilename: String?) {
     let current = generation
     var request = try request(path)
     request.setValue("*/*", forHTTPHeaderField: "Accept")
     let (file, response) = try await session.download(for: request, delegate: redirects)
     do {
       try check(response, generation: current)
-      return file
+      return (file, response.suggestedFilename)
     } catch {
       try? FileManager.default.removeItem(at: file)
       throw error

@@ -33,6 +33,9 @@ struct Conversation: Codable, Identifiable, Hashable {
   var lastActivityAt: Double?
   var working: Bool?
   var awaitingInput: Bool?
+  var purpose: String? = nil
+  var workingSince: Double? = nil
+  var lastTurnFailed: Bool? = nil
   var pinned: Bool?
   var archived: Bool?
   var localOnly: Bool?
@@ -83,15 +86,9 @@ struct Conversation: Codable, Identifiable, Hashable {
     return components.url
   }
 
-  func isInherited(_ message: ChatMessage) -> Bool {
-    guard forkedFrom != nil, let forkBoundarySeq, let sequence = message.sequence else {
-      return false
-    }
-    return sequence <= forkBoundarySeq
-  }
-
   var label: String { title?.isEmpty == false ? title! : "New conversation" }
-  var canReply: Bool { localOnly == true || canContinue == true }
+  var isSubagent: Bool { parentSessionId?.isEmpty == false }
+  var canReply: Bool { !isSubagent && (localOnly == true || canContinue == true) }
 }
 
 enum ConversationFilter: String, CaseIterable {
@@ -126,13 +123,13 @@ struct NativeConversationPin: Decodable, Identifiable {
 }
 
 struct Entry: Decodable, Identifiable {
+  let id: String
   let type: String
   let payload: EntryPayload?
   let createdAt: Double
   let seq: Int?
   let truncated: Bool?
-  var id: String { "\(seq ?? -1):\(createdAt):\(type)" }
-
+  var itemKind: String? = nil
 }
 
 struct NativePlayground: Decodable, Identifiable {
@@ -142,7 +139,7 @@ struct NativePlayground: Decodable, Identifiable {
   var id: String { artifactId }
 }
 
-struct EntryPayload: Decodable {
+final class EntryPayload: Decodable, Sendable {
   let details: NativeActivityValue?
   struct Display: Decodable { let artifact: NativePlayground? }
   let playground: NativePlayground?
@@ -278,9 +275,15 @@ struct ChatRunPresentation: Identifiable {
 
 func presentedChatMessages(
   _ entries: [Entry], runs: [ChatRunPresentation], activeRunID: String?,
-  queuedRunIDs: Set<String> = []
+  queuedRunIDs: Set<String> = [], liveActivity: [Entry] = []
 ) -> [ChatMessage] {
   var messages = chatMessages(entries)
+  if let activeRunID {
+    let indices = messages.indices.filter { messages[$0].runID == activeRunID }
+    for entry in liveActivity {
+      _ = attachToolResult(entry, to: &messages, indices: indices)
+    }
+  }
   for run in runs {
     if let input = run.input, !input.isRecorded(in: entries), !queuedRunIDs.contains(run.id),
       run.finished || activeRunID == nil || activeRunID == run.runID
@@ -291,16 +294,45 @@ func presentedChatMessages(
         } ?? messages.endIndex
       messages.insert(input.message, at: position)
     }
-    let replyRecorded = run.runID.map { hasRecordedRunReply(entries, runID: $0) } ?? false
+    let projected = run.finished ? chatMessages(run.activity, runID: run.runID) : []
+    for var message in projected where !messages.contains(where: { $0.id == message.id }) {
+      let presented = Set(messages.flatMap(\.activity).map(\.id))
+      message.activity.removeAll { presented.contains($0.id) }
+      let position =
+        message.sequence.flatMap { sequence in
+          messages.firstIndex { ($0.sequence ?? Int.min) > sequence }
+        } ?? run.runID.flatMap { id in messages.lastIndex { $0.runID == id }.map { $0 + 1 } }
+        ?? messages.endIndex
+      messages.insert(message, at: position)
+    }
+    let projectedIDs = Set(projected.map(\.id))
+    let delivered = run.activity.contains {
+      projectedIDs.contains($0.id)
+        && ($0.type == "assistant" || $0.type == "tool_call" && $0.payload?.action == "post")
+    }
+    let last = run.activity.last
+    let finalNarration =
+      last?.type == "text" && last?.payload?.details?["phase"] == .string("final_answer")
+      && last?.payload?.details?["demoted"] != .bool(true) && last?.payload?.text == run.reply
+    let replyRecorded =
+      (run.runID.map { hasRecordedRunReply(entries, runID: $0) } ?? false)
+      || delivered || finalNarration
     var seen = Set(messages.filter { $0.runID == run.runID }.flatMap(\.activity).map(\.id))
-    let remainingActivity = run.activity.filter {
+    var remainingActivity = run.activity.filter {
       NativeWorkItem.supports($0) && seen.insert($0.id).inserted
     }
+    let indices = messages.indices.filter { messages[$0].runID == run.runID }
+    remainingActivity.removeAll {
+      attachToolResult($0, to: &messages, indices: indices)
+    }
     if run.finished, replyRecorded, let runID = run.runID,
+      let first = remainingActivity.first,
       let index = messages.lastIndex(where: { $0.runID == runID && $0.role == "assistant" })
     {
-      messages[index].activity += remainingActivity
-      messages[index].activity.sort { ($0.seq ?? Int.max) < ($1.seq ?? Int.max) }
+      messages.insert(
+        ChatMessage(
+          id: "activity:\(first.id)", role: "assistant", text: "", runID: runID,
+          activity: remainingActivity), at: index + 1)
     }
     if let reply = run.reply, !reply.isEmpty, !replyRecorded {
       let position =
@@ -310,6 +342,18 @@ func presentedChatMessages(
       messages.insert(
         ChatMessage(
           id: "reply:\(run.id)", role: "assistant", text: reply, runID: run.runID,
+          activity: remainingActivity),
+        at: position)
+    } else if run.finished, !remainingActivity.isEmpty,
+      !messages.contains(where: { $0.runID == run.runID && $0.role == "assistant" })
+    {
+      let position =
+        run.runID.flatMap { id in
+          messages.lastIndex { $0.runID == id }.map { $0 + 1 }
+        } ?? messages.endIndex
+      messages.insert(
+        ChatMessage(
+          id: "activity:\(run.id)", role: "assistant", text: "", runID: run.runID,
           activity: remainingActivity),
         at: position)
     }
@@ -324,8 +368,11 @@ struct Run: Decodable {
   var replyComplete: Bool? = nil
   var input: RunInput? = nil
   var activity: [Entry]? = nil
+  var attempt: Int? = nil
+  var partialStartOffset: Int? = nil
+  var reasoning: [RunReasoning]? = nil
   var isFinished: Bool {
-    status == "done" || status == "failed" || result != nil || replyComplete == true
+    status == "done" || status == "failed" || result != nil
   }
   var failure: String? {
     if status == "failed" || result?.status == "failed" || result?.status == "refused" {
@@ -395,8 +442,8 @@ struct ChatMessage: Identifiable {
   var notice: ChatNotice?
 }
 
-func chatMessages(_ entries: [Entry]) -> [ChatMessage] {
-  var builder = ChatMessageBuilder()
+func chatMessages(_ entries: [Entry], runID: String? = nil) -> [ChatMessage] {
+  var builder = ChatMessageBuilder(currentRunID: runID)
   for entry in entries { builder.add(entry) }
   return builder.messagesWithReferences()
 }
@@ -406,6 +453,9 @@ private struct ChatMessageBuilder {
   var posts: [String: Entry] = [:]
   var posted = false
   var lastText = ""
+  var lastTextID: String?
+  var lastTextPhase: String?
+  var lastTextStep: NativeActivityValue?
   var silent = false
   var playgroundIDs = Set<String>()
   var currentRunID: String?
@@ -417,11 +467,17 @@ private struct ChatMessageBuilder {
     let messageCount = messages.count
     if entry.type == "user", payload.steered != true || payload.runId != nil {
       currentRunID = payload.runId
+    } else if let runID = payload.runId {
+      currentRunID = runID
     }
-    if NativeWorkItem.supports(entry) { activity.append(entry) }
+    if NativeWorkItem.supports(entry),
+      !attachToolResult(entry, to: &messages, indices: Array(turnStart..<messages.count))
+    {
+      activity.append(entry)
+    }
     switch entry.type {
     case "user": addUser(entry, payload)
-    case "text": lastText = payload.text ?? ""
+    case "text": addText(entry, payload)
     case "tool_call":
       if payload.action == "post", let callID = payload.callId { posts[callID] = entry }
     case "tool_result": addToolResult(entry, payload)
@@ -452,6 +508,9 @@ private struct ChatMessageBuilder {
       posted = false
       silent = false
       lastText = ""
+      lastTextID = nil
+      lastTextPhase = nil
+      lastTextStep = nil
     }
     guard payload.hidden != true else { return }
     let text = payload.display ?? payload.text ?? ""
@@ -497,7 +556,13 @@ private struct ChatMessageBuilder {
   private mutating func addAssistant(_ entry: Entry, _ payload: EntryPayload) {
     if !posted && !silent {
       let text = payload.text?.isEmpty == false ? payload.text! : lastText
-      if !text.isEmpty || !(payload.attachments ?? []).isEmpty {
+      if let last = messages.indices.last, messages[last].id == lastTextID,
+        lastTextPhase != "commentary", messages[last].text == text, activity.isEmpty,
+        lastTextStep == nil || payload.details?["step"] == nil
+          || lastTextStep == payload.details?["step"]
+      {
+        messages[last].files += payload.attachments ?? []
+      } else if !text.isEmpty || !(payload.attachments ?? []).isEmpty {
         messages.append(
           ChatMessage(
             id: entry.id, role: "assistant", text: text, files: payload.attachments ?? [],
@@ -507,7 +572,21 @@ private struct ChatMessageBuilder {
     posted = false
     silent = false
     lastText = ""
+    lastTextID = nil
+    lastTextPhase = nil
+    lastTextStep = nil
     posts = [:]
+  }
+
+  private mutating func addText(_ entry: Entry, _ payload: EntryPayload) {
+    lastText = payload.text ?? ""
+    lastTextPhase = payload.details?["phase"]?.string
+    lastTextStep = payload.details?["step"]
+    guard payload.hidden != true, payload.details?["demoted"] != .bool(true),
+      !lastText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    else { return }
+    lastTextID = entry.id
+    messages.append(ChatMessage(id: entry.id, role: "assistant", text: lastText))
   }
 
   private mutating func addDelivery(_ entry: Entry, _ payload: EntryPayload) {
@@ -537,9 +616,8 @@ private struct ChatMessageBuilder {
   }
 
   private mutating func attachActivity(_ entry: Entry, from messageCount: Int) {
-    if entry.type == "assistant", messageCount == messages.count, let last = lastAssistantInTurn {
-      messages[last].activity += activity
-      activity = []
+    if entry.type == "assistant", messageCount == messages.count, let first = activity.first {
+      messages.append(ChatMessage(id: "activity:\(first.id)", role: "assistant", text: ""))
     }
     for index in messageCount..<messages.count {
       messages[index].runID = currentRunID
@@ -565,6 +643,20 @@ private struct ChatMessageBuilder {
     }
     return messages
   }
+}
+
+private func attachToolResult(_ entry: Entry, to messages: inout [ChatMessage], indices: [Int])
+  -> Bool
+{
+  guard entry.type == "tool_result", let callID = entry.payload?.callId,
+    let index = indices.last(where: { index in
+      messages[index].activity.contains { $0.type == "tool_call" && $0.payload?.callId == callID }
+    })
+  else { return false }
+  if !messages[index].activity.contains(where: { $0.id == entry.id }) {
+    messages[index].activity.append(entry)
+  }
+  return true
 }
 
 struct RunResult: Decodable {
@@ -602,11 +694,14 @@ struct StreamEvent: Decodable {
     guard name == "run", let value, let status = value.status else { return nil }
     return Run(
       status: status, partial: value.partial, result: value.result,
-      replyComplete: value.replyComplete, input: value.input, activity: value.activity)
+      replyComplete: value.replyComplete, input: value.input, activity: value.activity,
+      attempt: value.attempt, partialStartOffset: value.partialStartOffset,
+      reasoning: value.reasoning)
   }
 
   struct Value: Decodable {
     let offset: Int?
+    let startOffset: Int?
     let delta: String?
     let status: String?
     let partial: String?
@@ -614,31 +709,126 @@ struct StreamEvent: Decodable {
     let replyComplete: Bool?
     let input: RunInput?
     let activity: [Entry]?
+    let attempt: Int?
+    let partialStartOffset: Int?
+    let reasoning: [RunReasoning]?
+    let step: String?
+    let index: Int?
   }
 }
 
 struct StreamText {
   private(set) var text = ""
-  private var utf16Count = 0
+  private(set) var isFinalReply = false
+  private(set) var startOffset = 0
+  private(set) var reasoning: [RunReasoning] = []
+  private var utf16Offset = 0
+  private var attempt: Int?
+  private var textBlockOffset: Int?
+  private var textPosition: Int?
+  private var reasoningPositions: [String: Int] = [:]
+  private var nextPosition = 0
+
+  var reasoningAfterText: Set<String> {
+    guard let textPosition else { return [] }
+    return Set(reasoningPositions.filter { $0.value > textPosition }.map(\.key))
+  }
+
+  mutating func apply(_ run: Run) {
+    if let attempt = run.attempt, attempt != self.attempt {
+      self = StreamText()
+      self.attempt = attempt
+    }
+    let lastText = run.activity?.last { $0.type == "text_start" || $0.type == "text" }
+    if lastText?.type == "text" { textPosition = nil }
+    if let marker = run.activity?.last(where: { $0.type == "text_start" }),
+      case .number(let offset) = marker.payload?.details?["streamOffset"]
+    {
+      let offset = NSDecimalNumber(decimal: offset).intValue
+      if textBlockOffset != offset {
+        textBlockOffset = offset
+        textPosition = nil
+      }
+    }
+    for block in run.reasoning ?? [] { mergeReasoning(block, offset: 0) }
+    if let reply = run.result?.reply {
+      text = reply
+      isFinalReply = true
+      startOffset = 0
+      utf16Offset = reply.utf16.count
+      textPosition = nil
+      if !reply.isEmpty { recordTextPosition() }
+    } else if let partial = run.partial {
+      text = partial
+      isFinalReply = false
+      startOffset = run.partialStartOffset ?? 0
+      utf16Offset = startOffset + partial.utf16.count
+      if lastText?.type == "text" {
+        textPosition = nil
+      } else if utf16Offset > (textBlockOffset ?? startOffset) {
+        recordTextPosition()
+      }
+    }
+    if let activity = run.activity {
+      let persisted = Set(activity.compactMap(\.reasoningID))
+      reasoning.removeAll { persisted.contains($0.id) }
+    }
+  }
 
   mutating func apply(_ event: StreamEvent) throws {
-    if event.name == "run", let partial = event.value?.result?.reply ?? event.value?.partial {
-      text = partial
-      utf16Count = partial.utf16.count
+    if let run = event.run {
+      apply(run)
+    } else if event.name == "reasoning", let value = event.value, let step = value.step,
+      let index = value.index, let offset = value.offset, let delta = value.delta
+    {
+      mergeReasoning(RunReasoning(step: step, index: index, text: delta), offset: offset)
     } else if event.name == "delta", let offset = event.value?.offset,
       let delta = event.value?.delta
     {
-      guard offset >= 0, offset <= utf16Count else {
+      let retainedStart = max(startOffset, event.value?.startOffset ?? 0)
+      guard offset >= 0, offset <= max(utf16Offset, retainedStart) else {
         throw QMError.message("Reconnecting to the response…")
       }
+      if retainedStart > startOffset {
+        text = String(decoding: text.utf16.dropFirst(retainedStart - startOffset), as: UTF16.self)
+        startOffset = retainedStart
+        utf16Offset = max(utf16Offset, retainedStart)
+      }
       let incoming = Array(delta.utf16)
-      let overlap = utf16Count - offset
+      let overlap = utf16Offset - offset
       if overlap < incoming.count {
         let suffix = incoming.dropFirst(overlap)
         text.append(String(decoding: suffix, as: UTF16.self))
-        utf16Count += suffix.count
+        utf16Offset += suffix.count
+        recordTextPosition()
       }
     }
+  }
+
+  private mutating func mergeReasoning(_ block: RunReasoning, offset: Int) {
+    let index = reasoning.firstIndex { $0.id == block.id }
+    let current = index.map { reasoning[$0].text } ?? ""
+    guard offset >= 0, offset <= current.utf16.count else { return }
+    let text = String(decoding: current.utf16.prefix(offset), as: UTF16.self) + block.text
+    guard text.utf16.count > current.utf16.count else { return }
+    let updated = RunReasoning(step: block.step, index: block.index, text: text)
+    if let index {
+      reasoning[index] = updated
+    } else {
+      reasoning.removeAll { $0.step != block.step }
+      reasoningPositions = reasoningPositions.filter { key, _ in reasoning.contains { $0.id == key }
+      }
+      reasoningPositions[block.id] = nextPosition
+      nextPosition += 1
+      reasoning.append(updated)
+    }
+  }
+
+  private mutating func recordTextPosition() {
+    guard textPosition == nil else { return }
+    if textBlockOffset == nil { textBlockOffset = startOffset }
+    textPosition = nextPosition
+    nextPosition += 1
   }
 }
 
@@ -658,7 +848,7 @@ enum QMError: LocalizedError {
 struct ConversationUpdate: Decodable { let session: Conversation }
 
 func sidebarConversations(_ conversations: [Conversation]) -> [Conversation] {
-  conversations.filter { $0.parentSessionId?.isEmpty != false }
+  conversations.filter { !$0.isSubagent }
 }
 
 func hasRecordedRunReply(_ entries: [Entry], runID: String, includingPosts: Bool = true) -> Bool {

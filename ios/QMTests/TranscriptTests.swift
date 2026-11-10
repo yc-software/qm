@@ -51,6 +51,26 @@ final class TranscriptTests: XCTestCase {
     XCTAssertEqual(messages.flatMap(\.activity).compactMap(\.seq), [2, 3, 4])
   }
 
+  func testCompletedRunWithoutReplyKeepsItsActivityVisible() throws {
+    let entries = try JSONDecoder().decode(
+      [Entry].self,
+      from: Data(
+        #"[{"type":"user","seq":1,"createdAt":1,"payload":{"text":"Check status","runId":"A"}}]"#
+          .utf8))
+    let activity = try JSONDecoder().decode(
+      [Entry].self,
+      from: Data(
+        #"[{"type":"tool_call","seq":2,"createdAt":2,"payload":{"tool":"web","action":"search","callId":"check"}},{"type":"tool_result","seq":3,"createdAt":3,"payload":{"callId":"check","ok":true}}]"#
+          .utf8))
+    let run = ChatRunPresentation(
+      id: "A", runID: "A", reply: "", finished: true, activity: activity)
+    let messages = presentedChatMessages(entries, runs: [run], activeRunID: nil)
+    XCTAssertEqual(messages.map(\.role), ["user", "assistant"])
+    XCTAssertEqual(messages.last?.text, "")
+    XCTAssertEqual(messages.last?.activity.compactMap(\.seq), [2, 3])
+    XCTAssertEqual(messages.last?.runID, "A")
+  }
+
   func testFailedAndUnmatchedPostsDoNotSuppressTheRunReply() throws {
     let entries = try JSONDecoder().decode(
       [Entry].self,

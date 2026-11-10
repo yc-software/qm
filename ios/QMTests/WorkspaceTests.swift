@@ -36,6 +36,22 @@ struct WorkspaceTests {
         .canReply)
   }
 
+  @Test func subagentsStayReadOnlyEvenWhenContinuationIsAllowed() {
+    var conversation = Conversation(
+      id: "agent", scopeId: "personal:test", threadRef: "web:test:agent", surface: "web",
+      canContinue: true, parentSessionId: "parent")
+    #expect(conversation.isSubagent)
+    #expect(!conversation.canReply)
+    conversation.localOnly = true
+    #expect(!conversation.canReply)
+    conversation.parentSessionId = ""
+    #expect(!conversation.isSubagent)
+    #expect(conversation.canReply)
+    conversation.parentSessionId = nil
+    #expect(!conversation.isSubagent)
+    #expect(conversation.canReply)
+  }
+
   @Test func slackLinksUseWorkspaceAndThreadIdentifiers() {
     var conversation = Conversation(
       id: "chat", scopeId: "channel:test", threadRef: "ch:C123:1727712000.123456")
@@ -59,19 +75,8 @@ struct WorkspaceTests {
     #expect(conversation.slackURL(workspaceURL: "https://example.slack.com") == nil)
   }
 
-  @Test func forkHistoryUsesBoundaryAndLeavesPendingMessagesCurrent() throws {
-    let conversation = try JSONDecoder().decode(
-      Conversation.self,
-      from: Data(
-        #"{"id":"fork","scopeId":"personal:test","threadRef":"web:fork","surface":"web","canContinue":true,"forkedFrom":{"sessionId":"source","title":"  Original  "},"forkBoundarySeq":5}"#
-          .utf8))
-    #expect(conversation.forkedFrom?.label == "Original")
-    #expect(
-      conversation.isInherited(ChatMessage(id: "old", role: "user", text: "Old", sequence: 5)))
-    #expect(
-      !conversation.isInherited(ChatMessage(id: "new", role: "user", text: "New", sequence: 6)))
-    #expect(
-      !conversation.isInherited(ChatMessage(id: "pending", role: "assistant", text: "Pending")))
+  @Test func forkOriginHasReadableLabel() {
+    #expect(Conversation.ForkOrigin(sessionId: "source", title: "  Original  ").label == "Original")
     #expect(
       Conversation.ForkOrigin(sessionId: "source", title: " ").label == "another conversation")
   }

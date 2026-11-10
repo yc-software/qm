@@ -16,9 +16,11 @@ process.env.CORE_SIGNING_SECRET = "local-auth-test-core-secret";
 process.env.WEB_UI_UPSTREAM = upstreamUrl;
 process.env.CORE_API_URL = upstreamUrl;
 process.env.PORTAL_LOCAL_AUTH_BYPASS = "1";
+process.env.PORTAL_LOCAL_AUTH_BYPASS_LAN = "1";
 process.env.PORTAL_DEV_PRINCIPAL = "local-admin";
 
-const { isLoopbackAddress, server } = await import("../src/index.ts");
+const { isLoopbackAddress, isPrivateNetworkAddress, privateLanSameOriginRequest, server } =
+  await import("../src/index.ts");
 await new Promise<void>((r) => server.listen(0, r));
 const base = `http://localhost:${(server.address() as AddressInfo).port}`;
 
@@ -54,6 +56,42 @@ test("local auth bypass only treats loopback client addresses as local", () => {
   assert.equal(isLoopbackAddress("192.168.1.10"), false);
   assert.equal(isLoopbackAddress("::ffff:192.168.1.10"), false);
   assert.equal(isLoopbackAddress(undefined), false);
+});
+
+test("LAN auth bypass only recognizes private network client addresses", () => {
+  for (const address of [
+    "10.16.80.90",
+    "172.16.0.1",
+    "172.31.255.254",
+    "192.168.1.10",
+    "169.254.1.2",
+    "::ffff:10.16.80.90",
+    "fd12:3456::1",
+    "fe80::1",
+  ]) {
+    assert.equal(isPrivateNetworkAddress(address), true, address);
+  }
+  for (const address of ["8.8.8.8", "172.15.0.1", "172.32.0.1", "2001:4860:4860::8888", undefined]) {
+    assert.equal(isPrivateNetworkAddress(address), false, String(address));
+  }
+});
+
+test("LAN auth bypass accepts only same-origin forms served from the private portal address", () => {
+  const request = (remoteAddress: string, host: string, origin: string) =>
+    ({
+      headers: { host, origin, "sec-fetch-site": "same-origin" },
+      socket: { remoteAddress },
+    }) as unknown as IncomingMessage;
+  assert.equal(
+    privateLanSameOriginRequest(request("10.16.80.42", "10.16.80.90:8113", "http://10.16.80.90:8113")),
+    true,
+  );
+  assert.equal(privateLanSameOriginRequest(request("10.16.80.42", "10.16.80.90:8113", "https://attacker.test")), false);
+  assert.equal(privateLanSameOriginRequest(request("8.8.8.8", "10.16.80.90:8113", "http://10.16.80.90:8113")), false);
+  assert.equal(
+    privateLanSameOriginRequest(request("10.16.80.42", "example.test:8113", "http://example.test:8113")),
+    false,
+  );
 });
 
 test("local auth bypass respects logout until explicit login", async () => {

@@ -8,6 +8,17 @@ struct NativeThemePalette: Codable, Equatable {
     let blue: Double
     var color: Color { Color(red: red, green: green, blue: blue) }
     var luminance: Double { red * 0.2126 + green * 0.7152 + blue * 0.0722 }
+    private var relativeLuminance: Double {
+      func linear(_ component: Double) -> Double {
+        component <= 0.04045 ? component / 12.92 : pow((component + 0.055) / 1.055, 2.4)
+      }
+      return linear(red) * 0.2126 + linear(green) * 0.7152 + linear(blue) * 0.0722
+    }
+    func contrast(with other: Self) -> Double {
+      let first = relativeLuminance
+      let second = other.relativeLuminance
+      return (max(first, second) + 0.05) / (min(first, second) + 0.05)
+    }
     func mixed(with other: Self, fraction: Double) -> Self {
       .init(
         red: red * (1 - fraction) + other.red * fraction,
@@ -33,6 +44,17 @@ struct NativeThemePalette: Codable, Equatable {
   let background: RGB
   let foreground: RGB
   var dark: Bool { background.luminance < 0.5 }
+  var readableForeground: RGB {
+    guard foreground.contrast(with: background) < 4.5 else { return foreground }
+    let black = RGB(red: 0, green: 0, blue: 0)
+    let white = RGB(red: 1, green: 1, blue: 1)
+    return black.contrast(with: background) > white.contrast(with: background) ? black : white
+  }
+  var surface: RGB {
+    let foreground = readableForeground
+    let mixed = background.mixed(with: foreground, fraction: 0.08)
+    return mixed.contrast(with: foreground) >= 4.5 ? mixed : background
+  }
   static func read(_ data: Data, filename: String) throws -> Self {
     guard data.count <= 2 * 1024 * 1024 else {
       throw QMError.message("Choose a theme file smaller than 2 MB.")

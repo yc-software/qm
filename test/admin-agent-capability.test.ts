@@ -25,6 +25,7 @@ import {
 } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
+import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 
@@ -63,6 +64,7 @@ async function start(withConfig = true) {
     sessions: built.sessions,
     runs: built.runs,
     errors: built.errors,
+    mcpServers: built.mcpServers,
     keychain,
     capabilitySecret: SECRET,
     signingSecret: SECRET,
@@ -495,16 +497,43 @@ test("admin walls hold for every spelling of a path, and encoded params still ro
   }
 });
 
-test("MCP server registration refuses agent tokens — the agent cannot change which calls need approval", async () => {
+test("MCP server mutations refuse agent tokens — the agent cannot change which calls need approval", async () => {
   const s = await start();
   try {
-    const res = await fetch(`${s.base}/v1/admin/mcp-servers/crm`, {
+    const path = "/v1/admin/mcp-servers/crm";
+    const cap = await capFor("admin-alice");
+    await s.built.mcpServers.put({
+      id: "crm",
+      name: "CRM",
+      url: "https://tools.example.com/mcp",
+      auth: "none",
+      readOnly: true,
+      enabled: true,
+      updatedAt: Date.now(),
+      updatedBy: "admin-alice",
+    });
+    const res = await fetch(`${s.base}${path}`, {
       method: "PUT",
-      headers: { "x-agent-capability": await capFor("admin-alice"), "content-type": "application/json" },
+      headers: { "x-agent-capability": cap, "content-type": "application/json" },
       body: JSON.stringify({ url: "https://tools.example.com/mcp", approval: "none", validate: false }),
     });
     assert.equal(res.status, 403);
     assert.match(((await res.json()) as any).message, /portal-only/);
+
+    const agentDelete = await fetch(`${s.base}${path}`, {
+      method: "DELETE",
+      headers: { "x-agent-capability": cap },
+    });
+    assert.equal(agentDelete.status, 403);
+    assert.match(((await agentDelete.json()) as any).message, /portal-only/);
+    assert.ok(await s.built.mcpServers.get("crm"));
+
+    const portalDelete = await fetch(`${s.base}${path}`, {
+      method: "DELETE",
+      headers: signedRequestHeaders(SECRET, "DELETE", path, "", { "x-admin-actor": "admin-alice@default-org" }),
+    });
+    assert.equal(portalDelete.status, 200);
+    assert.equal(await s.built.mcpServers.get("crm"), null);
   } finally {
     await s.close();
   }

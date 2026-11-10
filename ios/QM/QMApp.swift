@@ -24,6 +24,11 @@ struct RootView: View {
   @State private var choosingWorkspace = false
   @Environment(\.scenePhase) private var phase
 
+  private var conversationSyncURL: URL? {
+    guard phase == .active, path.isEmpty, model.client?.hasSession == true else { return nil }
+    return model.client?.baseURL
+  }
+
   private var visibleConversations: [Conversation] {
     sidebarConversations(model.conversations).filter {
       $0.archived != true
@@ -37,14 +42,30 @@ struct RootView: View {
       Group {
         if let identity = model.identity {
           QMList {
-            Text("Conversations")
-              .font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
-              .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 4, trailing: 20))
-              .listRowBackground(QMTheme.paper)
-              .listRowSeparator(.hidden)
+            HStack {
+              Text(webOnly ? "Web conversations" : "Conversations")
+                .foregroundStyle(.secondary)
+              Spacer()
+              if webOnly {
+                Button("Show all") { webOnly = false }
+                  .buttonStyle(.borderless)
+                  .accessibilityLabel("Show all conversations")
+              }
+            }
+            .font(.subheadline.weight(.medium))
+            .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 4, trailing: 20))
+            .listRowBackground(QMTheme.paper)
+            .listRowSeparator(.hidden)
+            if model.showingInitialConversationLoad {
+              NativeConversationListLoading()
+                .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
+                .listRowSeparator(.hidden)
+            }
             ForEach(visibleConversations) { conversation in
               NavigationLink(value: conversation) {
-                NativeConversationRow(conversation: conversation)
+                NativeConversationRow(
+                  conversation: conversation,
+                  updating: model.updatingConversationIDs.contains(conversation.id))
               }
               .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
               .listRowSeparator(.hidden)
@@ -66,22 +87,18 @@ struct RootView: View {
           .background(QMTheme.paper)
           .searchable(text: $search, prompt: "Find a conversation")
           .refreshable { await model.load() }
-          .task(id: phase == .active && path.isEmpty) {
-            if phase == .active && path.isEmpty { await model.watchConversations() }
-          }
           .toolbar { homeToolbar(identity) }
+        } else if model.client?.hasSession == true {
+          workspaceConnection
         } else {
-          WelcomeView(model: model)
+          WelcomeView(model: model, choosingWorkspace: $choosingWorkspace)
         }
       }
       .navigationTitle(model.identity == nil ? "" : "QM")
       .navigationBarTitleDisplayMode(.inline)
       .safeAreaInset(edge: .bottom) {
-        if let error = model.error {
-          HStack {
-            Text(error).font(.footnote)
-            Button("Retry") { Task { await model.restore() } }
-          }.padding().frame(maxWidth: .infinity).background(.regularMaterial)
+        if model.identity != nil, !model.conversations.isEmpty {
+          ConversationErrorBanner(model: model)
         }
       }
       .navigationDestination(for: Conversation.self) { conversation in
@@ -106,6 +123,7 @@ struct RootView: View {
         }
         rename = nil
       }
+      .disabled(rename.map { model.updatingConversationIDs.contains($0.id) } ?? true)
     }
     .preferredColorScheme(
       appearance == "custom"
@@ -118,37 +136,69 @@ struct RootView: View {
       path = []
       search = ""
     }
-    .task { await model.restore() }
+    .task(id: conversationSyncURL) {
+      if conversationSyncURL != nil { await model.watchConversations() }
+    }
     .onChange(of: model.client?.hasSession) { _, hasSession in
       if hasSession == false {
         path = []
-        model.identity = nil
-        model.conversations = []
+        model.resetAfterSessionLoss()
       }
     }
   }
 
   @ViewBuilder
+  private var workspaceConnection: some View {
+    if model.error != nil {
+      ContentUnavailableView {
+        Label("Couldn’t connect to your workspace", systemImage: "wifi.exclamationmark")
+      } description: {
+        Text("Your sign-in is saved. We’ll reconnect when your workspace is available.")
+      } actions: {
+        Button {
+          Task { await model.restore() }
+        } label: {
+          NativeActionLabel(title: "Try again", busyTitle: "Connecting...", busy: model.loading)
+        }.disabled(model.loading)
+        Button("Change workspace") { choosingWorkspace = true }
+      }
+      .accessibilityIdentifier("workspaceConnectionError")
+    } else {
+      NativeTwinSailsLoading(label: "Loading your workspace")
+        .padding(.horizontal, 24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(QMTheme.paper.ignoresSafeArea())
+    }
+  }
+
+  @ViewBuilder
   private func emptyState(_ identity: Identity) -> some View {
-    if visibleConversations.isEmpty && !model.loading {
+    if visibleConversations.isEmpty && !model.showingInitialConversationLoad {
       if model.error != nil && model.conversations.isEmpty {
         ContentUnavailableView {
           Label("Couldn’t load conversations", systemImage: "wifi.exclamationmark")
         } description: {
           Text("Check your connection and try again.")
         } actions: {
-          Button("Try again") { Task { await model.load() } }
+          Button {
+            Task { await model.load() }
+          } label: {
+            NativeActionLabel(title: "Try again", busyTitle: "Loading...", busy: model.loading)
+          }.disabled(model.loading)
         }
-      } else if !search.isEmpty {
-        ContentUnavailableView.search(text: search)
+        .accessibilityIdentifier("conversationLoadError")
       } else if webOnly {
         ContentUnavailableView {
-          Label("No web conversations", systemImage: "bubble.left")
+          Label(
+            search.isEmpty ? "No web conversations" : "No matching web conversations",
+            systemImage: search.isEmpty ? "bubble.left" : "magnifyingglass")
         } description: {
           Text("Your conversation filter is hiding Slack conversations.")
         } actions: {
           Button("Show all conversations") { webOnly = false }
         }
+      } else if !search.isEmpty {
+        ContentUnavailableView.search(text: search)
       } else {
         ContentUnavailableView(
           "Give QM something to do", systemImage: "bubble.left.and.text.bubble.right",
@@ -173,7 +223,7 @@ struct RootView: View {
         Text(identity.displayName ?? identity.user)
         NavigationLink("Archived conversations") { archivedConversations }
         Toggle("Web conversations only", isOn: $webOnly)
-        Button("Change workspace") { choosingWorkspace = true }.disabled(model.loading)
+        Button("Change workspace") { choosingWorkspace = true }
         Picker("App appearance", selection: $appearance) {
           Text("System").tag("system")
           Text("Light").tag("light")
@@ -221,21 +271,31 @@ struct RootView: View {
 
   private var archivedConversations: some View {
     QMList {
+      if model.showingInitialConversationLoad {
+        NativeConversationListLoading()
+          .listRowSeparator(.hidden)
+      }
       ForEach(
         sidebarConversations(model.conversations).filter { $0.archived == true }
       ) { conversation in
         NavigationLink(value: conversation) {
-          NativeConversationRow(conversation: conversation)
+          NativeConversationRow(
+            conversation: conversation,
+            updating: model.updatingConversationIDs.contains(conversation.id))
         }
         .contextMenu { conversationActions(conversation) }
         .swipeActions { conversationActions(conversation) }
       }
     }
     .navigationTitle("Archived conversations")
+    .safeAreaInset(edge: .bottom) { ConversationErrorBanner(model: model) }
+    .refreshable { await model.load() }
     .overlay {
-      if !sidebarConversations(model.conversations).contains(where: {
-        $0.archived == true
-      }) {
+      if !model.showingInitialConversationLoad, model.error == nil,
+        !sidebarConversations(model.conversations).contains(where: {
+          $0.archived == true
+        })
+      {
         ContentUnavailableView("No archived conversations", systemImage: "archivebox")
       }
     }
@@ -250,11 +310,13 @@ struct RootView: View {
         }
       }
       .tint(QMTheme.ink)
+      .disabled(model.updatingConversationIDs.contains(conversation.id))
       Button("Rename", systemImage: "pencil") {
         renamedTitle = conversation.label
         rename = conversation
       }
       .tint(QMTheme.ink.opacity(0.55))
+      .disabled(model.updatingConversationIDs.contains(conversation.id))
       Button(
         conversation.archived == true ? "Restore" : "Archive", systemImage: "archivebox"
       ) {
@@ -263,6 +325,28 @@ struct RootView: View {
         }
       }
       .tint(QMTheme.navy)
+      .disabled(model.updatingConversationIDs.contains(conversation.id))
+    }
+  }
+}
+
+private struct ConversationErrorBanner: View {
+  @Bindable var model: AppModel
+
+  var body: some View {
+    VStack(spacing: 0) {
+      if model.identity != nil, let error = model.error {
+        HStack {
+          Text(error).font(.footnote)
+          Button {
+            Task { await model.restore() }
+          } label: {
+            NativeActionLabel(title: "Reload", busyTitle: "Loading...", busy: model.loading)
+          }.disabled(model.loading)
+        }
+        .padding().frame(maxWidth: .infinity).background(.regularMaterial)
+        .accessibilityIdentifier("conversationErrorBanner")
+      }
     }
   }
 }
@@ -270,17 +354,27 @@ struct RootView: View {
 struct NativeConversationRow: View {
   let conversation: Conversation
   var showsContext = true
+  var updating = false
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   var body: some View {
-    HStack(spacing: 9) {
-      if conversation.working == true {
-        NativeWave().frame(width: 18, height: 10).foregroundStyle(.blue)
-      } else if conversation.awaitingInput == true {
-        Circle().fill(.orange).frame(width: 6, height: 6)
+    VStack(alignment: .leading, spacing: 4) {
+      HStack(spacing: 9) {
+        if conversation.working == true {
+          NativeWave().frame(width: 18, height: 10).foregroundStyle(.blue)
+        } else if conversation.awaitingInput == true {
+          Circle().fill(.orange).frame(width: 6, height: 6)
+        }
+        Text(conversation.label).font(.body)
+          .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+          .fixedSize(horizontal: false, vertical: true)
+        Spacer(minLength: 4)
+        if let emoji = conversation.status?.emoji, !emoji.isEmpty {
+          Text(emoji).font(.body)
+        }
       }
-      Text(conversation.label).font(.body).lineLimit(1)
-      Spacer(minLength: 4)
-      if let emoji = conversation.status?.emoji, !emoji.isEmpty {
-        Text(emoji).font(.body)
+      if updating {
+        NativeActionLabel(title: "", busyTitle: "Updating...", busy: true)
+          .font(.caption).foregroundStyle(.secondary)
       }
     }
     .frame(minHeight: 44)

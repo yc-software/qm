@@ -380,7 +380,7 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
   log(
     assembled.env.PORTAL_LOCAL_AUTH_BYPASS === "0"
       ? "portal auth: localhost bypass disabled"
-      : `portal auth: localhost bypass signs in as ${portalDevPrincipal}`,
+      : `portal auth: local bypass signs in as ${portalDevPrincipal} (${assembled.env.PORTAL_LOCAL_AUTH_BYPASS_LAN === "0" ? "localhost only" : "private LAN devices enabled"})`,
   );
 
   const tokens = slackOn(spec) ? slotTokens(slot, store) : null;

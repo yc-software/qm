@@ -4,59 +4,189 @@ import os
 @MainActor @Observable
 final class ChatModel {
   let user: String
-  var conversation: Conversation { didSet { rebuildForkPoints() } }
-  var entries: [Entry] = [] { didSet { rebuildTranscript() } }
-  private var inheritedEntries: [Entry]? { didSet { rebuildTranscript() } }
+  var conversation: Conversation {
+    didSet { if conversation != oldValue { presentationRevision += 1 } }
+  }
+  var entries: [Entry] = [] { didSet { presentationRevision += 1 } }
+  private var inheritedEntries: [Entry]? { didSet { presentationRevision += 1 } }
   var loadingInherited = false
   private(set) var hasLoadedTranscript: Bool
 
-  private(set) var transcriptEntries: [Entry] = []
-  private(set) var messages: [ChatMessage] = []
-  private(set) var forkableMessageIDs = Set<String>()
-  private var partialIsRecorded = false
-
-  private func rebuildForkPoints() {
-    forkableMessageIDs = Set(
-      NativeForkPoint.points(
-        transcriptEntries, inheritedBoundary: conversation.forkBoundarySeq
-      ).map(\.id))
+  private var earlierPromptAt: Double? {
+    didSet { if earlierPromptAt != oldValue { presentationRevision += 1 } }
+  }
+  private var earlierPromptBoundary: Int?
+  private static func latestPrompt(in messages: [ChatMessage]) -> Double? {
+    messages.lazy.filter { $0.role == "user" && SubagentMail(text: $0.text) == nil }
+      .compactMap(\.createdAt).max()
   }
 
-  private func rebuildPartialVisibility() {
-    partialIsRecorded = partialRunID.map { hasRecordedRunReply(entries, runID: $0) } ?? false
+  private struct StreamShape: Equatable {
+    let responding: Bool
+    let reasoning: [String]
+    let reasoningAfterText: Set<String>
   }
 
-  private func rebuildTranscript() {
+  private struct Presentation {
+    let revision: Int
+    let transcriptEntries: [Entry]
+    let messages: [ChatMessage]
+    let forkableMessageIDs: Set<String>
+    let partialIsRecorded: Bool
+    let liveTimeline: NativeRunTimeline?
+    let timeline: NativeChatTimeline
+    let visiblePromptAt: Double?
+    let latestPromptAt: Double?
+    let agentActivity: [NativeWorkItem]
+    let stream: StreamShape
+  }
+
+  private var presentationRevision = 0
+  @ObservationIgnored private var cachedPresentation: Presentation?
+
+  private var presentation: Presentation {
+    let revision = presentationRevision
+    if let cachedPresentation, cachedPresentation.revision == revision {
+      return cachedPresentation
+    }
     let currentIDs = Set(entries.map(\.id))
-    transcriptEntries = ((inheritedEntries ?? []).filter { !currentIDs.contains($0.id) } + entries)
-      .sorted { ($0.seq ?? Int.max) < ($1.seq ?? Int.max) }
-    rebuildMessages()
-    rebuildForkPoints()
-    rebuildPartialVisibility()
+    let transcriptEntries =
+      ((inheritedEntries ?? []).filter { !currentIDs.contains($0.id) }
+      + entries).sorted { ($0.seq ?? Int.max) < ($1.seq ?? Int.max) }
+    let messages = presentedChatMessages(
+      transcriptEntries, runs: runPresentations, activeRunID: activeRunID,
+      queuedRunIDs: queuedRunIDs, liveActivity: liveActivity)
+    let live = activeRunID.map {
+      NativeRunTimeline(
+        activity: liveActivity, partial: partial, startOffset: streamStartOffset,
+        runID: $0, recorded: messages, finalReply: streamIsFinalReply)
+    }
+    let timeline = NativeChatTimeline(
+      messages: messages + (live?.messages ?? []),
+      entries: transcriptEntries + runPresentations.flatMap(\.activity) + liveActivity,
+      activeRunID: activeRunID, reasoning: live == nil ? [] : liveReasoning,
+      reasoningAfterText: reasoningAfterText,
+      streamingMessageID: live?.messages.last?.id)
+    let visiblePromptAt = Self.latestPrompt(in: messages)
+    let latestPromptAt = [visiblePromptAt, earlierPromptAt].compactMap { $0 }.max()
+    let built = Presentation(
+      revision: revision, transcriptEntries: transcriptEntries, messages: messages,
+      forkableMessageIDs: conversation.isSubagent
+        ? []
+        : Set(
+          NativeForkPoint.points(
+            transcriptEntries, inheritedBoundary: conversation.forkBoundarySeq
+          ).map(\.id)),
+      partialIsRecorded: partialRunID.map { hasRecordedRunReply(entries, runID: $0) } ?? false,
+      liveTimeline: live, timeline: timeline, visiblePromptAt: visiblePromptAt,
+      latestPromptAt: latestPromptAt,
+      agentActivity: timeline.items.compactMap { item in
+        guard case .work(let work) = item.content, work.opensAgents else { return nil }
+        if item.active { return work }
+        guard work.state(active: false) == .complete, let latestPromptAt,
+          work.entry.createdAt >= latestPromptAt
+        else { return nil }
+        return work
+      },
+      stream: streamShape(live))
+    cachedPresentation = built
+    return built
   }
 
-  private func rebuildMessages() {
-    messages = presentedChatMessages(
-      transcriptEntries, runs: runPresentations, activeRunID: activeRunID,
-      queuedRunIDs: queuedRunIDs)
+  private func streamShape(_ live: NativeRunTimeline?) -> StreamShape {
+    guard let live else {
+      return StreamShape(responding: false, reasoning: [], reasoningAfterText: [])
+    }
+    return StreamShape(
+      responding: !live.liveText(
+        partial, startOffset: streamStartOffset, finalReply: streamIsFinalReply
+      ).isEmpty,
+      reasoning: liveReasoning.map(\.id), reasoningAfterText: reasoningAfterText)
   }
+
+  private func streamChanged() {
+    guard let cached = cachedPresentation, cached.revision == presentationRevision,
+      streamShape(cached.liveTimeline) != cached.stream
+    else { return }
+    presentationRevision += 1
+  }
+
+  var transcriptEntries: [Entry] { presentation.transcriptEntries }
+  var messages: [ChatMessage] { presentation.messages }
+  var forkableMessageIDs: Set<String> { presentation.forkableMessageIDs }
+  var latestPromptAt: Double? { presentation.latestPromptAt }
+  var liveTimeline: NativeRunTimeline? { presentation.liveTimeline }
+  var timeline: NativeChatTimeline { presentation.timeline }
+  var agentActivity: [NativeWorkItem] { presentation.agentActivity }
+
   var pins: [NativeConversationPin] = []
   var draft = ""
   var attachments: [UploadAttachment] = []
   var uploading = false
-  var partial = ""
-  private(set) var liveActivity: [Entry] = []
-  private(set) var partialRunID: String? { didSet { rebuildPartialVisibility() } }
-  private(set) var runPresentations: [ChatRunPresentation] = [] { didSet { rebuildMessages() } }
-  private var queuedRunIDs = Set<String>() { didSet { rebuildMessages() } }
+  var uploadingName: String?
+  @ObservationIgnored var attachmentUploadTask: Task<Void, Never>?
+  var partial = "" { didSet { streamChanged() } }
+  private(set) var liveActivity: [Entry] = [] { didSet { presentationRevision += 1 } }
+  private(set) var liveReasoning: [RunReasoning] = [] { didSet { streamChanged() } }
+  private var reasoningAfterText = Set<String>() { didSet { streamChanged() } }
+  private var streamStartOffset = 0 { didSet { streamChanged() } }
+  private var streamIsFinalReply = false { didSet { streamChanged() } }
+  @ObservationIgnored private var streamState = StreamText()
+  private(set) var partialRunID: String? {
+    didSet { if partialRunID != oldValue { presentationRevision += 1 } }
+  }
+  private(set) var runPresentations: [ChatRunPresentation] = [] {
+    didSet { presentationRevision += 1 }
+  }
+  private var queuedRunIDs = Set<String>() {
+    didSet { if queuedRunIDs != oldValue { presentationRevision += 1 } }
+  }
 
   var displayedPartial: String {
-    if partialIsRecorded { return "" }
-    return partial
+    let presentation = presentation
+    if let live = presentation.liveTimeline {
+      return live.liveText(partial, startOffset: streamStartOffset, finalReply: streamIsFinalReply)
+    }
+    return presentation.partialIsRecorded ? "" : partial
   }
+
+  func reasoningText(_ block: RunReasoning) -> String {
+    liveReasoning.first { $0.id == block.id }?.text ?? block.text
+  }
+
+  private func publish(_ text: StreamText) {
+    partial = text.text
+    streamStartOffset = text.startOffset
+    streamIsFinalReply = text.isFinalReply
+    liveReasoning = text.reasoning
+    reasoningAfterText = text.reasoningAfterText
+  }
+  var workStatus: NativeReadOnlyWorkStatus? {
+    if reconnecting { return .reconnecting }
+    if approvals.contains(where: \.blocksComposer) { return .awaitingInput }
+    if activeRunID != nil { return activeRunStatus == "pending" ? .pending : .working }
+    return NativeReadOnlyWorkStatus(conversation: conversation)
+  }
+  var showsWorkingStatus: Bool { workStatus == .working }
+  private(set) var activeRunStatus: String?
   var approvals: [Approval] = []
-  var error: String?
-  var activeRunID: String? { didSet { rebuildMessages() } }
+  private var actionError: String?
+  private var syncError: String?
+  var error: String? {
+    get { actionError ?? syncError }
+    set { actionError = newValue }
+  }
+  var hasActionError: Bool { actionError != nil }
+  private var reconnectingStream = false
+  private var needsRefresh = false
+  var reconnecting: Bool { reconnectingStream || needsRefresh }
+  var activeRunID: String? {
+    didSet {
+      guard activeRunID != oldValue else { return }
+      activeRunStatus = nil
+      presentationRevision += 1
+    }
+  }
   var pending: PendingSend?
   var sending = false
   var runtimeSelection: RuntimeSelection?
@@ -71,6 +201,7 @@ final class ChatModel {
   private var seededTranscript = false
   private var knownSession: Bool
   private var monitor: Task<Void, Never>?
+  private var monitoredRunID: String?
   private var generation = UUID()
   private var transcriptRevision = 0
   private var completedRunIDs = Set<String>()
@@ -97,12 +228,13 @@ final class ChatModel {
     }
     drafts = DraftStore(
       account: client.baseURL.absoluteString + user, thread: conversation.threadRef)
-    let saved = drafts.read()
-    draft = saved.text
-    runtimeSelection = saved.runtime
-    pending = saved.pending
-    attachments = saved.pending?.attachments ?? saved.attachments ?? []
-    rebuildTranscript()
+    if !conversation.isSubagent {
+      let saved = drafts.read()
+      draft = saved.text
+      runtimeSelection = saved.runtime
+      pending = saved.pending
+      attachments = saved.pending?.attachments ?? saved.attachments ?? []
+    }
   }
 
   var runtimeLabel: String {
@@ -166,15 +298,31 @@ final class ChatModel {
         let transcript: Transcript = try await client.fetch(
           "api/sessions/\(conversation.id)", query: [.init(name: "tailTurns", value: "25")])
         guard current == generation, revision == transcriptRevision else { return false }
+        var session = transcript.session ?? conversation
+        if session.isSubagent {
+          let response: ConversationUpdate = try await client.fetch(
+            "api/sessions/row", query: [.init(name: "id", value: session.id)])
+          guard current == generation, revision == transcriptRevision else { return false }
+          session = response.session
+        }
         let retained =
           transcript.entries.first?.seq.map { first in
             entries.filter { ($0.seq ?? Int.max) < first }
           } ?? []
         pins = transcript.pins ?? []
-        if let session = transcript.session { conversation = session }
+        conversation = session
         entries = retained + transcript.entries
         hasLoadedTranscript = true
-        if let partialRunID, hasRecordedRunReply(entries, runID: partialRunID) {
+        if let id = activeRunID, completedRunIDs.contains(id),
+          hasRecordedRunReply(entries, runID: id)
+        {
+          recordCompletion(id: id, reply: nil)
+          activeRunID = nil
+          if partialRunID == id { partial = "" }
+        }
+        if let partialRunID, completedRunIDs.contains(partialRunID),
+          hasRecordedRunReply(entries, runID: partialRunID)
+        {
           partial = ""
         }
         let recordedEntryIDs = Set(entries.map(\.id))
@@ -189,6 +337,8 @@ final class ChatModel {
               }
         }
         earlierEntries = max(0, (transcript.earlierEntries ?? 0) - retained.count)
+        await recoverEarlierPrompt()
+        guard current == generation, revision == transcriptRevision else { return false }
         if conversation.canReply {
           let response: ApprovalList = try await client.fetch(
             "api/sessions/\(conversation.id)/approvals")
@@ -196,11 +346,12 @@ final class ChatModel {
           approvals = response.approvals
         }
       }
-      error = nil
+      syncError = nil
+      needsRefresh = false
       return knownSession
     } catch {
       if !Task.isCancelled, current == generation, revision == transcriptRevision {
-        self.error = error.localizedDescription
+        needsRefresh = recordSyncFailure(error)
       }
       return false
     }
@@ -209,9 +360,10 @@ final class ChatModel {
   func resume(refreshInterval: Duration = .seconds(5)) async {
     pause()
     visible = true
+    syncError = nil
     let current = generation
-    async let activeResponse: ActiveRun? = fetchActiveRun()
-    let restored: Bool
+    async let activeResponse: QueuedInputsResponse? = fetchActiveRun()
+    var restored: Bool
     if seededTranscript {
       seededTranscript = false
       restored = true
@@ -221,13 +373,20 @@ final class ChatModel {
             "api/sessions/\(conversation.id)/approvals")
           guard current == generation, !Task.isCancelled else { return }
           approvals = response.approvals
-        } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+        } catch {
+          if current == generation, !Task.isCancelled {
+            restored = false
+            needsRefresh = recordSyncFailure(error)
+          }
+        }
       }
     } else {
       restored = await refresh()
     }
     guard !Task.isCancelled, current == generation else { return }
-    if !conversation.canReply {
+    await recoverEarlierPrompt()
+    guard !Task.isCancelled, current == generation else { return }
+    if !conversation.canReply && !conversation.isSubagent {
       monitor = Task {
         while !Task.isCancelled, current == generation, visible, client.hasSession {
           do { try await Task.sleep(for: refreshInterval) } catch { return }
@@ -241,17 +400,40 @@ final class ChatModel {
       let active = try await activeResponse
       guard current == generation, !Task.isCancelled else { return }
       if let id = active?.runId, !completedRunIDs.contains(id) {
-        activeRunID = id
         follow(id)
+      } else if let active, active.runId == nil, activeRunID != nil {
+        await reconcileActivity(active)
       } else if restored {
         activeRunID = nil
         partial = ""
+      } else if reconnecting {
+        retryResume(after: refreshInterval)
       }
-    } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+    } catch {
+      guard current == generation, !Task.isCancelled else { return }
+      if recordSyncFailure(error) {
+        if let activeRunID {
+          follow(activeRunID)
+        } else {
+          retryResume(after: refreshInterval)
+        }
+        reconnectingStream = true
+      }
+    }
   }
 
-  private func fetchActiveRun() async throws -> ActiveRun? {
-    guard conversation.canReply else { return nil }
+  private func retryResume(after interval: Duration) {
+    let current = generation
+    monitor = Task {
+      do { try await Task.sleep(for: interval) } catch { return }
+      guard current == generation, visible, client.hasSession, !Task.isCancelled else { return }
+      monitor = nil
+      await resume(refreshInterval: interval)
+    }
+  }
+
+  private func fetchActiveRun() async throws -> QueuedInputsResponse? {
+    guard conversation.canReply || conversation.isSubagent else { return nil }
     return try await client.fetch(
       "api/runs/active", query: [.init(name: "threadRef", value: conversation.threadRef)])
   }
@@ -261,6 +443,8 @@ final class ChatModel {
     generation = UUID()
     monitor?.cancel()
     monitor = nil
+    monitoredRunID = nil
+    reconnectingStream = false
   }
 
   func send() async {
@@ -270,18 +454,18 @@ final class ChatModel {
     sending = true
     let accountGeneration = client.generation
     var acceptedSubmission: Submission?
+    var submission =
+      pending
+      ?? PendingSend(
+        text: text, idempotencyKey: UUID().uuidString.lowercased(), attachments: attachments,
+        runtime: runtimeSelection)
     do {
-      if pending == nil {
-        pending = PendingSend(
-          text: text, idempotencyKey: UUID().uuidString.lowercased(), attachments: attachments,
-          runtime: runtimeSelection)
-      }
       try drafts.write(
         .init(
           text: draft, pending: pending, conversation: conversation, attachments: attachments,
           runtime: runtimeSelection))
       var staged: [UploadAttachment] = []
-      for attachment in pending!.attachments ?? [] {
+      for attachment in submission.attachments ?? [] {
         let age = Date().timeIntervalSince1970 - (attachment.uploadedAt ?? 0)
         if attachment.uploadedAt != nil && age >= 0 && age < 5 * 60 * 60 {
           staged.append(attachment)
@@ -308,14 +492,14 @@ final class ChatModel {
             blobId: blob.blobId, localSHA: sha, uploadedAt: Date().timeIntervalSince1970))
       }
       guard client.generation == accountGeneration else { throw CancellationError() }
-      pending!.attachments = staged
+      submission.attachments = staged
       attachments = staged
       try drafts.write(
         .init(
-          text: draft, pending: pending, conversation: conversation, attachments: attachments,
+          text: draft, pending: submission, conversation: conversation, attachments: attachments,
           runtime: runtimeSelection))
       var body: [String: Any] = [
-        "text": pending!.text, "idempotencyKey": pending!.idempotencyKey,
+        "text": submission.text, "idempotencyKey": submission.idempotencyKey,
         "threadRef": conversation.threadRef, "scopeId": conversation.scopeId,
         "timezone": TimeZone.current.identifier,
         "attachments": staged.map { attachment -> [String: Any] in
@@ -325,9 +509,10 @@ final class ChatModel {
           ]
         },
       ]
-      if let runtime = pending!.runtime {
+      if let runtime = submission.runtime {
         body.merge(runtime.turnOptions) { _, selected in selected }
       }
+      pending = submission
       let result: Submission = try await client.fetch("api/turn", body: body)
       guard result.runId != nil || result.isTerminalResult else {
         throw QMError.message(
@@ -361,7 +546,7 @@ final class ChatModel {
   }
 
   func decide(_ approval: Approval, approved: Bool, scope: String = "once") async {
-    guard !sending,
+    guard !conversation.isSubagent, !sending,
       scope == "once" || (scope == "session" && approval.grantModes?.session == true)
         || (scope == "always" && approval.grantModes?.always == true)
     else { return }
@@ -378,6 +563,7 @@ final class ChatModel {
         throw QMError.message(response.reason ?? "Could not confirm approval. Retry this decision.")
       }
       approvals.removeAll { $0.id == approval.id }
+      error = nil
       await reconcileSubmission(response)
     } catch { self.error = error.localizedDescription }
   }
@@ -398,18 +584,12 @@ final class ChatModel {
     guard current == generation, !Task.isCancelled else { return }
     if let active { reconcileQueuedPresentations(active) }
     let next = active?.runId ?? activeRunID ?? (active == nil ? result.runId : nil)
-    if let next, !completedRunIDs.contains(next),
-      activeRunID != next
-    {
-      partial = ""
-      activeRunID = next
-      follow(next)
-    }
+    if let next { follow(next) }
     let established = generation
     let restored = await refresh()
     guard established == generation, !Task.isCancelled else { return }
     if result.status == "failed" || result.status == "refused" {
-      error = result.reason ?? "The task could not be completed."
+      syncError = result.reason ?? "The task could not be completed."
     }
     if !restored, let pending = result.pendingApprovals, !pending.isEmpty { approvals = pending }
   }
@@ -420,31 +600,45 @@ final class ChatModel {
   }
 
   func reconcileActivity(_ active: QueuedInputsResponse) async {
-    guard visible, client.hasSession else { return }
+    guard visible, client.hasSession, !Task.isCancelled else { return }
     reconcileQueuedPresentations(active)
-    if let id = active.runId, activeRunID != id, !completedRunIDs.contains(id) {
-      let current = generation
-      activeRunID = id
-      partial = ""
-      await refresh()
-      guard current == generation, activeRunID == id, !Task.isCancelled else { return }
+    if let id = active.runId, !completedRunIDs.contains(id) {
+      guard monitoredRunID != id || monitor != nil else { return }
+      let changed = activeRunID != id
       follow(id)
-    } else if active.runId == nil && activeRunID == nil {
-      await refresh()
+      if changed || needsRefresh { await refresh() }
+    } else if active.runId == nil {
+      if let id = activeRunID {
+        let current = generation
+        do {
+          let run: Run = try await client.fetch("api/runs/\(id)")
+          guard current == generation, !Task.isCancelled else { return }
+          if run.isFinished {
+            await finish(run, id: id, generation: current)
+          } else {
+            follow(id)
+          }
+        } catch {
+          handleRunFailure(error, id: id, generation: current)
+        }
+      } else if monitoredRunID == nil {
+        await refresh()
+      }
     }
   }
 
   func stop() async {
-    guard let id = activeRunID else { return }
+    guard !conversation.isSubagent, let id = activeRunID else { return }
     do {
       struct Signal: Decodable {}
       let _: Signal = try await client.fetch(
         "api/runs/\(id)/signal", body: ["kind": "abort", "threadRef": conversation.threadRef])
+      error = nil
     } catch { self.error = error.localizedDescription }
   }
 
   func fork(from messageID: String? = nil) async -> Conversation? {
-    guard !forking else { return nil }
+    guard !conversation.isSubagent, !forking else { return nil }
     forking = true
     defer { forking = false }
     do {
@@ -483,7 +677,6 @@ final class ChatModel {
     else { return }
     loadingInherited = true
     defer { loadingInherited = false }
-    let current = generation
     var before = boundary + 1
     var loaded: [Entry] = []
     do {
@@ -493,7 +686,7 @@ final class ChatModel {
           query: [
             .init(name: "beforeSeq", value: String(before)), .init(name: "tailTurns", value: "25"),
           ])
-        guard current == generation, !Task.isCancelled else { return }
+        guard !Task.isCancelled else { return }
         let inherited = page.entries.filter { ($0.seq ?? Int.max) <= boundary }
         loaded.insert(contentsOf: inherited, at: 0)
         guard (page.earlierEntries ?? 0) > 0, let first = inherited.first?.seq,
@@ -501,11 +694,11 @@ final class ChatModel {
         else { break }
         before = first
       }
-      guard current == generation, !Task.isCancelled else { return }
+      guard !Task.isCancelled else { return }
       inheritedEntries = loaded
-      error = nil
+      syncError = nil
     } catch {
-      if current == generation, !Task.isCancelled { self.error = error.localizedDescription }
+      if !Task.isCancelled { syncError = error.localizedDescription }
     }
   }
 
@@ -513,19 +706,20 @@ final class ChatModel {
     guard !loadingEarlier, let first = entries.first?.seq else { return }
     loadingEarlier = true
     defer { loadingEarlier = false }
-    let revision = transcriptRevision
-    let current = generation
     do {
       let page: Transcript = try await client.fetch(
         "api/sessions/\(conversation.id)",
         query: [
           .init(name: "beforeSeq", value: String(first)), .init(name: "tailTurns", value: "25"),
         ])
-      guard current == generation, revision == transcriptRevision else { return }
+      guard !Task.isCancelled else { return }
       let existing = Set(entries.map(\.id))
       entries.insert(contentsOf: page.entries.filter { !existing.contains($0.id) }, at: 0)
       earlierEntries = page.earlierEntries ?? 0
-    } catch { self.error = error.localizedDescription }
+      syncError = nil
+    } catch {
+      if !Task.isCancelled { syncError = error.localizedDescription }
+    }
   }
 
   private func updatePresentation(id: String, update: (inout ChatRunPresentation) -> Void) {
@@ -535,6 +729,41 @@ final class ChatModel {
       var presentation = ChatRunPresentation(id: id, runID: id)
       update(&presentation)
       runPresentations.append(presentation)
+    }
+  }
+
+  private func recoverEarlierPrompt() async {
+    guard presentation.visiblePromptAt == nil, earlierEntries > 0, let first = entries.first?.seq,
+      earlierPromptBoundary != first
+    else { return }
+    let current = generation
+    let revision = transcriptRevision
+    var before = first
+    do {
+      while !Task.isCancelled {
+        let page: Transcript = try await client.fetch(
+          "api/sessions/\(conversation.id.apiComponent)",
+          query: [
+            .init(name: "beforeSeq", value: String(before)), .init(name: "tailTurns", value: "25"),
+          ])
+        guard current == generation, revision == transcriptRevision, !Task.isCancelled else {
+          return
+        }
+        if let prompt = Self.latestPrompt(in: chatMessages(page.entries)) {
+          earlierPromptAt = prompt
+          earlierPromptBoundary = first
+          return
+        }
+        guard (page.earlierEntries ?? 0) > 0, let next = page.entries.first?.seq,
+          next > 0, next < before
+        else {
+          earlierPromptBoundary = first
+          return
+        }
+        before = next
+      }
+    } catch {
+      if !Task.isCancelled { Log.background.failure("Earlier prompt lookup", error) }
     }
   }
 
@@ -554,24 +783,80 @@ final class ChatModel {
 
   private func finish(_ run: Run, id: String, generation current: UUID) async {
     guard current == generation, !Task.isCancelled else { return }
+    reconnectingStream = false
+    completedRunIDs.insert(id)
+    if let activity = run.activity { liveActivity = activity }
     if let input = run.input { updatePresentation(id: id) { $0.input = input } }
-    recordCompletion(id: id, reply: run.result?.reply ?? run.partial ?? partial)
+    let reply = run.result?.reply ?? run.partial ?? partial
+    recordCompletion(id: id, reply: reply)
     if activeRunID == id { activeRunID = nil }
     if partialRunID == id { partial = "" }
-    if await refresh(), current == generation, !Task.isCancelled {
-      error = run.failure
+    let refreshed = await refresh()
+    guard current == generation, !Task.isCancelled else { return }
+    if refreshed || run.failure != nil { syncError = run.failure }
+    if monitoredRunID == id {
+      monitor?.cancel()
+      monitor = nil
+      monitoredRunID = nil
     }
+  }
+
+  private func handleRunFailure(_ failure: Error, id: String, generation current: UUID) {
+    guard current == generation, !Task.isCancelled, activeRunID == id,
+      !completedRunIDs.contains(id)
+    else { return }
+    Log.background.failure("Run status refresh", failure)
+    if recordSyncFailure(failure) {
+      reconnectingStream = true
+      return
+    }
+    reconnectingStream = false
+    activeRunID = nil
+    monitor?.cancel()
+    monitor = nil
+    monitoredRunID = id
+  }
+
+  @discardableResult
+  private func recordSyncFailure(_ failure: Error) -> Bool {
+    switch failure {
+    case QMError.signedOut, QMError.rejected:
+      syncError = failure.localizedDescription
+    case is DecodingError:
+      syncError = "QM returned a response this app couldn’t read. Retry or update the app."
+    case is CancellationError:
+      return false
+    default:
+      return true
+    }
+    return false
   }
 
   private func follow(_ id: String) {
     guard visible, !completedRunIDs.contains(id) else { return }
+    guard monitoredRunID != id || monitor == nil else { return }
     pause()
     visible = true
     let current = generation
+    activeRunID = id
+    if partialRunID != id {
+      partial = ""
+      liveActivity = []
+      liveReasoning = []
+      reasoningAfterText = []
+      streamStartOffset = 0
+      streamIsFinalReply = false
+      streamState = StreamText()
+    }
     partialRunID = id
-    liveActivity = []
+    monitoredRunID = id
     monitor = Task {
-      var text = StreamText()
+      defer {
+        if current == generation {
+          monitor = nil
+        }
+      }
+      var text = streamState
       while !Task.isCancelled && current == generation {
         do {
           var textChanged = false
@@ -580,7 +865,7 @@ final class ChatModel {
               do { try await publishTick() } catch { return }
               guard current == generation, !Task.isCancelled else { return }
               if textChanged {
-                partial = text.text
+                publish(text)
                 textChanged = false
               }
             }
@@ -590,18 +875,21 @@ final class ChatModel {
           try await client.stream(id) { event in
             guard current == generation, !Task.isCancelled else { throw CancellationError() }
             try text.apply(event)
-            if event.name == "delta" || event.name == "run" { textChanged = true }
+            streamState = text
+            if event.name == "delta" || event.name == "run" || event.name == "reasoning" {
+              textChanged = true
+            }
+            if let run = event.run { activeRunStatus = run.status }
             if let activity = event.run?.activity { liveActivity = activity }
             if let input = event.run?.input, input.runId == id {
               updatePresentation(id: id) { $0.input = input }
             }
-            error = nil
+            reconnectingStream = false
             if let run = event.run, run.isFinished {
               terminal = run
-              recordCompletion(id: id, reply: run.result?.reply ?? run.partial ?? text.text)
-              if activeRunID == id { activeRunID = nil }
+              completedRunIDs.insert(id)
+              publish(text)
               publisher.cancel()
-              partial = ""
             }
           }
           publisher.cancel()
@@ -610,42 +898,36 @@ final class ChatModel {
             await finish(terminal, id: id, generation: current)
             return
           }
-          if textChanged { partial = text.text }
-          let run: Run = try await client.fetch("api/runs/\(id)")
-          if let activity = run.activity { liveActivity = activity }
-          if let input = run.input, input.runId == id {
-            updatePresentation(id: id) { $0.input = input }
-          }
-          if run.isFinished {
-            await finish(run, id: id, generation: current)
-            return
-          }
+          if textChanged { publish(text) }
         } catch {
           if Task.isCancelled || current != generation { return }
           if case QMError.signedOut = error {
-            self.error = error.localizedDescription
+            handleRunFailure(error, id: id, generation: current)
             return
           }
-          self.error = "Connection interrupted. Reconnecting…"
+          Log.background.failure("Run stream", error)
+          reconnectingStream = true
         }
         do {
           let run: Run = try await client.fetch("api/runs/\(id)")
+          guard current == generation, !Task.isCancelled else { return }
+          text.apply(run)
+          activeRunStatus = run.status
+          streamState = text
           if let activity = run.activity { liveActivity = activity }
           if let input = run.input, input.runId == id {
             updatePresentation(id: id) { $0.input = input }
           }
-          partial = run.result?.reply ?? run.partial ?? partial
+          publish(text)
+          reconnectingStream = false
           if run.isFinished {
             await finish(run, id: id, generation: current)
             return
           }
           try await Task.sleep(for: .seconds(2))
         } catch {
-          if Task.isCancelled { return }
-          if case QMError.signedOut = error {
-            self.error = error.localizedDescription
-            return
-          }
+          handleRunFailure(error, id: id, generation: current)
+          guard current == generation, !Task.isCancelled, activeRunID == id else { return }
           try? await Task.sleep(for: .seconds(3))
         }
       }

@@ -158,6 +158,23 @@ test("a retry replays the answer the previous attempt recorded instead of asking
   assert.equal((await runs.get(run.id))?.turnUserSeq, boundary, "the boundary is not moved by the retry");
 });
 
+test("a retry preserves a stopped partial as stopped instead of delivering a completed answer", async () => {
+  const { orchestrator, sessions, runs, turns, input, asks } = buildScenario();
+  const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+  const marker = await seedTurn(sessions, [
+    { type: "user", payload: { text: ASK, runId: run.id } },
+    { type: "assistant", payload: { text: "partial answer", stopped: true } },
+  ]);
+  await runs.noteTurnUserSeq(run.id, marker);
+
+  const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
+  assert.equal(retry.status, "ok");
+  assert.equal(retry.reply, "partial answer");
+  assert.equal(retry.stopped, true, "the interrupted reply is still marked stopped after replay");
+  assert.equal(turns.length, 0, "the stopped request is not restarted");
+  assert.equal((await asks()).length, 1, "the original request remains the only ask");
+});
+
 test("a retry with no recorded boundary runs the turn, so a lost attempt never drops the ask", async () => {
   const { orchestrator, runs, turns, input, asks } = buildScenario();
   const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;

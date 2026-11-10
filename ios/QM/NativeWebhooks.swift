@@ -39,6 +39,7 @@ struct NativeWebhookEvents: Decodable { let events: [NativeWebhookEvent] }
 final class WebhooksModel {
   let client: APIClient
   var webhooks: [NativeWebhook] = []
+  var loaded = false
   var busy = false
   var error: String?
   private let loader = LoadGuard()
@@ -50,6 +51,7 @@ final class WebhooksModel {
       try await client.fetch("api/webhooks") as NativeWebhookList
     } apply: { result in
       webhooks = result.webhooks
+      loaded = true
       error = nil
     } failed: {
       error = $0.localizedDescription
@@ -58,6 +60,7 @@ final class WebhooksModel {
   func setEnabled(_ webhook: NativeWebhook) async {
     guard !busy else { return }
     busy = true
+    error = nil
     loader.cancel()
     defer { busy = false }
     do {
@@ -72,6 +75,7 @@ final class WebhooksModel {
   {
     guard !busy else { return nil }
     busy = true
+    error = nil
     loader.cancel()
     defer { busy = false }
     do {
@@ -133,7 +137,9 @@ struct NativeWebhooksView: View {
           }.padding(.vertical, 6)
         }
       }
-      if model.webhooks.isEmpty && !model.loading {
+      if model.loading && !model.loaded && model.error == nil {
+        NativeCollectionLoading(label: "Loading webhooks", symbol: "bolt.horizontal")
+      } else if model.webhooks.isEmpty && model.loaded && model.error == nil {
         ContentUnavailableView(
           "No webhooks", systemImage: "bolt.horizontal",
           description: Text("Let incoming events trigger work in QM."))
@@ -142,6 +148,11 @@ struct NativeWebhooksView: View {
     .navigationTitle("Webhooks").searchable(text: $query)
     .scrollContentBackground(.hidden).background(QMTheme.paper)
     .toolbar { Button("New webhook", systemImage: "plus") { creating = true } }
+    .modifier(
+      NativeCollectionRefresh(
+        active: model.loading && (model.loaded || model.error != nil) && !model.busy,
+        label: "Refreshing webhooks")
+    )
     .task { await model.load() }.refreshable { await model.load() }
     .sheet(
       isPresented: $creating, onDismiss: { Task { await model.load() } },
@@ -156,6 +167,8 @@ struct NativeWebhookDetail: View {
   let original: NativeWebhook
   let user: String
   @State private var events: [NativeWebhookEvent] = []
+  @State private var eventLoads = 0
+  @State private var eventsLoaded = false
   @State private var error: String?
   private var webhook: NativeWebhook { model.webhooks.first { $0.id == original.id } ?? original }
   var body: some View {
@@ -172,8 +185,12 @@ struct NativeWebhookDetail: View {
           LabeledContent("Last event", value: Date(timeIntervalSince1970: last / 1000).formatted())
         }
         if let error = webhook.lastError { Text(error).foregroundStyle(.red) }
-        Button(webhook.enabled ? "Disable webhook" : "Enable webhook") {
+        Button {
           Task { await model.setEnabled(webhook) }
+        } label: {
+          NativeActionLabel(
+            title: webhook.enabled ? "Disable webhook" : "Enable webhook",
+            busyTitle: "Updating…", busy: model.busy)
         }.disabled(model.busy)
         if let error = model.error { Text(error).foregroundStyle(.red) }
       }
@@ -186,7 +203,9 @@ struct NativeWebhookDetail: View {
       }
       Section {
         if let error { Text(error).foregroundStyle(.red) }
-        if events.isEmpty && error == nil {
+        if eventLoads > 0 && !eventsLoaded && error == nil {
+          NativeCollectionLoading(label: "Loading events", rows: 3)
+        } else if events.isEmpty && eventsLoaded && error == nil {
           Text("No messages recorded yet.").foregroundStyle(.secondary)
         }
         ForEach(Array(events.enumerated()), id: \.offset) { _, event in
@@ -210,17 +229,26 @@ struct NativeWebhookDetail: View {
     }
     .navigationTitle("Webhook").navigationBarTitleDisplayMode(.inline)
     .scrollContentBackground(.hidden).background(QMTheme.paper)
+    .modifier(
+      NativeCollectionRefresh(
+        active: (model.loading && !model.busy)
+          || (eventLoads > 0 && (eventsLoaded || error != nil)),
+        label: "Refreshing webhook")
+    )
     .task { await loadEvents() }.refreshable {
       await model.load()
       await loadEvents()
     }
   }
   private func loadEvents() async {
+    eventLoads += 1
+    defer { eventLoads -= 1 }
     do {
       let result: NativeWebhookEvents = try await model.client.fetch(
         "api/webhooks/\(webhook.id.apiComponent)/events")
       try Task.checkCancellation()
       events = result.events
+      eventsLoaded = true
       error = nil
     } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
   }
@@ -278,6 +306,7 @@ struct NativeWebhookCreation: View {
           }
           Section("Filters (optional)") {
             TextEditor(text: $filters).font(.body.monospaced()).frame(minHeight: 100)
+              .textInputAutocapitalization(.never).autocorrectionDisabled()
             Text("One filter per line: path: value1, value2").font(.caption)
           }
           if let error = model.error { Text(error).foregroundStyle(.red) }
@@ -290,13 +319,16 @@ struct NativeWebhookCreation: View {
         }
         if created == nil {
           ToolbarItem(placement: .confirmationAction) {
-            Button("Create") {
+            Button {
               Task {
                 created = await model.create(
                   action: action.trimmingCharacters(in: .whitespacesAndNewlines), scheme: scheme,
                   secret: secret.trimmingCharacters(in: .whitespacesAndNewlines), filters: filters)
                 if created != nil { secret = "" }
               }
+            } label: {
+              NativeActionLabel(
+                title: "Create", busyTitle: "Creating…", busy: model.busy, compact: true)
             }
             .disabled(model.busy || action.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
           }

@@ -154,13 +154,15 @@ enum AttachmentUpload {
     }
   }
 
-  static func read(_ url: URL) throws -> PreparedAttachment {
+  static func read(_ url: URL, name suppliedName: String? = nil, type: UTType? = nil) throws
+    -> PreparedAttachment
+  {
     try Task.checkCancellation()
     guard url.isFileURL else { throw QMError.message("Choose a file from Files.") }
     let scoped = url.startAccessingSecurityScopedResource()
     defer { if scoped { url.stopAccessingSecurityScopedResource() } }
     let values = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey, .contentTypeKey])
-    let name = url.lastPathComponent
+    let name = suppliedName ?? url.lastPathComponent
     guard values.isRegularFile == true else {
       throw QMError.message("\(name) is not a regular file. Choose a document instead.")
     }
@@ -197,7 +199,7 @@ enum AttachmentUpload {
     retained = true
     return PreparedAttachment(
       name: name,
-      mimetype: values.contentType?.preferredMIMEType
+      mimetype: type?.preferredMIMEType ?? values.contentType?.preferredMIMEType
         ?? UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
         ?? "application/octet-stream",
       url: staging, size: size,
@@ -205,24 +207,63 @@ enum AttachmentUpload {
   }
 }
 
+@MainActor enum AttachmentSource {
+  case file(URL)
+  case image(NSItemProvider)
+
+  var name: String {
+    switch self {
+    case .file(let url): return url.lastPathComponent
+    case .image(let provider): return provider.suggestedName ?? "Pasted image"
+    }
+  }
+
+  func prepare() async throws -> PreparedAttachment {
+    switch self {
+    case .file(let url):
+      return try await AttachmentUpload.prepare(url)
+    case .image(let provider):
+      guard
+        let type = provider.registeredTypeIdentifiers.compactMap(UTType.init)
+          .first(where: { $0.conforms(to: .image) })
+      else { throw QMError.message("The clipboard does not contain a supported image.") }
+      var filename = FilePreviewResource.filename(provider.suggestedName ?? "Pasted image")
+      if URL(fileURLWithPath: filename).pathExtension.isEmpty,
+        let suffix = type.preferredFilenameExtension
+      {
+        filename += ".\(suffix)"
+      }
+      let name = filename
+      return try await withCheckedThrowingContinuation { continuation in
+        provider.loadFileRepresentation(forTypeIdentifier: type.identifier) { url, error in
+          do {
+            guard let url else {
+              throw error ?? QMError.message("The image could not be read. Copy it and try again.")
+            }
+            continuation.resume(returning: try AttachmentUpload.read(url, name: name, type: type))
+          } catch {
+            continuation.resume(throwing: error)
+          }
+        }
+      }
+    }
+  }
+}
+
 struct AttachmentPicker: View {
-  let client: APIClient
-  let account: String
-  @Binding var attachments: [UploadAttachment]
+  let uploading: Bool
   @Binding var error: String?
-  @Binding var uploading: Bool
+  let onSelect: ([AttachmentSource]) -> Void
   @State private var showingImporter = false
-  @State private var uploadTask: Task<Void, Never>?
 
   var body: some View {
-    Button {
-      showingImporter = true
-    } label: {
-      if uploading {
-        ProgressView().frame(width: 44, height: 44)
-      } else {
-        Image(systemName: "paperclip").font(.system(size: 20)).frame(width: 44, height: 44)
+    Menu {
+      Button("Choose files", systemImage: "doc") { showingImporter = true }
+      PasteButton(supportedContentTypes: [.image]) { providers in
+        onSelect(providers.map(AttachmentSource.image))
       }
+    } label: {
+      Image(systemName: "paperclip").font(.system(size: 20)).frame(width: 44, height: 44)
     }
     .accessibilityLabel(uploading ? "Uploading attachments" : "Attach files")
     .disabled(uploading)
@@ -233,8 +274,7 @@ struct AttachmentPicker: View {
       switch result {
       case .success(let urls):
         guard !urls.isEmpty, !uploading else { return }
-        uploading = true
-        uploadTask = Task { await upload(urls) }
+        onSelect(urls.map(AttachmentSource.file))
       case .failure(let failure):
         let nsError = failure as NSError
         if nsError.domain != NSCocoaErrorDomain || nsError.code != NSUserCancelledError {
@@ -242,16 +282,42 @@ struct AttachmentPicker: View {
         }
       }
     }
-    .onDisappear { uploadTask?.cancel() }
+  }
+}
+
+extension ChatModel {
+  func addAttachments(_ sources: [AttachmentSource]) {
+    guard !conversation.isSubagent, attachmentUploadTask == nil, !sending, !uploading,
+      !sources.isEmpty
+    else { return }
+    attachmentUploadTask = Task {
+      await uploadAttachments(sources)
+      if !Task.isCancelled { attachmentUploadTask = nil }
+    }
   }
 
-  private func upload(_ urls: [URL]) async {
-    defer { uploading = false }
+  func cancelAttachmentUpload() {
+    attachmentUploadTask?.cancel()
+    attachmentUploadTask = nil
+    uploading = false
+    uploadingName = nil
+  }
+
+  func uploadAttachments(_ sources: [AttachmentSource]) async {
+    guard !conversation.isSubagent, !Task.isCancelled, !sending, !uploading else { return }
+    uploading = true
+    defer {
+      if !Task.isCancelled {
+        uploading = false
+        uploadingName = nil
+      }
+    }
     error = nil
     let generation = client.generation
     let cacheGeneration = AttachmentCache.generation
+    let account = attachmentAccount
     var failures: [String] = []
-    for url in urls {
+    for source in sources {
       do {
         try Task.checkCancellation()
         guard generation == client.generation else { break }
@@ -260,7 +326,8 @@ struct AttachmentPicker: View {
             "Up to 10 files can be attached. Remove an attachment before adding more.")
           break
         }
-        let prepared = try await AttachmentUpload.prepare(url)
+        uploadingName = source.name
+        let prepared = try await source.prepare()
         try Task.checkCancellation()
         guard generation == client.generation else { break }
         try await Task.detached {
@@ -281,14 +348,15 @@ struct AttachmentPicker: View {
               name: prepared.name, mimetype: prepared.mimetype,
               sizeBytes: blob.sizeBytes, blobId: blob.blobId, localSHA: prepared.sha,
               uploadedAt: Date().timeIntervalSince1970))
+          saveDraft()
         }
       } catch is CancellationError {
         break
       } catch {
         guard generation == client.generation else { break }
-        failures.append("\(url.lastPathComponent): \(error.localizedDescription)")
+        failures.append("\(source.name): \(error.localizedDescription)")
       }
     }
-    if !failures.isEmpty { error = failures.joined(separator: "\n") }
+    if !Task.isCancelled, !failures.isEmpty { error = failures.joined(separator: "\n") }
   }
 }

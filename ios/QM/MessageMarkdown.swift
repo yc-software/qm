@@ -78,7 +78,7 @@ struct MessageMarkdown: View {
       .environment(
         \.openURL,
         OpenURLAction { url in
-          if let file = FilePreviewResource.attachment(url, files: files) {
+          if let file = FilePreviewResource.attachment(url, baseURL: client.baseURL, files: files) {
             previewFile = file
             return .handled
           }

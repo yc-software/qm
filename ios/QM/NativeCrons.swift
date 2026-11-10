@@ -77,6 +77,7 @@ final class CronsModel {
   let client: APIClient
   var owned: [NativeCron] = []
   var shared: [NativeCron] = []
+  var loaded = false
   var busy = false
   var error: String?
   private let loader = LoadGuard()
@@ -90,6 +91,7 @@ final class CronsModel {
     } apply: { result in
       owned = result.crons
       shared = result.visible ?? []
+      loaded = true
       error = nil
     } failed: {
       error = $0.localizedDescription
@@ -137,7 +139,10 @@ struct NativeCronsView: View {
       Picker("Show", selection: $tab) {
         ForEach(["Yours", "Shared", "Archived"], id: \.self) { Text($0) }
       }.pickerStyle(.segmented)
-      if let error = model.error { Text(error).foregroundStyle(.red) }
+      if let error = model.error {
+        Text(error).foregroundStyle(.red)
+        Button("Retry loading") { Task { await model.load() } }.disabled(model.loading)
+      }
       ForEach(crons) { cron in
         NavigationLink {
           NativeCronDetail(model: model, original: cron, user: user)
@@ -152,17 +157,35 @@ struct NativeCronsView: View {
           }.padding(.vertical, 6)
         }
       }
-      if crons.isEmpty && !model.loading {
-        ContentUnavailableView(
-          "No scheduled tasks", systemImage: "clock",
-          description: Text("Ask QM to schedule a task and it will appear here."))
+      if model.loading && !model.loaded && model.error == nil {
+        NativeCollectionLoading(label: "Loading scheduled tasks", symbol: "clock")
+      } else if crons.isEmpty && model.loaded && model.error == nil {
+        if !query.isEmpty {
+          ContentUnavailableView.search(text: query)
+        } else {
+          ContentUnavailableView(
+            tab == "Shared"
+              ? "No shared tasks"
+              : tab == "Archived" ? "No archived tasks" : "No scheduled tasks",
+            systemImage: "clock",
+            description: Text(
+              tab == "Shared"
+                ? "Tasks shared with you will appear here."
+                : tab == "Archived"
+                  ? "Archived tasks will appear here."
+                  : "Ask QM to schedule a task and it will appear here."))
+        }
       }
     }
     .navigationTitle("Crons").searchable(text: $query)
     .scrollContentBackground(.hidden).background(QMTheme.paper)
     .toolbar { Button("New cron", systemImage: "plus") { creating = true } }
     .task { await model.load() }.refreshable { await model.load() }
-    .overlay { if model.loading && model.owned.isEmpty { ProgressView() } }
+    .modifier(
+      NativeCollectionRefresh(
+        active: model.loading && (model.loaded || model.error != nil) && !model.busy,
+        label: "Refreshing scheduled tasks")
+    )
     .sheet(
       isPresented: $creating, onDismiss: { Task { await model.load() } },
       content: {
@@ -178,6 +201,8 @@ struct NativeCronDetail: View {
   @Environment(\.dismiss) private var dismiss
   @State private var runs: [NativeCronRun] = []
   @State private var historyError: String?
+  @State private var loadingRuns = true
+  @State private var runsLoaded = false
   @State private var editing = false
   @State private var deleting = false
   @State private var running = false
@@ -228,7 +253,11 @@ struct NativeCronDetail: View {
       }
       Section("Recent runs") {
         if let historyError { Text(historyError).foregroundStyle(.red) }
-        if runs.isEmpty && historyError == nil { Text("No runs yet").foregroundStyle(.secondary) }
+        if loadingRuns && !runsLoaded && historyError == nil {
+          NativeCollectionLoading(label: "Loading runs", rows: 3)
+        } else if runs.isEmpty && runsLoaded && historyError == nil {
+          Text("No runs yet").foregroundStyle(.secondary)
+        }
         ForEach(runs.sorted { $0.firedAt > $1.firedAt }) { run in
           VStack(alignment: .leading, spacing: 8) {
             Text(Date(timeIntervalSince1970: run.firedAt / 1000), style: .date)
@@ -241,11 +270,17 @@ struct NativeCronDetail: View {
             }
           }.padding(.vertical, 6)
         }
-        Button("Refresh runs") { Task { await loadRuns() } }
+        Button("Refresh runs") { Task { await loadRuns() } }.disabled(loadingRuns)
       }
     }
     .navigationTitle(cron.label).navigationBarTitleDisplayMode(.inline)
     .scrollContentBackground(.hidden).background(QMTheme.paper)
+    .modifier(
+      NativeCollectionRefresh(
+        active: (model.loading && !model.busy)
+          || (loadingRuns && (runsLoaded || historyError != nil)),
+        label: "Refreshing scheduled task")
+    )
     .task { await loadRuns() }.refreshable {
       await model.load()
       await loadRuns()
@@ -265,11 +300,14 @@ struct NativeCronDetail: View {
     }
   }
   private func loadRuns() async {
+    loadingRuns = true
+    defer { loadingRuns = false }
     do {
       let result: NativeCronRuns = try await model.client.fetch(
         "api/crons/\(cron.id.apiComponent)/runs")
       try Task.checkCancellation()
       runs = result.runs
+      runsLoaded = true
       historyError = nil
     } catch { if !Task.isCancelled { historyError = error.localizedDescription } }
   }
@@ -341,7 +379,11 @@ struct NativeCronEditor: View {
           Button("Cancel") { dismiss() }.disabled(model.busy)
         }
         ToolbarItem(placement: .confirmationAction) {
-          Button("Save") { Task { await save() } }.disabled(
+          Button {
+            Task { await save() }
+          } label: {
+            NativeActionLabel(title: "Save", busyTitle: "Saving…", busy: model.busy, compact: true)
+          }.disabled(
             model.busy
               || (cron.canEditTask && task.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
         }

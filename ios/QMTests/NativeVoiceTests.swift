@@ -1,4 +1,5 @@
 import AVFAudio
+import Speech
 import XCTest
 import os
 
@@ -15,6 +16,37 @@ final class NativeVoiceTests: XCTestCase {
   }
 
   @MainActor
+  func testDictationAudioTapProcessesBuffersOffMainActor() async throws {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "qm-dictation-tap-\(UUID().uuidString).caf")
+    defer { try? FileManager.default.removeItem(at: url) }
+    let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
+    nonisolated(unsafe) let buffer = try XCTUnwrap(
+      AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 128))
+    buffer.frameLength = 128
+    let samples = try XCTUnwrap(buffer.floatChannelData?.pointee)
+    for index in 0..<Int(buffer.frameLength) { samples[index] = 0.25 }
+    let recording = try AVAudioFile(forWriting: url, settings: format.settings)
+    let request = SFSpeechAudioBufferRecognitionRequest()
+    let meter = DictationLevel()
+    let errors = OSAllocatedUnfairLock(initialState: [String]())
+    nonisolated(unsafe) let tap = dictationAudioTap(
+      request: request, recording: recording, meter: meter
+    ) { message in errors.withLock { $0.append(message) } }
+    let calledOnMainThread = await withCheckedContinuation { continuation in
+      DispatchQueue.global(qos: .userInitiated).async {
+        tap(buffer, AVAudioTime(sampleTime: 0, atRate: 48_000))
+        continuation.resume(returning: Thread.isMainThread)
+      }
+    }
+    request.endAudio()
+    XCTAssertFalse(calledOnMainThread)
+    XCTAssertTrue(errors.withLock { $0.isEmpty })
+    XCTAssertEqual(recording.length, 128)
+    XCTAssertEqual(meter.read(), (20 * log10(0.25) + 50) / 50, accuracy: 0.0001)
+  }
+
+  @MainActor
   func testCanceledPreparationCannotStartTheMicrophoneOrChangeTheDraft() async {
     let provider = DelayedDictationProvider()
     let model = NativeDictationModel(provider: provider)
@@ -25,7 +57,7 @@ final class NativeVoiceTests: XCTestCase {
     }
     XCTAssertEqual(model.state, .preparing)
     model.cancel()
-    provider.continuation?.resume(returning: "OpenAI")
+    provider.continuation?.resume()
     for _ in 0..<10 { await Task.yield() }
     XCTAssertEqual(model.state, .idle)
     XCTAssertNil(model.completedText)
@@ -94,6 +126,58 @@ final class NativeVoiceTests: XCTestCase {
     XCTAssertEqual(activity.payload?.tool, "search")
     XCTAssertEqual(second.text, " Found it.")
     XCTAssertEqual(result, "One result")
+  }
+
+  @MainActor
+  func testVoiceMicrophoneDenialStopsConnectingAndOffersSettings() async {
+    let model = NativeVoiceModel(
+      client: APIClient(baseURL: URL(string: "https://voice-permission.example")!),
+      conversation: nil, microphonePermission: { false })
+    model.available = true
+    await model.start()
+    XCTAssertFalse(model.connecting)
+    XCTAssertFalse(model.connected)
+    XCTAssertFalse(model.stopping)
+    XCTAssertEqual(model.permissionError, .microphoneDenied)
+    XCTAssertEqual(model.permissionError?.canOpenSettings, true)
+    XCTAssertEqual(model.status, NativeAudioPermissionError.microphoneDenied.localizedDescription)
+  }
+
+  @MainActor
+  func testEndingVoiceDuringPermissionPromptIgnoresALateGrant() async throws {
+    let requested = expectation(description: "Microphone permission requested")
+    var permission: CheckedContinuation<Bool, Never>?
+    let model = NativeVoiceModel(
+      client: APIClient(baseURL: URL(string: "https://voice-permission.example")!),
+      conversation: nil
+    ) {
+      await withCheckedContinuation {
+        permission = $0
+        requested.fulfill()
+      }
+    }
+    model.available = true
+    let starting = Task { await model.start() }
+    defer {
+      permission?.resume(returning: false)
+      starting.cancel()
+      model.finish()
+    }
+    await fulfillment(of: [requested], timeout: 2)
+    let prompt = try XCTUnwrap(permission)
+    permission = nil
+    XCTAssertTrue(model.connecting)
+    model.finish()
+    let stoppedRevision = model.revision
+    let stoppedStatus = model.status
+    prompt.resume(returning: true)
+    await starting.value
+    XCTAssertFalse(model.connecting)
+    XCTAssertFalse(model.connected)
+    XCTAssertFalse(model.stopping)
+    XCTAssertNil(model.permissionError)
+    XCTAssertEqual(model.revision, stoppedRevision)
+    XCTAssertEqual(model.status, stoppedStatus)
   }
 
   @MainActor
@@ -237,11 +321,15 @@ final class NativeVoiceTests: XCTestCase {
 
 @MainActor
 private final class DelayedDictationProvider: SpeechToTextProvider {
-  var continuation: CheckedContinuation<String, any Error>?
-  func availability() async throws -> String {
+  var continuation: CheckedContinuation<Void, any Error>?
+  func availability() async throws {
     try await withCheckedThrowingContinuation { continuation = $0 }
   }
   func transcribe(file: URL) async throws -> String { "Unused" }
+  func recognizeLive(
+    request: SFSpeechAudioBufferRecognitionRequest,
+    onResult: @escaping @Sendable (String?, Bool, String?) -> Void
+  ) throws -> SFSpeechRecognitionTask? { nil }
 }
 
 final class VoiceTaskProtocol: URLProtocol, @unchecked Sendable {

@@ -19,6 +19,8 @@ export interface SpecInputs {
 
 export function buildChildSpecs(i: SpecInputs): ChildSpec[] {
   const watchArgs = i.watch ? ["--watch"] : [];
+  const localAuthBypass = i.baseEnv.PORTAL_LOCAL_AUTH_BYPASS ?? "1";
+  const localAuthBypassLan = i.baseEnv.PORTAL_LOCAL_AUTH_BYPASS_LAN ?? (localAuthBypass === "0" ? "0" : "1");
   const base = { ...i.baseEnv, ...i.sandboxEnv };
   const siblingBase = Object.fromEntries(
     Object.entries(base).filter(([key]) => key !== "HOME" && key !== "CODEX_HOME"),
@@ -88,7 +90,8 @@ export function buildChildSpecs(i: SpecInputs): ChildSpec[] {
         WEB_UI_UPSTREAM: `http://localhost:${i.ports.web}`,
         PORTAL_SESSION_SECRET: i.portalSessionSecret,
         NODE_ENV: "development",
-        PORTAL_LOCAL_AUTH_BYPASS: i.baseEnv.PORTAL_LOCAL_AUTH_BYPASS ?? "1",
+        PORTAL_LOCAL_AUTH_BYPASS: localAuthBypass,
+        PORTAL_LOCAL_AUTH_BYPASS_LAN: localAuthBypassLan,
         PORTAL_DEV_PRINCIPAL: i.portalDevPrincipal,
       },
       port: i.ports.portal,

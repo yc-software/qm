@@ -49,7 +49,7 @@ struct NativeAppsView: View {
   @State private var tab = "Yours"
   @State private var query = ""
   @State private var error: String?
-  @State private var loading = false
+  @State private var loading = true
   private var filtered: [NativeDeployment] {
     apps.filter {
       $0.tab(user: user) == tab
@@ -63,7 +63,10 @@ struct NativeAppsView: View {
       Picker("Show", selection: $tab) {
         ForEach(["Yours", "Shared", "Archived"], id: \.self) { Text($0) }
       }.pickerStyle(.segmented)
-      if let error { Text(error).foregroundStyle(.red) }
+      if let error {
+        Text(error).foregroundStyle(.red)
+        Button("Try again") { Task { await load() } }.disabled(loading)
+      }
       ForEach(filtered) { app in
         NavigationLink {
           NativeAppDetail(client: client, user: user, original: app)
@@ -76,10 +79,24 @@ struct NativeAppsView: View {
           }.padding(.vertical, 8)
         }
       }
-      if filtered.isEmpty && !loading {
-        ContentUnavailableView(
-          "No apps here yet", systemImage: "square.stack.3d.up",
-          description: Text("Apps you create with QM will appear here."))
+      if loading && apps.isEmpty {
+        NativeAppCollectionLoading(label: "Loading apps...")
+      } else if filtered.isEmpty && !loading && error == nil {
+        if !query.isEmpty {
+          ContentUnavailableView.search(text: query)
+        } else {
+          ContentUnavailableView(
+            tab == "Shared"
+              ? "No shared apps"
+              : tab == "Archived" ? "No archived apps" : "No apps here yet",
+            systemImage: "square.stack.3d.up",
+            description: Text(
+              tab == "Shared"
+                ? "Apps shared with you will appear here."
+                : tab == "Archived"
+                  ? "Archived apps will appear here."
+                  : "Apps you create with QM will appear here."))
+        }
       }
     }
     .navigationTitle("Apps").searchable(text: $query)
@@ -106,6 +123,7 @@ struct NativeAppDetail: View {
   @State private var loader = LoadGuard()
   @State private var error: String?
   @State private var busy = false
+  @State private var mutationAction: String?
   @State private var name = ""
   @State private var editingName = false
   @State private var slug = ""
@@ -128,21 +146,46 @@ struct NativeAppDetail: View {
       if let error { Text(error).foregroundStyle(.red) }
       if app.canManage {
         Section("Settings") {
-          Button("Edit display name") {
-            name = app.displayName ?? ""
+          Button {
+            if mutationAction != "display-name" { name = app.displayName ?? "" }
             editingName = true
+          } label: {
+            VStack(alignment: .leading, spacing: 4) {
+              NativeActionLabel(
+                title: "Edit display name", busyTitle: "Saving...",
+                busy: busy && mutationAction == "display-name")
+              if busy && mutationAction == "display-name" {
+                Text(name.isEmpty ? app.name ?? app.id : name)
+                  .font(.subheadline).foregroundStyle(.secondary)
+                  .fixedSize(horizontal: false, vertical: true)
+              }
+            }
           }
-          Button("Change app URL") {
-            slug = app.name ?? app.id
+          Button {
+            if mutationAction != "name" { slug = app.name ?? app.id }
             editingSlug = true
+          } label: {
+            VStack(alignment: .leading, spacing: 4) {
+              NativeActionLabel(
+                title: "Change app URL", busyTitle: "Saving...",
+                busy: busy && mutationAction == "name")
+              if busy && mutationAction == "name" {
+                Text(slug).font(.subheadline).foregroundStyle(.secondary)
+                  .fixedSize(horizontal: false, vertical: true)
+              }
+            }
           }
           if app.ownerScopeId == "personal:\(user)" {
             NavigationLink("Permissions") { NativeAppPermissions(client: client, app: app) }
           }
-          Button(
-            app.status == "archived" ? "Restore deployment" : "Archive deployment",
-            role: app.status == "archived" ? nil : .destructive
-          ) { archive = true }
+          Button(role: app.status == "archived" ? nil : .destructive) {
+            archive = true
+          } label: {
+            NativeActionLabel(
+              title: app.status == "archived" ? "Restore deployment" : "Archive deployment",
+              busyTitle: mutationAction == "restore" ? "Restoring..." : "Archiving...",
+              busy: busy && (mutationAction == "restore" || mutationAction == "archive"))
+          }
         }.disabled(busy)
       }
       Section("Version history") {
@@ -156,8 +199,12 @@ struct NativeAppDetail: View {
             }
           }
         }
-        if app.versions?.isEmpty != false {
-          Text("No version history available.").foregroundStyle(.secondary)
+        if app.versions?.isEmpty != false && error == nil {
+          if loader.loading || current == nil {
+            NativeAppCollectionLoading(label: "Loading version history...")
+          } else {
+            Text("No version history available.").foregroundStyle(.secondary)
+          }
         }
       }
     }
@@ -202,9 +249,10 @@ struct NativeAppDetail: View {
           : "The app will stop being available. You can restore it later.")
     }
   }
-  private func load(afterMutation: Bool = false) async {
-    guard !busy || afterMutation else { return }
-    await loader.run {
+  @discardableResult
+  private func load(afterMutation: Bool = false) async -> Bool {
+    guard !busy || afterMutation else { return false }
+    return await loader.run {
       try await client.fetch("api/deployments/\(original.id.apiComponent)")
         as NativeDeploymentResult
     } apply: { result in
@@ -217,12 +265,13 @@ struct NativeAppDetail: View {
   private func mutate(_ action: String, body: [String: Any] = [:]) async {
     guard !busy else { return }
     busy = true
+    mutationAction = action
     loader.cancel()
     defer { busy = false }
     do {
       let _: MutationReceipt = try await client.fetch(
         "api/deployments/\(app.id.apiComponent)/\(action)", body: body)
-      await load(afterMutation: true)
+      if await load(afterMutation: true) { mutationAction = nil }
     } catch { self.error = error.localizedDescription }
   }
 }
@@ -237,40 +286,68 @@ struct NativeAppPermissions: View {
   let client: APIClient
   let app: NativeDeployment
   @State private var grants: [NativeAppGrant] = []
-  @State private var query = ""
-  @State private var matches: [DirectoryPerson] = []
+  @State private var search: NativePeopleSearchModel
   @State private var selected: DirectoryPerson?
   @State private var access = "view"
   @State private var pending: (scope: String, access: String)?
-  @State private var busy = false
+  @State private var savingScope: String?
   @State private var loaded = false
   @State private var error: String?
+  @State private var loading = true
+  @State private var searchAttempt = 0
+  private var busy: Bool { savingScope != nil }
   private var endpoint: String { "api/deployments/\(app.id.apiComponent)/share" }
+  private var searchTerm: String { search.query.trimmingCharacters(in: .whitespacesAndNewlines) }
+  private var matchingPeople: [DirectoryPerson] {
+    search.matches.filter { person in
+      "personal:\(person.id)" != app.ownerScopeId
+        && !grants.contains(where: { $0.scope == "personal:\(person.id)" })
+    }
+  }
+  init(client: APIClient, app: NativeDeployment) {
+    self.client = client
+    self.app = app
+    _search = State(initialValue: NativePeopleSearchModel(client: client))
+  }
   var body: some View {
     QMList {
       if let error { Text(error).foregroundStyle(.red) }
       Section("People with access") {
+        if loading && grants.isEmpty {
+          NativePeopleSearchLoading(label: "Loading access...")
+        } else if loaded && grants.isEmpty && error == nil {
+          Text("No one else has access.").foregroundStyle(.secondary)
+        }
         ForEach(grants) { grant in
           HStack {
             Text(grant.scope)
             Spacer()
-            Menu(grant.permission == "write" ? "Can manage" : "Can view") {
-              Button("Can view") { pending = (grant.scope, "view") }
-              Button("Can manage") { pending = (grant.scope, "manage") }
-              Button("Remove access", role: .destructive) { pending = (grant.scope, "none") }
+            if savingScope == grant.scope {
+              NativeActionLabel(title: "Access", busyTitle: "Saving...", busy: true)
+            } else {
+              Menu(grant.permission == "write" ? "Can manage" : "Can view") {
+                Button("Can view") { pending = (grant.scope, "view") }
+                Button("Can manage") { pending = (grant.scope, "manage") }
+                Button("Remove access", role: .destructive) { pending = (grant.scope, "none") }
+              }
             }
           }
         }
       }
       Section("Add people") {
-        TextField("Name or email", text: $query)
-        ForEach(
-          matches.filter { person in
-            "personal:\(person.id)" != app.ownerScopeId
-              && !grants.contains(where: { $0.scope == "personal:\(person.id)" })
-          }
-        ) { person in
+        TextField("Name or email", text: $search.query)
+        ForEach(matchingPeople) { person in
           Button(person.displayName) { selected = person }
+        }
+        if search.searching {
+          NativePeopleSearchLoading(label: "Searching people for \"\(searchTerm)\"...")
+        } else if let searchError = search.error {
+          Text(searchError).foregroundStyle(.red)
+          Button("Try search again") { searchAttempt += 1 }
+        } else if search.completed && matchingPeople.isEmpty {
+          Text(
+            search.matches.isEmpty ? "No matching people." : "Everyone found already has access."
+          ).foregroundStyle(.secondary)
         }
         if let selected {
           LabeledContent("Person", value: selected.displayName)
@@ -278,24 +355,21 @@ struct NativeAppPermissions: View {
             Text("Can view").tag("view")
             Text("Can manage").tag("manage")
           }
-          Button("Grant access") { pending = ("personal:\(selected.id)", access) }.disabled(!loaded)
+          Button {
+            pending = ("personal:\(selected.id)", access)
+          } label: {
+            NativeActionLabel(
+              title: "Grant access", busyTitle: "Saving...",
+              busy: savingScope == "personal:\(selected.id)")
+          }.disabled(!loaded)
         }
       }
     }
     .disabled(busy).navigationTitle("App permissions")
     .refreshable { if !busy { await load() } }
     .task { await load() }
-    .task(id: query) {
-      matches = []
-      guard query.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2 else { return }
-      do {
-        try await Task.sleep(for: .milliseconds(250))
-        let result: DirectoryMatches = try await client.fetch(
-          "api/directory/resolve", query: [.init(name: "q", value: query)])
-        try Task.checkCancellation()
-        matches = result.matches
-      } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
-    }
+    .task(id: "\(search.query)|\(searchAttempt)") { await search.search() }
+    .onDisappear { search.cancel() }
     .confirmationDialog(
       "Update access?",
       isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } })
@@ -312,6 +386,8 @@ struct NativeAppPermissions: View {
     }
   }
   private func load() async {
+    loading = true
+    defer { loading = false }
     do {
       let result: NativeAppGrants = try await client.fetch(endpoint)
       try Task.checkCancellation()
@@ -322,14 +398,14 @@ struct NativeAppPermissions: View {
   }
   private func change(_ scope: String, access: String) async {
     guard !busy else { return }
-    busy = true
-    defer { busy = false }
+    savingScope = scope
+    defer { savingScope = nil }
     do {
       let result: NativeAppGrants = try await client.fetch(
         endpoint, body: ["scope": scope, "access": access])
       grants = result.grantees
       selected = nil
-      query = ""
+      search.query = ""
       pending = nil
       error = nil
     } catch { self.error = error.localizedDescription }

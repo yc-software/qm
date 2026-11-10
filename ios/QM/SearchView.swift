@@ -25,6 +25,10 @@ struct SearchView: View {
 
   var body: some View {
     QMList {
+      if loading {
+        NativeCollectionLoading(
+          label: "Searching messages", symbol: "text.magnifyingglass", rows: 3)
+      }
       ForEach(hits) { hit in
         NavigationLink {
           NativeConversationDestination(
@@ -42,9 +46,7 @@ struct SearchView: View {
     .navigationTitle("Search messages")
     .searchable(text: $query, prompt: "Search messages across your workspace")
     .overlay {
-      if loading {
-        NativeWave()
-      } else if let error {
+      if !loading, let error {
         ContentUnavailableView {
           Label("Search unavailable", systemImage: "wifi.exclamationmark")
         } description: {
@@ -52,7 +54,7 @@ struct SearchView: View {
         } actions: {
           Button("Try again") { retry += 1 }
         }
-      } else if hits.isEmpty {
+      } else if !loading, hits.isEmpty {
         ContentUnavailableView(
           query.count < 2 ? "Find past work" : "No matching messages",
           systemImage: "magnifyingglass",
@@ -110,7 +112,13 @@ struct NativeConversationDestination: View {
           Button("Try again") { retry += 1 }
         }
       } else {
-        NativeWave().accessibilityLabel("Opening conversation")
+        ScrollView {
+          NativeChatHistoryPlaceholder()
+            .padding(20)
+            .frame(maxWidth: QMTheme.conversationWidth)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .background(QMTheme.paper)
       }
     }
     .task(id: retry) {

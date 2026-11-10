@@ -51,8 +51,9 @@ final class QueuedInputsModel {
   var expanded = false
   private var refreshError: String?
   private var actionError: String?
-  var error: String? { actionError ?? refreshError }
+  var error: String? { actionError ?? (inputs.isEmpty && edit == nil ? nil : refreshError) }
   var mutating = false
+  private(set) var retrying = false
   var activeRunID: String?
   private var mutation: Task<Void, Never>?
   private var retry: Task<Void, Never>?
@@ -93,7 +94,7 @@ final class QueuedInputsModel {
 
   func poll() async {
     while !Task.isCancelled {
-      await refresh()
+      if !retrying { await refresh() }
       do { try await Task.sleep(for: .seconds(3)) } catch { return }
     }
   }
@@ -102,16 +103,22 @@ final class QueuedInputsModel {
     revision += 1
     retry?.cancel()
     retry = nil
+    retrying = false
     mutation?.cancel()
     mutation = nil
     mutating = false
   }
 
   func retryRefresh() {
-    retry?.cancel()
+    guard !mutating, !retrying else { return }
+    let expectedRevision = revision
+    retrying = true
     refreshError = nil
     actionError = nil
-    retry = Task { await refresh() }
+    retry = Task {
+      defer { if revision == expectedRevision { retrying = false } }
+      await refresh()
+    }
   }
 
   func save() {
@@ -206,35 +213,11 @@ final class QueuedInputsModel {
   }
 }
 
-struct QueuedRunsView: View {
-  let client: APIClient
-  let threadRef: String
-  let scopeID: String
-  let onSnapshot: (QueuedInputsResponse) async -> Void
-
-  var body: some View {
-    QueuedRunsContent(
-      client: client, threadRef: threadRef, scopeID: scopeID, onSnapshot: onSnapshot
-    ).id(threadRef)
-  }
-}
-
 @MainActor
-private struct QueuedRunsContent: View {
-  @State private var model: QueuedInputsModel
-  @Environment(\.scenePhase) private var phase
-
-  init(
-    client: APIClient, threadRef: String, scopeID: String,
-    onSnapshot: @escaping (QueuedInputsResponse) async -> Void
-  ) {
-    _model = State(
-      initialValue: QueuedInputsModel(
-        client: client, threadRef: threadRef, scopeID: scopeID, onSnapshot: onSnapshot))
-  }
+struct QueuedRunsView: View {
+  @Bindable var model: QueuedInputsModel
 
   var body: some View {
-    @Bindable var model = model
     VStack(alignment: .leading, spacing: 10) {
       if !model.inputs.isEmpty || model.edit != nil {
         DisclosureGroup(isExpanded: $model.expanded) {
@@ -272,7 +255,7 @@ private struct QueuedRunsContent: View {
                     Text(
                       "This message changed elsewhere. Your draft is kept; cancel and reopen to edit the latest version."
                     )
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(QMTheme.warning)
                   } else if !model.inputs.contains(where: { $0.id == edit.runID }) {
                     Text("This message is no longer queued. Copy your draft before closing.")
                       .foregroundStyle(.secondary)
@@ -298,21 +281,25 @@ private struct QueuedRunsContent: View {
           )
           .font(.subheadline)
         }
-        .disabled(model.mutating)
+        .disabled(model.mutating || model.retrying)
       }
-      if model.mutating { NativeWave().accessibilityLabel("Updating queue") }
+      if model.mutating {
+        NativeActionLabel(title: "", busyTitle: "Updating queue...", busy: true)
+          .font(.caption)
+      }
+      if model.retrying {
+        NativeLoadingRail()
+          .accessibilityHidden(false)
+          .accessibilityLabel("Refreshing queued messages")
+      }
       if let error = model.error {
         HStack(alignment: .top) {
           Text(error).font(.caption).foregroundStyle(.red)
           Button("Refresh") {
             model.retryRefresh()
-          }.font(.caption).disabled(model.mutating)
+          }.font(.caption).disabled(model.mutating || model.retrying)
         }
       }
     }
-    .task(id: phase) {
-      if phase == .active { await model.poll() } else { model.stop() }
-    }
-    .onDisappear { model.stop() }
   }
 }

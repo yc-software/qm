@@ -3468,21 +3468,101 @@ export function createChatSurface(
     return {};
   }
 
-  function toolPayloadText(payload: ToolPayload): string {
+  function toolPayloadEntries(payload: ToolPayload): Array<[string, unknown]> {
     const hidden = new Set(["tool", "callId", "workStartedAt", "workFinishedAt", "isError", "retrySafe", "rerun"]);
-    const entries = Object.entries(payload as Record<string, unknown>).filter(
+    return Object.entries(payload as Record<string, unknown>).filter(
       ([key, value]) => !hidden.has(key) && value !== undefined,
     );
-    if (!entries.length) return "";
-    if (entries.length === 1 && typeof entries[0]![1] === "string") return entries[0]![1] as string;
-    return JSON.stringify(Object.fromEntries(entries), null, 2);
   }
 
-  function toolPayloadCard(label: string | null, text: string, loadFull?: () => void): TemplateResult | typeof nothing {
-    if (!text) return nothing;
+  function toolPayloadField(name: string, value: unknown, depth = 0): TemplateResult {
+    const label = name
+      .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+      .replace(/[_-]/g, " ")
+      .replace(/^./, (c) => c.toUpperCase());
+    if (value !== null && typeof value === "object") {
+      const entries = Array.isArray(value)
+        ? value.map((item, index): [string, unknown] => [`Item ${index + 1}`, item])
+        : Object.entries(value);
+      const unit = Array.isArray(value) ? "item" : "field";
+      const renderFields = (details: HTMLDetailsElement): void => {
+        const host = details.querySelector<HTMLElement>(":scope > .tool-payload-group-host");
+        if (host)
+          render(
+            details.open ? html`${entries.map(([key, item]) => toolPayloadField(key, item, depth + 1))}` : nothing,
+            host,
+          );
+      };
+      return html`<details
+        class="tool-payload-group"
+        ?open=${depth === 0 && !Array.isArray(value)}
+        @toggle=${(event: Event) => renderFields(event.currentTarget as HTMLDetailsElement)}
+      >
+        <summary>
+          <span>${label}</span
+          ><span class="tool-payload-count">${entries.length} ${unit}${entries.length === 1 ? "" : "s"}</span>
+        </summary>
+        <div
+          class="tool-payload-group-host"
+          ${ref((element) => {
+            const details = element?.closest<HTMLDetailsElement>("details");
+            if (details) renderFields(details);
+          })}
+        ></div>
+      </details>`;
+    }
+    let text: string;
+    if (value === null) text = "None";
+    else if (typeof value === "boolean") text = value ? "True" : "False";
+    else text = String(value);
+    const code = ["command", "stdout", "stderr", "path", "query", "result", "output"].includes(name);
+    return html`<div class="tool-payload-field">
+      <div class="tool-payload-key">${label}</div>
+      <div class=${code ? "tool-payload-value tool-payload-code" : "tool-payload-value"}>${text || "(empty)"}</div>
+    </div>`;
+  }
+
+  function toolPayloadCard(
+    label: string | null,
+    payload: ToolPayload | string,
+    loadFull?: () => void,
+  ): TemplateResult | typeof nothing {
+    const entries = typeof payload === "string" ? [] : toolPayloadEntries(payload);
+    if (!entries.length && !loadFull && (typeof payload !== "string" || !payload)) return nothing;
+    const technicalKeys = new Set(["step", "wire", "runId", "requestId", "scope", "scopeLabel"]);
+    const technical = entries.filter(([key]) => technicalKeys.has(key));
+    const primary = entries.filter(([key]) => !technicalKeys.has(key));
+    const renderRaw = (details: HTMLDetailsElement): void => {
+      const host = details.querySelector<HTMLElement>(":scope > .tool-payload-raw-host");
+      if (host)
+        render(
+          details.open ? html`<pre class="tool-payload-body">${JSON.stringify(payload, null, 2)}</pre>` : nothing,
+          host,
+        );
+    };
     return html`<div class="tool-payload-card">
       ${label ? html`<div class="tool-payload-label">${label}</div>` : nothing}
-      <pre class="tool-payload-body">${text}</pre>
+      ${
+        typeof payload === "string"
+          ? html`<pre class="tool-payload-body">${payload}</pre>`
+          : html`<div class="tool-payload-fields">
+              ${primary.map(([key, value]) => toolPayloadField(key, value))}
+              ${technical.length ? toolPayloadField("Technical details", Object.fromEntries(technical), 1) : nothing}
+              <details
+                class="tool-payload-raw"
+                @toggle=${(event: Event) => renderRaw(event.currentTarget as HTMLDetailsElement)}
+              >
+                <summary>Raw JSON</summary>
+                <div
+                  class="tool-payload-raw-host"
+                  ${ref((element) => {
+                    const details = element?.closest<HTMLDetailsElement>("details");
+                    if (details) renderRaw(details);
+                  })}
+                ></div>
+              </details>
+            </div>`
+      }
       ${loadFull ? html`<div class="code-card-foot"><button class="show-full-btn" type="button" @click=${loadFull}>Show full ${label?.toLowerCase() ?? "command"}</button></div>` : nothing}
     </div>`;
   }
@@ -3495,8 +3575,8 @@ export function createChatSurface(
     row: ToolRowModel,
   ): TemplateResult {
     const execution = toolCategory({ ...result, ...call, tool }) === "execute";
-    const input = execution ? (call.command ?? "") : toolPayloadText(call);
-    const output = execution ? "" : toolPayloadText(result);
+    const input = execution ? (call.command ?? "") : call;
+    const output = execution ? "" : result;
     return html`<div class="tool-disclosure">
       ${toolPayloadCard(execution ? null : "Input", input, row.call?.truncated ? () => void loadFullEntry(work, row.call!) : undefined)}
       ${toolPayloadCard("Result", output, row.result?.truncated ? () => void loadFullEntry(work, row.result!) : undefined)}

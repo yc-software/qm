@@ -19,11 +19,23 @@ struct NativeConversationTools: View {
           }
         }
         if model.earlierEntries > 0 {
-          Button("Load earlier fork points") { Task { await model.loadEarlier() } }
+          Button {
+            Task { await model.loadEarlier() }
+          } label: {
+            NativeActionLabel(
+              title: "Load earlier fork points", busyTitle: "Loading earlier fork points...",
+              busy: model.loadingEarlier)
+          }.disabled(model.loadingEarlier)
         }
-        NavigationLink("Linked conversations") { NativeLinkedConversations(model: model) }
-        Button("Fork conversation", systemImage: "arrow.triangle.branch") {
+        Button {
           Task { fork = await model.fork(from: cut == "all" ? nil : cut) }
+        } label: {
+          if model.forking {
+            NativeActionLabel(
+              title: "Fork conversation", busyTitle: "Forking conversation...", busy: true)
+          } else {
+            Label("Fork conversation", systemImage: "arrow.triangle.branch")
+          }
         }.disabled(model.forking)
         Text("A fork creates a separate conversation from the selected point.").font(.caption)
           .foregroundStyle(.secondary)
@@ -94,23 +106,42 @@ struct NativeConversationShare: View {
           Text("Anyone with the link").tag("external")
         }
         .onChange(of: audience) { result = nil }
+        .disabled(busy)
         Text(
           "This shares a snapshot. Subsequent messages will not be visible unless you share again.")
         if audience == "external" {
           Text(
             "Anyone with the link can read this conversation. Review its contents before creating the link."
-          ).foregroundStyle(.orange)
+          ).foregroundStyle(QMTheme.warning)
         }
-        Button(result == nil ? "Create link" : "Create new snapshot") { confirming = true }
+        Button {
+          confirming = true
+        } label: {
+          HStack(spacing: 10) {
+            if busy {
+              Image(systemName: "link")
+                .frame(width: 22, height: 22)
+                .modifier(NativeLoadingPulse())
+                .accessibilityHidden(true)
+            }
+            Text(busy ? "Creating link..." : result == nil ? "Create link" : "Create new snapshot")
+              .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+          }
+          .frame(minHeight: 44)
+        }.disabled(busy)
         if let url {
-          ShareLink("Share conversation", item: url)
+          ShareLink("Share conversation", item: url).disabled(busy)
           Text(url.absoluteString).font(.footnote).textSelection(.enabled)
         }
         if let error { Text(error).foregroundStyle(.red) }
       }
-      .disabled(busy).navigationTitle("Share conversation")
-      .toolbar { Button("Done") { dismiss() }.disabled(busy) }
-      .interactiveDismissDisabled(busy)
+      .navigationTitle("Share conversation")
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Done") { dismiss() }.disabled(busy)
+        }
+      }
       .confirmationDialog("Create a conversation snapshot?", isPresented: $confirming) {
         Button("Create \(audience == "external" ? "external" : "workspace") link") {
           Task { await create() }
@@ -122,11 +153,12 @@ struct NativeConversationShare: View {
             : "Signed-in members of this workspace with the link will be able to read the shared messages."
         )
       }
-    }
+    }.interactiveDismissDisabled(busy)
   }
   private func create() async {
     guard !busy else { return }
     busy = true
+    error = nil
     defer { busy = false }
     do {
       let value: Result = try await client.fetch(
@@ -145,8 +177,13 @@ struct NativeActivityView: View {
   var body: some View {
     QMList {
       if model.earlierEntries > 0 {
-        Button("Load earlier activity") { Task { await model.loadEarlier() } }.disabled(
-          model.loadingEarlier)
+        Button {
+          Task { await model.loadEarlier() }
+        } label: {
+          NativeActionLabel(
+            title: "Load earlier activity", busyTitle: "Loading earlier activity...",
+            busy: model.loadingEarlier)
+        }.disabled(model.loadingEarlier)
       }
       ForEach(model.entries) { entry in NativeActivityRow(entry: entry, client: model.client) }
       if let error = model.error { Text(error).foregroundStyle(.red) }
@@ -190,8 +227,15 @@ struct NativeBackgroundView: View {
   let conversation: Conversation
   @State private var work: NativeBackground?
   @State private var error: String?
+  @State private var loading = false
   var body: some View {
     QMList {
+      if loading, work == nil {
+        NativeActionLabel(
+          title: "Background work", busyTitle: "Loading background work...", busy: true
+        )
+        .listRowSeparator(.hidden)
+      }
       if let error { Text(error).foregroundStyle(.red) }
       Section("Processes") {
         ForEach(work?.jobs ?? []) { job in
@@ -231,6 +275,9 @@ struct NativeBackgroundView: View {
     .navigationTitle("Background work").task { await load() }.refreshable { await load() }
   }
   private func load() async {
+    guard !loading else { return }
+    loading = true
+    defer { loading = false }
     do {
       let result: NativeBackground = try await client.fetch(
         "api/sessions/\(conversation.id.apiComponent)/background")
@@ -267,7 +314,13 @@ struct NativeProcessOutput: View {
         Text(output).font(.footnote.monospaced()).textSelection(.enabled).frame(
           maxWidth: .infinity, alignment: .leading)
         if let error { Text(error).foregroundStyle(.red) }
-        Button("Refresh output") { Task { await load() } }.disabled(busy)
+        Button {
+          Task { await load() }
+        } label: {
+          NativeActionLabel(
+            title: "Refresh output",
+            busyTitle: state.isEmpty ? "Loading output..." : "Refreshing output...", busy: busy)
+        }.disabled(busy)
       }.padding()
     }
     .navigationTitle("Process output")
@@ -295,103 +348,6 @@ struct NativeProcessOutput: View {
       exitCode = result.exitCode
       error = nil
     } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
-  }
-}
-
-struct NativeLinkedConversations: View {
-  @Bindable var model: ChatModel
-  @State private var sessions: [Conversation] = []
-  @State private var selected = ""
-  @State private var busy = false
-  @State private var error: String?
-  @State private var confirming = false
-  @State private var loader = LoadGuard()
-  private var current: Conversation {
-    sessions.first { $0.id == model.conversation.id } ?? model.conversation
-  }
-  private var candidates: [Conversation] {
-    sessions.filter {
-      $0.id != current.id && $0.parentSessionId == nil && $0.archived != true
-        && $0.scopeId == current.scopeId && $0.surface != "swarm"
-    }
-  }
-  var body: some View {
-    QMList {
-      if let parent = current.parentSessionId {
-        Section("Linked under") {
-          NavigationLink(sessions.first { $0.id == parent }?.label ?? "Parent conversation") {
-            NativeConversationDestination(client: model.client, user: model.user, sessionID: parent)
-          }
-          Button("Make standalone") {
-            selected = ""
-            confirming = true
-          }
-        }
-      }
-      Section("Related conversations") {
-        ForEach(sessions.filter { $0.parentSessionId == current.id }) { child in
-          NavigationLink(child.label) {
-            ChatView(
-              model: ChatModel(
-                conversation: child, client: model.client, user: model.user, knownSession: true))
-          }
-        }
-      }
-      if current.surface == "swarm" {
-        Section("Link this conversation") {
-          Text(
-            "Group this conversation under another one in the sidebar. This does not merge messages."
-          ).font(.caption).foregroundStyle(.secondary)
-          Picker("Parent conversation", selection: $selected) {
-            Text("Choose conversation").tag("")
-            ForEach(candidates) { Text($0.label).tag($0.id) }
-          }
-          Button("Link conversation") { confirming = true }.disabled(
-            selected.isEmpty || selected == current.parentSessionId)
-        }
-      }
-      if let error { Text(error).foregroundStyle(.red) }
-    }.disabled(busy).navigationTitle("Linked conversations")
-      .task { await load() }.refreshable { if !busy { await load() } }
-      .confirmationDialog(
-        selected.isEmpty ? "Make this conversation standalone?" : "Link this conversation?",
-        isPresented: $confirming
-      ) {
-        Button(selected.isEmpty ? "Make standalone" : "Link") { Task { await change() } }
-      } message: {
-        Text(
-          selected.isEmpty
-            ? "It will appear independently in the conversation list."
-            : "It will be grouped under \(candidates.first { $0.id == selected }?.label ?? "the selected conversation")."
-        )
-      }
-  }
-  private func load(afterMutation: Bool = false) async {
-    guard !busy || afterMutation else { return }
-    await loader.run {
-      try await model.client.fetch("api/sessions") as ConversationList
-    } apply: { result in
-      sessions = result.sessions
-      if let updated = sessions.first(where: { $0.id == model.conversation.id }) {
-        model.conversation = updated
-      }
-      error = nil
-    } failed: {
-      error = $0.localizedDescription
-    }
-  }
-  private func change() async {
-    guard !busy else { return }
-    busy = true
-    loader.cancel()
-    defer { busy = false }
-    do {
-      let _: MutationReceipt = try await model.client.fetch(
-        "api/sessions/\(current.id.apiComponent)/\(selected.isEmpty ? "detach" : "adopt")",
-        body: selected.isEmpty ? [:] : ["parentSessionId": selected])
-      await load(afterMutation: true)
-      selected = ""
-    } catch { self.error = error.localizedDescription }
   }
 }
 

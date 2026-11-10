@@ -56,6 +56,100 @@ final class AttachmentSubmissionProtocol: URLProtocol, @unchecked Sendable {
 
 @MainActor
 final class AttachmentSubmissionTests: XCTestCase {
+  func testUnpreparedAttachmentCanBeRemovedAndDraftEditedAfterRelaunch() async throws {
+    for sha in [nil, String(repeating: "f", count: 64)] as [String?] {
+      let configuration = URLSessionConfiguration.ephemeral
+      configuration.protocolClasses = [AttachmentSubmissionProtocol.self]
+      let base = URL(string: "https://\(UUID().uuidString).example.test")!
+      let client = APIClient(baseURL: base, configuration: configuration)
+      let account = base.absoluteString + "test"
+      defer { DraftStore.removeAccount(account) }
+      let conversation = Conversation(
+        id: "draft", scopeId: "personal:test", threadRef: "web:test:draft", surface: "web",
+        localOnly: true)
+      let chat = ChatModel(
+        conversation: conversation, client: client, user: "test", knownSession: false)
+      let attachment = UploadAttachment(
+        name: "notes.txt", mimetype: "text/plain", sizeBytes: 3, blobId: "expired",
+        localSHA: sha, uploadedAt: 0)
+      chat.draft = "Send these notes"
+      chat.attachments = [attachment]
+
+      await chat.send()
+
+      XCTAssertNotNil(chat.error)
+      XCTAssertFalse(chat.sending)
+      XCTAssertNil(chat.pending)
+      XCTAssertEqual(chat.draft, "Send these notes")
+      XCTAssertEqual(chat.attachments, [attachment])
+      XCTAssertFalse(
+        AttachmentSubmissionProtocol.requests.withLock {
+          $0.contains { $0.url?.host == base.host }
+        })
+
+      let restored = ChatModel(
+        conversation: conversation, client: client, user: "test", knownSession: false)
+      XCTAssertNil(restored.pending)
+      XCTAssertEqual(restored.draft, "Send these notes")
+      XCTAssertEqual(restored.attachments, [attachment])
+      restored.attachments.removeAll()
+      restored.draft = "Send the revised text instead"
+      await restored.send()
+
+      let turns = AttachmentSubmissionProtocol.requests.withLock {
+        $0.filter { $0.url?.host == base.host && $0.url?.path == "/api/turn" }
+      }
+      XCTAssertEqual(turns.count, 1)
+      let body = try XCTUnwrap(
+        try JSONSerialization.jsonObject(with: XCTUnwrap(turns.first?.httpBody)) as? [String: Any])
+      XCTAssertEqual(body["text"] as? String, "Send the revised text instead")
+      XCTAssertEqual((body["attachments"] as? [[String: Any]])?.count, 0)
+    }
+  }
+
+  func testPreparationFailureOnUncertainRetryKeepsOriginalSubmission() async throws {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [AttachmentSubmissionProtocol.self]
+    let base = URL(string: "https://\(UUID().uuidString).example.test")!
+    let client = APIClient(baseURL: base, configuration: configuration)
+    let account = base.absoluteString + "test"
+    defer { DraftStore.removeAccount(account) }
+    let conversation = Conversation(
+      id: "draft", scopeId: "personal:test", threadRef: "web:test:draft", surface: "web",
+      localOnly: true)
+    let chat = ChatModel(
+      conversation: conversation, client: client, user: "test", knownSession: false)
+    chat.draft = "Send exactly once"
+    chat.attachments = [
+      UploadAttachment(
+        name: "notes.txt", mimetype: "text/plain", sizeBytes: 3, blobId: "uploaded",
+        localSHA: String(repeating: "f", count: 64), uploadedAt: Date().timeIntervalSince1970)
+    ]
+    await chat.send()
+    var pending = try XCTUnwrap(chat.pending)
+    let originalKey = pending.idempotencyKey
+    pending.attachments?[0].uploadedAt = 0
+    let store = DraftStore(account: account, thread: conversation.threadRef)
+    try store.write(
+      .init(
+        text: chat.draft, pending: pending, conversation: conversation,
+        attachments: pending.attachments))
+    let restored = ChatModel(
+      conversation: conversation, client: client, user: "test", knownSession: false)
+
+    await restored.send()
+
+    XCTAssertNotNil(restored.error)
+    XCTAssertEqual(restored.pending?.idempotencyKey, originalKey)
+    XCTAssertEqual(restored.pending?.text, "Send exactly once")
+    XCTAssertEqual(restored.pending?.attachments?.first?.blobId, "uploaded")
+    XCTAssertEqual(store.read().pending?.idempotencyKey, originalKey)
+    XCTAssertEqual(
+      AttachmentSubmissionProtocol.requests.withLock {
+        $0.filter { $0.url?.host == base.host && $0.url?.path == "/api/turn" }.count
+      }, 1)
+  }
+
   func testCompletedReplayClearsDraftWithoutCreatingAnotherSubmission() async throws {
     AttachmentSubmissionProtocol.requests.withLock { $0 = [] }
     let configuration = URLSessionConfiguration.ephemeral

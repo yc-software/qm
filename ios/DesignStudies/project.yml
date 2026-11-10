@@ -1,0 +1,30 @@
+name: QMDesignStudies
+options:
+  bundleIdPrefix: org.qm.studies
+  deploymentTarget:
+    iOS: "18.0"
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    CURRENT_PROJECT_VERSION: "1"
+    MARKETING_VERSION: "1.0"
+    GENERATE_INFOPLIST_FILE: YES
+targets:
+  QMDesignStudies:
+    type: application
+    platform: iOS
+    sources: [Sources]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.qm.designstudies
+        INFOPLIST_KEY_CFBundleDisplayName: QM Studies
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+schemes:
+  QMDesignStudies:
+    build:
+      targets:
+        QMDesignStudies: all

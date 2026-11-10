@@ -8,6 +8,11 @@ final class AppModel {
   var conversations: [Conversation] = []
   var error: String?
   var loading = false
+  private(set) var hasLoadedConversations = false
+  private(set) var updatingConversationIDs = Set<String>()
+  var showingInitialConversationLoad: Bool {
+    loading && !hasLoadedConversations && conversations.isEmpty && error == nil
+  }
   private let signIn = SignIn()
   private var cleanedAccount: String?
   private let defaults: UserDefaults
@@ -29,9 +34,8 @@ final class AppModel {
   }
 
   func selectWorkspace(_ raw: String) throws {
-    guard !loading else { throw QMError.message("Wait for the current connection to finish.") }
     guard let url = Self.workspaceURL(raw) else {
-      throw QMError.message("Enter a workspace HTTPS address without a path or sign-in details.")
+      throw QMError.message("That isn’t a valid workspace address. \(Self.workspaceAddressHint)")
     }
     if url == client?.baseURL { return }
     signOut()
@@ -40,8 +44,10 @@ final class AppModel {
   }
 
   static func workspaceURL(_ raw: String) -> URL? {
-    guard var parts = URLComponents(string: raw.trimmingCharacters(in: .whitespacesAndNewlines))
-    else { return nil }
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    let input = workspaceInputWithScheme(trimmed)
+    guard var parts = URLComponents(string: input) else { return nil }
     parts.scheme = parts.scheme?.lowercased()
     parts.host = parts.host?.lowercased()
     guard let candidate = parts.url, allowedURL(candidate) else { return nil }
@@ -60,10 +66,51 @@ final class AppModel {
     else { return false }
     if url.scheme == "https" { return true }
     #if DEBUG
-      return url.scheme == "http" && ["localhost", "127.0.0.1", "[::1]"].contains(host)
+      return url.scheme == "http" && isLocalDevelopmentHost(host)
     #else
       return false
     #endif
+  }
+
+  static var workspaceAddressHint: String {
+    #if DEBUG
+      "Use HTTPS for hosted workspaces; local development addresses may use HTTP."
+    #else
+      "Use the HTTPS origin without a path or sign-in details."
+    #endif
+  }
+
+  private static func workspaceInputWithScheme(_ input: String) -> String {
+    guard !input.contains("://") else { return input }
+    #if DEBUG
+      if let host = URLComponents(string: "http://\(input)")?.host,
+        isLocalDevelopmentHost(host)
+      {
+        return "http://\(input)"
+      }
+    #endif
+    return "https://\(input)"
+  }
+
+  private static func isLocalDevelopmentHost(_ rawHost: String) -> Bool {
+    let host = rawHost.lowercased().trimmingCharacters(
+      in: CharacterSet(charactersIn: "[]"))
+    if host == "localhost" || host == "::1" || host.hasSuffix(".local") { return true }
+    if host.contains(":")
+      && (host.hasPrefix("fc") || host.hasPrefix("fd") || host.hasPrefix("fe8")
+        || host.hasPrefix("fe9") || host.hasPrefix("fea") || host.hasPrefix("feb"))
+    {
+      return true
+    }
+
+    let octets = host.split(separator: ".", omittingEmptySubsequences: false).compactMap {
+      UInt8($0)
+    }
+    guard octets.count == 4 else { return false }
+    return octets[0] == 10 || octets[0] == 127
+      || (octets[0] == 172 && (16...31).contains(octets[1]))
+      || (octets[0] == 192 && octets[1] == 168)
+      || (octets[0] == 169 && octets[1] == 254)
   }
 
   func restore() async {
@@ -92,6 +139,9 @@ final class AppModel {
       guard self.client === client, client.generation == generation else { return }
       loading = false
       await load()
+    } catch is CancellationError {
+      guard self.client === client, client.generation == generation else { return }
+      loading = false
     } catch {
       guard self.client === client, client.generation == generation else { return }
       self.error = error.localizedDescription
@@ -132,6 +182,7 @@ final class AppModel {
       }
       conversations = DraftStore.merging(
         list.sessions, account: client.baseURL.absoluteString + user.user)
+      hasLoadedConversations = true
       error = nil
     } catch is CancellationError {
     } catch {
@@ -140,20 +191,28 @@ final class AppModel {
       else { return }
       self.error = error.localizedDescription
       if case QMError.signedOut = error {
-        identity = nil
-        conversations = []
+        resetAfterSessionLoss()
       }
     }
   }
 
   func update(_ conversation: Conversation, patch: [String: Any]) async {
-    guard let client, conversation.localOnly != true else { return }
+    guard let client, conversation.localOnly != true,
+      updatingConversationIDs.insert(conversation.id).inserted
+    else { return }
     let generation = client.generation
+    defer {
+      if self.client === client, client.generation == generation {
+        updatingConversationIDs.remove(conversation.id)
+      }
+    }
     do {
       let _: ConversationUpdate = try await client.fetch(
         "api/sessions/\(conversation.id)", body: patch)
       guard self.client === client, client.generation == generation else { return }
       await load()
+    } catch QMError.signedOut {
+      if self.client === client { resetAfterSessionLoss() }
     } catch is CancellationError {
     } catch {
       guard self.client === client, client.generation == generation else { return }
@@ -172,15 +231,22 @@ final class AppModel {
 
   func signOut() {
     signIn.cancel()
-    loadRevision = UUID()
-    loading = false
     if let client, let identity {
       DraftStore.removeAccount(client.baseURL.absoluteString + identity.user)
     }
     client?.signOut()
+    resetAfterSessionLoss()
+    error = nil
+  }
+
+  func resetAfterSessionLoss() {
+    guard client?.hasSession != true else { return }
+    loadRevision = UUID()
+    loading = false
     cleanedAccount = nil
     identity = nil
     conversations = []
-    error = nil
+    hasLoadedConversations = false
+    updatingConversationIDs = []
   }
 }

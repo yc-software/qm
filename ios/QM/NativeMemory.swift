@@ -38,7 +38,12 @@ final class NotebookModel {
   var draft = ""
   var revision = ""
   var history: [NotebookRevision] = []
+  private let historyLoader = LoadGuard()
+  var historyLoading: Bool { historyLoader.loading }
+  var historyLoaded = false
+  var historyError: String?
   var loaded = false
+  var loading = false
   var busy = false
   var error: String?
   var dirty: Bool { draft != content }
@@ -48,7 +53,11 @@ final class NotebookModel {
   func load() async {
     guard !busy, !dirty else { return }
     busy = true
-    defer { busy = false }
+    loading = true
+    defer {
+      loading = false
+      busy = false
+    }
     do {
       let head: NotebookHead = try await client.fetch("api/memory")
       try Task.checkCancellation()
@@ -89,11 +98,15 @@ final class NotebookModel {
   }
 
   func loadHistory() async {
-    do {
-      let result: NotebookHistory = try await client.fetch("api/memory/history")
-      try Task.checkCancellation()
+    await historyLoader.run {
+      try await client.fetch("api/memory/history") as NotebookHistory
+    } apply: { result in
       history = result.revisions
-    } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+      historyLoaded = true
+      historyError = nil
+    } failed: {
+      historyError = $0.localizedDescription
+    }
   }
 
   private func accept(_ head: NotebookHead) throws {
@@ -122,7 +135,9 @@ struct NativeMemoryView: View {
           Text(error).foregroundStyle(.red)
           Button("Try again") { Task { await model.load() } }
         }
-        if model.loaded && model.content.isEmpty {
+        if model.loading && !model.loaded && model.error == nil {
+          NativeParagraphLoading(label: "Loading notebook")
+        } else if model.loaded && model.content.isEmpty {
           ContentUnavailableView(
             "A fresh notebook", systemImage: "book.closed",
             description: Text("Add preferences, facts, and instructions you want QM to remember."))
@@ -133,7 +148,10 @@ struct NativeMemoryView: View {
         maxWidth: .infinity, alignment: .center)
     }
     .background(QMTheme.paper).navigationTitle("Memory").navigationBarTitleDisplayMode(.inline)
-    .overlay { if model.busy { ProgressView() } }
+    .modifier(
+      NativeCollectionRefresh(
+        active: model.loading && (model.loaded || model.error != nil), label: "Refreshing notebook")
+    )
     .toolbar {
       Button("History", systemImage: "clock.arrow.circlepath") { history = true }.disabled(
         !model.loaded)
@@ -153,6 +171,11 @@ struct NotebookEditor: View {
   @State private var query = ""
   @State private var discarding = false
   @State private var reloading = false
+  private var matchingFacts: [NotebookFact] {
+    NotebookFact.parse(model.draft).filter {
+      query.isEmpty || $0.text.localizedCaseInsensitiveContains(query)
+    }
+  }
 
   var body: some View {
     NavigationStack {
@@ -166,17 +189,22 @@ struct NotebookEditor: View {
         }
         if facts {
           QMList {
-            ForEach(
-              NotebookFact.parse(model.draft).filter {
-                query.isEmpty || $0.text.localizedCaseInsensitiveContains(query)
-              }
-            ) { fact in
+            ForEach(matchingFacts) { fact in
               Text(fact.text).swipeActions {
                 Button("Remove", role: .destructive) {
                   var lines = model.draft.components(separatedBy: "\n")
                   lines.remove(at: fact.line)
                   model.draft = lines.joined(separator: "\n")
                 }
+              }
+            }
+            if matchingFacts.isEmpty {
+              if !query.isEmpty {
+                ContentUnavailableView.search(text: query)
+              } else {
+                ContentUnavailableView(
+                  "No facts yet", systemImage: "list.bullet",
+                  description: Text("Notebook bullet points appear here."))
               }
             }
           }.searchable(text: $query, prompt: "Find a fact")
@@ -193,6 +221,9 @@ struct NotebookEditor: View {
         }.font(.footnote).padding()
       }
       .disabled(model.busy)
+      .modifier(
+        NativeCollectionRefresh(active: model.loading, label: "Loading latest notebook")
+      )
       .navigationTitle("Edit notebook").navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .cancellationAction) {
@@ -200,8 +231,13 @@ struct NotebookEditor: View {
             model.busy)
         }
         ToolbarItem(placement: .confirmationAction) {
-          Button(model.busy ? "Saving…" : "Save") { Task { if await model.save() { dismiss() } } }
-            .disabled(model.busy || !model.dirty || model.revision.isEmpty)
+          Button {
+            Task { if await model.save() { dismiss() } }
+          } label: {
+            NativeActionLabel(
+              title: "Save", busyTitle: model.loading ? "Loading…" : "Saving…", busy: model.busy,
+              compact: true)
+          }.disabled(model.busy || !model.dirty || model.revision.isEmpty)
         }
       }
       .interactiveDismissDisabled(model.dirty || model.busy)
@@ -232,6 +268,10 @@ struct NotebookHistoryView: View {
     NavigationStack {
       QMList {
         if let error = model.error { Text(error).foregroundStyle(.red) }
+        if let error = model.historyError {
+          Text(error).foregroundStyle(.red)
+          Button("Try again") { Task { await model.loadHistory() } }.disabled(model.historyLoading)
+        }
         ForEach(model.history) { revision in
           NavigationLink {
             ScrollView {
@@ -241,8 +281,12 @@ struct NotebookHistoryView: View {
               }.padding()
             }.navigationTitle("Notebook revision")
               .toolbar {
-                Button("Restore") { restoring = revision }.disabled(
-                  model.busy || revision.id == model.revision)
+                Button {
+                  restoring = revision
+                } label: {
+                  NativeActionLabel(
+                    title: "Restore", busyTitle: "Restoring…", busy: model.busy, compact: true)
+                }.disabled(model.busy || revision.id == model.revision)
               }
           } label: {
             VStack(alignment: .leading, spacing: 5) {
@@ -253,9 +297,20 @@ struct NotebookHistoryView: View {
             }
           }
         }
-        if model.history.isEmpty { Text("No previous versions.").foregroundStyle(.secondary) }
+        if model.history.isEmpty {
+          if model.historyLoading && !model.historyLoaded && model.historyError == nil {
+            NativeParagraphLoading(label: "Loading saved versions", pages: 2)
+          } else if model.historyLoaded && model.historyError == nil {
+            Text("No previous versions.").foregroundStyle(.secondary)
+          }
+        }
       }
       .navigationTitle("Memory history")
+      .modifier(
+        NativeCollectionRefresh(
+          active: model.historyLoading && (model.historyLoaded || model.historyError != nil),
+          label: "Refreshing saved versions")
+      )
       .toolbar { Button("Done") { dismiss() }.disabled(model.busy) }
       .task { await model.loadHistory() }
       .refreshable { await model.loadHistory() }

@@ -99,6 +99,22 @@ test("GET requires explicit confirmation and cannot mint a code", async () => {
   assert.doesNotMatch(html, /qm-desktop:\/\//);
   assert.equal(response.headers.get("set-cookie"), null);
   assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(response.headers.get("referrer-policy"), "strict-origin");
+});
+
+test("HTTP native sign-in accepts the browser origin without Fetch Metadata and rejects an opaque origin", async () => {
+  const confirmation = await fetch(`${base}${requestPath}`, {
+    method: "POST",
+    headers: { origin, cookie, "content-type": "application/x-www-form-urlencoded" },
+  });
+  assert.equal(confirmation.status, 200);
+  assert.match(await confirmation.text(), /qm-desktop:\/\/auth\/callback/);
+
+  const opaque = await fetch(`${base}${requestPath}`, {
+    method: "POST",
+    headers: { origin: "null", cookie, "content-type": "application/x-www-form-urlencoded" },
+  });
+  assert.equal(opaque.status, 403);
 });
 
 test("confirmed sign-in launches the app with a CSP-authorized script and retains the fallback link", async () => {

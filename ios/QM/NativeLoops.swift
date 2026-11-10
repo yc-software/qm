@@ -123,10 +123,18 @@ struct NativeLoopsView: View {
   @State private var loops: [NativeLoop] = []
   @State private var error: String?
   @State private var query = ""
+  @State private var loading = true
+  @State private var loaded = false
+  private var filteredLoops: [NativeLoop] {
+    loops.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }
+  }
   var body: some View {
     QMList {
-      if let error { Text(error).foregroundStyle(.red) }
-      ForEach(loops.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }) {
+      if let error {
+        Text(error).foregroundStyle(.red)
+        Button("Try again") { Task { await load() } }.disabled(loading)
+      }
+      ForEach(filteredLoops) {
         loop in
         NavigationLink {
           NativeLoopDetailView(client: client, id: loop.id)
@@ -141,21 +149,34 @@ struct NativeLoopsView: View {
           }.padding(.vertical, 6)
         }
       }
-      if loops.isEmpty && error == nil {
-        ContentUnavailableView(
-          "No loops yet", systemImage: "repeat",
-          description: Text("Loops keep track of recurring work for QM."))
+      if loading && !loaded && error == nil {
+        NativeLoopCollectionLoading()
+      } else if loaded && filteredLoops.isEmpty && error == nil {
+        if !query.isEmpty {
+          ContentUnavailableView.search(text: query)
+        } else {
+          ContentUnavailableView(
+            "No loops yet", systemImage: "repeat",
+            description: Text("Loops keep track of recurring work for QM."))
+        }
       }
     }
     .navigationTitle("Loops").searchable(text: $query)
     .scrollContentBackground(.hidden).background(QMTheme.paper)
+    .modifier(
+      NativeCollectionRefresh(
+        active: loading && (loaded || error != nil), label: "Refreshing loops")
+    )
     .task { await load() }.refreshable { await load() }
   }
   private func load() async {
+    loading = true
+    defer { loading = false }
     do {
       let result: NativeLoopList = try await client.fetch("api/loops")
       try Task.checkCancellation()
       loops = result.loops
+      loaded = true
       error = nil
     } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
   }
@@ -181,7 +202,7 @@ struct NativeLoopDetailView: View {
           Text(detail.loop.purpose ?? detail.loop.successCondition)
           LabeledContent("State", value: detail.loop.state)
           LabeledContent("Health", value: detail.loop.health)
-          if let reason = detail.loop.healthReason { Text(reason).foregroundStyle(.orange) }
+          if let reason = detail.loop.healthReason { Text(reason).foregroundStyle(QMTheme.warning) }
           LabeledContent("Queued", value: String(detail.vitals.queue.queued))
           LabeledContent("In progress", value: String(detail.vitals.queue.inProgress))
           LabeledContent("Awaiting review", value: String(detail.vitals.openOutputs))
@@ -225,7 +246,7 @@ struct NativeLoopDetailView: View {
             VStack(alignment: .leading, spacing: 6) {
               Text(item.sourceSummary ?? item.sourceKey)
               Text("\(item.status) · \(item.attempts) attempts").font(.caption)
-              if let reason = item.parkedReason { Text(reason).foregroundStyle(.orange) }
+              if let reason = item.parkedReason { Text(reason).foregroundStyle(QMTheme.warning) }
             }
           }
         }
@@ -247,12 +268,17 @@ struct NativeLoopDetailView: View {
           }
           Button("Add event source") { adding = true }
         }
-      } else if model.loading {
-        ProgressView()
+      } else if model.loading && model.error == nil {
+        NativeParagraphLoading(label: "Loading loop")
       }
     }
     .disabled(model.busy).navigationTitle(model.detail?.loop.name ?? "Loop")
     .navigationBarTitleDisplayMode(.inline)
+    .modifier(
+      NativeCollectionRefresh(
+        active: model.loading && (model.detail != nil || model.error != nil) && !model.busy,
+        label: "Refreshing loop")
+    )
     .task { await model.load() }.refreshable { await model.load() }
     .sheet(isPresented: $editing) { NativeLoopPlaybook(model: model) }
     .sheet(isPresented: $adding, onDismiss: { Task { await model.load() } }) {
@@ -311,10 +337,13 @@ struct NativeLoopPlaybook: View {
             }.disabled(model.busy)
           }
           ToolbarItem(placement: .confirmationAction) {
-            Button("Save") {
+            Button {
               Task {
                 if await model.mutate(method: "PATCH", body: ["playbook": draft]) { dismiss() }
               }
+            } label: {
+              NativeActionLabel(
+                title: "Save", busyTitle: "Saving…", busy: model.busy, compact: true)
             }.disabled(model.busy || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
           }
         }.interactiveDismissDisabled(model.busy || draft != model.detail?.loop.playbook)
@@ -412,7 +441,11 @@ struct NativeLoopSourceCreation: View {
         }
         if !created {
           ToolbarItem(placement: .confirmationAction) {
-            Button("Create") { Task { await create() } }.disabled(
+            Button {
+              Task { await create() }
+            } label: {
+              NativeActionLabel(title: "Create", busyTitle: "Creating…", busy: busy, compact: true)
+            }.disabled(
               busy || (kind == "slack" && (secret.isEmpty || team.isEmpty)))
           }
         }

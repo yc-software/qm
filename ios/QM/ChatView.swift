@@ -2,26 +2,38 @@ import AVFAudio
 import SwiftUI
 
 struct ChatView: View {
-  @State var model: ChatModel
+  @State private var model: ChatModel
   var initialSequence: Int? = nil
   @State private var positionedSearch = false
   @State private var dictation: NativeDictationModel
+  @State private var queuedInputs: QueuedInputsModel
   @State private var inheritedExpanded = false
   @Environment(\.scenePhase) private var phase
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+  @Environment(\.verticalSizeClass) private var verticalSizeClass
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(\.qmIdentity) private var identity
   @State private var approvalToConfirm: Approval?
   @State private var showingRuntime = false
-  @State private var forkedConversation: Conversation?
+  @State private var showingAgents = false
+  @State private var openedConversation: Conversation?
   @State private var followsLatest = true
-  @State private var nearLatest = true
-  @State private var scrollPhase = ScrollPhase.idle
+  @State private var previewingAttachment: UploadAttachment?
+  @State private var stopping = false
+  @State private var retryingHistory = false
+  @State private var forkingMessageID: String?
+  @State private var approvalSubmission: (id: String, approved: Bool)?
   @FocusState private var composerFocused: Bool
 
   init(model: ChatModel, initialSequence: Int? = nil) {
     _model = State(initialValue: model)
     _dictation = State(
-      initialValue: NativeDictationModel(provider: QMSpeechToTextProvider(client: model.client)))
+      initialValue: NativeDictationModel(provider: OnDeviceSpeechToTextProvider()))
+    _queuedInputs = State(
+      initialValue: QueuedInputsModel(
+        client: model.client, threadRef: model.conversation.threadRef,
+        scopeID: model.conversation.scopeId
+      ) { await model.reconcileActivity($0) })
     self.initialSequence = initialSequence
     _followsLatest = State(initialValue: initialSequence == nil)
     _inheritedExpanded = State(initialValue: initialSequence != nil)
@@ -34,52 +46,62 @@ struct ChatView: View {
       && !model.approvals.contains(where: \.blocksComposer)
   }
 
+  private func transcriptScroll(width: CGFloat, proxy: ScrollViewProxy) -> some View {
+    ScrollView {
+      transcript
+        .frame(width: min(width, QMTheme.conversationWidth), alignment: .leading)
+        .frame(maxWidth: .infinity)
+    }
+    .scrollDismissesKeyboard(.interactively)
+    .onScrollGeometryChange(for: TranscriptGeometry.self) { geometry in
+      TranscriptGeometry(
+        contentHeight: geometry.contentSize.height, viewportHeight: geometry.visibleRect.height,
+        nearLatest: geometry.contentSize.height - geometry.visibleRect.maxY <= 44)
+    } action: { previous, current in
+      if followsLatest, !current.nearLatest, current.sizeChanged(since: previous) {
+        proxy.scrollTo("transcript", anchor: .bottom)
+      } else {
+        followsLatest = current.nearLatest
+      }
+    }
+    .defaultScrollAnchor(initialSequence == nil ? .bottom : .top, for: .initialOffset)
+    .defaultScrollAnchor(followsLatest ? .bottom : nil, for: .sizeChanges)
+    .defaultScrollAnchor(.top, for: .alignment)
+    .overlay(alignment: .bottomTrailing) { jumpToLatest(proxy) }
+    .onChange(of: inheritedExpanded) { _, expanded in
+      if expanded { proxy.scrollTo("fork-origin", anchor: .top) }
+    }
+    .onChange(of: composerFocused) { _, focused in
+      if focused {
+        showingAgents = false
+      }
+    }
+    .task(id: model.transcriptEntries.count) {
+      guard let initialSequence, !positionedSearch, !model.transcriptEntries.isEmpty else {
+        return
+      }
+      if model.needsEarlierHistory(for: initialSequence) {
+        await model.loadEarlier()
+        return
+      }
+      let messages = model.messages
+      let target =
+        messages.last {
+          ($0.sequence ?? Int.max) <= initialSequence
+        } ?? messages.first
+      if let target {
+        proxy.scrollTo(target.id, anchor: .top)
+        positionedSearch = true
+      }
+    }
+  }
+
   var body: some View {
-    let messages = model.messages
     ScrollViewReader { proxy in
-      ScrollView {
-        transcript
-      }
-      .scrollDismissesKeyboard(.interactively)
-      .scrollClipDisabled()
-      .onScrollPhaseChange { previous, phase in
-        scrollPhase = phase
-        if phase == .interacting { followsLatest = false }
-        if phase == .idle, previous == .interacting || previous == .decelerating {
-          followsLatest = nearLatest
-        }
-      }
-      .onChange(of: inheritedExpanded) { _, expanded in
-        if expanded { proxy.scrollTo("fork-origin", anchor: .top) }
-      }
-      .onChange(of: messages.last?.id) { _, _ in
-        if followsLatest { proxy.scrollTo("bottom", anchor: .bottom) }
-      }
-      .onChange(of: composerFocused) { _, focused in
-        if focused, followsLatest { proxy.scrollTo("bottom", anchor: .bottom) }
-      }
-      .overlay(alignment: .bottomTrailing) { jumpToLatest(proxy) }
-      .defaultScrollAnchor(initialSequence == nil ? .bottom : .top, for: .initialOffset)
-      .defaultScrollAnchor(
-        followsLatest ? .bottom : nil, for: .sizeChanges
-      )
-      .defaultScrollAnchor(.top, for: .alignment)
-      .task(id: model.transcriptEntries.count) {
-        guard let initialSequence, !positionedSearch, !model.transcriptEntries.isEmpty else {
-          return
-        }
-        if model.needsEarlierHistory(for: initialSequence) {
-          await model.loadEarlier()
-          return
-        }
-        let messages = model.messages
-        let target =
-          messages.last {
-            ($0.sequence ?? Int.max) <= initialSequence
-          } ?? messages.first
-        if let target {
-          proxy.scrollTo(target.id, anchor: .top)
-          positionedSearch = true
+      GeometryReader { geometry in
+        VStack(spacing: 0) {
+          transcriptScroll(width: geometry.size.width, proxy: proxy)
+          bottomBar(proxy)
         }
       }
     }
@@ -89,13 +111,17 @@ struct ChatView: View {
     .environment(\.qmSessionID, model.conversation.id)
     .navigationTitle(model.conversation.label)
     .navigationBarTitleDisplayMode(.inline)
-    .safeAreaInset(edge: .bottom, spacing: 0) { bottomBar }
     .toolbar { conversationToolbar }
-    .navigationDestination(item: $forkedConversation) { conversation in
+    .navigationDestination(item: $openedConversation) { conversation in
       ChatView(
         model: ChatModel(
           conversation: conversation, client: model.client, user: model.user, knownSession: true))
     }
+    .sheet(item: $previewingAttachment) { attachment in
+      FilePreviewSheet(
+        attachment: attachment, account: model.attachmentAccount, client: model.client)
+    }
+    .onChange(of: model.client.generation) { model.cancelAttachmentUpload() }
     .confirmationDialog(
       "Allow this action?",
       isPresented: Binding(
@@ -106,7 +132,19 @@ struct ChatView: View {
     } message: { approval in
       Text(approval.command)
     }
-    .task { await model.loadRuntime() }
+    .task {
+      if model.conversation.canReply { await model.loadRuntime() }
+    }
+    .onChange(of: showingAgents) { _, expanded in
+      if expanded, dictation.busy {
+        showingAgents = false
+        return
+      }
+      if expanded {
+        composerFocused = false
+        queuedInputs.expanded = false
+      }
+    }
     .onChange(of: dictation.completedText) { _, text in
       if let text {
         model.draft = NativeDictationModel.appending(text, to: model.draft)
@@ -114,8 +152,12 @@ struct ChatView: View {
         composerFocused = true
       }
     }
-    .onDisappear { dictation.cancel() }
-    .onChange(of: phase) { _, phase in if phase == .background { dictation.cancel() } }
+    .onChange(of: phase) { _, phase in
+      if phase == .background {
+        showingAgents = false
+        dictation.cancel()
+      }
+    }
     .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) {
       notification in
       if notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
@@ -135,52 +177,96 @@ struct ChatView: View {
     }
     .onChange(of: model.draft) { _, _ in model.saveDraft() }
     .onChange(of: model.attachments) { _, _ in model.saveDraft() }
-    .task(id: phase) { if phase == .active { await model.resume() } else { model.pause() } }
-    .onDisappear { model.pause() }
+    .task(id: phase == .background) {
+      if phase != .background { await model.resume() } else { model.pause() }
+    }
+    .task(id: phase == .background) {
+      if phase != .background, model.conversation.canReply || model.conversation.isSubagent {
+        await queuedInputs.poll()
+      } else {
+        queuedInputs.stop()
+      }
+    }
+    .onDisappear {
+      showingAgents = false
+      dictation.cancel()
+      model.pause()
+      model.cancelAttachmentUpload()
+      queuedInputs.stop()
+    }
   }
 
   @ToolbarContentBuilder
   private var conversationToolbar: some ToolbarContent {
     ToolbarItem(placement: .topBarTrailing) {
       Menu {
-        if model.conversation.surface == "web" {
+        if model.conversation.localOnly != true {
+          Button("Agents", systemImage: "point.3.connected.trianglepath.dotted") {
+            composerFocused = false
+            showingAgents = true
+          }
+        }
+        if model.conversation.surface == "web", model.conversation.canReply {
           NavigationLink {
             VoiceView(client: model.client, conversation: model.conversation)
           } label: {
             Label("Talk to QM", systemImage: "waveform")
           }
         }
-        Button("Model and effort", systemImage: "slider.horizontal.3") { showingRuntime = true }
-        NavigationLink {
-          NativeConversationTools(model: model)
-        } label: {
-          Label("All conversation tools", systemImage: "rectangle.3.group")
+        if model.conversation.canReply, model.pending == nil {
+          Button("Model and effort", systemImage: "slider.horizontal.3") { showingRuntime = true }
         }
-        .disabled(model.conversation.localOnly == true)
+        if !model.conversation.isSubagent {
+          NavigationLink {
+            NativeConversationTools(model: model)
+          } label: {
+            Label("All conversation tools", systemImage: "rectangle.3.group")
+          }
+          .disabled(model.conversation.localOnly == true)
+        } else {
+          NavigationLink("Activity log") { NativeActivityView(model: model) }
+        }
       } label: {
         Image(systemName: "ellipsis.circle")
       }
       .accessibilityLabel("Conversation controls")
     }
-    if model.activeRunID != nil,
+    if composerFocused {
+      ToolbarItem(placement: .topBarTrailing) {
+        Button {
+          composerFocused = false
+        } label: {
+          Image(systemName: "keyboard.chevron.compact.down")
+        }
+        .accessibilityLabel("Dismiss keyboard")
+      }
+    }
+    if model.conversation.canReply, model.activeRunID != nil,
       !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         || !model.attachments.isEmpty
     {
       ToolbarItem(placement: .topBarTrailing) {
-        Button("Stop", systemImage: "stop.circle") { Task { await model.stop() } }
+        Button {
+          Task { await stop() }
+        } label: {
+          Image(systemName: "stop.circle")
+            .modifier(NativeLoadingPulse(active: stopping))
+        }
+        .accessibilityLabel(stopping ? "Stopping response" : "Stop response")
+        .disabled(stopping)
       }
     }
   }
 
   @ViewBuilder
   private func jumpToLatest(_ proxy: ScrollViewProxy) -> some View {
-    if !nearLatest, !model.messages.isEmpty {
+    if !followsLatest {
       Button {
-        followsLatest = true
-        withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) }
+        positionedSearch = true
+        proxy.scrollTo("transcript", anchor: .bottom)
       } label: {
         Image(systemName: "arrow.down")
-          .font(.body.weight(.semibold)).frame(width: 44, height: 44)
+          .font(.system(size: 18, weight: .semibold)).frame(width: 44, height: 44)
           .background(QMTheme.paper, in: Circle())
           .overlay(Circle().strokeBorder(QMTheme.border))
           .shadow(color: .black.opacity(0.08), radius: 6, y: 2)
@@ -192,15 +278,15 @@ struct ChatView: View {
 
   @ViewBuilder
   private func approvalChoices(_ approval: Approval) -> some View {
-    Button("Approve once") { Task { await model.decide(approval, approved: true) } }
+    Button("Approve once") { Task { await decide(approval, approved: true) } }
     if approval.grantModes?.session == true {
       Button("Allow for this session") {
-        Task { await model.decide(approval, approved: true, scope: "session") }
+        Task { await decide(approval, approved: true, scope: "session") }
       }
     }
     if approval.grantModes?.always == true {
       Button("Always allow matching actions") {
-        Task { await model.decide(approval, approved: true, scope: "always") }
+        Task { await decide(approval, approved: true, scope: "always") }
       }
     }
   }
@@ -240,18 +326,17 @@ struct ChatView: View {
             .font(.subheadline).multilineTextAlignment(.leading)
         }
         Button {
-          followsLatest = false
           inheritedExpanded.toggle()
           if inheritedExpanded {
             Task { await model.loadInheritedHistory() }
           }
         } label: {
           HStack {
-            Text(inheritedExpanded ? "Hide earlier history" : "Show earlier history")
+            NativeActionLabel(
+              title: inheritedExpanded ? "Hide earlier history" : "Show earlier history",
+              busyTitle: "Loading earlier history...", busy: model.loadingInherited)
             Spacer()
-            if model.loadingInherited {
-              NativeWave()
-            } else {
+            if !model.loadingInherited {
               Image(systemName: inheritedExpanded ? "chevron.up" : "chevron.down")
             }
           }.font(.footnote)
@@ -272,146 +357,307 @@ struct ChatView: View {
       Text(approval.command).font(.system(.footnote, design: .monospaced)).textSelection(
         .enabled)
       HStack {
-        Button("Deny", role: .destructive) {
-          Task { await model.decide(approval, approved: false) }
+        Button(role: .destructive) {
+          Task { await decide(approval, approved: false) }
+        } label: {
+          NativeActionLabel(
+            title: "Deny", busyTitle: "Denying...",
+            busy: approvalSubmission?.id == approval.id && approvalSubmission?.approved == false)
         }
         Spacer()
-        Button("Approve once") { approvalToConfirm = approval }.buttonStyle(
-          .borderedProminent)
+        Button {
+          approvalToConfirm = approval
+        } label: {
+          NativeActionLabel(
+            title: "Approve once", busyTitle: "Approving...",
+            busy: approvalSubmission?.id == approval.id && approvalSubmission?.approved == true)
+        }.buttonStyle(.borderedProminent)
       }.disabled(model.sending)
     }.padding().background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 16))
   }
 
+  @State private var workDisclosure = NativeWorkDisclosureState()
+
+  private func stop() async {
+    guard !stopping else { return }
+    stopping = true
+    defer { stopping = false }
+    await model.stop()
+  }
+
+  private func decide(_ approval: Approval, approved: Bool, scope: String = "once") async {
+    guard !model.sending else { return }
+    approvalSubmission = (approval.id, approved)
+    defer { approvalSubmission = nil }
+    await model.decide(approval, approved: approved, scope: scope)
+  }
+
+  private func fork(from messageID: String) async {
+    guard !model.forking else { return }
+    forkingMessageID = messageID
+    defer { forkingMessageID = nil }
+    openedConversation = await model.fork(from: messageID)
+  }
+
+  private func retryHistory() async {
+    guard !retryingHistory else { return }
+    retryingHistory = true
+    defer { retryingHistory = false }
+    await model.resume()
+  }
+
+  var showsInitialHistoryPlaceholder: Bool {
+    !model.hasLoadedTranscript && (model.error == nil || retryingHistory)
+      && model.activeRunID == nil
+      && model.transcriptEntries.isEmpty && model.messages.isEmpty
+      && model.displayedPartial.isEmpty && model.pending == nil && !model.sending
+  }
+
   private var transcript: some View {
     let messages = model.messages
+    let liveTimeline = model.liveTimeline
     let forkable = model.forkableMessageIDs
-    let inherited = messages.filter { model.conversation.isInherited($0) }
-    let current = messages.filter { !model.conversation.isInherited($0) }
-    let visible = inheritedExpanded ? messages : current
+    let timeline = model.timeline.items
+    let inherited = timeline.filter { $0.isInherited(in: model.conversation) }
+    let current = timeline.filter { !$0.isInherited(in: model.conversation) }
+    let visible = inheritedExpanded ? inherited + current : current
+    let sections = NativeChatTranscriptSection.grouped(
+      visible, activeRunID: model.activeRunID, status: model.workStatus)
     let showSpeakers =
       model.conversation.isShared
       || Set(messages.filter { $0.role == "user" }.compactMap(\.speaker)).count > 1
-    return LazyVStack(alignment: .leading, spacing: 24) {
-      pinsSection
-      forkOrigin
-      if model.earlierEntries > 0,
-        inheritedExpanded || model.conversation.forkBoundarySeq == nil
-          || model.earlierEntries > (model.conversation.forkBoundarySeq ?? -1) + 1
-      {
-        Button("Load earlier messages") { Task { await model.loadEarlier() } }
-          .disabled(model.loadingEarlier)
-      }
-      if !model.hasLoadedTranscript && model.error == nil && model.activeRunID == nil {
-        NativeWave().accessibilityLabel("Loading conversation")
-          .frame(maxWidth: .infinity).padding(.top, 60)
-      } else if model.hasLoadedTranscript && model.transcriptEntries.isEmpty
-        && model.earlierEntries == 0 && visible.isEmpty && model.displayedPartial.isEmpty
-        && model.activeRunID == nil && model.pending == nil
-      {
-        ContentUnavailableView(
-          "What shall we work on?", systemImage: "helm",
-          description: Text("Ask a question or hand off a task.")
-        )
-        .padding(.top, 60)
-        if model.draft.isEmpty, model.attachments.isEmpty, model.conversation.canReply,
-          let identity, !model.conversation.isShared
+    return VStack(alignment: .leading, spacing: 16) {
+      Group {
+        pinsSection
+        forkOrigin
+        if model.earlierEntries > 0,
+          inheritedExpanded || model.conversation.forkBoundarySeq == nil
+            || model.earlierEntries > (model.conversation.forkBoundarySeq ?? -1) + 1
         {
-          NativeSuggestedActivities(client: model.client, identity: identity) { activity in
-            guard model.draft.isEmpty else { return }
-            model.draft = activity.prompt
-            model.saveDraft()
-            composerFocused = true
+          Button {
+            Task { await model.loadEarlier() }
+          } label: {
+            NativeActionLabel(
+              title: "Load earlier messages",
+              busyTitle: initialSequence != nil && !positionedSearch
+                ? "Loading selected message..." : "Loading earlier messages...",
+              busy: model.loadingEarlier)
+          }.disabled(model.loadingEarlier)
+        }
+        if showsInitialHistoryPlaceholder {
+          NativeChatHistoryPlaceholder()
+        } else if model.hasLoadedTranscript && model.transcriptEntries.isEmpty
+          && model.earlierEntries == 0 && visible.isEmpty && model.displayedPartial.isEmpty
+          && model.activeRunID == nil && model.pending == nil && model.workStatus == nil
+        {
+          ContentUnavailableView(
+            "What shall we work on?", systemImage: "helm",
+            description: Text("Ask a question or hand off a task.")
+          )
+          .padding(.top, 60)
+          if model.draft.isEmpty, model.attachments.isEmpty, model.conversation.canReply,
+            let identity, !model.conversation.isShared
+          {
+            NativeSuggestedActivities(client: model.client, identity: identity) { activity in
+              guard model.draft.isEmpty else { return }
+              model.draft = activity.prompt
+              model.saveDraft()
+              composerFocused = true
+            }
           }
         }
-      }
-      ForEach(visible) { entry in
-        if inheritedExpanded, !inherited.isEmpty, entry.id == current.first?.id {
-          HStack {
-            Rectangle().frame(height: 1)
-            Text("This conversation").font(.caption).fixedSize()
-            Rectangle().frame(height: 1)
-          }.foregroundStyle(.secondary)
+        ForEach(sections) { section in
+          VStack(alignment: .leading, spacing: 16) {
+            if inheritedExpanded, !inherited.isEmpty, section.items.first?.id == current.first?.id {
+              HStack {
+                Rectangle().frame(height: 1)
+                Text("This conversation").font(.caption).fixedSize()
+                Rectangle().frame(height: 1)
+              }.foregroundStyle(.secondary)
+            }
+            if section.isActivity {
+              NativeTimelineActivityGroup(
+                section: section, client: model.client, user: model.user,
+                disclosure: workDisclosure,
+                reasoningText: model.reasoningText,
+                onShowAgents: {
+                  composerFocused = false
+                  showingAgents = true
+                },
+                onInspect: { followsLatest = false })
+            } else if let item = section.items.first {
+              timelineRow(item, showSpeakers: showSpeakers, forkable: forkable)
+            }
+          }
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .id(section.id)
         }
-        NativeChatMessageView(
-          message: entry, client: model.client,
-          showSpeaker: showSpeakers, user: model.user, conversationID: model.conversation.id,
-          onFork: forkable.contains(entry.id) && !model.forking
-            ? {
-              Task { forkedConversation = await model.fork(from: entry.id) }
-            } : nil
-        )
-        .id(entry.id)
-      }
-      if !model.displayedPartial.isEmpty {
-        VStack(alignment: .leading, spacing: 8) {
-          MessageMarkdown(text: model.displayedPartial, client: model.client)
-        }.accessibilityIdentifier("streamingResponse")
-      }
-      if model.activeRunID != nil {
-        NativeWorkSummary(
-          activity: model.liveActivity, client: model.client, active: true,
-          responding: !model.displayedPartial.isEmpty)
-      }
-      ForEach(model.approvals) { approval in approvalCard(approval) }
-      Color.clear.frame(height: 1).id("bottom")
-        .onScrollVisibilityChange { visible in
-          nearLatest = visible
+        if liveTimeline == nil, !model.displayedPartial.isEmpty {
+          VStack(alignment: .leading, spacing: 8) {
+            MessageMarkdown(text: model.displayedPartial, client: model.client)
+          }.accessibilityIdentifier("streamingResponse")
         }
+        if model.conversation.canReply {
+          ForEach(model.approvals) { approval in approvalCard(approval) }
+        }
+      }
+      .padding(.horizontal, 16)
     }
-    .padding(20)
-    .frame(maxWidth: QMTheme.conversationWidth)
-    .frame(maxWidth: .infinity)
+    .padding(.vertical, 20)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .id("transcript")
   }
 
-  private var bottomBar: some View {
+  private func displayed(_ message: ChatMessage, streaming: Bool) -> ChatMessage {
+    guard streaming else { return message }
+    var message = message
+    message.text = model.displayedPartial
+    return message
+  }
+
+  @ViewBuilder private func timelineRow(
+    _ item: NativeChatTimelineItem, showSpeakers: Bool, forkable: Set<String>
+  ) -> some View {
+    switch item.content {
+    case .message(let message):
+      NativeChatMessageView(
+        message: displayed(message, streaming: item.streaming), client: model.client,
+        showSpeaker: showSpeakers, user: model.user,
+        conversationID: model.conversation.id,
+        onFork: !model.conversation.isSubagent && forkable.contains(message.id) && !model.forking
+          ? { Task { await fork(from: message.id) } } : nil,
+        forking: forkingMessageID == message.id, streaming: item.streaming
+      )
+      .accessibilityIdentifier(item.streaming ? "streamingResponse" : "message-\(item.id)")
+    case .work, .reasoning:
+      EmptyView()
+    }
+  }
+
+  private func bottomBar(_ proxy: ScrollViewProxy) -> some View {
     VStack(spacing: 10) {
-      if model.conversation.canReply, model.pending == nil {
+      if model.conversation.localOnly != true {
+        NativeAgentTrail(
+          client: model.client, user: model.user, conversationID: model.conversation.id,
+          promptStartedAt: model.latestPromptAt,
+          agentActivity: model.agentActivity,
+          isExpanded: $showingAgents,
+          onOpen: { conversation in
+            showingAgents = false
+            composerFocused = false
+            openedConversation = conversation
+          }
+        )
+        .disabled(dictation.busy)
+      }
+      bottomControls(proxy)
+    }
+    .padding(.horizontal, 16).padding(.vertical, 12)
+    .frame(maxWidth: QMTheme.conversationWidth)
+    .frame(maxWidth: .infinity)
+    .background(QMTheme.paper)
+  }
+
+  private func bottomControls(_ proxy: ScrollViewProxy) -> some View {
+    VStack(spacing: 10) {
+      if let parent = model.conversation.parentSessionId, !parent.isEmpty {
+        NavigationLink {
+          NativeConversationDestination(client: model.client, user: model.user, sessionID: parent)
+        } label: {
+          HStack(spacing: 10) {
+            NativeAgentAvatar(
+              sessionID: model.conversation.id,
+              returned: model.conversation.working != true
+                && model.conversation.awaitingInput != true
+                && model.conversation.lastTurnFailed != true
+            )
+            .frame(width: 36, height: 36)
+            VStack(alignment: .leading, spacing: 3) {
+              Text("Read-only agent").font(.subheadline.weight(.medium))
+              Text("Open parent conversation").font(.caption).foregroundStyle(.secondary)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            Image(systemName: "arrow.up.left").font(.subheadline)
+          }
+          .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+        }
+        .accessibilityHint(
+          "This agent updates automatically. View the conversation that delegated this work."
+        )
+        .accessibilityIdentifier("agentReadOnlyNotice")
+      }
+      if model.conversation.canReply, model.pending == nil, !dictation.busy {
         NativeSkillSuggestions(client: model.client, draft: $model.draft).disabled(model.sending)
       }
-      if model.conversation.canReply {
-        QueuedRunsView(
-          client: model.client, threadRef: model.conversation.threadRef,
-          scopeID: model.conversation.scopeId
-        ) {
-          await model.reconcileActivity($0)
-        }
+      if model.conversation.canReply, !composerFocused, !dictation.busy {
+        QueuedRunsView(model: queuedInputs)
       }
       if let error = model.error {
         HStack {
           Text(error).font(.footnote).foregroundStyle(.red)
-          Button("Retry") { Task { await model.resume() } }
+          if model.hasActionError {
+            Button("Dismiss") { model.error = nil }
+          } else {
+            Button {
+              Task { await retryHistory() }
+            } label: {
+              NativeActionLabel(title: "Retry", busyTitle: "Retrying...", busy: retryingHistory)
+            }.disabled(retryingHistory)
+          }
         }
       }
-      if !model.attachments.isEmpty {
+      if model.conversation.canReply, !model.attachments.isEmpty, !dictation.busy {
         ScrollView(.horizontal) {
           HStack {
             ForEach(model.attachments) { attachment in
               HStack(spacing: 8) {
-                Label(attachment.name, systemImage: "doc").lineLimit(1)
+                Button {
+                  composerFocused = false
+                  previewingAttachment = attachment
+                } label: {
+                  Label(
+                    attachment.name,
+                    systemImage: attachment.mimetype.hasPrefix("image/") ? "photo" : "doc"
+                  )
+                  .lineLimit(1).frame(minHeight: 44)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Preview \(attachment.name)")
                 if model.pending == nil {
                   Button {
                     model.attachments.removeAll { $0.id == attachment.id }
                   } label: {
                     Image(systemName: "xmark.circle.fill")
+                      .frame(width: 44, height: 44)
+                      .contentShape(Rectangle())
                   }.accessibilityLabel("Remove \(attachment.name)")
                     .disabled(model.sending)
                 }
-              }.font(.footnote).padding(10).background(QMTheme.surface, in: Capsule())
+              }
+              .font(.footnote).padding(.leading, 12).padding(.trailing, 4)
+              .frame(minHeight: 44).background(QMTheme.surface, in: Capsule())
             }
           }
         }
       }
-      if model.pending != nil && !model.sending {
-        Button("Retry sending saved message") { Task { await model.send() } }.disabled(
-          model.sending)
+      if model.conversation.canReply, model.pending != nil && !model.sending {
+        Button("Retry sending saved message") { send(proxy) }
+          .frame(minHeight: 44).disabled(model.sending)
       } else if model.conversation.canReply {
-        composer
-      } else {
+        composer(proxy)
+      } else if !model.conversation.isSubagent {
         if let url = model.conversation.slackURL(workspaceURL: identity?.slackWorkspaceUrl) {
           Link(destination: url) {
-            Label("Open in Slack", systemImage: "arrow.up.right.square")
-              .font(.subheadline.weight(.medium))
-              .frame(maxWidth: .infinity, minHeight: 44)
+            Label {
+              Text("Open in Slack")
+            } icon: {
+              Image("Service-slack")
+                .resizable().renderingMode(.template).scaledToFit()
+                .frame(width: 18, height: 18)
+            }
+            .font(.subheadline.weight(.medium))
+            .frame(maxWidth: .infinity, minHeight: 44)
           }
           .buttonStyle(.bordered)
         } else {
@@ -419,75 +665,85 @@ struct ChatView: View {
         }
       }
     }
-    .padding(.horizontal, 16).padding(.vertical, 12)
-    .frame(maxWidth: QMTheme.conversationWidth)
-    .frame(maxWidth: .infinity)
   }
 
-  private var composer: some View {
+  private func send(_ proxy: ScrollViewProxy) {
+    showingAgents = false
+    composerFocused = false
+    positionedSearch = true
+    proxy.scrollTo("transcript", anchor: .bottom)
+    Task { await model.send() }
+  }
+
+  private func composer(_ proxy: ScrollViewProxy) -> some View {
     VStack(alignment: .leading, spacing: 6) {
-      TextField("Message QM", text: $model.draft, axis: .vertical)
-        .lineLimit(1...(dynamicTypeSize.isAccessibilitySize ? 3 : 8))
-        .padding(.horizontal, 8).padding(.top, 8)
-        .focused($composerFocused)
-        .disabled(model.sending)
-        .accessibilityIdentifier("composer")
-      if dictation.busy || dictation.error != nil { dictationStatus }
-      HStack(spacing: 6) {
-        AttachmentPicker(
-          client: model.client, account: model.attachmentAccount,
-          attachments: $model.attachments, error: $model.error, uploading: $model.uploading
-        ).disabled(model.sending)
-        if !dynamicTypeSize.isAccessibilitySize { modelSelector }
-        Spacer(minLength: 0)
-        Button {
-          if dictation.state == .recording {
-            dictation.finish()
-          } else {
+      if dictation.busy {
+        NativeDictationComposer(model: dictation)
+      } else {
+        composerTextField
+        if let error = dictation.error {
+          NativeAudioPermissionNotice(message: error, permission: dictation.permissionError)
+            .padding(.horizontal, 8)
+        }
+        if model.uploading, let uploadingName = model.uploadingName {
+          NativeChatUploadStatus(filename: uploadingName)
+            .padding(.horizontal, 8)
+        }
+        HStack(spacing: 6) {
+          AttachmentPicker(
+            uploading: model.uploading, error: $model.error, onSelect: model.addAttachments
+          ).disabled(model.sending)
+          if !dynamicTypeSize.isAccessibilitySize || verticalSizeClass == .compact { modelSelector }
+          Spacer(minLength: 0)
+          Button {
             composerFocused = false
             dictation.start()
-          }
-        } label: {
-          Image(systemName: dictation.state == .recording ? "stop.circle.fill" : "mic")
-            .font(.system(size: 21)).frame(width: 44, height: 44)
-            .foregroundStyle(dictation.state == .recording ? Color.red : QMTheme.ink)
-        }
-        .accessibilityLabel(dictation.state == .recording ? "Finish dictation" : "Dictate message")
-        .disabled(model.sending || (dictation.busy && dictation.state != .recording))
-        if model.activeRunID != nil,
-          model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-          model.attachments.isEmpty
-        {
-          Button {
-            Task { await model.stop() }
           } label: {
-            Image(systemName: "stop.fill")
-              .font(.system(size: 15, weight: .semibold))
+            Image(systemName: "mic")
+              .font(.system(size: 21)).frame(width: 44, height: 44)
+              .foregroundStyle(QMTheme.ink)
+          }
+          .accessibilityLabel("Dictate message")
+          .disabled(model.sending)
+          if model.activeRunID != nil,
+            model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            model.attachments.isEmpty
+          {
+            Button {
+              Task { await stop() }
+            } label: {
+              Image(systemName: "stop.fill")
+                .font(.system(size: 15, weight: .semibold))
+                .modifier(NativeLoadingPulse(active: stopping))
+                .foregroundStyle(QMTheme.paper)
+                .frame(width: 44, height: 44)
+                .background(QMTheme.ink, in: Circle())
+            }.accessibilityLabel(stopping ? "Stopping response" : "Stop response")
+              .disabled(stopping)
+          } else {
+            Button {
+              send(proxy)
+            } label: {
+              Group {
+                if model.sending {
+                  NativeWave().foregroundStyle(QMTheme.paper)
+                    .transition(.opacity.combined(with: .scale(scale: 0.8)))
+                } else {
+                  Image(systemName: "arrow.up").font(.system(size: 18, weight: .semibold))
+                    .transition(.opacity.combined(with: .scale(scale: 0.8)))
+                }
+              }
               .foregroundStyle(QMTheme.paper)
               .frame(width: 44, height: 44)
-              .background(QMTheme.ink, in: Circle())
-          }.accessibilityLabel("Stop response")
-        } else {
-          Button {
-            followsLatest = true
-            Task { await model.send() }
-          } label: {
-            Group {
-              if model.sending {
-                NativeWave().foregroundStyle(QMTheme.paper)
-              } else {
-                Image(systemName: "arrow.up").font(.system(size: 18, weight: .semibold))
-              }
+              .background(QMTheme.ink.opacity(canSend ? 1 : 0.25), in: Circle())
+              .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.sending)
             }
-            .foregroundStyle(QMTheme.paper)
-            .frame(width: 44, height: 44)
-            .background(QMTheme.ink.opacity(canSend ? 1 : 0.25), in: Circle())
+            .accessibilityLabel(model.activeRunID == nil ? "Send message" : "Queue message")
+            .disabled(!canSend)
           }
-          .accessibilityLabel(model.activeRunID == nil ? "Send message" : "Queue message")
-          .disabled(!canSend)
         }
+        if dynamicTypeSize.isAccessibilitySize && verticalSizeClass != .compact { modelSelector }
       }
-      if dynamicTypeSize.isAccessibilitySize { modelSelector }
     }
     .padding(8)
     .background(QMTheme.surface, in: RoundedRectangle(cornerRadius: 24))
@@ -497,40 +753,15 @@ struct ChatView: View {
     }
   }
 
-  private var dictationStatus: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      HStack(spacing: 10) {
-        if dictation.state == .recording {
-          Image(systemName: "waveform").foregroundStyle(.red)
-            .scaleEffect(0.85 + dictation.level * 0.3)
-          Text(
-            "Recording · \(Int(dictation.elapsed) / 60):\(String(format: "%02d", Int(dictation.elapsed) % 60))"
-          )
-          Spacer()
-          Button("Done") { dictation.finish() }
-        } else if dictation.state == .ready {
-          Text("Recording stopped")
-          Spacer()
-          Button("Transcribe") { dictation.finish() }
-        } else if dictation.state == .retry {
-          Text("Recording saved for retry")
-          Spacer()
-          Button("Retry") { dictation.retry() }
-        } else if dictation.busy {
-          NativeWave()
-          Text(dictation.state == .preparing ? "Preparing microphone…" : "Transcribing…")
-          Spacer()
-        }
-        Button(dictation.busy ? "Cancel" : "Dismiss") { dictation.cancel() }
-      }
-      if let error = dictation.error { Text(error).foregroundStyle(.red) }
-      if dictation.state == .recording {
-        Text(
-          "Audio is sent to \(dictation.providerName) when you finish recording. You can edit before sending."
-        )
-        .foregroundStyle(.secondary)
-      }
-    }.font(.footnote).padding(.horizontal, 8).padding(.vertical, 6)
+  private var composerTextField: some View {
+    TextField("Message QM", text: $model.draft, axis: .vertical)
+      .lineLimit(
+        1...(verticalSizeClass == .compact ? 1 : dynamicTypeSize.isAccessibilitySize ? 3 : 8)
+      )
+      .padding(.horizontal, 8).padding(.top, 8)
+      .focused($composerFocused)
+      .disabled(model.sending)
+      .accessibilityIdentifier("composer")
   }
 
   private var modelSelector: some View {
@@ -558,4 +789,236 @@ struct ChatView: View {
     .disabled(model.sending)
   }
 
+}
+
+private struct TranscriptGeometry: Equatable {
+  let contentHeight: CGFloat
+  let viewportHeight: CGFloat
+  let nearLatest: Bool
+
+  func sizeChanged(since previous: Self) -> Bool {
+    contentHeight != previous.contentHeight || viewportHeight != previous.viewportHeight
+  }
+}
+
+private struct NativeDictationComposer: View {
+  let model: NativeDictationModel
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+  @Environment(\.verticalSizeClass) private var verticalSizeClass
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var transcriptHeight: CGFloat = 28
+
+  var body: some View {
+    VStack(spacing: 8) {
+      HStack(spacing: 6) {
+        Text(headerTitle)
+          .font(.caption2.weight(.semibold))
+          .tracking(1.4)
+        if model.state == .recording || model.state == .ready {
+          Text("·")
+          Text(String(format: "%01d:%02d", Int(model.elapsed) / 60, Int(model.elapsed) % 60))
+            .font(.caption.monospacedDigit())
+        }
+      }
+      .foregroundStyle(.secondary)
+      .frame(maxWidth: .infinity)
+      .accessibilityElement(children: .combine)
+
+      NativeDictationOrb(
+        model: model,
+        size: verticalSizeClass == .compact || dynamicTypeSize.isAccessibilitySize ? 58 : 82
+      )
+      .padding(.vertical, 2)
+
+      transcriptArea
+
+      if let error = model.error {
+        NativeAudioPermissionNotice(message: error, permission: model.permissionError)
+      }
+
+      ViewThatFits(in: .horizontal) {
+        HStack(spacing: 4) {
+          cancelButton
+          Spacer(minLength: 4)
+          footerStatus
+          Spacer(minLength: 4)
+          primaryButton
+        }
+
+        VStack(spacing: 0) {
+          footerStatus
+          HStack {
+            cancelButton
+            Spacer(minLength: 8)
+            primaryButton
+          }
+        }
+      }
+    }
+    .padding(.horizontal, 4)
+    .padding(.vertical, 4)
+    .accessibilityIdentifier("dictationComposer")
+  }
+
+  private var transcriptArea: some View {
+    ScrollViewReader { scrollProxy in
+      ScrollView {
+        transcript
+          .font(.title3)
+          .multilineTextAlignment(.center)
+          .frame(maxWidth: .infinity)
+          .fixedSize(horizontal: false, vertical: true)
+          .id("dictationTranscript")
+          .onGeometryChange(for: CGFloat.self) {
+            $0.size.height
+          } action: {
+            transcriptHeight = $0
+          }
+      }
+      .frame(height: min(transcriptHeight, maximumTranscriptHeight))
+      .scrollIndicators(.hidden)
+      .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: transcriptHeight)
+      .onChange(of: transcriptHeight) { _, height in
+        if height > maximumTranscriptHeight {
+          scrollProxy.scrollTo("dictationTranscript", anchor: .bottom)
+        }
+      }
+    }
+    .accessibilityLabel(model.liveText.isEmpty ? placeholder : model.liveText)
+  }
+
+  private var transcript: Text {
+    guard !model.liveText.isEmpty else {
+      return Text(placeholder).foregroundColor(QMTheme.ink.opacity(0.58))
+    }
+    let latest = model.liveText.split(whereSeparator: \.isWhitespace).last.map(String.init) ?? ""
+    let preceding = String(model.liveText.dropLast(latest.count))
+    return Text(preceding) + Text(latest).fontWeight(.semibold)
+  }
+
+  private var maximumTranscriptHeight: CGFloat {
+    verticalSizeClass == .compact ? 120 : 220
+  }
+
+  private var placeholder: String {
+    switch model.state {
+    case .idle: ""
+    case .preparing: "Preparing microphone…"
+    case .recording: "Listening…"
+    case .ready: "Recording stopped"
+    case .transcribing: "Transcribing…"
+    case .retry: "Recording saved for retry"
+    }
+  }
+
+  private var footerStatus: some View {
+    Text(footerTitle)
+      .font(.footnote)
+      .foregroundStyle(.secondary)
+      .lineLimit(1)
+  }
+
+  private var headerTitle: String {
+    switch model.state {
+    case .idle: "DICTATION"
+    case .preparing: "PREPARING"
+    case .recording: "LISTENING"
+    case .ready: "READY"
+    case .transcribing: "FINISHING"
+    case .retry: "SAVED AUDIO"
+    }
+  }
+
+  private var footerTitle: String {
+    switch model.state {
+    case .idle: ""
+    case .preparing: "Preparing…"
+    case .recording: "Recording"
+    case .ready: "Recording stopped"
+    case .transcribing: "Finishing…"
+    case .retry: "Saved audio"
+    }
+  }
+
+  private var cancelButton: some View {
+    Button("Cancel") { model.cancel() }
+      .font(.footnote.weight(.medium))
+      .foregroundStyle(QMTheme.ink)
+      .frame(minWidth: 76, minHeight: 44)
+      .buttonStyle(.plain)
+  }
+
+  private var primaryButton: some View {
+    Button(primaryTitle) {
+      switch model.state {
+      case .recording, .ready: model.finish()
+      case .retry: model.retry()
+      case .idle, .preparing, .transcribing: break
+      }
+    }
+    .font(.footnote.weight(.semibold))
+    .foregroundStyle(QMTheme.paper)
+    .frame(minWidth: 90, minHeight: 44)
+    .background(QMTheme.ink.opacity(primaryEnabled ? 1 : 0.35), in: Capsule())
+    .buttonStyle(.plain)
+    .disabled(!primaryEnabled)
+  }
+
+  private var primaryTitle: String {
+    switch model.state {
+    case .ready: "Transcribe"
+    case .retry: "Retry"
+    case .idle, .preparing, .recording, .transcribing: "Done"
+    }
+  }
+
+  private var primaryEnabled: Bool {
+    model.state == .recording || model.state == .ready || model.state == .retry
+  }
+}
+
+private struct NativeDictationOrb: View {
+  let model: NativeDictationModel
+  let size: CGFloat
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  private let blue = Color(red: 0.20, green: 0.39, blue: 0.88)
+  private let paleBlue = Color(red: 0.82, green: 0.88, blue: 1.0)
+
+  var body: some View {
+    let active = model.state == .recording
+    let level = model.level
+    TimelineView(.animation(minimumInterval: 1.0 / 24, paused: !active || reduceMotion)) {
+      timeline in
+      let time = timeline.date.timeIntervalSinceReferenceDate
+      let drift = active && !reduceMotion ? sin(time * 0.9) : 0
+      ZStack {
+        Circle()
+          .fill(
+            LinearGradient(
+              colors: [blue.opacity(0.76), Color(red: 0.43, green: 0.61, blue: 0.97), paleBlue],
+              startPoint: .topLeading,
+              endPoint: .bottomTrailing
+            ))
+        Ellipse()
+          .fill(.white.opacity(0.66))
+          .frame(width: size * 1.38, height: size * 0.40)
+          .blur(radius: size * 0.11)
+          .rotationEffect(.degrees(-24 + drift * 3))
+          .offset(x: -size * 0.02, y: size * (0.13 + drift * 0.03))
+        Ellipse()
+          .fill(blue.opacity(0.18))
+          .frame(width: size * 0.92, height: size * 0.28)
+          .blur(radius: size * 0.12)
+          .rotationEffect(.degrees(-24))
+          .offset(x: size * 0.20, y: size * (-0.23 + drift * 0.02))
+      }
+      .frame(width: size, height: size)
+      .clipShape(Circle())
+      .overlay { Circle().strokeBorder(blue.opacity(0.09), lineWidth: 0.5) }
+      .scaleEffect(active ? 1 + level * 0.025 : 1)
+      .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: level)
+      .accessibilityHidden(true)
+    }
+  }
 }

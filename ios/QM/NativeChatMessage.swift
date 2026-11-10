@@ -7,10 +7,8 @@ struct NativeChatMessageView: View {
   let user: String
   var conversationID: String? = nil
   var onFork: (() -> Void)? = nil
-  @State private var copied = false
-  @State private var expanded = false
-  @State private var messageHeight: CGFloat = 0
-  @ScaledMetric(relativeTo: .body) private var collapsedHeight: CGFloat = 150
+  var forking = false
+  var streaming = false
 
   private var isUser: Bool { message.role == "user" }
 
@@ -32,7 +30,7 @@ struct NativeChatMessageView: View {
   }
 
   private var messageBody: some View {
-    VStack(alignment: .leading, spacing: 10) {
+    VStack(alignment: .leading, spacing: 8) {
       if message.steered {
         Label("Steered the running task", systemImage: "arrow.turn.down.right")
           .font(.caption).foregroundStyle(.secondary)
@@ -41,43 +39,12 @@ struct NativeChatMessageView: View {
         Label("Task failed", systemImage: "exclamationmark.circle")
           .font(.subheadline.weight(.medium)).foregroundStyle(.red)
       } else if showSpeaker {
-        Text(isUser ? message.speaker ?? "Participant" : "QM")
+        Text(isUser ? message.speaker ?? "Input" : "QM")
           .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-      }
-      if !isUser {
-        NativeWorkSummary(
-          activity: message.activity, client: client, turnFailed: message.role == "error",
-          finishedAt: message.createdAt)
       }
       if !message.text.isEmpty {
         MessageMarkdown(text: message.text, client: client, files: message.referencedFiles)
-          .fixedSize(horizontal: false, vertical: true)
-          .onGeometryChange(for: CGFloat.self) {
-            $0.size.height
-          } action: {
-            if isUser { messageHeight = $0 }
-          }
-          .frame(maxHeight: isUser && !expanded ? collapsedHeight : nil, alignment: .top)
-          .clipped()
-          .overlay(alignment: .bottom) {
-            if isUser, !expanded, messageHeight > collapsedHeight {
-              LinearGradient(
-                colors: [QMTheme.surface.opacity(0), QMTheme.surface], startPoint: .top,
-                endPoint: .bottom
-              )
-              .frame(height: 24).allowsHitTesting(false).accessibilityHidden(true)
-            }
-          }
-        if isUser, messageHeight > collapsedHeight {
-          Button(
-            expanded ? "Show less" : "Show more",
-            systemImage: expanded ? "chevron.up" : "chevron.down"
-          ) {
-            expanded.toggle()
-          }
-          .font(.footnote).foregroundStyle(.secondary)
-          .frame(maxWidth: .infinity, minHeight: 44, alignment: .trailing)
-        }
+          .lineSpacing(3)
       }
       if message.deleted || message.edited {
         Label(
@@ -92,49 +59,17 @@ struct NativeChatMessageView: View {
       ForEach(Array(message.files.enumerated()), id: \.offset) { _, file in
         FileAttachmentView(file: file, client: client)
       }
-      if !isUser, !message.text.isEmpty {
-        HStack(spacing: 4) {
-          Button {
-            UIPasteboard.general.string = message.text
-            copied = true
-          } label: {
-            Image(systemName: copied ? "checkmark" : "doc.on.doc")
-              .frame(width: 44, height: 44)
-          }
-          .accessibilityLabel(copied ? "Copied message" : "Copy message")
-          ShareLink(item: message.text) {
-            Image(systemName: "square.and.arrow.up").frame(width: 44, height: 44)
-          }.accessibilityLabel("Share message")
-          Menu {
-            messageActions
-          } label: {
-            Image(systemName: "ellipsis").frame(width: 44, height: 44)
-          }.accessibilityLabel("More message actions")
-          Spacer(minLength: 0)
-          if let timestamp = message.createdAt {
-            Text(Date(timeIntervalSince1970: timestamp / 1000), style: .time)
-              .font(.caption2)
-          }
-        }
-        .font(.footnote)
-        .foregroundStyle(.secondary)
-        .padding(.leading, -10)
-        .padding(.top, -4)
-        .padding(.bottom, -10)
+      if forking {
+        NativeActionLabel(title: "Fork from here", busyTitle: "Forking conversation...", busy: true)
+          .font(.footnote).foregroundStyle(.secondary)
       }
     }
     .padding(isUser ? 14 : 0)
-    .background(isUser ? QMTheme.surface : .clear, in: RoundedRectangle(cornerRadius: 20))
+    .background(isUser ? Color.brown.opacity(0.09) : .clear, in: RoundedRectangle(cornerRadius: 8))
     .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
     .padding(.leading, isUser ? 28 : 0)
-    .contextMenu { messageActions }
-    .task(id: copied) {
-      guard copied else { return }
-      do {
-        try await Task.sleep(for: .seconds(2))
-        copied = false
-      } catch {}
-    }
+    .tint(.brown)
+    .contextMenu { if !streaming { messageActions } }
   }
 
   @ViewBuilder private func noticeView(_ notice: ChatNotice) -> some View {
@@ -167,20 +102,28 @@ struct NativeChatMessageView: View {
       NavigationLink {
         NativeConversationDestination(client: client, user: user, sessionID: mail.sessionID)
       } label: {
-        HStack(spacing: 10) {
-          Image(systemName: "arrow.triangle.branch")
-          VStack(alignment: .leading, spacing: 3) {
-            Text(mail.title).font(.subheadline.weight(.medium))
-            Text(mail.status).font(.caption).foregroundStyle(.secondary)
-          }
-          Spacer()
-          Image(systemName: "chevron.right").font(.caption)
-        }
-        .padding(12)
-        .background(QMTheme.surface, in: RoundedRectangle(cornerRadius: 12))
+        subagentLabel(mail)
       }
       .buttonStyle(.plain)
     }
+  }
+
+  private func subagentLabel(_ mail: SubagentMail) -> some View {
+    HStack(spacing: 10) {
+      NativeAgentAvatar(
+        sessionID: mail.sessionID, returned: ["final_answer", "no_reply"].contains(mail.kind)
+      )
+      .frame(width: 32, height: 32)
+      .accessibilityHidden(true)
+      VStack(alignment: .leading, spacing: 3) {
+        Text(mail.title).font(.subheadline.weight(.medium))
+        Text(mail.status).font(.caption).foregroundStyle(.secondary)
+      }
+      Spacer()
+      Image(systemName: "chevron.right").font(.caption)
+    }
+    .frame(minHeight: 44)
+    .tint(.brown)
   }
 
   private func approvalLabel(approved: Bool, scope: String?) -> String {

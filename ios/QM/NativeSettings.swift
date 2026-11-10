@@ -29,6 +29,7 @@ final class ModelAccountsModel {
   var busy = false
   var error: String?
   private let loader = LoadGuard()
+  var loading: Bool { loader.loading }
   init(client: APIClient) { self.client = client }
   func load() async {
     guard !busy else { return }
@@ -44,6 +45,7 @@ final class ModelAccountsModel {
   func choose(_ account: String) async {
     guard !busy else { return }
     busy = true
+    error = nil
     loader.cancel()
     defer { busy = false }
     do {
@@ -58,6 +60,7 @@ final class ModelAccountsModel {
   func disconnect(_ provider: String) async {
     guard !busy else { return }
     busy = true
+    error = nil
     loader.cancel()
     defer { busy = false }
     do {
@@ -67,6 +70,37 @@ final class ModelAccountsModel {
       status = result
       error = nil
     } catch { self.error = error.localizedDescription }
+  }
+}
+
+struct NativeActionLabel: View {
+  let title: String
+  let busyTitle: String
+  let busy: Bool
+  var compact = false
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.scenePhase) private var scenePhase
+  @ScaledMetric(relativeTo: .body) private var iconSize: CGFloat = 18
+
+  var body: some View {
+    let symbolSize = min(iconSize, compact ? 18 : 24)
+    HStack(spacing: 8) {
+      if busy {
+        Image(systemName: "arrow.triangle.2.circlepath")
+          .font(.system(size: symbolSize))
+          .symbolEffect(
+            .rotate, options: .repeating, isActive: !reduceMotion && scenePhase == .active
+          )
+          .symbolEffectsRemoved(reduceMotion || scenePhase != .active)
+          .frame(width: symbolSize * 1.5, height: symbolSize * 1.5)
+          .accessibilityHidden(true)
+      }
+      Text(busy ? busyTitle : title)
+        .lineLimit(compact ? 1 : nil)
+        .fixedSize(horizontal: false, vertical: !compact)
+        .dynamicTypeSize(...(compact ? DynamicTypeSize.xxxLarge : .accessibility5))
+    }
+    .accessibilityElement(children: .combine)
   }
 }
 
@@ -129,6 +163,9 @@ struct NativeModelAccountsView: View {
   init(client: APIClient) { _model = State(initialValue: ModelAccountsModel(client: client)) }
   var body: some View {
     QMList {
+      if model.busy {
+        NativeActionLabel(title: "Update accounts", busyTitle: "Updating accounts…", busy: true)
+      }
       if let status = model.status {
         Section("Use for conversations") {
           if !status.required {
@@ -158,7 +195,10 @@ struct NativeModelAccountsView: View {
           ForEach(["claude", "chatgpt"], id: \.self) { provider in
             let key = provider == "claude" ? "anthropic" : "openai"
             VStack(alignment: .leading, spacing: 8) {
-              Text(provider == "claude" ? "Claude" : "ChatGPT / Codex").font(.headline)
+              HStack(spacing: 8) {
+                if provider == "chatgpt" { NativeChatGPTLogo() }
+                Text(provider == "claude" ? "Claude" : "ChatGPT / Codex").font(.headline)
+              }
               if let connection = status.connections.first(where: { $0.provider == key }) {
                 Text(connection.kind == "oauth" ? "Subscription connected" : "API key connected")
                   .font(.caption)
@@ -170,10 +210,10 @@ struct NativeModelAccountsView: View {
             }
           }
         }
-      } else {
+      } else if model.loading {
         ProgressView("Loading accounts…")
       }
-      if let error = model.error {
+      if let error = model.error, !model.loading {
         Text(error).foregroundStyle(.red)
         Button("Try again") { Task { await model.load() } }
       }
@@ -222,16 +262,28 @@ struct NativeModelConnection: View {
         if method == "API key" {
           SecureField("API key", text: $apiKey).textInputAutocapitalization(.never)
             .autocorrectionDisabled()
-          Button("Save API key") { Task { await saveKey() } }.disabled(
+          Button {
+            Task { await saveKey() }
+          } label: {
+            NativeActionLabel(title: "Save API key", busyTitle: "Saving…", busy: busy)
+          }.disabled(
             busy || apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         } else if let device {
+          if polling && error == nil {
+            NativeConnectionLoading(status: "Waiting for sign-in…")
+          }
           Text("Enter this code when you sign in:")
           Text(device.userCode).font(.title.monospaced()).textSelection(.enabled)
           if let url = Self.httpsURL(device.verificationUrl) {
-            Link("Continue to ChatGPT", destination: url)
+            Link(destination: url) {
+              Label {
+                Text("Continue to ChatGPT")
+              } icon: {
+                NativeChatGPTLogo()
+              }
+            }
           }
           Text("Return here after signing in. QM will complete the connection.").font(.caption)
-          if polling { ProgressView("Waiting for sign-in…") }
           Button("Start again") {
             self.device = nil
             error = nil
@@ -242,11 +294,22 @@ struct NativeModelConnection: View {
           }
           SecureField("Authorization code", text: $code).textInputAutocapitalization(.never)
             .autocorrectionDisabled()
-          Button("Complete sign-in") { Task { await completeClaude(claude) } }.disabled(
+          Button {
+            Task { await completeClaude(claude) }
+          } label: {
+            NativeActionLabel(title: "Complete sign-in", busyTitle: "Connecting…", busy: busy)
+          }.disabled(
             busy || code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         } else {
-          Button("Sign in with \(provider == "claude" ? "Claude" : "ChatGPT")") {
+          Button {
             Task { await start() }
+          } label: {
+            HStack(spacing: 8) {
+              if provider != "claude" { NativeChatGPTLogo() }
+              NativeActionLabel(
+                title: "Sign in with \(provider == "claude" ? "Claude" : "ChatGPT")",
+                busyTitle: "Connecting…", busy: busy)
+            }
           }.disabled(busy)
         }
         if let error { Text(error).foregroundStyle(.red) }
@@ -292,6 +355,7 @@ struct NativeModelConnection: View {
   private func saveKey() async {
     guard !busy else { return }
     busy = true
+    error = nil
     defer { busy = false }
     do {
       let _: MutationReceipt = try await client.fetch(
@@ -306,6 +370,7 @@ struct NativeModelConnection: View {
   private func completeClaude(_ prompt: ModelClaudePrompt) async {
     guard !busy else { return }
     busy = true
+    error = nil
     defer { busy = false }
     do {
       let _: MutationReceipt = try await client.fetch(
@@ -318,7 +383,9 @@ struct NativeModelConnection: View {
     } catch { self.error = error.localizedDescription }
   }
   private func poll(_ prompt: ModelDevicePrompt) async {
+    guard !Task.isCancelled else { return }
     polling = true
+    error = nil
     defer { polling = false }
     do {
       while !Task.isCancelled && Date().timeIntervalSince1970 * 1000 < prompt.expiresAt {
@@ -357,8 +424,12 @@ struct NativeSlackAccountView: View {
         if let user = status.user { LabeledContent("Account", value: user) }
         if let workspace = status.workspace { LabeledContent("Workspace", value: workspace) }
       }
-      Button(status?.connected == true ? "Reconnect Slack" : "Connect Slack") {
+      Button {
         Task { await connect() }
+      } label: {
+        NativeActionLabel(
+          title: status?.connected == true ? "Reconnect Slack" : "Connect Slack",
+          busyTitle: "Connecting…", busy: busy)
       }.disabled(busy)
       if let error { Text(error).foregroundStyle(.red) }
     }
@@ -378,6 +449,7 @@ struct NativeSlackAccountView: View {
     let attempt = UUID()
     authorizationRevision = attempt
     busy = true
+    error = nil
     defer { busy = false }
     do {
       struct Start: Decodable {

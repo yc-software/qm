@@ -1,3 +1,10 @@
+OpenAI
+
+The OpenAI and ChatGPT names and logo are trademarks of OpenAI.
+Logo artwork: https://openai.com/brand/
+Source: https://images.ctfassets.net/kftzwdyauwt9/3hUGLn3ypllZ0oa01qOYVq/28e8188e6f11b84c3e876569d492734f/Blossom_Light.svg
+The logo path is reproduced unchanged from the official artwork.
+
 swift-markdown-ui
 
 The MIT License (MIT)

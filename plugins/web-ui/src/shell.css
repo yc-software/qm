@@ -3278,6 +3278,64 @@ qm-markdown .tok-in {
   white-space: pre-wrap;
   word-break: break-word;
 }
+.tool-payload-fields {
+  display: grid;
+  gap: 8px;
+  max-height: 320px;
+  padding: 3px 10px 9px;
+  overflow: auto;
+  color: var(--foreground);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.tool-payload-field,
+.tool-payload-group {
+  min-width: 0;
+}
+.tool-payload-key {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 600;
+}
+.tool-payload-value {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  user-select: text;
+}
+.tool-payload-code {
+  font-family: var(--font-mono);
+}
+.tool-payload-group,
+.tool-payload-raw {
+  border-left: 1px solid var(--border);
+  padding-left: 8px;
+}
+.tool-payload-group > summary,
+.tool-payload-raw > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.tool-payload-group > summary:focus-visible,
+.tool-payload-raw > summary:focus-visible {
+  outline: 1px solid var(--muted-foreground);
+  outline-offset: 2px;
+}
+.tool-payload-count {
+  color: var(--muted-foreground);
+  font-weight: 400;
+}
+.tool-payload-group-host {
+  display: grid;
+  gap: 8px;
+  padding: 0 0 8px 8px;
+}
+.tool-payload-raw .tool-payload-body {
+  padding: 3px 0 9px;
+}
 .tool-disclosure .code-card-foot {
   font-family: var(--font-sans);
   font-size: 11px;

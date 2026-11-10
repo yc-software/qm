@@ -30,6 +30,11 @@ final class MarkdownImagesTests: XCTestCase {
       MarkdownImageResource.path(
         URL(string: "https://qm.example/api/files/abc-123/content")!, baseURL: base),
       "api/files/abc-123/content")
+    XCTAssertEqual(
+      MarkdownImageResource.path(
+        URL(string: "https://qm.example/api/files/abc-123/content/Chart%20Preview.png")!,
+        baseURL: base),
+      "api/files/abc-123/content")
     for value in [
       "https://other.example/api/files/abc/content", "http://qm.example/api/files/abc/content",
       "https://qm.example:444/api/files/abc/content", "https://qm.example/api/admin/reset",

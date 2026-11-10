@@ -80,6 +80,7 @@ final class KeychainModel {
     let attempt = UUID()
     authorizationRevision = attempt
     busy = true
+    error = nil
     loader.cancel()
     defer { busy = false }
     do {
@@ -112,6 +113,7 @@ final class KeychainModel {
   func mutate(_ path: String, body: [String: Any] = [:], method: String = "POST") async {
     guard !busy else { return }
     busy = true
+    error = nil
     loader.cancel()
     defer { busy = false }
     do {
@@ -144,7 +146,14 @@ struct NativeKeychainView: View {
   }
   var body: some View {
     QMList {
+      if model.busy {
+        NativeActionLabel(
+          title: "Update keychain", busyTitle: "Updating keychain…", busy: model.busy)
+      }
       if let error = model.error { Text(error).foregroundStyle(.red) }
+      if model.loading && model.overview == nil && model.error == nil {
+        NativeCollectionLoading(label: "Loading keychain", symbol: "key")
+      }
       Section("Connections") {
         NavigationLink("Browse app connections") { NativeConnectedApps(client: model.client) }
         ForEach(model.providers.keys.sorted(), id: \.self) { provider in
@@ -167,7 +176,7 @@ struct NativeKeychainView: View {
             }.padding(.vertical, 6)
           }
         }
-        if model.providers.isEmpty && !model.loading {
+        if model.providers.isEmpty && model.overview != nil && model.error == nil {
           Text("No providers are configured for this workspace.").foregroundStyle(.secondary)
         }
       }
@@ -190,6 +199,11 @@ struct NativeKeychainView: View {
     }
     .disabled(model.busy).navigationTitle("Keychain")
     .scrollContentBackground(.hidden).background(QMTheme.paper)
+    .modifier(
+      NativeCollectionRefresh(
+        active: model.loading && (model.overview != nil || model.error != nil) && !model.busy,
+        label: "Refreshing keychain")
+    )
     .task { await model.load() }.refreshable { await model.load() }
     .onDisappear { model.cancel() }
     .sheet(isPresented: $adding, onDismiss: { Task { await model.load() } }) {
@@ -219,6 +233,10 @@ struct NativeCredentialDetail: View {
   @State private var revoke: NativeCredentialGrant?
   var body: some View {
     QMList {
+      if model.busy {
+        NativeActionLabel(
+          title: "Update credential", busyTitle: "Updating credential…", busy: model.busy)
+      }
       Section("Credential") {
         if let account = credential.accountLabel { LabeledContent("Account", value: account) }
         if let host = credential.host { LabeledContent("Host", value: host) }
@@ -313,7 +331,11 @@ struct NativeCredentialCreation: View {
           Button("Cancel") { dismiss() }.disabled(busy)
         }
         ToolbarItem(placement: .confirmationAction) {
-          Button("Save") { Task { await save() } }.disabled(
+          Button {
+            Task { await save() }
+          } label: {
+            NativeActionLabel(title: "Save", busyTitle: "Saving…", busy: busy, compact: true)
+          }.disabled(
             busy
               || [service, purpose, secret].contains {
                 $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -335,6 +357,7 @@ struct NativeCredentialCreation: View {
   private func save() async {
     guard !busy else { return }
     busy = true
+    error = nil
     defer { busy = false }
     do {
       struct Drop: Decodable { let url: String }
