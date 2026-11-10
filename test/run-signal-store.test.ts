@@ -756,4 +756,21 @@ test("startSignalPoll: an approval request is answered to its sender, never trea
   const refused = await waitForClientResult(store, "ar2", "req-2", { timeoutMs: 3_000 });
   await bare();
   assert.deepEqual(refused, { content: "this run can't show approval cards", isError: true });
+
+  await store.send("ar3", { kind: "approval_request", tool: "records", input: {}, dedupeKey: "req-3" });
+  const failing = startSignalPoll(
+    store,
+    "ar3",
+    {
+      onSteer: async () => {},
+      onAbort: async () => {},
+      onApprovalRequest: async () => {
+        throw new Error("catalog unreachable");
+      },
+    },
+    { intervalMs: 20 },
+  );
+  const failed = await waitForClientResult(store, "ar3", "req-3", { timeoutMs: 3_000 });
+  await failing();
+  assert.deepEqual(failed, { content: "the run failed to raise the card: catalog unreachable", isError: true });
 });

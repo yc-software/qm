@@ -1,5 +1,5 @@
 import type { ClientToolResult, StopScope, TurnRequest } from "../types.ts";
-import { swallowAs } from "../util/errors.ts";
+import { errMessage, swallowAs } from "../util/errors.ts";
 import type { ClaimedRow } from "../tenants/claim.ts";
 
 export type RunSignalKind = "abort" | "steer" | "client_result" | "approval_request";
@@ -137,9 +137,13 @@ export function startSignalPoll(
         if (s.kind === "abort" || s.kind === "client_result" || declined.has(id)) continue;
         if (s.kind === "approval_request") {
           try {
-            const answer = handlers.onApprovalRequest
-              ? await handlers.onApprovalRequest(s)
-              : { content: "this run can't show approval cards", isError: true };
+            let answer: ClientToolResult = { content: "this run can't show approval cards", isError: true };
+            try {
+              if (handlers.onApprovalRequest) answer = await handlers.onApprovalRequest(s);
+            } catch (e) {
+              opts?.onError?.(e);
+              answer = { content: `the run failed to raise the card: ${errMessage(e)}`, isError: true };
+            }
             if (s.dedupeKey)
               await signals.send(runId, {
                 kind: "client_result",
