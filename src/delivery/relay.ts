@@ -33,7 +33,7 @@ export function createDeliveryRelay(
         e,
         `delivery=${d.id} retry_in=${Math.round(delayMs / 1000)}s`,
       );
-      await deliveries.retryAfter(d.id, delayMs);
+      await deliveries.retryAfter(tenant, d.id, delayMs);
       return;
     }
     if (outcome) await deliveries.fail(d.id, outcome.refused, Date.now());

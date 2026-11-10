@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment, ScopeId } from "../types.ts";
 import type { TurnOrigin } from "../core/turn-origin.ts";
-import { currentTenant } from "../tenants/context.ts";
+import { currentTenant, type Tenant } from "../tenants/context.ts";
 import { tenantListeners } from "../tenants/cache.ts";
 import type { ClaimedRow } from "../tenants/claim.ts";
 
@@ -51,7 +51,7 @@ export interface DeliveryStore {
   claimPending(type: string, ttlMs: number): Promise<Delivery[]>;
   claimDue(type: string, ttlMs: number): Promise<ClaimedDelivery[]>;
   undeliveredTenants(type: string): Promise<ClaimedRow[]>;
-  retryAfter(id: string, delayMs: number): Promise<void>;
+  retryAfter(tenant: Tenant, id: string, delayMs: number): Promise<void>;
   listShadow(opts?: { limit?: number }): Promise<Delivery[]>;
   ack(id: string, at: number, slackApiMs?: number): Promise<void>;
   fail(id: string, reason: string, at: number): Promise<Delivery | null>;
@@ -163,7 +163,7 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
       );
       return waiting ? [{ tenantId: currentTenant(), id: type }] : [];
     },
-    async retryAfter(id, delayMs) {
+    async retryAfter(_tenant, id, delayMs) {
       const d = deliveries.get(id);
       if (d && d.deliveredAt === null && d.expiredAt === undefined) claimedUntil.set(id, Date.now() + delayMs);
     },

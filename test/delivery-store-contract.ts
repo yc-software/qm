@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import type { DeliveryStore } from "../src/delivery/delivery-store.ts";
+import { ambientTenant } from "../src/tenants/context.ts";
 
 export async function exerciseDeliveryStore(store: DeliveryStore): Promise<void> {
   const d = await store.enqueue({
@@ -240,7 +241,7 @@ export async function exerciseDeliveryStore(store: DeliveryStore): Promise<void>
     idempotencyKey: "fire-retry-after",
   });
   assert.equal((await store.claimPending("group", 50)).length, 1);
-  await store.retryAfter(deferred.id, 300);
+  await store.retryAfter(ambientTenant(), deferred.id, 300);
   await new Promise((r) => setTimeout(r, 80));
   assert.deepEqual(await store.claimPending("group", 60_000), [], "a row waiting out its retry delay is not claimed");
   await new Promise((r) => setTimeout(r, 300));
