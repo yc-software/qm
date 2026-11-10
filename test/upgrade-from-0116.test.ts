@@ -28,10 +28,10 @@ const REPLACED_TABLES = new Set([
 
 const SCHEMA_SNAPSHOT = `
   WITH rels AS (
-    SELECT c.oid, n.nspname || '.' || regexp_replace(c.relname, '_[0-9]{8}', '_N', 'g') AS name, c.relkind,
+    SELECT c.oid, n.nspname || '.' || c.relname AS name, c.relkind,
            c.relrowsecurity, c.relforcerowsecurity
       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-     WHERE n.nspname IN ('public', 'pgboss') AND c.relkind IN ('r', 'p', 'v', 'S', 'i')
+     WHERE n.nspname IN ('public', 'pgboss') AND c.relkind IN ('r', 'p', 'v', 'S', 'i') AND (NOT c.relispartition OR pg_get_expr(c.relpartbound, c.oid) = 'DEFAULT')
   )
   SELECT DISTINCT entry FROM (
     SELECT format('rel %s %s rls=%s/%s', name, relkind, relrowsecurity, relforcerowsecurity) AS entry FROM rels
@@ -41,10 +41,10 @@ const SCHEMA_SNAPSHOT = `
       FROM rels r JOIN pg_attribute a ON a.attrelid = r.oid AND a.attnum > 0 AND NOT a.attisdropped
       LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
     UNION ALL
-    SELECT format('con %s %s %s %s', r.name, regexp_replace(k.conname, '_[0-9]{8}', '_N', 'g'), pg_get_constraintdef(k.oid), k.convalidated)
+    SELECT format('con %s %s %s %s', r.name, k.conname, pg_get_constraintdef(k.oid), k.convalidated)
       FROM rels r JOIN pg_constraint k ON k.conrelid = r.oid AND k.contype <> 'n'
     UNION ALL
-    SELECT format('idx %s', regexp_replace(pg_get_indexdef(i.indexrelid), '_[0-9]{8}', '_N', 'g'))
+    SELECT format('idx %s', pg_get_indexdef(i.indexrelid))
       FROM rels r JOIN pg_index i ON i.indrelid = r.oid
     UNION ALL
     SELECT format('pol %s %s %s %s', r.name, p.polname, pg_get_expr(p.polqual, p.polrelid),
