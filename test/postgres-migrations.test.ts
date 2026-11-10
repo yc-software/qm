@@ -2,13 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import pg from "pg";
-import {
-  applyPgMigrations,
-  createPgPool,
-  definePgMigration,
-  migrateRegisteredPgSchemas,
-  PG_MIGRATIONS_TABLE,
-} from "../src/persistence/pg-pool.ts";
+import { applyPgMigrations, createPgPool, definePgMigration, PG_MIGRATIONS_TABLE } from "../src/persistence/pg-pool.ts";
 import { settle } from "./support/settle.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -224,51 +218,12 @@ test("a failed migration rolls back and is not recorded", { skip }, async () => 
   }
 });
 
-test("repeatable maintenance runs once per store instance after migrations", { skip }, async () => {
-  const admin = new pg.Pool({ connectionString: databaseUrl });
-  const { id, table } = names();
-  const maintenanceId = `${id}/maintenance`;
-  const store = createPgPool(
-    databaseUrl!,
-    [
-      {
-        id,
-        statements: [`CREATE TABLE ${table}(value INT NOT NULL)`, `INSERT INTO ${table}(value) VALUES (0)`],
-      },
-      {
-        id: `${id}/0002`,
-        statements: [`UPDATE ${table} SET value = value + 10`],
-      },
-    ],
-    [{ id: maintenanceId, statements: [`UPDATE ${table} SET value = value + 1`] }],
-  );
-  try {
-    await migrateRegisteredPgSchemas(databaseUrl);
-    assert.deepEqual(await store.q(`SELECT value FROM ${table}`), [{ value: 11 }]);
-    const ledger = await admin.query(`SELECT id FROM ${PG_MIGRATIONS_TABLE} WHERE id IN ($1, $2, $3) ORDER BY id`, [
-      id,
-      `${id}/0002`,
-      maintenanceId,
-    ]);
-    assert.deepEqual(ledger.rows, [{ id }, { id: `${id}/0002` }]);
-  } finally {
-    await store.close();
-    await admin.query(`DROP TABLE IF EXISTS ${table}`);
-    await admin.query(`DELETE FROM ${PG_MIGRATIONS_TABLE} WHERE id IN ($1, $2)`, [id, `${id}/0002`]);
-    await admin.end();
-  }
-});
-
-for (const lock of ["qm:schema-maintenance", "qm:schema-migrations"]) {
+for (const lock of ["qm:schema-migrations"]) {
   test(`waiting for the ${lock} lock does not deadlock a concurrent index build`, { skip }, async () => {
     const admin = new pg.Pool({ connectionString: databaseUrl });
     const holder = new pg.Client({ connectionString: databaseUrl });
     const { id, table } = names();
-    const store = createPgPool(
-      databaseUrl!,
-      [{ id, statements: [`ALTER TABLE ${table} ADD COLUMN extra INT`] }],
-      [{ id: `${id}/repair`, statements: ["SELECT 1"] }],
-    );
+    const store = createPgPool(databaseUrl!, [{ id, statements: [`ALTER TABLE ${table} ADD COLUMN extra INT`] }]);
     await holder.connect();
     try {
       await admin.query(`CREATE TABLE ${table}(value INT NOT NULL)`);
