@@ -510,7 +510,7 @@ test("transferDeploymentOwner is home authority — a write ('manage') grantee c
     name: "kept",
   });
   await deploy.shareDeployment(d.id, scopeId("personal", "U2"), "write", { createdBy: "U1" });
-  assert.equal(await deploy.canManageDeployment(d.id, "U2"), true, "U2 can manage…");
+  assert.equal(await deploy.canManageDeployment(d.id, { actorId: "U2" }), true, "U2 can manage…");
   await assert.rejects(
     () => deploy.transferDeploymentOwner("kept", scopeId("personal", "U2"), { callerId: "U2" }),
     /only the owner/,
@@ -719,7 +719,7 @@ test("directory email recipients retain manage access", async () => {
   assert.deepEqual(await deploy.deploymentGrantees(d.id), [
     { scope: "personal:member@example.com", permission: "write" },
   ]);
-  assert.equal(await deploy.canManageDeployment(d.id, "member@example.com"), true);
+  assert.equal(await deploy.canManageDeployment(d.id, { actorId: "member@example.com" }), true);
 });
 
 test("exact email read grants admit app-only login and guest reach without membership or source access", async (t) => {
@@ -778,7 +778,7 @@ test("exact email read grants admit app-only login and guest reach without membe
   assert.deepEqual(await allowed("other@example.com"), { allowed: false });
   assert.equal(await app.effectiveDeploymentPermission(d, "Invitee@Example.com"), "read");
   assert.equal(await app.effectiveDeploymentPermission(d, "other@example.com"), null);
-  assert.equal(await app.deploymentGitPermissionFor(d.id, email), null);
+  assert.equal(await app.deploymentGitPermissionFor(d.id, { actorId: email }), null);
   assert.equal((await app.reachDeployment(d.id, email)).status, "ok");
   assert.equal(await app.directoryMember(email), null);
   assert.equal(identity.externalMember(email), undefined);

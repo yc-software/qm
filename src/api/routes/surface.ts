@@ -90,6 +90,17 @@ async function regenerateSessionTitle(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, out);
 }
 
+async function suggestNextPrompt(ctx: ApiCtx): Promise<void> {
+  const { res, app, body } = ctx;
+  const principalId = (body as { principalId?: unknown }).principalId;
+  if (typeof principalId !== "string" || !principalId) {
+    return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
+  }
+  const out = await app.suggestNextPrompt(ctx.params.id!, principalId);
+  if (!out) return sendJson(res, 404, { error: "not_found" });
+  return sendJson(res, 200, out);
+}
+
 async function detachSession(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
   const id = ctx.params.id!;
@@ -971,7 +982,10 @@ async function restoreSkill(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 401, { error: "capability_required" });
   }
   if (!principalId) return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId required" });
-  const restored = await ctx.app.restoreOwnedSkill(ctx.params.id!, principalId);
+  const liveActor = ctx.capability ? livePersonCapability(ctx.capability) : true;
+  const restored = await ctx.app.restoreOwnedSkill(ctx.params.id!, principalId, { liveActor });
+  if (restored === "trigger_blocked")
+    return sendJson(ctx.res, 403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
   if (restored === "exists")
     return sendJson(ctx.res, 409, {
       error: "exists",
@@ -1440,9 +1454,9 @@ export async function postSoul(ctx: ApiCtx): Promise<void> {
     content = b.content;
     actorId = b.actorId;
   }
-  const allowSharedScope =
-    Boolean(capability) ||
-    (parseScopeId(scopeIdVal).kind !== "personal" && (await app.managesScope(actorId, scopeIdVal as ScopeId)));
+  const allowSharedScope = capability
+    ? capability.botActor !== true
+    : parseScopeId(scopeIdVal).kind !== "personal" && (await app.managesScope(actorId, scopeIdVal as ScopeId));
   try {
     const version = await app.updateSoul(
       scopeIdVal,
@@ -1482,6 +1496,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
     { method: "PUT", path: "/v1/runtime-config", browser: true, auth: "either", handle: putRuntimeConfig },
     { method: "PUT", path: "/v1/channel-header-pin", browser: true, auth: "either", handle: putChannelHeaderPin },
     { method: "POST", path: "/v1/sessions/:id/title", browser: true, auth: "source", handle: regenerateSessionTitle },
+    { method: "POST", path: "/v1/sessions/:id/next-prompt", browser: true, auth: "source", handle: suggestNextPrompt },
     { method: "POST", path: "/v1/sessions/:id/expand", browser: true, auth: "source", handle: expandSideChat },
     { method: "POST", path: "/v1/sessions", browser: true, auth: "source", handle: spawnWebSession },
     { method: "POST", path: "/v1/sessions/:id/fork", browser: true, auth: "source", handle: forkSession },

@@ -136,6 +136,7 @@ export interface InboxItem {
   slack?: { channelId: string; channelLabel?: string; ts: string; threadTs?: string; userId?: string };
   sentAt?: number;
   dismissedAt?: number;
+  dismissedReason?: string;
   repliedAt?: number;
   externalReplyText?: string;
   sourceContextPartial?: boolean;
@@ -456,6 +457,7 @@ export function toInboxItem(entry: LedgerItem): InboxItem {
       : {}),
     ...(resolved === "sent" && entry.actedAt !== undefined ? { sentAt: entry.actedAt } : {}),
     ...(resolved === "dismissed" && entry.actedAt !== undefined ? { dismissedAt: entry.actedAt } : {}),
+    ...(resolved === "dismissed" && entry.parkedReason ? { dismissedReason: entry.parkedReason } : {}),
     ...(resolved === "replied" && entry.actedAt !== undefined ? { repliedAt: entry.actedAt } : {}),
     ...(resolved === "replied" && entry.actionResult ? { externalReplyText: entry.actionResult } : {}),
     ...(payload.sourceContextPartial === true && entry.source === "slack" ? { sourceContextPartial: true } : {}),
@@ -1473,6 +1475,7 @@ export function handledNoteTpl(item: InboxItem): TemplateResult {
   const label = `${handledStateLabel(item)} ${item.dismissedAt ? relTime(item.dismissedAt) : ""}`;
   return html`<div class="inbox-handled-note">
     ${icon(X, 13)}<span>${label}</span>
+    ${item.dismissedReason ? html`<span class="inbox-dismissed-reason">${item.dismissedReason}</span>` : nothing}
     ${reopenButtonTpl(item)}
   </div>`;
 }
@@ -1801,7 +1804,9 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
   const resolvedItems = allOpen.filter((item) => item.verdict?.state === "resolved");
   const openItems = allOpen.filter((item) => item.verdict?.state !== "resolved");
   const showFilter = surface.viewId !== "sent";
-  let emptyMessage = "No messages in this view yet. Sync to check for new messages.";
+  let emptyMessage = syncLoops(surface.viewId).some((loop) => loop.syncCron)
+    ? "No messages in this view yet. Sync to check for new messages."
+    : "Nothing here needs your attention.";
   if (showFilter && inboxState.filter === "triaged")
     emptyMessage = "Nothing is waiting on you. Choose People or Everything to see more conversations.";
   if (surface.viewId === "sent") emptyMessage = "No sent messages yet. Sent Email and Slack replies will appear here.";

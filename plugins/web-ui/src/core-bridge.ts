@@ -473,6 +473,12 @@ export async function regenerateTitle(id: string): Promise<{ title: string | nul
   return api<{ title: string | null }>(`/api/sessions/${encodeURIComponent(id)}/title`, { method: "POST" });
 }
 
+export async function suggestNextPrompt(id: string): Promise<{ enabled: boolean; suggestion: string | null }> {
+  return api<{ enabled: boolean; suggestion: string | null }>(`/api/sessions/${encodeURIComponent(id)}/next-prompt`, {
+    method: "POST",
+  });
+}
+
 export async function detachSession(id: string): Promise<{ detached: true }> {
   return api<{ detached: true }>(`/api/sessions/${encodeURIComponent(id)}/detach`, { method: "POST" });
 }
@@ -789,6 +795,13 @@ function reportSigninRequired(detail: SigninRequired): void {
   onSigninRequired?.(detail);
 }
 
+let servedRelease: string | null = null;
+
+export function servedReleaseChanged(): boolean {
+  const booted = document.querySelector<HTMLMetaElement>('meta[name="qm-release"]')?.content;
+  return Boolean(booted && servedRelease && servedRelease !== booted);
+}
+
 export async function webFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const startMs = Date.now();
   const request = input instanceof Request ? input : null;
@@ -802,6 +815,7 @@ export async function webFetch(input: RequestInfo | URL, init?: RequestInit): Pr
     throw error;
   }
   reportRequestTiming(url, method, startMs, response.status);
+  servedRelease = response.headers.get("x-qm-release") ?? servedRelease;
   if (response.status !== 401) return response;
   stopBrowserErrors();
   stopAnalytics();

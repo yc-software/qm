@@ -498,6 +498,7 @@ export interface ToolContextDeps {
   files?: FileArtifactStore;
   auditLog?: AuditLog;
   createdBy: string;
+  botActor?: boolean;
   publicWebUrl?: string;
   publishContext?: {
     conversationKind: ConversationKind;
@@ -724,7 +725,10 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       } catch (error) {
         return withCleanup(
           () => Promise.reject(error),
-          () => fileExecution!.finish(),
+          async () => {
+            const note = await fileExecution!.finish();
+            if (note) console.warn(`${note} The command could not start.`);
+          },
         );
       }
     }
@@ -895,6 +899,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         "command",
         execOpts?.signal,
       );
+      let credentialNote: string | undefined;
       const r = await withCleanup(
         async (): Promise<ExecResult> => {
           const commandHandle = Object.keys(commandEnv).length
@@ -913,10 +918,17 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           }
         },
         async () => {
-          await fileExecution?.finish();
+          credentialNote = await fileExecution?.finish();
         },
-      );
-      return { ...r, ...(scratchReroute ? { scratchReroute } : {}) };
+      ).catch((error: unknown) => {
+        if (credentialNote) console.warn(`${credentialNote} The command itself failed.`);
+        throw error;
+      });
+      return {
+        ...r,
+        ...(credentialNote ? { stderr: r.stderr ? `${r.stderr}\n${credentialNote}` : credentialNote } : {}),
+        ...(scratchReroute ? { scratchReroute } : {}),
+      };
     },
 
     async read(path: string, signal?: AbortSignal, sandboxId?: string): Promise<ReadResult> {
@@ -1070,6 +1082,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       const d = await deps.deploy.deployOrUpdate({
         ownerScopeId: owner,
         createdBy: deps.createdBy,
+        botActor: deps.botActor,
         createdInScope,
         files,
         ...(input.entrypoint ? { entrypoint: input.entrypoint } : {}),

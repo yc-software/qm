@@ -408,3 +408,32 @@ test("the inbox filter is unavailable without Inbox access", async (t) => {
   assert.equal(host.querySelector(".inbox-email-filter-control"), null);
   assert.deepEqual(requests, []);
 });
+
+test("the empty state mentions Sync only for views that offer a Sync action", async (t) => {
+  const { host, mount, inbox } = await inboxUi(t);
+  const selected = [
+    {
+      id: "email",
+      name: "Email",
+      sources: ["gmail"],
+      source: "gmail",
+      count: 0,
+      cronId: "c1",
+      syncCron: { id: "c1", enabled: true },
+    },
+    { id: "reviews", name: "Reviews", sources: [], count: 0, syncCron: null },
+  ];
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input), "http://localhost");
+    if (!url.pathname.endsWith("/api/inbox")) return Response.json({});
+    return Response.json({ filter: "all", selected, available: [], items: [], total: 0, nextCursor: null });
+  };
+  await inbox.refreshInbox();
+  const emptyText = () => host.querySelector(".inbox-zero")?.textContent?.trim();
+  mount({ viewId: "email" });
+  assert.equal(emptyText(), "No messages in this view yet. Sync to check for new messages.");
+  assert.ok(host.querySelector(".inbox-sync-line"));
+  mount({ viewId: "reviews" });
+  assert.equal(emptyText(), "Nothing here needs your attention.");
+  assert.equal(host.querySelector(".inbox-sync-line"), null);
+});
