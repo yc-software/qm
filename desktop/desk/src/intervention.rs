@@ -879,10 +879,9 @@ mod runner_probe {
             }
         });
         thread::sleep(Duration::from_millis(300));
-        let source = objc2_core_graphics::CGEventSource::new(objc2_core_graphics::CGEventSourceStateID::HIDSystemState);
         for i in 0..400 {
             let point = objc2_core_foundation::CGPoint { x: 100.0 + (i % 50) as f64, y: 100.0 };
-            if let Some(e) = CGEvent::new_mouse_event(source.as_deref(), CGEventType(5), point, objc2_core_graphics::CGMouseButton::Left) {
+            if let Some(e) = CGEvent::new_mouse_event(None, CGEventType(5), point, objc2_core_graphics::CGMouseButton::Left) {
                 CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&e));
             }
             thread::sleep(Duration::from_millis(10));
