@@ -113,7 +113,8 @@ export function createWebEvents(
     const candidates = [...clientsOf(tenant).keys()];
     const allowed = await Promise.all(
       candidates.map(
-        async (id) => (!identity || identity.classify(id).type === "internal") && canAdministerLoop(app, loop, id),
+        async (id) =>
+          (!identity || identity.classify(id).type === "internal") && canAdministerLoop(app, loop, { actorId: id }),
       ),
     );
     return candidates.filter((_, i) => allowed[i]);

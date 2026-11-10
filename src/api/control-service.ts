@@ -233,7 +233,7 @@ export async function editWebhookTask(
   if (!action.trim()) return { ok: false, code: "bad_request", message: "task cannot be empty" };
   const webhook = await app.getWebhook(id);
   if (!webhook) return { ok: false, code: "not_found", message: `no webhook ${id}` };
-  if (!(await canAdministerWebhook(app, webhook, principalId)))
+  if (!(await canAdministerWebhook(app, webhook, { actorId: principalId })))
     return { ok: false, code: "forbidden", message: "not your webhook" };
   const updated = await app.updateWebhook(id, { action });
   return updated ? { ok: true, webhook: updated } : { ok: false, code: "not_found", message: `no webhook ${id}` };
@@ -242,13 +242,14 @@ export async function editWebhookTask(
 export async function canAdministerWebhook(
   app: Pick<App, "membershipControlsScope" | "managesScope" | "samePerson">,
   webhook: Pick<Webhook, "ownerScopeId" | "owner">,
-  actorId: string,
+  actor: Pick<CapabilityClaims, "actorId" | "botActor">,
   isActor?: (id: string) => Promise<boolean>,
 ): Promise<boolean> {
-  if (await app.membershipControlsScope(webhook.ownerScopeId)) {
-    return app.managesScope(actorId, webhook.ownerScopeId);
-  }
-  return isActor ? isActor(webhook.owner) : app.samePerson(webhook.owner, actorId);
+  const owns = () => (isActor ? isActor(webhook.owner) : app.samePerson(webhook.owner, actor.actorId));
+  if (actor.botActor && !(await owns())) return false;
+  if (await app.membershipControlsScope(webhook.ownerScopeId))
+    return app.managesScope(actor.actorId, webhook.ownerScopeId);
+  return owns();
 }
 
 function withDefaultTimezone(schedule: CronSchedule, cap: CapabilityClaims): CronSchedule {
@@ -773,16 +774,14 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
     async listWebhooks(capability) {
       const all = await app.listWebhooks();
       const isActor = await app.personMatcher(capability.actorId);
-      const allowed = await Promise.all(
-        all.map((webhook) => canAdministerWebhook(app, webhook, capability.actorId, isActor)),
-      );
+      const allowed = await Promise.all(all.map((webhook) => canAdministerWebhook(app, webhook, capability, isActor)));
       return all.filter((_webhook, index) => allowed[index]);
     },
 
     async disableWebhook(id, capability) {
       const webhook = await app.getWebhook(id);
       if (!webhook) return { ok: false, code: "not_found", message: `no webhook ${id}` };
-      if (!(await canAdministerWebhook(app, webhook, capability.actorId)))
+      if (!(await canAdministerWebhook(app, webhook, capability)))
         return { ok: false, code: "forbidden", message: "not your webhook" };
       await app.setWebhookEnabled(id, false);
       return { ok: true };

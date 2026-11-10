@@ -1125,7 +1125,7 @@ test("a cron created and retargeted through capabilities preserves webhook routi
   assert.equal(delivery.destination.target, candidate.target);
 });
 
-test("a Slack bot's turn can't change a channel cron it doesn't own, through a write grant or channel membership", async () => {
+test("a Slack bot's turn can't change a channel cron or webhook it doesn't own, through a write grant or channel membership", async () => {
   const chanScope = scopeId("channel", "C9");
   const chanClaims = (actor: string, extra: Partial<CapabilityClaims> = {}) =>
     claims(actor, chanScope, {
@@ -1180,4 +1180,16 @@ test("a Slack bot's turn can't change a channel cron it doesn't own, through a w
   );
   assert.equal(botEdit.ok ? "" : botEdit.code, "forbidden");
   assert.equal((await built.app.getCron(conversational.id))?.action, "tidy");
+  const hook = await control.createWebhook(
+    { action: "handle the event", verification: { scheme: "github", secret: "shh-secret" } },
+    chanClaims("U1", { liveActor: true }),
+    "https://portal.example",
+  );
+  assert.ok(hook.ok, JSON.stringify(hook));
+  const botClaims = chanClaims("release-bot", { botActor: true });
+  assert.deepEqual(await control.listWebhooks(botClaims), []);
+  const botDisable = await control.disableWebhook(hook.webhook.id, botClaims);
+  assert.equal(botDisable.ok ? "" : botDisable.code, "forbidden");
+  assert.equal((await built.app.getWebhook(hook.webhook.id))?.enabled, true);
+  assert.ok((await control.disableWebhook(hook.webhook.id, chanClaims("U2"))).ok);
 });

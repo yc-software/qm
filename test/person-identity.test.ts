@@ -105,8 +105,8 @@ describe("canAdminister: owner checks are same-person, not raw id equality", () 
       owner: "Alex@EXAMPLE.com",
       ownerScopeId: scopeId("personal", "Alex@EXAMPLE.com"),
     } as Webhook;
-    assert.equal(await canAdministerWebhook(appOver(), webhook, "alex@example.com"), true);
-    assert.equal(await canAdministerWebhook(appOver(), webhook, "casey@example.com"), false);
+    assert.equal(await canAdministerWebhook(appOver(), webhook, { actorId: "alex@example.com" }), true);
+    assert.equal(await canAdministerWebhook(appOver(), webhook, { actorId: "casey@example.com" }), false);
   });
 
   it("the list-path matcher agrees with the per-item check, including the roster bridge", async () => {

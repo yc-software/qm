@@ -79,7 +79,7 @@ export async function inboxView(ctx: ApiCtx): Promise<InboxView | null> {
   });
   const available: Loop[] = [];
   for (const loop of await deps.store.list()) {
-    if (loop.state !== "archived" && (await canAdministerLoop(ctx.app, loop, acting.actorId))) available.push(loop);
+    if (loop.state !== "archived" && (await canAdministerLoop(ctx.app, loop, acting))) available.push(loop);
   }
   let ids = Array.isArray(pref.value) ? pref.value.filter((value): value is string => typeof value === "string") : [];
   if (ctx.method === "POST") {
