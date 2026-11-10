@@ -79,6 +79,10 @@ cd repo
 git checkout -b codex/small-change
 ```
 
+Look for an open PR/MR that already makes the change before starting one; if it exists, point to it.
+
+When the repo is too large to clone whole, change a few files through the forge's commits API on a new branch (GitLab `POST /projects/:id/repository/commits` with `start_branch`; GitHub's contents API), or use a sparse checkout: `git clone --filter=blob:none --sparse URL repo`, then `git sparse-checkout set DIRS`. Never commit from a `--no-checkout` clone or after `git checkout HEAD -- PATH`: the index then holds only those files, and the commit deletes every other file in the repo.
+
 Keep changes scoped. Run the repo's tests. If a push or PR/MR creation is requested,
 prepare the branch and summary first.
 
@@ -102,7 +106,7 @@ git push -u origin codex/small-change
 glab mr create --repo GROUP/PROJECT --title "..." --description-file mr.md
 ```
 
-Report the final URL and leave enough context for review.
+Before pushing, run `git status --short` and `git show --stat HEAD`, and confirm the commit touches only the files you meant to change. After opening the PR/MR, read its changed-file count back from the forge (`gh pr view --json changedFiles`, `glab mr view NUMBER --output json` and its `changes_count`) and give it with the final URL in your report. If the count is not what you intended, fix it before calling the PR/MR ready. Never enable auto-merge.
 
 ## Wait for GitHub CI
 
@@ -142,5 +146,5 @@ gh pr merge NUMBER --repo OWNER/REPO --squash --match-head-commit REVIEWED_HEAD_
 ```
 
 On a branch that requires a merge queue, this queues the PR; it is merged only once
-GitHub shows it as merged. Never use auto-merge or bypass repository gates. This
+GitHub shows it as merged. Never bypass repository gates. This
 helper does not retry GitLab commands or change their authentication behavior.
