@@ -781,7 +781,6 @@ resource "aws_lb" "this" {
   subnets            = local.subnet_ids
   security_groups    = [aws_security_group.alb.id]
   tags               = local.tags
-  idle_timeout       = 60
   depends_on         = [aws_s3_bucket_policy.alb_logs]
   access_logs {
     bucket  = aws_s3_bucket.alb_logs.id
@@ -1143,7 +1142,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "alb_logs" {
     status = "Enabled"
     filter {}
     expiration {
-      days = 7
+      days = 30
     }
     abort_incomplete_multipart_upload {
       days_after_initiation = 1
