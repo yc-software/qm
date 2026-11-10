@@ -632,32 +632,90 @@ test(
     gate.resolve();
     assert.equal((await building).stdout, "blocked-command\n");
     assert.equal((await store.get(scope))!.homeDirty, true);
-    t.mock.timers.tick(3 * 60_000);
+    t.mock.timers.tick(4 * 60_000);
     assert.deepEqual(await make().reapDeepIdle!(1), { reaped: 1 });
     assert.equal(fake.sandboxes.get(sandboxId)?.status, "terminated");
   },
 );
 
-test("Render keeps a computer running when a write starts during its idle-stop checkpoint", async (t) => {
+test("Render leaves a computer and its credentials alone when a command starts during its idle check", async (t) => {
+  const { make, fake, store, scope } = setup(t);
+  const sandbox = make();
+  const handle = await sandbox.provision(scope);
+  const { sandboxId } = (await store.get(scope))!;
+  await fake.client.writeFileBytes(sandboxId, "/tmp/agent-creds/gh", Buffer.from("token"));
+  await store.merge(scope, { lastActivityMs: Date.now() - 7200_000 });
+  const run = fake.client.runScript;
+  let late: Promise<unknown> | undefined;
+  fake.client.runScript = async (id, script, timeoutSec) => {
+    const result = await run(id, script, timeoutSec);
+    if (script.includes(".agent-proc")) await (late ??= sandbox.run(handle, "echo late"));
+    return result;
+  };
+  assert.deepEqual(await make().reapDeepIdle!(0), { reaped: 0 });
+  assert.equal(fake.sandboxes.get(sandboxId)?.status, "running");
+  assert.equal(String(await fake.client.readFileBytes(sandboxId, "/tmp/agent-creds/gh")), "token");
+  assert.equal((await store.get(scope))!.stopped, undefined);
+});
+
+test("Render refuses a write that starts during its idle-stop checkpoint", async (t) => {
   const { make, fake, store, scope } = setup(t);
   const sandbox = make();
   const handle = await sandbox.provision(scope);
   const { sandboxId } = (await store.get(scope))!;
   await store.merge(scope, { lastActivityMs: Date.now() - 7200_000 });
   const create = fake.client.createSnapshot;
-  let late: Promise<void> | undefined;
+  let late: Promise<unknown> | undefined;
   t.mock.method(fake.client, "createSnapshot", async (id: string, name: string) => {
     const snapshot = await create(id, name);
-    late ??= sandbox.writeFile(handle, "late", "kept");
+    late ??= sandbox.writeFile(handle, "late", "refused").catch((error: unknown) => error);
     await late;
     return snapshot;
   });
-  assert.deepEqual(await make().reapDeepIdle!(0), { reaped: 0 });
-  assert.equal(fake.sandboxes.get(sandboxId)?.status, "running");
-  const stored = (await store.get(scope))!;
-  assert.equal(stored.stopped, undefined);
-  assert.equal(stored.homeDirty, true);
-  assert.equal(await sandbox.readFile(handle, "late"), "kept");
+  assert.deepEqual(await make().reapDeepIdle!(0), { reaped: 1 });
+  assert.match(String(await late), /has stopped; the next turn restores it from its last checkpoint/);
+  assert.equal(fake.sandboxes.get(sandboxId)?.status, "terminated");
+});
+
+test("Render reports a write that finishes during a restart instead of losing it", async (t) => {
+  const { make, fake, scope } = setup(t);
+  const sandbox = make();
+  const handle = await sandbox.provision(scope);
+  const reached = Promise.withResolvers<void>();
+  const gate = Promise.withResolvers<void>();
+  const landed = Promise.withResolvers<void>();
+  const write = fake.client.writeFileBytes;
+  t.mock.method(fake.client, "writeFileBytes", async (id: string, path: string, data: Uint8Array) => {
+    if (!path.endsWith("/late")) return write(id, path, data);
+    reached.resolve();
+    await gate.promise;
+    await write(id, path, data);
+    landed.resolve();
+  });
+  const create = fake.client.createSnapshot;
+  t.mock.method(fake.client, "createSnapshot", async (id: string, name: string) => {
+    const snapshot = await create(id, name);
+    gate.resolve();
+    await landed.promise;
+    return snapshot;
+  });
+  const writing = sandbox.writeFile(handle, "late", "after the snapshot").catch((error: unknown) => error);
+  await reached.promise;
+  await sandbox.restartComputer!(scope);
+  assert.match(String(await writing), /was restarted while the command ran; run it again/);
+});
+
+test("Render returns a finished command's result when it cannot confirm the write afterwards", async (t) => {
+  const { make, store, scope } = setup(t);
+  const sandbox = make();
+  const handle = await sandbox.provision(scope);
+  const get = store.get;
+  let calls = 0;
+  t.mock.method(store, "get", async (id: string) => {
+    if (++calls === 2) throw new Error("database blip");
+    return get(id);
+  });
+  assert.equal((await sandbox.run(handle, "echo ran")).stdout, "ran\n");
 });
 
 test("Render skips remote probes and checkpoints for a recently used sandbox", async (t) => {

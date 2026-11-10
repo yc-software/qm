@@ -34,7 +34,8 @@ import { claimThenBind } from "../tenants/claim.ts";
 
 const ORPHAN_GRACE_MS = 15 * 60_000;
 const ACTIVITY_TOUCH_MS = 60_000;
-const ACTIVITY_GRACE_MS = 2 * ACTIVITY_TOUCH_MS;
+const ACTIVITY_GRACE_MS = 3 * ACTIVITY_TOUCH_MS;
+const RESTARTED_MESSAGE = "This Render computer was restarted while the command ran; run it again";
 const activeSince = (stored: StoredRenderSandbox | null, cutoffMs: number): boolean =>
   !stored || stored.lastActivityMs > cutoffMs;
 
@@ -123,7 +124,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
         return operation(handle, ...args);
       }
       const heartbeat = setInterval(
-        () => void idFor(handle.id).catch(swallowAs("render-sandbox: record activity", undefined)),
+        () => void idFor(handle.id, true).catch(swallowAs("render-sandbox: record activity", undefined)),
         ACTIVITY_TOUCH_MS / 2,
       );
       heartbeat.unref();
@@ -165,17 +166,30 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
       throw new Error("This Render computer has stopped; the next turn restores it from its last checkpoint");
     return stored.sandboxId;
   };
-  const keepDirty = async (name: string): Promise<void> => {
+  const settle = async (name: string, sandboxId: string): Promise<boolean> => {
     const scope = base.scopeFor(name);
-    if (scope && (await store.get(scope))?.homeDirty === false) await store.merge(scope, { homeDirty: true });
+    if (!scope) return true;
+    const current = await store.get(scope);
+    if (current?.homeDirty === false) await store.merge(scope, { homeDirty: true });
+    return !!current && !current.stopped && current.sandboxId === sandboxId;
+  };
+  const settleWrite = async <T>(name: string, sandboxId: string, work: () => Promise<T>): Promise<T> => {
+    let result: T;
+    try {
+      result = await work();
+    } catch (error) {
+      await settle(name, sandboxId).catch(swallowAs("render-sandbox: mark home changed", undefined));
+      throw error;
+    }
+    if (!(await settle(name, sandboxId).catch(swallowAs("render-sandbox: confirm write", true))))
+      throw new Error(RESTARTED_MESSAGE);
+    return result;
   };
   const exec = async (name: string, script: string, timeoutSec: number): Promise<ExecResult> => {
     const sandboxId = await idFor(name, true);
     const startedAtMs = Date.now();
-    const result = await client
-      .runScript(sandboxId, script, timeoutSec)
-      .finally(() => keepDirty(name))
-      .catch(async (error: unknown) => {
+    const result = await settleWrite(name, sandboxId, () =>
+      client.runScript(sandboxId, script, timeoutSec).catch(async (error: unknown) => {
         const scope = base.scopeFor(name);
         const info = scope ? await client.get(sandboxId).catch(() => undefined) : undefined;
         if (!scope || info === undefined || (info && info.status !== "terminated" && info.status !== "errored"))
@@ -183,18 +197,20 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
         const current = await store.update(scope, (row) =>
           row.sandboxId === sandboxId ? { ...row, stopped: true } : row,
         );
-        if (current && current.sandboxId !== sandboxId)
-          throw new Error("This Render computer was restarted while the command ran; run it again", { cause: error });
+        if (current && current.sandboxId !== sandboxId) throw new Error(RESTARTED_MESSAGE, { cause: error });
         throw new Error("This Render computer has stopped; the next turn restores it from its last checkpoint", {
           cause: error,
         });
-      });
+      }),
+    );
     const timedOut =
       (result.exitCode === 124 || result.exitCode === 137) && Date.now() - startedAtMs >= timeoutSec * 1000;
     return { stdout: result.stdout, stderr: result.stderr, code: result.exitCode, timedOut };
   };
-  const writeAbsBytes = async (name: string, path: string, data: Uint8Array): Promise<void> =>
-    client.writeFileBytes(await idFor(name, true), path, data).finally(() => keepDirty(name));
+  const writeAbsBytes = async (name: string, path: string, data: Uint8Array): Promise<void> => {
+    const sandboxId = await idFor(name, true);
+    await settleWrite(name, sandboxId, () => client.writeFileBytes(sandboxId, path, data));
+  };
   const readAbsBytes = async (name: string, path: string): Promise<Uint8Array | null> =>
     client.readFileBytes(await idFor(name), path);
 
@@ -332,9 +348,13 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
     let snapshotId: string | undefined;
     if (stored) {
       if (info?.status === "running") {
-        stored = await checkpoint(scope, stored, false);
-        await client.terminate(info.id);
+        const running = stored;
         await store.merge(scope, { stopped: true });
+        stored = await reopenOnFailure(scope, async () => {
+          const saved = await checkpoint(scope, running, false);
+          await client.terminate(info.id);
+          return saved;
+        });
       } else if (info?.status === "suspended") {
         await client.terminate(info.id);
         await store.merge(scope, { stopped: true });
@@ -358,6 +378,17 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
     onStatus?.(stored ? "Restoring your computer…" : "Starting your computer…");
     await start(scope, stored, source);
     return { coldStart: !stored };
+  }
+
+  async function reopenOnFailure<T>(scope: string, work: () => Promise<T>): Promise<T> {
+    try {
+      return await work();
+    } catch (error) {
+      await store
+        .merge(scope, { stopped: undefined })
+        .catch(swallowAs("render-sandbox: reopen computer after a failed stop", undefined));
+      throw error;
+    }
   }
 
   async function start(
@@ -712,20 +743,21 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
               await checkpoint(scope, stored, active || undefined);
               return;
             }
-            if (await hasLiveProcesses(info.id)) return;
-            await clearCredentials(info.id).catch((error: unknown) =>
-              reportError("credential_clear_failed", error, scope),
-            );
-            await checkpoint(scope, stored, false);
-            const claimed = await store.update(scope, (row) =>
+            const fenced = await store.update(scope, (row) =>
               activeSince(row, cutoff) ? row : { ...row, stopped: true },
             );
-            if (!claimed?.stopped) return;
-            await client.terminate(info.id).catch(async (error: unknown) => {
-              await store.merge(scope, { stopped: undefined });
-              throw error;
+            if (!fenced?.stopped) return;
+            const stopped = await reopenOnFailure(scope, async () => {
+              if (await hasLiveProcesses(info.id)) return false;
+              await clearCredentials(info.id).catch((error: unknown) =>
+                reportError("credential_clear_failed", error, scope),
+              );
+              await checkpoint(scope, fenced, false);
+              await client.terminate(info.id);
+              return true;
             });
-            reaped++;
+            if (stopped) reaped++;
+            else await store.merge(scope, { stopped: undefined });
           }).catch((error) => reportError("idle_checkpoint_failed", error, scope));
         }
       });
