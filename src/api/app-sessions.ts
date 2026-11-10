@@ -837,7 +837,7 @@ export function createSessionMethods(
         const wanted = channel.trim().replace(/^#/, "");
         if (!wanted) return { status: "invalid_channel" };
         const findChannel = async () => {
-          const reachable = await deps.directory.listChannelsFor(principalId).catch(() => []);
+          const reachable = await h.directory.listChannelsFor(principalId).catch(() => []);
           return (
             reachable.find((c) => c.channelId === wanted) ??
             reachable.find((c) => c.name.toLowerCase() === wanted.toLowerCase())
@@ -987,7 +987,7 @@ export function createSessionMethods(
     currentScopeMembers: createCurrentScopeMembers(
       {
         managedGroups: deps.projects,
-        directory: deps.directory,
+        directory: h.directory,
         identity: deps.identity,
       },
       true,

@@ -656,7 +656,7 @@ async function completeSlack(ctx: ApiCtx): Promise<void> {
         error: "wrong_workspace",
         message: "Connect the Slack workspace where your company uses QM.",
       });
-    const members = (await deps.directory.list()).filter(
+    const members = (await deps.directory.list(tenantOf(ctx))).filter(
       (m) => m.slackId === slack.user_id || m.principalId === slack.user_id,
     );
     if (members.length !== 1 || members[0]!.type !== "internal")

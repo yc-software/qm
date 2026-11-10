@@ -16,6 +16,7 @@ import { cronQueueMisconfigured, installCronQueue } from "./cron/job-queue.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
 import { bindBootTenant, inBootTenant, readBootTenant } from "./tenants/boot.ts";
 import { loadTenant, perTenant } from "./tenants/cache.ts";
+import type { Tenant } from "./tenants/context.ts";
 import { sessionLifetime } from "../plugins/portal/src/session.ts";
 import { startFrontDoor } from "./web/front-door.ts";
 import { sweepDictationSpool } from "./api/routes/voice.ts";
@@ -34,8 +35,8 @@ function tenantBranding(load: () => Promise<OrgBranding>): () => Promise<OrgBran
 
 function envSlackAccountRuntimes(
   env: NodeJS.ProcessEnv,
-  tenant: string | undefined,
-  startPlugin: (config: SlackPluginConfig, tenant: string) => Promise<{ stop(): Promise<void> }>,
+  tenant: Tenant | undefined,
+  startPlugin: (config: SlackPluginConfig, tenant: Tenant) => Promise<{ stop(): Promise<void> }>,
 ) {
   const accounts = slackAccountConfigsFromEnv(env);
   if (!tenant) {
@@ -155,7 +156,7 @@ export async function startQm(
   if (!config.backgroundWorkEnabled)
     console.log("[qm] background work disabled; scheduler and runtime loops will not start");
 
-  const slackRuntimeFor = (slackTenant: string) =>
+  const slackRuntimeFor = (slackTenant: Tenant) =>
     createSlackRuntimeReconciler({
       startPaused: true,
       load: async () => {
@@ -178,11 +179,11 @@ export async function startQm(
           return dynamic ? { version: stored.version, config: dynamic } : null;
         }
         if (status.managed) return null;
-        if (slackConfig && slackTenant === tenant) return { version: "environment", config: slackConfig };
+        if (slackConfig && slackTenant.id === tenant) return { version: "environment", config: slackConfig };
         return null;
       },
       startPlugin: (desired) => startSlackPlugin(desired, built.slackCore, slackTenant),
-      onError: reportFailureAs("slack plugin reconciliation", undefined, `tenant=${slackTenant}`),
+      onError: reportFailureAs("slack plugin reconciliation", undefined, `tenant=${slackTenant.id}`),
     });
   const slackRuntime = createTenantSlackRuntimes({
     runtimeFor: slackRuntimeFor,
@@ -193,8 +194,10 @@ export async function startQm(
     () => void slackRuntime.reconcile().catch(reportFailureAs("slack install start", undefined)),
   );
 
-  const slackAccountRuntimes = envSlackAccountRuntimes(env, tenant, (desired, accountTenant) =>
-    startSlackPlugin(desired, built.slackCore, accountTenant),
+  const slackAccountRuntimes = inBootTenant(tenant, (bootTenant) =>
+    envSlackAccountRuntimes(env, bootTenant, (desired, accountTenant) =>
+      startSlackPlugin(desired, built.slackCore, accountTenant),
+    ),
   );
 
   const slackRuntimes = [slackRuntime, ...slackAccountRuntimes];

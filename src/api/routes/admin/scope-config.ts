@@ -439,10 +439,10 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
       ? read("credentials", () => scopeServiceCredentials(deps, tenantOf(ctx), targetScope))
       : undefined,
     includes("credentials") && parseScopeId(targetScope).kind === "org"
-      ? read("people", () => deps.directory?.list())
+      ? read("people", () => deps.directory?.list(tenantOf(ctx)))
       : undefined,
     includes("credentials") && parseScopeId(targetScope).kind === "org"
-      ? read("channels", () => deps.directory?.listChannels?.())
+      ? read("channels", () => deps.directory?.listChannels(tenantOf(ctx)))
       : undefined,
     includes("governance") ? deps.config.getSharingPostureOwnDurable(targetScope) : undefined,
     includes("governance") ? scopeEgress(deps, targetScope) : undefined,

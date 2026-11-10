@@ -1,11 +1,11 @@
-import type { DirectoryStore } from "../directory/directory-store.ts";
+import type { TenantDirectory } from "../directory/directory-store.ts";
 import type { ProjectStore } from "../projects/project-store.ts";
 import { parseScopeId, type ScopeId } from "../types.ts";
 import { swallowAs } from "../util/errors.ts";
 
 export async function memoryRecallLabels(
   scopes: readonly ScopeId[],
-  directory?: Pick<DirectoryStore, "get" | "resolveChannel">,
+  directory?: Pick<TenantDirectory, "get" | "resolveChannel">,
   projects?: Pick<ProjectStore, "recognizes" | "name">,
 ): Promise<Map<string, string>> {
   const labels = await Promise.all(

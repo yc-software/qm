@@ -1,3 +1,4 @@
+import type { Tenant } from "../tenants/context.ts";
 import { companySlackActor, type ExternalSlackAccess } from "./external-access.ts";
 import {
   type ActorAssertion,
@@ -89,6 +90,7 @@ export interface Directory {
 }
 
 export function createDirectory(deps: {
+  tenant: Tenant;
   externalAccess?: ExternalSlackAccess;
   core: SlackCoreClient;
   ids: BotIdentity;
@@ -99,7 +101,7 @@ export function createDirectory(deps: {
   userCacheTtlMs?: number;
   coreSingleton?: boolean;
 }): Directory {
-  const { core, ids } = deps;
+  const { core, ids, tenant } = deps;
   const CORE_SINGLETON = deps.coreSingleton !== false;
   const USER_SNAPSHOT_TTL_MS = deps.userSnapshotTtlMs ?? 5 * 60_000;
   const CHANNEL_MEMBERS_TTL_MS = deps.channelMembersTtlMs ?? 30 * 60_000;
@@ -450,7 +452,7 @@ export function createDirectory(deps: {
     }
     if (!members.length && !(fetched && fetched.channels.length)) return false;
     try {
-      const applied = await core.pushDirectory({
+      const applied = await core.pushDirectory(tenant, {
         members,
         membersSyncedAt: snap.fetchedAt,
         ...(fetched
@@ -624,7 +626,7 @@ export function createDirectory(deps: {
       if (!info?.name || typeof info.is_private !== "boolean" || info.is_member === false || observedAt === undefined)
         return { audience: [actor, externalMarker()] };
       if (membership.publishMembers) {
-        const applied = await core.pushDirectory({
+        const applied = await core.pushDirectory(tenant, {
           channels: [{ channelId: channel, name: info.name, isPrivate: info.is_private }],
           channelMembers: membership.publishMembers.map((member) => ({
             channelId: channel,

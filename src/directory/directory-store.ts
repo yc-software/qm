@@ -1,3 +1,4 @@
+import { ambientTenant, type Tenant } from "../tenants/context.ts";
 import type { PrincipalType } from "../types.ts";
 
 export interface DirectoryMember {
@@ -49,8 +50,9 @@ export type ChannelResolution =
   { kind: "one"; channel: DirectoryChannel } | { kind: "ambiguous"; candidates: DirectoryChannel[] } | { kind: "none" };
 
 export interface DirectoryStore {
-  replace(members: DirectoryMember[], syncedAt?: number): Promise<boolean>;
+  replace(tenant: Tenant, members: DirectoryMember[], syncedAt?: number): Promise<boolean>;
   replaceChannels(
+    tenant: Tenant,
     channels: DirectoryChannel[],
     channelMembers?: ChannelMembership[],
     syncedAt?: number,
@@ -58,38 +60,87 @@ export interface DirectoryStore {
     revocations?: ChannelMembership[],
     partial?: boolean,
   ): Promise<boolean>;
-  list(): Promise<DirectoryMember[]>;
-  listChannels(): Promise<DirectoryChannel[]>;
-  get(principalId: string): Promise<DirectoryMember | null>;
-  getBySlackId(slackId: string): Promise<DirectoryMember | null>;
-  resolve(query: string): Promise<RecipientResolution>;
-  resolveChannel(query: string): Promise<ChannelResolution>;
-  channelMember(channelId: string, principalId: string): Promise<boolean>;
-  channelMembership(channelId: string, principalId: string): Promise<boolean | undefined>;
-  channelMemberIds(channelId: string): Promise<string[] | undefined>;
-  channelPrivacy(channelId: string): Promise<boolean | undefined>;
-  rosterCoversAudience(channelId: string): Promise<boolean | undefined>;
+  list(tenant: Tenant): Promise<DirectoryMember[]>;
+  listChannels(tenant: Tenant): Promise<DirectoryChannel[]>;
+  get(tenant: Tenant, principalId: string): Promise<DirectoryMember | null>;
+  getBySlackId(tenant: Tenant, slackId: string): Promise<DirectoryMember | null>;
+  resolve(tenant: Tenant, query: string): Promise<RecipientResolution>;
+  resolveChannel(tenant: Tenant, query: string): Promise<ChannelResolution>;
+  channelMember(tenant: Tenant, channelId: string, principalId: string): Promise<boolean>;
+  channelMembership(tenant: Tenant, channelId: string, principalId: string): Promise<boolean | undefined>;
+  channelMemberIds(tenant: Tenant, channelId: string): Promise<string[] | undefined>;
+  channelPrivacy(tenant: Tenant, channelId: string): Promise<boolean | undefined>;
+  rosterCoversAudience(tenant: Tenant, channelId: string): Promise<boolean | undefined>;
   replaceGroups(
+    tenant: Tenant,
     groupMembers: GroupMembership[],
     syncedAt?: number,
     groupIds?: string[],
     groupRosterIds?: string[],
   ): Promise<boolean>;
-  upsertGroup(groupId: string, principalIds: readonly string[]): Promise<void>;
-  resolveGroupByParticipants(participants: readonly string[]): Promise<GroupResolution>;
-  groupMember(groupId: string, principalId: string): Promise<boolean>;
-  groupMembership(groupId: string, principalId: string): Promise<boolean | undefined>;
-  listGroupsFor(principalId: string): Promise<string[]>;
-  conversationMembers(kind: "channel" | "group", id: string): Promise<DirectoryMember[] | undefined>;
-  groupRosters(groupIds: readonly string[]): Promise<Map<string, DirectoryMember[]>>;
-  listChannelsFor(principalId: string): Promise<DirectoryChannel[]>;
-  setWorkspaceUrl(url: string): Promise<void>;
-  meta(): Promise<DirectoryMeta>;
+  upsertGroup(tenant: Tenant, groupId: string, principalIds: readonly string[]): Promise<void>;
+  resolveGroupByParticipants(tenant: Tenant, participants: readonly string[]): Promise<GroupResolution>;
+  groupMember(tenant: Tenant, groupId: string, principalId: string): Promise<boolean>;
+  groupMembership(tenant: Tenant, groupId: string, principalId: string): Promise<boolean | undefined>;
+  listGroupsFor(tenant: Tenant, principalId: string): Promise<string[]>;
+  conversationMembers(tenant: Tenant, kind: "channel" | "group", id: string): Promise<DirectoryMember[] | undefined>;
+  groupRosters(tenant: Tenant, groupIds: readonly string[]): Promise<Map<string, DirectoryMember[]>>;
+  listChannelsFor(tenant: Tenant, principalId: string): Promise<DirectoryChannel[]>;
+  setWorkspaceUrl(tenant: Tenant, url: string): Promise<void>;
+  meta(tenant: Tenant): Promise<DirectoryMeta>;
+  setAppHandle?(tenant: Tenant, handle: string): Promise<"ok" | "taken">;
   tenantsForEmail?(email: string): Promise<SignInTenant[]>;
   tenantsForPrincipal?(principal: string): Promise<SignInTenant[]>;
-  setAppHandle?(handle: string): Promise<"ok" | "taken">;
   tenantForAppHandle?(handle: string): Promise<string | undefined>;
   trustedClientFor?(tenant: string): Promise<{ clientId: string; clientSecret: string } | undefined>;
+}
+
+type TenantScoped = Exclude<
+  keyof DirectoryStore,
+  "setAppHandle" | "tenantsForEmail" | "tenantsForPrincipal" | "tenantForAppHandle" | "trustedClientFor"
+>;
+
+export type TenantDirectory = {
+  [K in TenantScoped]: DirectoryStore[K] extends (tenant: Tenant, ...args: infer A) => infer R
+    ? (...args: A) => R
+    : never;
+};
+
+export function directoryFor(store: DirectoryStore, token: Tenant): TenantDirectory {
+  return view(store, () => token);
+}
+
+export function directoryInBinding(store: DirectoryStore): TenantDirectory {
+  return view(store, () => ambientTenant());
+}
+
+function view(store: DirectoryStore, tenant: () => Tenant): TenantDirectory {
+  return {
+    replace: async (...a) => store.replace(tenant(), ...a),
+    replaceChannels: async (...a) => store.replaceChannels(tenant(), ...a),
+    list: async () => store.list(tenant()),
+    listChannels: async () => store.listChannels(tenant()),
+    get: async (...a) => store.get(tenant(), ...a),
+    getBySlackId: async (...a) => store.getBySlackId(tenant(), ...a),
+    resolve: async (...a) => store.resolve(tenant(), ...a),
+    resolveChannel: async (...a) => store.resolveChannel(tenant(), ...a),
+    channelMember: async (...a) => store.channelMember(tenant(), ...a),
+    channelMembership: async (...a) => store.channelMembership(tenant(), ...a),
+    channelMemberIds: async (...a) => store.channelMemberIds(tenant(), ...a),
+    channelPrivacy: async (...a) => store.channelPrivacy(tenant(), ...a),
+    rosterCoversAudience: async (...a) => store.rosterCoversAudience(tenant(), ...a),
+    replaceGroups: async (...a) => store.replaceGroups(tenant(), ...a),
+    upsertGroup: async (...a) => store.upsertGroup(tenant(), ...a),
+    resolveGroupByParticipants: async (...a) => store.resolveGroupByParticipants(tenant(), ...a),
+    groupMember: async (...a) => store.groupMember(tenant(), ...a),
+    groupMembership: async (...a) => store.groupMembership(tenant(), ...a),
+    listGroupsFor: async (...a) => store.listGroupsFor(tenant(), ...a),
+    conversationMembers: async (...a) => store.conversationMembers(tenant(), ...a),
+    groupRosters: async (...a) => store.groupRosters(tenant(), ...a),
+    listChannelsFor: async (...a) => store.listChannelsFor(tenant(), ...a),
+    setWorkspaceUrl: async (...a) => store.setWorkspaceUrl(tenant(), ...a),
+    meta: async () => store.meta(tenant()),
+  };
 }
 
 export const MAX_CANDIDATES = 10;

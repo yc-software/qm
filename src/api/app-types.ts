@@ -548,8 +548,9 @@ export interface App {
   failDelivery(id: string, reason: string): Promise<Delivery | null>;
   ackDeliveryByKey(idempotencyKey: string): Promise<void>;
   setRunDeliveryState(runId: string, state: RunDeliveryState): Promise<boolean>;
-  upsertDirectory(members: DirectoryMember[], syncedAt?: number): Promise<boolean>;
+  upsertDirectory(tenant: Tenant, members: DirectoryMember[], syncedAt?: number): Promise<boolean>;
   upsertChannels(
+    tenant: Tenant,
     channels: DirectoryChannel[],
     channelMembers?: ChannelMembership[],
     syncedAt?: number,
@@ -558,13 +559,14 @@ export interface App {
     partial?: boolean,
   ): Promise<boolean>;
   upsertGroups(
+    tenant: Tenant,
     groupMembers: GroupMembership[],
     syncedAt?: number,
     groupIds?: string[],
     groupRosterIds?: string[],
   ): Promise<boolean>;
-  setDirectoryWorkspaceUrl(url: string): Promise<void>;
-  directoryMeta(): Promise<DirectoryMeta>;
+  setDirectoryWorkspaceUrl(tenant: Tenant, url: string): Promise<void>;
+  directoryMeta(tenant: Tenant): Promise<DirectoryMeta>;
   resolveRecipient(query: string): Promise<RecipientResolution>;
   resolveChannel(query: string): Promise<ChannelResolution>;
   directoryMember(principalId: string): Promise<DirectoryMember | null>;

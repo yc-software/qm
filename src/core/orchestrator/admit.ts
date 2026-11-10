@@ -6,6 +6,7 @@ import { isSubagentThreadRef } from "../../sessions/session-syscalls.ts";
 import { scopeId as toScopeId, type ScopeId, type Session, type TurnResult } from "../../types.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
+import { directoryFor } from "../../directory/directory-store.ts";
 import type { Tenant } from "../../tenants/context.ts";
 
 export class ProjectRosterChanged extends Error {}
@@ -15,6 +16,7 @@ type Actor = OrchestratorInput["actor"];
 type Conversation = OrchestratorInput["conversation"];
 
 export async function admitSubagentSession(
+  tenant: Tenant,
   deps: OrchestratorDeps,
   conversation: Conversation,
   actor: Actor,
@@ -31,7 +33,7 @@ export async function admitSubagentSession(
             membership: async (ref, id) => (await deps.managedGroups!.members(ref))?.includes(id),
           }
         : undefined,
-      directory: deps.directory,
+      directory: directoryFor(deps.directory, tenant),
       identity: deps.identity,
     });
     if (

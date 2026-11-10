@@ -70,7 +70,7 @@ export function createResourceSearchMethods(
         const [projects, channels] = await Promise.all([
           helpers.projectsForViewer(principalId),
           deps.identity.isInternal(deps.identity.classify(principalId))
-            ? deps.directory.listChannelsFor(principalId)
+            ? helpers.directory.listChannelsFor(principalId)
             : Promise.resolve([]),
         ]);
         return [

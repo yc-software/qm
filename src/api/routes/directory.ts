@@ -5,7 +5,7 @@ import { cleanDisplayName } from "../../identity/user-store.ts";
 import { personLabel } from "../../identity/person-names.ts";
 import { sendJson } from "../http.ts";
 import { audit, isObj, orgScope } from "./shared.ts";
-import { withActor, type ApiCtx, type Route } from "./route.ts";
+import { tenantOf, withActor, type ApiCtx, type Route } from "./route.ts";
 import { trimTrailingSlashes } from "../../util/text.ts";
 
 const numOrUndef = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
@@ -101,7 +101,7 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
     });
   }
   const workspaceUrl = typeof b.workspaceUrl === "string" ? trimTrailingSlashes(b.workspaceUrl) : "";
-  if (/^https:\/\/[^\s/]+$/.test(workspaceUrl)) await app.setDirectoryWorkspaceUrl(workspaceUrl);
+  if (/^https:\/\/[^\s/]+$/.test(workspaceUrl)) await app.setDirectoryWorkspaceUrl(tenantOf(ctx), workspaceUrl);
   let memberCount: number | undefined;
   if (Array.isArray(b.members)) {
     const members = b.members
@@ -117,7 +117,7 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
         ...(typeof m.avatarUrl === "string" && m.avatarUrl.startsWith("https://") ? { avatarUrl: m.avatarUrl } : {}),
         ...(m.isBot === true ? { isBot: true } : {}),
       }));
-    await app.upsertDirectory(members, numOrUndef(b.membersSyncedAt));
+    await app.upsertDirectory(tenantOf(ctx), members, numOrUndef(b.membersSyncedAt));
     memberCount = members.length;
   }
   let channelCount: number | undefined;
@@ -142,6 +142,7 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
         )
       : undefined;
     const applied = await app.upsertChannels(
+      tenantOf(ctx),
       channels,
       channelMembers,
       numOrUndef(b.channelsSyncedAt),
@@ -164,7 +165,7 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
     const groupRosterIds = Array.isArray(b.groupRosterIds)
       ? b.groupRosterIds.filter((groupId): groupId is string => typeof groupId === "string")
       : undefined;
-    await app.upsertGroups(groupMembers, numOrUndef(b.groupsSyncedAt), groupIds, groupRosterIds);
+    await app.upsertGroups(tenantOf(ctx), groupMembers, numOrUndef(b.groupsSyncedAt), groupIds, groupRosterIds);
     groupMemberCount = groupMembers.length;
   }
   return sendJson(res, 200, {
@@ -177,7 +178,7 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
 
 async function directoryMeta(ctx: ApiCtx): Promise<void> {
   const { res, app } = ctx;
-  return sendJson(res, 200, await app.directoryMeta());
+  return sendJson(res, 200, await app.directoryMeta(tenantOf(ctx)));
 }
 
 const SLACK_ID_RE = /^[UW][A-Z0-9]{8,}$/;

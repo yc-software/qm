@@ -2,6 +2,7 @@ import { appHandleSchema, appLabelLimitError } from "../../../tenants/app-handle
 import { noteTenantAppHandle, tenantAppHandle } from "../../../tenants/settings.ts";
 import { parseScopeId } from "../../../types.ts";
 import type { AdminResource } from "../admin-resources.ts";
+import { tenantOf } from "../route.ts";
 
 export const appHandleResource: AdminResource = {
   id: "app-handle",
@@ -20,7 +21,7 @@ export const appHandleResource: AdminResource = {
       const problem = appLabelLimitError(parsed.data, d.name ?? d.id);
       if (problem) return { error: problem };
     }
-    if ((await setAppHandle(parsed.data)) === "taken")
+    if ((await setAppHandle(tenantOf(ctx), parsed.data)) === "taken")
       return { error: "another workspace already uses that handle", status: 409 };
     noteTenantAppHandle(parsed.data);
     return { ok: true };

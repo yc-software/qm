@@ -30,7 +30,7 @@ import {
   createMembershipControlsScope,
 } from "../resolution/scope-membership.ts";
 import { samePerson } from "../directory/person.ts";
-import type { DirectoryMember } from "../directory/directory-store.ts";
+import { directoryInBinding, type DirectoryMember } from "../directory/directory-store.ts";
 import { actorAssertionActive } from "../identity/identity-service.ts";
 import type { Deployment } from "../deploy/deploy-store.ts";
 import { reportFailureAs, swallow, swallowAs } from "../util/errors.ts";
@@ -59,6 +59,7 @@ import { toFileItem } from "./app-types.ts";
 import { personLabel } from "../identity/person-names.ts";
 
 export function createAppHelpers(deps: AppDeps, app: App) {
+  const directory = directoryInBinding(deps.directory);
   const adminBase = deps.publicWebUrl?.replace(/\/$/, "");
   const adminLink = (sessionId: string): string | undefined =>
     adminBase ? adminSessionUrl(adminBase, sessionId) : undefined;
@@ -70,14 +71,14 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     await directoryRefresher.pull("slack", { syncDirectory: true, count: 1 });
   }
   const reachDir: ReachDirectory = {
-    resolveRecipient: (q) => deps.directory.resolve(q),
-    resolveChannel: (q) => deps.directory.resolveChannel(q),
-    channelMember: (c, p) => deps.directory.channelMember(c, p),
-    resolveGroup: (parts) => deps.directory.resolveGroupByParticipants(parts),
-    groupMember: (g, p) => deps.directory.groupMember(g, p),
-    directoryMember: (p) => deps.directory.get(p),
+    resolveRecipient: (q) => directory.resolve(q),
+    resolveChannel: (q) => directory.resolveChannel(q),
+    channelMember: (c, p) => directory.channelMember(c, p),
+    resolveGroup: (parts) => directory.resolveGroupByParticipants(parts),
+    groupMember: (g, p) => directory.groupMember(g, p),
+    directoryMember: (p) => directory.get(p),
     openGroup: (parts) => openGroupViaSurface((query) => surfaceContext.pull("slack", query), parts),
-    registerGroup: (g, parts) => deps.directory.upsertGroup(g, parts),
+    registerGroup: (g, parts) => directory.upsertGroup(g, parts),
   };
   const resolveReachTargetFor = (
     target: ReachTarget,
@@ -243,7 +244,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       return run.request.scopeVersion === (await deps.projects?.version(conversation.channelRef));
     }
     if (conversation.kind !== "channel") return false;
-    const isPublic = (await deps.directory.channelPrivacy?.(conversation.channelRef).catch(() => undefined)) === false;
+    const isPublic = (await directory.channelPrivacy?.(conversation.channelRef).catch(() => undefined)) === false;
     const active = deps.identity.isInternal(deps.identity.classify(viewer));
     return isPublic && active && principalCanReadScope(viewer, scope);
   }
@@ -254,7 +255,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     const users = await deps.users?.resolve(memberIds).catch(() => undefined);
     const members = await Promise.all(
       memberIds.map(async (principalId) => {
-        const member = await deps.directory.get(principalId).catch(() => null);
+        const member = await directory.get(principalId).catch(() => null);
         return {
           principalId,
           displayName: personLabel(principalId, { displayName: member?.displayName, user: users?.get(principalId) }),
@@ -316,7 +317,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     const byScope = new Map<ScopeId, ContextSummary>();
     byScope.set(personal, { scopeId: personal, kind: "personal", name: null, sessionCount: 0, lastActivityAt: null });
     if (deps.identity.isInternal(deps.identity.classify(principalId))) {
-      for (const c of await deps.directory.listChannelsFor(principalId)) {
+      for (const c of await directory.listChannelsFor(principalId)) {
         const sid = scopeId("channel", c.channelId);
         byScope.set(sid, {
           scopeId: sid,
@@ -343,7 +344,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       const { kind, ref } = parseScopeId(scope.scopeId);
       if (scope.scopeId !== personal && kind !== "channel" && kind !== "group") continue;
       let ctx = byScope.get(scope.scopeId);
-      if (!ctx && kind === "group" && (await deps.directory.groupMember(ref, principalId))) {
+      if (!ctx && kind === "group" && (await directory.groupMember(ref, principalId))) {
         ctx = {
           scopeId: scope.scopeId,
           kind: "group",
@@ -359,7 +360,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       byScope.set(scope.scopeId, ctx);
     }
     const slackGroups = [...byScope.values()].filter((ctx) => ctx.kind === "group" && !ctx.project);
-    const rosters = await deps.directory
+    const rosters = await directory
       .groupRosters(slackGroups.map((ctx) => parseScopeId(ctx.scopeId).ref))
       .catch(swallowAs("contexts: group DM rosters", new Map<string, DirectoryMember[]>()));
     for (const ctx of slackGroups) {
@@ -414,8 +415,8 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     try {
       const [sessionScopes, channels, groups, projects, personas] = await Promise.all([
         deps.sessions ? scopesForViewer(principalId) : Promise.resolve([]),
-        deps.directory ? deps.directory.listChannelsFor(principalId) : Promise.resolve([]),
-        deps.directory?.listGroupsFor?.(principalId) ?? Promise.resolve([]),
+        deps.directory ? directory.listChannelsFor(principalId) : Promise.resolve([]),
+        directory.listGroupsFor?.(principalId) ?? Promise.resolve([]),
         projectsForViewer(principalId),
         deps.personas?.list(principalId),
       ]);
@@ -439,7 +440,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
 
   const scopeMembershipDeps = {
     ...(deps.projects ? { managedGroups: deps.projects } : {}),
-    ...(deps.directory ? { directory: deps.directory } : {}),
+    directory,
     ...(deps.identity ? { identity: deps.identity } : {}),
     ...(deps.teams ? { teams: deps.teams } : {}),
     ...(deps.personas ? { personas: deps.personas } : {}),
@@ -483,14 +484,14 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     const { kind, ref } = parseScopeId(targetScope);
     if (kind !== "channel") return false;
     if (!deps.identity.isInternal(deps.identity.classify(principalId))) return false;
-    if ((await deps.directory.channelPrivacy?.(ref).catch(() => undefined)) !== false) return false;
+    if ((await directory.channelPrivacy?.(ref).catch(() => undefined)) !== false) return false;
     return principalCanReadScope(principalId, targetScope);
   }
 
   async function principalCanUseWriteGrant(principalId: string, targetScope: ScopeId): Promise<boolean> {
     const { kind, ref } = parseScopeId(targetScope);
     const publicChannel =
-      kind === "channel" && (await deps.directory.channelPrivacy?.(ref).catch(() => undefined)) === false;
+      kind === "channel" && (await directory.channelPrivacy?.(ref).catch(() => undefined)) === false;
     return publicChannel
       ? principalCanAccessCurrentScope(principalId, targetScope)
       : principalCanWriteScope(principalId, targetScope);
@@ -507,9 +508,9 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     const { kind, ref } = parseScopeId(claims.scopeId);
     if (kind === "channel" && !deps.identity.isInternal(deps.identity.classify(claims.actorId))) return false;
     const privateChannel =
-      kind === "channel" && (await deps.directory.channelPrivacy?.(ref).catch(() => undefined)) === true;
+      kind === "channel" && (await directory.channelPrivacy?.(ref).catch(() => undefined)) === true;
     const capabilityMembership = privateChannel
-      ? await deps.directory.channelMembership(ref, claims.actorId).catch(() => undefined)
+      ? await directory.channelMembership(ref, claims.actorId).catch(() => undefined)
       : undefined;
     const attestedBot =
       privateChannel &&
@@ -640,10 +641,10 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   async function syncProjectChannelRoster(project: Project, actorId: string): Promise<void> {
     const link = project.slackChannel;
     if (!link || !deps.projects) return;
-    const roster = await deps.directory.channelMemberIds(link.channelId).catch(() => undefined);
+    const roster = await directory.channelMemberIds(link.channelId).catch(() => undefined);
     if (roster === undefined) return;
     const derived = roster.filter((m) => deps.identity.isInternal(deps.identity.classify(m)));
-    const channel = (await deps.directory.listChannels().catch(() => [])).find((c) => c.channelId === link.channelId);
+    const channel = (await directory.listChannels().catch(() => [])).find((c) => c.channelId === link.channelId);
     const prev = project.channelMemberIds ?? [];
     const manual = new Set([project.ownerId, ...project.memberIds]);
     const prevSet = new Set(prev);
@@ -859,6 +860,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     recordError,
     adminBase,
     adminLink,
+    directory,
     directoryMember: (principalId: string) => app.directoryMember(principalId),
     withAdminLink,
     resolveReachTargetFor,

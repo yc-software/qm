@@ -278,7 +278,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     const cached = directoryIndexCache.get(tenant.id);
     if (cached) return cached;
     const byId = new Map<string, DirectoryMember>();
-    for (const m of await directory.list()) byId.set(personKey(m.principalId), m);
+    for (const m of await directory.list(tenant)) byId.set(personKey(m.principalId), m);
     directoryIndexCache.set(tenant.id, byId);
     return byId;
   }
@@ -541,7 +541,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           reason: "internal-only: non-internal principals cannot interact",
         };
       }
-      const { delegatedSession, refusal: subagentRefusal } = await admitSubagentSession(deps, conversation, actor);
+      const { delegatedSession, refusal: subagentRefusal } = await admitSubagentSession(
+        tenant,
+        deps,
+        conversation,
+        actor,
+      );
       if (subagentRefusal) return subagentRefusal;
       const { managedRosterIsCurrent, withManagedRosterVersion } = createManagedRoster(
         deps,

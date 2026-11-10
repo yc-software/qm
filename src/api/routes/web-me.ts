@@ -53,7 +53,7 @@ async function me(ctx: ApiCtx): Promise<void> {
   const [permissions, workspaceUrl, auth, branding] = await Promise.all([
     permissionsOf(ctx, user),
     app
-      .directoryMeta()
+      .directoryMeta(tenantOf(ctx))
       .then((meta) => meta.workspaceUrl ?? null)
       .catch(swallowAs("web: /me directory meta", null)),
     modelAuthStatus(deps, user),

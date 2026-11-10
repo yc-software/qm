@@ -1,7 +1,7 @@
 import { runEmojiUpload, type EmojiUploadDeps } from "../../connectors/emoji-upload-service.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
-import type { ApiCtx, Route } from "./route.ts";
+import { tenantOf, type ApiCtx, type Route } from "./route.ts";
 
 async function addEmoji(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, capability } = ctx;
@@ -22,7 +22,8 @@ async function addEmoji(ctx: ApiCtx): Promise<void> {
     });
   }
   const workspaceArg = typeof b.workspace === "string" ? b.workspace : undefined;
-  const connectorWorkspace = (deps.directory ? (await deps.directory.meta()).workspaceUrl : null) ?? undefined;
+  const connectorWorkspace =
+    (deps.directory ? (await deps.directory.meta(tenantOf(ctx))).workspaceUrl : null) ?? undefined;
 
   const uploadDeps: EmojiUploadDeps = {
     principalId: capability.actorId,
