@@ -486,6 +486,11 @@ export async function detachSession(id: string): Promise<{ detached: true }> {
 export async function cancelSessionGoal(id: string): Promise<{ cancelled: true }> {
   return api<{ cancelled: true }>(`/api/sessions/${encodeURIComponent(id)}/goal/cancel`, { method: "POST" });
 }
+export async function resumeSessionGoal(id: string): Promise<{ resumed: true; goal: GoalStripState }> {
+  return api<{ resumed: true; goal: GoalStripState }>(`/api/sessions/${encodeURIComponent(id)}/goal/resume`, {
+    method: "POST",
+  });
+}
 type WorkStatus = "thinking" | "working" | "complete" | "failed";
 export interface WorkBlock {
   streamStartOffset?: number;
@@ -795,6 +800,13 @@ function reportSigninRequired(detail: SigninRequired): void {
   onSigninRequired?.(detail);
 }
 
+let servedRelease: string | null = null;
+
+export function servedReleaseChanged(): boolean {
+  const booted = document.querySelector<HTMLMetaElement>('meta[name="qm-release"]')?.content;
+  return Boolean(booted && servedRelease && servedRelease !== booted);
+}
+
 export async function webFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const startMs = Date.now();
   const request = input instanceof Request ? input : null;
@@ -808,6 +820,7 @@ export async function webFetch(input: RequestInfo | URL, init?: RequestInit): Pr
     throw error;
   }
   reportRequestTiming(url, method, startMs, response.status);
+  servedRelease = response.headers.get("x-qm-release") ?? servedRelease;
   if (response.status !== 401) return response;
   stopBrowserErrors();
   stopAnalytics();

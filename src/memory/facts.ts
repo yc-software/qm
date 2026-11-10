@@ -14,6 +14,7 @@ export interface MemoryFact extends MemoryProvenance {
   id: string;
   text: string;
   author?: string;
+  sessionId?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -87,16 +88,25 @@ export interface MemoryCandidate {
   claim?: string;
   text: string;
   source?: MemorySource;
+  sessionId?: string;
 }
 
 export const normalizeClaim = (text: string) => text.trim().toLowerCase();
+
+export const fromOtherSession = (fact: { sessionId?: string }, sessionId: string | undefined): boolean =>
+  !sessionId || fact.sessionId !== sessionId;
 
 export function recentCandidates(facts: readonly MemoryFact[]): MemoryCandidate[] {
   return facts.map(factCandidate).reverse();
 }
 
 export function factCandidate(fact: MemoryFact): MemoryCandidate {
-  return { id: fact.id, claim: fact.text, text: renderFacts([fact]) };
+  return {
+    id: fact.id,
+    claim: fact.text,
+    text: renderFacts([fact]),
+    ...(fact.sessionId ? { sessionId: fact.sessionId } : {}),
+  };
 }
 
 export function factLine(fact: Shown & Pick<MemoryFact, "id">): string {

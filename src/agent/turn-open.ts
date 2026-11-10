@@ -16,6 +16,7 @@ export function turnToolRef(dispatched: AgentTurnInput): TurnSession["ref"] {
     runtimeActorId: dispatched.runtimeActorId,
     pendingApprovals: [],
     pausedOnApproval: undefined,
+    ...(dispatched.approvalUnavailable ? { approvalUnavailable: dispatched.approvalUnavailable } : {}),
     silentRequested: false,
     pollFire: !!dispatched.pollFire,
     screenToolResult: dispatched.screenToolResult,
