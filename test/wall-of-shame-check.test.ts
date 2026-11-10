@@ -81,6 +81,8 @@ test("over-testing is counted from the diff, whatever the report says", () => {
   const source = [
     "10\t4\tsrc/a.ts",
     "500\t0\tplugins/web-ui/package-lock.json",
+    "500\t0\tdesktop/desk/Cargo.lock",
+    "500\t0\tios/QM.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved",
     "300\t0\tdocs/notes.md",
     "-\t-\tdocs/logo.png",
   ];
