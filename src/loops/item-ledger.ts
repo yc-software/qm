@@ -656,7 +656,7 @@ export function createLoopItemLedger(
     skip: (id, reason) =>
       transition(
         id,
-        new Set(["queued", "in_progress"]),
+        new Set(["queued", "in_progress", "ready", "failed"]),
         (item, now) => ({
           ...item,
           status: "skipped",

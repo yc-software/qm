@@ -7,7 +7,7 @@ import { pathUnder } from "../util/paths.ts";
 import { homeRelativePath } from "./paths.ts";
 import { builtInCredentialPaths, type CredentialPathSpec } from "./resident-paths.ts";
 import {
-  credentialFilesFingerprint,
+  credentialFileHashes,
   fileCredentialEnvironment,
   KeychainError,
   MAX_CREDENTIAL_BYTES,
@@ -20,7 +20,7 @@ import {
 
 export interface ExecutionFileCredential {
   files: CredentialFile[];
-  save(files: CredentialFile[]): Promise<void>;
+  save(files: CredentialFile[]): Promise<string[]>;
   source?: FileCredentialSource;
 }
 
@@ -31,7 +31,7 @@ export interface ExecutionFilePlan {
 
 export interface ProcessCredentialFiles {
   plan: ExecutionFilePlan;
-  sources: Array<FileCredentialSource & { fingerprint: string }>;
+  sources: Array<FileCredentialSource & { fileHashes: Record<string, string> }>;
 }
 
 export function processCredentialFiles(
@@ -42,7 +42,7 @@ export function processCredentialFiles(
     plan,
     sources: credentials.map((credential) => {
       if (!credential.source) throw new Error("Background credentials need a keychain source");
-      return { ...credential.source, fingerprint: credentialFilesFingerprint(credential.files) };
+      return { ...credential.source, fileHashes: credentialFileHashes(credential.files) };
     }),
   };
 }
@@ -59,13 +59,13 @@ export async function finishProcessCredentials(
   const stored = await deps.processes.credentialFiles(processId);
   if (!stored) return;
   const keychain = deps.keychain;
-  await finishExecutionFiles(
+  const note = await finishExecutionFiles(
     deps.sandbox,
     handle,
     stored.plan,
-    stored.sources.map(({ fingerprint, ...source }) => async (files: CredentialFile[]) => {
+    stored.sources.map(({ fileHashes, ...source }) => async (files: CredentialFile[]) => {
       if (!keychain) throw new Error("Refreshed credentials cannot be saved without a keychain");
-      await keychain.updateFiles(await keychain.writebackBaseline(source, fingerprint), files);
+      return keychain.updateFiles(await keychain.writebackBaseline(source, fileHashes ?? {}), files);
     }),
     (retry) =>
       deps.processes.setCredentialFiles(
@@ -78,6 +78,7 @@ export async function finishProcessCredentials(
           : null,
       ),
   );
+  if (note) console.warn(`[credentials] background job ${processId}: ${note}`);
 }
 
 async function runOrThrow(sandbox: Sandbox, handle: SandboxHandle, command: string, failure: string) {
@@ -93,7 +94,7 @@ export async function prepareExecutionFiles(
   sandbox: Sandbox,
   handle: SandboxHandle,
   credentials: ExecutionFileCredential[],
-): Promise<{ env: Record<string, string>; plan: ExecutionFilePlan; finish(): Promise<void> }> {
+): Promise<{ env: Record<string, string>; plan: ExecutionFilePlan; finish(): Promise<string | undefined> }> {
   const files = credentials
     .flatMap((credential) => credential.files)
     .map((file) => ({
@@ -178,9 +179,9 @@ async function finishExecutionFiles(
   sandbox: Sandbox,
   handle: SandboxHandle,
   plan: ExecutionFilePlan,
-  saves: ReadonlyArray<(files: CredentialFile[]) => Promise<void>>,
+  saves: ReadonlyArray<(files: CredentialFile[]) => Promise<string[]>>,
   settle?: (retry: number[]) => Promise<void>,
-): Promise<void> {
+): Promise<string | undefined> {
   const { directory } = plan;
   const home = `${directory}/home`;
   let retry = settle ? plan.credentials.map((_, index) => index) : [];
@@ -196,6 +197,9 @@ async function finishExecutionFiles(
       `cd ${shq(home)} && [ ! -L ${shq(home)} ] && set -- && ` +
         `for p in ${roots.map((root) => shq(`./${root}`)).join(" ")}; do if [ -e "$p" ] || [ -L "$p" ]; then set -- "$@" "$p"; fi; done && ` +
         `: > ${shq(`${directory}/paths`)} && { [ $# -eq 0 ] || find "$@" -type f -print0 > ${shq(`${directory}/paths`)}; } && ` +
+        `printf '\\0' > ${shq(`${directory}/links`)} && for p in ${roots.map((root) => shq(`./${root}`)).join(" ")}; do ` +
+        `q=$(dirname "$p"); while [ "$q" != . ]; do if [ -L "$q" ]; then printf '%s\\0' "$q" >> ${shq(`${directory}/links`)}; fi; q=$(dirname "$q"); done; done && ` +
+        `{ [ $# -eq 0 ] || find "$@" -type l -print0 >> ${shq(`${directory}/links`)}; } && ` +
         `COPYFILE_DISABLE=1 tar --null -T ${shq(`${directory}/paths`)} -cf ${shq(`${directory}/files.tar`)} && ` +
         `size=$(wc -c < ${shq(`${directory}/files.tar`)}) && { [ "$size" -le ${archiveLimit} ] || ` +
         `{ echo "credential files archive is $size bytes, over the ${archiveLimit}-byte cap" >&2; exit 1; }; }`,
@@ -212,12 +216,33 @@ async function finishExecutionFiles(
       contentBase64: entry.data.toString("base64"),
       mode: restoredFileMode(entry.mode),
     }));
-    if (plan.credentials.some(({ paths }) => paths.some((path) => !refreshed.some((entry) => entry.path === path))))
-      throw permanent("Credential files were removed or replaced with symlinks during execution");
+    const linkList = await sandbox.readFileBytes({ ...handle, rootDir: directory }, "links");
+    if (!linkList) throw permanent("Captured credential link list is missing");
+    const links = new Set(Buffer.from(linkList).toString("utf8").split("\0").filter(Boolean).map(homeRelativePath));
+    const replaced = (path: string) =>
+      path.split("/").some((_, index, parts) => links.has(parts.slice(0, index + 1).join("/")));
+    if (plan.credentials.some(({ paths }) => paths.some(replaced)))
+      throw permanent("Credential files were replaced with symlinks during execution");
+    const notes: string[] = [];
     const results = await Promise.allSettled(
-      plan.credentials.map(({ roots }, index) =>
-        saves[index]!(refreshed.filter((file) => belongsTo(file.path, roots))),
-      ),
+      plan.credentials.map(async ({ paths, roots }, index) => {
+        const remaining = refreshed.filter((file) => belongsTo(file.path, roots));
+        const deleted = paths.filter((path) => !refreshed.some((entry) => entry.path === path));
+        if (deleted.length && !remaining.length) {
+          notes.push(`deleted all of its credential files (${deleted.join(", ")}); the saved login was left unchanged`);
+          return;
+        }
+        const overruled = await saves[index]!(remaining);
+        const removed = deleted.filter((path) => !overruled.includes(path));
+        if (removed.length)
+          notes.push(
+            `deleted ${removed.join(", ")}; the saved login no longer includes ${removed.length === 1 ? "it" : "them"}`,
+          );
+        if (overruled.length)
+          notes.push(
+            `could not save its changes to ${overruled.join(", ")} because another command saved changes to ${overruled.length === 1 ? "it" : "them"} first; rerun it if they are needed`,
+          );
+      }),
     );
     const failures = results.flatMap((result, index) =>
       result.status === "rejected" ? [{ index, reason: result.reason as unknown }] : [],
@@ -228,13 +253,16 @@ async function finishExecutionFiles(
           failure.index === index && !(failure.reason instanceof KeychainError && failure.reason.status < 500),
       ),
     );
-    if (failures.length)
+    if (failures.length) {
+      if (notes.length) console.warn(`[credentials] Before a save failed, this command ${notes.join("; and ")}.`);
       throw new AggregateError(
         failures.map(({ reason }) => reason),
         `${retry.length ? "Could not persist refreshed credentials; will retry" : "Could not persist refreshed credentials"}: ${failures.map(({ reason }) => errMessage(reason)).join("; ")}`,
       );
+    }
+    return notes.length ? `[credentials] This command ${notes.join("; and ")}.` : undefined;
   };
-  await withCleanup(work, async () => {
+  return withCleanup(work, async () => {
     await settle?.(retry);
     if (!retry.length) await removeDirectory(sandbox, handle, directory);
   });

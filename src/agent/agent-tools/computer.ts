@@ -535,10 +535,13 @@ export function computerTools(kit: ToolKit) {
           case "unwatch": {
             try {
               const r = await tc.backgroundUnwatch(params.monitor_id!);
+              const refusal = r.notYours
+                ? `[not your watch: ${r.monitorId}; someone else in this conversation armed it]`
+                : `[no such watch: ${r.monitorId}]`;
               return recordResult(
                 callId,
                 { tool: "background", action: params.action, ...r },
-                text(r.removed ? `unwatched ${r.monitorId}` : `[no such watch: ${r.monitorId}]`),
+                text(r.removed ? `unwatched ${r.monitorId}` : refusal),
                 !r.removed,
               );
             } catch (e) {
@@ -577,7 +580,7 @@ export function computerTools(kit: ToolKit) {
                       ? jobs
                           .map(
                             (j) =>
-                              `${j.processId}  ${j.registryStatus === "reaped" ? "stopped (ttl)" : fmtStatus(j.status)}  ${new Date(j.startedAt).toISOString()}  ${j.purpose ?? j.command}${j.purpose ? `\n  ${j.command}` : ""}`,
+                              `${j.processId}  ${j.registryStatus === "reaped" ? "stopped (ttl)" : j.registryStatus}  ${new Date(j.startedAt).toISOString()}  ${j.purpose ?? j.command}${j.purpose ? `\n  ${j.command}` : ""}`,
                           )
                           .join("\n")
                       : "(no background jobs)",

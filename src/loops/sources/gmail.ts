@@ -12,6 +12,7 @@ import {
   parseCommonFields,
   parseReplyDraft,
   tokenFor,
+  type ConnectorTokenSource,
   type LoopSourceAdapter,
   type ParsedEntry,
   type ReplyDraft,
@@ -62,6 +63,17 @@ function metaOf(item: LoopItem): GmailMeta | undefined {
   return parseGmailMeta(item.sourcePayload?.gmail);
 }
 
+export function gmailAccountOf(item: LoopItem): GmailMeta["accountType"] {
+  return metaOf(item)?.accountType;
+}
+
+export async function gmailToken(tokens: ConnectorTokenSource, owner: string, item: LoopItem): Promise<string | null> {
+  const accountType = gmailAccountOf(item);
+  return accountType
+    ? await tokens.connectorAccessToken(GMAIL_HOST, owner, accountType)
+    : await tokenFor(tokens, GMAIL_HOST, owner);
+}
+
 function titleOf(item: LoopItem): string {
   return clip(item.sourcePayload?.title, 300) ?? "";
 }
@@ -98,10 +110,7 @@ async function sendGmail(deps: SourceActionDeps, item: LoopItem, draft: ReplyDra
   const fetchImpl = deps.fetchImpl ?? fetch;
   const meta = metaOf(item);
   if (!meta) return { ok: false, reason: "bad_item", message: "invalid Gmail metadata" };
-  const accountType = meta.accountType ?? (item.sourcePayload?.sentChat === true ? "default" : undefined);
-  const token = accountType
-    ? await deps.tokens.connectorAccessToken(GMAIL_HOST, deps.owner, accountType)
-    : await tokenFor(deps.tokens, GMAIL_HOST, deps.owner);
+  const token = await gmailToken(deps.tokens, deps.owner, item);
   if (!token) return { ok: false, reason: "not_connected", message: "Google is not connected for this account" };
   const mime = await buildGmailReplyMime(item, draft);
   if (!mime) return { ok: false, reason: "bad_item", message: "no recipient — add a To: address to the draft" };

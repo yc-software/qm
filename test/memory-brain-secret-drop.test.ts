@@ -419,3 +419,21 @@ test("a signed-in admin mints a brain link from the browser, and a signed-in mem
   assert.equal(admin.status, 200, admin.text);
   assert.match((JSON.parse(admin.text) as { formPath: string }).formPath, /^\/drop\//);
 });
+
+test("a brain link stays usable when saving the secret fails, and works once on the retry", async (t) => {
+  const { built, mint, servedSecret } = await setup(t);
+  const link = await mint("admin-alice", { memoryBrain: "acme-personal", purpose: "survive a save failure" });
+  const registry = built.memoryRegistry as unknown as Record<string, unknown>;
+  const update = registry.update;
+  registry.update = async () => {
+    throw new Error("registry unavailable");
+  };
+  try {
+    assert.equal((await link.redeem("brain-secret-retry")).status, 500);
+  } finally {
+    registry.update = update;
+  }
+  assert.equal((await link.redeem("brain-secret-retry")).status, 200);
+  assert.equal(await servedSecret(), "brain-secret-retry");
+  assert.equal((await link.redeem("brain-secret-again")).status, 404);
+});

@@ -90,6 +90,7 @@ export interface Swarm {
   messageRequests: Record<string, { messageId: string; signature: string }>;
   notificationCount: number;
   pending: boolean;
+  personUsedComputers?: true;
 }
 
 export type SwarmControlState = "active" | "paused" | "stopped";

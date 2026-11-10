@@ -397,3 +397,29 @@ test("crons: owner and a private-channel member manage; a public-channel member 
     "a teammate cannot manage my personal cron",
   );
 });
+
+test("skills: an archive landing mid-edit is not overwritten by the edit", async () => {
+  const deps = makeDeps();
+  const planted = await deps.skills.create({
+    scopeId: privScope,
+    manifest: { name: "raced", description: "d", requiredCapabilities: [], body: "# b" },
+    createdBy: OWNER,
+  });
+  await deps.skills.review(planted.id, "system:test", []);
+  await deps.skills.publish(planted.id);
+  const get = deps.skills.get.bind(deps.skills);
+  let first = true;
+  deps.skills.get = async (id) => {
+    const seen = await get(id);
+    if (first) {
+      first = false;
+      await deps.skills.archive(id);
+    }
+    return seen;
+  };
+  const app = createApp(deps as unknown as AppDeps);
+  assert.equal(await app.updateOwnedSkill(planted.id, PRIV_MEMBER, { description: "late" }, { liveActor: true }), null);
+  const after = await get(planted.id);
+  assert.equal(after!.status, "archived");
+  assert.equal(after!.manifest.description, "d");
+});

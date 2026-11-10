@@ -6,6 +6,7 @@ import {
 } from "./external-access.ts";
 import type { SlackRateLimitNotice } from "./rate-limit-notice.ts";
 import type { SlackHistoryReader } from "./history.ts";
+import type { SlackIdentityMode } from "./identity.ts";
 import { slackFailureText } from "./turn-flow.ts";
 import { errMessage, reportFailure, reportFailureAs, swallowAs } from "../util/errors.ts";
 import {
@@ -117,6 +118,15 @@ export interface TurnHandler {
   botHasStakeInThread(client: any, channel: string, threadTs: string, before?: string): Promise<boolean>;
 }
 
+export function botAuthoredActor(
+  actor: ActorAssertion,
+  inc: { botAuthored?: boolean; userId: string | undefined },
+  identityMode: SlackIdentityMode,
+): ActorAssertion {
+  const unresolved = identityMode === "email" && !!inc.userId && actor.externalId === inc.userId;
+  return inc.botAuthored && unresolved && !actor.isBot ? { ...actor, isBot: true } : actor;
+}
+
 function channelType(kind: SlackConversationKind, conversationKind: SlackConversationKind): string {
   if (kind === "dm") return "im";
   return conversationKind === "group" ? "mpim" : "channel";
@@ -136,7 +146,7 @@ export function createTurnHandler(deps: {
   externalAccess?: ExternalSlackAccess;
   continuePrivate?: (runId: string, task: string) => Promise<void>;
   rateLimitNotice?: SlackRateLimitNotice;
-  onEngaged?: (runId: string, channel: string, threadTs?: string) => void;
+  onEngaged?: (runId: string, channel: string, threadTs?: string, emoji?: Promise<string>) => void;
   onSettled?: () => void;
   core: SlackCoreClient;
   flow: TurnFlow;
@@ -207,10 +217,14 @@ export function createTurnHandler(deps: {
         ...(inc.prefetched.timezone ? { timezone: inc.prefetched.timezone } : {}),
       };
     else classified = await classifyUserCached(client, inc.userId);
-    const actor = classified.actor;
-    if (deps.externalAccess && (actor.isExternalGuest || actor.isBot || !inc.userId || inc.synthetic)) return;
+    if (
+      deps.externalAccess &&
+      (classified.actor.isExternalGuest || classified.actor.isBot || !inc.userId || inc.synthetic)
+    )
+      return;
     if (deps.externalAccess && inc.unprompted) inc = { ...inc, unprompted: false };
-    if (deps.allowActor && !deps.allowActor(actor)) return;
+    if (deps.allowActor && !deps.allowActor(classified.actor)) return;
+    const actor = botAuthoredActor(classified.actor, inc, ids.identityMode);
     const timezone = classified.timezone;
     const text = resolveMentions(
       decodeSlackEntities(inc.rawText).trim(),
@@ -543,7 +557,8 @@ export function createTurnHandler(deps: {
           : {
               onReplying: () => {
                 if (acknowledges) startAck();
-                if (queuedRunId && replyThreadTs) deps.onEngaged?.(queuedRunId, inc.channel, replyThreadTs);
+                if (queuedRunId && replyThreadTs)
+                  deps.onEngaged?.(queuedRunId, inc.channel, replyThreadTs, ack?.emoji());
               },
             }),
         onQueued: async (runId) => {
@@ -718,6 +733,7 @@ export function createTurnHandler(deps: {
       if (delivery === "silent") {
         await finishTaskAck();
         if (queuedRunId && result.refusalKind === "security_quarantine") inFlightRuns.delete(queuedRunId);
+        else if (queuedRunId) ackRunDelivery(queuedRunId);
         console.error(
           `[slack-plugin] unprompted turn ${result.status} (staying quiet) ch=${inc.channel} ts=${inc.ts}: ${result.reason ?? "refused"}`,
         );
