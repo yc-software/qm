@@ -1,7 +1,7 @@
 import { trialCronScript, type CronScriptTrial } from "../cron/script.ts";
 import type { AdminToolAccess } from "./admin.ts";
 import type { SelfApiCall } from "./self-api.ts";
-import { parkedOutputKey, type ToolOutputStore } from "../sessions/tool-output.ts";
+import { parkedOutputKey, TOOL_OUTPUT_RETENTION_DAYS, type ToolOutputStore } from "../sessions/tool-output.ts";
 import { rankedSkills } from "../skills/materialize.ts";
 import type { SkillResolution } from "../skills/skill-store.ts";
 import {
@@ -947,7 +947,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         const parked = await withAbort(() => deps.toolOutput!.read(deps.sessionId!, parkedKey), signal);
         if (parked && "expired" in parked)
           return {
-            content: `[the full output in ${path} expired after 30 days; only the cut shown in the transcript remains]`,
+            content: `[the full output in ${path} expired after ${TOOL_OUTPUT_RETENTION_DAYS} days; only the cut shown in the transcript remains]`,
             sourceScopeId: writableScopeId,
           };
         if (parked) {
