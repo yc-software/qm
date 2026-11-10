@@ -3,7 +3,7 @@ import type { PromptSnapshot } from "./core/orchestrator/prompt-snapshot.ts";
 import { onTenantLoad, perTenant } from "./tenants/cache.ts";
 import { loadTenantSettings, TENANT_SETTINGS_REFRESH_MS } from "./tenants/settings.ts";
 import { nonDeploymentCredential, withDeploymentCredentials } from "./credentials/deployment-credentials.ts";
-import { resolveEmbeddingModel } from "./model/pi-models.ts";
+import { embeddingModelFromDefinition, resolveEmbeddingModel } from "./model/pi-models.ts";
 import { createPostgresTeamStore, type TeamStore } from "./teams/teams.ts";
 import type { DecisionBackend } from "./decisions/decisions.ts";
 import { createDecisionHooks, createReplyCheck, routeTurnRuntime, turnStartState } from "./decisions/hooks.ts";
@@ -674,6 +674,12 @@ export function buildApp(
       };
     },
   };
+  const ownModelProviders = async (): Promise<ReadonlySet<string>> =>
+    new Set(
+      (await directModelCredentials.statuses())
+        .filter((status) => status.source === "admin" && status.configured)
+        .map((status) => status.provider),
+    );
   const advisoryLock: AdvisoryLock = createPostgresAdvisoryLock(pgArtifactMap.pool);
   const users = createPostgresUserStore(databaseUrl);
   const principalLinks = createPrincipalLinkService(users, advisoryLock);
@@ -1415,8 +1421,13 @@ export function buildApp(
   const resolveMemoryEmbedder = async (id: string): Promise<MemoryEmbedder> => {
     const model = resolveEmbeddingModel(id);
     if (!model) throw new Error(`Embedding model unavailable: ${id}`);
-    const key = model.provider === "openai" ? await modelCredentials.resolve("openai") : null;
-    return createMemoryEmbedder(model, key, gatewayTransport, overrides.modelCredentialFetch);
+    const target = model.provider === "qm:gateway" ? gatewayTransport?.models[model.id] : undefined;
+    const served =
+      target?.startsWith("openai/") && (await ownModelProviders()).has("openai")
+        ? embeddingModelFromDefinition({ ...model, provider: "openai", id: target.slice("openai/".length) })
+        : model;
+    const key = served.provider === "openai" ? await modelCredentials.resolve("openai") : null;
+    return createMemoryEmbedder(served, key, gatewayTransport, overrides.modelCredentialFetch);
   };
   const resolveModelProviderKeys = async () => {
     await refreshModels();
@@ -1501,6 +1512,7 @@ export function buildApp(
     resolveBaseModelId: () => orgBaseModelId() ?? deploymentDefaultModel(),
     ...(configDefault ? { defaultModelId: configDefault } : {}),
     resolveProviderKeys: resolveCompanyProviderKeys,
+    ownProviders: ownModelProviders,
     ...(gatewayTransport ? { modelGateway: gatewayTransport } : {}),
     companyModelId: (id: string) => companyModelId(id, directProviderAvailability),
     resolveFallbackRuntime: () => configStore.getPurposeRuntime("fallback"),
@@ -2231,7 +2243,7 @@ export function buildApp(
     ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
     capabilityTokenCompression: config.capabilityTokenCompression,
     ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-    ...(gatewayTransport ? { sandboxModels: true } : {}),
+    ...(gatewayTransport ? { sandboxModels: async () => !(await ownModelProviders()).size } : {}),
     ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),
     ...(config.deployAppsDomain ? { deployAppsDomain: config.deployAppsDomain } : {}),
     ...(config.resendApiKey && config.emailFrom

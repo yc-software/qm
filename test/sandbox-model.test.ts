@@ -230,6 +230,30 @@ test("gateway deployments hand the sandbox a gateway URL and turn token, never t
   assert.doesNotMatch((await turn("!sysprompt", "strict-prompt")).reply ?? "", /MODEL_GATEWAY/);
 });
 
+test("once a company adds its own provider key the sandbox no longer gets the YC gateway", async () => {
+  const built = buildApp(
+    testConfig({
+      signingSecret: "ingress-secret".repeat(3),
+      apiBaseUrl: "https://core.example.test/",
+      modelGateway: { url: "https://models.invalid", apiKey: key, apiKeyHeader: "api-key", models: routes },
+    }),
+    { modelCredentialFetch: async () => new Response("unavailable", { status: 503 }) },
+  );
+  await selectDefaultSandbox(built, "U1", "personal:U1");
+  const prompt = async (thread: string) =>
+    (
+      await built.app.turn({
+        surface: "test",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef: `dm:U1:${thread}` },
+        text: "!sysprompt",
+      })
+    ).reply ?? "";
+  assert.match(await prompt("before"), /MODEL_GATEWAY_TOKEN/);
+  await built.modelCredentials.set("openai", "sk-company-own", "U1");
+  assert.doesNotMatch(await prompt("after"), /MODEL_GATEWAY/);
+});
+
 test("deployments without a gateway leave the sandbox gateway variables unset", async () => {
   const config = testConfig({ signingSecret: "ingress-secret".repeat(3), apiBaseUrl: "https://core.example.test" });
   const built = buildApp(config);

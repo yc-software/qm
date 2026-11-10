@@ -218,7 +218,12 @@ async function mintControlPlaneTokens(
         deps.capabilitySecret ?? deps.signingSecret,
       );
     }
-    if (deps.sandboxModels && allInternal && securityPolicy.posture !== "strict") {
+    if (
+      allInternal &&
+      securityPolicy.posture !== "strict" &&
+      (sessionAuth?.account ?? "company") === "company" &&
+      (await deps.sandboxModels?.())
+    ) {
       connectorEnv.MODEL_GATEWAY_URL = `${trimTrailingSlashes(deps.apiBaseUrl)}${SANDBOX_MODEL_PREFIX}`;
       connectorEnv.MODEL_GATEWAY_TOKEN = await mintCapabilityToken(
         { ...scopeAttestation, aud: SANDBOX_MODEL_AUD, exp: sandboxTokenExpiry },

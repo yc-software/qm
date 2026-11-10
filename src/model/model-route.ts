@@ -1,10 +1,12 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { modelGatewayRequest, type ModelGatewayTransportConfig } from "./provider-endpoints.ts";
+import { isModelProvider, modelGatewayRequest, type ModelGatewayTransportConfig } from "./provider-endpoints.ts";
+import { GATEWAY_MODEL_PREFIX } from "./gateway-models.ts";
 import type { ProviderKeys } from "./model-runtime.ts";
 import {
   auxiliaryModelFor,
   DEFAULT_AGENT_MODEL_ID,
   defaultModel,
+  defaultModelForProvider,
   getRequiredModel,
   modelDisplayName,
   personalModelId,
@@ -59,6 +61,7 @@ export interface ModelRouteOptions {
   openrouterApiKey?: string;
   modelGateway?: ModelGatewayTransportConfig;
   resolveProviderKeys?: () => Promise<ProviderKeys>;
+  ownProviders?: () => Promise<ReadonlySet<string>>;
 }
 
 export function configRouteOptions(config: Config): ModelRouteOptions {
@@ -104,11 +107,23 @@ export function createModelRoutes(opts: ModelRouteOptions = {}): ModelRoutes {
   const companyServedId = (id: string) => (opts.companyModelId ? opts.companyModelId(id) : id);
   const servedId = (id: string, personalKeys?: ProviderKeys) =>
     personalKeys ? personalModelId(id, personalKeys) : companyServedId(id);
+  const ownModelId = async (id: string): Promise<string | undefined> => {
+    if (!opts.modelGateway) return undefined;
+    const own = (await opts.ownProviders?.()) ?? new Set<string>();
+    if (!own.size) return undefined;
+    const native = id.startsWith(GATEWAY_MODEL_PREFIX)
+      ? id.slice(id.indexOf("/", GATEWAY_MODEL_PREFIX.length) + 1)
+      : id;
+    const provider = resolveModel(native)?.provider;
+    if (provider && own.has(String(provider))) return native;
+    return [...own].flatMap((p) => (isModelProvider(p) ? [defaultModelForProvider(p)] : [])).find(Boolean);
+  };
   const route = async (requestedId: string, personalKeys?: ProviderKeys): Promise<ModelRoute> => {
-    const modelId = personalKeys ? personalModelId(requestedId, personalKeys) : requestedId;
+    const own = personalKeys ? undefined : await ownModelId(requestedId);
+    const modelId = personalKeys ? personalModelId(requestedId, personalKeys) : (own ?? requestedId);
     const model = getRequiredModel(personalKeys ? modelId : companyServedId(modelId), !personalKeys);
     const keys = personalKeys ?? (await companyKeys());
-    const gateway = personalKeys ? undefined : opts.modelGateway;
+    const gateway = personalKeys || own ? undefined : opts.modelGateway;
     return {
       modelId,
       model,
