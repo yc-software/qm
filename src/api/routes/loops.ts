@@ -1,6 +1,5 @@
 import { LOOP_ICON_ERROR, validLoopIcon } from "../../loops/loop-store.ts";
 import { boundLoopCron } from "../../loops/authority.ts";
-import { unattendedGrantRefusal } from "../../cron/authority.ts";
 import { livePersonCapability } from "../artifact-share.ts";
 import type { AdvisoryLock } from "../../persistence/advisory-lock.ts";
 import type { Loop, LoopState, LoopTriageConfig } from "../../loops/types.ts";
@@ -117,21 +116,13 @@ export async function loadAdministrable(
 }
 
 export async function requireLoopAuthority(ctx: ApiCtx, deps: LoopServiceDeps, loop: Loop): Promise<boolean> {
-  let cron;
   try {
-    cron = await boundLoopCron(loop, deps.crons);
+    await boundLoopCron(loop, deps.crons);
   } catch (e) {
     sendJson(ctx.res, 409, { error: "authority_mismatch", message: errMessage(e) });
     return false;
   }
-  if (!cron?.unattendedGrants?.length) return true;
-  const principal = ctx.capability ?? (ctx.actor?.p ? { actorId: ctx.actor.p, liveActor: true } : undefined);
-  const refusal = principal
-    ? await unattendedGrantRefusal(ctx.app, ctx.deps.admin, cron, principal)
-    : { message: "a privileged loop requires a live turn started by its owner" };
-  if (!refusal) return true;
-  sendJson(ctx.res, 403, { error: "forbidden", message: refusal.message });
-  return false;
+  return true;
 }
 
 const GATES = new Set(["auto", "hold"]);

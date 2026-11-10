@@ -12,6 +12,7 @@ import { notifyOwnerOfCronEdit } from "../../triggers/edit-notice.ts";
 import { canAdministerCron } from "../control-service.ts";
 import { CRON_PATCH_NOTHING_TO_CHANGE } from "../control-service.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
+import { actsAsScope } from "../../types.ts";
 
 function defaultTimezoneFor(capability: CapabilityClaims | null): string {
   return typeof capability?.timezone === "string" && capability.timezone.trim()
@@ -25,7 +26,6 @@ function isCreateCron(b: unknown): b is CreateCronInput {
     isCronRuntime(b.runtime) &&
     userScheduleFromBody(b.schedule) !== null &&
     (typeof b.action === "string" || typeof (b as { message?: unknown }).message === "string") &&
-    (b as { unattendedGrants?: unknown }).unattendedGrants === undefined &&
     typeof b.ownerScopeId === "string" &&
     typeof b.owner === "string" &&
     typeof b.createdBy === "string" &&
@@ -101,7 +101,6 @@ function isCronPatch(b: unknown): b is {
   enabled?: boolean;
   archived?: boolean;
   unfurlLinks?: boolean;
-  unattendedGrants?: string[];
   session?: boolean;
 } {
   if (!isObj(b) || !isCronRuntime(b.runtime)) return false;
@@ -113,18 +112,12 @@ function isCronPatch(b: unknown): b is {
   const hasEnabled = b.enabled !== undefined;
   const hasArchived = b.archived !== undefined;
   const hasUnfurlLinks = b.unfurlLinks !== undefined;
-  const hasUnattendedGrants = b.unattendedGrants !== undefined;
   if (hasTitle && typeof b.title !== "string") return false;
   if (hasAction && typeof b.action !== "string") return false;
   if (hasTask && typeof b.task !== "string") return false;
   if (hasEnabled && typeof b.enabled !== "boolean") return false;
   if (hasArchived && typeof b.archived !== "boolean") return false;
   if (hasUnfurlLinks && typeof b.unfurlLinks !== "boolean") return false;
-  if (
-    hasUnattendedGrants &&
-    (!Array.isArray(b.unattendedGrants) || !b.unattendedGrants.every((grant) => typeof grant === "string"))
-  )
-    return false;
   if (hasSchedule && userScheduleFromBody(b.schedule) === null) return false;
   if (b.session !== undefined && typeof b.session !== "boolean") return false;
   return true;
@@ -140,7 +133,6 @@ function hasCronPatchFields(b: Record<string, unknown>): boolean {
     b.enabled !== undefined ||
     b.archived !== undefined ||
     b.unfurlLinks !== undefined ||
-    b.unattendedGrants !== undefined ||
     b.session !== undefined
   );
 }
@@ -169,15 +161,6 @@ async function createCron(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: CRON_SCRIPT_TOOL_ONLY });
   if (capability) {
     const b = body as CapabilityCronBody;
-    if (
-      b.unattendedGrants !== undefined &&
-      (!Array.isArray(b.unattendedGrants) || !b.unattendedGrants.every((grant) => typeof grant === "string"))
-    ) {
-      return sendJson(res, 400, {
-        error: "bad_request",
-        message: "unattendedGrants must be an array of recognized grant strings",
-      });
-    }
     const schedule = userScheduleFromBody(b.schedule, defaultTimezoneFor(capability));
     const task = taskText(b);
     const text = exactText(b);
@@ -204,7 +187,6 @@ async function createCron(ctx: ApiCtx): Promise<void> {
         ...(b.scope === "personal" ? { scope: "personal" as const } : {}),
         ...(typeof b.destinationKey === "string" ? { destinationKey: b.destinationKey } : {}),
         ...(typeof b.unfurlLinks === "boolean" ? { unfurlLinks: b.unfurlLinks } : {}),
-        ...(Array.isArray(b.unattendedGrants) ? { unattendedGrants: b.unattendedGrants } : {}),
         ...(typeof b.session === "boolean" ? { session: b.session } : {}),
       },
       capability,
@@ -342,7 +324,7 @@ async function cronRuns(ctx: ApiCtx): Promise<void> {
 }
 
 const CRON_PATCH_BAD_REQUEST =
-  "expected a cron patch: title (string), task (string), schedule, enabled (boolean), archived (boolean), unfurlLinks (boolean), unattendedGrants (string[]), and/or session (boolean)";
+  "expected a cron patch: title (string), task (string), schedule, enabled (boolean), archived (boolean), unfurlLinks (boolean), and/or session (boolean)";
 
 async function cronById(ctx: ApiCtx): Promise<void> {
   const { res, app, url, pathname, method, body, capability } = ctx;
@@ -379,7 +361,6 @@ async function cronById(ctx: ApiCtx): Promise<void> {
         ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
         ...(body.archived !== undefined ? { archived: body.archived } : {}),
         ...(body.unfurlLinks !== undefined ? { unfurlLinks: body.unfurlLinks } : {}),
-        ...(body.unattendedGrants !== undefined ? { unattendedGrants: body.unattendedGrants } : {}),
         ...(body.session !== undefined ? { session: body.session } : {}),
       },
       capability,
@@ -427,16 +408,18 @@ function isPersonCronPatch(b: unknown): b is {
 
 async function patchCronAsPerson(ctx: ApiCtx, cron: Cron, body: unknown): Promise<void> {
   const { res, app, url } = ctx;
-  if ((cron.unattendedGrants?.length ?? 0) > 0) {
-    return sendJson(res, 403, {
-      error: "forbidden",
-      message: "a privileged cron may only be patched by its owner from a live turn",
-    });
-  }
   if (!isPersonCronPatch(body))
     return sendJson(res, 400, { error: "bad_request", message: PERSON_CRON_PATCH_BAD_REQUEST });
   const schedule = body.schedule !== undefined ? userScheduleFromBody(body.schedule)! : undefined;
+  const editor = url.searchParams.get("principalId");
+  // Fires run with the owner's authority, so whoever rewrites the task takes ownership of the cron.
+  const takesOver =
+    body.task !== undefined &&
+    !!editor &&
+    !actsAsScope(cron.owner, cron.ownerScopeId) &&
+    !(await app.samePerson(cron.owner, editor));
   const patch: CronPatch = {
+    ...(takesOver ? { owner: editor } : {}),
     ...(body.runtime !== undefined ? { runtime: body.runtime } : {}),
     ...(body.title !== undefined ? { title: body.title } : {}),
     ...(body.task !== undefined ? { action: body.task } : {}),
@@ -446,7 +429,6 @@ async function patchCronAsPerson(ctx: ApiCtx, cron: Cron, body: unknown): Promis
   };
   try {
     const updated = await app.updateCron(cron.id, patch);
-    const editor = url.searchParams.get("principalId");
     if (updated && editor)
       await notifyOwnerOfCronEdit(app, {
         cron: updated,

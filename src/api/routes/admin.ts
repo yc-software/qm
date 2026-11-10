@@ -66,7 +66,6 @@ import {
 } from "./admin/memory-registry.ts";
 import { listSecurityFlags } from "./admin/security.ts";
 import { spend } from "./admin/spend.ts";
-import { listUnattendedGrants } from "./admin/unattended-grants.ts";
 import { offboardUser, reactivateUser } from "./admin/offboard.ts";
 import { createPrincipalLink, deletePrincipalLink, listPrincipalLinks } from "./admin/principal-links.ts";
 
@@ -145,7 +144,6 @@ const routes: Route<ApiCtx>[] = [
       auth: "either",
       admin: {
         privateRead: "always",
-        unattended: { grant: "admin.sessions.read", summary: "list the scope directory" },
       },
       handle: listAdminScopes,
     },
@@ -169,7 +167,6 @@ const routes: Route<ApiCtx>[] = [
       method: "GET",
       path: "/v1/admin/spend",
       auth: "either",
-      admin: { unattended: { grant: "admin.spend.read", summary: "read the org spend report" } },
       handle: spend,
     },
     {
@@ -178,7 +175,6 @@ const routes: Route<ApiCtx>[] = [
       auth: "either",
       admin: {
         privateRead: "always",
-        unattended: { grant: "admin.egress.read", summary: "read scope-labelled egress decisions" },
       },
       handle: egress,
     },
@@ -188,7 +184,6 @@ const routes: Route<ApiCtx>[] = [
       auth: "either",
       admin: {
         privateRead: "always",
-        unattended: { grant: "admin.sessions.read", summary: "list conversation metadata" },
       },
       handle: listAdminSessions,
     },
@@ -205,7 +200,6 @@ const routes: Route<ApiCtx>[] = [
       auth: "either",
       admin: {
         privateRead: "always",
-        unattended: { grant: "admin.sessions.read", summary: "read a conversation transcript" },
       },
       handle: getAdminSession,
     },
@@ -243,7 +237,6 @@ const routes: Route<ApiCtx>[] = [
       auth: "either",
       admin: {
         privateRead: "always",
-        unattended: { grant: "admin.files.read", summary: "read a stored file by ?id=" },
       },
       handle: readAdminFile,
     },
@@ -253,7 +246,6 @@ const routes: Route<ApiCtx>[] = [
       auth: "either",
       admin: {
         privateRead: "always",
-        unattended: { grant: "admin.files.read", summary: "download a stored file by ?id=" },
       },
       handle: downloadAdminFile,
     },
@@ -263,7 +255,6 @@ const routes: Route<ApiCtx>[] = [
       auth: "either",
       admin: {
         privateRead: "always",
-        unattended: { grant: "admin.files.read", summary: "list a scope's document store" },
       },
       handle: listAdminFiles,
     },
@@ -272,7 +263,7 @@ const routes: Route<ApiCtx>[] = [
       method: "GET",
       path: "/v1/admin/errors",
       auth: "either",
-      admin: { privateRead: "always", unattended: { grant: "admin.sessions.read", summary: "read error telemetry" } },
+      admin: { privateRead: "always" },
       handle: listAdminErrors,
     },
     {
@@ -281,7 +272,6 @@ const routes: Route<ApiCtx>[] = [
       auth: "either",
       admin: {
         privateRead: "always",
-        unattended: { grant: "admin.audit.read", summary: "read security audit events" },
       },
       handle: listAdminAudit,
     },
@@ -289,7 +279,7 @@ const routes: Route<ApiCtx>[] = [
       method: "GET",
       path: "/v1/admin/crons",
       auth: "either",
-      admin: { privateRead: "always", unattended: { grant: "admin.crons.read", summary: "list a scope's crons" } },
+      admin: { privateRead: "always" },
       handle: listAdminArtifacts,
     },
     {
@@ -449,12 +439,6 @@ const routes: Route<ApiCtx>[] = [
     { method: "DELETE", path: "/v1/admin/external-users/:email", auth: "either", handle: revokeExternalUser },
   ]).map((route) => ({ ...route, browser: "self" as const })),
   ...withAdmin([
-    {
-      method: "GET",
-      path: "/v1/admin/unattended-grants",
-      auth: "either",
-      handle: (ctx) => listUnattendedGrants(ctx, routes),
-    },
     {
       method: "GET",
       path: "/v1/admin/deliveries/shadow",

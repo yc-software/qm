@@ -14,7 +14,6 @@ import { cronTriggerAuthority } from "../cron/authority.ts";
 import { MAX_SCREEN_CHARS } from "../security/security-posture.ts";
 import type { CronStore } from "../cron/cron-store.ts";
 import { boundLoopCron } from "./authority.ts";
-import { samePerson } from "../directory/person.ts";
 import type { TurnRequest, TurnResult } from "../types.ts";
 import type { Loop, LoopItem, LoopOutput } from "./types.ts";
 import { destinationVisible, runTrigger, type TriggerDeps, type TriggerOutcome } from "../triggers/run-trigger.ts";
@@ -565,16 +564,6 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       cron = bound?.loopId === loop.id ? bound : null;
     } catch (e) {
       return { authzFailed: true, ran: false, note: errMessage(e) };
-    }
-    if (cron?.unattendedGrants?.length && (!cron.enabled || cron.archived)) {
-      return { authzFailed: true, ran: false, note: "loop cron is disabled or archived" };
-    }
-    if (
-      cron?.unattendedGrants?.length &&
-      actorId !== undefined &&
-      !(await (deps.samePerson ?? samePerson)(cron.owner, actorId))
-    ) {
-      return { authzFailed: true, ran: false, note: "only the owner may direct a privileged loop turn" };
     }
     return runTrigger(deps.trigger, {
       ...cronTriggerAuthority(cron ?? loop),

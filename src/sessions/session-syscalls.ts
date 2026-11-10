@@ -67,7 +67,6 @@ export async function delegatedAuthorizationOrigin(
   let current = request;
   for (let depth = 0; depth < 32; depth++) {
     if (
-      current.origin.kind === "automation" ||
       current.readOnly ||
       current.privateSessionMessage ||
       current.swarm ||
@@ -118,6 +117,7 @@ export async function delegatedAuthorizationOrigin(
       !isSessionTurn(parent) &&
       internal &&
       (parent.origin.kind === "human" ||
+        (parent.origin.kind === "automation" && !parent.botActor) ||
         (parent.origin.kind === "ambient" && parent.origin.live === true && parent.conversation.kind !== "dm"))
     )
       return parent.origin;
@@ -159,7 +159,6 @@ export function sessionContextOf(input: OrchestratorInput): SpawnMeta {
     origin,
     ...(input.surfaceTools ? { surfaceTools: true } : {}),
     ...(input.deliveryCandidates ? { deliveryCandidates: input.deliveryCandidates } : {}),
-    ...(input.unattendedGrants ? { unattendedGrants: [...input.unattendedGrants] } : {}),
     ...(input.surfaceOrigin?.audience === "external" ? { surfaceOrigin: input.surfaceOrigin } : {}),
     ...(input.scopeVersion ? { scopeVersion: input.scopeVersion } : {}),
     ...(input.sessionParticipantIds ? { sessionParticipantIds: input.sessionParticipantIds } : {}),
@@ -277,7 +276,6 @@ export interface SessionSyscallBinding {
     | "surface"
     | "surfaceTools"
     | "deliveryCandidates"
-    | "unattendedGrants"
     | "privateSessionMessage"
     | "sessionMessageDepth"
     | "swarm"
@@ -428,7 +426,6 @@ function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayT
     actor: meta.actor,
     conversation: { ...meta.conversation, threadRef: child.threadRef },
     origin: sessionTurnOrigin(meta.origin, text),
-    ...(meta.unattendedGrants ? { unattendedGrants: [...meta.unattendedGrants] } : {}),
     text,
     displayText,
     envelopeWrapped: true,
@@ -848,7 +845,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   ...binding.request,
                   surface: binding.request.surface ?? binding.session.surface ?? "web",
                   origin: caller.origin,
-                  unattendedGrants: caller.unattendedGrants,
                   readOnly,
                   model: runtime.model,
                   thinkingLevel: runtime.thinkingLevel,
@@ -936,7 +932,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   surface: meta.surface ?? target.surface ?? "web",
                   actor: caller.actor,
                   origin: caller.origin,
-                  unattendedGrants: caller.unattendedGrants,
                   readOnly: privateMessage || caller.readOnly || meta.readOnly || target.spawnMeta?.readOnly,
                   memoryNotebookOnly: caller.memoryNotebookOnly || meta.memoryNotebookOnly,
                   botActor: caller.botActor,

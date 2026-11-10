@@ -225,10 +225,7 @@ export function createMessagingMethods(
       if (patch.runtime !== undefined) await validateRuntime({ ...before, ...patch });
       if (patch.schedule) validateUserSchedule(patch.schedule);
       await trialBeforeSave(patch.script, patch.schedule, trial);
-      const grantsReaffirmed = patch.unattendedGrants !== undefined;
-      const guardedPatch =
-        (before.unattendedGrants?.length ?? 0) > 0 && !grantsReaffirmed ? { ...patch, unattendedGrants: [] } : patch;
-      const updated = await deps.crons.update(id, guardedPatch);
+      const updated = await deps.crons.update(id, patch);
       deps.auditLog.record({
         at: Date.now(),
         principalId: before.owner,

@@ -118,7 +118,6 @@ export interface SpawnMeta {
   surfaceTools?: boolean;
   deliveryCandidates?: TurnRequest["deliveryCandidates"];
   origin?: TurnOrigin;
-  unattendedGrants?: string[];
   openFingerprint?: string;
   scopeVersion?: string;
   sessionParticipantIds?: readonly string[];
@@ -403,7 +402,6 @@ export interface TurnRequest {
   text: string;
   origin?: TurnOrigin;
   gatewayContext?: GatewayContext;
-  unattendedGrants?: string[];
   cronScript?: import("./triggers/types.ts").CronScript;
   infrequentCron?: boolean;
   personaId?: string;

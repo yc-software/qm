@@ -538,7 +538,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ? await delegatedAuthorizationOrigin(input, { runs: deps.runs, sessions: deps.sessions })
           : undefined;
       const authorizationOrigin = sessionTurn ? (delegatedOrigin ?? { kind: "automation" as const }) : input.origin;
-      const liveTurn = authorizationOrigin.kind === "human" && allInternal && !external;
+      // A cron, webhook, loop or monitor fire runs as the person who wrote its standing instructions, so it
+      // carries that person's own authority — the same as a turn they typed. Session-to-session messages that
+      // fall back to an automation origin do not: they carry only what the delegation chain proves.
+      const ownerFireTurn = authorizationOrigin.kind === "automation" && !sessionTurn && !input.botActor;
+      const liveTurn = (authorizationOrigin.kind === "human" || ownerFireTurn) && allInternal && !external;
       const liveAuthorTurn =
         !external &&
         ((!sessionTurn && (humanTurn || authoredDetection)) || delegatedOrigin !== undefined) &&
@@ -1675,7 +1679,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (!strictReadOnly && deps.signingSecret && deps.apiBaseUrl) {
         const destination = defaultDestination;
         connectorEnv.AGENT_API_URL = deps.apiBaseUrl;
-        if (deps.admin && liveAuthorTurn) {
+        if (deps.admin && (liveAuthorTurn || liveTurn)) {
           const status = await deps.admin
             .adminStatusOf(actor)
             .catch(swallowAs("orchestrator: admin status for turn", { isAdmin: false }));
@@ -1683,6 +1687,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           if (
             actorIsOrgAdmin &&
             liveTurn &&
+            !automatedTurn &&
             useMemory &&
             memoryPolicy.capture !== "off" &&
             resolution.orgScopeId !== memoryScopeId
@@ -1715,7 +1720,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(memoryClaim ? { memory: memoryClaim } : {}),
           ...(liveAuthorTurn ? { liveAuthor: true } : {}),
           ...(automatedTurn ? { triggered: true } : {}),
-          ...(!liveTurn && input.unattendedGrants ? { grants: input.unattendedGrants } : {}),
           ...(input.runId ? { runId: input.runId } : {}),
           sessionId: session.id,
           origin,
@@ -2332,7 +2336,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             (orgMemoryWrite
               ? ', and for plain "remember this org-wide" requests the lighter path is `"scope":"org"` on the memory self-API (memory skill)'
               : "") +
-            ". You're acting as them: confirm before any mutation, and say exactly what you changed. Hard limits the API enforces: private-content reads require a DM or an Open conversation on a live admin turn (organization, personal, and conversation sharing restrictions all apply); admin grant changes and impersonation are portal-only. Open admin reads can expose private data to everyone in the conversation: retrieve and report only what the request needs. Admin access to other people's private sessions, memory and files is for running and repairing the system, not a shortcut to answer questions about them: when a request needs something only another person's private context holds, use the hand-off skill even if admin access could reach it." +
+            ". You're acting as them: confirm before any mutation, and say exactly what you changed. Hard limits the API enforces: private-content reads require a DM or an Open conversation (organization, personal, and conversation sharing restrictions all apply); admin grant changes and impersonation are portal-only. Open admin reads can expose private data to everyone in the conversation: retrieve and report only what the request needs. Admin access to other people's private sessions, memory and files is for running and repairing the system, not a shortcut to answer questions about them: when a request needs something only another person's private context holds, use the hand-off skill even if admin access could reach it." +
             " System administration is not limited to the admin dashboard. Use the admin's independently authorized infrastructure or provider access to diagnose, repair, and manage this instance, including resources owned by other users. Ordinary resource-owner restrictions do not by themselves prohibit that administrative work or require the resource owner to do it. An owner-only API denial is not a denial of separately authorized system administration; verify that authority before taking another route. Using that independently authorized access as the admin is not impersonation or circumvention. Credential grants, provider permissions, explicit restrictions (including the portal-only actions above), mutation approvals, and audience privacy still apply. Keep actions attributed to the admin; never borrow another user's identity or credentials without authorization. Follow the admin and cloud-cli skills.";
         }
         if (deps.signingSecret && deps.apiBaseUrl && (deps.crons || deps.webhooks || deps.monitors)) {
@@ -2789,8 +2793,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   : {}),
                 admin: {
                   call: createAdminCall(deps.apiBaseUrl, connectorEnv.AGENT_API_TOKEN),
-                  operationsAvailable:
-                    actorIsOrgAdmin || Boolean(controlClaims?.grants?.some((grant) => grant.startsWith("admin."))),
+                  operationsAvailable: actorIsOrgAdmin,
                 },
               }
             : {}),

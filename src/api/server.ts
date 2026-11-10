@@ -60,10 +60,8 @@ async function capabilityAdminDenied(
 ): Promise<string | null> {
   if (access.agent === "anyone") return null;
   if (claims.aud !== CONTROL_PLANE_AUD) return "admin routes require the per-turn agent token";
-  if (!livePersonCapability(claims) && !(access.unattended && claims.grants?.includes(access.unattended.grant))) {
-    return access.unattended
-      ? `admin actions through the agent require a turn the admin started themselves — this autonomous run lacks the unattended grant ${access.unattended.grant}, which only a cron's org-admin owner can add, from a live turn in their own DM. Report this failure where the run delivers instead of finishing silently.`
-      : "admin actions through the agent require a turn the admin started themselves — autonomous turns (crons, webhooks) cannot use this route. Report this failure where the run delivers instead of finishing silently.";
+  if (!livePersonCapability(claims)) {
+    return "admin actions through the agent carry a person's own authority — this turn runs with none (a bot actor, an external audience, or a session message whose authorization chain could not be verified). Report this failure where the run delivers instead of finishing silently.";
   }
   if (typeof access.agent === "object") return access.agent.portalOnly;
   if (access.privateRead && parseScopeId(claims.scopeId).kind !== "personal") {
@@ -511,7 +509,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
       : null;
   const wiring: Wiring = {
     app,
-    deps: { ...deps, control: createControlService(app, deps.scheduler, deps.admin) },
+    deps: { ...deps, control: createControlService(app, deps.scheduler) },
     secret: deps.signingSecret,
     auth,
     requirePortalIdentity,

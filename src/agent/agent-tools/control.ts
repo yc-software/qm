@@ -493,7 +493,7 @@ export function controlPlaneTools(kit: ToolKit) {
 
   if (ref.current === null || ref.current.admin?.operationsAvailable)
     admin.description =
-      "Admin API; authority is rechecked on every call and audited. Private content needs a live admin in a DM or Open conversation; unattended reads need explicit grants. Admin-role changes, impersonation, identity links and teammate invitations are portal-only. Confirm every mutation, report exactly what changed, and disclose only what this conversation needs. Never put secrets in arguments.\n\n" +
+      "Admin API; authority is rechecked on every call and audited. Private content needs the admin in a DM or Open conversation; a cron, webhook or loop fire carries its owner's authority. Admin-role changes, impersonation, identity links and teammate invitations are portal-only. Confirm every mutation, report exactly what changed, and disclose only what this conversation needs. Never put secrets in arguments.\n\n" +
       admin.description;
 
   return { webhook, guidance, sharingTool, admin };

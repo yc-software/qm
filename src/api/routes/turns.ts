@@ -133,7 +133,6 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
   const {
     surfaceOrigin: _surfaceOrigin,
     spawned: _spawned,
-    unattendedGrants: _unattendedGrants,
     cronScript: _cronScript,
     infrequentCron: _infrequentCron,
     redeliveryKey: _redeliveryKey,

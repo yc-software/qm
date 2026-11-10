@@ -8,7 +8,6 @@ import { audit, requireScopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 import { notifyOwnerOfCronEdit } from "../../../triggers/edit-notice.ts";
 import { personNamer, requireScopedResource } from "./common.ts";
-import { unattendedGrantRefusal } from "../../../cron/authority.ts";
 
 function adminCronDestination(v: unknown, current: Destination | undefined): Destination | null {
   if (typeof v !== "object" || v === null) return null;
@@ -62,7 +61,6 @@ export async function listAdminArtifacts(ctx: ApiCtx): Promise<void> {
         schedule: c.schedule,
         runtime: c.runtime,
         loopId: c.loopId,
-        unattendedGrants: c.unattendedGrants,
         destination: c.destination,
         createdAt: c.createdAt,
         lastFiredAt: c.lastFiredAt,
@@ -155,15 +153,6 @@ export async function putAdminCronDestination(ctx: ApiCtx): Promise<void> {
   const { actor, record: cron } = scoped;
   if (typeof body !== "object" || body === null || !("destination" in body)) {
     return sendJson(res, 400, { error: "bad_request", message: "destination is required; use null to clear" });
-  }
-  if ((cron.unattendedGrants?.length ?? 0) > 0) {
-    const refusal = await unattendedGrantRefusal(
-      app,
-      deps.admin,
-      cron,
-      ctx.capability ?? { actorId: actor.id, liveActor: true },
-    );
-    if (refusal) return sendJson(res, 409, { error: "conflict", message: refusal.message });
   }
   const requested = (body as { destination: unknown }).destination;
   const next = requested === null ? undefined : adminCronDestination(requested, cron.destination);

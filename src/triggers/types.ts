@@ -56,7 +56,6 @@ export interface Cron extends TriggerBase {
   message?: string;
   loopId?: string;
   createdAt: number;
-  unattendedGrants?: string[];
   sessionRef?: string;
   script?: CronScript;
 
