@@ -148,7 +148,7 @@ export function createSlackSessionStatus(
           const [title, phrase] = ((): [string, string] => {
             if (running) return [purposeOf(running) ?? "Thinking it through", "Working on it"];
             if (active.length) return [purposeOf(active[0]) ?? "Queued", "Picking back up shortly"];
-            if (helpers.length) return ["Waiting on subagents", "Subagents are working"];
+            if (helpers.length) return ["Waiting on subagents", ""];
             if (background) return background;
             return [`${failed ? "Stopped after" : "Done in"} ${duration(elapsed)}`, ""];
           })();
