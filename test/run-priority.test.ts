@@ -36,30 +36,6 @@ async function claimAll(runs: RunStore): Promise<string[]> {
 
 for (const backend of backends) {
   test(
-    `[${backend.name}] a person's unmentioned thread follow-up runs at person priority; other ambient work stays background`,
-    { skip: backend.skip },
-    async () => {
-      const runs = await backend.make();
-      try {
-        await runs.enqueue({ sessionId: "cron", request: cron("cron") });
-        await runs.enqueue({ sessionId: "bot", request: request("bot ambient", { origin: { kind: "ambient" } }) });
-        const followUp = (
-          await runs.enqueue({
-            sessionId: "thread",
-            request: request("person follow-up", { origin: { kind: "ambient", live: true } }),
-          })
-        ).run;
-        assert.equal(followUp.priority, 0);
-        assert.deepEqual(await claimAll(runs), ["person follow-up", "cron", "bot ambient"]);
-      } finally {
-        await runs.close?.();
-      }
-    },
-  );
-}
-
-for (const backend of backends) {
-  test(
     `[${backend.name}] people's turns run first, then their subagents, then background work`,
     { skip: backend.skip },
     async () => {
@@ -67,6 +43,7 @@ for (const backend of backends) {
       try {
         const nightly = (await runs.enqueue({ sessionId: "cron", request: cron("cron") })).run;
         const human = (await runs.enqueue({ sessionId: "dm", request: request("person") })).run;
+        await runs.enqueue({ sessionId: "th", request: request("follow-up", { origin: { kind: "ambient", live: true } }) });
         const child = (await runs.enqueue({ sessionId: "c", request: subagentOf(human, "subagent") })).run;
         await runs.enqueue({ sessionId: "g", request: subagentOf(child, "sub-subagent") });
         await runs.enqueue({ sessionId: "nc", request: subagentOf(nightly, "cron subagent") });
@@ -93,6 +70,7 @@ for (const backend of backends) {
         );
         assert.deepEqual(await claimAll(runs), [
           "person",
+          "follow-up",
           "subagent",
           "sub-subagent",
           "cron",
