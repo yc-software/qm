@@ -26,10 +26,24 @@ function fixture() {
   const records = new Map<string, Run>();
   const jobs: ProcessRecord[] = [];
   const watches: Monitor[] = [];
+  const children: Session[] = [];
+  const purposes = new Map<string, string>();
   const runs = {
     get: async (id: string) => records.get(id) ?? null,
     inFlightForThread: async (threadRef: string) =>
       [...records.values()].filter((run) => run.sessionId === threadRef && !isTerminal(run.status)),
+    activeForThreads: async (threadRefs: readonly string[]) =>
+      new Map(
+        [...records.values()]
+          .filter((run) => threadRefs.includes(run.sessionId) && !isTerminal(run.status))
+          .map((run) => [run.sessionId, run]),
+      ),
+    lastFinishedForThreads: async (threadRefs: readonly string[]) =>
+      new Map(
+        [...records.values()]
+          .filter((run) => threadRefs.includes(run.sessionId) && isTerminal(run.status))
+          .map((run) => [run.sessionId, run]),
+      ),
   };
   const cards: Array<{ method: string; args: Record<string, unknown> }> = [];
   const client = {
@@ -48,7 +62,16 @@ function fixture() {
       monitors: { ownedBy: async (scope) => watches.filter((watch) => watch.ownerScopeId === scope) },
       publicWebUrl: "https://qm.example.test/web-ui/",
       sessions: {
-        getByThread: async (threadRef) => (threadRef === "ch:C1:1.0" ? ({ id: "canonical-uuid" } as Session) : null),
+        getByThread: async (threadRef) =>
+          threadRef === "ch:C1:1.0" ? ({ id: "canonical-uuid", scopeId: "channel:C1" } as Session) : null,
+        childrenOf: async (id) => children.filter((child) => child.parentSessionId === id),
+        latestToolSteps: async (ids) =>
+          new Map(
+            ids.flatMap((id) => {
+              const purpose = purposes.get(id);
+              return purpose ? [[id.toLowerCase(), { tool: "execute", at, purpose }]] : [];
+            }),
+          ),
       },
     });
   const status = manager();
@@ -93,10 +116,19 @@ function fixture() {
     watches.push(monitor);
     return monitor;
   };
+  const subagent = (id: string, title: string, scope = "channel:C1") => {
+    const child = { id, title, scopeId: scope, threadRef: `sub:${id}`, parentSessionId: "canonical-uuid" } as Session;
+    children.push(child);
+    const run = add(`${id}-run`);
+    run.sessionId = child.threadRef;
+    return run;
+  };
   return {
     store,
     flags,
     records,
+    purposes,
+    subagent,
     runs,
     cards,
     client,
@@ -106,7 +138,8 @@ function fixture() {
     background,
     watch,
     enable: () => flags.setEnabled("slack_loading_indicator", "channel:C1", true, "admin"),
-    start: (id: string, account = "T1:B1") => status.start(client, account, id, "C1", "1.0"),
+    start: (id: string, account = "T1:B1", emoji?: string) =>
+      status.start(client, account, id, "C1", "1.0", emoji ? Promise.resolve(emoji) : undefined),
     reconcile: () => status.reconcile(client, "T1:B1"),
     card: () => cards.at(-1)!.args.blocks as Array<Record<string, unknown>>,
     advance: (ms: number) => {
@@ -143,8 +176,8 @@ test("concurrent starts share one card, terminal runs cannot clear active work, 
   assert.equal(f.cards.length, 1);
   next.status = "failed";
   await f.reconcile();
-  assert.equal(f.card()[0]?.title, "No active work");
-  assert.equal(f.card()[0]?.status, "complete");
+  assert.equal(f.card()[0]?.title, "Stopped after 0s");
+  assert.equal(f.card()[0]?.status, "error");
   assert.deepEqual(await f.store.all(), []);
   const oldCard = f.card()[0]?.task_id;
   f.add("later");
@@ -163,14 +196,14 @@ test("restart preserves card identity and pending or expired-lease work is waiti
   assert.equal(f.cards.length, 1);
   run.leaseExpiresAt = 0;
   await restarted.reconcile(f.client, "T1:B1");
-  assert.equal(f.card()[0]?.title, "Waiting to resume");
+  assert.equal(f.card()[0]?.title, "Queued");
   run.status = "pending";
   await restarted.reconcile(f.client, "T1:B1");
   assert.equal(f.cards.length, 2);
   run.status = "running";
   run.leaseExpiresAt = Number.MAX_SAFE_INTEGER;
   await restarted.reconcile(f.client, "T1:B1");
-  assert.equal(f.card()[0]?.title, "Working");
+  assert.equal(f.card()[0]?.title, "Thinking it through");
   assert.ok(f.cards.slice(1).every((call) => call.args.ts === "card.1"));
 });
 
@@ -182,10 +215,10 @@ test("background lifecycle survives restart and gains a canonical link after fiv
   const job = f.background();
   run.status = "done";
   await f.reconcile();
-  assert.equal(f.card()[0]?.title, "Background work");
+  assert.equal(f.card()[0]?.title, "Background job");
   const monitor = f.watch();
   await f.manager().reconcile(f.client, "T1:B1");
-  assert.equal(f.card()[0]?.title, "Monitoring");
+  assert.equal(f.card()[0]?.title, "Watching for updates");
   f.advance(300_000);
   await f.reconcile();
   assert.equal(f.card().length, 1);
@@ -197,16 +230,74 @@ test("background lifecycle survives restart and gains a canonical link after fiv
   });
   const wake = f.add("wake");
   await f.reconcile();
-  assert.equal(f.card()[0]?.title, "Working");
+  assert.equal(f.card()[0]?.title, "Thinking it through");
   assert.equal((await f.store.all())[0]?.startedAt, 1_000);
   wake.status = "done";
   job.status = "exited";
   monitor.enabled = false;
   await f.reconcile();
-  assert.equal(f.card()[0]?.title, "No active work");
+  assert.equal(f.card()[0]?.title, "Done in 5m 0s");
   assert.equal(f.card().length, 2);
   assert.equal(f.cards.filter((call) => call.method === "chat.postMessage").length, 1);
   assert.ok(!JSON.stringify(f.cards).includes("secret-"));
+});
+
+const line = (block: Record<string, unknown> | undefined) =>
+  (block?.details as { elements: Array<{ elements: unknown[] }> } | undefined)?.elements[0]?.elements;
+
+test("the card shows the latest step with the ack emoji and ends with how long the work took", async () => {
+  const f = fixture();
+  await f.enable();
+  const run = f.add("r1");
+  await f.start(run.id, "T1:B1", "crab");
+  assert.deepEqual(line(f.card()[0]), [
+    { type: "emoji", name: "crab" },
+    { type: "text", text: " Working on it" },
+  ]);
+  f.purposes.set("r1", "Reading status implementation");
+  f.advance(61_000);
+  await f.reconcile();
+  assert.equal(f.card()[0]?.title, "Reading status implementation");
+  assert.deepEqual(line(f.card()[0])?.[1], { type: "text", text: " Working on it · 1m" });
+  const posts = f.cards.length;
+  await f.reconcile();
+  assert.equal(f.cards.length, posts);
+  const job = f.background();
+  job.purpose = "Waiting on CI";
+  run.status = "done";
+  await f.reconcile();
+  assert.equal(f.card()[0]?.title, "Waiting on CI");
+  assert.deepEqual(line(f.card()[0])?.[1], { type: "text", text: " Running in the background · 1m" });
+  job.status = "exited";
+  f.advance(73_000);
+  await f.reconcile();
+  assert.equal(f.card()[0]?.title, "Done in 2m 14s");
+  assert.equal(f.card()[0]?.status, "complete");
+  assert.deepEqual(line(f.card()[0]), [{ type: "emoji", name: "crab" }]);
+});
+
+test("running subagents keep the card open as plan rows showing their latest step", async () => {
+  const f = fixture();
+  await f.enable();
+  const run = f.add("r1");
+  await f.start(run.id);
+  const child = f.subagent("c1", "Slack status card personality");
+  f.purposes.set(child.id, "Reading Slack docs");
+  f.subagent("c2", "Elsewhere", "channel:other");
+  run.status = "done";
+  await f.reconcile();
+  assert.equal(f.card()[0]?.title, "Waiting on subagents");
+  assert.equal(f.card()[0]?.status, "in_progress");
+  const plan = f.card()[1] as { type: string; title: string; tasks: Array<Record<string, unknown>> };
+  assert.equal(plan.type, "plan");
+  assert.equal(plan.title, "1 subagent");
+  assert.equal(plan.tasks.length, 1);
+  assert.equal(plan.tasks[0]?.title, "Slack status card personality");
+  assert.deepEqual(line(plan.tasks[0]), [{ type: "text", text: "Reading Slack docs" }]);
+  child.status = "done";
+  await f.reconcile();
+  assert.equal(f.card()[0]?.title, "Done in 0s");
+  assert.equal(f.card().length, 1);
 });
 
 test("unrelated, expired, disabled, private and nonengaged work never keeps a card active", async () => {
@@ -227,7 +318,7 @@ test("unrelated, expired, disabled, private and nonengaged work never keeps a ca
   f.add("other").sessionId = "other-thread";
   run.status = "done";
   await f.reconcile();
-  assert.equal(f.card()[0]?.title, "No active work");
+  assert.equal(f.card()[0]?.title, "Done in 0s");
 });
 
 test("opt-out settles only this account's card without cancelling work", async () => {
@@ -239,7 +330,7 @@ test("opt-out settles only this account's card without cancelling work", async (
   const job = f.background();
   await f.flags.setEnabled("slack_loading_indicator", "channel:C1", false, "admin");
   await f.reconcile();
-  assert.equal(f.card()[0]?.title, "No active work");
+  assert.equal(f.card()[0]?.title, "Done in 0s");
   assert.equal(f.card()[0]?.status, "complete");
   assert.equal(job.status, "running");
   assert.deepEqual(
@@ -337,7 +428,7 @@ for (const method of ["chat.postMessage", "chat.update"]) {
     await pending;
     await f.reconcile();
     assert.equal(f.cards.filter((call) => call.method === "chat.postMessage").length, 1);
-    assert.equal(f.card()[0]?.title, method === "chat.update" ? "Working" : "No active work");
+    assert.equal(f.card()[0]?.title, method === "chat.update" ? "Thinking it through" : "Done in 0s");
   });
 }
 

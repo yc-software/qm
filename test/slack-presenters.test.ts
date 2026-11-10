@@ -122,6 +122,20 @@ test("ack presenter: settle never blocks on a never-resolving pick", async () =>
   assert.deepEqual(calls, ["add:eyes", "remove:eyes"]);
 });
 
+test("ack presenter: the reported emoji is the one it reacts with, whether the pick is early or late", async () => {
+  const early = pickHarness(Promise.resolve("bug"));
+  assert.equal(await early.presenter.emoji(), "bug");
+  await tick(30);
+  assert.deepEqual(early.calls, ["add:bug"]);
+  const late = pickHarness(new Promise<string>(() => {}));
+  const reported = late.presenter.emoji();
+  await tick(30);
+  assert.equal(await reported, "eyes");
+  assert.deepEqual(late.calls, ["add:eyes"]);
+  await early.presenter.settle();
+  await late.presenter.settle();
+});
+
 test("stripAckPrefix: removes exactly the posted ack prefix (plus the gap), and only when it leads", () => {
   assert.equal(stripAckPrefix("On it.\n\nDone — cloned it.", "On it."), "Done — cloned it.");
   assert.equal(stripAckPrefix("  On it.\nDone.", "On it."), "Done.");

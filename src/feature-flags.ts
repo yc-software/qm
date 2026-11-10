@@ -20,7 +20,7 @@ export const FEATURES = {
   inbox_loops: { label: "Inbox Loops" },
   slack_loading_indicator: {
     label: "Slack loading indicator (experimental)",
-    hint: "Shows an activity card in Slack threads, including background work and monitors. After five minutes, the card links to the web conversation. Everyone in a shared thread can see it. Top-level DMs stay unchanged. Turning this off leaves existing cards.",
+    hint: "Shows a live activity card in Slack threads: the current step, background work, monitors and subagents, ending with how long the work took. After five minutes, the card links to the web conversation. Everyone in a shared thread can see it. Top-level DMs stay unchanged. Turning this off leaves existing cards.",
   },
   descriptive_session_titles: {
     label: "Descriptive session titles",

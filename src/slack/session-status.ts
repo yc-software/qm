@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
-import { isTerminal, leaseLapsed, type RunStore } from "../runs/run-store.ts";
+import { isTerminal, leaseLapsed, type Run, type RunStore } from "../runs/run-store.ts";
 import type { ProcessRegistry } from "../processes/process-registry.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { MonitorStore } from "../monitors/monitor-store.ts";
@@ -11,6 +11,7 @@ import { conversationScope } from "../resolution/resolution-service.ts";
 import { conversationWebUrl } from "../util/conversation-links.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
+import { snippet } from "../util/text.ts";
 
 export interface SlackSessionStatusState {
   writer?: string;
@@ -19,6 +20,7 @@ export interface SlackSessionStatusState {
   threadTs: string;
   anchorRunId: string;
   startedAt?: number;
+  emoji?: string;
   cardId?: string;
   cardTs?: string;
   cardContent?: string;
@@ -30,7 +32,7 @@ interface StatusClient {
 }
 
 export interface SlackStatusActivity {
-  sessions?: Pick<SessionStore, "getByThread">;
+  sessions?: Pick<SessionStore, "getByThread" | "childrenOf" | "latestToolSteps">;
   processes?: Pick<ProcessRegistry, "liveByScope">;
   monitors?: Pick<MonitorStore, "ownedBy">;
   publicWebUrl?: string;
@@ -39,7 +41,7 @@ export interface SlackStatusActivity {
 export function createSlackSessionStatus(
   store: DurableMap<SlackSessionStatusState>,
   lease: LeaderLease,
-  runs: Pick<RunStore, "get" | "inFlightForThread">,
+  runs: Pick<RunStore, "get" | "inFlightForThread" | "activeForThreads" | "lastFinishedForThreads">,
   flags: Pick<FeatureFlagStore, "enabled">,
   now = Date.now,
   activity: SlackStatusActivity = {},
@@ -90,7 +92,6 @@ export function createSlackSessionStatus(
                   (run) => run.deliveryState?.replying && !run.request.privateSessionMessage,
                 )
               : [];
-          const processing = active.some((run) => run.status === "running" && !leaseLapsed(run, now()));
           const threadRef = anchor?.request.conversation.threadRef;
           const jobs =
             optedIn && threadRef
@@ -104,31 +105,75 @@ export function createSlackSessionStatus(
                   (monitor) => monitor.enabled && monitor.threadRef === threadRef && monitor.expiresAt > now(),
                 )
               : [];
-          const ongoing = active.length > 0 || jobs.length > 0 || monitors.length > 0;
-          let title = "No active work";
-          if (processing) title = "Working";
-          else if (active.length) title = "Waiting to resume";
-          else if (monitors.length) title = "Monitoring";
-          else if (jobs.length) title = "Background work";
+          const session = anchor?.sessionId ? await activity.sessions?.getByThread(anchor.sessionId) : null;
+          const children =
+            optedIn && session
+              ? ((await activity.sessions?.childrenOf(session.id)) ?? []).filter(
+                  (child) => child.scopeId === session.scopeId,
+                )
+              : [];
+          const childRuns = children.length
+            ? await runs.activeForThreads(children.map((child) => child.threadRef))
+            : new Map<string, Run>();
+          const helpers = children.flatMap((child) => {
+            const run = childRuns.get(child.threadRef);
+            return run ? [{ child, run }] : [];
+          });
+          const steps =
+            (await activity.sessions?.latestToolSteps(
+              [...active, ...helpers.map((h) => h.run)].map((run) => run.id),
+            )) ?? new Map<string, { purpose?: string }>();
+          const purposeOf = (run: Run | undefined) => (run ? steps.get(run.id.toLowerCase())?.purpose : undefined);
           state = {
             ...state,
             startedAt: state.startedAt ?? now(),
             cardId: state.cardId ?? randomUUID(),
           };
-          if (now() - state.startedAt! > 5 * 60_000 && anchor?.sessionId) {
-            const session = await activity.sessions?.getByThread(anchor.sessionId);
-            if (session) state.followUrl = conversationWebUrl(activity.publicWebUrl, session.id);
-          }
+          const elapsed = now() - state.startedAt!;
+          const ongoing = active.length > 0 || jobs.length > 0 || monitors.length > 0 || helpers.length > 0;
+          const failed =
+            !ongoing &&
+            !!anchor &&
+            (await runs.lastFinishedForThreads([anchor.sessionId])).get(anchor.sessionId)?.status === "failed";
+          const running = active.find((run) => run.status === "running" && !leaseLapsed(run, now()));
+          const [title, phrase] = ((): [string, string] => {
+            if (running) return [purposeOf(running) ?? "Thinking it through", "Working on it"];
+            if (active.length) return [purposeOf(active[0]) ?? "Queued", "Picking back up shortly"];
+            if (helpers.length) return ["Waiting on subagents", "Subagents are working"];
+            if (monitors.length) return [monitors[0]!.purpose ?? "Watching for updates", "Keeping watch"];
+            if (jobs.length) return [jobs[0]!.purpose ?? "Background job", "Running in the background"];
+            return [`${failed ? "Stopped after" : "Done in"} ${duration(elapsed)}`, ""];
+          })();
+          if (elapsed > 5 * 60_000 && session) state.followUrl = conversationWebUrl(activity.publicWebUrl, session.id);
           if (leaseLost) return true;
           if (!(await persist(state))) return true;
+          const details = richText(
+            state.emoji,
+            ongoing && elapsed >= 60_000 ? `${phrase} · ${duration(elapsed, false)}` : phrase,
+          );
           const blocks: Record<string, unknown>[] = [
             {
               type: "task_card",
               task_id: `${SLACK_STATUS_TASK_PREFIX}${state.cardId}`,
-              title,
-              status: ongoing ? "in_progress" : "complete",
+              title: snippet(title, 80),
+              status: (failed && "error") || (ongoing && "in_progress") || "complete",
+              ...(details ? { details } : {}),
             },
           ];
+          if (helpers.length)
+            blocks.push({
+              type: "plan",
+              title: helpers.length === 1 ? "1 subagent" : `${helpers.length} subagents`,
+              tasks: helpers.slice(0, 50).map(({ child, run }) => {
+                const step = richText(undefined, purposeOf(run) ?? "");
+                return {
+                  task_id: `${SLACK_STATUS_TASK_PREFIX}${state!.cardId}:${child.id}`,
+                  title: snippet(child.title || "Subagent", 80),
+                  status: "in_progress",
+                  ...(step ? { details: step } : {}),
+                };
+              }),
+            });
           if (state.followUrl)
             blocks.push({
               type: "context",
@@ -184,14 +229,24 @@ export function createSlackSessionStatus(
     });
   }
   return {
-    async start(client: StatusClient, account: string, runId: string, channel: string, threadTs?: string) {
+    async start(
+      client: StatusClient,
+      account: string,
+      runId: string,
+      channel: string,
+      threadTs?: string,
+      emoji?: Promise<string | undefined>,
+    ) {
       if (!threadTs) return;
+      const startedAt = now();
+      const picked = await emoji?.catch(swallowAs("slack: session status emoji", undefined));
       await sync(client, key(account, channel, threadTs), {
         account,
         channel,
         threadTs,
         anchorRunId: runId,
-        startedAt: now(),
+        startedAt,
+        ...(picked ? { emoji: picked } : {}),
         cardId: randomUUID(),
       }).catch(swallowAs("slack: start session status", undefined));
     },
@@ -201,6 +256,22 @@ export function createSlackSessionStatus(
           await sync(client, id).catch(swallowAs("slack: reconcile session status", undefined));
     },
   };
+}
+
+function duration(ms: number, seconds = true): string {
+  const total = Math.max(0, Math.round(ms / 1000));
+  const [h, m, sec] = [Math.floor(total / 3600), Math.floor(total / 60) % 60, total % 60];
+  if (h) return `${h}h ${m}m`;
+  if (!seconds) return `${m}m`;
+  return m ? `${m}m ${sec}s` : `${sec}s`;
+}
+
+function richText(emoji: string | undefined, text: string) {
+  const elements = [
+    ...(emoji ? [{ type: "emoji", name: emoji }] : []),
+    ...(text ? [{ type: "text", text: emoji ? ` ${text}` : text }] : []),
+  ];
+  return elements.length ? { type: "rich_text", elements: [{ type: "rich_text_section", elements }] } : undefined;
 }
 
 export type SlackSessionStatus = ReturnType<typeof createSlackSessionStatus>;

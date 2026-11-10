@@ -1706,9 +1706,11 @@ test("thread status is detached from reply delivery and steering cannot take own
   const network = new Promise<void>((resolve) => {
     release = resolve;
   });
+  const emojis: unknown[] = [];
   f.core.sessionStatus = {
     start: async (...args) => {
-      starts.push(args.slice(1));
+      starts.push(args.slice(1, 5));
+      emojis.push(await args[5]);
       await network;
     },
     reconcile: async () => {},
@@ -1730,6 +1732,8 @@ test("thread status is detached from reply delivery and steering cannot take own
     await original;
     assert.ok(f.client.posts.some((post) => post.text === "finished" && post.thread_ts === "700.1"));
     assert.equal(starts.length, 1);
+    await waitFor(() => emojis.length === 1, 5_000);
+    assert.equal(typeof emojis[0], "string");
   } finally {
     release();
     await f.stop();

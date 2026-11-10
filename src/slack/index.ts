@@ -338,14 +338,14 @@ export async function startSlackPlugin(
       });
     return statusSync;
   };
-  const statusSweep = createSweeper(reconcileStatus, 60_000, { label: "slack session status", immediate: true });
+  const statusSweep = createSweeper(reconcileStatus, 5_000, { label: "slack session status", immediate: true });
   const handler = createTurnHandler({
     accountId: ACCOUNT_LABEL,
     ...(cfg.externalAccess ? { externalAccess: cfg.externalAccess } : {}),
     continuePrivate: (runId, task) => continueInPrivate(core, runId, task, (id) => slackAccountClients().get(id)),
-    onEngaged: (runId, channel, threadTs) => {
+    onEngaged: (runId, channel, threadTs, emoji) => {
       void core.sessionStatus
-        ?.start(statusClient, statusAccount(), runId, channel, threadTs)
+        ?.start(statusClient, statusAccount(), runId, channel, threadTs, emoji)
         .catch(swallowAs("slack: session status start", undefined))
         .finally(() => {
           void reconcileStatus();
