@@ -67,7 +67,9 @@ function fixture() {
           jobs.filter((job) => job.scopeId === scope && job.status === "running" && job.expiresAt > at),
       },
       monitors: { ownedBy: async (scope) => watches.filter((watch) => watch.ownerScopeId === scope) },
-      deliveries: { pending: async () => outbox as never },
+      deliveries: {
+        pending: async (_type, thread) => outbox.filter((d) => d.provenance?.sourceThreadRef === thread) as never,
+      },
       sessions: {
         getByThread: async (threadRef) =>
           threadRef === "ch:C1:1.0" ? ({ id: "canonical-uuid", scopeId: "channel:C1" } as Session) : null,

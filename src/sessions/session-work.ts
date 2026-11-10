@@ -88,9 +88,7 @@ export function createSessionWork(deps: SessionWorkDeps, now = Date.now) {
         !branches.length &&
         !returning &&
         !background &&
-        ((await deps.deliveries?.pending(surface)) ?? []).some(
-          (delivery) => delivery.provenance?.sourceThreadRef === threadRef,
-        );
+        ((await deps.deliveries?.pending(surface, threadRef)) ?? []).length > 0;
       return {
         ...(session ? { sessionId: session.id } : {}),
         busy: own.length > 0 || branches.length > 0 || returning || !!background || delivering,
