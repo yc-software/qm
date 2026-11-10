@@ -90,16 +90,18 @@ test("groups describe categories and surface errors and approvals", () => {
 
 test("thinking titles become disclosure labels without repeating the heading", () => {
   for (const heading of ["**Organizing the setup**", "## Organizing the setup", "__Organizing the setup__"]) {
-    assert.deepEqual(thinkingPresentation(`${heading}\n\nBody text`), {
+    assert.deepEqual(thinkingPresentation(`${heading}\n\nBody text`, true), {
       title: "Organizing the setup",
       body: "Body text",
     });
   }
-  assert.deepEqual(thinkingPresentation("A thought without a heading"), {
+  assert.deepEqual(thinkingPresentation("A thought without a heading", true), {
     title: "Thinking",
     body: "A thought without a heading",
   });
-  assert.equal(thinkingPresentation("**Bold** inside a sentence").title, "Thinking");
+  assert.equal(thinkingPresentation("**Bold** inside a sentence", true).title, "Thinking");
+  assert.equal(thinkingPresentation("A finished thought", false).title, "Thought");
+  assert.equal(thinkingPresentation("**Organizing the setup**\n\nBody", false).title, "Organizing the setup");
 });
 
 test("session actions identify their recipient and retain failure state", () => {

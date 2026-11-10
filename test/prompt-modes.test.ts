@@ -474,7 +474,7 @@ test("web group conversations are not described as private 1:1s", async () => {
     text: "",
     origin: { kind: "direct" },
   });
-  assert.match(prompt, /live group conversation with Alice/);
+  assert.match(prompt, /live group conversation with the people here/);
   assert.doesNotMatch(prompt, /private 1:1/);
 });
 

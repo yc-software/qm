@@ -585,6 +585,7 @@ export function createToolResultScreen(turn: ToolResultScreenTurn) {
         }),
       });
       if (
+        input.botActor !== true &&
         !quarantineReleaseApprovals.some(
           (qa) =>
             qa.approvalKey === releaseKey &&

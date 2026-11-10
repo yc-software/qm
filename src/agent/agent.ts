@@ -118,6 +118,7 @@ export interface AgentTurnInput {
   tools: ToolContext;
   mcpTools?: McpToolDescriptor[];
   toolApprovalGate?(tool: string, callKey?: string): boolean;
+  approvalUnavailable?: string;
   emit(item: NewItem): Promise<Item>;
   resumeToolCall?: ResumableToolCall;
   approvedToolCalls?: ApprovedToolCall[];
