@@ -6,7 +6,8 @@ import { adminStatusFromGrants } from "../../admin/admin-service.ts";
 import { canonicalPerson, samePerson } from "../../directory/person.ts";
 import { isTerminal, type Run } from "../../runs/run-store.ts";
 import type { ServerDeps } from "../deps.ts";
-import type { ApiCtx } from "./route.ts";
+import { tenantOf, type ApiCtx } from "./route.ts";
+import type { Tenant } from "../../tenants/context.ts";
 import { headerValue, sendJson } from "../http.ts";
 import { currentModelRequestContext } from "../../model/request-context.ts";
 
@@ -35,14 +36,18 @@ export function adminActorFrom(ctx: Pick<ApiCtx, "req" | "deps" | "capability" |
   return actor ? { ...actor, id: canonicalPerson(actor.id) } : null;
 }
 
-export async function adminStanding(deps: ServerDeps, principalId: string): Promise<"inactive" | "admin" | "member"> {
+export async function adminStanding(
+  deps: ServerDeps,
+  tenant: Tenant,
+  principalId: string,
+): Promise<"inactive" | "admin" | "member"> {
   const id = canonicalPerson(principalId);
   if (!(await activePrincipal(deps, id))) return "inactive";
-  return adminStatusFromGrants((await deps.admin?.listGrants()) ?? [], id).isAdmin ? "admin" : "member";
+  return adminStatusFromGrants((await deps.admin?.listGrants(tenant)) ?? [], id).isAdmin ? "admin" : "member";
 }
 
 export async function authorizeAdmin(
-  ctx: Pick<ApiCtx, "req" | "res" | "deps" | "capability" | "actor">,
+  ctx: Pick<ApiCtx, "req" | "res" | "deps" | "capability" | "actor" | "tenant">,
   scope: string,
 ): Promise<Principal | null> {
   const { res, deps } = ctx;
@@ -51,7 +56,7 @@ export async function authorizeAdmin(
     return null;
   }
   const actor = adminActorFrom(ctx);
-  const standing = actor ? await adminStanding(deps, actor.id) : "member";
+  const standing = actor ? await adminStanding(deps, tenantOf(ctx), actor.id) : "member";
   if (standing === "inactive") {
     sendJson(res, 403, { error: "forbidden", message: "this principal is no longer active" });
     return null;

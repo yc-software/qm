@@ -41,7 +41,33 @@ test("getRun reports stale exactly when no live worker owns a previously-claimed
   assert.equal(
     (await built.app.getRun(runId))?.stale,
     true,
-    "requeued after a claim (deploy drain) — awaiting re-claim",
+    "requeued after a claim with no recorded reason — awaiting re-claim",
+  );
+
+  const parkedClaim = (await built.runs.claim("w2", 5_000))[0] ?? null;
+  assert.equal(parkedClaim?.id, runId);
+  await built.runs.releaseLease(runId, parkedClaim!.leaseToken!, { kind: "parked" });
+  assert.equal(
+    (await built.app.getRun(runId))?.stale,
+    undefined,
+    "parked for a person's turn — planned, not interrupted",
+  );
+
+  const drained = (await built.runs.claim("w2", 5_000))[0] ?? null;
+  await built.runs.releaseLease(runId, drained!.leaseToken!, { kind: "shutdown" });
+  assert.equal(
+    (await built.app.getRun(runId))?.stale,
+    undefined,
+    "handed back by a draining worker — planned, not interrupted",
+  );
+
+  const crashed = (await built.runs.claim("w3", 5_000))[0] ?? null;
+  assert.equal(await built.runs.heartbeat(runId, crashed!.leaseToken!, -1_000), true);
+  await built.runs.reapExpired();
+  assert.equal(
+    (await built.app.getRun(runId))?.stale,
+    true,
+    "a worker lost after a planned requeue — interrupted again",
   );
 
   const reclaimed = (await built.runs.claim("w2", 5_000))[0] ?? null;
