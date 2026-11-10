@@ -20,6 +20,26 @@ export const SWARM_LIMITS = {
   provisionMs: 10_000,
 } as const;
 
+export const STAMP_SWARM_COMPUTERS_MIGRATION = {
+  id: "durable-map/swarms/0040-stamp-computers",
+  statements: [
+    `DO $$
+    BEGIN
+      IF to_regclass('swarms') IS NOT NULL AND to_regclass('sandbox_resources') IS NOT NULL THEN
+        UPDATE durable_map_versions SET v = v + 1 WHERE tbl = 'sandbox_resources';
+        UPDATE sandbox_resources r SET json = r.json || jsonb_build_object('swarmId', c.swarm_id)
+        FROM (
+          SELECT tenant_id, id AS swarm_id, json #>> '{board,sandboxId}' AS sandbox_id FROM swarms
+          UNION ALL
+          SELECT s.tenant_id, s.id, member ->> 'sandboxId'
+          FROM swarms s, jsonb_array_elements(s.json -> 'members') AS member
+        ) c
+        WHERE r.tenant_id = c.tenant_id AND r.id = c.sandbox_id AND NOT r.json ? 'swarmId';
+      END IF;
+    END $$`,
+  ],
+};
+
 export interface SwarmMember {
   id: string;
   sessionId?: string;

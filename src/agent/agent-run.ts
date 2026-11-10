@@ -9,7 +9,6 @@ import {
 import {
   recordSteerIntake,
   recordStoppedTurn,
-  imageRefs,
   resumeInterruptedToolCall,
   runApprovedToolCall,
   approvedCallSteerNote,
@@ -19,7 +18,6 @@ import {
 } from "./turn-support.ts";
 import { withDocumentInputs, type DocumentModel } from "./document-inputs.ts";
 import { guardOutputBudget, sanitizeLlmPayload, trimPayloadToByteBudget } from "./provider-payload.ts";
-import { documentStub, type DocumentInput } from "../core/documents.ts";
 import { mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -37,25 +35,10 @@ import {
   type Model,
   type ModelThinkingLevel,
   type ToolResultMessage,
-  type Usage,
 } from "@earendil-works/pi-ai";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
-
-const TURN_EFFORT_LEVELS = new Set<string>([
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-  "ultracode",
-  "auto",
-  "default",
-  "adaptive",
-]);
 import type { ConversationTurn, StopScope } from "../types.ts";
-import { isAgentReply, isUserItem, type Item } from "../sessions/items.ts";
+import type { Item } from "../sessions/items.ts";
 import type { LlmCallUsage } from "../sessions/session-store.ts";
 import { NonRetryableTurnError, ProviderTurnError } from "../core/turn-error.ts";
 import {
@@ -70,8 +53,6 @@ import { asError, reportFailure, swallow, swallowAs } from "../util/errors.ts";
 import { startPhase } from "../../plugins/chassis/src/error-reporting.ts";
 import {
   defaultInteractiveThinkingLevel,
-  modelSupportsAdaptiveThinking,
-  modelSupportsProviderDefault,
   resolveModel,
   contextTokenBudgetForModel,
   modelHasPrices,
@@ -103,9 +84,7 @@ import {
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
 import {
   reconstructMessagesFromHistory,
-  dayMarkerPrefix,
   recordedMessageTimestamps,
-  userPromptText,
   seedPriorTurns,
   legacyAssistant,
   type PiReplayMessage,
@@ -122,19 +101,45 @@ import {
   SECURITY_SCREEN_SYSTEM_PROMPT,
 } from "../security/security-posture.ts";
 import { errMessage } from "../util/errors.ts";
-
+import type { TurnSession } from "./turn-session.ts";
+import { recordCapturedRequests, subscribeTurnStream } from "./turn-stream.ts";
+import { settleTurnGoal, turnResult } from "./turn-settle.ts";
+import { openTurnPrompt, replayApprovedCalls, turnToolRef } from "./turn-open.ts";
+import { applyReasoningMode, applyTurnEffort } from "./turn-effort.ts";
 import {
-  createFloorCapPolicy,
-  createGrindMeter,
-  meterGrindCall,
-  bankGoalTurn,
-  enforceGoal,
-  goalPausedNote,
-  goalSteeringNote,
-  meterGoalCall,
-  goalWorkDigest,
-  type GovernorVerdict,
-} from "./goal.ts";
+  ACK_EMOJI_PROMPT,
+  APPROVAL_SUMMARY_PROMPT,
+  buildDetectionPrompt,
+  parseDetectVerdict,
+  renderDetectPrompt,
+} from "./utility-prompts.ts";
+import {
+  messagesSince,
+  piAssistantFailure,
+  piGoalWork,
+  piLastAssistantTextOrThrow,
+  piRoundFailed,
+  piTurnError,
+  textFromContent,
+  type AssistantTextSession,
+} from "./pi-messages.ts";
+import {
+  DOCUMENT_REJECTION_CODES,
+  documentsDroppedNote,
+  FALLBACK_CODES,
+  fallbackFailed,
+  refusalFallbackNote,
+  routeFailed,
+} from "./turn-fallback.ts";
+import {
+  EMPTY_ENDING_MIN_BUDGET_MS,
+  emptyEndingNote,
+  raceTurnWallClock,
+  wallClockTurnFailure,
+  type TurnWallClockOutcome,
+} from "./turn-wall-clock.ts";
+
+import { createFloorCapPolicy, createGrindMeter, enforceGoal, type GovernorVerdict } from "./goal.ts";
 
 export interface AgentOptions {
   routes?: ModelRoutes;
@@ -163,195 +168,6 @@ export function agentConfigOptions(config: Config): AgentOptions {
     ...coreToolOptions(config),
     turnWallClockMs: config.turnWallClockMs,
   };
-}
-
-const TURN_DETECTION_PROMPT_HEAD = [
-  "You decide whether an AI assistant should reply to the NEWEST message in a conversation",
-  "thread it is part of — judging like a thoughtful human colleague, not an eager bot.",
-  "The assistant's own personality and voice are in the persona you're given; judge as THAT",
-  "specific colleague would, not a generic bot.",
-  "",
-  "Reply (YES) when the newest message:",
-  "  - asks the assistant a question or makes a request (directly or by clear implication),",
-  "  - is naturally for the assistant based on the conversation flow, even without an explicit",
-  "    mention: it answers a question you just asked, says yes/no/go ahead/that/this in response",
-  "    to your prior message, asks for clarification or continuation of your work, or follows up",
-  "    on something you just said or did.",
-  "  - is a follow-up question in an active exchange where the implied target is the assistant,",
-  "    even if the assistant is not explicitly mentioned. Clues include second-person language",
-  "    (you/your), references to what the assistant just said, did, saw, has, can access, or can",
-  '    do next, and short continuation questions like "what about now?", "what do you mean?",',
-  '    or "what is available?". Treat those as questions for you unless the message explicitly',
-  "    addresses another person.",
-  "  - @-addresses or names the assistant,",
-  "  - uses a plain-text assistant name/handle (case, punctuation, and spacing may vary), like",
-  '    "agent", "bot", "agent prod", or the assistant\'s visible app name, especially at the',
-  "    start of a message. Treat that as addressed to you even when it is not a formal platform @mention.",
-  "  - gives the assistant an instruction, correction, preference, or feedback — stated OR",
-  "    implied — about how it should act or who it should be, EVEN as a flat statement with no",
-  '    question mark (e.g. "be more concise from now on", "those status updates are running long").',
-  "    A colleague who's just been told (even indirectly) how to do their job acknowledges it;",
-  "    staying silent on feedback aimed at you reads as ignoring the person.",
-  "  - is an open-ended question to the room that the assistant can genuinely help with.",
-  "  - is posted in a thread the assistant itself STARTED (the assistant's own message is the",
-  "    thread root — e.g. a deploy/PR notification it posted) and isn't clearly aimed at a specific",
-  "    OTHER person. Someone replying under your own message is almost always talking to you, even",
-  '    without naming you — a bare "what did you think?" there is a question FOR you, not a bystander.',
-  "Do NOT choose NO just because the topic is legal, medical, financial, sensitive, uncertain,",
-  "or needs caveats/disclaimers. If the message is aimed at you, choose YES; the main assistant",
-  "can answer carefully with appropriate caveats.",
-];
-
-const TURN_DETECTION_PROMPT_TAIL = [
-  "Stay out (NO) when:",
-  "  - two or more people are talking to EACH OTHER and the assistant isn't needed,",
-  "  - it's chit-chat or a side remark not aimed at the assistant,",
-  "  - chiming in would be interrupting rather than helping.",
-  "",
-  "Examples (newest message → verdict):",
-  '  - "those recaps are getting pretty long"  → YES (feedback with an implied request to tighten up — confirm)',
-  '  - "from now on keep your replies short"  → YES (a standing preference for how you should act)',
-  '  - "actually that\'s not what I meant, I wanted staging"  → YES (correcting what you just did)',
-  '  - "can you also loop in finance?"  → YES (a request, even mid-thread)',
-  '  - "yes, send it" after you offered to send something → YES (a direct answer to you, no mention needed)',
-  '  - "can you send the chart?" after your chart summary → YES (a follow-up to your work, no mention needed)',
-  '  - "what do you mean by that?" after your prior reply → YES (the implied target is you)',
-  '  - "what is available now?" after you described a blocker or capability → YES (follow-up to your state/work)',
-  '  - "agent prod do I have grounds to sue if my workplace is consistently 78F at lunchtime"  → YES (plain-text assistant name + question; answer carefully with caveats)',
-  '  - "@dana can you review this?"  → NO (addressed to another person, not you)',
-  '  - "<@U123> what do you mean by that?" → NO (explicitly addressed to another person)',
-  '  - "haha the deploy bot is melting down again"  → NO (chit-chat between people)',
-  "",
-  "When genuinely unsure, prefer NO — a good colleague would rather stay quiet than barge in —",
-  "but when the message is plausibly aimed at the assistant (an instruction, correction, or",
-  "feedback about it), prefer YES: blanking a message directed at you is worse than a brief reply.",
-];
-
-export function buildDetectionPrompt(reactionGuidance?: string): string {
-  const guidance = reactionGuidance?.trim();
-  const lines = [...TURN_DETECTION_PROMPT_HEAD];
-  if (guidance) {
-    lines.push(
-      "Acknowledge with a reaction (REACT) — instead of a written reply — when the newest message",
-      'is aimed at the assistant but needs no words: a thank-you, praise, or a "nice/lgtm/perfect"',
-      "about something the assistant did. A real colleague nods here instead of writing a paragraph,",
-      "as THAT specific colleague (per the persona) would. " + guidance,
-    );
-  }
-  lines.push(...TURN_DETECTION_PROMPT_TAIL);
-  lines.push(
-    guidance
-      ? "First line: exactly YES, NO, or REACT (a REACT verdict is REACT followed by the reaction, per the guidance above)."
-      : "First line: exactly YES or NO.",
-    "Optionally a brief reason after.",
-  );
-  return lines.join("\n");
-}
-
-export function parseDetectVerdict(out: string, reactionsEnabled: boolean): DetectResult {
-  const firstLine = out.split("\n", 1)[0] ?? "";
-  const verdict = firstLine.replace(/^\s*(?:answer|verdict)\s*[:-]?\s*/i, "").replace(/^[\s*_"'`]+/, "");
-  if (reactionsEnabled && /^react\b/i.test(verdict)) {
-    const reactions = parseEmojiTokens(firstLine);
-    return reactions.length
-      ? { respond: false, reactions, reason: out.slice(0, 120) }
-      : { respond: false, reason: out.slice(0, 120) };
-  }
-  return { respond: /^yes\b/i.test(verdict), reason: out.slice(0, 120) };
-}
-
-function parseEmojiTokens(line: string): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  const push = (t: string): void => {
-    if (t && !seen.has(t)) {
-      seen.add(t);
-      out.push(t);
-    }
-  };
-  for (const m of line.matchAll(/:([a-z0-9_+'-]+):/gi)) push(m[1]!.toLowerCase());
-  for (const m of line.matchAll(/\p{Extended_Pictographic}/gu)) push(m[0]!);
-  return out.slice(0, 3);
-}
-
-const DETECT_PERSONA_CAP = 2000;
-
-export function renderDetectPrompt(detect: DetectInput): string {
-  const recentAssistantTurns = detect.history
-    .filter(isAgentReply)
-    .slice(-4)
-    .map((e) => `assistant (you): ${e.text ?? ""}`.trim())
-    .filter((l) => l.length > 0);
-  const reacts = Boolean(detect.reactionGuidance?.trim());
-  const parts: string[] = [];
-  const persona = detect.systemPrompt.trim();
-  if (persona) {
-    const note = reacts
-      ? "your persona — judge, and pick any emoji, in THIS voice"
-      : "your persona — judge in THIS voice";
-    parts.push(`Who you are (${note}):\n${persona.slice(0, DETECT_PERSONA_CAP)}`);
-  }
-  if (detect.threadOpener?.trim())
-    parts.push(
-      `This is a thread YOU (the assistant) started — your own message is its root:\n${detect.threadOpener.trim()}`,
-    );
-  if (recentAssistantTurns.length)
-    parts.push(`Your earlier replies in this thread:\n${recentAssistantTurns.join("\n")}`);
-  if (detect.recentContext.trim())
-    parts.push(`Messages since your last reply (you have NOT responded to these):\n${detect.recentContext.trim()}`);
-  parts.push(`NEWEST message:\n${detect.message.trim()}`);
-  parts.push(
-    reacts ? "Should you (the assistant) reply — YES, NO, or REACT?" : "Should you (the assistant) reply — YES or NO?",
-  );
-  return parts.join("\n\n");
-}
-
-const ACK_EMOJI_PROMPT = [
-  "You pick ONE emoji to react to a Slack message with, silently acknowledging you've seen it and",
-  "are working on it. The emoji should fit the TOPIC or vibe of what the person asked — a debugging",
-  "task gets :bug:, a data question gets :bar_chart:, a security task gets :lock:, a vague or general",
-  'request gets a neutral "looking into it" emoji like :eyes: or :mag:.',
-  "Some candidates are the workspace's own custom emoji (unusual names you don't recognize) — favor a",
-  "playful, on-vibe one of those when it genuinely fits, rather than always the literal topic match.",
-  "Rules:",
-  "- Choose ONLY from the provided candidate list. Return the exact name, no colons.",
-  "- The work is still in flight — never a completion-flavored emoji (check, done, tada).",
-  "- When nothing topical or fun fits, prefer a neutral acknowledgment (eyes, mag, hourglass_flowing_sand).",
-  'Output STRICT JSON only: {"emoji":"<name>"}. Nothing else.',
-].join("\n");
-
-const APPROVAL_SUMMARY_PROMPT = [
-  "A command hit a human-approval gate. Explain, in ONE plain-English sentence, what running THIS",
-  "specific command would actually do — concrete enough that a non-expert can decide whether to allow it.",
-  "Name the real targets (files, branches, tables, URLs) the command acts on; don't restate the policy",
-  "label or the raw flags.",
-  "Output ONLY the sentence: no quotes, no prefix, no markdown. If the command is unintelligible,",
-  "output exactly: NONE",
-].join("\n");
-
-interface TurnSession {
-  agentSession: AgentSession;
-  ref: ToolContextRef & { effortLevel?: string };
-  composedPromptTokens: number;
-  agentDir: string;
-  ephemeralCwd?: string;
-}
-
-function sumCacheUsage(
-  usages: ReadonlyArray<LlmCallUsage | null>,
-): { cacheRead: number; cacheWrite: number; uncachedInput: number } | null {
-  let saw = false;
-  let cacheRead = 0;
-  let cacheWrite = 0;
-  let uncachedInput = 0;
-  for (const usage of usages) {
-    if (!usage) continue;
-    saw = true;
-    cacheRead += usage.cacheRead;
-    cacheWrite += usage.cacheWrite;
-    uncachedInput += usage.input;
-  }
-  return saw ? { cacheRead, cacheWrite, uncachedInput } : null;
 }
 
 interface IsolatedResources {
@@ -401,70 +217,6 @@ export function seedRawMessagesIntoSession(session: unknown, messages: readonly 
   }
 }
 
-function textFromContent(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .filter((c) => c && typeof c === "object" && (c as { type?: unknown }).type === "text")
-    .map((c) => (typeof (c as { text?: unknown }).text === "string" ? (c as { text: string }).text : ""))
-    .join("");
-}
-
-function piGoalWork(messages: ReadonlyArray<unknown>): string {
-  const lines: string[] = [];
-  for (const m of messages as ReadonlyArray<{ role?: string; content?: unknown; toolName?: string }>) {
-    if (m.role === "toolResult") lines.push(`tool_result ${m.toolName ?? ""}: ${textFromContent(m.content)}`);
-    else if (m.role === "user" || m.role === "assistant") {
-      const said = textFromContent(m.content);
-      if (said) lines.push(`${m.role}: ${said}`);
-      for (const c of Array.isArray(m.content) ? m.content : [])
-        if ((c as { type?: string }).type === "toolCall")
-          lines.push(
-            `tool_call ${(c as { name?: string }).name ?? ""}: ${JSON.stringify((c as { arguments?: unknown }).arguments ?? {})}`,
-          );
-    }
-  }
-  return goalWorkDigest(lines);
-}
-
-type AssistantTextSession = Pick<AgentSession, "getLastAssistantText" | "messages">;
-
-function piFailedAssistant(session: AssistantTextSession): AssistantMessage | undefined {
-  const lastAssistant = [...session.messages].reverse().find((m) => m.role === "assistant") as
-    AssistantMessage | undefined;
-  return lastAssistant?.stopReason === "error" ? lastAssistant : undefined;
-}
-
-function lastInputTokens(session: AssistantTextSession, failed: AssistantMessage): number | undefined {
-  const ok = [...session.messages]
-    .reverse()
-    .find((m) => m !== failed && m.role === "assistant" && (m as AssistantMessage).stopReason !== "error") as
-    AssistantMessage | undefined;
-  const u = ok?.usage;
-  return u ? u.input + u.cacheRead + u.cacheWrite : undefined;
-}
-
-function piAssistantFailure(session: AssistantTextSession): ProviderTurnError | null {
-  const failed = piFailedAssistant(session);
-  if (!failed) return null;
-  const contextWindow = (
-    failed.model ? (resolveModel(failed.model) as { contextWindow?: number } | undefined) : undefined
-  )?.contextWindow;
-  return providerTurnError(failed, { contextWindow, lastInputTokens: lastInputTokens(session, failed) });
-}
-
-const FALLBACK_CODES = new Set(["refusal", "model_unavailable", "model_budget", "auth"]);
-const DOCUMENT_REJECTION_CODES = new Set(["context_too_long", "bad_request"]);
-
-function documentsDroppedNote(documents: readonly DocumentInput[]): string {
-  return (
-    `The model provider rejected an earlier request in this task while it carried these attachments inline ` +
-    `(most likely they exceed the model's context), so they were removed from model input. ` +
-    documents.map((document) => documentStub(document)).join(" ") +
-    ` If the file matters to the request, tell the person it could not be read in full here and read only the parts you need.`
-  );
-}
-
 const DOCUMENTS_DROPPED_RETRY_NOTE =
   "[system] The previous request failed while it carried inline attachments; they have been replaced with notes on how to read them from saved files. Continue with the request.";
 
@@ -477,140 +229,6 @@ function dropFailedAssistant(session: AgentSession, messagesBefore: number): voi
       break;
     }
   }
-}
-
-export function piLastAssistantTextOrThrow(session: AssistantTextSession): string | undefined {
-  const err = piAssistantFailure(session);
-  if (err) throw err;
-  return session.getLastAssistantText();
-}
-
-function messagesSince(session: AssistantTextSession, messagesBefore?: number): AssistantTextSession {
-  return messagesBefore === undefined
-    ? session
-    : ({ messages: session.messages.slice(messagesBefore) } as AssistantTextSession);
-}
-
-function piRoundFailed(session: AssistantTextSession, messagesBefore: number): boolean {
-  return !!piFailedAssistant(messagesSince(session, messagesBefore));
-}
-
-export function piTurnError(session: AssistantTextSession, thrown: unknown, messagesBefore?: number): Error {
-  const detailed = piAssistantFailure(messagesSince(session, messagesBefore));
-  if (detailed) return detailed;
-  return thrown instanceof Error ? thrown : new Error(String(thrown));
-}
-
-function fallbackFailed(failure: ProviderTurnError, fallback: ModelRoute, reason: string): ProviderTurnError {
-  return new ProviderTurnError(`${failure.message} — the fallback ${routeLabel(fallback)} also failed: ${reason}`, {
-    code: failure.code,
-    retryable: false,
-    status: failure.status,
-    raw: failure.raw,
-  });
-}
-
-function routeFailed(failure: ProviderTurnError, route: ModelRoute): ProviderTurnError {
-  return new ProviderTurnError(`${routeLabel(route)}: ${failure.message}`, {
-    code: failure.code,
-    retryable: failure.retryable,
-    status: failure.status,
-    raw: failure.raw,
-  });
-}
-
-export function refusalFallbackNote(fromModel: string, toModel: string, refusal: string): string {
-  return (
-    `[system] Your previous response was blocked or failed at the model provider before it reached the user ` +
-    `— these failures can fire spuriously; the user did nothing wrong. ` +
-    `The provider's stated reason was: "${refusal}". ` +
-    `The turn has been switched from ${fromModel} to ${toModel}. Start your reply by briefly ` +
-    `telling the user that ${fromModel} could not answer this request and why (paraphrase the provider's ` +
-    `stated reason in plain words), and that you are answering as ${toModel} instead — then answer ` +
-    `their message.`
-  );
-}
-
-export type TurnWallClockOutcome = "ok" | "aborted" | "abandoned";
-
-const TURN_ABORT_GRACE_MS = 30_000;
-
-export const EMPTY_ENDING_MIN_BUDGET_MS = 30_000;
-export const EMPTY_ENDING_NOTE =
-  "[system] The turn ended with an empty message. If the work above is unfinished, continue it — without redoing steps that already succeeded; otherwise reply with your answer now.";
-
-export function emptyEndingNote(opts: {
-  wallClock: TurnWallClockOutcome;
-  userAborted: boolean;
-  cancelled: boolean;
-  surfaceTools: boolean;
-  pollFire: boolean;
-  ref: {
-    runtimeHandoff?: unknown;
-    silentRequested?: boolean;
-    swarmHeld?: boolean;
-    pausedOnApproval?: boolean;
-    pendingApprovals?: unknown[];
-    modelCalls?: number;
-  };
-  session: AssistantTextSession;
-  turnWallClockMs: number;
-  elapsedMs: number;
-}): string | null {
-  if (opts.wallClock !== "ok" || opts.userAborted || opts.cancelled || opts.surfaceTools) return null;
-  if (endedOnPurpose(opts.ref) || opts.ref.pendingApprovals?.length) return null;
-  if (opts.pollFire) return null;
-  const calls = opts.ref.modelCalls ?? 0;
-  if (calls === 0) return null;
-  if (piFailedAssistant(opts.session)) return null;
-  if ((opts.session.getLastAssistantText() ?? "").trim()) return null;
-  if (opts.turnWallClockMs > 0 && opts.turnWallClockMs - opts.elapsedMs < EMPTY_ENDING_MIN_BUDGET_MS) return null;
-  return EMPTY_ENDING_NOTE;
-}
-
-export async function raceTurnWallClock(
-  prompting: Promise<void>,
-  opts: { capMs: number; graceMs?: number; abort: () => Promise<void>; extendMs?: () => number },
-): Promise<TurnWallClockOutcome> {
-  if (!Number.isFinite(opts.capMs) || opts.capMs <= 0) {
-    await prompting;
-    return "ok";
-  }
-  let capTimer: NodeJS.Timeout | undefined;
-  let graceTimer: NodeJS.Timeout | undefined;
-  try {
-    const settled = prompting.then(() => "settled" as const);
-    let waitMs = opts.capMs;
-    for (;;) {
-      const deadline = new Promise<"deadline">((resolve) => {
-        capTimer = setTimeout(() => resolve("deadline"), waitMs);
-      });
-      if ((await Promise.race([settled, deadline])) === "settled") return "ok";
-      clearTimeout(capTimer);
-      const extension = opts.extendMs?.() ?? 0;
-      if (!(Number.isFinite(extension) && extension > 0)) break;
-      waitMs = extension;
-    }
-    void opts.abort().catch(swallowAs("pi: wall-clock abort", undefined));
-    const grace = new Promise<"grace">((resolve) => {
-      graceTimer = setTimeout(() => resolve("grace"), opts.graceMs ?? TURN_ABORT_GRACE_MS);
-    });
-    if ((await Promise.race([settled.catch(() => "settled" as const), grace])) === "settled") return "aborted";
-    prompting.catch(swallowAs("pi: abandoned capped turn", undefined));
-    return "abandoned";
-  } finally {
-    clearTimeout(capTimer);
-    clearTimeout(graceTimer);
-  }
-}
-
-export function wallClockTurnFailure(
-  wallClock: TurnWallClockOutcome,
-  userAborted: boolean,
-  cancelAborted: boolean,
-): boolean {
-  if (wallClock === "ok" || userAborted) return false;
-  return !cancelAborted || wallClock === "abandoned";
 }
 
 export function stableCwd(prefix: string): string {
@@ -740,40 +358,6 @@ async function recordOneShotCall(
   }
 }
 
-export function applyTurnEffort(session: AgentSession, level?: string): void {
-  if (!level || !TURN_EFFORT_LEVELS.has(level)) return;
-  if (level === "adaptive" || level === "default") {
-    session.setThinkingLevel("off");
-    return;
-  }
-  const effectiveLevel =
-    level === "auto" && session.state.model ? defaultInteractiveThinkingLevel(session.state.model) : level;
-  const normalizedLevel = effectiveLevel === "auto" ? "medium" : effectiveLevel;
-  const providerLevel = normalizedLevel === "ultracode" ? "max" : normalizedLevel;
-  session.setThinkingLevel(providerLevel as ModelThinkingLevel);
-}
-
-export function applyReasoningMode<T>(payload: T, model: Model<Api>, level?: string): T {
-  if (level !== "adaptive" && level !== "default") return payload;
-  if (level === "adaptive" ? !modelSupportsAdaptiveThinking(model) : !modelSupportsProviderDefault(model))
-    throw new NonRetryableTurnError(`${level} reasoning is not supported by ${model.id}`);
-  if (!payload || typeof payload !== "object") return payload;
-  const body = payload as Record<string, unknown>;
-  delete body.thinking;
-  delete body.reasoning;
-  delete body.reasoning_effort;
-  if (body.output_config && typeof body.output_config === "object") {
-    const outputConfig = { ...body.output_config } as Record<string, unknown>;
-    delete outputConfig.effort;
-    if (Object.keys(outputConfig).length) body.output_config = outputConfig;
-    else delete body.output_config;
-  }
-  if (model.reasoning && ["openai-responses", "openai-codex-responses"].includes(model.api))
-    body.include = [...new Set([...(Array.isArray(body.include) ? body.include : []), "reasoning.encrypted_content"])];
-  if (level === "adaptive") body.thinking = { type: "adaptive", display: "summarized" };
-  return payload;
-}
-
 export function createAgent(opts?: AgentOptions): Agent {
   const routes = opts?.routes ?? createModelRoutes();
   const baseModelId = routes.baseModelId;
@@ -857,44 +441,39 @@ export function createAgent(opts?: AgentOptions): Agent {
       }
     }
 
-    {
-      const agent = session.agent;
-      if (agent) {
-        agent.onPayload = async (payload, model) => {
-          ref.modelCalls = (ref.modelCalls ?? 0) + 1;
-          ref.onModelRequest?.();
-          ref.stepPhase?.end();
-          ref.stepPhase = undefined;
-          ref.firstTokenPhase?.end();
-          ref.firstTokenPhase = startPhase("model.first_token");
-          applyFastSpeed(payload, ref.fast, (model as { api?: string } | undefined)?.api);
-          applyReasoningMode(payload, model as Model<Api>, ref.effortLevel);
-          const capturedPayload = ref.llmCapture ? sanitizeLlmPayload(payload, model) : undefined;
-          let finalPayload = await withDocumentInputs(
-            payload,
-            model as DocumentModel,
-            ref.documents ?? [],
-            ref.abortSignal,
-            ref.documentsStubbed ? documentsDroppedNote(ref.documents ?? []) : undefined,
-          );
-          const guarded = guardOutputBudget(finalPayload, model);
-          if (guarded.kind === "raised") {
-            console.error(
-              `[pi] output-budget guard raised output cap ${guarded.from} -> ${guarded.to} (estimated prompt ${guarded.estimatedPromptTokens} tokens) session=${sessionId}`,
-            );
-          }
-          try {
-            const gateway = modelGatewayRequest(route.gateway, model as Model<Api>);
-            finalPayload = trimPayloadToByteBudget(finalPayload, gateway ? 9_000_000 : undefined);
-          } catch (e) {
-            swallow("pi: request byte budget", e);
-          }
-          if (capturedPayload) ref.llmCapture?.push(capturedPayload);
-          return finalPayload;
-        };
-        agent.afterToolCall = pauseStampAfterToolCall(ref);
+    session.agent.onPayload = async (payload, model) => {
+      ref.modelCalls = (ref.modelCalls ?? 0) + 1;
+      ref.onModelRequest?.();
+      ref.stepPhase?.end();
+      ref.stepPhase = undefined;
+      ref.firstTokenPhase?.end();
+      ref.firstTokenPhase = startPhase("model.first_token");
+      applyFastSpeed(payload, ref.fast, (model as { api?: string } | undefined)?.api);
+      applyReasoningMode(payload, model as Model<Api>, ref.effortLevel);
+      const capturedPayload = ref.llmCapture ? sanitizeLlmPayload(payload, model) : undefined;
+      let finalPayload = await withDocumentInputs(
+        payload,
+        model as DocumentModel,
+        ref.documents ?? [],
+        ref.abortSignal,
+        ref.documentsStubbed ? documentsDroppedNote(ref.documents ?? []) : undefined,
+      );
+      const guarded = guardOutputBudget(finalPayload, model);
+      if (guarded.kind === "raised") {
+        console.error(
+          `[pi] output-budget guard raised output cap ${guarded.from} -> ${guarded.to} (estimated prompt ${guarded.estimatedPromptTokens} tokens) session=${sessionId}`,
+        );
       }
-    }
+      try {
+        const gateway = modelGatewayRequest(route.gateway, model as Model<Api>);
+        finalPayload = trimPayloadToByteBudget(finalPayload, gateway ? 9_000_000 : undefined);
+      } catch (e) {
+        swallow("pi: request byte budget", e);
+      }
+      if (capturedPayload) ref.llmCapture?.push(capturedPayload);
+      return finalPayload;
+    };
+    session.agent.afterToolCall = pauseStampAfterToolCall(ref);
 
     const entry: TurnSession = {
       agentSession: session,
@@ -911,44 +490,10 @@ export function createAgent(opts?: AgentOptions): Agent {
       const route = await sessionRoute(dispatched);
       const desiredModelId = route.modelId;
       const wantFast = wantsFastMode(dispatched.runtime?.fastMode, desiredModelId);
-      const ref: TurnSession["ref"] = {
-        current: dispatched.tools,
-        documents: dispatched.documents,
-        runtimeHandoff: undefined,
-        runtimeMutationPending: false,
-        runtimeInFlight: new Set(),
-        runtimeActorId: dispatched.runtimeActorId,
-        pendingApprovals: [],
-        pausedOnApproval: undefined,
-        ...(dispatched.approvalUnavailable ? { approvalUnavailable: dispatched.approvalUnavailable } : {}),
-        silentRequested: false,
-        pollFire: !!dispatched.pollFire,
-        screenToolResult: dispatched.screenToolResult,
-        governGoal: dispatched.governGoal,
-        saveGoal: dispatched.saveGoal,
-        emit: dispatched.emit,
-        scopeLabel: dispatched.scopeLabel,
-        orgScopeId: dispatched.orgScopeId,
-        toolApprovalGate: dispatched.toolApprovalGate,
-        shutdown: dispatched.shutdown,
-      };
+      const ref = turnToolRef(dispatched);
       let activeSteps: StepRecorder | undefined;
       const tools = recordingTools(createTurnTools(ref, dispatched), () => activeSteps);
-      const approvedItems: Item[] = [];
-      for (const call of dispatched.approvedToolCalls ?? [])
-        approvedItems.push(
-          ...(
-            await runApprovedToolCall(
-              call,
-              ref,
-              tools as unknown as BridgedTool[],
-              dispatched.cancel ? { cancel: dispatched.cancel } : {},
-            )
-          ).items,
-        );
-      const approvedTurn = approvedItems.length
-        ? { ...dispatched, history: [...dispatched.history, ...approvedItems] }
-        : dispatched;
+      const approvedTurn = await replayApprovedCalls(dispatched, ref, tools);
       const resumed = await resumeInterruptedToolCall(approvedTurn, ref, tools as unknown as BridgedTool[]);
       const turn = resumed ? { ...approvedTurn, history: resumed.history } : approvedTurn;
       const { entry } = await createTurnSession(
@@ -982,38 +527,7 @@ export function createAgent(opts?: AgentOptions): Agent {
         const continueTurn = !!continued;
         const grindMeter = createGrindMeter();
 
-        entry.ref.goal = turn.goal ?? null;
-        entry.ref.goalMeter = grindMeter;
-        entry.ref.goalInbox = turn.goalInbox;
-        entry.ref.goalRound = turn.continueTurn ? 1 : 0;
-        const activeGoalAtStart = entry.ref.goal?.status === "active" ? entry.ref.goal : null;
-        const pausedGoalAtStart = entry.ref.goal?.status === "paused" ? entry.ref.goal : null;
-        const goalNote = (() => {
-          if (activeGoalAtStart) return goalSteeringNote(activeGoalAtStart);
-          if (pausedGoalAtStart) return goalPausedNote(pausedGoalAtStart);
-          return "";
-        })();
-        const userEntry = continueTurn
-          ? turn.history.find((e) => e.seq === turn.resumeUserSeq)
-          : await turn.emit({
-              kind: "UserMessage",
-              text: turn.input,
-              author: turn.runtimeActorId ?? null,
-              externalId: turn.triggerTs ?? turn.entryTs ?? null,
-              body: {
-                ...(turn.environment ? { environment: turn.environment } : {}),
-                ...(goalNote.trim() ? { goalNote } : {}),
-                ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
-                ...imageRefs(turn.images),
-              },
-            });
-        const modelPrompt =
-          (userEntry
-            ? dayMarkerPrefix(
-                turn.history.findLast((e) => isUserItem(e) && e.seq < userEntry.seq),
-                userEntry,
-              )
-            : "") + userPromptText({ goalNote, text: turn.input, environment: turn.environment });
+        const { userEntry, modelPrompt } = await openTurnPrompt({ entry, turn, continueTurn, grindMeter });
         entry.ref.llmCapture = captureRequests && turn.recordLlmRequest ? [] : undefined;
         entry.ref.modelCalls = 0;
         entry.ref.onModelRequest = () => {
@@ -1088,60 +602,7 @@ export function createAgent(opts?: AgentOptions): Agent {
           if (e.type === "message_end") noteDocumentRejection(e.message);
           return e.type === "message_end" ? onMessageEnd(e.message) : undefined;
         });
-        const unsubscribe = entry.agentSession.subscribe((event) => {
-          if (event.type === "message_update" && entry.ref.firstTokenPhase) {
-            entry.ref.firstTokenPhase.end();
-            entry.ref.firstTokenPhase = undefined;
-          }
-          if (event.type === "message_start" && (event.message as { role?: string }).role === "assistant") {
-            steps.startStreaming();
-          } else if (event.type === "message_update" && event.assistantMessageEvent.type === "text_start") {
-            turn.onTextBlockStart?.();
-          } else if (event.type === "message_update" && event.assistantMessageEvent.type === "toolcall_start") {
-            const block = event.assistantMessageEvent.partial.content[event.assistantMessageEvent.contentIndex];
-            if (block?.type === "toolCall") turn.onToolCallStart?.(block.name);
-          } else if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-            turn.onDelta?.(event.assistantMessageEvent.delta);
-          } else if (event.type === "message_update" && event.assistantMessageEvent.type === "thinking_delta") {
-            const { contentIndex, delta, partial } = event.assistantMessageEvent;
-            const block = partial.content[contentIndex];
-            if (block?.type === "thinking" && !block.redacted)
-              turn.onReasoningDelta?.(steps.streamingStepId(), contentIndex, delta);
-          } else if (event.type === "message_end" && (event.message as { role?: string }).role === "assistant") {
-            const served = event.message as { usage?: Partial<Usage>; serviceTier?: string };
-            const stepModel = entry.agentSession.model;
-            const usage = piUsageToCallUsage(served.usage, stepModel, entry.ref.fast, served.serviceTier);
-            meterGrindCall(grindMeter, usage);
-            const meteredGoal = entry.ref.goal;
-            if (meteredGoal?.status === "active") meterGoalCall(meteredGoal, usage);
-            callUsage.push(usage);
-            entry.ref.firstTokenPhase?.end();
-            entry.ref.firstTokenPhase = undefined;
-            if ((event.message as AssistantMessage).stopReason === "toolUse")
-              entry.ref.stepPhase = startPhase("step.gap");
-          }
-        });
-        const drainCaptured = async (): Promise<void> => {
-          const captured = entry.ref.llmCapture ?? [];
-          entry.ref.llmCapture = undefined;
-          if (!turn.recordLlmRequest) return;
-          const usageAligned = callUsage.length === captured.length;
-          for (let step = 0; step < captured.length; step++) {
-            try {
-              await turn.recordLlmRequest({
-                turnSeq: userEntry?.seq ?? null,
-                step,
-                model: captured[step]!.transport?.modelId ?? effectiveModel,
-                promptEnvelope: captured[step]!.envelope,
-                truncated: captured[step]!.truncated,
-                transport: captured[step]!.transport ?? null,
-                usage: usageAligned ? (callUsage[step] ?? null) : null,
-              });
-            } catch (e) {
-              swallow("pi: llm request record", e);
-            }
-          }
-        };
+        const unsubscribe = subscribeTurnStream({ entry, steps, turn, grindMeter, callUsage });
         let wallClock!: TurnWallClockOutcome;
         const messagesBefore = entry.agentSession.messages.length;
         entry.ref.goalRecentWork = () => piGoalWork(entry.agentSession.messages.slice(-80));
@@ -1498,7 +959,7 @@ export function createAgent(opts?: AgentOptions): Agent {
           activeSteps = undefined;
           entry.ref.emit = turn.emit;
           await thinkTail;
-          await drainCaptured();
+          await recordCapturedRequests({ entry, turn, callUsage, userEntry, effectiveModel });
           entry.ref.onModelRequest = undefined;
           toolAbort.abort();
           entry.ref.abortSignal = undefined;
@@ -1516,28 +977,9 @@ export function createAgent(opts?: AgentOptions): Agent {
               (wallClock === "abandoned" ? " (a stuck operation did not respond to cancellation)" : ""),
           );
         }
-        const settleGoal = async (pause: boolean): Promise<void> => {
-          const g = entry.ref.goal;
-          if (!g) return;
-          bankGoalTurn(g, grindMeter.startedAt);
-          if (pause && g.status === "active") {
-            g.status = "paused";
-            g.updatedAt = Date.now();
-          }
-          await turn.saveGoal?.(g);
-          if (g.status === "complete") entry.ref.goal = null;
-        };
-        const result = (reply: string, extra: Partial<AgentTurnResult>): AgentTurnResult => {
-          const cacheUsage = sumCacheUsage(callUsage);
-          return {
-            reply,
-            ...extra,
-            ...(checked.retry.length ? { retracted: checked.retry } : {}),
-            ...(checked.prod.length ? { prodded: checked.prod } : {}),
-            modelCalls: entry.ref.modelCalls ?? 0,
-            ...(cacheUsage ? { cacheUsage } : {}),
-          };
-        };
+        const settleGoal = (pause: boolean): Promise<void> => settleTurnGoal({ entry, turn, grindMeter }, pause);
+        const result = (reply: string, extra: Partial<AgentTurnResult>): AgentTurnResult =>
+          turnResult({ entry, callUsage, checked }, reply, extra);
         if (entry.ref.runtimeHandoff && !userAborted && !turn.cancel?.aborted) {
           steps.flush();
           await thinkTail;

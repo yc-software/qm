@@ -5,6 +5,7 @@ export type LedgerEventOp =
   | "ingest"
   | "proposal"
   | "annotate"
+  | "verdict"
   | "thread"
   | "triage"
   | "action"

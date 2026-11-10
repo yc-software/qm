@@ -157,7 +157,8 @@ import type { ChatSurface, ConvCtx } from "./conv-types";
 import { errMessage, swallow } from "../../chassis/src/errors";
 import { showStateError } from "./error-banner";
 import { splitLinks } from "./linkify";
-import { slackWireToPlain, splitSlackWire, stripSlackDirectives } from "./slack-text";
+import { slackPreviewText, slackWireToPlain, splitSlackWire, stripSlackDirectives } from "./slack-text";
+import { charForName } from "./emoji-picker";
 import { installMarkdownSanitizer } from "./markdown-sanitize";
 import { transcriptModel, defaultEffortForModel } from "./model-options";
 import {
@@ -1357,9 +1358,6 @@ export function createChatSurface(
                                 anchorSeq !== null ? { beforeSeq: anchorSeq, tailTurns: TAIL_TURNS } : undefined,
                               );
                               if (chatState.sessionId !== s.id) return;
-                              const scroller = container?.querySelector<HTMLElement>(".chat-scroll");
-                              const priorHeight = scroller?.scrollHeight ?? 0;
-                              const priorTop = scroller?.scrollTop ?? 0;
                               const rawRemaining = page.earlierItems ?? 0;
                               const remaining = currentEarlierCount(s, rawRemaining);
                               const split = inheritedTranscript(s, page.items);
@@ -1373,14 +1371,6 @@ export function createChatSurface(
                                   ...chatState.inheritedMessages,
                                 ],
                               );
-                              requestAnimationFrame(() => {
-                                const scrollerNow = container?.querySelector<HTMLElement>(".chat-scroll");
-                                if (!scrollerNow) return;
-                                const prev = scrollerNow.style.scrollBehavior;
-                                scrollerNow.style.scrollBehavior = "auto";
-                                scrollerNow.scrollTop = priorTop + (scrollerNow.scrollHeight - priorHeight);
-                                scrollerNow.style.scrollBehavior = prev;
-                              });
                             } catch {
                               btn.disabled = false;
                               btn.textContent = "Show earlier messages";
@@ -1617,24 +1607,12 @@ export function createChatSurface(
           ...itemsToMessages(split.inherited, transcriptModel()),
           ...chatState.inheritedMessages,
         ];
-      const scroller = chatState.host?.querySelector<HTMLElement>(".chat-scroll");
-      const priorHeight = scroller?.scrollHeight ?? 0;
-      const priorTop = scroller?.scrollTop ?? 0;
       agent.state.messages = [...earlierMessages, ...agent.state.messages];
       const rawRemaining = page.earlierItems ?? 0;
       chatState.transcriptAnchorSeq = rawRemaining > 0 ? (page.items?.[0]?.seq ?? null) : null;
       chatState.earlierCount = currentEarlierCount(chatState.forkSession ?? {}, rawRemaining);
       chatState.loadingEarlier = false;
       drawActiveChat(agent);
-      requestAnimationFrame(() => {
-        const scrollerNow = chatState.host?.querySelector<HTMLElement>(".chat-scroll");
-        if (agent !== chatState.agent || sessionId !== chatState.sessionId || scrollerNow !== scroller || !scrollerNow)
-          return;
-        const prev = scrollerNow.style.scrollBehavior;
-        scrollerNow.style.scrollBehavior = "auto";
-        scrollerNow.scrollTop = priorTop + (scrollerNow.scrollHeight - priorHeight);
-        scrollerNow.style.scrollBehavior = prev;
-      });
     } catch (error) {
       reportHandledError("web:load_earlier", error);
     } finally {
@@ -2156,10 +2134,13 @@ export function createChatSurface(
         return row(html`Goal cancelled: <span class="system-note-text">${goalObjectiveLabel(note.content)}</span>`);
       const who = note.byAgent ? brandName() : (note.speaker ?? "The user");
       const whose = note.byAgent ? "its" : "their";
+      if (note.action === "deleted") return row(html`${who} deleted ${whose} message`);
+      const preview = slackPreviewText(note.content, charForName);
       return row(
-        note.action === "deleted"
-          ? html`${who} deleted ${whose} message`
-          : html`${who} edited ${whose} message: <span class="system-note-text">${note.content}</span>`,
+        html`<span class="system-note-line" title=${preview}
+          >${who} edited ${whose}
+          message${preview ? html`: <span class="system-note-text">${preview}</span>` : nothing}</span
+        >`,
       );
     }
     if (role === "assistant") {

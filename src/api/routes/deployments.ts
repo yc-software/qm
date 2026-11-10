@@ -32,9 +32,9 @@ import { FRAME_SESSION_COOKIE, portalSession, portalSessionFrom } from "../../de
 import { appHostLabel, appNameFromLabel, labelOfAppHost } from "../../tenants/app-handle.ts";
 import { isDnsLabel } from "../../../plugins/chassis/src/dns-label.ts";
 import { tenantAppHandle } from "../../tenants/settings.ts";
-import { boundTenant } from "../../tenants/context.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "../../deploy/embed-ancestors.ts";
 import { proxyHeaders } from "../../util/http-proxy.ts";
+import { relayWebSocket } from "../../../plugins/chassis/src/websocket-relay.ts";
 import { deploymentGitParts, isDeploymentGitRoute } from "../../../plugins/chassis/src/deployment-git.ts";
 
 function deploymentProxyAgent(port?: number): { agent?: SocksProxyAgent } {
@@ -154,7 +154,10 @@ async function proxyAdminDeployment(ctx: BaseCtx): Promise<void> {
     return;
   const found = await app.getDeployment(parts.id);
   const deployment = found?.id === parts.id ? found : undefined;
-  const actor = await authorizeAdmin({ req, res, deps, capability: null }, deployment?.ownerScopeId ?? orgScope(deps));
+  const actor = await authorizeAdmin(
+    { req, res, deps, capability: null, tenant: ctx.tenant },
+    deployment?.ownerScopeId ?? orgScope(deps),
+  );
   if (!actor) return;
   if (!deployment) return sendJson(res, 404, { error: "not_found" });
   audit(deps, {
@@ -559,6 +562,19 @@ async function proxyReach(
       viewerIdentityKey(ctx.secret, reach.id),
     );
   }
+  if (ctx.upgrade) {
+    const target = {
+      tls: reach.endpoint.tls === true,
+      hostname: host,
+      port,
+      path: subPath + url.search,
+      headers,
+      timeoutMs: deps.deployDialTimeoutMs ?? CONFIG_DEFAULTS.deployDialTimeoutMs,
+      ...deploymentProxyAgent(reach.endpoint.socksProxyPort),
+    };
+    relayWebSocket(res, ctx.upgrade, target, "deployment-websocket");
+    return;
+  }
   if (/(?:^|,)\s*chunked\s*$/i.test(String(req.headers["transfer-encoding"] ?? ""))) {
     const chunks: Buffer[] = [];
     let size = 0;
@@ -819,7 +835,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     sendJson(res, 404, { error: "not_found" });
     return true;
   }
-  if (!["GET", "HEAD", "OPTIONS"].includes(ctx.method)) {
+  if (ctx.upgrade || !["GET", "HEAD", "OPTIONS"].includes(ctx.method)) {
     const origin = req.headers.origin;
     const site = req.headers["sec-fetch-site"];
     if ((origin !== undefined && origin !== `https://${rawHost}`) || (site !== undefined && site !== "same-origin")) {
@@ -860,7 +876,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
   if (!session && sessionSecret && embedAncestors.length) {
     session = portalSessionFrom(req.headers.cookie, FRAME_SESSION_COOKIE, sessionSecret, Date.now());
   }
-  if (session?.t !== undefined && session.t !== boundTenant()) {
+  if (session?.t !== undefined && session.t !== ctx.tenant?.id) {
     sendJson(res, 404, { error: "not_found" });
     return true;
   }
@@ -942,9 +958,16 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
       return true;
     }
     if (isShellRequest) {
-      if (pathname === "/__claw__/version" && deployment)
-        sendJson(res, 200, { version: deployment.appliedVersion ?? deployment.currentVersion });
-      else if (annotationsEnabled && (pathname === "/__claw__/annotate.js" || pathname === "/__claw__/annotate.css")) {
+      if (pathname === "/__claw__/version" && deployment) {
+        const draft = (await app.deploymentLiveEdit(deployment.id))?.draft;
+        sendJson(res, 200, {
+          version: deployment.appliedVersion ?? deployment.currentVersion,
+          ...(draft ? { live: draft.reloads } : {}),
+        });
+      } else if (
+        annotationsEnabled &&
+        (pathname === "/__claw__/annotate.js" || pathname === "/__claw__/annotate.css")
+      ) {
         const kind = pathname.endsWith(".js") ? "js" : "css";
         res.writeHead(200, {
           "content-type": kind === "js" ? "text/javascript; charset=utf-8" : "text/css; charset=utf-8",
@@ -1412,7 +1435,21 @@ export async function getDeployment(ctx: ApiCtx): Promise<void> {
   const stored = await app.getDeployment(params.id!);
   const permission = stored ? await app.deploymentGitPermissionFor(stored.id, principalId) : null;
   if (!stored || !permission) return sendJson(res, 404, { error: "not_found" });
-  const deployment = { ...deploymentView(stored), permission, webUrl: webUrlOf(stored.id) };
+  const draft = permission === "write" ? (await app.deploymentLiveEdit(stored.id))?.draft : null;
+  const deployment = {
+    ...deploymentView(stored),
+    permission,
+    webUrl: webUrlOf(stored.id),
+    ...(draft
+      ? {
+          savedEdits: {
+            savedAt: draft.savedAt,
+            ...(draft.publishAt ? { publishAt: draft.publishAt } : {}),
+            ...(draft.failure ? { publishFailure: draft.failure } : {}),
+          },
+        }
+      : {}),
+  };
   if (!secret) return sendJson(res, 200, { deployment });
   const git = await app.deploymentGitUrlFor(deployment.id, principalId, { secret, baseUrl: gitUrlBase(ctx) });
   return sendJson(res, 200, { deployment: git ? { ...deployment, gitUrl: git.url } : deployment });

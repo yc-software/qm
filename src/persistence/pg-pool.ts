@@ -4,7 +4,7 @@ import type { EventEmitter } from "node:events";
 import type { Socket } from "node:net";
 import type { ClientConfig, Pool, PoolClient, QueryResult } from "pg";
 import { parseIntoClientConfig } from "pg-connection-string";
-import { boundTenant, pinTenant } from "../tenants/context.ts";
+import { boundTenant, explicitTenantId, pinTenant, type Tenant } from "../tenants/context.ts";
 import { createKeyedQueue, sleep, withAbort } from "../util/async.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 
@@ -114,11 +114,17 @@ export interface PgQueryOptions {
   timeoutMs?: number;
 }
 
+export interface TenantDb {
+  q(text: string, params?: unknown[], options?: PgQueryOptions): Promise<Rows>;
+  query(text: string, params?: unknown[], options?: PgQueryOptions): Promise<{ rows: Rows; rowCount: number }>;
+}
+
 export interface PgPool {
   pool(): Promise<Pool>;
   sessionPool(): Promise<Pool>;
   q(text: string, params?: unknown[], options?: PgQueryOptions): Promise<Rows>;
   query(text: string, params?: unknown[], options?: PgQueryOptions): Promise<{ rows: Rows; rowCount: number }>;
+  forTenant(tenant: Tenant): TenantDb;
   registerMigration(migration: PgMigrationDefinition): void;
   migrate(migration: PgMigrationDefinition | readonly PgMigrationDefinition[]): Promise<void>;
   close(): Promise<void>;
@@ -126,14 +132,14 @@ export interface PgPool {
 
 type PgSetting = readonly [name: string, value: string];
 
-function tenantSettings(tenant = boundTenant()): PgSetting[] {
+function tenantSettings(tenant: string | undefined): PgSetting[] {
   return tenant === undefined ? [] : [["qm.tenant_id", tenant]];
 }
 
-function querySettings(timeoutMs: number | undefined): PgSetting[] {
-  if (timeoutMs === undefined) return tenantSettings();
+function querySettings(tenant: string | undefined, timeoutMs: number | undefined): PgSetting[] {
+  if (timeoutMs === undefined) return tenantSettings(tenant);
   if (!Number.isFinite(timeoutMs) || timeoutMs < 1) throw new Error("Query timeout must be a positive finite number");
-  return [...tenantSettings(), ["statement_timeout", String(Math.round(timeoutMs))]];
+  return [...tenantSettings(tenant), ["statement_timeout", String(Math.round(timeoutMs))]];
 }
 
 function settingsQuery(settings: readonly PgSetting[]): { text: string; values: string[] } {
@@ -198,7 +204,7 @@ async function rollbackOrReport(client: PoolClient, context: string): Promise<Er
 }
 
 async function beginTransaction(client: PoolClient): Promise<void> {
-  const settings = tenantSettings();
+  const settings = tenantSettings(boundTenant());
   await client.query("BEGIN");
   if (settings.length) await client.query(settingsQuery(settings));
 }
@@ -552,12 +558,13 @@ export function createPgPool(connectionString: string, definitions: readonly PgM
     if (closed) throw new Error("Postgres store is closed");
     return (sessionPoolP ??= retainPool(connectionString, "session"));
   }
-  async function query(
+  async function run(
+    tenant: string | undefined,
     text: string,
-    params: unknown[] = [],
-    { signal, timeoutMs }: PgQueryOptions = {},
+    params: unknown[],
+    { signal, timeoutMs }: PgQueryOptions,
   ): Promise<{ rows: Rows; rowCount: number }> {
-    const settings = querySettings(timeoutMs);
+    const settings = querySettings(tenant, timeoutMs);
     const p = await pool();
     if (!signal && !settings.length) {
       const res = await p.query(text, params);
@@ -590,8 +597,16 @@ export function createPgPool(connectionString: string, definitions: readonly PgM
       client.release(discard);
     }
   }
+  function query(text: string, params: unknown[] = [], options: PgQueryOptions = {}) {
+    return run(boundTenant(), text, params, options);
+  }
   async function q(text: string, params: unknown[] = [], options?: PgQueryOptions): Promise<Rows> {
     return (await query(text, params, options)).rows;
+  }
+  function forTenant(tenant: Tenant): TenantDb {
+    const scoped = async (text: string, params: unknown[] = [], options: PgQueryOptions = {}) =>
+      run(explicitTenantId(tenant), text, params, options);
+    return { query: scoped, q: async (text, params, options) => (await scoped(text, params, options)).rows };
   }
   async function close(): Promise<void> {
     if (closed) return;
@@ -612,5 +627,5 @@ export function createPgPool(connectionString: string, definitions: readonly PgM
   function registerMigration(definition: PgMigrationDefinition): void {
     registerPgMigration(connectionString, definePgMigration(definition));
   }
-  return { pool, sessionPool, q, query, registerMigration, migrate, close };
+  return { pool, sessionPool, q, query, forTenant, registerMigration, migrate, close };
 }

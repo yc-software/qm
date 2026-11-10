@@ -16,7 +16,9 @@ import type { SkillResolution } from "../../skills/skill-store.ts";
 import { hostMatches } from "../../resolution/egress-policy.ts";
 import { swallow } from "../../util/errors.ts";
 import { hashId } from "../../util/crypto.ts";
-import type { OrchestratorInput } from "./types.ts";
+import type { PersonaForTurn } from "../../personas/persona-service.ts";
+import { deliveryMenu } from "./prompt-blocks.ts";
+import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 
 export const MAX_AUTO_ATTACHMENT_SCREEN_BYTES = 12_000;
 
@@ -134,11 +136,10 @@ export function renderTitleTranscript(items: Item[]): string {
 const DELIVERY_NOTE_ITEM_MAX_CHARS = 200;
 
 export async function recentPrincipalDeliveryNote(
-  deliveries: DeliveryStore | undefined,
+  deliveries: DeliveryStore,
   threadRef: string,
   since = 0,
 ): Promise<string> {
-  if (!deliveries) return "";
   const recent = (await deliveries.listByRecipientThread(threadRef, { limit: 5 })).filter(
     (d) => (d.deliveredAt ?? d.createdAt) > since,
   );
@@ -251,11 +252,13 @@ export interface TurnPostKeys {
   seed(completed: number): void;
   take(): number;
   key(destination: Destination, seq: number): string;
+  readonly ackKey: string;
 }
 
 export function turnPostKeys(turnKey: string): TurnPostKeys {
   let next = 0;
   return {
+    ackKey: `ack:${turnKey}`,
     seed(completed) {
       next = completed;
     },
@@ -300,4 +303,43 @@ export function deliveryCandidatesFor(
   }
   const defaultKey = candidates.find((c) => c.target === deliveryTarget)?.key ?? candidates[0]?.key;
   return { candidates, ...(defaultKey ? { defaultKey } : {}) };
+}
+
+export function resolveTurnDelivery(turn: {
+  deps: Pick<OrchestratorDeps, "signingSecret" | "apiBaseUrl">;
+  input: OrchestratorInput;
+  scopeId: ScopeId;
+  persona: PersonaForTurn | null;
+}) {
+  const { deps, input, scopeId, persona } = turn;
+  const delivery = deliveryCandidatesFor(input, scopeId);
+  if (input.surfaceOrigin)
+    for (const candidate of delivery.candidates)
+      candidate.account = { id: input.surfaceOrigin.author.account, workspace: input.surfaceOrigin.workspace };
+  const defaultCandidate = delivery.candidates.find((c) => c.key === delivery.defaultKey);
+  let defaultDestination: Destination | undefined;
+  if (defaultCandidate) {
+    defaultDestination = {
+      ...(defaultCandidate.webhook ? { webhook: defaultCandidate.webhook } : {}),
+      type: defaultCandidate.type,
+      target: defaultCandidate.target,
+      ...(defaultCandidate.account ? { account: defaultCandidate.account } : {}),
+      ...(defaultCandidate.audienceScopeId ? { audienceScopeId: defaultCandidate.audienceScopeId } : {}),
+    };
+  } else if (input.surfaceTools && input.origin.kind === "automation" && input.origin.destination) {
+    defaultDestination = input.origin.destination;
+  }
+  const wornPersona = persona
+    ? {
+        id: persona.persona.id,
+        name: persona.persona.name,
+        ...(persona.persona.icon ? { icon: persona.persona.icon } : {}),
+      }
+    : undefined;
+  if (defaultDestination && wornPersona) defaultDestination = { ...defaultDestination, persona: wornPersona };
+  const cronBlock =
+    delivery.candidates.length > 1 && deps.signingSecret && deps.apiBaseUrl
+      ? `\n\n${deliveryMenu(delivery.candidates, delivery.defaultKey)}`
+      : "";
+  return { delivery, defaultDestination, wornPersona, cronBlock };
 }

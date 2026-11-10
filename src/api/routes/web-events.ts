@@ -4,13 +4,13 @@ import type { ServerDeps } from "../deps.ts";
 import type { SessionStateEvent } from "../../runs/session-state-bus.ts";
 import type { OwnedLedgerEvent } from "../../loops/ledger-events.ts";
 import { canonicalPerson } from "../../directory/person.ts";
-import { reportFailure, swallow } from "../../util/errors.ts";
+import { reportFailure, swallowAs } from "../../util/errors.ts";
 import { createSweeper } from "../../util/sweeper.ts";
 import { canAdministerLoop } from "./loops.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { sendJson } from "../http.ts";
 import { bootTenant, tenancyBooted } from "../../tenants/boot.ts";
-import { boundTenant, withTenant } from "../../tenants/context.ts";
+import { boundTenant, type Tenant } from "../../tenants/context.ts";
 import { claimThenBind } from "../../tenants/claim.ts";
 import type { DeliveryStore } from "../../delivery/delivery-store.ts";
 
@@ -30,7 +30,7 @@ type HubApp = Pick<
 >;
 
 export interface WebEvents {
-  stream(user: string, res: ServerResponse): void;
+  stream(user: string, res: ServerResponse, tenant: Tenant | undefined): void;
   start(): void;
   stop(): Promise<void>;
 }
@@ -66,8 +66,8 @@ export function createWebEvents(
     let failure: unknown;
     try {
       const now = Date.now();
-      const drainLane = async (): Promise<void> => {
-        const tenant = boundTenant();
+      const drainLane = async (_id?: string, bound?: Tenant): Promise<void> => {
+        const tenant = bound?.id;
         for (const d of await app.pendingDeliveries("web")) {
           const owner = canonicalPerson(ownerOfWebThread(d.destination.target) ?? "");
           if (clientsOf(tenant).get(owner)?.size) send(tenant, owner, "delivery", { threadRef: d.destination.target });
@@ -97,8 +97,8 @@ export function createWebEvents(
 
   const forwardSessionState = (event: SessionStateEvent): void => {
     if (typeof event.threadRef !== "string" || !event.threadRef) return;
-    const { participants, tenantId, ...visible } = event;
-    const tenant = tenantId ?? boundTenant();
+    const { participants, ...visible } = event;
+    const tenant = boundTenant();
     const owner = ownerOfWebThread(event.threadRef);
     const targets = new Set((participants ?? []).map(canonicalPerson));
     if (targets.size === 0 && owner) targets.add(canonicalPerson(owner));
@@ -119,29 +119,23 @@ export function createWebEvents(
     return candidates.filter((_, i) => allowed[i]);
   };
   const forwardInboxItem = async (event: OwnedLedgerEvent): Promise<void> => {
-    const tenant = event.tenantId ?? (tenancyBooted() ? bootTenant() : undefined);
+    const tenant = boundTenant();
     if (!event.loopId || !event.itemId || !clientsOf(tenant).size) return;
     if (tenancyBooted() && !tenant) return;
-    const forward = async (): Promise<void> => {
-      const viewers = await viewersOf(event.loopId, tenant).catch((e: unknown) => {
-        swallow("web: inbox item viewers", e);
-        return undefined;
-      });
-      if (viewers === undefined) {
-        for (const user of clientsOf(tenant).keys()) send(tenant, user, "inbox_resync", {});
-        return;
-      }
-      const frame = { loopId: event.loopId, itemId: event.itemId, op: event.op ?? "" };
-      for (const user of viewers ?? []) send(tenant, user, "inbox_item", frame);
-    };
-    await (tenant ? withTenant(tenant, forward) : forward());
+    const viewers = await viewersOf(event.loopId, tenant).catch(swallowAs("web: inbox item viewers", undefined));
+    if (viewers === undefined) {
+      for (const user of clientsOf(tenant).keys()) send(tenant, user, "inbox_resync", {});
+      return;
+    }
+    const frame = { loopId: event.loopId, itemId: event.itemId, op: event.op ?? "" };
+    for (const user of viewers ?? []) send(tenant, user, "inbox_item", frame);
   };
 
   let unsubscribe: Array<() => void> = [];
   return {
-    stream(user, res) {
+    stream(user, res, tenant) {
       const key = canonicalPerson(user);
-      const lane = laneOf(boundTenant());
+      const lane = laneOf(tenant?.id);
       const clients = lanes.get(lane) ?? new Map<string, Set<ServerResponse>>();
       lanes.set(lane, clients);
       res.writeHead(200, {
@@ -166,12 +160,7 @@ export function createWebEvents(
       if (unsubscribe.length) return;
       unsubscribe = [
         app.subscribeSessionStates(forwardSessionState, { onResync: () => broadcast("session_state_resync") }),
-        app.subscribeLedgerEvents(
-          (event) => void forwardInboxItem(event).catch((e: unknown) => swallow("web: inbox item", e)),
-          {
-            onResync: () => broadcast("inbox_resync"),
-          },
-        ),
+        app.subscribeLedgerEvents(forwardInboxItem, { onResync: () => broadcast("inbox_resync") }),
       ];
       sweeper.start();
     },
@@ -185,7 +174,7 @@ export function createWebEvents(
 
 function streamWebEvents(ctx: ApiCtx): void {
   if (!ctx.deps.web || !ctx.actor) return sendJson(ctx.res, 404, { error: "not_found" });
-  ctx.deps.web.events.stream(ctx.actor.p, ctx.res);
+  ctx.deps.web.events.stream(ctx.actor.p, ctx.res, ctx.tenant);
 }
 
 export const webEventRoutes: ReadonlyArray<Route<ApiCtx>> = [

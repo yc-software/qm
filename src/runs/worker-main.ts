@@ -17,11 +17,11 @@ inBootTenant(tenant, () => runtime.start());
 console.log(`[qm:worker] draining runs (org=${config.orgId}, workers=${config.workers})`);
 
 let shuttingDown = false;
-function shutdown(signal: string): void {
+function shutdown(signal: string, fatal = false): void {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`[qm:worker] ${signal} received, stopping`);
-  stopWithBackstop(runtime, config.shutdownDrainMs, "qm:worker");
+  stopWithBackstop(runtime, config.shutdownDrainMs, "qm:worker", fatal);
 }
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));

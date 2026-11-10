@@ -79,10 +79,13 @@ export function waitForClientResult(
       }
     };
     const timer = setTimeout(() => finish("timeout"), opts.timeoutMs);
-    const unsubscribe = signals.onSignal(runId, () => void check());
+    const checkInBackground = (): void => {
+      check().catch(swallowAs("client result check", undefined));
+    };
+    const unsubscribe = signals.onSignal(runId, checkInBackground);
     if (opts.signal?.aborted) return finish("cancelled");
     opts.signal?.addEventListener("abort", onAbort, { once: true });
-    void check();
+    checkInBackground();
   });
 }
 
