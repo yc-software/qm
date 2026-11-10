@@ -750,6 +750,8 @@ test("the personal-account picker preserves composer choices and saves context d
     remove("Alpha")!.click();
     await tick();
     assert.deepEqual(names(), ["Beta"], "removing the last row selects the one above it");
+    assert.equal(pick("Beta").getAttribute("aria-checked"), "true");
+    assert.equal(document.activeElement, pick("Beta"));
     assert.equal(agent.state.model.id, "beta");
     assert.equal(composer!.state.effortLevel, "high");
     assert.equal(composer!.state.fastMode, true);

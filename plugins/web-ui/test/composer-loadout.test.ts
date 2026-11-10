@@ -14,26 +14,23 @@ import {
 } from "../src/composer-loadout.ts";
 import type { ModelOption } from "../src/model-options.ts";
 
-test("saved loadouts migrate harness prefixes once across default and account preferences", () => {
+test("saved loadouts migrate harness prefixes once and keep every model across default and account preferences", () => {
   const dom = new JSDOM("", { url: "http://localhost/" });
   const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
   Object.defineProperty(globalThis, "localStorage", { configurable: true, value: dom.window.localStorage });
   try {
     for (const key of ["web-ui:loadout", "web-ui:loadout:account:a", "web-ui:loadout:account:b"]) {
+      const others = ["provider:model", "c", "d", "e", "f", "g", "h"].map((id) => entry(id, "medium"));
       localStorage.setItem(
         key,
         JSON.stringify([
           entry("pi:alpha", "high", true),
           entry("claude:alpha", "low"),
           entry("pi:gpt-6.1-sol-ultrafast", "xhigh"),
-          entry("provider:model", "medium"),
+          ...others,
         ]),
       );
-      const expected = [
-        entry("alpha", "high", true),
-        entry("gpt-6.1-sol-ultrafast", "xhigh"),
-        entry("provider:model", "medium"),
-      ];
+      const expected = [entry("alpha", "high", true), entry("gpt-6.1-sol-ultrafast", "xhigh"), ...others];
       assert.deepEqual(loadLoadout(key), expected);
       assert.deepEqual(JSON.parse(localStorage.getItem(key)!), expected);
       assert.deepEqual(loadLoadout(key), expected);
