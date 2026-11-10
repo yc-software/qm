@@ -67,9 +67,6 @@ export interface AmbientBatch {
 }
 
 const EARLIER_CONTEXT = 10;
-// Long earlier bot write-ups crowded new reports out of the judge's attention: in a production replay
-// an actionable multi-post alert drew a reply in 48/60 runs with full-length earlier messages and
-// 59/60 with earlier messages clipped to 300 characters (the opening lines: title, link, first sentence).
 const EARLIER_MESSAGE_CHARS = 300;
 
 export function ambientWindow(
