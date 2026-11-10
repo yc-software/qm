@@ -96,7 +96,7 @@ async function withDatabase<T>(admin: pg.Pool, run: (url: string, db: pg.Pool) =
     return await run(url.toString(), db);
   } finally {
     await db.end();
-    await admin.query(`DROP DATABASE ${name} WITH (FORCE)`);
+    await admin.query(`DROP DATABASE ${name}`);
   }
 }
 
