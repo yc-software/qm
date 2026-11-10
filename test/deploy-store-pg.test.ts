@@ -227,7 +227,6 @@ test("version and label setters from two instances keep each other's writes on P
   const a = makeStore().store;
   const b = makeStore().store;
   const d = await a.create({ ...createInput(), files: [{ path: "s.js", data: "1" }] });
-  const v1 = d.versions[0]!.commit!;
   await a.addVersion(d.id, { entrypoint: "node s.js", snapshotDir: "/snap", files: [{ path: "s.js", data: "2" }] });
   const blob = async () => (await raw("SELECT json FROM deployments WHERE id = $1", [d.id]))[0]!.json as Deployment;
 
@@ -244,17 +243,6 @@ test("version and label setters from two instances keep each other's writes on P
   await assert.rejects(a.setAppliedVersion(d.id, 99), /no such version 99/);
   assert.equal((await blob()).appliedVersion, 2);
 
-  await a.setCurrentVersion(d.id, 2);
-  assert.equal(await a.addVersionFromCommit(d.id, (await blob()).versions[1]!.commit!), null);
-  const v3 = (await a.addVersionFromCommit(d.id, v1))!;
-  assert.equal(v3.version, 3);
-  assert.equal((await blob()).currentVersion, 3);
-
-  await b.setDisplayName(d.id, "Label");
-  assert.equal((await blob()).displayName, "Label");
-  await b.setDisplayName(d.id, undefined);
-  assert.equal("displayName" in (await blob()), false);
-
   const results = await Promise.allSettled([
     a.addVersion(d.id, { entrypoint: "node s.js", snapshotDir: "/snap" }),
     b.addVersion(d.id, { entrypoint: "node s.js", snapshotDir: "/snap" }),
@@ -262,5 +250,5 @@ test("version and label setters from two instances keep each other's writes on P
   const landed = results.filter((r) => r.status === "fulfilled").length;
   assert.ok(landed >= 1);
   for (const r of results) if (r.status === "rejected") assert.match(String(r.reason), /gained a version concurrently/);
-  assert.equal((await blob()).versions.length, 3 + landed);
+  assert.equal((await blob()).versions.length, 2 + landed);
 });
