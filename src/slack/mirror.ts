@@ -63,7 +63,7 @@ export function slackMessageToIngestEvent(
         ...(file.size !== undefined ? { size: file.size } : {}),
         mimetype: file.mimetype,
       })),
-    ...(m.bot_id || m.bot_profile ? { bot: true } : {}),
+    ...(m.bot_id || m.bot_profile || m.subtype === "bot_message" ? { bot: true } : {}),
     ...(mentionsBot(String(m.text ?? ""), ids.botUserId) ? { mentionsSelf: true } : {}),
     ...((opts.editedAt ?? Number(m.edited?.ts) * 1000) > 0
       ? { editedAt: Math.round(opts.editedAt ?? Number(m.edited?.ts) * 1000) }
