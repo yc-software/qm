@@ -1002,6 +1002,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (introducesUser(input.origin, input)) await recordUser(deps.users, actor.id, input.botActor);
 
       const delegatedTask = !!input.sessionSenderId && session.parentSessionId === input.sessionSenderId;
+      const childWake =
+        !!input.sessionSenderId &&
+        !input.surfaceTools &&
+        !isSubagentThreadRef(conversation.threadRef) &&
+        (await deps.sessions.get(input.sessionSenderId))?.parentSessionId === session.id;
       const syntheticInput =
         (input.proactiveOpener && !input.text.trim()) ||
         ((automatedTurn || (sessionTurn && input.envelopeWrapped)) && !delegatedTask);
@@ -1435,6 +1440,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (automatedTurn && input.surface && isPollSurface(input.surface)) {
           turnEvents.push(
             "This turn was fired by a scheduled trigger, not a person typing. If there's nothing new worth reporting, call `finish_silently` to end the turn without sending anything.",
+          );
+        }
+        if (childWake) {
+          turnEvents.push(
+            "This turn was started by one of your subagents, not a person typing. To end it without posting, call `finish_silently` and write no text; anything you write is shown to the person.",
           );
         }
         if (!external && conversation.kind !== "dm") {
@@ -2118,6 +2128,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
         if (cronScript?.escalation) turnInput = `${turnInput}\n\n${cronScript.escalation}`;
         const isPollFire = automatedTurn && !!input.surface && isPollSurface(input.surface);
+        const replyOptional = isPollFire || childWake;
         const sessionUsedTools = visibleHistory.some(
           (e) => e.kind === "ToolCall" && !(e.tool === "skill" || (e.tool === "skills" && e.body.action === "read")),
         );
@@ -2458,7 +2469,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ? { clientTools: session.clientTools ?? input.clientTools }
               : {}),
             ...(input.surfaceTools && surfaceToolDeps ? { surfaceTools: true } : {}),
-            ...(isPollFire ? { pollFire: true } : {}),
+            ...(replyOptional ? { replyOptional: true } : {}),
             turnWallClockMs:
               effectiveTurnWallClockMs > 0
                 ? Math.max(1, effectiveTurnWallClockMs - (Date.now() - turnStart))
@@ -2695,7 +2706,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           reply,
           turnCompleted,
           cancelStopped,
-          isPollFire,
+          replyOptional,
           stagedAttachments,
           quarantineReleaseApprovals,
           surfaceToolDeps,
