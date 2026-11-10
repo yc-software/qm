@@ -28,6 +28,7 @@ function fixture() {
   const watches: Monitor[] = [];
   const children: Session[] = [];
   const purposes = new Map<string, string>();
+  const unreturned = new Set<string>();
   const runs = {
     get: async (id: string) => records.get(id) ?? null,
     inFlightForThread: async (threadRef: string) =>
@@ -37,6 +38,10 @@ function fixture() {
         [...records.values()]
           .filter((run) => threadRefs.includes(run.sessionId) && !isTerminal(run.status))
           .map((run) => [run.sessionId, run]),
+      ),
+    pendingReturns: async (_limit?: number, _after?: string, threadRefs: readonly string[] = []) =>
+      [...records.values()].filter(
+        (run) => unreturned.has(run.id) && isTerminal(run.status) && threadRefs.includes(run.sessionId),
       ),
     lastFinishedForThreads: async (threadRefs: readonly string[]) =>
       new Map(
@@ -139,6 +144,7 @@ function fixture() {
     flags,
     records,
     purposes,
+    unreturned,
     subagent,
     runs,
     cards,
@@ -344,6 +350,23 @@ test("running subagents keep the card open as plan rows showing their latest ste
   assert.equal(f.card()[0]?.type, "task_card");
   assert.equal(f.card()[0]?.title, "Done in 10s");
   assert.equal(f.card().length, 1);
+});
+
+test("a finished subagent whose result has not reached the parent yet keeps the card waiting", async () => {
+  const f = fixture();
+  await f.enable();
+  const run = f.add("r1");
+  await f.start(run.id);
+  const child = f.subagent("c1", "Worker");
+  child.status = "done";
+  f.unreturned.add(child.id);
+  run.status = "done";
+  await f.reconcile();
+  assert.equal(f.card()[0]?.title, "Waiting on subagents");
+  assert.equal(f.card()[0]?.status, "in_progress");
+  f.unreturned.delete(child.id);
+  await f.reconcile();
+  assert.equal(f.card()[0]?.title, "Done in 10s");
 });
 
 test("a busy grandchild keeps its subagent row open, and overflow rows are counted rather than dropped", async () => {

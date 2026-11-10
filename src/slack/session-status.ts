@@ -8,6 +8,7 @@ import type { ProcessRegistry } from "../processes/process-registry.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { MonitorStore } from "../monitors/monitor-store.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
+import type { ScopeId } from "../types.ts";
 import { conversationWebUrl } from "../util/conversation-links.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
@@ -41,7 +42,7 @@ export interface SlackStatusActivity {
 export function createSlackSessionStatus(
   store: DurableMap<SlackSessionStatusState>,
   lease: LeaderLease,
-  runs: Pick<RunStore, "get" | "inFlightForThread" | "activeForThreads" | "lastFinishedForThreads">,
+  runs: Pick<RunStore, "get" | "inFlightForThread" | "activeForThreads" | "lastFinishedForThreads" | "pendingReturns">,
   flags: Pick<FeatureFlagStore, "enabled">,
   now = Date.now,
   activity: SlackStatusActivity = {},
@@ -50,6 +51,68 @@ export function createSlackSessionStatus(
   const deleteIf = store.deleteIf.bind(store);
   const queue = createKeyedQueue<string>();
   const key = (account: string, channel: string, threadTs: string) => JSON.stringify([account, channel, threadTs]);
+  async function threadWork(anchor: Run | null, scope: ScopeId | undefined): Promise<ThreadWork> {
+    const active =
+      scope && anchor
+        ? (await runs.inFlightForThread(anchor.sessionId)).filter(
+            (run) => run.deliveryState?.replying && !run.request.privateSessionMessage,
+          )
+        : [];
+    const threadRef = anchor?.request.conversation.threadRef;
+    const session = anchor?.sessionId ? await activity.sessions?.getByThread(anchor.sessionId) : null;
+    const children =
+      scope && session
+        ? ((await activity.sessions?.childrenOf(session.id)) ?? []).filter((child) => child.scopeId === session.scopeId)
+        : [];
+    const descendants = children.length
+      ? ((await activity.sessions?.descendantsOf(children.map((child) => child.id))) ?? [])
+      : [];
+    const lineageRefs = [...children, ...descendants].map((s) => s.threadRef);
+    const threads = new Set([threadRef, ...lineageRefs]);
+    const jobs =
+      scope && threadRef
+        ? ((await activity.processes?.liveByScope(scope, now())) ?? []).filter(
+            (job) => job.kind === "background" && threads.has(job.sessionRef),
+          )
+        : [];
+    const monitors =
+      scope && threadRef
+        ? ((await activity.monitors?.ownedBy(scope)) ?? []).filter(
+            (monitor) => monitor.enabled && threads.has(monitor.threadRef) && monitor.expiresAt > now(),
+          )
+        : [];
+    const childRuns = lineageRefs.length ? await runs.activeForThreads(lineageRefs) : new Map<string, Run>();
+    const returning = lineageRefs.length > 0 && (await runs.pendingReturns(1, "", lineageRefs)).length > 0;
+    const steps =
+      (await activity.sessions?.latestToolSteps([...active, ...childRuns.values()].map((run) => run.id))) ??
+      new Map<string, { purpose?: string }>();
+    const purposeOf = (run: Run | undefined) => (run ? steps.get(run.id.toLowerCase())?.purpose : undefined);
+    const backgroundOf = (ref: string | undefined): [string, string] | undefined => {
+      const monitor = monitors.find((m) => m.threadRef === ref);
+      if (monitor) return [monitor.purpose ?? "Watching for updates", "Keeping watch"];
+      const job = jobs.find((j) => j.sessionRef === ref);
+      return job && [job.purpose ?? "Background job", "Running in the background"];
+    };
+    const stepOf = (ref: string) => {
+      const run = childRuns.get(ref);
+      return run ? (purposeOf(run) ?? "Thinking it through") : backgroundOf(ref)?.[0];
+    };
+    const helpers = children.flatMap((child) => {
+      const lineage = [child, ...descendants.filter((d) => d.rootId === child.id)];
+      const step = lineage.map((s) => stepOf(s.threadRef)).find(Boolean);
+      return step ? [{ id: child.id, title: child.title || "Subagent", step }] : [];
+    });
+    const background = backgroundOf(threadRef);
+    const running = active.find((run) => run.status === "running" && !leaseLapsed(run, now()));
+    const base = { session, helpers, ongoing: true, failed: false };
+    if (running) return { ...base, title: purposeOf(running) ?? "Thinking it through", phrase: "Working on it" };
+    if (active.length) return { ...base, title: purposeOf(active[0]) ?? "Queued", phrase: "Picking back up shortly" };
+    if (helpers.length || returning) return { ...base, title: "Waiting on subagents", phrase: "" };
+    if (background) return { ...base, title: background[0], phrase: background[1] };
+    const failed =
+      !!anchor && (await runs.lastFinishedForThreads([anchor.sessionId])).get(anchor.sessionId)?.status === "failed";
+    return { ...base, ongoing: false, failed, title: "", phrase: "" };
+  }
   async function sync(client: StatusClient, id: string, next?: SlackSessionStatusState) {
     await queue(id, async () => {
       for (let attempt = 0; attempt < 300; attempt++) {
@@ -78,120 +141,16 @@ export function createSlackSessionStatus(
           }
           const current = await store.get(id);
           if (!current || leaseLost) return true;
-          const active =
-            optedIn && anchor
-              ? (await runs.inFlightForThread(anchor.sessionId)).filter(
-                  (run) => run.deliveryState?.replying && !run.request.privateSessionMessage,
-                )
-              : [];
-          const threadRef = anchor?.request.conversation.threadRef;
-          const session = anchor?.sessionId ? await activity.sessions?.getByThread(anchor.sessionId) : null;
-          const children =
-            optedIn && session
-              ? ((await activity.sessions?.childrenOf(session.id)) ?? []).filter(
-                  (child) => child.scopeId === session.scopeId,
-                )
-              : [];
-          const descendants = children.length
-            ? ((await activity.sessions?.descendantsOf(children.map((child) => child.id))) ?? [])
-            : [];
-          const threads = new Set([threadRef, ...[...children, ...descendants].map((s) => s.threadRef)]);
-          const jobs =
-            optedIn && threadRef
-              ? ((await activity.processes?.liveByScope(scope!, now())) ?? []).filter(
-                  (job) => job.kind === "background" && threads.has(job.sessionRef),
-                )
-              : [];
-          const monitors =
-            optedIn && threadRef
-              ? ((await activity.monitors?.ownedBy(scope!)) ?? []).filter(
-                  (monitor) => monitor.enabled && threads.has(monitor.threadRef) && monitor.expiresAt > now(),
-                )
-              : [];
-          const childRuns = children.length
-            ? await runs.activeForThreads([...children, ...descendants].map((s) => s.threadRef))
-            : new Map<string, Run>();
-          const steps =
-            (await activity.sessions?.latestToolSteps([...active, ...childRuns.values()].map((run) => run.id))) ??
-            new Map<string, { purpose?: string }>();
-          const purposeOf = (run: Run | undefined) => (run ? steps.get(run.id.toLowerCase())?.purpose : undefined);
-          const backgroundOf = (ref: string | undefined): [string, string] | undefined => {
-            const monitor = monitors.find((m) => m.threadRef === ref);
-            if (monitor) return [monitor.purpose ?? "Watching for updates", "Keeping watch"];
-            const job = jobs.find((j) => j.sessionRef === ref);
-            return job && [job.purpose ?? "Background job", "Running in the background"];
-          };
-          const stepOf = (ref: string) => {
-            const run = childRuns.get(ref);
-            return run ? (purposeOf(run) ?? "Thinking it through") : backgroundOf(ref)?.[0];
-          };
-          const helpers = children.flatMap((child) => {
-            const lineage = [child, ...descendants.filter((d) => d.rootId === child.id)];
-            const step = lineage.map((s) => stepOf(s.threadRef)).find(Boolean);
-            return step ? [{ child, step }] : [];
-          });
-          const background = backgroundOf(threadRef);
+          const work = await threadWork(anchor, optedIn ? scope : undefined);
           const startedAt = current.startedAt ?? now();
           const cardId = current.cardId ?? randomUUID();
           const elapsed = now() - startedAt;
-          const ongoing = active.length > 0 || helpers.length > 0 || !!background;
-          const failed =
-            !ongoing &&
-            !!anchor &&
-            (await runs.lastFinishedForThreads([anchor.sessionId])).get(anchor.sessionId)?.status === "failed";
-          const running = active.find((run) => run.status === "running" && !leaseLapsed(run, now()));
-          const [title, phrase] = ((): [string, string] => {
-            if (running) return [purposeOf(running) ?? "Thinking it through", "Working on it"];
-            if (active.length) return [purposeOf(active[0]) ?? "Queued", "Picking back up shortly"];
-            if (helpers.length) return ["Waiting on subagents", ""];
-            if (background) return background;
-            return [`${failed ? "Stopped after" : "Done in"} ${duration(elapsed)}`, ""];
-          })();
           const followUrl =
-            elapsed > 5 * 60_000 && session ? conversationWebUrl(activity.publicWebUrl, session.id) : current.followUrl;
-          const icon = current.emoji ? EMOJI_CHAR_BY_NAME[current.emoji] : undefined;
-          const details = richText(
-            icon ? undefined : current.emoji,
-            ongoing && elapsed >= 60_000 ? `${phrase} · ${duration(elapsed, false)}` : phrase,
-          );
-          const headline = icon ? `${icon} ${title}` : title;
-          const status = (failed && "error") || (ongoing && "in_progress") || "complete";
-          const rows = helpers.map(({ child, step }) => ({
-            task_id: `${SLACK_STATUS_TASK_PREFIX}${cardId}:${child.id}`,
-            title: child.title || "Subagent",
-            status: "in_progress",
-            details: richText(undefined, step),
-          }));
-          const blocks: Record<string, unknown>[] = [
-            rows.length
-              ? {
-                  type: "plan",
-                  title: headline,
-                  tasks:
-                    rows.length > PLAN_TASK_LIMIT
-                      ? [
-                          ...rows.slice(0, PLAN_TASK_LIMIT - 1),
-                          {
-                            task_id: `${SLACK_STATUS_TASK_PREFIX}${cardId}:more`,
-                            title: `${rows.length - PLAN_TASK_LIMIT + 1} more subagents`,
-                            status: "in_progress",
-                          },
-                        ]
-                      : rows,
-                }
-              : {
-                  type: "task_card",
-                  task_id: `${SLACK_STATUS_TASK_PREFIX}${cardId}`,
-                  title: headline,
-                  status,
-                  ...(details ? { details } : {}),
-                },
-          ];
-          if (followUrl)
-            blocks.push({
-              type: "context",
-              elements: [{ type: "mrkdwn", text: `<${followUrl}|Follow via QM Web>` }],
-            });
+            elapsed > 5 * 60_000 && work.session
+              ? conversationWebUrl(activity.publicWebUrl, work.session.id)
+              : current.followUrl;
+          const { blocks, headline } = renderCard(work, { emoji: current.emoji, cardId, elapsed, followUrl });
+          const { ongoing } = work;
           const content = JSON.stringify(blocks);
           const post =
             current.cardContent !== content && (!!current.cardTs || (optedIn && ongoing && elapsed >= SHOW_AFTER_MS));
@@ -288,6 +247,59 @@ export function createSlackSessionStatus(
 
 const SHOW_AFTER_MS = 10_000;
 const PLAN_TASK_LIMIT = 50;
+
+interface ThreadWork {
+  session: { id: string } | null | undefined;
+  helpers: { id: string; title: string; step: string }[];
+  ongoing: boolean;
+  failed: boolean;
+  title: string;
+  phrase: string;
+}
+
+function renderCard(
+  work: ThreadWork,
+  card: { emoji?: string | undefined; cardId: string; elapsed: number; followUrl?: string | undefined },
+) {
+  const title = work.ongoing ? work.title : `${work.failed ? "Stopped after" : "Done in"} ${duration(card.elapsed)}`;
+  const icon = card.emoji ? EMOJI_CHAR_BY_NAME[card.emoji] : undefined;
+  const headline = icon ? `${icon} ${title}` : title;
+  const details = richText(
+    icon ? undefined : card.emoji,
+    work.ongoing && card.elapsed >= 60_000 ? `${work.phrase} · ${duration(card.elapsed, false)}` : work.phrase,
+  );
+  const rows = work.helpers.map(({ id, title, step }) => ({
+    task_id: `${SLACK_STATUS_TASK_PREFIX}${card.cardId}:${id}`,
+    title,
+    status: "in_progress",
+    details: richText(undefined, step),
+  }));
+  const tasks =
+    rows.length > PLAN_TASK_LIMIT
+      ? [
+          ...rows.slice(0, PLAN_TASK_LIMIT - 1),
+          {
+            task_id: `${SLACK_STATUS_TASK_PREFIX}${card.cardId}:more`,
+            title: `${rows.length - PLAN_TASK_LIMIT + 1} more subagents`,
+            status: "in_progress",
+          },
+        ]
+      : rows;
+  const blocks: Record<string, unknown>[] = [
+    rows.length
+      ? { type: "plan", title: headline, tasks }
+      : {
+          type: "task_card",
+          task_id: `${SLACK_STATUS_TASK_PREFIX}${card.cardId}`,
+          title: headline,
+          status: (work.failed && "error") || (work.ongoing && "in_progress") || "complete",
+          ...(details ? { details } : {}),
+        },
+  ];
+  if (card.followUrl)
+    blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: `<${card.followUrl}|Follow via QM Web>` }] });
+  return { blocks, headline };
+}
 
 function duration(ms: number, seconds = true): string {
   const total = Math.max(0, Math.round(ms / 1000));
