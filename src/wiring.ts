@@ -2213,8 +2213,8 @@ export function buildApp(
               artifactDigest: job.artifactDigest ?? null,
               instruction:
                 role === "producer"
-                  ? "Produce or reuse the approved workbook in the persistent sandbox. Persist it by POSTing JSON {name,mimetype,dataBase64} to $AGENT_API_URL/v1/files/upload with x-agent-capability: $AGENT_API_TOKEN (use this local fallback, not /v1/files/uploads, when S3 is unavailable). Then call finny_artifact_ready with the returned immutable file.id as provisionalRevision and file.sha256 as artifactDigest."
-                  : "Invoke deterministic_audit once for the mandatory spreadsheet checks, then independently audit every remaining required policy check and report immutable Files evidence through Finny.",
+                  ? `Produce or reuse the approved workbook in the persistent sandbox following the resolved domain skill (such as sharechat-ap-outstanding-workbook). Persist it by POSTing JSON {name,mimetype,dataBase64} to $AGENT_API_URL/v1/files/upload with x-agent-capability: $AGENT_API_TOKEN. Then call finny_artifact_ready with the returned immutable file.id as provisionalRevision and file.sha256 as artifactDigest.`
+                  : `Execute Finny Auditor checklist: invoke deterministic_audit once for the mandatory spreadsheet checks (formula.recalculate, summary.crossfoot, artifact.structure), then independently audit every remaining required check (${Object.keys(job.policy.requiredGenerations).join(", ")}) and report immutable Files evidence through Finny.`,
             });
           },
         },

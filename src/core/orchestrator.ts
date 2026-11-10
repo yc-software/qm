@@ -245,7 +245,7 @@ import { reconcileMessageRevisions, revisionAnchorAt } from "../slack/message-re
 import { type ProviderKeys } from "../model/model-runtime.ts";
 import { surfaceToolPrompt } from "../surfaces/registry.ts";
 import { finnySlackAuthority } from "../finny/integration.ts";
-
+import { createFinanceResolverIndex, isFinancialQuery } from "../finny/resolver/resolver-index.ts";
 async function recordUser(users: OrchestratorDeps["users"], id: string, botActor: boolean | undefined): Promise<void> {
   try {
     await users.record({ id, source: "turn", at: Date.now() });
@@ -1178,7 +1178,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         .sort();
       if (otherSkillSources.length)
         systemPrompt += `\n\nAdditional skill sources: ${otherSkillSources.join(", ")}. Use skills list/search with source to discover their authorized skills; read with the same source.`;
-      const nativeSkills = filterConnectorSkills(skillSourceContext.skills, configuredProviders, appConnections);
+      const isFinanceTurn =
+        deps.finnyTools && !conversation.threadRef.includes("subagent") && isFinancialQuery(input.text);
+      let nativeSkills = filterConnectorSkills(skillSourceContext.skills, configuredProviders, appConnections);
+      if (isFinanceTurn) {
+        const resolver = createFinanceResolverIndex();
+        const resolvedIntent = resolver.resolve(input.text);
+        nativeSkills = nativeSkills.filter((s) => s.skill?.manifest.name === "finnyloop");
+        systemPrompt += `\n\n## Mandatory FinnyLoop Governance Harness\nThis turn matches a financial workbook/reconciliation intent (${resolvedIntent.intentName ?? "financial"}). All financial calculations, NetSuite balance queries, and Excel workbook production MUST flow through the FinnyLoop governance lifecycle. Do NOT execute domain skills directly or attach unverified workbooks. You must first call finny_create_plan to present the plan for human approval via Slack Block Kit cards. Required invariants: ${resolvedIntent.mandatoryInvariants.join("; ")}.`;
+      }
       turnContextBlocks["Skills"] = skillsIndex(nativeSkills);
       const transferId = turnFileId(input.runId, input.attempt);
       const turnSessionDir = `${TURN_FILES_DIR}/${hashId([conversation.threadRef], 24)}`;

@@ -191,7 +191,18 @@ export async function uploadAttachments(
   opts: { initialComment?: string } = {},
 ): Promise<{ uploaded: boolean; messageTs?: string }> {
   const fileUploads: Array<{ filename: string; file: Buffer }> = [];
+  const isFinnyEnabled = Boolean(process.env.FINNY_ENABLED === "true");
   for (const a of attachments) {
+    const isSpreadsheet =
+      /\.(xlsx|xls|xlsm|csv)$/i.test(a.name) ||
+      a.mimetype === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+      a.mimetype === "application/vnd.ms-excel";
+    if (isFinnyEnabled && isSpreadsheet && !opts.initialComment?.includes("Finny")) {
+      console.warn(
+        `[finny-governance] Blocked direct uncertified spreadsheet upload: ${a.name}. All financial workbooks must complete FinnyLoop certification.`,
+      );
+      continue;
+    }
     let file: Buffer;
     try {
       file = await blobs.readBlob(a.blobId);
