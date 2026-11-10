@@ -100,6 +100,8 @@ test("thinking titles become disclosure labels without repeating the heading", (
     body: "A thought without a heading",
   });
   assert.equal(thinkingPresentation("**Bold** inside a sentence").title, "Thinking");
+  assert.equal(thinkingPresentation("A finished thought", true).title, "Thought");
+  assert.equal(thinkingPresentation("**Organizing the setup**\n\nBody", true).title, "Organizing the setup");
 });
 
 test("session actions identify their recipient and retain failure state", () => {
