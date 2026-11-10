@@ -1,6 +1,5 @@
 export const NEXT_PROMPT_MODEL_ID = "claude-opus-5-5";
 
-// Adapted from Claude Code's prompt-suggestion generator; chosen by an offline eval on real web transcripts.
 export const NEXT_PROMPT_PROMPT = [
   "[SUGGESTION MODE: Predict the exact next message this person will type, so they can accept it with Tab.]",
   "",

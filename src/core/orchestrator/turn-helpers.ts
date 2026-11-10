@@ -131,13 +131,8 @@ export function renderTitleTranscript(items: Item[]): string {
   return lines.join("\n\n");
 }
 
-// Window sizes match the offline eval the prompt and model were chosen on.
 const NEXT_PROMPT_EXCHANGES = 6;
-const NEXT_PROMPT_USER_CHARS = 2_500;
-const NEXT_PROMPT_ASSISTANT_CHARS = 3_500;
 
-// The last few exchanges, each assistant turn reduced to its final reply. Undefined unless the
-// conversation currently ends on an assistant reply (nothing to predict while a turn is pending).
 export function renderNextPromptTranscript(items: Item[]): string | undefined {
   const turns: Array<{ role: "User" | "Assistant"; text: string }> = [];
   for (const e of items) {
@@ -151,13 +146,9 @@ export function renderNextPromptTranscript(items: Item[]): string | undefined {
     else turns.push({ role, text });
   }
   if (turns.at(-1)?.role !== "Assistant") return undefined;
-  const recent = turns.slice(-NEXT_PROMPT_EXCHANGES * 2);
-  const body = recent
-    .map(({ role, text }) =>
-      role === "User"
-        ? `User:\n${text.slice(0, NEXT_PROMPT_USER_CHARS)}`
-        : `Assistant:\n${text.slice(-NEXT_PROMPT_ASSISTANT_CHARS)}`,
-    )
+  const body = turns
+    .slice(-NEXT_PROMPT_EXCHANGES * 2)
+    .map(({ role, text }) => `${role}:\n${text}`)
     .join("\n\n");
   return `<conversation>\n${body}\n</conversation>`;
 }

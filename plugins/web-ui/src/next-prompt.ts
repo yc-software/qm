@@ -1,7 +1,6 @@
 import { suggestNextPrompt } from "./core-bridge.ts";
+import { reportHandledError } from "./browser-errors.ts";
 
-// One prediction per finished reply, fetched once and kept for the page's lifetime. A response
-// saying the feature is off for this person stops all further requests until the next page load.
 let disabled = false;
 const suggestions = new Map<string, string | null>();
 const pending = new Set<string>();
@@ -18,7 +17,10 @@ export function nextPromptSuggestion(sessionId: string, replyKey: string, redraw
         suggestions.set(key, out.suggestion);
         if (out.suggestion) redraw();
       })
-      .catch(() => suggestions.set(key, null))
+      .catch((error: unknown) => {
+        suggestions.set(key, null);
+        reportHandledError("next_prompt_suggestion", error);
+      })
       .finally(() => pending.delete(key));
   }
   return null;
