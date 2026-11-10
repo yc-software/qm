@@ -408,4 +408,11 @@ export async function exerciseDeliveryFail(makeStore: (opts: { maxAgeMs: number 
   assert.equal(again.id, card.id);
   assert.equal(again.failedReason, "cannot_dm_bot", "re-enqueuing the same key does not revive a failed row");
   assert.deepEqual(await store.claimPending("principal", 60_000), []);
+  for (const k of ["ack", "ackByKey", "recordRecipientThread"] as const) {
+    const { id } = await store.enqueue({ destination: { type: "principal", target: "" }, text: "", idempotencyKey: k });
+    await store.fail(id, "cannot_dm_bot", 1);
+    if (k === "ack") await store.ack(id, 2);
+    else await (k === "ackByKey" ? store.ackByKey(k, 2) : store[k](id, "T", 2));
+    assert.equal((await store.get(id))?.failedReason, undefined, `${k} leaves the delivered row refused`);
+  }
 }
