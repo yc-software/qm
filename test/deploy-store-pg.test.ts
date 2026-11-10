@@ -196,3 +196,19 @@ test("the name index migration skips a tenant's duplicate names instead of faili
     }
   }
 });
+
+test("concurrent status and endpoint writes from two instances both land", { skip }, async () => {
+  const a = makeStore().store;
+  const b = makeStore().store;
+  const d = await a.create(createInput());
+  for (let i = 0; i < 25; i++) {
+    const status = i % 2 ? "running" : "stopped";
+    const host = `h${i}.example.test`;
+    await Promise.all([a.setStatus(d.id, status), b.setEndpoint(d.id, { host, port: 443 })]);
+    const blob = (await raw("SELECT json FROM deployments WHERE id = $1", [d.id]))[0]!.json as Deployment;
+    assert.equal(blob.status, status, `status survives a concurrent endpoint write (round ${i})`);
+    assert.equal(blob.endpoint?.host, host, `endpoint survives a concurrent status write (round ${i})`);
+  }
+  await a.setStatus("missing-id", "stopped");
+  assert.equal((await raw("SELECT count(*) c FROM deployments WHERE id = 'missing-id'"))[0]!.c, "0");
+});
