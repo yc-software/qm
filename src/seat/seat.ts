@@ -79,7 +79,7 @@ export interface SeatOptions {
 export const SEAT_OFF =
   "Agent Seat is off for you. An org admin can turn on the agent_seat feature flag for your personal scope.";
 export const SEAT_PERSONAL_ONLY = "You (Agent Seat) only plays in your own personal conversations.";
-const SEAT_CLOSED = "This step is no longer waiting for a move. It was answered, cancelled, or timed out.";
+const SEAT_CLOSED = "This step is no longer waiting for a move. It was answered, or its turn stopped.";
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS seat_steps(
