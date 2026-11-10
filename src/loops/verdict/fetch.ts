@@ -30,7 +30,8 @@ export interface SourceClientDeps {
 
 type FetchOutcome =
   | { kind: "conversation"; conversation: Conversation }
-  | { kind: "skipped"; reason: "not_connected" | "not_inbox" | "bad_item" | "source_gone" };
+  | { kind: "skipped"; reason: "not_connected" | "not_inbox" | "bad_item" }
+  | { kind: "skipped"; reason: "source_gone"; message: string };
 
 export class SourceRateLimited extends TransientTurnFailure {
   constructor(source: string) {
@@ -76,13 +77,19 @@ export function changedSinceLastLook(item: Pick<LoopItem, "verdict">, conversati
   return newest !== undefined && newest !== item.verdict?.lastSeenTs;
 }
 
-const goneSlackErrors = new Set(["channel_not_found", "thread_not_found", "not_in_channel", "is_archived"]);
+const goneSlackErrors = new Map([
+  ["channel_not_found", "The conversation is no longer available in Slack."],
+  ["thread_not_found", "The conversation is no longer available in Slack."],
+  ["not_in_channel", "You are no longer a member of this Slack channel."],
+  ["is_archived", "This Slack channel was archived."],
+]);
 
-function sourceGone(error: unknown): boolean {
-  if (error instanceof GmailApiError) return error.status === 404;
+function sourceGone(error: unknown): string | undefined {
+  if (error instanceof GmailApiError)
+    return error.status === 404 ? "The conversation is no longer available in Gmail." : undefined;
   const code =
     isObj(error) && error.code === ErrorCode.PlatformError && isObj(error.data) ? error.data.error : undefined;
-  return typeof code === "string" && goneSlackErrors.has(code);
+  return typeof code === "string" ? goneSlackErrors.get(code) : undefined;
 }
 
 function rateLimitedAfter(error: unknown): number | undefined {
@@ -400,7 +407,8 @@ export function createConversationFetcher(clients: SourceClients): ConversationF
       if (item.source === "slack") return await slack(owner, item);
       if (item.source === "gmail") return await gmail(owner, item);
     } catch (error) {
-      if (sourceGone(error)) return { kind: "skipped", reason: "source_gone" };
+      const message = sourceGone(error);
+      if (message) return { kind: "skipped", reason: "source_gone", message };
       throw error;
     }
     return { kind: "skipped", reason: "not_inbox" };

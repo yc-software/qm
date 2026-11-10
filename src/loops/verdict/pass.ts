@@ -80,11 +80,7 @@ export function createInboxPass(deps: InboxPassDeps): InboxPass {
     const outcome = await deps.fetch(owner, item);
     if (outcome.kind === "skipped") {
       if (outcome.reason === "bad_item") await deps.items.skip(item.id, "the item has no usable source reference");
-      if (outcome.reason === "source_gone")
-        await deps.items.skip(
-          item.id,
-          `The conversation is no longer available in ${item.source === "slack" ? "Slack" : "Gmail"}.`,
-        );
+      if (outcome.reason === "source_gone") await deps.items.skip(item.id, outcome.message);
       return false;
     }
     const { conversation } = outcome;
