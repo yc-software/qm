@@ -92,6 +92,7 @@ export interface SwarmService {
     computer: Pick<SandboxResource, "swarmId">,
     turn: { actorId: string; threadRef: string; sessionId: string },
   ): Promise<boolean>;
+  authorizes(claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "members">): Promise<boolean>;
   binding(input: OrchestratorInput): Promise<{ sandboxId?: string; rootSessionId: string; member: SwarmMember } | null>;
   queuedMessages(
     input: OrchestratorInput,
@@ -855,6 +856,7 @@ export function createSwarmService(deps: {
         ({ auth, swarm } = await load(caller));
       }
     },
+    authorizes: (claims) => deps.authorize(claims),
     async botMayUseComputer(computer, turn) {
       if (!computer.swarmId) return true;
       const swarm = await store.get(computer.swarmId);

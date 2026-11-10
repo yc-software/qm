@@ -725,7 +725,7 @@ async function listAgentApis(ctx: ApiCtx): Promise<void> {
       capability,
       { isAdmin: admin.isAdmin, ...(admin.role ? { role: admin.role } : {}) },
       {
-        swarmsEnabled: Boolean(ctx.app.swarms),
+        swarmsEnabled: Boolean(await ctx.app.swarms?.authorizes(capability)),
         personasEnabled: Boolean(await ctx.app.personas?.enabledFor(capability.actorId)),
       },
     ),
