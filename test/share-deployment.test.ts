@@ -778,7 +778,7 @@ test("exact email read grants admit app-only login and guest reach without membe
   assert.deepEqual(await allowed("other@example.com"), { allowed: false });
   assert.equal(await app.effectiveDeploymentPermission(d, "Invitee@Example.com"), "read");
   assert.equal(await app.effectiveDeploymentPermission(d, "other@example.com"), null);
-  assert.equal(await app.deploymentGitPermissionFor(d.id, email), null);
+  assert.equal(await app.deploymentGitPermissionFor(d.id, { actorId: email }), null);
   assert.equal((await app.reachDeployment(d.id, email)).status, "ok");
   assert.equal(await app.directoryMember(email), null);
   assert.equal(identity.externalMember(email), undefined);

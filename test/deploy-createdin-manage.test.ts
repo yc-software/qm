@@ -341,6 +341,51 @@ test("canManage: the creator may still rename", async () => {
   }
 });
 
+test("a Slack bot's turn in the creation channel gets neither git write nor manage authority over a person's app", async () => {
+  const { f, d } = await setup();
+  try {
+    await f.directory.replaceChannels(
+      [{ channelId: CH, name: "built", isPrivate: true }],
+      ["U1", "U2", "release-bot"].map((principalId) => ({ channelId: CH, principalId })),
+    );
+    const bot = {
+      "content-type": "application/json",
+      "x-agent-capability": await mintCapabilityToken(
+        {
+          actorId: "release-bot",
+          scopeId: scopeId("channel", CH),
+          aud: CONTROL_PLANE_AUD,
+          liveActor: true,
+          botActor: true,
+          exp: Date.now() + CAPABILITY_TTL_MS,
+        },
+        SECRET,
+      ),
+    };
+    const git = await fetch(`${f.base}/v1/deployments/${encodeURIComponent(d.id)}/git-url`, { headers: bot });
+    assert.equal(git.status === 200 ? ((await git.json()) as { permission: string }).permission : git.status, "read");
+    const archive = await fetch(`${f.base}/v1/deployments/${d.id}/archive`, {
+      method: "POST",
+      headers: bot,
+      body: "{}",
+    });
+    assert.equal(archive.status, 403);
+    assert.equal((await gitPerm(f.base, d.id, "U2")).permission, "write");
+    const own = await f.app.deploy({
+      ownerScopeId: scopeId("personal", "release-bot"),
+      createdBy: "release-bot",
+      entrypoint: "node server.js",
+      files: [{ path: "server.js", data: "console.log('bot')" }],
+      name: "bot-app",
+      createdInScope: scopeId("channel", CH),
+    });
+    const ownGit = await fetch(`${f.base}/v1/deployments/${encodeURIComponent(own.id)}/git-url`, { headers: bot });
+    assert.equal(((await ownGit.json()) as { permission: string }).permission, "write");
+  } finally {
+    await f.close();
+  }
+});
+
 test("authority follows the person: a creation-channel member manages the app from their DM (web routes + share); a non-member may not", async () => {
   const { f, d } = await setup();
   try {
