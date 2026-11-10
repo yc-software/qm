@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createAgent } from "../src/agent/agent-run.ts";
 import { createModelRoutes } from "../src/model/model-route.ts";
+import { auxiliaryModelFor } from "../src/model/pi-models.ts";
 import { TITLE_GENERATION_PROMPT } from "../src/agent/session-title-prompt.ts";
 import type { AgentTurnInput, CompactInput } from "../src/agent/agent.ts";
 import type { Item, NewItem } from "../src/sessions/items.ts";
@@ -351,6 +352,25 @@ test("the runtime listing bills an OpenAI model to company ChatGPT access even w
   await deps.config!.setWebuiModels(orgScope(), ["claude-sonnet-5", "gpt-6-astra"]);
   const listed = await runtimeConfigBody({ deps }, orgScope());
   assert.equal(listed.modelCatalog["gpt-6-astra"]?.billing, "org_key");
+});
+
+test("titles fall back to the utility model when Sonnet is not servable", async () => {
+  const agent = createAgent({
+    routes: createModelRoutes({
+      defaultModelId: "gpt-6-astra",
+      resolveProviderKeys: async () => ({ openai: "sk-openai" }),
+    }),
+  });
+  await withFetch(
+    () => errorReply(500, "api_error", "down"),
+    async (calls) => {
+      await agent.generateTitle!("User:\nPlan the offsite").catch(() => undefined);
+      assert.deepEqual(
+        calls.map((call) => call.model),
+        [auxiliaryModelFor("gpt-6-astra")],
+      );
+    },
+  );
 });
 
 test("titles run the title prompt on Sonnet", async () => {

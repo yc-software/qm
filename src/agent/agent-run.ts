@@ -1154,7 +1154,7 @@ export function createAgent(opts?: AgentOptions): Agent {
 
     async generateTitle(transcript: string): Promise<string | undefined> {
       if (!transcript.trim()) return undefined;
-      const route = await utilityRoute(TITLE_MODEL_ID);
+      const route = (await utilityRoute(TITLE_MODEL_ID)) ?? (await utilityRoute(opts?.titleModelId));
       if (!route) return undefined;
       const out = await oneShot(
         "pi-title",
