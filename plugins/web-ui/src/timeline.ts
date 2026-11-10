@@ -306,7 +306,7 @@ export function sessionToolView(
   const sessionId = session?.id ?? result.sessionId;
   let chipTitle = session?.title || result.title || call.name || "Subagent";
   let detail = "";
-  if (action === "wait") return { action, detail: "for agent messages" };
+  if (action === "wait") return { action, detail: "agent messages" };
   if (action === "read" && !target && result.children === undefined) return { action, detail: "subagents" };
   if (action === "read" && result.children !== undefined) {
     return { action, detail: `${result.children} subagent${result.children === 1 ? "" : "s"}` };

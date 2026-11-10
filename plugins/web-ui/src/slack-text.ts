@@ -86,3 +86,16 @@ export function stripSlackDirectives(text: string): string {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
+
+const EMOJI_SHORTCODE = /:([a-z0-9_+-]+):/gi;
+const MRKDWN_EMPHASIS = /(^|[\s([{])([_*~])(?=\S)([^\n]*?\S)\2(?=$|[\s)\]}.,:;!?])/gm;
+
+/** One-line plain preview of Slack wire text: links become their labels, :shortcodes: become
+ *  emoji when known, mrkdwn emphasis markers drop, and whitespace collapses. */
+export function slackPreviewText(text: string, emojiFor: (name: string) => string | null): string {
+  return slackWireToPlain(stripSlackDirectives(text))
+    .replace(EMOJI_SHORTCODE, (whole, name: string) => emojiFor(name) ?? whole)
+    .replace(MRKDWN_EMPHASIS, "$1$3")
+    .replace(/\s+/g, " ")
+    .trim();
+}
