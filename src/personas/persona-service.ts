@@ -102,13 +102,12 @@ export function createPersonaService(deps: {
   const { store } = deps;
   const enabledFor = (principalId: string) => deps.flags.enabled("personas", scopeId("personal", principalId));
 
-  async function granteeScopes(principalId: string, contextScope?: ScopeId): Promise<ScopeId[]> {
+  async function granteeScopes(principalId: string): Promise<ScopeId[]> {
     const teams = (await deps.teams?.forTurn("", [principalId])) ?? [];
     return [
       ...personIds(principalId).map((id) => scopeId("personal", id)),
       deps.orgScope,
       ...teams.map((team) => scopeId("team", team.id)),
-      ...(contextScope && parseScopeId(contextScope).kind === "channel" ? [contextScope] : []),
     ];
   }
 
@@ -125,13 +124,20 @@ export function createPersonaService(deps: {
     return channels.filter((_, i) => member[i]);
   }
 
+  const higher = (a: PersonaRole | null, b: PersonaRole | null) => (atLeast(a, b ?? "read") ? a : b);
+
   async function role(principalId: string, personaId: string, contextScope?: ScopeId) {
-    const [direct, viaChannel] = await Promise.all([
-      store.roles(await granteeScopes(principalId, contextScope), personaId),
-      editorChannels(principalId).then((channels) => (channels.length ? store.roles(channels, personaId) : new Map())),
+    const inChannel = contextScope && parseScopeId(contextScope).kind === "channel" ? [contextScope] : [];
+    const [direct, here, viaChannel] = await Promise.all([
+      granteeScopes(principalId).then((scopes) => store.roles(scopes, personaId)),
+      inChannel.length ? store.roles(inChannel, personaId) : new Map<string, PersonaRole>(),
+      editorChannels(principalId).then((channels) =>
+        channels.length ? store.roles(channels, personaId) : new Map<string, PersonaRole>(),
+      ),
     ]);
-    const held = direct.get(personaId) ?? null;
-    return viaChannel.get(personaId) === "write" && !atLeast(held, "write") ? "write" : held;
+    const usable: PersonaRole | null = here.has(personaId) ? "read" : null;
+    const editor: PersonaRole | null = viaChannel.get(personaId) === "write" ? "write" : null;
+    return higher(higher(direct.get(personaId) ?? null, usable), editor);
   }
 
   async function guarded<T>(

@@ -474,6 +474,7 @@ test("a channel with write access lets its current members edit the persona, fol
 
   assert.deepEqual(ok(await personas.list(CAROL)), []);
   assert.equal((await personas.update(CAROL, ada.id, { description: "not a member" })).status, "not_found");
+  assert.equal(await personas.role("U_DAVE", ada.id, scopeId("channel", "C_EDIT")), "read");
 
   await roster([CAROL]);
   assert.deepEqual(ok(await personas.list(BOB)), []);
