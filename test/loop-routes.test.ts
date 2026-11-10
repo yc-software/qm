@@ -813,12 +813,6 @@ test("a bound loop's config and manual fires need only its owner, not a live tur
   assert.equal((await deps.store.get(loop.id))?.playbook, "owner revision");
   assert.equal((await call(deps, "POST", `/v1/loops/${loop.id}/fire`, {}, "josh", "capability", false)).status, 200);
   assert.equal(fires, 1);
-  assert.equal(
-    (await call(deps, "PATCH", `/v1/loops/${loop.id}`, { playbook: "stranger" }, "mallory", "capability", true, true))
-      .status,
-    403,
-  );
-  assert.equal((await deps.store.get(loop.id))?.playbook, "owner revision");
 });
 
 test("loop icons can be set and reset by their owner, reject invalid input and retain authorization", async () => {

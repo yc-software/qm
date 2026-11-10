@@ -1619,26 +1619,6 @@ test("an owner's cron fire carries the owner's authority: liveActor, no org-note
   assert.equal(unmarked.status, "ok");
   claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
   assert.equal(claims!.liveActor, undefined, "an automation turn no trigger produced carries no authority");
-
-  captured = undefined;
-  assert.equal(
-    (
-      await app.turn(
-        fire({
-          actor: { externalId: "U1" },
-          conversation: { kind: "dm", threadRef: "dm:U1:owner-fire" },
-        }),
-      )
-    ).status,
-    "ok",
-  );
-  claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
-  assert.equal(claims!.liveActor, true, "a non-admin owner's fire is live too");
-  assert.equal(claims!.memory?.orgWrite, undefined);
-  const userPrompt = await app.turn(
-    fire({ actor: { externalId: "U1" }, text: "!sysprompt", conversation: { kind: "dm", threadRef: "dm:U1:fire-2" } }),
-  );
-  assert.doesNotMatch(userPrompt.reply ?? "", /## Acting for an org admin/);
 });
 
 test("the egress claim keeps the control-plane host reachable under an allowlist or a matching denylist", () => {

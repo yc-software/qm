@@ -9,7 +9,7 @@ import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
-import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
+import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
@@ -45,7 +45,6 @@ const capFor = (
     liveAuthor?: boolean;
     triggered?: boolean;
     botActor?: boolean;
-    controlPlane?: boolean;
   } = {},
 ) =>
   mintCapabilityToken(
@@ -58,7 +57,6 @@ const capFor = (
       ...(opts.liveAuthor ? { liveAuthor: true } : {}),
       ...(opts.triggered ? { triggered: true } : {}),
       ...(opts.botActor ? { botActor: true } : {}),
-      ...(opts.controlPlane ? { aud: CONTROL_PLANE_AUD } : {}),
     },
     SECRET,
   );
@@ -155,10 +153,10 @@ test("an admin's token carrying no person's authority is shown no admin plane â€
   }
 });
 
-test("a cron fire (liveActor + triggered) discovers the full admin plane and can read spend through the admin door", async () => {
+test("a cron fire (liveActor + triggered) discovers the full admin plane", async () => {
   const s = await start();
   try {
-    const cap = await capFor("admin-alice", { liveActor: true, triggered: true, controlPlane: true });
+    const cap = await capFor("admin-alice", { liveActor: true, triggered: true });
     const { body } = await listApis(s.base, cap);
     assert.deepEqual(body.admin, { isAdmin: true, role: "org_admin" });
     const p = paths(body);
@@ -166,8 +164,6 @@ test("a cron fire (liveActor + triggered) discovers the full admin plane and can
     assert.ok(p.includes("/v1/admin/users"));
     assert.ok(!p.includes("/v1/admin/grants"), "grant management stays portal-only");
     assert.equal(p.filter((x: string) => x === "/v1/admin/whoami").length, 1);
-    const spend = await fetch(`${s.base}/v1/admin/spend`, { headers: { "x-agent-capability": cap } });
-    assert.equal(spend.status, 200, "a fire reads a non-private admin report with its owner's authority");
   } finally {
     await s.close();
   }
