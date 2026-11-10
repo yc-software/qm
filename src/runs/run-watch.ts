@@ -54,7 +54,7 @@ export function createRunWatch(
       wake?.();
     };
     const key = sessionAvailabilityKey(sessionId);
-    const off = available.subscribe((session) => session === key && note(), { onResync: note });
+    const off = available.subscribe((session) => (session === key ? note() : undefined), { onResync: note });
     return {
       changed(timeoutMs, signal) {
         return new Promise<void>((resolve) => {

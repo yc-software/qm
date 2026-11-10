@@ -134,6 +134,7 @@ export interface KeychainAsk {
   requesterMessageTs?: string;
   purpose: string;
   requestedMode?: GrantMode;
+  botActor?: boolean;
   status: AskStatus;
   createdAt: number;
   expiresAt: number;
@@ -332,6 +333,7 @@ interface CreateAskInput {
   requesterMessageTs?: string;
   purpose: string;
   requestedMode?: GrantMode;
+  botActor?: boolean;
   expiresAt?: number;
 }
 
@@ -1275,6 +1277,7 @@ export function createKeychain(deps: {
         ...(input.requesterMessageTs ? { requesterMessageTs: input.requesterMessageTs } : {}),
         purpose,
         ...(input.requestedMode ? { requestedMode: input.requestedMode } : {}),
+        ...(input.botActor ? { botActor: true } : {}),
         status: "pending",
         createdAt: t,
         expiresAt: input.expiresAt ?? t + ASK_TTL_MS,

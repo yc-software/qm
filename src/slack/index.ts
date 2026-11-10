@@ -1,5 +1,5 @@
 import { continueInPrivate } from "./private-continuation.ts";
-import { currentTenant, withTenant } from "../tenants/context.ts";
+import { withTenant } from "../tenants/context.ts";
 import { perTenant } from "../tenants/cache.ts";
 import { externalSlackNamespace, type ExternalSlackAccess } from "./external-access.ts";
 import { registerKeychainApprovalActions } from "./keychain-approvals.ts";
@@ -62,8 +62,8 @@ const slackAccountClients = perTenant(
 export async function startSlackPlugin(
   cfg: SlackPluginConfig,
   core: SlackCoreClient,
+  tenant: string,
 ): Promise<{ stop(): Promise<void> }> {
-  const tenant = currentTenant();
   const accounts = slackAccountClients();
   const EVENTS_MODE = cfg.eventsMode ?? "socket";
   if (!cfg.botToken) {
@@ -182,6 +182,7 @@ export async function startSlackPlugin(
   };
   const app = new App({
     token: BOT_TOKEN,
+    deferInitialization: true,
     ignoreSelf: false,
     receiver: receiver(),
     logLevel: parseLogLevel(cfg.logLevel),
@@ -453,6 +454,7 @@ export async function startSlackPlugin(
 
   let auth: AuthTestResponse;
   try {
+    await app.init();
     auth = await app.client.auth.test();
     ids.ownTeamId = auth.team_id ?? "";
     ids.botUserId = auth.user_id ?? "";

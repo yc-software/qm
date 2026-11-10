@@ -147,16 +147,16 @@ describe("tenant tables", () => {
   it("upserts on tenant-first keys, so the same natural key lives once per tenant", async () => {
     const grants = createPostgresAdminGrantStore(appDatabaseUrl);
     const grant = { principalId: "p", scopeId: scopeId("org", "o"), role: "org_admin" as const, grantedBy: "x" };
-    for (const tenant of [tenantA, tenantB]) {
-      await withTenant(tenant, () => grants.put(grant));
-      await withTenant(tenant, () => grants.put({ ...grant, grantedBy: tenant }));
+    for (const id of [tenantA, tenantB]) {
+      await withTenant(id, (tenant) => grants.put(tenant, grant));
+      await withTenant(id, (tenant) => grants.put(tenant, { ...grant, grantedBy: id }));
     }
     assert.deepEqual(
-      (await withTenant(tenantA, () => grants.all())).map((g) => g.grantedBy),
+      (await withTenant(tenantA, (tenant) => grants.all(tenant))).map((g) => g.grantedBy),
       [tenantA],
     );
     assert.deepEqual(
-      (await withTenant(tenantB, () => grants.all())).map((g) => g.grantedBy),
+      (await withTenant(tenantB, (tenant) => grants.all(tenant))).map((g) => g.grantedBy),
       [tenantB],
     );
   });

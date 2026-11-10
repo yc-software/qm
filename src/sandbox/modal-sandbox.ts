@@ -52,6 +52,9 @@ const WORKSPACE_BASENAME = "workspace";
 const HOME_TAR = `${HOME_DIR}/.qm-home.tar`;
 const HYDRATED_MARKER = `${HOME_DIR}/.qm-hydrated`;
 const ACTIVITY_TOUCH_INTERVAL_MS = 10 * 60_000;
+const ACTIVITY_GRACE_MS = 2 * ACTIVITY_TOUCH_INTERVAL_MS;
+const activeSince = (row: StoredModalSandbox | null | undefined, cutoffMs: number): boolean =>
+  !row?.lastActivityMs || row.lastActivityMs > cutoffMs;
 const swallowGone = (error: unknown): void => {
   if (!(error instanceof ModalSandboxGoneError)) throw error;
 };
@@ -416,10 +419,16 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
     }
   }
 
-  function withSession<T>(name: string, action: (session: ModalSession) => Promise<T>): Promise<T> {
+  async function withSession<T>(name: string, action: (session: ModalSession) => Promise<T>): Promise<T> {
     if (scratchKeyByName.has(name)) return withSessionUnlocked(name, action);
-    const key = `modal-use:${scopeByName.get(name) ?? "default"}`;
-    return advisoryLock.withSharedLock(key, () => withSessionUnlocked(name, action));
+    await touchActivity(name);
+    const heartbeat = setInterval(() => void touchActivity(name), ACTIVITY_TOUCH_INTERVAL_MS / 2);
+    heartbeat.unref();
+    try {
+      return await withSessionUnlocked(name, action);
+    } finally {
+      clearInterval(heartbeat);
+    }
   }
 
   const lastTouchMs = new Map<string, number>();
@@ -429,7 +438,10 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
     const now = Date.now();
     if (now - (lastTouchMs.get(scope) ?? 0) < ACTIVITY_TOUCH_INTERVAL_MS) return;
     lastTouchMs.set(scope, now);
-    await store.merge(scope, { lastActivityMs: now }).catch(swallowAs("modal-sandbox: record activity", undefined));
+    await store.merge(scope, { lastActivityMs: now }).catch((error: unknown) => {
+      if (lastTouchMs.get(scope) === now) lastTouchMs.delete(scope);
+      swallowAs("modal-sandbox: record activity", undefined)(error);
+    });
   }
 
   async function runTimed(
@@ -451,7 +463,6 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
     timeoutSec: number,
     env?: Record<string, string>,
   ): Promise<ExecResult> {
-    await touchActivity(name);
     return withSession(name, (session) => runTimed(session, script, timeoutSec, env));
   }
 
@@ -551,7 +562,8 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
           !current ||
           current.hydrationPending ||
           current.nativeSnapshotId !== rec.nativeSnapshotId ||
-          !checkpointRenewalDue(current, Date.now())
+          !checkpointRenewalDue(current, Date.now()) ||
+          (current.lastActivityMs ?? 0) > Date.now() - ACTIVITY_GRACE_MS
         )
           return;
         try {
@@ -600,9 +612,10 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
       provisionQueue(scope, async (): Promise<number> => {
         const current = await store.get(scope);
         if (!current || current.sandboxId !== rec.sandboxId) return 0;
-        if (idleCutoffMs !== undefined && (!current.lastActivityMs || current.lastActivityMs > idleCutoffMs)) return 0;
+        if (idleCutoffMs !== undefined && activeSince(current, idleCutoffMs)) return 0;
         try {
           await snapshotHome(scope, session);
+          if (idleCutoffMs !== undefined && activeSince(await store.get(scope), idleCutoffMs)) return 0;
           await session.terminate();
           sessionByName.delete(name);
           return 1;
@@ -640,7 +653,10 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
       else if (checkpointRenewalDue(rec, now)) await renewCheckpoint(scope, name, rec);
       return 0;
     }
-    if (rec.expiresAtMs && rec.expiresAtMs - now <= lifetimeMarginMs) return retire(scope, name, rec, session);
+    if (rec.expiresAtMs && rec.expiresAtMs - now <= lifetimeMarginMs) {
+      const imminent = rec.expiresAtMs - now <= lifetimeMarginMs / 2;
+      return retire(scope, name, rec, session, imminent ? undefined : now - ACTIVITY_GRACE_MS);
+    }
     if (rec.lastActivityMs && rec.lastActivityMs <= cutoff) {
       let busy: boolean;
       try {
@@ -944,7 +960,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
     async reapDeepIdle(idleMs): Promise<{ reaped: number }> {
       if (!(idleMs > 0)) return { reaped: 0 };
       const now = Date.now();
-      const cutoff = now - Math.min(idleMs, reapIdleMs);
+      const cutoff = now - Math.max(ACTIVITY_GRACE_MS, Math.min(idleMs, reapIdleMs));
       const idle = await claimThenBind(store.claimTenants, async () => {
         let n = 0;
         for (const [scope, rec] of await store.entries()) n += await reapIdleScope(scope, rec, now, cutoff);

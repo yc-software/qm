@@ -6,7 +6,7 @@ import { orgId } from "../../config.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
-import type { ApiCtx, Route } from "./route.ts";
+import { tenantOf, type ApiCtx, type Route } from "./route.ts";
 import { orgScope } from "./shared.ts";
 import { modelAuthStatus } from "./user-model-auth.ts";
 import { adminPermissions } from "./admin/scope-config.ts";
@@ -35,7 +35,9 @@ async function permissionsOf(ctx: ApiCtx, user: string): Promise<string[]> {
   const [admin, preview] = await Promise.all([
     ctx.actor?.imp
       ? null
-      : adminPermissions(ctx.deps, { id: user, type: "internal" }).catch(swallowAs("web: /me admin status", null)),
+      : adminPermissions(ctx.deps, tenantOf(ctx), { id: user, type: "internal" }).catch(
+          swallowAs("web: /me admin status", null),
+        ),
     inboxPreviewEnabled(ctx.deps, user).catch(swallowAs("web: /me inbox preview flag", false)),
   ]);
   const permissions = [...(admin?.permissions ?? [])];

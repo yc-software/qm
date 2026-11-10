@@ -134,7 +134,7 @@ export async function swarmFixture(
     return {
       kind: "agent",
       claims: {
-        actorId: actor.id,
+        actorId: run!.request.actor.id,
         scopeId: root.scopeId,
         runId: notification.runId!,
         sessionId: member.sessionId!,
@@ -142,6 +142,7 @@ export async function swarmFixture(
         runLeaseToken: run!.leaseToken!,
         threadRef: member.threadRef,
         exp: Date.now() + 60_000,
+        ...(run!.request.botActor ? { botActor: true } : {}),
       },
     };
   };

@@ -56,6 +56,7 @@ import type { MonitorBroker, BackgroundWatchResult, BackgroundUnwatchResult } fr
 import { deploymentEntrypoint, type DeployService, type DeployFile } from "../deploy/deploy-service.ts";
 import { appUrlOf } from "../deploy/deploy-store.ts";
 import { carriesGitMetadata } from "../deploy/deploy-fs.ts";
+import type { LiveEditSaved } from "../deploy/live-edits.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import type { OutboundFile } from "../core/attachments.ts";
@@ -123,6 +124,7 @@ interface PublishResult {
   alwaysOn?: boolean;
   embedAncestors?: string[];
   public?: boolean;
+  liveEdit?: LiveEditSaved;
 }
 
 export class NeedsApproval extends Error {
@@ -476,6 +478,7 @@ export interface ToolContextDeps {
     authorize?: (access: SandboxAccessPlan) => void,
   ) => Promise<SandboxHandle>;
   accessSandboxResource?: (id: string) => Promise<SandboxAccessPlan>;
+  assertDefaultSandboxUsable?: () => Promise<void>;
   boundSandboxId?: string;
   workdir?: string;
   listSkills?: (source?: string) => Promise<SkillResolution[]>;
@@ -769,6 +772,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
             }
             if (action === "default") {
               if (input?.sandboxId === undefined) throw new Error("default requires sandbox_id or null");
+              if (input.sandboxId !== null) await accessSandbox(input.sandboxId);
               await resources.setDefault(deps.createdBy, writableScopeId, input.sandboxId);
               deps.invalidateProvision?.();
               return { defaultSandboxId: input.sandboxId };
@@ -810,6 +814,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         const access = await accessSandbox(sandboxId);
         return probe(await resources.status(deps.createdBy, sandboxId), () => deps.provisionResource!(access));
       }
+      await deps.assertDefaultSandboxUsable?.();
       if (!deps.sandbox.computerStatus) {
         throw new CapabilityUnsupportedError(deps.sandbox.profile.backend, "reporting computer status");
       }
@@ -827,6 +832,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         return resources.restart(deps.createdBy, sandboxId, memoryGb);
       }
       if (memoryGb !== undefined) throw new Error("a memory size needs a computer from sandbox list");
+      await deps.assertDefaultSandboxUsable?.();
       if (!deps.sandbox.restartComputer) {
         throw new CapabilityUnsupportedError(deps.sandbox.profile.backend, "restarting the computer");
       }
@@ -1106,6 +1112,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         ...(d.alwaysOn ? { alwaysOn: true } : {}),
         ...(d.embedAncestors?.length ? { embedAncestors: d.embedAncestors } : {}),
         ...(d.public ? { public: true } : {}),
+        ...(d.liveEdit ? { liveEdit: d.liveEdit } : {}),
       };
     },
 
