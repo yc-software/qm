@@ -3,7 +3,7 @@ import { LRUCache } from "lru-cache";
 import addressparser from "nodemailer/lib/addressparser";
 import type { LoopItem } from "../types.ts";
 import { isObj, tokenFor, type ConnectorTokenSource } from "../sources/adapter.ts";
-import { gmailThreadOf } from "../sources/gmail.ts";
+import { gmailAccountOf, gmailThreadOf, gmailToken } from "../sources/gmail.ts";
 import { slackConversationOf } from "../sources/slack.ts";
 import { normalizeSlackApiUrl } from "../../slack/config.ts";
 import { slackMessageContent } from "../../slack/message-content.ts";
@@ -30,7 +30,8 @@ export interface SourceClientDeps {
 
 type FetchOutcome =
   | { kind: "conversation"; conversation: Conversation }
-  | { kind: "skipped"; reason: "not_connected" | "not_inbox" | "bad_item" };
+  | { kind: "skipped"; reason: "not_connected" | "not_inbox" | "bad_item" }
+  | { kind: "skipped"; reason: "source_gone"; message: string };
 
 export class SourceRateLimited extends TransientTurnFailure {
   constructor(source: string) {
@@ -59,9 +60,9 @@ export interface SourceClients {
   slackIdentity(owner: string, token: string): Promise<SlackIdentity>;
   slackChannel(owner: string, token: string, channelId: string): Promise<SlackChannel>;
   slackUser(owner: string, token: string, userId: string): Promise<Participant>;
-  gmailToken(owner: string): Promise<string | null>;
+  gmailToken(owner: string, item?: LoopItem): Promise<string | null>;
   gmailRead<T>(owner: string, token: string, path: string): Promise<T>;
-  gmailAddress(owner: string, token: string): Promise<string | undefined>;
+  gmailAddress(owner: string, token: string, item: LoopItem): Promise<string | undefined>;
 }
 
 export type ConversationFetcher = (owner: string, item: LoopItem) => Promise<FetchOutcome>;
@@ -74,6 +75,21 @@ const SLACK_PAGE = 200;
 export function changedSinceLastLook(item: Pick<LoopItem, "verdict">, conversation: Conversation): boolean {
   const newest = newestTs(conversation);
   return newest !== undefined && newest !== item.verdict?.lastSeenTs;
+}
+
+const goneSlackErrors = new Map([
+  ["channel_not_found", "The conversation is no longer available in Slack."],
+  ["thread_not_found", "The conversation is no longer available in Slack."],
+  ["not_in_channel", "You are no longer a member of this Slack channel."],
+  ["is_archived", "This Slack channel was archived."],
+]);
+
+function sourceGone(error: unknown): string | undefined {
+  if (error instanceof GmailApiError)
+    return error.status === 404 ? "The conversation is no longer available in Gmail." : undefined;
+  const code =
+    isObj(error) && error.code === ErrorCode.PlatformError && isObj(error.data) ? error.data.error : undefined;
+  return typeof code === "string" ? goneSlackErrors.get(code) : undefined;
 }
 
 function rateLimitedAfter(error: unknown): number | undefined {
@@ -147,7 +163,8 @@ export function createSourceClients(deps: SourceClientDeps): SourceClients {
       users().set(userId, resolved);
       return resolved;
     },
-    gmailToken: (owner) => tokenFor(deps.tokens, "gmail.googleapis.com", owner),
+    gmailToken: (owner, item) =>
+      item ? gmailToken(deps.tokens, owner, item) : tokenFor(deps.tokens, "gmail.googleapis.com", owner),
     async gmailRead(owner, token, path) {
       if (limited().has(`${owner}:Gmail`)) throw new SourceRateLimited("Gmail");
       try {
@@ -157,12 +174,13 @@ export function createSourceClients(deps: SourceClientDeps): SourceClients {
         throw error;
       }
     },
-    async gmailAddress(owner, token) {
-      const cached = addresses().get(owner);
+    async gmailAddress(owner, token, item) {
+      const key = `${owner}:${gmailAccountOf(item) ?? ""}`;
+      const cached = addresses().get(key);
       if (cached) return cached;
       const profile = await clients.gmailRead<{ emailAddress?: string }>(owner, token, "profile");
       const address = profile.emailAddress?.toLowerCase();
-      if (address) addresses().set(owner, address);
+      if (address) addresses().set(key, address);
       return address;
     },
   };
@@ -324,9 +342,9 @@ export function createConversationFetcher(clients: SourceClients): ConversationF
   async function gmail(owner: string, item: LoopItem): Promise<FetchOutcome> {
     const threadId = gmailThreadOf(item);
     if (!threadId) return { kind: "skipped", reason: "bad_item" };
-    const token = await clients.gmailToken(owner);
+    const token = await clients.gmailToken(owner, item);
     if (!token) return { kind: "skipped", reason: "not_connected" };
-    const address = await clients.gmailAddress(owner, token);
+    const address = await clients.gmailAddress(owner, token, item);
     const thread = await clients.gmailRead<{ messages?: unknown[] }>(
       owner,
       token,
@@ -385,8 +403,14 @@ export function createConversationFetcher(clients: SourceClients): ConversationF
   }
 
   return async (owner, item) => {
-    if (item.source === "slack") return slack(owner, item);
-    if (item.source === "gmail") return gmail(owner, item);
+    try {
+      if (item.source === "slack") return await slack(owner, item);
+      if (item.source === "gmail") return await gmail(owner, item);
+    } catch (error) {
+      const message = sourceGone(error);
+      if (message) return { kind: "skipped", reason: "source_gone", message };
+      throw error;
+    }
     return { kind: "skipped", reason: "not_inbox" };
   };
 }

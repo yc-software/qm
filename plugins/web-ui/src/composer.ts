@@ -1212,17 +1212,19 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   }
 
   function focusComposerEnd(): void {
-    requestAnimationFrame(() => {
+    const focus = () => {
       const ta = ctx.chat.state.host?.querySelector<HTMLTextAreaElement>(".composer-input");
-      if (!ta) return;
+      if (!ta) return false;
       if (ta.disabled) {
         pendingComposerFocus = true;
-        return;
+        return true;
       }
       pendingComposerFocus = false;
       ta.focus({ preventScroll: true });
       ta.setSelectionRange(ta.value.length, ta.value.length);
-    });
+      return true;
+    };
+    if (!focus()) requestAnimationFrame(focus);
   }
 
   function closeSlashMenu(agent: Agent): void {

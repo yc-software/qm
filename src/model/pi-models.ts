@@ -155,6 +155,9 @@ export function fastModeModelIds(): readonly string[] {
     ...chatOverlays()
       .filter((m) => modelSupportsFastMode(m.id))
       .map((m) => m.id),
+    ...gatewayModelCatalog(true)
+      .map((m) => m.id)
+      .filter(modelSupportsFastMode),
   ];
 }
 
@@ -433,6 +436,7 @@ export function modelSupportsFastMode(modelId: string | undefined): boolean {
   return (
     (overlay && !isEmbeddingModel(overlay) ? overlay.fastMode : undefined) ??
     REGISTRY_BY_ID.get(modelId)?.fastMode ??
+    resolveGatewayModel(modelId)?.fastMode ??
     false
   );
 }

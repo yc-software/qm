@@ -75,6 +75,7 @@ function parseModel(value: unknown, allowed: Set<string>, baseUrl: string): Gate
   else if (pdf) documentInput = "pdf";
   return {
     documentInput,
+    ...(anthropic && info.supports_fast_mode === true ? { fastMode: true } : {}),
     id: GATEWAY_MODEL_PREFIX + info.model_group,
     name: info.model_group,
     provider: GATEWAY_PROVIDER,

@@ -234,8 +234,7 @@ test(
     try {
       await writer.runs.list();
       for (const worker of workers) worker.start();
-      await until(() => claims >= 2);
-      await sleep(100);
+      await until(() => claims >= readers.length * 2);
       const before = claims;
       await sleep(1_000);
       assert.equal(claims, before, "idle workers issue no claim queries between recovery polls");

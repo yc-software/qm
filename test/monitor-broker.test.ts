@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createMonitorBroker, readBackgroundOutputTail } from "../src/monitors/monitor-broker.ts";
 import type { BackgroundWatchArmedResult, BackgroundWatchResult } from "../src/monitors/monitor-broker.ts";
 import { createMonitorStore, type MonitorStore } from "../src/monitors/monitor-store.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeActor, scopeId } from "../src/types.ts";
 import { createPostgresProcessRegistry, type ProcessRegistry } from "../src/processes/process-registry.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 
@@ -227,4 +227,50 @@ test("unwatch removes own monitors only", async () => {
   assert.ok(await store.get(other.id));
   assert.equal((await broker.unwatch(r.monitorId)).removed, true);
   assert.equal(await store.get(r.monitorId), null);
+});
+
+test("in a shared conversation, only whoever armed a watch can remove it, but any person there can remove the conversation's own", async () => {
+  const store = createMonitorStore(testMap());
+  const registry = createPostgresProcessRegistry(testDatabaseUrl());
+  const channel = scopeId("channel", "C1");
+  await registry.register({
+    processId: "p-1",
+    scopeId: SCOPE,
+    sandboxId: "sandbox-1",
+    kind: "background",
+    command: "bg: npm run build",
+    ttlMs: 60_000,
+  });
+  const watcher = (owner: string, botActor?: boolean) =>
+    createMonitorBroker({
+      store,
+      registry,
+      readOutputTail: async () => ({ outputTail: "" }),
+      scopeId: SCOPE,
+      owner,
+      ownerScopeId: channel,
+      ...(botActor ? { botActor } : {}),
+      threadRef: "thread-1",
+      graceMs: 1000,
+    });
+  const alice = watcher("U1");
+  const watch = armed(await alice.watch("p-1", { instructions: "tell alice when it finishes" }));
+  assert.deepEqual(await watcher("release-bot", true).unwatch(watch.monitorId), {
+    monitorId: watch.monitorId,
+    removed: false,
+    notYours: true,
+  });
+  assert.deepEqual(await watcher("U2").unwatch(watch.monitorId), {
+    monitorId: watch.monitorId,
+    removed: false,
+    notYours: true,
+  });
+  assert.equal((await store.get(watch.monitorId))?.instructions, "tell alice when it finishes");
+  assert.equal((await alice.unwatch(watch.monitorId)).removed, true);
+  assert.equal(await store.get(watch.monitorId), null);
+  const conversation = armed(
+    await watcher(scopeActor(channel)).watch("p-1", { instructions: "post the build result" }),
+  );
+  assert.equal((await watcher("release-bot", true).unwatch(conversation.monitorId)).notYours, true);
+  assert.equal((await watcher("U2").unwatch(conversation.monitorId)).removed, true);
 });
