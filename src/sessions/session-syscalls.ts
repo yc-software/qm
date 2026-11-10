@@ -71,7 +71,7 @@ export async function delegatedAuthorizationOrigin(
   let current = request;
   for (let depth = 0; depth < 32; depth++) {
     if (
-      (current.origin.kind === "automation" && current.origin.ownerFire !== true) ||
+      (current.origin.kind === "automation" && !isOwnerFire(current)) ||
       current.readOnly ||
       current.privateSessionMessage ||
       current.swarm ||

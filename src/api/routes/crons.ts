@@ -413,6 +413,7 @@ async function patchCronAsPerson(ctx: ApiCtx, cron: Cron, body: unknown): Promis
   const takeover = editor ? await cronTaskTakeover(app, cron, editor, body.task !== undefined) : undefined;
   const patch: CronPatch = {
     ...takeover,
+    ...(body.task !== undefined && cron.taskAuthor ? { taskAuthor: null } : {}),
     ...(body.runtime !== undefined ? { runtime: body.runtime } : {}),
     ...(body.title !== undefined ? { title: body.title } : {}),
     ...(body.task !== undefined ? { action: body.task } : {}),
@@ -431,6 +432,7 @@ async function patchCronAsPerson(ctx: ApiCtx, cron: Cron, body: unknown): Promis
           ...(body.title !== undefined ? ["title"] : []),
           ...(body.task !== undefined ? ["task"] : []),
           ...(takeover ? ["owner"] : []),
+          ...(takeover?.script === null ? ["script"] : []),
           ...(schedule !== undefined ? ["schedule"] : []),
           ...(body.enabled !== undefined ? [`enabled=${body.enabled}`] : []),
           ...(body.archived !== undefined ? [`archived=${body.archived}`] : []),

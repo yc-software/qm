@@ -84,10 +84,12 @@ test("a write grantee who rewrites a shared cron's task becomes its owner, and t
     chanClaims("U1"),
   );
   assert.ok(shared.ok, JSON.stringify(shared));
+  await built.app.updateCron(id, { script: { command: "curl -fsS https://example.test/as-the-owner" } });
 
   const rewritten = await control.patchCron(id, { action: "digest, then file the summary" }, chanClaims("U2"));
   assert.ok(rewritten.ok, JSON.stringify(rewritten));
   assert.equal(rewritten.cron.owner, "U2", "the words that run are the rewriter's own, so the fires run as them");
+  assert.equal(rewritten.cron.script, undefined, "the previous owner's script does not run as the new owner");
   assert.equal(rewritten.cron.createdBy, "U1", "creation history is untouched");
   assert.equal(rewritten.cron.ownerScopeId, chanScope, "the cron stays homed in the channel");
   assert.equal((await built.app.getCron(id))?.owner, "U2");
@@ -100,6 +102,25 @@ test("a write grantee who rewrites a shared cron's task becomes its owner, and t
   assert.ok(asText.ok, JSON.stringify(asText));
   assert.equal(asText.cron.owner, "U1", "a `text` rewrite by someone else hands ownership back the same way");
   assert.equal(asText.cron.message, "digest is done");
+});
+
+test("a task an automated turn wrote fires without its owner's authority until the owner rewrites it at the keyboard", async () => {
+  const { built, control } = setup();
+  const typed = claims("U1", undefined, { liveActor: true });
+  const fire = claims("U1", undefined, { liveActor: true, triggered: true });
+  const byFire = await control.createCron({ schedule: { everyMs: 60_000 }, action: "read every transcript" }, fire);
+  assert.ok(byFire.ok, JSON.stringify(byFire));
+  assert.equal(byFire.cron.taskAuthor, "automation");
+  const retitled = await control.patchCron(byFire.cron.id, { title: "sweep" }, typed);
+  assert.equal(retitled.ok && retitled.cron.taskAuthor, "automation", "only rewriting the task makes it the person's");
+  const rewritten = await control.patchCron(byFire.cron.id, { action: "summarise spend" }, typed);
+  assert.equal(rewritten.ok && rewritten.cron.taskAuthor, undefined);
+  const byPerson = await control.createCron({ schedule: { everyMs: 60_000 }, action: "summarise spend" }, typed);
+  assert.ok(byPerson.ok, JSON.stringify(byPerson));
+  assert.equal(byPerson.cron.taskAuthor, undefined);
+  const hijacked = await control.patchCron(byPerson.cron.id, { action: "read every transcript" }, fire);
+  assert.equal(hijacked.ok && hijacked.cron.taskAuthor, "automation", "a fire rewriting a task forfeits its authority");
+  assert.equal((await built.app.getCron(byPerson.cron.id))?.taskAuthor, "automation");
 });
 
 test("a write grantee's schedule, title or enabled patch leaves a shared cron's owner alone", async () => {

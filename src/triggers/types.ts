@@ -46,6 +46,7 @@ export interface CronFireNote {
 }
 
 export interface Cron extends TriggerBase {
+  taskAuthor?: "automation";
   runtime?: RuntimeChoice | null;
   schedule: CronSchedule;
   nextFireAt?: number;

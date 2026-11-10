@@ -31,6 +31,7 @@ export interface CreateCronInput extends CreateTriggerInput {
   loopId?: string;
   sessionRef?: string;
   script?: CronScript;
+  taskAuthor?: "automation";
 }
 
 export interface CronPatch {
@@ -43,6 +44,7 @@ export interface CronPatch {
   archived?: boolean;
   destination?: Destination;
   owner?: string;
+  taskAuthor?: "automation" | null;
   sessionRef?: string | null;
   script?: CronScript | null;
 }
@@ -137,6 +139,7 @@ export function createCronStore(
         ...(input.sessionRef ? { sessionRef: input.sessionRef } : {}),
         ...(input.runtime ? { runtime: input.runtime } : {}),
         ...(input.script ? { script: input.script } : {}),
+        ...(input.taskAuthor ? { taskAuthor: input.taskAuthor } : {}),
       }));
     },
     get: (id) => backing.get(id),
@@ -162,6 +165,7 @@ export function createCronStore(
       if (patch.destination !== undefined) fields.destination = patch.destination;
       if (patch.archived === true) fields.enabled = false;
       if (patch.owner !== undefined) fields.owner = patch.owner;
+      if (patch.taskAuthor !== undefined) fields.taskAuthor = patch.taskAuthor ?? undefined;
       if (patch.sessionRef !== undefined) fields.sessionRef = patch.sessionRef ?? undefined;
       if (patch.script !== undefined) fields.script = patch.script ?? undefined;
       return backing.merge(id, fields);

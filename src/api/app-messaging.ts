@@ -229,7 +229,7 @@ export function createMessagingMethods(
       const updated = await deps.crons.update(id, patch);
       deps.auditLog.record({
         at: Date.now(),
-        principalId: before.owner,
+        principalId: patch.owner ?? before.owner,
         action: "cron_update",
         resource: id,
         scopeLabel: before.ownerScopeId,

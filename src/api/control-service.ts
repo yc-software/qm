@@ -227,9 +227,10 @@ export async function cronTaskTakeover(
   cron: Cron,
   editorId: string,
   rewritesTask: boolean,
-): Promise<{ owner: string } | undefined> {
+): Promise<{ owner: string; script?: null } | undefined> {
   if (!rewritesTask || actsAsScope(cron.owner, cron.ownerScopeId)) return undefined;
-  return (await ownsCron(app, cron, editorId)) ? undefined : { owner: editorId };
+  if (await ownsCron(app, cron, editorId)) return undefined;
+  return { owner: editorId, ...(cron.script ? { script: null } : {}) };
 }
 
 const WEBHOOK_TASK_OWNER_ONLY =
@@ -480,6 +481,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         createdBy: capability.actorId,
         ownerScopeId,
         ...(capability.botActor ? { botActor: true } : {}),
+        ...(personAtKeyboard(capability) ? {} : { taskAuthor: "automation" as const }),
         ...(typeof req.title === "string" ? { title: req.title } : {}),
         ...(destination ? { destination } : {}),
         ...(script ? { script } : {}),
@@ -547,10 +549,12 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           return { ok: false, code: "bad_request", message: CRON_SCRIPT_HOME_ONLY };
         patch.script = script;
       } else if (before.script && (req.script === null || req.text !== undefined)) patch.script = null;
-      Object.assign(
-        patch,
-        await cronTaskTakeover(app, before, capability.actorId, req.action !== undefined || req.text !== undefined),
-      );
+      const rewritesTask = req.action !== undefined || req.text !== undefined;
+      Object.assign(patch, await cronTaskTakeover(app, before, capability.actorId, rewritesTask));
+      if (rewritesTask || patch.script) {
+        if (!personAtKeyboard(capability)) patch.taskAuthor = "automation";
+        else if (before.taskAuthor) patch.taskAuthor = null;
+      }
       if (!cronPatchChanges(before, patch)) return { ok: true, cron: before };
       try {
         const cron = await app.updateCron(id, patch, trial);
@@ -844,7 +848,12 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
 
       try {
         if (orgSkillCede) {
-          const promoted = await app.promoteSkill(home.id, toScope, capability.actorId, personAtKeyboard(capability));
+          const promoted = await app.promoteSkill(
+            home.id,
+            toScope,
+            capability.actorId,
+            capability.liveActor === true && personAtKeyboard(capability),
+          );
           return {
             ok: true,
             verb: "promote",
@@ -856,7 +865,11 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         }
 
         if (req.move) {
-          const deployPersonTransfer = req.type === "deploy" && toKind === "personal" && personAtKeyboard(capability);
+          const deployPersonTransfer =
+            req.type === "deploy" &&
+            toKind === "personal" &&
+            capability.liveActor === true &&
+            personAtKeyboard(capability);
           if (toKind === "persona" && req.type !== "skill" && req.type !== "file") {
             return {
               ok: false,

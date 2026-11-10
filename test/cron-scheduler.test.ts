@@ -77,6 +77,21 @@ test("a fire's TurnRequest runs as the cron owner and carries no grant list: the
   assert.equal(automationOrigin(calls[0])?.ownerFire, true);
   assert.ok(!("unattendedGrants" in calls[0]!), "nothing but the owner's own standing rides along");
   assert.ok(!("grants" in calls[0]!));
+  const written = await crons.create({
+    schedule: { everyMs: 1000 },
+    action: "scan every transcript",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+    taskAuthor: "automation",
+  });
+  await runNowSettled(scheduler, written.id);
+  assert.equal(calls.length, 2);
+  assert.equal(
+    automationOrigin(calls[1])?.ownerFire,
+    undefined,
+    "a task no person wrote carries no person's authority",
+  );
 });
 
 test("a channel cron runs in the channel scope and delivers its real output to the channel", async () => {
