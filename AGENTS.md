@@ -56,13 +56,14 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   where findings decide the verdict; point it at them rather than restating them.
   Put each reviewer's actual verdict, score, and concise assessment in the **PR
   description**, labeled by lens and reviewer and tied to the reviewed commit, and list
-  every finding raised on the PR with how it ended. Update
+  every finding raised on the PR with how it ended: the commit that fixed it, the
+  judge's ground for dropping it, or the waiver. Update
   the description as reviews arrive; mark pending reviews honestly and never invent
   results or substitute the author's self-review. After edits, have independent
   reviewers reassess affected lenses and explicitly carry forward unaffected results;
-  never re-run a reviewer on unchanged code to get a different verdict. Fix each finding
-  or send it to a judge. When a judge drops every finding a reviewer raised, record that
-  lens as Accept with the judge and its reason in the assessment.
+  never re-run a reviewer on unchanged code to get a different verdict. When a judge has
+  dropped every finding a reviewer raised, set that lens's verdict to Accept and keep the
+  reviewer's score.
   These reviews run alongside PR work; before merging, every relevant lens must have
   accepted. Only a human maintainer can waive a lens, for
   one PR: keep the reviewer's actual score, set the verdict to `Waived`, and write the
