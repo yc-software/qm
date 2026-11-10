@@ -160,3 +160,19 @@ test("keychain auth is unavailable when the credential is missing", async () => 
   const auth = keychainCompanyChatGPTAuth({ keychain: fakeKeychain(state), credentialId: "other", now: () => NOW });
   assert.equal(await auth.accessToken(), undefined);
 });
+
+test("keychain auth logs which auth file is corrupt instead of treating it as absent", async (t) => {
+  const logged: string[] = [];
+  t.mock.method(console, "warn", (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  });
+  const state = keychainState(authJson("acct", FRESH_EXP));
+  state.files = [
+    { path: ".codex/auth.json", contentBase64: Buffer.from("{not json").toString("base64") },
+    { path: "other/auth.json", contentBase64: Buffer.from(JSON.stringify({ auth_mode: "apikey" })).toString("base64") },
+  ];
+  const auth = keychainCompanyChatGPTAuth({ keychain: fakeKeychain(state), credentialId: "cred-1", now: () => NOW });
+  assert.equal(await auth.accessToken(), undefined);
+  assert.match(logged[0]!, /^\[swallowed\] chatgpt: unusable auth file \.codex\/auth\.json: .*JSON/);
+  assert.match(logged[1]!, /^\[swallowed\] chatgpt: unusable auth file other\/auth\.json: not a ChatGPT login/);
+});

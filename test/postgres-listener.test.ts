@@ -73,8 +73,8 @@ test("notification buses and run signals share a listener without closing their 
   let ready = 0;
   let messages = 0;
   let signalsSeen = 0;
-  const offA = a.subscribe(() => messages++, { onResync: () => ready++ });
-  const offB = b.subscribe(() => messages++, { onResync: () => ready++ });
+  const offA = a.subscribe(() => void messages++, { onResync: () => void ready++ });
+  const offB = b.subscribe(() => void messages++, { onResync: () => void ready++ });
   const offSignal = signals.onSignal("consolidation-run", () => signalsSeen++);
   try {
     await until(() => ready === 2 && signalsSeen > 0);
