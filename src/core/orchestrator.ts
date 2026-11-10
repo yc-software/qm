@@ -1335,6 +1335,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             loadedFacts,
             (outcome) => void recallOutcomes.push(outcome),
             isPersonAuthored(input.origin.kind) && !sessionTurn ? titleText : undefined,
+            session.id,
           );
         const importsOverheard = (!input.envelopeWrapped || humanInput) && !!input.overheard?.length;
         const earlyRecall =

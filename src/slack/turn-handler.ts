@@ -733,6 +733,7 @@ export function createTurnHandler(deps: {
       if (delivery === "silent") {
         await finishTaskAck();
         if (queuedRunId && result.refusalKind === "security_quarantine") inFlightRuns.delete(queuedRunId);
+        else if (queuedRunId) ackRunDelivery(queuedRunId);
         console.error(
           `[slack-plugin] unprompted turn ${result.status} (staying quiet) ch=${inc.channel} ts=${inc.ts}: ${result.reason ?? "refused"}`,
         );
