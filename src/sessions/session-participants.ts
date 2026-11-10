@@ -129,7 +129,7 @@ export function createSessionParticipants(
     async addParticipant(sessionId, principalId, title): Promise<void> {
       await q(
         `INSERT INTO participants(session_id, principal_id, title) VALUES ($1, $2, $3)
-         ON CONFLICT (session_id, principal_id) DO UPDATE SET title = EXCLUDED.title WHERE EXCLUDED.title IS NOT NULL`,
+         ON CONFLICT (tenant_id, session_id, principal_id) DO UPDATE SET title = EXCLUDED.title WHERE EXCLUDED.title IS NOT NULL`,
         [sessionId, principalId, title ?? null],
       );
     },

@@ -146,7 +146,12 @@ function deployments(page: AdminPage, data: Row, header: Header) {
   const all = [...(data.deployments || [])].sort(newest(latest));
   const row = (r: Row) => ({
     name: r.name || r.id,
-    preview: dot(r.status || "unknown", r.currentVersion, orgWide(page) && scopeName(r.ownerScopeId), r.createdBy),
+    preview: dot(
+      r.status || "unknown",
+      r.currentVersion,
+      orgWide(page) && scopeName(r.ownerScopeId),
+      r.createdByName || r.createdBy,
+    ),
     time: relTime(latest(r)),
     href: r.publicUrl || undefined,
     target: "_blank",
@@ -254,7 +259,7 @@ function cronDetail(page: AdminPage, all: Row[], id: string) {
           )
         : "None",
     ],
-    ["Owner", cron.owner || cron.createdBy || "None"],
+    ["Owner", cron.owner || cron.createdByName || cron.createdBy || "None"],
     ["Status", cronStatus(cron)],
     ["Created", cron.createdAt ? new Date(cron.createdAt).toLocaleString() : ""],
     ["Last fired", cron.lastFiredAt ? when(cron.lastFiredAt) : "never fired"],

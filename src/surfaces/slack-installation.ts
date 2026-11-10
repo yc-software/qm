@@ -77,6 +77,7 @@ export interface SlackInstallationStore {
   }): Promise<boolean>;
   disableManaged(installId: string): Promise<boolean>;
   enableManaged(): Promise<boolean>;
+  onSet(listener: () => void): void;
 }
 
 export function createSlackInstallationStore(
@@ -97,7 +98,11 @@ export function createSlackInstallationStore(
           version: record.version,
         }
       : { configured: false, managed: record !== null };
+  const setListeners = new Set<() => void>();
   return {
+    onSet(listener) {
+      setListeners.add(listener);
+    },
     async get() {
       const record = await map.get(orgId);
       if (!record || record.disabled) return null;
@@ -139,6 +144,7 @@ export function createSlackInstallationStore(
         ...(current.installedAt !== undefined ? { installedAt: current.installedAt } : {}),
       }));
       if (!stored) throw new Error("Slack installation disappeared during update");
+      for (const listener of setListeners) listener();
       return publicStatus(stored);
     },
     async setManaged(input) {

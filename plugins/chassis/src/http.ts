@@ -1,8 +1,76 @@
-import { type IncomingMessage, type OutgoingMessage, ServerResponse } from "node:http";
+import { type IncomingMessage, type OutgoingMessage, type Server, ServerResponse } from "node:http";
+import type { Socket } from "node:net";
 import { Readable, type Writable } from "node:stream";
 import { gzip } from "node:zlib";
 
 const COMPRESS_MIN_BYTES = 1024;
+
+const ALB_IDLE_TIMEOUT_MS = 60_000;
+export const KEEP_ALIVE_TIMEOUT_MS = ALB_IDLE_TIMEOUT_MS + 5_000;
+
+type ConnectionState = {
+  openedAt: number;
+  lastAnsweredAt: number;
+  answeredBytes: number;
+  served: number;
+  error?: string;
+  draining: boolean;
+  pending?: { method: string; path: string; trace: string; startedAt: number };
+};
+
+export function logUnansweredCloses(server: Server, label: string): void {
+  const states = new WeakMap<Socket, ConnectionState>();
+  server.on("connection", (socket: Socket) => {
+    const now = Date.now();
+    const state: ConnectionState = { openedAt: now, lastAnsweredAt: now, answeredBytes: 0, served: 0, draining: false };
+    states.set(socket, state);
+    socket.on("error", (error: NodeJS.ErrnoException) => (state.error = `${error.code ?? "unknown"} ${error.message}`));
+    socket.on("close", () => {
+      if (states.get(socket) !== state) return;
+      const unreadBytes = socket.bytesRead - state.answeredBytes;
+      if (!state.pending && (unreadBytes <= 0 || state.draining)) return;
+      const closedAt = Date.now();
+      const request = state.pending
+        ? `${state.pending.method} ${state.pending.path} after ${closedAt - state.pending.startedAt}ms trace=${state.pending.trace}`
+        : "none parsed";
+      console.warn(
+        "[http] %s connection closed before answering: request=%s unanswered_bytes=%d idle_before=%dms connection_age=%dms served=%d error=%s",
+        label,
+        request,
+        unreadBytes,
+        (state.pending?.startedAt ?? closedAt) - state.lastAnsweredAt,
+        closedAt - state.openedAt,
+        state.served,
+        state.error ?? "none",
+      );
+    });
+  });
+  server.on("upgrade", (req: IncomingMessage) => states.delete(req.socket));
+  server.on("request", (req: IncomingMessage, res: ServerResponse) => {
+    const state = states.get(req.socket);
+    if (!state) return;
+    const url = req.url ?? "?";
+    const query = url.indexOf("?");
+    const trace = req.headers["x-amzn-trace-id"];
+    state.pending = {
+      method: req.method ?? "?",
+      path: query < 0 ? url : url.slice(0, query),
+      trace: typeof trace === "string" ? trace : "none",
+      startedAt: Date.now(),
+    };
+    res.once("finish", () => {
+      state.pending = undefined;
+      state.lastAnsweredAt = Date.now();
+      state.served += 1;
+      if (req.complete) return void (state.answeredBytes = req.socket.bytesRead);
+      state.draining = true;
+      req.once("end", () => {
+        state.draining = false;
+        state.answeredBytes = req.socket.bytesRead;
+      });
+    });
+  });
+}
 
 export function isLoopbackUrl(raw: string): boolean {
   const hostname = URL.parse(raw)?.hostname.toLowerCase();
