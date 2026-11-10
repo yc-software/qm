@@ -129,7 +129,7 @@ export function createPersonaService(deps: {
   }
 
   async function credentialsOf(id: string) {
-    const grants = (await deps.keychain?.grantsForScope(personaScope(id))) ?? [];
+    const grants = (await deps.keychain?.grantsForScope(personaScope(id), { includePersonGrants: true })) ?? [];
     return grants.map(({ grant, credential }) => ({
       grantId: grant.id,
       service: credential.service,

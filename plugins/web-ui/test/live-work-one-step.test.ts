@@ -290,3 +290,61 @@ test("text the agent says mid-turn stays visible between work folds while the li
     await h.close();
   }
 });
+
+test("a thinking row reads Thought once later work follows it, and Thinking only while it is the live tail", async () => {
+  const startedAt = Date.now() - 5_000;
+  const thought = item("Reasoning", {
+    seq: 2,
+    createdAt: startedAt + 100,
+    text: "Check the docs first.",
+    body: { wire: { step: "s1", index: 0 } },
+  });
+  const followed: RunActivityEntry[] = [
+    { item: thought },
+    {
+      item: item("AgentMessage", {
+        seq: 3,
+        createdAt: startedAt + 200,
+        variant: "narration",
+        text: "Starting the rest now.",
+        body: { wire: { message: { stopReason: "toolUse" } } },
+      }),
+    },
+    {
+      item: item("ToolCall", {
+        seq: 4,
+        createdAt: startedAt + 300,
+        tool: "execute",
+        callId: "c1",
+        body: { command: "npm test", purpose: "Rechecking docs publish" },
+      }),
+    },
+  ];
+  for (const [activity, title] of [
+    [followed, "Thought"],
+    [[{ item: thought }], "Thinking"],
+  ] as const) {
+    const run = () => ({ status: "running", alive: true, startedAt, attempt: 1, activity, result: null });
+    const h = await harness({
+      path: `/s/${SESSION.id}`,
+      listSessions: [SESSION],
+      items: [item("UserMessage", { seq: 1, createdAt: startedAt - 1000, text: "did you do that?" })],
+      api: (path) => {
+        if (path.includes("/api/runs/active")) return Response.json({ runId: "r1", run: run(), queued: [] });
+        if (path.startsWith("/api/runs/r1/events")) throw new TypeError("no sse");
+        if (path === "/api/runs/r1") return Response.json(run());
+        return undefined;
+      },
+    });
+    try {
+      h.releaseSessions();
+      await h.boot();
+      await h.sessionsReady();
+      const titles = () => [...document.querySelectorAll(".thinking-title")].map((el) => el.textContent);
+      await until(() => titles().length > 0);
+      assert.deepEqual(titles(), [title]);
+    } finally {
+      await h.close();
+    }
+  }
+});

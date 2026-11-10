@@ -426,6 +426,10 @@ export interface App {
     sessionId: string,
     principalId: string,
   ): Promise<{ cancelled: true } | { cancelled: false; reason: "no_open_goal" | "busy" } | null>;
+  resumeSessionGoal(
+    sessionId: string,
+    principalId: string,
+  ): Promise<{ resumed: true; goal: GoalView } | { resumed: false; reason: "no_open_goal" | "busy" } | null>;
   spawnSession(principalId: string, opts: { scopeId: ScopeId; title?: string }): Promise<{ session: Session } | null>;
   discardSession(sessionId: string, principalId: string): Promise<boolean>;
   forkSession(

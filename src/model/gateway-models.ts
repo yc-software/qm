@@ -5,7 +5,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 export const GATEWAY_PROVIDER = "qm:gateway";
 export const GATEWAY_MODEL_PREFIX = "gateway/";
 
-export type GatewayModel = Model<Api> & { documentInput?: "pdf" | "files" };
+export type GatewayModel = Model<Api> & { documentInput?: "pdf" | "files"; fastMode?: boolean };
 
 const gateway: {
   models: Map<string, GatewayModel | EmbeddingModel>;

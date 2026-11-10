@@ -172,8 +172,8 @@ export function withWebTranscriptDeliveries(
       }
       return delivery;
     },
-    async pending(type) {
-      const rows = await store.pending(type);
+    async pending(type, sourceThreadRef) {
+      const rows = await store.pending(type, sourceThreadRef);
       return transcribed(type) ? drained(rows) : rows;
     },
     async claimPending(type, ttlMs) {

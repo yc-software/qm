@@ -13,7 +13,7 @@ import { ambientTenant } from "../tenants/context.ts";
 import { fileArtifactId, artifactPath } from "../files/file-artifact-store.ts";
 import { windowedTranscript } from "../sessions/session-store.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
-import { cancelGoal, goalCancelledItem, openGoal } from "../agent/goal.ts";
+import { cancelGoal, goalCancelledItem, openGoal, resumeGoal } from "../agent/goal.ts";
 import { goalView } from "../runs/turn-stream.ts";
 import { SEARCH_HIT_LIMIT, searchSnippet, searchTerms } from "../sessions/entry-search.ts";
 import { supportsProcessSessions } from "../sandbox/sandbox.ts";
@@ -109,6 +109,7 @@ export function createSessionMethods(
   | "updateSession"
   | "detachSession"
   | "cancelSessionGoal"
+  | "resumeSessionGoal"
   | "regenerateTitle"
   | "suggestNextPrompt"
   | "spawnSession"
@@ -1050,6 +1051,20 @@ export function createSessionMethods(
       cancelGoal(goal, "Cancelled from the goal bar.");
       await deps.sessions.setGoal({ sessionId: session.id }, goal, [goalCancelledItem(goal, principalId)]);
       return { cancelled: true as const };
+    },
+
+    async resumeSessionGoal(sessionId, principalId) {
+      const session = await sessionForViewer(sessionId, principalId);
+      if (!session || !(await mayWriteSession(principalId, session))) return null;
+      if (!(await waitForNoRunningRun(deps.runs, session.threadRef, 0)))
+        return { resumed: false as const, reason: "busy" as const };
+      const goal = openGoal((await deps.sessions.goals([session.id])).get(session.id));
+      if (!goal) return { resumed: false as const, reason: "no_open_goal" as const };
+      if (goal.status === "paused") {
+        resumeGoal(goal);
+        await deps.sessions.setGoal({ sessionId: session.id }, goal);
+      }
+      return { resumed: true as const, goal: goalView(goal) };
     },
 
     async regenerateTitle(sessionId, principalId) {

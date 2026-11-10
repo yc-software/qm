@@ -13,7 +13,7 @@ permissions:
 jobs:
   desk:
     name: macOS desk build and tests
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
