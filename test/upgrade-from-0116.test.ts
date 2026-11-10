@@ -23,6 +23,7 @@ const REPLACED_TABLES = new Set([
   "public.qm_schema_migrations",
   "public.qm_tenant",
   "public.retired_tenant_hosts",
+  "public.session_leases",
   "public.tenant_hosts",
 ]);
 
