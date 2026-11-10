@@ -121,7 +121,7 @@ export function visibleTitleEntryText(item: Item): string | undefined {
 function* visibleTurnTexts(items: Item[]): Generator<{ role: "User" | "Assistant"; text: string }> {
   for (const e of items) {
     if (!isUserItem(e) && !isAgentReply(e)) continue;
-    if (isOverheard(e)) continue;
+    if (isOverheard(e) || isHidden(e)) continue;
     const raw = visibleTitleEntryText(e);
     const text = raw && isUserItem(e) ? stripTurnBoilerplate(raw) : raw;
     if (text) yield { role: isUserItem(e) ? "User" : "Assistant", text };
@@ -138,7 +138,7 @@ export function renderTitleTranscript(items: Item[]): string {
 }
 
 export function renderNextPromptTranscript(items: Item[]): string | undefined {
-  const turns = [...visibleTurnTexts(items.filter((item) => !isHidden(item)))];
+  const turns = [...visibleTurnTexts(items)];
   const reply = turns.at(-1);
   if (reply?.role !== "Assistant") return undefined;
   const asked = turns.findLast((turn) => turn.role === "User");
