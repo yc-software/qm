@@ -58,7 +58,7 @@ const saveSource =
   (keychain: ProcessCredentialDeps["keychain"], { fileHashes, ...source }: ProcessCredentialFiles["sources"][number]) =>
   async (files: CredentialFile[]) => {
     if (!keychain) throw new Error("Refreshed credentials cannot be saved without a keychain");
-    return keychain.updateFiles(await keychain.writebackBaseline(source, fileHashes), files);
+    return keychain.updateFiles(await keychain.writebackBaseline(source, fileHashes ?? {}), files);
   };
 
 export async function finishProcessCredentials(
@@ -101,7 +101,7 @@ export async function syncProcessCredentials(
     stored.plan,
     stored.sources.map((source, index) => async (files: CredentialFile[]) => {
       const hashes = credentialFileHashes(files);
-      if (sameCredentialFileHashes(hashes, source.fileHashes)) return [];
+      if (!source.fileHashes || sameCredentialFileHashes(hashes, source.fileHashes)) return [];
       const overruled = await saveSource(deps.keychain, source)(files);
       saved.set(index, hashes);
       return overruled;
@@ -283,9 +283,15 @@ async function finishExecutionFiles(
           notes.push(
             `deleted ${removed.join(", ")}; the saved login no longer includes ${removed.length === 1 ? "it" : "them"}`,
           );
-        if (overruled.length)
+        const keptDeleted = deleted.filter((path) => overruled.includes(path));
+        const lost = overruled.filter((path) => !deleted.includes(path));
+        if (keptDeleted.length)
           notes.push(
-            `changed ${overruled.join(", ")}, but the saved login kept another command's version; rerun this command if its change is needed`,
+            `deleted ${keptDeleted.join(", ")}, but another command changed ${keptDeleted.length === 1 ? "it" : "them"} meanwhile, so the saved login kept ${keptDeleted.length === 1 ? "it" : "them"}`,
+          );
+        if (lost.length)
+          notes.push(
+            `changed ${lost.join(", ")}, but the saved login kept another command's version; rerun this command if its change is needed`,
           );
       }),
     );

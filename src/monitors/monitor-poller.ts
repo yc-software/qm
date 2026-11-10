@@ -203,11 +203,6 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
 
     const exited = read.status.state === "exited";
     const expired = !exited && t >= m.expiresAt;
-    if (!exited && read.chunks)
-      await deps.onProcessOutput?.(handle, m.processId).catch((e) => {
-        reportFailure("monitor: save refreshed credentials", e, m.processId);
-        return deps.monitors.recordError(m.id, errMessage(e));
-      });
     const raw = (m.tail ?? "") + read.chunks;
     let events = raw;
     let tail: string | undefined;
@@ -256,6 +251,11 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
       ev = { kind: "expired" };
       fireKey = `monitor:${m.id}:expired`;
     }
+    if (!exited && !expired)
+      await deps.onProcessOutput?.(handle, m.processId).catch((e) => {
+        reportFailure("monitor: save refreshed credentials", e, m.processId);
+        return deps.monitors.recordError(m.id, errMessage(e));
+      });
     const outcome = await fire(m, fireKey, renderEvent(m, events, ev), true);
     if (outcome.authzFailed) {
       await deps.monitors.setEnabled(m.id, false);

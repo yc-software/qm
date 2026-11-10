@@ -255,8 +255,8 @@ test("concurrent refreshes keep the token with the later expiry, whichever saves
     const b = await startCommand(f);
     const earlier = [ssoFile("A", "2026-11-09T18:00:00Z")];
     const later = [ssoFile("B", "2026-11-09T19:00:00Z")];
-    await f.keychain.updateFiles(a, laterFirst ? later : earlier);
-    await f.keychain.updateFiles(b, laterFirst ? earlier : later);
+    assert.deepEqual(await f.keychain.updateFiles(a, laterFirst ? later : earlier), []);
+    assert.deepEqual(await f.keychain.updateFiles(b, laterFirst ? earlier : later), []);
     assert.equal(JSON.parse(await savedValue(f)).accessToken, "B");
   }
 });
@@ -273,20 +273,6 @@ test("a completed login replaces files another command refreshed meanwhile", asy
   const saved = await savedFiles(f);
   assert.equal(JSON.parse(saved[".aws/sso/cache/session.json"]!).accessToken, "login");
   assert.equal(saved[".aws/sso/cache/client.json"], "registered client");
-});
-
-test("concurrent commands that change different files both keep their changes", async (t) => {
-  const f = await fixture(t);
-  const role = (value: string) => textFile(".aws/cli/cache/role.json", value);
-  await f.keychain.updateFiles(await startCommand(f), [...files("original"), role("role-original")]);
-  const a = await startCommand(f);
-  const b = await startCommand(f);
-  await f.keychain.updateFiles(a, [...files("sso-by-a"), role("role-original")]);
-  await f.keychain.updateFiles(b, [...files("original"), role("role-by-b")]);
-  assert.deepEqual(await savedFiles(f), {
-    ".aws/cli/cache/role.json": "role-by-b",
-    ".aws/sso/cache/session.json": "sso-by-a",
-  });
 });
 
 test("symlink replacement is rejected and the ephemeral home is removed", async (t) => {

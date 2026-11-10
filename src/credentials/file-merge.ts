@@ -3,11 +3,7 @@ import type { CredentialFile } from "./keychain.ts";
 const EXPIRY_FIELDS = [["expiresAt"], ["Credentials", "Expiration"]];
 
 function timestamp(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) return value < 1e12 ? value * 1000 : value;
-  if (typeof value !== "string" || !value.trim()) return undefined;
-  const numeric = Number(value);
-  if (Number.isFinite(numeric)) return timestamp(numeric);
-  const parsed = Date.parse(value);
+  const parsed = typeof value === "string" ? Date.parse(value) : NaN;
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
@@ -46,9 +42,9 @@ export function mergeCredentialFiles(input: {
   const merged: CredentialFileMerge = { files: [], overruled: [] };
   for (const path of [...new Set([...stored.keys(), ...refreshed.keys()])].sort()) {
     const ours = refreshed.get(path);
-    const pick = choose(version, input.baseline.get(path), ours, stored.get(path));
+    const { pick, firstSave } = choose(version, input.baseline.get(path), ours, stored.get(path));
     if (pick) merged.files.push(pick);
-    if (version(ours) !== input.baseline.get(path) && version(pick) !== version(ours)) merged.overruled.push(path);
+    if (firstSave) merged.overruled.push(path);
   }
   return merged;
 }
@@ -58,13 +54,14 @@ function choose(
   base: string | undefined,
   ours: CredentialFile | undefined,
   theirs: CredentialFile | undefined,
-): CredentialFile | undefined {
-  if (version(ours) === version(theirs) || version(ours) === base) return theirs;
-  if (version(theirs) === base) return ours;
+): { pick: CredentialFile | undefined; firstSave?: true } {
+  if (version(ours) === version(theirs) || version(ours) === base) return { pick: theirs };
+  if (version(theirs) === base) return { pick: ours };
   if (ours && theirs) {
     const a = credentialFileExpiry(ours);
     const b = credentialFileExpiry(theirs);
-    if (a !== undefined && b !== undefined && a !== b) return a > b ? ours : theirs;
+    if (a !== undefined && b !== undefined && a !== b) return { pick: a > b ? ours : theirs };
+    return { pick: theirs, firstSave: true };
   }
-  return theirs ?? ours;
+  return { pick: theirs ?? ours, ...(ours ? {} : { firstSave: true as const }) };
 }

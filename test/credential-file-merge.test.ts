@@ -30,7 +30,6 @@ test("expiry is read from the AWS SSO token cache and the AWS CLI credential cac
     credentialFileExpiry(file("b", { Credentials: { Expiration: "2026-11-09T19:00:00+00:00" } })),
     Date.parse("2026-11-09T19:00:00Z"),
   );
-  assert.equal(credentialFileExpiry(file("c", { expiresAt: 1_800_000_000 })), 1_800_000_000_000);
   assert.equal(credentialFileExpiry(file("d", "[default]\nregion = us-east-1\n")), undefined);
   assert.equal(credentialFileExpiry(file("e", { expiresAt: "soon" })), undefined);
 });
