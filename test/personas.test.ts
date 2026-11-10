@@ -36,12 +36,13 @@ function setup() {
   );
   const personas = built.app.personas!;
   const enable = (who: string) => built.featureFlags.setEnabled("personas", scopeId("personal", who), true, "admin");
-  const sysprompt = async (who: string, conversation: TurnRequest["conversation"]) => {
+  const sysprompt = async (who: string, conversation: TurnRequest["conversation"], botActor?: true) => {
     const result = await built.app.turn({
       surface: "test",
       actor: { externalId: who },
       conversation,
       text: "!sysprompt",
+      ...(botActor ? { botActor } : {}),
     });
     assert.equal(result.status, "ok");
     const session = await built.sessions.get(result.sessionId!);
@@ -277,6 +278,30 @@ test("credentials attached by an owner reach every turn that uses the persona, a
 
   ok(await personas.remove(ALICE, ada.id));
   assert.ok(!(await sysprompt(BOB, dm)).reply.includes(handle));
+});
+
+test("credentials attached to a persona reach a Slack bot's turns that use it", async () => {
+  const { built, personas, enable, sysprompt } = setup();
+  const BOT = "U_RELEASEBOT";
+  for (const who of [ALICE, BOT]) await enable(who);
+  const ada = ok(await personas.create(ALICE, { name: "Ada" }));
+  ok(
+    await personas.setAccess(ALICE, ada.id, [
+      { scopeId: scopeId("personal", ALICE), role: "owner" },
+      { scopeId: scopeId("personal", BOT), role: "read" },
+    ]),
+  );
+  const credential = await built.keychain!.save({
+    ownerId: ALICE,
+    service: "acme",
+    secret: "s3cret",
+    envKey: "ACME_TOKEN",
+  });
+  ok(await personas.attachCredential(ALICE, ada.id, credential.id));
+  const dm = { kind: "dm" as const, threadRef: "dm:U_RELEASEBOT:creds" };
+  const opened = await sysprompt(BOT, dm, true);
+  ok(await personas.assign(BOT, (await built.sessions.get(opened.sessionId))!, ada.id));
+  assert.ok((await sysprompt(BOT, dm, true)).reply.includes(credentialHandle(credential)));
 });
 
 test("linking a sign-in keeps persona authorship and grants with the person", async () => {

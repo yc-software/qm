@@ -242,7 +242,7 @@ test("legacy retry grants remain consumed and invalidate prepared uses", async (
   });
   const prepared = await k.prepareMaterialize(grant.id, "channel:C1", "U2");
   await grants.put(grant.id, { ...grant, status: "active", usedAt: Date.now(), usedBy: "U2" });
-  assert.equal((await k.grantsForScope("channel:C1")).length, 0);
+  assert.equal((await k.grantsForScope("channel:C1", { includePersonGrants: true })).length, 0);
   for (const actor of ["U2", "U3"])
     await assert.rejects(materializeGrant(k, grant.id, "channel:C1", actor), (e: KeychainError) => e.status === 410);
   await assert.rejects(prepared.commit(), (e: KeychainError) => e.status === 410);
@@ -1110,9 +1110,9 @@ describe("/v1/keychain routes (capability-authed)", () => {
     assert.equal(saved.credential.credentialHandle, metadata.credentials[0].credentialHandle);
     assert.ok(!JSON.stringify([saved, metadata]).includes("synthetic-handle-secret"));
     const grant = await grantHere(saved.credential.id, owner, scopeId("personal", owner), "once", "use the handle");
-    const current = (await built.keychain!.grantsForScope(scopeId("personal", owner))).find(
-      ({ grant: g }) => g.id === grant.id,
-    );
+    const current = (
+      await built.keychain!.grantsForScope(scopeId("personal", owner), { includePersonGrants: true })
+    ).find(({ grant: g }) => g.id === grant.id);
     assert.equal(current?.credential.credentialHandle, saved.credential.credentialHandle);
     const prepared = await built.keychain!.prepareMaterialize(grant.id, scopeId("personal", owner), owner);
     assert.equal(prepared.materialized.kind, "env");
