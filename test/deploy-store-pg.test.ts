@@ -197,7 +197,7 @@ test("the name index migration skips a tenant's duplicate names instead of faili
   }
 });
 
-test("concurrent status and endpoint writes from two instances both land", { skip }, async () => {
+test("concurrent field writes and new versions from two instances all land", { skip }, async () => {
   const a = makeStore().store;
   const b = makeStore().store;
   const d = await a.create(createInput());
@@ -208,6 +208,16 @@ test("concurrent status and endpoint writes from two instances both land", { ski
     const blob = (await raw("SELECT json FROM deployments WHERE id = $1", [d.id]))[0]!.json as Deployment;
     assert.equal(blob.status, status, `status survives a concurrent endpoint write (round ${i})`);
     assert.equal(blob.endpoint?.host, host, `endpoint survives a concurrent status write (round ${i})`);
+  }
+  for (let i = 0; i < 10; i++) {
+    const status = i % 2 ? "running" : "stopped";
+    await Promise.all([
+      a.addVersion(d.id, { entrypoint: "node s.js", snapshotDir: "/snap" }),
+      b.setStatus(d.id, status),
+    ]);
+    const blob = (await raw("SELECT json FROM deployments WHERE id = $1", [d.id]))[0]!.json as Deployment;
+    assert.equal(blob.status, status, `status survives a concurrent new version (round ${i})`);
+    assert.equal(blob.versions.length, i + 2, `new version survives a concurrent status write (round ${i})`);
   }
   await a.setStatus("missing-id", "stopped");
   assert.equal((await raw("SELECT count(*) c FROM deployments WHERE id = 'missing-id'"))[0]!.c, "0");
