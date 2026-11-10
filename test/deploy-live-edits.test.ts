@@ -113,7 +113,7 @@ test("republishing a running app writes only the changed files into it and keeps
   const d = await publishApp(h, "live-a");
 
   const first = await h.save("live-a", tree(true, "v2", [{ path: "old.css", data: "body{}" }]));
-  assert.deepEqual(first.liveEdit, { changed: 1, hot: true, publishAt: first.liveEdit!.publishAt });
+  assert.deepEqual(first.liveEdit, { changed: 1, hot: true, first: true, publishAt: first.liveEdit!.publishAt });
   assert.deepEqual(h.state.edits[0], {
     entrypoint: DEV,
     files: ["src/App.jsx"],

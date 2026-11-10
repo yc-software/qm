@@ -24,6 +24,7 @@ const devScript = z.object({ scripts: z.object({ dev: z.string().trim().min(1) }
 export interface LiveEditSaved {
   changed: number;
   hot: boolean;
+  first?: boolean;
   publishAt?: number;
   previousFailure?: string;
 }
@@ -167,6 +168,7 @@ export function createLiveEdits(deps: LiveEditDeps) {
     return {
       changed: changed.length + deletedPaths.length,
       hot,
+      ...(draft ? {} : { first: true }),
       publishAt,
       ...(draft?.failure ? { previousFailure: draft.failure } : {}),
     };

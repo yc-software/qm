@@ -32,9 +32,12 @@ function describeLiveEdit(r: { name?: string; id: string; version: number; url: 
     const pending = edit.publishAt === undefined ? "" : "; the earlier saved edits still publish as a new version";
     return `No changes to save in ${app} (v${r.version}) → ${r.url}${pending}.${failed}`;
   }
+  const hint = edit.first
+    ? " A package.json `dev` script that serves on $PORT (Vite: `vite --host --port $PORT` with server.allowedHosts true) would hot-reload instead."
+    : "";
   const shown = edit.hot
     ? "Open tabs hot-reload the change now."
-    : "The app restarted with the change and open tabs reload within seconds. A package.json `dev` script that serves on $PORT (Vite: `vite --host --port $PORT` with server.allowedHosts true) would hot-reload instead.";
+    : `The app restarted with the change and open tabs reload within seconds.${hint}`;
   return `Saved ${app} → ${r.url}. ${shown} It publishes as a new version after ${minutes} minutes without edits; v${r.version} until then.${failed}`;
 }
 
