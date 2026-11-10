@@ -17,6 +17,8 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { TEST_TENANT } from "./support/test-tenant.ts";
+import { withTenant } from "../src/tenants/context.ts";
 
 const automationOrigin = (request?: { origin?: TurnOrigin }) =>
   request?.origin?.kind === "automation" ? request.origin : undefined;
@@ -884,8 +886,8 @@ test("a failing cron fire is logged, not swallowed", async (t) => {
 test("queue mode: fires claim the slot before running, and stale or lost claims never run", async () => {
   const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const calls: TurnRequest[] = [];
-  let onFire: ((job: { cronId: string; scheduledAt: number }) => Promise<void>) | undefined;
-  const enqueued: Array<{ cronId: string; scheduledAt: number }> = [];
+  let onFire: ((job: CronFireJob) => Promise<void>) | undefined;
+  const enqueued: Array<CronFireJob> = [];
   const scheduler = createScheduler({
     ...singleProcessDeps(),
     crons,
@@ -917,16 +919,20 @@ test("queue mode: fires claim the slot before running, and stale or lost claims 
   });
   await settle(async () => onFire !== undefined);
   assert.ok(onFire, "queue mode registers the fire handler");
-  scheduler.notifyChanged(cron.id);
+  withTenant(TEST_TENANT, () => scheduler.notifyChanged(cron.id));
   await settle(async () => enqueued.length > 0);
-  assert.deepEqual(enqueued.pop(), { cronId: cron.id, scheduledAt: 1 }, "notifyChanged prompt-schedules the slot");
+  assert.deepEqual(
+    enqueued.pop(),
+    { tenantId: TEST_TENANT, cronId: cron.id, scheduledAt: 1 },
+    "notifyChanged prompt-schedules the slot",
+  );
 
-  await onFire!({ cronId: cron.id, scheduledAt: 1 });
+  await onFire!({ tenantId: TEST_TENANT, cronId: cron.id, scheduledAt: 1 });
   assert.equal(calls.length, 1, "the job for the due slot fires");
   assert.ok((await crons.get(cron.id))!.lastFiredAt, "the claim advanced the schedule");
   assert.deepEqual(enqueued.pop()?.cronId, cron.id, "the next slot is chained");
 
-  await onFire!({ cronId: cron.id, scheduledAt: 1 });
+  await onFire!({ tenantId: TEST_TENANT, cronId: cron.id, scheduledAt: 1 });
   assert.equal(calls.length, 1, "a duplicate job for a claimed slot does not run the turn");
   scheduler.stop();
 });
@@ -980,7 +986,7 @@ for (const queued of [false, true]) {
       await scheduler.ready();
     }
     let first: Promise<void>;
-    if (queued) first = onFire!({ cronId: cron.id, scheduledAt: 1000 });
+    if (queued) first = onFire!({ tenantId: TEST_TENANT, cronId: cron.id, scheduledAt: 1000 });
     else {
       const manual = await scheduler.runNow(cron.id);
       assert.ok(manual.started);
@@ -997,9 +1003,9 @@ for (const queued of [false, true]) {
     });
     const owedSlot = (await crons.get(cron.id))!.nextFireAt!;
     let deferred = false;
-    const second = (queued ? onFire!({ cronId: cron.id, scheduledAt: owedSlot }) : scheduler.tick(clock)).then(
-      () => (deferred = true),
-    );
+    const second = (
+      queued ? onFire!({ tenantId: TEST_TENANT, cronId: cron.id, scheduledAt: owedSlot }) : scheduler.tick(clock)
+    ).then(() => (deferred = true));
     try {
       await Promise.race([second, new Promise((resolve) => setTimeout(resolve, 5_000))]);
       assert.equal(deferred, true, "an active fire must not make the scheduler wait for its lifecycle lock");
@@ -1008,14 +1014,19 @@ for (const queued of [false, true]) {
       assert.equal(pending.nextFireAt, owedSlot, "the unstarted slot remains owed");
       assert.equal(pending.deferUntil, 32_000, "the retry is durable and delayed");
       if (queued) {
-        assert.deepEqual(enqueued.at(-1), { cronId: cron.id, scheduledAt: owedSlot, notBefore: 32_000 });
-        await onFire!({ cronId: other.id, scheduledAt: 2000 });
+        assert.deepEqual(enqueued.at(-1), {
+          tenantId: TEST_TENANT,
+          cronId: cron.id,
+          scheduledAt: owedSlot,
+          notBefore: 32_000,
+        });
+        await onFire!({ tenantId: TEST_TENANT, cronId: other.id, scheduledAt: 2000 });
       }
       assert.equal((await crons.get(other.id))!.enabled, false, "an unrelated cron can finish while this one runs");
       gate.resolve({ status: "ok", reply: "done" });
       await first;
       clock = 32_000;
-      if (queued) await onFire!({ cronId: cron.id, scheduledAt: owedSlot });
+      if (queued) await onFire!({ tenantId: TEST_TENANT, cronId: cron.id, scheduledAt: owedSlot });
       else await scheduler.tick(clock);
       assert.equal(calls.length, 2, "the deferred slot runs once after the active fire completes");
       assert.equal((await crons.listFires(cron.id)).total, 2, "no phantom running fire was created for the deferral");
@@ -1086,7 +1097,7 @@ test("queue mode: concurrent reconciliation cannot consume an overdue slot while
   });
   scheduler.start(1000);
   await scheduler.ready();
-  const first = onFire({ cronId: cron.id, scheduledAt: slot });
+  const first = onFire({ tenantId: TEST_TENANT, cronId: cron.id, scheduledAt: slot });
   let second: Promise<void> | undefined;
   try {
     await gates[0]!.entered.promise;
@@ -1106,7 +1117,7 @@ test("queue mode: concurrent reconciliation cannot consume an overdue slot while
     releaseHeld.resolve();
     await holding;
     clock = deferred.deferUntil!;
-    await onFire({ cronId: cron.id, scheduledAt: slot });
+    await onFire({ tenantId: TEST_TENANT, cronId: cron.id, scheduledAt: slot });
     assert.equal(calls.length, 1);
     assert.equal(calls[0]!.idempotencyKey, `cron:${cron.id}:${slot}`);
     assert.equal((await crons.get(cron.id))!.nextFireAt, slot + 60_000);
@@ -1156,7 +1167,7 @@ test("queue mode: while the queue runs, the interval scheduler's leader lease is
 test("queue mode: an authz-failed fire disables the cron but gives the slot back (parity with the interval path)", async () => {
   const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const identity = createIdentityService(testMap(), { externalMembers: testMap() });
-  let onFire: ((job: { cronId: string; scheduledAt: number }) => Promise<void>) | undefined;
+  let onFire: ((job: CronFireJob) => Promise<void>) | undefined;
   const calls: TurnRequest[] = [];
   const scheduler = createScheduler({
     ...singleProcessDeps(),
@@ -1188,7 +1199,7 @@ test("queue mode: an authz-failed fire disables the cron but gives the slot back
   });
   await identity.deactivate("U1");
   await settle(async () => onFire !== undefined);
-  await onFire!({ cronId: cron.id, scheduledAt: 1 });
+  await onFire!({ tenantId: TEST_TENANT, cronId: cron.id, scheduledAt: 1 });
   const after = (await crons.get(cron.id))!;
   assert.equal(calls.length, 0, "no turn runs for a departed owner");
   assert.equal(after.enabled, false, "the cron fails closed");
@@ -1452,7 +1463,7 @@ test("scheduler relinquishes queue claims before a long turn drains and preserve
   const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const entered = Promise.withResolvers<void>();
   const finish = Promise.withResolvers<void>();
-  let onFire: ((job: { cronId: string; scheduledAt: number }) => Promise<void>) | undefined;
+  let onFire: ((job: CronFireJob) => Promise<void>) | undefined;
   let claimsStopped = false;
   let queueClosed = false;
   const scheduler = createScheduler({
@@ -1490,7 +1501,7 @@ test("scheduler relinquishes queue claims before a long turn drains and preserve
     ownerScopeId: scopeId("personal", "U1"),
   });
   scheduler.start(1000);
-  const work = onFire!({ cronId: cron.id, scheduledAt: 1 });
+  const work = onFire!({ tenantId: TEST_TENANT, cronId: cron.id, scheduledAt: 1 });
   await entered.promise;
   const stopped = scheduler.stop();
   await scheduler.stopClaims();
@@ -1536,7 +1547,7 @@ test("scheduler resumes new queue claims while an older admitted turn remains al
   const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const entered = Promise.withResolvers<void>();
   const finish = Promise.withResolvers<void>();
-  let onFire: ((job: { cronId: string; scheduledAt: number }) => Promise<void>) | undefined;
+  let onFire: ((job: CronFireJob) => Promise<void>) | undefined;
   let calls = 0;
   let starts = 0;
   let closed = false;
@@ -1582,15 +1593,15 @@ test("scheduler resumes new queue claims while an older admitted turn remains al
   scheduler.start(1000);
   await scheduler.ready();
   const oldHandler = onFire!;
-  const oldWork = oldHandler({ cronId: jobs[0]!.id, scheduledAt: 1 });
+  const oldWork = oldHandler({ tenantId: TEST_TENANT, cronId: jobs[0]!.id, scheduledAt: 1 });
   await entered.promise;
   await scheduler.stopClaims();
   scheduler.start(1000);
   await scheduler.ready();
   assert.equal(starts, 2);
-  await oldHandler({ cronId: jobs[1]!.id, scheduledAt: 1 });
+  await oldHandler({ tenantId: TEST_TENANT, cronId: jobs[1]!.id, scheduledAt: 1 });
   assert.equal(calls, 1);
-  await onFire!({ cronId: jobs[1]!.id, scheduledAt: 1 });
+  await onFire!({ tenantId: TEST_TENANT, cronId: jobs[1]!.id, scheduledAt: 1 });
   assert.equal(calls, 2);
   assert.equal(closed, false);
   finish.resolve();

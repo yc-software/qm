@@ -14,6 +14,7 @@ import { createGmailPushClient, type GmailCursor } from "../src/loops/gmail-push
 import { loopIngressRoutes } from "../src/api/routes/loop-ingress.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { TEST_TENANT } from "./support/test-tenant.ts";
 
 async function world() {
   const sources = testMap<LoopIngress>();
@@ -37,6 +38,7 @@ async function world() {
     items,
     outputs: createLoopOutputStore(testMap()),
     lock: testAdvisoryLock(),
+    tenants: { gmailTenants: async () => [TEST_TENANT] },
     fire: {
       fire: async (
         loopId: string,

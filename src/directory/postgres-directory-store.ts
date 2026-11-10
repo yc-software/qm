@@ -12,6 +12,14 @@ import {
   type DirectoryStore,
 } from "./directory-store.ts";
 import { createDirectorySync } from "./directory-sync.ts";
+import {
+  EMAIL_USER_TENANTS,
+  PRINCIPAL_ADMIN_TENANTS,
+  PRINCIPAL_TENANTS,
+  PRINCIPAL_USER_TENANTS,
+} from "../tenants/lookup.ts";
+import { tenantTables } from "../tenants/migrations.ts";
+import { withTenant } from "../tenants/context.ts";
 
 const PREVIOUS_SCHEMA = "directory/store/0005";
 
@@ -117,6 +125,52 @@ export const DIRECTORY_MIGRATIONS = [
     expectedChecksum: "e8dcd5c2a3a8fcba7b1c14db1d1aceb57ca7ef6e1c7366ace6df65043f731198",
     statements: [BASE_SCHEMA],
   },
+  ...tenantTables("directory/store/0007-tenants", [
+    { table: "directory_members", primaryKey: "org_id, principal_id" },
+    { table: "directory_channels", primaryKey: "org_id, channel_id" },
+    { table: "directory_channel_members", primaryKey: "org_id, channel_id, principal_id" },
+    { table: "directory_group_members", primaryKey: "org_id, group_id, principal_id" },
+    { table: "directory_groups", primaryKey: "org_id, group_id" },
+    { table: "directory_sync", primaryKey: "org_id" },
+    { table: "directory_meta", primaryKey: "org_id" },
+  ]),
+  {
+    id: "directory/store/0008-tenants-for-email",
+    statements: [
+      `DO $tenants_for_email$
+BEGIN
+  EXECUTE format(
+    $function$CREATE OR REPLACE FUNCTION qm_tenants_for_email(email text) RETURNS TABLE(tenant_id uuid)
+      LANGUAGE sql STABLE SECURITY DEFINER SET search_path = %I, pg_temp AS $body$
+      SELECT DISTINCT m.tenant_id FROM directory_members m
+       WHERE lower(m.principal_id) = lower(email) AND m.type = 'internal'
+    $body$$function$,
+    current_schema());
+END $tenants_for_email$`,
+    ],
+  },
+  PRINCIPAL_TENANTS,
+  PRINCIPAL_ADMIN_TENANTS,
+  {
+    id: "directory/store/0009-tenants-for-email-admins",
+    statements: [
+      `DO $tenants_for_email$
+BEGIN
+  EXECUTE format(
+    $function$CREATE OR REPLACE FUNCTION qm_tenants_for_email(email text) RETURNS TABLE(tenant_id uuid)
+      LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = %I, pg_temp AS $body$ BEGIN
+      RETURN QUERY
+        SELECT m.tenant_id FROM directory_members m
+         WHERE lower(m.principal_id) = lower(email) AND m.type = 'internal'
+        UNION
+        SELECT g.tenant_id FROM admin_grants g WHERE lower(g.principal_id) = lower(email);
+    END $body$$function$,
+    current_schema());
+END $tenants_for_email$`,
+    ],
+  },
+  PRINCIPAL_USER_TENANTS,
+  EMAIL_USER_TENANTS,
 ];
 
 const rosterCoversAudience = (channel: { is_external?: unknown }) => channel.is_external !== true;
@@ -188,11 +242,72 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     return rosters;
   }
 
+  async function branded(rows: Record<string, unknown>[]) {
+    const found = await Promise.all(
+      rows.map(({ id }) =>
+        withTenant(String(id), async () => {
+          const [tenant] = await q(
+            `SELECT settings->>'brandName' AS brand, qm_tenant_handle(settings) AS handle,
+                    settings->>'serving' IS DISTINCT FROM 'false' OR qm_boot_tenant() IS NOT NULL AS serving
+               FROM tenants WHERE id = $1`,
+            [id],
+          );
+          if (tenant?.serving !== true) return [];
+          return [
+            {
+              id: String(id),
+              ...(typeof tenant.brand === "string" ? { brandName: tenant.brand } : {}),
+              ...(typeof tenant.handle === "string" ? { handle: tenant.handle } : {}),
+            },
+          ];
+        }),
+      ),
+    );
+    return found.flat();
+  }
+
   return {
     ...createDirectorySync({ q, pool, orgId }),
     async meta() {
       const rows = await q("SELECT workspace_url FROM directory_meta WHERE org_id = $1", [orgId]);
       return { workspaceUrl: (rows[0]?.workspace_url as string | null) ?? null };
+    },
+
+    async tenantsForEmail(email) {
+      const rows = await q("SELECT tenant_id::text AS id FROM qm_tenants_for_email($1) ORDER BY tenant_id", [email]);
+      return branded(rows);
+    },
+
+    async tenantsForPrincipal(principal) {
+      const rows = await q("SELECT tenant::text AS id FROM qm_tenants_for_principal($1) tenant ORDER BY tenant", [
+        principal,
+      ]);
+      return branded(rows);
+    },
+
+    async tenantForAppHandle(handle) {
+      const rows = await q("SELECT qm_tenant_for_app_handle($1)::text AS id", [handle]);
+      return typeof rows[0]?.id === "string" ? rows[0].id : undefined;
+    },
+
+    async setAppHandle(handle) {
+      try {
+        await q("SELECT qm_set_tenant_handle($1)", [handle]);
+        return "ok";
+      } catch (error) {
+        if ((error as { code?: string }).code === "23505") return "taken";
+        throw error;
+      }
+    },
+
+    async trustedClientFor(tenant) {
+      const [row] = await withTenant(tenant, () =>
+        q("SELECT settings->'oidcClient' AS client FROM tenants WHERE id = $1", [tenant]),
+      );
+      const client = row?.client as { clientId?: unknown; clientSecret?: unknown } | null | undefined;
+      return typeof client?.clientId === "string" && typeof client.clientSecret === "string"
+        ? { clientId: client.clientId, clientSecret: client.clientSecret }
+        : undefined;
     },
 
     async channelMember(channelId, principalId) {

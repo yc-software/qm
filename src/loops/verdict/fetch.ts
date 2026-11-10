@@ -10,6 +10,7 @@ import { slackMessageContent } from "../../slack/message-content.ts";
 import { slackWebClient } from "../../slack/web-client.ts";
 import { GmailApiError, gmailApi } from "../../connectors/gmail-api.ts";
 import { TransientTurnFailure } from "../../core/turn-error.ts";
+import { perTenant } from "../../tenants/cache.ts";
 import {
   newestTs,
   TRANSCRIPT_TAIL,
@@ -87,21 +88,21 @@ export function createSourceClients(deps: SourceClientDeps): SourceClients {
     deps.slackClient ??
     ((token: string) =>
       slackWebClient(token, (t, options) => new WebClient(t, { ...options, slackApiUrl }), SOURCE_TIMEOUT_MS));
-  const identities = new LRUCache<string, SlackIdentity>({ max: 500, ttl: IDENTITY_TTL });
-  const addresses = new LRUCache<string, string>({ max: 500, ttl: IDENTITY_TTL });
-  const channels = new LRUCache<string, SlackChannel>({ max: 5000, ttl: DAY_TTL });
-  const users = new LRUCache<string, Participant>({ max: 5000, ttl: DAY_TTL });
-  const limited = new LRUCache<string, boolean>({ max: 100 });
+  const identities = perTenant(() => new LRUCache<string, SlackIdentity>({ max: 500, ttl: IDENTITY_TTL }));
+  const addresses = perTenant(() => new LRUCache<string, string>({ max: 500, ttl: IDENTITY_TTL }));
+  const channels = perTenant(() => new LRUCache<string, SlackChannel>({ max: 5000, ttl: DAY_TTL }));
+  const users = perTenant(() => new LRUCache<string, Participant>({ max: 5000, ttl: DAY_TTL }));
+  const limited = perTenant(() => new LRUCache<string, boolean>({ max: 100 }));
 
   function limitFor(owner: string, source: string, seconds: number): never {
-    limited.set(`${owner}:${source}`, true, { ttl: Math.max(60, seconds) * 1000 });
+    limited().set(`${owner}:${source}`, true, { ttl: Math.max(60, seconds) * 1000 });
     throw new SourceRateLimited(source);
   }
 
   const clients: SourceClients = {
     slackToken: (owner) => tokenFor(deps.tokens, "slack.com", owner),
     async slackCall(owner, token, method, params) {
-      if (limited.has(`${owner}:Slack`)) throw new SourceRateLimited("Slack");
+      if (limited().has(`${owner}:Slack`)) throw new SourceRateLimited("Slack");
       try {
         const body: unknown = await slackClient(token).apiCall(method, params);
         return isObj(body) ? body : {};
@@ -111,16 +112,16 @@ export function createSourceClients(deps: SourceClientDeps): SourceClients {
       }
     },
     async slackIdentity(owner, token) {
-      const cached = identities.get(owner);
+      const cached = identities().get(owner);
       if (cached) return cached;
       const identity = await clients.slackCall(owner, token, "auth.test", {});
       if (typeof identity.user_id !== "string") throw new Error("Slack auth.test returned no user id");
       const resolved = { userId: identity.user_id, teamUrl: typeof identity.url === "string" ? identity.url : "" };
-      identities.set(owner, resolved);
+      identities().set(owner, resolved);
       return resolved;
     },
     async slackChannel(owner, token, channelId) {
-      const cached = channels.get(channelId);
+      const cached = channels().get(channelId);
       if (cached) return cached;
       const info = await clients.slackCall(owner, token, "conversations.info", { channel: channelId });
       const channel = isObj(info.channel) ? info.channel : {};
@@ -128,11 +129,11 @@ export function createSourceClients(deps: SourceClientDeps): SourceClients {
         direct: channel.is_im === true || channel.is_mpim === true,
         ...(typeof channel.name === "string" && channel.name ? { name: channel.name } : {}),
       };
-      channels.set(channelId, resolved);
+      channels().set(channelId, resolved);
       return resolved;
     },
     async slackUser(owner, token, userId) {
-      const cached = users.get(userId);
+      const cached = users().get(userId);
       if (cached) return cached;
       const info = await clients.slackCall(owner, token, "users.info", { user: userId });
       const user = isObj(info.user) ? info.user : {};
@@ -143,12 +144,12 @@ export function createSourceClients(deps: SourceClientDeps): SourceClients {
         ) ?? userId;
       const avatar = profile.image_72;
       const resolved = { id: userId, name: String(name), ...(typeof avatar === "string" ? { avatarUrl: avatar } : {}) };
-      users.set(userId, resolved);
+      users().set(userId, resolved);
       return resolved;
     },
     gmailToken: (owner) => tokenFor(deps.tokens, "gmail.googleapis.com", owner),
     async gmailRead(owner, token, path) {
-      if (limited.has(`${owner}:Gmail`)) throw new SourceRateLimited("Gmail");
+      if (limited().has(`${owner}:Gmail`)) throw new SourceRateLimited("Gmail");
       try {
         return await gmailApi(token, fetchImpl)(path, { timeoutMs: SOURCE_TIMEOUT_MS });
       } catch (error) {
@@ -157,11 +158,11 @@ export function createSourceClients(deps: SourceClientDeps): SourceClients {
       }
     },
     async gmailAddress(owner, token) {
-      const cached = addresses.get(owner);
+      const cached = addresses().get(owner);
       if (cached) return cached;
       const profile = await clients.gmailRead<{ emailAddress?: string }>(owner, token, "profile");
       const address = profile.emailAddress?.toLowerCase();
-      if (address) addresses.set(owner, address);
+      if (address) addresses().set(owner, address);
       return address;
     },
   };

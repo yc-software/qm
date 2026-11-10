@@ -110,6 +110,12 @@ broker starts without email delivery. The sign-in page and submissions return
 claimed to have been sent. Previously issued links and codes keep their normal
 expiration and single-use checks.
 
+`AUTH_EMAIL_SIGN_IN=off` turns email-link sign-in off even when delivery is
+configured, so the same sender can still serve core's invitation emails. With
+email-link and password sign-in both off and a trusted provider configured, the
+sign-in page shows only its heading and the trusted provider's button, and the
+same holds when delivery is simply unconfigured.
+
 To enable email sign-in, configure the selected transport's credentials and
 `AUTH_EMAIL_FROM`, then restart. The sender must be verified and may be written
 as `Name <sender@example.com>`. Supplying only part of the configuration leaves

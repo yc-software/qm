@@ -154,7 +154,7 @@ export function createStepRecorder(turn: Pick<AgentTurnInput, "emit" | "shutdown
         } else calls.set(block.id, { step: { ...step, index }, block });
       });
       pending = { step, parts };
-      if (message.content.some((block) => block.type === "toolCall")) flush();
+      if (stopReason !== "aborted" && message.content.some((block) => block.type === "toolCall")) flush();
     },
     startStreaming(): void {
       streamingStep = undefined;

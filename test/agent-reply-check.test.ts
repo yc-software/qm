@@ -7,6 +7,7 @@ import { storedItem, type Item } from "../src/sessions/items.ts";
 import type { RunSignal, RunSignalStore } from "../src/runs/run-signal-store.ts";
 import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
 import { forModelContext } from "../src/agent/context-compaction.ts";
+import { TEST_TENANT } from "./support/test-tenant.ts";
 
 type Sink = { entries: Item[] };
 
@@ -106,7 +107,7 @@ function memorySignals(): RunSignalStore & { send(runId: string, signal: RunSign
       return taken.map((s) => s.signal);
     },
     steerAuthors: async () => [],
-    pendingRunIds: async () => [...queued.keys()],
+    pendingRuns: async () => [...queued.keys()].map((id) => ({ tenantId: TEST_TENANT, id })),
     prune: async () => {},
     onSignal(runId, cb) {
       const set = listeners.get(runId) ?? new Set();

@@ -8,12 +8,15 @@ import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_TENANT } from "./support/test-tenant.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { trustedPrincipal } from "../plugins/portal/src/trusted-entry.ts";
 import { provisionTrustedAdmin } from "../plugins/portal/src/trusted-admin.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { withoutTenant } from "../src/tenants/context.ts";
+import { bindBootTenant } from "../src/tenants/boot.ts";
 
 const signingSecret = "core-test-secret".repeat(3);
 const identitySecret = "portal-test-secret".repeat(3);
@@ -124,4 +127,20 @@ test("provisioning needs core opt-in and never reactivates a deactivated founder
   await s.built.identity.deactivate(id);
   assert.equal((await send(s.base, claims())).status, 403);
   assert.equal((await s.built.admin.adminStatusOf({ id, type: "internal" })).isAdmin, false);
+});
+
+test("on a shared host with no tenant bound, a trusted sign-in grants admin nowhere", async (t) => {
+  await bindBootTenant(async () => undefined);
+  t.after(() => bindBootTenant(async () => TEST_TENANT));
+  const s = withoutTenant(() => start());
+  t.after(s.close);
+  const before = await s.built.admin.listGrants();
+  const response = await withoutTenant(() => send(s.base, claims({ subject: "founder-shared" })));
+  assert.equal(response.status, 204);
+  assert.deepEqual(await s.built.admin.listGrants(), before);
+  const principal = { id: trustedPrincipal(issuer, "founder-shared"), type: "internal" as const };
+  assert.equal((await s.built.admin.adminStatusOf(principal)).isAdmin, false);
+  const config = { core: s.base, signingSecret, identitySecret, org: "default-org", issuer };
+  await withoutTenant(() => provisionTrustedAdmin(config, "founder-shared"));
+  assert.deepEqual(await s.built.admin.listGrants(), before);
 });

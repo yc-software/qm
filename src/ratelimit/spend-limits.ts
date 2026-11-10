@@ -1,4 +1,5 @@
 import { parseScopeId, scopeId as toScopeId, type ScopeId } from "../types.ts";
+import { perTenant } from "../tenants/cache.ts";
 import type { SpendRow } from "../sessions/session-store.ts";
 
 export interface SpendLimit {
@@ -54,16 +55,17 @@ export function parseSpendLimit(body: unknown): { value: SpendLimit | null } | {
 export function createSpendLimits(deps: SpendLimitDeps) {
   const now = deps.now ?? Date.now;
   const cacheMs = deps.cacheMs ?? CACHE_MS;
-  let cached: Totals | null = null;
-  let inflight: Promise<Totals> | null = null;
+  const spend = perTenant<{ cached?: Totals; inflight?: Promise<Totals> }>(() => ({}));
 
   const totals = async (): Promise<Totals> => {
     const t = now();
     const d = new Date(t);
     const monthStart = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
     const today = Math.floor(t / DAY_MS);
+    const state = spend();
+    const { cached } = state;
     if (cached && cached.monthStart === monthStart && cached.today === today && t - cached.at < cacheMs) return cached;
-    inflight ??= (async () => {
+    state.inflight ??= (async () => {
       try {
         const { rows } = await deps.spendReport({ from: monthStart, to: (today + 1) * DAY_MS });
         const byScope = new Map<ScopeId, { today: number; month: number }>();
@@ -74,13 +76,13 @@ export function createSpendLimits(deps: SpendLimitDeps) {
           byScope.set(row.scopeId, acc);
         }
         const fresh: Totals = { at: t, monthStart, today, totals: byScope };
-        cached = fresh;
+        state.cached = fresh;
         return fresh;
       } finally {
-        inflight = null;
+        state.inflight = undefined;
       }
     })();
-    return inflight;
+    return state.inflight;
   };
 
   const effectiveLimit = async (scopeId: ScopeId): Promise<{ limit: SpendLimit; orgDefault: boolean } | null> => {

@@ -29,6 +29,7 @@ export interface AuthConfig {
   passwordLimitPerEmail: number;
   passwordLimitPerIp: number;
   emailFrom: string;
+  emailSignIn: boolean;
   brandName: string;
   faviconSvg: string | undefined;
   transport: EmailTransportKind;
@@ -105,6 +106,7 @@ export function readConfig(env: NodeJS.ProcessEnv): AuthConfig {
     passwordLimitPerEmail: numberFrom(env.AUTH_PASSWORD_LIMIT_PER_EMAIL, 10),
     passwordLimitPerIp: numberFrom(env.AUTH_PASSWORD_LIMIT_PER_IP, 30),
     emailFrom: env.AUTH_EMAIL_FROM?.trim() ?? "",
+    emailSignIn: !/^(off|false|0|no)$/i.test(env.AUTH_EMAIL_SIGN_IN?.trim() ?? ""),
     brandName: env.AUTH_BRAND_NAME?.trim() || "qm",
     faviconSvg: env.AUTH_FAVICON_SVG?.trim() || undefined,
     transport,
