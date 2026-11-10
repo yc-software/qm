@@ -9,6 +9,7 @@ const ID = "[^/]+";
 const FILE_ID = "(?!by-name(?:/|$))[^/]+";
 const CHAT_API_ROUTES: ReadonlyArray<{ method: string; re: RegExp }> = [
   { method: "GET", re: /^\/me$/ },
+  { method: "GET", re: /^\/api\/runtime-config$/ },
   { method: "POST", re: /^\/api\/turn$/ },
   { method: "GET", re: /^\/api\/runs\/active$/ },
   { method: "GET", re: new RegExp(`^/api/runs/${ID}$`) },
