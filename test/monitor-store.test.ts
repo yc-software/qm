@@ -121,9 +121,9 @@ test("deleteDefunct spares a monitor re-enabled after the candidate scan", async
   const store = createMonitorStore(backing);
   const m = await store.create(input({ expiresAt: 123 }));
   await store.setEnabled(m.id, false);
-  const all = backing.all.bind(backing);
-  backing.all = async () => {
-    const rows = await all();
+  const entries = backing.entries.bind(backing);
+  backing.entries = async () => {
+    const rows = await entries();
     await store.setEnabled(m.id, true);
     return rows;
   };

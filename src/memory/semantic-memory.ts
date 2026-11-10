@@ -17,12 +17,12 @@ export function createSemanticMemory(opts: {
 }) {
   const { databaseUrl } = opts;
   let store: MemoryVectorStore | undefined;
+  const vectors = () => (store ??= createPostgresVectorStore(databaseUrl));
   const resolve = async () => {
     const id = await opts.embeddingModel();
     if (!id) return undefined;
     const embedder = await opts.resolveEmbedder(id);
-    store ??= createPostgresVectorStore(databaseUrl);
-    return { embedder, store };
+    return { embedder, store: vectors() };
   };
   const memory = createSemanticMemoryService(
     opts.notebook,
@@ -30,7 +30,11 @@ export function createSemanticMemory(opts: {
     { search: (input) => store!.search(input) },
     { onError: (error) => reportFailure("memory semantic recall; using recent facts", error) },
   );
-  const indexer = createMemoryVectorIndexer({ resolve, leaderLease: opts.leaderLease });
+  const indexer = createMemoryVectorIndexer({
+    claim: () => vectors().claimTenants(),
+    resolve,
+    leaderLease: opts.leaderLease,
+  });
   const sweeper = opts.createSweeper(() => indexer.tick(), 30_000, { label: "memory-vector-index", immediate: true });
   return {
     memory,

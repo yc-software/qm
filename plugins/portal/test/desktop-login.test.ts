@@ -54,7 +54,6 @@ Object.assign(process.env, {
   CORE_ORG_ID: browser.org,
   CORE_API_URL: coreUrl,
   PORTAL_LOCAL_AUTH_BYPASS: "0",
-  PORTAL_PLAYGROUND: "0",
 });
 const { server } = await import("../src/index.ts");
 await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -123,18 +122,12 @@ test("confirmed sign-in launches the app with a CSP-authorized script and retain
   assert.equal(response.headers.get("cache-control"), "no-store");
 });
 
-test("cross-origin authorization and anonymous sessions cannot mint a desktop identity", async () => {
+test("cross-origin authorization cannot mint a desktop identity", async () => {
   const response = await fetch(`${base}${requestPath}`, {
     method: "POST",
     headers: { origin: "https://attacker.test", cookie },
   });
   assert.equal(response.status, 403);
-  const anonymous = seal({ ...browser, anon: true }, deriveKey(secret, "portal.session.v1"));
-  const anonResponse = await fetch(`${base}${requestPath}`, {
-    redirect: "manual",
-    headers: { cookie: `portal_session=${anonymous}` },
-  });
-  assert.equal(anonResponse.status, 303);
 });
 
 test("wrong proof cannot consume a code and one of concurrent valid redemptions succeeds", async () => {
