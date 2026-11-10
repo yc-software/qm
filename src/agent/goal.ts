@@ -323,7 +323,7 @@ function governorNote(goal: GoalRecord): string {
 function goalGovernorPausePrompt(goal: GoalRecord): string {
   return [
     `[goal] An independent governor paused this goal because it needs the user:`,
-    `<governor>\n${escapeTags(goal.pauseReason ?? goal.governor?.reasons ?? "")}\n</governor>`,
+    `<governor>\n${escapeTags(goal.pauseReason ?? "")}\n</governor>`,
     `Stop working on it now. End your reply with one short message to the user: where things stand and exactly what you need from them. Their reply resumes the goal.`,
   ].join("\n\n");
 }
@@ -453,12 +453,12 @@ export function applyGovernorVerdict(goal: GoalRecord, verdict: GovernorVerdict,
     verdict.verdict === "pause" && goal.governor?.verdict !== "step_back"
       ? { ...verdict, verdict: "step_back" }
       : verdict;
-  goal.governor = effective;
   goal.updatedAt = now;
   if (effective.verdict === "pause") {
     goal.status = "paused";
     goal.pauseReason = effective.reasons;
-  }
+    delete goal.governor;
+  } else goal.governor = effective;
   return effective;
 }
 

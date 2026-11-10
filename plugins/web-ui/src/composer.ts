@@ -110,7 +110,6 @@ if (typeof window !== "undefined") {
 
 function rememberThreadPick(threadRef: string, value: ModelOptionValue): void {
   const merged = loadThreadPicks();
-  for (const [ref, pick] of threadModelPicks) if (!merged.has(ref)) merged.set(ref, pick);
   merged.delete(threadRef);
   merged.set(threadRef, value);
   while (merged.size > THREAD_PICKS_CAP) merged.delete(merged.keys().next().value as string);
