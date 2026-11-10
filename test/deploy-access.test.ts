@@ -24,6 +24,7 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testAdvisoryLock, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { companyTest } from "./support/app-handle.ts";
 
 const owner = "alice@example.com";
 const requester = "bob@example.com";
@@ -132,7 +133,7 @@ test("malformed or scope-injecting button payloads are rejected", () => {
     assert.throws(() => parseDeployAccess(value));
 });
 
-test("approve is audited and idempotent, preserves manage access, and respects transfers/revokes", async (t) => {
+companyTest("approve is audited and idempotent, preserves manage access, and respects transfers/revokes", async (t) => {
   const f = await fixture(t);
   assert.match(await f.decide(), /^Approved\./);
   await f.decide();
@@ -140,7 +141,7 @@ test("approve is audited and idempotent, preserves manage access, and respects t
   const notices = await f.notices();
   assert.equal(notices.length, 1);
   assert.equal(notices[0]!.destination.target, requester);
-  assert.match(notices[0]!.text, /gave you access.*https:\/\/mysite.apps.example.com\//);
+  assert.match(notices[0]!.text, /gave you access.*https:\/\/acme1-mysite.apps.example.com\//);
   assert.ok((await f.auditLog.events()).some((e) => e.action === "grant"));
   await f.share(null);
   assert.deepEqual(await f.grants(), []);
@@ -215,7 +216,7 @@ test("direct share paths notify only after successful grants; org, self and revo
   assert.equal((await f.share("write")).find((g) => g.scope === person(requester))?.permission, "write");
 });
 
-test("notify:false grants access on every direct share path without a DM or invitation email", async (t) => {
+companyTest("notify:false grants access on every direct share path without a DM or invitation email", async (t) => {
   const f = await fixture(t);
   const sent: string[] = [];
   const app = createApp({
@@ -246,7 +247,7 @@ test("notify:false grants access on every direct share path without a DM or invi
   assert.deepEqual(invited.invitation, {
     emailSent: false,
     emailProblem: "notify was false",
-    appUrl: "https://mysite.apps.example.com/",
+    appUrl: "https://acme1-mysite.apps.example.com/",
   });
   assert.deepEqual(await f.deploy.deploymentGrantees(f.d.id), [
     { scope: person(requester), permission: "write" },

@@ -14,6 +14,7 @@ export interface RuntimeConfig {
     orgRevision?: number;
   } | null;
   effective: { modelId: string; effortLevel?: string; fastMode?: boolean };
+  appEditRuntime?: { modelId: string; effortLevel?: string; fastMode?: boolean };
   upgradeAvailable: boolean;
   fastModeModelIds?: string[];
 }

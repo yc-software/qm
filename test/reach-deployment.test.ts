@@ -190,7 +190,7 @@ test("listDeploymentsForViewer includes owned and ACL-visible deployments only",
     [{ channelId: "C1", principalId: "U2" }],
   );
 
-  const rows = await app.listDeploymentsForViewer("U2");
+  const rows = await app.listDeploymentsForViewer({ actorId: "U2" });
   assert.deepEqual(rows.map((d) => d.id).sort(), [own.id, shared.id].sort());
   assert.ok(!rows.some((d) => d.id === hidden.id));
   assert.equal(rows.find((d) => d.id === own.id)?.permission, "write");
@@ -212,7 +212,7 @@ test("listDeploymentsForViewer: a write grant yields permission write for a non-
     permission: "write",
     grantedBy: "U1",
   });
-  const rows = await app.listDeploymentsForViewer("U2");
+  const rows = await app.listDeploymentsForViewer({ actorId: "U2" });
   assert.equal(rows.find((d) => d.id === shared.id)?.permission, "write");
 });
 

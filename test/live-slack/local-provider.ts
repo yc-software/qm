@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { loadConfig } from "../../src/config.ts";
 import { startQm } from "../../src/start.ts";
 import { setOnboardingStatus } from "../../src/onboarding/onboarding.ts";
+import { bootTenant, inBootTenant } from "../../src/tenants/boot.ts";
 import { assertSandboxExecution } from "./scenarios-sandbox-providers.ts";
 
 async function main(): Promise<void> {
@@ -27,6 +28,21 @@ async function main(): Promise<void> {
     backgroundWorkEnabled: true,
     turnWallClockMs: 180_000,
   });
+  const failures = await inBootTenant(bootTenant(), () => qualify(built));
+  await stop();
+  if (failures.length)
+    throw new AggregateError(failures, `local qualification failed: ${failures.map(String).join("; ")}`);
+  console.log(
+    JSON.stringify({
+      provider: "local",
+      source: process.env.GIT_SHA,
+      sandboxImage: process.env.LOCAL_SANDBOX_IMAGE,
+      status: "pass",
+    }),
+  );
+}
+
+async function qualify(built: Awaited<ReturnType<typeof startQm>>["built"]): Promise<unknown[]> {
   const actorId = `provider-qualification-${randomUUID()}`;
   const scopeId = `personal:${actorId}`;
   const name = `local-${randomUUID()}`;
@@ -67,17 +83,7 @@ async function main(): Promise<void> {
   } catch (error) {
     failures.push(error);
   }
-  await stop();
-  if (failures.length)
-    throw new AggregateError(failures, `local qualification failed: ${failures.map(String).join("; ")}`);
-  console.log(
-    JSON.stringify({
-      provider: "local",
-      source: process.env.GIT_SHA,
-      sandboxImage: process.env.LOCAL_SANDBOX_IMAGE,
-      status: "pass",
-    }),
-  );
+  return failures;
 }
 
 main()

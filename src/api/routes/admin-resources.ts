@@ -20,15 +20,16 @@ import {
   ALL_PROVIDERS_AVAILABLE,
 } from "../../model/pi-models.ts";
 import { resolveRuntimeChoice } from "../../agent/runtime-choice.ts";
+import { APP_EDIT_DEFAULT_RUNTIME } from "../runtime-config.ts";
+import type { ScopedConfigStore } from "../../resolution/config-store.ts";
 import { sanitizeBranding } from "../../resolution/branding.ts";
+import { credentialInjectionError, type CredentialInjection } from "../../credentials/credential-injection.ts";
 import {
-  credentialInjectionError,
   isValidCredentialSlug,
   isValidServiceCredentialEnvKey,
   isValidBrokerHost,
   isValidBrokerMethod,
   isValidBrokerPathPrefix,
-  type CredentialInjection,
   type DecryptedServiceCredential,
   type PublicServiceCredential,
   type ServiceCredentialInput,
@@ -43,6 +44,7 @@ import type { ApprovalGrantModes } from "../../types.ts";
 import { parseEgressPolicy } from "../../resolution/egress-policy.ts";
 import { FEATURE_NAMES, FEATURES, type FeatureName } from "../../feature-flags.ts";
 import { parseSharingPosture, SHARING_POSTURES, type SharingPosture } from "../../resolution/sharing-posture.ts";
+import { appHandleResource } from "./admin/app-handle.ts";
 
 type Actor = { id: string };
 
@@ -92,6 +94,22 @@ function channelContainer(scope: string): string | undefined {
   const { kind, ref } = parseScopeId(scope);
   return ref && (kind === "channel" || kind === "group") ? ref : undefined;
 }
+
+const RUNTIME_RESOURCES: {
+  id: string;
+  purpose?: Parameters<ScopedConfigStore["setPurposeRuntime"]>[0];
+  label?: string;
+}[] = [
+  { id: "runtime" },
+  { id: "cron-runtime", purpose: "cron" },
+  { id: "subagent-runtime", purpose: "subagent" },
+  { id: "fallback-runtime", purpose: "fallback" },
+  {
+    id: "app-edit-runtime",
+    purpose: "appEdit",
+    label: `Runtime for chats beside a published app until the person picks another model in that chat; it takes precedence over their conversation runtime and saved model variant. Unset means ${APP_EDIT_DEFAULT_RUNTIME.modelId}. When the person cannot run it on this deployment, the chat uses their conversation runtime.`,
+  },
+];
 
 export const ADMIN_RESOURCES: readonly AdminResource[] = [
   {
@@ -470,8 +488,9 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       return { ok: true };
     },
   },
-  ...([undefined, "cron", "subagent", "fallback"] as const).map((purpose): AdminResource => ({
-    id: purpose ? `${purpose}-runtime` : "runtime",
+  ...RUNTIME_RESOURCES.map(({ id, purpose, label }): AdminResource => ({
+    id,
+    ...(label ? { label } : {}),
     refreshesModels: true,
     kind: "custom",
     target: purpose ? "org" : "any",
@@ -577,6 +596,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       (deps, scope, names) => deps.config!.setAckEmoji(scope, names),
     ),
   },
+  appHandleResource,
   {
     id: "branding",
     kind: "custom",
