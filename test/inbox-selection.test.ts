@@ -211,7 +211,7 @@ test("Sent chat items stay out of Inbox counts and handled history remains reada
   );
 });
 
-test("verdicts decide visibility per filter while source counts include every open conversation", async () => {
+test("verdicts decide visibility per filter and source counts match what each filter shows", async () => {
   const w = world();
   const [email, slack] = await ensureDefaultInboxLoops(w.deps.store, "alice");
   for (const [key, state, draft] of [
@@ -255,11 +255,11 @@ test("verdicts decide visibility per filter while source counts include every op
   const triaged = (await w.call("GET", null, "filter=triaged")).data;
   assert.equal(triaged.filter, "triaged");
   assert.deepEqual(keys(triaged), ["question", "slack-question", "unverdicted"]);
-  assert.equal(triaged.total, 9);
+  assert.equal(triaged.total, 3);
   const sourceCounts = (feed: any) => feed.selected.map((loop: any) => [loop.id, loop.count]);
   assert.deepEqual(sourceCounts(triaged), [
-    [email!.id, 5],
-    [slack!.id, 4],
+    [email!.id, 2],
+    [slack!.id, 1],
   ]);
   for (const [filter, expected] of [
     ["triaged", ["question", "slack-question", "unverdicted"]],
@@ -270,12 +270,11 @@ test("verdicts decide visibility per filter while source counts include every op
     const feed = (await w.call()).data;
     assert.equal(feed.filter, filter);
     assert.deepEqual(keys(feed), expected);
-    assert.equal(feed.total, 9);
-    assert.deepEqual(sourceCounts(feed), sourceCounts(triaged));
-    assert.equal(
-      feed.selected.reduce((sum: number, loop: any) => sum + loop.count, 0),
-      9,
-    );
+    assert.equal(feed.total, expected.length);
+    assert.deepEqual(sourceCounts(feed), [
+      [email!.id, expected.filter((key) => !key.startsWith("slack-")).length],
+      [slack!.id, expected.filter((key) => key.startsWith("slack-")).length],
+    ]);
     assert.deepEqual(
       keys((await w.call("GET", null, `loopId=${slack!.id}`)).data),
       expected.filter((key) => key.startsWith("slack-")),
@@ -299,11 +298,42 @@ test("verdicts decide visibility per filter while source counts include every op
   const question = (await w.deps.items.byLoop(email!.id)).find((item) => item.sourceKey === "question")!;
   await w.deps.items.recordAction(question.id, { kind: "dismiss", outcome: "dismissed" });
   const afterDismiss = (await w.call()).data;
-  assert.equal(afterDismiss.total, 8);
+  assert.equal(afterDismiss.total, 4);
   assert.deepEqual(sourceCounts(afterDismiss), [
-    [email!.id, 4],
-    [slack!.id, 4],
+    [email!.id, 2],
+    [slack!.id, 2],
   ]);
+});
+
+test("a loop whose open items are all still queued shows a count of zero beside its empty list", async () => {
+  const w = world();
+  const { loop } = await w.deps.store.create({
+    owner: "alice",
+    createdBy: "alice",
+    ownerScopeId: "personal:alice",
+    name: "Reviews",
+    playbook: "Review things",
+    successCondition: "Reviewed",
+  });
+  await w.deps.items.ingest(
+    Array.from({ length: 25 }, (_, i) => ({
+      loopId: loop.id,
+      dedupeKey: `r${i}`,
+      sourcePayload: { title: `Review ${i}` },
+    })),
+  );
+  assert.equal((await w.call("POST", { loopIds: [loop.id] })).status, 200);
+  const feed = (await w.call("GET", null, `loopId=${loop.id}`)).data;
+  assert.deepEqual(feed.items, []);
+  assert.equal(feed.selected.find((entry: any) => entry.id === loop.id).count, 0);
+  assert.equal(feed.total, 0);
+  const ready = (await w.deps.items.byLoop(loop.id))[0]!;
+  const token = (await w.deps.items.claim(ready.id))!.claimToken!;
+  await w.deps.items.markReady(ready.id, [], token);
+  const after = (await w.call("GET", null, `loopId=${loop.id}`)).data;
+  assert.equal(after.items.length, 1);
+  assert.equal(after.selected.find((entry: any) => entry.id === loop.id).count, 1);
+  assert.equal(after.total, 1);
 });
 
 test("inbox filters apply before pagination even when noise fills multiple pages", async () => {
@@ -320,7 +350,7 @@ test("inbox filters apply before pagination even when noise fills multiple pages
   );
   for (let n = 0; n < 85; n++) await w.verdict(loop!.id, String(n), n >= 5 ? "noise" : "needs_reply");
   const triaged = (await w.call("GET", null, "filter=triaged")).data;
-  assert.equal(triaged.total, 85);
+  assert.equal(triaged.total, 5);
   assert.equal(triaged.items.length, 5);
   assert.equal(triaged.nextCursor, null);
   await w.uiState.put(uiStateId("alice", "inbox-filter"), { value: "all", updatedAt: Date.now() });
@@ -350,7 +380,7 @@ test("explicit refresh filters stay consistent across saved preference changes w
   assert.equal(pinned.items.length, 2);
   const latest = (await w.call()).data;
   assert.equal(latest.filter, "human");
-  assert.equal(latest.total, 2);
+  assert.equal(latest.total, 1);
   assert.equal(latest.items.length, 1);
   assert.equal((await w.call("GET", null, "filter=invalid")).status, 400);
 });
