@@ -115,6 +115,7 @@ export async function resolveTurnContext(input: ContextInput) {
       disclosedFacts?: Promise<ReadonlyMap<ScopeId, readonly MemoryFact[]>>,
       report?: MemoryRecallContext["report"],
       text?: string,
+      sessionId?: string,
     ) =>
       tracePhase(
         "turn.memory_recall",
@@ -129,6 +130,7 @@ export async function resolveTurnContext(input: ContextInput) {
               maxChars: RECALL_MAX_CHARS,
               ...(disclosedFacts ? { disclosedFacts } : {}),
               ...(report ? { report } : {}),
+              ...(sessionId ? { sessionId } : {}),
             },
             memoryLabels,
           ),
@@ -139,10 +141,12 @@ export async function resolveTurnContext(input: ContextInput) {
       limit = 20,
       scope?: ScopeId,
       report?: MemoryRecallContext["report"],
+      sessionId?: string,
     ): Promise<string[] | null> => {
       const hits = await searchNotebooks(memory, read, query, limit, scope, {
         ...reader,
         ...(report ? { report } : {}),
+        ...(sessionId ? { sessionId } : {}),
       });
       if (hits) for (const source of scope === undefined ? read : [scope]) recordRead(source, "memory");
       return hits;

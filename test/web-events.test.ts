@@ -25,7 +25,7 @@ async function serve(deps: Partial<ServerDeps> = {}, t?: TestContext): Promise<s
   const server = createServer(built.app, {
     ...serverDeps(config, built),
     ...browserSessionDeps,
-    web: { events, me: { suggestedActivities: [] } },
+    web: { events, me: { suggestedActivities: [] }, shell: { release: async () => undefined } as never },
     ...deps,
   } as ServerDeps);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));

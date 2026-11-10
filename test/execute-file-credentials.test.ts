@@ -204,7 +204,30 @@ test("credential files that grow past the limit fail with the reason", async (t)
   );
 });
 
-test("concurrent file updates cannot overwrite a newer credential or its grants", async (t) => {
+const ssoFile = (accessToken: string, expiresAt: string): CredentialFile => ({
+  path: ".aws/sso/cache/session.json",
+  contentBase64: Buffer.from(JSON.stringify({ accessToken, refreshToken: `r-${accessToken}`, expiresAt })).toString(
+    "base64",
+  ),
+});
+const textFile = (path: string, value: string): CredentialFile => ({
+  path,
+  contentBase64: Buffer.from(value).toString("base64"),
+});
+const savedFiles = async (f: Awaited<ReturnType<typeof fixture>>) => {
+  const saved = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
+  if (saved.kind !== "file") throw new Error("Expected files");
+  return Object.fromEntries(
+    saved.files.map((file) => [file.path, Buffer.from(file.contentBase64, "base64").toString()]),
+  );
+};
+const startCommand = async (f: Awaited<ReturnType<typeof fixture>>) => {
+  const m = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
+  if (m.kind !== "file") throw new Error("Expected files");
+  return { ...m, writeback: true };
+};
+
+test("a conflict with no readable expiry keeps the first save and leaves grants alone", async (t) => {
   const f = await fixture(t);
   const grant = await f.keychain.createGrant({
     credentialId: f.credential.id,
@@ -213,12 +236,26 @@ test("concurrent file updates cannot overwrite a newer credential or its grants"
     mode: "standing",
     purpose: "test",
   });
-  const a = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
-  const b = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
-  if (a.kind !== "file" || b.kind !== "file") throw new Error("Expected files");
-  await f.keychain.updateFiles({ ...a, writeback: true }, files("newer"));
-  await assert.rejects(f.keychain.updateFiles({ ...b, writeback: true }, files("stale")), /changed during execution/);
+  const a = await startCommand(f);
+  const b = await startCommand(f);
+  await f.keychain.updateFiles(a, files("newer"));
+  await f.keychain.updateFiles(b, files("stale"));
+  assert.equal(await savedValue(f), "newer");
   assert.equal((await f.keychain.getGrant(grant.id))?.status, "active");
+});
+
+test("a completed login replaces files another command refreshed meanwhile", async (t) => {
+  const f = await fixture(t);
+  const refresher = await startCommand(f);
+  const login = await startCommand(f);
+  await f.keychain.updateFiles(refresher, [ssoFile("refreshed", "2026-11-09T18:00:00Z")]);
+  await f.keychain.updateFiles(login, [
+    ssoFile("login", "2026-11-10T02:00:00Z"),
+    textFile(".aws/sso/cache/client.json", "registered client"),
+  ]);
+  const saved = await savedFiles(f);
+  assert.equal(JSON.parse(saved[".aws/sso/cache/session.json"]!).accessToken, "login");
+  assert.equal(saved[".aws/sso/cache/client.json"], "registered client");
 });
 
 test("symlink replacement is rejected and the ephemeral home is removed", async (t) => {
@@ -233,6 +270,78 @@ test("symlink replacement is rejected and the ephemeral home is removed", async 
   );
   const execution = f.commands.find((entry) => entry.command.startsWith('rm "$HOME'))!;
   await assert.rejects(access(execution.handle.env!.HOME!));
+});
+
+test("a credential directory replaced with a symlink is rejected and the saved login is untouched", async (t) => {
+  const f = await fixture(t);
+  const wal = { path: ".aws/cli/cache/session.db-wal", contentBase64: Buffer.from("scratch").toString("base64") };
+  await f.keychain.save({ ownerId: owner, service: "aws", files: [...files("original"), wal] });
+  await assert.rejects(
+    f.context().execute('rm -rf "$HOME/.aws/sso/cache"; ln -s /tmp "$HOME/.aws/sso/cache"', { credentials: ["aws"] }),
+    /symlinks/,
+  );
+  const next = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
+  if (next.kind !== "file") throw new Error("Expected files");
+  assert.deepEqual(next.files.map((file) => [file.path, Buffer.from(file.contentBase64, "base64").toString()]).sort(), [
+    [".aws/cli/cache/session.db-wal", "scratch"],
+    [".aws/sso/cache/session.json", "original"],
+  ]);
+});
+
+test("a parent of a credential file replaced with a symlink is rejected and the saved login is untouched", async (t) => {
+  const f = await fixture(t);
+  const token = { path: ".tool-state/auth/token", contentBase64: Buffer.from("secret").toString("base64") };
+  await f.keychain.save({ ownerId: owner, service: "aws", files: [...files("original"), token] });
+  await assert.rejects(
+    f
+      .context()
+      .execute('rm -rf "$HOME/.tool-state"; ln -s "$(mktemp -d)" "$HOME/.tool-state"', { credentials: ["aws"] }),
+    /symlinks/,
+  );
+  const next = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
+  if (next.kind !== "file") throw new Error("Expected files");
+  assert.deepEqual(next.files.map((file) => file.path).sort(), [
+    ".aws/sso/cache/session.json",
+    ".tool-state/auth/token",
+  ]);
+});
+
+test("a command that deletes a cached credential file keeps its output and saves the rest", async (t) => {
+  const f = await fixture(t);
+  const wal = { path: ".aws/cli/cache/session.db-wal", contentBase64: Buffer.from("scratch").toString("base64") };
+  await f.keychain.save({ ownerId: owner, service: "aws", files: [...files("original"), wal] });
+  const result = await f
+    .context()
+    .execute(
+      'printf refreshed > "$HOME/.aws/sso/cache/session.json"; rm "$HOME/.aws/cli/cache/session.db-wal"; echo done',
+      { credentials: ["aws"] },
+    );
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout.trim(), "done");
+  assert.match(
+    result.stderr,
+    /\[credentials\] This command deleted \.aws\/cli\/cache\/session\.db-wal; the saved login no longer includes it\.$/,
+  );
+  const next = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
+  if (next.kind !== "file") throw new Error("Expected files");
+  assert.deepEqual(
+    next.files.map((file) => [file.path, Buffer.from(file.contentBase64, "base64").toString()]),
+    [[".aws/sso/cache/session.json", "refreshed"]],
+  );
+  const second = await f.context().execute('cat "$HOME/.aws/sso/cache/session.json"', { credentials: ["aws"] });
+  assert.equal(second.stdout, "refreshed");
+  assert.equal(second.stderr, "");
+});
+
+test("a command that deletes every credential file leaves the saved login unchanged", async (t) => {
+  const f = await fixture(t);
+  const result = await f.context().execute('rm -rf "$HOME/.aws"; echo gone', { credentials: ["aws"] });
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout.trim(), "gone");
+  assert.match(result.stderr, /deleted all of its credential files .*left unchanged/);
+  const next = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
+  if (next.kind !== "file") throw new Error("Expected files");
+  assert.equal(Buffer.from(next.files[0]!.contentBase64, "base64").toString(), "original");
 });
 
 test("refreshes made through a use grant never change the owner's saved login", async (t) => {
@@ -258,8 +367,8 @@ test("refreshes made through a use grant never change the owner's saved login", 
 
 test("an execution sweeps only stale credential directories", async (t) => {
   const f = await fixture(t);
-  const stale = await prepareExecutionFiles(f.sandbox, f.handle, [{ files: files("stale"), save: async () => {} }]);
-  const live = await prepareExecutionFiles(f.sandbox, f.handle, [{ files: files("live"), save: async () => {} }]);
+  const stale = await prepareExecutionFiles(f.sandbox, f.handle, [{ files: files("stale"), save: async () => [] }]);
+  const live = await prepareExecutionFiles(f.sandbox, f.handle, [{ files: files("live"), save: async () => [] }]);
   const staleDir = stale.env.HOME!.replace(/\/home$/, "");
   await f.sandbox.run(f.handle, `touch -d '3 hours ago' ${staleDir}`);
   await f.context().execute("true", { credentials: ["aws"] });
@@ -400,10 +509,10 @@ test("a failed background writeback keeps the refresh for a later retry", async 
   const f = await fixture(t);
   let outage = true;
   const keychain: Pick<Keychain, "writebackBaseline" | "updateFiles"> = {
-    writebackBaseline: (source, fingerprint) => f.keychain.writebackBaseline(source, fingerprint),
+    writebackBaseline: (...args) => f.keychain.writebackBaseline(...args),
     async updateFiles(materialized, updated) {
       if (outage) throw new Error("keychain database unavailable");
-      await f.keychain.updateFiles(materialized, updated);
+      return f.keychain.updateFiles(materialized, updated);
     },
   };
   const bg = background(f, { keychain });
@@ -445,4 +554,64 @@ test("a background start that fails before launch removes its staging", async (t
     /sandbox refused/,
   );
   assert.equal((await run("sh", ["-c", "ls -d /tmp/qm-credentials.* 2>/dev/null | wc -l"])).stdout, before);
+});
+
+test("a background login merges at exit with refreshes other commands saved while it ran", async (t) => {
+  const f = await fixture(t);
+  const bg = background(f);
+  const ctx = bg.ctx();
+  const login = JSON.stringify({ accessToken: "login", expiresAt: "2026-11-10T02:00:00Z" });
+  const started = await ctx.backgroundStart(
+    `sleep 0.5; printf '%s' '${login}' > "$HOME/.aws/sso/cache/session.json"; echo "Successfully logged in"`,
+    { purpose: "Log in", credentials: ["aws"] },
+  );
+  await f.keychain.updateFiles(await startCommand(f), [
+    ssoFile("refreshed", "2026-11-09T18:00:00Z"),
+    textFile(".aws/cli/cache/role.json", "role-from-another-command"),
+  ]);
+  await bg.waitForExit(started.processId);
+  await ctx.backgroundPoll(started.processId);
+  const saved = await savedFiles(f);
+  assert.equal(JSON.parse(saved[".aws/sso/cache/session.json"]!).accessToken, "login");
+  assert.equal(saved[".aws/cli/cache/role.json"], "role-from-another-command");
+  assert.equal(await bg.registry.credentialFiles(started.processId), null);
+});
+
+test("a background job that changed nothing leaves other commands' saves alone", async (t) => {
+  const f = await fixture(t);
+  const bg = background(f);
+  const ctx = bg.ctx();
+  const started = await ctx.backgroundStart("sleep 0.5", { purpose: "Wait", credentials: ["aws"] });
+  await f.keychain.updateFiles(await startCommand(f), files("saved-meanwhile"));
+  await bg.waitForExit(started.processId);
+  await ctx.backgroundPoll(started.processId);
+  assert.equal(await savedValue(f), "saved-meanwhile");
+});
+
+test("a command whose change loses a conflict says so on stderr", async (t) => {
+  const f = await fixture(t);
+  const other = await startCommand(f);
+  const result = await f
+    .context({
+      commandCredentials: [
+        {
+          handle: "aws",
+          async resolve() {
+            const m = await startCommand(f);
+            await f.keychain.updateFiles(other, files("saved-meanwhile"));
+            return {
+              env: [],
+              files: { files: m.files, save: (updated: CredentialFile[]) => f.keychain.updateFiles(m, updated) },
+            };
+          },
+        },
+      ],
+    })
+    .execute('printf mine > "$HOME/.aws/sso/cache/session.json"', { credentials: ["aws"] });
+  assert.equal(result.code, 0);
+  assert.match(
+    result.stderr,
+    /\[credentials\] This command could not save its changes to \.aws\/sso\/cache\/session\.json because another command saved changes to it first; rerun it if they are needed\.$/,
+  );
+  assert.equal(await savedValue(f), "saved-meanwhile");
 });
