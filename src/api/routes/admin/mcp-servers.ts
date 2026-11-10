@@ -77,7 +77,10 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
   }
   const body = ctx.body as Partial<McpServer> & { validate?: boolean };
   const existing = await ctx.deps.mcpServers.get(id);
-  const b: typeof body = { ...existing, ...Object.fromEntries(Object.entries(body).filter(([, v]) => v != null)) };
+  const b: typeof body = {
+    ...existing,
+    ...Object.fromEntries(Object.entries(body).filter(([, v]) => v != null && v !== "")),
+  };
   const url = typeof b.url === "string" ? b.url.trim() : "";
   let parsed: URL;
   try {
@@ -159,8 +162,8 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
       return sendJson(ctx.res, 400, { error: "bad_request", message: `${field} must be an HTTPS URL` });
     }
   }
-  let oauthAuthorizeUrl = httpsUrl(b.oauthAuthorizeUrl) ?? (oauthUser ? existing?.oauthAuthorizeUrl : undefined);
-  let oauthTokenUrl = httpsUrl(b.oauthTokenUrl) ?? (oauthUser ? existing?.oauthTokenUrl : undefined);
+  let oauthAuthorizeUrl = httpsUrl(b.oauthAuthorizeUrl);
+  let oauthTokenUrl = httpsUrl(b.oauthTokenUrl);
   const credentialAccountType = b.credentialAccountType ?? "default";
   if (!isAccountType(credentialAccountType)) {
     return sendJson(ctx.res, 400, {
@@ -193,25 +196,23 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
     auth,
     credentialScope,
     ...(credentialScope === "per-user" ? { credentialHost, credentialAccountType } : {}),
-    ...(auth === "bearer"
-      ? { bearerToken: typeof b.bearerToken === "string" && b.bearerToken ? b.bearerToken : existing?.bearerToken }
-      : {}),
+    ...(auth === "bearer" ? { bearerToken: b.bearerToken } : {}),
     ...(oauthUser
       ? {
-          clientId: typeof b.clientId === "string" && b.clientId ? b.clientId.trim() : existing?.clientId,
+          clientId: typeof b.clientId === "string" ? b.clientId.trim() : undefined,
           oauthAuthorizeUrl,
           oauthTokenUrl,
-          oauthScopes: parseScopes(b.oauthScopes) ?? existing?.oauthScopes ?? discovered?.scopes ?? [],
+          oauthScopes: parseScopes(b.oauthScopes) ?? discovered?.scopes ?? [],
         }
       : {}),
     ...(auth === "client-credentials"
       ? {
-          clientId: typeof b.clientId === "string" && b.clientId ? b.clientId : existing?.clientId,
-          clientSecret: typeof b.clientSecret === "string" && b.clientSecret ? b.clientSecret : existing?.clientSecret,
+          clientId: b.clientId,
+          clientSecret: b.clientSecret,
         }
       : {}),
-    ...(existing?.tools ? { tools: existing.tools } : {}),
-    ...(existing?.about ? { about: existing.about } : {}),
+    ...(existing?.url === url && existing.tools ? { tools: existing.tools } : {}),
+    ...(existing?.url === url && existing.about ? { about: existing.about } : {}),
     ...(approval === "annotations" ? {} : { approval }),
     ...(catalog ? { catalog } : {}),
     ...(attestActor ? { attestActor } : {}),
