@@ -3,13 +3,9 @@ import { randomUUID } from "node:crypto";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
-import { isTerminal, leaseLapsed, type Run, type RunStore } from "../runs/run-store.ts";
-import type { ProcessRegistry } from "../processes/process-registry.ts";
-import type { SessionStore } from "../sessions/session-store.ts";
-import type { MonitorStore } from "../monitors/monitor-store.ts";
-import type { DeliveryStore } from "../delivery/delivery-store.ts";
+import { isTerminal, type RunStore } from "../runs/run-store.ts";
+import type { SessionWork, SessionWorkReader } from "../sessions/session-work.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
-import type { ScopeId } from "../types.ts";
 import { conversationWebUrl } from "../util/conversation-links.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
@@ -33,17 +29,14 @@ interface StatusClient {
 }
 
 export interface SlackStatusActivity {
-  sessions?: Pick<SessionStore, "getByThread" | "childrenOf" | "descendantsOf" | "latestToolSteps">;
-  processes?: Pick<ProcessRegistry, "liveByScope">;
-  deliveries?: Pick<DeliveryStore, "pending">;
-  monitors?: Pick<MonitorStore, "ownedBy">;
+  work?: Pick<SessionWorkReader, "of">;
   publicWebUrl?: string;
 }
 
 export function createSlackSessionStatus(
   store: DurableMap<SlackSessionStatusState>,
   lease: LeaderLease,
-  runs: Pick<RunStore, "get" | "inFlightForThread" | "activeForThreads" | "pendingReturns">,
+  runs: Pick<RunStore, "get">,
   flags: Pick<FeatureFlagStore, "enabled">,
   now = Date.now,
   activity: SlackStatusActivity = {},
@@ -52,71 +45,6 @@ export function createSlackSessionStatus(
   const deleteIf = store.deleteIf.bind(store);
   const queue = createKeyedQueue<string>();
   const key = (account: string, channel: string, threadTs: string) => JSON.stringify([account, channel, threadTs]);
-  async function threadWork(anchor: Run | null, scope: ScopeId | undefined): Promise<ThreadWork> {
-    const active =
-      scope && anchor
-        ? (await runs.inFlightForThread(anchor.sessionId)).filter(
-            (run) => run.deliveryState?.replying && !run.request.privateSessionMessage,
-          )
-        : [];
-    const threadRef = anchor?.request.conversation.threadRef;
-    const session = anchor?.sessionId ? await activity.sessions?.getByThread(anchor.sessionId) : null;
-    const children =
-      scope && session
-        ? ((await activity.sessions?.childrenOf(session.id)) ?? []).filter((child) => child.scopeId === session.scopeId)
-        : [];
-    const descendants = children.length
-      ? ((await activity.sessions?.descendantsOf(children.map((child) => child.id))) ?? [])
-      : [];
-    const lineageRefs = [...children, ...descendants].map((s) => s.threadRef);
-    const threads = new Set([threadRef, ...lineageRefs]);
-    const jobs =
-      scope && threadRef
-        ? ((await activity.processes?.liveByScope(scope, now())) ?? []).filter(
-            (job) => job.kind === "background" && threads.has(job.sessionRef),
-          )
-        : [];
-    const monitors =
-      scope && threadRef
-        ? ((await activity.monitors?.ownedBy(scope)) ?? []).filter(
-            (monitor) => monitor.enabled && threads.has(monitor.threadRef) && monitor.expiresAt > now(),
-          )
-        : [];
-    const childRuns = lineageRefs.length ? await runs.activeForThreads(lineageRefs) : new Map<string, Run>();
-    const returning = lineageRefs.length > 0 && (await runs.pendingReturns(1, "", lineageRefs)).length > 0;
-    const steps =
-      (await activity.sessions?.latestToolSteps([...active, ...childRuns.values()].map((run) => run.id))) ??
-      new Map<string, { purpose?: string }>();
-    const purposeOf = (run: Run | undefined) => (run ? steps.get(run.id.toLowerCase())?.purpose : undefined);
-    const backgroundOf = (ref: string | undefined): [string, string] | undefined => {
-      const monitor = monitors.find((m) => m.threadRef === ref);
-      if (monitor) return [monitor.purpose ?? "Watching for updates", "Keeping watch"];
-      const job = jobs.find((j) => j.sessionRef === ref);
-      return job && [job.purpose ?? "Background job", "Running in the background"];
-    };
-    const stepOf = (ref: string) => {
-      const run = childRuns.get(ref);
-      return run ? (purposeOf(run) ?? "Thinking it through") : backgroundOf(ref)?.[0];
-    };
-    const helpers = children.flatMap((child) => {
-      const lineage = [child, ...descendants.filter((d) => d.rootId === child.id)];
-      const step = lineage.map((s) => stepOf(s.threadRef)).find(Boolean);
-      return step ? [{ id: child.id, title: child.title || "Subagent", step }] : [];
-    });
-    const background = backgroundOf(threadRef);
-    const running = active.find((run) => run.status === "running" && !leaseLapsed(run, now()));
-    const base = { session, helpers, ongoing: true, landing: false };
-    if (running) return { ...base, title: purposeOf(running) ?? "Thinking it through", phrase: "Working on it" };
-    if (active.length) return { ...base, title: purposeOf(active[0]) ?? "Queued", phrase: "Picking back up shortly" };
-    if (helpers.length || returning) return { ...base, title: "Waiting on subagents", phrase: "" };
-    if (background) return { ...base, title: background[0], phrase: background[1] };
-    const landing =
-      !!anchor &&
-      ((await activity.deliveries?.pending("slack")) ?? []).some(
-        (delivery) => delivery.provenance?.sourceThreadRef === anchor.sessionId,
-      );
-    return { ...base, ongoing: false, landing, title: "", phrase: "" };
-  }
   async function sync(client: StatusClient, id: string, next?: SlackSessionStatusState) {
     await queue(id, async () => {
       for (let attempt = 0; attempt < 300; attempt++) {
@@ -145,14 +73,14 @@ export function createSlackSessionStatus(
           }
           const current = await store.get(id);
           if (!current || leaseLost) return true;
-          const work = await threadWork(anchor, optedIn ? scope : undefined);
+          const work = optedIn && anchor ? await activity.work?.of(anchor.sessionId, "slack") : undefined;
+          if (work?.delivering) return true;
           const startedAt = current.startedAt ?? now();
           const cardId = current.cardId ?? randomUUID();
           const elapsed = now() - startedAt;
-          if (work.landing) return true;
-          const followUrl = work.session ? conversationWebUrl(activity.publicWebUrl, work.session.id) : undefined;
+          const followUrl = work?.sessionId ? conversationWebUrl(activity.publicWebUrl, work.sessionId) : undefined;
           const { blocks, headline } = renderCard(work, { emoji: current.emoji, cardId, elapsed, followUrl });
-          const { ongoing } = work;
+          const ongoing = !!work?.busy;
           const content = JSON.stringify(blocks);
           const post =
             current.cardContent !== content && (!!current.cardTs || (optedIn && ongoing && elapsed >= SHOW_AFTER_MS));
@@ -251,32 +179,33 @@ export function createSlackSessionStatus(
 
 const SHOW_AFTER_MS = 10_000;
 const PLAN_TASK_LIMIT = 50;
+const BACKGROUND_STEP = { watch: "Watching for updates", job: "Background job" } as const;
 
-interface ThreadWork {
-  session: { id: string } | null | undefined;
-  helpers: { id: string; title: string; step: string }[];
-  ongoing: boolean;
-  landing: boolean;
-  title: string;
-  phrase: string;
+function headlineOf(work: SessionWork | undefined): [string, string] {
+  if (work?.running) return [work.running.purpose ?? "Thinking it through", "Working on it"];
+  if (work?.queued) return [work.queued.purpose ?? "Queued", "Picking back up shortly"];
+  if (work?.branches.length || work?.returning) return ["Waiting on subagents", ""];
+  if (work?.background?.kind === "watch") return [work.background.purpose ?? BACKGROUND_STEP.watch, "Keeping watch"];
+  if (work?.background) return [work.background.purpose ?? BACKGROUND_STEP.job, "Running in the background"];
+  return ["", ""];
 }
 
 function renderCard(
-  work: ThreadWork,
+  work: SessionWork | undefined,
   card: { emoji?: string | undefined; cardId: string; elapsed: number; followUrl?: string | undefined },
 ) {
-  const title = work.title;
+  const [title, phrase] = headlineOf(work);
   const icon = card.emoji ? EMOJI_CHAR_BY_NAME[card.emoji] : undefined;
   const headline = icon ? `${icon} ${title}` : title;
   const details = richText(
     icon ? undefined : card.emoji,
-    card.elapsed >= 60_000 ? `${work.phrase} · ${minutes(card.elapsed)}` : work.phrase,
+    card.elapsed >= 60_000 ? `${phrase} · ${minutes(card.elapsed)}` : phrase,
   );
-  const rows = work.helpers.map(({ id, title, step }) => ({
+  const rows = (work?.branches ?? []).map(({ id, title, step, background }) => ({
     task_id: `${SLACK_STATUS_TASK_PREFIX}${card.cardId}:${id}`,
     title,
     status: "in_progress",
-    details: richText(undefined, step),
+    details: richText(undefined, step ?? (background ? BACKGROUND_STEP[background] : "Thinking it through")),
   }));
   const tasks =
     rows.length > PLAN_TASK_LIMIT

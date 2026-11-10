@@ -432,8 +432,9 @@ export function createDeliveryPoller(deps: {
             }
           },
           ack: async (body) => {
+            const acked = await ackDelivery(d.id, mergeSlackApiMs(body, slackApiMs));
             if (runId) await core.taskAcknowledgements?.finish(client, runId);
-            return ackDelivery(d.id, mergeSlackApiMs(body, slackApiMs));
+            return acked;
           },
           onError: logDeliveryError(d.id),
         });

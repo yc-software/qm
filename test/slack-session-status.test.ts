@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
 import { createFeatureFlagStore } from "../src/feature-flags.ts";
+import { createSessionWork } from "../src/sessions/session-work.ts";
 import { createSlackSessionStatus, type SlackSessionStatusState } from "../src/slack/session-status.ts";
 import { createSlackCoreClient, type SlackCoreClientDeps } from "../src/api/slack-core-client.ts";
 import { createTurnStream } from "../src/runs/turn-stream.ts";
@@ -58,15 +59,15 @@ function fixture() {
       return { ts: method === "chat.update" ? String(args.ts) : `card.${cards.length}` };
     },
   };
-  const manager = (rows = store) =>
-    createSlackSessionStatus(rows, createNoopLeaderLease(), runs, flags, () => at, {
+  const work = createSessionWork(
+    {
+      runs,
       processes: {
         liveByScope: async (scope) =>
           jobs.filter((job) => job.scopeId === scope && job.status === "running" && job.expiresAt > at),
       },
       monitors: { ownedBy: async (scope) => watches.filter((watch) => watch.ownerScopeId === scope) },
       deliveries: { pending: async () => outbox as never },
-      publicWebUrl: "https://qm.example.test/web-ui/",
       sessions: {
         getByThread: async (threadRef) =>
           threadRef === "ch:C1:1.0" ? ({ id: "canonical-uuid", scopeId: "channel:C1" } as Session) : null,
@@ -90,6 +91,13 @@ function fixture() {
             }),
           ),
       },
+    },
+    () => at,
+  );
+  const manager = (rows = store) =>
+    createSlackSessionStatus(rows, createNoopLeaderLease(), runs, flags, () => at, {
+      work,
+      publicWebUrl: "https://qm.example.test/web-ui/",
     });
   const status = manager();
   const add = (id: string) => {
@@ -148,6 +156,7 @@ function fixture() {
     unreturned,
     outbox,
     deleted,
+    work,
     subagent,
     runs,
     cards,
@@ -429,7 +438,9 @@ test("unrelated, expired, disabled, private and nonengaged work never keeps a ca
   f.watch().ownerScopeId = "channel:other";
   f.watch().enabled = false;
   f.watch().expiresAt = 0;
-  f.add("quiet").deliveryState = null;
+  const quiet = f.add("quiet");
+  quiet.deliveryState = null;
+  quiet.request.origin = { kind: "ambient" };
   f.add("private").request.privateSessionMessage = true;
   f.add("other").sessionId = "other-thread";
   run.status = "done";
@@ -497,6 +508,8 @@ test("delayed insert after lease loss cannot replace a newer card", async () => 
     { hold: async (_key, fn) => fn(lost.promise) },
     f.runs,
     f.flags,
+    f.now,
+    { work: f.work },
   );
   const pending = first.start(f.client, "T1:B1", old.id, "C1", "1.0");
   await begun.promise;
@@ -525,6 +538,7 @@ for (const method of ["chat.postMessage", "chat.update"]) {
       f.runs,
       f.flags,
       f.now,
+      { work: f.work },
     );
     if (method === "chat.update") {
       await f.start(run.id);

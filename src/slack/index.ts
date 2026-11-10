@@ -330,9 +330,13 @@ export async function startSlackPlugin(
   const statusAccount = () => `${ids.ownTeamId}:${ids.botUserId}`;
   let statusSync: Promise<void> | undefined;
   const reconcileStatus = () => {
-    statusSync ??= core.sessionStatus
-      ?.reconcile(statusClient, statusAccount())
-      .catch(swallowAs("slack: session status reconciliation", undefined))
+    statusSync ??= Promise.all([
+      core.sessionStatus
+        ?.reconcile(statusClient, statusAccount())
+        .catch(swallowAs("slack: session status reconciliation", undefined)),
+      core.taskAcknowledgements?.reconcile(statusClient).catch(swallowAs("slack: task ack reconciliation", undefined)),
+    ])
+      .then(() => undefined)
       .finally(() => {
         statusSync = undefined;
       });
