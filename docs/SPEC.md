@@ -204,7 +204,7 @@ Growing the codebase to keep every path it ever took alive. The canonical case: 
 
 ### Over-testing (checked by CI)
 
-A PR's net added test lines must not exceed its added source lines. Remove or reshape existing tests to stay within that. Test lines are lines in files under a `test`, `tests` or `*Tests` directory or with `.test.` in the name; every other file except lockfiles is source.
+A PR's net test lines (added minus removed) must not exceed the source lines it adds. Remove or reshape existing tests to stay within that. Test lines are lines in files under a `test`, `tests` or `*Tests` directory or with `.test.` in the name; every other file except lockfiles is source.
 
 ### Prod-like QA (2 examples)
 

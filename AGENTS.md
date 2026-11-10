@@ -92,8 +92,8 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   on the old code through the real path and assert the correct behavior, not the inverse
   of the specific fix. Don't write checks that can't fail — a fixture compared against
   itself, a job that always reports success. When a feature is removed, delete its tests.
-  Keep a PR's net added test lines at or below its added source lines, removing or
-  reshaping existing tests to get there; CI counts this as the Over-testing lens.
+  Keep a PR's net test lines (added minus removed) at or below the source lines it adds,
+  removing or reshaping existing tests to get there; CI counts this as the Over-testing lens.
 - **Verify non-trivial behavior changes in a live dev instance before opening a PR.**
   When a change is substantial enough that unit tests alone won't prove it works
   end-to-end — new or changed agent behavior, or anything touching the Slack/web
