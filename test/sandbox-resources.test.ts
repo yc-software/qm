@@ -472,24 +472,23 @@ test("activation preserves routes, cold identities and explicit nulls without ca
       availableBackends: ["local", "modal"],
       legacyScopes: async () => ["personal:old-session", "personal:unset"],
       legacySandboxes: async () => [
-        { scopeId: "personal:routed", backend: "modal", machineId: "sb-old" },
-        { scopeId: "personal:routed", backend: "e2b", machineId: "e2b-cold" },
-        { scopeId: "sandbox-managed", backend: "local", machineId: "managed-machine" },
+        { scopeId: "personal:routed", backend: "modal" },
+        { scopeId: "personal:routed", backend: "e2b" },
+        { scopeId: "sandbox-managed", backend: "local" },
       ],
     }),
   });
   const routed = await resources.resolve("personal:routed");
   assert.equal(routed?.backend, "modal");
   assert.equal(routed?.backingScopeId, "personal:routed");
-  assert.equal(routed?.machineId, "sb-old");
   assert.equal(routed?.state, "unverified");
-  assert.equal((await resources.resolve("personal:old-session"))?.machineId, undefined);
+  assert.ok(await resources.resolve("personal:old-session"));
   assert.equal(await resources.resolve("personal:unset"), null);
   assert.equal((await resources.resolve(managed.ownerScopeId))?.id, "managed");
   assert.equal(await resources.resolve("personal:new-after-activation"), null);
   assert.ok(await marker.get("explicit-defaults"));
   const inventory = await resources.list("admin", "personal:routed");
-  assert.ok(inventory.sandboxes.some((r) => r.backend === "e2b" && r.machineId === "e2b-cold"));
+  assert.ok(inventory.sandboxes.some((r) => r.backend === "e2b" && r.backingScopeId === "personal:routed"));
   assert.ok(!inventory.sandboxes.some((r) => r.legacy && r.backingScopeId === "sandbox-managed"));
   assert.deepEqual(inventory.sandboxes.find((r) => r.id === routed!.id)?.availableActions, []);
   assert.deepEqual(provisioned, []);
