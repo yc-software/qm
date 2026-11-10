@@ -4,7 +4,8 @@ import { randomUUID } from "node:crypto";
 import type { ServerResponse } from "node:http";
 import { createWebEvents } from "../src/api/routes/web-events.ts";
 import { bindBootTenant } from "../src/tenants/boot.ts";
-import { boundTenant, withTenant } from "../src/tenants/context.ts";
+import { boundTenant, currentTenant, withTenant } from "../src/tenants/context.ts";
+import { installPrincipalLinks } from "../src/directory/person.ts";
 import type { SessionStateEvent } from "../src/runs/session-state-bus.ts";
 import type { OwnedLedgerEvent } from "../src/loops/ledger-events.ts";
 import type { Delivery } from "../src/types.ts";
@@ -108,6 +109,31 @@ test("an inbox event from one tenant never reaches another tenant's browsers", a
     assert.deepEqual(looked, []);
     assert.doesNotMatch(inB.text(), /inbox/);
   } finally {
+    await events.stop();
+  }
+});
+
+test("an inbox event delivered outside any tenant binding is forwarded inside the event's tenant", async () => {
+  const fake = hub({}, []);
+  const events = createWebEvents(fake.app, {
+    loops: {
+      store: {
+        get: async () => {
+          throw new Error("loop store unavailable");
+        },
+      },
+    } as never,
+  });
+  installPrincipalLinks({ canonical: () => (currentTenant(), undefined), aliases: () => [] });
+  events.start();
+  try {
+    const inB = browser();
+    withTenant(b, () => events.stream("pat", inB));
+    fake.ledger({ tenantId: b, loopId: "loop", itemId: "item", owner: "pat" } as OwnedLedgerEvent);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.match(inB.text(), /event: inbox_resync/);
+  } finally {
+    installPrincipalLinks(null);
     await events.stop();
   }
 });
