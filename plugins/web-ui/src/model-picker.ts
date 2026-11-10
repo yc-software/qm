@@ -109,17 +109,22 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
     focusSpeedControl("Fast");
   }
 
-  function removeLoadoutEntry(value: string, selected: ModelOption): void {
-    if (value === activeLoadoutEntry(selected).value) return;
+  function removeLoadoutEntry(value: string, selected: ModelOption, agent: T): void {
     const entries = seededLoadout(selected);
     const index = entries.findIndex((entry) => entry.value === value);
     const next = entries.filter((entry) => entry.value !== value);
+    const neighbor = Math.max(0, Math.min(index, next.length - 1));
+    if (value === activeLoadoutEntry(selected).value) {
+      const successor = next[neighbor];
+      if (!successor) return;
+      applyLoadout(successor, agent);
+    }
     presets?.save(next);
     bindings.redraw();
     placeLoadout();
     requestAnimationFrame(() => {
       const rows = bindings.host()?.querySelectorAll<HTMLButtonElement>(".loadout-pick");
-      rows?.[Math.max(0, Math.min(index, next.length - 1))]?.focus();
+      rows?.[neighbor]?.focus();
     });
   }
 
@@ -138,7 +143,12 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
     >`;
   }
 
-  function loadoutRow(entry: LoadoutEntry, selected: ModelOption, agent: T): TemplateResult | typeof nothing {
+  function loadoutRow(
+    entry: LoadoutEntry,
+    selected: ModelOption,
+    agent: T,
+    onlyPreset: boolean,
+  ): TemplateResult | typeof nothing {
     const option = catalog.options().find((option) => option.value === entry.value);
     if (!option) return nothing;
     const active = entry.value === activeLoadoutEntry(selected).value;
@@ -208,13 +218,13 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
       }
       ${isDefault && !canMakeDefault ? html`<span class="loadout-default-star" role="img" aria-label="My default" ${tip("My default")}>${icon(Star, 14)}</span>` : nothing}
       ${
-        !active && presets
+        presets && !(active && onlyPreset)
           ? html`<button
               class="loadout-remove"
               type="button"
               aria-label=${`Remove ${modelLabel(option)} from presets`}
               ${tip("Remove from presets")}
-              @click=${() => removeLoadoutEntry(entry.value, selected)}
+              @click=${() => removeLoadoutEntry(entry.value, selected, agent)}
             >
               ${icon(X, 14)}
             </button>`
@@ -489,7 +499,9 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
             >
               <div class="loadout-panel">
                 ${presets ? html`<div class="loadout-head">Presets</div>` : nothing}
-                <div class="loadout-list">${entries.map((entry) => loadoutRow(entry, selected, agent))}</div>
+                <div class="loadout-list">
+                  ${entries.map((entry) => loadoutRow(entry, selected, agent, entries.length === 1))}
+                </div>
                 ${
                   presets
                     ? html`<div class="loadout-submenu-anchor">

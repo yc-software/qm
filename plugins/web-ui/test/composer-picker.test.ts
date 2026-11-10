@@ -727,6 +727,58 @@ test("the personal-account picker preserves composer choices and saves context d
     });
     draw();
     assert.match(button(".loadout-button").getAttribute("aria-label")!, /^Model: Gamma, /);
+    (ctx.chat as unknown as { turnRuntime: () => unknown }).turnRuntime = () => null;
+    localStorage.setItem(
+      "web-ui:loadout",
+      JSON.stringify([
+        { value: "beta", effort: "high", fast: true },
+        { value: "gamma", effort: "medium", fast: false },
+        { value: "alpha", effort: "low", fast: false },
+      ]),
+    );
+    ctx.chat.state.threadRef = "web:tester:remove-selected";
+    await mount();
+    const remove = (label: string): HTMLButtonElement | null =>
+      pick(label).closest(".loadout-row")!.querySelector<HTMLButtonElement>(".loadout-remove");
+    assert.equal(pick("Gamma").getAttribute("aria-checked"), "true");
+    remove("Gamma")!.click();
+    await tick();
+    assert.deepEqual(names(), ["Beta", "Alpha"], "removing the selected preset keeps the menu open without it");
+    assert.equal(pick("Alpha").getAttribute("aria-checked"), "true", "the preset that takes its place is selected");
+    assert.equal(document.activeElement, pick("Alpha"));
+    assert.equal(agent.state.model.id, "alpha");
+    assert.equal(composer!.state.effortLevel, "low");
+    assert.deepEqual(saved(), [
+      { value: "beta", effort: "high", fast: true },
+      { value: "alpha", effort: "low", fast: false },
+    ]);
+    remove("Alpha")!.click();
+    await tick();
+    assert.deepEqual(names(), ["Beta"], "removing the last row selects the one above it");
+    assert.equal(agent.state.model.id, "beta");
+    assert.equal(composer!.state.effortLevel, "high");
+    assert.equal(composer!.state.fastMode, true);
+    assert.deepEqual(saved(), [{ value: "beta", effort: "high", fast: true }]);
+    assert.equal(remove("Beta"), null, "the only preset cannot be removed");
+    context.resetContextModel();
+    localStorage.setItem(
+      "web-ui:loadout",
+      JSON.stringify([
+        { value: "gamma", effort: "medium", fast: false },
+        { value: "alpha", effort: "low", fast: false },
+      ]),
+    );
+    await context.loadContextModel(config.scopeId, drawContext);
+    contextButton(".loadout-button").click();
+    contextButton('[aria-label="Remove Gamma from presets"]').click();
+    await tick();
+    assert.deepEqual(
+      updates.at(-1),
+      { scopeId: config.scopeId, modelId: "alpha", effortLevel: "low", fastMode: false },
+      "removing the project's selected preset saves the preset that takes its place",
+    );
+    assert.equal(context.contextModelState.config.effective.modelId, "alpha");
+    assert.deepEqual(saved(), [{ value: "alpha", effort: "low", fast: false }]);
   } finally {
     resetContext?.();
     composer?.dispose();
