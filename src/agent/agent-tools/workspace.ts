@@ -378,7 +378,7 @@ export function workspaceTools(kit: ToolKit) {
         const embedNote = r.embedAncestors?.length ? `\nEmbeddable by: ${r.embedAncestors.join(", ")}` : "";
         const publicNote = r.public ? "\nAccess: public — anyone with the link can open it without signing in." : "";
         const dataNote = r.dataDir
-          ? `\nDurable data: runtime state written under ${r.dataDir} ($DATA_DIR) survives restarts and redeploys — keep SQLite at ${r.dataDir}/app.db (it gets the strongest durability the runtime offers). If this app writes runtime state anywhere else on disk, migrate it there (data deliberately baked into the repo stays where it is).`
+          ? `\nDurable data: runtime state written under ${r.dataDir} ($DATA_DIR) survives restarts and redeploys — keep SQLite at ${r.dataDir}/app.db (it gets the strongest durability the runtime offers). It belongs to this deployment alone: the same source published under another name is a separate app with its own empty data, so rename with renameFrom instead of publishing under a new name. If this app writes runtime state anywhere else on disk, migrate it there (data deliberately baked into the repo stays where it is).`
           : "";
         return recordResult(
           callId,
