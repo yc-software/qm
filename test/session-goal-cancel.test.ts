@@ -157,3 +157,34 @@ test("a run holding a stale active copy cannot write a cancelled goal back to ac
   await built.sessions.setGoal({ sessionId: session.id }, next);
   assert.equal((await sessionGoal(built, session.id))?.status, "active");
 });
+
+test("the owner resumes a paused goal from the goal bar; a running reply or a closed goal refuses", async () => {
+  const built = freshApp();
+  const ref = "web:U1:resume";
+  const session = await sessionWithGoal(built, ref, "paused");
+  const paused = (await sessionGoal(built, session.id))!;
+  paused.pauseReason = "needs the user";
+  await built.sessions.setGoal({ sessionId: session.id }, paused);
+
+  assert.equal(await built.app.resumeSessionGoal(session.id, "U2"), null, "a non-participant cannot resume");
+
+  const out = await built.app.resumeSessionGoal(session.id, "U1");
+  assert.equal(out?.resumed && out.goal.status, "active");
+  const goal = await sessionGoal(built, session.id);
+  assert.equal(goal?.status, "active");
+  assert.equal(goal?.pauseReason, undefined, "the pause reason goes with the pause");
+  assert.equal((await built.app.getSessionForViewer(session.id, "U1"))?.goal?.status, "active");
+  assert.equal(
+    (await built.app.resumeSessionGoal(session.id, "U1"))?.resumed,
+    true,
+    "resuming an already active goal is a no-op the bar can follow with a message",
+  );
+
+  await built.runs.enqueue({ sessionId: ref, request: runRequest() });
+  const run = (await built.runs.claim("w1", 60_000))[0]!;
+  assert.deepEqual(await built.app.resumeSessionGoal(session.id, "U1"), { resumed: false, reason: "busy" });
+  await built.runs.complete(run.id, run.leaseToken ?? "", { status: "ok", reply: "done" });
+
+  assert.deepEqual(await built.app.cancelSessionGoal(session.id, "U1"), { cancelled: true });
+  assert.deepEqual(await built.app.resumeSessionGoal(session.id, "U1"), { resumed: false, reason: "no_open_goal" });
+});
