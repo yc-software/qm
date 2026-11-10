@@ -32,7 +32,7 @@ runs models from many providers, so a deployment isn't tied to any single vendor
 
 Tell your coding agent of choice `Let's deploy https://github.com/yc-software/qm`. From here, it should follow the deployment guide in this repo.
 
-For less setup, you can also use a hosted version of QM: [Agent 37](https://www.agent37.com/qm), [E2B](https://e2b.dev/docs/agents/qm), or [DigitalOcean](https://marketplace.digitalocean.com/apps/yc-qm).
+For less setup, you can also use a hosted version of QM: [Agent 37](https://www.agent37.com/qm), [E2B](https://e2b.dev/docs/agents/qm), [DigitalOcean](https://marketplace.digitalocean.com/apps/yc-qm), or [Render](https://render.com/docs/deploy-yc-qm).
 
 If you're an infra provider interested in offering a hosted version of QM, feel free to reach out.
 
