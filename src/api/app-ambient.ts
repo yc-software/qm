@@ -332,6 +332,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
           surface: batch.surface,
           ...(surfaceOrigin ? { surfaceOrigin } : {}),
           actor: { externalId: `system:ambient:${orgIdOf()}` },
+          ...(batch.messages.some((m) => m.bot) ? { botActor: true } : {}),
           conversation,
           deliveryTarget: batch.container,
           text: buildWakeEnvelope({
@@ -381,6 +382,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
         hasFiles: false,
         actorId: req.actor.externalId,
         modelAccount: "company",
+        ...(req.botActor ? { bot: true } : {}),
         ...(req.idempotencyKey ? { dedupKey: req.idempotencyKey } : {}),
         routed: false,
       },

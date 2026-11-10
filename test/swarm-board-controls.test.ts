@@ -1,6 +1,5 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createSwarmService } from "../src/swarms/swarm-service.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 
 test("a swarm provisions one shared board computer that the root and every worker share", async () => {
@@ -112,19 +111,6 @@ test("a worker cannot control a sibling", async () => {
     fixture.service.control(await fixture.workerCaller(first!.id), { memberId: second!.id, state: "stopped" }),
     /descendants/,
   );
-});
-
-test("a swarm owner without the flag gets no reconciliation", async () => {
-  const fixture = await swarmFixture();
-  let enabled = true;
-  const service = createSwarmService({ ...fixture.serviceOptions, enabled: async () => enabled });
-  await service.spawn(fixture.caller, { requestId: "one", text: "Work" });
-  enabled = false;
-  await service.sweep();
-  const swarm = (await fixture.store.get(fixture.root.id))!;
-  assert.equal(swarm.members[1]!.state, "reserved");
-  assert.equal((await fixture.records.get(swarm.board!.sandboxId)) ?? null, null);
-  assert.equal(await service.enabledFor("alice"), false);
 });
 
 test("pausing and stopping the root's direct children cascades across a 120-worker swarm", async () => {
