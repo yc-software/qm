@@ -32,6 +32,7 @@ interface ProviderState {
   body: boolean;
   resolved: DeployEndpoint | null;
   failEntrypoint?: string;
+  rotate?: boolean;
   reconciles: Array<{ commit: string | undefined; entrypoint: string }>;
   edits: Edit[];
 }
@@ -50,6 +51,7 @@ function harness(opts: { liveEdits?: boolean } = {}) {
       return ENDPOINT;
     },
     resolveEndpoint: async () => state.resolved,
+    rotationDue: async () => state.rotate === true,
     destroy: async () => {},
     ...(opts.liveEdits === false
       ? {}
@@ -198,6 +200,16 @@ test("a replaced microVM comes back running the saved edits, not the last publis
     h.state.reconciles.at(-1),
     { commit: next.commit, entrypoint: DEV },
     "an edit with no running microVM places the saved edits",
+  );
+
+  h.state.rotate = true;
+  const placed = h.state.reconciles.length;
+  await h.deploy.maintainDeployments();
+  assert.equal(h.state.reconciles.length, placed + 1);
+  assert.deepEqual(
+    h.state.reconciles.at(-1),
+    { commit: next.commit, entrypoint: DEV },
+    "a rotated microVM places the saved edits",
   );
 });
 

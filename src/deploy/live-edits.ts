@@ -16,11 +16,6 @@ import {
 } from "./deploy-store.ts";
 
 export const LIVE_EDIT_PUBLISH_DELAY_MS = 2 * 60_000;
-const FAILURE_TAIL_CHARS = 600;
-
-export function failureTail(failure: string): string {
-  return failure.length > FAILURE_TAIL_CHARS ? `…${failure.slice(-FAILURE_TAIL_CHARS)}` : failure;
-}
 
 const DEV_INSTALL = "npm install --no-audit --no-fund";
 const DEPENDENCY_MANIFESTS = new Set(["package.json", "package-lock.json", "npm-shrinkwrap.json"]);
@@ -120,7 +115,7 @@ export function createLiveEdits(deps: LiveEditDeps) {
         changed: 0,
         hot: draft?.hot ?? false,
         ...(draft?.publishAt !== undefined ? { publishAt: draft.publishAt } : {}),
-        ...(draft?.failure ? { previousFailure: failureTail(draft.failure) } : {}),
+        ...(draft?.failure ? { previousFailure: draft.failure } : {}),
       };
     const read = await next.read(next.tree.has("package.json") ? [...changedPaths, "package.json"] : changedPaths);
     const changed = read.filter((f) => changedPaths.includes(f.path));
@@ -173,7 +168,7 @@ export function createLiveEdits(deps: LiveEditDeps) {
       changed: changed.length + deletedPaths.length,
       hot,
       publishAt,
-      ...(draft?.failure ? { previousFailure: failureTail(draft.failure) } : {}),
+      ...(draft?.failure ? { previousFailure: draft.failure } : {}),
     };
   }
 
