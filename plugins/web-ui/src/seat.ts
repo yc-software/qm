@@ -10,7 +10,6 @@ import {
   argsTemplate,
   buildMove,
   draftFromBlocks,
-  leftLabel,
   messageViews,
   preview,
   systemTexts,
@@ -249,9 +248,7 @@ function body(v: SeatView, steps: SeatStepSummary[]): TemplateResult {
                 @click=${() => void select(v, s.id)}
               >
                 <span class="seat-step-title">${s.sessionTitle?.trim() || "Untitled conversation"}</span>
-                <span class="seat-step-age"
-                  >${fresh ? "new · " : ""}${ageLabel(s.createdAt, now)} · ${leftLabel(s.expiresAt, now)}</span
-                >
+                <span class="seat-step-age">${fresh ? "new · " : ""}${ageLabel(s.createdAt, now)}</span>
               </button>
             </li>
           `;
@@ -345,11 +342,9 @@ function requestView(v: SeatView, step: SeatStep, d: StepDerived): TemplateResul
 
 function stepView(v: SeatView, step: SeatStep): TemplateResult {
   const d = derive(v, step);
-  const now = Date.now();
   return html`
     <div class="seat-step-head">
       <span class="seat-step-name">${step.sessionTitle?.trim() || "Untitled conversation"}</span>
-      <span class="seat-left ${step.expiresAt - now < 60_000 ? "soon" : ""}">${leftLabel(step.expiresAt, now)}</span>
     </div>
     ${guard([step.id, d.raw], () => requestView(v, step, d))} ${composer(v, step.request.tools ?? [])}
   `;

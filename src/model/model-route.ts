@@ -107,7 +107,12 @@ export function createModelRoutes(opts: ModelRouteOptions = {}): ModelRoutes {
     personalKeys ? personalModelId(id, personalKeys) : companyServedId(id);
   const route = async (requestedId: string, personalKeys?: ProviderKeys): Promise<ModelRoute> => {
     if (requestedId === SEAT_MODEL_ID)
-      return { modelId: SEAT_MODEL_ID, model: seatModel(), keys: await companyKeys(), billing: "org_key" };
+      return {
+        modelId: SEAT_MODEL_ID,
+        model: seatModel(),
+        keys: { ...(await companyKeys()), [SEAT_MODEL_ID]: SEAT_MODEL_ID },
+        billing: "org_key",
+      };
     const modelId = personalKeys ? personalModelId(requestedId, personalKeys) : requestedId;
     const model = getRequiredModel(personalKeys ? modelId : companyServedId(modelId), !personalKeys);
     const keys = personalKeys ?? (await companyKeys());
@@ -121,7 +126,7 @@ export function createModelRoutes(opts: ModelRouteOptions = {}): ModelRoutes {
     };
   };
   const servable = (r: ModelRoute): ModelRoute | undefined =>
-    r.billing === "model_gateway" || r.modelId === SEAT_MODEL_ID || r.keys[String(r.model.provider)] ? r : undefined;
+    r.billing === "model_gateway" || r.keys[String(r.model.provider)] ? r : undefined;
   const utilityModelId = (override?: string) => override ?? auxiliaryModelFor(baseModelId());
   return {
     ...(opts.modelGateway ? { gateway: opts.modelGateway } : {}),

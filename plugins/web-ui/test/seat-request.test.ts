@@ -4,7 +4,6 @@ import {
   argsTemplate,
   buildMove,
   draftFromBlocks,
-  leftLabel,
   messageViews,
   renderBlock,
   systemTexts,
@@ -137,12 +136,4 @@ test("a model's answer becomes an editable draft", () => {
     ]),
     { text: "First.\n\nSecond.", calls: [{ name: "execute", args: '{\n  "command": "ls"\n}' }] },
   );
-});
-
-test("time left reads in minutes, then seconds in the last minute", () => {
-  const now = 1_000_000;
-  assert.equal(leftLabel(now + 4 * 60_000 + 59_000, now), "4m left");
-  assert.equal(leftLabel(now + 59_000, now), "59s left");
-  assert.equal(leftLabel(now - 5000, now), "0s left");
-  assert.equal(leftLabel(now + 2 * 3_600_000, now), "2h left");
 });

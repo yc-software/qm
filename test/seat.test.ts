@@ -152,14 +152,6 @@ test("cancelling the turn withdraws the step", async () => {
   });
 });
 
-test("an unanswered step times out with an error the turn can show", async () => {
-  const seat = seats(testDatabaseUrl(), { timeoutMs: 200 });
-  const message = await play(seat, "alice");
-  assert.equal(message.stopReason, "error");
-  assert.match(message.errorMessage ?? "", /No move was made at the Agent Seat/);
-  assert.deepEqual(await seat.pending(ambientTenant(), "alice"), []);
-});
-
 test("a step whose run ended is no longer offered or answerable, and a retried call replaces it", async () => {
   const url = testDatabaseUrl();
   const crashed = seats(url);

@@ -34,7 +34,7 @@ export function waitForClientResult(
   signals: RunSignalStore,
   runId: string,
   callId: string,
-  opts: { timeoutMs: number; signal?: AbortSignal },
+  opts: { timeoutMs?: number; signal?: AbortSignal },
 ): Promise<ClientToolResult | "timeout" | "cancelled"> {
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -78,7 +78,7 @@ export function waitForClientResult(
         checking = false;
       }
     };
-    const timer = setTimeout(() => finish("timeout"), opts.timeoutMs);
+    const timer = opts.timeoutMs === undefined ? undefined : setTimeout(() => finish("timeout"), opts.timeoutMs);
     const checkInBackground = (): void => {
       check().catch(swallowAs("client result check", undefined));
     };

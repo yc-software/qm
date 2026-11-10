@@ -56,7 +56,6 @@ export const seatRoutes: ReadonlyArray<Route<ApiCtx>> = [
     browser: "self",
     auth: "source",
     actor: "body.principalId",
-    maxBodyBytes: 2_000_000,
     handle: (ctx) =>
       seated(ctx, bodyPrincipal(ctx), async (owner) => {
         await ctx.deps.seat!.move(tenantOf(ctx), owner, ctx.params.id!, isObj(ctx.body) ? ctx.body.content : undefined);

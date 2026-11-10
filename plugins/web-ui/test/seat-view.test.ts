@@ -7,7 +7,6 @@ const step = {
   sessionId: "s1",
   sessionTitle: "Fix the build",
   createdAt: Date.now() - 5000,
-  expiresAt: Date.now() + 5 * 60_000 + 30_000,
   request: {
     model: "claude-test",
     max_tokens: 4096,
@@ -88,8 +87,6 @@ test("the oldest step opens with its request text, and a tool call move is sent"
   assert.match(text, /You are QM, a helpful assistant\./);
   assert.match(text, /Why is CI red\?/);
   assert.match(text, /Run a shell command\./);
-  assert.match(host.querySelector(".seat-step-age")!.textContent!, /· 5m left$/);
-  assert.equal(host.querySelector(".seat-step-head .seat-left")!.textContent, "5m left");
   button(host, "Add tool call").click();
   await until(() => Boolean(host.querySelector(".seat-call select")));
   const select = host.querySelector<HTMLSelectElement>(".seat-call select")!;

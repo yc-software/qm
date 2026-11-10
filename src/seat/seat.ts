@@ -33,7 +33,6 @@ interface SeatStepSummary {
   id: string;
   sessionId: string;
   createdAt: number;
-  expiresAt: number;
 }
 
 interface SeatStep extends SeatStepSummary {
@@ -50,8 +49,8 @@ export type SeatErrorCode = "feature_disabled" | "step_closed" | "bad_request" |
 
 export class SeatError extends Error {
   readonly code: SeatErrorCode;
-  constructor(code: SeatErrorCode, message: string) {
-    super(message);
+  constructor(code: SeatErrorCode, message: string, options?: ErrorOptions) {
+    super(message, options);
     this.code = code;
   }
 }
@@ -75,14 +74,12 @@ export interface SeatOptions {
   ask(request: Record<string, unknown>, signal: AbortSignal): Promise<SeatDraft>;
   signals: RunSignalStore;
   runLive(runId: string): Promise<boolean>;
-  timeoutMs?: number;
 }
 
 export const SEAT_OFF =
   "Agent Seat is off for you. An org admin can turn on the agent_seat feature flag for your personal scope.";
 export const SEAT_PERSONAL_ONLY = "You (Agent Seat) only plays in your own personal conversations.";
 const SEAT_CLOSED = "This step is no longer waiting for a move. It was answered, cancelled, or timed out.";
-const TIMEOUT_MS = 30 * 60_000;
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS seat_steps(
@@ -188,14 +185,6 @@ export function seatRuntime(
     model.provider === SEAT_MODEL_ID
       ? seat.streamSimple(model, context, options, runId)
       : streamSimple(model, context, options)) as typeof runtime.streamSimple;
-  const hasConfiguredAuth = runtime.hasConfiguredAuth.bind(runtime);
-  runtime.hasConfiguredAuth = (provider) => provider === SEAT_MODEL_ID || hasConfiguredAuth(provider);
-  const getAuth = runtime.getAuth.bind(runtime);
-  runtime.getAuth = (async (model, overrides) => {
-    if (typeof model === "string") return getAuth(model, overrides);
-    if (model.provider === SEAT_MODEL_ID) return { auth: { apiKey: SEAT_MODEL_ID }, source: SEAT_MODEL_ID };
-    return getAuth(model, overrides);
-  }) as typeof runtime.getAuth;
   return runtime;
 }
 
@@ -222,7 +211,7 @@ export function seatAsk(routes: Pick<ModelRoutes, "baseModelId" | "route">): Sea
         ),
       )
       .catch((error: unknown) => {
-        throw new SeatError("ask_failed", errMessage(error));
+        throw new SeatError("ask_failed", errMessage(error), { cause: error });
       });
     if (result.stopReason === "error" || result.stopReason === "aborted")
       throw new SeatError("ask_failed", result.errorMessage || `${model.id} did not answer.`);
@@ -235,7 +224,6 @@ export function createSeat(connectionString: string, opts: SeatOptions): Seat {
     { id: "seat/0001", statements: SCHEMA },
     ...tenantTables("seat/0002-tenants", [{ table: "seat_steps", primaryKey: "id" }]),
   ]);
-  const timeoutMs = opts.timeoutMs ?? TIMEOUT_MS;
 
   async function hold(
     tenant: Tenant,
@@ -257,10 +245,8 @@ export function createSeat(connectionString: string, opts: SeatOptions): Seat {
       [tenant.id, id, actorId, sessionId, runId, JSON.stringify(request)],
     );
     try {
-      const outcome = await waitForClientResult(opts.signals, runId, id, { timeoutMs, ...(signal ? { signal } : {}) });
-      if (outcome === "cancelled") throw new DOMException("The turn was cancelled", "AbortError");
-      if (outcome === "timeout")
-        throw new Error(`No move was made at the Agent Seat within ${Math.round(timeoutMs / 60_000)} minutes.`);
+      const outcome = await waitForClientResult(opts.signals, runId, id, signal ? { signal } : {});
+      if (typeof outcome === "string") throw new DOMException("The turn was cancelled", "AbortError");
       return seatResponse(outcome.structured as SeatBlock[]);
     } finally {
       await db
@@ -294,7 +280,6 @@ export function createSeat(connectionString: string, opts: SeatOptions): Seat {
       id: row.id as string,
       sessionId: row.session_id as string,
       createdAt: Number(row.created_at),
-      expiresAt: Number(row.created_at) + timeoutMs,
       request: JSON.parse(row.request as string) as Record<string, unknown>,
     };
   }
@@ -339,7 +324,6 @@ export function createSeat(connectionString: string, opts: SeatOptions): Seat {
         id: row.id as string,
         sessionId: row.session_id as string,
         createdAt: Number(row.created_at),
-        expiresAt: Number(row.created_at) + timeoutMs,
       }));
     },
 
