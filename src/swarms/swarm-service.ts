@@ -7,7 +7,7 @@ import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import type { ProcessRecord, ProcessRegistry } from "../processes/process-registry.ts";
-import type { SandboxResource, SandboxResources } from "../sandbox/sandbox-resources.ts";
+import { SandboxAccessError, type SandboxResource, type SandboxResources } from "../sandbox/sandbox-resources.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import { sleep, withTimeout } from "../util/async.ts";
@@ -244,7 +244,7 @@ export function createSwarmService(deps: {
   enabled?(actorId: string): Promise<boolean>;
   signals?: Pick<RunSignalStore, "send">;
   defaults?: SwarmSettings;
-  processes?: Pick<ProcessRegistry, "liveByScope" | "markStatus">;
+  processes?: Pick<ProcessRegistry, "listLive" | "markStatus">;
   stopProcess?: (job: ProcessRecord) => Promise<void>;
 }): SwarmService {
   const enabledFor = deps.enabled ?? (async () => true);
@@ -255,17 +255,28 @@ export function createSwarmService(deps: {
     if (!swarm.template.botActor) return;
     const lostSwarm = (run: Run | null): boolean =>
       run?.request.botActor === true && !botMayWorkIn(swarm, run.request.conversation.threadRef, run.request.actor.id);
-    const active = await runs.activeForThreads(swarm.members.map((member) => member.threadRef));
-    await Promise.all(
-      [...active.values()]
-        .filter((run) => run.status === "running" && lostSwarm(run))
-        .map((run) => deps.signals?.send(run.id, { kind: "abort", reason })),
-    );
-    const { processes, stopProcess } = deps;
-    if (!processes || !stopProcess) return;
     const computers = new Set(swarm.members.flatMap((member) => (member.sandboxId ? [member.sandboxId] : [])));
     if (swarm.board) computers.add(swarm.board.sandboxId);
-    const jobs = (await processes.liveByScope(swarm.scopeId)).filter(
+    const holders = await Promise.all(
+      [...computers].map((id) =>
+        deps.sandboxes.get(id).then(
+          (computer) => computer.holders ?? [],
+          (error: unknown) => {
+            if (error instanceof SandboxAccessError) return [];
+            throw error;
+          },
+        ),
+      ),
+    );
+    const active = await runs.activeForThreads(swarm.members.map((member) => member.threadRef));
+    const held = await Promise.all([...new Set(holders.flat())].map((runId) => runs.get(runId)));
+    const running = new Set(
+      [...active.values(), ...held].flatMap((run) => (run?.status === "running" && lostSwarm(run) ? [run.id] : [])),
+    );
+    await Promise.all([...running].map((runId) => deps.signals?.send(runId, { kind: "abort", reason })));
+    const { processes, stopProcess } = deps;
+    if (!processes || !stopProcess) return;
+    const jobs = (await processes.listLive()).filter(
       (job) => job.sandboxId && computers.has(job.sandboxId) && job.runId,
     );
     const lost = await Promise.all(jobs.map(async (job) => lostSwarm(await runs.get(job.runId!))));

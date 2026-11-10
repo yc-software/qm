@@ -200,6 +200,14 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
           launched = true;
           await register(processId);
         }
+        try {
+          await deps.assertComputerUsable?.(sandboxId);
+        } catch (error) {
+          await deps.sandbox.signalProcess(handle, processId, "KILL");
+          await deps.registry.markStatus(processId, "reaped");
+          await deps.onExit?.(handle, processId);
+          throw error;
+        }
 
         const { output, cursor, status } = await pollProcess(deps.sandbox, handle, processId, {
           deadlineMs: POLL_MS,

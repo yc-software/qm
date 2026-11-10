@@ -77,11 +77,11 @@ function recordRuns(f: Fixture): Array<{ on: string; command: string }> {
   return ran;
 }
 
-function channelRequest(f: Fixture, actor: Principal, botActor: boolean): OrchestratorInput {
+function channelRequest(f: Fixture, actor: Principal, botActor: boolean, thread = f.root.threadRef): OrchestratorInput {
   return {
     surface: "slack",
     actor,
-    conversation: { kind: "channel", threadRef: f.root.threadRef, channelRef: "C1", audience: [actor] },
+    conversation: { kind: "channel", threadRef: thread, channelRef: "C1", audience: [actor] },
     origin: { kind: "human", messageTs: "1700000000.000100" },
     ...(botActor ? { botActor: true } : {}),
     text: "check on the swarm's computers",
@@ -430,7 +430,7 @@ test("a bot's turn loses the swarm computer it already opened once a person send
   );
 });
 
-function jobComputers() {
+function jobComputers(beforeStart?: () => Promise<unknown>) {
   const output = new Map<string, string>();
   const reads: string[] = [];
   const signals: string[] = [];
@@ -457,6 +457,7 @@ function jobComputers() {
     async teardown() {},
     async destroyScope() {},
     async startProcess(_handle, command) {
+      await beforeStart?.();
       const processId = `bg-${output.size + 1}`;
       output.set(processId, `${command}\n`);
       return { processId };
@@ -598,7 +599,7 @@ async function botBoardJob(f: Fixture, processes: ProcessRegistry) {
     { processes },
   );
   await f.runs.complete(queued.id, (await f.runs.get(queued.id))!.leaseToken!, { status: "ok", reply: "started" });
-  const job = (await processes.listLive()).find((rec) => rec.sandboxId === board);
+  const job = (await processes.listByScope(f.root.scopeId)).find((rec) => rec.sandboxId === board);
   assert.ok(job, String(started));
   return job;
 }
@@ -617,24 +618,28 @@ const reaped = (processes: ProcessRegistry, processId: string) =>
   settle(async () => (await processes.get(processId))?.status === "reaped");
 
 test("a Slack bot's turn running on its swarm's computer is told to stop once a person sends work into the swarm", async () => {
-  const signals = createPostgresRunSignalStore(testDatabaseUrl());
-  const f = await botSwarm({ signals });
-  const swarm = (await f.store.get(f.root.id))!;
-  const worker = swarm.members.find((member) => member.id !== swarm.id)!;
-  await f.sandboxes.setDefault(alice.id, f.root.scopeId, swarm.board!.sandboxId);
-  const { run: queued } = await f.runs.enqueue({
-    sessionId: f.root.threadRef,
-    request: channelRequest(f, releaseBot, true),
-    maxAttempts: 1,
-  });
-  const observed = await drive(f, queued, async (_call, run) => {
-    await f.service.send(
-      { kind: "human", actorId: alice.id, sessionId: f.root.id },
-      { requestId: "person-send", audience: [worker.id], text: "alice's work" },
-    );
-    return { status: run.status, stops: (await signals.pending(run.id)).map(({ signal }) => signal.kind) };
-  });
-  assert.deepEqual(observed, { status: "running", stops: ["abort"] });
+  for (const elsewhere of [false, true]) {
+    const signals = createPostgresRunSignalStore(testDatabaseUrl());
+    const f = await botSwarm({ signals });
+    const swarm = (await f.store.get(f.root.id))!;
+    const worker = swarm.members.find((member) => member.id !== swarm.id)!;
+    await f.sandboxes.setDefault(alice.id, f.root.scopeId, swarm.board!.sandboxId);
+    const thread = elsewhere ? `slack:C1:${f.root.id}` : f.root.threadRef;
+    const { run: queued } = await f.runs.enqueue({
+      sessionId: thread,
+      request: channelRequest(f, releaseBot, true, thread),
+      maxAttempts: 1,
+    });
+    const observed = await drive(f, queued, async (call, run) => {
+      await call("execute", { command: "cat board.md", purpose: "Reading the board" });
+      await f.service.send(
+        { kind: "human", actorId: alice.id, sessionId: f.root.id },
+        { requestId: "person-send", audience: [worker.id], text: "alice's work" },
+      );
+      return { status: run.status, stops: (await signals.pending(run.id)).map(({ signal }) => signal.kind) };
+    });
+    assert.deepEqual(observed, { status: "running", stops: ["abort"] }, thread);
+  }
 });
 
 test("a background job a Slack bot started on its swarm's computer stops once a person's send into the swarm completes", async () => {
@@ -643,9 +648,9 @@ test("a background job a Slack bot started on its swarm's computer stops once a 
   let lookupFailures = 0;
   const processes: ProcessRegistry = {
     ...registry,
-    async liveByScope(scopeId, now) {
+    async listLive(now) {
       if (lookupFailures-- > 0) throw new Error("process registry unavailable");
-      return registry.liveByScope(scopeId, now);
+      return registry.listLive(now);
     },
   };
   const { stopped, stopProcess } = jobStops(computers.backend);
@@ -653,6 +658,13 @@ test("a background job a Slack bot started on its swarm's computer stops once a 
   const swarm = (await f.store.get(f.root.id))!;
   const worker = swarm.members.find((member) => member.id !== swarm.id)!;
   const botJob = await botBoardJob(f, processes);
+  const otherChannelJob = await processes.register({
+    ...botJob,
+    sandboxId: botJob.sandboxId!,
+    processId: `c2-${f.root.id}`,
+    scopeId: "channel:C2",
+    ttlMs: 600_000,
+  });
   const bot = await f.rootTurn(releaseBot.id, true);
   await f.service.send(bot.caller, { requestId: "bot-send", audience: [worker.id], text: "more bot work" });
   await bot.done();
@@ -677,8 +689,9 @@ test("a background job a Slack bot started on its swarm's computer stops once a 
   await personSend();
   await person.done();
   await reaped(processes, botJob.processId);
-  assert.deepEqual(stopped, [botJob.processId]);
-  assert.deepEqual(computers.signals, [botJob.processId]);
+  await reaped(processes, otherChannelJob.processId);
+  assert.deepEqual(stopped.sort(), [botJob.processId, otherChannelJob.processId].sort());
+  assert.deepEqual(computers.signals.sort(), [botJob.processId, otherChannelJob.processId].sort());
   assert.equal((await processes.get(aliceJob.processId))?.status, "running");
 });
 
@@ -709,4 +722,18 @@ test("a background job a Slack bot started on its swarm's computer stops once a 
   await f.runs.complete(run.id, (await f.runs.get(run.id))!.leaseToken!, { status: "ok", reply: "done" });
   await reaped(processes, botJob.processId);
   assert.deepEqual(computers.signals, [botJob.processId]);
+});
+
+test("a background job a Slack bot launches on its swarm's computer as a person sends work into the swarm stops once it starts", async () => {
+  const computers = jobComputers(() =>
+    f.service.send(
+      { kind: "human", actorId: alice.id, sessionId: f.root.id },
+      { requestId: "person-send", audience: "all", text: "alice's work" },
+    ),
+  );
+  const processes = createPostgresProcessRegistry(testDatabaseUrl());
+  const { stopProcess } = jobStops(computers.backend);
+  const f = await botSwarm({ backend: computers.backend, processes, stopProcess });
+  const job = await botBoardJob(f, processes);
+  assert.deepEqual([job.status, computers.signals], ["reaped", [job.processId]]);
 });
