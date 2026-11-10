@@ -15,6 +15,7 @@ import type { Agent } from "../src/agent/agent.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { Conversation, Principal } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { orchestratorTestDeps } from "./support/orchestrator-deps.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresErrorLog } from "../src/admin/postgres-error-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
@@ -43,9 +44,10 @@ test("an ambient message whose reply detection fails stays silent and leaves the
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const errors = createPostgresErrorLog(testDatabaseUrl());
   const orch = createOrchestrator({
-    ...singleProcessDeps(),
+    ...orchestratorTestDeps(),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     resolution: createResolutionService("default-org", config, acl),
+    config,
     sessions: createPostgresSessionStore(testDatabaseUrl()),
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: {
