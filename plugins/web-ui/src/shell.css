@@ -1932,6 +1932,13 @@ a.chat-row-open {
   line-height: 1.4;
   pointer-events: auto;
 }
+.source-caption {
+  margin: 0 0 2px;
+  font-size: max(min(12px, var(--chat-font-size)), calc(var(--chat-font-size) * var(--text-scale)));
+  line-height: 1.4;
+  color: var(--muted-foreground);
+  user-select: none;
+}
 .named-user-row > .speaker-label {
   max-width: 72%;
   margin-right: 12px;

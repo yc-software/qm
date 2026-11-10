@@ -4,7 +4,7 @@ import "./slack-reply";
 import type { SlackReply } from "./slack-reply";
 import { assistantSidebar, assistantMessage } from "./assistant-sidebar";
 import { formatMessageTime } from "./message-time.ts";
-import { assistantSpeakerText } from "./via-label.ts";
+import { assistantSpeakerText, sourceText } from "./via-label.ts";
 import { messageEntrySeqs, highlightMessage } from "./message-link.ts";
 import { appEditSlug } from "../../chassis/src/app-edit";
 import { isConnectionReturn } from "./connection-return";
@@ -1971,10 +1971,13 @@ export function createChatSurface(
     const forkable = Boolean(chatState.threadRef && chatState.sessionId && chatState.agent);
     const forking = pendingFork !== null;
     const speaker = speakerLabelFor(message);
+    const via = message.role === "assistant" ? (message as AssistantWork).via : undefined;
     const speakerLabel =
-      message.role === "assistant" && (chatState.labelSpeakers || (message as AssistantWork).via)
-        ? assistantSpeakerText(chatState.assistantSpeakerLabel || brandName(), (message as AssistantWork).via)
-        : speaker && `${speaker}\n${speakerMember(message)?.avatarUrl ?? ""}`;
+      message.role === "assistant" && chatState.labelSpeakers
+        ? assistantSpeakerText(chatState.assistantSpeakerLabel || brandName(), via)
+        : via
+          ? sourceText(via)
+          : speaker && `${speaker}\n${speakerMember(message)?.avatarUrl ?? ""}`;
     const edited = Boolean((message as { edited?: boolean }).edited);
     const deleted = Boolean((message as { deleted?: boolean }).deleted);
     const day = new Date().toDateString();
@@ -2208,7 +2211,7 @@ export function createChatSurface(
           meta: isStreaming ? nothing : messageMeta(msg, index),
         });
       const via = (msg as AssistantWork).via;
-      const labeled = chatState.labelSpeakers || Boolean(via);
+      const labeled = chatState.labelSpeakers;
       return html`
         <article
           class="message-row assistant-row ${labeled ? "named-assistant-row" : ""} ${isStreaming ? "streaming" : ""}"
@@ -2222,7 +2225,9 @@ export function createChatSurface(
               ? html`<div class="speaker-label">
                   ${brandMark()}<span>${assistantSpeakerText(chatState.assistantSpeakerLabel || brandName(), via)}</span>${speakerTime(msg)}
                 </div>`
-              : nothing
+              : via
+                ? html`<div class="source-caption">${sourceText(via)}</div>`
+                : nothing
           }
           <div class="assistant-body">
             ${workView} ${assistantContent(msg, isStreaming, showWork)} ${assistantFileList(deliveredFiles)}

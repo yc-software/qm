@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { itemsToMessages, type AssistantWork } from "../src/core-bridge.ts";
-import { assistantSpeakerText } from "../src/via-label.ts";
+import { assistantSpeakerText, sourceText } from "../src/via-label.ts";
 import type { Item } from "../src/items.ts";
 
 const item = (seq: number, over: Partial<Item>): Item =>
@@ -31,4 +31,10 @@ test("an automated post names its source in the assistant speaker label", () => 
   assert.equal(assistantSpeakerText("QM", "webhook"), "QM · Webhook");
   assert.equal(assistantSpeakerText("QM", "monitor"), "QM · Monitor");
   assert.equal(assistantSpeakerText("QM", undefined), "QM");
+});
+
+test("an automated post in an unlabelled conversation is captioned with its source alone", () => {
+  assert.equal(sourceText("cron"), "Scheduled task");
+  assert.equal(sourceText("webhook"), "Webhook");
+  assert.equal(sourceText("monitor"), "Monitor");
 });
