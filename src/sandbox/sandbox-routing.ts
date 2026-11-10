@@ -193,7 +193,7 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
       return resources.use(
         resourceId,
         async () => {
-          const held = parks && !!(await resources.get(resourceId)).holders?.length;
+          const held = parks && (await resources.inUse(resourceId));
           return forHandle(handle).teardown(handle, held ? { ...tdOpts, keepWarm: true } : tdOpts);
         },
         !!tdOpts?.destroy || parks,
