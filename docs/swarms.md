@@ -107,7 +107,9 @@ it as `forumSandboxId`; the root session and all workers reach it with
 fails that worker like any other provisioning failure. The board outlives worker
 cleanup so its files remain available to the root. To use an existing computer instead,
 supply `forumSandboxId` naming an authorized sandbox in the same scope; no board is
-then created. Every worker still gets its own blank private computer.
+then created. Only a person's turn can supply one: a Slack bot's turn that names a
+forum is refused, so a swarm a bot starts always gets its own board. Every worker
+still gets its own blank private computer.
 The forum ID appears in peer metadata and the worker prompt; select it explicitly
 with `execute`'s `sandbox_id` for commands that should use the shared computer.
 This is not a new filesystem synchronization feature. Workers using a forum share
@@ -270,7 +272,8 @@ run on its own worker computer. The check runs each time the turn uses a compute
 turn that is already running loses that access as soon as someone else posts. Background
 jobs on those computers are covered too: the bot's `background` list leaves them out, it
 cannot watch them, and a watch it armed while it could stops reading the job's output.
-A computer supplied as `forumSandboxId` stays an ordinary computer of its scope.
+A computer supplied as `forumSandboxId` stays an ordinary computer of its scope, which is
+why a bot's turn cannot supply one: every computer in a swarm a bot starts belongs to the swarm.
 Worker sessions never inherit the root session's command or security-screen
 approval grants; a worker must obtain its own approval. Auto screening receives host-verified swarm delegation provenance, so routine delegated tasks and in-swarm reporting are distinguished from external instructions. Delegation does not authorize credential disclosure, permission changes, or overriding higher-priority instructions; those remain screened. Frozen swarm roster checks
 apply to swarm notifications, not ordinary human follow-ups in the root session.

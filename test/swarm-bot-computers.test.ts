@@ -38,6 +38,8 @@ const releaseBot: Principal = { id: "release-bot", type: "internal", displayName
 const alice: Principal = { id: "alice", type: "internal" };
 const refusedDirection = "a Slack bot's turn cannot direct a person's swarm";
 const refusedComputer = "a Slack bot's turn cannot use the computers of a person's swarm";
+const refusedForum =
+  "a Slack bot's turn cannot supply forumSandboxId; spawn without it and the swarm gets its own board computer";
 
 type Fixture = Awaited<ReturnType<typeof swarmFixture>>;
 
@@ -505,4 +507,31 @@ test("a bot's watch of a job in a swarm only it directs stops reading the job on
   assert.equal(computers.reads.length, reads);
   const [monitor] = await monitors.list();
   assert.deepEqual([monitor?.enabled, monitor?.lastError], [false, refusedComputer]);
+});
+
+test("a Slack bot's turn cannot supply a forum computer for its swarm while a person still can", async () => {
+  const f = await channelSwarm();
+  if (f.caller.kind !== "agent") throw new Error("wrong caller");
+  await f.sessions.addParticipant(f.root.id, releaseBot.id);
+  await f.runs.complete(f.caller.claims.runId!, f.caller.claims.runLeaseToken!, { status: "ok", reply: "idle" });
+  const forum = await f.sandboxes.create(alice.id, f.root.scopeId, "modal", "Shared notes");
+  const spawnWithForum = async (actorId: string, botActor: boolean) => {
+    const turn = await f.rootTurn(actorId, botActor);
+    const outcome = await f.service
+      .spawn(turn.caller, { requestId: `${actorId}-forum`, text: "work", forumSandboxId: forum.id })
+      .then(
+        (members) => members.map((member) => member.forumSandboxId),
+        (error: unknown) => errMessage(error),
+      );
+    await turn.done();
+    return outcome;
+  };
+  const bot = await spawnWithForum(releaseBot.id, true);
+  const afterBot = (await f.store.get(f.root.id)) ?? null;
+  const person = await spawnWithForum(alice.id, false);
+  const swarm = (await f.store.get(f.root.id))!;
+  assert.deepEqual(
+    { bot, afterBot, person, board: swarm.board },
+    { bot: refusedForum, afterBot: null, person: [forum.id], board: undefined },
+  );
 });
