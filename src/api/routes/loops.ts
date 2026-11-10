@@ -1,3 +1,4 @@
+import { canAdministerLoop } from "../loop-administration.ts";
 import { LOOP_ICON_ERROR, validLoopIcon } from "../../loops/loop-store.ts";
 import { boundLoopCron } from "../../loops/authority.ts";
 import { unattendedGrantRefusal } from "../../cron/authority.ts";
@@ -82,16 +83,6 @@ function requireLiveHuman(ctx: ApiCtx, acting: ActingPrincipal): boolean {
   if (acting.liveHuman) return true;
   sendJson(ctx.res, 403, { error: "human_required", message: "this action requires a live human actor" });
   return false;
-}
-
-export async function canAdministerLoop(
-  app: Pick<ApiCtx["app"], "membershipControlsScope" | "managesScope" | "samePerson">,
-  loop: Loop,
-  actorId: string,
-): Promise<boolean> {
-  if (await app.membershipControlsScope(loop.ownerScopeId)) return app.managesScope(actorId, loop.ownerScopeId);
-  if (await app.samePerson(loop.owner, actorId)) return true;
-  return app.managesScope(actorId, loop.ownerScopeId);
 }
 
 export async function loadAdministrable(
@@ -335,10 +326,8 @@ async function listLoops(ctx: ApiCtx): Promise<void> {
   const acting = actingPrincipal(ctx);
   if (!acting) return;
   const all = await deps.store.list();
-  const visible: Loop[] = [];
-  for (const loop of all) {
-    if (await canAdministerLoop(ctx.app, loop, acting.actorId)) visible.push(loop);
-  }
+  const permissions = await ctx.app.loopAdministration(acting.actorId, all);
+  const visible = all.filter((_loop, i) => permissions[i]);
   return sendJson(ctx.res, 200, { loops: visible });
 }
 

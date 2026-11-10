@@ -15,7 +15,14 @@ import { audit, requireScopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 import { requireScopedResource } from "./common.ts";
 import { activityCounts, scopeActivity } from "./scope-activity.ts";
-import { deliveryOrigin, parseSessionWakeRef, sessionKind, sessionOrigin, type AdminSessionOrigin } from "./origins.ts";
+import {
+  cronOrigins,
+  deliveryOrigin,
+  parseSessionWakeRef,
+  sessionKind,
+  sessionOrigin,
+  type AdminSessionOrigin,
+} from "./origins.ts";
 
 const SESSIONS_PAGE_LIMIT_MAX = 200;
 const SESSIONS_PAGE_LIMIT_DEFAULT = 50;
@@ -66,51 +73,58 @@ async function deliveryProvenanceSidecars(
     if (group) group.push(d);
     else bySource.set(key, [d]);
   }
-  await Promise.all(
-    [...bySource.values()].map(async (group) => {
-      const provenance = group[0]!.provenance!;
-      const sourceSession = provenance.sourceSessionId
-        ? await deps.sessions?.get(provenance.sourceSessionId)
-        : await deps.sessions?.getByThread(provenance.sourceThreadRef);
-      if (!sourceSession || (!orgWide && sourceSession.scopeId !== requestedScope)) {
-        for (const d of group) out.set(d.id, { provenance: d.provenance! });
-        return;
+  const sources =
+    (await deps.sessions?.getMany({
+      ids: [...bySource.values()].flatMap((group) => group[0]!.provenance!.sourceSessionId ?? []),
+      threadRefs: [...bySource.values()].flatMap((group) =>
+        group[0]!.provenance!.sourceSessionId ? [] : [group[0]!.provenance!.sourceThreadRef],
+      ),
+    })) ?? [];
+  const byId = new Map(sources.map((source) => [source.id, source]));
+  const byThread = new Map(sources.map((source) => [source.threadRef, source]));
+  const allowed = [...bySource.values()].flatMap((group) => {
+    const provenance = group[0]!.provenance!;
+    const sourceSession = provenance.sourceSessionId
+      ? byId.get(provenance.sourceSessionId)
+      : byThread.get(provenance.sourceThreadRef);
+    for (const d of group) out.set(d.id, { provenance: d.provenance! });
+    return sourceSession && (orgWide || sourceSession.scopeId === requestedScope) ? [{ group, sourceSession }] : [];
+  });
+  const ranges = new Map<string, number>();
+  for (const { group, sourceSession } of allowed)
+    for (const d of group) {
+      const seq = d.provenance!.sourceUserSeq;
+      if (seq !== undefined) ranges.set(sourceSession.id, Math.min(ranges.get(sourceSession.id) ?? Infinity, seq));
+    }
+  const entries =
+    (await deps.sessions?.userItemSeqs([...ranges].map(([sessionId, sinceSeq]) => ({ sessionId, sinceSeq })))) ?? [];
+  const perDelivery = allowed.flatMap(({ group, sourceSession }) =>
+    group.map((d) => {
+      const p = d.provenance!;
+      const turnSeqs = new Set<number>();
+      if (p.sourceUserSeq !== undefined) {
+        turnSeqs.add(p.sourceUserSeq);
+        for (const e of entries)
+          if (
+            e.sessionId === sourceSession.id &&
+            e.seq >= p.sourceUserSeq &&
+            (p.sourceAssistantEntrySeq === undefined || e.seq <= p.sourceAssistantEntrySeq)
+          )
+            turnSeqs.add(e.seq);
       }
-      const seqBounds = group.map((d) => d.provenance!.sourceUserSeq).filter((s): s is number => s !== undefined);
-      const sourceEntries =
-        seqBounds.length && deps.sessions
-          ? (
-              await createTranscriptSource(deps.sessions).forRender(sourceSession.id, {
-                sinceSeq: Math.min(...seqBounds),
-              })
-            ).items
-          : [];
-      const turnSeqsFor = (p: DeliveryProvenance): Set<number> => {
-        const seqs = new Set<number>();
-        if (p.sourceUserSeq === undefined) return seqs;
-        for (const e of sourceEntries) {
-          if (e.seq < p.sourceUserSeq) continue;
-          if (p.sourceAssistantEntrySeq !== undefined && e.seq > p.sourceAssistantEntrySeq) continue;
-          if (isUserItem(e)) seqs.add(e.seq);
-        }
-        seqs.add(p.sourceUserSeq);
-        return seqs;
-      };
-      const perDelivery = group.map((d) => ({ d, turnSeqs: turnSeqsFor(d.provenance!) }));
-      const allTurnSeqs = new Set(perDelivery.flatMap(({ turnSeqs }) => [...turnSeqs]));
-      const requests = allTurnSeqs.size
-        ? ((await deps.sessions?.listLlmRequests(sourceSession.id, { turnSeqs: [...allTurnSeqs] })) ?? [])
-        : [];
-      for (const { d, turnSeqs } of perDelivery) {
-        const own = requests.filter((r) => r.turnSeq !== null && turnSeqs.has(r.turnSeq));
-        out.set(d.id, {
-          provenance: d.provenance!,
-          sourceSession,
-          ...(own.length ? { llmRequests: own } : {}),
-        });
-      }
+      return { d, sourceSession, turnSeqs };
     }),
   );
+  const turns = perDelivery.flatMap(({ sourceSession, turnSeqs }) =>
+    [...turnSeqs].map((turnSeq) => ({ sessionId: sourceSession.id, turnSeq })),
+  );
+  const requests = (await deps.sessions?.listLlmRequestsForTurns(turns)) ?? [];
+  for (const { d, sourceSession, turnSeqs } of perDelivery) {
+    const own = requests.filter(
+      (r) => r.sessionId === sourceSession.id && r.turnSeq !== null && turnSeqs.has(r.turnSeq),
+    );
+    out.set(d.id, { provenance: d.provenance!, sourceSession, ...(own.length ? { llmRequests: own } : {}) });
+  }
   return out;
 }
 
@@ -185,8 +199,7 @@ export async function listAdminSessions(ctx: ApiCtx): Promise<void> {
     const wake = parseSessionWakeRef(s.threadRef);
     if (wake?.trigger === "cron") pageCronIds.add(wake.sourceId);
   }
-  const pageCrons = await Promise.all([...pageCronIds].map(async (id) => [id, await app.getCron(id)] as const));
-  const cronLookup = new Map(pageCrons.flatMap(([id, cron]) => (cron ? [[id, cron] as const] : [])));
+  const cronLookup = new Map((await app.listCrons([...pageCronIds])).map((cron) => [cron.id, cron]));
   const sessions = await Promise.all(
     summaries.map(async (s) => {
       const cronRow = parseSessionWakeRef(s.threadRef)?.trigger === "cron";
@@ -262,6 +275,10 @@ export async function getAdminSession(ctx: ApiCtx): Promise<void> {
   const sourceDeliveries = deps.deliveries
     ? await deps.deliveries.listBySourceSession(session.id, session.threadRef, { limit: 100 })
     : [];
+  const cronLookup = await cronOrigins(app, [
+    session.threadRef,
+    ...[...recipientDeliveries, ...sourceDeliveries].map((d) => d.provenance?.fireKey ?? d.idempotencyKey),
+  ]);
   const sidecars = await deliveryProvenanceSidecars(deps, recipientDeliveries, scope);
   const recipientDeliveryEvents = await Promise.all(
     recipientDeliveries.map(async (d) => {
@@ -275,7 +292,7 @@ export async function getAdminSession(ctx: ApiCtx): Promise<void> {
         createdAt: d.deliveredAt ?? d.createdAt,
         idempotencyKey: d.idempotencyKey,
         provenance: d.provenance ?? null,
-        origin: await deliveryOrigin(app, d, scope),
+        origin: await deliveryOrigin(app, d, scope, cronLookup),
         ...(provenance?.sourceSession ? { sourceSession: provenance.sourceSession } : {}),
         ...(provenance?.llmRequests ? { llmRequests: provenance.llmRequests } : {}),
       };
@@ -291,7 +308,7 @@ export async function getAdminSession(ctx: ApiCtx): Promise<void> {
       createdAt: d.deliveredAt ?? d.createdAt,
       idempotencyKey: d.idempotencyKey,
       provenance: d.provenance ?? null,
-      origin: await deliveryOrigin(app, d, scope),
+      origin: await deliveryOrigin(app, d, scope, cronLookup),
       ...(d.recipientThreadRef ? { recipientThreadRef: d.recipientThreadRef } : {}),
       ...(d.deliveredAt !== null ? { deliveredAt: d.deliveredAt } : {}),
       ...(d.expiredAt !== undefined ? { expiredAt: d.expiredAt } : {}),
@@ -305,7 +322,7 @@ export async function getAdminSession(ctx: ApiCtx): Promise<void> {
     deliveryEvents,
     hasMore,
     limit,
-    origin: await sessionOrigin(app, session, scope),
+    origin: await sessionOrigin(app, session, scope, cronLookup),
   });
 }
 
@@ -322,6 +339,10 @@ export async function listAdminShadowDeliveries(ctx: ApiCtx): Promise<void> {
   });
   const orgWide = parseScopeId(scope).kind === "org";
   const rows = (await deps.deliveries?.listShadow({ limit: 200 })) ?? [];
+  const cronLookup = await cronOrigins(
+    app,
+    rows.map((d) => d.provenance?.fireKey ?? d.idempotencyKey),
+  );
   const shadow = await Promise.all(
     rows
       .filter((d) => orgWide || d.provenance?.sourceScopeId === scope)
@@ -333,7 +354,7 @@ export async function listAdminShadowDeliveries(ctx: ApiCtx): Promise<void> {
         idempotencyKey: d.idempotencyKey,
         provenance: d.provenance ?? null,
         shadow: true as const,
-        origin: await deliveryOrigin(app, d, scope),
+        origin: await deliveryOrigin(app, d, scope, cronLookup),
       })),
   );
   return sendJson(res, 200, { scopeId: scope, shadow });

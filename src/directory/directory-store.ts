@@ -60,6 +60,7 @@ export interface DirectoryStore {
   ): Promise<boolean>;
   list(): Promise<DirectoryMember[]>;
   listChannels(): Promise<DirectoryChannel[]>;
+  getMany(principalIds: readonly string[]): Promise<Map<string, DirectoryMember>>;
   get(principalId: string): Promise<DirectoryMember | null>;
   getBySlackId(slackId: string): Promise<DirectoryMember | null>;
   resolve(query: string): Promise<RecipientResolution>;

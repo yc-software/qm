@@ -145,8 +145,11 @@ test("incremental transcript reads bound entry storage and preserve windows and 
     const page = (await built.app.getSession(session.id, { sinceSeq: 490 }))!;
     assert.equal(page.items.length, 10);
     assert.equal(page.earlierItems, 490);
-    assert.equal(loadedRows, 10);
-    assert.ok(calls.every((opts) => opts?.sinceSeq === 490));
+    assert.equal(loadedRows, 11);
+    assert.deepEqual(calls, [
+      { limit: undefined, beforeSeq: undefined, sinceSeq: 490, transcript: true },
+      { seqs: [narration.seq] },
+    ]);
     const viewerPage = (await built.app.getSessionForViewer(session.id, "U1", { sinceSeq: 490 }))!;
     assert.deepEqual(viewerPage.items, page.items);
     assert.equal(viewerPage.earlierItems, 490);
