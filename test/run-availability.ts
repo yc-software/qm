@@ -442,11 +442,11 @@ test("a batch claimed as claiming pauses is handed back, and claiming resumes", 
       });
     worker.start();
     await until(() => claims === 1);
-    await sleep(50);
-    assert.deepEqual(
-      (await runs.list()).map((run) => run.status),
-      ["pending", "pending", "pending"],
-    );
+    for (const deadline = Date.now() + 3_000; ; await sleep(5)) {
+      const statuses = (await runs.list()).map((run) => run.status);
+      if (statuses.every((status) => status === "pending")) break;
+      assert.ok(Date.now() < deadline, `the claimed batch is handed back, got ${statuses.join(", ")}`);
+    }
     assert.equal(handled.length, 0);
     open = true;
     await until(() => handled.length === 3);
