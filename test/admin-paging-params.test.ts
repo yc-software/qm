@@ -9,13 +9,14 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { testMigratedDatabaseUrl } from "./support/test-database.ts";
 
 const URL = process.env.DATABASE_URL;
 
 test("admin list endpoints accept fractional limit values", { skip: !URL }, async () => {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "admin-paging-")),
-    databaseUrl: URL,
+    databaseUrl: testMigratedDatabaseUrl(),
     adminGrants: "admin-alice:org_admin",
   });
   const built = buildApp(config);

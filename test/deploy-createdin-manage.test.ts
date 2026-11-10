@@ -27,12 +27,11 @@ const CH = "CBUILT";
 const CH_OTHER = "CSHARED";
 
 async function fixture() {
-  const deployStore = createDeployStore(
-    testDeployBackings({ git: { repoRoot: mkdtempSync(join(tmpdir(), "createdin-repo-")) } }),
-  );
+  const backings = testDeployBackings({ git: { repoRoot: mkdtempSync(join(tmpdir(), "createdin-repo-")) } });
+  const deployStore = createDeployStore(backings);
   const acl: AclStore = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const directory: DirectoryStore = createPostgresDirectoryStore(testDatabaseUrl());
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const sessions = createPostgresSessionStore(backings.databaseUrl);
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore,
@@ -268,7 +267,7 @@ test("canManage: a channel write grant follows a member into their DM", async ()
       permission: "write",
       grantedBy: "U1",
     });
-    assert.equal(await f.deploy.canManageDeployment(d.id, "U3", scopeId("personal", "U3")), true);
+    assert.equal(await f.deploy.canManageDeployment(d.id, { actorId: "U3" }, scopeId("personal", "U3")), true);
   } finally {
     await f.close();
   }
@@ -285,7 +284,7 @@ test("an org write grant gives active org members git write and manage authority
       grantedBy: "U1",
     });
     assert.deepEqual(await gitPerm(f.base, d.id, "U9"), { status: 200, permission: "write" });
-    assert.equal(await f.deploy.canManageDeployment(d.id, "U9", scopeId("personal", "U9")), true);
+    assert.equal(await f.deploy.canManageDeployment(d.id, { actorId: "U9" }, scopeId("personal", "U9")), true);
   } finally {
     await f.close();
   }
@@ -310,7 +309,7 @@ test("removed channel members keep stale-session read reach but lose write and m
 
     assert.equal((await gitPerm(f.base, d.id, "U2")).status, 403);
     assert.equal(await pushStatus(beforeRemovalUrl), 403, "a write URL minted before removal is revoked at push time");
-    assert.equal(await f.deploy.canManageDeployment(d.id, "U2", scopeId("personal", "U2")), false);
+    assert.equal(await f.deploy.canManageDeployment(d.id, { actorId: "U2" }, scopeId("personal", "U2")), false);
 
     await f.acl.grant({
       ownerScopeId: d.ownerScopeId,
@@ -320,7 +319,7 @@ test("removed channel members keep stale-session read reach but lose write and m
       grantedBy: "U1",
     });
     assert.equal((await gitPerm(f.base, d.id, "U2")).status, 403);
-    assert.equal(await f.deploy.canManageDeployment(d.id, "U2", scopeId("personal", "U2")), false);
+    assert.equal(await f.deploy.canManageDeployment(d.id, { actorId: "U2" }, scopeId("personal", "U2")), false);
   } finally {
     await f.close();
   }
@@ -337,6 +336,66 @@ test("canManage: the creator may still rename", async () => {
       createdInScope: scopeId("channel", CH),
     });
     assert.equal(renamed.name, "renamed-by-creator");
+  } finally {
+    await f.close();
+  }
+});
+
+test("a Slack bot's turn in the creation channel gets neither git write nor manage authority over a person's app", async () => {
+  const { f, d } = await setup();
+  try {
+    await f.directory.replaceChannels(
+      [{ channelId: CH, name: "built", isPrivate: true }],
+      ["U1", "U2", "release-bot"].map((principalId) => ({ channelId: CH, principalId })),
+    );
+    const bot = {
+      "content-type": "application/json",
+      "x-agent-capability": await mintCapabilityToken(
+        {
+          actorId: "release-bot",
+          scopeId: scopeId("channel", CH),
+          aud: CONTROL_PLANE_AUD,
+          liveActor: true,
+          botActor: true,
+          exp: Date.now() + CAPABILITY_TTL_MS,
+        },
+        SECRET,
+      ),
+    };
+    const git = await fetch(`${f.base}/v1/deployments/${encodeURIComponent(d.id)}/git-url`, { headers: bot });
+    assert.equal(git.status === 200 ? ((await git.json()) as { permission: string }).permission : git.status, "read");
+    const archive = await fetch(`${f.base}/v1/deployments/${d.id}/archive`, {
+      method: "POST",
+      headers: bot,
+      body: "{}",
+    });
+    assert.equal(archive.status, 403);
+    assert.equal((await gitPerm(f.base, d.id, "U2")).permission, "write");
+    const own = await f.app.deploy({
+      ownerScopeId: scopeId("personal", "release-bot"),
+      createdBy: "release-bot",
+      entrypoint: "node server.js",
+      files: [{ path: "server.js", data: "console.log('bot')" }],
+      name: "bot-app",
+      createdInScope: scopeId("channel", CH),
+    });
+    const ownGit = await fetch(`${f.base}/v1/deployments/${encodeURIComponent(own.id)}/git-url`, { headers: bot });
+    assert.equal(((await ownGit.json()) as { permission: string }).permission, "write");
+    const publish = (input: { name: string; renameFrom?: string; rollbackTo?: number }) =>
+      f.deploy.deployOrUpdate({
+        ownerScopeId: scopeId("personal", "release-bot"),
+        createdBy: "release-bot",
+        botActor: true,
+        createdInScope: scopeId("channel", CH),
+        entrypoint: "node server.js",
+        files: [{ path: "server.js", data: "console.log('bot over the top')" }],
+        ...input,
+      });
+    await assert.rejects(publish({ name: "channel-app" }), /deployment name taken/);
+    await assert.rejects(publish({ name: "bot-renamed", renameFrom: "channel-app" }), /not authorized/);
+    await assert.rejects(publish({ name: "channel-app", rollbackTo: 1 }), /not authorized/);
+    assert.equal((await f.deploy.getDeployment(d.id))?.name, "channel-app");
+    assert.equal((await f.deploy.getDeployment(d.id))?.currentVersion, d.currentVersion);
   } finally {
     await f.close();
   }

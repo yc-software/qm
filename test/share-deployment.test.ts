@@ -30,6 +30,9 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import { testAdvisoryLock, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { allGrants } from "./support/acl-grants.ts";
+import { bindBootTenant } from "../src/tenants/boot.ts";
+import { TEST_TENANT } from "./support/test-tenant.ts";
+import { companyTest } from "./support/app-handle.ts";
 import { trimTrailingSlashes } from "../src/util/text.ts";
 
 const externalSharingOn = { enabled: async () => true } as unknown as FeatureFlagStore;
@@ -507,7 +510,7 @@ test("transferDeploymentOwner is home authority — a write ('manage') grantee c
     name: "kept",
   });
   await deploy.shareDeployment(d.id, scopeId("personal", "U2"), "write", { createdBy: "U1" });
-  assert.equal(await deploy.canManageDeployment(d.id, "U2"), true, "U2 can manage…");
+  assert.equal(await deploy.canManageDeployment(d.id, { actorId: "U2" }), true, "U2 can manage…");
   await assert.rejects(
     () => deploy.transferDeploymentOwner("kept", scopeId("personal", "U2"), { callerId: "U2" }),
     /only the owner/,
@@ -716,10 +719,12 @@ test("directory email recipients retain manage access", async () => {
   assert.deepEqual(await deploy.deploymentGrantees(d.id), [
     { scope: "personal:member@example.com", permission: "write" },
   ]);
-  assert.equal(await deploy.canManageDeployment(d.id, "member@example.com"), true);
+  assert.equal(await deploy.canManageDeployment(d.id, { actorId: "member@example.com" }), true);
 });
 
-test("exact email read grants admit app-only login and guest reach without membership or source access", async () => {
+test("exact email read grants admit app-only login and guest reach without membership or source access", async (t) => {
+  await bindBootTenant(async () => undefined);
+  t.after(() => bindBootTenant(async () => TEST_TENANT));
   const { deploy, acl } = makeDeploy();
   const identity = createIdentityService(testMap(), { externalMembers: testMap() });
   const directory = createPostgresDirectoryStore(testDatabaseUrl());
@@ -773,7 +778,7 @@ test("exact email read grants admit app-only login and guest reach without membe
   assert.deepEqual(await allowed("other@example.com"), { allowed: false });
   assert.equal(await app.effectiveDeploymentPermission(d, "Invitee@Example.com"), "read");
   assert.equal(await app.effectiveDeploymentPermission(d, "other@example.com"), null);
-  assert.equal(await app.deploymentGitPermissionFor(d.id, email), null);
+  assert.equal(await app.deploymentGitPermissionFor(d.id, { actorId: email }), null);
   assert.equal((await app.reachDeployment(d.id, email)).status, "ok");
   assert.equal(await app.directoryMember(email), null);
   assert.equal(identity.externalMember(email), undefined);
@@ -831,7 +836,7 @@ test("uniform app share accepts exact emails and enforces view-only outside the 
   assert.equal(moved.ok, false);
 });
 
-test("new email grants send an app-specific invitation once; re-adds and revocations send nothing", async () => {
+companyTest("new email grants send an app-specific invitation once; re-adds and revocations send nothing", async () => {
   const { deploy, acl } = makeDeploy();
   const sent: Array<{ to: string; subject: string; text: string; html: string }> = [];
   const app = createApp({
@@ -857,12 +862,12 @@ test("new email grants send an app-specific invitation once; re-adds and revocat
   await app.setDeploymentDisplayName(d.id, "Status <page>");
   const added = await callShare(app, cap("U1"), d.id, { email: "  Invitee@Example.com " });
   assert.equal(added.status, 200);
-  assert.deepEqual(added.body.invitation, { emailSent: true, appUrl: "https://status-page.apps.example.com/" });
+  assert.deepEqual(added.body.invitation, { emailSent: true, appUrl: "https://acme1-status-page.apps.example.com/" });
   assert.equal(sent.length, 1);
   assert.equal(sent[0]!.to, "invitee@example.com");
   assert.equal(sent[0]!.subject, "You've been invited to Status <page>");
   assert.match(sent[0]!.text, /Sign in using this email address \(invitee@example.com\)/);
-  assert.match(sent[0]!.text, /https:\/\/status-page\.apps\.example\.com\//);
+  assert.match(sent[0]!.text, /https:\/\/acme1-status-page\.apps\.example\.com\//);
   assert.doesNotMatch(sent[0]!.text, /single-use|token=/);
   assert.match(sent[0]!.html, /Status &lt;page&gt;/);
   const repeated = await Promise.all(
@@ -879,7 +884,7 @@ test("new email grants send an app-specific invitation once; re-adds and revocat
   assert.equal(sent.length, 2);
 });
 
-test("failed invitation delivery leaves the grant and reports the failure and manual app link", async () => {
+companyTest("failed invitation delivery leaves the grant and reports the failure and manual app link", async () => {
   for (const mailer of [
     undefined,
     {
@@ -908,14 +913,44 @@ test("failed invitation delivery leaves the grant and reports the failure and ma
     assert.equal(added.status, 200);
     assert.equal(added.body.invitation.emailSent, false);
     assert.match(added.body.invitation.emailProblem, mailer ? /mail unavailable/ : /not configured/);
-    assert.equal(added.body.invitation.appUrl, "https://status-page.apps.example.com/");
+    assert.equal(added.body.invitation.appUrl, "https://acme1-status-page.apps.example.com/");
     assert.deepEqual(await deploy.deploymentGrantees(d.id), [
       { scope: "personal:invitee@example.com", permission: "read" },
     ]);
   }
 });
 
-test("uniform app share uses the same invitation sender", async () => {
+test("a company without an app handle gets no app link in the invitation and no email", async () => {
+  const { deploy, acl } = makeDeploy();
+  const sent: string[] = [];
+  const app = createApp({
+    advisoryLock: testAdvisoryLock(),
+    deploy,
+    acl,
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    deployAppsDomain: "apps.example.com",
+    inviteMailer: {
+      async send(message: { to: string }) {
+        sent.push(message.to);
+        return "sent";
+      },
+    },
+  } as unknown as Parameters<typeof createApp>[0]);
+  const d = await app.deploy({
+    ownerScopeId: "personal:U1",
+    createdBy: "U1",
+    entrypoint: "x",
+    files: [],
+    name: "status-page",
+  });
+  const added = await callShare(app, cap("U1"), d.id, { email: "invitee@example.com" });
+  assert.equal(added.status, 200);
+  assert.equal(added.body.invitation.emailSent, false);
+  assert.equal(added.body.invitation.appUrl, undefined);
+  assert.deepEqual(sent, []);
+});
+
+companyTest("uniform app share uses the same invitation sender", async () => {
   const { deploy, acl } = makeDeploy();
   const sent: string[] = [];
   const app = createApp({

@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createLoopItemLedger, type IngestEntryInput } from "../src/loops/item-ledger.ts";
 import { createInboxRealtime } from "../src/loops/inbox-realtime.ts";
-import { renderSourceInboxTask } from "../src/loops/inbox-loop.ts";
 import { slackConversationRef } from "../src/loops/sources/slack.ts";
 import type { LedgerEvent } from "../src/loops/ledger-events.ts";
 import type { Loop } from "../src/loops/types.ts";
@@ -57,10 +56,10 @@ function realtime(items: ReturnType<typeof createLoopItemLedger>) {
   return Object.assign(rt, { calls });
 }
 
-const latest = (entries: IngressEntry[] | undefined) =>
-  entries?.map((entry) => [entry.dedupeKey, entry.sourcePayload?.latestEvent]);
+const bumps = (entries: IngressEntry[] | undefined) =>
+  entries?.map((entry) => [entry.dedupeKey, entry.source, entry.sourceAt, entry.merge, entry.sourcePayload]);
 
-test("the owner's own reply is queued as an owner event for the card's conversation", async () => {
+test("the owner's own reply bumps the card's conversation so the next pass re-verdicts it", async () => {
   const items = createLoopItemLedger(testMap());
   await items.ingest([slackEntry()]);
   const rt = realtime(items);
@@ -71,12 +70,10 @@ test("the owner's own reply is queued as an owner event for the card's conversat
     text: "on it!",
     senderEmail: "Owner@Example.com",
   });
-  assert.deepEqual(latest(rt.calls[0]), [["D123", { author: "owner", at: 2_000_000, text: "on it!" }]]);
-  assert.equal(rt.calls[0]![0]!.merge, true);
-  assert.equal(rt.calls[0]![0]!.sourceAt, 2_000_000);
+  assert.deepEqual(bumps(rt.calls[0]), [["D123", "slack", 2_000_000, true, {}]]);
 });
 
-test("someone else's messages are queued as other events with their sender", async () => {
+test("someone else's messages bump the matching card for each source", async () => {
   const items = createLoopItemLedger(testMap());
   await items.ingest([slackEntry(), gmailEntry()]);
   const rt = realtime(items);
@@ -94,31 +91,10 @@ test("someone else's messages are queued as other events with their sender", asy
     text: "any word?",
     senderEmail: "ada@example.com",
   });
-  assert.deepEqual(
-    rt.calls.map((entries) => entries.map((entry) => [entry.dedupeKey, entry.sourcePayload])),
-    [
-      [
-        [
-          "D123",
-          {
-            latestEvent: { author: "other", at: 3_000_000, from: "sam@example.com" },
-            receivedAt: 3_000_000,
-            snippet: "ping",
-          },
-        ],
-      ],
-      [
-        [
-          "gmail:t-1",
-          {
-            latestEvent: { author: "other", at: 3_001_000, from: "ada@example.com" },
-            receivedAt: 3_001_000,
-            snippet: "any word?",
-          },
-        ],
-      ],
-    ],
-  );
+  assert.deepEqual(rt.calls.map(bumps), [
+    [["D123", "slack", 3_000_000, true, {}]],
+    [["gmail:t-1", "gmail", 3_001_000, true, {}]],
+  ]);
 });
 
 test("events in unrelated conversations or other sources queue nothing", async () => {
@@ -177,7 +153,7 @@ test("a thread reply reaches a channel card anchored at the thread root", async 
     text: "done",
     senderEmail: LOOP.owner,
   });
-  assert.deepEqual(latest(rt.calls[0]), [["C9:100.1", { author: "owner", at: 2_000_000, text: "done" }]]);
+  assert.deepEqual(bumps(rt.calls[0]), [["C9:100.1", "slack", 2_000_000, true, {}]]);
 });
 
 test("slack conversation refs key DMs by channel and channel asks by thread root", () => {
@@ -194,7 +170,7 @@ test("ledger mutations emit change events", async () => {
   await items.ingest([slackEntry()]);
   const [item] = await items.byLoop(LOOP.id);
   await items.setProposal(item!.id, { data: { body: "draft" }, by: "agent" });
-  await items.recordAction(item!.id, { kind: "replied", outcome: "dismissed" });
+  await items.recordAction(item!.id, { kind: "dismiss", outcome: "dismissed" });
   assert.deepEqual(
     events.map((e) => e.op),
     ["ingest", "proposal", "action"],
@@ -204,10 +180,4 @@ test("ledger mutations emit change events", async () => {
 
 test("private-channel mentions stay anchored to their thread, not the channel tail", () => {
   assert.equal(slackConversationRef("GPRIVATE", "200.2", "100.1", false), "GPRIVATE:100.1");
-});
-
-test("the inbox sync task asks for the full waiting message", () => {
-  const task = renderSourceInboxTask("loop-inbox", "gmail");
-  assert.match(task, /snippet \(the full text of the waiting message/);
-  assert.doesNotMatch(task, /snippet \(the waiting message, <=200 chars\)/);
 });

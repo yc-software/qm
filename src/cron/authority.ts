@@ -5,16 +5,18 @@ import type { App } from "../api/app.ts";
 import type { AdminService } from "../admin/admin-service.ts";
 import { errMessage } from "../util/errors.ts";
 import { parseScopeId } from "../types.ts";
+import type { Tenant } from "../tenants/context.ts";
 import { samePerson } from "../directory/person.ts";
 import { livePersonCapability } from "../api/artifact-share.ts";
 
-type TriggerAuthority = Pick<TriggerSpec, "owner" | "ownerScopeId" | "unattendedGrants">;
+type TriggerAuthority = Pick<TriggerSpec, "owner" | "ownerScopeId" | "unattendedGrants" | "botActor">;
 
 export function cronTriggerAuthority(cron: TriggerAuthority): TriggerAuthority {
   return {
     owner: cron.owner,
     ownerScopeId: cron.ownerScopeId,
     ...(cron.unattendedGrants ? { unattendedGrants: [...cron.unattendedGrants] } : {}),
+    ...(cron.botActor ? { botActor: true } : {}),
   };
 }
 
@@ -31,6 +33,7 @@ export interface UnattendedGrantRefusal {
 export async function unattendedGrantRefusal(
   app: App,
   admin: AdminService | undefined,
+  tenant: Tenant,
   cron: Pick<Cron, "owner" | "ownerScopeId">,
   capability: Pick<CapabilityClaims, "actorId" | "liveActor" | "botActor">,
 ): Promise<UnattendedGrantRefusal | null> {
@@ -47,7 +50,7 @@ export async function unattendedGrantRefusal(
     };
   let status: Awaited<ReturnType<AdminService["adminStatusOf"]>> | undefined;
   try {
-    status = await admin?.adminStatusOf({ id: capability.actorId, type: "internal" });
+    status = await admin?.adminStatusOf(tenant, { id: capability.actorId, type: "internal" });
   } catch (e) {
     return forbidden(`unattended grants could not confirm the cron owner is a current org admin: ${errMessage(e)}`);
   }
