@@ -1129,7 +1129,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const {
         actorIsOrgAdmin,
         orgMemoryWritable,
-        tenant,
         controlClaims,
         sandboxTokenExpiry,
         scopeAttestation,
