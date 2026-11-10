@@ -82,7 +82,7 @@ function calendarJob(schedule: CronSchedule): Croner {
   return new Croner(schedule.cron, { timezone: normalizeTimezone(schedule.timezone), paused: true, mode: "5-part" });
 }
 
-function nextCalendarFireAfter(schedule: CronSchedule, after: number): number | undefined {
+export function nextCalendarFireAfter(schedule: CronSchedule, after: number): number | undefined {
   const next = calendarJob(schedule).nextRun(new Date(after));
   return next ? next.getTime() : undefined;
 }

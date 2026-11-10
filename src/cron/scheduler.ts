@@ -9,6 +9,7 @@ import { isDeferred, type CronStore } from "./cron-store.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { IdempotencyStore } from "../idempotency/idempotency-store.ts";
 import { runTrigger, type TriggerDeps } from "../triggers/run-trigger.ts";
+import type { HandlerInboxes } from "./handler/handler-inbox.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
 import type { VisibilityDirectory } from "../directory/visibility.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
@@ -88,6 +89,7 @@ export interface SchedulerDeps {
     getByThread(threadRef: string): Promise<{ personaId?: string } | null>;
   };
   resolveRecipient?: TriggerDeps["resolveRecipient"];
+  handler?: Pick<HandlerInboxes, "accept" | "sweep">;
   skipFire?: (cron: Cron) => Promise<string | undefined>;
   notebookOnlyMemory?: (cron: Cron) => Promise<boolean>;
   deleteCron?: (id: string) => Promise<void>;
@@ -314,9 +316,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           ...(deps.currentScopeMembers ? { currentScopeMembers: deps.currentScopeMembers } : {}),
           ...(deps.sessions ? { sessions: deps.sessions } : {}),
           ...(deps.resolveRecipient ? { resolveRecipient: deps.resolveRecipient } : {}),
+          ...(deps.handler ? { handler: deps.handler } : {}),
         },
         {
           ...cronTriggerAuthority(cron),
+          cronId: cron.id,
           input: (homeRoster) =>
             renderCronFireInput(cron, cronMentionRoster(cron, homeRoster), runtimeProblem, refusedDelivery),
           fireKey,
@@ -467,6 +471,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         await sweepStranded(t);
         await gcFires(t);
         await deps.sweepAsks?.(t).catch(reportFailureAs("scheduler: ask sweep", undefined));
+        await deps.handler?.sweep(t).catch(reportFailureAs("scheduler: cron handler sweep", undefined));
       }),
     );
   };

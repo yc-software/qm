@@ -135,6 +135,8 @@ import { createPostgresAppPageViewLog, DEPLOYMENT_TABLES, type AppPageViewLog } 
 import type { BudgetTracker } from "./ratelimit/budget.ts";
 import { BUDGET_MIGRATIONS, createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
+import { createHandlerInboxes, type HandlerInbox } from "./cron/handler/handler-inbox.ts";
+import { runTrigger } from "./triggers/run-trigger.ts";
 import { PUBLISHED_ORIGIN_UPGRADE, PUBLISHED_ORIGIN_COMPLETE } from "./surfaces/published-upgrade.ts";
 import { RETIRED_ORIGIN_SWEEP_MIGRATION } from "./surfaces/origin-migration.ts";
 import { BACKFILL_BOT_MARKER_MIGRATION, DROP_RECIPIENT_CONSENT_MIGRATION } from "./triggers/trigger-store.ts";
@@ -2750,7 +2752,29 @@ export function buildApp(
     crons,
     scheduler: { notifyChanged: (id) => scheduler.notifyChanged(id) },
   });
+  const cronHandler = createHandlerInboxes({
+    inboxes: artifactMap<HandlerInbox>("cron_handler_inboxes"),
+    deliveries,
+    timezone: async (principalId) => (await suggestedActivityProfiles.get(principalId))?.timezone,
+    ask: async (owner, ownerScopeId, threadRef, prompt, fireKey) =>
+      (
+        await runTrigger(
+          {
+            deliveries,
+            idempotency,
+            identity,
+            run: runTriggered,
+            directory,
+            currentScopeMembers,
+            sessions,
+            resolveRecipient,
+          },
+          { owner, ownerScopeId, input: prompt, fireKey, threadRef, surface: "cron", title: "Scheduled task reports" },
+        )
+      ).reply ?? "",
+  });
   const scheduler = createScheduler({
+    handler: cronHandler,
     admittedWork,
     skipFire: async (cron) => (await memoryTidy.skipFire(cron)) ?? suggestedActivities.skipFire(cron),
     notebookOnlyMemory: (cron) => memoryTidy.manages(cron),

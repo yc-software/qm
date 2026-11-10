@@ -15,6 +15,8 @@ import { grantsHomedWithOwner } from "../cron/authority.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { isProjectGroupRef } from "../projects/project-store.ts";
 import { reportFailureAs, swallowAs } from "../util/errors.ts";
+import { ownerHandledDestination, type HandlerInboxes } from "../cron/handler/handler-inbox.ts";
+import { parseUrgency } from "../cron/handler/fire-handler.ts";
 
 const MEMBERSHIP_SKIP_NOTE = "the acting person is no longer a member of this trigger's home scope — run skipped";
 const UNKNOWN_HOME_SKIP_NOTE =
@@ -34,6 +36,7 @@ export interface TriggerDeps {
   };
   sessions?: { participantScopes(principalId: string): Promise<readonly { scopeId: ScopeId }[]> };
   resolveRecipient?: (query: string) => Promise<RecipientResolution>;
+  handler?: Pick<HandlerInboxes, "accept">;
 }
 
 export interface TriggerSpec extends Pick<
@@ -42,6 +45,7 @@ export interface TriggerSpec extends Pick<
 > {
   runtime?: import("../agent/agent.ts").RuntimeChoice | null;
   title?: string;
+  cronId?: string;
   owner: string;
   ownerScopeId: ScopeId;
   input: string | ((homeRoster: DirectoryMember[] | undefined) => string);
@@ -341,6 +345,26 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       if (runDelivers) return;
       note = "hit a require_approval command — failed closed (no human at fire/event time)";
       console.warn(`[trigger] ${spec.surface} ${spec.fireKey} ${note}`);
+      return;
+    }
+    const handledAt =
+      spec.surface === "cron" && deps.handler && !spec.shadow && !res.attachments?.length && !res.persona
+        ? ownerHandledDestination(actorId, spec.ownerScopeId, spec.destination)
+        : null;
+    if (res.status === "ok" && res.reply && handledAt && deps.handler) {
+      const { text, urgent } = parseUrgency(res.reply);
+      await deps.handler.accept({
+        owner: actorId,
+        ownerScopeId: spec.ownerScopeId,
+        destination: handledAt,
+        report: {
+          cronId: spec.cronId ?? spec.fireKey,
+          cronTitle: spec.title ?? spec.cronId ?? "Scheduled task",
+          at: Date.now(),
+          text,
+          ...(urgent ? { urgent: true } : {}),
+        },
+      });
       return;
     }
     if (res.status === "ok" && (res.reply || res.attachments?.length)) {
