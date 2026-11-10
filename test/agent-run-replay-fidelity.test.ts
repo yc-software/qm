@@ -1,6 +1,7 @@
 import { mock, test } from "node:test";
 import assert from "node:assert/strict";
-import { createAgent, EMPTY_ENDING_NOTE } from "../src/agent/agent-run.ts";
+import { createAgent } from "../src/agent/agent-run.ts";
+import { EMPTY_ENDING_NOTE } from "../src/agent/turn-wall-clock.ts";
 import { createModelRoutes } from "../src/model/model-route.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { forModelContext } from "../src/agent/context-compaction.ts";
