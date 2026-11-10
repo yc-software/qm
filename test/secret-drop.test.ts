@@ -345,7 +345,7 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
     assert.equal(credential.service, "stripe");
     assert.equal(credential.ownerId, "U_A");
 
-    const grants = await built.keychain!.grantsForScope(scopeId("channel", "C1"));
+    const grants = await built.keychain!.grantsForScope(scopeId("channel", "C1"), { includePersonGrants: true });
     const g = grants.find((x) => x.credential.id === credential.id);
     assert.ok(g, "a standing grant for the asking channel was minted on redeem");
     const m = await materializeGrant(built.keychain!, g!.grant.id, scopeId("channel", "C1"), "U_A");
@@ -468,7 +468,7 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
       { envKey: "DOORDASH_PASSWORD", secret: true },
     ]);
 
-    const grants = await built.keychain!.grantsForScope(scopeId("channel", "C1"));
+    const grants = await built.keychain!.grantsForScope(scopeId("channel", "C1"), { includePersonGrants: true });
     const g = grants.find((x) => x.credential.id === credential.id);
     const m = await materializeGrant(built.keychain!, g!.grant.id, scopeId("channel", "C1"), "U_A");
     assert.ok(m.kind === "env");
@@ -683,11 +683,11 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
       "botdeploy",
       "B-DEPLOY",
     );
-    const offered = async (botActor: boolean) =>
-      (await built.keychain!.grantsForScope(room, { botActor })).map(({ credential }) => credential.id);
-    assert.ok((await offered(false)).includes(personal));
-    assert.ok(!(await offered(true)).includes(personal));
-    assert.ok((await offered(true)).includes(asked));
+    const offered = async (includePersonGrants: boolean) =>
+      (await built.keychain!.grantsForScope(room, { includePersonGrants })).map(({ credential }) => credential.id);
+    assert.ok((await offered(true)).includes(personal));
+    assert.ok(!(await offered(false)).includes(personal));
+    assert.ok((await offered(false)).includes(asked));
   });
 });
 

@@ -417,7 +417,7 @@ export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   revokeGrant(ownerId: string, grantId: string): Promise<boolean>;
   grantsForScope(
     scopeId: ScopeId,
-    opts?: { botActor?: boolean },
+    opts?: { includePersonGrants?: boolean },
   ): Promise<Array<{ grant: KeychainGrant; credential: KeychainCredentialMeta }>>;
 
   createAsk(input: CreateAskInput): Promise<{ ask: KeychainAsk; existing: boolean }>;
@@ -1208,7 +1208,7 @@ export function createKeychain(deps: {
     async grantsForScope(scopeId, opts) {
       const out: Array<{ grant: KeychainGrant; credential: KeychainCredentialMeta }> = [];
       for (const grant of await activeGrantsFor(scopeId)) {
-        if (opts?.botActor && grant.botActor !== true) continue;
+        if (!opts?.includePersonGrants && grant.botActor !== true) continue;
         const cred = await deps.creds.get(grant.credentialId);
         if (cred && (cred.managed === "connector" || !credExpired(cred, now())))
           out.push({ grant, credential: toMeta(cred) });

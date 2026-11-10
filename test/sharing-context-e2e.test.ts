@@ -215,7 +215,7 @@ test("sharing e2e: a delegated turn shares its live parent's access under curren
     ),
     "available",
   );
-  assert.deepEqual(await b.keychain!.grantsForScope("channel:C1"), []);
+  assert.deepEqual(await b.keychain!.grantsForScope("channel:C1", { includePersonGrants: true }), []);
   await b.config.setSharingPosture("personal:U1", "isolated");
   assert.match(await childTurn(read), /no file/);
   await b.config.clearSharingPosture("personal:U1");
@@ -543,8 +543,8 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
       "True|True|file_U1|True|isolated",
     );
   }
-  assert.deepEqual(await b.keychain.grantsForScope("group:G1"), []);
-  assert.deepEqual(await b.keychain.grantsForScope("channel:C1"), []);
+  assert.deepEqual(await b.keychain.grantsForScope("group:G1", { includePersonGrants: true }), []);
+  assert.deepEqual(await b.keychain.grantsForScope("channel:C1", { includePersonGrants: true }), []);
   assert.ok((await b.auditLog.events()).some((event) => event.action === "keychain.open_speaker_use"));
   const onScratch = (command: string) =>
     `!execute ${JSON.stringify({ command, credentials: [handles.get("U1")![0]] })}`;
