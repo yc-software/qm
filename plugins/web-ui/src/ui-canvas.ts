@@ -323,7 +323,7 @@ async function update(panel: Panel, change: { pinned?: boolean; dismiss?: true }
     loaded.set(panel.sessionId, panel.canvas);
     drawHead(panel);
   }
-  const { sessionId } = panel;
+  const { sessionId, owner } = panel;
   mutating.set(sessionId, (mutating.get(sessionId) ?? 0) + 1);
   await api(`/api/ui-canvas/${encodeURIComponent(sessionId)}`, {
     method: "POST",
@@ -334,6 +334,7 @@ async function update(panel: Panel, change: { pinned?: boolean; dismiss?: true }
       const left = (mutating.get(sessionId) ?? 1) - 1;
       if (left) return void mutating.set(sessionId, left);
       mutating.delete(sessionId);
+      waiting.set(sessionId, (waiting.get(sessionId) ?? new Set()).add(owner));
       load(sessionId);
     });
 }
