@@ -16,6 +16,7 @@ import type { BotIdentity, Directory } from "./directory.ts";
 import type { SlackConversationKind } from "./messaging.ts";
 import { type SlackHistoryMessage } from "./payloads.ts";
 import { slackMessageContent } from "./message-content.ts";
+import { isBotAuthored } from "./message-gating.ts";
 
 export const RECENT_HISTORY_LIMIT = 200;
 export const RECENT_THREAD_LIMIT = 200;
@@ -143,7 +144,7 @@ export function createConversationSerializer(deps: {
         ...(m.user || m.bot_id ? { authorId: String(m.user || m.bot_id) } : {}),
         text: decodeSlackEntities(content.text.trim()),
         ...(m.ts === triggerTs ? { isTrigger: true } : {}),
-        ...(m.bot_id ? { isBot: true } : {}),
+        ...(isBotAuthored(m) ? { isBot: true } : {}),
         ...(isSelfMessage(m) ? { isSelf: true } : {}),
         ...(m.thread_ts && String(m.thread_ts) !== m.ts ? { parentTs: String(m.thread_ts) } : {}),
         ...(reactionTallies(m.reactions).length ? { reactions: reactionTallies(m.reactions) } : {}),
