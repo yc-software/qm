@@ -175,10 +175,7 @@ export function createAclStore(persist: GrantPersistence, opts: AclStoreOptions 
         throw new Error("only a manager of this scope may revoke access");
       }
       const matches = await persist.find({ ownerScopeId, ref, granteeScopeIds: [granteeScopeId] });
-      for (const g of matches) {
-        if (onlyAccessRequest !== undefined && g.accessRequest !== onlyAccessRequest) continue;
-        await persist.remove(g, onlyAccessRequest);
-      }
+      for (const g of matches) await persist.remove(g, onlyAccessRequest);
     },
     async replaceGrantsIfCurrent(ownerScopeId, ref, expected, replacement, changedBy, authoredBy) {
       if (!(await canManage(ownerScopeId, changedBy, authoredBy))) {
