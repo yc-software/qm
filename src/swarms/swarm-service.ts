@@ -88,11 +88,11 @@ export interface SwarmService {
   send(caller: SwarmCaller, input: MessageInput): Promise<SwarmMessage>;
   read(caller: SwarmCaller, options: { after?: number; replyTo?: string; waitMs?: number }): Promise<SwarmMessage[]>;
   control(caller: SwarmCaller, input: { memberId: string; state: SwarmControlState }): Promise<SwarmMember>;
-  enabledFor(actorId: string): Promise<boolean>;
   botMayUseComputer(
     computer: Pick<SandboxResource, "id" | "ownerScopeId" | "swarmId">,
     turn: { actorId: string; threadRef: string; sessionId: string },
   ): Promise<boolean>;
+  authorizes(claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "members">): Promise<boolean>;
   notePersonUse(computer: Pick<SandboxResource, "swarmId">): Promise<void>;
   binding(input: OrchestratorInput): Promise<{ sandboxId?: string; rootSessionId: string; member: SwarmMember } | null>;
   queuedMessages(
@@ -233,11 +233,9 @@ export function createSwarmService(deps: {
   sandboxes: SandboxResources;
   lock: AdvisoryLock;
   authorize(claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "members">): Promise<boolean>;
-  enabled?(actorId: string): Promise<boolean>;
   signals?: Pick<RunSignalStore, "send">;
   defaults?: SwarmSettings;
 }): SwarmService {
-  const enabledFor = deps.enabled ?? (async () => true);
   const { store, sessions, runs } = deps;
   const update = (auth: Authority, mutate: (swarm: Swarm) => void) => store.update(auth.rootId, mutate, auth.fence);
   const defaults = resolveSwarmSettings(deps.defaults);
@@ -473,7 +471,7 @@ export function createSwarmService(deps: {
       };
       try {
         let swarm = await step(() => store.get(rootId));
-        if (!swarm || !(await step(() => enabledFor(swarm!.ownerId)))) return;
+        if (!swarm) return;
         if (phase === "delivery") {
           await deliver(swarm, step);
           return;
@@ -864,7 +862,7 @@ export function createSwarmService(deps: {
         ({ auth, swarm } = await load(caller));
       }
     },
-    enabledFor,
+    authorizes: (claims) => deps.authorize(claims),
     async botMayUseComputer(computer, turn) {
       const { rootId, memberId } = threadIdentity(turn.threadRef, turn.sessionId);
       const botMayWork = (swarm: Swarm) => botMayDirect(swarm, rootId === swarm.id ? memberId : swarm.id, turn.actorId);

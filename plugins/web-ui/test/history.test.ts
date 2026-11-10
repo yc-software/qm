@@ -1257,7 +1257,7 @@ test("a no-op finish_silently (non-poll, no silent:true) does NOT suppress promo
   const items: Item[] = [
     item("UserMessage", { createdAt: 100, seq: 1, text: "do it" }),
     item("ToolCall", { createdAt: 110, seq: 2, tool: "finish_silently" }),
-    item("ToolResult", { createdAt: 120, seq: 3, tool: "finish_silently", body: { noop: "not_a_poll_fire" } }),
+    item("ToolResult", { createdAt: 120, seq: 3, tool: "finish_silently", body: { noop: "reply_required" } }),
     item("AgentMessage", { createdAt: 130, seq: 4, variant: "narration", text: "Actually, here's the result." }),
     item("ToolCall", { createdAt: 140, seq: 5, tool: "execute", body: { command: "ls" } }),
     item("ToolResult", { createdAt: 150, seq: 6, tool: "execute", body: { code: 0 } }),

@@ -65,7 +65,8 @@ entry path, set `PORTAL_TRUSTED_OIDC_ADMIN=1` on portal and set core's
 `TRUSTED_OIDC_ADMIN_ISSUER` to the exact trusted issuer. This requires a distinct
 `PORTAL_IDENTITY_SECRET` and durable replay storage. After verified provider login,
 portal submits a short-lived, single-use, purpose-bound assertion; core creates a
-normal durable organization-admin grant before portal issues the session. Primary
+normal durable organization-admin grant before portal issues the session. Outside the
+deployment's own boot tenant, core grants only in a tenant the subject already belongs to. Primary
 login and impersonation cannot request this promotion. Deactivated users stay blocked.
 Existing sessions need a fresh trusted sign-in. Revoking a grant removes admin access
 until the next successful trusted sign-in; disabling provisioning prevents future

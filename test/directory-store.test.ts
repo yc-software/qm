@@ -187,6 +187,15 @@ describe("group-DM (mpim) membership (addressed by participant set, §10)", () =
     assert.equal(await d.groupMembership("G-1", "U-alice"), false);
   });
 
+  it("a single registered group neither marks the org synced nor fences out the next full sync", async () => {
+    const d = createPostgresDirectoryStore(testDatabaseUrl());
+    await d.upsertGroup("G-1", ["U-alice"]);
+    assert.equal(await d.groupMembership("G-1", "U-alice"), true);
+    assert.equal(await d.groupMembership("G-2", "U-alice"), undefined);
+    assert.equal(await d.replaceGroups([{ groupId: "G-2", principalId: "U-alice" }], Date.now() - 60_000), true);
+    assert.equal(await d.groupMembership("G-2", "U-alice"), true);
+  });
+
   it("replaceGroups is a full per-org swap", async () => {
     const d = await dir();
     await d.replaceGroups([{ groupId: "G-3", principalId: "U-alice" }]);

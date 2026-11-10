@@ -58,7 +58,7 @@ import { desktopClientForTurn, introducesUser, isPersonAuthored, isSessionTurn }
 import { resolveTurnFastMode } from "./turn-options.ts";
 import { orgId } from "../config.ts";
 import { currentTenant } from "../tenants/context.ts";
-import { deriveTurnOutcome, heldReplyResult } from "./turn-outcome.ts";
+import { deriveTurnOutcome } from "./turn-outcome.ts";
 import { applyPromptVars, loadProtocolFile, type PromptVars } from "../resolution/prompt-vars.ts";
 import { cleanBrandingLabel, resolveBranding } from "../resolution/branding.ts";
 import { resolveTurnContext } from "../resolution/turn-context.ts";
@@ -192,6 +192,7 @@ import { resolveTurnRuntimeAuth } from "./orchestrator/turn-runtime.ts";
 import { startStallWatchdog } from "./orchestrator/stall-watchdog.ts";
 import { openSegmentGoal, segmentEnvironment } from "./orchestrator/run-segment.ts";
 import { selectTurnResult, startMemoryCapture } from "./orchestrator/settle.ts";
+import { replayRecordedAnswer } from "./orchestrator/turn-replay.ts";
 import { addConversationBlocks, appendTurnGuidance, finishSystemPrompt } from "./orchestrator/turn-prompt.ts";
 import { createArtifactAccess, createFileRegistration, createTurnBrokers } from "./orchestrator/turn-tools.ts";
 import {
@@ -213,12 +214,7 @@ import {
   registerKeychainCredentials,
   registerServiceCredentials,
 } from "./orchestrator/credential-catalog.ts";
-import {
-  createSurfaceToolDeps,
-  replayRecordedSurfaceAnswer,
-  surfaceToolsActive,
-  type SpineState,
-} from "../surfaces/surface-tools.ts";
+import { createSurfaceToolDeps, type SpineState } from "../surfaces/surface-tools.ts";
 import { createAttachStaging } from "./orchestrator/attach-tool.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "../slack/message-revisions.ts";
 import { type ProviderKeys } from "../model/model-runtime.ts";
@@ -996,6 +992,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (introducesUser(input.origin, input)) await recordUser(deps.users, actor.id, input.botActor);
 
       const delegatedTask = !!input.sessionSenderId && session.parentSessionId === input.sessionSenderId;
+      const wakingChild =
+        input.sessionSenderId && !input.approval && !input.surfaceTools && !isSubagentThreadRef(conversation.threadRef)
+          ? await deps.sessions.get(input.sessionSenderId)
+          : null;
+      const childWake = wakingChild?.parentSessionId === session.id && isSubagentThreadRef(wakingChild.threadRef);
       const syntheticInput =
         (input.proactiveOpener && !input.text.trim()) ||
         ((automatedTurn || (sessionTurn && input.envelopeWrapped)) && !delegatedTask);
@@ -1028,51 +1029,23 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       };
       const recorded = isRetry ? await recordedTurnForRun() : null;
       const recordedTurn = recorded?.turn;
-      if (recorded && recordedTurn?.answer) {
-        const recordedAnswer = recordedTurn.answer;
-        audit({
-          action: "turn.already_answered",
-          resource: conversation.threadRef,
-          detail: `attempt ${input.attempt}; replaying the answer the previous attempt recorded at seq ${recordedAnswer.seq}`,
-        });
-        console.error(
-          `[orchestrator] turn.already_answered attempt=${input.attempt} run=${input.runId} thread=${conversation.threadRef} answerSeq=${recordedAnswer.seq}`,
+      if (recorded && recordedTurn?.answer)
+        return replayRecordedAnswer(
+          {
+            deps,
+            input,
+            conversation,
+            session,
+            strictReadOnly,
+            defaultDestination,
+            surfaceName,
+            postProvenance,
+            audit,
+          },
+          recorded,
+          recordedTurn,
+          recordedTurn.answer,
         );
-        const stopped = recordedAnswer.stopped ? { stopped: true } : {};
-        const surfaceTools = surfaceToolsActive({ input, strictReadOnly, defaultDestination });
-        const held = heldReplyResult({
-          sessionId: session.id,
-          stopped: recordedAnswer.stopped === true,
-          runCancelled: recordedAnswer.cancelled === true,
-          surfaceTools,
-        });
-        const text = absoluteAppLinks(recordedAnswer.text, deps.publicWebUrl);
-        if (held) {
-          if (surfaceTools && !recordedAnswer.stopped)
-            await replayRecordedSurfaceAnswer({
-              deps,
-              input,
-              session,
-              defaultDestination,
-              surfaceName,
-              turnItems: recorded.items,
-              userSeq: recordedTurn.userSeq,
-              text,
-              postProvenance,
-            });
-          return held;
-        }
-        return text.trim()
-          ? {
-              status: "ok",
-              sessionId: session.id,
-              reply: text,
-              sourceUserSeq: recordedTurn.userSeq,
-              sourceAssistantEntrySeq: recordedAnswer.seq,
-              ...stopped,
-            }
-          : { status: "silent", sessionId: session.id, ...stopped };
-      }
 
       audit({
         action: "turn",
@@ -1392,6 +1365,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           tenant,
           orgMemoryWritable,
           automatedTurn,
+          childWake,
         });
         ({ rosterMembers, scopeAskList } = await addConversationBlocks({
           deps,
@@ -2032,6 +2006,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
         if (cronScript?.escalation) turnInput = `${turnInput}\n\n${cronScript.escalation}`;
         const isPollFire = automatedTurn && !!input.surface && isPollSurface(input.surface);
+        const replyOptional = isPollFire || childWake;
         const sessionUsedTools = visibleHistory.some(
           (e) => e.kind === "ToolCall" && !(e.tool === "skill" || (e.tool === "skills" && e.body.action === "read")),
         );
@@ -2372,7 +2347,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ? { clientTools: session.clientTools ?? input.clientTools }
               : {}),
             ...(input.surfaceTools && surfaceToolDeps ? { surfaceTools: true } : {}),
-            ...(isPollFire ? { pollFire: true } : {}),
+            ...(replyOptional ? { replyOptional: true } : {}),
             turnWallClockMs:
               effectiveTurnWallClockMs > 0
                 ? Math.max(1, effectiveTurnWallClockMs - (Date.now() - turnStart))
@@ -2609,7 +2584,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           reply,
           turnCompleted,
           cancelStopped,
-          isPollFire,
+          replyOptional,
           stagedAttachments,
           quarantineReleaseApprovals,
           surfaceToolDeps,
