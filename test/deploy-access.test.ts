@@ -196,11 +196,7 @@ test("decline only notifies and leaves access unchanged; duplicate clicks dedupe
 
 const requestA = "00000000-0000-4000-8000-0000000000aa";
 const requestB = "00000000-0000-4000-8000-0000000000bb";
-const decideRequest = (
-  f: Awaited<ReturnType<typeof fixture>>,
-  approve: boolean,
-  requestId: string | undefined = requestA,
-) =>
+const decideRequest = (f: Awaited<ReturnType<typeof fixture>>, approve: boolean, requestId: string | null = requestA) =>
   decideDeploymentAccess(
     f.app,
     f.identity,
@@ -248,7 +244,7 @@ test("a decline takes back neither another request's approval nor anything from 
   const f = await fixture(t);
   await decideRequest(f, true, requestA);
   await decideRequest(f, false, requestB);
-  await decideRequest(f, false, undefined);
+  await decideRequest(f, false, null);
   assert.deepEqual(await f.grants(), [{ scope: person(requester), permission: "read" }]);
   const g = await f.app.deploymentGrantees(f.d.id);
   assert.equal(g.length, 1);
@@ -256,7 +252,7 @@ test("a decline takes back neither another request's approval nor anything from 
 
 test("a grant from a card without a request ID is never linked, so a decline leaves it", async (t) => {
   const f = await fixture(t);
-  await decideRequest(f, true, undefined);
+  await decideRequest(f, true, null);
   await decideRequest(f, false, requestA);
   assert.deepEqual(await f.grants(), [{ scope: person(requester), permission: "read" }]);
 });
