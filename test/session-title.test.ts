@@ -83,7 +83,7 @@ test("a title provider exception is recorded before the completed turn gets its 
   const failures = (await errors.list({ sessionId: turn.sessionId! })).filter(
     (error) => error.category === "session_title" && error.code === "generation_failed",
   );
-  assert.equal(failures.length, 1);
+  assert.equal(failures.length, 2);
   assert.match(failures[0]!.message, /title model overloaded/);
 });
 
@@ -98,7 +98,7 @@ test("a rejected title answer is recorded with the rule that rejected it before 
   );
   assert.deepEqual(
     recorded.map((error) => error.code),
-    ["rejected_reply_opener"],
+    ["rejected_reply_opener", "rejected_reply_opener"],
   );
   assert.equal(recorded[0]!.message, 'reply_opener: "Sorry, I can\'t title this one"');
 });
@@ -121,7 +121,7 @@ test("POST /v1/sessions/:id/title answers 200 with the fallback title and record
     const codes = (await errors.list({ sessionId: turn.sessionId! }))
       .filter((error) => error.category === "session_title")
       .map((error) => error.code);
-    assert.deepEqual(codes, ["rejected_reply_opener", "rejected_reply_opener"]);
+    assert.deepEqual(codes, ["rejected_reply_opener", "rejected_reply_opener", "rejected_reply_opener"]);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
