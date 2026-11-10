@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -55,7 +56,7 @@ test("a sandbox command's approval request reaches the live run, and is refused 
         },
         SECRET,
       );
-    const live = await token({ runId, sessionId: run.sessionId });
+    const live = await token({ runId, sessionId: randomUUID(), threadRef: run.sessionId });
     const post = (body: unknown, capability: string) =>
       fetch(`${base}/v1/tool-approvals`, {
         method: "POST",

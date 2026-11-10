@@ -27,7 +27,8 @@ async function requestToolApproval(ctx: ApiCtx): Promise<void> {
     });
   }
   const runId = capability.runId;
-  if (!runId || !capability.sessionId) return sendJson(res, 409, { error: "no_live_turn", message: NO_LIVE_TURN });
+  const threadRef = capability.threadRef;
+  if (!runId || !threadRef) return sendJson(res, 409, { error: "no_live_turn", message: NO_LIVE_TURN });
   const { runs, signals } = deps;
   if (!runs || !signals) {
     return sendJson(res, 503, { error: "unavailable", message: "approval requests aren't available on this server" });
@@ -36,7 +37,7 @@ async function requestToolApproval(ctx: ApiCtx): Promise<void> {
   if (
     !run ||
     isTerminal(run.status) ||
-    run.sessionId !== capability.sessionId ||
+    run.sessionId !== threadRef ||
     !samePerson(run.request.actor.id, capability.actorId)
   ) {
     return sendJson(res, 409, { error: "no_live_turn", message: NO_LIVE_TURN });
