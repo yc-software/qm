@@ -55,13 +55,7 @@ import type {
   PendingApprovalRecord,
 } from "../types.ts";
 import { scopeId as toScopeId, personalScope } from "../types.ts";
-import {
-  desktopClientForTurn,
-  introducesUser,
-  isPersonAuthored,
-  isSessionTurn,
-  spokenByPerson,
-} from "./turn-origin.ts";
+import { desktopClientForTurn, introducesUser, isPersonAuthored, isSessionTurn } from "./turn-origin.ts";
 import { resolveTurnFastMode } from "./turn-options.ts";
 import { orgId } from "../config.ts";
 import { currentTenant } from "../tenants/context.ts";
@@ -70,7 +64,7 @@ import { applyPromptVars, loadProtocolFile, type PromptVars } from "../resolutio
 import { cleanBrandingLabel, resolveBranding } from "../resolution/branding.ts";
 import { resolveTurnContext } from "../resolution/turn-context.ts";
 import { reachEnqueue } from "../reach/reach.ts";
-import { interimReplyDelivery, turnGuidance } from "./orchestrator/reply-check.ts";
+import { deliverAddressedReply, interimReplyDelivery, turnGuidance } from "./orchestrator/reply-check.ts";
 import { turnDeliveryProvenance } from "../delivery/delivery-store.ts";
 import type { DirectoryStore, DirectoryMember } from "../directory/directory-store.ts";
 import { resolveEnvironmentId } from "../environments/environment-store.ts";
@@ -227,7 +221,6 @@ import {
 } from "./orchestrator/credential-catalog.ts";
 import {
   createSurfaceToolDeps,
-  enqueueDirectReply,
   replayRecordedSurfaceAnswer,
   surfaceToolsActive,
   type SpineState,
@@ -1537,6 +1530,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 sessionRef: conversation.threadRef,
                 ttlMs: deps.backgroundJobTtlMs,
                 ttlMaxMs: deps.backgroundJobTtlMaxMs,
+                assertComputerUsable: assertDefaultUsable,
               })
             : undefined;
 
@@ -1571,6 +1565,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 threadRef: conversation.threadRef,
                 ...(defaultDestination ? { destination: defaultDestination } : {}),
                 returnsToParent: isSubagentThreadRef(conversation.threadRef) && Boolean(session.parentSessionId),
+                assertComputerUsable: assertDefaultUsable,
               })
             : undefined;
 
@@ -2632,74 +2627,29 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(inbound.metas.length ? { attachments: inbound.metas } : {}),
           ...(inbound.images.length ? { images: inbound.images } : {}),
         });
-        if (replyCheck && !replyCheck.enforce && result.reply.trim() && !result.silent && !result.stopped)
-          void replyCheck.check(result.reply).catch(swallowAs("orchestrator: observed reply check", undefined));
-        const followedUpByPerson = !input.addressed && spokenByPerson(input.origin) && !sessionTurn;
-        if (
-          (input.addressed || followedUpByPerson) &&
-          !strictReadOnly &&
-          input.surfaceTools &&
-          surfaceToolDeps &&
-          !input.cancel?.aborted &&
-          spine.surfaceOutboundCount === 0 &&
-          !result.silent &&
-          !result.stopped
-        ) {
-          const primaryReply = stripAckPrefix(result.reply ?? "", spineAckText).trim();
-          if (input.addressed && primaryReply && defaultDestination) {
-            try {
-              await enqueueDirectReply({
-                deliveries: deps.deliveries,
-                destination: defaultDestination,
-                text: primaryReply,
-                key: postKeys.key(defaultDestination, postKeys.take()),
-                postProvenance,
-                ...(result.retracted ? { retracted: result.retracted } : {}),
-              });
-              spine.surfaceOutboundCount += 1;
-              if (input.runId) deps.turnStream.markSurfacePosted(input.runId);
-            } catch (e) {
-              reportFailure("orchestrator: direct reply delivery", e, `session=${session.id}`);
-            }
-          }
-          if (
-            spine.surfaceOutboundCount === 0 &&
-            !result.pendingApprovals?.length &&
-            (primaryReply || (input.addressed && !isPollFire))
-          ) {
-            const nudgeHistory = filterHistory(forModelContext((await historyWindow()).items));
-            result = await runAgentTurn(
-              input.addressed
-                ? `[system] You were addressed directly. Reply with the \`${surfaceName}\` tool's \`post\` action, or decline explicitly with finish_silently — ending the turn without either is not allowed here.`
-                : `[system] Your text above was not delivered: in this thread only the \`${surfaceName}\` tool's \`post\` action reaches people. Post your reply with \`post\`, or decline explicitly with finish_silently.`,
-              inbound.images.length ? { images: inbound.images } : {},
-              { history: nudgeHistory },
-            );
-            if (input.addressed && spine.surfaceOutboundCount === 0 && !result.silent && !result.stopped) {
-              const fallback = stripAckPrefix(result.reply ?? "", spineAckText).trim();
-              if (fallback && defaultDestination) {
-                try {
-                  await enqueueDirectReply({
-                    deliveries: deps.deliveries,
-                    destination: defaultDestination,
-                    text: fallback,
-                    key: postKeys.key(defaultDestination, postKeys.take()),
-                    postProvenance,
-                  });
-                  spine.surfaceOutboundCount += 1;
-                  if (input.runId) deps.turnStream.markSurfacePosted(input.runId);
-                } catch (e) {
-                  console.error(
-                    `[orchestrator] shed-reply fallback delivery failed session=${session.id}:`,
-                    errMessage(e),
-                  );
-                }
-              } else {
-                console.error(`[orchestrator] addressed turn ended silent after nudge session=${session.id}`);
-              }
-            }
-          }
-        }
+        result = await deliverAddressedReply(
+          {
+            deps,
+            input,
+            session,
+            strictReadOnly,
+            sessionTurn,
+            surfaceToolDeps,
+            spine,
+            ackText: () => spineAckText,
+            defaultDestination,
+            postKeys,
+            postProvenance,
+            isPollFire,
+            surfaceName,
+            inbound,
+            replyCheck,
+            filterHistory,
+            historyWindow,
+            runAgentTurn,
+          },
+          result,
+        );
 
         const stagedAttachments = attachStaging.staged();
         const harvestedAck = (() => {

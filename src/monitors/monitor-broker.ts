@@ -1,7 +1,7 @@
 import type { Destination, ScopeId } from "../types.ts";
+import { samePerson } from "../directory/person.ts";
 import type { MonitorStore } from "./monitor-store.ts";
 import type { ProcessRegistry, ProcessStatus } from "../processes/process-registry.ts";
-import { samePerson } from "../directory/person.ts";
 
 export interface BackgroundWatchArmedResult {
   monitorId: string;
@@ -106,6 +106,7 @@ export interface MonitorBrokerDeps {
   destination?: Destination;
   returnsToParent?: boolean;
   graceMs?: number;
+  assertComputerUsable?: (sandboxId: string | undefined) => Promise<void>;
 }
 
 export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
@@ -116,6 +117,7 @@ export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
       if (!rec || rec.scopeId !== deps.scopeId || rec.kind !== "background") {
         throw new Error("no such background job to watch");
       }
+      await deps.assertComputerUsable?.(rec.sandboxId);
       if (rec.status !== "running") {
         const tail = await deps.readOutputTail(processId, WATCH_COMPLETED_TAIL_BYTES);
         return {
@@ -139,6 +141,7 @@ export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
           m.enabled &&
           m.processId === processId &&
           m.threadRef === deps.threadRef &&
+          samePerson(m.owner, deps.owner) &&
           Boolean(m.botActor) === Boolean(deps.botActor),
       );
       if (existing) {

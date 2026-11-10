@@ -16,6 +16,8 @@ import { currentTenant, withTenant } from "../tenants/context.ts";
 import { errMessage, reportFailureAs } from "../util/errors.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { compileMonitorPattern } from "./monitor-broker.ts";
+import { assertBotMayUseComputer, SandboxAccessError, type SandboxResources } from "../sandbox/sandbox-resources.ts";
+import type { SwarmService } from "../swarms/swarm-service.ts";
 import { buildEventWakeEnvelope, capForEscaping } from "../wake/wake-envelope.ts";
 
 const TICK_LEASE_KEY = "monitor:poller:tick";
@@ -50,6 +52,8 @@ export interface MonitorPollerDeps {
   onProcessExit?: (handle: SandboxHandle, processId: string) => Promise<void>;
   heartbeatMs?: number;
   minFireIntervalMs?: number;
+  sandboxResources?: SandboxResources;
+  swarms?: Pick<SwarmService, "botMayUseComputer">;
 }
 
 type MonitorEvent =
@@ -274,6 +278,22 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
     if (!rec?.sandboxId) {
       await reportLost(m);
       return 1;
+    }
+    const swarms = m.botActor ? deps.swarms : undefined;
+    try {
+      await assertBotMayUseComputer(
+        deps.sandboxResources,
+        rec.scopeId,
+        rec.sandboxId,
+        swarms &&
+          ((computer) =>
+            swarms.botMayUseComputer(computer, { actorId: m.owner, threadRef: m.threadRef, sessionId: "" })),
+      );
+    } catch (e) {
+      if (!(e instanceof SandboxAccessError)) throw e;
+      await deps.monitors.recordError(m.id, e.message);
+      await deps.monitors.setEnabled(m.id, false);
+      return 0;
     }
     const tenantId = currentTenant();
     const targetKey = `${tenantId}:${rec.sandboxId}`;
