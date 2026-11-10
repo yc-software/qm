@@ -1839,7 +1839,7 @@ test("a fire is not told about a refusal its previous output overcame with a lat
   await deliveries.ack(first!.id, Date.now());
   const landed = await deliveries.get(first!.id);
   assert.ok(landed?.deliveredAt, "the late success lands");
-  assert.equal(landed?.failedReason, "cannot_dm_bot", "the refusal stays on the row as history");
+  assert.equal(landed?.failedReason, undefined, "a delivered row is not also refused");
   await runNowSettled(scheduler, cron.id);
   assert.doesNotMatch(calls[1]?.text ?? "", /was refused/);
 });
