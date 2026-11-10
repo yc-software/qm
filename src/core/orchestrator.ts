@@ -1691,6 +1691,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 scopeId: memoryScopeId,
                 owner: actor.id,
                 ownerScopeId: scopeId,
+                ...(input.botActor ? { botActor: true } : {}),
                 threadRef: conversation.threadRef,
                 ...(defaultDestination ? { destination: defaultDestination } : {}),
                 returnsToParent: isSubagentThreadRef(conversation.threadRef) && Boolean(session.parentSessionId),
