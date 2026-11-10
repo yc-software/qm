@@ -552,19 +552,16 @@ export async function refreshInbox(
     inboxState.total = metadata.total;
     inboxState.filter = refreshFilter!;
     const next = [...combined.values()];
-    const openIds = new Set([fullSurface, ...surfaces].flatMap((surface) => surface?.selectedId ?? []));
-    const details = inboxState.items.filter((item) => openIds.has(item.id) && item.detailLoaded);
+    const openId = fullSurface?.selectedId;
+    const detail = openId ? inboxState.items.find((item) => item.id === openId && item.detailLoaded) : undefined;
     inboxState.items = next;
-    for (const openId of openIds) {
-      const detail = details.find((item) => item.id === openId);
-      if (detail && inboxState.selected.some((loop) => loop.id === detail.loopId)) {
-        upsertItem(detail);
-        void loadDetail(detail.id, detail.loopId);
-      }
-      if (!detail) {
-        const entry = inboxState.items.find((item) => item.id === openId);
-        if (entry) void loadDetail(entry.id, entry.loopId);
-      }
+    if (detail && inboxState.selected.some((loop) => loop.id === detail.loopId)) {
+      upsertItem(detail);
+      void loadDetail(detail.id, detail.loopId);
+    }
+    if (openId && !detail) {
+      const entry = inboxState.items.find((item) => item.id === openId);
+      if (entry) void loadDetail(entry.id, entry.loopId);
     }
     const localItems = await fetchLocalInboxItems();
     if (localItems.length) inboxState.items = localItems;
