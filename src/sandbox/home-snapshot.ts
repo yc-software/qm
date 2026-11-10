@@ -35,6 +35,7 @@ export const HOME_SNAPSHOT_PRUNE = [
 export interface SnapshotBookkeeping {
   lastSnapshotMs?: number;
   lastSnapshotAttemptMs?: number;
+  lastSnapshotError?: string;
   homeDirty?: boolean;
 }
 
@@ -60,11 +61,13 @@ export async function attemptSnapshot(
     await record({ lastSnapshotAttemptMs: Date.now() });
     await capture();
   } catch (e) {
-    if (failing) swallow("home-snapshot: snapshot still failing", e);
-    else report(errMessage(e));
+    const message = errMessage(e);
+    if (failing && message === stored?.lastSnapshotError) swallow("home-snapshot: snapshot still failing", e);
+    else report(message);
+    await record({ lastSnapshotError: message }).catch(swallowAs("home-snapshot: record snapshot error", undefined));
     return;
   }
-  await record({ lastSnapshotAttemptMs: undefined }).catch(
+  await record({ lastSnapshotAttemptMs: undefined, lastSnapshotError: undefined }).catch(
     swallowAs("home-snapshot: clear snapshot attempt", undefined),
   );
 }
