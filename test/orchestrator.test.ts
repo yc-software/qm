@@ -3225,6 +3225,54 @@ for (const approved of [true, false]) {
   });
 }
 
+test("an approval steered into a run that ends before its replay starts is not reported as joining that run", async () => {
+  const { app, signals, runs } = freshApp();
+  const args = { to: "a@example.com", body: "late" };
+  const raised = await app.turn(dm(`!declared-noted ${JSON.stringify(args)}`));
+  const { requestId } = raised.pendingApprovals![0]!;
+  const hold = "live-replay-lost";
+  const holding = app.turn(dm(`!hold ${hold}`));
+  let live = mockHeldTurns.get(hold);
+  for (let i = 0; !live && i < 200; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    live = mockHeldTurns.get(hold);
+  }
+  assert.ok(live?.runId);
+  const getRun = runs.get.bind(runs);
+  const send = signals.send.bind(signals);
+  const turn = app.turn.bind(app);
+  let ended = false;
+  signals.send = async (runId, signal) => {
+    const sent = await send(runId, signal);
+    if (runId === live.runId) ended = true;
+    return sent;
+  };
+  runs.get = async (id) => {
+    const run = await getRun(id);
+    return ended && run && id === live.runId ? { ...run, status: "failed" } : run;
+  };
+  let replays = 0;
+  app.turn = async (req, opts) => {
+    if (ended && req.approval && replays++ === 0) throw new Error("replay start failed");
+    return turn(req, opts);
+  };
+  try {
+    const routed = await turn(
+      dm(`!declared-noted ${JSON.stringify(args)}`, {
+        async: true,
+        approval: { requestId, approved: true, scope: "once" as const },
+      }),
+    );
+    assert.equal(replays, 1, "the drained decision tried to replay and failed");
+    assert.notEqual(routed.steered, true, "a decision whose replay failed is not reported as steered");
+    assert.notEqual(routed.runId, live.runId, "the decision is not pinned to the run that ended");
+  } finally {
+    ended = false;
+    mockHeldTurns.release(hold);
+    await holding;
+  }
+});
+
 test("a tool that declares approval runs once for the exact approved arguments", async () => {
   const { app, sessions } = freshApp();
   const call = '!declared {"to":"a@example.com","body":"hi"}';
