@@ -558,19 +558,18 @@ function channelsSection(persona: PersonaDetail): TemplateResult {
           removableRow(
             html`<span class="persona-channel-glyph">${icon(Hash, 14)}</span>`,
             grantLabel(grant),
-            channelDetail(persona, grant),
+            grant.pinned ? `Pinned: QM answers as ${persona.name} here` : "",
             owner ? `Remove ${grantLabel(grant)}` : null,
             () => void removeGrantee(persona, grant),
             owner
-              ? html`<button
-                    class="btn persona-action"
-                    type="button"
-                    ?disabled=${busyId !== null}
-                    aria-pressed=${grant.role === "write" ? "true" : "false"}
-                    @click=${() => void toggleChannelEditors(persona, grant)}
-                  >
-                    ${icon(Pencil, 14)}<span>${grant.role === "write" ? "Members edit" : "Let members edit"}</span>
-                  </button>
+              ? html`<fieldset class="permission-control" ?disabled=${busyId !== null}>
+                    ${menuSelect({
+                      value: grant.role,
+                      ariaLabel: `Access for ${grantLabel(grant)}`,
+                      options: (["write", "read"] as const).map((role) => ({ value: role, label: ROLE_LABELS[role] })),
+                      onSelect: (value) => void changeRole(persona, grant, value),
+                    })}
+                  </fieldset>
                   <button
                     class="btn persona-action"
                     type="button"
@@ -589,7 +588,7 @@ function channelsSection(persona: PersonaDetail): TemplateResult {
     "Slack channels",
     owner ? rowAction("Add channel", Plus, () => void openGranteePicker(persona.id, "channels")) : nothing,
     html`${list}${flagNote}${granteePickerTpl(persona, "channels")}`,
-    `People in these channels can ask QM to use ${persona.name} in a thread there. Let members edit a channel and everyone in it can change ${persona.name}'s instructions and skills, following the channel as people join and leave. Pin it in a channel to make every conversation there ${persona.name}, posting under its name and icon.`,
+    `People in these channels can ask QM to use ${persona.name} in a thread there. "Can edit" lets everyone in the channel change ${persona.name}'s instructions and skills, following the channel as people join and leave. Pin it in a channel to make every conversation there ${persona.name}, posting under its name and icon.`,
   );
 }
 
@@ -689,29 +688,6 @@ async function changeRole(persona: PersonaDetail, grant: PersonaGrant, value: st
     access.map((g) => (g.scopeId === grant.scopeId ? { ...g, role } : g)),
   );
   if (saved) await openPersona(persona.id, "Access saved.");
-}
-
-function channelDetail(persona: PersonaDetail, grant: PersonaGrant): string {
-  const notes = [
-    grant.pinned ? `Pinned: QM answers as ${persona.name} here` : "",
-    grant.role === "write" ? "Everyone in the channel can edit" : "",
-  ];
-  return notes.filter(Boolean).join(" · ");
-}
-
-async function toggleChannelEditors(persona: PersonaDetail, grant: PersonaGrant): Promise<void> {
-  const label = `#${grantLabel(grant).replace(/^#/, "")}`;
-  const role = grant.role === "write" ? "read" : "write";
-  const saved = await saveAccess(persona, (access) =>
-    access.map((g) => (g.scopeId === grant.scopeId ? { ...g, role } : g)),
-  );
-  if (saved)
-    await openPersona(
-      persona.id,
-      role === "write"
-        ? `Everyone in ${label} can edit ${persona.name}.`
-        : `${label} can use ${persona.name} but not edit it.`,
-    );
 }
 
 async function togglePin(persona: PersonaDetail, grant: PersonaGrant): Promise<void> {

@@ -78,7 +78,6 @@ export interface PersonaStore {
   access(id: string): Promise<PersonaAccess[]>;
   replaceAccess(id: string, access: ReadonlyArray<PersonaAccessEntry>, by: string): Promise<void>;
   pinnedIn(channel: ScopeId): Promise<string | null>;
-  writerChannels(): Promise<ScopeId[]>;
   roles(grantees: readonly ScopeId[], id?: string): Promise<Map<string, PersonaRole>>;
   listFor(grantees: readonly ScopeId[]): Promise<Array<Persona & { role: PersonaRole }>>;
   ownerGrants(): Promise<Array<{ personaId: string; scopeId: ScopeId }>>;
@@ -263,12 +262,6 @@ export function createPostgresPersonaStore(connectionString: string, opts: { id?
     async pinnedIn(channel) {
       const rows = await q("SELECT persona_id FROM persona_access WHERE grantee_scope_id = $1 AND pinned", [channel]);
       return (rows[0]?.persona_id as string | undefined) ?? null;
-    },
-    async writerChannels() {
-      const rows = await q(
-        "SELECT DISTINCT grantee_scope_id FROM persona_access WHERE grantee_scope_id LIKE 'channel:%' AND role = 'write'",
-      );
-      return rows.map((r) => r.grantee_scope_id as ScopeId);
     },
     async roles(grantees, id) {
       const rows = await q(

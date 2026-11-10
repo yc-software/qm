@@ -1,5 +1,4 @@
 import { personIds } from "../directory/person.ts";
-import { swallowAs } from "../util/errors.ts";
 import { validProjectIcon } from "../projects/project-store.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
 import type { TeamStore } from "../teams/teams.ts";
@@ -96,7 +95,7 @@ export function createPersonaService(deps: {
   teams?: Pick<TeamStore, "forTurn">;
   sessions: Pick<SessionStore, "setPersona">;
   isActive: (principalId: string) => boolean;
-  channelMember: (channelId: string, principalId: string) => Promise<boolean>;
+  memberChannelIds: (principalId: string) => Promise<string[]>;
   keychain?: Pick<Keychain, "grantsForScope" | "createGrant" | "revokeGrant">;
 }): PersonaService {
   const { store } = deps;
@@ -113,31 +112,20 @@ export function createPersonaService(deps: {
 
   async function editorChannels(principalId: string): Promise<ScopeId[]> {
     if (!deps.isActive(principalId)) return [];
-    const channels = await store.writerChannels();
-    const member = await Promise.all(
-      channels.map((channel) =>
-        deps
-          .channelMember(parseScopeId(channel).ref!, principalId)
-          .catch(swallowAs("personas: channel editors", false)),
-      ),
-    );
-    return channels.filter((_, i) => member[i]);
+    return (await deps.memberChannelIds(principalId)).map((id) => scopeId("channel", id));
   }
-
-  const higher = (a: PersonaRole | null, b: PersonaRole | null) => (atLeast(a, b ?? "read") ? a : b);
 
   async function role(principalId: string, personaId: string, contextScope?: ScopeId) {
     const inChannel = contextScope && parseScopeId(contextScope).kind === "channel" ? [contextScope] : [];
-    const [direct, here, viaChannel] = await Promise.all([
+    const [direct, here] = await Promise.all([
       granteeScopes(principalId).then((scopes) => store.roles(scopes, personaId)),
       inChannel.length ? store.roles(inChannel, personaId) : new Map<string, PersonaRole>(),
-      editorChannels(principalId).then((channels) =>
-        channels.length ? store.roles(channels, personaId) : new Map<string, PersonaRole>(),
-      ),
     ]);
-    const usable: PersonaRole | null = here.has(personaId) ? "read" : null;
-    const editor: PersonaRole | null = viaChannel.get(personaId) === "write" ? "write" : null;
-    return higher(higher(direct.get(personaId) ?? null, usable), editor);
+    const held = direct.get(personaId) ?? (here.has(personaId) ? "read" : null);
+    if (atLeast(held, "write")) return held;
+    const channels = await editorChannels(principalId);
+    const viaChannel = channels.length ? (await store.roles(channels, personaId)).get(personaId) : undefined;
+    return viaChannel === "write" ? "write" : held;
   }
 
   async function guarded<T>(

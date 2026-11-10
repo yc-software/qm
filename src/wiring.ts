@@ -1861,7 +1861,7 @@ export function buildApp(
     teams,
     sessions,
     isActive: isActiveMember,
-    channelMember: (channelId, principalId) => directory.channelMember(channelId, principalId),
+    memberChannelIds: (principalId) => directory.memberChannelIds(principalId),
     ...(keychain ? { keychain } : {}),
   });
   const personaHandover = createPersonaHandover({

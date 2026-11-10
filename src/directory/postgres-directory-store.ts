@@ -340,6 +340,16 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       return rows.map((row) => row.principal_id as string);
     },
 
+    async memberChannelIds(principalId) {
+      const rows = await q(
+        `SELECT DISTINCT channel_id FROM directory_channel_members
+          WHERE org_id = $1 AND (principal_id = ANY($2::text[]) OR principal_id IN (
+            SELECT slack_id FROM directory_members WHERE org_id = $1 AND principal_id = ANY($2::text[])))`,
+        [orgId, rosterIds(principalId)],
+      );
+      return rows.map((row) => row.channel_id as string);
+    },
+
     async channelMembership(channelId, principalId) {
       const rows = await q(
         `SELECT EXISTS (
