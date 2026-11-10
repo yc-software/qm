@@ -203,7 +203,7 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
           message: "sandbox_id isn't a computer this conversation can read files from",
         });
       }
-    } else {
+    } else if (needsSandbox) {
       try {
         await assertBotMayUseComputer(deps.sandboxResources, envScope, undefined, botMayUse);
       } catch (e) {

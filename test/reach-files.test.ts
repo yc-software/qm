@@ -270,11 +270,11 @@ describe("POST /v1/reach with files", () => {
     const handle = await built.sandbox.provision(scope, { sandboxId: worker.id });
     await built.sandbox.writeFile(handle, "plan.md", "carol's plan\n");
     await built.sandbox.teardown(handle, { keepWarm: true });
-    const send = async (botActor: boolean, sandboxId?: string) =>
+    const send = async (botActor: boolean, sandboxId?: string, files: unknown[] = ["plan.md"]) =>
       post(
         base,
         "/v1/reach",
-        { text: "plan", recipient: "Alice", files: ["plan.md"], ...(sandboxId ? { sandbox_id: sandboxId } : {}) },
+        { text: "plan", recipient: "Alice", files, ...(sandboxId ? { sandbox_id: sandboxId } : {}) },
         {
           "x-agent-capability": await mintCapabilityToken(
             {
@@ -299,6 +299,11 @@ describe("POST /v1/reach with files", () => {
       const botDefault = await send(true);
       assert.equal(botDefault.status, 403);
       assert.equal(((await botDefault.json()) as any).error, "forbidden");
+      const botStored = await send(true, undefined, [
+        { file_id: await storeFile("U-carol", "stored.txt", "from Files\n") },
+      ]);
+      assert.equal(botStored.status, 200);
+      assert.deepEqual(await readDelivered(((await botStored.json()) as any).deliveryId), ["stored.txt:from Files\n"]);
       const personDefault = await send(false);
       assert.equal(personDefault.status, 200);
       assert.deepEqual(await readDelivered(((await personDefault.json()) as any).deliveryId), [
