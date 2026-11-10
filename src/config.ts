@@ -12,10 +12,13 @@ import { isBearerSecret, isStrongSigningSecret } from "./auth/source-auth.ts";
 import { parseSandboxCapabilityTtlMs } from "./auth/capability-token.ts";
 import { existsSync, readdirSync } from "node:fs";
 import {
+  MODEL_PROVIDERS,
   MODEL_REQUEST_CONTEXT_HEADERS,
+  isModelProvider,
   parseProviderBaseUrl,
   providerBaseUrlsFromEnv,
   type ModelGatewayTransportConfig,
+  type ModelProvider,
   type ProviderBaseUrls,
 } from "./model/provider-endpoints.ts";
 import { join, resolve } from "node:path";
@@ -42,11 +45,8 @@ import { parseSharingPosture, type SharingPosture } from "./resolution/sharing-p
 import { slackPluginConfigFromEnv, slackAccountConfigsFromEnv, type SlackPluginConfig } from "./slack/config.ts";
 import {
   DEFAULT_CODEX_MODEL_ID,
-  MODEL_PROVIDERS,
   defaultModelForProvider,
-  isModelProvider,
   onlyProvider,
-  type ModelProvider,
   type ModelProviderAvailability,
 } from "./model/pi-models.ts";
 

@@ -35,6 +35,7 @@ import { tenantAppHandle } from "../../tenants/settings.ts";
 import { boundTenant } from "../../tenants/context.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "../../deploy/embed-ancestors.ts";
 import { proxyHeaders } from "../../util/http-proxy.ts";
+import { relayWebSocket } from "../../../plugins/chassis/src/websocket-relay.ts";
 import { deploymentGitParts, isDeploymentGitRoute } from "../../../plugins/chassis/src/deployment-git.ts";
 
 function deploymentProxyAgent(port?: number): { agent?: SocksProxyAgent } {
@@ -559,6 +560,19 @@ async function proxyReach(
       viewerIdentityKey(ctx.secret, reach.id),
     );
   }
+  if (ctx.upgrade) {
+    const target = {
+      tls: reach.endpoint.tls === true,
+      hostname: host,
+      port,
+      path: subPath + url.search,
+      headers,
+      timeoutMs: deps.deployDialTimeoutMs ?? CONFIG_DEFAULTS.deployDialTimeoutMs,
+      ...deploymentProxyAgent(reach.endpoint.socksProxyPort),
+    };
+    relayWebSocket(res, ctx.upgrade, target, "deployment-websocket");
+    return;
+  }
   if (/(?:^|,)\s*chunked\s*$/i.test(String(req.headers["transfer-encoding"] ?? ""))) {
     const chunks: Buffer[] = [];
     let size = 0;
@@ -819,7 +833,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     sendJson(res, 404, { error: "not_found" });
     return true;
   }
-  if (!["GET", "HEAD", "OPTIONS"].includes(ctx.method)) {
+  if (ctx.upgrade || !["GET", "HEAD", "OPTIONS"].includes(ctx.method)) {
     const origin = req.headers.origin;
     const site = req.headers["sec-fetch-site"];
     if ((origin !== undefined && origin !== `https://${rawHost}`) || (site !== undefined && site !== "same-origin")) {

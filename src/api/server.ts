@@ -9,6 +9,8 @@ import {
   type ServerResponse,
   type Server,
 } from "node:http";
+import type { Duplex } from "node:stream";
+import { failUpgrade, isWebSocketUpgrade, responseOnSocket } from "../../plugins/chassis/src/websocket-relay.ts";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest, type HTTPMethods } from "fastify";
 import type { App } from "./app.ts";
 import type { ServerDeps } from "./deps.ts";
@@ -525,6 +527,10 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
       respondError(req, res, err),
     );
   });
+  server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+    socket.on("error", () => socket.destroy());
+    void upgradeFront(req, socket, head).catch((error: unknown) => failUpgrade(socket, "deployment-websocket", error));
+  });
   const { fastify, routing } = buildFastify(wiring, server);
   const ready = Promise.resolve(fastify.ready());
   ready.catch((err: unknown) => console.error("[server] fastify initialization failed:", errMessage(err)));
@@ -534,6 +540,18 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
   server.maxConnections = 1024;
 
   const capabilitySecret = deps.capabilitySecret ?? deps.signingSecret;
+  async function upgradeFront(req: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
+    const res = isWebSocketUpgrade(req) ? responseOnSocket(req, socket) : null;
+    if (!res) return void socket.destroy();
+    const base: BaseCtx = { ...baseCtx(req, res, wiring), upgrade: { socket, head } };
+    await withRequestContext("core", req, res, () =>
+      inRequestTenant(req, res, base, null, async () => {
+        if (await proxyDeploymentSubdomain(base)) return nameRequest(base.method, "/deployment-proxy/websocket");
+        sendJson(res, 404, { error: "not_found" });
+      }),
+    );
+  }
+
   async function front(req: IncomingMessage, res: ServerResponse): Promise<void> {
     let base = baseCtx(req, res, wiring);
     const alias = appHostRequest(req, deps) ? null : apiAlias(base.method, base.pathname);
@@ -543,13 +561,23 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     }
     const raw = findRoute(rawRoutes, base.method, base.pathname);
     const matched = raw ? null : findRoute(apiRoutes, base.method, base.pathname);
-    const route = (raw ?? matched)?.route;
-    const inbound = inboundKey(req, deps, raw ?? matched, base.url);
+    await inRequestTenant(req, res, base, raw ?? matched, () => serve(req, res, base, raw, matched));
+  }
+
+  async function inRequestTenant(
+    req: IncomingMessage,
+    res: ServerResponse,
+    base: BaseCtx,
+    found: Matched<BaseCtx> | Matched<ApiCtx>,
+    next: () => Promise<void>,
+  ): Promise<void> {
+    const route = found?.route;
+    const inbound = inboundKey(req, deps, found, base.url);
     if (inbound)
       return withInboundTenant(
         app,
         inbound,
-        () => serve(req, res, base, raw, matched),
+        next,
         async () =>
           (await identityTenant(req, deps.portalIdentitySecret ?? deps.signingSecret)) ??
           (usesBrowserSession(req, route) ? (browserSessionTenant(req, deps) ?? bootTenant()) : undefined),
@@ -560,7 +588,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
       route,
       capabilitySecret,
       bootTenant(),
-      () => serve(req, res, base, raw, matched),
+      next,
       deps.portalIdentitySecret ?? deps.signingSecret,
       () => (usesBrowserSession(req, route) ? browserSessionTenant(req, deps) : undefined),
     );
