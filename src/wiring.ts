@@ -1,3 +1,4 @@
+import type { PromptSnapshot } from "./core/orchestrator/prompt-snapshot.ts";
 import { onTenantLoad, perTenant } from "./tenants/cache.ts";
 import { loadTenantSettings, TENANT_SETTINGS_REFRESH_MS } from "./tenants/settings.ts";
 import { nonDeploymentCredential, withDeploymentCredentials } from "./credentials/deployment-credentials.ts";
@@ -2241,6 +2242,7 @@ export function buildApp(
     deliveries,
     approvals,
     approvalGrants: artifactMap<CommandApprovalGrant>("approval_grants", ["actorId"]),
+    promptSnapshots: artifactMap<PromptSnapshot>("prompt_snapshots"),
     ...(processes ? { processes } : {}),
     monitors,
     crons,

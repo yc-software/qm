@@ -27,7 +27,9 @@ import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
-import type { ConnectorTokenStore } from "../src/credentials/keychain.ts";
+import { createKeychain, type ConnectorTokenStore, type Keychain } from "../src/credentials/keychain.ts";
+import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
+import type { AdminService } from "../src/admin/admin-service.ts";
 import { createSkillStore, type SkillStore } from "../src/skills/skill-store.ts";
 import { scopeId, type Conversation, type Principal, type ScopeId, type TurnRequest } from "../src/types.ts";
 import { senderNote } from "../src/core/orchestrator/prompt-blocks.ts";
@@ -109,6 +111,8 @@ function buildOrchestrator(
     securityScreener?: SecurityScreener;
     managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "members" | "version" | "withVersion" | "slackChannel">;
     isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
+    keychain?: Keychain;
+    admin?: AdminService;
   } = {},
 ) {
   const config = testConfigStore(ORG);
@@ -555,7 +559,7 @@ test("standing obligations: this scope's pending triggers render; other scopes' 
   const prompt = b.reply ?? "";
 
   assert.match(prompt, /schedule the wake-up in the same turn/);
-  assert.match(prompt, /\n## Scheduled here \(America\/Los_Angeles\)\n/);
+  assert.match(prompt, /\n## Crons scheduled here \(America\/Los_Angeles\)\n/);
   assert.match(prompt, /Vendor status — every 5 min$/m);
   assert.match(prompt, /Legal follow-up — once at/);
   assert.doesNotMatch(prompt, /poll the vendor status page|follow up with legal/);
@@ -1526,7 +1530,7 @@ for (const surfaceTools of [false, true]) {
   });
 }
 
-test("scheduled-work changes update the next turn's system block without rewriting history", async () => {
+test("scheduled-work changes ride the next turn's environment note without rewriting the system prompt or history", async () => {
   const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const sandbox = fakeSandbox();
   const seen: AgentTurnInput[] = [];
@@ -1558,12 +1562,12 @@ test("scheduled-work changes update the next turn's system block without rewriti
     throw new Error("inventory unavailable");
   };
   assert.equal((await orchestrator.handleTurn({ ...input, text: "fourth" })).status, "ok");
-  for (const turn of seen) assert.doesNotMatch(turn.environment ?? "", /Scheduled here|Sandboxes|Debian|vCPU/);
+  for (const turn of seen) assert.equal(turn.systemPrompt, seen[0]!.systemPrompt);
   assert.match(seen[0]!.systemPrompt, /Nothing is scheduled here/);
-  assert.match(seen[1]!.systemPrompt, /- Synthetic status — /);
-  assert.equal(seen[2]!.systemPrompt, seen[0]!.systemPrompt);
-  assert.match(seen[3]!.systemPrompt, /Scheduled-work status is unavailable/);
-  assert.doesNotMatch(seen[1]!.systemPrompt, /Other Linux|8 vCPU|\/new\/workspace/);
+  assert.match(seen[1]!.environment ?? "", /Synthetic status/);
+  assert.doesNotMatch(seen[2]!.environment ?? "", /Synthetic status|Crons scheduled here/);
+  assert.match(seen[3]!.environment ?? "", /Scheduled-work status is unavailable/);
+  for (const turn of seen) assert.doesNotMatch(turn.environment ?? "", /Other Linux|8 vCPU|\/new\/workspace/);
   assert.deepEqual(seen[1]!.history, originalItems);
   assert.deepEqual((await sessions.getItems(first.sessionId!)).slice(0, originalItems.length), originalItems);
 });
@@ -1609,3 +1613,100 @@ for (const mode of ["safe", "blocked", "unavailable", "ordinary", "observe"] as 
     else assert.ok(refreshedScreens > 0);
   });
 }
+
+test("a shared thread keeps one byte-identical system prompt until compaction; changes ride the environment note", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  const teammate: Principal = { id: "U2", type: "internal", displayName: "Teammate" };
+  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const keychain = createKeychain({
+    lock: testAdvisoryLock(),
+    creds: testMap(),
+    grants: testMap(),
+    asks: testMap(),
+    key: deriveConnectorKey("stable-prompt-test"),
+  });
+  const npm = await keychain.save({
+    ownerId: actor.id,
+    service: "npm",
+    secret: "npm_x",
+    envKey: "NPM_TOKEN",
+    expiresAt: Date.now() + 3_600_000,
+  });
+  await keychain.createGrant({
+    credentialId: npm.id,
+    ownerId: actor.id,
+    audienceScopeId: scopeId("channel", "C1"),
+    mode: "standing",
+    purpose: "publish packages",
+  });
+  const admin = {
+    adminStatusOf: async (_tenant: Parameters<AdminService["adminStatusOf"]>[0], p: Principal) => ({
+      isAdmin: p.id === actor.id,
+    }),
+    listGrants: async (tenant: Parameters<AdminService["listGrants"]>[0]) => {
+      assert.ok(tenant);
+      return [{ principalId: actor.id, role: "org_admin", scopeId: scopeId("org", ORG) }];
+    },
+  } as unknown as AdminService;
+  const { orchestrator, sessions } = buildOrchestrator({ crons, keychain, admin });
+  const thread = "C1:stable-thread";
+  const turn = async (speaker: Principal, origin: OrchestratorInput["origin"] = { kind: "human" }) => {
+    const result = await orchestrator.handleTurn({
+      surface: "test",
+      actor: speaker,
+      conversation: {
+        kind: "channel",
+        threadRef: thread,
+        channelRef: "C1",
+        audience: [actor, teammate],
+        publishMembers: [actor, teammate],
+      },
+      text: "!sysprompt",
+      origin,
+    });
+    assert.equal(result.status, "ok", result.reason);
+    const reply = result.reply ?? "";
+    const system = reply.split("\n\n<environment>")[0]!;
+    return { system, environment: reply.slice(system.length) };
+  };
+
+  const first = await turn(actor);
+  assert.match(first.environment, /The sender is an org admin\./);
+  assert.doesNotMatch(first.environment, /Changed since the system prompt/);
+
+  const second = await turn(teammate);
+  assert.equal(second.system, first.system, "a different speaker must not change a byte of the system prompt");
+  assert.doesNotMatch(second.environment, /org admin|Changed since the system prompt/);
+
+  await crons.create({
+    owner: actor.id,
+    createdBy: actor.id,
+    ownerScopeId: scopeId("channel", "C1"),
+    schedule: { cron: "0 9 * * 1", timezone: "America/Los_Angeles" },
+    title: "Weekly digest",
+    action: "summarize the week",
+  });
+  t.mock.timers.tick(2 * 3_600_000);
+  const third = await turn(teammate);
+  assert.equal(third.system, first.system, "a new cron and an expired credential must not change the system prompt");
+  assert.match(third.environment, /Added to "Crons scheduled here[^"]*":\n- Weekly digest/);
+  assert.match(third.environment, /Removed from "Credentials › U1":\n.*NPM_TOKEN/);
+
+  const fired = await turn(actor, { kind: "automation", destination: { type: "test", target: thread } });
+  assert.equal(fired.system, first.system, "a scheduled fire must not change the system prompt");
+  assert.match(fired.environment, /scheduled trigger/);
+  assert.match(fired.environment, /Weekly digest/);
+
+  const session = (await sessions.getByThread(thread))!;
+  const items = await sessions.getItems(session.id);
+  await sessions.append(
+    { sessionId: session.id },
+    { kind: "ContextCompaction", throughSeq: items.at(-1)!.seq, text: "earlier work" },
+  );
+  const compacted = await turn(actor);
+  assert.notEqual(compacted.system, first.system, "compaction re-snapshots the system prompt");
+  assert.match(compacted.system, /Weekly digest/);
+  assert.doesNotMatch(compacted.system, /NPM_TOKEN/);
+  assert.doesNotMatch(compacted.environment, /Changed since the system prompt/);
+  assert.equal((await turn(teammate)).system, compacted.system);
+});
