@@ -97,3 +97,57 @@ test("seed skill names cannot escape or alias their materialized directory", () 
   }
   assert.equal(parseSeedSkillFrontmatter(skill("foo-bar_v1.2")).name, "foo-bar_v1.2");
 });
+
+test("drops unquoted inline comments but keeps # inside quotes or words", () => {
+  const { attrs } = parseFrontmatter(`---
+name: demo # human-readable note
+description: "a # inside quotes" # trailing note
+tag: c#sharp
+joined: foo# bar
+caps: [one, two] # why
+folded: > # note
+  folded body
+empty: # nothing left
+list:
+  - command:demo # why
+---
+body`);
+  assert.equal(attrs.name, "demo");
+  assert.equal(attrs.description, "a # inside quotes");
+  assert.equal(attrs.tag, "c#sharp");
+  assert.equal(attrs.joined, "foo# bar");
+  assert.deepEqual(attrs.caps, ["one", "two"]);
+  assert.equal(attrs.folded, "folded body");
+  assert.deepEqual(attrs.empty, []);
+  assert.deepEqual(attrs.list, ["command:demo"]);
+});
+
+test("a commented-out value is missing, not a literal comment", () => {
+  assert.throws(() => parseSeedSkillFrontmatter("---\nname: # note\ndescription: d\n---\nbody"), /requires name/);
+  assert.equal(parseSeedSkillFrontmatter("---\nname: demo # note\ndescription: d # note\n---\nbody").name, "demo");
+});
+
+test("a # inside quotes (with escapes, doubling, or an unclosed quote) is not a comment", () => {
+  const { attrs } = parseFrontmatter(`---
+escaped: "He said \\"go\\" # really"
+doubled: 'it''s # fine'
+unclosed: use 'em all # note
+caps:
+  - one # why
+  - # dropped
+  - two
+---
+body`);
+  assert.equal(attrs.escaped, 'He said \\"go\\" # really');
+  assert.equal(attrs.doubled, "it''s # fine");
+  assert.equal(attrs.unclosed, "use 'em all");
+  assert.deepEqual(attrs.caps, ["one", "two"]);
+});
+
+test("inline comment stripping stays linear on long scalars", () => {
+  const value = `a${" ".repeat(200_000)}${'\\"'.repeat(100_000)}b`;
+  const started = performance.now();
+  const { attrs } = parseFrontmatter(`---\nname: demo\ndescription: "${value}"\n---\nbody`);
+  assert.ok(performance.now() - started < 2_000, "parseFrontmatter must not backtrack on long scalars");
+  assert.equal(attrs.description, value);
+});
