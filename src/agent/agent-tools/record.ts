@@ -250,10 +250,10 @@ export function createRecorder(ref: ToolContextRef) {
       if (cut && toolOutput && !quarantined) {
         output = (await parkFullText(toolOutput, t, cut)) ?? undefined;
         if (output) {
-          result = result.replace(cut.unparkedText, cut.text);
+          result = result.replace(cut.unparkedText, () => cut.text);
           (ret as { content: Array<{ type: string; text?: string }> }).content = ret.content.map((c) =>
             c.type === "text" && c.text?.includes(cut.unparkedText)
-              ? { ...c, text: c.text.replace(cut.unparkedText, cut.text) }
+              ? { ...c, text: c.text.replace(cut.unparkedText, () => cut.text) }
               : c,
           );
         }

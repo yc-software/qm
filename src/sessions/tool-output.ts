@@ -13,6 +13,8 @@ export const TOOL_OUTPUT_RETENTION_DAYS = 30;
 const SETTING_CACHE_MS = 30_000;
 const TOOL_OUTPUT_PATH = "tool-output/";
 const DIGEST_DIR = "md5/";
+const UNPARKED_NOTE =
+  " The full output was not kept; rerun the call narrower (filter or paginate it) if you need the rest";
 
 export interface ToolOutputRef {
   blob: string;
@@ -94,7 +96,7 @@ export async function cutIfOverCap(
 ): Promise<InlineCut | null> {
   const inlineTokens = await inlineTokensOf(store);
   const cut = cutToolOutput(text, inlineTokens, callId);
-  return cut ? { ...cut, unparkedText: cutToInline(text, inlineTokens)!.text } : null;
+  return cut ? { ...cut, unparkedText: cutToInline(text, inlineTokens, UNPARKED_NOTE)!.text } : null;
 }
 
 export async function parkFullText(

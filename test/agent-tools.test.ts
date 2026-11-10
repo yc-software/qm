@@ -714,7 +714,7 @@ test("a result over the inline cap keeps its head and tail and parks the full te
   const bytes = createMemoryDurableByteStore();
   const outputs = createPostgresToolOutputStore({ pool, bytesFor: () => bytes, now: () => clock.at });
   const appends: Promise<unknown>[] = [];
-  const full = Array.from({ length: 2_000 }, (_, i) => `line ${i}`).join("\n");
+  const full = `${Array.from({ length: 2_000 }, (_, i) => `line ${i}`).join("\n")}\nprice $' total`;
   const tc = {
     ...fakeToolContext(),
     toolOutput: outputs,
@@ -740,6 +740,7 @@ test("a result over the inline cap keeps its head and tail and parks the full te
   assert.equal(result.text, seen, "the item stores exactly what the model saw");
   assert.ok(seen.startsWith("line 0\nline 1"), "head survives");
   assert.ok(seen.includes("[exit 0]"), "tail survives");
+  assert.ok(seen.includes("price $' total"), "the tail reaches the model verbatim");
   const marker = parkedOutputKey(/tool-output\/\S+(?=;)/.exec(seen)![0])!;
   const parked = await outputs.read(session.id, marker);
   assert.ok(parked && "text" in parked, "the marker names the parked file");
@@ -820,6 +821,7 @@ test("a result over the inline cap that cannot be parked drops the file referenc
   assert.equal(result.body.output, undefined);
   assert.ok(result.text?.includes("[output cut: showing the first"));
   assert.ok(!result.text?.includes("tool-output/"), "no marker points at a file that was never written");
+  assert.ok(result.text?.includes("rerun the call narrower"));
   assert.equal(ret.content.map((c) => c.text).join("\n"), result.text);
 });
 
