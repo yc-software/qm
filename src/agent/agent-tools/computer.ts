@@ -536,7 +536,7 @@ export function computerTools(kit: ToolKit) {
             try {
               const r = await tc.backgroundUnwatch(params.monitor_id!);
               const refusal = r.notYours
-                ? `[not your watch: ${r.monitorId}; only the person who armed it can remove it]`
+                ? `[not your watch: ${r.monitorId}; someone else in this conversation armed it]`
                 : `[no such watch: ${r.monitorId}]`;
               return recordResult(
                 callId,

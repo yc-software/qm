@@ -1,4 +1,4 @@
-import type { Destination, ScopeId } from "../types.ts";
+import { isSystemActor, type Destination, type ScopeId } from "../types.ts";
 import { samePerson } from "../directory/person.ts";
 import type { MonitorStore } from "./monitor-store.ts";
 import type { ProcessRegistry, ProcessStatus } from "../processes/process-registry.ts";
@@ -172,7 +172,8 @@ export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
     async unwatch(monitorId) {
       const m = await deps.store.get(monitorId);
       if (!m || m.ownerScopeId !== deps.ownerScopeId) return { monitorId, removed: false };
-      if (!samePerson(m.owner, deps.owner)) return { monitorId, removed: false, notYours: true };
+      if (isSystemActor(m.owner) ? deps.botActor === true : !samePerson(m.owner, deps.owner))
+        return { monitorId, removed: false, notYours: true };
       await deps.store.delete(monitorId);
       return { monitorId, removed: true };
     },
