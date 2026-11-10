@@ -1138,12 +1138,9 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "alb_logs" {
 resource "aws_s3_bucket_lifecycle_configuration" "alb_logs" {
   bucket = aws_s3_bucket.alb_logs.id
   rule {
-    id     = "expire-alb-access-logs"
+    id     = "abort-incomplete-uploads"
     status = "Enabled"
     filter {}
-    expiration {
-      days = 30
-    }
     abort_incomplete_multipart_upload {
       days_after_initiation = 1
     }
