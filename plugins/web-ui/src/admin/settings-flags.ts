@@ -7,7 +7,7 @@ const state = {
   scope: "",
   available: false,
   selected: new Set<string>(),
-  feature: "persistent_subagents",
+  feature: "app_annotations",
   saving: false,
   message: "",
   choices: [] as any[],

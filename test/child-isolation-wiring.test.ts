@@ -11,7 +11,6 @@ const scope = scopeId("personal", "U1");
 
 test("a child's turn carries its placement note in the system prompt", async () => {
   const built = buildApp(testConfig());
-  await built.featureFlags.setEnabled("persistent_subagents", scope, true, "admin");
   const room = await built.sessions.getOrCreateByThread("web:room", "dm", scope, undefined, "web");
   await built.sessions.addParticipant(room.id, actor.id);
   const syscalls = built.sessionSyscalls.forTurn({

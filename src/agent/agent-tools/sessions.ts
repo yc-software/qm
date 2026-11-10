@@ -35,8 +35,9 @@ export function sessionTools(kit: ToolKit) {
     name: "subagents",
     label: "subagents",
     description:
-      "Spawn and coordinate subagents: background workers that cannot see this conversation. Brief one like a capable colleague (goal, why it matters, what you know, real limits) and leave the approach to them; its final answer arrives as an internal message. " +
-      "open: start one with `task`. " +
+      "Spawn and coordinate subagents: background workers that cannot see this conversation. Brief one like a capable colleague (goal, why it matters, the one or two facts it needs, real limits) and leave the approach to them; its final answer arrives as an internal message. " +
+      "Keep the brief at the scale of the user's ask, in their words. A question that one or two commands could answer is answered here, not delegated. Do not add deliverables, deadlines, dimensions, or proofs the user did not ask for; a subagent can ask if something is unclear. " +
+      "open: start one with `task`; it retires when it delivers its final answer, so open a fresh one for new work. " +
       'send_message: message a subagent, sibling or parent (target="parent"); it wakes the recipient unless wake:false, and a subagent already mid-turn gets it at its next step instead of after the turn ends. Wake when you need it to act or answer (more work, a re-review, a question); use wake:false for FYI it can act on later (status, a finding, an ack), which an idle recipient won\'t see until something else wakes it. interrupt:true stops its current run (not its subagents) and makes any text its next turn. ' +
       "read: list subagents or read one's transcript. " +
       (delegateWork
@@ -83,6 +84,12 @@ export function sessionTools(kit: ToolKit) {
       fastMode: Type.Optional(
         Type.Boolean({ description: "open: fast mode; omitted: yours when the model is inherited, else the default." }),
       ),
+      persistent: Type.Optional(
+        Type.Boolean({
+          description:
+            "open: keep the subagent after its final answer for follow-ups that depend on its context (a long-running operator). Default: it retires when it answers.",
+        }),
+      ),
       target: Type.Optional(
         Type.String({
           description:
@@ -109,6 +116,7 @@ export function sessionTools(kit: ToolKit) {
         requestId?: string;
         thinkingLevel?: string;
         fastMode?: boolean;
+        persistent?: boolean;
         task?: string;
         name?: string;
         noComputer?: boolean;
@@ -131,6 +139,7 @@ export function sessionTools(kit: ToolKit) {
         ...(p.text ? { text: p.text } : {}),
         ...(p.wake === false ? { wake: false } : {}),
         ...(p.interrupt ? { interrupt: true } : {}),
+        ...(p.persistent ? { persistent: true } : {}),
       });
       if (!syscalls) {
         return recordResult(
@@ -165,6 +174,7 @@ export function sessionTools(kit: ToolKit) {
           ...(p.noComputer !== undefined ? { readOnly: p.noComputer } : {}),
           ...(p.isolation ? { isolation: p.isolation } : {}),
           ...(p.model ? { model: p.model } : {}),
+          ...(p.persistent ? { persistent: true } : {}),
         });
         if (!result.ok) {
           return recordResult(
@@ -231,7 +241,7 @@ export function sessionTools(kit: ToolKit) {
         return recordResult(
           callId,
           { tool: "subagents", action: "read", children: result.children.length },
-          text(lines.length ? lines.join("\n") : "[no subagents opened from this conversation]"),
+          text(lines.length ? lines.join("\n") : "[no subagents to list; retired ones can still be read by id]"),
         );
       }
       return recordResult(
