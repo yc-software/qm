@@ -160,71 +160,20 @@ disposable test deployment: the test redeems real links for its configured admin
   never redirects to the provider. Sign-out is local to this portal: it does not
   contact the OIDC provider or end the provider session, so choosing **Sign in**
   may complete silently through an existing provider session. Sign out of the
-  provider directly to end it everywhere. Built-in broker and anonymous logout
-  retain their existing flows. Local-development logout also stops on the
+  provider directly to end it everywhere. Built-in broker logout retains its
+  existing flow. Local-development logout also stops on the
   signed-out page until the user chooses **Sign in**.
 - **Stateless session limits.** Clearing browser cookies does not revoke a copied
   portal session before `exp`; the core's `canAdminister` (re-read per request)
   remains the live admin revocation path.
 
-## Playground mode
+## Apps domain and cookie domain
 
-`PORTAL_PLAYGROUND=1` turns the deployment into a public try-it instance: an
-unauthenticated browser navigation (a `GET` that accepts HTML) mints an anonymous
-principal (`playground-<random>`), seals it into the ordinary `portal_session`
-cookie, and continues — so each visitor's sessions, files, memory, and sandbox are
-pinned to their browser through the same scoping that isolates real teammates.
-Non-HTML requests without a session still get `401`, so the SPA's API calls ride
-the cookie from the first page load and bare `curl` never mints.
-
-What playground mode does **not** change: `/auth/login` still runs the full OIDC
-flow (that's how the one admin signs in — production still demands the usual OIDC
-config), anonymous sessions never pass the core's admin checks, and admin identity remains
-the core's `ADMIN_GRANTS`. Signing out of an anonymous session just clears the
-cookie; the next visit starts a fresh playground identity.
-
-Minting is rate-limited per client address through the core's Postgres-backed
-single-use claim store (the same one the sign-in broker uses), so restarts and
-blue-green deploys can't reset it; if the core can't record the claim the portal
-fails closed and answers 429. `PORTAL_PLAYGROUND_MINTS_PER_IP` (default 30, at
-most 64 — the core grants at most 64 claim slots per request) per
-`PORTAL_PLAYGROUND_MINT_WINDOW_S` (default 3600, at most 86400 — the core's
-claim horizon); the portal refuses to boot outside those ranges rather than
-silently serving 429 to everyone. IPv6 clients are bucketed per /64, not per
-address, so a visitor with a routed prefix can't rotate through fresh budgets.
-The client address comes from `clientIpOf` — on Fly that's `fly-client-ip`;
-elsewhere set `PORTAL_XFF_TRUSTED_HOPS` when a reverse proxy fronts the portal,
-or every visitor (and every crawler that accepts HTML) shares the socket
-address's one bucket.
-
-Because playground authority must never leave this origin, the portal refuses
-to boot with `PORTAL_PLAYGROUND` alongside `PORTAL_COOKIE_DOMAIN`, an apps
-domain (`PORTAL_APPS_DOMAIN` / `DEPLOY_APPS_DOMAIN`), or an explicit
-`PORTAL_DEPLOYMENTS_ENABLED=1` — a domain-wide cookie or the deployment proxy
-would hand anonymous sessions to surfaces that never see the `anon` flag. The
-deployment proxy (`/d/<app>/`), on by default for signed-in portals, turns
-itself off under the playground, and anonymous sessions are refused it at
-request time too. Outside the playground, `PORTAL_APPS_DOMAIN` defaults to
-`DEPLOY_APPS_DOMAIN`, and `PORTAL_COOKIE_DOMAIN` to the portal host itself when
-the apps domain sits directly under it (`apps.<portal host>`), so one core-side
-variable configures both processes. Any other layout needs an explicit
-`PORTAL_COOKIE_DOMAIN` — deriving a shared parent by guesswork risks landing on
-a public suffix browsers refuse. Anonymous sessions are also refused the `/connect/*` and
-`/drop/*` flows, so a visitor can't attach real OAuth tokens or dropped secrets
-to a throwaway principal that a cleared cookie orphans.
-
-The `anon` flag lives only in the portal's session cookie — it does not cross
-the portal identity boundary. To the core, a playground visitor is an ordinary
-**internal** principal of the deployment's org: they can run turns, use their
-sandbox, create crons, and reach anything granted or published at `org:` scope,
-including org-granted credentials. That is the design — visitors are members of
-the playground org — so a playground must be its own deployment with nothing
-sensitive at org scope: no org-wide credential grants, no real connector
-credentials, no company data. A cleared cookie mints a fresh principal, so pair
-this with the core's real brakes: `BUDGET_USD_PER_WINDOW`,
-`ORG_BUDGET_USD_PER_WINDOW`, and a single pinned model
-via the admin `base-model` / `webui-models` resources. Nothing
-garbage-collects an abandoned visitor's scope yet.
+`PORTAL_APPS_DOMAIN` defaults to `DEPLOY_APPS_DOMAIN`, and `PORTAL_COOKIE_DOMAIN`
+to the portal host itself when the apps domain sits directly under it
+(`apps.<portal host>`), so one core-side variable configures both processes. Any
+other layout needs an explicit `PORTAL_COOKIE_DOMAIN` — deriving a shared parent
+by guesswork risks landing on a public suffix browsers refuse.
 
 ## Env
 

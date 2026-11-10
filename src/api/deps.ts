@@ -5,12 +5,11 @@ import type { SlackWebClientFactory } from "../slack/web-client.ts";
 import type { TeamStore } from "../teams/teams.ts";
 import type { DecisionStore } from "../decisions/store.ts";
 import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
-import type { ModelGatewayTransportConfig } from "../model/provider-endpoints.ts";
+import type { ModelGatewayTransportConfig, ModelProvider } from "../model/provider-endpoints.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { LoopIngressService } from "../loops/ingress.ts";
 import type { createSuggestedActivityService } from "../suggestions/activities.ts";
 import type { ManagedSlack } from "../surfaces/slack-managed.ts";
-import type { InboxSourceRefresh } from "../loops/inbox-source-refresh.ts";
 import type { BrokerSessionStore } from "../auth/broker-sessions.ts";
 import type { DirectFileUploads } from "../files/direct-file-upload.ts";
 import type { SandboxResources } from "../sandbox/sandbox-resources.ts";
@@ -18,7 +17,7 @@ import type { ModelVerifier } from "../model/model-verification.ts";
 import type { DurableByteStore } from "../files/durable-byte-store.ts";
 import type { SessionShareStore } from "../sessions/session-share.ts";
 import type { ModelOverlayStore } from "../model/model-overlay-store.ts";
-import type { ModelProvider, ModelProviderAvailability } from "../model/pi-models.ts";
+import type { ModelProviderAvailability } from "../model/pi-models.ts";
 import type { CustomProviderStore, ModelCredentialStore } from "../model/model-credential-store.ts";
 import type { UserModelCredentialStore } from "../model/user-model-credential-store.ts";
 import type { McpServerStore } from "../mcp/mcp-server-store.ts";
@@ -51,6 +50,7 @@ import type { Scheduler } from "../cron/scheduler.ts";
 import type { WebhookReceiver } from "../webhooks/webhook-receiver.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { PrincipalLinkService } from "../identity/principal-links.ts";
+import type { UserStore } from "../identity/user-store.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
 import type {
   ConnectorTokenStore,
@@ -194,7 +194,6 @@ export interface ServerDeps {
   channelPolicy?: ChannelPolicyStore;
   uiState?: UiStateStore;
   loopSourceTokens?: ConnectorTokenSource;
-  inboxSourceRefresh?: InboxSourceRefresh;
   loopSlackClient?: (token: string) => SlackUserClient;
   sessionShares?: SessionShareStore;
   sessionShareBytes?: DurableByteStore;
@@ -214,6 +213,7 @@ export interface ServerDeps {
   loopIngress?: LoopIngressService;
   identity?: IdentityService;
   principalLinks?: PrincipalLinkService;
+  users?: Pick<UserStore, "get" | "resolve" | "setDisplayName">;
   keychain?: Keychain;
   serviceCreds?: ServiceCredentialStore;
   deliveries?: DeliveryStore;

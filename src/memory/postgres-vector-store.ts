@@ -1,6 +1,8 @@
-import { createPgPool } from "../persistence/pg-pool.ts";
-import { unitVector } from "../model/embeddings.ts";
+import { createPgPool, type PgMigrationDefinition } from "../persistence/pg-pool.ts";
+import { PGVECTOR_MAX_DIMENSIONS, unitVector } from "../model/embeddings.ts";
 import { MEMORY_FACTS_MIGRATIONS } from "./postgres-memory-service.ts";
+import { tenantTables } from "../tenants/migrations.ts";
+import { claimFunction, claimRows, type ClaimedRow } from "../tenants/claim.ts";
 
 export interface MemoryVector {
   scope: string;
@@ -36,6 +38,7 @@ export interface MemoryVectorStore {
     afterId?: string,
   ): Promise<Array<{ scope: string; factId: string; hash: string; text: string }>>;
   prune(model: string, limit: number, dimensions?: number, signal?: AbortSignal): Promise<number>;
+  claimTenants(): Promise<ClaimedRow[]>;
   close(): Promise<void>;
 }
 
@@ -58,36 +61,44 @@ const batchSize = (limit: number) => Math.max(1, Math.min(256, Math.floor(limit)
 
 function vectorWidth(dimensions: number | undefined): number | null {
   if (dimensions === undefined) return null;
-  if (!Number.isInteger(dimensions) || dimensions < 1 || dimensions > 16000)
+  if (!Number.isInteger(dimensions) || dimensions < 1 || dimensions > PGVECTOR_MAX_DIMENSIONS)
     throw new Error("Invalid memory embedding dimensions");
   return dimensions;
 }
 
-export function createPostgresVectorStore(connectionString: string): MemoryVectorStore {
-  const db = createPgPool(connectionString, [
-    ...MEMORY_FACTS_MIGRATIONS,
-    { id: "memory/vectors/0001-extension", statements: ["CREATE EXTENSION IF NOT EXISTS vector"] },
-    { id: "memory/vectors/0002", statements: SCHEMA },
-    {
-      id: "memory/vectors/0003-sketch",
-      statements: [
-        "SET LOCAL lock_timeout = '3s'",
-        "ALTER TABLE memory_fact_vectors ADD COLUMN IF NOT EXISTS embedding_bits BIT VARYING",
-        `CREATE OR REPLACE FUNCTION memory_fact_vectors_bits() RETURNS trigger LANGUAGE plpgsql AS $$
+export const VECTOR_MIGRATIONS: PgMigrationDefinition[] = [
+  ...MEMORY_FACTS_MIGRATIONS,
+  {
+    id: "memory/vectors/0001-vector-extension",
+    statements: [
+      `DO $ext$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector') THEN
+          CREATE EXTENSION vector;
+        END IF;
+      END $ext$`,
+    ],
+  },
+  { id: "memory/vectors/0002", statements: SCHEMA },
+  {
+    id: "memory/vectors/0003-sketch",
+    statements: [
+      "SET LOCAL lock_timeout = '3s'",
+      "ALTER TABLE memory_fact_vectors ADD COLUMN IF NOT EXISTS embedding_bits BIT VARYING",
+      `CREATE OR REPLACE FUNCTION memory_fact_vectors_bits() RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
           NEW.embedding_bits := binary_quantize(NEW.embedding);
           RETURN NEW;
         END $$`,
-        "DROP TRIGGER IF EXISTS memory_fact_vectors_bits ON memory_fact_vectors",
-        `CREATE TRIGGER memory_fact_vectors_bits BEFORE INSERT OR UPDATE OF embedding ON memory_fact_vectors
+      "DROP TRIGGER IF EXISTS memory_fact_vectors_bits ON memory_fact_vectors",
+      `CREATE TRIGGER memory_fact_vectors_bits BEFORE INSERT OR UPDATE OF embedding ON memory_fact_vectors
           FOR EACH ROW EXECUTE FUNCTION memory_fact_vectors_bits()`,
-      ],
-    },
-    {
-      id: "memory/vectors/0004-sketch-backfill",
-      autocommit: true,
-      statements: [
-        `DO $memory_sketch_backfill$
+    ],
+  },
+  {
+    id: "memory/vectors/0004-sketch-backfill",
+    autocommit: true,
+    statements: [
+      `DO $memory_sketch_backfill$
         DECLARE
           batch tid[];
         BEGIN
@@ -100,9 +111,49 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
             COMMIT;
           END LOOP;
         END $memory_sketch_backfill$`,
-      ],
-    },
-  ]);
+    ],
+  },
+  ...tenantTables("memory/vectors/0003-tenants", [
+    { table: "memory_fact_vectors", primaryKey: "scope_id, model, fact_id" },
+  ]),
+  {
+    id: "memory/vectors/0004-claims",
+    statements: [
+      claimFunction(
+        "claim_memory_index",
+        "model text, dims integer",
+        `SELECT f.tenant_id, 'memory'::text FROM memory_facts f
+             WHERE f.deleted_at IS NULL AND NOT EXISTS (
+               SELECT 1 FROM memory_fact_vectors v
+                WHERE v.tenant_id = f.tenant_id AND v.scope_id = f.scope_id AND v.fact_id = f.id AND v.model = $1
+                  AND v.fact_hash = f.text_hash AND ($2::integer IS NULL OR v.dimensions = $2))
+             GROUP BY f.tenant_id
+           UNION
+           SELECT s.tenant_id, 'memory'::text FROM memory_fact_vectors s
+             WHERE s.model <> $1 OR ($2::integer IS NOT NULL AND s.dimensions <> $2) OR NOT EXISTS (
+               SELECT 1 FROM memory_facts f
+                WHERE f.tenant_id = s.tenant_id AND f.scope_id = s.scope_id AND f.id = s.fact_id
+                  AND f.deleted_at IS NULL AND f.text_hash = s.fact_hash)
+             GROUP BY s.tenant_id`,
+      ),
+    ],
+  },
+  {
+    id: "memory/vectors/0005-claim-tenants",
+    statements: [
+      "DROP FUNCTION IF EXISTS claim_memory_index(text, integer)",
+      claimFunction(
+        "claim_memory_tenants",
+        "",
+        `SELECT tenant_id, 'memory'::text FROM memory_facts WHERE deleted_at IS NULL
+           UNION SELECT tenant_id, 'memory'::text FROM memory_fact_vectors`,
+      ),
+    ],
+  },
+];
+
+export function createPostgresVectorStore(connectionString: string): MemoryVectorStore {
+  const db = createPgPool(connectionString, VECTOR_MIGRATIONS);
   return {
     async search(input) {
       if (!Number.isInteger(input.limit) || input.limit < 1)
@@ -177,7 +228,7 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
         )
         INSERT INTO memory_fact_vectors(scope_id, model, fact_id, fact_hash, dimensions, embedding)
         SELECT scope, model, "factId", hash, jsonb_array_length(vector), vector::text::vector FROM live
-        ON CONFLICT (scope_id, model, fact_id) DO UPDATE
+        ON CONFLICT (tenant_id, scope_id, model, fact_id) DO UPDATE
         SET fact_hash = EXCLUDED.fact_hash, dimensions = EXCLUDED.dimensions, embedding = EXCLUDED.embedding`,
         [JSON.stringify([...latest.values()])],
         { signal, timeoutMs: 5000 },
@@ -219,6 +270,17 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
       );
       return rowCount;
     },
+    claimTenants: () => claimRows(db, "claim_memory_tenants"),
     close: () => db.close(),
   };
+}
+
+export async function registerVectorMigrations(connectionString: string): Promise<void> {
+  const pg = createPgPool(connectionString);
+  try {
+    const available = await pg.q("SELECT 1 FROM pg_available_extensions WHERE name = 'vector'");
+    if (available.length) for (const migration of VECTOR_MIGRATIONS) pg.registerMigration(migration);
+  } finally {
+    await pg.close();
+  }
 }

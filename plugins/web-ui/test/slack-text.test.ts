@@ -5,6 +5,7 @@ import { splitMentions } from "../src/linkify.ts";
 import {
   decodeSlackEntities,
   safeHttpHref,
+  slackPreviewText,
   slackWireToPlain,
   splitSlackWire,
   stripSlackDirectives,
@@ -129,4 +130,15 @@ test("a literally typed, escaped mention stays text even where plain @names are 
     { kind: "text", text: "<@U123> and " },
     { kind: "mention", handle: "ada" },
   ]);
+});
+
+test("slackPreviewText turns Slack wire links and known shortcodes into plain text", () => {
+  const emoji = (name: string) => ({ large_green_square: "🟩", white_large_square: "⬜" })[name] ?? null;
+  assert.equal(
+    slackPreviewText(
+      "Progress :large_green_square::white_large_square: at 10:30 ~15%\n• Chase <https://example.com/issue/ABC-1|ABC-1> :not_an_emoji:",
+      emoji,
+    ),
+    "Progress 🟩⬜ at 10:30 ~15%\n• Chase ABC-1 :not_an_emoji:",
+  );
 });
