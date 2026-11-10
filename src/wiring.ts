@@ -142,12 +142,13 @@ import { createPostgresCronFireStore } from "./cron/fire-store.ts";
 import { createLoopStore } from "./loops/loop-store.ts";
 import { createLoopItemLedger } from "./loops/item-ledger.ts";
 import { createPostgresLedgerEventBus, type LedgerEventBus } from "./loops/ledger-events.ts";
-import { createInboxSourceRefresh } from "./loops/inbox-source-refresh.ts";
+import { createInboxPass } from "./loops/verdict/pass.ts";
+import { createConversationFetcher, createSourceClients } from "./loops/verdict/fetch.ts";
+import { createDiscoverer } from "./loops/verdict/discover.ts";
 import { createInboxRealtime } from "./loops/inbox-realtime.ts";
 import { createLoopOutputStore } from "./loops/output-store.ts";
 import { createShipGrantStore } from "./loops/ship-grant-store.ts";
 import { createLoopFireService, type LoopFireService } from "./loops/loop-fire.ts";
-import { createInboxQuietCheck } from "./loops/inbox-quiet-check.ts";
 import type { LoopServiceDeps } from "./api/routes/loops.ts";
 import type { DeliveryStore } from "./delivery/delivery-store.ts";
 import { createPostgresDeliveryStore } from "./delivery/postgres-delivery-store.ts";
@@ -165,7 +166,12 @@ import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
 import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-store.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
-import { createDeployStore, deployTouchDebounceMs, type Deployment } from "./deploy/deploy-store.ts";
+import {
+  createDeployStore,
+  deployTouchDebounceMs,
+  type Deployment,
+  type DeploymentDraft,
+} from "./deploy/deploy-store.ts";
 import { viewerIdentityKey } from "./deploy/access-token.ts";
 import { deploymentCredentialSlugs } from "./deploy/deployment-credentials.ts";
 import { createDockerDeployProvider } from "./deploy/docker-deploy-provider.ts";
@@ -312,7 +318,7 @@ import { createPostgresToolOutputStore } from "./sessions/tool-output.ts";
 import { LLM_CAPTURE_RETENTION_MS, type SessionStore } from "./sessions/session-store.ts";
 import { keychainCompanyChatGPTAuth, type CompanyChatGPTAuth } from "./model/company-chatgpt-auth.ts";
 import { keychainEnvCredential } from "./credentials/keychain-env-credential.ts";
-import { createAgent, agentConfigOptions } from "./agent/agent-run.ts";
+import { createAgent, agentConfigOptions, oneShot } from "./agent/agent-run.ts";
 import { withResolvedRuntime, resolveRuntimeChoice } from "./agent/runtime-choice.ts";
 import { selectableModelCatalog } from "./model/model-catalog.ts";
 import type { Agent, RuntimeChoice, SessionRoute } from "./agent/agent.ts";
@@ -359,7 +365,7 @@ import type { RunActivityStore } from "./runs/run-activity-store.ts";
 import { createPostgresRunActivityStore } from "./runs/postgres-run-activity-store.ts";
 import { createApp, type App } from "./api/app.ts";
 import { startSession } from "./api/start-session.ts";
-import { createSwarmStore, type SwarmStorage } from "./swarms/swarm-store.ts";
+import { createSwarmStore, STAMP_SWARM_COMPUTERS_MIGRATION, type SwarmStorage } from "./swarms/swarm-store.ts";
 import { createSwarmService } from "./swarms/swarm-service.ts";
 import { createSlackCoreClient, type SlackCoreClient } from "./api/slack-core-client.ts";
 import { createSurfaceContextPuller } from "./api/surface-context-puller.ts";
@@ -415,18 +421,19 @@ import { type probeModel, type ProviderKeys } from "./model/model-runtime.ts";
 
 export interface Runtime {
   start(services?: BackgroundServices): void;
-  stop(beforeClose?: () => Promise<void>): Promise<void>;
-  releaseInFlightRuns(): Promise<void>;
+  stop(opts?: { beforeClose?: () => Promise<void>; fatal?: boolean }): Promise<void>;
+  releaseInFlightRuns(fatal?: boolean): Promise<void>;
 }
 
 export function stopWithBackstop(
   runtime: Pick<Runtime, "stop" | "releaseInFlightRuns">,
   shutdownDrainMs: number,
   label: string,
+  fatal = false,
 ): void {
   const hardExit = setTimeout(() => {
     console.error(`[${label}] drain overran; releasing in-flight leases before forced exit`);
-    void Promise.race([runtime.releaseInFlightRuns(), sleep(SHUTDOWN_RELEASE_MS, { unref: true })]).finally(
+    void Promise.race([runtime.releaseInFlightRuns(fatal), sleep(SHUTDOWN_RELEASE_MS, { unref: true })]).finally(
       async () => {
         await flushErrorReporting();
         process.exit();
@@ -434,7 +441,7 @@ export function stopWithBackstop(
     );
   }, shutdownDrainMs + SHUTDOWN_RELEASE_MS);
   hardExit.unref();
-  void runtime.stop().then(
+  void runtime.stop({ fatal }).then(
     async () => {
       await flushErrorReporting();
       clearTimeout(hardExit);
@@ -443,7 +450,7 @@ export function stopWithBackstop(
     (e: unknown) => {
       console.error(`[${label}] graceful stop failed: ${errMessage(e)}`);
       clearTimeout(hardExit);
-      void Promise.race([runtime.releaseInFlightRuns(), sleep(SHUTDOWN_RELEASE_MS, { unref: true })]).finally(
+      void Promise.race([runtime.releaseInFlightRuns(fatal), sleep(SHUTDOWN_RELEASE_MS, { unref: true })]).finally(
         async () => {
           await flushErrorReporting();
           process.exit(1);
@@ -1692,6 +1699,7 @@ export function buildApp(
   };
   const deployStore = createDeployStore({
     deployments: pgArtifactMap.map<Deployment>("deployments", undefined, DEPLOYMENT_TABLES),
+    drafts: artifactMap<DeploymentDraft>("deployment_drafts"),
     pg: pgArtifactMap.pool,
     touchDebounceMs: deployTouchDebounceMs(config.deployIdleTtlMs),
     git: {
@@ -1987,6 +1995,7 @@ export function buildApp(
   pgArtifactMap.pool.registerMigration(PUBLISHED_ORIGIN_COMPLETE);
   pgArtifactMap.pool.registerMigration(RETIRED_ORIGIN_SWEEP_MIGRATION);
   pgArtifactMap.pool.registerMigration(DROP_RECIPIENT_CONSENT_MIGRATION);
+  pgArtifactMap.pool.registerMigration(STAMP_SWARM_COMPUTERS_MIGRATION);
   pgArtifactMap.pool.registerMigration({
     id: "durable-map/crons/0002-drop-fire-log",
     statements: [
@@ -2654,6 +2663,12 @@ export function buildApp(
     ? (drop: DropResolution) =>
         fireDropResolution({ deliveries, idempotency, identity, run: runTriggered, directory, resolveRecipient }, drop)
     : undefined;
+  const inboxClients =
+    keychain &&
+    createSourceClients({
+      tokens: keychain,
+      ...(config.slack?.apiUrl ? { slackApiUrl: config.slack.apiUrl } : {}),
+    });
   const loopFire: LoopFireService = createLoopFireService({
     admittedWork,
     crons,
@@ -2665,11 +2680,25 @@ export function buildApp(
     outputs: loopOutputs,
     grants: loopGrants,
     files,
-    ...(keychain
+    ...(inboxClients
       ? {
-          inboxQuiet: createInboxQuietCheck({
-            tokens: keychain,
-            ...(config.slack?.apiUrl ? { slackApiUrl: config.slack.apiUrl } : {}),
+          inboxPass: createInboxPass({
+            items: loopItems,
+            errors,
+            fetch: createConversationFetcher(inboxClients),
+            discover: createDiscoverer(inboxClients),
+            model: {
+              verdict: (system, prompt) => agent.oneShot?.(system, prompt, "decision") ?? Promise.resolve(undefined),
+              draft: async (system, prompt) => {
+                const route = modelRoutes.servable(await modelRoutes.route(modelRoutes.baseModelId()));
+                if (!route) return undefined;
+                return oneShot("pi-inbox-draft", route.model, route.keys, system, prompt, {
+                  modelGateway: route.gateway,
+                  purpose: "decision",
+                });
+              },
+            },
+            ownerName: async (owner) => (await directory.get(owner))?.displayName || undefined,
           }),
         }
       : {}),
@@ -2916,6 +2945,7 @@ export function buildApp(
       : null;
   const DEPLOY_MAINTENANCE_INTERVAL_MS = 5 * 60_000;
   const deployMaintenanceSweeper = createSweeper(() => app.maintainDeployments(), DEPLOY_MAINTENANCE_INTERVAL_MS);
+  const liveEditPublishSweeper = createSweeper(() => app.publishDueLiveEdits(), 10_000);
   const deepIdleMachineMs = config.deepIdleMachineMs;
   const devIdleMachineMs = config.devIdleMachineMs;
   const SANDBOX_MAINTENANCE_INTERVAL_MS = 5 * 60_000;
@@ -2962,6 +2992,7 @@ export function buildApp(
       fileUploads?.start();
       idleSweeper?.start();
       deployMaintenanceSweeper.start();
+      liveEditPublishSweeper.start();
       deepIdleSweeper?.start();
       wakeSweep.start();
       swarms?.start();
@@ -2996,6 +3027,7 @@ export function buildApp(
       skillSyncEngine.stop(),
       idleSweeper?.stop(),
       deployMaintenanceSweeper.stop(),
+      liveEditPublishSweeper.stop(),
       deepIdleSweeper?.stop(),
       blobSweeper.stop(),
       composioReturnSweeper.stop(),
@@ -3021,13 +3053,13 @@ export function buildApp(
     return draining;
   }
   let releasing: Promise<void> | null = null;
-  function releaseInFlightRuns(): Promise<void> {
+  function releaseInFlightRuns(fatal = false): Promise<void> {
     turnWaitShutdown.abort();
     releasing ??= Promise.all([
       withTimeout(() => admittedWork.drained(), SHUTDOWN_RELEASE_MS, "synchronous turn wait release").catch(
         swallowAs("wiring: synchronous turn wait release failed", undefined),
       ),
-      worker.releaseInFlight(),
+      worker.releaseInFlight(fatal),
     ]).then(() => {});
     return releasing;
   }
@@ -3045,7 +3077,7 @@ export function buildApp(
       drain.start(services);
     },
     releaseInFlightRuns,
-    async stop(beforeClose) {
+    async stop(opts) {
       stopTenantLoad();
       stopSettingsLoad();
       stopLayerLoad();
@@ -3058,9 +3090,9 @@ export function buildApp(
         ),
         worker.stop(config.shutdownDrainMs),
       ]).catch(swallowAs("wiring: worker drain failed", undefined));
-      await releaseInFlightRuns();
+      await releaseInFlightRuns(opts?.fatal);
       await draining;
-      await beforeClose?.();
+      await opts?.beforeClose?.();
       stopStreamSync();
       await Promise.all(
         [
@@ -3317,20 +3349,7 @@ export function serverDeps(
     channelPolicy: built.channelPolicy,
     ...(built.suggestedActivities ? { suggestedActivities: built.suggestedActivities } : {}),
     uiState: built.uiState,
-    ...(built.keychain
-      ? {
-          loopSourceTokens: built.keychain,
-          inboxSourceRefresh: createInboxSourceRefresh({
-            featureFlags: built.featureFlags,
-            items: built.loops.items,
-            errors: built.errors,
-            enqueue: (loop, entries) => built.loopIngress.enqueueConversation(loop, entries),
-            tokens: built.keychain,
-            directory: built.directory,
-            ...(config.slack?.apiUrl ? { slackApiUrl: config.slack.apiUrl } : {}),
-          }),
-        }
-      : {}),
+    ...(built.keychain ? { loopSourceTokens: built.keychain } : {}),
     loopSlackClient: slackUserClientFactory(config.slack?.apiUrl),
     sessionShares: built.sessionShares,
     sessionShareBytes: built.sessionShareBytes,

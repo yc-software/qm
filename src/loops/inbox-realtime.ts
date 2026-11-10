@@ -1,9 +1,8 @@
 import type { LoopStore } from "./loop-store.ts";
 import type { LoopItemLedger } from "./item-ledger.ts";
-import { conversationEvent, type IngressEntry } from "./ingress.ts";
+import { conversationChanged, type IngressEntry } from "./ingress.ts";
 import type { ConversationEvent } from "./sources/adapter.ts";
 import { sourceAdapter } from "./sources/index.ts";
-import { isResolved } from "./ledger-view.ts";
 import { currentTenant } from "../tenants/context.ts";
 
 export interface InboxRealtimeDeps {
@@ -37,23 +36,13 @@ export function createInboxRealtime(deps: InboxRealtimeDeps): {
       const adapter = sourceAdapter(event.source);
       if (!adapter) return;
       for (const loop of await inboxLoops()) {
-        const owner = Boolean(event.senderEmail && event.senderEmail.toLowerCase() === loop.owner.toLowerCase());
         const matched = (await deps.items.byLoop(loop.id)).filter(
-          (item) =>
-            item.source === event.source &&
-            adapter.matchesEvent(item, event.conversationRef) &&
-            !(owner && isResolved(item)),
+          (item) => item.source === event.source && adapter.matchesEvent(item, event.conversationRef),
         );
         if (!matched.length) continue;
-        const latest = {
-          author: owner ? ("owner" as const) : ("other" as const),
-          at: event.at,
-          ...(event.text ? { text: event.text } : {}),
-          ...(event.senderEmail ? { from: event.senderEmail } : {}),
-        };
         await deps.enqueue(
           loop,
-          matched.map((item) => conversationEvent(item, latest)),
+          matched.map((item) => conversationChanged(item, event.at)),
         );
       }
     },

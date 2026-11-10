@@ -2,7 +2,7 @@ import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3
 import { orgId as configOrgId } from "../config.ts";
 import { AssumeRoleCommand, STSClient } from "@aws-sdk/client-sts";
 import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
-import type { DeployEndpoint, DeployProvider, DeployReconcileInput } from "./deploy-provider.ts";
+import type { DeployEndpoint, DeployProvider } from "./deploy-provider.ts";
 import { bytes, normalizeRelPath, posixJoin, readTree } from "./deploy-fs.ts";
 import { AwsApiError, createMicrovmApi, createMicrovmClient, type AwsMicrovmApi } from "../sandbox/aws-microvm-api.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
@@ -498,10 +498,10 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     endpoint: string,
     fresh: boolean,
     version: DeploymentVersion,
-    input?: DeployReconcileInput,
+    gitBundle?: Uint8Array,
   ): Promise<void> {
-    if (input?.gitBundle && version.commit) {
-      await checkoutBundle(id, endpoint, input.gitBundle, version.commit);
+    if (gitBundle && version.commit) {
+      await checkoutBundle(id, endpoint, gitBundle, version.commit);
     } else {
       await writeFiles(id, endpoint, APP_DIR, await readTree(version.snapshotDir, { tolerateMissing: true }));
     }
@@ -630,18 +630,14 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     return endpointFor(d, stored.microvmId, stored.endpoint);
   };
 
-  const place = async (
-    d: Deployment,
-    version: DeploymentVersion,
-    input?: DeployReconcileInput,
-  ): Promise<DeployEndpoint> => {
+  const place = async (d: Deployment, version: DeploymentVersion, gitBundle?: Uint8Array): Promise<DeployEndpoint> => {
     ensureConfigured();
     if (litestream && Date.now() < binariesMissingUntilMs)
       throw new Error(
         "litestream/aws binaries missing from the MicroVM image (rechecking every 10 min) — roll AWS_DEPLOY_IMAGE",
       );
     const body = await ensureBody(d);
-    await materialize(d, body.id, body.endpoint, body.fresh, version, input);
+    await materialize(d, body.id, body.endpoint, body.fresh, version, gitBundle);
     bumpResolveGen(keyOf(d.id));
     return endpointFor(d, body.id, body.endpoint);
   };
@@ -649,7 +645,6 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
   return {
     profile: {
       managedScaleToZero: true,
-      inPlaceReconcile: true,
       maxAppBytes: MAX_APP_BYTES,
       ...(s3 ? { dataDir: DATA_DIR } : {}),
     },
@@ -661,7 +656,27 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       return !!stored && rotationDue(stored);
     },
 
-    reconcile: (d, version, input) => place(d, version, input),
+    reconcile: (d, version, gitBundle) => place(d, version, gitBundle),
+
+    async liveEdit(d, version, edit): Promise<boolean> {
+      ensureConfigured();
+      const stored = await store.get(d.id);
+      const desc = stored ? await api.tryGetMicrovm(stored.microvmId) : null;
+      if (!stored || !desc || desc.state === "TERMINATED" || desc.state === "TERMINATING") return false;
+      await ensureRunning(stored.microvmId, stored.endpoint, desc);
+      await Promise.all(
+        edit.files.map((f) =>
+          writeAbs(stored.microvmId, stored.endpoint, posixJoin(APP_DIR, normalizeRelPath(f.path)), f.data),
+        ),
+      );
+      if (edit.deletedPaths.length) {
+        const paths = edit.deletedPaths.map((p) => shq(posixJoin(APP_DIR, normalizeRelPath(p)))).join(" ");
+        const r = await execRaw(stored.microvmId, stored.endpoint, `rm -f ${paths}`, 30);
+        if (r.code !== 0) throw execFailure("aws live edit delete", r);
+      }
+      if (edit.restart) await startApp(d, stored.microvmId, stored.endpoint, version);
+      return true;
+    },
 
     async resolveEndpoint(d, version): Promise<DeployEndpoint | null> {
       const gen = resolveGens.get(keyOf(d.id)) ?? 0;

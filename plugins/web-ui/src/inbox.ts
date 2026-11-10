@@ -72,8 +72,6 @@ export interface InboxContextMessage {
   at?: number;
   text: string;
   images?: string[];
-  reply?: boolean;
-  nearby?: boolean;
 }
 
 export interface LedgerThreadMessage {
@@ -101,6 +99,7 @@ export interface LedgerItem {
   actedAt?: number;
   actionKind?: string;
   actionResult?: string;
+  verdict?: { state: "needs_reply" | "resolved" | "noise"; reason: string };
   updatedAt: number;
 }
 
@@ -139,15 +138,11 @@ export interface InboxItem {
   dismissedAt?: number;
   repliedAt?: number;
   externalReplyText?: string;
-  noReplyNeeded?: { reason?: string };
+  sourceContextPartial?: boolean;
   reactions?: string[];
-  probablyResolved?: boolean;
-  automated?: boolean;
+  verdict?: { state: "needs_reply" | "resolved" | "noise"; reason: string };
   images?: string[];
   updatedAt: number;
-  sourceContextFetched?: boolean;
-  sourceContextPartial?: boolean;
-  sourceRefreshError?: string;
 }
 
 export interface InboxView {
@@ -185,16 +180,20 @@ function inboxViewSegment(viewId: string): string {
 }
 
 const INBOX_FILTERS = [
-  { id: "all", label: "All emails", description: "All synced emails, including newsletters and automated mail" },
+  {
+    id: "all",
+    label: "Everything",
+    description: "Every synced conversation, including newsletters, notifications and bot chatter",
+  },
   {
     id: "human",
-    label: "Light filtering — exclude notifications",
-    description: "Emails from people, including conversations that need no reply",
+    label: "People",
+    description: "Conversations with people, including ones that probably need no reply",
   },
   {
     id: "triaged",
-    label: "Heavy filtering — only emails that need your attention",
-    description: "Emails identified as needing a reply or review",
+    label: "Needs a reply",
+    description: "Only conversations waiting on your reply",
   },
 ] as const;
 
@@ -365,12 +364,7 @@ export function itemsFor(viewId: string, status: "open" | "handled"): InboxItem[
     if (viewId === "sent") return item.status === "sent" && item.source !== "generic";
     if (status !== "open") return item.status !== "open";
     if (item.status !== "open") return false;
-    if (item.source === "gmail") {
-      if (inboxState.filter === "all") return true;
-      if (item.automated) return false;
-      if (inboxState.filter === "human") return true;
-      if (item.probablyResolved) return false;
-    }
+    if (item.source !== "generic") return verdictVisible(item, inboxState.filter);
     return item.attention !== false || (item.groupId !== undefined && loopTriage(item).consolidate);
   });
 }
@@ -397,6 +391,14 @@ function resolvedStatus(entry: LedgerItem): InboxItem["status"] {
   if (entry.state === "actioned") return entry.source === "gmail" || entry.source === "slack" ? "sent" : "dismissed";
   if (entry.state !== "dismissed") return "open";
   return entry.actionKind === "replied" ? "replied" : "dismissed";
+}
+
+export function verdictVisible(item: Pick<InboxItem, "verdict" | "snippet">, filter: string): boolean {
+  const state = item.verdict?.state;
+  if (!state) return item.snippet !== "";
+  if (state === "needs_reply") return true;
+  if (state === "resolved") return filter !== "triaged";
+  return filter === "all";
 }
 
 export function toInboxItem(entry: LedgerItem): InboxItem {
@@ -430,9 +432,6 @@ export function toInboxItem(entry: LedgerItem): InboxItem {
     ...(entry.triage?.pinned?.includes("priority") ? { priorityPinned: true } : {}),
     ...(entry.triage?.groupId ? { groupId: entry.triage.groupId } : {}),
     ...(str(payload.fromDetail) ? { fromDetail: payload.fromDetail as string } : {}),
-    sourceContextFetched: payload.sourceContextFetched === true,
-    sourceContextPartial: payload.sourceContextPartial === true,
-    ...(typeof payload.sourceRefreshError === "string" ? { sourceRefreshError: payload.sourceRefreshError } : {}),
     ...(source === "slack" && Array.isArray(payload.participants)
       ? {
           participants: payload.participants.flatMap((person) =>
@@ -451,8 +450,7 @@ export function toInboxItem(entry: LedgerItem): InboxItem {
     ...(payload.gmail ? { gmail: payload.gmail as InboxItem["gmail"] } : {}),
     ...(payload.slack ? { slack: payload.slack as InboxItem["slack"] } : {}),
     ...(reactions?.length ? { reactions } : {}),
-    ...(payload.probablyResolved === true ? { probablyResolved: true } : {}),
-    ...(payload.automated === true ? { automated: true } : {}),
+    ...(entry.verdict ? { verdict: { state: entry.verdict.state, reason: entry.verdict.reason } } : {}),
     ...(Array.isArray(payload.images)
       ? { images: (payload.images as unknown[]).filter((u): u is string => typeof u === "string") }
       : {}),
@@ -460,9 +458,7 @@ export function toInboxItem(entry: LedgerItem): InboxItem {
     ...(resolved === "dismissed" && entry.actedAt !== undefined ? { dismissedAt: entry.actedAt } : {}),
     ...(resolved === "replied" && entry.actedAt !== undefined ? { repliedAt: entry.actedAt } : {}),
     ...(resolved === "replied" && entry.actionResult ? { externalReplyText: entry.actionResult } : {}),
-    ...(entry.actionKind === "no_reply_needed"
-      ? { noReplyNeeded: entry.actionResult ? { reason: entry.actionResult } : {} }
-      : {}),
+    ...(payload.sourceContextPartial === true && entry.source === "slack" ? { sourceContextPartial: true } : {}),
   };
 }
 
@@ -937,18 +933,10 @@ function actionPath(item: InboxItem, leaf: "action" | "followup"): string {
   return `/api/loops/${encodeURIComponent(item.loopId)}/items/${encodeURIComponent(item.id)}/${leaf}`;
 }
 
-const sourceRefreshAt = new Map<string, number>();
-function ensureItemSource(item: InboxItem): void {
-  if (!item.slack || Date.now() - (sourceRefreshAt.get(item.id) ?? 0) < 60_000) return;
-  for (const [id, at] of sourceRefreshAt) if (Date.now() - at >= 60_000) sourceRefreshAt.delete(id);
-  sourceRefreshAt.set(item.id, Date.now());
-  void refetchItem(item, true);
-}
-
-async function refetchItem(item: InboxItem, refreshSource = false): Promise<void> {
+async function refetchItem(item: InboxItem): Promise<void> {
   try {
     const { item: fresh } = await api<{ item: LedgerItem }>(
-      `/api/loops/${encodeURIComponent(item.loopId)}/items/${encodeURIComponent(item.id)}${refreshSource ? "?refreshSource=1" : ""}`,
+      `/api/loops/${encodeURIComponent(item.loopId)}/items/${encodeURIComponent(item.id)}`,
     );
     updateSentChat(fresh);
     replaceItem({ ...toInboxItem(fresh), detailLoaded: true });
@@ -1254,10 +1242,9 @@ function watchEarlier(item: InboxItem, el: Element | undefined): void {
 
 export function contextTpl(item: InboxItem): TemplateResult | typeof nothing {
   const context = (item.context ?? []).map((message, index) => ({ ...message, imageIndex: index }));
-  const rows = item.sourceContextFetched
+  const rows = context.length
     ? context
     : [
-        ...context.filter((m) => !item.slack || m.nearby === true),
         {
           author: item.from,
           authorId: item.slack?.userId ?? (item.source === "slack" ? item.participants?.[0]?.key : undefined),
@@ -1265,8 +1252,6 @@ export function contextTpl(item: InboxItem): TemplateResult | typeof nothing {
           text: item.snippet,
           images: item.images,
           imageIndex: -1,
-          reply: false,
-          nearby: false,
         },
       ];
   const hidden = Math.max(0, rows.length - CONTEXT_TAIL - (revealedContext.get(item.id) ?? 0));
@@ -1282,7 +1267,6 @@ export function contextTpl(item: InboxItem): TemplateResult | typeof nothing {
           </button>`
         : nothing
     }
-    ${item.sourceRefreshError ? html`<div class="inbox-source-notice" role="status">${item.sourceRefreshError}</div>` : nothing}
     ${item.sourceContextPartial ? html`<div class="inbox-source-notice">Showing part of this conversation. Open in Slack for the full history.</div>` : nothing}
     ${rows.slice(hidden).map((m) => {
       const participant = item.source === "slack" ? item.participants?.find((p) => p.key === m.authorId) : undefined;
@@ -1290,12 +1274,11 @@ export function contextTpl(item: InboxItem): TemplateResult | typeof nothing {
       const name = participantName(author) || author;
       const avatarUrl = participant ? participant.avatarUrl : m.avatarUrl;
       return html`
-        <div class="inbox-context-msg ${m.reply ? "inbox-thread-reply" : ""} ${m.nearby ? "inbox-nearby-context" : ""}">
+        <div class="inbox-context-msg">
           ${avatarTpl({ key: m.authorId ?? participantKey(m.author), name, avatarUrl: item.source === "slack" ? avatarUrl : undefined })}
           <div class="inbox-context-body">
             <div class="inbox-context-head">
               <span class="inbox-context-author">${name}</span>
-              ${m.nearby ? html`<span class="inbox-context-at">Nearby in channel</span>` : nothing}
               ${m.at ? html`<span class="inbox-context-at">${relTime(m.at)}</span>` : nothing}
             </div>
             <div class="inbox-context-text">${slackTextTpl(item, m.text)}</div>
@@ -1319,7 +1302,7 @@ export function chatTpl(item: InboxItem, compact = false): TemplateResult {
       source: item.source,
       hasDraft: Boolean(item.draft),
       sent: Boolean(item.sentChat),
-      resolved: Boolean(item.probablyResolved),
+      resolved: item.verdict?.state === "resolved",
     },
     messages: html`${item.thread.map((message) => assistantMessage({ role: message.role, text: message.text }))}`,
     busy,
@@ -1455,7 +1438,7 @@ function reactionChipTpl(name: string): TemplateResult {
 function handledStateLabel(item: InboxItem): string {
   if (item.status === "sent") return "Sent";
   if (item.status === "replied") return "Replied";
-  return item.noReplyNeeded ? "No reply needed" : "Dismissed";
+  return "Dismissed";
 }
 
 function itemSideMark(item: InboxItem, handled: boolean): TemplateResult | typeof nothing {
@@ -1488,11 +1471,6 @@ export function handledNoteTpl(item: InboxItem): TemplateResult {
     </div>`;
   }
   const label = `${handledStateLabel(item)} ${item.dismissedAt ? relTime(item.dismissedAt) : ""}`;
-  if (item.noReplyNeeded?.reason)
-    return html`<div class="inbox-handled-note inbox-replied-note">
-      <div class="inbox-handled-line">${icon(X, 13)}<span>${label}</span> ${reopenButtonTpl(item)}</div>
-      <div class="inbox-replied-text">${item.noReplyNeeded.reason}</div>
-    </div>`;
   return html`<div class="inbox-handled-note">
     ${icon(X, 13)}<span>${label}</span>
     ${reopenButtonTpl(item)}
@@ -1686,7 +1664,9 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem, groupSize = 1): Temp
               <span class="inbox-item-heading">${heading}</span>
               <span class="inbox-item-sub">${sub}</span>
             </span>
-            <span class="inbox-item-snippet">${slackTextTpl(item, item.snippet, { links: false })}</span>
+            <span class="inbox-item-snippet" title=${item.verdict?.state === "resolved" ? item.verdict.reason : nothing}
+              >${slackTextTpl(item, item.snippet, { links: false })}</span
+            >
           </span>
           <span class="inbox-item-side">
             ${slack ? nothing : participantsTpl(item)} ${priorityMarkTpl(item)} ${itemSideMark(item, handled)}
@@ -1818,17 +1798,12 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
   const density = surface.density();
   const compact = density !== "full";
   const allOpen = itemsFor(surface.viewId, "open");
-  const resolvedItems = allOpen.filter((item) => item.source !== "gmail" && item.probablyResolved);
-  const openItems = allOpen.filter((item) => item.source === "gmail" || !item.probablyResolved);
-  const selectedLoop = inboxState.selected.find((loop) => loop.id === surface.viewId);
-  const showEmailFilter =
-    surface.viewId === "all" ||
-    surface.viewId === "gmail" ||
-    selectedLoop?.source === "gmail" ||
-    selectedLoop?.sources?.includes("gmail");
+  const resolvedItems = allOpen.filter((item) => item.verdict?.state === "resolved");
+  const openItems = allOpen.filter((item) => item.verdict?.state !== "resolved");
+  const showFilter = surface.viewId !== "sent";
   let emptyMessage = "No messages in this view yet. Sync to check for new messages.";
-  if (showEmailFilter && inboxState.filter === "triaged")
-    emptyMessage = "Nothing is waiting on you. Choose Light filtering or All emails to see more emails.";
+  if (showFilter && inboxState.filter === "triaged")
+    emptyMessage = "Nothing is waiting on you. Choose People or Everything to see more conversations.";
   if (surface.viewId === "sent") emptyMessage = "No sent messages yet. Sent Email and Slack replies will appear here.";
   const handledItems = itemsFor(surface.viewId, "handled");
   const hasMore = !!feedWindows.get(surface.viewId)?.nextCursor;
@@ -1954,16 +1929,16 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
         ${chips} ${surface.pane ? html`<span class="inbox-toolbar-spacer"></span>${syncLineTpl(surface)}` : nothing}
       </div>
       ${
-        showEmailFilter || hasMore
+        showFilter || hasMore
           ? html`
               <div class="inbox-filter-bar">
                 ${
-                  showEmailFilter
+                  showFilter
                     ? html`<div class="inbox-filter">
-                        <span>Emails</span>
+                        <span>Show</span>
                         ${menuSelect({
                           className: "inbox-email-filter-control",
-                          ariaLabel: "Email filter",
+                          ariaLabel: "Inbox filter",
                           ariaDescription: INBOX_FILTERS.find((filter) => filter.id === inboxState.filter)?.description,
                           value: inboxState.filter,
                           disabled: inboxState.filterBusy || inboxState.loading,
@@ -2158,8 +2133,6 @@ function drawSurface(surface: InboxSurface): void {
   }
   if (!surface.host.isConnected && surface.pane) return;
   keepingChatLogsPinned(surface.host, () => render(surfaceTpl(surface), surface.host));
-  const selected = inboxState.items.find((item) => item.id === surface.selectedId);
-  if (selected) ensureItemSource(selected);
 }
 
 let fullSurface: InboxSurface | null = null;
@@ -2248,7 +2221,6 @@ function drawFull(): void {
       </div>
     `;
   keepingChatLogsPinned(host, () => render(page, host));
-  if (openItem) ensureItemSource(openItem);
 }
 
 function syncInboxUrl(itemId: string | null, push = false): void {

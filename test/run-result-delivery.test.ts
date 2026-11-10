@@ -45,6 +45,7 @@ function run(over: Partial<Run>): Run {
     maxAttempts: 3,
     priority: 2,
     preemptions: 0,
+    handbacks: 0,
     leaseToken: null,
     leaseExpiresAt: null,
     workerId: null,

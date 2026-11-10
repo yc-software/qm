@@ -119,6 +119,7 @@ export function testDeployBackings(
       undefined,
       DEPLOYMENT_TABLES,
     ),
+    drafts: maps.map<import("../../src/deploy/deploy-store.ts").DeploymentDraft>("deployment_drafts"),
     pg: maps.pool,
     ...backings,
   };

@@ -87,7 +87,7 @@ import { type AmbientDecision } from "../surface-cache/ambient-judge.ts";
 import type { SurfaceRegistry } from "../surfaces/registry.ts";
 import type { AmbientJudgmentStore } from "../surface-cache/ambient-judgment-store.ts";
 import type { AckEmojiPickStore } from "../surface-cache/ack-emoji-pick-store.ts";
-import type { Deployment } from "../deploy/deploy-store.ts";
+import type { Deployment, DeploymentDraft } from "../deploy/deploy-store.ts";
 import type { DeploymentLayerRuntime } from "../deployment/load-layer.ts";
 import { type ArtifactHome, type ArtifactType } from "./artifact-share.ts";
 import type {
@@ -611,6 +611,8 @@ export interface App {
   setDeploymentPublic(idOrName: string, isPublic: boolean, actor: { createdBy: string }): Promise<Deployment>;
   setDeploymentConnectors(idOrName: string, connectors: string[], actor: { createdBy: string }): Promise<Deployment>;
   maintainDeployments(): Promise<number>;
+  publishDueLiveEdits(): Promise<number>;
+  deploymentLiveEdit(id: string): Promise<{ draft: DeploymentDraft | null } | null>;
   reachDeployment(id: string, principalId: string, opts?: ReachOptions): Promise<Reach>;
   deploymentLogsFor(
     id: string,

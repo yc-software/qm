@@ -67,7 +67,7 @@ import {
   midTurnSessionMessage,
   spokenByPerson,
 } from "./turn-origin.ts";
-import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
+import { resolveTurnFastMode } from "./turn-options.ts";
 import { orgId } from "../config.ts";
 import { currentTenant } from "../tenants/context.ts";
 import { deriveTurnOutcome, approvalBlocksInput, heldReplyResult } from "./turn-outcome.ts";
@@ -167,7 +167,7 @@ import {
   selectOverheardToImport,
   type OverheardEntryPayload,
 } from "../agent/replay.ts";
-import { errMessage, reportFailure, reportFailureAs, swallow, swallowAs } from "../util/errors.ts";
+import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
 import { pgTextSafe } from "../util/text.ts";
 import { absoluteAppLinks } from "../util/markdown.ts";
 import {
@@ -187,7 +187,6 @@ import { LRUCache } from "lru-cache";
 import type { SkillResolution } from "../skills/skill-store.ts";
 import type { Orchestrator, OrchestratorDeps, OrchestratorInput } from "./orchestrator/types.ts";
 import { personalModelId } from "../model/pi-models.ts";
-import { loadPersonalModelAuth } from "./individual-auth-routing.ts";
 import { createSessionTitles } from "./session-title.ts";
 import {
   MAX_AUTO_ATTACHMENT_SCREEN_BYTES,
@@ -219,6 +218,7 @@ import {
 } from "./orchestrator/prompt-blocks.ts";
 import { createCompaction } from "./orchestrator/compaction.ts";
 import { mintTurnCapabilities } from "./orchestrator/capability-tokens.ts";
+import { resolveTurnRuntimeAuth } from "./orchestrator/turn-runtime.ts";
 import { startStallWatchdog } from "./orchestrator/stall-watchdog.ts";
 import {
   cleanVerdict,
@@ -1293,64 +1293,29 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (browseSteps && !("BROWSE_LAB_MAX_STEPS" in connectorEnv))
           connectorEnv.BROWSE_LAB_MAX_STEPS = String(browseSteps);
       }
-      const runtimePurpose = turnRuntimePurpose(
-        { surface: input.surface, triggered: automatedTurn, infrequentCron: input.infrequentCron },
-        !!session.parentSessionId || !!swarmBinding?.member.parentId,
-      );
-      const purposeDefault = runtimePurpose ? await deps.config.getPurposeRuntimeDurable(runtimePurpose) : undefined;
-      const loadRuntimeAuth = async (runtime: Partial<RuntimeChoice>) => {
-        const userCredStore = external ? undefined : deps.userModelCredentials;
-        const account = external
-          ? "company"
-          : (input.modelAccount ?? (await deps.config.getModelAccountDurable(actor.id)) ?? "company");
-        if (!userCredStore || !humanInput || account === "company")
-          return {
-            userProviderKeys: undefined,
-            userModelOverride: undefined,
-            personalAuth: false,
-            authLabel: "api-key",
-            account: "company" as const,
-          };
-        const personal = await loadPersonalModelAuth(
-          userCredStore,
-          actor.id,
-          account,
-          account === "personal" || input.surface === "web"
-            ? (runtime.modelId ?? input.model ?? purposeDefault?.modelId)
-            : (runtime.modelId ?? purposeDefault?.modelId),
-        );
-        if (!personal)
-          throw new NonRetryableTurnError(
-            "Your personal AI account is unavailable. Open Settings → AI access to reconnect Claude or ChatGPT / Codex, or choose company access. The chat cannot continue on company access.",
-          );
-        return {
-          userProviderKeys: personal.keys,
-          userModelOverride: personal.modelId,
-          personalAuth: true,
-          authLabel: personal.subscription ? `${personal.subscription}-subscription` : "api-key",
-          account,
-        };
-      };
-      const initialRuntimeAuth = loadRuntimeAuth({});
-      const sessionAuth = await initialRuntimeAuth.catch(() => undefined);
-      const sessionModel = sessionAuth?.userModelOverride ?? input.model;
-      const sessionRoute: SessionRoute | undefined = sessionAuth && {
-        ...(sessionModel ? { runtime: { modelId: sessionModel } } : {}),
-        ...(sessionAuth.userProviderKeys ? { providerKeys: sessionAuth.userProviderKeys, runtimePinned: true } : {}),
-        ...(runtimePurpose ? { runtimePurpose } : {}),
-      };
-      const browserModel =
-        !strictReadOnly && allInternal && sessionRoute
-          ? (
-              await deps
-                .resolveSessionRuntime?.({ ...sessionRoute, scopeLabel: scopeId })
-                .catch(reportFailureAs("browser model: session runtime", undefined, scopeId))
-            )?.modelId
-          : undefined;
-      if (browserModel) {
-        connectorEnv.BROWSE_LAB_MODEL_PROVIDER = "managed";
-        connectorEnv.BROWSE_LAB_MODEL = browserModel;
-      }
+      const {
+        runtimePurpose,
+        purposeDefault,
+        loadRuntimeAuth,
+        initialRuntimeAuth,
+        sessionAuth,
+        sessionModel,
+        sessionRoute,
+        browserModel,
+      } = await resolveTurnRuntimeAuth({
+        deps,
+        input,
+        actor,
+        session,
+        scopeId,
+        external,
+        strictReadOnly,
+        allInternal,
+        automatedTurn,
+        humanInput,
+        swarmBinding,
+        connectorEnv,
+      });
       const {
         actorIsOrgAdmin,
         orgMemoryWrite,
@@ -1441,6 +1406,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
       const {
         boundSandboxId,
+        assertDefaultUsable,
         workdir,
         provision,
         provisionScratch,
@@ -1975,6 +1941,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           provisionJobComputer,
           provisionResource,
           accessSandboxResource: accessResource,
+          assertDefaultSandboxUsable: assertDefaultUsable,
           boundSandboxId,
           workdir,
           useSkill,

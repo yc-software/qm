@@ -79,7 +79,7 @@ test("addVersionFromCommit registers a pushed commit as a new version inheriting
   assert.deepEqual(v2.env, { FOO: "bar" });
   assert.equal((await s.get(d.id))!.currentVersion, 2);
 
-  const v2bundle = await s.bundleOf(d.id, 2);
+  const v2bundle = await s.bundleOf(d.id, pushed);
   assert.ok((v2bundle?.byteLength ?? 0) > 0, "a push-deployed version can be exported as a git bundle");
 
   assert.equal(await s.addVersionFromCommit(d.id, pushed), null);
@@ -283,21 +283,7 @@ test("deploy versions carry git commits for app files and rollback moves the cur
     "resident home files are not part of app git history",
   );
 
-  const diff = await s2.diffVersions(d.id, 1, 2);
-  assert.deepEqual(
-    diff?.added.map((f) => f.path),
-    ["public/index.html"],
-  );
-  assert.deepEqual(
-    diff?.modified.map((f) => f.path),
-    ["data.json"],
-  );
-  assert.deepEqual(
-    diff?.deleted.map((f) => f.path),
-    [],
-  );
-
-  const bundle = await s2.bundleOf(d.id, 2);
+  const bundle = await s2.bundleOf(d.id, v2.commit!);
   assert.ok((bundle?.byteLength ?? 0) > 0, "a deploy version can be exported as a git bundle");
   const checkout = mkdtempSync(join(tmpdir(), "deploy-git-bundle-checkout-"));
   const bundlePath = join(checkout, "repo.bundle");
@@ -403,7 +389,7 @@ test("uploaded files a .gitignore would exclude still reach the deployment's git
     "the build output the app serves is archived even though the app's .gitignore excludes it",
   );
 
-  const files = await s.filesOf(d.id, 1, ["dist/index.html"]);
+  const files = await s.filesOf(d.id, (await s.versionOf(d.id, 1))!.commit!, ["dist/index.html"]);
   assert.equal(files?.[0]?.data.toString(), "<h1>built</h1>");
 
   await s.addVersion(d.id, {
@@ -457,7 +443,10 @@ test("deploy git repos restore from the durable archive into a fresh repo root",
   );
   assert.ok(existsSync(await s2.repoUrl(d.id)), "the restored bare repo exists on the fresh instance");
   assert.deepEqual(
-    (await s2.filesOf(d.id, 2))?.map((f) => [f.path, Buffer.from(f.data).toString("utf8")]),
+    (await s2.filesOf(d.id, (await s2.versionOf(d.id, 2))!.commit!))?.map((f) => [
+      f.path,
+      Buffer.from(f.data).toString("utf8"),
+    ]),
     [["server.js", "console.log('v2')"]],
   );
 
@@ -496,7 +485,10 @@ test("deploy git archives keep bundle bytes in the byte store, not the row", asy
     git: { repoRoot: mkdtempSync(join(tmpdir(), "deploy-git-blob-b-")), archiveStore, archiveBytes },
   });
   assert.deepEqual(
-    (await s2.filesOf(d.id, 1))?.map((f) => [f.path, Buffer.from(f.data).toString("utf8")]),
+    (await s2.filesOf(d.id, (await s2.versionOf(d.id, 1))!.commit!))?.map((f) => [
+      f.path,
+      Buffer.from(f.data).toString("utf8"),
+    ]),
     [["server.js", "console.log('v1')"]],
   );
 
@@ -536,7 +528,10 @@ test("legacy inline-bundle rows still restore and migrate to blob refs on read",
     git: { repoRoot: mkdtempSync(join(tmpdir(), "deploy-git-legacy-b-")), archiveStore, archiveBytes },
   });
   assert.deepEqual(
-    (await s2.filesOf(d.id, 1))?.map((f) => [f.path, Buffer.from(f.data).toString("utf8")]),
+    (await s2.filesOf(d.id, (await s2.versionOf(d.id, 1))!.commit!))?.map((f) => [
+      f.path,
+      Buffer.from(f.data).toString("utf8"),
+    ]),
     [["server.js", "console.log('v1')"]],
   );
   const migrated = (await archiveStore.get(d.id))!;

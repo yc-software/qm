@@ -844,7 +844,6 @@ test("agent loop reads omit Slack avatar metadata", async () => {
   const payload = {
     source: "slack",
     participants: [{ id: "U1", name: "Alex", avatarUrl: "https://example.com/avatar.png" }],
-    slackAvatarsRefreshAt: 12345,
   };
   await deps.items.ingest([{ loopId: loop.id, dedupeKey: "D1", source: "slack", sourcePayload: payload }]);
   for (const mode of ["source", "capability"] as const) {
@@ -853,7 +852,7 @@ test("agent loop reads omit Slack avatar metadata", async () => {
     const text = JSON.stringify(response.body);
     if (mode === "source") assert.match(text, /avatar.png/);
     else {
-      assert.doesNotMatch(text, /avatarUrl|slackAvatarsRefreshAt/);
+      assert.doesNotMatch(text, /avatarUrl/);
       assert.match(text, /Alex/);
     }
   }

@@ -207,6 +207,7 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
   app.addEventListener("load", sync);
   if (location.hash) app.src += location.hash;
   let base = null;
+  app.addEventListener("load", () => { base = null; });
   const reloadApp = (v) => {
     base = v;
     upd.classList.remove("show");
@@ -220,9 +221,12 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
       const d = await r.json();
       if (typeof d.version !== "number") return;
       verEl.textContent = "v" + d.version;
-      if (base === null) base = d.version;
-      else if (d.version !== base) {
-        if (panel.classList.contains("open")) reloadApp(d.version);
+      const served = d.version + ":" + (d.live ?? "");
+      if (base === null) {
+        base = served;
+        upd.classList.remove("show");
+      } else if (served !== base) {
+        if (panel.classList.contains("open")) reloadApp(served);
         else upd.classList.add("show");
       }
     } catch {}
@@ -233,7 +237,7 @@ ${opts.annotationsEnabled ? ANNOTATE_JS : ""}
   upd.addEventListener("click", () => {
     void fetch("/__claw__/version", { cache: "no-store" })
       .then((r) => r.json())
-      .then((d) => reloadApp(typeof d.version === "number" ? d.version : base))
+      .then((d) => reloadApp(typeof d.version === "number" ? d.version + ":" + (d.live ?? "") : base))
       .catch(() => reloadApp(base));
   });
 })();

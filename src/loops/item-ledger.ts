@@ -5,6 +5,7 @@ import type {
   LoopItem,
   LoopItemStatus,
   LoopItemTriage,
+  LoopItemVerdict,
   LoopProposal,
   LoopSourcePayload,
   LoopThreadMessage,
@@ -59,6 +60,24 @@ interface PruneOptions {
 
 export type TriagePatch = Partial<Pick<LoopItemTriage, "at" | "priority" | "reason" | "groupId">>;
 
+export interface VerdictInput {
+  verdict: LoopItemVerdict;
+  sourcePayload: LoopSourcePayload;
+  sourceAt: number;
+  draft?: LoopSourcePayload;
+  replied?: string;
+}
+
+export const INBOX_SUMMARY_FIELDS = [
+  "title",
+  "from",
+  "fromDetail",
+  "snippet",
+  "receivedAt",
+  "sentChat",
+  "participants",
+] as const;
+
 interface RecordActionInput {
   kind: string;
   result?: string;
@@ -81,15 +100,13 @@ export interface LoopItemLedger {
   ): Promise<LoopItem | null>;
   appendThread(id: string, messages: Array<Omit<LoopThreadMessage, "id" | "at">>): Promise<LoopItem | null>;
   setTriage(id: string, patch: TriagePatch, by: "agent" | "human"): Promise<LoopItem | null>;
+  recordVerdict(id: string, input: VerdictInput): Promise<LoopItem | null>;
   recordAction(id: string, input: RecordActionInput): Promise<LoopItem | null>;
   reopen(id: string, opts?: { sentReply?: boolean }): Promise<LoopItem | null>;
   prune(loopId: string, options: PruneOptions): Promise<number>;
   get(id: string): Promise<LoopItem | null>;
   byLoop(loopId: string): Promise<LoopItem[]>;
-  summaries(
-    loopIds: string[],
-    options?: { includeInboxMetadata?: boolean },
-  ): Promise<Array<Omit<LoopItem, "proposal" | "agentDrafts" | "thread" | "sourcePayload">>>;
+  summaries(loopIds: string[]): Promise<LoopItemSummary[]>;
   queued(loopId: string, limit?: number): Promise<LoopItem[]>;
   claim(id: string, claimedAt?: number, expectedLoopId?: string): Promise<LoopItem | null>;
   acquireDecision(id: string, decisionAt?: number): Promise<string | null>;
@@ -103,6 +120,8 @@ export interface LoopItemLedger {
   stats(loopId: string, now: number, held?: ReadonlySet<string>): Promise<LoopQueueStats>;
   deleteByLoop(loopId: string): Promise<void>;
 }
+
+export type LoopItemSummary = Omit<LoopItem, "proposal" | "agentDrafts" | "thread">;
 
 export function loopItemId(loopId: string, sourceKey: string): string {
   return hashId([contentPart(loopId), contentPart(sourceKey)]);
@@ -145,15 +164,6 @@ function withAgentDraft(
   return { agentDrafts: next.slice(-AGENT_DRAFT_HISTORY), agentMentionKeys: [...keys] };
 }
 
-function inboxPreview(payload: LoopSourcePayload | undefined): LoopSourcePayload {
-  if (!payload) return {};
-  return Object.fromEntries(
-    ["title", "from", "fromDetail", "snippet", "receivedAt", "probablyResolved", "sentChat"].flatMap((key) =>
-      payload[key] === undefined ? [] : [[key, payload[key]]],
-    ),
-  );
-}
-
 function mergeIngest(item: LoopItem, entry: IngestEntryInput, now: number): LoopItem | null {
   const newerSource = entry.sourceAt !== undefined && entry.sourceAt > (item.sourceAt ?? 0);
   if (isResolved(item) && !newerSource) return null;
@@ -173,7 +183,6 @@ function mergeIngest(item: LoopItem, entry: IngestEntryInput, now: number): Loop
     status,
     ...withAgentDraft(item, proposal),
     sourcePayload: entry.sourcePayload,
-    inboxPreview: inboxPreview(entry.sourcePayload),
     sourceAt: entry.sourceAt ?? item.sourceAt,
     actedAt: undefined,
     actionKind: undefined,
@@ -260,33 +269,11 @@ export function createLoopItemLedger(
       const created = await backing.insertIfAbsent(id, candidate);
       return { item: created ? candidate : ((await backing.get(id)) ?? candidate), created };
     },
-    async summaries(loopIds, options) {
-      if (!options?.includeInboxMetadata)
-        return backing.select({
-          where: { field: "loopId", anyOfFold: loopIds },
-          omit: ["proposal", "agentDrafts", "thread", "sourcePayload"],
-        });
-      const items = await backing.select({
+    summaries(loopIds) {
+      return backing.select({
         where: { field: "loopId", anyOfFold: loopIds },
         omit: ["proposal", "agentDrafts", "thread"],
-        pickNested: { sourcePayload: ["automated", "participants", "slackAvatarsRefreshAt"] },
-      });
-      return items.map(({ sourcePayload, ...item }) => {
-        return {
-          ...item,
-          ...(item.source === "slack"
-            ? {
-                inboxPreview: {
-                  ...item.inboxPreview,
-                  participants: sourcePayload?.participants,
-                  slackAvatarsRefreshAt: sourcePayload?.slackAvatarsRefreshAt,
-                },
-              }
-            : {}),
-          ...(item.source === "gmail"
-            ? { inboxPreview: { ...item.inboxPreview, automated: sourcePayload?.automated === true } }
-            : {}),
-        };
+        pickNested: { sourcePayload: [...INBOX_SUMMARY_FIELDS] },
       });
     },
     async ingest(entries) {
@@ -309,7 +296,6 @@ export function createLoopItemLedger(
                 runIds: [],
                 outputIds: [],
                 sourcePayload: entry.sourcePayload,
-                inboxPreview: inboxPreview(entry.sourcePayload),
                 createdAt: now,
                 updatedAt: now,
                 ...(entry.source !== undefined ? { source: entry.source } : {}),
@@ -429,6 +415,56 @@ export function createLoopItemLedger(
       if (applied) emit(after, "triage");
       return applied ? after : null;
     },
+    async recordVerdict(id, input) {
+      const after = await update(id, (item) => {
+        const now = Date.now();
+        const newer = item.verdict
+          ? input.verdict.lastSeenTs !== item.verdict.lastSeenTs
+          : input.sourceAt > (item.sourceAt ?? 0);
+        const incoming = input.draft ? { data: input.draft, by: "agent" as const, at: now } : undefined;
+        const keepCurrent =
+          (item.proposal?.by === "human" && !newer) ||
+          (incoming !== undefined && item.proposal?.by === "agent" && sameDraft(item.proposal, incoming));
+        const proposal = keepCurrent ? item.proposal : incoming;
+        const reopened = isResolved(item) && newer && input.verdict.state === "needs_reply";
+        const replied = input.replied !== undefined && !isResolved(item);
+        return {
+          ...item,
+          verdict: input.verdict,
+          sourcePayload: { ...input.sourcePayload, ...(item.sourcePayload?.sentChat ? { sentChat: true } : {}) },
+          sourceAt: input.sourceAt,
+          proposal,
+          ...withAgentDraft(item, proposal),
+          ...(replied
+            ? {
+                status: "skipped" as const,
+                actionKind: "replied",
+                actedAt: now,
+                actionResult: input.replied,
+                claimToken: undefined,
+                claimedAt: undefined,
+                parkedReason: undefined,
+              }
+            : {}),
+          ...(!replied && (reopened || item.status === "queued" || item.status === "failed")
+            ? {
+                status: "ready" as const,
+                actedAt: undefined,
+                actionKind: undefined,
+                actionResult: undefined,
+                parkedReason: undefined,
+                outputIds: [],
+                claimToken: undefined,
+                claimedAt: undefined,
+                attempts: 0,
+              }
+            : {}),
+          updatedAt: now,
+        };
+      });
+      emit(after, "verdict");
+      return after;
+    },
     async recordAction(id, input) {
       let applied = false;
       const after = await update(id, (item) => {
@@ -479,14 +515,15 @@ export function createLoopItemLedger(
     async prune(loopId, options) {
       const now = options.now ?? Date.now();
       const items = await forLoop(loopId);
+      const settled = (item: LoopItem) => isResolved(item) || (item.verdict && item.verdict.state !== "needs_reply");
       const expired = items.filter(
-        (item) => isResolved(item) && now - (item.actedAt ?? item.updatedAt) >= options.retentionMs,
+        (item) => settled(item) && now - (item.actedAt ?? item.updatedAt) >= options.retentionMs,
       );
       const doomed = new Map(expired.map((item) => [item.id, item]));
       const surviving = items.filter((item) => !doomed.has(item.id));
       if (surviving.length > options.maxItems) {
         const resolvedOldestFirst = surviving
-          .filter(isResolved)
+          .filter(settled)
           .sort((a, b) => (a.actedAt ?? a.updatedAt) - (b.actedAt ?? b.updatedAt));
         for (const item of resolvedOldestFirst.slice(0, surviving.length - options.maxItems)) doomed.set(item.id, item);
       }
