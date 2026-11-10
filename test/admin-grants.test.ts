@@ -11,10 +11,7 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testAdminGrantStore, testDatabaseUrl, testUsers } from "./support/test-database.ts";
 import { createPostgresUserStore } from "../src/identity/user-store.ts";
-import { TEST_TENANT } from "./support/test-tenant.ts";
-import { withTenant } from "../src/tenants/context.ts";
-
-const tenant = withTenant(TEST_TENANT, (t) => t);
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-grants-")) }));

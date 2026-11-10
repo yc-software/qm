@@ -1,4 +1,4 @@
-import { createPgPool, withPgTransaction, type PgMigrationDefinition } from "../persistence/pg-pool.ts";
+import { createPgPool, type PgMigrationDefinition, type PoolClient } from "../persistence/pg-pool.ts";
 import type { Grant, Permission, ScopeId } from "../types.ts";
 import { sameGrantSet, type GrantPersistence } from "./acl-store.ts";
 import { refPrefix } from "./resource-ref.ts";
@@ -111,12 +111,13 @@ export const ACL_GRANT_MIGRATIONS: PgMigrationDefinition[] = [
 
 export function createPostgresGrantStore(connectionString: string): GrantPersistence {
   const db = createPgPool(connectionString, ACL_GRANT_MIGRATIONS);
-  const { q } = db;
+  const lockResource = (client: PoolClient, ownerScopeId: ScopeId, ref: string) =>
+    client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`acl-grants:${ownerScopeId}\n${ref}`]);
 
   return {
-    async find(query) {
-      const where: string[] = [];
-      const params: unknown[] = [];
+    async find(tenant, query) {
+      const params: unknown[] = [tenant.id];
+      const where: string[] = ["tenant_id = $1"];
       const match = (condition: (param: string) => string, value: unknown) => {
         params.push(value);
         where.push(condition(`$${params.length}`));
@@ -125,47 +126,53 @@ export function createPostgresGrantStore(connectionString: string): GrantPersist
       if (query.ref !== undefined) match((p) => `path = ${p}`, query.ref);
       if (query.kind !== undefined) match((p) => `path LIKE ${p}`, `${likeEscape(refPrefix(query.kind))}%`);
       if (query.granteeScopeIds !== undefined) match((p) => `grantee_scope_id = ANY(${p})`, [...query.granteeScopeIds]);
-      const rows = await q(
-        `SELECT owner_scope_id, path, grantee_scope_id, permission, granted_by FROM acl_grants WHERE ${where.join(" AND ")} ORDER BY owner_scope_id, path, grantee_scope_id, permission`,
-        params,
-      );
+      const rows = await db
+        .forTenant(tenant)
+        .q(
+          `SELECT owner_scope_id, path, grantee_scope_id, permission, granted_by FROM acl_grants WHERE ${where.join(" AND ")} ORDER BY owner_scope_id, path, grantee_scope_id, permission`,
+          params,
+        );
       return rows.map(rowToGrant);
     },
-    async put(g) {
-      await withPgTransaction(await db.pool(), async (client) => {
-        await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`acl-grants:${g.ownerScopeId}\n${g.ref}`]);
+    async put(tenant, g) {
+      await db.forTenant(tenant).transaction(async (client) => {
+        await lockResource(client, g.ownerScopeId, g.ref);
         await client.query(
-          `INSERT INTO acl_grants (owner_scope_id, path, grantee_scope_id, permission, granted_by)
-           VALUES ($1, $2, $3, $4, $5)
+          `INSERT INTO acl_grants (tenant_id, owner_scope_id, path, grantee_scope_id, permission, granted_by)
+           VALUES ($1, $2, $3, $4, $5, $6)
            ON CONFLICT (tenant_id, owner_scope_id, path, grantee_scope_id, permission)
            DO UPDATE SET granted_by = EXCLUDED.granted_by`,
-          [g.ownerScopeId, g.ref, g.granteeScopeId, g.permission, g.grantedBy],
+          [tenant.id, g.ownerScopeId, g.ref, g.granteeScopeId, g.permission, g.grantedBy],
         );
       });
     },
-    async remove(g) {
-      await withPgTransaction(await db.pool(), async (client) => {
-        await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`acl-grants:${g.ownerScopeId}\n${g.ref}`]);
+    async remove(tenant, g) {
+      await db.forTenant(tenant).transaction(async (client) => {
+        await lockResource(client, g.ownerScopeId, g.ref);
         await client.query(
-          "DELETE FROM acl_grants WHERE owner_scope_id = $1 AND path = $2 AND grantee_scope_id = $3 AND permission = $4",
-          [g.ownerScopeId, g.ref, g.granteeScopeId, g.permission],
+          "DELETE FROM acl_grants WHERE tenant_id = $1 AND owner_scope_id = $2 AND path = $3 AND grantee_scope_id = $4 AND permission = $5",
+          [tenant.id, g.ownerScopeId, g.ref, g.granteeScopeId, g.permission],
         );
       });
     },
-    async replaceForResourceIfCurrent(ownerScopeId, ref, expected, replacement) {
-      return withPgTransaction(await db.pool(), async (client) => {
-        await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`acl-grants:${ownerScopeId}\n${ref}`]);
+    async replaceForResourceIfCurrent(tenant, ownerScopeId, ref, expected, replacement) {
+      return db.forTenant(tenant).transaction(async (client) => {
+        await lockResource(client, ownerScopeId, ref);
         const selected = await client.query(
-          "SELECT owner_scope_id, path, grantee_scope_id, permission, granted_by FROM acl_grants WHERE owner_scope_id = $1 AND path = $2 FOR UPDATE",
-          [ownerScopeId, ref],
+          "SELECT owner_scope_id, path, grantee_scope_id, permission, granted_by FROM acl_grants WHERE tenant_id = $1 AND owner_scope_id = $2 AND path = $3 FOR UPDATE",
+          [tenant.id, ownerScopeId, ref],
         );
         const current = selected.rows.map(rowToGrant);
         if (!sameGrantSet(current, expected)) return false;
-        await client.query("DELETE FROM acl_grants WHERE owner_scope_id = $1 AND path = $2", [ownerScopeId, ref]);
+        await client.query("DELETE FROM acl_grants WHERE tenant_id = $1 AND owner_scope_id = $2 AND path = $3", [
+          tenant.id,
+          ownerScopeId,
+          ref,
+        ]);
         for (const grant of replacement) {
           await client.query(
-            "INSERT INTO acl_grants (owner_scope_id, path, grantee_scope_id, permission, granted_by) VALUES ($1, $2, $3, $4, $5)",
-            [grant.ownerScopeId, grant.ref, grant.granteeScopeId, grant.permission, grant.grantedBy],
+            "INSERT INTO acl_grants (tenant_id, owner_scope_id, path, grantee_scope_id, permission, granted_by) VALUES ($1, $2, $3, $4, $5, $6)",
+            [tenant.id, grant.ownerScopeId, grant.ref, grant.granteeScopeId, grant.permission, grant.grantedBy],
           );
         }
         return true;

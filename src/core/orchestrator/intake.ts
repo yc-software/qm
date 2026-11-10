@@ -21,6 +21,7 @@ import {
 import type { TurnOrigin } from "../turn-origin.ts";
 import { senderNote } from "./prompt-blocks.ts";
 import { isScreenableTextAttachment } from "./turn-helpers.ts";
+import type { Tenant } from "../../tenants/context.ts";
 
 export interface IncomingMessage {
   text: string;
@@ -118,6 +119,7 @@ export async function recordUser(
 }
 
 export interface SteerTurn {
+  tenant: Tenant;
   deps: OrchestratorDeps;
   orchestrator: Orchestrator;
   input: OrchestratorInput;
@@ -147,6 +149,7 @@ export interface SteerTurn {
 
 export function createSteerPreparer(turn: SteerTurn): NonNullable<AgentTurnInput["prepareSteer"]> {
   const {
+    tenant,
     deps,
     orchestrator,
     input,
@@ -194,7 +197,7 @@ export function createSteerPreparer(turn: SteerTurn): NonNullable<AgentTurnInput
       .join("\n\n");
     if (screened) {
       const screen = await orchestrator
-        .screenSecuritySteer({ payload: screened, actor: steerer, conversation, sessionId: session.id })
+        .screenSecuritySteer({ tenant, payload: screened, actor: steerer, conversation, sessionId: session.id })
         .catch((error: unknown) => {
           reportFailure("orchestrator: mid-turn message screen", error);
           return undefined;

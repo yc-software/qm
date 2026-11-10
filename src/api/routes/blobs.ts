@@ -10,7 +10,7 @@ import {
   MAX_STAGE_BLOB_BYTES,
 } from "../../persistence/blob-transfer.ts";
 import { CAPABILITY_HEADER } from "../contract.ts";
-import { usesBrowserSession } from "./route.ts";
+import { tenantOf, usesBrowserSession } from "./route.ts";
 import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.ts";
 import { extendBodyDeadline, headerValue, sendJson, verifyOrReject } from "../http.ts";
 import { relayStream } from "../../../plugins/chassis/src/http.ts";
@@ -164,7 +164,7 @@ async function uploadFile(ctx: ApiCtx): Promise<void> {
   const opened = await deps.blobTransfer!.open(blobId);
   if (!opened) return sendJson(res, 404, { error: "not_found", message: "staged blob not found" });
   try {
-    const file = await app.uploadFileForViewer(principalId, {
+    const file = await app.uploadFileForViewer(tenantOf(ctx), principalId, {
       ...(scopeId ? { scopeId } : {}),
       name,
       mimetype,

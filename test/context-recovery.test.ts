@@ -11,6 +11,7 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresErrorLog } from "../src/admin/postgres-error-log.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const modelContext = async (sessions: SessionStore, sessionId: string) =>
   forModelContext((await sessions.getContextWindow(sessionId)).items);
@@ -36,6 +37,7 @@ async function fixture() {
     maxContextTokens: 500,
   } as unknown as OrchestratorDeps);
   const input = {
+    tenant,
     session,
     writer,
     visibleHistory: await modelContext(sessions, session.id),

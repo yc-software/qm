@@ -8,6 +8,7 @@ import { createSkillStore, type Skill, type SkillManifest, type SkillStore } fro
 import { scopeId, type Principal, type ScopeId } from "../src/types.ts";
 import { testMap, testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const ORG = scopeId("org", "default-org");
 const JOSH = scopeId("personal", "josh");
@@ -29,7 +30,7 @@ async function publishedSkill(store: SkillStore, scope: ScopeId, name: string) {
 
 test("person-to-person skill grant reaches the grantee's audience", async () => {
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
-  await acl.grant({
+  await acl.grant(tenant, {
     ownerScopeId: JOSH,
     ref: encodeRef(skillRef("s1")),
     granteeScopeId: ERIC,
@@ -37,13 +38,14 @@ test("person-to-person skill grant reaches the grantee's audience", async () => 
     grantedBy: "josh",
   });
 
-  const inEricsDm = await acl.sharedOfKindForAudience("skill", [P("eric")], ERIC, ORG, entitledScopes);
+  const inEricsDm = await acl.sharedOfKindForAudience(tenant, "skill", [P("eric")], ERIC, ORG, entitledScopes);
   assert.deepEqual(
     inEricsDm.map((g) => parseRef(g.ref).id),
     ["s1"],
   );
 
   const together = await acl.sharedOfKindForAudience(
+    tenant,
     "skill",
     [P("eric"), P("josh")],
     scopeId("channel", "C"),
@@ -53,6 +55,7 @@ test("person-to-person skill grant reaches the grantee's audience", async () => 
   assert.equal(together.length, 1);
 
   const mixed = await acl.sharedOfKindForAudience(
+    tenant,
     "skill",
     [P("eric"), P("mallory")],
     scopeId("channel", "C"),
@@ -62,6 +65,7 @@ test("person-to-person skill grant reaches the grantee's audience", async () => 
   assert.deepEqual(mixed, []);
 
   const other = await acl.sharedOfKindForAudience(
+    tenant,
     "skill",
     [P("alice")],
     scopeId("personal", "alice"),

@@ -38,6 +38,7 @@ import {
   type ToolResultScreenInput,
 } from "../../security/security-posture.ts";
 import { quarantineFullText, quarantinePreview, type createApprovalLedger } from "./approvals.ts";
+import type { Tenant } from "../../tenants/context.ts";
 
 type ApprovalLedger = Awaited<ReturnType<typeof createApprovalLedger>>;
 
@@ -67,6 +68,7 @@ export interface SecurityScreenContext {
 }
 
 export type SecurityClassifier = (
+  tenant: Tenant,
   payload: string,
   actorId: string,
   scopeLabel: ScopeId,
@@ -89,7 +91,7 @@ function screenSources(payload: string): string[] {
 }
 
 export function createSecurityClassifier(deps: OrchestratorDeps): SecurityClassifier {
-  return async function classifySecurityData(payload, actorId, scopeLabel, recordLlmRequest, context) {
+  return async function classifySecurityData(tenant, payload, actorId, scopeLabel, recordLlmRequest, context) {
     const screener = deps.securityScreener;
     const model = deps.agent.screenSecurity;
     const observe = context.mode === "observe";
@@ -148,7 +150,7 @@ export function createSecurityClassifier(deps: OrchestratorDeps): SecurityClassi
         payload: request ? JSON.stringify({ request, payload }) : payload,
         signal,
         recordModelCall: (rec) => {
-          if (!observe) void deps.budget?.record(actorId, estimateCostUsd(rec.inputTokens));
+          if (!observe) void deps.budget?.record(tenant, actorId, estimateCostUsd(rec.inputTokens));
         },
         ...(recordLlmRequest && !observe ? { recordLlmRequest } : {}),
       });
