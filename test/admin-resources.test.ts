@@ -343,10 +343,10 @@ test("feature flag table changes one scope live without restart", async () => {
       }
     ).featureFlags;
     assert.deepEqual(flags.find((flag) => flag.featureName === "inbox_loops")?.enabledScopes, ["channel:C1"]);
-    const spine = flags.find((flag) => flag.featureName === "responsive_spine");
-    assert.equal(spine?.label, "Responsive spine (delegation)");
-    assert.equal(spine?.personalOnly, true);
-    assert.deepEqual(spine?.enabledScopes, []);
+    const canvas = flags.find((flag) => flag.featureName === "ui_canvas");
+    assert.equal(canvas?.label, "UI canvas and UI state (agent code runs in the page)");
+    assert.equal(canvas?.personalOnly, true);
+    assert.deepEqual(canvas?.enabledScopes, []);
   } finally {
     await srv.close();
   }
