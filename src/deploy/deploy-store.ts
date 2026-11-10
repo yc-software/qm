@@ -368,12 +368,11 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
       return ds.map((d) => withAccess(d, accessAt.get(d.id)));
     },
     async setCurrentVersion(id, version) {
-      const d = await backingMap.get(id);
-      if (!d) return;
-      const v = d.versions.find((x) => x.version === version);
-      if (!v) throw new Error(`no such version ${version}`);
-      d.currentVersion = version;
-      await backingMap.put(id, d);
+      await backingMap.update(id, (d) => {
+        if (!d.versions.some((x) => x.version === version)) throw new Error(`no such version ${version}`);
+        d.currentVersion = version;
+        return d;
+      });
     },
     async setVersionImage(id, version, image) {
       await backingMap.update(id, (d) => {

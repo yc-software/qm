@@ -222,3 +222,45 @@ test("concurrent field writes and new versions from two instances all land", { s
   await a.setStatus("missing-id", "stopped");
   assert.equal((await raw("SELECT count(*) c FROM deployments WHERE id = 'missing-id'"))[0]!.c, "0");
 });
+
+test("version and label setters from two instances keep each other's writes on Postgres", { skip }, async () => {
+  const a = makeStore().store;
+  const b = makeStore().store;
+  const d = await a.create({ ...createInput(), files: [{ path: "s.js", data: "1" }] });
+  const v1 = d.versions[0]!.commit!;
+  await a.addVersion(d.id, { entrypoint: "node s.js", snapshotDir: "/snap", files: [{ path: "s.js", data: "2" }] });
+  const blob = async () => (await raw("SELECT json FROM deployments WHERE id = $1", [d.id]))[0]!.json as Deployment;
+
+  for (let i = 0; i < 10; i++) {
+    const status = i % 2 ? "running" : "stopped";
+    await Promise.all([a.setCurrentVersion(d.id, (i % 2) + 1), b.setStatus(d.id, status)]);
+    assert.equal((await blob()).status, status, `status survives a concurrent current-version write (round ${i})`);
+    assert.equal((await blob()).currentVersion, (i % 2) + 1);
+  }
+
+  await Promise.all([a.setAppliedVersion(d.id, 2), b.setEndpoint(d.id, { host: "x.example.test", port: 443 })]);
+  assert.equal((await blob()).appliedVersion, 2);
+  assert.equal((await blob()).endpoint?.host, "x.example.test");
+  await assert.rejects(a.setAppliedVersion(d.id, 99), /no such version 99/);
+  assert.equal((await blob()).appliedVersion, 2);
+
+  await a.setCurrentVersion(d.id, 2);
+  assert.equal(await a.addVersionFromCommit(d.id, (await blob()).versions[1]!.commit!), null);
+  const v3 = (await a.addVersionFromCommit(d.id, v1))!;
+  assert.equal(v3.version, 3);
+  assert.equal((await blob()).currentVersion, 3);
+
+  await b.setDisplayName(d.id, "Label");
+  assert.equal((await blob()).displayName, "Label");
+  await b.setDisplayName(d.id, undefined);
+  assert.equal("displayName" in (await blob()), false);
+
+  const results = await Promise.allSettled([
+    a.addVersion(d.id, { entrypoint: "node s.js", snapshotDir: "/snap" }),
+    b.addVersion(d.id, { entrypoint: "node s.js", snapshotDir: "/snap" }),
+  ]);
+  const landed = results.filter((r) => r.status === "fulfilled").length;
+  assert.ok(landed >= 1);
+  for (const r of results) if (r.status === "rejected") assert.match(String(r.reason), /gained a version concurrently/);
+  assert.equal((await blob()).versions.length, 3 + landed);
+});
