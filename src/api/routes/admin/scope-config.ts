@@ -254,6 +254,7 @@ const SETTINGS_RESOURCES = {
     "cronRuntime",
     "subagentRuntime",
     "fallbackRuntime",
+    "appEditRuntime",
     "webuiModels",
     "interactiveFastMode",
     "individualModelAuth",
@@ -348,7 +349,12 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
     name: resolvedCurrent?.name ?? currentId + " (configured)",
     provider: resolvedCurrent?.provider ?? "",
   };
-  const purposeRuntimes = [values.cronRuntime, values.subagentRuntime, values.fallbackRuntime].filter(
+  const purposeRuntimes = [
+    values.cronRuntime,
+    values.subagentRuntime,
+    values.fallbackRuntime,
+    values.appEditRuntime,
+  ].filter(
     (value): value is { modelId: string } => !!value && typeof (value as { modelId?: unknown }).modelId === "string",
   );
   const models = selectableCatalog(catalog);
