@@ -425,7 +425,7 @@ test("an unchanged live card costs no store writes or Slack calls per sweep", as
   assert.equal(f.card()[0]?.title, "Reading files");
 });
 
-test("unrelated, expired, disabled, private and nonengaged work never keeps a card active", async () => {
+test("unrelated, expired, disabled and private work never keeps a card active", async () => {
   const f = fixture();
   await f.enable();
   const run = f.add("r1");
@@ -438,9 +438,6 @@ test("unrelated, expired, disabled, private and nonengaged work never keeps a ca
   f.watch().ownerScopeId = "channel:other";
   f.watch().enabled = false;
   f.watch().expiresAt = 0;
-  const quiet = f.add("quiet");
-  quiet.deliveryState = null;
-  quiet.request.origin = { kind: "ambient" };
   f.add("private").request.privateSessionMessage = true;
   f.add("other").sessionId = "other-thread";
   run.status = "done";

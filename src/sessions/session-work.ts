@@ -37,10 +37,7 @@ export interface SessionWorkDeps {
 export function createSessionWork(deps: SessionWorkDeps, now = Date.now) {
   return {
     async of(threadRef: string, surface: string): Promise<SessionWork> {
-      const own = (await deps.runs.inFlightForThread(threadRef)).filter(
-        (run) =>
-          !run.request.privateSessionMessage && (run.request.origin?.kind !== "ambient" || run.deliveryState?.replying),
-      );
+      const own = (await deps.runs.inFlightForThread(threadRef)).filter((run) => !run.request.privateSessionMessage);
       const session = await deps.sessions?.getByThread(threadRef);
       const children = session
         ? ((await deps.sessions?.childrenOf(session.id)) ?? []).filter((child) => child.scopeId === session.scopeId)
