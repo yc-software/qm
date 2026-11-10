@@ -7,7 +7,8 @@ import pg from "pg";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { applyPgMigrations, definePgMigration } from "../src/persistence/pg-pool.ts";
 import { PUBLISHED_SESSION_UPGRADE } from "../src/sessions/published-upgrade.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testBareDatabaseUrl } from "./support/test-database.ts";
+import { withTenant } from "../src/tenants/context.ts";
 
 const exec = promisify(execFile);
 const skip = !process.env.DATABASE_URL;
@@ -35,7 +36,7 @@ for (const interrupted of [false, true]) {
     `upgrade a populated published 0.1.15 database and restart; restart after history copy: ${interrupted}`,
     { skip },
     async () => {
-      const url = testDatabaseUrl();
+      const url = testBareDatabaseUrl();
       const db = new pg.Pool({ connectionString: url });
       try {
         await db.query(await readFile(new URL("fixtures/upgrades/0.1.15.sql", import.meta.url), "utf8"));
@@ -73,7 +74,13 @@ for (const interrupted of [false, true]) {
           assert.equal((await db.query("SELECT count(*)::int AS n FROM items")).rows[0].n, 4);
         }
         await migrate(url);
-        const sessions = createPostgresSessionStore(url);
+        const tenant = (await db.query<{ id: string }>("SELECT id FROM tenants")).rows[0]!.id;
+        const store = createPostgresSessionStore(url);
+        const sessions = {
+          getItems: (id: string) => withTenant(tenant, () => store.getItems(id)),
+          get: (id: string) => withTenant(tenant, () => store.get(id)),
+          append: (...args: Parameters<typeof store.append>) => withTenant(tenant, () => store.append(...args)),
+        };
         const items = await sessions.getItems("conversation");
         assert.deepEqual(
           items.map((item) => [item.seq, item.kind, item.text]),
@@ -124,10 +131,13 @@ for (const interrupted of [false, true]) {
 }
 
 test("published surface upgrade preserves request carriers, Slack access and destinations", { skip }, async () => {
-  const url = testDatabaseUrl();
-  const db = new pg.Pool({ connectionString: url });
+  const url = testBareDatabaseUrl();
+  let db = new pg.Pool({ connectionString: url });
   try {
     await migrate(url);
+    const tenant = (await db.query<{ id: string }>("SELECT id FROM tenants")).rows[0]!.id;
+    await db.end();
+    db = new pg.Pool({ connectionString: url, options: `-c qm.tenant_id=${tenant}` });
     const { PUBLISHED_ORIGIN_UPGRADE } = await import("../src/surfaces/published-upgrade.ts");
     await db.query(
       "INSERT INTO qm_schema_migrations(id, checksum) VALUES ('sessions/store/0033-client-tools', 'fixture')",

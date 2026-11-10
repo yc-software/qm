@@ -1,4 +1,6 @@
-import { parseProviderBaseUrl, PROVIDER_IDS } from "./provider-endpoints.ts";
+import { isModelProvider, parseProviderBaseUrl } from "./provider-endpoints.ts";
+import { perTenant } from "../tenants/cache.ts";
+import { boundTenant } from "../tenants/context.ts";
 
 export const CUSTOM_PROVIDER_PROTOCOLS = ["openai", "openai-responses", "anthropic"] as const;
 export type CustomProviderProtocol = (typeof CUSTOM_PROVIDER_PROTOCOLS)[number];
@@ -21,16 +23,14 @@ export interface CustomProviderSpec {
   models: CustomModelSpec[];
 }
 
-const SLUG_RE = /^[a-z][a-z0-9-]{1,31}$/;
-const RESERVED = new Set<string>(PROVIDER_IDS);
+const SLUG_RE = /^[a-z][a-z0-9-]+$/;
 
 export function validateCustomProviderSpec(spec: CustomProviderSpec): void {
   if (!SLUG_RE.test(spec.id)) {
     throw new Error(`provider id must match ${SLUG_RE} (lowercase slug), got "${spec.id}"`);
   }
-  if (RESERVED.has(spec.id)) throw new Error(`provider id "${spec.id}" is reserved`);
+  if (isModelProvider(spec.id)) throw new Error(`provider id "${spec.id}" is reserved`);
   if (!spec.name.trim()) throw new Error("provider name is required");
-  if (spec.name.length > 100) throw new Error("provider name must be 100 chars or fewer");
   if (!CUSTOM_PROVIDER_PROTOCOLS.includes(spec.protocol)) {
     throw new Error(`protocol must be one of ${CUSTOM_PROVIDER_PROTOCOLS.join(", ")}`);
   }
@@ -38,12 +38,10 @@ export function validateCustomProviderSpec(spec: CustomProviderSpec): void {
   if (!Array.isArray(spec.models) || spec.models.length === 0) {
     throw new Error("at least one model is required");
   }
-  if (spec.models.length > 200) throw new Error("at most 200 models per provider");
   const seen = new Set<string>();
   for (const m of spec.models) {
-    if (!m.id?.trim() || m.id.length > 200) throw new Error("every model needs an id (<=200 chars)");
-    if (m.name !== undefined && (typeof m.name !== "string" || m.name.length > 200))
-      throw new Error(`model "${m.id}": name must be a string of 200 chars or fewer`);
+    if (!m.id?.trim()) throw new Error("every model needs an id");
+    if (m.name !== undefined && typeof m.name !== "string") throw new Error(`model "${m.id}": name must be a string`);
     if (m.reasoning !== undefined && typeof m.reasoning !== "boolean")
       throw new Error(`model "${m.id}": reasoning must be a boolean`);
     if (seen.has(m.id)) throw new Error(`duplicate model id "${m.id}"`);
@@ -107,13 +105,15 @@ function toRuntimeModel(provider: CustomProviderSpec, m: CustomModelSpec): Custo
   };
 }
 
-let registry = new Map<string, CustomRuntimeModel>();
-let providers: CustomProviderSpec[] = [];
-let version = 0;
+const state = perTenant(() => ({
+  registry: new Map<string, CustomRuntimeModel>(),
+  providers: new Array<CustomProviderSpec>(),
+  version: 0,
+}));
 
 export function setCustomProviders(specs: CustomProviderSpec[]): void {
-  const snapshot = JSON.stringify(specs);
-  if (snapshot === JSON.stringify(providers)) return;
+  const current = state();
+  if (JSON.stringify(specs) === JSON.stringify(current.providers)) return;
   const next = new Map<string, CustomRuntimeModel>();
   for (const spec of specs) {
     for (const m of spec.models) {
@@ -121,13 +121,13 @@ export function setCustomProviders(specs: CustomProviderSpec[]): void {
       next.set(model.id, model);
     }
   }
-  registry = next;
-  providers = specs.map((s) => ({ ...s, models: [...s.models] }));
-  version += 1;
+  current.registry = next;
+  current.providers = specs.map((s) => ({ ...s, models: [...s.models] }));
+  current.version += 1;
 }
 
 export function customProvidersVersion(): number {
-  return version;
+  return state().version;
 }
 
 export function hasCustomModelPrefix(id: string): boolean {
@@ -135,18 +135,19 @@ export function hasCustomModelPrefix(id: string): boolean {
 }
 
 export function resolveCustomModel(id: string): CustomRuntimeModel | undefined {
-  return registry.get(id);
+  return state().registry.get(id);
 }
 
 export function isCustomModelId(id: string): boolean {
-  return registry.has(id);
+  return boundTenant() !== undefined && state().registry.has(id);
 }
 
 export function customModelCatalog(): Array<{ id: string; name: string; provider: string }> {
-  return [...registry.values()].map((m) => ({ id: m.id, name: m.name, provider: m.provider }));
+  return [...state().registry.values()].map((m) => ({ id: m.id, name: m.name, provider: m.provider }));
 }
 
 export function customModelsJson(): { providers: Record<string, unknown> } | undefined {
+  const { registry, providers } = state();
   if (providers.length === 0) return undefined;
   return {
     providers: Object.fromEntries(

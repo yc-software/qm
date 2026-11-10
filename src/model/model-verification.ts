@@ -5,7 +5,7 @@ import { embeddingModelFromDefinition, modelFromOverlay } from "./pi-models.ts";
 import { isEmbeddingModel, type RegisteredModel } from "./model-overlay.ts";
 import { createMemoryEmbedder } from "./embeddings.ts";
 import type { ModelCredentialStore } from "./model-credential-store.ts";
-import { ModelUnavailableError, type ModelGatewayTransportConfig } from "./provider-endpoints.ts";
+import { gatewayKey, ModelUnavailableError, type ModelGatewayTransportConfig } from "./provider-endpoints.ts";
 import { probeModel } from "./model-runtime.ts";
 
 export class ModelVerificationError extends Error {
@@ -89,7 +89,7 @@ export function createModelVerifier(input: {
         "The model template is unavailable. Choose another template.",
       );
     const gateway = !isEmbeddingModel(spec) && input.modelGateway?.models[spec.id] ? input.modelGateway : undefined;
-    const key = gateway?.apiKey ?? (await input.credentials.resolve(spec.provider));
+    const key = (gateway && gatewayKey(gateway)) ?? (await input.credentials.resolve(spec.provider));
     if (!key)
       throw new ModelVerificationError(
         "missing_credential",

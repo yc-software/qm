@@ -1,14 +1,5 @@
 import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
-import {
-  renderSourceInboxTask,
-  inboxSource,
-  inboxTaskContext,
-  loadInboxVoiceProfile,
-  isReplyLoop,
-  applyReplyResolution,
-  REPLY_DECISION,
-  VOICE_JUDGEMENT,
-} from "./inbox-loop.ts";
+import { inboxPlaybook, inboxSource, loadInboxVoiceProfile } from "./inbox-loop.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import { cronTriggerAuthority } from "../cron/authority.ts";
 import { MAX_SCREEN_CHARS } from "../security/security-posture.ts";
@@ -56,7 +47,8 @@ import {
 } from "./triage.ts";
 import type { TriagePatch } from "./item-ledger.ts";
 import { adapterForItem } from "./sources/index.ts";
-import type { InboxQuietCheck } from "./inbox-quiet-check.ts";
+import { claimThenBind } from "../tenants/claim.ts";
+import type { InboxPass, InboxPassSummary } from "./verdict/pass.ts";
 
 export interface LoopFireDeps {
   admittedWork?: AdmittedWork;
@@ -70,7 +62,7 @@ export interface LoopFireDeps {
   grants: ShipGrantStore;
   files: Pick<FileArtifactStore, "listOwnedByScopes" | "open">;
   trigger: TriggerDeps;
-  inboxQuiet?: InboxQuietCheck;
+  inboxPass?: InboxPass;
 }
 
 interface LoopFireResult {
@@ -368,7 +360,7 @@ function excerpt(s: string | undefined): string {
 
 function playbookText(loop: Loop, voiceProfile?: string): string {
   const source = inboxSource(loop);
-  if (source) return renderSourceInboxTask(loop.id, source, inboxTaskContext(loop, voiceProfile));
+  if (source) return inboxPlaybook(source, voiceProfile);
   return promptText(loop.playbook.replaceAll("$LOOP_ID", loop.id));
 }
 
@@ -414,7 +406,7 @@ function triagePrompt(loop: Loop, open: LoopItem[], pending: LoopItem[]): StageI
   );
   const data = JSON.stringify(
     open.map((item) => {
-      const preview = item.inboxPreview ?? {};
+      const preview = item.sourcePayload ?? {};
       return {
         id: item.id,
         ...(pendingIds.has(item.id) ? { new: true } : {}),
@@ -492,12 +484,7 @@ function workPrompt(
     ...(guidance ? ["```untrusted-data", promptText(JSON.stringify({ reviewerNote: guidance })), "```"] : []),
     shipActionContract(loop),
     `The item's success condition: ${promptText(loop.successCondition)}`,
-    isReplyLoop(loop, item)
-      ? [
-          REPLY_DECISION,
-          'For a reply, end with a fenced JSON object {"proposal":{"body":"the draft reply","to":["email recipients if applicable"],"subject":"email subject if applicable"},"outputs":[]}. Save the draft for human review; never send it.',
-        ].join("\n")
-      : 'End your reply with a fenced json block: {"outputs": [{"shipAction": "<declared action>", "label": "<optional grouping label>", "title": "<one line>", "externalRef": "<url or id if any>", "summary": "<one line>"}]}. List every externally-reviewable artifact you prepared; an empty outputs array means the item needed none.',
+    'End your reply with a fenced json block: {"outputs": [{"shipAction": "<declared action>", "label": "<optional grouping label>", "title": "<one line>", "externalRef": "<url or id if any>", "summary": "<one line>"}]}. List every externally-reviewable artifact you prepared; an empty outputs array means the item needed none.',
     "[End loop work]",
     "",
     "Playbook:",
@@ -517,7 +504,6 @@ function judgePrompt(loop: Loop, item: LoopItem): string {
     "```untrusted-data",
     data,
     "```",
-    ...(isReplyLoop(loop, item) ? [VOICE_JUDGEMENT] : []),
     ...(loop.successChecks?.length
       ? [
           `Run every declared check yourself with your tools: ${JSON.stringify(loop.successChecks.map(promptText))}. Report each exact command, whether it passed, and a short detail.`,
@@ -753,36 +739,29 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     const threadRef = loopFireThreadRef(loopId, fireKey);
     let profile: Promise<string | undefined> | undefined;
     const voiceProfile = () => (profile ??= loadInboxVoiceProfile(deps.files, loop));
-    if (inboxSource(loop) && options?.enumerate !== false) {
+    if (inboxSource(loop)) {
       if (!isRunnable(loop)) return notRunnable(loop);
+      if (!deps.inboxPass) return { status: "failed", note: "inbox pass is not wired" };
       const firedAt = Date.now();
-      const quiet = deps.inboxQuiet
-        ? await deps.items
-            .byLoop(loopId)
-            .then((items) => deps.inboxQuiet!(loop, items))
-            .catch((error: unknown) => ({ quiet: false as const, reason: `pre-check failed: ${errMessage(error)}` }))
-        : undefined;
-      const quietNote =
-        quiet && (quiet.quiet ? "inbox quiet: nothing new since the last pass" : `inbox sync ran: ${quiet.reason}`);
-      let failure: unknown;
+      const discover = options?.enumerate !== false;
+      let summary: InboxPassSummary;
       try {
-        if (!quiet?.quiet) {
-          const outcome = await stageTurn(loop, `${fireKey}:sync`, threadRef, playbookText(loop, await voiceProfile()));
-          if (!outcome.ran && !outcome.authzFailed) return { status: "silent", note: "duplicate fire key" };
-          failure = stageFailure("inbox sync", outcome)?.error;
-        }
-        if (failure === undefined) await triage(loop, fireKey, threadRef);
+        summary = await deps.inboxPass(loop, { discover, voiceProfile: await voiceProfile() });
+        await triage(loop, fireKey, threadRef);
       } catch (error) {
-        failure = error;
+        return recordFailedFire(loopId, error);
       }
-      if (failure === undefined) {
-        await deps.loops.recordScan(loopId, firedAt);
-        await deps.loops.recordFireOutcome(loopId, "ok");
-        await applyGovernor(loopId);
-        return { status: "silent", ...(quietNote ? { note: quietNote } : {}) };
+      const note = `scanned ${summary.checked}, new ${summary.discovered}, verdicts ${summary.verdicts}${
+        summary.failures.length ? `; failures: ${summary.failures.map(excerpt).join("; ")}` : ""
+      }`;
+      if (summary.failures.length && summary.checked === summary.failures.length) {
+        const failed = await recordFailedFire(loopId, summary.firstError);
+        return { ...failed, note: `${failed.note}; ${note}` };
       }
-      const failed = await recordFailedFire(loopId, failure);
-      return quietNote ? { ...failed, note: `${failed.note}; ${quietNote}` } : failed;
+      if (summary.scanned) await deps.loops.recordScan(loopId, firedAt);
+      await deps.loops.recordFireOutcome(loopId, "ok");
+      await applyGovernor(loopId);
+      return { status: "silent", note };
     }
     const maxAttempts = loop.caps?.maxItemAttempts ?? DEFAULT_MAX_ATTEMPTS;
     const grants = await deps.grants.byLoop(loopId);
@@ -819,8 +798,6 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
             const failure = stageFailure("work", outcome);
             if (failure) throw failure.error;
             const parsed = fencedJson(outcome.reply ?? "");
-            if (await applyReplyResolution(deps.items, loop, item, parsed))
-              return { runId: outcome.sessionId ?? `${threadRef}:work:${item.id}` };
             const proposal =
               parsed && typeof parsed === "object" && "proposal" in parsed
                 ? adapterForItem(item)?.parseProposal(parsed.proposal)
@@ -986,15 +963,11 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
   }
 
   async function sweepStale(now: number): Promise<void> {
-    for (const loop of await deps.loops.list()) {
-      if (
-        loop.state === "enabled" &&
-        loop.governor?.staleFireMs !== undefined &&
-        now - (loop.lastFiredAt ?? loop.createdAt) > loop.governor.staleFireMs
-      ) {
-        await applyGovernor(loop.id, undefined, now);
-      }
-    }
+    await claimThenBind(deps.loops.claimTenants, async () => {
+      for (const { id, state, governor, lastFiredAt, createdAt } of await deps.loops.list())
+        if (state === "enabled" && now - (lastFiredAt ?? createdAt) > (governor?.staleFireMs ?? Infinity))
+          await applyGovernor(id, undefined, now);
+    });
   }
 
   async function itemTurn(
