@@ -21,6 +21,7 @@ import { createPostgresFileArtifactStore } from "../src/files/postgres-file-arti
 import { testDatabaseUrl, testAdvisoryLock, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { allGrants } from "./support/acl-grants.ts";
+import type { Tenant } from "../src/tenants/context.ts";
 
 const ORG = "default-org";
 
@@ -80,11 +81,11 @@ function fakeApp(state: FakeState): App {
     artifactGrantPermission: async () => null,
     membershipControlsScope: async () => false,
     managesScope: async () => false,
-    async grant(g: Grant) {
-      await state.acl.grant(g, authorOfGrant(state, g.ownerScopeId, g.ref));
+    async grant(t: Tenant, g: Grant) {
+      await state.acl.grant(t, g, authorOfGrant(state, g.ownerScopeId, g.ref));
     },
-    async revokeGrant(ownerScopeId: ScopeId, ref: string, granteeScopeId: ScopeId, revokedBy: string) {
-      await state.acl.revoke(ownerScopeId, ref, granteeScopeId, revokedBy, authorOfGrant(state, ownerScopeId, ref));
+    async revokeGrant(t: Tenant, ownerScopeId: ScopeId, ref: string, granteeScopeId: ScopeId, revokedBy: string) {
+      await state.acl.revoke(t, ownerScopeId, ref, granteeScopeId, revokedBy, authorOfGrant(state, ownerScopeId, ref));
     },
     async moveArtifactHome(type: ArtifactType, id: string, toScope: ScopeId, movedBy: string) {
       if (type !== "skill" && type !== "deploy")

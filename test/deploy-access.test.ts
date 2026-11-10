@@ -25,6 +25,7 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { testAdvisoryLock, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { companyTest } from "./support/app-handle.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const owner = "alice@example.com";
 const requester = "bob@example.com";
@@ -95,7 +96,7 @@ async function fixture(t: { after(fn: () => void): void }) {
     value,
     auditLog,
     decide: (id = owner, approve = true, extra: Partial<ActorAssertion> = {}) =>
-      decideDeploymentAccess(app, identity, value, { externalId: id, ...extra }, approve),
+      decideDeploymentAccess(tenant, app, identity, value, { externalId: id, ...extra }, approve),
   };
 }
 
@@ -176,7 +177,10 @@ test("tampering the deployment ID cannot authorize another owner's app", async (
   const other = await f.app.deploy(publishInput(requester, "other"));
   const value = JSON.stringify({ ...request, deploymentId: other.id });
   for (const approve of [true, false])
-    await assert.rejects(decideDeploymentAccess(f.app, f.identity, value, { externalId: owner }, approve), /owner/);
+    await assert.rejects(
+      decideDeploymentAccess(tenant, f.app, f.identity, value, { externalId: owner }, approve),
+      /owner/,
+    );
 });
 
 test("decline only notifies and leaves access unchanged; duplicate clicks dedupe", async (t) => {
@@ -267,7 +271,7 @@ test("button dispatch classifies the clicker, settles the card, and keeps failed
       directory: { classifyActor: async (_c: unknown, id: string) => ({ externalId: id }) } as never,
       core: {
         decideDeploymentAccess: (value: string, actor: ActorAssertion, approve: boolean) =>
-          decideDeploymentAccess(f.app, f.identity, value, actor, approve),
+          decideDeploymentAccess(tenant, f.app, f.identity, value, actor, approve),
       } as never,
     },
   );

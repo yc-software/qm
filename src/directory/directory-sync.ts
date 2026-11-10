@@ -302,10 +302,7 @@ export function createDirectorySync(deps: {
           orgId,
         ]);
         await client.query(
-          `INSERT INTO directory_sync (org_id, groups_hash, groups_synced_at, updated_at) VALUES ($1, $2, $3, $3)
-           ON CONFLICT (tenant_id, org_id) DO UPDATE SET groups_hash = EXCLUDED.groups_hash,
-             groups_synced_at = GREATEST(COALESCE(directory_sync.groups_synced_at, 0), EXCLUDED.groups_synced_at),
-             updated_at = EXCLUDED.updated_at`,
+          "UPDATE directory_sync SET groups_hash = $2, updated_at = $3 WHERE org_id = $1 AND groups_hash IS NOT NULL",
           [orgId, hashRoster(all.rows.map((r) => `${r.group_id}|${r.principal_id}`)), Date.now()],
         );
       });

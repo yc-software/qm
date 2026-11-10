@@ -9,7 +9,7 @@ import type {
   ActorAssertion,
 } from "../../types.ts";
 import { boundWebhook } from "../turn-origin.ts";
-import { isAgentReply, isOverheard, isUserItem, type Item, proseText } from "../../sessions/items.ts";
+import { isAgentReply, isHidden, isOverheard, isUserItem, type Item, proseText } from "../../sessions/items.ts";
 import type { DeliveryStore } from "../../delivery/delivery-store.ts";
 import type { SkillBundle, SkillBundleStore } from "../../skills/skill-bundle-store.ts";
 import type { SkillResolution } from "../../skills/skill-store.ts";
@@ -121,7 +121,7 @@ export function visibleTitleEntryText(item: Item): string | undefined {
 function* visibleTurnTexts(items: Item[]): Generator<{ role: "User" | "Assistant"; text: string }> {
   for (const e of items) {
     if (!isUserItem(e) && !isAgentReply(e)) continue;
-    if (isOverheard(e)) continue;
+    if (isOverheard(e) || isHidden(e)) continue;
     const raw = visibleTitleEntryText(e);
     const text = raw && isUserItem(e) ? stripTurnBoilerplate(raw) : raw;
     if (text) yield { role: isUserItem(e) ? "User" : "Assistant", text };

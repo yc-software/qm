@@ -21,6 +21,7 @@ import type { SandboxBackendName } from "./sandbox-routing.ts";
 import type { Sandbox, AgentComputerSpec, ProvisionOptions, ComputerStatus, EgressEnforcement } from "./sandbox.ts";
 import { JOB_COMPUTER_SCOPE_PREFIX } from "./home-snapshot.ts";
 import { claimThenBind } from "../tenants/claim.ts";
+import type { LoadSample } from "./load-probe.ts";
 
 export interface SandboxResource {
   id: string;
@@ -33,7 +34,6 @@ export interface SandboxResource {
   legacy: boolean;
   state: "unverified" | "provisioning" | "ready" | "failed" | "retired";
   availableActions?: string[];
-  machineId?: string;
   cleanupPending?: boolean;
   holders?: string[];
   spec?: AgentComputerSpec;
@@ -94,6 +94,8 @@ export interface SandboxResources {
   retire(actorId: string, id: string): Promise<void>;
   use<T>(id: string, action: () => Promise<T>, exclusive?: boolean): Promise<T>;
   hold(id: string, runId: string): Promise<void>;
+  recordLoad(id: string, sample: LoadSample): Promise<void>;
+  load(id: string): Promise<LoadSample | null>;
   release(id: string, runId: string | undefined, isLive: (runId: string) => Promise<boolean>): Promise<boolean>;
   setDefault(actorId: string, scopeId: ScopeId, id: string | null): Promise<void>;
   resolve(scopeId: ScopeId): Promise<SandboxResource | null>;
@@ -141,6 +143,7 @@ export async function assertBotMayUseComputer(
 export function createSandboxResources(opts: {
   upgrade?: () => Promise<void>;
   records: DurableMap<SandboxResource>;
+  loads: DurableMap<LoadSample>;
   defaults: DurableMap<SandboxDefault>;
   backends: Partial<Record<SandboxBackendName, Sandbox>>;
   defaultBackend: SandboxBackendName;
@@ -237,6 +240,8 @@ export function createSandboxResources(opts: {
     initialize,
     get,
     use,
+    recordLoad: (id, sample) => opts.loads.put(id, sample),
+    load: (id) => opts.loads.get(id),
     async hold(id, runId) {
       await opts.records.update(id, (current) =>
         current.holders?.includes(runId) ? current : { ...current, holders: [...(current.holders ?? []), runId] },
@@ -285,7 +290,7 @@ export function createSandboxResources(opts: {
         const current = await get(id);
         if (!current.jobOnly || current.state !== seenState) return;
         await destroy(current);
-        await opts.records.delete(id);
+        await Promise.all([opts.records.delete(id), opts.loads.delete(id)]);
       });
     },
     access: agentRecord,
@@ -373,14 +378,13 @@ export function createSandboxResources(opts: {
         await opts.records.put(id, record);
         const sandbox = opts.backends[record.backend]!;
         try {
-          const handle = await sandbox.provision(record.backingScopeId, {
+          await sandbox.provision(record.backingScopeId, {
             ...(await opts.provisionOptions?.(scopeId)),
             ...(memoryGb ? { memoryGb } : {}),
           });
           const ready: SandboxResource = {
             ...record,
             state: "ready",
-            machineId: handle.id,
             spec: sandbox.profile.spec,
           };
           await opts.records.put(id, ready);

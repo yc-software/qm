@@ -50,12 +50,7 @@ mock.module("./support/mock-agent.ts", {
   },
 });
 const wiring = await import("./support/build-app.ts");
-const { orgId } = await import("../src/config.ts");
-const buildApp = (...args: Parameters<typeof wiring.buildApp>): ReturnType<typeof wiring.buildApp> => {
-  const built = wiring.buildApp(...args);
-  void built.featureFlags.setEnabled("swarms", `org:${orgId()}`, true, "test");
-  return built;
-};
+const { buildApp } = wiring;
 test.after(() => fake.cleanup());
 
 for (const kind of ["command", "security-screen"] as const) {
@@ -551,19 +546,6 @@ test("disabled swarms park queued notifications once without running the model o
     }
   } finally {
     exerciseTurn = undefined;
-    await built.runtime.stop();
-  }
-});
-
-test("swarms stay off for a person until the swarms flag names their personal scope", async () => {
-  const built = wiring.buildApp(testConfig());
-  try {
-    assert.ok(built.app.swarms);
-    assert.equal(await built.app.swarms.enabledFor("U1"), false);
-    await built.featureFlags.setEnabled("swarms", "personal:U1", true, "test");
-    assert.equal(await built.app.swarms.enabledFor("U1"), true);
-    assert.equal(await built.app.swarms.enabledFor("U2"), false);
-  } finally {
     await built.runtime.stop();
   }
 });

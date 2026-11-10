@@ -49,7 +49,6 @@ export interface BackgroundJobSummary {
   processId: string;
   command: string;
   purpose?: string;
-  status: ProcessState;
   registryStatus: ProcessStatus;
   startedAt: number;
 }
@@ -91,11 +90,6 @@ const DEFAULT_TTL_MAX_MS = CONFIG_DEFAULTS.backgroundJobTtlMaxSec * 1000;
 const DEFAULT_MAX_BYTES = 64 * 1024;
 const DEFAULT_TERM_GRACE_MS = 2_000;
 const DEFAULT_KILL_GRACE_MS = 1_000;
-
-function stateFromRow(status: ProcessStatus): ProcessState {
-  if (status === "running") return { state: "running" };
-  return { state: "exited", code: status === "reaped" ? 143 : 0 };
-}
 
 export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): BackgroundExecBroker {
   const POLL_MS = deps.pollMs ?? 5_000;
@@ -285,7 +279,6 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
           processId: r.processId,
           command: r.command,
           ...(r.purpose ? { purpose: r.purpose } : {}),
-          status: stateFromRow(r.status),
           registryStatus: r.status,
           startedAt: r.startedAt,
         }));

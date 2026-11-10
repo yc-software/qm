@@ -1089,11 +1089,14 @@ export function createKeychain(deps: {
     return grant;
   }
 
+  const revokeActiveGrant = (id: string) =>
+    deps.grants.update(id, (current) =>
+      current.status === "active" ? { ...current, status: "revoked", revokedAt: now() } : current,
+    );
+
   async function deleteCredential(id: string): Promise<void> {
     for (const grant of await deps.grants.all()) {
-      if (grant.credentialId === id && grant.status === "active") {
-        await deps.grants.merge(grant.id, { status: "revoked", revokedAt: now() });
-      }
+      if (grant.credentialId === id && grant.status === "active") await revokeActiveGrant(grant.id);
     }
     await deps.creds.delete(id);
   }
@@ -1246,7 +1249,7 @@ export function createKeychain(deps: {
     async revokeGrant(ownerId, grantId) {
       const g = await deps.grants.get(grantId);
       if (!g || !samePerson(g.ownerId, ownerId)) return false;
-      if (g.status === "active") await deps.grants.merge(grantId, { status: "revoked", revokedAt: now() });
+      await revokeActiveGrant(grantId);
       return true;
     },
 
