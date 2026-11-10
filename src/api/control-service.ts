@@ -857,9 +857,12 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         };
       if (
         !orgSkillCede &&
-        !(cron
-          ? await ownsCron(app, cron, capability.actorId)
-          : await app.canManageArtifactHome(home.ownerScopeId, home.createdBy, capability.actorId))
+        !(
+          (await personOrOwningBot(capability, () => app.samePerson(home.createdBy, capability.actorId))) &&
+          (cron
+            ? await ownsCron(app, cron, capability.actorId)
+            : await app.canManageArtifactHome(home.ownerScopeId, home.createdBy, capability.actorId))
+        )
       ) {
         return {
           ok: false,
