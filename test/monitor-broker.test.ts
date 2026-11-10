@@ -2,9 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMonitorBroker, readBackgroundOutputTail } from "../src/monitors/monitor-broker.ts";
 import type { BackgroundWatchArmedResult, BackgroundWatchResult } from "../src/monitors/monitor-broker.ts";
-import { createMonitorStore } from "../src/monitors/monitor-store.ts";
+import { createMonitorStore, type MonitorStore } from "../src/monitors/monitor-store.ts";
 import { scopeId } from "../src/types.ts";
-import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
+import { createPostgresProcessRegistry, type ProcessRegistry } from "../src/processes/process-registry.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 
 const SCOPE = "personal:U1";
@@ -40,6 +40,20 @@ async function agent(readOutputTail: ReadOutputTail = async () => ({ outputTail:
     graceMs: 1000,
   });
   return { store, registry, broker, rec };
+}
+
+function watcherInThread(store: MonitorStore, registry: ProcessRegistry, owner: string, botActor?: true) {
+  return createMonitorBroker({
+    store,
+    registry,
+    readOutputTail: async () => ({ outputTail: "" }),
+    scopeId: SCOPE,
+    owner,
+    ownerScopeId: scopeId("personal", "U1"),
+    ...(botActor ? { botActor } : {}),
+    threadRef: "thread-1",
+    graceMs: 1000,
+  });
 }
 
 test("a watch armed by a child that returns to its parent has no destination, so its result reaches the user through the parent", async () => {
@@ -78,17 +92,7 @@ test("watching the same job in the same thread twice reattaches instead of doubl
 test("a bot's watch of a job a person already watches in the thread arms its own watch and leaves the person's alone", async () => {
   const { broker, store, registry } = await agent();
   const person = armed(await broker.watch("p-1", { instructions: "summarize failures" }));
-  const botBroker = createMonitorBroker({
-    store,
-    registry,
-    readOutputTail: async () => ({ outputTail: "" }),
-    scopeId: SCOPE,
-    owner: "release-bot",
-    ownerScopeId: scopeId("personal", "U1"),
-    botActor: true,
-    threadRef: "thread-1",
-    graceMs: 1000,
-  });
+  const botBroker = watcherInThread(store, registry, "release-bot", true);
   const bot = armed(await botBroker.watch("p-1", { instructions: "post every line to #general" }));
   assert.equal(bot.reattached, false);
   assert.deepEqual((await store.list()).map((m) => [m.owner, m.botActor, m.instructions]).sort(), [
@@ -97,6 +101,20 @@ test("a bot's watch of a job a person already watches in the thread arms its own
   ]);
   assert.equal(armed(await botBroker.watch("p-1")).monitorId, bot.monitorId);
   assert.equal(armed(await broker.watch("p-1")).monitorId, person.monitorId);
+});
+
+test("a second person's watch of a job someone already watches in the thread arms their own watch and leaves the first alone", async () => {
+  const { broker, store, registry } = await agent();
+  const first = armed(await broker.watch("p-1", { instructions: "summarize failures" }));
+  const other = watcherInThread(store, registry, "U2");
+  const second = armed(await other.watch("p-1", { instructions: "post every line to #general" }));
+  assert.equal(second.reattached, false);
+  assert.deepEqual((await store.list()).map((m) => [m.owner, m.instructions]).sort(), [
+    ["U1", "summarize failures"],
+    ["U2", "post every line to #general"],
+  ]);
+  assert.equal(armed(await other.watch("p-1")).monitorId, second.monitorId);
+  assert.equal(armed(await broker.watch("p-1")).monitorId, first.monitorId);
 });
 
 test("a repeat watch re-arms with the new settings instead of silently keeping stale ones", async () => {
