@@ -4,6 +4,7 @@ import "./slack-reply";
 import type { SlackReply } from "./slack-reply";
 import { assistantSidebar, assistantMessage } from "./assistant-sidebar";
 import { formatMessageTime } from "./message-time.ts";
+import { assistantSpeakerText } from "./via-label.ts";
 import { messageEntrySeqs, highlightMessage } from "./message-link.ts";
 import { appEditSlug } from "../../chassis/src/app-edit";
 import { isConnectionReturn } from "./connection-return";
@@ -156,7 +157,8 @@ import type { ChatSurface, ConvCtx } from "./conv-types";
 import { errMessage, swallow } from "../../chassis/src/errors";
 import { showStateError } from "./error-banner";
 import { splitLinks } from "./linkify";
-import { slackWireToPlain, splitSlackWire, stripSlackDirectives } from "./slack-text";
+import { slackPreviewText, slackWireToPlain, splitSlackWire, stripSlackDirectives } from "./slack-text";
+import { charForName } from "./emoji-picker";
 import { installMarkdownSanitizer } from "./markdown-sanitize";
 import { transcriptModel, defaultEffortForModel } from "./model-options";
 import {
@@ -1356,9 +1358,6 @@ export function createChatSurface(
                                 anchorSeq !== null ? { beforeSeq: anchorSeq, tailTurns: TAIL_TURNS } : undefined,
                               );
                               if (chatState.sessionId !== s.id) return;
-                              const scroller = container?.querySelector<HTMLElement>(".chat-scroll");
-                              const priorHeight = scroller?.scrollHeight ?? 0;
-                              const priorTop = scroller?.scrollTop ?? 0;
                               const rawRemaining = page.earlierItems ?? 0;
                               const remaining = currentEarlierCount(s, rawRemaining);
                               const split = inheritedTranscript(s, page.items);
@@ -1372,14 +1371,6 @@ export function createChatSurface(
                                   ...chatState.inheritedMessages,
                                 ],
                               );
-                              requestAnimationFrame(() => {
-                                const scrollerNow = container?.querySelector<HTMLElement>(".chat-scroll");
-                                if (!scrollerNow) return;
-                                const prev = scrollerNow.style.scrollBehavior;
-                                scrollerNow.style.scrollBehavior = "auto";
-                                scrollerNow.scrollTop = priorTop + (scrollerNow.scrollHeight - priorHeight);
-                                scrollerNow.style.scrollBehavior = prev;
-                              });
                             } catch {
                               btn.disabled = false;
                               btn.textContent = "Show earlier messages";
@@ -1616,24 +1607,12 @@ export function createChatSurface(
           ...itemsToMessages(split.inherited, transcriptModel()),
           ...chatState.inheritedMessages,
         ];
-      const scroller = chatState.host?.querySelector<HTMLElement>(".chat-scroll");
-      const priorHeight = scroller?.scrollHeight ?? 0;
-      const priorTop = scroller?.scrollTop ?? 0;
       agent.state.messages = [...earlierMessages, ...agent.state.messages];
       const rawRemaining = page.earlierItems ?? 0;
       chatState.transcriptAnchorSeq = rawRemaining > 0 ? (page.items?.[0]?.seq ?? null) : null;
       chatState.earlierCount = currentEarlierCount(chatState.forkSession ?? {}, rawRemaining);
       chatState.loadingEarlier = false;
       drawActiveChat(agent);
-      requestAnimationFrame(() => {
-        const scrollerNow = chatState.host?.querySelector<HTMLElement>(".chat-scroll");
-        if (agent !== chatState.agent || sessionId !== chatState.sessionId || scrollerNow !== scroller || !scrollerNow)
-          return;
-        const prev = scrollerNow.style.scrollBehavior;
-        scrollerNow.style.scrollBehavior = "auto";
-        scrollerNow.scrollTop = priorTop + (scrollerNow.scrollHeight - priorHeight);
-        scrollerNow.style.scrollBehavior = prev;
-      });
     } catch (error) {
       reportHandledError("web:load_earlier", error);
     } finally {
@@ -1983,8 +1962,8 @@ export function createChatSurface(
     const forking = pendingFork !== null;
     const speaker = speakerLabelFor(message);
     const speakerLabel =
-      message.role === "assistant" && chatState.labelSpeakers
-        ? chatState.assistantSpeakerLabel
+      message.role === "assistant" && (chatState.labelSpeakers || (message as AssistantWork).via)
+        ? assistantSpeakerText(chatState.assistantSpeakerLabel || brandName(), (message as AssistantWork).via)
         : speaker && `${speaker}\n${speakerMember(message)?.avatarUrl ?? ""}`;
     const edited = Boolean((message as { edited?: boolean }).edited);
     const deleted = Boolean((message as { deleted?: boolean }).deleted);
@@ -2155,10 +2134,13 @@ export function createChatSurface(
         return row(html`Goal cancelled: <span class="system-note-text">${goalObjectiveLabel(note.content)}</span>`);
       const who = note.byAgent ? brandName() : (note.speaker ?? "The user");
       const whose = note.byAgent ? "its" : "their";
+      if (note.action === "deleted") return row(html`${who} deleted ${whose} message`);
+      const preview = slackPreviewText(note.content, charForName);
       return row(
-        note.action === "deleted"
-          ? html`${who} deleted ${whose} message`
-          : html`${who} edited ${whose} message: <span class="system-note-text">${note.content}</span>`,
+        html`<span class="system-note-line" title=${preview}
+          >${who} edited ${whose}
+          message${preview ? html`: <span class="system-note-text">${preview}</span>` : nothing}</span
+        >`,
       );
     }
     if (role === "assistant") {
@@ -2215,18 +2197,20 @@ export function createChatSurface(
           ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${msg.errorMessage}</div>` : nothing}`,
           meta: isStreaming ? nothing : messageMeta(msg, index),
         });
+      const via = (msg as AssistantWork).via;
+      const labeled = chatState.labelSpeakers || Boolean(via);
       return html`
         <article
-          class="message-row assistant-row ${chatState.labelSpeakers ? "named-assistant-row" : ""} ${isStreaming ? "streaming" : ""}"
+          class="message-row assistant-row ${labeled ? "named-assistant-row" : ""} ${isStreaming ? "streaming" : ""}"
           data-index=${index}
           data-entry-seqs=${messageEntrySeqs(message)
             .filter((seq) => !inlineSteers.has(seq))
             .join(" ")}
         >
           ${
-            chatState.labelSpeakers
+            labeled
               ? html`<div class="speaker-label">
-                  ${brandMark()}<span>${chatState.assistantSpeakerLabel}</span>${speakerTime(msg)}
+                  ${brandMark()}<span>${assistantSpeakerText(chatState.assistantSpeakerLabel || brandName(), via)}</span>${speakerTime(msg)}
                 </div>`
               : nothing
           }
@@ -3302,11 +3286,13 @@ export function createChatSurface(
       (q) =>
         html`<div class="inline-steer waiting-steer" aria-busy="true">
           ${chatMessage(
-            {
-              role: "user",
-              content: q.text || (q.hasAttachments ? "(files)" : ""),
-              steered: true,
-            } as unknown as AgentMessage,
+            (q.attachments?.length
+              ? { role: "user-with-attachments", content: q.text, attachments: q.attachments, steered: true }
+              : {
+                  role: "user",
+                  content: q.text || (q.hasAttachments ? "(files)" : ""),
+                  steered: true,
+                }) as unknown as AgentMessage,
             -1,
             false,
             true,

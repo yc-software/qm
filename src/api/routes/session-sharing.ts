@@ -156,6 +156,9 @@ async function readShare(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, transcriptOf(share));
 }
 
+const SHARE_TENANT = { by: "share", key: (params: Record<string, string>) => params.token } as const;
+const BROWSER_SHARE_TENANT = { ...SHARE_TENANT, signedTenantFirst: true } as const;
+
 export const sessionSharingRoutes: ReadonlyArray<Route> = [
   {
     method: "POST",
@@ -165,24 +168,37 @@ export const sessionSharingRoutes: ReadonlyArray<Route> = [
     auth: "source",
     handle: createShare,
   },
-  { method: "GET", path: "/v1/shared-sessions/:token", actor: "query.viewer", auth: "source", handle: readShare },
-  {
-    method: "GET",
-    path: "/v1/shared-sessions/:token/files/:fileId",
-    browser: true,
-    actor: "query.viewer",
-    auth: "source",
-    handle: readShare,
-  },
-  { method: "GET", path: "/v1/public-shares/:token", auth: "source", handle: readShare },
-  { method: "GET", path: "/v1/public-shares/:token/files/:fileId", auth: "public", handle: readShare },
+  ...(["shared-sessions", "public-shares"] as const).flatMap((prefix): Route[] => {
+    const shared = prefix === "shared-sessions";
+    const actor = shared ? ("query.viewer" as const) : undefined;
+    const tenant = SHARE_TENANT;
+    return [
+      { method: "GET", path: `/v1/${prefix}/:token`, actor, auth: "source", tenant, handle: readShare },
+      {
+        method: "GET",
+        path: `/v1/${prefix}/:token/files/:fileId`,
+        ...(shared ? { browser: true as const } : {}),
+        actor,
+        auth: shared ? "source" : "public",
+        tenant: shared ? BROWSER_SHARE_TENANT : tenant,
+        handle: readShare,
+      },
+    ];
+  }),
   {
     method: "GET",
     path: "/v1/web/shares/internal/:token",
     browser: true,
     actor: "person",
     auth: "source",
+    tenant: BROWSER_SHARE_TENANT,
     handle: (ctx) => sharePage(ctx, false),
   },
-  { method: "GET", path: "/v1/web/shares/external/:token", auth: "public", handle: (ctx) => sharePage(ctx, true) },
+  {
+    method: "GET",
+    path: "/v1/web/shares/external/:token",
+    auth: "public",
+    tenant: SHARE_TENANT,
+    handle: (ctx) => sharePage(ctx, true),
+  },
 ];

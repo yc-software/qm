@@ -1,7 +1,8 @@
-import type { SkillPackStore } from "./skill-pack-store.ts";
+import type { SkillPack, SkillPackStore } from "./skill-pack-store.ts";
 import type { SkillPackFetcher } from "./pack-fetcher.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { createSweeper } from "../util/sweeper.ts";
+import { claimThenBind } from "../tenants/claim.ts";
 import { errMessage, reportFailureAs } from "../util/errors.ts";
 
 const TICK_LEASE_KEY = "skills:sync:tick";
@@ -23,30 +24,27 @@ export interface SkillSyncDeps {
 export function createSkillSyncEngine(deps: SkillSyncDeps): SkillSyncEngine {
   const leaderLease = deps.leaderLease;
 
-  async function syncOne(packId: string): Promise<void> {
-    const pack = await deps.packs.get(packId);
-    if (!pack) return;
+  async function syncOne(pack: SkillPack): Promise<void> {
     if (pack.syncMode === "tracked") {
       const head = await deps.fetcher.resolveRef(pack);
       if (pack.lastImport?.status === "ok" && head === pack.lastImport.commit) return;
-      await deps.reconcile(packId);
+      await deps.reconcile(pack.id);
     } else {
       const head = await deps.fetcher.resolveRef(pack);
       const available = pack.lastImport ? head !== pack.lastImport.commit : false;
       if (available !== Boolean(pack.updateAvailable)) {
-        await deps.packs.update(packId, { updateAvailable: available });
+        await deps.packs.update(pack.id, { updateAvailable: available });
       }
     }
   }
 
   async function syncAll(): Promise<void> {
-    for (const pack of await deps.packs.list()) {
-      try {
-        await syncOne(pack.id);
-      } catch (e) {
-        console.error("%s", `[skill-sync] pack ${pack.id} failed:`, errMessage(e));
-      }
-    }
+    await claimThenBind(deps.packs.claimTenants, async () => {
+      for (const pack of await deps.packs.list())
+        await syncOne(pack).catch((e: unknown) =>
+          console.error("%s", `[skill-sync] pack ${pack.id} failed:`, errMessage(e)),
+        );
+    });
   }
 
   const tick = async (): Promise<void> => {

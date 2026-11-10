@@ -283,3 +283,13 @@ test("an allow click shows who allowed it while running and keeps that record un
   assert.equal(decision.type, "section");
   assert.match(decision.text.text, /^:white_check_mark: Allowed once by <@U2> · `rm -rf \/tmp\/x` · /);
 });
+
+test("an allowed channel turn that answered through its own post settles the card without a failure note", async () => {
+  const f = fixture();
+  f.state.result = { status: "silent" };
+
+  await f.click("U2", "hilo_allow_once");
+  const final = f.updates.at(-1);
+  assert.match(String(final.text), /^:white_check_mark: Allowed once by <@U2> · `rm -rf \/tmp\/x` · /);
+  assert.doesNotMatch(JSON.stringify(final), /can't continue/);
+});

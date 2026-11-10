@@ -243,6 +243,51 @@ test("egress-audit ingest: a hostile over-long hostname is truncated, never drop
   }
 });
 
+test("egress-audit ingest: a record naming a malformed tenant is rejected, the rest land", async () => {
+  const s = start();
+  try {
+    const res = await fetch(s.base + "/v1/egress-audit", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        records: [
+          { host: "api.github.com", verdict: "ok", scopeLabel: "personal:U1", tenant: "not-a-tenant" },
+          { host: "example.com", verdict: "ok", scopeLabel: "personal:U1" },
+        ],
+      }),
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { accepted: 1, rejected: 1 });
+  } finally {
+    await s.close();
+  }
+});
+
+test("egress-audit ingest: a record naming a tenant that does not exist is rejected", async () => {
+  const s = start();
+  try {
+    const res = await fetch(s.base + "/v1/egress-audit", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        records: [
+          {
+            host: "api.github.com",
+            verdict: "ok",
+            scopeLabel: "personal:U1",
+            tenant: "7d1f0c52-3b8e-4f6a-9c2d-5e4b3a2f1c0d",
+          },
+          { host: "example.com", verdict: "ok", scopeLabel: "personal:U1" },
+        ],
+      }),
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { accepted: 1, rejected: 1 });
+  } finally {
+    await s.close();
+  }
+});
+
 test("egress-audit ingest: an oversized or empty batch is rejected", async () => {
   const s = start();
   try {

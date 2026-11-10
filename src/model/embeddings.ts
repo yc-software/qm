@@ -9,14 +9,16 @@ export interface MemoryEmbedder {
   embed(texts: string[], signal: AbortSignal): Promise<number[][]>;
 }
 
+export const PGVECTOR_MAX_DIMENSIONS = 16_000;
+
 export function unitVector(value: unknown): number[] {
-  if (
-    !Array.isArray(value) ||
-    !value.length ||
-    value.length > 16384 ||
-    !value.every((v) => typeof v === "number" && Number.isFinite(v))
-  ) {
+  if (!Array.isArray(value) || !value.length || !value.every((v) => typeof v === "number" && Number.isFinite(v))) {
     throw new Error("Invalid memory embedding");
+  }
+  if (value.length > PGVECTOR_MAX_DIMENSIONS) {
+    throw new Error(
+      `Memory embedding has ${value.length} dimensions; pgvector stores at most ${PGVECTOR_MAX_DIMENSIONS}`,
+    );
   }
   const norm = Math.hypot(...value);
   if (!Number.isFinite(norm) || norm === 0) throw new Error("Invalid memory embedding norm");

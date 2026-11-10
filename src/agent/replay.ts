@@ -402,7 +402,9 @@ export function reconstructMessagesFromHistory(
       }
     } else if (isAgentReply(e)) {
       const t = itemText(e);
-      if (t) raw.push(legacyAssistant([{ type: "text", text: t }], e.createdAt));
+      const via = typeof e.body.via === "string" ? e.body.via : undefined;
+      if (t && via) raw.push(userMsg(messageTag({ from: "agent", via }, t), e.createdAt));
+      else if (t) raw.push(legacyAssistant([{ type: "text", text: t }], e.createdAt));
     } else if (e.kind === "AgentMessage" && e.variant === "files_delivered") {
       const t = itemText(e);
       if (t) raw.push(userMsg(deliveryNote(t), e.createdAt));
