@@ -91,6 +91,12 @@ test("parent reads persisted side-chat exchanges on its next turn without a synt
   assert.ok(child);
   await turn(child.session.threadRef, "The retry decision is five attempts");
   assert.equal(inputs.length, 2);
+  const messaging = inputs[1]!.tools.sessionSyscalls;
+  assert.ok(messaging);
+  const sent = await messaging.write({ target: first.sessionId!, text: "Side discussion update", wake: false });
+  assert.equal(sent.ok, true);
+  const delegated = await messaging.open({ task: "Investigate the retry policy" });
+  assert.equal(delegated.ok, false);
   await turn("web:U1:context-parent", "Continue with the agreed retry decision");
   assert.equal(inputs.length, 3);
   const [discussion] = discussions(inputs[2]!.systemPrompt);
