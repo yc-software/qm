@@ -223,7 +223,7 @@ test("concurrent field writes and new versions from two instances all land", { s
   assert.equal((await raw("SELECT count(*) c FROM deployments WHERE id = 'missing-id'"))[0]!.c, "0");
 });
 
-test("version and label setters from two instances keep each other's writes on Postgres", { skip }, async () => {
+test("version setters from two instances keep each other's writes on Postgres", { skip }, async () => {
   const a = makeStore().store;
   const b = makeStore().store;
   const d = await a.create({ ...createInput(), files: [{ path: "s.js", data: "1" }] });
