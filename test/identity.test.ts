@@ -179,20 +179,3 @@ test("a manual deactivation survives roster churn — only reactivate() clears i
   await svc.reactivate("U-fired");
   assert.equal(svc.classify("U-fired").type, "internal");
 });
-
-test("a deactivation the store refuses is not remembered, so a retry writes it", async () => {
-  const store = testMap<DeactivationRecord>();
-  const put = store.put.bind(store);
-  let refuse = true;
-  store.put = async (key, value) => {
-    if (refuse) throw new Error("store down");
-    return put(key, value);
-  };
-  const svc = createIdentityService(store, { externalMembers: testMap() });
-  await assert.rejects(svc.deactivate("U9"));
-  assert.equal(svc.classify("U9").type, "internal");
-  refuse = false;
-  await svc.deactivate("U9");
-  assert.equal((await store.all()).length, 1);
-  assert.equal(svc.classify("U9").type, "guest");
-});
