@@ -65,7 +65,6 @@ export async function finishProcessCredentials(
     stored.plan,
     stored.sources.map(({ fileHashes, ...source }) => async (files: CredentialFile[]) => {
       if (!keychain) throw new Error("Refreshed credentials cannot be saved without a keychain");
-      // Rows from jobs launched before per-file hashes existed lack fileHashes; delete once none can remain (60-minute job TTL).
       return keychain.updateFiles(await keychain.writebackBaseline(source, fileHashes ?? {}), files);
     }),
     (retry) =>
