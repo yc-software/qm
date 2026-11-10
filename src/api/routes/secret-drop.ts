@@ -397,7 +397,6 @@ async function mintDrop(ctx: ApiCtx): Promise<void> {
     ...(fields ? { fields } : {}),
     purpose: b.purpose.trim(),
     requestedBy: capability.actorId,
-    ...(capability.botActor ? { botActor: true } : {}),
     audienceScopeId: capability.scopeId,
     ...(brain
       ? { memoryBrain: brain }
@@ -559,7 +558,7 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
           ...(meta.credentialHandle ? { credentialHandle: meta.credentialHandle } : {}),
           granted: !!grantId,
           ...(pending.length ? { pendingSiblings: pending } : {}),
-          ...(drop.botActor ? { botActor: true } : {}),
+          ...(attestation?.botActor ? { botActor: true } : {}),
         });
       })().catch((e) => swallow("secret-drop: resolution fire failed", e));
     }

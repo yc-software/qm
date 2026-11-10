@@ -26,7 +26,6 @@ export interface SecretDropRecord {
   threadRef?: string;
   requiresToken?: boolean;
   memoryBrain?: { id: string; url: string };
-  botActor?: boolean;
   createdAt: number;
 }
 

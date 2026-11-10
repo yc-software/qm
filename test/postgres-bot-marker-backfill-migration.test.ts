@@ -17,7 +17,6 @@ test("the bot marker backfill marks what a Slack app user made and nothing a per
     loops: "createdBy",
     monitors: "createdBy",
     keychain_asks: "requesterId",
-    secret_drops: "requestedBy",
   };
   for (const [table, creator] of Object.entries(creators)) {
     const map = maps.map<Record<string, unknown>>(table);

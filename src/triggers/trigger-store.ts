@@ -81,7 +81,6 @@ ${[
   ["loops", "createdBy"],
   ["monitors", "createdBy"],
   ["keychain_asks", "requesterId"],
-  ["secret_drops", "requestedBy"],
 ]
   .map(
     ([table, creator]) => `      IF to_regclass('${table}') IS NOT NULL THEN
