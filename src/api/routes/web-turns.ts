@@ -133,7 +133,7 @@ async function webTurnBase(
     ...(inbox ? { conversationHeader: inbox } : {}),
     ...(appSlug
       ? {
-          conversationHeader: `The user is chatting beside their deployed app ${JSON.stringify(appSlug)}. Requests about this app refer to that deployment. Use the existing app source and publish updates to the same deployment when requested. This context does not grant additional permissions.${liveEdit ? ` Pushing to the app's git remote or republishing it updates the running app within seconds, and it becomes a new version on its own ${LIVE_EDIT_PUBLISH_DELAY_MS / 60_000} minutes after the last change, so an unchanged version number right after a change is expected.` : ""}${failedPublish ? ` The last automatic publish of this app failed, so it is still running the saved edits; republishing returns the whole error. Its last lines: ${failedPublish}` : ""}`,
+          conversationHeader: `The user is chatting beside their deployed app ${JSON.stringify(appSlug)}. Requests about this app refer to that deployment. Use the existing app source and publish updates to the same deployment when requested. This context does not grant additional permissions.${liveEdit ? ` Pushing to the app's git remote or republishing it updates the running app within seconds, and it becomes a new version on its own ${LIVE_EDIT_PUBLISH_DELAY_MS / 60_000} minutes after the last change, so an unchanged version number right after a change is expected.` : ""}${failedPublish ? ` The last automatic publish of this app failed, so it is still running the saved edits. The deployment's savedEdits.publishFailure has the whole error; its last lines: ${failedPublish}` : ""}`,
         }
       : {}),
     text,
