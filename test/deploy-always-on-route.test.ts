@@ -48,7 +48,7 @@ describe("deployment always-on route", () => {
     const app = {
       authorizesCapabilityScope: async () => true,
       getDeployment: async (id: string) => (id === deployment.id || id === deployment.name ? deployment : null),
-      canManageDeployment: async (_id: string, principalId: string) => principalId === "U1",
+      canManageDeployment: async (_id: string, caller: { actorId: string }) => caller.actorId === "U1",
       setDeploymentAlwaysOn: async (_id: string, alwaysOn: boolean) => {
         flag = alwaysOn;
         return { ...deployment, ...(alwaysOn ? { alwaysOn: true } : {}) };

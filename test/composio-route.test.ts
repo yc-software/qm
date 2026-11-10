@@ -16,6 +16,10 @@ import { orgId } from "../src/config.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap, testUserStore } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { withTenant } from "../src/tenants/context.ts";
+import { TEST_TENANT } from "./support/test-tenant.ts";
+
+const tenant = withTenant(TEST_TENANT, (t) => t);
 
 function fixture() {
   const keychain = createKeychain({
@@ -89,6 +93,7 @@ function fixture() {
       res,
       url,
       body,
+      tenant,
       capability,
       actor: actor ? { p: actor, exp: Date.now() + 60_000, ...(impersonating ? { imp: "admin" } : {}) } : null,
     } as ApiCtx;

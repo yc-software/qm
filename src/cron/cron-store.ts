@@ -18,6 +18,8 @@ import {
 import { assertCronRuntime } from "./runtime.ts";
 import { hashId } from "../util/crypto.ts";
 import { advanceNextFireAt, isCalendarSchedule, normalizeSchedule, recoverNextFireAt } from "./schedule.ts";
+import { claimThenBind, type ClaimedRow } from "../tenants/claim.ts";
+import { currentTenant } from "../tenants/context.ts";
 
 export interface CreateCronInput extends CreateTriggerInput {
   runtime?: Cron["runtime"];
@@ -56,6 +58,7 @@ export interface CronStore {
   create(input: CreateCronInput): Promise<Cron>;
   get(id: string): Promise<Cron | null>;
   list(): Promise<Cron[]>;
+  claimTenants(): Promise<ClaimedRow[]>;
   ownedBy(scopeId: string): Promise<Cron[]>;
   update(id: string, patch: CronPatch): Promise<Cron | null>;
   delete(id: string): Promise<void>;
@@ -75,7 +78,7 @@ export interface CronStore {
   defer(id: string, until: number): Promise<void>;
   claimSlot(id: string, scheduledAt: number, at: number): Promise<boolean>;
   unclaimSlot(id: string, scheduledAt: number, at: number, priorLastFiredAt: number | undefined): Promise<void>;
-  due(now: number): Promise<Array<Cron & { scheduledAt: number }>>;
+  due(now: number): Promise<Array<Cron & { scheduledAt: number; tenantId: string }>>;
 }
 
 export function cronIsActive(
@@ -142,6 +145,7 @@ export function createCronStore(
     },
     get: (id) => backing.get(id),
     list: () => backing.all(),
+    claimTenants: () => backing.claimTenants(),
     ownedBy: (scopeId) => ownedBy(backing, scopeId),
     async update(id, patch) {
       const before = await backing.get(id);
@@ -246,13 +250,15 @@ export function createCronStore(
       await backing.merge(id, { deferUntil: until });
     },
     async due(now) {
-      const due: Array<Cron & { scheduledAt: number }> = [];
-      for (const c of await backing.all()) {
-        if (c.archived || !c.enabled || isDeferred(c, now)) continue;
-        const scheduledAt = recoverNextFireAt(c.schedule, c.createdAt, c.lastFiredAt, c.nextFireAt);
-        if (scheduledAt !== undefined && now >= scheduledAt) due.push({ ...c, nextFireAt: scheduledAt, scheduledAt });
-      }
-      return due;
+      const due = await claimThenBind(backing.claimTenants, async () =>
+        (await backing.all()).flatMap((c) => {
+          if (c.archived || !c.enabled || isDeferred(c, now)) return [];
+          const scheduledAt = recoverNextFireAt(c.schedule, c.createdAt, c.lastFiredAt, c.nextFireAt);
+          if (scheduledAt === undefined || now < scheduledAt) return [];
+          return [{ ...c, nextFireAt: scheduledAt, scheduledAt, tenantId: currentTenant() }];
+        }),
+      );
+      return due.flat();
     },
   };
 }

@@ -7,6 +7,7 @@ import { createGoalRecord } from "../src/agent/goal.ts";
 import type { ScopeId } from "../src/types.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresErrorLog } from "../src/admin/postgres-error-log.ts";
 
 const scope = "personal:goal@example.com" as ScopeId;
 
@@ -24,6 +25,7 @@ test("compaction leaves the session goal on its row and writes no goal entries",
   }
   const compaction = createCompaction({
     sessions,
+    errors: createPostgresErrorLog(testDatabaseUrl()),
     maxContextTokens: 400,
     agent: { compactHistory: async () => "Earlier work." },
   } as unknown as OrchestratorDeps);
@@ -58,6 +60,7 @@ test("background compaction cannot revive an older goal over one closed while it
   const finish = Promise.withResolvers<string>();
   const compaction = createCompaction({
     sessions,
+    errors: createPostgresErrorLog(testDatabaseUrl()),
     maxContextTokens: 400,
     agent: {
       compactHistory: async () => {

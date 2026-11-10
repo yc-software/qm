@@ -54,7 +54,6 @@ test("Slack feed avatars use stable identities and fall back to initials when a 
       "https://avatars.slack-edge.com/updated.png",
     );
     item.participants[0].name = "Alex";
-    item.sourceContextFetched = true;
     item.context = [
       { author: "Alex", authorId: "U2", avatarUrl: "https://avatars.slack-edge.com/other-alex.png", text: "Reply" },
     ];
