@@ -108,9 +108,18 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
     await deps.onExit?.(handle, processId);
   };
   const outputSeen = new Map<string, number>();
-  const settle = async (handle: SandboxHandle, processId: string, status: ProcessState, cursor: number) => {
-    if (status.state === "exited") return exited(handle, processId);
-    if (cursor <= (outputSeen.get(processId) ?? 0)) return;
+  const settle = async (
+    handle: SandboxHandle,
+    processId: string,
+    status: ProcessState,
+    cursor: number,
+    credentials: boolean,
+  ) => {
+    if (status.state === "exited") {
+      outputSeen.delete(processId);
+      return exited(handle, processId);
+    }
+    if (!credentials || cursor <= (outputSeen.get(processId) ?? 0)) return;
     outputSeen.set(processId, cursor);
     await deps
       .onOutput?.(handle, processId)
@@ -210,7 +219,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
         const { output, cursor, status } = await pollProcess(deps.sandbox, handle, processId, {
           deadlineMs: POLL_MS,
         });
-        await settle(handle, processId, status, cursor);
+        await settle(handle, processId, status, cursor, !!credentials?.files);
         return { processId, output: mask(output), cursor, status, reattached: false };
       } catch (error) {
         return withCleanup(
@@ -236,7 +245,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
         maxBytes: opts?.maxBytes ?? DEFAULT_MAX_BYTES,
         waitMs: opts?.waitMs ?? 0,
       });
-      await settle(handle, processId, read.status, read.cursor);
+      await settle(handle, processId, read.status, read.cursor, !!rec.credentialsPending);
       return { processId, chunks: read.chunks, cursor: read.cursor, status: read.status };
     },
 

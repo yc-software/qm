@@ -173,7 +173,6 @@ for (const [name, make] of [
           credentialId: "c1",
           ownerId: "U1",
           service: "aws",
-          fingerprint: "f1",
           fileHashes: { ".aws/sso/cache/x.json": "h" },
         },
       ],

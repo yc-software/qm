@@ -657,22 +657,7 @@ test("a command whose change loses a conflict says so on stderr", async (t) => {
   assert.equal(result.code, 0);
   assert.match(
     result.stderr,
-    /\[credentials\] This command changed \.aws\/sso\/cache\/session\.json, but another command saved a newer or concurrent version first; the saved login keeps that version\.$/,
+    /\[credentials\] This command changed \.aws\/sso\/cache\/session\.json, but another command saved its own change first; the saved login keeps that version, so rerun this command if its change is needed\.$/,
   );
   assert.equal(await savedValue(f), "saved-meanwhile");
-});
-
-test("a background job registered before per-file hashes still saves its refresh at exit", async (t) => {
-  const f = await fixture(t);
-  const bg = background(f);
-  const started = await bg.ctx().backgroundStart(refresh, { purpose: "Refresh a login", credentials: ["aws"] });
-  const stored = (await bg.registry.credentialFiles(started.processId))!;
-  await bg.registry.setCredentialFiles(started.processId, {
-    ...stored,
-    sources: stored.sources.map(({ fileHashes: _, ...source }) => ({ ...source, fingerprint: "legacy" }) as never),
-  });
-  await bg.waitForExit(started.processId);
-  await bg.ctx().backgroundPoll(started.processId);
-  assert.equal(await savedValue(f), "background");
-  assert.equal(await bg.registry.credentialFiles(started.processId), null);
 });

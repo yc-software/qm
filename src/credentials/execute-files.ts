@@ -94,7 +94,6 @@ export async function syncProcessCredentials(
   const stored = await deps.processes.credentialFiles(processId);
   if (!stored || !deps.keychain) return;
   const saved = new Map<number, Record<string, string>>();
-  let failure: unknown;
   const note = await finishExecutionFiles(
     deps.sandbox,
     handle,
@@ -108,28 +107,20 @@ export async function syncProcessCredentials(
     }),
     undefined,
     { keepDirectory: true },
-  ).catch((error: unknown) => {
-    failure = error;
-    return undefined;
-  });
+  );
   if (note) console.warn(`[credentials] background job ${processId}: ${note}`);
   if (saved.size)
-    await deps.processes
-      .advanceCredentialFiles(processId, stored, {
-        ...stored,
-        sources: stored.sources.map((source, index) => ({
-          ...source,
-          fileHashes: saved.get(index) ?? source.fileHashes,
-        })),
-      })
-      .catch((error: unknown) => {
-        throw failure ? new AggregateError([failure, error], errMessage(failure)) : error;
-      });
-  if (failure) throw failure;
+    await deps.processes.advanceCredentialFiles(processId, stored, {
+      ...stored,
+      sources: stored.sources.map((source, index) => ({
+        ...source,
+        fileHashes: saved.get(index) ?? source.fileHashes,
+      })),
+    });
 }
 
-const sameHashes = (a: Record<string, string>, b: Record<string, string> | undefined) =>
-  !!b && Object.keys(a).length === Object.keys(b).length && Object.entries(a).every(([path, hash]) => b[path] === hash);
+const sameHashes = (a: Record<string, string>, b: Record<string, string>) =>
+  Object.keys(a).length === Object.keys(b).length && Object.entries(a).every(([path, hash]) => b[path] === hash);
 
 async function runOrThrow(sandbox: Sandbox, handle: SandboxHandle, command: string, failure: string) {
   const result = await sandbox.run(handle, command);
@@ -280,18 +271,26 @@ async function finishExecutionFiles(
         const remaining = refreshed.filter((file) => belongsTo(file.path, roots));
         const deleted = paths.filter((path) => !refreshed.some((entry) => entry.path === path));
         if (deleted.length && !remaining.length) {
-          notes.push(`deleted all of its credential files (${deleted.join(", ")}); the saved login was left unchanged`);
+          notes.push(
+            `deleted all of its credential files (${deleted.join(", ")}); the saved login was left unchanged. To remove the saved login itself, delete the credential from the keychain`,
+          );
           return;
         }
         const overruled = (await saves[index]!(remaining)) ?? [];
         const removed = deleted.filter((path) => !overruled.includes(path));
+        const kept = deleted.filter((path) => overruled.includes(path));
+        const lost = overruled.filter((path) => !deleted.includes(path));
         if (removed.length)
           notes.push(
             `deleted ${removed.join(", ")}; the saved login no longer includes ${removed.length === 1 ? "it" : "them"}`,
           );
-        if (overruled.length)
+        if (kept.length)
           notes.push(
-            `changed ${overruled.join(", ")}, but another command saved a newer or concurrent version first; the saved login keeps that version`,
+            `deleted ${kept.join(", ")}, but another command changed ${kept.length === 1 ? "it" : "them"} meanwhile; the saved login keeps that version`,
+          );
+        if (lost.length)
+          notes.push(
+            `changed ${lost.join(", ")}, but another command saved its own change first; the saved login keeps that version, so rerun this command if its change is needed`,
           );
       }),
     );
