@@ -256,8 +256,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     } else {
       let materialized = version;
       if (version.commit) {
-        const files = await deps.deployStore.filesOf(id, version.version);
-        if (files == null) throw new Error(`cannot materialize deployment ${id} version ${version.version}`);
+        const files = await deps.deployStore.filesOf(id, version.commit);
         materialized = { ...version, snapshotDir: await snapshotFiles(deps.deployDir, files) };
       }
       endpoint = await deps.provider.apply(d, materialized);
@@ -435,7 +434,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           (input.alwaysOn === undefined || input.alwaysOn === !!before.alwaysOn) &&
           envKey(env) === envKey(current.env)
         ) {
-          const liveEdit = await liveEdits.save(before, input.files, input.actor ?? before.createdBy);
+          const liveEdit = await liveEdits.save(before, input.actor ?? before.createdBy, { files: input.files });
           if (liveEdit) return { ...(await deps.deployStore.get(id))!, liveEdit };
         }
         await deps.deployStore.deleteDraft(id);
@@ -723,6 +722,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
             deps.provider.profile.maxAppBytes,
           );
           await withdrawLoanUnlessPublisher(before, actor);
+          if (await liveEdits.save(before, actor ?? before.createdBy, { commit: pushed })) return result;
           const v = await deps.deployStore.addVersionFromCommit(id, pushed);
           if (!v) return result;
           await deps.deployStore.deleteDraft(id);

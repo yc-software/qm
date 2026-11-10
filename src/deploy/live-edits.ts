@@ -41,6 +41,13 @@ interface LiveEditDeps {
 }
 
 type AppFile = { path: string; data: Uint8Array };
+type SavedSource = { files: ReadonlyArray<{ path: string; data: string | Uint8Array }> } | { commit: string };
+
+interface Snapshot {
+  tree: Map<string, string>;
+  read(paths: string[]): Promise<AppFile[]>;
+  commit(base: string): Promise<string>;
+}
 
 function gitBlobSha(data: Uint8Array): string {
   return createHash("sha1").update(`blob ${data.byteLength}\0`).update(data).digest("hex");
@@ -72,35 +79,50 @@ export function createLiveEdits(deps: LiveEditDeps) {
     return current && draft ? draftVersion(current, draft) : current;
   }
 
-  async function save(
-    before: Deployment,
-    input: ReadonlyArray<{ path: string; data: string | Uint8Array }>,
-    actor: string,
-  ): Promise<LiveEditSaved | null> {
+  async function snapshotOf(id: string, source: SavedSource): Promise<Snapshot> {
+    if ("commit" in source) {
+      const tree = new Map((await store.commitTreeOf(id, source.commit)).map((f) => [f.path, f.sha]));
+      return {
+        tree,
+        read: async (paths) =>
+          (await store.filesOf(id, source.commit, paths)).map((f) => ({ path: f.path, data: bytes(f.data) })),
+        commit: async () => source.commit,
+      };
+    }
+    const files = source.files.map((f) => ({ path: normalizeRelPath(f.path), data: bytes(f.data) }));
+    return {
+      tree: new Map(files.map((f) => [f.path, gitBlobSha(f.data)])),
+      read: async (paths) => files.filter((f) => paths.includes(f.path)),
+      commit: (base) => store.commitDraft(id, files, base),
+    };
+  }
+
+  async function save(before: Deployment, actor: string, source: SavedSource): Promise<LiveEditSaved | null> {
     const current = currentVersionOf(before);
     const liveEdit = deps.provider.liveEdit;
     if (!liveEdit || before.status !== "running" || !current?.commit) return null;
     const draft = await store.draftOf(before.id);
     const base = draft?.commit ?? current.commit;
-    const files = input.map((f) => ({ path: normalizeRelPath(f.path), data: bytes(f.data) }));
     const known = new Map((await store.commitTreeOf(before.id, base)).map((f) => [f.path, f.sha]));
-    const changed = files.filter((f) => known.get(f.path) !== gitBlobSha(f.data));
-    const kept = new Set(files.map((f) => f.path));
-    const deletedPaths = [...known.keys()].filter((path) => !kept.has(path));
-    const dev = devEntrypoint(files);
-    const hot = dev !== undefined;
-    if (!changed.length && !deletedPaths.length)
+    const next = await snapshotOf(before.id, source);
+    const changedPaths = [...next.tree].filter(([path, sha]) => known.get(path) !== sha).map(([path]) => path);
+    const deletedPaths = [...known.keys()].filter((path) => !next.tree.has(path));
+    if (!changedPaths.length && !deletedPaths.length)
       return {
         changed: 0,
         hot: draft?.hot ?? false,
         ...(draft?.publishAt !== undefined ? { publishAt: draft.publishAt } : {}),
         ...(draft?.failure ? { previousFailure: draft.failure } : {}),
       };
+    const read = await next.read(next.tree.has("package.json") ? [...changedPaths, "package.json"] : changedPaths);
+    const changed = read.filter((f) => changedPaths.includes(f.path));
+    const dev = devEntrypoint(read);
+    const hot = dev !== undefined;
     const switched = draft?.hot !== hot;
     const restart = !hot || switched || changed.some((f) => DEPENDENCY_MANIFESTS.has(f.path));
     const target = { ...current, entrypoint: dev ?? current.entrypoint };
     const [committed, edited] = await Promise.allSettled([
-      store.commitDraft(before.id, files, base),
+      next.commit(base),
       deps
         .withDeploymentEnv(before, target)
         .then((version) => liveEdit(before, version, { files: changed, deletedPaths, restart })),

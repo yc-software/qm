@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createDeployStore } from "../src/deploy/deploy-store.ts";
+import { createDeployStore, deployCurrentGitRef } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import type { DeployEndpoint, DeployProvider } from "../src/deploy/deploy-provider.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
@@ -137,6 +138,39 @@ test("republishing a running app writes only the changed files into it and keeps
     (await h.deployStore.commitTreeOf(d.id, draft.commit)).map((f) => f.path),
     ["package.json", "src/App.jsx"],
   );
+  assert.equal(
+    await h.deployStore.refOf(d.id, deployCurrentGitRef),
+    draft.commit,
+    "a clone of the app starts from the saved edits",
+  );
+});
+
+test("a git push to a running app is saved live like a republish", async () => {
+  const h = harness();
+  const d = await publishApp(h, "live-push");
+  const work = mkdtempSync(join(tmpdir(), "live-push-"));
+  execFileSync("git", ["clone", "--quiet", await h.deployStore.repoUrl(d.id), work]);
+  writeFileSync(join(work, "src/App.jsx"), "pushed");
+  execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@t", "commit", "-aqm", "edit"], { cwd: work });
+  const pushed = execFileSync("git", ["rev-parse", "HEAD"], { cwd: work }).toString().trim();
+
+  await h.deploy.pushGit(
+    d.id,
+    async () => {
+      execFileSync("git", ["push", "--quiet", await h.deployStore.repoUrl(d.id), "HEAD:current"], { cwd: work });
+      return { result: "pushed", ok: true };
+    },
+    OWNER,
+  );
+  assert.deepEqual(h.state.edits[0], {
+    entrypoint: DEV,
+    files: ["src/App.jsx"],
+    contents: ["pushed"],
+    deletedPaths: [],
+    restart: true,
+  });
+  assert.equal((await h.deployStore.draftOf(d.id))!.commit, pushed);
+  assert.equal((await h.deployStore.get(d.id))!.versions.length, 1, "the push publishes no version yet");
 });
 
 test("a replaced microVM comes back running the saved edits, not the last published version", async () => {
@@ -176,7 +210,7 @@ test("once edits stop, the saved edits publish as a new version on the productio
   assert.equal(after.appliedVersion, 2);
   assert.equal(after.versions[1]!.entrypoint, PRODUCTION);
   assert.equal(await h.deployStore.draftOf(d.id), null);
-  const app = (await h.deployStore.filesOf(d.id, 2))!.find((f) => f.path === "src/App.jsx")!;
+  const app = (await h.deployStore.filesOf(d.id, draft.commit)).find((f) => f.path === "src/App.jsx")!;
   assert.equal(Buffer.from(app.data).toString(), "v2");
 });
 

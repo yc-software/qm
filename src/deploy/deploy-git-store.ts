@@ -29,6 +29,7 @@ export interface DeployGitStore {
     files: DeployGitInputFile[];
     parent?: string;
     message?: string;
+    ref?: string;
   }): Promise<string>;
   treeOf(deploymentId: string, commitSha: string): Promise<DeployGitTreeFile[]>;
   filesOf(deploymentId: string, commitSha: string, paths?: string[]): Promise<DeployGitInputFile[]>;
@@ -252,7 +253,10 @@ export function createDeployGitStore(opts: DeployGitStoreOptions = {}): DeployGi
           },
         );
         const sha = (await git(["rev-parse", "HEAD"], { cwd: workdir })).toString("utf8").trim();
-        await git(["push", "--quiet", repo, `HEAD:refs/deploy-commits/${sha}`], { cwd: workdir });
+        await git(
+          ["push", "--quiet", repo, `HEAD:refs/deploy-commits/${sha}`, ...(input.ref ? [`+HEAD:${input.ref}`] : [])],
+          { cwd: workdir },
+        );
         await persistArchive(input.deploymentId, repo);
         return sha;
       } finally {
