@@ -24,6 +24,7 @@ import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
 import { testAdvisoryLock, testCountedAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { probedCommand } from "./support/probed-command.ts";
 
 async function jobComputers(resources: SandboxResources): Promise<SandboxResource[]> {
   const found: SandboxResource[] = [];
@@ -749,8 +750,8 @@ for (const [kind, waiting] of [
     };
     backend.teardown = hold;
     backend.run = async (_handle, command) => {
-      if (command === "long") await hold();
-      return { stdout: command, stderr: "", code: 0, timedOut: false };
+      if (probedCommand(command) === "long") await hold();
+      return { stdout: probedCommand(command), stderr: "", code: 0, timedOut: false };
     };
     const long = waiting === "command" ? router.run(handle, "long") : router.teardown(handle);
     let restarted = false;
@@ -827,7 +828,7 @@ test("concurrent commands on one Sprites computer run together", { timeout: 1000
     if (peak === 3) release.resolve();
     await release.promise;
     running--;
-    return { stdout: command, stderr: "", code: 0, timedOut: false };
+    return { stdout: probedCommand(command), stderr: "", code: 0, timedOut: false };
   };
   const results = await Promise.all(["a", "b", "c"].map((command) => router.run(handle, command)));
   assert.deepEqual(
@@ -1268,10 +1269,13 @@ test("the recorded load sample takes mem and disk totals from the created size, 
   const fallback = await kernel.resources.load(bare.resourceId!);
   assert.deepEqual([fallback?.memTotalMb, fallback?.diskTotalGb], [463713, 512]);
 
-  const sized = fixture((backend) => {
-    shellRun(backend, () => hostLine);
-    backend.profile.spec = { memoryMb: 2048, diskGb: 10 };
-  });
+  const sized = fixture(
+    (backend) => {
+      shellRun(backend, () => hostLine);
+      backend.profile.spec = { memoryMb: 2048, diskGb: 10 };
+    },
+    ["personal:alice", "personal:bob"],
+  );
   const handle = await sized.router.provision("personal:alice");
   await sized.router.run(handle, "true");
   const sample = await sized.resources.load(handle.resourceId!);

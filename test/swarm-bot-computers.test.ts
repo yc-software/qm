@@ -33,6 +33,7 @@ import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 import { errMessage } from "../src/util/errors.ts";
+import { probedCommand } from "./support/probed-command.ts";
 
 const releaseBot: Principal = { id: "release-bot", type: "internal", displayName: "Release bot" };
 const alice: Principal = { id: "alice", type: "internal" };
@@ -59,7 +60,7 @@ const textOf = (result: ToolResult): string => result.content.map((part) => part
 function recordRuns(f: Fixture): Array<{ on: string; command: string }> {
   const ran: Array<{ on: string; command: string }> = [];
   f.backend.run = async (handle, command) => {
-    ran.push({ on: handle.id, command });
+    ran.push({ on: handle.id, command: probedCommand(command) });
     return { stdout: f.disks.get(handle.id)?.get("plan.md") ?? "", stderr: "", code: 0, timedOut: false };
   };
   return ran;
