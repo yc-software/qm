@@ -70,6 +70,7 @@ import {
 } from "./composer-loadout";
 
 import { createModelPicker } from "./model-picker";
+import { nextPromptSuggestion } from "./next-prompt";
 
 export type ComposerMenu = "effort" | "model" | "settings" | "loadout";
 
@@ -547,6 +548,8 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       (appEditSlug(ctx.chat.state.threadRef, appState.me?.user) ? "Describe a change…" : "Ask anything");
     if (inputBlocked) placeholder = runtimePending ? "Loading runtime…" : "Approve or deny to continue";
     else if (agent.state.isStreaming) placeholder = "Queue a message for after this turn…";
+    suggestedNext = inputBlocked ? null : nextPromptFor(agent);
+    if (suggestedNext) placeholder = suggestedNext;
     let composerNotice: TemplateResult | typeof nothing = nothing;
     if (composerState.processingFiles) {
       composerNotice = html`<div class="composer-note">Preparing files...</div>`;
@@ -1179,6 +1182,20 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   }
 
   let pendingComposerFocus = false;
+  let suggestedNext: string | null = null;
+
+  function nextPromptFor(agent: Agent): string | null {
+    const sessionId = ctx.chat.state.sessionId;
+    const messages = agent.state.messages;
+    const last = messages.at(-1);
+    if (!sessionId || options.prepareSubmit || last?.role !== "assistant" || composerState.attachments.length)
+      return null;
+    if (agent.state.isStreaming || ctx.chat.hasLiveRun()) return null;
+    const replyKey = `${messages.length}:${(last as { ts?: string }).ts ?? ""}`;
+    return nextPromptSuggestion(sessionId, replyKey, () => {
+      if (agent === ctx.chat.state.agent && !composerState.draft) ctx.chat.drawActiveChat(agent);
+    });
+  }
 
   function focusComposerEnd(): void {
     requestAnimationFrame(() => {
@@ -1338,6 +1355,10 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         e.preventDefault();
         return;
       }
+    }
+    if (e.key === "Tab" && !e.shiftKey && !composerState.draft && suggestedNext) {
+      e.preventDefault();
+      return fillSuggestedPrompt(suggestedNext, agent);
     }
     if (e.key !== "Enter" || e.shiftKey) return;
     e.preventDefault();

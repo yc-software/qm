@@ -96,6 +96,7 @@ export type ModelRequestPurpose =
   | "approval_summary"
   | "security_screen"
   | "ack_emoji"
+  | "next_prompt"
   | "memory_capture"
   | "memory_classification"
   | "embedding"

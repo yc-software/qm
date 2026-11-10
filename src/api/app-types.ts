@@ -417,6 +417,10 @@ export interface App {
     },
   ): Promise<Session | null>;
   regenerateTitle(sessionId: string, principalId: string): Promise<{ title: string | null } | null>;
+  suggestNextPrompt(
+    sessionId: string,
+    principalId: string,
+  ): Promise<{ enabled: boolean; suggestion: string | null } | null>;
   detachSession(sessionId: string, principalId: string): Promise<{ detached: true } | null>;
   cancelSessionGoal(
     sessionId: string,
