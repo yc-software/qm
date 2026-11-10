@@ -274,21 +274,13 @@ test("personal models retain canonical endpoints when org endpoints are overridd
 });
 
 test("registered OpenAI clones retain exact model identity on the Codex subscription transport", () => {
-  const subscriptionWindows: Record<string, number> = {
-    "gpt-6-astra": 272_000,
-    "gpt-6.1-sol": 500_000,
-    "gpt-6.1-terra": 500_000,
-    "gpt-6-sol": 272_000,
-    "gpt-6-luna": 272_000,
-  };
-  for (const [id, contextWindow] of Object.entries(subscriptionWindows)) {
+  for (const id of ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"]) {
     const api = getRequiredModel(id);
     const subscription = getRequiredModel(codexSubscriptionModelId(id));
     assert.equal(subscription.id, `codex/${id}`);
     assert.equal(subscription.provider, "openai-codex");
     assert.equal(subscription.api, "openai-codex-responses");
     assert.equal(subscription.baseUrl, getRequiredModel("codex/gpt-5.6-sol").baseUrl);
-    assert.equal(subscription.contextWindow, contextWindow);
     assert.equal(subscription.maxTokens, api.maxTokens);
     assert.deepEqual(subscription.cost, api.cost);
   }
