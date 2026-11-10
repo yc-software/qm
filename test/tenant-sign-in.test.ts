@@ -20,7 +20,7 @@ import { bindBootTenant } from "../src/tenants/boot.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testMigratedDatabaseUrl } from "./support/test-database.ts";
-import { appUrl, ownerUrl } from "./support/test-tenant.ts";
+import { appUrl, ownerUrl, testTenant } from "./support/test-tenant.ts";
 
 const IDENTITY_SECRET = "tenant-sign-in-identity-secret".repeat(2);
 const alpha = randomUUID();
@@ -46,7 +46,7 @@ async function member(tenant: string, principal: string, type = "internal"): Pro
 
 test.before(async () => {
   await bindBootTenant(async () => undefined);
-  await directory.list().catch(() => undefined);
+  await directory.list(testTenant).catch(() => undefined);
   await owner.q(
     `INSERT INTO tenants(id, settings) VALUES
        ($1, '{"brandName":"Alpha","allowedEmails":["@nowhere.test"]}'),

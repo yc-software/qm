@@ -9,12 +9,14 @@ import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { scopeId } from "../src/types.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const PID = "soul-read-portal-identity-secret-for-tests";
 
 test("source-authenticated SOUL reads require the portal-verified principal to belong to the scope", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "soul-read-")) }));
   await built.directory.replaceChannels(
+    testTenant,
     [{ channelId: "C", name: "eng", isPrivate: true }],
     [{ channelId: "C", principalId: "alice" }],
   );

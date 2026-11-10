@@ -118,6 +118,7 @@ test("reachDeployment: shared-scope read grants require current channel or group
     grantedBy: "U1",
   });
   await directory.replaceChannels(
+    tenant,
     [{ channelId: "C1", name: "eng", isPrivate: true }],
     [{ channelId: "C1", principalId: "U2" }],
   );
@@ -138,7 +139,7 @@ test("reachDeployment: shared-scope read grants require current channel or group
     permission: "read",
     grantedBy: "U1",
   });
-  await directory.replaceGroups([{ groupId: "G1", principalId: "U4" }]);
+  await directory.replaceGroups(tenant, [{ groupId: "G1", principalId: "U4" }]);
   assert.equal((await app.reachDeployment(groupDeployment.id, "U4")).status, "ok");
 
   const session = await sessions.getOrCreateByThread("thread-g2", "group", scopeId("group", "G2"));
@@ -187,6 +188,7 @@ test("listDeploymentsForViewer includes owned and ACL-visible deployments only",
     grantedBy: "U1",
   });
   await directory.replaceChannels(
+    tenant,
     [{ channelId: "C1", name: "eng", isPrivate: true }],
     [{ channelId: "C1", principalId: "U2" }],
   );
@@ -234,6 +236,7 @@ test("HTTP: /v1/deployments?principalId= filters through viewer authz", async ()
     grantedBy: "U1",
   });
   await directory.replaceChannels(
+    tenant,
     [{ channelId: "C1", name: "eng", isPrivate: true }],
     [{ channelId: "C1", principalId: "U2" }],
   );
@@ -278,6 +281,7 @@ test("HTTP: /v1/deployments/:id shows a deployment only to principals who can se
     grantedBy: "U1",
   });
   await directory.replaceChannels(
+    tenant,
     [{ channelId: "C1", name: "eng", isPrivate: true }],
     [{ channelId: "C1", principalId: "U2" }],
   );
@@ -318,6 +322,7 @@ test("HTTP: each /v1/deployments row carries an authed, clonable gitUrl when ing
     grantedBy: "U1",
   });
   await directory.replaceChannels(
+    tenant,
     [{ channelId: "C1", name: "eng", isPrivate: true }],
     [{ channelId: "C1", principalId: "U2" }],
   );

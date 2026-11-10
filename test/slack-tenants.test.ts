@@ -60,7 +60,7 @@ describe("per-tenant Slack runtimes", () => {
     const started: string[] = [];
     const runtimes = createTenantSlackRuntimes({
       runtimeFor: (tenant) => ({
-        start: () => void started.push(tenant),
+        start: () => void started.push(tenant.id),
         reconcile: async () => {},
         stop: async () => {},
       }),

@@ -18,6 +18,7 @@ import {
   CONTROL_PLANE_AUD,
 } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const SECRET = "consent-bridge-secret".repeat(3);
 const oauthEnv = { GOOGLE_OAUTH_CLIENT_ID: "gid", GOOGLE_OAUTH_CLIENT_SECRET: "gsecret" } as NodeJS.ProcessEnv;
@@ -28,6 +29,7 @@ async function start(
 ): Promise<{ base: string; built: BuiltApp; close: () => Promise<void> }> {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "consent-")), signingSecret: SECRET }));
   await built.directory.replaceChannels(
+    testTenant,
     [
       { channelId: "C1", name: "consent", isPrivate: false },
       { channelId: "C9", name: "connectors", isPrivate: false },

@@ -63,6 +63,7 @@ test("POST /v1/search derives principals from capability and shared scopes fail 
   const secret = "search-route-secret".repeat(3);
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "search-")), signingSecret: secret }));
   await built.directory.replaceChannels(
+    tenant,
     [
       { channelId: "C1", name: "private", isPrivate: true },
       { channelId: "C-ALICE", name: "alice-only", isPrivate: true },
@@ -153,6 +154,7 @@ test("file backend applies the principal visibility intersection to real file ro
 test("slack backend intersects private-channel visibility across all principals", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "search-slack-")) }));
   await built.directory.replaceChannels(
+    tenant,
     [
       { channelId: "C-SHARED", name: "shared", isPrivate: true },
       { channelId: "C-ALICE", name: "alice-only", isPrivate: true },

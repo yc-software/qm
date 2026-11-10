@@ -34,6 +34,7 @@ import { testConfig } from "./support/test-config.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap, testUserStore } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { directoryFor } from "../src/directory/directory-store.ts";
 
 const EMAIL = "jordan@acme.test";
 const SLACK = "U0JORDAN";
@@ -147,9 +148,9 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
   it("the directory bridge reaches a linked sign-in through the roster row", async () => {
     await installed();
     const dir = createPostgresDirectoryStore(testDatabaseUrl());
-    await dir.replace([{ principalId: EMAIL, displayName: "Jordan", type: "internal", slackId: SLACK }]);
-    assert.equal(await samePersonInDirectory(dir, OIDC, SLACK), true);
-    assert.equal(await samePersonInDirectory(dir, OIDC, "U0CASEY"), false);
+    await dir.replace(tenant, [{ principalId: EMAIL, displayName: "Jordan", type: "internal", slackId: SLACK }]);
+    assert.equal(await samePersonInDirectory(directoryFor(dir, tenant), OIDC, SLACK), true);
+    assert.equal(await samePersonInDirectory(directoryFor(dir, tenant), OIDC, "U0CASEY"), false);
   });
 
   it("the identity service classifies a linked sign-in as the canonical principal and deactivates the person", async () => {
@@ -268,7 +269,9 @@ describe("linked sign-ins across the HTTP surface", () => {
 
   before(async () => {
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "principal-links-")), signingSecret: SECRET }));
-    await built.app.upsertDirectory([{ principalId: EMAIL, displayName: "Jordan", type: "internal", slackId: SLACK }]);
+    await built.app.upsertDirectory(tenant, [
+      { principalId: EMAIL, displayName: "Jordan", type: "internal", slackId: SLACK },
+    ]);
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,

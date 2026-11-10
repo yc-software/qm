@@ -16,6 +16,7 @@ import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const SECRET = "reach-files-secret".repeat(3);
 
@@ -50,7 +51,7 @@ describe("POST /v1/reach with files", () => {
   before(async () => {
     void fakeSprites;
     built = buildApp(testConfig({ signingSecret: SECRET }));
-    await built.app.upsertDirectory([
+    await built.app.upsertDirectory(testTenant, [
       { principalId: "U-carol", displayName: "Carol", type: "internal" },
       { principalId: "U-alice", displayName: "Alice", type: "internal" },
     ]);

@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore, type AclStore } from "../src/acl/acl-store.ts";
-import { type DirectoryStore } from "../src/directory/directory-store.ts";
+import { directoryFor, type DirectoryStore } from "../src/directory/directory-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createCanReadScope, createCanWriteScope } from "../src/resolution/scope-membership.ts";
 import { scopeId } from "../src/types.ts";
@@ -27,6 +27,7 @@ async function setup(opts: { withResolver: boolean } = { withResolver: true }) {
   const directory: DirectoryStore = createPostgresDirectoryStore(testDatabaseUrl());
   const identity = createIdentityService(testMap(), { externalMembers: testMap() });
   await directory.replaceChannels(
+    tenant,
     [
       { channelId: CH, name: "built", isPrivate: true },
       { channelId: CH_OTHER, name: "shared", isPrivate: true },
@@ -51,8 +52,8 @@ async function setup(opts: { withResolver: boolean } = { withResolver: true }) {
     deployDir: mkdtempSync(join(tmpdir(), "parity-deploy-")),
     ...(opts.withResolver
       ? {
-          canReadScope: createCanReadScope({ directory, identity }),
-          canWriteScope: createCanWriteScope({ directory, identity }),
+          canReadScope: createCanReadScope({ directory: directoryFor(directory, tenant), identity }),
+          canWriteScope: createCanWriteScope({ directory: directoryFor(directory, tenant), identity }),
         }
       : {}),
   });
@@ -135,6 +136,7 @@ test("new channel apps grant read access only to authenticated current channel m
   assert.equal((await deploy.reachDeployment(d.id, "U3")).status, "denied");
   assert.equal((await deploy.reachDeployment(d.id, "")).status, "denied");
   await directory.replaceChannels(
+    tenant,
     [{ channelId: CH, name: "built", isPrivate: true }],
     [{ channelId: CH, principalId: "U1" }],
   );
@@ -192,6 +194,7 @@ test("republishing channel apps neither widens their audience nor restores revok
 test("public-channel defaults follow existing channel visibility without anonymous access", async () => {
   const { deploy, d, directory } = await setup();
   await directory.replaceChannels(
+    tenant,
     [{ channelId: CH, name: "built", isPrivate: false }],
     [{ channelId: CH, principalId: "U1" }],
   );

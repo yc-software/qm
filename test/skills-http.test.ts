@@ -20,6 +20,7 @@ import { SHARED_SKILL_TRIGGER_REFUSAL } from "../src/api/artifact-share.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { SKILL_NAME_RULE } from "../src/skills/skill-name.ts";
 import { sleep } from "../src/util/async.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 function start() {
   const built = buildApp(
@@ -98,6 +99,7 @@ test("GET /v1/skills marks a private-channel skill editable for a member and not
   const srv = start();
   try {
     await srv.directory.replaceChannels(
+      testTenant,
       [{ channelId: "C9", name: "avery-jordan", isPrivate: true }],
       [
         { channelId: "C9", principalId: "avery" },
@@ -612,6 +614,7 @@ test("POST /v1/skills via a capability token from a private-channel scope homes 
   const srv = await startSecure();
   try {
     await srv.directory.replaceChannels(
+      testTenant,
       [{ channelId: "C9", name: "avery-jordan", isPrivate: true }],
       [
         { channelId: "C9", principalId: "avery" },
@@ -701,6 +704,7 @@ test("PUT /v1/skills/:id via a capability token cannot edit another scope's skil
 
 async function seedChannelSkill(srv: Awaited<ReturnType<typeof startSecure>>) {
   await srv.directory.replaceChannels(
+    testTenant,
     [{ channelId: "C9", name: "avery-jordan", isPrivate: true }],
     [
       { channelId: "C9", principalId: "avery" },
@@ -799,6 +803,7 @@ test("an author who LEAVES a private channel loses inline CRUD on its skill (mem
   try {
     const id = await seedChannelSkill(srv);
     await srv.directory.replaceChannels(
+      testTenant,
       [{ channelId: "C9", name: "avery-jordan", isPrivate: true }],
       [{ channelId: "C9", principalId: "jordan" }],
     );
@@ -846,6 +851,7 @@ test("a shared-scope skill cannot be created/edited/deleted by an automated trig
   const srv = await startSecure();
   try {
     await srv.directory.replaceChannels(
+      testTenant,
       [{ channelId: "C9", name: "avery-jordan", isPrivate: true }],
       [{ channelId: "C9", principalId: "avery" }],
     );
@@ -966,7 +972,7 @@ test("a PERSONAL-scope trigger (no liveActor) may still edit + delete its OWNER'
 test("a group-DM skill is editable by any group member (the group-DM analog of a private channel)", async () => {
   const srv = await startSecure();
   try {
-    await srv.directory.replaceGroups([
+    await srv.directory.replaceGroups(testTenant, [
       { groupId: "G7", principalId: "ann" },
       { groupId: "G7", principalId: "bob" },
     ]);
@@ -1018,7 +1024,7 @@ test("POST /v1/skills refuses to home a skill directly in an org or team scope (
 test("GET /v1/skills shows a group-DM skill to a member known only via directory membership", async () => {
   const srv = start();
   try {
-    await srv.directory.replaceGroups([
+    await srv.directory.replaceGroups(testTenant, [
       { groupId: "G7", principalId: "ann" },
       { groupId: "G7", principalId: "bob" },
     ]);
@@ -1075,6 +1081,7 @@ test("a PUBLIC channel (self-joinable) stays owner-only — a non-author member 
   const srv = await startSecure();
   try {
     await srv.directory.replaceChannels(
+      testTenant,
       [{ channelId: "CPUB", name: "general", isPrivate: false }],
       ["owner", "rando"].map((principalId) => ({ channelId: "CPUB", principalId })),
     );
@@ -1234,6 +1241,7 @@ test("only a live person can restore an archived channel skill, not a Slack bot'
   const srv = await startSecure();
   try {
     await srv.directory.replaceChannels(
+      testTenant,
       [{ channelId: "C9", name: "eng", isPrivate: true }],
       ["U1", "U2", "release-bot"].map((principalId) => ({ channelId: "C9", principalId })),
     );
@@ -1265,6 +1273,7 @@ test("the skills tool saves a skill into the turn's scope and edits it through t
   const srv = await startSecure();
   try {
     await srv.directory.replaceChannels(
+      testTenant,
       [{ channelId: "C9", name: "avery-jordan", isPrivate: true }],
       [
         { channelId: "C9", principalId: "avery" },
@@ -1313,6 +1322,7 @@ test("the skills tool cannot save or edit where the skill API refuses", async ()
   const srv = await startSecure();
   try {
     await srv.directory.replaceChannels(
+      testTenant,
       [{ channelId: "C9", name: "avery-jordan", isPrivate: true }],
       [{ channelId: "C9", principalId: "avery" }],
     );
@@ -1402,6 +1412,7 @@ test("a turn's skills tool saves with that turn's own capability, and read-only 
   globalThis.fetch = (input, init) => realFetch(String(input).replace("http://core.example.test", base), init);
   try {
     await built.directory.replaceChannels(
+      testTenant,
       [{ channelId: "C9", name: "avery-jordan", isPrivate: true }],
       [{ channelId: "C9", principalId: "avery" }],
     );

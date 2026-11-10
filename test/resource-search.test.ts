@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 function fresh() {
   return buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "resource-search-")), seedSkills: false }));
@@ -62,7 +63,7 @@ test("resource search filters private data, includes owned drafts, and bounds sn
 
 test("revoked project membership removes both project and cron hits, even for the creator", async () => {
   const { app } = fresh();
-  await app.upsertDirectory([
+  await app.upsertDirectory(testTenant, [
     { principalId: "owner", displayName: "Owner", type: "internal" },
     { principalId: "member", displayName: "Member", type: "internal" },
   ]);

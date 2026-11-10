@@ -6,6 +6,8 @@ import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { settle } from "./support/settle.ts";
+import { testTenant } from "./support/test-tenant.ts";
+import type { Tenant } from "../src/tenants/context.ts";
 
 const channel = (id: string, isPrivate = false) => ({
   id,
@@ -31,7 +33,7 @@ function fixture(t: TestContext) {
       rejectPush: false,
       apps: [] as Array<{ id: string; team_id: string; is_bot: true }>,
     };
-    const pushes: Parameters<SlackCoreClient["pushDirectory"]>[0][] = [];
+    const pushes: Parameters<SlackCoreClient["pushDirectory"]>[1][] = [];
     const user = { id: "U_ONE", team_id: "T_TEST" };
     const client = {
       async *paginate(method: string, args: { types?: string }) {
@@ -48,16 +50,18 @@ function fixture(t: TestContext) {
       users: { info: async () => ({ user }) },
     };
     const directory = createDirectory({
+      tenant: testTenant,
       core: {
         holdDirectorySync: async (fn: (lost: Promise<void>) => Promise<boolean>) => fn(new Promise(() => {})),
-        pushDirectory: async (body: Parameters<SlackCoreClient["pushDirectory"]>[0]) => {
+        pushDirectory: async (tenant: Tenant, body: Parameters<SlackCoreClient["pushDirectory"]>[1]) => {
           if (state.rejectPush) {
             pushes.push(body);
             return false;
           }
-          const members = await store.replace(body.members ?? [], body.membersSyncedAt);
+          const members = await store.replace(tenant, body.members ?? [], body.membersSyncedAt);
           const channels = body.channels
             ? await store.replaceChannels(
+                tenant,
                 body.channels,
                 body.channelMembers,
                 body.channelsSyncedAt,
@@ -66,7 +70,13 @@ function fixture(t: TestContext) {
               )
             : true;
           const groups = body.groupMembers
-            ? await store.replaceGroups(body.groupMembers, body.groupsSyncedAt, body.groupIds, body.groupRosterIds)
+            ? await store.replaceGroups(
+                tenant,
+                body.groupMembers,
+                body.groupsSyncedAt,
+                body.groupIds,
+                body.groupRosterIds,
+              )
             : true;
           pushes.push(body);
           return members && channels && groups;
@@ -101,12 +111,12 @@ test("a fresh listing discovers channels without replaying cached rosters", asyn
   advance();
   a.state.channels.push(channel("C_NEW"));
   const pushed = await a.refresh();
-  assert.equal(await store.channelPrivacy("C_NEW"), false);
+  assert.equal(await store.channelPrivacy(testTenant, "C_NEW"), false);
   assert.equal(pushed.channelsSyncedAt, Date.now());
   assert.deepEqual(pushed.channelRosterIds, []);
   assert.deepEqual(pushed.channelMembers, []);
   assert.equal(pushed.groupMembers, undefined);
-  assert.equal(await store.channelMember("C_ONE", "U_ONE"), true);
+  assert.equal(await store.channelMember(testTenant, "C_ONE", "U_ONE"), true);
   assert.equal(a.state.memberCalls, 1);
 });
 
@@ -117,12 +127,12 @@ test("fresh listings update names and privacy while roster refresh is throttled"
   advance();
   a.state.channels = [{ ...channel("C_ONE", true), name: "renamed" }];
   const pushed = await a.refresh();
-  assert.equal(await store.channelPrivacy("C_ONE"), true);
+  assert.equal(await store.channelPrivacy(testTenant, "C_ONE"), true);
   assert.equal(pushed.channels?.[0]?.name, "renamed");
   advance();
   a.state.channels = [channel("C_ONE")];
   await a.refresh();
-  assert.equal(await store.channelPrivacy("C_ONE"), false);
+  assert.equal(await store.channelPrivacy(testTenant, "C_ONE"), false);
 });
 
 test("two cores recover a successful omission through healthy periodic listings", async (t) => {
@@ -132,13 +142,13 @@ test("two cores recover a successful omission through healthy periodic listings"
   advance(1);
   const b = core([channel("C_OTHER")]);
   await b.refresh();
-  assert.equal(await store.channelPrivacy("C_ONE"), undefined);
+  assert.equal(await store.channelPrivacy(testTenant, "C_ONE"), undefined);
   b.state.channels = [channel("C_ONE")];
   for (const node of [a, b, a, b]) {
     advance();
     await node.refresh();
-    assert.equal(await store.channelPrivacy("C_ONE"), false);
-    assert.equal(await store.channelMember("C_ONE", "U_ONE"), false);
+    assert.equal(await store.channelPrivacy(testTenant, "C_ONE"), false);
+    assert.equal(await store.channelMember(testTenant, "C_ONE", "U_ONE"), false);
   }
 });
 
@@ -151,13 +161,13 @@ test("periodic and unrelated targeted refreshes cannot resurrect another core's 
   await b.refresh();
   advance(1);
   await b.directory.forceDirectorySync(b.client, "C_ONE", "U_ONE");
-  assert.equal(await store.channelMember("C_ONE", "U_ONE"), false);
+  assert.equal(await store.channelMember(testTenant, "C_ONE", "U_ONE"), false);
   advance(1);
   await a.directory.forceDirectorySync(a.client, "C_OTHER");
   advance();
   await a.refresh();
-  assert.equal(await store.channelMember("C_ONE", "U_ONE"), false);
-  assert.equal(await store.channelMember("C_OTHER", "U_ONE"), true);
+  assert.equal(await store.channelMember(testTenant, "C_ONE", "U_ONE"), false);
+  assert.equal(await store.channelMember(testTenant, "C_OTHER", "U_ONE"), true);
 });
 
 test("targeted refresh does not postpone the next full roster refresh", async (t) => {
@@ -172,7 +182,7 @@ test("targeted refresh does not postpone the next full roster refresh", async (t
   advance(2_000);
   const pushed = await a.refresh();
   assert.deepEqual(pushed.channelRosterIds?.sort(), ["C_ONE", "C_OTHER"]);
-  assert.equal(await store.channelMember("C_ONE", "U_ONE"), false);
+  assert.equal(await store.channelMember(testTenant, "C_ONE", "U_ONE"), false);
 });
 
 test("API errors preserve stored rosters and metadata but successful omissions remove them", async (t) => {
@@ -183,19 +193,19 @@ test("API errors preserve stored rosters and metadata but successful omissions r
   a.state.failMembers = true;
   a.state.channels = [channel("C_ONE", true)];
   await a.directory.forceDirectorySync(a.client, "C_ONE");
-  assert.equal(await store.channelPrivacy("C_ONE"), true);
-  assert.equal(await store.channelMember("C_ONE", "U_ONE"), true);
+  assert.equal(await store.channelPrivacy(testTenant, "C_ONE"), true);
+  assert.equal(await store.channelMember(testTenant, "C_ONE", "U_ONE"), true);
   advance();
   a.state.failList = true;
   await a.refresh();
-  assert.equal(await store.channelPrivacy("C_ONE"), true);
-  assert.equal(await store.channelMember("C_ONE", "U_ONE"), true);
+  assert.equal(await store.channelPrivacy(testTenant, "C_ONE"), true);
+  assert.equal(await store.channelMember(testTenant, "C_ONE", "U_ONE"), true);
   advance();
   a.state.failList = false;
   a.state.channels = [];
   await a.refresh();
-  assert.equal(await store.channelPrivacy("C_ONE"), undefined);
-  assert.equal(await store.channelMember("C_ONE", "U_ONE"), false);
+  assert.equal(await store.channelPrivacy(testTenant, "C_ONE"), undefined);
+  assert.equal(await store.channelMember(testTenant, "C_ONE", "U_ONE"), false);
 });
 
 test("a rejected full crawl is retried instead of throttling unpublished rosters", async (t) => {
@@ -203,11 +213,11 @@ test("a rejected full crawl is retried instead of throttling unpublished rosters
   const a = core();
   a.state.rejectPush = true;
   await a.refresh();
-  assert.equal(await store.channelPrivacy("C_ONE"), undefined);
+  assert.equal(await store.channelPrivacy(testTenant, "C_ONE"), undefined);
   a.state.rejectPush = false;
   advance();
   await a.refresh();
-  assert.equal(await store.channelMember("C_ONE", "U_ONE"), true);
+  assert.equal(await store.channelMember(testTenant, "C_ONE", "U_ONE"), true);
   assert.equal(a.state.memberCalls, 2);
 });
 

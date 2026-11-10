@@ -17,6 +17,7 @@ import { testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const SECRET = "project-trigger-secret".repeat(3);
 
@@ -53,12 +54,12 @@ async function token(actorId: string, scopeId: CapabilityClaims["scopeId"], scop
 
 test("Project trigger access follows current membership while Slack-group owner access is unchanged", async (t) => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "project-trigger-auth-")) }));
-  await built.app.upsertDirectory([
+  await built.app.upsertDirectory(testTenant, [
     { principalId: "owner", displayName: "Owner", type: "internal" },
     { principalId: "member", displayName: "Member", type: "internal" },
   ]);
-  await built.app.upsertGroups([{ groupId: "G-slack", principalId: "member" }]);
-  await built.app.upsertChannels([{ channelId: "C-public", name: "public", isPrivate: false }], []);
+  await built.app.upsertGroups(testTenant, [{ groupId: "G-slack", principalId: "member" }]);
+  await built.app.upsertChannels(testTenant, [{ channelId: "C-public", name: "public", isPrivate: false }], []);
   const project = await built.app.createProject("owner", "Launch");
   assert.ok(project);
   const initialVersion = await built.projects.version(project.scopeId.slice("group:".length));

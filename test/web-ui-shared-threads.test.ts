@@ -13,6 +13,7 @@ import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
@@ -70,6 +71,7 @@ async function waitForSession(user: string, threadRef: string): Promise<SessionR
 
 test("a channel member can continue a teammate's shared web thread; outsiders and personal claims can't", async () => {
   await built.app.upsertChannels(
+    testTenant,
     [{ channelId: "C2", name: "sekrit", isPrivate: true }],
     [
       { channelId: "C2", principalId: "alice" },
@@ -171,6 +173,7 @@ test("a person's own chats stay writable whichever login started them; Slack thr
 
 test("someone who can start a chat in a public channel can keep going in it", async () => {
   await built.app.upsertChannels(
+    testTenant,
     [{ channelId: "C4", name: "town-square", isPrivate: false }],
     [{ channelId: "C4", principalId: "alice" }],
   );

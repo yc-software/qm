@@ -13,6 +13,7 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { scopeId } from "../src/types.ts";
 import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const SECRET = "web-run-ownership-secret".repeat(2);
 
@@ -109,6 +110,7 @@ test("another user cannot inspect or control a session's swarm", async () => {
 
 test("the active-run lookup finds a Slack DM or private-channel run only for someone who may use it", async () => {
   await built.app.upsertChannels(
+    testTenant,
     [{ channelId: "PRIVRUNS", name: "private-runs", isPrivate: true }],
     [{ channelId: "PRIVRUNS", principalId: "alice" }],
   );

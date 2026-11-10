@@ -18,6 +18,7 @@ import { configureCommandRules } from "./support/command-rules.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
@@ -156,13 +157,16 @@ test("core route: a bare steer without a ts gets one minted so agents persist it
 
 test("signalRun carries a bare steer from a shared-scope viewer who is not the run's owner as theirs", async () => {
   await built.app.upsertChannels(
+    testTenant,
     [{ channelId: "C-STEER", name: "steer-room", isPrivate: true }],
     [
       { channelId: "C-STEER", principalId: "steer-owner" },
       { channelId: "C-STEER", principalId: "steer-member" },
     ],
   );
-  await built.app.upsertDirectory([{ principalId: "steer-member", displayName: "Steer Member", type: "internal" }]);
+  await built.app.upsertDirectory(testTenant, [
+    { principalId: "steer-member", displayName: "Steer Member", type: "internal" },
+  ]);
   const threadRef = "shared-steer:C-STEER";
   const owner = { id: "steer-owner", type: "internal" as const };
   const { run } = await built.runs.enqueue({
@@ -464,7 +468,7 @@ test("web: a steer claiming another user's thread is refused", async () => {
 });
 
 test("web: Project roster revisions revoke pending run status, signals, and events", async () => {
-  await built.app.upsertDirectory([
+  await built.app.upsertDirectory(testTenant, [
     { principalId: "project-owner", displayName: "Project Owner", type: "internal" },
     { principalId: "project-member", displayName: "Project Member", type: "internal" },
     { principalId: "project-late-member", displayName: "Late Member", type: "internal" },
@@ -577,7 +581,7 @@ test("web: Project roster revisions revoke pending run status, signals, and even
 });
 
 test("web: a Project member can resolve their own approval in another member's thread", async () => {
-  await built.app.upsertDirectory([
+  await built.app.upsertDirectory(testTenant, [
     { principalId: "approval-owner", displayName: "Approval Owner", type: "internal" },
     { principalId: "approval-member", displayName: "Approval Member", type: "internal" },
   ]);
@@ -614,6 +618,7 @@ test("web: a Project member can resolve their own approval in another member's t
 
 test("run control follows current shared membership while public history requires an active principal", async () => {
   await built.app.upsertChannels(
+    testTenant,
     [
       { channelId: "C-RUN", name: "run-room", isPrivate: true },
       { channelId: "C-PUBLIC-RUN", name: "public-run", isPrivate: false },
@@ -623,7 +628,7 @@ test("run control follows current shared membership while public history require
       { channelId: "C-RUN", principalId: "shared-member" },
     ],
   );
-  await built.app.upsertGroups([
+  await built.app.upsertGroups(testTenant, [
     { groupId: "G-RUN", principalId: "shared-owner" },
     { groupId: "G-RUN", principalId: "shared-member" },
   ]);
@@ -649,6 +654,7 @@ test("run control follows current shared membership while public history require
     assert.ok(await built.app.getRun(run.id, "shared-member"));
     if (shared.kind === "channel") {
       await built.app.upsertChannels(
+        testTenant,
         [
           { channelId: "C-RUN", name: "run-room", isPrivate: true },
           { channelId: "C-PUBLIC-RUN", name: "public-run", isPrivate: false },
@@ -656,7 +662,7 @@ test("run control follows current shared membership while public history require
         [{ channelId: "C-RUN", principalId: "shared-owner" }],
       );
     } else {
-      await built.app.upsertGroups([{ groupId: "G-RUN", principalId: "shared-owner" }]);
+      await built.app.upsertGroups(testTenant, [{ groupId: "G-RUN", principalId: "shared-owner" }]);
     }
     assert.ok(
       await built.app.getSessionForViewer(session.id, "shared-member"),

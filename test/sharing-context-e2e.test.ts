@@ -28,6 +28,7 @@ async function fixture(t: TestContext, config: Partial<Config> = {}) {
   let members = ["U1", "U2", "U3"];
   const roster = async () => {
     await built.directory.replaceChannels(
+      tenant,
       [{ channelId: "C1", name: "engineering", isPrivate: true }],
       members.map((principalId) => ({ channelId: "C1", principalId })),
     );
@@ -528,7 +529,7 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
   assert.match(ambientNote, /Added to "Credentials › U2":(?:\n- .*)*`npm:/);
   assert.match(ambientNote, /Removed all of "Credentials › U1"/);
   assert.match(await b.turn(`!run ${probe}`, true, "U2"), /^unset\|unset\|absent\|/);
-  await b.directory.replaceGroups([
+  await b.directory.replaceGroups(tenant, [
     { groupId: "G1", principalId: "U1" },
     { groupId: "G1", principalId: "U2" },
   ]);

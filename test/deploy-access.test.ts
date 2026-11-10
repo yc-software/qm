@@ -48,6 +48,7 @@ async function fixture(t: { after(fn: () => void): void }) {
   const identity = createIdentityService(testMap(), { externalMembers: testMap() });
   const directory = createPostgresDirectoryStore(testDatabaseUrl());
   await directory.replace(
+    tenant,
     [owner, requester, "carol@example.com"].map((principalId) => ({
       principalId,
       displayName: principalId,
@@ -56,7 +57,7 @@ async function fixture(t: { after(fn: () => void): void }) {
   );
   const deploy = createDeployService({
     ...singleProcessDeps(),
-    canManageEmail: async (email) => (await directory.get(email))?.type === "internal",
+    canManageEmail: async (email) => (await directory.get(tenant, email))?.type === "internal",
     deliveries,
     deployAppsDomain: "apps.example.com",
     deployStore: createDeployStore(testDeployBackings()),
@@ -301,7 +302,7 @@ test("button dispatch classifies the clicker, settles the card, and keeps failed
 
 test("shared-home members can approve and decline, outsiders cannot", async (t) => {
   const f = await fixture(t);
-  await f.directory.upsertGroup("G1", [owner, "carol@example.com"]);
+  await f.directory.upsertGroup(tenant, "G1", [owner, "carol@example.com"]);
   await f.app.moveArtifactHome("deploy", f.d.id, scopeId("group", "G1"), owner);
   assert.match(await f.decide("carol@example.com", false), /^Declined\./);
   assert.match(await f.decide("carol@example.com"), /^Approved\./);

@@ -13,6 +13,8 @@ import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { settle } from "./support/settle.ts";
+import { testTenant } from "./support/test-tenant.ts";
+import type { Tenant } from "../src/tenants/context.ts";
 
 function fixture(options: { secondary?: boolean; failWrite?: boolean; throwWrite?: boolean } = {}) {
   const store = createPostgresDirectoryStore(testDatabaseUrl());
@@ -33,13 +35,15 @@ function fixture(options: { secondary?: boolean; failWrite?: boolean; throwWrite
     },
   };
   const directory = createDirectory({
+    tenant: testTenant,
     core: {
       holdDirectorySync: async () => null,
-      pushDirectory: async (body: Parameters<SlackCoreClient["pushDirectory"]>[0]) => {
+      pushDirectory: async (tenant: Tenant, body: Parameters<SlackCoreClient["pushDirectory"]>[1]) => {
         state.writes++;
         if (options.throwWrite) throw new Error("directory transport unavailable");
         if (options.failWrite) return false;
         return store.replaceChannels(
+          tenant,
           body.channels!,
           body.channelMembers,
           body.channelsSyncedAt,
@@ -67,20 +71,20 @@ function fixture(options: { secondary?: boolean; failWrite?: boolean; throwWrite
 
 test("verified channel membership persists before admission without deleting another room", async () => {
   const { store, observe } = fixture();
-  await store.replaceChannels([{ channelId: "C_OTHER", name: "other" }], [], 1);
+  await store.replaceChannels(testTenant, [{ channelId: "C_OTHER", name: "other" }], [], 1);
   const result = await observe();
   assert.ok(result.publishMembers);
-  assert.equal(await store.channelMember("C_ONE", "U_ONE"), true);
-  assert.equal(await store.channelPrivacy("C_ONE"), true);
-  assert.equal(await store.channelPrivacy("C_OTHER"), false);
+  assert.equal(await store.channelMember(testTenant, "C_ONE", "U_ONE"), true);
+  assert.equal(await store.channelPrivacy(testTenant, "C_ONE"), true);
+  assert.equal(await store.channelPrivacy(testTenant, "C_OTHER"), false);
 });
 
 test("live observation repairs stale privacy", async () => {
   const { store, observe } = fixture();
-  await store.replaceChannels([{ channelId: "C_ONE", name: "old", isPrivate: true }], [], 1);
+  await store.replaceChannels(testTenant, [{ channelId: "C_ONE", name: "old", isPrivate: true }], [], 1);
   await observe({ name: "room", is_private: false });
-  assert.equal(await store.channelPrivacy("C_ONE"), false);
-  assert.equal(await store.channelMember("C_ONE", "U_ONE"), true);
+  assert.equal(await store.channelPrivacy(testTenant, "C_ONE"), false);
+  assert.equal(await store.channelMember(testTenant, "C_ONE", "U_ONE"), true);
 });
 
 test("secondary accounts never publish live channels", async () => {
@@ -123,9 +127,9 @@ test("unknown, external and group metadata never publish an ordinary channel", a
 
 test("newer removal rejects an older in-flight live observation", async () => {
   const { store, observe } = fixture();
-  await store.replaceChannels([], [], Date.now() + 60_000);
+  await store.replaceChannels(testTenant, [], [], Date.now() + 60_000);
   await assert.rejects(observe(), /not persisted before admission/);
-  assert.equal(await store.channelPrivacy("C_ONE"), undefined);
+  assert.equal(await store.channelPrivacy(testTenant, "C_ONE"), undefined);
 });
 
 test("equal observation stamps trigger recovery without changing the internal roster", async (t) => {
@@ -133,7 +137,7 @@ test("equal observation stamps trigger recovery without changing the internal ro
   const { store, observe } = fixture();
   assert.ok((await observe()).publishMembers);
   await assert.rejects(observe(), /not persisted before admission/);
-  assert.equal(await store.channelMember("C_ONE", "U_ONE"), true);
+  assert.equal(await store.channelMember(testTenant, "C_ONE", "U_ONE"), true);
 });
 
 for (const mode of ["socket", "http"] as const)

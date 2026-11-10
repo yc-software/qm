@@ -14,6 +14,7 @@ import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const SECRET = "surface-context-test-secret".repeat(3);
 
@@ -81,11 +82,12 @@ describe("surface-context pulls", async () => {
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
-    await built.app.upsertDirectory([
+    await built.app.upsertDirectory(testTenant, [
       { principalId: "U1", displayName: "Una", type: "internal" },
       { principalId: "U-member", displayName: "Mia", type: "internal" },
     ]);
     await built.app.upsertChannels(
+      testTenant,
       [
         { channelId: "C9", name: "current" },
         { channelId: "C-ENG", name: "eng" },

@@ -196,7 +196,7 @@ test("/v1/admin/keychain: a person's sign-ins are one row under their primary si
       linkedBy: "",
       createdAt: Date.now(),
     });
-    await s.built.app.upsertDirectory([{ principalId: "U-PAT", displayName: "Pat", type: "internal" }]);
+    await s.built.app.upsertDirectory(testTenant, [{ principalId: "U-PAT", displayName: "Pat", type: "internal" }]);
     await s.keychain.save({ ownerId: "U-PAT", service: "github", secret: "s1", envKey: "GITHUB_TOKEN" });
     await s.keychain.save({ ownerId: "pat@example.com", service: "linear", secret: "s2", envKey: "LINEAR_KEY" });
     const user = (await s.built.admin.users.get("pat@example.com"))!;

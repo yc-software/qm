@@ -10,6 +10,7 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-t
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const SECRET = "reach-thread-secret".repeat(3);
 const TS = "1723497600.123456";
@@ -34,11 +35,11 @@ describe("POST /v1/reach with threadTs", () => {
 
   before(async () => {
     built = buildApp(testConfig({ signingSecret: SECRET }));
-    await built.app.upsertDirectory([
+    await built.app.upsertDirectory(testTenant, [
       { principalId: "U-carol", displayName: "Carol", type: "internal" },
       { principalId: "U-alice", displayName: "Alice", type: "internal" },
     ]);
-    await built.app.upsertChannels([{ channelId: "C-eng", name: "eng" }]);
+    await built.app.upsertChannels(testTenant, [{ channelId: "C-eng", name: "eng" }]);
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,

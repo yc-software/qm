@@ -11,6 +11,7 @@ import { serverDeps } from "../src/wiring.ts";
 import { buildApp, stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { browserImpersonationCookie, browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const config = testConfig({ signingSecret: "web-me-signing-secret-0123456789abcdef" });
 const built = stopAtEnd(buildApp(config));
@@ -49,7 +50,7 @@ async function me(cookie: string, at = base): Promise<Record<string, unknown>> {
 }
 
 test("/me describes the signed-in person, the company and the web app's settings, in the relay's shape", async () => {
-  await built.app.setDirectoryWorkspaceUrl("https://acme.slack.com");
+  await built.app.setDirectoryWorkspaceUrl(testTenant, "https://acme.slack.com");
   await built.config.setBranding(orgScope() as ScopeId, { orgName: " Acme " });
   const body = await me(browserSessionCookie("bob@example.com", { name: " Bob " }));
   assert.deepEqual(body, {

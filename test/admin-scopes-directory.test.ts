@@ -117,8 +117,8 @@ test("the admin scope directory lists every known scope with labels and counts (
 test("scopes without a session label fall back to the org directory (people's names, channel names)", async () => {
   const s = start();
   try {
-    await s.built.app.upsertDirectory([{ principalId: "U1", displayName: "Uma Ada", type: "internal" }]);
-    await s.built.app.upsertChannels([
+    await s.built.app.upsertDirectory(testTenant, [{ principalId: "U1", displayName: "Uma Ada", type: "internal" }]);
+    await s.built.app.upsertChannels(testTenant, [
       { channelId: "C7", name: "random" },
       { channelId: "C8", name: "quiet" },
     ]);
@@ -157,7 +157,7 @@ test("scopes without a session label fall back to the org directory (people's na
 test("the admin scope directory exposes named environments and attached scopes", async () => {
   const s = start();
   try {
-    await s.built.app.upsertChannels([
+    await s.built.app.upsertChannels(testTenant, [
       { channelId: "A", name: "source" },
       { channelId: "B", name: "attached" },
     ]);

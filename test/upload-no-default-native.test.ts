@@ -5,6 +5,7 @@ import * as mockAgent from "./support/mock-agent.ts";
 import type { AgentTurnInput, AgentTurnResult } from "../src/agent/agent.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 let exercise: ((turn: AgentTurnInput) => Promise<AgentTurnResult | void>) | undefined;
 mock.module("./support/mock-agent.ts", {
@@ -27,8 +28,9 @@ const PNG = Buffer.from(
 
 async function scopeWithoutDefault() {
   const built = buildApp(testConfig());
-  await built.directory.replace([{ principalId: "U1", displayName: "Synthetic User", type: "internal" }]);
+  await built.directory.replace(testTenant, [{ principalId: "U1", displayName: "Synthetic User", type: "internal" }]);
   await built.directory.replaceChannels(
+    testTenant,
     [{ channelId: "C1", name: "synthetic-upload", isPrivate: true }],
     [{ channelId: "C1", principalId: "U1" }],
   );

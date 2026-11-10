@@ -238,6 +238,7 @@ pgTest("HTTP Open DM combines room and current memory, then blocks reads after m
     room = "channel:C1",
     denied = "channel:C2";
   await built.directory.replaceChannels(
+    testTenant,
     [
       { channelId: "C1", name: "room", isPrivate: true },
       { channelId: "C2", name: "closed", isPrivate: true },
@@ -293,7 +294,7 @@ pgTest("HTTP Open DM combines room and current memory, then blocks reads after m
   assert.equal(inputs.filter((batch) => batch.length === 1 && batch[0]!.includes("verify the change")).length, 1);
   assert.match(await turn("!memoryread channel:C1", "read-shared"), /REMOTE_BEST/);
   assert.doesNotMatch(await turn("!memoryread channel:C2", "read-denied"), /DENIED_NOTEBOOK/);
-  await built.directory.replaceChannels([{ channelId: "C1", name: "room", isPrivate: true }], []);
+  await built.directory.replaceChannels(testTenant, [{ channelId: "C1", name: "room", isPrivate: true }], []);
   assert.doesNotMatch(await turn("!memoryread channel:C1", "read-revoked"), /REMOTE_BEST/);
   assert.doesNotMatch(await turn("!sysprompt\nverify the change", "recall-revoked"), /REMOTE_BEST/);
   assert.ok(

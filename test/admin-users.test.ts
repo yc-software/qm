@@ -124,6 +124,7 @@ test("/v1/admin/users: org_admin sees the roster + grants; a non-admin is denied
     });
     assert.equal(
       await s.built.app.upsertDirectory(
+        testTenant,
         [
           { principalId: "Uno@Example.com", displayName: "Uno", type: "internal", slackId: "U1" },
           { principalId: "Seven@Example.com", displayName: "Seven", type: "internal", slackId: "U7" },
@@ -351,7 +352,7 @@ test("/v1/admin/directory: org_admin resolves a name or id to candidates; empty 
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
-    await built.directory.replace([
+    await built.directory.replace(testTenant, [
       { principalId: "dana@example.com", displayName: "Dana Example", type: "internal" },
       { principalId: "jane@example.com", displayName: "Jane Doe", type: "internal" },
     ]);
@@ -439,7 +440,9 @@ for (const canonicalPrincipal of ["alice@example.com", "Alice@example.com"]) {
     const s = start();
     try {
       if (canonicalPrincipal === "Alice@example.com")
-        await s.built.directory.replace([{ principalId: canonicalPrincipal, displayName: "Alice", type: "internal" }]);
+        await s.built.directory.replace(testTenant, [
+          { principalId: canonicalPrincipal, displayName: "Alice", type: "internal" },
+        ]);
       const scope = "personal:" + canonicalPrincipal;
       const session = await s.built.sessions.getOrCreateByThread("dm:case-test", "dm", scope);
       await s.built.sessions.addParticipant(session.id, canonicalPrincipal);

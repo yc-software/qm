@@ -11,6 +11,7 @@ import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const SECRET = "test-capability-secret";
 
@@ -55,7 +56,7 @@ async function put(base: string, cap: string): Promise<Response> {
 test("runtime-config accepts a liveAuthor capability (a human replying in a thread)", async () => {
   const srv = start();
   try {
-    await srv.built.directory.replaceGroups([{ groupId: "C123", principalId: "alice@default-org" }]);
+    await srv.built.directory.replaceGroups(testTenant, [{ groupId: "C123", principalId: "alice@default-org" }]);
     const res = await put(srv.base, await token({ liveAuthor: true }));
     assert.equal(res.status, 200);
     const body = (await res.json()) as {
@@ -74,7 +75,7 @@ test("runtime-config accepts a liveAuthor capability (a human replying in a thre
 test("runtime-config still refuses an automated trigger with neither liveActor nor liveAuthor", async () => {
   const srv = start();
   try {
-    await srv.built.directory.replaceGroups([{ groupId: "C123", principalId: "alice@default-org" }]);
+    await srv.built.directory.replaceGroups(testTenant, [{ groupId: "C123", principalId: "alice@default-org" }]);
     const res = await put(srv.base, await token({ triggered: true }));
     assert.equal(res.status, 403);
     assert.deepEqual(await res.json(), { error: "live_actor_required" });

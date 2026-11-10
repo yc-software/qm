@@ -10,6 +10,7 @@ import { externalSlackNamespace } from "../src/slack/external-access.ts";
 import type { TriggerOutcome } from "../src/triggers/run-trigger.ts";
 import type { Destination, ScopeId, TurnRequest } from "../src/types.ts";
 import { slackSurfaceOrigin } from "../src/surfaces/slack/adapter.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const policy = { companyDomains: ["example.com"], companyTeamIds: ["TCOMPANY"], serviceCredentials: [] };
 const namespace = externalSlackNamespace("TBATCH", policy);
@@ -26,11 +27,11 @@ async function setup(t: TestContext) {
     b.scheduler.stop();
     await b.runtime.stop();
   });
-  await b.app.upsertDirectory([
+  await b.app.upsertDirectory(testTenant, [
     { principalId: "U_ALICE", displayName: "Alice", type: "internal" },
     { principalId: "U_BOB", displayName: "Bob", type: "internal" },
   ]);
-  await b.app.upsertGroups([
+  await b.app.upsertGroups(testTenant, [
     { groupId: "G1", principalId: "U_ALICE" },
     { groupId: "G1", principalId: "U_BOB" },
   ]);

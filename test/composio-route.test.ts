@@ -441,7 +441,7 @@ test("Slack connection links verified workspace identity to the web owner and pe
   f.deps.slackAccounts = testMap();
   f.deps.signingSecret = "qa-slack-link-secret";
   f.deps.directory = createPostgresDirectoryStore(testDatabaseUrl());
-  await f.deps.directory.replace([
+  await f.deps.directory.replace(tenant, [
     { principalId: "work@example.test", slackId: "U123", displayName: "Alice", type: "internal" },
   ]);
   f.deps.slackEnvBotToken = "bot-test";
@@ -496,7 +496,7 @@ test("Slack link rejects changed browser accounts, wrong owner, bots, other work
     f.deps.principalLinks = createPrincipalLinkService(testUserStore(), testAdvisoryLock());
     f.deps.slackAccounts = testMap();
     f.deps.directory = createPostgresDirectoryStore(testDatabaseUrl());
-    await f.deps.directory.replace([
+    await f.deps.directory.replace(tenant, [
       { principalId: "work@example.test", slackId: "U123", displayName: "Alice", type: "internal" },
     ]);
     f.deps.slackEnvBotToken = "bot-test";
@@ -1224,7 +1224,9 @@ async function nativeSlackFixture(linked = true) {
   f.deps.connectorTokens = f.deps.keychain;
   f.deps.oauthEnv = { SLACK_OAUTH_CLIENT_ID: "native-client", SLACK_OAUTH_CLIENT_SECRET: "native-secret" };
   f.deps.directory = createPostgresDirectoryStore(testDatabaseUrl());
-  await f.deps.directory.replace([{ principalId: "alice", slackId: "U123", displayName: "Alice", type: "internal" }]);
+  await f.deps.directory.replace(tenant, [
+    { principalId: "alice", slackId: "U123", displayName: "Alice", type: "internal" },
+  ]);
   f.deps.slackEnvBotToken = "workspace-bot";
   if (linked) await f.deps.connectorTokens!.setConnectorToken("slack.com", "alice", { accessToken: "alice-user" });
   const nativeCalls: Array<{ method: string; token: string; payload?: object }> = [];

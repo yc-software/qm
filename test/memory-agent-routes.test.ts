@@ -17,6 +17,7 @@ import { McpCallError } from "../src/mcp/mcp-client.ts";
 import { TimeoutError } from "../src/util/async.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const SECRET = "memory-route-test-secret".repeat(3);
 
@@ -369,19 +370,20 @@ describe("agent memory: cross-conversation writes are refused", () => {
         signingSecret: SECRET,
       }),
     );
-    await built.directory.replace([
+    await built.directory.replace(testTenant, [
       { principalId: "U1", displayName: "Una", type: "internal" },
       { principalId: "U-carol", displayName: "Carol", type: "internal" },
       { principalId: "U-sam", displayName: "Sam", type: "internal" },
     ]);
     await built.directory.replaceChannels(
+      testTenant,
       [
         { channelId: CH_PUBLIC, name: "eng", isPrivate: false },
         { channelId: CH_PRIVATE, name: "secret", isPrivate: true },
       ],
       [{ channelId: CH_PRIVATE, principalId: "U-carol" }],
     );
-    await built.directory.replaceGroups([
+    await built.directory.replaceGroups(testTenant, [
       { groupId: GROUP, principalId: "U-carol" },
       { groupId: GROUP, principalId: "U-sam" },
     ]);
@@ -443,6 +445,7 @@ describe("agent memory: cross-conversation writes are refused", () => {
 
   it("refuses even ambiguous named targets before resolution", async () => {
     await built.directory.replaceChannels(
+      testTenant,
       [
         { channelId: CH_PUBLIC, name: "eng", isPrivate: false },
         { channelId: CH_PRIVATE, name: "secret", isPrivate: true },

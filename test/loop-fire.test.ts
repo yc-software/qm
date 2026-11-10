@@ -21,9 +21,10 @@ import { securityScreenPayload } from "../src/security/security-posture.ts";
 import { ProviderTurnError, TransientTurnFailure } from "../src/core/turn-error.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
-import type { DirectoryStore } from "../src/directory/directory-store.ts";
+import { directoryFor, type DirectoryStore } from "../src/directory/directory-store.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const automationOrigin = (request?: { origin?: TurnOrigin }) =>
   request?.origin?.kind === "automation" ? request.origin : undefined;
@@ -90,7 +91,7 @@ function service(
       deliveries: deliveries.store as never,
       idempotency,
       identity: fakeIdentity() as never,
-      ...(overrides?.directory ? { directory: overrides.directory } : {}),
+      ...(overrides?.directory ? { directory: directoryFor(overrides.directory, testTenant) } : {}),
       ...(overrides?.resolveRecipient ? { resolveRecipient: overrides.resolveRecipient } : {}),
       run: async (req): Promise<TurnResult> => {
         const run = async (): Promise<TurnResult> => {
@@ -375,11 +376,11 @@ test("the scheduler sweep detects a stale loop that has never fired", async () =
 
 test("a stale-loop ping is withheld from a group DM its owner has left", async () => {
   const directory = createPostgresDirectoryStore(testDatabaseUrl());
-  await directory.replace([
+  await directory.replace(testTenant, [
     { principalId: "josh", displayName: "Josh", type: "internal" },
     { principalId: "U2", displayName: "Bob", type: "internal" },
   ]);
-  await directory.replaceGroups([{ groupId: "G1", principalId: "U2" }]);
+  await directory.replaceGroups(testTenant, [{ groupId: "G1", principalId: "U2" }]);
   const s = service(HAPPY, { directory });
   const loop = await makeLoop(s.loops, {
     governor: { staleFireMs: 1_000 },

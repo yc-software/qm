@@ -42,6 +42,7 @@ async function start(withConfig = true) {
     }),
   );
   await built.directory.replaceChannels(
+    tenant,
     [{ channelId: "C1", name: "agent-admin", isPrivate: false }],
     [
       { channelId: "C1", principalId: "admin-alice" },
@@ -746,7 +747,7 @@ for (const room of [scopeId("channel", "C1"), scopeId("group", "G1")]) {
   test(`Open admin reads and writes from ${room} preserve live authorization and posture vetoes`, async () => {
     const s = await start();
     try {
-      await s.built.directory.replaceGroups([
+      await s.built.directory.replaceGroups(tenant, [
         { groupId: "G1", principalId: "admin-alice" },
         { groupId: "G1", principalId: "U1" },
       ]);
@@ -862,7 +863,7 @@ for (const room of [scopeId("personal", "admin-alice"), scopeId("channel", "C1")
   test(`retired bulk import is equally unsupported from ${room}`, async () => {
     const s = await start();
     try {
-      await s.built.directory.replaceGroups([
+      await s.built.directory.replaceGroups(tenant, [
         { groupId: "G1", principalId: "admin-alice" },
         { groupId: "G1", principalId: "U1" },
       ]);

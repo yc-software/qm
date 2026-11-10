@@ -4,11 +4,13 @@ import assert from "node:assert/strict";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 test("an upload in a scope without a default sandbox still reaches the agent", async () => {
   const built = buildApp(testConfig());
-  await built.directory.replace([{ principalId: "U1", displayName: "Synthetic User", type: "internal" }]);
+  await built.directory.replace(testTenant, [{ principalId: "U1", displayName: "Synthetic User", type: "internal" }]);
   await built.directory.replaceChannels(
+    testTenant,
     [{ channelId: "C1", name: "synthetic-upload", isPrivate: true }],
     [{ channelId: "C1", principalId: "U1" }],
   );

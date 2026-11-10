@@ -9,6 +9,8 @@ import type { MemoryService } from "../src/memory/memory-service.ts";
 import { recallText } from "./support/recall-text.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { testTenant } from "./support/test-tenant.ts";
+import { directoryFor } from "../src/directory/directory-store.ts";
 
 const actor = { id: "alice", type: "internal" as const };
 const bob = { id: "bob", type: "internal" as const };
@@ -281,14 +283,19 @@ test("source decisions are shared within one read but never cached across reads"
 
 test("complete memory audience rejects external or unresolved members rather than dropping them", async () => {
   const directory = createPostgresDirectoryStore(testDatabaseUrl());
-  await directory.replace([{ principalId: "alice", displayName: "Alice", type: "internal" }]);
+  await directory.replace(testTenant, [{ principalId: "alice", displayName: "Alice", type: "internal" }]);
   await directory.replaceChannels(
+    testTenant,
     [{ channelId: "room", name: "room", isPrivate: true }],
     [{ channelId: "room", principalId: "alice" }],
   );
-  const members = createCurrentScopeMembers({ directory, identity: { classify: () => ({ type: "internal" }) } }, true);
+  const members = createCurrentScopeMembers(
+    { directory: directoryFor(directory, testTenant), identity: { classify: () => ({ type: "internal" }) } },
+    true,
+  );
   assert.equal((await members("channel:room"))?.length, 1);
   await directory.replaceChannels(
+    testTenant,
     [{ channelId: "room", name: "room", isPrivate: true }],
     [
       { channelId: "room", principalId: "alice" },
@@ -297,6 +304,7 @@ test("complete memory audience rejects external or unresolved members rather tha
   );
   assert.equal(await members("channel:room"), undefined);
   await directory.replaceChannels(
+    testTenant,
     [{ channelId: "room", name: "room", isPrivate: true, isExternal: true }],
     [{ channelId: "room", principalId: "alice" }],
   );

@@ -11,6 +11,7 @@ import { credentialHandle } from "../src/credentials/keychain.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 mock.module("./support/mock-agent.ts", {
   namedExports: {
@@ -54,6 +55,7 @@ async function fixture(t: TestContext) {
   await b.identity.refresh();
   await b.deploymentLayerReady;
   await b.app.upsertDirectory(
+    testTenant,
     ["alice", "bob", "stranger"].map((principalId) => ({
       principalId,
       displayName: principalId,
@@ -62,6 +64,7 @@ async function fixture(t: TestContext) {
   );
   const roster = (ids: string[]) =>
     b.directory.replaceChannels(
+      testTenant,
       [{ channelId: "public-room", name: "public-room", isPrivate: false }],
       ids.map((principalId) => ({ channelId: "public-room", principalId })),
     );
@@ -265,6 +268,7 @@ for (const isPrivate of [false, true]) {
       const b = await fixture(t);
       assert.ok(b.keychain);
       await b.directory.replaceChannels(
+        testTenant,
         [{ channelId: "public-room", name: "public-room", isPrivate }],
         ["alice", "bob"].map((principalId) => ({ channelId: "public-room", principalId })),
       );
@@ -308,6 +312,7 @@ test("HTTP private channel cron runs without its owner's keychain once the conve
   const b = await fixture(t);
   assert.ok(b.keychain);
   await b.directory.replaceChannels(
+    testTenant,
     [{ channelId: "public-room", name: "private-room", isPrivate: true }],
     ["alice", "bob"].map((principalId) => ({ channelId: "public-room", principalId })),
   );

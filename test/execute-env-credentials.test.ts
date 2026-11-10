@@ -9,6 +9,7 @@ import { installGlobalFakeSprites, type FakeSprites } from "./support/fake-sprit
 import { testConfig } from "./support/test-config.ts";
 import { createAwsRoleBroker } from "../src/auth/aws-role-broker.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 let ff: FakeSprites;
 before(() => {
@@ -121,6 +122,7 @@ test("role broker sessions in a shared conversation reach only the turn's scratc
   );
   const members = [actor, { externalId: "U_ENV_PEER" }];
   await built.directory.replaceChannels(
+    testTenant,
     [{ channelId: "C_BROKER", name: "broker-room", isPrivate: true }],
     members.map(({ externalId }) => ({ channelId: "C_BROKER", principalId: externalId })),
   );

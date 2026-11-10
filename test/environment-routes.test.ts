@@ -13,6 +13,7 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-t
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const SECRET = "env-route-test-secret".repeat(3);
 
@@ -40,6 +41,7 @@ describe("environment verbs (list / create / attach, owner-gated)", async () => 
       }),
     );
     await built.directory.replaceChannels(
+      testTenant,
       [{ channelId: "C-eng", name: "eng", isPrivate: false }],
       [{ channelId: "C-eng", principalId: "U-owner" }],
     );

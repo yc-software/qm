@@ -520,8 +520,9 @@ test("an admin edit's destination audience follows its target and cannot be supp
 test("an admin edit cannot aim a cron at a channel its owner can't see by labelling it the cron's home", async () => {
   const s = start();
   try {
-    await s.built.app.upsertDirectory([{ principalId: "U1", displayName: "Una", type: "internal" }]);
+    await s.built.app.upsertDirectory(testTenant, [{ principalId: "U1", displayName: "Una", type: "internal" }]);
     await s.built.directory.replaceChannels(
+      testTenant,
       [
         { channelId: "C-home", name: "home", isPrivate: true },
         { channelId: "C-secret", name: "secret", isPrivate: true },

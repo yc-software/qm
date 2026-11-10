@@ -10,6 +10,7 @@ import { createControlService } from "../src/api/control-service.ts";
 import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 const skip = databaseUrl ? false : "set DATABASE_URL (a Postgres) to run the Postgres linked-identity membership test";
@@ -47,15 +48,19 @@ test(
           ownerScopeId: room,
         });
 
-      await built.app.upsertDirectory([{ principalId: email, displayName: "Person", type: "internal" }]);
-      await built.app.upsertChannels([channel], [{ channelId: "C-room", principalId: email }]);
+      await built.app.upsertDirectory(testTenant, [{ principalId: email, displayName: "Person", type: "internal" }]);
+      await built.app.upsertChannels(testTenant, [channel], [{ channelId: "C-room", principalId: email }]);
       await built.principalLinks.link({
         principalId: email,
         canonicalId: canonical,
         evidence: "test: verified sign-in",
         linkedBy: canonical,
       });
-      assert.equal(await built.directory.get(canonical), null, "the directory row stays keyed by the linked email");
+      assert.equal(
+        await built.directory.get(testTenant, canonical),
+        null,
+        "the directory row stays keyed by the linked email",
+      );
 
       const cron = await makeCron();
       const disabled = await control.setCronEnabled(cron.id, false, claims(canonical));
@@ -68,11 +73,11 @@ test(
       assert.equal(await built.app.getCron(cron.id), null);
 
       const kept = await makeCron();
-      await built.app.upsertChannels([channel], []);
+      await built.app.upsertChannels(testTenant, [channel], []);
       assert.equal((await control.deleteCron(kept.id, claims(canonical))).ok, false, "removed from the room");
       assert.equal(await built.app.authorizesCapabilityScope({ actorId: canonical, scopeId: room }), false);
 
-      await built.app.upsertChannels([channel], [{ channelId: "C-room", principalId: email }]);
+      await built.app.upsertChannels(testTenant, [channel], [{ channelId: "C-room", principalId: email }]);
       await built.principalLinks.unlink(email);
       assert.equal((await control.deleteCron(kept.id, claims(canonical))).ok, false, "no longer the same person");
       assert.equal(await built.app.authorizesCapabilityScope({ actorId: canonical, scopeId: room }), false);
