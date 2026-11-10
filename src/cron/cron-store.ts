@@ -85,11 +85,7 @@ export function cronIsActive(
   cron: Pick<Cron, "enabled" | "archived" | "schedule" | "createdAt" | "lastFiredAt" | "nextFireAt">,
 ): boolean {
   if (!cron.enabled || cron.archived) return false;
-  try {
-    return recoverNextFireAt(cron.schedule, cron.createdAt, cron.lastFiredAt, cron.nextFireAt) !== undefined;
-  } catch {
-    return false;
-  }
+  return recoverNextFireAt(cron.schedule, cron.createdAt, cron.lastFiredAt, cron.nextFireAt) !== undefined;
 }
 
 export function cronTiedTo(cron: Pick<Cron, "destination" | "sessionRef">, threadRef: string): boolean {

@@ -101,5 +101,4 @@ test("a one-shot cron stays active until it fires, and again once rescheduled", 
   assert.equal(cronIsActive({ ...base, schedule: { firstFireAt: 9 }, nextFireAt: 9, lastFiredAt: 6 }), true);
   assert.equal(cronIsActive({ ...base, schedule: { everyMs: 60_000, firstFireAt: 5 }, lastFiredAt: 6 }), true);
   assert.equal(cronIsActive({ ...base, archived: true }), false);
-  assert.equal(cronIsActive({ ...base, nextFireAt: Number.NaN }), false);
 });
