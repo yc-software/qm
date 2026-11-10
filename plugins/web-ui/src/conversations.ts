@@ -1,7 +1,7 @@
 import { createChatSurface } from "./chat";
 import { createComposerSurface, type ComposerOptions } from "./composer";
 import { densityTierFor, type DensityTier } from "./density";
-import { servedReleaseChanged, subscribeDeliveries } from "./core-bridge";
+import { subscribeDeliveries } from "./core-bridge";
 import { applySessionState } from "./session-list";
 import { refreshOpenTrees, refreshSessions, refreshTreesFor, renderList, sessionsState } from "./sessions";
 import { appState } from "./shell-state";
@@ -33,23 +33,12 @@ export function allConversations(): Conversation[] {
   return [...live];
 }
 
-const TEXT_ENTRY =
-  "textarea, input:not([type=checkbox], [type=radio], [type=range], [type=button], [type=submit], [type=reset], [type=color], [type=file])";
-
-function editingOutsideComposers(): boolean {
-  const active = document.activeElement as HTMLInputElement | null;
-  if (document.querySelector('dialog[open], [aria-modal="true"]') || active?.isContentEditable) return true;
-  return Boolean(active?.matches(TEXT_ENTRY) && active.value);
-}
-
-export function reloadIntoServedRelease(): boolean {
-  if (!servedReleaseChanged() || document.visibilityState !== "visible" || editingOutsideComposers()) return false;
+export function conversationsBusy(): boolean {
   for (const { state, composer } of live) {
-    if (state.agent?.state.isStreaming || state.pendingSend !== null) return false;
-    if (composer.state.draft.trim() || composer.state.attachments.length > 0) return false;
+    if (state.agent?.state.isStreaming || state.pendingSend !== null) return true;
+    if (composer.state.draft.trim() || composer.state.attachments.length > 0) return true;
   }
-  location.reload();
-  return true;
+  return false;
 }
 
 export function isLiveConversation(conv: Conversation): boolean {

@@ -52,13 +52,8 @@ import { icon } from "./icons";
 import { isPhone, markDesktopEmbed, onPhoneChange, trackVisualViewport } from "./viewport";
 import { markConnectorConnected } from "./chat";
 import { clearSkillsCache, resyncModelSelection } from "./composer";
-import {
-  allConversations,
-  ensureDeliveryStream,
-  mainConversation,
-  onExitCanvas,
-  reloadIntoServedRelease,
-} from "./conversations";
+import { allConversations, ensureDeliveryStream, mainConversation, onExitCanvas } from "./conversations";
+import { reloadIntoServedRelease } from "./stale-release";
 import { clearAllDrafts, newChatDraftKey, saveDraft, storedDraft } from "./drafts";
 import { deepLinkPath, isPlainLeftClick, parseDeepLink, sessionLinkTarget, UI_BASE } from "./deep-link";
 import {
