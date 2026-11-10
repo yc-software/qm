@@ -114,6 +114,13 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return rows[0] ? rowToSession(rows[0]) : null;
     },
 
+    async getMany({ ids, threadRefs }) {
+      if (!ids.length && !threadRefs.length) return [];
+      return (
+        await q("SELECT * FROM sessions WHERE id = ANY($1::text[]) OR thread_ref = ANY($2::text[])", [ids, threadRefs])
+      ).map(rowToSession);
+    },
+
     async get(id): Promise<Session | null> {
       const rows = await q("SELECT * FROM sessions WHERE id = $1", [id]);
       return rows[0] ? rowToSession(rows[0]) : null;
@@ -123,14 +130,17 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       await q("UPDATE sessions SET title = $2 WHERE id = $1", [sessionId, title]);
     },
 
-    async sideChatsOf(sessionId) {
-      const rows = await q(
-        `SELECT s.* FROM sessions s WHERE s.forked_from_session_id = $1 AND s.side_chat IS NOT NULL
+    async sideChatsOf(sessionId, principalId) {
+      const condition = `s.forked_from_session_id = $${principalId === undefined ? 1 : 2} AND s.side_chat IS NOT NULL
          AND EXISTS (SELECT 1 FROM items i WHERE i.tenant_id = ${TENANT} AND i.session_id = s.id
-           AND i.seq > s.fork_boundary_seq AND i.kind = 'UserMessage') ORDER BY s.created_at`,
-        [sessionId],
+           AND i.seq > s.fork_boundary_seq AND i.kind = 'UserMessage') ORDER BY s.created_at`;
+      const rows = await q(
+        principalId === undefined
+          ? `SELECT s.* FROM sessions s WHERE ${condition}`
+          : participantSessionsSql(` AND ${condition}`),
+        principalId === undefined ? [sessionId] : [principalId, sessionId],
       );
-      return rows.map(rowToSession);
+      return rows.map(principalId === undefined ? rowToSession : rowToParticipantSession);
     },
 
     async expandSideChat(sessionId) {

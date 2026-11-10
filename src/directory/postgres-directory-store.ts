@@ -461,6 +461,27 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       return rows.map(channelRow);
     },
 
+    async getMany(principalIds) {
+      if (!principalIds.length) return new Map();
+      const emails = principalIds.map(foldPrincipalId).filter((id) => id.includes("@"));
+      const rows = (
+        await q(
+          `SELECT ${MEMBER_COLS} FROM directory_members WHERE org_id = $1
+        AND (principal_id = ANY($2::text[]) OR lower(principal_id) = ANY($3::text[]))`,
+          [orgId, principalIds, emails],
+        )
+      ).map(memberRow);
+      return new Map(
+        principalIds.flatMap((id) => {
+          const key = foldPrincipalId(id);
+          const row =
+            rows.find((member) => member.principalId === id) ??
+            (key.includes("@") ? rows.find((member) => member.principalId.toLowerCase() === key) : undefined);
+          return row ? [[id, row]] : [];
+        }),
+      );
+    },
+
     async get(principalId) {
       const key = foldPrincipalId(principalId);
       const rows = await q(

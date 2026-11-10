@@ -1,3 +1,4 @@
+import { loopAdministration } from "./loop-administration.ts";
 import type { ScopeId } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
@@ -119,6 +120,7 @@ export function createMessagingMethods(
   | "directoryChannels"
   | "directoryChannelsFor"
   | "directoryMember"
+  | "loopAdministration"
   | "samePerson"
   | "personMatcher"
   | "cronAdminUrl"
@@ -201,8 +203,8 @@ export function createMessagingMethods(
     latestCronFireForThread(id, threadRef) {
       return deps.crons.latestFireForThread(id, threadRef);
     },
-    listCrons() {
-      return deps.crons.list();
+    listCrons(ids) {
+      return deps.crons.list(ids);
     },
     async listCronsForViewer(principalId) {
       const all = await deps.crons.list();
@@ -544,6 +546,7 @@ export function createMessagingMethods(
         (await identityMembers()).find((member) => personKey(member.principalId) === personKey(principalId)) ?? null
       );
     },
+    loopAdministration: (actorId, loops) => loopAdministration(deps, actorId, loops),
     samePerson(a, b) {
       return samePersonInDirectory(deps.directory, a, b);
     },

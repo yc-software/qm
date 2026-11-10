@@ -83,8 +83,10 @@ export function createLlmCaptures(deps: {
       const from = opts?.omitRequest
         ? "session_llm_requests r"
         : "session_llm_requests r LEFT JOIN llm_prompt_envelopes e ON e.hash = r.prompt_hash";
-      const conds = ["r.session_id = $1"];
-      const args: unknown[] = [sessionId];
+      const ids = typeof sessionId === "string" ? [sessionId] : sessionId;
+      if (!ids.length) return [];
+      const conds = ["r.session_id = ANY($1::text[])"];
+      const args: unknown[] = [ids];
       const turnSeqs = opts?.turnSeqs;
       if (turnSeqs) {
         args.push(turnSeqs);

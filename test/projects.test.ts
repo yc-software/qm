@@ -9,6 +9,8 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { configureCommandRules } from "./support/command-rules.ts";
+import { canAdministerLoop } from "../src/api/routes/loops.ts";
+import type { Loop } from "../src/loops/types.ts";
 import { projectRoutes } from "../src/api/routes/projects.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
@@ -69,25 +71,58 @@ test("session lists check each project once per request and observe membership c
       await built.sessions.addParticipant(session.id, "member");
       await built.sessions.updateTitle(session.id, `History ${i}`);
     }
-    const get = built.projects.get.bind(built.projects);
-    const membership = built.projects.membership.bind(built.projects);
-    let gets = 0;
-    let memberships = 0;
-    built.projects.get = async (id) => {
-      gets++;
-      return get(id);
-    };
-    built.projects.membership = async (ref, principal) => {
-      memberships++;
-      return membership(ref, principal);
+    const list = built.projects.listForMember.bind(built.projects);
+    let reads = 0;
+    built.projects.listForMember = async (...args) => {
+      reads++;
+      return list(...args);
     };
     assert.equal((await built.app.listSessions("member")).length, 50);
-    assert.equal(gets, 1);
-    assert.equal(memberships, 1);
+    assert.equal(reads, 1);
     await built.projects.removeMember(project.id, "owner", "member");
     assert.deepEqual(await built.app.listSessions("member"), []);
-    assert.equal(gets, 2);
-    assert.equal(memberships, 2);
+    assert.equal(reads, 2);
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("batched loop administration preserves scope rules and observes membership revocation", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "loop-membership-")) }));
+  try {
+    await built.directory.replace([
+      { principalId: "member", slackId: "U_MEMBER", displayName: "Member", type: "internal" },
+    ]);
+    await built.directory.replaceChannels(
+      [
+        { channelId: "C_PRIVATE", name: "private", isPrivate: true },
+        { channelId: "C_PUBLIC", name: "public", isPrivate: false },
+      ],
+      [{ channelId: "C_PRIVATE", principalId: "U_MEMBER" }],
+    );
+    const project = await built.projects.create({ name: "Shared", ownerId: "owner" });
+    await built.projects.addMember(project.id, "owner", "member");
+    const cases = [
+      { owner: "member", ownerScopeId: "personal:member" },
+      { owner: "U_MEMBER", ownerScopeId: "personal:U_MEMBER" },
+      { owner: "other", ownerScopeId: "personal:other" },
+      { owner: "owner", ownerScopeId: projectScopeId(project.id) },
+      { owner: "other", ownerScopeId: "channel:C_PRIVATE" },
+      { owner: "other", ownerScopeId: "channel:C_PUBLIC" },
+      { owner: "member", ownerScopeId: "group:unknown" },
+    ] as Loop[];
+    const expected = await Promise.all(cases.map((loop) => canAdministerLoop(built.app, loop, "member")));
+    assert.deepEqual(expected, [true, true, false, true, true, false, false]);
+    const getMany = built.directory.getMany.bind(built.directory);
+    let reads = 0;
+    built.directory.getMany = async (ids) => {
+      reads++;
+      return getMany(ids);
+    };
+    assert.deepEqual(await built.app.loopAdministration("member", [...cases, ...cases]), [...expected, ...expected]);
+    assert.equal(reads, 1);
+    await built.projects.removeMember(project.id, "owner", "member");
+    assert.equal((await built.app.loopAdministration("member", cases))[3], false);
   } finally {
     await built.runtime.stop();
   }
