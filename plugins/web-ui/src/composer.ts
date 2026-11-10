@@ -354,7 +354,9 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   }
 
   function defaultRuntime(key = scopeKey()): RuntimeConfig["effective"] | undefined {
-    return appEditRuntime(key) ?? getRuntimeConfig(key)?.effective;
+    const effective = getRuntimeConfig(key)?.effective;
+    const appEdit = appEditRuntime(key);
+    return appEdit && effective ? { ...effective, ...appEdit } : effective;
   }
 
   function defaultModelId(): ModelOptionValue {

@@ -49,25 +49,16 @@ async function setAppEditRuntime(base: string, body: unknown): Promise<number> {
   return res.status;
 }
 
-test("app edit chats start on Sol Ultrafast while other chats keep the conversation runtime", async () => {
+test("app edit chats default to Sol Ultrafast, the org setting replaces it, and clearing it restores the default", async () => {
   const srv = start({ openaiApiKey: "deployment-openai-key", anthropicApiKey: "deployment-anthropic-key" });
   try {
-    const body = await runtimeConfig(srv.base);
-    assert.deepEqual(body.appEditRuntime, { modelId: "gpt-6.1-sol-ultrafast" });
-    assert.notEqual(body.effective.modelId, "gpt-6.1-sol-ultrafast");
-  } finally {
-    await srv.close();
-  }
-});
-
-test("the org app edit runtime replaces the default and clearing it restores Sol Ultrafast", async () => {
-  const srv = start({ openaiApiKey: "deployment-openai-key", anthropicApiKey: "deployment-anthropic-key" });
-  try {
-    const before = (await runtimeConfig(srv.base)).effective;
+    const before = await runtimeConfig(srv.base);
+    assert.deepEqual(before.appEditRuntime, { modelId: "gpt-6.1-sol-ultrafast" });
+    assert.notEqual(before.effective.modelId, "gpt-6.1-sol-ultrafast");
     assert.equal(await setAppEditRuntime(srv.base, { modelId: "gpt-6.1-sol", effortLevel: "high" }), 200);
     const set = await runtimeConfig(srv.base);
     assert.deepEqual(set.appEditRuntime, { modelId: "gpt-6.1-sol", effortLevel: "high" });
-    assert.deepEqual(set.effective, before);
+    assert.deepEqual(set.effective, before.effective);
     assert.equal(await setAppEditRuntime(srv.base, { inherit: true }), 200);
     assert.deepEqual((await runtimeConfig(srv.base)).appEditRuntime, { modelId: "gpt-6.1-sol-ultrafast" });
   } finally {

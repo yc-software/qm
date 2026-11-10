@@ -51,12 +51,12 @@ export function runtimeFallback(ctx: { deps: RuntimeDeps }): RuntimeChoice {
 export const APP_EDIT_DEFAULT_RUNTIME: RuntimeChoice = { modelId: "gpt-6.1-sol-ultrafast" };
 const reportedAppEditFallbacks = new Set<string>();
 
-export async function withAppEditRuntime<T extends { models: string[] }>(
+export async function appEditRuntime(
   ctx: { deps: RuntimeDeps },
-  body: T,
-): Promise<T & { appEditRuntime?: RuntimeChoice }> {
+  models: readonly string[],
+): Promise<RuntimeChoice | undefined> {
   const configured = (await ctx.deps.config?.getPurposeRuntimeDurable("appEdit")) ?? APP_EDIT_DEFAULT_RUNTIME;
-  if (body.models.includes(configured.modelId)) return { ...body, appEditRuntime: storedChoice(configured) };
+  if (models.includes(configured.modelId)) return storedChoice(configured);
   const reason =
     modelUnavailableReason(configured.modelId) ??
     (modelSupported(configured.modelId) ? "not offered to this person on this deployment" : "unknown model");
@@ -68,7 +68,15 @@ export async function withAppEditRuntime<T extends { models: string[] }>(
       reason,
     });
   }
-  return body;
+  return undefined;
+}
+
+export async function withAppEditRuntime<T extends { models: string[] }>(
+  ctx: { deps: RuntimeDeps },
+  body: T,
+): Promise<T & { appEditRuntime?: RuntimeChoice }> {
+  const runtime = await appEditRuntime(ctx, body.models);
+  return runtime ? { ...body, appEditRuntime: runtime } : body;
 }
 
 export async function userRuntimeConfigBody(ctx: { deps: RuntimeDeps }, scope: ScopeId, actorId: string) {

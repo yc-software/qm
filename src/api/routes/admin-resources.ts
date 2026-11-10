@@ -107,7 +107,7 @@ const RUNTIME_RESOURCES: {
   {
     id: "app-edit-runtime",
     purpose: "appEdit",
-    label: `Runtime that new chats beside a published app start on. Unset means ${APP_EDIT_DEFAULT_RUNTIME.modelId}; a model this deployment does not offer falls back to the conversation runtime.`,
+    label: `Runtime for chats beside a published app until the person picks another model in that chat; it takes precedence over their conversation runtime and saved model variant. Unset means ${APP_EDIT_DEFAULT_RUNTIME.modelId}. When the person cannot run it on this deployment, the chat uses their conversation runtime.`,
   },
 ];
 
