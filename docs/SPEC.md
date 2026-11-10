@@ -34,7 +34,7 @@
 
 ## Wall of shame
 
-Patterns from this repo's history, with the PRs that introduced or removed them. Lenses marked _always reviewed_ get a reviewer on every PR; triage cannot mark them not relevant.
+Patterns from this repo's history, with the PRs that introduced or removed them. Lenses marked _always reviewed_ get a reviewer on every PR; triage cannot mark them not relevant. Lenses marked _checked by CI_ are computed from the diff and get no reviewer.
 
 ### Overengineering (always reviewed, 6 examples)
 
@@ -202,9 +202,9 @@ Growing the codebase to keep every path it ever took alive. The canonical case: 
 - **Session tape beside session entries** (2026-09-16): The tape was meant to replace `session_entries`, but caution kept both. `SESSION_TAPE_MODE` shadow/serve chose between them, exact-transcript annotations were added so the tape could reproduce every historical field, and a verifying, lease-aware operator backfill with dry runs and partial-scan statuses guarded the cutover. We got stuck here for weeks; one migration and a hard cutover would have left one system instead of two. _Status:_ both are gone. Code reads and writes only `items`; deployed databases have copied their older history into it and dropped `session_tape`, `session_entries` and the separate search table, and fresh databases start from one base schema.
 - **Legacy Inbox loop:** `src/loops/inbox-migration.ts` migrates each owner's legacy Inbox loop at runtime, with its own phase record in UI-state preferences, a pause-and-disable sequence, and a repair path for half-finished runs. _Status:_ deleted in [qm#2925](https://github.com/yc-software/qm/pull/2925).
 
-### Over-testing
+### Over-testing (checked by CI)
 
-Description and examples pending human input.
+A PR's net added test lines must not exceed its added source lines. Remove or reshape existing tests to stay within that. Test lines are lines in files under a `test`, `tests` or `*Tests` directory or with `.test.` in the name; every other file except lockfiles is source.
 
 ### Prod-like QA (2 examples)
 

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
@@ -24,9 +25,33 @@ export function alwaysReviewedLenses(spec: string) {
     .map((line) => line.slice(4).split(" (")[0]!.trim());
 }
 
-export function wallOfShameProblems(spec: string, body: string, headSha: string) {
+const lockfiles = ["package-lock.json", "Cargo.lock", "Package.resolved"];
+
+function overTesting(numstat: string) {
+  let tests = 0;
+  let source = 0;
+  const fields = numstat.split("\0");
+  for (let i = 0; i < fields.length; i++) {
+    const [added, removed, path] = fields[i]!.split("\t");
+    if (removed === undefined) continue;
+    const dirs = (path || fields[(i += 2)]!).split("/");
+    const name = dirs.pop()!;
+    if (name.includes(".test.") || dirs.some((dir) => dir === "test" || dir === "tests" || dir.endsWith("Tests")))
+      tests += (Number(added) || 0) - (Number(removed) || 0);
+    else if (!lockfiles.includes(name)) source += Number(added) || 0;
+  }
+  if (tests > source)
+    return `${tests} net test lines added against ${source} source lines added. Remove or reshape tests until test lines do not exceed source lines.`;
+}
+
+export function wallOfShameProblems(spec: string, body: string, headSha: string, numstat: string) {
+  const computed: Record<string, string | undefined> = { "Over-testing": overTesting(numstat) };
   const report = section(lines(body), "## Wall of shame review report");
-  if (!report) return ["PR description has no `## Wall of shame review report` section."];
+  if (!report)
+    return [
+      "PR description has no `## Wall of shame review report` section.",
+      ...Object.entries(computed).flatMap(([lens, finding]) => (finding ? [`${lens}: ${finding}`] : [])),
+    ];
   const problems: string[] = [];
   const reviewed = report.find((line) => line.startsWith("Reviewed commit:"))?.split("`")[1];
   if (reviewed !== headSha)
@@ -45,11 +70,18 @@ export function wallOfShameProblems(spec: string, body: string, headSha: string)
     if (matches.length > 1) problems.push(`${lens}: ${matches.length} review rows; keep one.`);
     const [, reviewer, verdict, score, assessment] = matches[0] ?? [];
     const skipped = verdict?.toLowerCase() === "not relevant";
+    const waived = verdict?.toLowerCase() === "waived";
+    if (waived && !assessment?.startsWith("Waived by "))
+      problems.push(`${lens}: a Waived row's assessment must start with "Waived by <name>:".`);
+    if (lens in computed) {
+      if (computed[lens] && !waived) problems.push(`${lens}: ${computed[lens]}`);
+      continue;
+    }
     if (!verdict) problems.push(`${lens}: no review row.`);
     else if (skipped && always.includes(lens))
       problems.push(`${lens}: always reviewed; triage cannot mark it Not relevant.`);
-    else if (!skipped && verdict.toLowerCase() !== "accept")
-      problems.push(`${lens}: verdict is ${verdict}, not Accept or Not relevant.`);
+    else if (!skipped && !waived && verdict.toLowerCase() !== "accept")
+      problems.push(`${lens}: verdict is ${verdict}, not Accept, Waived or Not relevant.`);
     if (verdict && !reviewer) problems.push(`${lens}: reviewer missing.`);
     if (verdict && !skipped && !/^(100|\d{1,2})\/100$/.test(score ?? ""))
       problems.push(`${lens}: score missing (expected N/100).`);
@@ -63,11 +95,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     readFileSync("docs/SPEC.md", "utf8"),
     process.env.PR_BODY ?? "",
     process.env.HEAD_SHA ?? "",
+    execFileSync("git", ["diff", "--numstat", "-z", "-M", `${process.env.DIFF_BASE ?? "origin/main"}...HEAD`], {
+      encoding: "utf8",
+    }),
   );
   if (problems.length) {
     console.error("Wall of shame review incomplete (see AGENTS.md):");
     for (const problem of problems) console.error(`- ${problem}`);
     process.exit(1);
   }
-  console.log("Wall of shame review: every lens accepted the PR head or was triaged as not relevant.");
+  console.log("Wall of shame review: every lens passed for the PR head, was waived, or was triaged as not relevant.");
 }
