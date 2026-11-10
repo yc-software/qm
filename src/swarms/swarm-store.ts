@@ -20,6 +20,26 @@ export const SWARM_LIMITS = {
   provisionMs: 10_000,
 } as const;
 
+export const STAMP_SWARM_COMPUTERS_MIGRATION = {
+  id: "durable-map/swarms/0040-stamp-computers",
+  statements: [
+    `DO $$
+    BEGIN
+      IF to_regclass('swarms') IS NOT NULL AND to_regclass('sandbox_resources') IS NOT NULL THEN
+        UPDATE sandbox_resources r SET json = r.json || jsonb_build_object('swarmId', s.id)
+        FROM swarms s
+        WHERE r.tenant_id = s.tenant_id
+          AND NOT r.json ? 'swarmId'
+          AND (
+            r.id = s.json #>> '{board,sandboxId}'
+            OR r.id IN (SELECT member ->> 'sandboxId' FROM jsonb_array_elements(s.json -> 'members') AS member)
+          );
+        UPDATE durable_map_versions SET v = v + 1 WHERE tbl = 'sandbox_resources';
+      END IF;
+    END $$`,
+  ],
+};
+
 export interface SwarmMember {
   id: string;
   sessionId?: string;
@@ -111,7 +131,6 @@ export interface SwarmStore {
   create(swarm: Swarm, fence?: SwarmRunFence): Promise<Swarm>;
   update(id: string, mutate: (swarm: Swarm) => void, fence?: SwarmRunFence): Promise<Swarm>;
   pending(afterId?: string): Promise<PendingSwarm[]>;
-  computerOwner(scopeId: string, sandboxId: string): Promise<Swarm | null>;
 }
 
 export type PendingSwarm = Swarm & { tenantId: string };
@@ -198,20 +217,6 @@ export function createSwarmStore(
   return {
     async get(id) {
       const row = await backing.get(id);
-      return row ? decode(row) : null;
-    },
-    async computerOwner(scopeId, sandboxId) {
-      const candidates = await backing.select({
-        where: { field: "scopeId", anyOfFold: [scopeId] },
-        omit: ["messages", "template", "spawnRequests", "messageRequests"],
-      });
-      const owner = candidates.find(
-        (swarm) =>
-          swarm.scopeId === scopeId &&
-          (swarm.board?.sandboxId === sandboxId || swarm.members.some((member) => member.sandboxId === sandboxId)),
-      );
-      if (!owner) return null;
-      const row = await backing.get(owner.id);
       return row ? decode(row) : null;
     },
     async create(swarm, fence) {

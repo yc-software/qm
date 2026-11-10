@@ -13,9 +13,9 @@ import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import type { Principal } from "../src/types.ts";
 import type { SwarmCaller } from "../src/swarms/swarm-service.ts";
+import { orchestratorTestDeps } from "./support/orchestrator-deps.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
@@ -144,7 +144,7 @@ async function channelTurn(f: Fixture, actor: Principal, botActor: boolean): Pro
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const config = testConfigStore("org");
   const orchestrator = createOrchestrator({
-    ...singleProcessDeps(),
+    ...orchestratorTestDeps(),
     config,
     runtime: createRuntimeService(
       { config, baseModelDefault: "claude-opus-5" },
@@ -170,7 +170,6 @@ async function channelTurn(f: Fixture, actor: Principal, botActor: boolean): Pro
       acl,
     }),
     acl,
-    deliveries: createDeliveryStore(),
   });
   const request: OrchestratorInput = {
     surface: "slack",

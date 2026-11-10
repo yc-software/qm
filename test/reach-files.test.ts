@@ -250,17 +250,31 @@ describe("POST /v1/reach with files", () => {
     assert.equal(malformed.status, 400);
   });
 
-  it("asks the swarm service before a Slack bot's turn reads a computer named by sandbox_id", async () => {
+  it("refuses a Slack bot's turn a swarm computer named by sandbox_id when it may not direct that swarm", async () => {
     const scope = scopeId("personal", "U-carol");
-    const computer = await secondSandbox("U-carol");
-    const handle = await built.sandbox.provision(scope, { sandboxId: computer.id });
+    const resources = built.sandboxResources.forTurn({
+      actorId: "U-carol",
+      scopeId: scope,
+      isCurrent: async () => true,
+    });
+    const worker = await resources.create(
+      "U-carol",
+      scope,
+      await resources.defaultBackend(),
+      "Swarm worker",
+      undefined,
+      undefined,
+      undefined,
+      "no-such-swarm",
+    );
+    const handle = await built.sandbox.provision(scope, { sandboxId: worker.id });
     await built.sandbox.writeFile(handle, "plan.md", "carol's plan\n");
     await built.sandbox.teardown(handle, { keepWarm: true });
     const send = async (botActor: boolean) =>
       post(
         base,
         "/v1/reach",
-        { text: "plan", recipient: "Alice", files: ["plan.md"], sandbox_id: computer.id },
+        { text: "plan", recipient: "Alice", files: ["plan.md"], sandbox_id: worker.id },
         {
           "x-agent-capability": await mintCapabilityToken(
             {
@@ -273,24 +287,12 @@ describe("POST /v1/reach with files", () => {
           ),
         },
       );
-    const swarms = built.app.swarms!;
-    const decide = swarms.botMayUseComputer;
-    const asked: string[] = [];
-    swarms.botMayUseComputer = async (resource) => {
-      asked.push(resource.id);
-      return false;
-    };
-    try {
-      const bot = await send(true);
-      assert.equal(bot.status, 403);
-      assert.equal(((await bot.json()) as any).error, "forbidden");
-      const person = await send(false);
-      assert.equal(person.status, 200);
-      assert.deepEqual(await readDelivered(((await person.json()) as any).deliveryId), ["plan.md:carol's plan\n"]);
-    } finally {
-      swarms.botMayUseComputer = decide;
-    }
-    assert.deepEqual(asked, [computer.id]);
+    const bot = await send(true);
+    assert.equal(bot.status, 403);
+    assert.equal(((await bot.json()) as any).error, "forbidden");
+    const person = await send(false);
+    assert.equal(person.status, 200);
+    assert.deepEqual(await readDelivered(((await person.json()) as any).deliveryId), ["plan.md:carol's plan\n"]);
   });
 
   it("composes named workspace files into the delivery as attachments (the silent-drop bug)", async () => {

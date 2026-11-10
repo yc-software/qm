@@ -28,6 +28,7 @@ export interface SandboxResource {
   error?: string;
   jobOnly?: boolean;
   memoryGb?: number;
+  swarmId?: string;
 }
 
 export interface SandboxAccessPlan {
@@ -71,6 +72,7 @@ export interface SandboxResources {
     reservationId?: string,
     jobOnly?: boolean,
     memoryGb?: number,
+    swarmId?: string,
   ): Promise<SandboxResource>;
   eachJobComputer(work: (computer: SandboxResource) => Promise<void>): Promise<void>;
   retireJobComputer(id: string, seenState: SandboxResource["state"]): Promise<void>;
@@ -311,7 +313,7 @@ export function createSandboxResources(opts: {
         providers: profiles(),
       };
     },
-    async create(actorId, scopeId, backend, name, reservationId, jobOnly, memoryGb) {
+    async create(actorId, scopeId, backend, name, reservationId, jobOnly, memoryGb, swarmId) {
       await initialize();
       await authorize(actorId, scopeId);
       if (!Object.hasOwn(opts.backends, backend) || !opts.backends[backend as SandboxBackendName])
@@ -335,6 +337,7 @@ export function createSandboxResources(opts: {
         state: "provisioning",
         ...(jobOnly ? { jobOnly } : {}),
         ...(memoryGb ? { memoryGb } : {}),
+        ...(swarmId ? { swarmId } : {}),
       };
       return opts.lock.withLock(`sandbox-resource:${id}`, async () => {
         const existing = await opts.records.get(id);

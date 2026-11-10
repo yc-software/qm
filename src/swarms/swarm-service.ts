@@ -90,7 +90,7 @@ export interface SwarmService {
   control(caller: SwarmCaller, input: { memberId: string; state: SwarmControlState }): Promise<SwarmMember>;
   enabledFor(actorId: string): Promise<boolean>;
   botMayUseComputer(
-    computer: Pick<SandboxResource, "id" | "ownerScopeId">,
+    computer: Pick<SandboxResource, "swarmId">,
     turn: { actorId: string; threadRef: string; sessionId: string },
   ): Promise<boolean>;
   binding(input: OrchestratorInput): Promise<{ sandboxId?: string; rootSessionId: string; member: SwarmMember } | null>;
@@ -485,7 +485,17 @@ export function createSwarmService(deps: {
             const provision = (name: string, id: string) => {
               const provisionDeadline = Math.min(deadline, Date.now() + SWARM_LIMITS.provisionMs);
               return step(
-                () => deps.sandboxes.create(swarm!.ownerId, swarm!.scopeId, swarm!.backend, name, id),
+                () =>
+                  deps.sandboxes.create(
+                    swarm!.ownerId,
+                    swarm!.scopeId,
+                    swarm!.backend,
+                    name,
+                    id,
+                    undefined,
+                    undefined,
+                    swarm!.id,
+                  ),
                 SWARM_LIMITS.provisionMs,
               ).catch((error: unknown) => {
                 provisioningTimedOut = Date.now() >= provisionDeadline;
@@ -850,8 +860,9 @@ export function createSwarmService(deps: {
     },
     enabledFor,
     async botMayUseComputer(computer, turn) {
-      const swarm = await store.computerOwner(computer.ownerScopeId, computer.id);
-      if (!swarm) return true;
+      if (!computer.swarmId) return true;
+      const swarm = await store.get(computer.swarmId);
+      if (!swarm) return false;
       const { rootId, memberId } = threadIdentity(turn.threadRef, turn.sessionId);
       return botMayDirect(swarm, rootId === swarm.id ? memberId : swarm.id, turn.actorId);
     },
