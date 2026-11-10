@@ -2664,7 +2664,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           if (deliberatePost || !ack || !defaultDestination || !deps.deliveries) return;
           spineAckText = ack;
           const runId = input.runId;
-          const ackKey = `ack:${turnKey}`;
+          const ackKey = postKeys.ackKey;
           void reachEnqueue({
             deliveries: deps.deliveries,
             destination: defaultDestination,
