@@ -30,8 +30,8 @@ test("the staging key is scoped by account, event type, channel and ts, and igno
 test("staging lands within its budget, or reports that it did not", async () => {
   const map = testMap<StagedEnvelope>();
   const staging = createEnvelopeStaging(map, { account: "acct" });
-  assert.equal(await map.get("k1"), null);
-  assert.deepEqual([await staging.stage("k1", envelope("message", "1.0")), Boolean(await map.get("k1"))], [true, true]);
+  assert.equal(await staging.stage("k1", envelope("message", "1.0")), true);
+  assert.ok(await map.get("k1"));
   const slow = createEnvelopeStaging({ ...map, putIfAbsent: () => new Promise(() => {}) } as typeof map, {
     account: "acct",
     stageTimeoutMs: 20,
