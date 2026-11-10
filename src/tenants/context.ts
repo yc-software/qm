@@ -1,6 +1,15 @@
-import { boundTenant, isTenantId, pinTenant, withoutTenant, withTenant } from "../../plugins/chassis/src/tenant.ts";
+import {
+  ambientTenant,
+  boundTenant,
+  explicitTenantId,
+  isTenantId,
+  pinTenant,
+  Tenant,
+  withoutTenant,
+  withTenant,
+} from "../../plugins/chassis/src/tenant.ts";
 
-export { boundTenant, isTenantId, pinTenant, withoutTenant, withTenant };
+export { ambientTenant, boundTenant, explicitTenantId, isTenantId, pinTenant, Tenant, withoutTenant, withTenant };
 
 export function currentTenant(): string {
   const id = boundTenant();
