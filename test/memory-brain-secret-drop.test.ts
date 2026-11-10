@@ -28,6 +28,10 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
+import { TEST_TENANT } from "./support/test-tenant.ts";
+import { withTenant } from "../src/tenants/context.ts";
+
+const tenant = withTenant(TEST_TENANT, (t) => t);
 
 const SECRET = "memory-brain-drop-test-secret".repeat(2);
 const BRAIN = {
@@ -257,21 +261,30 @@ test("a brain link refuses non-admins, other drop fields, unknown and moved brai
   assert.equal(await servedSecret(), "after-the-move-back");
 
   const alice = { id: "admin-alice", type: "internal" as const };
-  await built.admin.createGrant(alice, {
+  await built.admin.createGrant(tenant, alice, {
     principalId: "admin-carol",
     role: "org_admin",
     scopeId: scopeId("org", orgId()),
   });
   const carols = await mint("admin-carol", brainDrop);
   assert.equal(carols.status, 200);
-  await built.admin.revokeGrant(alice, "admin-carol", scopeId("org", orgId()), "org_admin");
+  await built.admin.revokeGrant(tenant, alice, "admin-carol", scopeId("org", orgId()), "org_admin");
+  const demotedForm = await carols.form();
+  assert.equal(demotedForm.status, 403, "a former admin's link shows no form");
+  assert.match(demotedForm.text, /You can no longer set this brain's secret/);
+  assert.doesNotMatch(demotedForm.text, /brain\.acme\.example|personal memory/);
   const demoted = await carols.redeem("from-a-former-admin");
   assert.equal(demoted.status, 403);
   assert.match(JSON.parse(demoted.text).message, /no longer set this brain's secret/);
   assert.equal(await servedSecret(), "after-the-move-back");
+  await built.memoryRegistry.update((record) =>
+    putBrain(record, "acme-personal", { url: "https://brain2.acme.example/mcp" }, change),
+  );
+  assert.equal((await carols.form()).status, 403, "a former admin's link stays refused after the brain moves");
   const rows = JSON.stringify(await built.auditLog.events());
   assert.match(rows, /memory-registry\.brain\.secret\.refused/);
   assert.equal(rows.match(/acme-personal: brain acme-personal changed after this link was made/g)?.length, 2);
+  assert.equal(rows.match(/acme-personal: you can no longer set this brain's secret: only an org admin/g)?.length, 3);
   assert.doesNotMatch(rows, /for-the-old-url|from-a-former-admin/);
 });
 

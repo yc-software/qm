@@ -2,13 +2,15 @@ import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3
 import { orgId as configOrgId } from "../config.ts";
 import { AssumeRoleCommand, STSClient } from "@aws-sdk/client-sts";
 import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
-import type { DeployEndpoint, DeployProvider, DeployReconcileInput } from "./deploy-provider.ts";
+import type { DeployEndpoint, DeployProvider } from "./deploy-provider.ts";
 import { bytes, normalizeRelPath, posixJoin, readTree } from "./deploy-fs.ts";
 import { AwsApiError, createMicrovmApi, createMicrovmClient, type AwsMicrovmApi } from "../sandbox/aws-microvm-api.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { shq } from "../util/shell.ts";
+import { bootTenant } from "../tenants/boot.ts";
+import { boundTenant } from "../tenants/context.ts";
 import { execFailure, swallow, swallowAs } from "../util/errors.ts";
 import {
   appEnv,
@@ -113,13 +115,14 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
   const resolveCache = new Map<string, { endpoint: DeployEndpoint; checkedMs: number; usedMs: number }>();
   const inflightResolves = new Map<string, Promise<DeployEndpoint | null>>();
   const resolveGens = new Map<string, number>();
+  const keyOf = (id: string): string => `${boundTenant() ?? ""}:${id}`;
   const bumpResolveGen = (id: string): void => {
     resolveGens.set(id, (resolveGens.get(id) ?? 0) + 1);
     resolveCache.delete(id);
     inflightResolves.delete(id);
   };
   const detached = async (d: Deployment, fn: () => Promise<void>): Promise<void> => {
-    await advisoryLock.tryWithLock(`deploy:${d.id}`, () => launchQueue(d.id, fn));
+    await advisoryLock.tryWithLock(`deploy:${d.id}`, () => launchQueue(keyOf(d.id), fn));
   };
 
   const ingress = opts.ingressConnectorArns?.length ? opts.ingressConnectorArns : [DEFAULT_INGRESS(region)];
@@ -148,8 +151,14 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
   const sts: Pick<STSClient, "send"> | undefined = litestream
     ? (opts.sts ?? new STSClient({ region, ...(opts.profile ? { profile: opts.profile } : {}) }))
     : undefined;
-  const dataKeyFor = (deploymentId: string): string => `${dataPrefix}/${deploymentId}.tar`;
-  const litestreamKeyPrefix = (deploymentId: string): string => `${dataPrefix}/${deploymentId}/litestream`;
+  const dataRoot = (): string => {
+    const tenant = boundTenant();
+    const boot = bootTenant();
+    if (tenant === undefined && boot === undefined) throw new Error("app data needs a bound tenant");
+    return tenant === undefined || tenant === boot ? dataPrefix : `${dataPrefix}/${tenant}`;
+  };
+  const dataKeyFor = (deploymentId: string): string => `${dataRoot()}/${deploymentId}.tar`;
+  const litestreamKeyPrefix = (deploymentId: string): string => `${dataRoot()}/${deploymentId}/litestream`;
 
   function ensureConfigured(): void {
     if (!region) throw new Error("AWS_DEPLOY_REGION/AWS_REGION not set (DEPLOY_PROVIDER=aws)");
@@ -356,7 +365,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
   }
 
   async function ensureBody(d: Deployment): Promise<{ id: string; endpoint: string; fresh: boolean }> {
-    return launchQueue(d.id, async () => {
+    return launchQueue(keyOf(d.id), async () => {
       let stored = await store.get(d.id);
       if (stored?.replacementMicrovmId) {
         await api
@@ -489,10 +498,10 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     endpoint: string,
     fresh: boolean,
     version: DeploymentVersion,
-    input?: DeployReconcileInput,
+    gitBundle?: Uint8Array,
   ): Promise<void> {
-    if (input?.gitBundle && version.commit) {
-      await checkoutBundle(id, endpoint, input.gitBundle, version.commit);
+    if (gitBundle && version.commit) {
+      await checkoutBundle(id, endpoint, gitBundle, version.commit);
     } else {
       await writeFiles(id, endpoint, APP_DIR, await readTree(version.snapshotDir, { tolerateMissing: true }));
     }
@@ -500,7 +509,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       await writeFiles(id, endpoint, HOME_DIR, await readTree(version.homeDir, { tolerateMissing: true }));
     await writeAbs(id, endpoint, READY_PATH, Buffer.from(`${version.commit ?? version.version}\n`));
     if (litestream) {
-      await launchQueue(d.id, async () => {
+      await launchQueue(keyOf(d.id), async () => {
         await stageLitestream(d.id, id, endpoint);
         const r = await execRaw(id, endpoint, `mkdir -p ${shq(DATA_DIR)}; ${litestreamStartScript(d.id)}`, 180);
         if (r.code !== 0) {
@@ -562,7 +571,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       const desc = await api.tryGetMicrovm(stored.microvmId);
       if (!desc || desc.state === "TERMINATED" || desc.state === "TERMINATING") {
         if (genCurrent()) {
-          resolveCache.delete(d.id);
+          resolveCache.delete(keyOf(d.id));
           await store.delete(d.id).catch((e) => swallow("aws-deploy: drop dead body pointer", e));
         }
         return null;
@@ -583,7 +592,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     if (s3 && Date.now() - (stored.lastSnapshotMs ?? 0) > snapshotIntervalMs) {
       void (async () => {
         const claim = (): Promise<StoredDeployBody | null> =>
-          launchQueue(d.id, async () => {
+          launchQueue(keyOf(d.id), async () => {
             const cur = await store.get(d.id);
             if (
               !cur ||
@@ -621,26 +630,21 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     return endpointFor(d, stored.microvmId, stored.endpoint);
   };
 
-  const place = async (
-    d: Deployment,
-    version: DeploymentVersion,
-    input?: DeployReconcileInput,
-  ): Promise<DeployEndpoint> => {
+  const place = async (d: Deployment, version: DeploymentVersion, gitBundle?: Uint8Array): Promise<DeployEndpoint> => {
     ensureConfigured();
     if (litestream && Date.now() < binariesMissingUntilMs)
       throw new Error(
         "litestream/aws binaries missing from the MicroVM image (rechecking every 10 min) — roll AWS_DEPLOY_IMAGE",
       );
     const body = await ensureBody(d);
-    await materialize(d, body.id, body.endpoint, body.fresh, version, input);
-    bumpResolveGen(d.id);
+    await materialize(d, body.id, body.endpoint, body.fresh, version, gitBundle);
+    bumpResolveGen(keyOf(d.id));
     return endpointFor(d, body.id, body.endpoint);
   };
 
   return {
     profile: {
       managedScaleToZero: true,
-      inPlaceReconcile: true,
       maxAppBytes: MAX_APP_BYTES,
       ...(s3 ? { dataDir: DATA_DIR } : {}),
     },
@@ -652,34 +656,54 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       return !!stored && rotationDue(stored);
     },
 
-    reconcile: (d, version, input) => place(d, version, input),
+    reconcile: (d, version, gitBundle) => place(d, version, gitBundle),
+
+    async liveEdit(d, version, edit): Promise<boolean> {
+      ensureConfigured();
+      const stored = await store.get(d.id);
+      const desc = stored ? await api.tryGetMicrovm(stored.microvmId) : null;
+      if (!stored || !desc || desc.state === "TERMINATED" || desc.state === "TERMINATING") return false;
+      await ensureRunning(stored.microvmId, stored.endpoint, desc);
+      await Promise.all(
+        edit.files.map((f) =>
+          writeAbs(stored.microvmId, stored.endpoint, posixJoin(APP_DIR, normalizeRelPath(f.path)), f.data),
+        ),
+      );
+      if (edit.deletedPaths.length) {
+        const paths = edit.deletedPaths.map((p) => shq(posixJoin(APP_DIR, normalizeRelPath(p)))).join(" ");
+        const r = await execRaw(stored.microvmId, stored.endpoint, `rm -f ${paths}`, 30);
+        if (r.code !== 0) throw execFailure("aws live edit delete", r);
+      }
+      if (edit.restart) await startApp(d, stored.microvmId, stored.endpoint, version);
+      return true;
+    },
 
     async resolveEndpoint(d, version): Promise<DeployEndpoint | null> {
-      const gen = resolveGens.get(d.id) ?? 0;
-      const genCurrent = (): boolean => (resolveGens.get(d.id) ?? 0) === gen;
+      const gen = resolveGens.get(keyOf(d.id)) ?? 0;
+      const genCurrent = (): boolean => (resolveGens.get(keyOf(d.id)) ?? 0) === gen;
       const revalidate = (): Promise<DeployEndpoint | null> => {
-        const inflight = inflightResolves.get(d.id);
+        const inflight = inflightResolves.get(keyOf(d.id));
         if (inflight) return inflight;
         const resolve = resolveLive(d, version, genCurrent)
           .then((endpoint) => {
             if (!genCurrent()) return endpoint;
             if (!endpoint) {
-              resolveCache.delete(d.id);
+              resolveCache.delete(keyOf(d.id));
               return endpoint;
             }
             if (resolveCache.size > 500) {
               for (const [k, v] of resolveCache) if (Date.now() - v.usedMs >= awakeForMs) resolveCache.delete(k);
             }
-            resolveCache.set(d.id, { endpoint, checkedMs: Date.now(), usedMs: Date.now() });
+            resolveCache.set(keyOf(d.id), { endpoint, checkedMs: Date.now(), usedMs: Date.now() });
             return endpoint;
           })
           .finally(() => {
-            if (inflightResolves.get(d.id) === resolve) inflightResolves.delete(d.id);
+            if (inflightResolves.get(keyOf(d.id)) === resolve) inflightResolves.delete(keyOf(d.id));
           });
-        inflightResolves.set(d.id, resolve);
+        inflightResolves.set(keyOf(d.id), resolve);
         return resolve;
       };
-      const cached = resolveCache.get(d.id);
+      const cached = resolveCache.get(keyOf(d.id));
       const samePlacement = !d.endpoint || d.endpoint.host === cached?.endpoint.host;
       if (cached && samePlacement && Date.now() - cached.usedMs < awakeForMs) {
         cached.usedMs = Date.now();
@@ -694,7 +718,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       if (d.alwaysOn) return;
       const stored = await store.get(d.id);
       if (!stored) return;
-      resolveCache.delete(d.id);
+      resolveCache.delete(keyOf(d.id));
       await api.suspend(stored.microvmId);
     },
 
@@ -710,7 +734,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     },
 
     async destroy(d): Promise<void> {
-      bumpResolveGen(d.id);
+      bumpResolveGen(keyOf(d.id));
       const stored = await store.get(d.id);
       if (stored) {
         await api.terminate(stored.microvmId).catch((e) => swallow("aws-deploy: destroy terminate", e));

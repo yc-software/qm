@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { createAgent } from "../src/agent/agent-run.ts";
 import { createModelRoutes } from "../src/model/model-route.ts";
 import { auxiliaryModelFor } from "../src/model/pi-models.ts";
@@ -7,6 +9,7 @@ import { DESCRIPTIVE_TITLE_PROMPT } from "../src/agent/session-title-prompt.ts";
 import type { AgentTurnInput, CompactInput } from "../src/agent/agent.ts";
 import type { Item, NewItem } from "../src/sessions/items.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
+import { configurePublicFetch } from "../src/util/network.ts";
 import { ProviderTurnError } from "../src/core/turn-error.ts";
 import { runtimeConfigBody } from "../src/api/runtime-config.ts";
 import { testConfigStore } from "./support/test-database.ts";
@@ -108,16 +111,34 @@ function turn(agent: ReturnType<typeof createAgent>, modelId: string): Promise<u
 }
 
 test("compaction summarizes on the session's own provider while the shared gateway is out of budget", async (t) => {
+  const direct: unknown[] = [];
+  const server = createServer((req, res) => {
+    let raw = "";
+    req.on("data", (chunk) => (raw += chunk));
+    req.on("end", () => {
+      direct.push((JSON.parse(raw) as { model?: unknown }).model);
+      void anthropicReply("summary of the work")
+        .text()
+        .then((body) => res.writeHead(200, { "content-type": "text/event-stream" }).end(body));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  configurePublicFetch(new Set([origin]), () => false);
   setCustomProviders([
     {
       id: "direct",
       name: "Direct",
       protocol: "anthropic",
-      baseUrl: "https://direct.example",
+      baseUrl: origin,
       models: [{ id: "claude-opus-5-5" }],
     },
   ]);
-  t.after(() => setCustomProviders([]));
+  t.after(() => {
+    setCustomProviders([]);
+    configurePublicFetch(new Set());
+    server.close();
+  });
   const agent = createAgent({
     routes: createModelRoutes({
       defaultModelId: "gpt-6-astra",
@@ -130,7 +151,8 @@ test("compaction summarizes on the session's own provider while the shared gatew
     async (calls) => {
       const text = await compact(agent, { runtime: { modelId: "custom/direct/claude-opus-5-5" } });
       assert.match(text, /summary of the work/);
-      assert.deepEqual(calls, [{ host: "direct.example", model: "claude-opus-5-5" }]);
+      assert.deepEqual(calls, []);
+      assert.deepEqual(direct, ["claude-opus-5-5"]);
     },
   );
 });

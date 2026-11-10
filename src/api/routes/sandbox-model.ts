@@ -1,5 +1,5 @@
 import { SANDBOX_MODEL_AUD } from "../../auth/capability-token.ts";
-import { gatewayActorId, gatewayRoot, modelGatewayHeaders } from "../../model/provider-endpoints.ts";
+import { gatewayActorId, gatewayKey, gatewayRoot, modelGatewayHeaders } from "../../model/provider-endpoints.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { reportFailure } from "../../util/errors.ts";
 import { SANDBOX_MODEL_PREFIX } from "../contract.ts";
@@ -98,7 +98,7 @@ async function proxy(ctx: ApiCtx): Promise<void> {
     });
     const contentType = response.headers.get("content-type") ?? "application/json";
     if (!response.ok || !response.body) {
-      const text = redactGatewayKey(gateway.apiKey)(await response.text());
+      const text = redactGatewayKey(gatewayKey(gateway))(await response.text());
       const retryAfter = response.headers.get("retry-after");
       const operatorFault = response.status >= 500 || response.status === 401 || response.status === 403;
       if (operatorFault) reportFailure("sandbox model: gateway refused", new Error(`${response.status} ${path}`), text);

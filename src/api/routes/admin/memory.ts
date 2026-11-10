@@ -3,7 +3,7 @@ import { audit, authorizeAdmin, orgScope, requireScopedAdmin } from "../shared.t
 import { renderFacts } from "../../../memory/facts.ts";
 import type { MemoryAuthority } from "../../../memory/memory-service.ts";
 import { memoryFacts, parseEdits, parseFacts, parseIds } from "../surface.ts";
-import { type ApiCtx } from "../route.ts";
+import { tenantOf, type ApiCtx } from "../route.ts";
 import { discoverScopes } from "./common.ts";
 
 export async function listMemoryScopes(ctx: ApiCtx): Promise<void> {
@@ -13,7 +13,7 @@ export async function listMemoryScopes(ctx: ApiCtx): Promise<void> {
   if (!actor) return;
   if (!deps.memory) return sendJson(res, 404, { error: "not_found" });
   audit(deps, { principalId: actor.id, action: "memory.scopes.read", resource: "memory", scopeLabel: scope });
-  const labels = await discoverScopes(app, deps);
+  const labels = await discoverScopes(app, deps, tenantOf(ctx));
   const meta = (await deps.memory.metadata?.()) ?? null;
   const scopes = await Promise.all(
     [...labels].map(async ([id, label]) => {
