@@ -90,6 +90,17 @@ async function regenerateSessionTitle(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, out);
 }
 
+async function suggestNextPrompt(ctx: ApiCtx): Promise<void> {
+  const { res, app, body } = ctx;
+  const principalId = (body as { principalId?: unknown }).principalId;
+  if (typeof principalId !== "string" || !principalId) {
+    return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
+  }
+  const out = await app.suggestNextPrompt(ctx.params.id!, principalId);
+  if (!out) return sendJson(res, 404, { error: "not_found" });
+  return sendJson(res, 200, out);
+}
+
 async function detachSession(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
   const id = ctx.params.id!;
@@ -1482,6 +1493,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
     { method: "PUT", path: "/v1/runtime-config", browser: true, auth: "either", handle: putRuntimeConfig },
     { method: "PUT", path: "/v1/channel-header-pin", browser: true, auth: "either", handle: putChannelHeaderPin },
     { method: "POST", path: "/v1/sessions/:id/title", browser: true, auth: "source", handle: regenerateSessionTitle },
+    { method: "POST", path: "/v1/sessions/:id/next-prompt", browser: true, auth: "source", handle: suggestNextPrompt },
     { method: "POST", path: "/v1/sessions/:id/expand", browser: true, auth: "source", handle: expandSideChat },
     { method: "POST", path: "/v1/sessions", browser: true, auth: "source", handle: spawnWebSession },
     { method: "POST", path: "/v1/sessions/:id/fork", browser: true, auth: "source", handle: forkSession },

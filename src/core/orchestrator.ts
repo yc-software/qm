@@ -162,6 +162,7 @@ import {
   resolveTurnDelivery,
   filterConnectorSkills,
   recentPrincipalDeliveryNote,
+  renderNextPromptTranscript,
   renderTitleTranscript,
   replayableRequest,
   stripAckPrefix,
@@ -252,6 +253,8 @@ const TURN_STALL_MS = 50 * 60_000;
 const DEFAULT_APPROVAL_SUMMARY_TIMEOUT_MS = 6_000;
 
 const DIRECTORY_INDEX_CACHE_MAX_ENTRIES = 100;
+
+const NEXT_PROMPT_READ_ITEMS = 20;
 
 export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   const config = deps.config;
@@ -431,6 +434,40 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           (await deps.featureFlags?.enabled("descriptive_session_titles", personalScope(principalId))) === true,
       });
       return { title: title ?? (personal ? null : (session.title ?? null)) };
+    },
+
+    async suggestNextPrompt(sessionId, principalId) {
+      if ((await deps.featureFlags?.enabled("next_prompt_suggestions", personalScope(principalId))) !== true)
+        return { enabled: false, suggestion: null };
+      const session = await deps.sessions.get(sessionId);
+      if (!session || !deps.agent.suggestNextPrompt) return { enabled: true, suggestion: null };
+      Object.assign(currentModelRequestContext(), {
+        sessionId,
+        actorId: principalId,
+        scopeId: session.scopeId,
+        origin: await originOf(session),
+      });
+      const recent = await transcripts.forViewer(sessionId, principalId, {
+        messagesOnly: true,
+        limit: NEXT_PROMPT_READ_ITEMS,
+      });
+      const transcript = renderNextPromptTranscript(recent.items);
+      if (!transcript) return { enabled: true, suggestion: null };
+      try {
+        return { enabled: true, suggestion: (await deps.agent.suggestNextPrompt(transcript)) ?? null };
+      } catch (e) {
+        deps.errors?.record(
+          {
+            category: "next_prompt",
+            code: "generation_failed",
+            message: errMessage(e),
+            scopeLabel: session.scopeId,
+            sessionId,
+          },
+          e,
+        );
+        return { enabled: true, suggestion: null };
+      }
     },
 
     async handleTurn(input: OrchestratorInput): Promise<TurnResult> {
@@ -2729,6 +2766,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   return {
     screenSecuritySteer: (input) => withModelRequestContext({}, () => orchestrator.screenSecuritySteer(input)),
     regenerateTitle: (...args) => withModelRequestContext({}, () => orchestrator.regenerateTitle(...args)),
+    suggestNextPrompt: (...args) => withModelRequestContext({}, () => orchestrator.suggestNextPrompt(...args)),
     handleTurn: (input) => withModelRequestContext({}, () => orchestrator.handleTurn(input)),
   };
 }
