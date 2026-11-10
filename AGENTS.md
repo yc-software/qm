@@ -49,7 +49,8 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   Honorable mentions may share one combined reviewer. Launch reviews asynchronously
   and in parallel within available capacity, queuing any overflow. Do not wait for
   reviews before opening or updating the PR, running checks, or continuing other work.
-  Each reviewer reads their lens and examples, examines the diff and affected paths,
+  Give each reviewer the raw evidence (diff, commands, logs, provider config), never the
+  author's summary of it. Each reviewer reads their lens and examples, examines the diff and affected paths,
   and returns **accept** or **request changes**, a **score out of 100** (higher is
   better), and **1–2 sentences** explaining their assessment. Cite concrete findings
   and state the smallest correction needed; explain when a lens has no applicable
