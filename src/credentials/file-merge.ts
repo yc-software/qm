@@ -19,7 +19,7 @@ export function credentialFileExpiry(file: CredentialFile): number | undefined {
   }
   const at = typeof value === "string" ? Date.parse(value) : NaN;
   if (Number.isFinite(at)) return at;
-  console.warn(`[credentials] ${file.path}: could not read its expiry; treating it as having none`);
+  if (value !== undefined && value !== null) console.warn(`[credentials] ${file.path}: could not read its expiry; treating it as having none`);
   return undefined;
 }
 

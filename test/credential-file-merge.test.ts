@@ -37,6 +37,15 @@ test("expiry is read only from the declared AWS SSO and CLI cache files", () => 
   assert.equal(credentialFileExpiry(file(TOKEN, { expiresAt: "soon" })), undefined);
 });
 
+test("the unreadable-expiry warning fires only when an expiry field is present but unparseable", (t) => {
+  const warn = t.mock.method(console, "warn", () => {});
+  credentialFileExpiry(file(TOKEN, { accessToken: "x" }));
+  credentialFileExpiry(file(TOKEN, { expiresAt: "2026-11-09T18:00:00Z" }));
+  assert.equal(warn.mock.callCount(), 0);
+  credentialFileExpiry(file(TOKEN, { expiresAt: "soon" }));
+  assert.equal(warn.mock.callCount(), 1);
+});
+
 test("each side keeps the files only it changed, including deletions", () => {
   const base = [file("config", "c0"), file("token", "t0"), file("wal", "w0"), file("extra", "x0")];
   assert.deepEqual(
