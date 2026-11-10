@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto";
+import { boundTenant } from "../tenants/context.ts";
 import { isGatewayModelId } from "./gateway-models.ts";
 import { currentModelRequestContext } from "./request-context.ts";
 import { attestableActor } from "../directory/person.ts";
@@ -118,7 +119,7 @@ function gatewayScopeId(scopeId: string | undefined, key: string | undefined): s
 }
 
 export function gatewayKey(config: Pick<ModelGatewayTransportConfig, "apiKey">): string {
-  return tenantSettings().modelGatewayKey ?? config.apiKey;
+  return (boundTenant() === undefined ? undefined : tenantSettings().modelGatewayKey) ?? config.apiKey;
 }
 
 export function modelGatewayHeaders(
