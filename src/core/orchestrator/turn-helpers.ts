@@ -134,11 +134,10 @@ export function renderTitleTranscript(items: Item[]): string {
 const DELIVERY_NOTE_ITEM_MAX_CHARS = 200;
 
 export async function recentPrincipalDeliveryNote(
-  deliveries: DeliveryStore | undefined,
+  deliveries: DeliveryStore,
   threadRef: string,
   since = 0,
 ): Promise<string> {
-  if (!deliveries) return "";
   const recent = (await deliveries.listByRecipientThread(threadRef, { limit: 5 })).filter(
     (d) => (d.deliveredAt ?? d.createdAt) > since,
   );
