@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import { ownerUrl, TEST_TENANT } from "./support/test-tenant.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
@@ -447,13 +448,14 @@ test("org-wide app access admits only signed-in org members", async () => {
     assert.equal((await visit("bob@example.com")).status, 403, "back to restricted closes it");
     const hostTenant = `SELECT qm_tenant_for_app_host($1)::text AS tenant`;
     assert.deepEqual(await owner.q(hostTenant, ["orgsite-teamsite"]), [{ tenant: TEST_TENANT }]);
-    assert.deepEqual(await owner.q(hostTenant, ["teamsite"]), [{ tenant: null }]);
+    assert.deepEqual(await owner.q(hostTenant, ["teamsite"]), [{ tenant: TEST_TENANT }]);
     await owner.q(`UPDATE tenants SET settings = settings - 'handle' WHERE id = $1`, [TEST_TENANT]);
     assert.deepEqual(
       await owner.q(hostTenant, ["teamsite"]),
-      [{ tenant: null }],
-      "a company without a handle has no app host",
+      [{ tenant: TEST_TENANT }],
+      "a deployment name owned by one company keeps its legacy app host",
     );
+    assert.deepEqual(await owner.q(hostTenant, ["nosuchsite"]), [{ tenant: null }]);
     assert.deepEqual(await owner.q(hostTenant, ["orgsite-teamsite"]), [{ tenant: null }]);
   } finally {
     await owner.q(`UPDATE tenants SET settings = settings - 'handle' WHERE id = $1`, [TEST_TENANT]);
@@ -467,6 +469,7 @@ test("org-wide app access admits only signed-in org members", async () => {
 
 test("subdomain ingress: without the session config the domain has no door — a 503, not a bounce", async () => {
   const backings = testDeployBackings();
+  const site = `nosession${randomUUID().slice(0, 8)}`;
   const deployStore = createDeployStore(backings);
   const deploy = createDeployService({
     ...singleProcessDeps(),
@@ -493,7 +496,7 @@ test("subdomain ingress: without the session config the domain has no door — a
     createdBy: "alice@example.com",
     entrypoint: "x",
     files: [],
-    name: "mysite",
+    name: site,
   });
   const server = createInsecureTestServer(app, {
     featureFlags: externalSharingOn,
@@ -504,7 +507,7 @@ test("subdomain ingress: without the session config the domain has no door — a
   const port = (server.address() as AddressInfo).port;
   try {
     const r = await httpGet(port, "/", {
-      Host: "mysite.apps.example.com",
+      Host: `${site}.apps.example.com`,
       Accept: "text/html",
       Cookie: `portal_session=${mintPortalSession("alice@example.com")}`,
     });

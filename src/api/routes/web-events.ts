@@ -122,17 +122,19 @@ export function createWebEvents(
     const tenant = event.tenantId ?? (tenancyBooted() ? bootTenant() : undefined);
     if (!event.loopId || !event.itemId || !clientsOf(tenant).size) return;
     if (tenancyBooted() && !tenant) return;
-    const lookup = () => viewersOf(event.loopId, tenant);
-    const viewers = await (tenant ? withTenant(tenant, lookup) : lookup()).catch((e: unknown) => {
-      swallow("web: inbox item viewers", e);
-      return undefined;
-    });
-    if (viewers === undefined) {
-      for (const user of clientsOf(tenant).keys()) send(tenant, user, "inbox_resync", {});
-      return;
-    }
-    const frame = { loopId: event.loopId, itemId: event.itemId, op: event.op ?? "" };
-    for (const user of viewers ?? []) send(tenant, user, "inbox_item", frame);
+    const forward = async (): Promise<void> => {
+      const viewers = await viewersOf(event.loopId, tenant).catch((e: unknown) => {
+        swallow("web: inbox item viewers", e);
+        return undefined;
+      });
+      if (viewers === undefined) {
+        for (const user of clientsOf(tenant).keys()) send(tenant, user, "inbox_resync", {});
+        return;
+      }
+      const frame = { loopId: event.loopId, itemId: event.itemId, op: event.op ?? "" };
+      for (const user of viewers ?? []) send(tenant, user, "inbox_item", frame);
+    };
+    await (tenant ? withTenant(tenant, forward) : forward());
   };
 
   let unsubscribe: Array<() => void> = [];
@@ -164,9 +166,12 @@ export function createWebEvents(
       if (unsubscribe.length) return;
       unsubscribe = [
         app.subscribeSessionStates(forwardSessionState, { onResync: () => broadcast("session_state_resync") }),
-        app.subscribeLedgerEvents((event) => void forwardInboxItem(event), {
-          onResync: () => broadcast("inbox_resync"),
-        }),
+        app.subscribeLedgerEvents(
+          (event) => void forwardInboxItem(event).catch((e: unknown) => swallow("web: inbox item", e)),
+          {
+            onResync: () => broadcast("inbox_resync"),
+          },
+        ),
       ];
       sweeper.start();
     },
