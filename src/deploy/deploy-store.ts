@@ -370,12 +370,12 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
       await backingMap.put(id, d);
     },
     async setVersionImage(id, version, image) {
-      const d = await backingMap.get(id);
-      if (!d) return;
-      const v = d.versions.find((x) => x.version === version);
-      if (!v) throw new Error(`no such version ${version}`);
-      v.image = image;
-      await backingMap.put(id, d);
+      await backingMap.update(id, (d) => {
+        const v = d.versions.find((x) => x.version === version);
+        if (!v) throw new Error(`no such version ${version}`);
+        v.image = image;
+        return d;
+      });
     },
     async setStatus(id, status) {
       await backingMap.merge(id, { status });
@@ -391,19 +391,10 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
       }
     },
     async setOwnerScope(id, ownerScopeId) {
-      const d = await backingMap.get(id);
-      if (d) {
-        d.ownerScopeId = ownerScopeId;
-        await backingMap.put(id, d);
-      }
+      await backingMap.merge(id, { ownerScopeId });
     },
     async setDisplayName(id, displayName) {
-      const d = await backingMap.get(id);
-      if (d) {
-        if (displayName) d.displayName = displayName;
-        else delete d.displayName;
-        await backingMap.put(id, d);
-      }
+      await backingMap.merge(id, { displayName: displayName || undefined });
     },
     async setAlwaysOn(id, alwaysOn) {
       await backingMap.merge(id, { alwaysOn } as Partial<Deployment>);
@@ -418,20 +409,18 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
       await backingMap.merge(id, { public: isPublic ? true : undefined });
     },
     async setDefaultAudience(id, snapshot) {
-      const d = await backingMap.get(id);
-      if (d) {
-        d.defaultAudience = snapshot;
-        await backingMap.put(id, d);
-      }
+      await backingMap.merge(id, { defaultAudience: snapshot });
     },
     async setAppliedVersion(id, version, placedCommit) {
-      const d = await backingMap.get(id);
-      if (!d) return;
-      const v = d.versions.find((x) => x.version === version);
-      if (!v) throw new Error(`no such version ${version}`);
-      d.appliedVersion = version;
-      await backingMap.put(id, d);
-      await updateAppliedRef(id, placedCommit ?? v.commit);
+      let commit: string | undefined;
+      const d = await backingMap.update(id, (d) => {
+        const v = d.versions.find((x) => x.version === version);
+        if (!v) throw new Error(`no such version ${version}`);
+        commit = v.commit;
+        d.appliedVersion = version;
+        return d;
+      });
+      if (d) await updateAppliedRef(id, placedCommit ?? commit);
     },
     async touch(id, at) {
       const prev = lastTouch.get(id);
