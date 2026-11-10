@@ -4,7 +4,7 @@
 
 <div align="center">
 
-**A multiplayer agent harness for work. In Slack and on the web.**<br>
+**An agent harness for teams. In Slack and on the web.**<br>
 Run it in your own cloud, with your own models and keys.
 
 [![CI](https://img.shields.io/github/actions/workflow/status/yc-software/qm/cicd.yml?branch=main&label=CI&style=flat-square)](https://github.com/yc-software/qm/actions/workflows/cicd.yml)
@@ -12,14 +12,14 @@ Run it in your own cloud, with your own models and keys.
 [![node](https://img.shields.io/badge/node-24.15%2B-3178c6?style=flat-square)](./package.json)
 [![npm](https://img.shields.io/npm/v/@yc-software/qm?label=npm&color=000&style=flat-square)](https://www.npmjs.com/package/@yc-software/qm)
 
-[Deploy](#deploy-it-for-your-org) · [How it works](#how-it-works) · [Security model](#security-and-secrets) · [Customize](#customize-your-instance) · [Contribute](#contributing) · [Documentation](#going-deeper)
+[Deploy](#deploy-it-for-your-org) · [How it works](#how-it-works) · [Security model](#security-and-secrets) · [Customize](#customize-your-instance) · [Contribute](#contributing) · [Documentation](https://labs.ycombinator.com/qm/)
 
 </div>
 
 ## Overview
 
 Most agents are designed like personal assistants. You can make one work for a whole
-company, but it quickly gets complex. QM is designed for startups. Employees each get
+team, but it quickly gets complex. QM is designed for teams. Everyone gets
 their own isolated workspace, and can also collaborate with the agent in channels, group messages, and projects.
 
 Each person and each room has its own scoped memory, files, keychain view, permissions,
@@ -101,7 +101,7 @@ and supervises through a direct service client.
 The core runs TypeScript directly on Node and uses Fastify for HTTP. The Slack plugin
 uses Bolt; the web UI builds with Vite and renders with Lit.
 
-The core itself is generic. Everything specific to one company — org config, custom tools
+The core itself is generic. Everything specific to one team — org config, custom tools
 and skills, sandbox image, infrastructure — lives in a **deployment directory** that the
 [`qm` CLI](./cli/README.md) validates and deploys. Every substrate (session store,
 sandbox, memory) sits behind an interface. Memory can also be routed by scope to
@@ -240,6 +240,7 @@ upstream source history to merge.
 
 ## Going deeper
 
+- [labs.ycombinator.com/qm](https://labs.ycombinator.com/qm/) — the documentation site
 - [`docs/getting-started.md`](./docs/getting-started.md) — first run, end to end
 - [`cli/README.md`](./cli/README.md) — the `qm` CLI and the deployment directory contract
 - [`docs/deploy-directory.md`](./docs/deploy-directory.md) — the deployment directory in full
