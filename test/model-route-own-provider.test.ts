@@ -34,7 +34,7 @@ test("company inference leaves the gateway once the organization saves its own p
     false,
   ]);
   assert.deepEqual(summary(await routes(["openai"]).route(claude)), [gpt, "org_key", false]);
-  assert.deepEqual(summary((await routes(["openai"]).utility())!), [gpt, "org_key", false]);
+  assert.equal((await routes(["openai"]).route("openrouter/auto")).modelId, "openrouter/auto");
   const personal = await routes(["openai"]).route(claude, { anthropic: "mine" });
   assert.deepEqual(summary(personal), [claude, "personal_account", false]);
 });

@@ -1,6 +1,6 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { isModelProvider, modelGatewayRequest, type ModelGatewayTransportConfig } from "./provider-endpoints.ts";
-import { GATEWAY_MODEL_PREFIX } from "./gateway-models.ts";
+import { gatewayUpstream } from "./gateway-models.ts";
 import type { ProviderKeys } from "./model-runtime.ts";
 import {
   auxiliaryModelFor,
@@ -108,12 +108,11 @@ export function createModelRoutes(opts: ModelRouteOptions = {}): ModelRoutes {
   const servedId = (id: string, personalKeys?: ProviderKeys) =>
     personalKeys ? personalModelId(id, personalKeys) : companyServedId(id);
   const ownModelId = async (id: string): Promise<string | undefined> => {
-    if (!opts.modelGateway) return undefined;
+    const upstream = gatewayUpstream(id);
+    const native = upstream?.modelId ?? (opts.modelGateway?.models[companyServedId(id)] ? id : undefined);
+    if (!native) return undefined;
     const own = (await opts.ownProviders?.()) ?? new Set<string>();
     if (!own.size) return undefined;
-    const native = id.startsWith(GATEWAY_MODEL_PREFIX)
-      ? id.slice(id.indexOf("/", GATEWAY_MODEL_PREFIX.length) + 1)
-      : id;
     const provider = resolveModel(native)?.provider;
     if (provider && own.has(String(provider))) return native;
     return [...own].flatMap((p) => (isModelProvider(p) ? [defaultModelForProvider(p)] : [])).find(Boolean);
@@ -151,7 +150,7 @@ export function createModelRoutes(opts: ModelRouteOptions = {}): ModelRoutes {
       if (fromModelIds.has(runtime.modelId) || fromModelIds.has(served) || !resolveModel(served, !providerKeys))
         return undefined;
       const r = servable(await route(runtime.modelId, providerKeys));
-      return r && { ...r, runtime };
+      return r && !fromModelIds.has(r.modelId) ? { ...r, runtime } : undefined;
     },
   };
 }
