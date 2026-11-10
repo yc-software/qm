@@ -56,7 +56,6 @@ test("slotPorts derive the full port block from the slot number", () => {
   const ports = slotPorts("pool3", 8080);
   assert.deepEqual(ports, {
     core: 8083,
-    web: 8099,
     portal: 8115,
     prodProxy: 8131,
     slackHealth: 8147,
@@ -69,12 +68,13 @@ test("port blocks preserve legacy slots and stay disjoint through the port ceili
     const used = new Set<number>();
     const count = portSlotCount(base);
     for (let num = 1; num <= count; num++) {
-      const ports = Object.values(slotPorts(`pool${num}`, base));
-      for (const [index, port] of ports.entries()) {
+      const ports = slotPorts(`pool${num}`, base);
+      const legacyOffsets = { core: 0, portal: 2, prodProxy: 3, slackHealth: 4, supervisor: 5 };
+      for (const [name, port] of Object.entries(ports)) {
         assert.ok(port > base && port <= 65535);
         assert.ok(!used.has(port), `port ${port} overlaps at slot ${num}`);
         used.add(port);
-        if (num <= 16) assert.equal(port, base + num + index * 16);
+        if (num <= 16) assert.equal(port, base + num + legacyOffsets[name as keyof typeof legacyOffsets] * 16);
       }
     }
     assert.throws(() => slotPorts(`pool${count + 1}`, base), /No valid port block/);
@@ -408,14 +408,10 @@ test("supervised children share the selected dev org", () => {
   };
   const specs = buildChildSpecs(inputs);
   assert.equal(specs.find((spec) => spec.name === "core")!.env.ORG_ID, "beta");
-  for (const spec of specs.filter((spec) => spec.name !== "core")) {
-    assert.equal(spec.env.HOME, undefined);
-    assert.equal(spec.env.CODEX_HOME, undefined);
-  }
   for (const spec of specs) assert.equal(spec.env.CORE_ORG_ID, "beta");
-  assert.equal(specs.find((spec) => spec.name === "portal")!.env.PORTAL_LOCAL_AUTH_BYPASS, "1");
+  assert.equal(specs.find((spec) => spec.name === "core")!.env.PORTAL_LOCAL_AUTH_BYPASS, "1");
   inputs.baseEnv.PORTAL_LOCAL_AUTH_BYPASS = "0";
-  assert.equal(buildChildSpecs(inputs).find((spec) => spec.name === "portal")!.env.PORTAL_LOCAL_AUTH_BYPASS, "0");
+  assert.equal(buildChildSpecs(inputs).find((spec) => spec.name === "core")!.env.PORTAL_LOCAL_AUTH_BYPASS, "0");
   inputs.baseEnv = {};
   assert.equal(buildChildSpecs(inputs).find((spec) => spec.name === "core")!.env.ORG_ID, "acme");
 });
@@ -451,11 +447,15 @@ test("child specs disable environment Slack tokens when no Slack tokens are supp
   assert.equal(slackOnly[0]!.env.SLACK_BOT_TOKEN, "xoxb-test");
   assert.equal(slackOnly[0]!.env.DEV_INSTANCE_NO_SLACK, "0");
   assert.equal(slackOnly[0]!.env.PUBLIC_WEB_URL, "");
+  assert.equal(slackOnly[0]!.env.PUBLIC_PORT, undefined);
   inputs.web = true;
+  const withWeb = buildChildSpecs(inputs);
   assert.deepEqual(
-    buildChildSpecs(inputs).map((spec) => spec.name),
-    ["core", "web", "portal"],
+    withWeb.map((spec) => spec.name),
+    ["core"],
   );
+  assert.equal(withWeb[0]!.env.PUBLIC_PORT, String(inputs.ports.portal));
+  assert.deepEqual(withWeb[0]!.health, { kind: "tcp", port: inputs.ports.portal });
 });
 
 test("formatAge renders the bash-compatible shapes", () => {
@@ -475,7 +475,7 @@ test("Slack-only dependency preparation needs no web installation or build", asy
   const worktree = mkdtempSync(join(tmpdir(), "qm-dev-deps-"));
   try {
     mkdirSync(join(worktree, "node_modules/emoji-datasource"), { recursive: true });
-    await ensureDeps(worktree, { web: false, watch: false, webUiBasePath: "/" }, () => {
+    await ensureDeps(worktree, { web: false, webUiBasePath: "/" }, () => {
       assert.fail("Slack-only startup must not install or build web dependencies");
     });
   } finally {

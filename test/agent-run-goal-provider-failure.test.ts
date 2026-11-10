@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createGoalRecord, type GoalRecord } from "../src/agent/goal.ts";
 import { createAgent } from "../src/agent/agent-run.ts";
+import { createModelRoutes } from "../src/model/model-route.ts";
 import { ProviderTurnError } from "../src/core/turn-error.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { storedItem, type Item } from "../src/sessions/items.ts";
@@ -35,7 +36,7 @@ function goalTurn(sessionId: string, cancel: AbortSignal, items: Item[]): AgentT
 }
 
 test("an active goal stops continuing once a model round fails at the provider", async () => {
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
   const controller = new AbortController();
   const items: Item[] = [];
   const realFetch = globalThis.fetch;
@@ -101,7 +102,7 @@ function textStream(text: string, stopReason = "end_turn"): Response {
 }
 
 test("a refused goal round falls back to another model and the goal keeps going", async () => {
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
   const controller = new AbortController();
   const items: Item[] = [];
   const realFetch = globalThis.fetch;
@@ -126,7 +127,9 @@ test("a refused goal round falls back to another model and the goal keeps going"
 });
 
 test("a goal never falls back to a model that already refused in the same turn", async () => {
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({
+    routes: createModelRoutes({ apiKey: "sk-test", resolveFallbackRuntime: () => ({ modelId: "claude-sonnet-5" }) }),
+  });
   const controller = new AbortController();
   const items: Item[] = [];
   const realFetch = globalThis.fetch;

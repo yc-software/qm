@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url";
 import { fetchWithRetry } from "../util/async.ts";
 import { errMessage, swallowAs, withRequestId } from "../util/errors.ts";
 import { openManagedAgentsTunnel, SANDBOX_AGENT_PORT, type ManagedAgentsTunnel } from "./managed-agents-tunnel.ts";
+import { trimTrailingSlashes } from "../util/text.ts";
 
 export interface ManagedAgentsCommandResult {
   stdout: string;
@@ -80,7 +81,6 @@ export class ManagedAgentsHitlRejectedError extends Error {
 
 interface ManagedAgentsCreateOpts {
   name: string;
-  egressAllow?: string[];
 }
 
 export interface ManagedAgentsClient {
@@ -102,7 +102,6 @@ export interface SdkManagedAgentsClientOptions {
   idleTimeoutSec?: number;
   maxCommandMs?: number;
   stallProbeMs?: number;
-  egressProxyUrl?: string;
 }
 
 const DEFAULT_API_BASE_URL = "https://api.digitalocean.com";
@@ -151,28 +150,17 @@ const USABLE_STATES: ReadonlySet<ManagedAgentsSessionState> = new Set<ManagedAge
 export const managedAgentsSessionState = (wire: string | undefined): ManagedAgentsSessionState =>
   STATE_BY_WIRE[wire ?? ""] ?? "unspecified";
 
-export function managedAgentsEgressAllow(egressProxyUrl: string): string[] {
-  const host = new URL(egressProxyUrl).hostname.replace(/^\[|\]$/g, "");
-  if (!host) throw new Error(`DO_AGENTS_EGRESS_PROXY_URL ${egressProxyUrl} has no host to put on the egress allowlist`);
-  return [host];
-}
-
 export function managedAgentsManifest(opts: {
   name: string;
   template: string;
   agent?: string;
   sizeSlug?: string;
   idleTimeoutSec?: number;
-  egressAllow?: readonly string[];
 }): string {
   const lines = [`name: ${JSON.stringify(opts.name)}`, `agent: ${JSON.stringify(opts.agent ?? DEFAULT_AGENT)}`];
   if (opts.template) lines.push(`template: ${JSON.stringify(opts.template)}`);
   if (opts.sizeSlug) lines.push(`size: ${JSON.stringify(opts.sizeSlug)}`);
   if (opts.idleTimeoutSec) lines.push(`idle_timeout: ${JSON.stringify(`${opts.idleTimeoutSec}s`)}`);
-  if (opts.egressAllow?.length) {
-    lines.push("egress:");
-    for (const host of opts.egressAllow) lines.push(`  - ${JSON.stringify(host)}`);
-  }
   lines.push("permissions:", "  default: allow", "  rules:", "    - tool: bash", "      action: allow");
   return `${lines.join("\n")}\n`;
 }
@@ -320,11 +308,10 @@ async function dialSandboxAgent(localPort: number, readyTimeoutMs: number): Prom
 }
 
 export function createSdkManagedAgentsClient(opts: SdkManagedAgentsClientOptions): ManagedAgentsClient {
-  const apiBaseUrl = (opts.apiBaseUrl ?? DEFAULT_API_BASE_URL).replace(/\/+$/, "");
+  const apiBaseUrl = trimTrailingSlashes(opts.apiBaseUrl ?? DEFAULT_API_BASE_URL);
   const template = opts.template ?? DEFAULT_TEMPLATE;
   const maxCommandMs = opts.maxCommandMs ?? DEFAULT_MAX_COMMAND_MS;
   const stallProbeMs = opts.stallProbeMs ?? STALL_PROBE_MS;
-  const egressAllow = opts.egressProxyUrl ? managedAgentsEgressAllow(opts.egressProxyUrl) : undefined;
 
   function send(method: string, path: string, body?: string, contentType?: string, signal?: AbortSignal) {
     return fetch(`${apiBaseUrl}${path}`, {
@@ -721,7 +708,6 @@ export function createSdkManagedAgentsClient(opts: SdkManagedAgentsClientOptions
         ...(opts.agent ? { agent: opts.agent } : {}),
         ...(opts.sizeSlug ? { sizeSlug: opts.sizeSlug } : {}),
         ...(opts.idleTimeoutSec ? { idleTimeoutSec: opts.idleTimeoutSec } : {}),
-        ...((createOpts.egressAllow ?? egressAllow) ? { egressAllow: createOpts.egressAllow ?? egressAllow } : {}),
       });
       const body = await callJson<{ session?: WireSession }>(
         "POST",

@@ -1,5 +1,4 @@
 import type { CoreSession } from "./core-bridge.ts";
-import type { Item } from "./items.ts";
 
 type SubagentState = "working" | "waiting" | "done" | "failed";
 
@@ -94,35 +93,4 @@ export function subagentSummary(rows: readonly SubagentRow[]): string {
   if (waiting) parts.push(`${waiting} need${waiting === 1 ? "s" : ""} you`);
   if (failed) parts.push(`${failed} failed`);
   return parts.join(", ");
-}
-
-export interface PeekLine {
-  kind: "tool" | "text";
-  text: string;
-}
-
-function clip(text: string, max: number): string {
-  const flat = text.replace(/\s+/g, " ").trim();
-  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
-}
-
-function toolLine(item: Item): string | null {
-  if (!item.tool) return null;
-  const { action, command } = item.body;
-  const actionText = typeof action === "string" && action ? ` ${action}` : "";
-  const commandText = typeof command === "string" && command ? ` · ${command}` : "";
-  return clip(`${item.tool}${actionText}${commandText}`, 120);
-}
-
-export function peekLines(items: readonly Item[], max = 4): PeekLine[] {
-  const lines: PeekLine[] = [];
-  for (const item of items) {
-    const tool = item.kind === "ToolCall" ? toolLine(item) : null;
-    if (tool) lines.push({ kind: "tool", text: tool });
-    else if (item.kind === "AgentMessage" && item.variant !== "files_delivered" && item.text !== null) {
-      const text = clip(item.text, 240);
-      if (text) lines.push({ kind: "text", text });
-    }
-  }
-  return lines.slice(-max);
 }

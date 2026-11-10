@@ -1,29 +1,13 @@
+import { steerWithheldItem } from "../core/turn-error.ts";
+import type { ResumableToolCall } from "../core/turn-resume.ts";
 import type { ReplayImageRef } from "./replay.ts";
-import { randomBytes } from "node:crypto";
-import {
-  parseSecurityScreenVerdict,
-  SECURITY_SCREEN_STEP,
-  SECURITY_SCREEN_SYSTEM_PROMPT,
-} from "../security/security-posture.ts";
-import type { ScopeId } from "../types.ts";
-import { createAgentTools, type AgentToolsOptions, type ToolContextRef } from "./agent-tools.ts";
-import { goalWorkFromItems } from "./goal.ts";
-import type { TurnLlmRequestRecord, ModelUtilities, AgentTurnInput, AgentTurnResult } from "./agent.ts";
-import { sanitizeTitle, TITLE_GENERATION_PROMPT, titleUserPrompt } from "./agent-run.ts";
+import type { ToolContextRef } from "./agent-tools.ts";
+import type { AgentTurnInput, ApprovedToolCall } from "./agent.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { INTERRUPTED_TOOL_RESULT } from "./context-compaction.ts";
-import { type Item, storedItem } from "../sessions/items.ts";
+import type { Item, NewItem } from "../sessions/items.ts";
+import { DuplicateCallError } from "../sessions/session-store.ts";
 import type { StepFields } from "./step-recorder.ts";
-
-export interface ToolPlumbing {
-  controlTools?: boolean;
-  sandboxResources?: boolean;
-  execTimeoutMs?: number;
-  execTimeoutCeilingMs?: number;
-  backgroundJobTtlMs?: number;
-  backgroundJobTtlMaxMs?: number;
-  sandboxCapabilityTtlMs?: number;
-}
 
 export type BridgedTool = {
   name: string;
@@ -45,6 +29,8 @@ export interface SteerIntake {
   attachments?: AgentTurnInput["attachments"];
   images?: AgentTurnInput["images"];
   author?: string;
+  authorName?: string;
+  withheld?: boolean;
   acknowledge?: () => Promise<void>;
 }
 
@@ -59,17 +45,20 @@ export function imageRefs(images: AgentTurnInput["images"]): { images?: ReplayIm
 }
 
 export async function recordSteerIntake(turn: AgentTurnInput, steer: SteerIntake): Promise<void> {
-  await turn.emit({
-    kind: "SteeringMessage",
-    text: steer.text,
-    author: steer.author ?? null,
-    body: {
-      ...(steer.prompt !== undefined && steer.prompt !== steer.text ? { prompt: steer.prompt } : {}),
-      ...(steer.ts ? { ts: steer.ts } : {}),
-      ...(steer.attachments?.length ? { attachments: steer.attachments } : {}),
-      ...imageRefs(steer.images),
-    },
-  });
+  if (steer.withheld) await turn.emit(steerWithheldItem(steer.authorName ?? steer.author ?? ""));
+  else
+    await turn.emit({
+      kind: "SteeringMessage",
+      text: steer.text,
+      author: steer.author ?? null,
+      body: {
+        ...(steer.authorName ? { name: steer.authorName } : {}),
+        ...(steer.prompt !== undefined && steer.prompt !== steer.text ? { prompt: steer.prompt } : {}),
+        ...(steer.ts ? { ts: steer.ts } : {}),
+        ...(steer.attachments?.length ? { attachments: steer.attachments } : {}),
+        ...imageRefs(steer.images),
+      },
+    });
   await steer.acknowledge?.().catch(swallowAs("steer acknowledge", undefined));
 }
 
@@ -87,63 +76,14 @@ export async function recordStoppedTurn(
         kind: "AgentMessage",
         text: partial,
         step: replay?.step ?? null,
-        body: { stopped: true, ...replay?.body },
+        body: { stopped: true, ...(turn.cancel?.aborted ? { cancelled: true } : {}), ...replay?.body },
       })
     : null;
   const note = await turn.emit({ kind: "Stop", body: { reason } });
   return note ?? answer;
 }
 
-export function turnToolContext(turn: AgentTurnInput): ToolContextRef {
-  return {
-    current: turn.tools,
-    runtimeActorId: turn.runtimeActorId,
-    pendingApprovals: [],
-    pausedOnApproval: false,
-    silentRequested: false,
-    pollFire: Boolean(turn.pollFire),
-    goal: turn.goal ?? null,
-    ...(turn.goalMeter ? { goalMeter: turn.goalMeter } : {}),
-    ...(turn.continueTurn ? { goalRound: 1 } : {}),
-    saveGoal: turn.saveGoal,
-    ...(turn.goalInbox ? { goalInbox: turn.goalInbox } : {}),
-    emit: turn.emit,
-    scopeLabel: turn.scopeLabel,
-    orgScopeId: turn.orgScopeId,
-    screenToolResult: turn.screenToolResult,
-    governGoal: turn.governGoal,
-    goalRecentWork: () => goalWorkFromItems(turn.history.slice(-40)),
-    toolApprovalGate: turn.toolApprovalGate,
-    shutdown: turn.shutdown,
-  };
-}
-
-export function turnToolOptions(opts: ToolPlumbing, turn?: AgentTurnInput): AgentToolsOptions {
-  return {
-    ...(turn?.mcpTools?.length ? { mcpTools: turn.mcpTools } : {}),
-    controlTools: opts.controlTools,
-    sandboxResources: opts.sandboxResources,
-    execTimeoutMs: opts.execTimeoutMs,
-    execTimeoutCeilingMs: opts.execTimeoutCeilingMs,
-    backgroundJobTtlMs: opts.backgroundJobTtlMs,
-    backgroundJobTtlMaxMs: opts.backgroundJobTtlMaxMs,
-    sandboxCapabilityTtlMs: opts.sandboxCapabilityTtlMs,
-    ...(turn
-      ? {
-          readOnly: turn.readOnly,
-          sessionTools: Boolean(turn.tools.sessionSyscalls),
-          surfaceTools: turn.surfaceTools,
-          delegateWork: turn.delegateWork,
-          surfaceName: turn.surfaceName,
-          ...(turn.clientTools?.length ? { clientTools: turn.clientTools } : {}),
-        }
-      : { surfaceTools: true, surfaceName: "slack" }),
-  };
-}
-
-export function bridgedTools(ref: ToolContextRef, options: AgentToolsOptions): BridgedTool[] {
-  return createAgentTools(ref, options) as unknown as BridgedTool[];
-}
+type ToolResultContent = NonNullable<Awaited<ReturnType<BridgedTool["execute"]>>["content"]>;
 
 export interface ResumedToolResult {
   history: Item[];
@@ -151,10 +91,117 @@ export interface ResumedToolResult {
     role: "toolResult";
     toolCallId: string;
     toolName: string;
-    content: NonNullable<Awaited<ReturnType<BridgedTool["execute"]>>["content"]>;
+    content: ToolResultContent;
     isError: boolean;
     timestamp: number;
   };
+}
+
+export interface ApprovedToolCallOutcome {
+  items: Item[];
+  text: string;
+  isError: boolean;
+}
+
+function toolCallRoute(
+  call: ResumableToolCall,
+  tools: readonly BridgedTool[],
+  viaConnector: boolean,
+): { tool: BridgedTool; args: unknown } | null {
+  const direct = tools.find((candidate) => candidate.name === call.tool);
+  if (direct) return { tool: direct, args: call.input };
+  if (!viaConnector) return null;
+  const connector = tools.find((candidate) => candidate.name === "mcp_call");
+  return connector ? { tool: connector, args: { tool: call.tool, args: call.input } } : null;
+}
+
+const ALREADY_RAN = "[error] this approved call was already started earlier, so it was not run again";
+
+async function runToolCallOnce(
+  call: ResumableToolCall,
+  ref: ToolContextRef,
+  tools: readonly BridgedTool[],
+  opts: {
+    cancel?: AbortSignal;
+    fresh?: Record<string, unknown>;
+    notRun: (reason: "unavailable" | "cancelled") => string;
+    fallbackBody?: Record<string, unknown>;
+  },
+): Promise<ApprovedToolCallOutcome & { result?: Item; content: ToolResultContent }> {
+  const emit = ref.emit;
+  const abortSignal = ref.abortSignal;
+  const tag = opts.fresh ?? {};
+  const items: Item[] = [];
+  let result: Item | undefined;
+  const append = async (item: NewItem) => {
+    const saved = await emit?.(item);
+    if (saved) items.push(saved);
+    return saved;
+  };
+  const hasCall = () => items.some((item) => item.kind === "ToolCall");
+  const recordCall = async () => {
+    if (opts.fresh && !hasCall())
+      await append({ kind: "ToolCall", tool: call.tool, callId: call.callId, body: { ...call.input, ...tag } });
+  };
+  const recordResult = async (isError: boolean, text: string, fallback = true) => {
+    await recordCall();
+    result = await append({
+      kind: "ToolResult",
+      tool: call.tool,
+      callId: call.callId,
+      isError,
+      text,
+      body: { ...(fallback ? opts.fallbackBody : {}), ...tag },
+    });
+  };
+  ref.emit = async (item) => {
+    if (item.kind === "ToolCall") {
+      if (!opts.fresh || item.callId === call.callId) return undefined;
+      return emit?.(item);
+    }
+    if (item.kind !== "ToolResult" || result || (opts.fresh && item.callId !== call.callId)) return emit?.(item);
+    await recordCall();
+    result = await append({ ...item, body: { ...item.body, ...tag } });
+    return result;
+  };
+  ref.abortSignal = opts.cancel;
+  let text: string;
+  let content: ToolResultContent;
+  let isError = true;
+  try {
+    const route = toolCallRoute(call, tools, !!opts.fresh);
+    if (!route || opts.cancel?.aborted) {
+      const reason = route ? "cancelled" : "unavailable";
+      console.error(
+        `[agent] ${opts.fresh ? "approved call" : "resume"}: ${call.tool} ${reason}; call ${call.callId} did not run`,
+      );
+      text = opts.notRun(reason);
+      content = [{ type: "text", text }];
+      if (!result) await recordResult(true, text);
+    } else {
+      try {
+        await recordCall();
+      } catch (error) {
+        if (!(error instanceof DuplicateCallError)) throw error;
+        console.error(`[agent] approved call: ${call.tool} call ${call.callId} was already recorded; not run again`);
+        return { items, text: ALREADY_RAN, content: [{ type: "text", text: ALREADY_RAN }], isError: true };
+      }
+      content = (await route.tool.execute(call.callId, route.args)).content ?? [];
+      text = content.flatMap((block) => (typeof block.text === "string" ? [block.text] : [])).join("\n");
+      isError = false;
+      if (!result) await recordResult(isError, text);
+    }
+  } catch (error) {
+    isError = result ? result.isError === true : true;
+    text = result ? (result.text ?? "") : `[error] ${errMessage(error)}`;
+    content = [{ type: "text", text }];
+    if (!result) await recordResult(isError, text, false);
+  } finally {
+    ref.emit = emit;
+    ref.abortSignal = abortSignal;
+  }
+  if (result?.isError === true) isError = true;
+  return { items, text, content, isError, ...(result ? { result } : {}) };
 }
 
 export async function resumeInterruptedToolCall(
@@ -164,49 +211,14 @@ export async function resumeInterruptedToolCall(
 ): Promise<ResumedToolResult | null> {
   const call = turn.resumeToolCall;
   if (!call) return null;
-  const tool = tools.find((candidate) => candidate.name === call.tool);
-  const emit = ref.emit;
-  const abortSignal = ref.abortSignal;
-  let recorded: Item | undefined;
-  ref.emit = async (item) => {
-    if (item.kind === "ToolCall") return;
-    const appended = await emit?.(item);
-    if (item.kind === "ToolResult" && !recorded) recorded = appended;
-    return appended;
-  };
-  ref.abortSignal = turn.cancel;
-  let content: ResumedToolResult["message"]["content"] = [{ type: "text", text: INTERRUPTED_TOOL_RESULT }];
-  let isError = true;
-  try {
-    if (tool && !turn.cancel?.aborted) {
-      content = (await tool.execute(call.callId, call.input)).content ?? [];
-      isError = false;
-    } else {
-      console.error(
-        `[agent] resume: ${tool ? "turn cancelled" : `tool ${call.tool} unavailable on this turn`}; recording call ${call.callId} as interrupted`,
-      );
-    }
-    if (!recorded) {
-      await ref.emit({
-        kind: "ToolResult",
-        tool: call.tool,
-        callId: call.callId,
-        isError,
-        text: content[0]?.text ?? "",
-        body: { interrupted: true },
-      });
-    }
-  } catch (error) {
-    isError = recorded ? recorded.isError === true : true;
-    content = [{ type: "text", text: recorded ? (recorded.text ?? "") : `[error] ${errMessage(error)}` }];
-    if (!recorded)
-      await ref.emit({ kind: "ToolResult", tool: call.tool, callId: call.callId, isError, text: content[0]!.text });
-  } finally {
-    ref.emit = emit;
-    ref.abortSignal = abortSignal;
-  }
+  const ran = await runToolCallOnce(call, ref, tools, {
+    ...(turn.cancel ? { cancel: turn.cancel } : {}),
+    notRun: () => INTERRUPTED_TOOL_RESULT,
+    fallbackBody: { interrupted: true },
+  });
+  const recorded = ran.result;
   if (!recorded) return null;
-  if (!isError)
+  if (!ran.isError)
     console.log(`[agent] resume: re-ran retry-safe ${call.tool} call ${call.callId} as seq ${recorded.seq}`);
   return {
     history: [...turn.history, recorded],
@@ -214,77 +226,43 @@ export async function resumeInterruptedToolCall(
       role: "toolResult",
       toolCallId: call.callId,
       toolName: call.tool,
-      content,
-      isError,
+      content: ran.content,
+      isError: ran.isError,
       timestamp: recorded.createdAt,
     },
   };
 }
 
-export type OneShotRunner = (
-  systemPrompt: string,
-  prompt: string,
-  signal?: AbortSignal,
-  observe?: Pick<AgentTurnInput, "recordModelCall" | "recordLlmRequest">,
-  modelOverride?: string,
-) => Promise<string | undefined>;
-
-export function oneShotRunner(runPrompt: (turn: AgentTurnInput) => Promise<AgentTurnResult>): OneShotRunner {
-  return async (systemPrompt, prompt, signal, observe, modelOverride) => {
-    const session = { id: `oneshot-${randomBytes(8).toString("hex")}` } as AgentTurnInput["session"];
-    const scope = { kind: "org", id: "oneshot" } as unknown as ScopeId;
-    const emitted: Item[] = [];
-    const result = await runPrompt({
-      session,
-      input: prompt,
-      systemPrompt,
-      history: [],
-      tools: {} as AgentTurnInput["tools"],
-      scopeLabel: scope,
-      orgScopeId: scope,
-      ...(signal ? { cancel: signal } : {}),
-      ...(modelOverride ? { runtime: { modelId: modelOverride } } : {}),
-      readOnly: true,
-      emit: async (item) => {
-        const saved = storedItem(item, { sessionId: session.id, seq: emitted.length + 1, createdAt: Date.now() });
-        emitted.push(saved);
-        return saved;
-      },
-      recordModelCall: observe?.recordModelCall ?? (() => {}),
-      ...(observe?.recordLlmRequest
-        ? {
-            recordLlmRequest: (rec: TurnLlmRequestRecord) => observe.recordLlmRequest!({ ...rec, turnSeq: null }),
-          }
-        : {}),
-    });
-    return result.reply || undefined;
-  };
+export async function runApprovedToolCall(
+  call: ApprovedToolCall,
+  ref: ToolContextRef,
+  tools: readonly BridgedTool[],
+  opts: { cancel?: AbortSignal },
+): Promise<ApprovedToolCallOutcome> {
+  const { items, text, isError } = await runToolCallOnce(call, ref, tools, {
+    ...opts,
+    fresh: { approvedRequestId: call.requestId },
+    notRun: (reason) =>
+      reason === "unavailable"
+        ? `[error] the approved tool ${call.tool} is not available on this turn, so it did not run`
+        : "[error] the turn was cancelled before the approved call ran",
+  });
+  return { items, text, isError };
 }
 
-export function oneShotModelUtilities(
-  single: OneShotRunner,
-  judgeModelId?: string,
-): Pick<ModelUtilities, "oneShot" | "judge" | "screenSecurity" | "generateTitle" | "summarizeApproval"> {
-  return {
-    oneShot: (system, prompt) => single(system, prompt),
-    judge: (system, prompt, signal) => single(system, prompt, signal, undefined, judgeModelId),
-    screenSecurity: async ({ payload, signal, recordModelCall, recordLlmRequest }) =>
-      parseSecurityScreenVerdict(
-        await single(SECURITY_SCREEN_SYSTEM_PROMPT, payload, signal, {
-          recordModelCall,
-          ...(recordLlmRequest
-            ? {
-                recordLlmRequest: (rec) => recordLlmRequest({ ...rec, step: SECURITY_SCREEN_STEP }),
-              }
-            : {}),
-        }),
-      ),
-    generateTitle: async (transcript) =>
-      sanitizeTitle(await single(TITLE_GENERATION_PROMPT, titleUserPrompt(transcript))),
-    summarizeApproval: (command, reason, purpose) =>
-      single(
-        "Explain this command in one plain-English sentence for an approver.",
-        [command, reason, purpose].filter(Boolean).join("\n"),
-      ),
-  };
+export function approvedCallSteerNote(
+  outcome: { summary: string; approver: string },
+  ran: ApprovedToolCallOutcome,
+  withResult: boolean,
+): string {
+  const head =
+    `[system] ${outcome.approver} approved the pending call ${outcome.summary}, and QM ran it exactly as approved` +
+    (ran.isError ? "; it returned an error" : "");
+  return withResult
+    ? `${head}. Result:\n${ran.text}\nDo not call it again; continue with this result.`
+    : `${head}. Its result is recorded in this conversation. Do not call it again.`;
+}
+
+export function deniedCallSteerNote(outcome: { summary: string; approver: string }): string {
+  return `[system] ${outcome.approver} denied the pending call ${outcome.summary}, so it did not run. Do not retry it unless they ask again.`;
 }

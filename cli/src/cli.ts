@@ -28,6 +28,7 @@ import { cliVersion } from "./manifest.ts";
 import { gitTopLevel, promptHidden, writeEnvValue } from "./util.ts";
 import { scopeStorageKey } from "./scope-storage-key.ts";
 import { runAdminLogin } from "./commands/admin-login.ts";
+import { runUiPublish } from "./commands/ui.ts";
 import { syncDeploymentLayer } from "./deployment-layer.ts";
 
 interface Parsed {
@@ -155,6 +156,8 @@ ${bold("DEPLOY (operator)")} ${dim("— runs in the deployment directory")}
   slack render                             render the bot manifest (+ SSO manifest for Slack OIDC)
   outputs [--json]                         print the Web UI, health, and Slack app creation links
   admin-login [--email <admin-email>]      print a single-use admin login link, valid for five minutes
+  ui publish --dir <dist-web>              upload a built web UI and make it live without restarting core
+  ui publish --release <id>                make an earlier web UI release live again (roll back)
   proof scope-key <scope-id>               derive the provider snapshot key for an exact scope
   infra render                             re-derive infra/terraform.tfvars from config
   infra build-image                        build the AWS deploy MicroVM image and record its pin
@@ -179,6 +182,16 @@ ${bold("DEPLOY (operator)")} ${dim("— runs in the deployment directory")}
     --config <path>                        path to deploy config (default: qm.config.jsonc in deploy dir)
     --env-file <path>                      path to .env (default: .env in the deploy dir)
     --sandbox-dir <path>                   path to the sandbox layer dir (default: sandbox/ in the deploy dir)
+
+${bold("TENANTS (operator)")} ${dim("— runs in the QM repo with DATABASE_URL set to the database owner login")}
+  tenant create [--brand-name <name>]      create a tenant and print its id
+  tenant list                              list tenants
+  tenant settings set <tenant> <key> <json>
+                                           set one tenant setting (null removes it)
+  tenant members add <tenant> <email> [--admin]
+                                           add a member to the tenant's directory, optionally as org admin
+  db grant <role>                          grant the app login <role> access to the public and pgboss schemas;
+                                           run as the database owner after migrations
 
 ${bold("DEVELOP (contributor)")} ${dim("— runs in the QM repo")}
   dev up [--surface web|slack|both] [--org <id>] · dev down · dev status · dev restart · dev canary · dev logs · dev doctor [options]
@@ -343,6 +356,18 @@ async function dispatch(argv: string[]): Promise<void> {
       return;
     }
 
+    case "tenant":
+    case "db": {
+      const root = gitTopLevel();
+      const result = spawnSync(process.execPath, [join(root, `scripts/${cmd}.ts`), ...argv.slice(1)], {
+        cwd: root,
+        stdio: "inherit",
+      });
+      if (result.error) throw result.error;
+      process.exitCode = result.status ?? 1;
+      return;
+    }
+
     case "check": {
       if (boolFlag(flags, "json")) {
         try {
@@ -451,6 +476,18 @@ async function dispatch(argv: string[]): Promise<void> {
       rejectExtraPositionals(positionals, 0);
       const ctx = deployContext(flags);
       runOutputs(ctx.config, ctx.configDir, boolFlag(flags, "json"));
+      return;
+    }
+
+    case "ui": {
+      rejectUnknownFlags(flags, ["dir", "release", "config", "env-file", "sandbox-dir", "target"]);
+      rejectExtraPositionals(positionals, 1);
+      if (positionals[0] !== "publish")
+        throw new CliError(`usage: ${CLI_NAME} ui publish --dir <built web UI> | --release <id>`, {
+          clause: "cli.invocation",
+        });
+      const ctx = deployContext(flags);
+      runUiPublish(ctx.config, { dir: strFlag(flags, "dir"), release: strFlag(flags, "release") });
       return;
     }
 

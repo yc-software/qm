@@ -123,7 +123,12 @@ pgTest("HTTP turn injects semantic matches; grep remains independent", async (t)
   const otherFact = "Another user's confidential browser preference";
   await built.memory.capture("personal:U1", [fact, ...filler], Date.now());
   await built.memory.capture("personal:U2", [otherFact], Date.now());
-  await seedVectors(built.memory, databaseUrl, embeddingId, providerUrl, ["org:default-org", "personal:U1"]);
+  await seedVectors(built.memory, databaseUrl, embeddingId, providerUrl, [
+    "org:default-org",
+    "personal:U1",
+    "personal:U2",
+  ]);
+  inputs.length = 0;
   const server = createInsecureTestServer(built.app, {
     memory: built.memory,
     capabilitySecret: TEST_CAPABILITY_SECRET,
@@ -253,7 +258,8 @@ pgTest("HTTP Open DM combines room and current memory, then blocks reads after m
   );
   await built.memory.capture(room, ["0.99 REMOTE_BEST", "0.72 REMOTE_NEAR"], Date.now());
   await built.memory.capture(denied, ["1 DENIED_NOTEBOOK"], Date.now());
-  await seedVectors(built.memory, databaseUrl, "test", providerUrl, [personal, room]);
+  await seedVectors(built.memory, databaseUrl, "test", providerUrl, [personal, room, denied]);
+  inputs.length = 0;
   const server = createInsecureTestServer(built.app);
   const base = await listen(server);
   t.after(() => close(server));
@@ -278,9 +284,9 @@ pgTest("HTTP Open DM combines room and current memory, then blocks reads after m
   const memory = prompt.split("## What you remember\n")[1]!.split("</environment>")[0]!;
   const packed = memory.slice(memory.indexOf("### ")).trim();
   assert.ok(packed.length <= 6000);
-  assert.ok(memory.indexOf("REMOTE_BEST") >= 0);
+  assert.ok(memory.indexOf("LOCAL_NEAR") >= 0);
+  assert.ok(memory.indexOf("LOCAL_NEAR") < memory.indexOf("REMOTE_BEST"));
   assert.ok(memory.indexOf("REMOTE_BEST") < memory.indexOf("REMOTE_NEAR"));
-  assert.ok(memory.indexOf("REMOTE_NEAR") < memory.indexOf("LOCAL_NEAR"));
   assert.doesNotMatch(prompt, /DENIED_NOTEBOOK/);
   assert.ok(inputs.flat().every((text) => !text.includes("DENIED_NOTEBOOK")));
   assert.equal(inputs.filter((batch) => batch.length === 1 && batch[0]!.includes("verify the change")).length, 1);

@@ -56,8 +56,9 @@ jobs:
           IMAGES_REF: ${{ inputs.images_ref || github.sha }}
         run: |
           set -euo pipefail
+          services=$(node -e 'import("./cli/src/services.ts").then(({ SERVICE_NAMES }) => console.log(SERVICE_NAMES.join(" ")))')
           out=$(jq -n '{sandboxBase: "", services: {}}')
-          for service in core web-ui portal auth egress-proxy sandbox-base; do
+          for service in $services sandbox-base; do
             repo="yc-software/qm/$service"
             token=$(curl -fsS "https://ghcr.io/token?scope=repository:$repo:pull&service=ghcr.io" | jq -r .token)
             digest=$(curl -fsS -o /dev/null -D - -H "Authorization: Bearer $token" \
@@ -79,7 +80,7 @@ jobs:
           printf '%s\n' "$out" > cli/manifest.json
           cat cli/manifest.json
           jq -e '(.sandboxBase | test("^ghcr\\.io/yc-software/qm/sandbox-base:[0-9a-f]{40}@sha256:[0-9a-f]{64}$"))
-                 and ([.services[]] | length == 6 and all(test("^ghcr\\.io/yc-software/qm/[a-z-]+@sha256:[0-9a-f]{64}$")))
+                 and ([.services[]] | all(test("^ghcr\\.io/yc-software/qm/[a-z-]+@sha256:[0-9a-f]{64}$")))
                  and ([.sandboxBase] + [.services[]] | all(test("@sha256:(.)\\1{63}$") | not))' cli/manifest.json > /dev/null
           printf 'manifest=%s\n' "$(jq -c . cli/manifest.json)" >> "$GITHUB_OUTPUT"
       - name: Publish

@@ -1,6 +1,6 @@
 ---
 name: google-workspace
-description: Read and act on the user's Gmail, Google Calendar, and Google Tasks through per-user OAuth.
+description: Read and act on the user's Gmail, Google Calendar, and Google Tasks through their own Google connection.
 requiredCapabilities:
   - egress:gmail.googleapis.com
   - egress:www.googleapis.com
@@ -11,17 +11,30 @@ requiredCapabilities:
 Use this skill when the user asks about Gmail, Google Calendar, or Google Tasks:
 schedule, meetings, emails, labels, drafts, replies, or to-do lists and tasks.
 
-This is an OAuth connector. The resolved user's Google OAuth token already lives on
-your computer as an environment variable, one per Google API host (the way a logged-in
-CLI's cached credential would):
+## Connection
 
-- `$VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM` — for `gmail.googleapis.com`
-- `$VAULT_TOKEN_WWW_GOOGLEAPIS_COM` — for `www.googleapis.com` (Calendar and Tasks)
+Google reaches you one of two ways; the requests are the same either way.
 
-Do not ask the user for a token, log it, or use another principal's. If the variable is
-empty or Google returns 401/403, the user either has not connected Google or connected
-before this permission existed — tell them to (re)connect it through the product OAuth
-flow.
+- **Direct token:** `$VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM` (`gmail.googleapis.com`) and
+  `$VAULT_TOKEN_WWW_GOOGLEAPIS_COM` (Calendar and Tasks on `www.googleapis.com`) hold the
+  user's Google OAuth token. The `curl` examples below use them as written.
+- **App connection:** with no token, the user connects Gmail, Google Calendar and Google
+  Tasks as apps instead (composio skill). Send the same request through QM — same method,
+  URL, `query`, headers and JSON `body`, but no Authorization header:
+
+  ```bash
+  curl -sS "$AGENT_API_URL/v1/composio/proxy" -H "X-Agent-Capability: $AGENT_API_TOKEN" \
+    -H 'content-type: application/json' \
+    --data '{"method":"GET","url":"https://www.googleapis.com/calendar/v3/users/me/settings/timezone"}'
+  ```
+
+  The reply is the provider's own status and body; the composio skill's "Raw requests"
+  section covers `409` answers, choosing an account, and file bodies. `gmail.py` picks the route itself
+  (`--account ca_…` before the command selects a connection).
+
+Do not ask the user for a token, log it, or use another principal's. A 401/403 from Google
+means they haven't connected it, or connected before this permission existed — have them
+(re)connect.
 
 ## Gmail
 
@@ -54,9 +67,10 @@ python3 "<skill dir>/scripts/gmail.py" send-draft DRAFT_ID
   message shows the matter is settled ("thanks", "done", someone else answered),
   don't flag it. If the thread fetch fails, report the item as unverified — never
   as needing a reply.
-- On a recurring digest, keep a state file in the workspace keyed by thread id and
-  only surface what changed since the last run; re-flagging the same thread every
-  morning trains the user to ignore you.
+- On a recurring digest, keep the seen-thread state in Files (upload a small JSON keyed
+  by thread id each run and keep its id in the cron note or a memory fact), never on
+  the computer, which is replaced without notice; surface only what changed since the
+  last run. Re-flagging the same thread every morning trains the user to ignore you.
 - Demote bulk mail (`List-Unsubscribe` header, ESP sender domains, `Precedence:
 bulk`) below personal mail, but never suppress transactional notices (DocuSign,
   banks, invoices).
@@ -148,4 +162,5 @@ curl -sS -X POST 'https://www.googleapis.com/calendar/v3/calendars/primary/event
   --data @event.json
 ```
 
-Always show what changed and keep enough IDs in the workspace to undo or inspect later.
+Always show what changed and keep the IDs needed to undo or inspect later in your
+reply or in memory, not on the computer.

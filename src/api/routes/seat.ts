@@ -29,6 +29,7 @@ export const seatRoutes: ReadonlyArray<Route<ApiCtx>> = [
   {
     method: "GET",
     path: "/v1/seat/steps",
+    browser: "self",
     auth: "source",
     actor: "query.principalId",
     handle: (ctx) =>
@@ -39,6 +40,7 @@ export const seatRoutes: ReadonlyArray<Route<ApiCtx>> = [
   {
     method: "GET",
     path: "/v1/seat/steps/:id",
+    browser: "self",
     auth: "source",
     actor: "query.principalId",
     handle: (ctx) =>
@@ -51,6 +53,7 @@ export const seatRoutes: ReadonlyArray<Route<ApiCtx>> = [
   {
     method: "POST",
     path: "/v1/seat/steps/:id/move",
+    browser: "self",
     auth: "source",
     actor: "body.principalId",
     maxBodyBytes: 2_000_000,
@@ -63,6 +66,7 @@ export const seatRoutes: ReadonlyArray<Route<ApiCtx>> = [
   {
     method: "POST",
     path: "/v1/seat/steps/:id/ask",
+    browser: "self",
     auth: "source",
     actor: "body.principalId",
     handle: (ctx) => {

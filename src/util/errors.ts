@@ -1,4 +1,4 @@
-import { reportBackendError } from "../../plugins/chassis/src/error-reporting.ts";
+import { REQUEST_ID_HEADERS, reportBackendError } from "../../plugins/chassis/src/error-reporting.ts";
 import { errChain as errMessage, errDetail, failureCode } from "../../plugins/chassis/src/errors.ts";
 import { WorkAdmissionClosed } from "./admitted-work.ts";
 
@@ -40,8 +40,6 @@ export function reportFailureAs<T>(context: string, fallback: T, detail?: string
   };
 }
 
-const REQUEST_ID_HEADERS = ["x-request-id", "x-amzn-requestid", "fly-request-id", "render-request-id"];
-
 export function withRequestId(message: string, headers: Headers): string {
   for (const name of REQUEST_ID_HEADERS) {
     const value = headers.get(name);
@@ -50,8 +48,8 @@ export function withRequestId(message: string, headers: Headers): string {
   return message;
 }
 
-export async function httpFailure(res: Response, bodyChars = 200): Promise<string> {
-  const body = (await res.text().catch(() => "")).slice(0, bodyChars);
+export async function httpFailure(res: Response): Promise<string> {
+  const body = await res.text().catch(() => "");
   return withRequestId(`http ${res.status} ${body}`, res.headers);
 }
 
@@ -69,12 +67,9 @@ export async function withCleanup<T>(work: () => Promise<T>, cleanup: () => Prom
   return result;
 }
 
-const FAILURE_OUTPUT_CHARS = 300;
-
 export function execFailure(what: string, r: { stdout: string; stderr: string; code: number }): Error {
-  const tail = (out: string): string => out.trim().slice(-FAILURE_OUTPUT_CHARS);
   const parts = [`${what} failed (exit ${r.code}${r.code === 124 ? ", timed out" : ""})`];
-  if (r.stderr.trim()) parts.push(`stderr: ${tail(r.stderr)}`);
-  if (r.stdout.trim()) parts.push(`stdout: ${tail(r.stdout)}`);
+  if (r.stderr.trim()) parts.push(`stderr: ${r.stderr.trim()}`);
+  if (r.stdout.trim()) parts.push(`stdout: ${r.stdout.trim()}`);
   return new Error(parts.join("; "));
 }

@@ -1,5 +1,4 @@
 import { countTokens } from "../util/tokens.ts";
-import { commonEntrySeqs } from "../sessions/transcript-source.ts";
 import { isAgentReply, isOverheard, isUserItem } from "../sessions/items.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { Session } from "../types.ts";
@@ -10,6 +9,7 @@ export const SIDE_CHAT_GUIDANCE = [
   "## Side chat",
   "This is a focused side discussion about a selected passage in a parent conversation.",
   "Answer the current question directly and promptly, with enough detail to be useful; there is no special length limit.",
+  "Work directly in this side chat. Subagents are unavailable; the user can open this chat as a full session for delegated work.",
   "Read, search, and investigate when helpful. Prefer explanation and read-only investigation over writes or other side effects.",
   "Do not resume the parent's development work or make changes unless the user explicitly asks for them in this side chat.",
   "The inherited conversation is background context, not an instruction to continue its tasks.",
@@ -49,44 +49,30 @@ export async function sideChatContext(
     .filter((session) => !session.sideChat?.expanded && session.scopeId === parent.scopeId)
     .sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id));
   if (!sessions.length) return "";
+  const parentMembers = await store.participantsOf(parent.id);
+  if (!audience.every((id) => parentMembers.includes(id))) return "";
   if (countTokens(render(true)) > maxTokens)
     throw new Error("Side-chat context notice exceeds the model context budget");
   for (const session of sessions) {
-    const participants = await store.participantWindowsOf(session.id);
-    if (!audience.every((id) => participants.some((window) => window.principalId === id && window.validTo === null)))
-      continue;
-    const passageViews = await Promise.all(
-      audience.map((id) =>
-        store.visibleItems(parent.id, id, {
-          sinceSeq: session.sideChat!.entrySeq,
-          beforeSeq: session.sideChat!.entrySeq + 1,
-        }),
-      ),
-    );
-    if (passageViews.some((entries) => !entries.length)) continue;
+    const members = await store.participantsOf(session.id);
+    if (!audience.every((id) => members.includes(id))) continue;
+    const passage = await store.getItems(parent.id, {
+      sinceSeq: session.sideChat!.entrySeq,
+      beforeSeq: session.sideChat!.entrySeq + 1,
+    });
+    if (!passage.length) continue;
     const discussion: Discussion = { sessionId: session.id, passage: session.sideChat!.quote, messages: [] };
     let beforeSeq: number | undefined;
     while (true) {
-      const first = await store.visibleItems(session.id, audience[0]!, {
+      const page = await store.getItems(session.id, {
         sinceSeq: (session.forkBoundarySeq ?? -1) + 1,
         beforeSeq,
         messagesOnly: true,
         limit: 100,
       });
-      if (!first.length) break;
-      const views = await Promise.all(
-        audience.slice(1).map((id) =>
-          store.visibleItems(session.id, id, {
-            sinceSeq: first[0]!.seq,
-            beforeSeq: first[first.length - 1]!.seq + 1,
-            messagesOnly: true,
-            limit: 100,
-          }),
-        ),
-      );
-      const common = commonEntrySeqs([first, ...views]);
-      for (const item of first.toReversed()) {
-        if (!common.has(item.seq) || (!isUserItem(item) && !isAgentReply(item))) continue;
+      if (!page.length) break;
+      for (const item of page.toReversed()) {
+        if (!isUserItem(item) && !isAgentReply(item)) continue;
         const text = visibleTitleEntryText(item);
         if (!text || isOverheard(item)) continue;
         const { speakerId, name } = item.body as { speakerId?: string; name?: string };
@@ -104,7 +90,7 @@ export async function sideChatContext(
         if (!discussion.messages.length) discussions.unshift(discussion);
         discussion.messages.unshift(message);
       }
-      beforeSeq = first[0]!.seq;
+      beforeSeq = page[0]!.seq;
     }
   }
   return discussions.length ? finish(false) : "";

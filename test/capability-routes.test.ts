@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
+import { createControlService } from "../src/api/control-service.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -205,6 +206,10 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
       ).status,
       403,
     );
+    const unattended = { "x-agent-capability": await capFor("admin-alice") };
+    assert.equal((await post(`/v1/crons/${cron.id}/disable`, {}, unattended)).status, 200);
+    assert.equal((await post(`/v1/crons/${cron.id}/enable`, {}, unattended)).status, 403);
+    assert.equal((await built.app.getCron(cron.id))?.enabled, false);
     assert.equal(
       (
         await post(
@@ -518,6 +523,12 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     ).json()) as any;
     const res = await post(`/v1/crons/${created.cron.id}/disable`, {}, { "x-agent-capability": await capFor("U2") });
     assert.equal(res.status, 403);
+    const enable = await post(`/v1/crons/${created.cron.id}/enable`, {}, { "x-agent-capability": await capFor("U2") });
+    assert.equal(enable.status, 403);
+    const owner = { "x-agent-capability": await capFor("U1") };
+    assert.equal((await post(`/v1/crons/${created.cron.id}/disable`, {}, owner)).status, 200);
+    assert.equal((await post(`/v1/crons/${created.cron.id}/enable`, {}, owner)).status, 200);
+    assert.equal((await built.app.getCron(created.cron.id))?.enabled, true);
   });
 
   it("creates a cron at a chosen destinationKey (the whole channel), audience from the token", async () => {
@@ -666,7 +677,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     assert.equal((await get(`/v1/crons/${id}`, { "x-agent-capability": await capFor("U1") })).status, 404);
   });
 
-  it("the runs endpoint reads the fire table and strips the legacy fireLog from the cron", async () => {
+  it("the runs endpoint reads the fire table", async () => {
     const created = (await (
       await post(
         "/v1/crons",
@@ -699,7 +710,6 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     assert.equal(body.runs.length, 1);
     assert.equal(body.runs[0].fireKey, "k2");
     assert.equal(body.runs[0].reply, "second");
-    assert.equal("fireLog" in body.cron, false);
   });
 
   it("another public-channel user can read an OWNER cron but cannot patch, run, or delete it", async () => {
@@ -763,6 +773,31 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     assert.equal(patched.status, 200);
     assert.equal(((await patched.json()) as any).cron.owner, "U1");
     assert.equal((await post(`/v1/crons/${cron.id}/disable`, {}, teammate)).status, 200);
+    const channelClaims = (actorId: string): CapabilityClaims => ({
+      actorId,
+      scopeId: scopeId("channel", "C"),
+      destination: { type: ROOT.type, target: ROOT.target, audienceScopeId: ROOT.audienceScopeId },
+      destinations: [THREAD, ROOT],
+      defaultDestinationKey: ROOT.key,
+      members: MEMBERS,
+      exp: Date.now() + CAPABILITY_TTL_MS,
+    });
+    const control = createControlService(built.app, built.scheduler, built.admin);
+    const script = { command: "./standup.sh" };
+    const passes = async () => undefined;
+    const byTeammate = await control.patchCron(cron.id, { script }, channelClaims("U2"), passes);
+    assert.equal(byTeammate.ok ? "" : byTeammate.code, "forbidden");
+    const byOwner = await control.patchCron(cron.id, { script }, channelClaims("U1"), passes);
+    assert.deepEqual(byOwner.ok && byOwner.cron.script, script);
+    const removed = await control.patchCron(cron.id, { script: null }, channelClaims("U2"));
+    assert.equal(removed.ok ? "" : removed.code, "forbidden");
+    const overHttp = await patch(
+      `/v1/crons/${cron.id}`,
+      { script },
+      { "x-agent-capability": await capChannelMembers("U1") },
+    );
+    assert.equal(overHttp.status, 400);
+    assert.match(((await overHttp.json()) as any).message, /cron tool/);
   });
 
   it("a channel cron is readable by a member but never administrable by them (your boss's channel cron stays out of your DM's control)", async () => {

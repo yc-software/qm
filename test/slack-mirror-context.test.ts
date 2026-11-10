@@ -7,6 +7,7 @@ import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import type { BotIdentity, Directory } from "../src/slack/directory.ts";
 import { createPostgresSurfaceCache } from "../src/surface-cache/surface-cache.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { testSurfaces } from "./support/single-process.ts";
 
 const ids = { botUserId: "UBOT", ownBotId: "BBOT" } as BotIdentity;
 const directory = {
@@ -194,6 +195,7 @@ test("read_thread, whats_new and mirror search retain coverage notes and contain
   ]);
   const tools = createSurfaceToolDeps({
     deps: {
+      surfaces: testSurfaces(),
       deliveries: {},
       surfaceCache: cache,
       surfaceContext: {

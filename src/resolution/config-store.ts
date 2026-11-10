@@ -5,6 +5,7 @@ import { randomBytes } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { createKeyedQueue } from "../util/async.ts";
+import { perTenant, tenantListeners } from "../tenants/cache.ts";
 import { composeSecurityPosture, type SecurityPosture } from "../security/security-posture.ts";
 import { composeSharingPostures, type SharingPosture } from "./sharing-posture.ts";
 import type { ApprovalGrantModes } from "../types.ts";
@@ -19,7 +20,6 @@ import {
   type PublicConnectorClient,
   type DecryptedConnectorClient,
 } from "../connectors/connector-client-store.ts";
-import { errMessage } from "../util/errors.ts";
 
 export interface PersistedSoul {
   scopeId: ScopeId;
@@ -58,12 +58,14 @@ export interface PersistedBaseModel {
   cronRuntime?: RuntimeSelection;
   subagentRuntime?: RuntimeSelection;
   fallbackRuntime?: RuntimeSelection;
+  appEditRuntime?: RuntimeSelection;
   orgRevision?: number;
   revision?: number;
   effortLevel?: string;
   fastMode?: boolean;
 }
-export type RuntimePurpose = "cron" | "subagent" | "fallback";
+type RuntimePurpose = "cron" | "subagent" | "fallback" | "appEdit";
+export type TurnRuntimePurpose = RuntimePurpose | "infrequentCron";
 
 interface RuntimeSelection {
   modelId: string;
@@ -118,8 +120,6 @@ export interface ScopedConfigStore {
   setApprovalGrantModes(id: ScopeId, modes: ApprovalGrantModes): Promise<void>;
   getEgress(id: ScopeId): EgressPolicy | null;
   setEgress(id: ScopeId, policy: EgressPolicy): Promise<void>;
-  getUnfulfilledInsights(id: ScopeId): boolean;
-  setUnfulfilledInsights(id: ScopeId, on: boolean): Promise<void>;
   getExternalSlackParticipants(id: ScopeId): boolean;
   setExternalSlackParticipants(id: ScopeId, on: boolean): Promise<void>;
   getExternalSlackParticipantsDurable(id: ScopeId): Promise<boolean>;
@@ -130,7 +130,7 @@ export interface ScopedConfigStore {
   getChannelHeaderPinDefaultDurable(): Promise<boolean>;
   onChannelHeaderPinChanged(listener: (id: ScopeId) => void): void;
   getPurposeRuntime(purpose: RuntimePurpose): RuntimeSelection | undefined;
-  getPurposeRuntimeDurable(purpose: RuntimePurpose): Promise<RuntimeSelection | undefined>;
+  getPurposeRuntimeDurable(purpose: TurnRuntimePurpose): Promise<RuntimeSelection | undefined>;
   setPurposeRuntime(purpose: RuntimePurpose, selection: RuntimeSelection): Promise<void>;
   clearPurposeRuntime(purpose: RuntimePurpose): Promise<void>;
   getBaseModel(id: ScopeId): string | null;
@@ -168,8 +168,6 @@ export interface ScopedConfigStore {
   setSpendLimit(id: ScopeId, limit: SpendLimit | null): Promise<void>;
   getBrowseMaxSteps(id: ScopeId): number | null;
   setBrowseMaxSteps(id: ScopeId, steps: number | null): Promise<void>;
-  getBrowseModel(id: ScopeId): string | null;
-  setBrowseModel(id: ScopeId, modelId: string | null): Promise<void>;
   getEmbeddingModelDurable(): Promise<string | null>;
   setEmbeddingModel(modelId: string | null): Promise<void>;
   setConnectorClient(id: ScopeId, provider: string, input: ConnectorClientInput): Promise<void>;
@@ -189,7 +187,6 @@ export interface ConfigStoreMaps {
   sharingPostures?: DurableMap<PersistedSharingPosture>;
   approvalGrantModes?: DurableMap<PersistedApprovalGrantModes>;
   egressPolicies?: DurableMap<PersistedEgressPolicy>;
-  unfulfilledInsights?: DurableMap<PersistedScopedFlag>;
   externalSlackParticipants?: DurableMap<PersistedScopedFlag>;
   channelHeaderPin?: DurableMap<PersistedScopedFlag>;
   baseModels?: DurableMap<PersistedBaseModel>;
@@ -202,7 +199,6 @@ export interface ConfigStoreMaps {
   branding?: DurableMap<ScopedRow<"branding", OrgBranding>>;
   browseMaxSteps?: DurableMap<ScopedRow<"steps", number>>;
   spendLimits?: DurableMap<ScopedRow<"limit", SpendLimit>>;
-  browseModels?: DurableMap<ScopedRow<"modelId", string>>;
   deploymentIdentity?: DurableMap<PersistedDeploymentIdentity>;
 }
 
@@ -215,7 +211,6 @@ const CONFIG_STORE_TABLES: Record<keyof ConfigStoreMaps, string> = {
   sharingPostures: "sharing_postures",
   approvalGrantModes: "approval_grant_modes",
   egressPolicies: "egress_policies",
-  unfulfilledInsights: "unfulfilled_insights_flag",
   externalSlackParticipants: "external_slack_participants_flag",
   channelHeaderPin: "channel_header_pin_flag",
   baseModels: "base_model_configs",
@@ -228,7 +223,6 @@ const CONFIG_STORE_TABLES: Record<keyof ConfigStoreMaps, string> = {
   branding: "branding_configs",
   browseMaxSteps: "browse_max_steps_configs",
   spendLimits: "spend_limit_configs",
-  browseModels: "browse_model_configs",
   deploymentIdentity: "deployment_identity",
 };
 
@@ -245,10 +239,18 @@ export function createConfigStore(
     defaultSharingPosture?: SharingPosture;
   },
 ): ScopedConfigStore {
-  const souls = new Map<ScopeId, { content: string; version: number }>();
-  const soulHistory = new Map<ScopeId, PersistedSoulRevision[]>();
-  const legacySoulHistory = new Map<ScopeId, PersistedSoulRevision[]>();
-  const baseModels = new Map<ScopeId, PersistedBaseModel>();
+  const tenantState = perTenant<{
+    souls: Map<ScopeId, { content: string; version: number }>;
+    soulHistory: Map<ScopeId, PersistedSoulRevision[]>;
+    legacySoulHistory: Map<ScopeId, PersistedSoulRevision[]>;
+    baseModels: Map<ScopeId, PersistedBaseModel>;
+    hydrated?: Promise<void>;
+  }>(() => ({
+    souls: new Map([[org, defaultOrgSoul]]),
+    soulHistory: new Map(),
+    legacySoulHistory: new Map(),
+    baseModels: new Map(),
+  }));
   const soulStore = opts.souls;
   const soulHistoryStore = opts.soulHistory;
   const baseModelStore = opts.baseModels;
@@ -269,8 +271,8 @@ export function createConfigStore(
     orgOnly = false,
   ) => {
     const store = opts[name] as DurableMap<Row<M>>;
-    const cache = new Map<ScopeId, T>();
-    const load = (id: ScopeId, row: Row<M> | null) => (row ? cache.set(id, read(row)) : cache.delete(id));
+    const cache = perTenant(() => new Map<ScopeId, T>());
+    const load = (id: ScopeId, row: Row<M> | null) => (row ? cache().set(id, read(row)) : cache().delete(id));
     const refresh = async (id: ScopeId) => {
       if (!orgOnly || id === org) load(id, await store.get(id));
     };
@@ -278,7 +280,7 @@ export function createConfigStore(
       store,
       refresh,
       reload: (id: ScopeId) => writeQueue(`${name}:${id}`, () => refresh(id)),
-      get: (id: ScopeId) => cache.get(id),
+      get: (id: ScopeId) => cache().get(id),
       durable: async (id: ScopeId) => {
         const row = await store.get(id);
         return row ? read(row) : undefined;
@@ -310,7 +312,6 @@ export function createConfigStore(
     sharingPostures: field("sharingPostures", "posture"),
     approvalGrantModes: field("approvalGrantModes", "modes"),
     egressPolicies: field("egressPolicies", "policy"),
-    unfulfilledInsights: field("unfulfilledInsights", "on"),
     externalSlackParticipants: field("externalSlackParticipants", "on"),
     channelHeaderPin: field("channelHeaderPin", "on"),
     orgAmbient: field("orgAmbient", "on", true),
@@ -321,29 +322,12 @@ export function createConfigStore(
     branding: field("branding", "branding"),
     browseMaxSteps: field("browseMaxSteps", "steps"),
     spendLimits: field("spendLimits", "limit"),
-    browseModels: field("browseModels", "modelId"),
   } satisfies Partial<Record<SettingKey, unknown>>;
   const allSettings = Object.values(settings);
-  const channelHeaderPinListeners = new Set<(id: ScopeId) => void>();
-  const noteChannelHeaderPinChanged = (id: ScopeId): void => {
-    for (const listener of channelHeaderPinListeners) {
-      try {
-        listener(id);
-      } catch (e) {
-        console.error("[config] channel-header-pin listener failed:", errMessage(e));
-      }
-    }
-  };
-  const runtimeSelectionListeners = new Set<(id: ScopeId) => void>();
-  const noteRuntimeSelectionChanged = (id: ScopeId): void => {
-    for (const listener of runtimeSelectionListeners) {
-      try {
-        listener(id);
-      } catch (e) {
-        console.error("[config] runtime-selection listener failed:", errMessage(e));
-      }
-    }
-  };
+  const channelHeaderPinListeners = tenantListeners<[ScopeId]>("config channel-header-pin");
+  const noteChannelHeaderPinChanged = channelHeaderPinListeners.emit;
+  const runtimeSelectionListeners = tenantListeners<[ScopeId]>("config runtime-selection");
+  const noteRuntimeSelectionChanged = runtimeSelectionListeners.emit;
   const connectorClients = opts.connectorClients;
   const connectorKey = deriveConnectorKey(opts.connectorSecretKey ?? randomBytes(32), "connector-clients");
   const connectorMapKey = (id: ScopeId, provider: string) => `${id}|${provider}`;
@@ -356,6 +340,7 @@ export function createConfigStore(
           ...(row?.cronRuntime ? { cronRuntime: row.cronRuntime } : {}),
           ...(row?.subagentRuntime ? { subagentRuntime: row.subagentRuntime } : {}),
           ...(row?.fallbackRuntime ? { fallbackRuntime: row.fallbackRuntime } : {}),
+          ...(row?.appEditRuntime ? { appEditRuntime: row.appEditRuntime } : {}),
         }
       : {};
   const withoutRuntime = (id: ScopeId, row: PersistedBaseModel | null): PersistedBaseModel => ({
@@ -390,8 +375,8 @@ export function createConfigStore(
     };
   };
   const cacheBaseModel = (id: ScopeId, row: PersistedBaseModel | null): void => {
-    if (row) baseModels.set(id, row);
-    else baseModels.delete(id);
+    if (row) tenantState().baseModels.set(id, row);
+    else tenantState().baseModels.delete(id);
   };
   const setPurposeRuntime = async (purpose: RuntimePurpose, selection?: RuntimeSelection) => {
     await writeQueue(`model:${org}`, async () => {
@@ -419,15 +404,13 @@ export function createConfigStore(
       "You are a helpful internal assistant for this organization. Be concise, accurate, and respect data boundaries: never reveal information to people who are not party to the current conversation.",
     version: 1,
   };
-  souls.set(org, defaultOrgSoul);
 
-  let hydrated: Promise<void> | null = null;
   const loadSoulCache = (id: ScopeId, soul: PersistedSoul | null): void => {
-    if (soul) souls.set(id, { content: soul.content, version: soul.version });
-    else if (id === org) souls.set(org, defaultOrgSoul);
-    else souls.delete(id);
-    if (soul?.history) soulHistory.set(id, soul.history);
-    else soulHistory.delete(id);
+    if (soul) tenantState().souls.set(id, { content: soul.content, version: soul.version });
+    else if (id === org) tenantState().souls.set(org, defaultOrgSoul);
+    else tenantState().souls.delete(id);
+    if (soul?.history) tenantState().soulHistory.set(id, soul.history);
+    else tenantState().soulHistory.delete(id);
   };
   const cloneSoul = (soul: PersistedSoul | null): SoulSnapshot => (soul ? structuredClone(soul) : null);
   const mergeSoulHistory = (
@@ -463,8 +446,8 @@ export function createConfigStore(
         ids.flatMap((id) => [
           writeQueue(`soul:${id}`, async () => {
             const soul = await soulStore.get(id);
-            if (soul) souls.set(id, { content: soul.content, version: soul.version });
-            else if (id !== org) souls.delete(id);
+            if (soul) tenantState().souls.set(id, { content: soul.content, version: soul.version });
+            else if (id !== org) tenantState().souls.delete(id);
           }),
           settings.commandPolicies.reload(id),
           settings.egressPolicies.reload(id),
@@ -472,8 +455,10 @@ export function createConfigStore(
       );
     },
     hydrate() {
-      if (!hydrated) {
-        hydrated = (async () => {
+      const state = tenantState();
+      if (!state.hydrated) {
+        const { souls, soulHistory, legacySoulHistory, baseModels } = state;
+        state.hydrated = (async () => {
           const identity = await deploymentIdentity.putIfAbsent("singleton", { orgId });
           if (identity.orgId !== orgId) throw new Error(`database belongs to org ${identity.orgId}, not ${orgId}`);
           for (const r of await soulStore.all()) {
@@ -493,13 +478,17 @@ export function createConfigStore(
           for (const r of await baseModelStore.all()) baseModels.set(r.scopeId, r);
           await Promise.all(allSettings.map((setting) => setting.hydrate()));
         })();
+        const hydrating = state.hydrated;
+        hydrating.catch(() => {
+          if (state.hydrated === hydrating) state.hydrated = undefined;
+        });
       }
-      return hydrated;
+      return state.hydrated;
     },
-    getSoul: (id) => souls.get(id)?.content ?? null,
+    getSoul: (id) => tenantState().souls.get(id)?.content ?? null,
     setSoul(id, content, updatedBy, sessionId) {
       return writeQueue(`soul:${id}`, async () => {
-        const legacy = legacySoulHistory.get(id) ?? [];
+        const legacy = tenantState().legacySoulHistory.get(id) ?? [];
         const append = (current: PersistedSoul): PersistedSoul => {
           const revision: PersistedSoulRevision = {
             scopeId: id,
@@ -517,7 +506,7 @@ export function createConfigStore(
         };
         let saved = await soulStore.update(id, append);
         if (!saved) {
-          const baseVersion = souls.get(id)?.version ?? 0;
+          const baseVersion = tenantState().souls.get(id)?.version ?? 0;
           const revision: PersistedSoulRevision = {
             scopeId: id,
             content,
@@ -532,7 +521,7 @@ export function createConfigStore(
           saved = canonical.mutationId === mutationId ? canonical : await soulStore.update(id, append);
         }
         if (!saved) throw new Error("SOUL disappeared during atomic update");
-        legacySoulHistory.delete(id);
+        tenantState().legacySoulHistory.delete(id);
         loadSoulCache(id, saved);
         return saved.version;
       });
@@ -548,13 +537,13 @@ export function createConfigStore(
           ...(updatedBy ? { updatedBy } : {}),
           ...(sessionId ? { sessionId } : {}),
         };
-        const legacyHistory = legacySoulHistory.get(id) ?? [];
+        const legacyHistory = tenantState().legacySoulHistory.get(id) ?? [];
         const mutationId = randomBytes(12).toString("hex");
         const candidate: PersistedSoul = { ...revision, history: [revision], mutationId };
         const durable = await soulStore.get(id);
         let saved: PersistedSoul;
         if (!durable) {
-          if ((souls.get(id)?.version ?? 0) !== expectedVersion) return null;
+          if ((tenantState().souls.get(id)?.version ?? 0) !== expectedVersion) return null;
           const canonical = await soulStore.putIfAbsent(id, candidate);
           if (canonical.mutationId !== mutationId) return null;
           saved = canonical;
@@ -574,14 +563,14 @@ export function createConfigStore(
           if (!accepted || !updated) return null;
           saved = updated;
         }
-        souls.set(id, { content: saved.content, version: saved.version });
-        soulHistory.set(id, saved.history ?? [revision]);
-        legacySoulHistory.delete(id);
+        tenantState().souls.set(id, { content: saved.content, version: saved.version });
+        tenantState().soulHistory.set(id, saved.history ?? [revision]);
+        tenantState().legacySoulHistory.delete(id);
         return saved.version;
       });
     },
-    soulVersion: (id) => souls.get(id)?.version ?? 0,
-    soulHistory: (id) => (soulHistory.get(id) ?? []).slice(0, 25),
+    soulVersion: (id) => tenantState().souls.get(id)?.version ?? 0,
+    soulHistory: (id) => (tenantState().soulHistory.get(id) ?? []).slice(0, 25),
     captureSoulSnapshot(id) {
       return writeQueue(`soul:${id}`, async () => cloneSoul(await soulStore.get(id)));
     },
@@ -627,9 +616,6 @@ export function createConfigStore(
       settings.approvalGrantModes.set(id, { session: !!modes.session, always: !!modes.always }),
     getEgress: (id) => settings.egressPolicies.get(id) ?? (id === org ? orgDefaultEgress : null),
     setEgress: (id, policy) => settings.egressPolicies.set(id, policy),
-    getUnfulfilledInsights: (id) =>
-      (settings.unfulfilledInsights.get(org) ?? false) || (settings.unfulfilledInsights.get(id) ?? false),
-    setUnfulfilledInsights: (id, on) => settings.unfulfilledInsights.set(id, on),
     getExternalSlackParticipants: (id) =>
       (settings.externalSlackParticipants.get(org) ?? false) || (settings.externalSlackParticipants.get(id) ?? false),
     setExternalSlackParticipants: (id, on) => settings.externalSlackParticipants.set(id, on),
@@ -650,16 +636,17 @@ export function createConfigStore(
       channelHeaderPinListeners.add(listener);
     },
     getPurposeRuntime: (purpose) => {
-      const selection = baseModels.get(org)?.[`${purpose}Runtime`];
+      const selection = tenantState().baseModels.get(org)?.[`${purpose}Runtime`];
       return selection ? { ...selection } : undefined;
     },
     getPurposeRuntimeDurable: async (purpose) => {
+      if (purpose === "infrequentCron") return undefined;
       const selection = (await baseModelStore.get(org))?.[`${purpose}Runtime`];
       return selection ? { ...selection } : undefined;
     },
     setPurposeRuntime,
     clearPurposeRuntime: (purpose) => setPurposeRuntime(purpose),
-    getBaseModel: (id) => baseModels.get(id)?.modelId ?? null,
+    getBaseModel: (id) => tenantState().baseModels.get(id)?.modelId ?? null,
     async setBaseModel(id, modelId) {
       await writeQueue(`model:${id}`, async () => {
         const saved = await updateBaseModelRow(id, (current) => {
@@ -670,7 +657,7 @@ export function createConfigStore(
       });
       noteRuntimeSelectionChanged(id);
     },
-    getRuntimeSelection: (id) => runtimeSelection(baseModels.get(id)),
+    getRuntimeSelection: (id) => runtimeSelection(tenantState().baseModels.get(id)),
     async setRuntimeSelection(id, selection) {
       await writeQueue(`model:${id}`, async () => {
         if (selection === null) {
@@ -692,7 +679,7 @@ export function createConfigStore(
       await writeQueue(`model:${id}`, async () => {
         const orgRevision = (await baseModelStore.get(org))?.revision ?? 0;
         const saved = await baseModelStore.merge(id, { orgRevision });
-        if (saved) baseModels.set(id, saved);
+        if (saved) tenantState().baseModels.set(id, saved);
       });
     },
     onRuntimeSelectionChanged(listener) {
@@ -746,8 +733,6 @@ export function createConfigStore(
     setSpendLimit: (id, limit) => settings.spendLimits.set(id, limit),
     getBrowseMaxSteps: (id) => settings.browseMaxSteps.get(id) ?? null,
     setBrowseMaxSteps: (id, steps) => settings.browseMaxSteps.set(id, steps),
-    getBrowseModel: (id) => settings.browseModels.get(id) ?? null,
-    setBrowseModel: (id, modelId) => settings.browseModels.set(id, modelId),
     getEmbeddingModelDurable: async () => (await baseModelStore.get(org))?.embeddingModelId ?? null,
     setEmbeddingModel: async (modelId) => {
       await writeQueue(`model:${org}`, async () => {
@@ -799,7 +784,7 @@ export function createConfigStore(
         ...allSettings.map((setting) => setting.refresh(id)),
       ]);
       let refreshedSoul = soul;
-      const legacyHistory = legacySoulHistory.get(id) ?? [];
+      const legacyHistory = tenantState().legacySoulHistory.get(id) ?? [];
       if (soul && soul.history === undefined && legacyHistory.length) {
         const mergedHistory = mergeSoulHistory(soul.history, legacyHistory);
         if (!isDeepStrictEqual(mergedHistory, soul.history ?? [])) {
@@ -811,13 +796,13 @@ export function createConfigStore(
               )
             : { ...soul, history: mergedHistory };
         }
-        legacySoulHistory.delete(id);
+        tenantState().legacySoulHistory.delete(id);
       } else if (soul?.history !== undefined) {
-        legacySoulHistory.delete(id);
+        tenantState().legacySoulHistory.delete(id);
       }
       loadSoulCache(id, refreshedSoul);
-      if (baseModel) baseModels.set(id, baseModel);
-      else baseModels.delete(id);
+      if (baseModel) tenantState().baseModels.set(id, baseModel);
+      else tenantState().baseModels.delete(id);
     },
   };
 }

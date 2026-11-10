@@ -1,6 +1,8 @@
 import { mock, test } from "node:test";
 import assert from "node:assert/strict";
-import { createAgent, EMPTY_ENDING_NOTE } from "../src/agent/agent-run.ts";
+import { createAgent } from "../src/agent/agent-run.ts";
+import { EMPTY_ENDING_NOTE } from "../src/agent/turn-wall-clock.ts";
+import { createModelRoutes } from "../src/model/model-route.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { forModelContext } from "../src/agent/context-compaction.ts";
 import { type Item, storedItem } from "../src/sessions/items.ts";
@@ -13,6 +15,7 @@ import { createPostgresToolOutputStore, type ToolOutputStore } from "../src/sess
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import { seedTestTenant } from "./support/test-tenant.ts";
 
 type Body = { messages?: unknown[]; input?: unknown[] };
 type Reply = Array<Record<string, unknown>>;
@@ -110,7 +113,7 @@ async function runTurn(
   signals?: RunSignalStore,
   onHistory?: () => Promise<void>,
 ) {
-  const agent = createAgent({ apiKey: "sk-test", ...(signals ? { signals } : {}) });
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }), ...(signals ? { signals } : {}) });
   const emitted: Item[] = [];
   const bodies: Body[] = [];
   let seq = (history.at(-1)?.seq ?? 0) + 1;
@@ -539,7 +542,8 @@ async function withPgSession(
   const schema = `replay_pg_${randomUUID().replaceAll("-", "")}`;
   await admin.query(`CREATE SCHEMA ${schema}`);
   const url = new globalThis.URL(PG_URL!);
-  url.searchParams.set("options", `-c search_path=${schema}`);
+  url.searchParams.set("options", `${url.searchParams.get("options") ?? ""} -c search_path=${schema}`.trim());
+  await seedTestTenant(url.toString());
   const store = createPostgresSessionStore(url.toString());
   const raw = new pg.Pool({ connectionString: url.toString() });
   try {
@@ -615,7 +619,7 @@ test(
             { type: "text", text: "Done." },
           ],
         },
-        { role: "assistant", content: [{ type: "text", text: "Daily digest" }] },
+        { role: "user", content: [{ type: "text", text: '<message from="agent" via="cron">Daily digest</message>' }] },
         { role: "user", content: [{ type: "text", text: "and Q3?" }] },
       ]);
     });

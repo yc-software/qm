@@ -1,10 +1,11 @@
 import type { ScopeId } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
-import { personKey, personKeys, samePersonInDirectory, samePersonMatcher } from "../directory/person.ts";
+import { personIds, personKey, personKeys, samePersonInDirectory, samePersonMatcher } from "../directory/person.ts";
 import type { Destination } from "../types.ts";
 import type { SurfaceContextRequest, SurfaceContextResult } from "../reach/reach.ts";
 import { reportFailureAs } from "../util/errors.ts";
+import { tenantListeners } from "../tenants/cache.ts";
 import { adminCronHistoryUrl } from "../util/admin-links.ts";
 import { randomUUID } from "node:crypto";
 import {
@@ -25,11 +26,13 @@ import { availableRuntimeError, validateRuntimeChoice } from "./runtime-config.t
 import { assertCronRuntime } from "../cron/runtime.ts";
 import type { Cron } from "../triggers/types.ts";
 import { validateUserSchedule } from "../cron/schedule.ts";
+import { trialBeforeSave } from "../cron/script.ts";
 
 import type { App, AppDeps, ReachNowResult } from "./app-types.ts";
 import { CONTEXT_REQUEST_EXPIRY_MS } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import type { AmbientHelpers } from "./app-ambient.ts";
+import { personLabel } from "../identity/person-names.ts";
 
 export async function cronVisibility(deps: AppDeps, h: AppHelpers, principalId: string) {
   const viewerKeys = personKeys(await deps.directory.get(principalId).catch(() => null), principalId);
@@ -84,6 +87,7 @@ export function createMessagingMethods(
   | "pendingDeliveries"
   | "enqueueDelivery"
   | "ingestSurfaceEvents"
+  | "surfaceMirrored"
   | "searchSurface"
   | "readSurfaceMessages"
   | "activeSurfaceThreads"
@@ -112,6 +116,7 @@ export function createMessagingMethods(
   | "resolveChannel"
   | "directoryMembers"
   | "directoryChannels"
+  | "directoryChannelsFor"
   | "directoryMember"
   | "samePerson"
   | "personMatcher"
@@ -125,7 +130,7 @@ export function createMessagingMethods(
   const { adminBase, resolveReachTargetFor } = h;
   const { judgeAmbientContainer, ambientSelf } = ambient;
   const contextRequests = deps.contextRequests;
-  const contextRequestListeners = new Set<(request: SurfaceContextRequest) => void>();
+  const contextRequestListeners = tenantListeners<[SurfaceContextRequest]>("context request");
   const contextRequestTokens = new Map<string, string>();
   // Principals identity knows about that the Slack directory never sees: the email
   // allow-list, invited external users, and anyone who has signed in. On a Slack-less
@@ -135,6 +140,7 @@ export function createMessagingMethods(
       deps.identity.listExternalMembers(),
       deps.sessions?.distinctParticipants() ?? [],
     ]);
+    const users = await deps.users?.resolve(participants).catch(() => undefined);
     const candidates: DirectoryMember[] = [
       ...(deps.emailAuthMembers ?? []),
       ...externals
@@ -142,7 +148,11 @@ export function createMessagingMethods(
         .map((member) => ({ principalId: member.email, displayName: member.email, type: "internal" as const })),
       ...participants
         .filter((principalId) => deps.identity.classify(principalId).type === "internal")
-        .map((principalId) => ({ principalId, displayName: principalId, type: "internal" as const })),
+        .map((principalId) => ({
+          principalId,
+          displayName: personLabel(principalId, { user: users?.get(principalId) }),
+          type: "internal" as const,
+        })),
     ];
     const byKey = new Map<string, DirectoryMember>();
     for (const member of candidates) {
@@ -167,9 +177,10 @@ export function createMessagingMethods(
   };
 
   return {
-    async createCron(input) {
+    async createCron(input, trial) {
       await validateRuntime(input);
       validateUserSchedule(input.schedule);
+      await trialBeforeSave(input.script, input.schedule, trial);
       const cron = await deps.crons.create(input);
       deps.auditLog.record({
         at: Date.now(),
@@ -208,11 +219,12 @@ export function createMessagingMethods(
         });
       return { owned, visible };
     },
-    async updateCron(id, patch) {
+    async updateCron(id, patch, trial) {
       const before = await deps.crons.get(id);
       if (!before) return null;
       if (patch.runtime !== undefined) await validateRuntime({ ...before, ...patch });
       if (patch.schedule) validateUserSchedule(patch.schedule);
+      await trialBeforeSave(patch.script, patch.schedule, trial);
       const grantsReaffirmed = patch.unattendedGrants !== undefined;
       const guardedPatch =
         (before.unattendedGrants?.length ?? 0) > 0 && !grantsReaffirmed ? { ...patch, unattendedGrants: [] } : patch;
@@ -314,6 +326,9 @@ export function createMessagingMethods(
     async enqueueDelivery(input) {
       await deps.deliveries.enqueue(input);
     },
+    surfaceMirrored(kind) {
+      return deps.surfaces.get(kind)?.capabilities.mirrored === true;
+    },
     async ingestSurfaceEvents(events, surface = "slack", self) {
       if (!deps.surfaceCache || !events.length) return { upserted: 0 };
       if (self && (self.name || self.mentionId)) ambientSelf.set(`${orgIdOf()}:${surface}`, self);
@@ -379,12 +394,11 @@ export function createMessagingMethods(
         );
         return request;
       }
-      for (const l of contextRequestListeners) l(viewerToken ? { ...request, query } : request);
+      contextRequestListeners.emit(viewerToken ? { ...request, query } : request);
       return request;
     },
     onContextRequestCreated(listener) {
-      contextRequestListeners.add(listener);
-      return () => contextRequestListeners.delete(listener);
+      return contextRequestListeners.add(listener);
     },
     getContextRequest(id) {
       return contextRequests.get(id);
@@ -433,6 +447,9 @@ export function createMessagingMethods(
     async upsertDirectory(members, syncedAt) {
       const previous = await deps.directory.list();
       if (!(await deps.directory.replace(members, syncedAt))) return false;
+      const apps = members.filter((m) => m.isBot).map((m) => m.principalId);
+      if (apps.length && deps.admin)
+        await deps.admin.users.markApps(apps).catch(reportFailureAs("users: mark apps", 0));
       const present = members.filter((m) => m.type === "internal").map((m) => m.principalId);
       const presentSet = new Set(present);
       const removed = previous.map((m) => m.principalId).filter((id) => !presentSet.has(id));
@@ -511,11 +528,19 @@ export function createMessagingMethods(
     directoryChannels() {
       return deps.directory.listChannels();
     },
+    directoryChannelsFor(principalId) {
+      return deps.directory.listChannelsFor(principalId);
+    },
     async directoryMember(principalId) {
+      const direct = await deps.directory.get(principalId);
+      if (direct) return direct;
+      await deps.identity.refresh();
+      for (const alias of personIds(principalId).filter((id) => id !== principalId)) {
+        const member = await deps.directory.get(alias);
+        if (member) return member;
+      }
       return (
-        (await deps.directory.get(principalId)) ??
-        (await identityMembers()).find((member) => personKey(member.principalId) === personKey(principalId)) ??
-        null
+        (await identityMembers()).find((member) => personKey(member.principalId) === personKey(principalId)) ?? null
       );
     },
     samePerson(a, b) {
@@ -607,6 +632,8 @@ export function createMessagingMethods(
         baseDestination = withThread(baseDestination, input.threadTs);
       }
       const sender = await deps.directory.get(input.senderId).catch(() => null);
+      const persona = input.currentDestination?.persona;
+      if (persona && !input.react && !input.delete) baseDestination = { ...baseDestination, persona };
       const delivery = await reachEnqueue({
         deliveries: deps.deliveries,
         destination: withEdit(

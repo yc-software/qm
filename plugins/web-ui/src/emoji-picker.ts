@@ -4,10 +4,13 @@ export interface EmojiRow {
   n: string;
   c: string;
   a: string[];
+  /** emoji-datasource category, e.g. "Smileys & Emotion". */
+  g: string;
 }
 
-export const EMOJI_ROWS: readonly EmojiRow[] = EMOJI_TABLE.map(([unified, n, ...a]) => ({
+export const EMOJI_ROWS: readonly EmojiRow[] = EMOJI_TABLE.map(([unified, g, n, ...a]) => ({
   n: n!,
+  g: g!,
   c: String.fromCodePoint(...unified!.split("-").map((hex) => parseInt(hex, 16))),
   a,
 }));

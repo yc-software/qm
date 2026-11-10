@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createApprovalStore } from "../src/slack/approval-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { slackSurfaceOrigin } from "../src/surfaces/slack/adapter.ts";
 import type { PendingApprovalRecord } from "../src/types.ts";
 import { testMap } from "./support/test-database.ts";
 
@@ -98,7 +99,12 @@ test("approvals requested from a Slack DM thread are delivered into that thread"
     const deliveries = createDeliveryStore();
     const approvals = createApprovalStore(testMap<PendingApprovalRecord>(), deliveries);
     const approval = record(threadRef);
-    approval.request!.slackSource = { accountId: "default", teamId: "T1", userId: "U1", replyThreadTs: "1700.1" };
+    approval.request!.surfaceOrigin = slackSurfaceOrigin({
+      accountId: "default",
+      teamId: "T1",
+      userId: "U1",
+      replyThreadTs: "1700.1",
+    });
     await approvals.put("A1", approval);
     const [delivery] = await deliveries.pending("principal");
     assert.equal(delivery?.destination.threadTs, "1700.1");
@@ -107,7 +113,27 @@ test("approvals requested from a Slack DM thread are delivered into that thread"
   const approvals = createApprovalStore(testMap<PendingApprovalRecord>(), deliveries);
   const channel = record("channel:C1:1700.2");
   channel.request!.conversation = { kind: "channel", threadRef: "channel:C1:1700.2" } as never;
-  channel.request!.slackSource = { accountId: "default", teamId: "T1", userId: "U1", replyThreadTs: "1700.2" };
+  channel.request!.surfaceOrigin = slackSurfaceOrigin({
+    accountId: "partner",
+    teamId: "T1",
+    userId: "U1",
+    replyThreadTs: "1700.2",
+  });
   await approvals.put("A2", channel);
-  assert.equal((await deliveries.pending("principal"))[0]?.destination.threadTs, undefined);
+  const [delivery] = await deliveries.pending("principal");
+  assert.equal(delivery?.destination.threadTs, undefined);
+  assert.deepEqual(delivery?.destination.account, { id: "partner", workspace: "T1" });
+});
+
+test("a Slack-originated approval goes to the Slack author even when the actor is a linked non-Slack principal", async () => {
+  const deliveries = createDeliveryStore();
+  const approvals = createApprovalStore(testMap<PendingApprovalRecord>(), deliveries);
+  const approval = record("dm:D1");
+  approval.request!.actor.externalId = "oidc:linked-principal";
+  approval.request!.surfaceOrigin = slackSurfaceOrigin({ accountId: "default", teamId: "T1", userId: "U9" });
+  await approvals.put("A1", approval);
+  const [delivery] = await deliveries.pending("principal");
+  assert.equal(delivery?.destination.target, "U9");
+  assert.equal(delivery?.destination.onBehalfOf, "oidc:linked-principal");
+  assert.equal(delivery?.destination.audienceScopeId, "personal:oidc:linked-principal");
 });

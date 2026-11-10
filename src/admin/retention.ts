@@ -1,9 +1,10 @@
-import { forEachAttributedTurn, type AttributionInput } from "./attribution.ts";
+import type { UserActivity } from "../identity/user-store.ts";
 
 const DAY = 86_400_000;
 const EPOCH_DAY_TO_MONDAY = 3;
 
-export interface RetentionInput extends AttributionInput {
+export interface RetentionInput {
+  activity: readonly UserActivity[];
   sessionCount: number;
   nowMs: number;
 }
@@ -32,28 +33,11 @@ function percentile(sorted: number[], p: number): number {
 }
 
 export function computeRetention(input: RetentionInput): RetentionReport {
-  const { sessionCount, participants, turns, nowMs } = input;
-
-  const activeDays = new Map<string, Set<number>>();
-  const turnsByUser = new Map<string, number>();
-  const sessionsByUser = new Map<string, Set<string>>();
-
-  forEachAttributedTurn(
-    { participants, turns },
-    {
-      onWindow(sessionId, w) {
-        const set = sessionsByUser.get(w.principalId);
-        if (set) set.add(sessionId);
-        else sessionsByUser.set(w.principalId, new Set([sessionId]));
-      },
-      onTurn(w, turn) {
-        const days = activeDays.get(w.principalId);
-        if (days) days.add(turn.day);
-        else activeDays.set(w.principalId, new Set([turn.day]));
-        turnsByUser.set(w.principalId, (turnsByUser.get(w.principalId) ?? 0) + turn.turns);
-      },
-    },
-  );
+  const { sessionCount, activity, nowMs } = input;
+  const people = activity.filter((a) => a.kind === "person" && a.days.length > 0);
+  const activeDays = new Map(people.map((a) => [a.principalId, new Set(a.days)]));
+  const turnsByUser = new Map(people.map((a) => [a.principalId, a.turns]));
+  const sessionsByUser = new Map(people.map((a) => [a.principalId, a.sessions]));
 
   const today = Math.floor(nowMs / DAY);
   const users = [...activeDays.keys()];
@@ -107,7 +91,7 @@ export function computeRetention(input: RetentionInput): RetentionReport {
       };
     });
 
-  const sessionCounts = users.map((u) => sessionsByUser.get(u)?.size ?? 0).sort((a, b) => a - b);
+  const sessionCounts = users.map((u) => sessionsByUser.get(u) ?? 0).sort((a, b) => a - b);
   const turnCounts = users.map((u) => turnsByUser.get(u) ?? 0).sort((a, b) => a - b);
 
   return {
@@ -120,7 +104,8 @@ export function computeRetention(input: RetentionInput): RetentionReport {
       turns: { p50: percentile(turnCounts, 50), p95: percentile(turnCounts, 95) },
     },
     totals: { users: users.length, sessions: sessionCount },
-    attribution: "DM/personal exact; channel approximate (entries carry no author principal).",
+    attribution:
+      "Per user across linked sign-ins, apps excluded; turns are credited to their author, so a scheduled run a person owns counts as theirs.",
     note: "Derived per-request over all sessions × entries; move to a materialized daily rollup if volume grows.",
   };
 }

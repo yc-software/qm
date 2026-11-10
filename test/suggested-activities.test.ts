@@ -95,7 +95,7 @@ test("normal personal cron produces durable suggestions without a notification d
   assert.match(cron.schedule.cron!, /^\d+ 2 \* \* \*$/);
   assert.equal(f.calls[0]?.readOnly, undefined);
   assert.equal(f.calls[0]?.actor.externalId, "alice");
-  assert.equal(f.calls[0]?.triggered, true);
+  assert.equal(f.calls[0]?.origin?.kind, "automation");
   assert.match(f.calls[0]!.text, /past conversations and unfinished work/);
   assert.deepEqual(await f.service.get("alice", []), { activities, pending: false });
   assert.equal(f.calls.length, 1);

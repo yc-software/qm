@@ -146,7 +146,12 @@ function deployments(page: AdminPage, data: Row, header: Header) {
   const all = [...(data.deployments || [])].sort(newest(latest));
   const row = (r: Row) => ({
     name: r.name || r.id,
-    preview: dot(r.status || "unknown", r.currentVersion, orgWide(page) && scopeName(r.ownerScopeId), r.createdBy),
+    preview: dot(
+      r.status || "unknown",
+      r.currentVersion,
+      orgWide(page) && scopeName(r.ownerScopeId),
+      r.createdByName || r.createdBy,
+    ),
     time: relTime(latest(r)),
     href: r.publicUrl || undefined,
     target: "_blank",
@@ -210,7 +215,6 @@ function cronDetail(page: AdminPage, all: Row[], id: string) {
   const current = () => ({
     type: cron.destination?.type === "principal" ? "principal" : "slack",
     target: cron.destination?.target || "",
-    audienceScopeId: cron.destination?.audienceScopeId || "",
     onBehalfOf: cron.destination?.onBehalfOf || "",
   });
   const draft = current();
@@ -227,7 +231,6 @@ function cronDetail(page: AdminPage, all: Row[], id: string) {
       : {
           type: draft.type,
           target: draft.target.trim(),
-          ...(draft.audienceScopeId.trim() ? { audienceScopeId: draft.audienceScopeId.trim() } : {}),
           ...(draft.type === "principal" && draft.onBehalfOf.trim() ? { onBehalfOf: draft.onBehalfOf.trim() } : {}),
         };
     const submitted = JSON.stringify(draft);
@@ -256,7 +259,7 @@ function cronDetail(page: AdminPage, all: Row[], id: string) {
           )
         : "None",
     ],
-    ["Owner", cron.owner || cron.createdBy || "None"],
+    ["Owner", cron.owner || cron.createdByName || cron.createdBy || "None"],
     ["Status", cronStatus(cron)],
     ["Created", cron.createdAt ? new Date(cron.createdAt).toLocaleString() : ""],
     ["Last fired", cron.lastFiredAt ? when(cron.lastFiredAt) : "never fired"],
@@ -278,11 +281,6 @@ function cronDetail(page: AdminPage, all: Row[], id: string) {
               .value=${draft.target}
               placeholder=${draft.type === "principal" ? "principal id" : "Slack channel/thread id"}
               @input=${field("target")} /></label
-          ><label
-            >Audience scope<input
-              .value=${draft.audienceScopeId}
-              placeholder=${draft.type === "principal" ? "personal:U123" : "channel:C123"}
-              @input=${field("audienceScopeId")} /></label
           ><label
             >On behalf of<input
               .value=${draft.onBehalfOf}

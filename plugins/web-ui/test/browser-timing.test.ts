@@ -7,7 +7,7 @@ import {
   reportSessionSwitch,
   stopBrowserErrors,
 } from "../src/browser-errors.ts";
-import { browserErrorConfig } from "../server/browser-error-config.ts";
+import { browserErrorConfig } from "../../chassis/src/browser-error-config.ts";
 
 const origin = "https://app.example.com";
 

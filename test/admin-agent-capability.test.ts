@@ -27,6 +27,10 @@ import { testConfig } from "./support/test-config.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { TEST_TENANT } from "./support/test-tenant.ts";
+import { withTenant } from "../src/tenants/context.ts";
+
+const tenant = withTenant(TEST_TENANT, (t) => t);
 
 const SECRET = "agent-admin-test-secret".repeat(3);
 const ORG = scopeId("org", "default-org");
@@ -622,7 +626,7 @@ test("revoking the admin grant cuts off an already-minted token immediately", as
     const cap = await capFor("admin-alice");
     const before = await fetch(`${s.base}/v1/admin/whoami`, { headers: { "x-agent-capability": cap } });
     assert.equal(((await before.json()) as any).isAdmin, true);
-    await s.built.admin.revokeGrant({ id: "admin-bob", type: "internal" }, "admin-alice", ORG, "org_admin");
+    await s.built.admin.revokeGrant(tenant, { id: "admin-bob", type: "internal" }, "admin-alice", ORG, "org_admin");
 
     const after = await fetch(`${s.base}/v1/admin/whoami`, { headers: { "x-agent-capability": cap } });
     assert.equal(((await after.json()) as any).isAdmin, false);
@@ -679,7 +683,7 @@ for (const liveAuthor of [false, true]) {
         ).status,
         403,
       );
-      await s.built.admin.revokeGrant({ id: "admin-bob", type: "internal" }, "admin-alice", ORG, "org_admin");
+      await s.built.admin.revokeGrant(tenant, { id: "admin-bob", type: "internal" }, "admin-alice", ORG, "org_admin");
       assert.equal(
         (
           await fetch(`${s.base}${path}`, {
@@ -697,11 +701,11 @@ for (const liveAuthor of [false, true]) {
 }
 
 for (const [name, input, expected] of [
-  ["human thread reply", { unprompted: true, liveActor: true }, 200],
-  ["synthetic ambient wake", { unprompted: true }, 403],
-  ["bot thread reply", { unprompted: true, botActor: true }, 403],
-  ["cron", { triggered: true, surface: "cron", liveActor: true }, 403],
-  ["webhook", { triggered: true, surface: "webhook", liveActor: true }, 403],
+  ["human thread reply", { origin: { kind: "ambient", live: true } }, 200],
+  ["synthetic ambient wake", { origin: { kind: "ambient" } }, 403],
+  ["bot thread reply", { origin: { kind: "ambient" }, botActor: true }, 403],
+  ["cron", { origin: { kind: "automation" }, surface: "cron" }, 403],
+  ["webhook", { origin: { kind: "automation" }, surface: "webhook" }, 403],
 ] satisfies Array<[string, Partial<TurnRequest>, number]>) {
   test(`orchestrator-issued ${name} token reaches the HTTP admin gate with the right authority`, async () => {
     const s = await start();
@@ -836,7 +840,7 @@ for (const room of [scopeId("channel", "C1"), scopeId("group", "G1")]) {
         "Open and a spoofed header cannot grant admin authority",
       );
       assert.equal((await write(nonAdmin)).status, 403, "Open does not give members admin write access");
-      await s.built.admin.revokeGrant({ id: "admin-bob", type: "internal" }, "admin-alice", ORG, "org_admin");
+      await s.built.admin.revokeGrant(tenant, { id: "admin-bob", type: "internal" }, "admin-alice", ORG, "org_admin");
       assert.equal((await read()).status, 403, "revocation applies to an existing Open token");
       assert.equal((await write()).status, 403, "revocation also stops writes on an existing Open token");
     } finally {
@@ -975,7 +979,7 @@ test("native admin tools use the authenticated handler, including its live autho
     const shared = createAdminCall(s.base, await capFor("admin-alice", { scope: "channel:C1" }));
     assert.equal((await shared({ action: "scopes" })).status, 403);
     assert.equal((await call({ action: "scopes" })).status, 200);
-    await s.built.admin.revokeGrant({ id: "admin-bob", type: "internal" }, "admin-alice", ORG, "org_admin");
+    await s.built.admin.revokeGrant(tenant, { id: "admin-bob", type: "internal" }, "admin-alice", ORG, "org_admin");
     assert.equal((await call({ action: "memory", scope: target })).status, 403);
   } finally {
     await s.close();

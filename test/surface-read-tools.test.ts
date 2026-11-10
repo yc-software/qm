@@ -28,7 +28,7 @@ function mention(text: string, channel: string, root: string): TurnRequest {
     conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor, mate] },
     deliveryTarget: `${channel}:${root}`,
     text,
-    liveActor: true,
+    origin: { kind: "human" },
     async: true,
   };
 }
@@ -130,21 +130,6 @@ test("enabled mirror search uses the current channel and returns author/snippet 
     assert.match(reply, /search\(cache\) 1 hit/);
     assert.deepEqual(await built.app.pendingContextRequests("slack"), []);
     assert.match(reply, /first=Bob:the budget doc/);
-  } finally {
-    await built.runtime.stop();
-  }
-});
-
-test("read_members lists the current container's roster (its resolved audience), by display name", async () => {
-  const built = freshApp();
-  built.runtime.start();
-  const root = "C12:1200.1";
-  try {
-    await built.app.turn(mention("!read_members", "C12", "1200.1"));
-    const reply = await subToolResult(built, root, "read_members");
-    assert.match(reply, /members: /);
-    assert.match(reply, /Ada/);
-    assert.match(reply, /Bob/);
   } finally {
     await built.runtime.stop();
   }

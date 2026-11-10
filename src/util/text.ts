@@ -5,6 +5,11 @@ export function headSlice(s: string, n: number): string {
   return /[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut;
 }
 
+export function snippet(text: string, max: number): string {
+  const oneLine = text.replace(/\s+/g, " ").trim();
+  return oneLine.length <= max ? oneLine : `${headSlice(oneLine, max - 1).trimEnd()}…`;
+}
+
 export function tailSlice(s: string, n: number): string {
   if (n <= 0) return "";
   if (s.length <= n) return s;
@@ -44,6 +49,10 @@ export function untrustedText(value: string): string {
     .replaceAll("</", "<\\/");
 }
 
+export function flatText(value: string): string {
+  return value.replace(/[\s\u0085]+/g, " ").trim();
+}
+
 export function quotedData(value: string): string {
   const lines = untrustedText(value)
     .split("\n")
@@ -52,4 +61,14 @@ export function quotedData(value: string): string {
       return text.startsWith("#") && "# \t".includes(text[1] ?? " ") ? `\\${line}` : line;
     });
   return ["```untrusted-data", ...lines, "```"].join("\n");
+}
+
+export function trimTrailing(s: string, strip: (char: string) => boolean): string {
+  let end = s.length;
+  while (end > 0 && strip(s[end - 1]!)) end--;
+  return s.slice(0, end);
+}
+
+export function trimTrailingSlashes(s: string): string {
+  return trimTrailing(s, (char) => char === "/");
 }

@@ -20,15 +20,16 @@ import {
   ALL_PROVIDERS_AVAILABLE,
 } from "../../model/pi-models.ts";
 import { resolveRuntimeChoice } from "../../agent/runtime-choice.ts";
+import { APP_EDIT_DEFAULT_RUNTIME } from "../runtime-config.ts";
+import type { ScopedConfigStore } from "../../resolution/config-store.ts";
 import { sanitizeBranding } from "../../resolution/branding.ts";
+import { credentialInjectionError, type CredentialInjection } from "../../credentials/credential-injection.ts";
 import {
-  credentialInjectionError,
   isValidCredentialSlug,
   isValidServiceCredentialEnvKey,
   isValidBrokerHost,
   isValidBrokerMethod,
   isValidBrokerPathPrefix,
-  type CredentialInjection,
   type DecryptedServiceCredential,
   type PublicServiceCredential,
   type ServiceCredentialInput,
@@ -43,6 +44,7 @@ import type { ApprovalGrantModes } from "../../types.ts";
 import { parseEgressPolicy } from "../../resolution/egress-policy.ts";
 import { FEATURE_NAMES, FEATURES, type FeatureName } from "../../feature-flags.ts";
 import { parseSharingPosture, SHARING_POSTURES, type SharingPosture } from "../../resolution/sharing-posture.ts";
+import { appHandleResource } from "./admin/app-handle.ts";
 
 type Actor = { id: string };
 
@@ -92,6 +94,22 @@ function channelContainer(scope: string): string | undefined {
   const { kind, ref } = parseScopeId(scope);
   return ref && (kind === "channel" || kind === "group") ? ref : undefined;
 }
+
+const RUNTIME_RESOURCES: {
+  id: string;
+  purpose?: Parameters<ScopedConfigStore["setPurposeRuntime"]>[0];
+  label?: string;
+}[] = [
+  { id: "runtime" },
+  { id: "cron-runtime", purpose: "cron" },
+  { id: "subagent-runtime", purpose: "subagent" },
+  { id: "fallback-runtime", purpose: "fallback" },
+  {
+    id: "app-edit-runtime",
+    purpose: "appEdit",
+    label: `Runtime for chats beside a published app until the person picks another model in that chat; it takes precedence over their conversation runtime and saved model variant. Unset means ${APP_EDIT_DEFAULT_RUNTIME.modelId}. When the person cannot run it on this deployment, the chat uses their conversation runtime.`,
+  },
+];
 
 export const ADMIN_RESOURCES: readonly AdminResource[] = [
   {
@@ -320,13 +338,6 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     },
   },
   {
-    id: "unfulfilled-insights",
-    kind: "boolean",
-    readKey: "unfulfilledInsights",
-    get: (deps, scope) => deps.config!.getUnfulfilledInsights(scope),
-    apply: generic(boolBody, (deps, scope, on) => deps.config!.setUnfulfilledInsights(scope, on)),
-  },
-  {
     id: "external-slack-participants",
     kind: "boolean",
     target: "org",
@@ -477,8 +488,9 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       return { ok: true };
     },
   },
-  ...([undefined, "cron", "subagent", "fallback"] as const).map((purpose): AdminResource => ({
-    id: purpose ? `${purpose}-runtime` : "runtime",
+  ...RUNTIME_RESOURCES.map(({ id, purpose, label }): AdminResource => ({
+    id,
+    ...(label ? { label } : {}),
     refreshesModels: true,
     kind: "custom",
     target: purpose ? "org" : "any",
@@ -584,6 +596,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       (deps, scope, names) => deps.config!.setAckEmoji(scope, names),
     ),
   },
+  appHandleResource,
   {
     id: "branding",
     kind: "custom",
@@ -611,37 +624,6 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         return { error: "branding mark image must be an https URL" };
       }
       await ctx.deps.config!.setBranding(scope, value ?? null);
-      return { ok: true };
-    },
-  },
-  {
-    id: "browse-model",
-    refreshesModels: true,
-    kind: "enum",
-    target: "org",
-    clearable: true,
-    label:
-      "The model driving the browser agent in the browse skill, org-wide (empty follows the deployment's base model; fast mode applies only on Opus models).",
-    readKey: "browseModel",
-    get enumValues() {
-      return selectableBaseModels();
-    },
-    get: (deps, scope) => deps.config!.getBrowseModel(scope),
-    apply: async (ctx, _actor, scope) => {
-      const bad = orgOnly(scope, "the browse model is org-wide");
-      if (bad) return bad;
-      const raw = (ctx.body as { modelId?: unknown }).modelId;
-      if (raw !== undefined && raw !== null && typeof raw !== "string") {
-        return { error: "browse-model requires { modelId: string } (empty string clears the override)" };
-      }
-      const modelId = typeof raw === "string" ? raw.trim() : "";
-      if (modelId && !resolveModel(modelId)) return { error: `unknown model id: ${modelId}` };
-      const configuredKeys = ctx.deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
-      const managedKeys = ctx.deps.modelCredentials ? await ctx.deps.modelCredentials.availability() : configuredKeys;
-      if (modelId && !modelServiceable(modelId, managedKeys)) {
-        return { error: `model ${modelId} isn't serviceable on this deployment: its provider key is not configured` };
-      }
-      await ctx.deps.config!.setBrowseModel(scope, modelId || null);
       return { ok: true };
     },
   },

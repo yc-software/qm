@@ -10,6 +10,7 @@ import {
   createRenderSandbox,
   type StoredRenderSandbox,
   type StoredRenderCleanup,
+  type StoredRenderNamespace,
   type StoredRenderScratch,
 } from "../src/sandbox/render-sandbox.ts";
 import { SandboxProvisionCleanupError, type SandboxHandle } from "../src/sandbox/sandbox.ts";
@@ -31,6 +32,7 @@ function setup(t: TestContext) {
   const store = testMap<StoredRenderSandbox>();
   const scratchStore = testMap<StoredRenderScratch>();
   const cleanupStore = testMap<StoredRenderCleanup>();
+  const namespaceStore = testMap<StoredRenderNamespace>();
   const advisoryLock = testAdvisoryLock();
   const errors: string[] = [];
   const ref = `ghcr.io/acme/sandbox-base:${"0".repeat(40)}@sha256:${"a".repeat(64)}`;
@@ -43,6 +45,7 @@ function setup(t: TestContext) {
       scratchStore: backing,
       cleanupStore,
       advisoryLock: lock,
+      namespaceStore,
       onError: ({ code }) => errors.push(code),
     });
   return { make, fake, store, scratchStore, errors };
@@ -258,35 +261,35 @@ test("Render serializes disposable cleanup across cores", async (t) => {
 });
 
 for (const cleanup of ["teardown", "expiry sweep"] as const) {
-  test(`Render completes a disposable file import before ${cleanup}`, { timeout: 10_000 }, async (t) => {
-    const { make, fake, scratchStore } = setup(t);
-    const sandbox = make();
-    const handle = await sandbox.provision("personal:scratch", options);
-    const uploading = Promise.withResolvers<void>();
-    const release = Promise.withResolvers<void>();
-    const write = fake.client.writeFileBytes;
-    t.mock.method(fake.client, "writeFileBytes", async (id: string, path: string, data: Uint8Array) => {
-      uploading.resolve();
-      await release.promise;
-      await write(id, path, data);
-    });
-    const pending = sandbox.importFiles!(handle, [{ path: "latest", data: Buffer.from("completed import") }]);
-    await uploading.promise;
-    if (cleanup === "expiry sweep") await scratchStore.merge(handle.id, { expiresAtMs: Date.now() - 1 });
-    const other = make();
-    const disposal = cleanup === "teardown" ? other.teardown(handle, { destroy: true }) : other.reapDeepIdle!(0);
-    try {
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      assert.equal((await scratchStore.get(handle.id))?.cleanupPending, undefined);
-      assert.deepEqual(fake.terminated, []);
-    } finally {
-      release.resolve();
-      const results = await Promise.allSettled([pending, disposal]);
-      for (const result of results) assert.equal(result.status, "fulfilled");
-    }
-    assert.deepEqual(fake.terminated, [handle.providerSandboxId]);
-    assert.deepEqual(await scratchStore.entries(), []);
-  });
+  test(
+    `Render ${cleanup} does not queue behind a disposable file import, which fails`,
+    { timeout: 10_000 },
+    async (t) => {
+      const { make, fake, scratchStore } = setup(t);
+      const sandbox = make();
+      const handle = await sandbox.provision("personal:scratch", options);
+      const uploading = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const write = fake.client.writeFileBytes;
+      t.mock.method(fake.client, "writeFileBytes", async (id: string, path: string, data: Uint8Array) => {
+        uploading.resolve();
+        await release.promise;
+        await write(id, path, data);
+      });
+      const pending = sandbox.importFiles!(handle, [{ path: "latest", data: Buffer.from("completed import") }]);
+      await uploading.promise;
+      if (cleanup === "expiry sweep") await scratchStore.merge(handle.id, { expiresAtMs: Date.now() - 1 });
+      const other = make();
+      try {
+        await (cleanup === "teardown" ? other.teardown(handle, { destroy: true }) : other.reapDeepIdle!(0));
+        assert.deepEqual(fake.terminated, [handle.providerSandboxId]);
+        assert.deepEqual(await scratchStore.entries(), []);
+      } finally {
+        release.resolve();
+      }
+      await assert.rejects(pending);
+    },
+  );
 }
 
 test("A failed Render initialization cannot later delete a replacement allocation", async (t) => {

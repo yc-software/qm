@@ -4,7 +4,6 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { scopeId } from "../src/types.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 
@@ -144,38 +143,5 @@ for (const backend of ["memory", "postgres"] as const) {
       ],
     );
     assert.deepEqual(await store.goals([]), new Map());
-  });
-
-  test(`latest runs batch matches single reads including private messages and ties: ${backend}`, { skip }, async () => {
-    const runtime =
-      backend === "memory"
-        ? createPostgresRunStore(testDatabaseUrl())
-        : createPostgresRunStore(process.env.DATABASE_URL!);
-    const { runs } = runtime;
-    const ids = [`batch:${randomUUID()}`, `batch:${randomUUID()}`];
-    const actor = { id: "internal:batch", type: "internal" as const };
-    try {
-      for (const id of ids)
-        for (const privateSessionMessage of [false, true])
-          await runs.enqueue({
-            sessionId: id,
-            request: {
-              actor,
-              conversation: { kind: "dm", threadRef: id, audience: [actor] },
-              origin: { kind: "direct" },
-              text: "batch",
-              ...(privateSessionMessage ? { privateSessionMessage: true as const } : {}),
-            },
-          });
-      for (const excludePrivateMessages of [false, true]) {
-        const batch = await runs.latestForThreads([...ids, "missing", ids[0]!], { excludePrivateMessages });
-        assert.equal(batch.size, 2);
-        for (const id of ids)
-          assert.deepEqual(batch.get(id), await runs.latestForThread(id, { excludePrivateMessages }));
-      }
-      assert.deepEqual(await runs.latestForThreads([]), new Map());
-    } finally {
-      await runs.close?.();
-    }
   });
 }

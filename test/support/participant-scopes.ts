@@ -20,14 +20,9 @@ export async function assertLateJoinerScopes(store: SessionStore, prefix: string
     (await store.getForParticipant(session.id, `${prefix}-early`))?.lastActivityAt,
     "a scope's recency is its newest session's user activity",
   );
-  assert.deepEqual(await store.participantScopes(`${prefix}-late`), [
-    { scopeId: scope, channelName: "eng", sessionCount: 0, lastActivityAt: null },
-  ]);
-  assert.equal((await store.getForParticipant(session.id, `${prefix}-late`))?.hasEntries, false);
-
-  await appendUser(store, session.id, "after the late joiner");
   const [late] = await store.participantScopes(`${prefix}-late`);
-  assert.equal(late?.sessionCount, 1, "the late joiner counts the session once it has something they can see");
+  assert.equal(late?.sessionCount, 1, "a late joiner counts a session whose content predates them");
+  assert.equal((await store.getForParticipant(session.id, `${prefix}-late`))?.hasEntries, true);
 }
 
 export async function assertLeanListing(store: SessionStore, prefix: string): Promise<void> {

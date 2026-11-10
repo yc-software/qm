@@ -31,7 +31,6 @@ function deployment(t: TestContext, change?: (raw: ScaffoldConfig) => void) {
 const connections = {
   databaseUrl: "postgres://qm:password@postgres/qm",
   coreUrl: "http://core-assigned:8080",
-  webUiUrl: "http://web-ui:8080",
   projectId: "prj-acme",
   environmentId: "evm-production",
 };
@@ -158,7 +157,7 @@ test("Render appRegion accepts supported regions without changing the core regio
     const core = renderServiceEnv(config, "core", new Map(), connections);
     assert.equal(core.RENDER_APP_REGION, appRegion);
     assert.equal(core.RENDER_REGION, "oregon");
-    assert.equal(renderServiceEnv(config, "web-ui", new Map(), connections).RENDER_APP_REGION, undefined);
+    assert.equal(renderServiceEnv(config, "reports", new Map(), connections).RENDER_APP_REGION, undefined);
   }
   for (const appRegion of ["us-east-1", "Virginia", "", null, 3, {}]) {
     writeFileSync(path, JSON.stringify({ ...raw, render: { ...raw.render, appRegion } }));
@@ -169,7 +168,7 @@ test("Render appRegion accepts supported regions without changing the core regio
 test("Render core receives scoped storage credentials and assigned URLs", (t) => {
   const { config } = deployment(t);
   config.apiUrl = "https://core-assigned.onrender.com";
-  config.publicUrl = "https://portal-assigned.onrender.com";
+  config.publicUrl = "https://core-assigned.onrender.com";
   const values = new Map([
     ["MINIO_ROOT_USER", "root-user"],
     ["MINIO_ROOT_PASSWORD", "root-secret"],
@@ -193,7 +192,7 @@ test("Render core receives scoped storage credentials and assigned URLs", (t) =>
   assert.equal(core.DATABASE_URL, connections.databaseUrl);
   assert.equal(core.CORE_SIGNING_SECRET, "qm-signing-key");
   assert.equal(core.WORKERS, undefined);
-  for (const service of ["core", "web-ui", "portal"]) {
+  for (const service of ["core", "reports"]) {
     const env = renderServiceEnv(config, service, values, wired);
     assert.equal(env.CORE_API_URL, connections.coreUrl);
     assert.equal(env.MINIO_ROOT_USER, undefined);
@@ -202,9 +201,13 @@ test("Render core receives scoped storage credentials and assigned URLs", (t) =>
       assert.equal(env.AWS_SECRET_ACCESS_KEY, undefined);
     }
   }
-  const portal = renderServiceEnv(config, "portal", values, connections);
-  assert.equal(portal.OIDC_ISSUER, `${config.publicUrl}/idp`);
-  assert.equal(portal.AUTH_REDIRECT_URI, `${config.publicUrl}/auth/callback`);
+  assert.equal(core.PORT, "8000");
+  assert.equal(core.PUBLIC_PORT, "8000");
+  assert.equal(core.PUBLIC_WEB_URL, config.publicUrl);
+  assert.equal(core.AUTH_EMBEDDED, "1");
+  assert.equal(core.OIDC_ISSUER, `${config.publicUrl}/idp`);
+  assert.equal(core.AUTH_REDIRECT_URI, `${config.publicUrl}/auth/callback`);
+  assert.equal(renderServiceEnv(config, "reports", values, connections).PORT, "8080");
   assert.equal(renderServiceEnv(config, "slack", values, connections).PUBLIC_API_URL, config.apiUrl);
 });
 
@@ -234,15 +237,15 @@ test("Render rejects prebuilt plugin images", (t) => {
 test("removing hosted auth and Slack resets their managed settings", (t) => {
   const { config } = deployment(t);
   config.services = config.services.filter((service) => !["auth", "slack"].includes(service));
-  config.env.portal = { OIDC_ISSUER: "https://idp.example.test" };
+  config.env.core = { ...config.env.core, OIDC_ISSUER: "https://idp.example.test" };
   const core = renderServiceEnv(config, "core", new Map(), connections);
   for (const key of ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_SIGNING_SECRET", "AUTH_ALLOWED_EMAIL_DOMAIN"])
     assert.equal(core[key], "");
-  const portal = renderServiceEnv(config, "portal", new Map(), connections);
-  assert.equal(portal.AUTH_EMBEDDED, "0");
-  assert.equal(portal.AUTH_BROKER_UPSTREAM, "");
-  assert.equal(portal.OIDC_ISSUER, "https://idp.example.test");
-  assert.equal(portal.OIDC_ALLOWED_EMAIL_DOMAIN, "");
+  assert.equal(core.AUTH_EMBEDDED, undefined);
+  assert.equal(core.AUTH_BROKER_UPSTREAM, undefined);
+  assert.equal(core.OIDC_ISSUER, "https://idp.example.test");
+  assert.equal(core.OIDC_AUTH_ENDPOINT, "https://slack.com/openid/connect/authorize");
+  assert.equal(core.OIDC_ALLOWED_EMAIL_DOMAIN, undefined);
 });
 
 test("removing an embedded auth domain clears the core and broker allowlists", (t) => {
@@ -251,10 +254,8 @@ test("removing an embedded auth domain clears the core and broker allowlists", (
   assert.equal(renderServiceEnv(config, "core", new Map(), connections).AUTH_ALLOWED_EMAIL_DOMAIN, "example.test");
   delete config.env.auth.AUTH_ALLOWED_EMAIL_DOMAIN;
   const core = renderServiceEnv(config, "core", new Map(), connections);
-  const portal = renderServiceEnv(config, "portal", new Map(), connections);
   assert.equal(core.AUTH_ALLOWED_EMAIL_DOMAIN, "");
-  assert.equal(portal.AUTH_ALLOWED_EMAIL_DOMAIN, "");
-  assert.equal(portal.OIDC_ALLOWED_EMAIL_DOMAIN, "");
+  assert.equal(core.OIDC_ALLOWED_EMAIL_DOMAIN, undefined);
 });
 
 test("Render storage validates settings and reserves bundled resource names", (t) => {

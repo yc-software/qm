@@ -66,11 +66,7 @@ export async function assertParticipantSessionParity(store: SessionStore, prefix
     (await store.getForParticipant(owned.id, owner))?.pinned,
     "the participant's own view of the row survives the single-session read",
   );
-  assert.equal(
-    (await store.getForParticipant(shared.id, guest))?.hasEntries,
-    true,
-    "a closed tenure still reports the entries it saw",
-  );
+  assert.equal(await store.getForParticipant(shared.id, guest), null, "a removed participant cannot read the session");
   assert.equal(
     (await store.getForParticipant(empty.id, owner))?.hasEntries,
     false,

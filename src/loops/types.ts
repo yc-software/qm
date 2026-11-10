@@ -66,6 +66,7 @@ export interface Loop extends TriggerBase {
   healthReason?: string;
   throttle?: boolean;
   cronId?: string;
+  lastScanAt?: number;
   consecutiveFailedFires?: number;
   quarantineClearedBy?: string;
   quarantineClearedAt?: number;
@@ -101,9 +102,19 @@ export interface LoopItemTriage {
   pinned?: Array<"priority" | "group">;
 }
 
+export type LoopVerdictState = "needs_reply" | "resolved" | "noise";
+
+export interface LoopItemVerdict {
+  state: LoopVerdictState;
+  reason: string;
+  waitingTs: string | null;
+  lastSeenTs: string;
+  at: number;
+}
+
 export interface LoopItem {
   triage?: LoopItemTriage;
-  inboxPreview?: LoopSourcePayload;
+  verdict?: LoopItemVerdict;
   id: string;
   loopId: string;
   sourceKey: string;

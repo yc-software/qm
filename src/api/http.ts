@@ -73,17 +73,11 @@ export function contentTypeWithUtf8Charset(contentType: string): string {
   return textual ? `${contentType}; charset=utf-8` : contentType;
 }
 
-export function pipeToResponse(
-  res: ServerResponse,
-  stream: NodeJS.ReadableStream & { destroy?: () => void },
-  errorMessage: string,
-): void {
-  stream.on("error", () => {
-    if (!res.headersSent) sendJson(res, 500, { error: "stream_error", message: errorMessage });
-    else res.destroy();
-  });
-  res.on("close", () => stream.destroy?.());
-  stream.pipe(res);
+export const UNTRUSTED_CONTENT_SANDBOX_CSP =
+  "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads";
+
+export function frameAncestorsDirective(ancestors: readonly string[]): string {
+  return ["frame-ancestors 'self'", ...ancestors].join(" ");
 }
 
 export function sendRedirect(res: ServerResponse, location: string): void {

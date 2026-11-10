@@ -3,7 +3,7 @@ import { contextSummary } from "../sessions/session-store.ts";
 import { isOverheard, isUserItem, itemFields, type Item, proseText, stepMessage } from "../sessions/items.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
 import { countTokens } from "../util/tokens.ts";
-import { documentAttachmentTokens, replayableDocumentMetas } from "../core/documents.ts";
+import { replayableDocumentMetas } from "../core/documents.ts";
 
 const MAX_COMPACT_ENTRY_CHARS = 16_000;
 const COMPACT_ENTRY_TAIL_CHARS = 2_000;
@@ -43,10 +43,17 @@ export const CONTEXT_SUMMARY_HEADER =
 
 const isNarration = (item: Item): boolean => item.kind === "AgentMessage" && item.variant === "narration";
 
+function stepId(item: Item): string | null {
+  const id = stepMessage(item)?.id;
+  return typeof id === "string" ? id : null;
+}
+
 function modelReplayable(items: Item[]): Item[] {
+  const retractedSteps = new Set(items.flatMap((e) => (e.body.retracted && stepId(e) ? [stepId(e)] : [])));
   return items.filter(
     (e) =>
       ((e.kind !== "Reasoning" && !isNarration(e)) || stepMessage(e) !== null) &&
+      !retractedSteps.has(stepId(e)) &&
       e.body.slackReplyReceipt !== true &&
       e.kind !== "Error",
   );
@@ -72,10 +79,6 @@ const itemTokenCache = new Map<string, number>();
 const ITEM_TOKEN_CACHE_MAX = 50_000;
 
 export function estimateItemTokens(item: Item): number {
-  return estimateItemTextTokens(item) + (isUserItem(item) ? documentAttachmentTokens(item.body) : 0);
-}
-
-function estimateItemTextTokens(item: Item): number {
   const prose = item.kind === "Reasoning" ? (item.text ?? "") : proseText(item);
   const environment = item.kind === "Reasoning" ? null : item.body.environment;
   const text =
@@ -197,6 +200,13 @@ export function planCompaction(
   const toSummarize = latestSummary ? [latestSummary, ...overflow] : overflow;
   if (!overflow.length) return null;
   return { toSummarize, kept: afterSummary.slice(overflowCount) };
+}
+
+export function compactedSinceLastTurn(history: readonly Item[]): boolean {
+  const summary = history.findLast((item) => contextSummary(item));
+  if (!summary) return false;
+  const lastTurn = history.findLast((item) => item.kind === "UserMessage" && !isOverheard(item));
+  return !lastTurn || lastTurn.seq < summary.seq;
 }
 
 export function compactionThroughSeq(items: Item[]): number {

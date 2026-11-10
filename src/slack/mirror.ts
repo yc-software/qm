@@ -75,17 +75,23 @@ export function slackMessageToIngestEvent(
 }
 
 export function createMirror(deps: {
+  account: string;
   core: SlackCoreClient;
   ids: BotIdentity;
   directory: Directory;
   externalParticipantsEnabled(): Promise<boolean>;
 }): Mirror {
-  const { core, ids, directory, externalParticipantsEnabled } = deps;
+  const { account, core, ids, directory, externalParticipantsEnabled } = deps;
   const ambientRoomGate = new Map<string, { allowed: boolean; at: number }>();
 
   async function pushSurfaceEvents(events: IngestEvent[]): Promise<void> {
     if (!events.length) return;
-    await core.ingestSurfaceEvents(events, { name: ids.botHandle, mentionId: ids.botUserId });
+    const source =
+      ids.ownTeamId && ids.botUserId ? { account, workspace: ids.ownTeamId, assistant: ids.botUserId } : undefined;
+    await core.ingestSurfaceEvents(source ? events.map((e) => ({ ...e, source })) : events, {
+      name: ids.botHandle,
+      mentionId: ids.botUserId,
+    });
   }
 
   async function resolveMentionNames(client: any, text: string): Promise<Record<string, string>> {

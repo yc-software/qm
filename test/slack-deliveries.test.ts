@@ -216,6 +216,35 @@ for (const type of ["slack", "group", "principal"]) {
   });
 }
 
+for (const [label, sourceThreadRef, webUiPublicUrl, footer] of [
+  [
+    "a persona post",
+    undefined,
+    "https://agent.example/web-ui/",
+    "Persona: <https://agent.example/web-ui/personas/p%201|Ada &lt;&amp;&gt;>",
+  ],
+  ["a persona post without a web UI", undefined, undefined, "Persona: Ada &lt;&amp;&gt;"],
+  [
+    "a persona's cron post",
+    "cron:c1:fire:123",
+    "https://agent.example",
+    "Persona: <https://agent.example/personas/p%201|Ada &lt;&amp;&gt;> · Weekly &lt;project&gt; &amp; check-in · <https://agent.example/crons/c1|Settings>",
+  ],
+] as const) {
+  test(`${label} names the persona in the footer`, async () => {
+    const { posts } = await deliver(
+      { persona: { id: "p 1", name: "Ada <&>" } },
+      sourceThreadRef,
+      webUiPublicUrl,
+      "Hello",
+    );
+    assert.deepEqual((posts[0]!.blocks as unknown[]).at(-1), {
+      type: "context",
+      elements: [{ type: "mrkdwn", text: footer, verbatim: true }],
+    });
+  });
+}
+
 test("ordinary deliveries omit cron settings even with a configured web UI", async () => {
   const { posts } = await deliver({ unfurlLinks: false }, "dm:D1", "https://agent.example/web-ui");
   assert.equal(posts[0]!.blocks, undefined);
@@ -339,6 +368,27 @@ test("delegated approvals recover native buttons from durable records", async ()
   assert.deepEqual(second.acknowledgements, ["D1"]);
 });
 
+test("an approval from a linked principal is posted to the Slack user who asked", async () => {
+  const approval = {
+    requestId: "A1",
+    command: "publish",
+    reason: "approval",
+    request: {
+      actor: { externalId: "oidc:linked-principal" },
+      surfaceOrigin: { author: { surface: "slack", account: "default", id: "U9" }, workspace: "T1" },
+    },
+  };
+  const { posts, conversationsOpened } = await deliver(
+    { type: "principal", target: "U9", commandApprovalId: "A1" },
+    undefined,
+    undefined,
+    "Approval needed",
+    { approval },
+  );
+  assert.deepEqual(conversationsOpened, [{ users: "U9" }]);
+  assert.match(JSON.stringify(posts[0]!.blocks), /hilo_allow_once/);
+});
+
 test("an approval too long for Slack links its Deny-only card to the conversation on the web", async () => {
   const approval = {
     requestId: "A1",
@@ -459,4 +509,18 @@ test("an edit of a message that no longer exists fails the delivery instead of r
   );
   assert.deepEqual(posts, []);
   assert.deepEqual(failures, [["D1", "edit_target_not_found"]]);
+});
+
+test("a reply revised by the reply check carries a plain-text edit note footer", async () => {
+  const { posts } = await deliver(
+    { type: "slack", editNote: "Edited after a reply check: em dash" },
+    undefined,
+    undefined,
+    "Clean reply",
+  );
+  const blocks = posts.at(-1)!.blocks as Array<{ type: string; elements?: unknown[] }>;
+  assert.deepEqual(blocks.at(-1), {
+    type: "context",
+    elements: [{ type: "plain_text", text: "Edited after a reply check: em dash", emoji: false }],
+  });
 });

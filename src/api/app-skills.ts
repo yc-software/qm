@@ -1,7 +1,7 @@
 import type { ScopeId } from "../types.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
-import type { SkillManifest } from "../skills/skill-store.ts";
+import { foreignSkillCollision, type SkillManifest } from "../skills/skill-store.ts";
 import type { SkillPack, SkillPackStore } from "../skills/skill-pack-store.ts";
 import type { SkillPackFetcher } from "../skills/pack-fetcher.ts";
 import { planIngest, importPack, collectSharedBundle, type ImportResult } from "../skills/ingest.ts";
@@ -26,7 +26,7 @@ export async function skillVisibilityContext(
     ...new Set(
       homes.filter((sid) => {
         const k = parseScopeId(sid).kind;
-        return k === "channel" || k === "group";
+        return k === "channel" || k === "group" || k === "persona";
       }),
     ),
   ];
@@ -290,16 +290,22 @@ export function createSkillMethods(
     async restoreOwnedSkill(id, principalId) {
       const skill = await deps.skills.get(id);
       if (!skill || skill.status !== "archived" || !(await canManageSkill(skill, principalId))) return null;
-      await deps.skills.review(id, principalId, skill.manifest.requiredCapabilities);
-      const restored = await deps.skills.publish(id);
-      deps.auditLog.record({
-        at: Date.now(),
-        principalId,
-        action: "skill_restore",
-        resource: id,
-        scopeLabel: skill.scopeId,
+      return deps.skills.withNameLock(skill.scopeId, skill.manifest.name, async () => {
+        const current = await deps.skills.get(id);
+        if (!current || current.status !== "archived") return null;
+        if (foreignSkillCollision(await deps.skills.list(), current.scopeId, current.manifest.name, (s) => s.id === id))
+          return "exists" as const;
+        await deps.skills.review(id, principalId, current.manifest.requiredCapabilities);
+        const restored = await deps.skills.publish(id);
+        deps.auditLog.record({
+          at: Date.now(),
+          principalId,
+          action: "skill_restore",
+          resource: id,
+          scopeLabel: current.scopeId,
+        });
+        return restored;
       });
-      return restored;
     },
     listSkillPacks() {
       return deps.skillPacks ? deps.skillPacks.list() : Promise.resolve([]);
@@ -396,31 +402,33 @@ export function createSkillMethods(
       if (!name || !description || !body) throw new Error("skill requires a non-empty name, description, and body");
       const homeScope = input.homeScope ?? scopeId("personal", input.principalId);
       const homeKind = parseScopeId(homeScope).kind;
-      if (homeKind !== "personal" && homeKind !== "channel" && homeKind !== "group") {
+      if (homeKind !== "personal" && homeKind !== "channel" && homeKind !== "group" && homeKind !== "persona") {
         throw new Error(
           "a skill cannot be created directly in an org or team scope — promote a published skill instead",
         );
       }
-      const existing = (await deps.skills.list()).find((s) => s.scopeId === homeScope && s.manifest.name === name);
-      if (existing && existing.status !== "archived") return null;
-      if (existing) await deps.skills.delete(existing.id);
-      const manifest: SkillManifest = {
-        name,
-        description,
-        requiredCapabilities: input.requiredCapabilities ?? [],
-        body,
-      };
-      const skill = await deps.skills.create({ scopeId: homeScope, manifest, createdBy: input.principalId });
-      await deps.skills.review(skill.id, "system:skill-authoring", manifest.requiredCapabilities);
-      const published = await deps.skills.publish(skill.id);
-      deps.auditLog.record({
-        at: Date.now(),
-        principalId: input.principalId,
-        action: "skill_create",
-        resource: skill.id,
-        scopeLabel: homeScope,
+      return deps.skills.withNameLock(homeScope, name, async () => {
+        const sameName = (await deps.skills.list()).filter((s) => s.scopeId === homeScope && s.manifest.name === name);
+        if (sameName.some((s) => s.status !== "archived")) return null;
+        for (const s of sameName) await deps.skills.delete(s.id);
+        const manifest: SkillManifest = {
+          name,
+          description,
+          requiredCapabilities: input.requiredCapabilities ?? [],
+          body,
+        };
+        const skill = await deps.skills.create({ scopeId: homeScope, manifest, createdBy: input.principalId });
+        await deps.skills.review(skill.id, "system:skill-authoring", manifest.requiredCapabilities);
+        const published = await deps.skills.publish(skill.id);
+        deps.auditLog.record({
+          at: Date.now(),
+          principalId: input.principalId,
+          action: "skill_create",
+          resource: skill.id,
+          scopeLabel: homeScope,
+        });
+        return published;
       });
-      return published;
     },
     async deleteOwnedSkill({ principalId, id, liveActor }) {
       const skill = await deps.skills.get(id);

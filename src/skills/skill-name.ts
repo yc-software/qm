@@ -4,11 +4,10 @@ export function isSafeSkillName(name: string): boolean {
   return SAFE_SKILL_NAME.test(name);
 }
 
+export const SKILL_NAME_RULE =
+  "skill name must be 1-128 ASCII letters, digits, dots, underscores, or hyphens; it must start with a letter or digit and cannot end with a dot";
+
 export function assertSafeSkillName(name: string): string {
-  if (!isSafeSkillName(name)) {
-    throw new Error(
-      "skill name must be 1-128 ASCII letters, digits, dots, underscores, or hyphens; it must start with a letter or digit and cannot end with a dot",
-    );
-  }
+  if (!isSafeSkillName(name)) throw new Error(SKILL_NAME_RULE);
   return name;
 }

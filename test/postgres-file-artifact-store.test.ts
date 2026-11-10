@@ -258,3 +258,17 @@ test("pg concurrent first shares reuse one path generation and republish after d
 test("shared file refs authorize only the exact record ID", { skip }, async () => {
   await assertSharedRecordIdentity(createPostgresFileArtifactStore(URL!, createMemoryDurableByteStore()));
 });
+
+test("pg stores mimetypes as parsed media types and anything unparseable as octet-stream", { skip }, async () => {
+  const store = createPostgresFileArtifactStore(URL!, createMemoryDurableByteStore());
+  const stored = async (key: string, mimetype: string) =>
+    (await store.put(put({ id: fileArtifactId(key, "out", 0), mimetype }))).artifact.mimetype;
+  assert.deepEqual(
+    [
+      await stored("smuggled", "text/plain, text/html"),
+      await stored("control", "text/plain\u0001"),
+      await stored("charset", "Text/CSV; charset=iso-8859-1"),
+    ],
+    ["application/octet-stream", "application/octet-stream", "text/csv;charset=iso-8859-1"],
+  );
+});

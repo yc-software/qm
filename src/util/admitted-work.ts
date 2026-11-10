@@ -6,11 +6,11 @@ export class WorkAdmissionClosed extends Error {
   }
 }
 
-export function createAdmittedWork(options: { paused?: boolean; canStart?: () => boolean } = {}) {
+export function createAdmittedWork() {
   const context = new AsyncLocalStorage<{ active: boolean }>();
   const pending = new Set<Promise<unknown>>();
-  let paused = options.paused ?? false;
-  const canRun = () => context.getStore()?.active === true || (!paused && (options.canStart?.() ?? true));
+  let paused = false;
+  const canRun = () => context.getStore()?.active === true || !paused;
   return {
     canRun,
     pause() {

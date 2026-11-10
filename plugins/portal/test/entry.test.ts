@@ -1,39 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
-
-test("`node src/index.ts` (relative entry, like Docker) binds the port and serves /healthz", async () => {
-  const PORT = "18097";
-  const child = spawn(process.execPath, ["src/index.ts"], {
-    cwd: process.cwd(),
-    env: { ...process.env, PORT, PORTAL_PUBLIC_URL: `http://localhost:${PORT}`, NODE_ENV: "test" },
-    stdio: "ignore",
-  });
-  try {
-    const deadline = Date.now() + 8000;
-    let ok = false;
-    while (Date.now() < deadline) {
-      try {
-        const r = await fetch(`http://localhost:${PORT}/healthz`);
-        if (r.status === 200) {
-          ok = true;
-          break;
-        }
-      } catch {
-        await new Promise((r) => setTimeout(r, 150));
-      }
-    }
-    assert.ok(ok, "portal entry should bind the port and answer /healthz");
-  } finally {
-    child.kill("SIGKILL");
-  }
-});
+import { spawnSync } from "node:child_process";
 
 test("boot refuses an own-origin OIDC endpoint when no broker upstream is wired", () => {
   const command = "import('./src/index.ts').then(m => m.bootChecks())";
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    PORTAL_PUBLIC_URL: "https://agent.example.com",
+    PUBLIC_WEB_URL: "https://agent.example.com",
     OIDC_AUTH_ENDPOINT: "https://agent.example.com/idp/authorize",
   };
   delete env.NODE_ENV;
@@ -58,7 +31,7 @@ test("production boot requires an explicit OIDC tenant trust boundary", () => {
   const baseEnv: NodeJS.ProcessEnv = {
     ...process.env,
     NODE_ENV: "production",
-    PORTAL_PUBLIC_URL: "https://agent.example.com",
+    PUBLIC_WEB_URL: "https://agent.example.com",
     PORTAL_SESSION_SECRET: "portal-session-secret",
     CORE_SIGNING_SECRET: "core-signing-secret",
     SKILL_SIGNING_SECRET: "skill-signing-secret",
@@ -100,7 +73,7 @@ test("production boot requires an explicit JWKS URI for custom issuers", () => {
   const baseEnv: NodeJS.ProcessEnv = {
     ...process.env,
     NODE_ENV: "production",
-    PORTAL_PUBLIC_URL: "https://agent.example.com",
+    PUBLIC_WEB_URL: "https://agent.example.com",
     PORTAL_SESSION_SECRET: "portal-session-secret",
     CORE_SIGNING_SECRET: "core-signing-secret",
     OIDC_CLIENT_ID: "client-id",
@@ -133,7 +106,7 @@ test("a session TTL above the default max ceiling still boots, but a contradicto
   const baseEnv: NodeJS.ProcessEnv = {
     ...process.env,
     NODE_ENV: "production",
-    PORTAL_PUBLIC_URL: "https://agent.example.com",
+    PUBLIC_WEB_URL: "https://agent.example.com",
     PORTAL_SESSION_SECRET: "portal-session-secret",
     CORE_SIGNING_SECRET: "core-signing-secret",
     SKILL_SIGNING_SECRET: "skill-signing-secret",
@@ -166,7 +139,7 @@ test("production accepts cleartext OIDC only on private-network hosts, and only 
   const brokerEnv: NodeJS.ProcessEnv = {
     ...process.env,
     NODE_ENV: "production",
-    PORTAL_PUBLIC_URL: "https://agent.example.com",
+    PUBLIC_WEB_URL: "https://agent.example.com",
     PORTAL_SESSION_SECRET: "portal-session-secret",
     CORE_SIGNING_SECRET: "core-signing-secret",
     OIDC_CLIENT_ID: "qm-portal",
@@ -211,4 +184,42 @@ test("production accepts cleartext OIDC only on private-network hosts, and only 
   const externalCleartext = boot({ ...externalEnv, OIDC_JWKS_URI: "http://10.0.0.5/keys" });
   assert.notEqual(externalCleartext.status, 0, "the relaxation is for the built-in broker only");
   assert.match(externalCleartext.stderr, /OIDC endpoint must be https unless it is the built-in broker/);
+});
+
+test("production serves a cleartext front door only on a loopback address", () => {
+  const command = "import('./src/index.ts').then(m => m.bootChecks())";
+  const env = (publicUrl: string): NodeJS.ProcessEnv => ({
+    ...process.env,
+    NODE_ENV: "production",
+    PUBLIC_WEB_URL: publicUrl,
+    PORTAL_SESSION_SECRET: "portal-session-secret",
+    CORE_SIGNING_SECRET: "core-signing-secret",
+    OIDC_CLIENT_ID: "qm-portal",
+    OIDC_CLIENT_SECRET: "client-secret",
+    OIDC_ISSUER: `${publicUrl}/idp`,
+    OIDC_AUTH_ENDPOINT: `${publicUrl}/idp/authorize`,
+    OIDC_TOKEN_ENDPOINT: "http://127.0.0.1:8099/token",
+    OIDC_USERINFO_ENDPOINT: "http://127.0.0.1:8099/userinfo",
+    OIDC_JWKS_URI: "http://127.0.0.1:8099/.well-known/jwks.json",
+    OIDC_ALLOWED_EMAILS: "admin@example.com",
+    AUTH_BROKER_UPSTREAM: "http://127.0.0.1:8099",
+    AUTH_BROKER_PREFIX: "/idp",
+  });
+  const boot = (publicUrl: string): { status: number | null; stderr: string } =>
+    spawnSync(process.execPath, ["--input-type=module", "-e", command], {
+      cwd: process.cwd(),
+      env: env(publicUrl),
+      encoding: "utf8",
+    });
+
+  for (const publicUrl of ["http://localhost:8082", "http://127.0.0.1:8082"]) {
+    const local = boot(publicUrl);
+    assert.equal(local.status, 0, `${publicUrl}: ${local.stderr}`);
+  }
+  for (const publicUrl of ["http://core:8000", "http://agent.example.com"]) {
+    const refused = boot(publicUrl);
+    assert.notEqual(refused.status, 0, publicUrl);
+    assert.match(refused.stderr, /PUBLIC_WEB_URL must be https in production unless it is a loopback address/);
+    assert.match(refused.stderr, /OIDC_AUTH_ENDPOINT must be https unless it is a loopback address/);
+  }
 });

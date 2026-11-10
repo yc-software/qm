@@ -1,7 +1,12 @@
 import type { Destination } from "../types.ts";
-import type { Cron, CronFireLogEntry, CronFireNote, CronSchedule } from "../triggers/types.ts";
+import type { Cron, CronFireLogEntry, CronFireNote, CronSchedule, CronScript } from "../triggers/types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import { type BeginFireResult, type CronFireRecord, type CronFireStore } from "./fire-store.ts";
+import {
+  FIRE_RETENTION_KEEP_PER_CRON,
+  type BeginFireResult,
+  type CronFireRecord,
+  type CronFireStore,
+} from "./fire-store.ts";
 import {
   assertNoEscalation,
   buildTriggerBase,
@@ -13,6 +18,8 @@ import {
 import { assertCronRuntime } from "./runtime.ts";
 import { hashId } from "../util/crypto.ts";
 import { advanceNextFireAt, isCalendarSchedule, normalizeSchedule, recoverNextFireAt } from "./schedule.ts";
+import { claimThenBind, type ClaimedRow } from "../tenants/claim.ts";
+import { currentTenant } from "../tenants/context.ts";
 
 export interface CreateCronInput extends CreateTriggerInput {
   runtime?: Cron["runtime"];
@@ -24,6 +31,7 @@ export interface CreateCronInput extends CreateTriggerInput {
   unattendedGrants?: string[];
   loopId?: string;
   sessionRef?: string;
+  script?: CronScript;
 }
 
 export interface CronPatch {
@@ -37,6 +45,7 @@ export interface CronPatch {
   destination?: Destination;
   unattendedGrants?: string[];
   sessionRef?: string | null;
+  script?: CronScript | null;
 }
 
 export const DEFAULT_FIRE_RUNNING_STALE_MS = 24 * 60 * 60 * 1000;
@@ -45,12 +54,11 @@ export const STRANDED_FIRE_NOTE = "fire never completed — stranded by a restar
 
 export const FIRE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 
-export const FIRE_RETENTION_KEEP_PER_CRON = 100;
-
 export interface CronStore {
   create(input: CreateCronInput): Promise<Cron>;
   get(id: string): Promise<Cron | null>;
   list(): Promise<Cron[]>;
+  claimTenants(): Promise<ClaimedRow[]>;
   ownedBy(scopeId: string): Promise<Cron[]>;
   update(id: string, patch: CronPatch): Promise<Cron | null>;
   delete(id: string): Promise<void>;
@@ -58,19 +66,19 @@ export interface CronStore {
   setDestination(id: string, destination: Destination | undefined): Promise<void>;
   beginFire(id: string, entry: CronFireLogEntry, opts?: { exclusive?: boolean }): Promise<BeginFireResult>;
   sweepStrandedFires(now: number): Promise<number>;
+  runningFires(now: number): Promise<CronFireRecord[]>;
   pruneFires(now: number): Promise<number>;
   recordFire(id: string, entry: CronFireLogEntry): Promise<void>;
   listFires(id: string, opts?: { limit?: number }): Promise<{ runs: CronFireLogEntry[]; total: number }>;
   firesByThreadRefs(threadRefs: readonly string[]): Promise<CronFireRecord[]>;
   latestFireForThread(id: string, threadRef: string): Promise<CronFireLogEntry | undefined>;
-  backfillFires(): Promise<number>;
   setFireNote(id: string, note: CronFireNote): Promise<"applied" | "superseded" | "missing">;
   markFired(id: string, at: number, scheduledAt?: number): Promise<void>;
   markAttempted(id: string, at: number): Promise<void>;
   defer(id: string, until: number): Promise<void>;
   claimSlot(id: string, scheduledAt: number, at: number): Promise<boolean>;
   unclaimSlot(id: string, scheduledAt: number, at: number, priorLastFiredAt: number | undefined): Promise<void>;
-  due(now: number): Promise<Array<Cron & { scheduledAt: number }>>;
+  due(now: number): Promise<Array<Cron & { scheduledAt: number; tenantId: string }>>;
 }
 
 export function cronIsActive(cron: Pick<Cron, "enabled" | "archived" | "schedule" | "lastFiredAt">): boolean {
@@ -117,6 +125,7 @@ export function createCronStore(
         contentPart(title),
         ...(input.loopId !== undefined ? [contentPart(input.loopId)] : []),
         ...(input.runtime ? [contentPart(input.runtime)] : []),
+        ...(input.script ? [contentPart(input.script)] : []),
       ]);
       return createDeduped(backing, contentId, (id) => ({
         ...buildTriggerBase(input, id, now),
@@ -130,10 +139,12 @@ export function createCronStore(
         ...(input.loopId ? { loopId: input.loopId } : {}),
         ...(input.sessionRef ? { sessionRef: input.sessionRef } : {}),
         ...(input.runtime ? { runtime: input.runtime } : {}),
+        ...(input.script ? { script: input.script } : {}),
       }));
     },
     get: (id) => backing.get(id),
     list: () => backing.all(),
+    claimTenants: () => backing.claimTenants(),
     ownedBy: (scopeId) => ownedBy(backing, scopeId),
     async update(id, patch) {
       const before = await backing.get(id);
@@ -155,6 +166,7 @@ export function createCronStore(
       if (patch.archived === true) fields.enabled = false;
       if (patch.unattendedGrants !== undefined) fields.unattendedGrants = patch.unattendedGrants;
       if (patch.sessionRef !== undefined) fields.sessionRef = patch.sessionRef ?? undefined;
+      if (patch.script !== undefined) fields.script = patch.script ?? undefined;
       return backing.merge(id, fields);
     },
     delete: (id) => backing.delete(id),
@@ -173,6 +185,7 @@ export function createCronStore(
     async sweepStrandedFires(now) {
       return fires.sweepStranded(now, staleRunningMs, STRANDED_FIRE_NOTE);
     },
+    runningFires: (now) => fires.listRunning(now - staleRunningMs),
     async pruneFires(now) {
       return fires.pruneEnded({ endedBefore: now - FIRE_RETENTION_MS, keepPerCron: FIRE_RETENTION_KEEP_PER_CRON });
     },
@@ -182,22 +195,6 @@ export function createCronStore(
     listFires: (id, opts) => fires.listByCron(id, opts),
     firesByThreadRefs: (threadRefs) => fires.listByThreadRefs(threadRefs),
     latestFireForThread: (id, threadRef) => fires.latestForThread(id, threadRef),
-    async backfillFires() {
-      let backfilled = 0;
-      for (const [id, cron] of await backing.entries()) {
-        const log = cron.fireLog;
-        if (log === undefined) continue;
-        if (log.length) {
-          await fires.backfill(id, log);
-          backfilled += log.length;
-        }
-        await backing.update(id, (current) => {
-          const { fireLog: _legacy, ...rest } = current;
-          return rest;
-        });
-      }
-      return backfilled;
-    },
     async setFireNote(id, note) {
       let applied = false;
       const apply = (cron: Cron): Cron => {
@@ -252,13 +249,15 @@ export function createCronStore(
       await backing.merge(id, { deferUntil: until });
     },
     async due(now) {
-      const due: Array<Cron & { scheduledAt: number }> = [];
-      for (const c of await backing.all()) {
-        if (c.archived || !c.enabled || isDeferred(c, now)) continue;
-        const scheduledAt = recoverNextFireAt(c.schedule, c.createdAt, c.lastFiredAt, c.nextFireAt);
-        if (scheduledAt !== undefined && now >= scheduledAt) due.push({ ...c, nextFireAt: scheduledAt, scheduledAt });
-      }
-      return due;
+      const due = await claimThenBind(backing.claimTenants, async () =>
+        (await backing.all()).flatMap((c) => {
+          if (c.archived || !c.enabled || isDeferred(c, now)) return [];
+          const scheduledAt = recoverNextFireAt(c.schedule, c.createdAt, c.lastFiredAt, c.nextFireAt);
+          if (scheduledAt === undefined || now < scheduledAt) return [];
+          return [{ ...c, nextFireAt: scheduledAt, scheduledAt, tenantId: currentTenant() }];
+        }),
+      );
+      return due.flat();
     },
   };
 }

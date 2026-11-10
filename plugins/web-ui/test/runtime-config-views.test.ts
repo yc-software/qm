@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { JSDOM } from "jsdom";
-import { createServer } from "vite";
+import { testViteServer } from "./vite-server.ts";
 import type { Agent } from "@earendil-works/pi-agent-core";
 import type { ConvCtx, ComposerSurface } from "../src/conv-types.ts";
 import { runtimeConfig } from "./runtime-fixture.ts";
@@ -56,7 +56,7 @@ test("runtime defaults are shared while pane choices and editor drafts remain lo
     gets++;
     return Response.json(configs.get(scope));
   };
-  const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  const vite = await testViteServer();
   const panes: Array<{ composer: ComposerSurface; ctx: ConvCtx; agent: Agent; host: HTMLElement }> = [];
   let resetPanel: (() => void) | undefined;
   try {

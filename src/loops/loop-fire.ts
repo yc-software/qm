@@ -1,5 +1,6 @@
 import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
-import { renderSourceInboxTask, isReplyLoop, applyReplyResolution, REPLY_DECISION } from "./inbox-loop.ts";
+import { inboxPlaybook, inboxSource, loadInboxVoiceProfile } from "./inbox-loop.ts";
+import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import { cronTriggerAuthority } from "../cron/authority.ts";
 import { MAX_SCREEN_CHARS } from "../security/security-posture.ts";
 import type { CronStore } from "../cron/cron-store.ts";
@@ -46,6 +47,8 @@ import {
 } from "./triage.ts";
 import type { TriagePatch } from "./item-ledger.ts";
 import { adapterForItem } from "./sources/index.ts";
+import { claimThenBind } from "../tenants/claim.ts";
+import type { InboxPass, InboxPassSummary } from "./verdict/pass.ts";
 
 export interface LoopFireDeps {
   admittedWork?: AdmittedWork;
@@ -57,7 +60,9 @@ export interface LoopFireDeps {
   items: LoopItemLedger;
   outputs: LoopOutputStore;
   grants: ShipGrantStore;
+  files: Pick<FileArtifactStore, "listOwnedByScopes" | "open">;
   trigger: TriggerDeps;
+  inboxPass?: InboxPass;
 }
 
 interface LoopFireResult {
@@ -144,7 +149,7 @@ function itemContextFences(item: LoopItem): string[] {
   return ["```untrusted-data", itemSource(item), "```", "```untrusted-data", promptText(review), "```"];
 }
 
-function followUpPrompt(loop: Loop, item: LoopItem, message: string): StageInput {
+function followUpPrompt(loop: Loop, item: LoopItem, message: string, voiceProfile?: string): StageInput {
   const input = [
     "[Loop item chat]",
     `A person is talking to you about ONE held item of the loop "${promptText(loop.name)}". Answer them directly and briefly.`,
@@ -165,12 +170,18 @@ function followUpPrompt(loop: Loop, item: LoopItem, message: string): StageInput
     "[End loop item chat]",
     "",
     "Playbook:",
-    playbookText(loop),
+    playbookText(loop, voiceProfile),
   ].join("\n");
   return { input, securityScreenData: itemSource(item) };
 }
 
-function itemActionPrompt(loop: Loop, item: LoopItem, kind: string, args: Record<string, unknown>): StageInput {
+function itemActionPrompt(
+  loop: Loop,
+  item: LoopItem,
+  kind: string,
+  args: Record<string, unknown>,
+  voiceProfile?: string,
+): StageInput {
   const input = [
     "[Loop item action]",
     `A person approved the action "${promptText(kind)}" on ONE held item of the loop "${promptText(loop.name)}". Execute EXACTLY that action, nothing else.`,
@@ -183,7 +194,7 @@ function itemActionPrompt(loop: Loop, item: LoopItem, kind: string, args: Record
     "[End loop item action]",
     "",
     "Playbook:",
-    playbookText(loop),
+    playbookText(loop, voiceProfile),
   ].join("\n");
   return { input, securityScreenData: itemSource(item) };
 }
@@ -333,7 +344,7 @@ function excerptReply(s: string): string {
 
 function transientOutcome(outcome: TriggerOutcome): boolean {
   if (outcome.authzFailed || !outcome.ran) return false;
-  return outcome.status === "queued" || (outcome.status === "failed" && isTransientErrorCode(outcome.errorCode));
+  return outcome.status === "failed" && isTransientErrorCode(outcome.errorCode);
 }
 
 function notRunnable(loop: Loop): LoopFireResult {
@@ -347,7 +358,9 @@ function excerpt(s: string | undefined): string {
   return s.length <= REPLY_EXCERPT_MAX ? s : `${s.slice(0, REPLY_EXCERPT_MAX - 3)}...`;
 }
 
-function playbookText(loop: Loop): string {
+function playbookText(loop: Loop, voiceProfile?: string): string {
+  const source = inboxSource(loop);
+  if (source) return inboxPlaybook(source, voiceProfile);
   return promptText(loop.playbook.replaceAll("$LOOP_ID", loop.id));
 }
 
@@ -393,7 +406,7 @@ function triagePrompt(loop: Loop, open: LoopItem[], pending: LoopItem[]): StageI
   );
   const data = JSON.stringify(
     open.map((item) => {
-      const preview = item.inboxPreview ?? {};
+      const preview = item.sourcePayload ?? {};
       return {
         id: item.id,
         ...(pendingIds.has(item.id) ? { new: true } : {}),
@@ -431,7 +444,13 @@ function triagePrompt(loop: Loop, open: LoopItem[], pending: LoopItem[]): StageI
   return { input, securityScreenData: promptText(data) };
 }
 
-function workPrompt(loop: Loop, item: LoopItem, guidance?: string, similar: LoopItem[] = []): StageInput {
+function workPrompt(
+  loop: Loop,
+  item: LoopItem,
+  guidance?: string,
+  similar: LoopItem[] = [],
+  voiceProfile?: string,
+): StageInput {
   const data = JSON.stringify({
     sourceKey: promptText(item.sourceKey),
     loopId: loop.id,
@@ -465,16 +484,11 @@ function workPrompt(loop: Loop, item: LoopItem, guidance?: string, similar: Loop
     ...(guidance ? ["```untrusted-data", promptText(JSON.stringify({ reviewerNote: guidance })), "```"] : []),
     shipActionContract(loop),
     `The item's success condition: ${promptText(loop.successCondition)}`,
-    isReplyLoop(loop, item)
-      ? [
-          REPLY_DECISION,
-          'For a reply, end with a fenced JSON object {"proposal":{"body":"the draft reply","to":["email recipients if applicable"],"subject":"email subject if applicable"},"outputs":[]}. Save the draft for human review; never send it.',
-        ].join("\n")
-      : 'End your reply with a fenced json block: {"outputs": [{"shipAction": "<declared action>", "label": "<optional grouping label>", "title": "<one line>", "externalRef": "<url or id if any>", "summary": "<one line>"}]}. List every externally-reviewable artifact you prepared; an empty outputs array means the item needed none.',
+    'End your reply with a fenced json block: {"outputs": [{"shipAction": "<declared action>", "label": "<optional grouping label>", "title": "<one line>", "externalRef": "<url or id if any>", "summary": "<one line>"}]}. List every externally-reviewable artifact you prepared; an empty outputs array means the item needed none.',
     "[End loop work]",
     "",
     "Playbook:",
-    playbookText(loop),
+    playbookText(loop, voiceProfile),
   ].join("\n");
   return { input, securityScreenData: screened(data) };
 }
@@ -723,28 +737,31 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       return { status: "silent", note: "duplicate fire key" };
     }
     const threadRef = loopFireThreadRef(loopId, fireKey);
-    if (loop.surface?.startsWith("inbox:") && options?.enumerate !== false) {
+    let profile: Promise<string | undefined> | undefined;
+    const voiceProfile = () => (profile ??= loadInboxVoiceProfile(deps.files, loop));
+    if (inboxSource(loop)) {
       if (!isRunnable(loop)) return notRunnable(loop);
-      let failure: unknown;
+      if (!deps.inboxPass) return { status: "failed", note: "inbox pass is not wired" };
+      const firedAt = Date.now();
+      const discover = options?.enumerate !== false;
+      let summary: InboxPassSummary;
       try {
-        const outcome = await stageTurn(
-          loop,
-          `${fireKey}:sync`,
-          threadRef,
-          renderSourceInboxTask(loop.id, loop.sources![0]!),
-        );
-        if (!outcome.ran && !outcome.authzFailed) return { status: "silent", note: "duplicate fire key" };
-        failure = stageFailure("inbox sync", outcome)?.error;
-        if (failure === undefined) await triage(loop, fireKey, threadRef);
+        summary = await deps.inboxPass(loop, { discover, voiceProfile: await voiceProfile() });
+        await triage(loop, fireKey, threadRef);
       } catch (error) {
-        failure = error;
+        return recordFailedFire(loopId, error);
       }
-      if (failure === undefined) {
-        await deps.loops.recordFireOutcome(loopId, "ok");
-        await applyGovernor(loopId);
-        return { status: "silent" };
+      const note = `scanned ${summary.checked}, new ${summary.discovered}, verdicts ${summary.verdicts}${
+        summary.failures.length ? `; failures: ${summary.failures.map(excerpt).join("; ")}` : ""
+      }`;
+      if (summary.failures.length && summary.checked === summary.failures.length) {
+        const failed = await recordFailedFire(loopId, summary.firstError);
+        return { ...failed, note: `${failed.note}; ${note}` };
       }
-      return recordFailedFire(loopId, failure);
+      if (summary.scanned) await deps.loops.recordScan(loopId, firedAt);
+      await deps.loops.recordFireOutcome(loopId, "ok");
+      await applyGovernor(loopId);
+      return { status: "silent", note };
     }
     const maxAttempts = loop.caps?.maxItemAttempts ?? DEFAULT_MAX_ATTEMPTS;
     const grants = await deps.grants.byLoop(loopId);
@@ -776,13 +793,11 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
               loop,
               `${fireKey}:work:${item.id}:${item.attempts}`,
               itemThreadRef,
-              workPrompt(loop, item, guidance, similar),
+              workPrompt(loop, item, guidance, similar, await voiceProfile()),
             );
             const failure = stageFailure("work", outcome);
             if (failure) throw failure.error;
             const parsed = fencedJson(outcome.reply ?? "");
-            if (await applyReplyResolution(deps.items, loop, item, parsed))
-              return { runId: outcome.sessionId ?? `${threadRef}:work:${item.id}` };
             const proposal =
               parsed && typeof parsed === "object" && "proposal" in parsed
                 ? adapterForItem(item)?.parseProposal(parsed.proposal)
@@ -948,15 +963,11 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
   }
 
   async function sweepStale(now: number): Promise<void> {
-    for (const loop of await deps.loops.list()) {
-      if (
-        loop.state === "enabled" &&
-        loop.governor?.staleFireMs !== undefined &&
-        now - (loop.lastFiredAt ?? loop.createdAt) > loop.governor.staleFireMs
-      ) {
-        await applyGovernor(loop.id, undefined, now);
-      }
-    }
+    await claimThenBind(deps.loops.claimTenants, async () => {
+      for (const { id, state, governor, lastFiredAt, createdAt } of await deps.loops.list())
+        if (state === "enabled" && now - (lastFiredAt ?? createdAt) > (governor?.staleFireMs ?? Infinity))
+          await applyGovernor(id, undefined, now);
+    });
   }
 
   async function itemTurn(
@@ -987,7 +998,8 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     await deps.items.appendThread(item.id, [{ role: "human", text: message, actorId }]);
     const asked = { ...item, thread: (await deps.items.get(item.id))?.thread ?? item.thread };
     const fireKey = `loop:${loop.id}:item:${item.id}:followup:${Date.now()}`;
-    const turn = await itemTurn(loop, asked, followUpPrompt(loop, asked, message), fireKey, actorId, options);
+    const prompt = followUpPrompt(loop, asked, message, await loadInboxVoiceProfile(deps.files, loop));
+    const turn = await itemTurn(loop, asked, prompt, fireKey, actorId, options);
     if (!turn.ok) {
       await deps.items.appendThread(item.id, [
         { role: "system", text: `The agent could not answer: ${turn.userNote ?? "the turn did not run"}` },
@@ -1020,7 +1032,8 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     actorId: string,
   ): Promise<ItemTurnResult> {
     const fireKey = `loop:${loop.id}:item:${item.id}:action:${kind}:${Date.now()}`;
-    return itemTurn(loop, item, itemActionPrompt(loop, item, kind, args), fireKey, actorId);
+    const prompt = itemActionPrompt(loop, item, kind, args, await loadInboxVoiceProfile(deps.files, loop));
+    return itemTurn(loop, item, prompt, fireKey, actorId);
   }
 
   return {

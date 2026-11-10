@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { JSDOM } from "jsdom";
-import { createServer } from "vite";
+import { testViteServer } from "./vite-server.ts";
 import type { Agent } from "@earendil-works/pi-agent-core";
 import type { ComposerSurface, ConvCtx } from "../src/conv-types.ts";
 import type { SuggestedActivity } from "../../chassis/src/suggested-activities.ts";
@@ -66,7 +66,7 @@ test("activity selection fills and persists an editable draft without sending or
     descriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
     Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
   }
-  const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  const vite = await testViteServer();
   let composer: ComposerSurface | undefined;
   try {
     const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");

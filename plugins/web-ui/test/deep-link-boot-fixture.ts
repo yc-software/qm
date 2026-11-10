@@ -16,6 +16,7 @@ export interface Harness {
   sessionsReady: () => Promise<void>;
   refreshSessions: () => Promise<boolean>;
   boot: () => Promise<void>;
+  openChatSearch: () => void;
   switchView: (view: "chats" | "settings") => void;
   renderList: () => void;
   drawChatsPage: () => void;
@@ -235,6 +236,7 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
   const sessions = await vite.ssrLoadModule("/src/sessions.ts");
   const conversations = await vite.ssrLoadModule("/src/conversations.ts");
   const split = await vite.ssrLoadModule("/src/split.ts");
+  const search = await vite.ssrLoadModule("/src/search.ts");
   return {
     requests,
     setTranscriptStatus: (status) => {
@@ -254,6 +256,7 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
     sessionsReady: sessions.sessionsReady as () => Promise<void>,
     refreshSessions: sessions.refreshSessions as () => Promise<boolean>,
     boot: shell.boot as () => Promise<void>,
+    openChatSearch: search.openChatSearch as () => void,
     switchView: shell.switchView as Harness["switchView"],
     renderList: sessions.renderList as () => void,
     drawChatsPage: sessions.drawChatsPage as () => void,

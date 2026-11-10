@@ -19,6 +19,7 @@ import {
   recencyGroup,
   rowIndicators,
   recentProjectSeeds,
+  sidebarProjectSeeds,
   mergeChildren,
   mergeFirstPage,
   upsertSessions,
@@ -189,7 +190,7 @@ test("a row's subagent indicators come from the server's counts, whatever childr
   const row = at("root", "web:u:root", 9, { subagents: { running: 2, waiting: 1 } });
   const cached = [row, at("c", "subagent:root:c", 1, { parentSessionId: "root" })];
   assert.equal(rowIndicators(row, null).awaiting, true);
-  assert.equal(conversationBackground(cached, "root", null)?.subagents, 3);
+  assert.equal(conversationBackground(cached, "root", null), null, "subagents alone light no background chip");
   assert.equal(rowIndicators(at("idle", "web:u:idle", 9), null).background, null);
 });
 
@@ -395,12 +396,61 @@ test("project metadata groups only its group scope while ordinary chats stay fla
   assert.equal(items[1]?.kind, "session");
 });
 
+test("grouping by activity lists scoped conversations flat, newest first, without empty project rows", () => {
+  const contexts = [
+    { scopeId: "channel:C1", kind: "channel" as const, name: "launch", sessionCount: 1, lastActivityAt: 30 },
+    { scopeId: "personal:alice", kind: "personal" as const, name: null, sessionCount: 1, lastActivityAt: 20 },
+    {
+      scopeId: "group:web-project-empty",
+      kind: "group" as const,
+      name: "Empty",
+      sessionCount: 0,
+      lastActivityAt: 10,
+      project: {
+        id: "empty",
+        name: "Empty",
+        ownerId: "alice",
+        memberIds: ["alice"],
+        scopeId: "group:web-project-empty",
+        members: [{ principalId: "alice", displayName: "Alice" }],
+      },
+    },
+  ];
+  const channel = { ...saved("1", "ch:C1:1.0"), type: "channel" as const, scopeId: "channel:C1", lastActivityAt: 30 };
+  const plain = { ...saved("2", "web:alice:plain"), scopeId: "personal:alice", lastActivityAt: 20 };
+  const byScope = groupProjectSessions([plain, channel], sidebarProjectSeeds(contexts, false));
+  assert.deepEqual(
+    byScope.map((item) => item.kind),
+    ["project", "project", "project"],
+  );
+  assert.deepEqual(groupProjectSessions([plain, channel], sidebarProjectSeeds(contexts, true)), [
+    { kind: "session", session: channel },
+    { kind: "session", session: plain },
+  ]);
+});
+
 test("empty projects appear in Recents", () => {
   const seeds = [{ scopeId: "group:web-project-empty", name: "Empty" }];
   const items = groupProjectSessions([], seeds);
   assert.deepEqual(items, [
     { kind: "project", scopeId: "group:web-project-empty", name: "Empty", groupKind: "project", sessions: [] },
   ]);
+});
+
+test("conversations with a persona you can use group under that persona instead of their home", () => {
+  const seeds = [
+    { scopeId: "personal:alice", name: "Personal", kind: "personal" as const },
+    { scopeId: "persona:ada", name: "Ada", kind: "persona" as const },
+    { scopeId: "persona:idle", name: "Idle", kind: "persona" as const },
+  ];
+  const withAda = { ...saved("1", "web:alice:ada"), scopeId: "personal:alice", personaId: "ada" };
+  const plain = { ...saved("2", "web:alice:plain"), scopeId: "personal:alice" };
+  const unknown = { ...saved("3", "web:alice:gone"), scopeId: "personal:alice", personaId: "deleted" };
+  const items = groupProjectSessions([withAda, plain, unknown], seeds);
+  const groups = Object.fromEntries(
+    items.flatMap((item) => (item.kind === "project" ? [[item.scopeId, item.sessions.map((s) => s.id)]] : [])),
+  );
+  assert.deepEqual(groups, { "persona:ada": ["1"], "personal:alice": ["2", "3"], "persona:idle": [] });
 });
 
 test("a pending (not-yet-sent) chat in a project scope nests under its project", () => {
@@ -452,7 +502,6 @@ test("backgroundLabel: jobs, watches and crons fold into one chip with a spoken 
     jobs: 1,
     watches: 0,
     crons: 0,
-    subagents: 0,
     goal: false,
     label: "1 background job running",
   });
@@ -460,7 +509,6 @@ test("backgroundLabel: jobs, watches and crons fold into one chip with a spoken 
     jobs: 2,
     watches: 1,
     crons: 0,
-    subagents: 0,
     goal: false,
     label: "2 background jobs running · 1 watch armed",
   });
@@ -468,7 +516,6 @@ test("backgroundLabel: jobs, watches and crons fold into one chip with a spoken 
     jobs: 0,
     watches: 2,
     crons: 0,
-    subagents: 0,
     goal: false,
     label: "2 watches armed",
   });
@@ -476,7 +523,6 @@ test("backgroundLabel: jobs, watches and crons fold into one chip with a spoken 
     jobs: 0,
     watches: 0,
     crons: 1,
-    subagents: 0,
     goal: false,
     label: "1 cron scheduled here",
   });
@@ -484,7 +530,6 @@ test("backgroundLabel: jobs, watches and crons fold into one chip with a spoken 
     jobs: 0,
     watches: 1,
     crons: 2,
-    subagents: 0,
     goal: false,
     label: "1 watch armed · 2 crons scheduled here",
   });
@@ -503,7 +548,6 @@ test("rowIndicators: background counts flow through backgroundLabel — zero cou
     jobs: 2,
     watches: 1,
     crons: 0,
-    subagents: 0,
     goal: false,
     label: "2 background jobs running · 1 watch armed",
   });
@@ -512,7 +556,6 @@ test("rowIndicators: background counts flow through backgroundLabel — zero cou
     jobs: 0,
     watches: 0,
     crons: 3,
-    subagents: 0,
     goal: false,
     label: "3 crons scheduled here",
   });
@@ -529,7 +572,6 @@ test("conversationBackground: resolves the mounted conversation by session id", 
     jobs: 2,
     watches: 1,
     crons: 0,
-    subagents: 0,
     goal: false,
     label: "2 background jobs running · 1 watch armed",
   });
@@ -541,7 +583,6 @@ test("conversationBackground: falls back to threadRef while the conversation is 
     jobs: 0,
     watches: 1,
     crons: 0,
-    subagents: 0,
     goal: false,
     label: "1 watch armed",
   });
@@ -669,12 +710,10 @@ test("a goal lights the background chip with time worked, then the floor", () =>
     0,
     0,
     0,
-    0,
-    0,
     { activeMs: 600_000, runningSince: 600_000, floor: { minMs: 1_200_000 } },
     720_000,
   );
   assert.equal(row?.goal, true);
   assert.equal(row?.label, "goal · 12m worked · 20m floor");
-  assert.equal(backgroundLabel(0, 0, 0, 0, 0, { activeMs: 60_000 }, 9_999_999)?.label, "goal · 1m worked");
+  assert.equal(backgroundLabel(0, 0, 0, { activeMs: 60_000 }, 9_999_999)?.label, "goal · 1m worked");
 });

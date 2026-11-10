@@ -19,46 +19,6 @@ test("sessionOrigin classifies trigger threads by prefix", () => {
   assert.equal(sessionOrigin(undefined), "conversation");
 });
 
-test("attributedTurns applies each window's [validFrom,validTo) and excludes overheard", async () => {
-  const nowRef = { v: 10_000_000_000 };
-  const store = createPostgresSessionStore(testDatabaseUrl(), { now: () => nowRef.v });
-  const scope = scopeId("channel", "C1");
-  const t0 = nowRef.v;
-  const s = await store.getOrCreateByThread("ch:C1:t1", "channel", scope);
-  await store.addParticipant(s.id, "U1");
-  const writer = { sessionId: s.id };
-  nowRef.v = t0 + 1000;
-  const early = await store.append(writer, { kind: "UserMessage", text: "early, U1 only" });
-  nowRef.v = t0 + 2000;
-  await store.addParticipant(s.id, "U2");
-  nowRef.v = t0 + 3000;
-  await store.append(writer, { kind: "UserMessage", text: "chatter", body: { overheard: true } });
-  nowRef.v = t0 + 4000;
-  const mid = await store.append(writer, { kind: "UserMessage", text: "both here" });
-  nowRef.v = t0 + 5000;
-  await store.removeParticipant(s.id, "U2");
-  nowRef.v = t0 + 6000;
-  const late = await store.append(writer, { kind: "UserMessage", text: "U1 only again" });
-
-  const rows = await store.attributedTurns();
-  const u1 = rows.filter((r) => r.principalId === "U1" && r.sessionId === s.id);
-  const u2 = rows.filter((r) => r.principalId === "U2" && r.sessionId === s.id);
-  assert.equal(
-    u1.reduce((n, r) => n + r.turns, 0),
-    3,
-    "U1 (open-ended) gets all three real turns; overheard excluded",
-  );
-  assert.equal(u1[0]!.firstAt, early.createdAt);
-  assert.equal(u1[0]!.lastAt, late.createdAt);
-  assert.equal(
-    u2.reduce((n, r) => n + r.turns, 0),
-    1,
-    "U2 gets only the turn inside [validFrom,validTo)",
-  );
-  assert.equal(u2[0]!.firstAt, mid.createdAt);
-  assert.equal(u2[0]!.lastAt, mid.createdAt);
-});
-
 test("scopeHasSessions + listByScope answer scope questions directly", async () => {
   const store = createPostgresSessionStore(testDatabaseUrl());
   const scope = scopeId("channel", "scoped");
@@ -174,13 +134,6 @@ test(`overheard catch-up entries are NOT counted as turns or as the first/last m
   assert.equal(row.firstMessage, "the real question", "the overheard row is not the first message");
   assert.equal(row.lastMessage, "the real question", "the overheard row is not the last message");
   assert.equal(row.messages, 4, "messages still counts every durable entry, overheard included");
-
-  const attributed = (await store.attributedTurns()).filter((t) => t.sessionId === s.id);
-  assert.equal(
-    attributed.reduce((n, t) => n + t.turns, 0),
-    1,
-    "retention/usage counts only the real user turn",
-  );
 });
 
 test(`scopeSessionSummaries paginates newest-activity-first`, async () => {
@@ -437,33 +390,6 @@ test(`listLlmRequests filters by turnSeq in the store (no load-all-then-filter)`
   );
 });
 
-test(`attributedTurns credits only user entries inside a participant's window, per session/day`, async () => {
-  const store = createPostgresSessionStore(testDatabaseUrl());
-  const scope = scopeId("personal", "U1");
-  const a = await store.getOrCreateByThread("t1", "dm", scope);
-  const b = await store.getOrCreateByThread("t2", "dm", scope);
-  await store.addParticipant(a.id, "U1");
-  await store.addParticipant(b.id, "U1");
-  const writer = { sessionId: a.id };
-  const u0 = await store.append(writer, { kind: "UserMessage", text: "1" });
-  await store.append(writer, { kind: "AgentMessage", text: "ack" });
-  const u1 = await store.append(writer, { kind: "UserMessage", text: "2" });
-
-  const rows = await store.attributedTurns();
-  const forA = rows.filter((r) => r.sessionId === a.id);
-  assert.equal(forA.length, 1, "one (principal, session, day) bucket");
-  assert.equal(forA[0]!.principalId, "U1");
-  assert.equal(forA[0]!.turns, 2, "only the two user entries; assistant excluded");
-  assert.equal(forA[0]!.firstAt, u0.createdAt);
-  assert.equal(forA[0]!.lastAt, u1.createdAt);
-  assert.equal(forA[0]!.day, Math.floor(u0.createdAt / 86_400_000));
-  assert.equal(
-    rows.some((r) => r.sessionId === b.id),
-    false,
-    "a session with no user entries yields no rows",
-  );
-});
-
 test(`bounded participant listing returns recent rows and keeps the unbounded API`, async () => {
   const store = createPostgresSessionStore(testDatabaseUrl());
   for (let i = 0; i < 5; i++) {
@@ -508,7 +434,7 @@ test(`countSessions and distinctParticipants aggregate without loading rows`, as
   await store.addParticipant(b.id, "U2");
   await store.removeParticipant(b.id, "U2");
   assert.equal(await store.countSessions(), 2);
-  assert.deepEqual((await store.distinctParticipants()).sort(), ["U1", "U2"], "one id per person, removed included");
+  assert.deepEqual(await store.distinctParticipants(), ["U1"], "one id per current participant");
   await store.deleteSession(b.id);
   assert.equal(await store.countSessions(), 1);
   assert.deepEqual(await store.distinctParticipants(), ["U1"]);
@@ -599,32 +525,7 @@ test(`listByParticipant reports whether the transcript has any entries`, async (
   );
 });
 
-test(`tenure windows remain exact when every event shares a timestamp`, async () => {
-  const clock = Date.now() + 1_000_000;
-  const store = createPostgresSessionStore(testDatabaseUrl(), { now: () => clock });
-  const scope = scopeId("personal", "U1");
-  const s = await store.getOrCreateByThread("dm:D1", "dm", scope);
-  await store.addParticipant(s.id, "U1");
-  const writer = { sessionId: s.id };
-  await store.append(writer, { kind: "UserMessage", text: "hi" });
-
-  await store.removeParticipant(s.id, "U1");
-  await store.addParticipant(s.id, "U1");
-  assert.equal(
-    (await store.listByParticipant("U1")).find((x) => x.id === s.id)?.hasEntries,
-    false,
-    "old entries fall outside the new tenure",
-  );
-
-  await store.append(writer, { kind: "UserMessage", text: "welcome back" });
-  assert.equal(
-    (await store.listByParticipant("U1")).find((x) => x.id === s.id)?.hasEntries,
-    true,
-    "an entry inside the new tenure counts",
-  );
-});
-
-test(`a participant's rename and archive survive remove/re-add`, async () => {
+test(`removing a participant clears their view; re-adding starts fresh`, async () => {
   const store = createPostgresSessionStore(testDatabaseUrl());
   const scope = scopeId("personal", "U1");
   const s = await store.getOrCreateByThread("dm:D1", "dm", scope);
@@ -632,13 +533,17 @@ test(`a participant's rename and archive survive remove/re-add`, async () => {
   await store.updateParticipantView(s.id, "U1", { title: "My name", archived: true, pinned: true, color: "#3b82f6" });
 
   await store.removeParticipant(s.id, "U1");
+  assert.equal(
+    (await store.listByParticipant("U1")).some((x) => x.id === s.id),
+    false,
+  );
   await store.addParticipant(s.id, "U1");
 
   const row = (await store.listByParticipant("U1")).find((x) => x.id === s.id)!;
-  assert.equal(row.title, "My name", "rename survives");
-  assert.equal(row.archived, true, "archive survives");
-  assert.equal(row.pinned, true, "pin survives");
-  assert.equal(row.color, "#3b82f6", "color survives");
+  assert.equal(row.title ?? null, null);
+  assert.ok(!row.archived);
+  assert.ok(!row.pinned);
+  assert.equal(row.color ?? null, null);
 });
 
 test(`updateParticipantView rename/archive is per-participant`, async () => {
@@ -694,7 +599,7 @@ test(`updateParticipantView pin/color is per-participant and clears`, async () =
   assert.equal(u1b.color ?? null, null);
 });
 
-test(`addParticipant can initialize a private title without resetting an active tenure`, async () => {
+test(`addParticipant can initialize a private title and later replace it`, async () => {
   const store = createPostgresSessionStore(testDatabaseUrl());
   const scope = scopeId("group", "G1");
   const session = await store.getOrCreateByThread("t1", "group", scope);

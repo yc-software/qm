@@ -1,6 +1,6 @@
 ---
 name: send
-description: Make a PR, wait for CI with bounded transport retries, independently review, and merge only when all gates pass.
+description: Make a PR, wait for CI with bounded transport retries, run the repo's required reviews, and merge only when all gates pass.
 requiredCapabilities:
   - egress:github.com
   - egress:api.github.com
@@ -50,54 +50,28 @@ any issues that come up, and merge once CI is **fully** green.
    Also wait for asynchronous reviewers (including Bugbot) to finish on the latest
    commit. Watcher success alone is never approval to merge.
 
-4. **Adversarially review the PR — always in a fresh context, before merging.**
-   Dispatch an independent subagent (or `/code-review`) that has not seen you
-   write the change. **Never review your own diff in the context that produced
-   it** — that context already believes the change is correct, and that belief is
-   exactly the bias review exists to defeat. A fresh reviewer is non-negotiable on
-   every send, however small the diff and however green CI is.
-
-   What scales with risk is the reviewer's **depth and breadth**, not its
-   independence:
-
-   - **Small, well-tested, single-file change:** one reviewer, modest effort,
-     scoped to the diff and its immediate call sites. Cheap, but still a
-     stranger's eyes.
-   - **Risky change** — core control flow, auth/credentials/security, data loss or
-     migrations, concurrency and retry logic, spend, a public API contract, or a
-     diff too large to hold in your head: high effort, wider blast-radius reading,
-     and consider several reviewers with distinct lenses (correctness, security,
-     does-it-actually-reproduce).
-
-   Prompt the reviewer to _break_ the change: correctness bugs, edge cases,
-   regressions, security holes, violations of the repo's CLAUDE.md/spec,
-   **overengineering** (needless abstraction, flags, layers, or generality for one
-   caller — prefer the simplest thing that works), and **reward hacking** (tests
-   weakened, skipped, or tailored to pass rather than to verify; assertions
-   gutted; intent met in letter but not spirit; CI gamed). Treat the diff as
-   guilty until proven correct. Green CI is not review.
+4. **Run the reviews the repo requires.** Follow the review process in the
+   repo's AGENTS.md or CLAUDE.md on the current head.
 
 5. **Fix every real issue found.** Address each genuine finding from the
-   adversarial review, from CI, and from reviewers/bots: fix it, push, and go
+   repo's reviews, from CI, and from reviewers/bots: fix it, push, and go
    back to step 3. Re-review the **delta**, not the whole diff again — a fresh
    full review per round is how a small PR turns into an afternoon. For anything
    that needs human judgment, ask the user. Cap at ~3 fix rounds, then stop and
    report what's unresolved.
 
 6. **Merge once green AND reviewed.** Merge only when all checks pass, the
-   adversarial review is clean (no unaddressed findings), and there are no
+   required reviews are clean (no unaddressed findings), and there are no
    unresolved comments/findings — re-read checks and review threads, then merge directly
    (`gh pr merge NUMBER --repo OWNER/REPO --squash --match-head-commit REVIEWED_HEAD_SHA` /
    `glab mr merge --squash`). Do **not** use platform auto-merge — it fires the
    moment required checks pass, before async bots like Bugbot finish and before
-   your review is done.
+   your review is done. On a branch that requires a merge queue, that command
+   queues the PR instead; report it merged only once the PR shows as merged.
 
 ## Notes
 
 - "Pull request" = PR/MR; same thing on either platform.
-- The review is non-optional on every send, and always runs in a fresh context —
-  what scales with risk is how deep the reviewer goes, never whether it's someone
-  other than the author.
 - Don't merge with open Bugbot/reviewer findings on the current commit.
 - Weight human feedback over bot feedback; don't blindly accept everything.
 - Prefer rebase over merge for conflicts. Never amend commits.

@@ -1,9 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { FIRST_PARTY_SECRET_SPECS } from "../cli/src/secrets.ts";
 import { isInvalidSecret as cliRejectsSecret } from "../cli/src/util.ts";
 import { CORE_SECRET_SPECS, validateCoreSecretEnv } from "../src/deployment/secret-schema.ts";
+
+const CHECKED_BY_THE_FRONT_DOOR_BOOT = new Set([
+  "OIDC_ALLOWED_EMAILS",
+  "OIDC_CLIENT_ID",
+  "OIDC_CLIENT_SECRET",
+  "PORTAL_EXPECTED_TEAM_ID",
+  "PORTAL_SESSION_SECRET",
+]);
 
 test("the standalone CLI and core agree on runtime-enforced core secret names", () => {
   const cli = new Set(
@@ -12,10 +21,48 @@ test("the standalone CLI and core agree on runtime-enforced core secret names", 
     ),
   );
   const runtime = new Set(CORE_SECRET_SPECS.map((secret) => secret.name));
-  assert.deepEqual([...runtime].sort(), [...cli].filter((name) => name !== "PUBLIC_API_URL").sort());
+  assert.deepEqual(
+    [...runtime].sort(),
+    [...cli].filter((name) => name !== "PUBLIC_API_URL" && !CHECKED_BY_THE_FRONT_DOOR_BOOT.has(name)).sort(),
+  );
 });
 
-test("background ownership requires strong control credentials only for configured deployments", () => {
+test("the front door refuses to boot in production without the sign-in secrets the CLI requires of core", () => {
+  const signIn: NodeJS.ProcessEnv = {
+    NODE_ENV: "production",
+    PUBLIC_WEB_URL: "https://agent.example.com",
+    PORTAL_SESSION_SECRET: "front-door-session-secret-0123456789abcdef",
+    CORE_SIGNING_SECRET: "front-door-core-signing-secret-0123456789ab",
+    OIDC_CLIENT_ID: "client-id",
+    OIDC_CLIENT_SECRET: "client-secret-0123456789",
+    OIDC_ISSUER: "https://slack.com",
+    PORTAL_EXPECTED_TEAM_ID: "T0123456",
+    OIDC_ALLOWED_EMAILS: "admin@example.com",
+  };
+  const boot = (env: NodeJS.ProcessEnv) =>
+    spawnSync(process.execPath, ["--input-type=module", "-e", "await (await import('./src/index.ts')).bootChecks()"], {
+      cwd: new URL("../plugins/portal/", import.meta.url),
+      env: { PATH: process.env.PATH, ...env },
+      encoding: "utf8",
+    });
+  const ok = boot(signIn);
+  assert.equal(ok.status, 0, ok.stderr);
+  for (const name of CHECKED_BY_THE_FRONT_DOOR_BOOT) {
+    const missing = { ...signIn, [name]: undefined };
+    if (name === "OIDC_ALLOWED_EMAILS" || name === "PORTAL_EXPECTED_TEAM_ID") {
+      missing.OIDC_ALLOWED_EMAILS = undefined;
+      missing.PORTAL_EXPECTED_TEAM_ID = undefined;
+    }
+    const refused = boot(missing);
+    assert.notEqual(refused.status, 0, `${name} missing`);
+    assert.match(
+      refused.stderr,
+      new RegExp(name === "OIDC_ALLOWED_EMAILS" ? "OIDC_ALLOWED_EMAILS|PORTAL_EXPECTED_TEAM_ID" : name),
+    );
+  }
+});
+
+test("a deployment id requires strong control credentials only for configured deployments", () => {
   assert.deepEqual(validateCoreSecretEnv({}), []);
   for (const secret of [undefined, "", " ".repeat(32), "short", "separate-control-secret-value-0000000000\n"]) {
     assert.deepEqual(

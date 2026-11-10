@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { computeRetention } from "../src/admin/retention.ts";
+import type { UserActivity } from "../src/identity/user-store.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
@@ -15,28 +16,29 @@ import { testConfig } from "./support/test-config.ts";
 const DAY = 86_400_000;
 const at = (dayIdx: number, frac = 0.5) => Math.round((dayIdx + frac) * DAY);
 
-test("computeRetention: DAU/WAU/MAU, cohorts, new-vs-returning, and channel approximation", () => {
+const person = (principalId: string, sessions: number, turns: number, days: number[]): UserActivity => ({
+  userId: null,
+  principalId,
+  kind: "person",
+  sessions,
+  turns,
+  lastSeenAt: days.length ? at(Math.max(...days)) : null,
+  days,
+});
+
+test("computeRetention: DAU/WAU/MAU, cohorts and new-vs-returning per person; apps and the never-active are not users", () => {
   const nowMs = at(1000);
   const report = computeRetention({
     nowMs,
     sessionCount: 4,
-    participants: [
-      { sessionId: "dm1", principalId: "U1", validFrom: at(950), validTo: null, validFromSeq: null, validToSeq: null },
-      { sessionId: "dm2", principalId: "U2", validFrom: at(998), validTo: null, validFromSeq: null, validToSeq: null },
-      { sessionId: "ch1", principalId: "U3", validFrom: at(995), validTo: null, validFromSeq: null, validToSeq: null },
-      { sessionId: "ch1", principalId: "U4", validFrom: at(995), validTo: null, validFromSeq: null, validToSeq: null },
-      { sessionId: "ch1", principalId: "U5", validFrom: at(1001), validTo: null, validFromSeq: null, validToSeq: null },
-      { sessionId: "dm3", principalId: "U6", validFrom: at(890), validTo: null, validFromSeq: null, validToSeq: null },
-    ],
-    turns: [
-      { principalId: "U1", sessionId: "dm1", day: 1000, turns: 1, firstAt: at(1000), lastAt: at(1000) },
-      { principalId: "U1", sessionId: "dm1", day: 994, turns: 1, firstAt: at(994), lastAt: at(994) },
-      { principalId: "U1", sessionId: "dm1", day: 987, turns: 1, firstAt: at(987), lastAt: at(987) },
-      { principalId: "U1", sessionId: "dm1", day: 960, turns: 1, firstAt: at(960), lastAt: at(960) },
-      { principalId: "U2", sessionId: "dm2", day: 998, turns: 1, firstAt: at(998), lastAt: at(998) },
-      { principalId: "U3", sessionId: "ch1", day: 1000, turns: 1, firstAt: at(1000), lastAt: at(1000) },
-      { principalId: "U4", sessionId: "ch1", day: 1000, turns: 1, firstAt: at(1000), lastAt: at(1000) },
-      { principalId: "U6", sessionId: "dm3", day: 900, turns: 1, firstAt: at(900), lastAt: at(900) },
+    activity: [
+      person("U1", 1, 4, [960, 987, 994, 1000]),
+      person("U2", 1, 1, [998]),
+      person("U3", 1, 1, [1000]),
+      person("U4", 1, 1, [1000]),
+      person("U5", 1, 0, []),
+      person("U6", 1, 1, [900]),
+      { ...person("B1", 1, 9, [1000]), kind: "app" },
     ],
   });
 
@@ -56,7 +58,7 @@ test("computeRetention: DAU/WAU/MAU, cohorts, new-vs-returning, and channel appr
 });
 
 test("computeRetention: empty input yields zeros, never NaN", () => {
-  const report = computeRetention({ nowMs: at(1000), sessionCount: 0, participants: [], turns: [] });
+  const report = computeRetention({ nowMs: at(1000), sessionCount: 0, activity: [] });
   assert.deepEqual(report.active, { dau: 0, wau: 0, mau: 0, stickiness: 0 });
   assert.deepEqual(report.perUser.turns, { p50: 0, p95: 0 });
   assert.deepEqual(report.cohorts, []);
@@ -96,7 +98,7 @@ test("retention endpoint: org-wide, org_admin-gated, audited; non-org scopes rej
     assert.ok(d.active.dau >= 1, "the just-driven turn counts as active today");
     assert.ok(Array.isArray(d.cohorts), "cohorts present");
     assert.ok(d.perUser?.sessions && d.perUser?.turns, "per-user distributions present");
-    assert.match(d.attribution, /approximate/, "the channel-attribution caveat is surfaced");
+    assert.match(d.attribution, /credited to their author/, "the attribution rule is surfaced");
 
     assert.equal((await get(s.base, "/v1/admin/retention?scope=channel:eng")).status, 400);
 

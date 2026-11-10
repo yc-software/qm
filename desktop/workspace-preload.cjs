@@ -62,7 +62,7 @@ window.addEventListener("DOMContentLoaded", () => {
         height: 96px; min-height: 96px; padding: 48px 0 8px; justify-content: center;
       }
       html[data-qm-desktop="darwin"] .brand button { -webkit-app-region: no-drag; }
-      html[data-qm-desktop="darwin"] .dv-tabs-and-actions-container,
+      html[data-qm-desktop="darwin"] .single-pane .dv-tabs-and-actions-container,
       html[data-qm-desktop="darwin"] .chat-topbar { -webkit-app-region: drag; }
       html[data-qm-desktop="darwin"] .dv-tabs-and-actions-container :is(button, a, input, [role="tab"], .dv-tab, .dv-right-actions-container),
       html[data-qm-desktop="darwin"] .chat-topbar :is(button, a, input, [role="tab"]) {

@@ -13,7 +13,7 @@ function message(threadTs?: string, text = "Continue", key = crypto.randomUUID()
     deliveryTarget: `D1${threadTs ? `:${threadTs}` : ""}`,
     text,
     async: true,
-    liveActor: true,
+    origin: { kind: "human" },
     redeliveryKey: key,
   };
 }

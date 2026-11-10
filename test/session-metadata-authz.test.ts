@@ -9,6 +9,7 @@ import { buildApp } from "./support/build-app.ts";
 import { projectGroupRef, projectScopeId } from "../src/projects/project-store.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { configureCommandRules } from "./support/command-rules.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-session-authz-"));
@@ -42,6 +43,7 @@ test("the single-session read applies the managed-project check the session list
     { principalId: "member", displayName: "Member", type: "internal" },
   ]);
   const project = await built.projects.create({ name: "Launch Cohort", ownerId: "owner" });
+  await configureCommandRules(built.config);
   const groupRef = projectGroupRef(project.id);
 
   assert.equal((await built.app.addProjectMember(project.id, "owner", "member")).status, "ok");
@@ -69,9 +71,10 @@ test("the single-session read applies the managed-project check the session list
   assert.ok((await built.app.searchSessions("member", "push")).some((hit) => hit.sessionId === sessionId));
   assert.equal((await built.app.removeProjectMember(project.id, "owner", "member")).status, "ok");
   assert.deepEqual(await built.app.searchSessions("member", "push"), []);
-  assert.ok(
+  assert.equal(
     await built.sessions.getForParticipant(sessionId, "member"),
-    "the participant row outlives the project membership, so the project check is what must reject",
+    null,
+    "removing the member removes their participant row",
   );
   assert.equal(
     await built.app.getSessionForViewer(sessionId, "member"),
@@ -101,9 +104,10 @@ test("a dropped project member cannot discard or retitle a session they can no l
   assert.ok(await built.app.getSessionForViewer(sessionId, "member"), "a project member reads the empty shell");
 
   assert.equal((await built.app.removeProjectMember(project.id, "owner", "member")).status, "ok");
-  assert.ok(
+  assert.equal(
     await built.sessions.getForParticipant(sessionId, "member"),
-    "the participant row outlives the project membership",
+    null,
+    "removing the member removes their participant row",
   );
   assert.equal(await built.app.regenerateTitle(sessionId, "member"), null, "no retitling a session they cannot read");
   assert.equal(await built.app.discardSession(sessionId, "member"), false, "no discarding it either");

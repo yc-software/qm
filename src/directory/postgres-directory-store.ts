@@ -1,127 +1,104 @@
 import { likeEscape } from "../persistence/like.ts";
 import { orgId as configOrgId } from "../config.ts";
-import { createHash } from "node:crypto";
-import { createPgPool, type PoolClient, withPgTransaction } from "../persistence/pg-pool.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
 import type { PrincipalType } from "../types.ts";
 import { foldPrincipalId, rosterIds } from "./person.ts";
 import {
   MAX_CANDIDATES,
   groupParticipantsKey,
   normDirectoryQuery,
-  type ChannelMembership,
   type DirectoryChannel,
   type DirectoryMember,
   type DirectoryStore,
 } from "./directory-store.ts";
+import { createDirectorySync } from "./directory-sync.ts";
+import {
+  EMAIL_USER_TENANTS,
+  PRINCIPAL_ADMIN_TENANTS,
+  PRINCIPAL_TENANTS,
+  PRINCIPAL_USER_TENANTS,
+} from "../tenants/lookup.ts";
+import { tenantTables } from "../tenants/migrations.ts";
+import { withTenant } from "../tenants/context.ts";
 
-const INITIAL_SCHEMA = [
-  `CREATE TABLE IF NOT EXISTS directory_members(
+const PREVIOUS_SCHEMA = "directory/store/0005";
+
+const BASE_SCHEMA = `DO $base_schema$
+BEGIN
+  IF EXISTS (SELECT 1 FROM qm_schema_migrations WHERE id = '${PREVIOUS_SCHEMA}') THEN
+    RETURN;
+  END IF;
+  IF to_regclass('directory_members') IS NOT NULL THEN
+    RAISE EXCEPTION 'This database has directory tables from a release older than ${PREVIOUS_SCHEMA}. Start a release that applies ${PREVIOUS_SCHEMA} but predates the base schema, then upgrade.';
+  END IF;
+
+  CREATE TABLE directory_members(
     org_id          TEXT NOT NULL,
     principal_id    TEXT NOT NULL,
     display_name    TEXT NOT NULL,
     display_name_lc TEXT NOT NULL,
     type            TEXT NOT NULL,
     slack_id        TEXT,
+    avatar_url      TEXT,
     PRIMARY KEY (org_id, principal_id)
-  )`,
-  `CREATE INDEX IF NOT EXISTS directory_members_name
-    ON directory_members (org_id, display_name_lc)`,
-  `CREATE INDEX IF NOT EXISTS directory_members_lower_pid
-    ON directory_members (org_id, lower(principal_id))`,
-  `DO $$
-  BEGIN
-    IF NOT EXISTS (
-      SELECT 1 FROM information_schema.columns
-      WHERE table_name = 'directory_members' AND column_name = 'slack_id'
-    ) THEN
-      ALTER TABLE directory_members ADD COLUMN slack_id TEXT;
-    END IF;
-  END $$`,
-  `CREATE TABLE IF NOT EXISTS directory_channels(
-    org_id     TEXT NOT NULL,
-    channel_id TEXT NOT NULL,
-    name       TEXT NOT NULL,
-    name_lc    TEXT NOT NULL,
-    is_private BOOLEAN NOT NULL DEFAULT FALSE,
+  );
+  CREATE INDEX directory_members_name ON directory_members (org_id, display_name_lc);
+  CREATE INDEX directory_members_lower_pid ON directory_members (org_id, lower(principal_id));
+
+  CREATE TABLE directory_channels(
+    org_id       TEXT NOT NULL,
+    channel_id   TEXT NOT NULL,
+    name         TEXT NOT NULL,
+    name_lc      TEXT NOT NULL,
+    is_private   BOOLEAN NOT NULL DEFAULT FALSE,
+    is_external  BOOLEAN NOT NULL DEFAULT FALSE,
+    roster_known BOOLEAN NOT NULL DEFAULT FALSE,
+    observed_at  BIGINT,
     PRIMARY KEY (org_id, channel_id)
-  )`,
-  `CREATE INDEX IF NOT EXISTS directory_channels_name
-    ON directory_channels (org_id, name_lc)`,
-  `CREATE INDEX IF NOT EXISTS directory_channels_lower_cid
-    ON directory_channels (org_id, lower(channel_id))`,
-  `CREATE TABLE IF NOT EXISTS directory_channel_members(
+  );
+  CREATE INDEX directory_channels_name ON directory_channels (org_id, name_lc);
+  CREATE INDEX directory_channels_lower_cid ON directory_channels (org_id, lower(channel_id));
+
+  CREATE TABLE directory_channel_members(
     org_id       TEXT NOT NULL,
     channel_id   TEXT NOT NULL,
     principal_id TEXT NOT NULL,
     PRIMARY KEY (org_id, channel_id, principal_id)
-  )`,
-  `CREATE TABLE IF NOT EXISTS directory_group_members(
-    org_id       TEXT NOT NULL,
-    group_id     TEXT NOT NULL,
-    principal_id TEXT NOT NULL,
-    PRIMARY KEY (org_id, group_id, principal_id)
-  )`,
-  `CREATE INDEX IF NOT EXISTS directory_group_members_principal
-    ON directory_group_members (org_id, principal_id, group_id)`,
-  `CREATE TABLE IF NOT EXISTS directory_sync(
-    org_id        TEXT PRIMARY KEY,
-    members_hash  TEXT,
-    channels_hash TEXT,
-    groups_hash   TEXT,
-    channel_members_synced BOOLEAN NOT NULL DEFAULT FALSE,
-    updated_at    BIGINT NOT NULL
-  )`,
-  `DO $$
-  BEGIN
-    IF NOT EXISTS (
-      SELECT 1 FROM information_schema.columns
-      WHERE table_name = 'directory_sync' AND column_name = 'groups_hash'
-    ) THEN
-      ALTER TABLE directory_sync ADD COLUMN groups_hash TEXT;
-    END IF;
-    IF NOT EXISTS (
-      SELECT 1 FROM information_schema.columns
-      WHERE table_name = 'directory_sync' AND column_name = 'channel_members_synced'
-    ) THEN
-      ALTER TABLE directory_sync ADD COLUMN channel_members_synced BOOLEAN NOT NULL DEFAULT FALSE;
-    END IF;
-  END $$`,
-  `CREATE TABLE IF NOT EXISTS directory_meta(
-    org_id        TEXT PRIMARY KEY,
-    workspace_url TEXT,
-    updated_at    BIGINT NOT NULL
-  )`,
-];
+  );
 
-const EXTERNAL_ROSTER_SCHEMA = [
-  `ALTER TABLE directory_channels ADD COLUMN IF NOT EXISTS is_external BOOLEAN NOT NULL DEFAULT FALSE`,
-  `DO $$
-  BEGIN
-    IF NOT EXISTS (
-      SELECT 1 FROM information_schema.columns
-      WHERE table_name = 'directory_channels' AND column_name = 'roster_known'
-    ) THEN
-      ALTER TABLE directory_channels ADD COLUMN roster_known BOOLEAN NOT NULL DEFAULT FALSE;
-      UPDATE directory_channels c SET roster_known = TRUE
-      FROM directory_sync s WHERE c.org_id = s.org_id AND s.channel_members_synced = TRUE;
-    END IF;
-  END $$`,
-  `CREATE TABLE IF NOT EXISTS directory_groups(
+  CREATE TABLE directory_groups(
     org_id       TEXT NOT NULL,
     group_id     TEXT NOT NULL,
     roster_known BOOLEAN NOT NULL DEFAULT FALSE,
     PRIMARY KEY (org_id, group_id)
-  )`,
-  `INSERT INTO directory_groups (org_id, group_id, roster_known)
-    SELECT DISTINCT org_id, group_id, TRUE FROM directory_group_members
-    ON CONFLICT (org_id, group_id) DO NOTHING`,
-];
+  );
 
-const SYNC_STAMP_SCHEMA = [
-  `ALTER TABLE directory_sync ADD COLUMN IF NOT EXISTS members_synced_at BIGINT`,
-  `ALTER TABLE directory_sync ADD COLUMN IF NOT EXISTS channels_synced_at BIGINT`,
-  `ALTER TABLE directory_sync ADD COLUMN IF NOT EXISTS groups_synced_at BIGINT`,
-];
+  CREATE TABLE directory_group_members(
+    org_id       TEXT NOT NULL,
+    group_id     TEXT NOT NULL,
+    principal_id TEXT NOT NULL,
+    PRIMARY KEY (org_id, group_id, principal_id)
+  );
+  CREATE INDEX directory_group_members_principal ON directory_group_members (org_id, principal_id, group_id);
+
+  CREATE TABLE directory_sync(
+    org_id             TEXT PRIMARY KEY,
+    members_hash       TEXT,
+    channels_hash      TEXT,
+    groups_hash        TEXT,
+    updated_at         BIGINT NOT NULL,
+    members_synced_at  BIGINT,
+    channels_synced_at BIGINT,
+    groups_synced_at   BIGINT
+  );
+
+  CREATE TABLE directory_meta(
+    org_id        TEXT PRIMARY KEY,
+    workspace_url TEXT,
+    updated_at    BIGINT NOT NULL
+  );
+END
+$base_schema$`;
 
 function memberRow(r: Record<string, unknown>): DirectoryMember {
   return {
@@ -142,51 +119,61 @@ function channelRow(r: Record<string, unknown>): DirectoryChannel {
   };
 }
 
-function hashRoster(rows: string[]): string {
-  return createHash("sha256").update(rows.slice().sort().join("\n")).digest("hex");
-}
-
-function dedupPairs<T>(rows: T[], idOf: (r: T) => string, pidOf: (r: T) => string): T[] {
-  const seen = new Map<string, Set<string>>();
-  const out: T[] = [];
-  for (const r of rows) {
-    const id = idOf(r);
-    const pid = pidOf(r);
-    if (!id || !pid) continue;
-    let principals = seen.get(id);
-    if (!principals) seen.set(id, (principals = new Set()));
-    if (!principals.has(pid)) {
-      principals.add(pid);
-      out.push(r);
-    }
-  }
-  return out;
-}
-function dedupMemberships(rows: ChannelMembership[]): ChannelMembership[] {
-  return dedupPairs(
-    rows,
-    (m) => m.channelId,
-    (m) => m.principalId,
-  );
-}
-
 export const DIRECTORY_MIGRATIONS = [
   {
-    id: "directory/store/0001",
-    expectedChecksum: "c47a45848f9d225ff601c9df13dc272349c7df7525e7e2417f33d68be7672cc1",
-    statements: INITIAL_SCHEMA,
+    id: "directory/store/0006-base-schema",
+    expectedChecksum: "e8dcd5c2a3a8fcba7b1c14db1d1aceb57ca7ef6e1c7366ace6df65043f731198",
+    statements: [BASE_SCHEMA],
   },
-  { id: "directory/store/0002", statements: SYNC_STAMP_SCHEMA },
-  { id: "directory/store/0003", statements: EXTERNAL_ROSTER_SCHEMA },
+  ...tenantTables("directory/store/0007-tenants", [
+    { table: "directory_members", primaryKey: "org_id, principal_id" },
+    { table: "directory_channels", primaryKey: "org_id, channel_id" },
+    { table: "directory_channel_members", primaryKey: "org_id, channel_id, principal_id" },
+    { table: "directory_group_members", primaryKey: "org_id, group_id, principal_id" },
+    { table: "directory_groups", primaryKey: "org_id, group_id" },
+    { table: "directory_sync", primaryKey: "org_id" },
+    { table: "directory_meta", primaryKey: "org_id" },
+  ]),
   {
-    id: "directory/store/0004",
-    statements: ["ALTER TABLE directory_channels ADD COLUMN IF NOT EXISTS observed_at BIGINT"],
+    id: "directory/store/0008-tenants-for-email",
+    statements: [
+      `DO $tenants_for_email$
+BEGIN
+  EXECUTE format(
+    $function$CREATE OR REPLACE FUNCTION qm_tenants_for_email(email text) RETURNS TABLE(tenant_id uuid)
+      LANGUAGE sql STABLE SECURITY DEFINER SET search_path = %I, pg_temp AS $body$
+      SELECT DISTINCT m.tenant_id FROM directory_members m
+       WHERE lower(m.principal_id) = lower(email) AND m.type = 'internal'
+    $body$$function$,
+    current_schema());
+END $tenants_for_email$`,
+    ],
   },
+  PRINCIPAL_TENANTS,
+  PRINCIPAL_ADMIN_TENANTS,
   {
-    id: "directory/store/0005",
-    statements: ["ALTER TABLE directory_members ADD COLUMN IF NOT EXISTS avatar_url TEXT"],
+    id: "directory/store/0009-tenants-for-email-admins",
+    statements: [
+      `DO $tenants_for_email$
+BEGIN
+  EXECUTE format(
+    $function$CREATE OR REPLACE FUNCTION qm_tenants_for_email(email text) RETURNS TABLE(tenant_id uuid)
+      LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = %I, pg_temp AS $body$ BEGIN
+      RETURN QUERY
+        SELECT m.tenant_id FROM directory_members m
+         WHERE lower(m.principal_id) = lower(email) AND m.type = 'internal'
+        UNION
+        SELECT g.tenant_id FROM admin_grants g WHERE lower(g.principal_id) = lower(email);
+    END $body$$function$,
+    current_schema());
+END $tenants_for_email$`,
+    ],
   },
+  PRINCIPAL_USER_TENANTS,
+  EMAIL_USER_TENANTS,
 ];
+
+const rosterCoversAudience = (channel: { is_external?: unknown }) => channel.is_external !== true;
 
 export function createPostgresDirectoryStore(connectionString: string): DirectoryStore {
   const orgId = configOrgId();
@@ -230,210 +217,114 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     return { kind: "ambiguous", items: pool2.slice(0, MAX_CANDIDATES).map(map) };
   }
 
-  async function swapIfChanged(
-    hashCol: string,
-    hash: string,
-    syncedAt: number | undefined,
-    write: (client: PoolClient) => Promise<boolean | void>,
-    partial = false,
-  ): Promise<boolean> {
-    const syncedAtCol = hashCol.replace(/_hash$/, "_synced_at");
-    return withPgTransaction(await pool(), async (client) => {
-      await client.query("SELECT pg_advisory_xact_lock(hashtext('directory'), hashtext($1))", [orgId]);
-      const sync = await client.query(`SELECT ${hashCol}, ${syncedAtCol} FROM directory_sync WHERE org_id = $1`, [
-        orgId,
-      ]);
-      const row = sync.rows[0];
-      if (
-        syncedAt !== undefined &&
-        row?.[syncedAtCol] != null &&
-        (partial ? Number(row[syncedAtCol]) >= syncedAt : Number(row[syncedAtCol]) > syncedAt)
-      ) {
-        console.warn(
-          `[directory] refused stale ${hashCol.replace(/_hash$/, "")} swap for ${orgId}: stamped ${Number(row[syncedAtCol]) - syncedAt}ms behind`,
-        );
-        return false;
-      }
-      if (!partial && row?.[hashCol] === hash) {
-        if (syncedAt !== undefined) {
-          await client.query(
-            `UPDATE directory_sync SET ${syncedAtCol} = GREATEST(COALESCE(${syncedAtCol}, 0), $2) WHERE org_id = $1`,
-            [orgId, syncedAt],
+  async function readGroupRosters(groupIds: readonly string[]): Promise<Map<string, DirectoryMember[]>> {
+    const rosters = new Map<string, DirectoryMember[]>();
+    if (!groupIds.length) return rosters;
+    const rows = await q(
+      `SELECT group_row.group_id, roster.principal_id AS roster_principal_id,
+              member.principal_id, member.display_name, member.type, member.slack_id, member.avatar_url
+       FROM directory_groups group_row
+       JOIN directory_group_members roster
+         ON roster.org_id = group_row.org_id AND roster.group_id = group_row.group_id
+       LEFT JOIN directory_members member
+         ON member.org_id = roster.org_id AND member.principal_id = roster.principal_id
+       WHERE group_row.org_id = $1 AND group_row.group_id = ANY($2::text[]) AND group_row.roster_known = TRUE
+       ORDER BY group_row.group_id, roster.principal_id`,
+      [orgId, [...groupIds]],
+    );
+    const incomplete = new Set<string>();
+    for (const row of rows) {
+      const groupId = row.group_id as string;
+      if (!row.principal_id) incomplete.add(groupId);
+      else rosters.set(groupId, [...(rosters.get(groupId) ?? []), memberRow(row)]);
+    }
+    for (const groupId of incomplete) rosters.delete(groupId);
+    return rosters;
+  }
+
+  async function branded(rows: Record<string, unknown>[]) {
+    const found = await Promise.all(
+      rows.map(({ id }) =>
+        withTenant(String(id), async () => {
+          const [tenant] = await q(
+            `SELECT settings->>'brandName' AS brand, qm_tenant_handle(settings) AS handle,
+                    settings->>'serving' IS DISTINCT FROM 'false' OR qm_boot_tenant() IS NOT NULL AS serving
+               FROM tenants WHERE id = $1`,
+            [id],
           );
-        }
-        return true;
-      }
-      const complete = await write(client);
-      if (partial && complete === false) return false;
-      await client.query(
-        `INSERT INTO directory_sync (org_id, ${hashCol}, ${syncedAtCol}, updated_at) VALUES ($1, $2, $3, $4)
-         ON CONFLICT (org_id) DO UPDATE SET ${hashCol} = EXCLUDED.${hashCol},
-           ${syncedAtCol} = COALESCE(EXCLUDED.${syncedAtCol}, directory_sync.${syncedAtCol}),
-           updated_at = EXCLUDED.updated_at`,
-        [orgId, partial || complete === false ? null : hash, partial ? null : (syncedAt ?? null), Date.now()],
-      );
-      return true;
-    });
+          if (tenant?.serving !== true) return [];
+          return [
+            {
+              id: String(id),
+              ...(typeof tenant.brand === "string" ? { brandName: tenant.brand } : {}),
+              ...(typeof tenant.handle === "string" ? { handle: tenant.handle } : {}),
+            },
+          ];
+        }),
+      ),
+    );
+    return found.flat();
   }
 
   return {
-    async replace(members, syncedAt) {
-      const byId = new Map<string, DirectoryMember>();
-      for (const m of members) if (m.principalId && m.type === "internal") byId.set(m.principalId, m);
-      const internal = [...byId.values()];
-
-      const hash = hashRoster(
-        internal.map((m) => `${m.principalId}|${m.displayName}|${m.type}|${m.slackId ?? ""}|${m.avatarUrl ?? ""}`),
-      );
-
-      return swapIfChanged("members_hash", hash, syncedAt, async (client) => {
-        await client.query("DELETE FROM directory_members WHERE org_id = $1", [orgId]);
-        if (internal.length) {
-          await client.query(
-            `INSERT INTO directory_members (org_id, principal_id, display_name, display_name_lc, type, slack_id, avatar_url)
-             SELECT $1, * FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[])`,
-            [
-              orgId,
-              internal.map((m) => m.principalId),
-              internal.map((m) => m.displayName),
-              internal.map((m) => normDirectoryQuery(m.displayName)),
-              internal.map((m) => m.type),
-              internal.map((m) => m.slackId ?? null),
-              internal.map((m) => m.avatarUrl ?? null),
-            ],
-          );
-        }
-      });
-    },
-
-    async replaceChannels(channels, channelMembers, syncedAt, channelRosterIds, revocations = [], partial = false) {
-      if (partial && (syncedAt === undefined || !Number.isFinite(syncedAt) || channelMembers === undefined))
-        return false;
-      const byId = new Map<string, DirectoryChannel>();
-      for (const c of channels) if (c.channelId && c.name) byId.set(c.channelId, c);
-      let list = [...byId.values()];
-      const listedIds = new Set(list.map((channel) => channel.channelId));
-
-      let rosterIds =
-        channelMembers === undefined
-          ? undefined
-          : new Set((channelRosterIds ?? [...listedIds]).filter((channelId) => listedIds.has(channelId)));
-      let membershipRows =
-        channelMembers === undefined
-          ? undefined
-          : dedupMemberships(channelMembers).filter((member) => rosterIds!.has(member.channelId));
-      let revokedRows = dedupMemberships(revocations).filter((member) => listedIds.has(member.channelId));
-      const channelsPart = list.map((c) => `${c.channelId}|${c.name}|${c.isPrivate ? 1 : 0}|${c.isExternal ? 1 : 0}`);
-      const membersPart =
-        membershipRows === undefined
-          ? []
-          : [
-              ...[...rosterIds!].map((channelId) => `r:${channelId}`),
-              ...membershipRows.map((m) => `m:${m.channelId}|${m.principalId}`),
-              ...revokedRows.map((m) => `x:${m.channelId}|${m.principalId}`),
-            ];
-      const hash = hashRoster([...channelsPart, ...membersPart]);
-
-      return swapIfChanged(
-        "channels_hash",
-        hash,
-        syncedAt,
-        async (client) => {
-          const protectedRows = await client.query(
-            "SELECT channel_id FROM directory_channels WHERE org_id = $1 AND (observed_at > $2 OR ($3 AND observed_at = $2))",
-            [orgId, syncedAt ?? null, partial],
-          );
-          const protectedIds = new Set(protectedRows.rows.map((row) => row.channel_id as string));
-          if (partial && list.some((channel) => protectedIds.has(channel.channelId))) return false;
-          list = list.filter((channel) => !protectedIds.has(channel.channelId));
-          rosterIds = rosterIds && new Set([...rosterIds].filter((id) => !protectedIds.has(id)));
-          membershipRows = membershipRows?.filter((member) => !protectedIds.has(member.channelId));
-          revokedRows = revokedRows.filter((member) => !protectedIds.has(member.channelId));
-          const retainedIds = [...listedIds, ...protectedIds];
-          const channelIds = list.map((channel) => channel.channelId);
-          if (!partial) {
-            await client.query(
-              "DELETE FROM directory_channels WHERE org_id = $1 AND NOT (channel_id = ANY($2::text[]))",
-              [orgId, retainedIds],
-            );
-            await client.query(
-              "DELETE FROM directory_channel_members WHERE org_id = $1 AND NOT (channel_id = ANY($2::text[]))",
-              [orgId, retainedIds],
-            );
-          }
-          if (list.length) {
-            await client.query(
-              `INSERT INTO directory_channels (org_id, channel_id, name, name_lc, is_private, is_external, roster_known, observed_at)
-             SELECT $1, rows.*, $8::bigint FROM unnest($2::text[], $3::text[], $4::text[], $5::boolean[], $6::boolean[], $7::boolean[]) AS rows
-             ON CONFLICT (org_id, channel_id) DO UPDATE SET
-               name = EXCLUDED.name,
-               name_lc = EXCLUDED.name_lc,
-               is_private = EXCLUDED.is_private,
-               is_external = EXCLUDED.is_external,
-               roster_known = directory_channels.roster_known OR EXCLUDED.roster_known,
-               observed_at = EXCLUDED.observed_at`,
-              [
-                orgId,
-                channelIds,
-                list.map((c) => c.name),
-                list.map((c) => normDirectoryQuery(c.name)),
-                list.map((c) => !!c.isPrivate),
-                list.map((c) => !!c.isExternal),
-                list.map((c) => rosterIds?.has(c.channelId) ?? false),
-                partial ? syncedAt : null,
-              ],
-            );
-          }
-          if (membershipRows !== undefined) {
-            await client.query(
-              "DELETE FROM directory_channel_members WHERE org_id = $1 AND channel_id = ANY($2::text[])",
-              [orgId, [...rosterIds!]],
-            );
-            if (membershipRows.length) {
-              await client.query(
-                `INSERT INTO directory_channel_members (org_id, channel_id, principal_id)
-               SELECT $1, * FROM unnest($2::text[], $3::text[])`,
-                [orgId, membershipRows.map((m) => m.channelId), membershipRows.map((m) => m.principalId)],
-              );
-            }
-          }
-          if (revokedRows.length) {
-            await client.query(
-              `DELETE FROM directory_channel_members member
-             USING unnest($2::text[], $3::text[]) AS revoked(channel_id, principal_id)
-             WHERE member.org_id = $1 AND member.channel_id = revoked.channel_id
-               AND member.principal_id = revoked.principal_id`,
-              [orgId, revokedRows.map((m) => m.channelId), revokedRows.map((m) => m.principalId)],
-            );
-          }
-          return partial || protectedIds.size === 0;
-        },
-        partial,
-      );
-    },
-
-    async setWorkspaceUrl(url) {
-      await q(
-        `INSERT INTO directory_meta (org_id, workspace_url, updated_at) VALUES ($1, $2, $3)
-         ON CONFLICT (org_id) DO UPDATE SET workspace_url = EXCLUDED.workspace_url, updated_at = EXCLUDED.updated_at`,
-        [orgId, url, Date.now()],
-      );
-    },
-
+    ...createDirectorySync({ q, pool, orgId }),
     async meta() {
       const rows = await q("SELECT workspace_url FROM directory_meta WHERE org_id = $1", [orgId]);
       return { workspaceUrl: (rows[0]?.workspace_url as string | null) ?? null };
     },
 
+    async tenantsForEmail(email) {
+      const rows = await q("SELECT tenant_id::text AS id FROM qm_tenants_for_email($1) ORDER BY tenant_id", [email]);
+      return branded(rows);
+    },
+
+    async tenantsForPrincipal(principal) {
+      const rows = await q("SELECT tenant::text AS id FROM qm_tenants_for_principal($1) tenant ORDER BY tenant", [
+        principal,
+      ]);
+      return branded(rows);
+    },
+
+    async tenantForAppHandle(handle) {
+      const rows = await q("SELECT qm_tenant_for_app_handle($1)::text AS id", [handle]);
+      return typeof rows[0]?.id === "string" ? rows[0].id : undefined;
+    },
+
+    async setAppHandle(handle) {
+      try {
+        await q("SELECT qm_set_tenant_handle($1)", [handle]);
+        return "ok";
+      } catch (error) {
+        if ((error as { code?: string }).code === "23505") return "taken";
+        throw error;
+      }
+    },
+
+    async trustedClientFor(tenant) {
+      const [row] = await withTenant(tenant, () =>
+        q("SELECT settings->'oidcClient' AS client FROM tenants WHERE id = $1", [tenant]),
+      );
+      const client = row?.client as { clientId?: unknown; clientSecret?: unknown } | null | undefined;
+      return typeof client?.clientId === "string" && typeof client.clientSecret === "string"
+        ? { clientId: client.clientId, clientSecret: client.clientSecret }
+        : undefined;
+    },
+
     async channelMember(channelId, principalId) {
       const rows = await q(
-        `SELECT 1 FROM directory_channel_members member
-         JOIN directory_channels channel USING (org_id, channel_id)
-         WHERE member.org_id = $1 AND member.channel_id = $2 AND member.principal_id = ANY($3::text[])
-           AND NOT (channel.is_private AND channel.is_external) LIMIT 1`,
+        `SELECT 1 FROM directory_channel_members
+         WHERE org_id = $1 AND channel_id = $2 AND principal_id = ANY($3::text[]) LIMIT 1`,
         [orgId, channelId, rosterIds(principalId)],
       );
       return rows.length > 0;
+    },
+
+    async rosterCoversAudience(channelId) {
+      const rows = await q("SELECT is_external FROM directory_channels WHERE org_id = $1 AND channel_id = $2", [
+        orgId,
+        channelId,
+      ]);
+      return rows.length ? rosterCoversAudience(rows[0]!) : undefined;
     },
 
     async channelMemberIds(channelId) {
@@ -470,84 +361,6 @@ export function createPostgresDirectoryStore(connectionString: string): Director
         channelId,
       ]);
       return rows.length > 0 ? (rows[0]!.is_private as boolean) : undefined;
-    },
-
-    async replaceGroups(groupMembers, syncedAt, groupIds, groupRosterIds) {
-      const allRows = dedupPairs(
-        groupMembers,
-        (m) => m.groupId,
-        (m) => m.principalId,
-      );
-      const listedIds = [...new Set((groupIds ?? allRows.map((member) => member.groupId)).filter(Boolean))];
-      const listed = new Set(listedIds);
-      const rosterIds = [...new Set((groupRosterIds ?? listedIds).filter((groupId) => listed.has(groupId)))];
-      const rostered = new Set(rosterIds);
-      const rows = allRows.filter((member) => rostered.has(member.groupId));
-      const hash = hashRoster([
-        ...listedIds.map((groupId) => `g:${groupId}`),
-        ...rosterIds.map((groupId) => `r:${groupId}`),
-        ...rows.map((member) => `m:${member.groupId}|${member.principalId}`),
-      ]);
-
-      return swapIfChanged("groups_hash", hash, syncedAt, async (client) => {
-        await client.query(
-          "DELETE FROM directory_group_members WHERE org_id = $1 AND NOT (group_id = ANY($2::text[]))",
-          [orgId, listedIds],
-        );
-        await client.query("DELETE FROM directory_groups WHERE org_id = $1 AND NOT (group_id = ANY($2::text[]))", [
-          orgId,
-          listedIds,
-        ]);
-        if (listedIds.length) {
-          await client.query(
-            `INSERT INTO directory_groups (org_id, group_id, roster_known)
-             SELECT $1, * FROM unnest($2::text[], $3::boolean[])
-             ON CONFLICT (org_id, group_id) DO UPDATE SET
-               roster_known = directory_groups.roster_known OR EXCLUDED.roster_known`,
-            [orgId, listedIds, listedIds.map((groupId) => rostered.has(groupId))],
-          );
-        }
-        await client.query("DELETE FROM directory_group_members WHERE org_id = $1 AND group_id = ANY($2::text[])", [
-          orgId,
-          rosterIds,
-        ]);
-        if (rows.length) {
-          await client.query(
-            `INSERT INTO directory_group_members (org_id, group_id, principal_id)
-             SELECT $1, * FROM unnest($2::text[], $3::text[])`,
-            [orgId, rows.map((m) => m.groupId), rows.map((m) => m.principalId)],
-          );
-        }
-      });
-    },
-
-    async upsertGroup(groupId, principalIds) {
-      const ids = [...new Set(principalIds.filter(Boolean))];
-      if (!groupId || !ids.length) return;
-      await withPgTransaction(await pool(), async (client) => {
-        await client.query("SELECT pg_advisory_xact_lock(hashtext('directory'), hashtext($1))", [orgId]);
-        await client.query(
-          `INSERT INTO directory_groups (org_id, group_id, roster_known) VALUES ($1, $2, TRUE)
-           ON CONFLICT (org_id, group_id) DO UPDATE SET roster_known = TRUE`,
-          [orgId, groupId],
-        );
-        await client.query("DELETE FROM directory_group_members WHERE org_id = $1 AND group_id = $2", [orgId, groupId]);
-        await client.query(
-          `INSERT INTO directory_group_members (org_id, group_id, principal_id)
-           SELECT $1, $2, * FROM unnest($3::text[])`,
-          [orgId, groupId, ids],
-        );
-        const all = await client.query("SELECT group_id, principal_id FROM directory_group_members WHERE org_id = $1", [
-          orgId,
-        ]);
-        await client.query(
-          `INSERT INTO directory_sync (org_id, groups_hash, groups_synced_at, updated_at) VALUES ($1, $2, $3, $3)
-           ON CONFLICT (org_id) DO UPDATE SET groups_hash = EXCLUDED.groups_hash,
-             groups_synced_at = GREATEST(COALESCE(directory_sync.groups_synced_at, 0), EXCLUDED.groups_synced_at),
-             updated_at = EXCLUDED.updated_at`,
-          [orgId, hashRoster(all.rows.map((r) => `${r.group_id}|${r.principal_id}`)), Date.now()],
-        );
-      });
     },
 
     async resolveGroupByParticipants(participants) {
@@ -603,43 +416,32 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     },
 
     async conversationMembers(kind, id) {
-      const rows =
-        kind === "channel"
-          ? await q(
-              `SELECT channel.roster_known, channel.is_external, roster.principal_id AS roster_principal_id,
-                      member.principal_id, member.display_name, member.type, member.slack_id
-               FROM directory_channels channel
-               LEFT JOIN directory_channel_members roster
-                 ON roster.org_id = channel.org_id AND roster.channel_id = channel.channel_id
-               LEFT JOIN directory_members member
-                 ON member.org_id = roster.org_id AND member.principal_id = roster.principal_id
-               WHERE channel.org_id = $1 AND channel.channel_id = $2
-               ORDER BY roster.principal_id`,
-              [orgId, id],
-            )
-          : await q(
-              `SELECT group_row.roster_known, FALSE AS is_external, roster.principal_id AS roster_principal_id,
-                      member.principal_id, member.display_name, member.type, member.slack_id
-               FROM directory_groups group_row
-               LEFT JOIN directory_group_members roster
-                 ON roster.org_id = group_row.org_id AND roster.group_id = group_row.group_id
-               LEFT JOIN directory_members member
-                 ON member.org_id = roster.org_id AND member.principal_id = roster.principal_id
-               WHERE group_row.org_id = $1 AND group_row.group_id = $2
-               ORDER BY roster.principal_id`,
-              [orgId, id],
-            );
-      if (!rows.length || rows[0]?.roster_known !== true || rows[0]?.is_external === true) return undefined;
+      if (kind === "group") return (await readGroupRosters([id])).get(id);
+      const rows = await q(
+        `SELECT channel.roster_known, channel.is_external, roster.principal_id AS roster_principal_id,
+                member.principal_id, member.display_name, member.type, member.slack_id
+         FROM directory_channels channel
+         LEFT JOIN directory_channel_members roster
+           ON roster.org_id = channel.org_id AND roster.channel_id = channel.channel_id
+         LEFT JOIN directory_members member
+           ON member.org_id = roster.org_id AND member.principal_id = roster.principal_id
+         WHERE channel.org_id = $1 AND channel.channel_id = $2
+         ORDER BY roster.principal_id`,
+        [orgId, id],
+      );
+      if (!rows.length || rows[0]?.roster_known !== true || !rosterCoversAudience(rows[0])) return undefined;
       if (rows.some((row) => !row.roster_principal_id || !row.principal_id)) return undefined;
       return rows.map(memberRow);
     },
 
+    groupRosters: readGroupRosters,
+
     async listChannelsFor(principalId) {
       const rows = await q(
         `SELECT channel_id, name, is_private, is_external FROM directory_channels c
-         WHERE org_id = $1 AND (is_private = FALSE OR (is_external = FALSE AND EXISTS (
+         WHERE org_id = $1 AND (is_private = FALSE OR EXISTS (
            SELECT 1 FROM directory_channel_members m
-           WHERE m.org_id = c.org_id AND m.channel_id = c.channel_id AND m.principal_id = ANY($2::text[]))))
+           WHERE m.org_id = c.org_id AND m.channel_id = c.channel_id AND m.principal_id = ANY($2::text[])))
          ORDER BY name_lc`,
         [orgId, rosterIds(principalId)],
       );

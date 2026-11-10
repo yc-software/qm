@@ -11,3 +11,4 @@ deploy/helm/templates/
 .generated/
 
 src/deploy/vendor/
+test/fixtures/gbrain/qm-memory-provider-v1.json

@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { continuableContext, createAgent } from "../src/agent/agent-run.ts";
+import { createModelRoutes } from "../src/model/model-route.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { INTERRUPTED_TOOL_RESULT } from "../src/agent/context-compaction.ts";
 import { storedItem, type Item, type NewItem } from "../src/sessions/items.ts";
@@ -75,7 +76,7 @@ function sse(text: string): Response {
 }
 
 async function runResume(history: Item[], overrides: Partial<AgentTurnInput> = {}) {
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
   const sink: Sink = { entries: [] };
   const requests: RequestBody[] = [];
   const llmTurnSeqs: Array<number | null> = [];

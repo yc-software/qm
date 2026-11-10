@@ -36,21 +36,10 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   source-auth signer, signed core-client, node:http helpers, error helpers, CORE_*
   env), imported by relative path and never importing core. The bar cuts both ways:
   don't manufacture an abstraction for a pattern with one caller.
-- **Never merge to `main` without a fresh-context pass that tries to break the change.**
-  Not a blessing — hunt for the bug, the missed edge case, the unstated assumption, the
-  thing that regresses. Always dispatch `/code-review` or an independent review agent that
-  did not watch you write the change: the context that produced a diff already believes it
-  is correct, and that belief is the bias review exists to defeat. Never self-review in the
-  authoring context, however small the diff; a green CI run is not review either. What
-  scales with risk is how deep the reviewer goes — a change with a narrow blast radius
-  warrants modest effort scoped to the diff for each reviewer, while core control flow, auth
-  and credentials, data loss or migrations, concurrency and retry logic, spend, public API
-  contracts, the shared helpers above that every path flows through, or a diff too large to
-  hold in your head warrant high effort and several reviewers with distinct lenses. Judge
-  blast radius by checking callers, not by counting files — a one-line edit to a helper with
-  fifty importers is not a small change. The reviewer, not the author, has the last word on
-  depth: a modest pass that spots risk it wasn't scoped for escalates on its own initiative
-  rather than staying in its lane. Resolve what they find before merging.
+- **Land PRs through the merge queue.** When a PR's checks and reviews pass,
+  `gh pr merge <number>` queues it rather than merging it. The queue runs CI on the
+  exact commit that will land, reusing the PR's run when `main` has not moved, and
+  `main`'s own CI then reuses the queue's run. Never bypass the queue with `--admin`.
 - **Run independent Wall of shame reviews in parallel for every PR.** First triage with
   one fast, cheap model, the latest Haiku: give it the diff and every lens in the current
   [Wall of shame](./docs/SPEC.md#wall-of-shame), and have it mark each lens relevant or
@@ -60,7 +49,8 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   Honorable mentions may share one combined reviewer. Launch reviews asynchronously
   and in parallel within available capacity, queuing any overflow. Do not wait for
   reviews before opening or updating the PR, running checks, or continuing other work.
-  Each reviewer reads their lens and examples, examines the diff and affected paths,
+  Give each reviewer the raw evidence (diff, commands, logs, provider config), never the
+  author's summary of it. Each reviewer reads their lens and examples, examines the diff and affected paths,
   and returns **accept** or **request changes**, a **score out of 100** (higher is
   better), and **1–2 sentences** explaining their assessment. Cite concrete findings
   and state the smallest correction needed; explain when a lens has no applicable
@@ -71,8 +61,7 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   results or substitute the author's self-review. After edits, have independent
   reviewers reassess affected lenses and explicitly carry forward unaffected results.
   These reviews run alongside PR work; before merging, every relevant lens must have accepted
-  and all requested changes must be resolved. They supplement the correctness,
-  security, and regression review above. The `Wall of shame review` CI check fails
+  and all requested changes must be resolved. The `Wall of shame review` CI check fails
   until the description's report covers every lens for the PR head: relevant lenses with
   an Accept verdict, and the rest as `Not relevant` with the triage model as reviewer and
   its one-line reason as the assessment.
@@ -91,8 +80,8 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   what you changed plus typecheck and lint, then push and let CI be the full gate — CI
   shards the suite across parallel runners, and reproducing that serially costs several
   times the wall clock for the same signal. Judge "affected" by callers rather than by diff
-  size, for the same reason as above; run everything locally when you can't tell what a
-  change reaches.
+  size — a one-line edit to a helper with fifty importers reaches all fifty; run everything
+  locally when you can't tell what a change reaches.
 - **Test what a user or caller sees, never the source.** Run the code and assert on its
   output; don't assert on source text, CSS, or prompt wording. A bug fix's test must fail
   on the old code through the real path and assert the correct behavior, not the inverse

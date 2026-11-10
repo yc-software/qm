@@ -9,6 +9,7 @@ import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
 import { countTokens } from "../src/util/tokens.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresErrorLog } from "../src/admin/postgres-error-log.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 
 const modelContext = async (sessions: SessionStore, sessionId: string) =>
@@ -23,17 +24,14 @@ async function fixture() {
       kind: "UserMessage",
       text: `old message ${i} `.repeat(100),
     });
-  let resets = 0;
   const agent = {
     compactHistory: async (): Promise<string> => {
       throw new Error("summary unavailable");
     },
-    resetSession: () => {
-      resets++;
-    },
   };
   const compaction = createCompaction({
     sessions,
+    errors: createPostgresErrorLog(testDatabaseUrl()),
     agent,
     maxContextTokens: 500,
   } as unknown as OrchestratorDeps);
@@ -45,14 +43,13 @@ async function fixture() {
     orgScopeId: "org:test",
     actorId: "test",
   };
-  return { sessions, agent, compaction, input, resets: () => resets };
+  return { sessions, agent, compaction, input };
 }
 
 test("mandatory summarizer failure recovers instead of wedging the pending turn", async () => {
   const f = await fixture();
   const history = await f.compaction.compactContextIfNeeded(f.input);
   assert.ok(history.length < f.input.visibleHistory.length);
-  assert.equal(f.resets(), 1);
   assert.equal((await f.sessions.getItems(f.input.session.id)).length, f.input.visibleHistory.length + 1);
   assert.deepEqual(await modelContext(f.sessions, f.input.session.id), history);
 });
@@ -111,32 +108,24 @@ for (const stage of ["before", "during", "abort-error"] as const) {
     await assert.rejects(f.compaction.compactContextIfNeeded({ ...f.input, cancel: abort.signal }), {
       name: "AbortError",
     });
-    assert.equal(f.resets(), 0);
     assert.deepEqual(await f.sessions.getItems(f.input.session.id), f.input.visibleHistory);
   });
 }
 
-for (const stage of ["append", "reset"] as const) {
-  test(`${stage} failure is not swallowed or retried as summarization failure`, async () => {
-    const f = await fixture();
-    let calls = 0;
-    f.agent.compactHistory = async () => {
-      calls++;
-      return "Summary.";
-    };
-    if (stage === "reset")
-      f.agent.resetSession = () => {
-        throw new Error("storage unavailable");
-      };
-    else
-      f.sessions[stage] = async () => {
-        throw new Error("storage unavailable");
-      };
-    await assert.rejects(f.compaction.compactContextIfNeeded(f.input), /storage unavailable/);
-    assert.equal(calls, 1);
-    assert.ok(!(await f.sessions.getItems(f.input.session.id)).some((e) => e.body.mode === "recent"));
-  });
-}
+test("append failure is not swallowed or retried as summarization failure", async () => {
+  const f = await fixture();
+  let calls = 0;
+  f.agent.compactHistory = async () => {
+    calls++;
+    return "Summary.";
+  };
+  f.sessions.append = async () => {
+    throw new Error("storage unavailable");
+  };
+  await assert.rejects(f.compaction.compactContextIfNeeded(f.input), /storage unavailable/);
+  assert.equal(calls, 1);
+  assert.ok(!(await f.sessions.getItems(f.input.session.id)).some((e) => e.body.mode === "recent"));
+});
 
 test("oversized entries and orphaned parallel tool results cannot bypass the recent budget", async () => {
   const f = await fixture();
@@ -178,4 +167,24 @@ test("recent recovery drops an oversized request inside a completed turn", async
   assert.ok(countTokens(JSON.stringify(reconstructMessagesFromHistory(history))) < 500);
   assert.doesNotMatch(JSON.stringify(history), /discarded oversized request/);
   assert.equal(history.at(-1)!.seq, last.seq);
+});
+
+test("a trim says why the summary failed and keeps the last saved summary, not the previous failure", async () => {
+  const f = await fixture();
+  await f.sessions.append(f.input.writer, { kind: "ContextCompaction", throughSeq: 1, text: "Saved work summary." });
+  const reasons = ["gateway budget exhausted", "provider key revoked"];
+  let marker = "";
+  for (const reason of reasons) {
+    f.agent.compactHistory = async () => {
+      throw new Error(reason);
+    };
+    for (let i = 0; i < 12; i++)
+      await f.sessions.append(f.input.writer, { kind: "UserMessage", text: `newer message ${i} `.repeat(100) });
+    const visibleHistory = await modelContext(f.sessions, f.input.session.id);
+    const history = await f.compaction.compactContextIfNeeded({ ...f.input, visibleHistory });
+    marker = contextSummary(history.find((item) => contextSummary(item))!)!.text;
+    assert.ok(marker.includes(reason));
+    assert.ok(marker.includes("Saved work summary."));
+  }
+  assert.ok(!marker.includes(reasons[0]!));
 });

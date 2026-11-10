@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { createServer as httpServer, type RequestListener } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createAgent } from "../src/agent/agent-run.ts";
+import { createModelRoutes } from "../src/model/model-route.ts";
 import { probeModel } from "../src/model/model-runtime.ts";
 import { gatewayActorId } from "../src/model/provider-endpoints.ts";
 import { withResolvedRuntime } from "../src/agent/runtime-choice.ts";
@@ -63,7 +64,9 @@ function turn(extra: Partial<AgentTurnInput> = {}): AgentTurnInput {
 
 test("a gateway turn carries the session, actor, scope, purpose and origin it works for", async (t) => {
   const requests = recordRequests(t);
-  const harness = createAgent({ defaultModelId: "claude-haiku-4-5", modelGateway: gateway });
+  const harness = createAgent({
+    routes: createModelRoutes({ defaultModelId: "claude-haiku-4-5", modelGateway: gateway }),
+  });
 
   assert.equal((await withModelRequestContext(cronContext, () => harness.runTurn(turn()))).reply, "ok");
   assert.equal(requests.at(-1)!.url, "https://gateway.test/v1/messages");
@@ -81,7 +84,9 @@ test("the gateway gets keyed pseudonyms for people, and none without a key", asy
   const requests = recordRequests(t);
   const personal = { ...cronContext, scopeId: "personal:owner@example.com" };
   await withModelRequestContext(personal, () =>
-    createAgent({ defaultModelId: "claude-haiku-4-5", modelGateway: gateway }).runTurn(turn()),
+    createAgent({ routes: createModelRoutes({ defaultModelId: "claude-haiku-4-5", modelGateway: gateway }) }).runTurn(
+      turn(),
+    ),
   );
   assert.deepEqual(contextHeaders(requests.at(-1)!.headers), {
     ...cronHeaders,
@@ -92,7 +97,9 @@ test("the gateway gets keyed pseudonyms for people, and none without a key", asy
 
   const { actorKey: _actorKey, ...unkeyed } = gateway;
   await withModelRequestContext(personal, () =>
-    createAgent({ defaultModelId: "claude-haiku-4-5", modelGateway: unkeyed }).runTurn(turn()),
+    createAgent({ routes: createModelRoutes({ defaultModelId: "claude-haiku-4-5", modelGateway: unkeyed }) }).runTurn(
+      turn(),
+    ),
   );
   assert.deepEqual(contextHeaders(requests.at(-1)!.headers), {
     "x-qm-session-id": "session-cron",
@@ -103,7 +110,9 @@ test("the gateway gets keyed pseudonyms for people, and none without a key", asy
 
 test("context values the credential broker could not attest are left off", async (t) => {
   const requests = recordRequests(t);
-  const harness = createAgent({ defaultModelId: "claude-haiku-4-5", modelGateway: gateway });
+  const harness = createAgent({
+    routes: createModelRoutes({ defaultModelId: "claude-haiku-4-5", modelGateway: gateway }),
+  });
 
   for (const actorId of ["Owner Example", "a".repeat(257), "owner@example.com\r\nx-qm-scope: org:other"]) {
     await withModelRequestContext({ ...cronContext, actorId }, () => harness.runTurn(turn()));
@@ -122,7 +131,9 @@ test("context values the credential broker could not attest are left off", async
 
 test("turns on a user's or the org's own provider key send no request context", async (t) => {
   const requests = recordRequests(t);
-  const harness = createAgent({ defaultModelId: "claude-haiku-4-5", apiKey: "org-key", modelGateway: gateway });
+  const harness = createAgent({
+    routes: createModelRoutes({ defaultModelId: "claude-haiku-4-5", apiKey: "org-key", modelGateway: gateway }),
+  });
 
   await withModelRequestContext(cronContext, async () => {
     await harness.runTurn(turn({ runtime: { modelId: "claude-opus-4-8" } }));
@@ -140,11 +151,10 @@ test("turns on a user's or the org's own provider key send no request context", 
 test("every helper call keeps its work's context and names its own purpose", async (t) => {
   const requests = recordRequests(t);
   const harness = createAgent({
-    defaultModelId: "claude-haiku-4-5",
+    routes: createModelRoutes({ defaultModelId: "claude-haiku-4-5", modelGateway: gateway }),
     detectModelId: "claude-haiku-4-5",
     titleModelId: "claude-haiku-4-5",
     judgeModelId: "claude-haiku-4-5",
-    modelGateway: gateway,
   });
   const session = { id: "session-cron" } as Session;
   const reportItem = storedItem(
@@ -186,9 +196,8 @@ test("every helper call keeps its work's context and names its own purpose", asy
 test("the goal governor judges with its turn's context", async (t) => {
   const requests = recordRequests(t);
   const pi = createAgent({
-    defaultModelId: "claude-haiku-4-5",
+    routes: createModelRoutes({ defaultModelId: "claude-haiku-4-5", modelGateway: gateway }),
     judgeModelId: "claude-haiku-4-5",
-    modelGateway: gateway,
   });
   const adapter = {
     ...pi,
@@ -199,7 +208,11 @@ test("the goal governor judges with its turn's context", async (t) => {
       return { reply: "" };
     },
   };
-  const router = withResolvedRuntime(adapter, () => ({ modelId: "claude-haiku-4-5" }));
+  const router = withResolvedRuntime(
+    adapter,
+    () => ({ modelId: "claude-haiku-4-5" }),
+    async () => ({ modelId: "claude-haiku-4-5" }),
+  );
 
   await withModelRequestContext(cronContext, () => router.runTurn(turn()));
   assert.deepEqual(contextHeaders(requests.at(-1)!.headers), { ...cronHeaders, "x-qm-purpose": "judge" });
@@ -235,8 +248,8 @@ async function gatewayApp(
     titleModelId: "claude-haiku-4-5",
     detectModelId: "claude-haiku-4-5",
     judgeModelId: "claude-haiku-4-5",
-    modelGateway: { ...gateway, url },
     ...overrides,
+    modelGateway: { ...(overrides.modelGateway ?? gateway), url },
   });
   const sent = (purpose: string, sessionId?: string) =>
     seen.find(
@@ -244,6 +257,7 @@ async function gatewayApp(
         headers["x-qm-purpose"] === purpose && (sessionId === undefined || headers["x-qm-session-id"] === sessionId),
     );
   const built = buildApp(config);
+  built.runtime.start();
   t.after(() => built.runtime.stop());
   return { config, built, seen, sent };
 }
@@ -287,7 +301,7 @@ test("app turns and their helper calls tell the gateway which session they serve
     actor: { externalId: "U1" },
     conversation: { kind: "channel", threadRef: "ch:C1:context", channelRef: "C1", audience: [{ externalId: "U1" }] },
     text: "anyone around?",
-    unprompted: true,
+    origin: { kind: "ambient" },
   });
   const channel = (await built.sessions.get(ambient.sessionId!))!;
   assert.deepEqual(sent("detect"), {
@@ -336,7 +350,7 @@ test("API work carries its token's turn, the admin replaying screens, or the mem
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
-  await built.memory.capture("personal:U2", ["Prefers tea"], Date.now(), "U2");
+  await built.memory.capture("personal:U2", ["Prefers tea"], Date.now(), { actorId: "U2", context: "conversation" });
   assert.deepEqual(sent("memory_classification"), {
     "x-qm-actor": pseudonym("U2"),
     "x-qm-scope": `personal:${pseudonym("U2")}`,
@@ -412,4 +426,32 @@ test("debounced memory capture keeps the context of the turn it came from, even 
       "x-qm-origin": "conversation",
       "x-qm-purpose": "memory_capture",
     });
+});
+
+test("decision rules on the gateway carry the same keyed actor as the turn they judge", async (t) => {
+  const { actorKey: _actorKey, ...envGateway } = gateway;
+  const { built, sent } = await gatewayApp(t, { modelGateway: envGateway });
+  const by = { actorId: "admin@example.com" };
+  await built.decisions!.saveProvider({ id: "gw", protocol: "chat-completions" }, by);
+  await built.decisions!.saveRule(
+    {
+      id: "router",
+      hook: "turn_start",
+      question: "Is this a hard task?",
+      options: { keep: { description: "ordinary", action: "keep" } },
+      model: { provider: "gw", model: "example/decision-model" },
+      mode: "observe",
+      onError: "keep",
+    },
+    by,
+  );
+  await built.app.turn({
+    surface: "test",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm", threadRef: "dm:U1:decision" },
+    text: "plan the migration",
+  });
+  await settle(async () => !!sent("decision"));
+  assert.equal(sent("decision")!["x-qm-actor"], pseudonym("U1"));
+  assert.equal(sent("decision")!["x-qm-actor"], sent("turn")!["x-qm-actor"]);
 });

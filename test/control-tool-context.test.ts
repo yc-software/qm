@@ -16,6 +16,7 @@ import { createAgentTools } from "../src/agent/agent-tools.ts";
 import { createSurfaceToolDeps, type SurfaceToolsContext } from "../src/surfaces/surface-tools.ts";
 import { createPostgresChannelPolicyStore } from "../src/surface-cache/channel-policy-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { testSurfaces } from "./support/single-process.ts";
 
 const SECRET = "control-tool-ctx";
 const handle: SandboxHandle = { id: "h", rootDir: "/workspace" };
@@ -181,6 +182,7 @@ for (const scope of ["conversation", "channel"] as const) {
     };
     const surface = createSurfaceToolDeps({
       deps: {
+        surfaces: testSurfaces(),
         deliveries: {},
         channelPolicy: scope === "channel" ? racingPolicy : channelPolicy,
         auditLog: { record() {} },
@@ -234,7 +236,7 @@ for (const scope of ["conversation", "channel"] as const) {
 test("channel guidance metadata updates preserve intervening edits and initialize missing policies", async () => {
   const channelPolicy = createPostgresChannelPolicyStore(testDatabaseUrl());
   const surface = createSurfaceToolDeps({
-    deps: { deliveries: {}, channelPolicy, auditLog: { record() {} } },
+    deps: { surfaces: testSurfaces(), deliveries: {}, channelPolicy, auditLog: { record() {} } },
     input: { surfaceTools: true },
     actor: { id: "U1" },
     conversation: { kind: "channel", channelRef: "C1" },

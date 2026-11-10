@@ -120,7 +120,7 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     name: "DEPLOYMENT_CONTROL_SECRET",
     service: "core",
     required: { when: { kind: "background-work-control" } },
-    description: "Deployment ownership credential held only by core and the privileged deployment operator.",
+    description: "Deployment control credential held only by core and the privileged deployment operator.",
     generate: MINT_LOCALLY,
   },
   {
@@ -328,27 +328,14 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     generate: MINT_LOCALLY,
   },
   {
-    name: "CORE_SIGNING_SECRET",
-    service: "web-ui",
-    required: true,
-    description: "HMAC key shared by core and surface plugins.",
-    generate: MINT_LOCALLY,
-  },
-  {
-    name: "INBOX_USERS",
-    service: "web-ui",
-    required: false,
-    description: "Comma-separated principals allowed to access Inbox, Calendar, and Design System.",
-  },
-  {
     name: "OIDC_CLIENT_ID",
-    service: "portal",
+    service: "core",
     required: {
       when: {
         kind: "all",
         conditions: [
           { kind: "service-absent", service: "auth" },
-          { kind: "env-absent", service: "portal", name: "OIDC_CLIENT_ID" },
+          { kind: "env-absent", service: "core", name: "OIDC_CLIENT_ID" },
         ],
       },
     },
@@ -356,14 +343,14 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
   },
   {
     name: "OIDC_CLIENT_SECRET",
-    service: "portal",
+    service: "core",
     required: { when: { kind: "service-absent", service: "auth" } },
     description:
       "Client secret issued by an external identity provider; the built-in auth broker mints its own instead.",
   },
   {
     name: "PORTAL_EXPECTED_TEAM_ID",
-    service: "portal",
+    service: "core",
     required: {
       when: {
         kind: "all",
@@ -371,7 +358,7 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
           { kind: "service-absent", service: "auth" },
           {
             kind: "env-all-absent",
-            service: "portal",
+            service: "core",
             names: ["OIDC_ALLOWED_EMAILS", "OIDC_ALLOWED_EMAIL_DOMAIN", "PORTAL_EXPECTED_TEAM_ID"],
           },
         ],
@@ -381,37 +368,9 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
   },
   {
     name: "PORTAL_SESSION_SECRET",
-    service: "portal",
+    service: "core",
     required: true,
     description: "Cookie-signing secret for portal sessions.",
-    generate: MINT_LOCALLY,
-  },
-  {
-    name: "CORE_SIGNING_SECRET",
-    service: "portal",
-    required: true,
-    description: "HMAC key shared by core and surface plugins.",
-    generate: MINT_LOCALLY,
-  },
-  {
-    name: "PORTAL_IDENTITY_SECRET",
-    service: "portal",
-    required: true,
-    description: "Signing key shared with core for portal-bound user identity.",
-    generate: MINT_LOCALLY,
-  },
-  {
-    name: "PORTAL_IDENTITY_SECRET",
-    service: "web-ui",
-    required: true,
-    description: "Signing key shared with core for portal-bound user identity.",
-    generate: MINT_LOCALLY,
-  },
-  {
-    name: "CORE_SIGNING_SECRET",
-    service: "auth",
-    required: true,
-    description: "HMAC key shared by core and surface plugins.",
     generate: MINT_LOCALLY,
   },
   {
@@ -453,7 +412,7 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
   },
   {
     name: "AUTH_CLIENT_SECRET",
-    service: "portal",
+    service: "core",
     envName: "OIDC_CLIENT_SECRET",
     required: { when: { kind: "service-enabled", service: "auth" } },
     description: "Client secret the portal presents to the built-in auth broker.",
@@ -480,7 +439,7 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
   },
   {
     name: "AUTH_ALLOWED_EMAILS",
-    service: "portal",
+    service: "core",
     envName: "OIDC_ALLOWED_EMAILS",
     required: {
       when: {

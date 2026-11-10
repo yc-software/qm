@@ -1,4 +1,15 @@
-export interface CachedMessage {
+export interface SurfaceKey {
+  surface?: string;
+  account?: string;
+}
+
+export interface SurfaceSource {
+  account: string;
+  workspace: string;
+  assistant: string;
+}
+
+export interface CachedMessage extends SurfaceKey {
   container: string;
   ts: string;
   sub?: string;
@@ -27,6 +38,7 @@ export interface ContainerState {
   oldestTs?: string;
   name?: string;
   kind?: "channel" | "dm" | "group";
+  source?: SurfaceSource;
   updatedAt: number;
 }
 
@@ -38,7 +50,7 @@ export interface ActiveThread {
   lastActivityAt: number;
 }
 
-export interface IngestEvent {
+export interface IngestEvent extends SurfaceKey {
   container: string;
   ts: string;
   sub?: string | null;
@@ -61,6 +73,7 @@ export interface IngestEvent {
   members?: string[];
   containerName?: string;
   kind?: "channel" | "dm" | "group";
+  source?: SurfaceSource;
 }
 
 export interface ContainerSummary extends ContainerState {
@@ -68,10 +81,11 @@ export interface ContainerSummary extends ContainerState {
   messageCount: number;
 }
 
-export interface ReadMessagesOpts {
+export interface ReadMessagesOpts extends SurfaceKey {
   at?: string;
   sub?: string | null;
   timestamps?: string[];
+  tsSuffix?: string;
   oldestFirst?: boolean;
   channelHistory?: boolean;
   limit?: number;
@@ -79,13 +93,14 @@ export interface ReadMessagesOpts {
   before?: string;
   includeDeleted?: boolean;
   noFallback?: boolean;
+  self?: boolean;
 }
 
-interface RevisedSinceOpts {
+interface RevisedSinceOpts extends SurfaceKey {
   thread?: string;
 }
 
-export interface SearchOpts {
+export interface SearchOpts extends SurfaceKey {
   container?: string;
   limit?: number;
 }
@@ -94,14 +109,14 @@ export type LiveFallback = (container: string, opts: ReadMessagesOpts) => Promis
 
 export interface SurfaceCache {
   ingest(events: IngestEvent[]): Promise<{ upserted: number }>;
-  markHandled(container: string, ts: string): Promise<void>;
+  markHandled(container: string, ts: string, key?: SurfaceKey): Promise<void>;
   readMessages(container: string, opts?: ReadMessagesOpts): Promise<CachedMessage[]>;
   revisedSince(container: string, since: number, opts?: RevisedSinceOpts): Promise<CachedMessage[]>;
   search(query: string, opts?: SearchOpts): Promise<CachedMessage[]>;
-  activeThreads(opts?: { container?: string; limit?: number }): Promise<ActiveThread[]>;
-  members(container: string): Promise<string[]>;
-  isMember(container: string, principalId: string): Promise<boolean>;
-  containerState(container: string): Promise<ContainerState | null>;
-  listContainers(opts?: { limit?: number }): Promise<ContainerSummary[]>;
+  activeThreads(opts?: SurfaceKey & { container?: string; limit?: number }): Promise<ActiveThread[]>;
+  members(container: string, key?: SurfaceKey): Promise<string[]>;
+  isMember(container: string, principalId: string, key?: SurfaceKey): Promise<boolean>;
+  containerState(container: string, key?: SurfaceKey): Promise<ContainerState | null>;
+  listContainers(opts?: SurfaceKey & { limit?: number }): Promise<ContainerSummary[]>;
   close(): Promise<void>;
 }

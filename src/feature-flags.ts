@@ -13,16 +13,19 @@ export const FEATURES = {
     personalOnly: true,
     hint: "Enables app text comments and annotation tools for the selected people. Applies on the next app page load; app management permission is still required.",
   },
-  persistent_subagents: {
-    label: "Persistent subagents",
-    personalOnly: true,
-    hint: "Persistent subagents are available for personal scopes only.",
+  personas: {
+    label: "Personas",
+    hint: "Lets the selected people create, share and chat with personas: reusable agents with their own instructions, skills and credentials.",
   },
-  responsive_spine: { label: "Responsive spine (delegation)", personalOnly: true },
   inbox_loops: { label: "Inbox Loops" },
   slack_loading_indicator: {
     label: "Slack loading indicator (experimental)",
     hint: "Shows an activity card in Slack threads, including background work and monitors. After five minutes, the card links to the web conversation. Everyone in a shared thread can see it. Top-level DMs stay unchanged. Turning this off leaves existing cards.",
+  },
+  descriptive_session_titles: {
+    label: "Descriptive session titles",
+    personalOnly: true,
+    hint: "Titles the selected people's new conversations with a short summary of what they asked, anchored on a name or distinctive word, written by a stronger model. Regenerating a title uses it too.",
   },
   external_app_sharing: { label: "External app sharing (public links, outside emails)" },
   loop_triage: { label: "Loop triage (prioritize and consolidate)" },

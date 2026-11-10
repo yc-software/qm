@@ -18,7 +18,7 @@ import { appState, can, signOut } from "./shell";
 import { isPlainLeftClick, UI_BASE } from "./deep-link";
 import { brandName } from "./ui";
 import { ADMIN_SECTIONS, VIEW_TITLE, adminMounter, settingsRoute } from "./admin/sections";
-import { sessionsState, setWebOnly } from "./sessions";
+import { sessionsState, setGroupByActivity, setWebOnly } from "./sessions";
 import { errMessage, swallowAs } from "../../chassis/src/errors";
 import { importTheme, isPalette, themeCss, themeTokens, type Palette } from "./theme-import";
 
@@ -403,6 +403,19 @@ function sidebarSurfaceRow(): TemplateResult {
   `;
 }
 
+function sidebarGroupingRow(): TemplateResult {
+  return choiceRow(
+    "Sidebar grouping",
+    "By activity lists every conversation newest first instead of under its scope.",
+    [
+      { value: false, label: "By scope" },
+      { value: true, label: "By activity" },
+    ],
+    sessionsState.groupByActivity,
+    setGroupByActivity,
+  );
+}
+
 let aiStatus: StatusResponse | null = null;
 let aiError = "";
 let aiBusy = false;
@@ -534,7 +547,7 @@ function accountRow(): TemplateResult {
       <div class="settings-row-copy">
         <div class="settings-row-title">Account</div>
         <div class="settings-row-note">
-          ${me?.displayName?.trim() || me?.user || "Not signed in"}${me?.org ? ` · ${me.org}` : ""}
+          ${me?.displayName?.trim() || me?.user || "Not signed in"}${me?.workspace || me?.org ? ` · ${me?.workspace || me?.org}` : ""}
         </div>
       </div>
       <button class="btn settings-row-action" type="button" @click=${() => void signOut()}>
@@ -625,7 +638,7 @@ function generalPane(): TemplateResult {
   return html`
     <div class="settings-group">
       ${aiAccountsRow()} ${themeRow()} ${openBehaviorRow()} ${pinPromptRow()} ${sendWhileWorkingRow()}
-      ${sidebarSurfaceRow()} ${desktopRow()} ${accountRow()}
+      ${sidebarSurfaceRow()} ${sidebarGroupingRow()} ${desktopRow()} ${accountRow()}
       <div class="settings-row settings-slack-account">
         <qm-slack-account .user=${`${appState.me?.org}:${appState.me?.user}`}></qm-slack-account>
       </div>

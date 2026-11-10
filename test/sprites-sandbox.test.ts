@@ -1,4 +1,3 @@
-import { SandboxProvisionCleanupError } from "../src/sandbox/sandbox.ts";
 import { pollProcess } from "../src/sandbox/process-poll.ts";
 import { test, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
@@ -579,14 +578,15 @@ test("spritesErrorDetail keeps plain errors as they are and enriches API errors"
   assert.equal(spritesErrorDetail(limited), "Too many; http 429; concurrent_sprite_limit_exceeded; retry after 7s");
 });
 
-test("a configured memory limit is applied as a resources policy and advertised in the profile", async () => {
-  const s = make({ memoryMb: 4096 });
-  assert.equal(s.profile.spec?.memoryMb, 4096);
-  assert.equal(s.profile.spec?.cpus, 8);
-  const h = await s.provision(scope);
+test("a computer's memory size is its sprite resources policy and a restart resizes it in place", async () => {
+  assert.equal(sandbox.profile.sizesMemory, true);
+  assert.equal(sandbox.profile.spec?.memoryMb, undefined);
+  const h = await sandbox.provision(scope, { memoryGb: 4 });
   assert.deepEqual(fake.resources(h.id), { limitMB: 4096 });
-  assert.equal(sandbox.profile.spec?.memoryMb, undefined, "no knob, no claim");
-  assert.equal(fake.resources(sandboxScopeName("qmt", scope))?.limitMB, 4096);
+  await sandbox.restartComputer!(scope, 6);
+  assert.deepEqual(fake.resources(h.id), { limitMB: 6144 });
+  const unsized = await sandbox.provision("personal:unsized");
+  assert.equal(fake.resources(unsized.id) ?? undefined, undefined);
 });
 
 test("the profile is honest about the base release and what survives sleep", () => {
@@ -851,29 +851,4 @@ test("failed hydration and failed deletion remain pending across adapters withou
   const restored = await make(options).provision(scope);
   assert.equal(await b.readFile(restored, "ledger"), "saved");
   assert.equal(await initializationStore.get(h.id), null);
-});
-
-test("scratch allocation is deleted when resource initialization fails", async () => {
-  const box = make({ memoryMb: 4096 });
-  fake.failNext(400, { match: (call) => call.path.endsWith("/policy/resources") });
-  await assert.rejects(box.provision(scope, { scratch: { key: "partial-allocation" } }));
-  assert.ok(!fake.names().some((name) => name.includes("scratch")));
-});
-
-test("failed scratch initialization and deletion retain a safe retryable identity", async () => {
-  const box = make({ memoryMb: 4096 });
-  fake.failNext(400, { match: (call) => call.path.endsWith("/policy/resources") });
-  fake.failNext(400, { match: (call) => call.method === "DELETE" });
-  let pending: import("../src/sandbox/sandbox.ts").SandboxHandle | undefined;
-  await assert.rejects(box.provision(scope, { scratch: { key: "failed-rollback" } }), (error: Error) => {
-    assert.ok(error instanceof SandboxProvisionCleanupError);
-    pending = error.handle;
-    assert.equal(pending.backend, "sprites");
-    assert.ok(fake.names().includes(pending.id));
-    assert.ok(error.cause);
-    return true;
-  });
-  assert.ok(pending);
-  await box.teardown(pending, { destroy: true });
-  assert.ok(!fake.names().includes(pending.id));
 });

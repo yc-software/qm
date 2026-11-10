@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { JSDOM } from "jsdom";
-import { createServer } from "vite";
+import { testViteServer } from "./vite-server.ts";
 
 test("emoji completion converts names and accepts suggestions without sending", async () => {
   const dom = new JSDOM('<div id="root"></div>', { url: "http://localhost" });
@@ -18,7 +18,7 @@ test("emoji completion converts names and accepts suggestions without sending", 
     originals.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
     Object.defineProperty(globalThis, key, { configurable: true, value: dom.window[key] });
   }
-  const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  const server = await testViteServer();
   try {
     const { html, render } = await server.ssrLoadModule("lit");
     const { emojiCompletion } = await server.ssrLoadModule("/src/emoji-completion.ts");

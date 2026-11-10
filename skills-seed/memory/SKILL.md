@@ -61,6 +61,25 @@ wording with the admin before writing and keep personal facts out of it. A `403 
 memory writes require an org admin` means the user isn't one — say so rather than
 retrying (`GET $AGENT_API_URL/v1/admin/whoami` answers it definitively).
 
+## A member's own memory brain
+
+A member who runs their own gbrain can make it their personal memory, on a turn they sent
+(triggered turns are refused). Call the self-API as them:
+
+1. `GET $AGENT_API_URL/v1/memory/brain` returns what they have connected and `principalId`,
+   the id their gbrain must link to their gbrain member. On their gbrain they also need a
+   confidential client-credentials client that may attest an actor.
+2. `PUT $AGENT_API_URL/v1/memory/brain` with `{"url":"https://…/mcp","clientId":"…"}`
+   (optionally `label`). The URL must be public `https://`. Never ask for or
+   send the client secret: `clientSecret` is refused here.
+3. Mint the secret link for the returned `brain.id` (see the `secret-drop` skill). The form
+   shows them where their memory goes before they submit.
+4. `disabled` in the reply says why it isn't serving: `secret_missing` until they use the link,
+   `member_brains_off` when an org admin has turned members' brains off.
+
+Once it serves, recall and explicit writes for their personal memory also go to that brain,
+attested as them, and their notebook keeps working. `DELETE` disconnects it.
+
 ## Failure modes
 
 - "memory isn't available in this conversation" — this conversation's memory policy

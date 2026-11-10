@@ -1,6 +1,7 @@
 import { posix } from "node:path";
 import { asError, type DecisionBackend, type DecisionProvider, type DecisionQuestion } from "./decisions.ts";
 import { modelGatewayHeaders, type ModelGatewayTransportConfig } from "../model/provider-endpoints.ts";
+import { publicFetch, type AddressFetch } from "../util/network.ts";
 
 const MAX_RESPONSE_BYTES = 1_000_000;
 
@@ -61,7 +62,7 @@ function normalize(
 }
 
 async function postJson(
-  fetchImpl: typeof fetch,
+  fetchImpl: AddressFetch,
   url: string,
   headers: Record<string, string>,
   body: unknown,
@@ -149,13 +150,14 @@ export function createDecisionBackend(opts: {
   providers: (ids: string[]) => readonly DecisionProvider[] | Promise<readonly DecisionProvider[]>;
   gateway?: Pick<ModelGatewayTransportConfig, "url" | "apiKey" | "apiKeyHeader" | "actorKey">;
   credential: (slug: string) => Promise<{ host: string; enabled: boolean; headers: Record<string, string> } | null>;
-  fetch?: typeof fetch;
+  fetch?: AddressFetch;
 }): DecisionBackend {
-  const fetchImpl = opts.fetch ?? fetch;
-  const endpoint = async (provider: DecisionProvider): Promise<{ base: string; auth: Record<string, string> }> => {
+  const endpoint = async (
+    provider: DecisionProvider,
+  ): Promise<{ base: string; auth: Record<string, string>; send: AddressFetch }> => {
     if (!provider.baseUrl) {
       if (!opts.gateway) throw new Error(`decision provider ${provider.id}: no model gateway is configured`);
-      return { base: opts.gateway.url, auth: modelGatewayHeaders(opts.gateway, "decision") };
+      return { base: opts.gateway.url, auth: modelGatewayHeaders(opts.gateway, "decision"), send: opts.fetch ?? fetch };
     }
     const rec = await opts.credential(provider.credential!);
     if (!rec?.enabled)
@@ -165,7 +167,7 @@ export function createDecisionBackend(opts: {
       throw new Error(
         `decision provider ${provider.id}: credential ${provider.credential} is for ${rec.host}, not ${url.host}`,
       );
-    return { base: provider.baseUrl, auth: rec.headers };
+    return { base: provider.baseUrl, auth: rec.headers, send: opts.fetch ?? publicFetch };
   };
   return {
     async choose({ questions, state, model, signal }) {
@@ -178,12 +180,12 @@ export function createDecisionBackend(opts: {
         (p) => p.id === model.provider,
       );
       if (!provider) throw new Error(`decision provider ${model.provider} is not configured`);
-      const { base, auth } = await Promise.race([endpoint(provider), aborted]);
+      const { base, auth, send } = await Promise.race([endpoint(provider), aborted]);
       const keys = Object.keys(questions);
       const wire = PROTOCOLS[provider.protocol];
       const url = new URL(base);
       url.pathname = posix.join(url.pathname, wire.path);
-      const body = await postJson(fetchImpl, url.toString(), auth, wire.request(model.model, questions, state), signal);
+      const body = await postJson(send, url.toString(), auth, wire.request(model.model, questions, state), signal);
       const answers = wire.answers(body);
       return Object.fromEntries(
         keys.map((k) => {

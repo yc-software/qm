@@ -1,16 +1,8 @@
-import { item } from "./item-fixture.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { CoreSession } from "../src/core-bridge.ts";
-import {
-  ackKey,
-  descendantsOf,
-  peekLines,
-  subagentRows,
-  subagentSummary,
-  visibleSubagents,
-} from "../src/subagent-activity.ts";
-import { backgroundLabel, conversationBackground, rowIndicators } from "../src/session-list.ts";
+import { ackKey, descendantsOf, subagentRows, subagentSummary, visibleSubagents } from "../src/subagent-activity.ts";
+import { conversationBackground, rowIndicators } from "../src/session-list.ts";
 
 function row(id: string, parentSessionId?: string, extra: Partial<CoreSession> = {}): CoreSession {
   return {
@@ -65,18 +57,10 @@ test("descendants keep list order across parents and follow a replaced list", ()
   );
 });
 
-test("the server's running and waiting counts feed the sidebar and tab badge", () => {
+test("a waiting subagent lights the parent's awaiting dot but no background chip", () => {
   const rolled = list.map((s) => (s.id === "root" ? { ...s, subagents: { running: 2, waiting: 1 } } : s));
   assert.equal(rowIndicators(rolled[0]!, null).awaiting, true, "a child waiting on approval lights the parent");
-  assert.deepEqual(conversationBackground(rolled, "root", null), {
-    jobs: 0,
-    watches: 0,
-    crons: 0,
-    subagents: 3,
-    goal: false,
-    label: "2 subagents running · 1 subagent needs you",
-  });
-  assert.equal(backgroundLabel(1, 0, 0, 1)?.label, "1 subagent running · 1 background job running");
+  assert.equal(conversationBackground(rolled, "root", null), null, "subagents never light the background chip");
 });
 
 test("rows derive working, waiting, done and failed; done folds away, failed stays until acknowledged", () => {
@@ -127,24 +111,6 @@ test("a working subagent under an idle one moves up to the nearest shown ancesto
     ],
   );
   assert.equal(subagentSummary(rows), "3 subagents running");
-});
-
-test("peek shows the latest tool steps and message", () => {
-  const lines = peekLines(
-    [
-      item("UserMessage", { text: "go" }),
-      item("ToolCall", { tool: "sandbox", body: { action: "exec", command: "npm test" } }),
-      item("ToolResult", { tool: "sandbox", body: { ok: true } }),
-      item("AgentMessage", { variant: "narration", text: "Tests  pass.\nOpening PR" }),
-      item("ToolCall", { tool: "github" }),
-    ],
-    3,
-  );
-  assert.deepEqual(lines, [
-    { kind: "tool", text: "sandbox exec · npm test" },
-    { kind: "text", text: "Tests pass. Opening PR" },
-    { kind: "tool", text: "github" },
-  ]);
 });
 
 test("a working subagent's clock starts at its current run, not its creation", () => {

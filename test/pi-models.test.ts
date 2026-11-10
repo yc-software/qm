@@ -1,4 +1,4 @@
-import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
+import { MODEL_PROVIDERS, setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -10,7 +10,6 @@ import {
   onlyProvider,
   resolveModel,
   getRequiredModel,
-  MODEL_PROVIDERS,
   SELECTABLE_BASE_MODELS,
   contextTokenBudgetForModel,
   codexProviderModelId,
@@ -95,6 +94,7 @@ test("the curated catalog contains only current model families", () => {
     SELECTABLE_BASE_MODELS.map((model) => model.id),
     [
       "claude-opus-5-5",
+      "claude-fable-5-2",
       "claude-fable-5-1",
       "claude-fable-5",
       "claude-opus-5",
@@ -303,4 +303,11 @@ test("gpt-6.1-terra pricing, context and fast mode match OpenAI's model page", (
     },
     { input: 1, output: 5, cacheRead: 0.05, cacheWrite: 1.25 },
   );
+});
+
+test("Fable 5.2 always thinks adaptively and offers fast mode", () => {
+  const fable52 = getRequiredModel("claude-fable-5-2");
+  assert.equal(fable52.thinkingLevelMap?.off, null);
+  assert.equal((fable52.compat as { forceAdaptiveThinking?: boolean }).forceAdaptiveThinking, true);
+  assert.equal(modelSupportsFastMode("claude-fable-5-2"), true);
 });

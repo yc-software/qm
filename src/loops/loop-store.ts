@@ -17,6 +17,7 @@ import {
   type CreateTriggerInput,
 } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
+import type { ClaimedRow } from "../tenants/claim.ts";
 
 export interface CreateLoopInput extends CreateTriggerInput {
   name: string;
@@ -63,12 +64,14 @@ export interface LoopStore {
   create(input: CreateLoopInput): Promise<{ loop: Loop; created: boolean }>;
   get(id: string): Promise<Loop | null>;
   list(): Promise<Loop[]>;
+  claimTenants(): Promise<ClaimedRow[]>;
   byCron(cronId: string): Promise<Loop | null>;
   update(id: string, patch: LoopPatch): Promise<Loop | null>;
   editPlaybook(id: string, edit: PlaybookEdit): Promise<Loop | null>;
   setState(id: string, state: LoopState): Promise<Loop | null>;
   setHealth(id: string, health: LoopHealth, reason?: string, throttle?: boolean): Promise<Loop | null>;
   recordFireOutcome(id: string, outcome: FireOutcome): Promise<Loop | null>;
+  recordScan(id: string, startedAt: number): Promise<Loop | null>;
   delete(id: string): Promise<void>;
 }
 
@@ -190,6 +193,7 @@ export function createLoopStore(backing: DurableMap<Loop>): LoopStore {
     },
     get: (id) => backing.get(id),
     list: () => backing.all(),
+    claimTenants: () => backing.claimTenants(),
     async byCron(cronId) {
       return (await backing.all()).find((loop) => loop.cronId === cronId) ?? null;
     },
@@ -253,6 +257,7 @@ export function createLoopStore(backing: DurableMap<Loop>): LoopStore {
         lastFiredAt: Date.now(),
       }));
     },
+    recordScan: (id, startedAt) => merge(id, { lastScanAt: startedAt }),
     delete: (id) => backing.delete(id),
   };
 }

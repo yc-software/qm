@@ -35,7 +35,7 @@ for (const surface of ["web", "slack", "swarm"]) {
             actor: { externalId: "U1" },
             conversation: { kind: "dm", threadRef: `${surface}-context` },
             text,
-            ...(surface === "swarm" ? { triggered: true, securityScreenData: "assigned task" } : { liveActor: true }),
+            origin: surface === "swarm" ? { kind: "automation", screenData: "assigned task" } : { kind: "human" },
           }),
         });
         assert.equal(response.status, 200);

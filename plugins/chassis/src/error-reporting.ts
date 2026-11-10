@@ -1,10 +1,12 @@
 import type * as Sentry from "@sentry/node";
+import { AsyncLocalStorage } from "node:async_hooks";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { parseSampleRate, SPAN_STATUS_ERROR } from "./timing.ts";
 import { swallow } from "./errors.ts";
 
 export const FLUSH_MS = 2_000;
 const UNTRACED_PATHS = new Set(["/healthz", "/readyz"]);
-const INTERNAL_SERVICE_URLS = ["CORE_API_URL", "WEB_UI_UPSTREAM", "AUTH_BROKER_UPSTREAM"];
+const INTERNAL_SERVICE_URLS = ["CORE_API_URL", "AUTH_BROKER_UPSTREAM"];
 const KEPT_TRACE_DATA = new Set([
   "sentry.op",
   "sentry.origin",
@@ -47,8 +49,19 @@ const MAX_SENT_SPANS = 500;
 const IDLE_CHECKOUT_SECONDS = 0.001;
 const HTTP_METHODS = new Set("GET HEAD POST PUT PATCH DELETE OPTIONS CONNECT TRACE".split(" "));
 type SamplingContext = Parameters<NonNullable<Sentry.NodeOptions["tracesSampler"]>>[0];
+export const REQUEST_ID_HEADERS = ["fly-request-id", "render-request-id", "x-amzn-requestid", "x-request-id"];
 let client: typeof Sentry | undefined;
 let tracing = false;
+
+interface RequestContext {
+  surface: string;
+  method: string;
+  finished: boolean;
+  route?: string;
+  requestId?: string;
+}
+
+const activeRequest = new AsyncLocalStorage<RequestContext>();
 
 export interface TraceCarrier {
   sentryTrace: string;
@@ -246,6 +259,7 @@ export function initializeErrorReporting(
     initialScope: { tags: { service, deployment: env.SENTRY_DEPLOYMENT ?? env.ORG_ID ?? env.CORE_ORG_ID } },
     shutdownTimeout: FLUSH_MS,
   });
+  sdk.addEventProcessor(tagActiveRequest);
   client = sdk;
   tracing = traced;
   process.on("unhandledRejection", (reason: unknown) => {
@@ -267,7 +281,54 @@ export function reportBackendError(error: unknown, code?: string, extra?: Record
   });
 }
 
+function requestIdOf(req: IncomingMessage): string | undefined {
+  for (const name of REQUEST_ID_HEADERS) {
+    const value = req.headers[name];
+    if (typeof value === "string" && value) return value;
+  }
+  return undefined;
+}
+
+export function withRequestContext<T>(surface: string, req: IncomingMessage, res: ServerResponse, work: () => T): T {
+  const requestId = requestIdOf(req);
+  const request: RequestContext = {
+    surface,
+    method: firstWord(req.method, HTTP_METHODS) ?? "HTTP",
+    finished: false,
+    ...(requestId ? { requestId } : {}),
+  };
+  res.once("close", () => {
+    request.finished = true;
+  });
+  return activeRequest.run(request, work);
+}
+
+export function describeActiveRequest(): string | undefined {
+  const request = activeRequest.getStore();
+  if (!request) return undefined;
+  const route = request.route ? ` ${request.route}` : "";
+  const id = request.requestId ? ` (request id ${request.requestId})` : "";
+  const target = `${request.surface} ${request.method}${route}${id}`;
+  return request.finished ? `after ${target} finished` : `during ${target}`;
+}
+
+function tagActiveRequest<T extends { type?: string; tags?: Record<string, unknown> }>(event: T): T {
+  const request = activeRequest.getStore();
+  if (!request || event.type !== undefined) return event;
+  event.tags = {
+    ...event.tags,
+    "request.surface": request.surface,
+    "request.method": request.method,
+    "request.finished": request.finished,
+    ...(request.route ? { "request.route": request.route } : {}),
+    ...(request.requestId ? { "request.id": request.requestId } : {}),
+  };
+  return event;
+}
+
 export function nameRequest(method: string, route: string): void {
+  const request = activeRequest.getStore();
+  if (request) request.route = route;
   if (!client || !tracing) return;
   try {
     const active = client.getActiveSpan();

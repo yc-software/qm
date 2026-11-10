@@ -124,6 +124,7 @@ export function createPorterSandbox(opts: PorterSandboxOptions): Sandbox {
     egressMode: "proxy" | "open",
     volume?: { mountPath: string; id: string },
     kind: "scope" | "scratch" = "scope",
+    memoryGb?: number,
   ): Promise<BodyEntry> {
     const name = bodyName(slug);
     const sb = await client.sandboxes
@@ -134,12 +135,13 @@ export function createPorterSandbox(opts: PorterSandboxOptions): Sandbox {
         tags: { [SCOPE_TAG]: slug, [EGRESS_TAG]: egressMode, [KIND_TAG]: kind },
         ...(volume ? { volume_mounts: { [volume.mountPath]: volume.id } } : {}),
         ...(egressMode === "proxy" && egressProxyHost ? { egress: { allowed_destinations: [egressProxyHost] } } : {}),
+        ...(memoryGb ? { resources: { memory: `${memoryGb}Gi` } } : {}),
         ttl_seconds: ttlSec,
       })
       .catch((e) => {
         if (errMessage(e).includes("egress restriction is not available")) {
           throw new Error(
-            `porter sandbox ${name}: PORTER_SANDBOX_EGRESS_PROXY_URL is set but this cluster has egress restriction turned off, so Porter refuses to create the body at all — enable it on the cluster's sandbox-api system application or unset the proxy URL (docs/porter.md) (${errMessage(e)})`,
+            `porter sandbox ${name}: EGRESS_PROXY_URL is set but this cluster has egress restriction turned off, so Porter refuses to create the body at all — enable it on the cluster's sandbox-api system application or add porter to EGRESS_PROXY_EXEMPT_BACKENDS (docs/porter.md) (${errMessage(e)})`,
             { cause: e },
           );
         }
@@ -159,7 +161,7 @@ export function createPorterSandbox(opts: PorterSandboxOptions): Sandbox {
   async function ensureScopeBody(
     scope: string,
     egressMode: "proxy" | "open",
-    onStatus?: (text: string) => void,
+    { onStatus, memoryGb }: ProvisionOptions = {},
   ): Promise<{ name: string; coldStart: boolean }> {
     const slug = porterScopeSlug(prefix, scope);
     return provisionQueue(scope, () =>
@@ -183,7 +185,7 @@ export function createPorterSandbox(opts: PorterSandboxOptions): Sandbox {
           await retirePorterBody(existing.sb, true);
         }
         onStatus?.("Starting your computer…");
-        const ref = await createBody(slug, egressMode, { mountPath: homeDir, id: volume.id });
+        const ref = await createBody(slug, egressMode, { mountPath: homeDir, id: volume.id }, "scope", memoryGb);
         scopeByBody.set(ref.name, scope);
         return { name: ref.name, coldStart: volume.created };
       }),
@@ -228,6 +230,7 @@ export function createPorterSandbox(opts: PorterSandboxOptions): Sandbox {
     writablePersistence: "resident_disk",
     processSessions: true,
     egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
+    sizesMemory: true,
     spec: {
       os: "Debian 12 container on Porter Sandboxes — $HOME persists on a volume; paths outside $HOME reset when the sandbox rotates",
       runtimes: ["Node 24", "Python 3"],
@@ -284,7 +287,7 @@ export function createPorterSandbox(opts: PorterSandboxOptions): Sandbox {
       if (scratch) {
         ({ name, coldStart } = await ensureScratch(scratch.key, forceEgress ? "proxy" : "open"));
       } else {
-        ({ name, coldStart } = await ensureScopeBody(scope, forceEgress ? "proxy" : "open", provOpts?.onStatus));
+        ({ name, coldStart } = await ensureScopeBody(scope, forceEgress ? "proxy" : "open", provOpts));
       }
 
       const turnEnv = Object.fromEntries(
@@ -376,7 +379,7 @@ export function createPorterSandbox(opts: PorterSandboxOptions): Sandbox {
       return { machine, guestResponsive };
     },
 
-    async restartComputer(scopeId: string): Promise<void> {
+    async restartComputer(scopeId: string, memoryGb?: number): Promise<void> {
       const slug = porterScopeSlug(prefix, scopeId);
       return provisionQueue(scopeId, () =>
         advisoryLock.withLock(`porter-provision:${scopeId}`, async () => {
@@ -386,7 +389,7 @@ export function createPorterSandbox(opts: PorterSandboxOptions): Sandbox {
           bodies.delete(slug);
           for (const b of live) await retirePorterBody(b, true);
           const volume = await ensurePorterVolume(client, `${slug}-home`);
-          const ref = await createBody(slug, egressMode, { mountPath: homeDir, id: volume.id });
+          const ref = await createBody(slug, egressMode, { mountPath: homeDir, id: volume.id }, "scope", memoryGb);
           scopeByBody.set(ref.name, scopeId);
         }),
       );

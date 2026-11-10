@@ -5,8 +5,10 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
+import { runResultDelivery } from "../src/delivery/run-result-delivery.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { firstAttemptFailed } from "./support/settle.ts";
 import { completedSurfaceEnqueues, turnPostKeys } from "../src/core/orchestrator/turn-helpers.ts";
 import { type NewItem, storedItem } from "../src/sessions/items.ts";
 
@@ -24,20 +26,22 @@ function channelTurn(text: string, extra: Partial<TurnRequest> = {}): TurnReques
     deliveryTarget: "slack:C9:t1",
     surfaceTools: true,
     addressed: true,
-    liveActor: true,
+    origin: { kind: "human" },
     text,
     ...extra,
   };
 }
 
-test("a retried turn does not re-post: the same position dedups against the delivered row", async () => {
+test("a retried turn does not re-post: the same position dedups against the delivered row", async (t) => {
   const built = freshApp();
   const req = channelTurn("!post-lost-result deploy is done", { idempotencyKey: "dedup-retry-1" });
 
-  await assert.rejects(built.app.turn(req), /boom/);
+  await firstAttemptFailed(built, req);
   const afterFirst = await built.deliveries.pending("slack");
   assert.equal(afterFirst.length, 1, "the interrupted attempt already enqueued its post");
 
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  t.mock.timers.tick(61_000);
   const res = await built.app.turn(req);
   assert.equal(res.status, "silent", res.reason);
 
@@ -55,7 +59,6 @@ test("a resumed turn's NEW post after a completed one is delivered, not swallowe
   const built = freshApp();
   const req = channelTurn("!post-then-boom first update|second update", { idempotencyKey: "dedup-resume-1" });
 
-  await assert.rejects(built.app.turn(req), /boom/);
   const res = await built.app.turn(req);
   assert.equal(res.status, "silent", res.reason);
 
@@ -75,13 +78,11 @@ test("a retried automation fire (surface 'monitor') still seeds past its recorde
     actor,
     conversation: { kind: "channel", threadRef: "monitor:M1:t1", channelRef: "C9", audience: [actor] },
     surfaceTools: true,
-    triggered: true,
-    triggerDestination: { type: "slack", target: "slack:C9:t1" },
+    origin: { kind: "automation", destination: { type: "slack", target: "slack:C9:t1" } },
     text: "!post-then-boom monitor first|monitor second",
     idempotencyKey: "dedup-monitor-1",
   };
 
-  await assert.rejects(built.app.turn(req), /boom/);
   const res = await built.app.turn(req);
   assert.equal(res.status, "silent", res.reason);
 
@@ -144,4 +145,52 @@ test("turnPostKeys mints deterministic per-destination position keys and seeds p
   const seeded = turnPostKeys("run-1");
   seeded.seed(2);
   assert.equal(seeded.key(dest, seeded.take()), "post:run-1:slack:C1:100.1:2");
+});
+
+test("bound approval callbacks retain the caller key when the run store extends its dedup key", async () => {
+  const built = freshApp();
+  const request: TurnRequest = {
+    surface: "web",
+    actor,
+    conversation: { kind: "dm", threadRef: "web:U1:bound" },
+    deliveryTarget: "web:U1:bound",
+    deliveryWebhook: { binding: "binding", url: "https://receiver.example/qm" },
+    text: "continue",
+    idempotencyKey: "caller-action",
+    async: true,
+    approval: { requestId: "approval-1", approved: true },
+  };
+  const queued = await built.app.turn(request);
+  assert.equal(queued.status, "queued");
+  assert.ok(queued.runId);
+  const stored = await built.runs.get(queued.runId);
+  assert.ok(stored);
+  assert.notEqual(stored.dedupKey, request.idempotencyKey);
+  const delivery = runResultDelivery({ ...stored, status: "done", result: { status: "ok", reply: "done" } });
+  assert.equal(delivery?.provenance.sourceRequestId, request.idempotencyKey);
+});
+
+test("a scheduled bound turn returns the persisted run needed for its callback", async () => {
+  const built = freshApp();
+  const request: TurnRequest = {
+    surface: "cron",
+    actor,
+    conversation: { kind: "dm", threadRef: "cron:bound:fire" },
+    text: "hello",
+    idempotencyKey: "cron:bound:fire",
+    origin: {
+      kind: "automation",
+      destination: {
+        type: "webhook",
+        target: "web:U1:bound",
+        webhook: { binding: "binding", url: "https://receiver.example/qm" },
+      },
+    },
+  };
+  const result = await built.app.turn(request);
+  const replayed = await built.app.turn(request);
+  assert.equal(replayed.runId, result.runId);
+  assert.ok(result.runId);
+  const stored = await built.runs.get(result.runId);
+  assert.equal(stored?.result?.status, result.status);
 });

@@ -1,10 +1,24 @@
 import { html, nothing, render, type TemplateResult } from "lit";
-import { Box, Brain, Clock, Files, Folder, KeyRound, Repeat, Rocket, ShieldUser, Webhook, type IconNode } from "lucide";
+import {
+  Bot,
+  Box,
+  Brain,
+  Clock,
+  Files,
+  Folder,
+  KeyRound,
+  Repeat,
+  Rocket,
+  ShieldUser,
+  Webhook,
+  type IconNode,
+} from "lucide";
 import { deepLinkPath, isPlainLeftClick, UI_BASE } from "./deep-link";
 import { nextGridIndex } from "./grid-nav";
 import { setScopedSession } from "./session-scope";
 import { ADMIN_HOME_URL, appState, can, switchView } from "./shell";
 import { icon } from "./icons";
+import { personasState } from "./personas";
 import type { View } from "./shell-state";
 
 interface Destination {
@@ -39,6 +53,7 @@ export function destinations(): Destination[] {
     to("memory", Brain, "Memory", "What QM remembers about your work"),
     to("skills", Box, "Skills", "Reusable procedures QM can follow"),
   ];
+  if (personasState.enabled) list.push(to("personas", Bot, "Personas", "Reusable roles you can chat with"));
   if (can("loops")) list.push(to("loops", Repeat, "Loops", "Standing work QM keeps pushing forward"));
   if (can("admin")) {
     list.push({
@@ -52,10 +67,24 @@ export function destinations(): Destination[] {
   return list;
 }
 
+const SIDEBAR_VIEWS: ReadonlySet<View> = new Set<View>(["contexts", "deploys"]);
+
+type SidebarDestination = Destination & { view: View };
+
+const inSidebar = (d: Destination): d is SidebarDestination => d.view !== null && SIDEBAR_VIEWS.has(d.view);
+
+export function sidebarDestinations(): SidebarDestination[] {
+  return destinations().filter(inSidebar);
+}
+
+function browseDestinations(): Destination[] {
+  return destinations().filter((d) => !inSidebar(d));
+}
+
 export function openBrowse(): void {
   if (browseState.open) return;
   browseState.open = true;
-  const current = destinations().findIndex((d) => d.view === appState.currentView);
+  const current = browseDestinations().findIndex((d) => d.view === appState.currentView);
   browseState.sel = current >= 0 ? current : 0;
   draw();
   requestAnimationFrame(() => host?.querySelector<HTMLElement>(".browse-tile.selected")?.focus());
@@ -91,7 +120,7 @@ function go(d: Destination): void {
 }
 
 function onGridKeydown(e: KeyboardEvent): void {
-  const list = destinations();
+  const list = browseDestinations();
   if (e.key === "Escape") {
     e.preventDefault();
     closeBrowse();
@@ -150,7 +179,7 @@ function paletteTpl(): TemplateResult {
           <span class="browse-title">Browse</span>
           <span class="chat-search-kbd">esc</span>
         </div>
-        <div class="browse-grid" role="group" aria-label="Destinations">${destinations().map(tile)}</div>
+        <div class="browse-grid" role="group" aria-label="Destinations">${browseDestinations().map(tile)}</div>
       </div>
     </div>
   `;

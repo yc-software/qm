@@ -92,7 +92,7 @@ describe("agent conversations self-API", async () => {
   });
 
   it("new sessions and forks seeded by a person's turn keep that person's origin and provenance", async () => {
-    const source = await built.runs.latestForThread("web:U1:c1");
+    const source = await built.runs.list({ threadRef: "web:U1:c1", limit: 1 }).then(([run]) => run);
     const provenance = {
       origin: { kind: "human" as const, messageTs: "1700000000.000100" },
       sessionSenderId: mineId,

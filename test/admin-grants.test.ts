@@ -9,7 +9,12 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { testAdminGrantStore } from "./support/test-database.ts";
+import { testAdminGrantStore, testDatabaseUrl, testUsers } from "./support/test-database.ts";
+import { createPostgresUserStore } from "../src/identity/user-store.ts";
+import { TEST_TENANT } from "./support/test-tenant.ts";
+import { withTenant } from "../src/tenants/context.ts";
+
+const tenant = withTenant(TEST_TENANT, (t) => t);
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-grants-")) }));
@@ -172,13 +177,14 @@ test("the last-admin guard counts one person's case-variant grants as ONE admin"
 
 test("canAdminister agrees with adminStatusOf: a cased grant admits the canonical actor", async () => {
   const { createAdminService } = await import("../src/admin/admin-service.ts");
-  const svc = createAdminService(testAdminGrantStore());
+  const svc = createAdminService(testAdminGrantStore(), { users: testUsers() });
   await svc.createGrant(
+    tenant,
     { id: "admin-alice", type: "internal" },
     { principalId: "Jordan@Acme.test", role: "org_admin", scopeId: "org:default-org" },
   );
-  assert.equal(await svc.canAdminister({ id: "jordan@acme.test", type: "internal" }, "org:default-org"), true);
-  assert.equal(await svc.canAdminister({ id: "casey@acme.test", type: "internal" }, "org:default-org"), false);
+  assert.equal(await svc.canAdminister(tenant, { id: "jordan@acme.test", type: "internal" }, "org:default-org"), true);
+  assert.equal(await svc.canAdminister(tenant, { id: "casey@acme.test", type: "internal" }, "org:default-org"), false);
 });
 
 test("a non-admin cannot revoke (403)", async () => {
@@ -212,4 +218,30 @@ test("the last org admin cannot be revoked (400 lock-out guard)", async () => {
   } finally {
     await s.close();
   }
+});
+
+test("granting admin puts the person on the roster first, so a failed roster write grants nothing", async () => {
+  const { createAdminService } = await import("../src/admin/admin-service.ts");
+  const svc = createAdminService(testAdminGrantStore(), { users: testUsers() });
+  const admin = { id: "admin-alice", type: "internal" as const };
+  await svc.createGrant(tenant, admin, { principalId: "new-admin", role: "org_admin", scopeId: "org:default-org" });
+  assert.equal((await svc.users.get("new-admin"))?.source, "admin");
+
+  const failing = createAdminService(testAdminGrantStore(), {
+    users: {
+      ...createPostgresUserStore(testDatabaseUrl()),
+      record: async () => {
+        throw new Error("store down");
+      },
+    },
+  });
+  await assert.rejects(
+    failing.createGrant(tenant, admin, { principalId: "other-admin", role: "org_admin", scopeId: "org:default-org" }),
+    /store down/,
+  );
+  assert.equal(
+    (await failing.adminStatusOf(tenant, { id: "other-admin", type: "internal" })).isAdmin,
+    false,
+    "the person is recorded first, so a failed record grants nothing",
+  );
 });

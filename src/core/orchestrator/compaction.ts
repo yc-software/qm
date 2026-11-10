@@ -21,15 +21,20 @@ import { waitForNoRunningRun } from "../../runs/run-store.ts";
 import type { OrchestratorDeps } from "./types.ts";
 import type { Item } from "../../sessions/items.ts";
 import { countTokens } from "../../util/tokens.ts";
+import type { SessionRoute } from "../../agent/agent.ts";
 
 const MAX_CONTEXT_TOKENS = 120_000;
 const KEEP_RECENT_TOKEN_FRACTION = 0.6;
 const DOCUMENT_TOKEN_FRACTION = 0.5;
+const RECENT_NOTICE =
+  "[Context reduced without a new summary. Earlier entries are excluded, not deleted. Use history to reopen missing requests and tool calls; history does not return tool results. Check actual state before repeating actions whose outcomes are missing.]";
+const SAVED_SUMMARY = "\n\nLast saved summary (not updated):\n";
 
 interface Summarized {
   text: string;
   throughSeq: number;
   mode?: "recent";
+  savedSummary?: string;
 }
 
 interface CompactionInput {
@@ -38,7 +43,7 @@ interface CompactionInput {
   visibleHistory: Item[];
   scopeId: string;
   actorId: string;
-  model?: string;
+  route?: SessionRoute;
   cancel?: AbortSignal;
   reservedTokens?: number;
 }
@@ -51,19 +56,19 @@ export interface CompactionContext {
     runLeaseToken?: string;
     scopeId: string;
     actorId: string;
-    model?: string;
+    route?: SessionRoute;
   }): void;
-  documentTokenBudget(scopeId: string, model?: string): number;
+  documentTokenBudget(model?: string): number;
 }
 
 export function createCompaction(deps: OrchestratorDeps): CompactionContext {
-  const tokenBudgetFor = (scopeLabel?: string, model?: string): number =>
-    deps.maxContextTokens ?? deps.agent.contextTokenBudget?.(scopeLabel, model) ?? MAX_CONTEXT_TOKENS;
-  const documentTokenBudget = (scopeId: string, model?: string): number =>
-    Math.floor(tokenBudgetFor(scopeId, model) * DOCUMENT_TOKEN_FRACTION);
-  const historyBudgetFor = (input: { scopeId: string; model?: string; reservedTokens?: number }): number => {
-    const total = tokenBudgetFor(input.scopeId, input.model);
-    const reserved = Math.min(Math.max(0, input.reservedTokens ?? 0), documentTokenBudget(input.scopeId, input.model));
+  const tokenBudgetFor = (model?: string): number =>
+    deps.maxContextTokens ?? deps.agent.contextTokenBudget?.(model) ?? MAX_CONTEXT_TOKENS;
+  const documentTokenBudget = (model?: string): number => Math.floor(tokenBudgetFor(model) * DOCUMENT_TOKEN_FRACTION);
+  const historyBudgetFor = (input: { route?: SessionRoute; reservedTokens?: number }): number => {
+    const model = input.route?.runtime?.modelId;
+    const total = tokenBudgetFor(model);
+    const reserved = Math.min(Math.max(0, input.reservedTokens ?? 0), documentTokenBudget(model));
     return Math.max(1, total - reserved);
   };
 
@@ -84,7 +89,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
 
   async function summarizeForCompaction(
     input: Omit<CompactionInput, "writer">,
-    recoverOnFailure = false,
+    onFailure?: (reason: string) => void,
   ): Promise<Summarized | null> {
     if (isManagedGroupScope(input.scopeId)) return null;
     if (!deps.agent.compactHistory) return null;
@@ -97,6 +102,8 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     let text: string;
     try {
       const raw = await deps.agent.compactHistory({
+        ...input.route,
+        scopeLabel: input.scopeId as ScopeId,
         session: input.session,
         history: plan.toSummarize,
         recordModelCall: (rec) => {
@@ -106,8 +113,8 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
       text = validateCompactSummary(raw);
     } catch (error) {
       input.cancel?.throwIfAborted();
-      if (!recoverOnFailure || (error instanceof Error && error.name === "AbortError")) throw error;
-      deps.errors?.record(
+      if (!onFailure || (error instanceof Error && error.name === "AbortError")) throw error;
+      deps.errors.record(
         {
           category: "turn",
           code: "compaction_summary_failed",
@@ -117,6 +124,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
         },
         error,
       );
+      onFailure(errMessage(error));
       return null;
     }
     input.cancel?.throwIfAborted();
@@ -131,23 +139,14 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     writer: SessionWriter;
     summarized: Summarized;
   }): Promise<Item> {
-    const { text, throughSeq, mode } = input.summarized;
+    const { text, throughSeq, mode, savedSummary } = input.summarized;
     const summary = await deps.sessions.append(input.writer, {
       kind: "ContextCompaction",
       text,
       throughSeq,
-      body: mode ? { mode } : {},
+      body: { ...(mode ? { mode } : {}), ...(savedSummary ? { savedSummary } : {}) },
     });
-    await deps.agent.resetSession?.(input.session.id);
     return summary;
-  }
-
-  async function applyCompaction(input: CompactionInput): Promise<Item[] | null> {
-    const summarized = await summarizeForCompaction(input, true);
-    if (!summarized) return null;
-    const summary = await writeCompaction({ ...input, summarized });
-    const recent = input.visibleHistory.filter((entry) => entry.seq > summarized.throughSeq && !contextSummary(entry));
-    return boundRecent([summary, ...recent], historyBudgetFor(input));
   }
 
   async function compactContextIfNeeded(input: CompactionInput): Promise<Item[]> {
@@ -155,23 +154,29 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     if (!overBudgetFraction(input.visibleHistory, maxContextTokens, COMPACT_HARD_FRACTION)) {
       return input.visibleHistory;
     }
-    const rebuilt = await applyCompaction(input);
-    return (
-      rebuilt ??
-      (!deps.agent.compactHistory || isManagedGroupScope(input.scopeId)
-        ? boundRecent(input.visibleHistory, maxContextTokens)
-        : compactRecent(input))
-    );
+    let failure: string | undefined;
+    const summarized = await summarizeForCompaction(input, (reason) => {
+      failure = reason;
+    });
+    if (summarized) {
+      const summary = await writeCompaction({ ...input, summarized });
+      const recent = input.visibleHistory.filter(
+        (entry) => entry.seq > summarized.throughSeq && !contextSummary(entry),
+      );
+      return boundRecent([summary, ...recent], maxContextTokens);
+    }
+    return !deps.agent.compactHistory || isManagedGroupScope(input.scopeId)
+      ? boundRecent(input.visibleHistory, maxContextTokens)
+      : compactRecent(input, failure);
   }
 
-  async function compactRecent(input: CompactionInput): Promise<Item[]> {
+  async function compactRecent(input: CompactionInput, failure?: string): Promise<Item[]> {
     input.cancel?.throwIfAborted();
     const budget = Math.floor(historyBudgetFor(input) * keepRecentTokenFraction);
     const prior = input.visibleHistory.findLast((entry) => contextSummary(entry));
     const rest = input.visibleHistory.filter((entry) => !contextSummary(entry));
-    const notice =
-      "[Context reduced without a new summary. Earlier entries are excluded, not deleted. Use history to reopen missing requests and tool calls; history does not return tool results. Check actual state before repeating actions whose outcomes are missing.]";
-    const markerTokens = countTokens(`${notice}\n\nLast saved summary (not updated):\n`);
+    const header = failure ? `${RECENT_NOTICE}\nThe summary call failed: ${failure}` : RECENT_NOTICE;
+    const markerTokens = countTokens(`${header}${SAVED_SUMMARY}`);
     let remaining = Math.max(0, budget - markerTokens);
     let start = rest.length;
     while (start > 0) {
@@ -192,10 +197,11 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     const recent = rest.slice(start);
     remaining = budget - markerTokens - estimateHistoryTokens(recent);
     const includedPrior = prior && estimateItemTokens(prior) <= remaining ? prior : undefined;
-    const priorText = includedPrior ? contextSummary(includedPrior)!.text : undefined;
-    let text = notice;
-    if (priorText)
-      text = priorText.startsWith(notice) ? priorText : `${notice}\n\nLast saved summary (not updated):\n${priorText}`;
+    const savedSummary =
+      includedPrior?.body.mode === "recent"
+        ? (includedPrior.body.savedSummary as string | undefined)
+        : includedPrior && contextSummary(includedPrior)!.text;
+    const text = savedSummary ? `${header}${SAVED_SUMMARY}${savedSummary}` : header;
     const window = await deps.sessions.getContextWindow(input.session.id);
     const boundary = window.items.reduce(
       (seq, item) => Math.max(seq, item.kind === "ContextCompaction" ? (item.throughSeq ?? -1) : -1),
@@ -209,6 +215,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
         text,
         throughSeq,
         mode: "recent",
+        ...(savedSummary ? { savedSummary } : {}),
       },
     });
     return [summary, ...recent];
@@ -224,12 +231,12 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     runLeaseToken?: string;
     scopeId: string;
     actorId: string;
-    model?: string;
+    route?: SessionRoute;
   }): void {
     if (compactionPending.has(input.sessionId)) return;
     compactionPending.add(input.sessionId);
     const recordFailure = (e: unknown) =>
-      deps.errors?.record(
+      deps.errors.record(
         {
           category: "turn",
           code: "background_compaction_failed",
@@ -244,7 +251,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
       try {
         const session = await deps.sessions.get(input.sessionId);
         if (!session) return;
-        const maxContextTokens = tokenBudgetFor(input.scopeId, input.model);
+        const maxContextTokens = tokenBudgetFor(input.route?.runtime?.modelId);
         const items = (await deps.sessions.getContextWindow(input.sessionId)).items;
         const history = forModelContext(items);
         if (!overBudgetFraction(history, maxContextTokens, COMPACT_SOFT_FRACTION)) return;
@@ -254,7 +261,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
           visibleHistory: history,
           scopeId: input.scopeId,
           actorId: input.actorId,
-          ...(input.model ? { model: input.model } : {}),
+          ...(input.route ? { route: input.route } : {}),
         });
         if (!summarized) return;
         if (deps.runs && !(await waitForNoRunningRun(deps.runs, session.threadRef, WRITE_WAIT_MS, input.runLeaseToken)))

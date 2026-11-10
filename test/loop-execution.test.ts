@@ -38,6 +38,7 @@ for (const checkResult of ["passed", "failed", "missing"] as const) {
       items,
       outputs,
       grants,
+      files: built.files,
       trigger: {
         identity: built.identity,
         deliveries: built.deliveries,

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { loadConfig } from "../src/config.ts";
 import { createAgent, agentConfigOptions } from "../src/agent/agent-run.ts";
+import { configRouteOptions, createModelRoutes } from "../src/model/model-route.ts";
 import { codexSubscriptionModelId } from "../src/model/pi-models.ts";
 
 const subscriptionToken = `e30.${Buffer.from(
@@ -20,10 +21,12 @@ function recordFetch(t: TestContext, headers: Headers[] = []): string[] {
 
 const companyAgent = (keys: Record<string, string>) =>
   createAgent({
-    modelId: "gpt-5.6-sol",
+    routes: createModelRoutes({
+      modelId: "gpt-5.6-sol",
+      resolveProviderKeys: async () => keys,
+      companyModelId: codexSubscriptionModelId,
+    }),
     captureRequests: false,
-    resolveProviderKeys: async () => keys,
-    companyModelId: codexSubscriptionModelId,
   });
 
 test("company utility calls on a plain OpenAI id are served by the ChatGPT subscription, never the metered key", async (t) => {
@@ -48,9 +51,8 @@ test("an unavailable company ChatGPT token fails closed instead of falling back 
 test("without a company subscription a plain OpenAI id stays metered", async (t) => {
   const urls = recordFetch(t);
   const agent = createAgent({
-    modelId: "gpt-5.6-sol",
+    routes: createModelRoutes({ modelId: "gpt-5.6-sol", resolveProviderKeys: async () => ({ openai: "sk-metered" }) }),
     captureRequests: false,
-    resolveProviderKeys: async () => ({ openai: "sk-metered" }),
   });
   await assert.rejects(async () => agent.oneShot?.("system", "hi"), /offline test response/);
   assert.ok(
@@ -64,9 +66,12 @@ test("a subscription-only deployment's default utility model is served by the Ch
   const config = { ...loadConfig({}), codexAuthCredential: "cred-1" };
   const agent = createAgent({
     ...agentConfigOptions(config),
+    routes: createModelRoutes({
+      ...configRouteOptions(config),
+      resolveProviderKeys: async () => ({ "openai-codex": subscriptionToken }),
+      companyModelId: codexSubscriptionModelId,
+    }),
     captureRequests: false,
-    resolveProviderKeys: async () => ({ "openai-codex": subscriptionToken }),
-    companyModelId: codexSubscriptionModelId,
   });
   await assert.rejects(async () => agent.oneShot?.("system", "hi"), /offline test response/);
   assert.ok(

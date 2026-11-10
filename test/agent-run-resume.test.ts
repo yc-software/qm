@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createAgent } from "../src/agent/agent-run.ts";
+import { createModelRoutes } from "../src/model/model-route.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { storedItem, type Item } from "../src/sessions/items.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
@@ -37,7 +38,7 @@ const scope = "personal:tester" as ScopeId;
 const NOTE = "(system note: your previous attempt at the request above was paused mid-turn and has resumed.)";
 
 test("the agent re-runs a retry-safe interrupted call before the model sees the resumed turn", async () => {
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
   const entries: Item[] = [];
   const queries: string[] = [];
   const requests: Array<Array<{ role: string; content: Array<Record<string, unknown>> | string }>> = [];

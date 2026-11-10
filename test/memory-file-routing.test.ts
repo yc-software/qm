@@ -93,3 +93,13 @@ test("non-memory writes still go to the computer", async () => {
   assert.equal(sandboxFiles.get("notes/todo.txt"), "buy milk");
   assert.equal(getDurable(), "");
 });
+
+test("a write whose path holds a long run of slashes returns promptly", async () => {
+  const { ctx, sandboxFiles } = agent();
+  const path = `notes${"/".repeat(100_000)}todo.txt`;
+  const started = performance.now();
+  await ctx.write(path, "buy milk");
+  const elapsedMs = performance.now() - started;
+  assert.equal(sandboxFiles.get(path), "buy milk");
+  assert.ok(elapsedMs < 1_000, `write took ${Math.round(elapsedMs)} ms`);
+});

@@ -27,12 +27,11 @@ const CH = "CBUILT";
 const CH_OTHER = "CSHARED";
 
 async function fixture() {
-  const deployStore = createDeployStore(
-    testDeployBackings({ git: { repoRoot: mkdtempSync(join(tmpdir(), "createdin-repo-")) } }),
-  );
+  const backings = testDeployBackings({ git: { repoRoot: mkdtempSync(join(tmpdir(), "createdin-repo-")) } });
+  const deployStore = createDeployStore(backings);
   const acl: AclStore = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const directory: DirectoryStore = createPostgresDirectoryStore(testDatabaseUrl());
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const sessions = createPostgresSessionStore(backings.databaseUrl);
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore,

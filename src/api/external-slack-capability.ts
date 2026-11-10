@@ -11,8 +11,9 @@ export async function externalSlackCapabilityAllowed(
   deps: Pick<ServerDeps, "runs" | "acl" | "externalSlackPolicies">,
 ): Promise<boolean> {
   const run = await currentExternalSlackRun(claims, deps);
-  if (!run?.request.externalSlack || !deps.acl) return false;
-  const allowed = new Set(run.request.externalSlack.serviceCredentials);
+  const origin = run?.request.surfaceOrigin;
+  if (!run || origin?.audience !== "external" || !deps.acl) return false;
+  const allowed = new Set(origin.access.serviceCredentials);
   const grants = await deps.acl.grantsOfKind(
     "service-cred",
     run.request.conversation.audience,

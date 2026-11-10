@@ -17,6 +17,7 @@ import type { ConnectorTokenStore } from "../src/credentials/keychain.ts";
 import type { SkillStore } from "../src/skills/skill-store.ts";
 import { scopeId, type Conversation, type Principal } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { orchestratorTestDeps } from "./support/orchestrator-deps.ts";
 import { FEATURE_NAMES } from "../src/feature-flags.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
@@ -73,6 +74,7 @@ async function buildOrchestrator(
     branding?: OrgBranding;
     brandingDefault?: OrgBranding;
     config?: ReturnType<typeof testConfigStore>;
+    sessions?: OrchestratorDeps["sessions"];
   } = {},
 ) {
   const config = opts.config ?? testConfigStore(ORG);
@@ -98,12 +100,12 @@ async function buildOrchestrator(
   }
 
   return createOrchestrator({
-    ...singleProcessDeps(),
+    ...orchestratorTestDeps(),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     sessionSyscalls: opts.sessionSyscalls,
     featureFlags: opts.featureFlags,
     resolution,
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    sessions: opts.sessions ?? createPostgresSessionStore(testDatabaseUrl()),
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: fakeSandbox(),
     auditLog,
@@ -280,33 +282,28 @@ test("shared-core platform guidance reaches both the DM and the spine prompt", a
   }
 });
 
-test("session search guidance follows the callable surface and feature gate", async () => {
+test("session search guidance follows the callable surface", async () => {
   for (const surface of ["web", "slack", "monitor"] as const) {
-    for (const enabled of [false, true]) {
-      for (const destination of [
-        undefined,
-        { type: "principal" as const, target: "U1", audienceScopeId: scopeId("personal", "U1"), onBehalfOf: "U1" },
-      ]) {
-        const orchestrator = await buildOrchestrator({
-          sessionSyscalls: { forTurn: () => ({}) } as unknown as OrchestratorDeps["sessionSyscalls"],
-          featureFlags: {
-            enabledFor: async () => new Set(enabled ? FEATURE_NAMES : []),
-          } as unknown as OrchestratorDeps["featureFlags"],
-        });
-        const prompt = await sysprompt(
-          orchestrator,
-          slackDm("", {
-            surface,
-            ...(destination
-              ? { origin: { kind: "automation", source: "cron", destination } as OrchestratorInput["origin"] }
-              : {}),
-          }),
-        );
-        assert.equal(
-          prompt.includes("`sessions` search for other accessible conversations"),
-          surface === "web" && enabled && !destination,
-        );
-      }
+    for (const destination of [
+      undefined,
+      { type: "principal" as const, target: "U1", audienceScopeId: scopeId("personal", "U1"), onBehalfOf: "U1" },
+    ]) {
+      const orchestrator = await buildOrchestrator({
+        sessionSyscalls: { forTurn: () => ({}) } as unknown as OrchestratorDeps["sessionSyscalls"],
+      });
+      const prompt = await sysprompt(
+        orchestrator,
+        slackDm("", {
+          surface,
+          ...(destination
+            ? { origin: { kind: "automation", source: "cron", destination } as OrchestratorInput["origin"] }
+            : {}),
+        }),
+      );
+      assert.equal(
+        prompt.includes("`sessions` search for other accessible conversations"),
+        surface === "web" && !destination,
+      );
     }
   }
 });
@@ -498,4 +495,50 @@ test("a guidance change from another session is announced on this session's next
     /<environment>[\s\S]*In a different session \(1aedf13\) the user updated their standing guidance: "Never cite a PR by bare number\."\. Follow it moving forward but no need to directly mention you're doing so\.[\s\S]*<\/environment>/,
   );
   assert.doesNotMatch(await sysprompt(orch, slackDm("")), /updated their standing guidance/);
+});
+
+test("the live-subagents note rides wake turns and the first turn after a compaction, never an ordinary turn", async () => {
+  const conversation: Conversation = { kind: "dm", threadRef: "dm:U1:roster", audience: [actor] };
+  let roster = "Subagents opened from this conversation that are still working or blocked:\n- builder (s1) — running";
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const orchestrator = await buildOrchestrator({
+    sessions,
+    sessionSyscalls: {
+      forTurn: () => ({
+        open: async () => ({ ok: false, message: "unused" }),
+        write: async () => ({ ok: false, message: "unused" }),
+        read: async () => ({ ok: true, mode: "children", children: [] }),
+        liveSubagents: async () => roster,
+      }),
+    },
+    featureFlags: {
+      list: async () => [],
+      get: async () => null,
+      enabled: async () => true,
+      enabledFor: async () => new Set(FEATURE_NAMES),
+      setEnabled: async () => {
+        throw new Error("unused");
+      },
+    },
+  });
+  const destination = {
+    type: "principal" as const,
+    target: "U1",
+    audienceScopeId: scopeId("personal", "U1"),
+    onBehalfOf: "U1",
+  };
+  const wake = slackDm("", { conversation, origin: { kind: "automation", destination } });
+  const ordinary = slackDm("", { conversation });
+  const noted = (prompt: string) => /<environment>[\s\S]*- builder \(s1\) — running[\s\S]*<\/environment>/.test(prompt);
+
+  assert.equal(noted(await sysprompt(orchestrator, ordinary)), false, "an ordinary turn carries no roster");
+  assert.equal(noted(await sysprompt(orchestrator, wake)), true, "a wake turn carries the roster");
+  const session = await sessions.getByThread(conversation.threadRef);
+  assert.ok(session);
+  const throughSeq = (await sessions.latestItemSeq(session.id)) - 1;
+  await sessions.append({ sessionId: session.id }, { kind: "ContextCompaction", throughSeq, text: "summary" });
+  assert.equal(noted(await sysprompt(orchestrator, ordinary)), true, "the first turn after a compaction carries it");
+  assert.equal(noted(await sysprompt(orchestrator, ordinary)), false, "later ordinary turns do not");
+  roster = "";
+  assert.doesNotMatch(await sysprompt(orchestrator, wake), /still working or blocked/, "no note when no child is live");
 });

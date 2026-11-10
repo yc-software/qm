@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { charForName, EMOJI_ROWS, filterEmoji } from "../src/emoji-picker.ts";
-import { createServer } from "vite";
+import { testViteServer } from "./vite-server.ts";
 
 test("Slack shortcodes resolve to the emoji users see in Slack", () => {
   const expected: Record<string, string> = {
@@ -49,7 +49,7 @@ test("search matches names and aliases in Slack's order, ignoring colons", () =>
 });
 
 test("the web bundle's prebuilt emoji table resolves every shortcode exactly as the full dataset does", async () => {
-  const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  const server = await testViteServer();
   try {
     const bundled = await server.ssrLoadModule("/src/emoji-picker.ts");
     const table = await server.transformRequest("/src/emoji-table.ts", { ssr: true });

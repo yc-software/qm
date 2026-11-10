@@ -5,6 +5,7 @@ import { connect } from "node:net";
 import type { AddressInfo } from "node:net";
 import { format } from "node:util";
 import { verifyPortalIdentity } from "../../chassis/src/portal-identity.ts";
+import { startWithFakeCore, type CoreHit } from "./fake-core.ts";
 
 let whoamiMode: "ok" | "down" | "fail-once" | "malformed" = "ok";
 let whoamiRequests = 0;
@@ -26,18 +27,14 @@ const upstream = createServer((req: IncomingMessage, res) => {
     res.writeHead(200, { "content-type": "application/json" });
     return void res.end(JSON.stringify({ isAdmin: typeof actor === "string" && actor.startsWith("U-admin") }));
   }
-  if ((req.url ?? "").startsWith("/api/echo-cookie")) {
-    res.writeHead(200, { "content-type": "application/json" });
-    return void res.end(JSON.stringify({ cookie: req.headers.cookie ?? null }));
-  }
-  if ((req.url ?? "").startsWith("/api/reset-mid-stream")) {
+  if ((req.url ?? "").startsWith("/d/app/reset-mid-stream")) {
     res.writeHead(200, { "content-type": "application/octet-stream", "content-length": "1000000" });
     res.write("partial");
     setTimeout(() => res.destroy(), 10);
     return;
   }
-  if ((req.url ?? "").startsWith("/api/upstream-reset")) return req.socket.destroy();
-  if ((req.url ?? "").startsWith("/api/upstream-unavailable")) {
+  if ((req.url ?? "").startsWith("/d/app/upstream-reset")) return req.socket.destroy();
+  if ((req.url ?? "").startsWith("/d/app/upstream-unavailable")) {
     res.writeHead(503, { "content-type": "application/json" });
     return res.end(JSON.stringify({ error: "unavailable" }));
   }
@@ -48,44 +45,25 @@ await new Promise<void>((r) => upstream.listen(0, r));
 const upstreamUrl = `http://localhost:${(upstream.address() as AddressInfo).port}`;
 
 const PUBLIC = "http://portal.test";
-process.env.PORTAL_PUBLIC_URL = PUBLIC;
+process.env.PUBLIC_WEB_URL = PUBLIC;
 process.env.PORTAL_SESSION_SECRET = "proxy-errors-test-portal-secret";
 process.env.CORE_SIGNING_SECRET = "proxy-errors-test-core-secret";
 process.env.PORTAL_IDENTITY_SECRET = "proxy-errors-test-identity-secret";
-process.env.PORTAL_DEPLOYMENTS_ENABLED = "1";
-process.env.WEB_UI_UPSTREAM = upstreamUrl;
 process.env.CORE_API_URL = upstreamUrl;
 
-const { server, consumeState, consumedStates } = await import("../src/index.ts");
+const { consumeState, consumedStates } = await import("../src/index.ts");
 const { deriveKey, seal } = await import("../src/session.ts");
-await new Promise<void>((r) => server.listen(0, r));
-const port = (server.address() as AddressInfo).port;
-const base = `http://localhost:${port}`;
+const { base, port, close } = await startWithFakeCore();
 
 const sessionKey = deriveKey("proxy-errors-test-portal-secret", "portal.session.v1");
-function sessionCookie(sub: string, name?: string): string {
+function sessionCookie(sub: string): string {
   const now = Math.floor(Date.now() / 1000);
-  return `portal_session=${encodeURIComponent(seal({ k: "session", sub, org: "acme", iat: now, exp: now + 3600, ...(name ? { name } : {}) }, sessionKey))}`;
+  return `portal_session=${encodeURIComponent(seal({ k: "session", sub, org: "acme", iat: now, exp: now + 3600 }, sessionKey))}`;
 }
 
 test.after(() => {
-  server.close();
+  close();
   upstream.close();
-});
-
-test("the portal forwards the signed-in user's Slack display name to the web surface", async () => {
-  const r = await fetch(`${base}/web-ui/api/echo-cookie`, {
-    headers: { cookie: sessionCookie("ada@acme.com", "Ada Lovelace") },
-  });
-  const body = (await r.json()) as { cookie: string | null };
-  assert.match(body.cookie ?? "", /webuiuser=ada%40acme\.com/);
-  assert.match(body.cookie ?? "", /webuiuser_name=Ada%20Lovelace/);
-});
-
-test("no display name on the session means no name cookie is forwarded", async () => {
-  const r = await fetch(`${base}/web-ui/api/echo-cookie`, { headers: { cookie: sessionCookie("ada@acme.com") } });
-  const body = (await r.json()) as { cookie: string | null };
-  assert.doesNotMatch(body.cookie ?? "", /webuiuser_name=/);
 });
 
 test("deployment proxy binds source auth and portal identity to the signed-in principal", async () => {
@@ -103,7 +81,7 @@ test("deployment proxy binds source auth and portal identity to the signed-in pr
 test("an upstream reset mid-response does not crash the portal", async (t) => {
   const errors = t.mock.method(console, "error", () => {});
   await assert.rejects(async () => {
-    const r = await fetch(`${base}/web-ui/api/reset-mid-stream`, { headers: { cookie: sessionCookie("U1") } });
+    const r = await fetch(`${base}/d/app/reset-mid-stream`, { headers: { cookie: sessionCookie("U1") } });
     await r.text();
   }, "the truncated body should surface as a fetch error to the client");
   const alive = await fetch(`${base}/healthz`);
@@ -116,7 +94,7 @@ test("a client abort mid-request-body does not crash the portal", async (t) => {
   await new Promise<void>((resolve) => {
     const s = connect(port, "localhost", () => {
       s.write(
-        `POST /web-ui/api/x HTTP/1.1\r\n` +
+        `POST /d/app/x HTTP/1.1\r\n` +
           `host: localhost\r\n` +
           `origin: ${PUBLIC}\r\n` +
           `cookie: ${sessionCookie("U1")}\r\n` +
@@ -139,8 +117,8 @@ test("a client abort mid-request-body does not crash the portal", async (t) => {
 test("completed portal failures log status, method and duration once without request data", async (t) => {
   const errors = t.mock.method(console, "error", () => {});
   for (const [path, status, method] of [
-    ["/web-ui/api/upstream-unavailable", 503, "GET"],
-    ["/web-ui/api/upstream-reset", 502, "GET"],
+    ["/d/app/upstream-unavailable", 503, "GET"],
+    ["/d/app/upstream-reset", 502, "GET"],
     ["/auth/admin-login", 503, "GET"],
     ["/auth/admin-login", 503, "POST"],
   ] as const) {
@@ -166,7 +144,13 @@ test("completed portal failures log status, method and duration once without req
     assert.equal(errors.mock.callCount(), before);
   }
   const before = errors.mock.callCount();
-  const status = await new Promise<number | undefined>((resolve, reject) => {
+  const thrown = await fetch(`${base}/connect/%E0/self-connect`, {
+    headers: { cookie: sessionCookie("private@example.com") },
+  });
+  await thrown.text();
+  assert.equal(thrown.status, 500);
+  assert.equal(errors.mock.callCount(), before + 1);
+  const rejected = await new Promise<number | undefined>((resolve, reject) => {
     const req = request(base, { path: "http://[" }, (res) => {
       res.resume();
       res.on("end", () => resolve(res.statusCode));
@@ -174,15 +158,17 @@ test("completed portal failures log status, method and duration once without req
     req.on("error", reject);
     req.end();
   });
-  assert.equal(status, 500);
+  assert.equal(rejected, 400);
   assert.equal(errors.mock.callCount(), before + 1);
 });
 
 test("a prototype-chain segment like /constructor/ never matches a keyed surface (no 500, falls to the web UI)", async () => {
   for (const p of ["/constructor/x", "/hasOwnProperty/x", "/toString/x", "/__proto__/x"]) {
     const r = await fetch(`${base}${p}`, { headers: { cookie: sessionCookie("U1") } });
-    assert.equal(r.status, 200, `expected the web-ui proxy for ${p}, got ${r.status}`);
-    assert.equal(((await r.json()) as { url: string }).url, p);
+    assert.equal(r.status, 200, `expected the web UI shell for ${p}, got ${r.status}`);
+    const hit = (await r.json()) as CoreHit;
+    assert.equal(hit.lane, "shell");
+    assert.equal(hit.url, p);
   }
 });
 

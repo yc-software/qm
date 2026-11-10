@@ -12,10 +12,9 @@ const upstream = createServer((req: IncomingMessage, res) => {
 await new Promise<void>((r) => upstream.listen(0, r));
 const upstreamUrl = `http://localhost:${(upstream.address() as AddressInfo).port}`;
 
-process.env.PORTAL_PUBLIC_URL = "http://localhost:18198";
+process.env.PUBLIC_WEB_URL = "http://localhost:18198";
 process.env.PORTAL_SESSION_SECRET = "apps-subdomain-test-portal-secret";
 process.env.CORE_SIGNING_SECRET = "apps-subdomain-test-core-secret";
-process.env.WEB_UI_UPSTREAM = upstreamUrl;
 process.env.CORE_API_URL = upstreamUrl;
 process.env.PORTAL_COOKIE_DOMAIN = "qm.example.com";
 process.env.PORTAL_APPS_DOMAIN = "apps.qm.example.com";

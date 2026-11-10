@@ -4,11 +4,12 @@ import type { PgPool } from "../persistence/pg-pool.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
 import { collectBytes } from "../util/bytes.ts";
 import { swallowAs } from "../util/errors.ts";
+import { currentTenant } from "../tenants/context.ts";
 
 const TOOL_OUTPUT_SETTING = "tool_result_inline_tokens";
 export const DEFAULT_INLINE_TOKENS = 4096;
 const CHARS_PER_TOKEN = 4;
-const TOOL_OUTPUT_RETENTION_MS = 30 * 24 * 60 * 60_000;
+export const TOOL_OUTPUT_RETENTION_DAYS = 30;
 const SETTING_CACHE_MS = 30_000;
 const TOOL_OUTPUT_PATH = "tool-output/";
 const DIGEST_DIR = "md5/";
@@ -48,20 +49,36 @@ export function parkedOutputKey(path: string): ParkedOutputKey | null {
   return name && !name.includes("/") ? { digest: md5Hex(name), callId: name } : null;
 }
 
-export function cutToolOutput(
+export function cutToInline(
   text: string,
   inlineTokens: number,
-  callId: string,
+  where = "",
 ): { text: string; shownChars: number } | null {
   if (inlineTokens <= 0) return null;
   const budget = inlineTokens * CHARS_PER_TOKEN;
   if (text.length <= budget) return null;
   const head = headSlice(text, Math.floor(budget / 2));
   const tail = tailSlice(text, Math.floor(budget / 2));
-  const marker =
-    `\n…[output cut: showing the first ${head.length} and last ${tail.length} of ${text.length} chars. ` +
-    `The full output is in ${TOOL_OUTPUT_PATH}${DIGEST_DIR}${md5Hex(callId)}; reading it with the files tool copies it onto the computer (kept 30 days)]…\n`;
+  const marker = `\n…[output cut: showing the first ${head.length} and last ${tail.length} of ${text.length} chars.${where}]…\n`;
   return { text: head + marker + tail, shownChars: head.length + tail.length };
+}
+
+export function cutToolOutput(
+  text: string,
+  inlineTokens: number,
+  callId: string,
+): { text: string; shownChars: number } | null {
+  return cutToInline(
+    text,
+    inlineTokens,
+    ` The full output is in ${TOOL_OUTPUT_PATH}${DIGEST_DIR}${md5Hex(callId)}; reading it with the files tool copies it onto the computer (kept ${TOOL_OUTPUT_RETENTION_DAYS} days)`,
+  );
+}
+
+export async function inlineTokensOf(store: Pick<ToolOutputStore, "inlineTokens"> | undefined): Promise<number> {
+  return store
+    ? store.inlineTokens().catch(swallowAs("tool output: inline cap", DEFAULT_INLINE_TOKENS))
+    : DEFAULT_INLINE_TOKENS;
 }
 
 export async function parkIfOverCap(
@@ -69,7 +86,7 @@ export async function parkIfOverCap(
   text: string,
   callId: string,
 ): Promise<{ text: string; output: ToolOutputRef } | null> {
-  const inlineTokens = await store.inlineTokens().catch(swallowAs("tool output: inline cap", DEFAULT_INLINE_TOKENS));
+  const inlineTokens = await inlineTokensOf(store);
   const cut = cutToolOutput(text, inlineTokens, callId);
   if (!cut) return null;
   const blob = await store.save(text).catch(swallowAs("tool output: park full text", null));
@@ -90,15 +107,7 @@ export function createPostgresToolOutputStore(opts: {
 }): ToolOutputStore {
   const now = opts.now ?? (() => Date.now());
   let setting: { value: number; at: number } | null = null;
-  let tenant: Promise<{ id: string; bytes: DurableByteStore }> | null = null;
-  const tenantBytes = (): Promise<{ id: string; bytes: DurableByteStore }> =>
-    (tenant ??= opts.pool.q("SELECT qm_tenant_id()::text AS id").then((rows) => {
-      const id = rows[0]?.id as string;
-      return { id, bytes: opts.bytesFor(`${TOOL_OUTPUT_PATH}${id}/`) };
-    })).catch((err: unknown) => {
-      tenant = null;
-      throw err;
-    });
+  const tenantBytes = (id: string): DurableByteStore => opts.bytesFor(`${TOOL_OUTPUT_PATH}${id}/`);
   return {
     async inlineTokens() {
       if (setting && now() - setting.at < SETTING_CACHE_MS) return setting.value;
@@ -107,8 +116,8 @@ export function createPostgresToolOutputStore(opts: {
       return setting.value;
     },
     async save(text) {
-      const { id, bytes } = await tenantBytes();
-      const put = await bytes.put(Buffer.from(text, "utf8"));
+      const id = currentTenant();
+      const put = await tenantBytes(id).put(Buffer.from(text, "utf8"));
       await opts.pool.q(
         `INSERT INTO blobs(tenant_id, sha256, size, mime, storage_key, created_at, expires_at)
          VALUES ($1::uuid, decode($2, 'hex'), $3, 'text/plain; charset=utf-8', $4,
@@ -120,29 +129,29 @@ export function createPostgresToolOutputStore(opts: {
           put.sizeBytes,
           `${TOOL_OUTPUT_PATH}${id}/${put.blobKey}`,
           now(),
-          now() + TOOL_OUTPUT_RETENTION_MS,
+          now() + TOOL_OUTPUT_RETENTION_DAYS * 24 * 60 * 60_000,
         ],
       );
       return put.sha256;
     },
     async read(sessionId, ref) {
       const rows = await opts.pool.q(
-        `SELECT b.storage_key, i.created_at <= now() - interval '30 days' AS expired
+        `SELECT b.storage_key, i.tenant_id::text AS tenant, i.created_at <= now() - make_interval(days => $4) AS expired
            FROM items i
       LEFT JOIN blobs b ON b.tenant_id = i.tenant_id AND b.sha256 = i.blob_sha
-          WHERE i.tenant_id = qm_tenant_id() AND i.session_id = $1 AND i.kind = 'ToolResult'
+          WHERE i.tenant_id = qm_bound_tenant() AND i.session_id = $1 AND i.kind = 'ToolResult'
             AND md5(i.call_id) = $2 AND ($3::text IS NULL OR i.call_id = $3)
             AND i.blob_sha IS NOT NULL`,
-        [sessionId, ref.digest, ref.callId ?? null],
+        [sessionId, ref.digest, ref.callId ?? null, TOOL_OUTPUT_RETENTION_DAYS],
       );
       const row = rows[0];
       if (!row) return null;
       if (row.expired === true) return { expired: true };
       if (typeof row.storage_key !== "string")
         throw new Error(`tool output ${ref.digest}: the result names a parked blob with no blobs row`);
-      const { bytes, id } = await tenantBytes();
+      const id = String(row.tenant);
       const key = String(row.storage_key).slice(`${TOOL_OUTPUT_PATH}${id}/`.length);
-      const text = await readText(bytes, key);
+      const text = await readText(tenantBytes(id), key);
       if (text === null)
         throw new Error(`tool output ${ref.digest}: parked bytes ${row.storage_key} are missing from storage`);
       return { text };

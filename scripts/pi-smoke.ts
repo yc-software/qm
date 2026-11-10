@@ -1,9 +1,10 @@
+import { randomBytes } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../src/config.ts";
 import { DEFAULT_AGENT_MODEL_ID } from "../src/model/pi-models.ts";
-import { buildApp } from "../src/wiring.ts";
+import { startQm } from "../src/start.ts";
 import type { TurnRequest } from "../src/types.ts";
 
 if (!process.env.ANTHROPIC_API_KEY) {
@@ -11,9 +12,10 @@ if (!process.env.ANTHROPIC_API_KEY) {
   process.exit(1);
 }
 
-const { app } = buildApp({
+const qm = await startQm({
   ...loadConfig(),
   port: 0,
+  signingSecret: randomBytes(32).toString("hex"),
   dataDir: mkdtempSync(join(tmpdir(), "pi-smoke-")),
 });
 
@@ -26,7 +28,7 @@ async function run(label: string, req: TurnRequest): Promise<void> {
   const started = Date.now();
   console.log(`\n=== ${label} ===`);
   console.log(`> ${req.text}`);
-  const r = await app.turn(req);
+  const r = await qm.built.app.turn(req);
   const ms = Date.now() - started;
   console.log(`STATUS: ${r.status}  (${ms}ms)`);
   console.log(`REPLY : ${(r.reply ?? r.reason ?? "").slice(0, 600)}`);

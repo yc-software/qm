@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Agent } from "@earendil-works/pi-agent-core";
 import { JSDOM } from "jsdom";
-import { createServer } from "vite";
+import { testViteServer } from "./vite-server.ts";
 import type { ComposerSurface, ConvCtx } from "../src/conv-types.ts";
 
 test("a steered queued message shows in the transcript as waiting until model intake or the run ends", async (t) => {
@@ -37,7 +37,7 @@ test("a steered queued message shows in the transcript as waiting until model in
     descriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
     Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
   }
-  const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  const vite = await testViteServer();
   let composer: ComposerSurface | undefined;
   try {
     const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
@@ -77,8 +77,9 @@ test("a steered queued message shows in the transcript as waiting until model in
     const ctx = {
       pane: false,
       chat: {
-        state: { agent, host, threadRef, sessionId: "s", scopeId: "personal:tester" },
+        state: { agent, host, threadRef, sessionId: "s", scopeId: "personal:tester", resolvingApprovals: new Set() },
         isStopping: () => false,
+        hasUnresolvedApproval: () => false,
         hasLiveRun: () => live,
         signalLiveRun: async (_kind: string, _text: string, queuedRunId: string) => {
           signalled.push(queuedRunId);
@@ -133,6 +134,44 @@ test("a steered queued message shows in the transcript as waiting until model in
       agentState.messages.push({ role: "user", content: "same text", steered: true, entrySeq: 6, ts: "other" });
       draw();
       assert.deepEqual(waiting(), ["same text"]);
+    });
+
+    await t.test("a steer sent with a file shows that file in its waiting row before intake", async () => {
+      const { setAlwaysSteer } = await vite.ssrLoadModule("/src/core-bridge.ts");
+      const realFetch = globalThis.fetch;
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/blobs")) return Response.json({ blobId: "b1", sizeBytes: 3 });
+        if (url.includes("/api/turn")) return Response.json({ steered: true, steerTs: "steer:file" });
+        return Response.json({});
+      }) as typeof fetch;
+      setAlwaysSteer(true);
+      try {
+        const file = { id: "a1", type: "image", fileName: "shot.png", mimeType: "image/png", size: 3, content: "AAAA" };
+        composer!.state.draft = "look at this";
+        composer!.state.attachments = [file] as never;
+        await composer!.submit();
+        const row = composer!.waitingSteers(agent).find((q) => q.text === "look at this");
+        assert.equal(composer!.state.error, "");
+        assert.deepEqual(
+          row?.attachments?.map((a) => a.fileName),
+          ["shot.png"],
+        );
+        agentState.messages.push({
+          role: "user",
+          content: "look at this",
+          steered: true,
+          entrySeq: 7,
+          ts: "steer:file",
+        });
+        assert.deepEqual(
+          composer!.waitingSteers(agent).map((q) => q.text),
+          ["same text"],
+        );
+      } finally {
+        setAlwaysSteer(false);
+        globalThis.fetch = realFetch;
+      }
     });
 
     await t.test("the waiting steer goes when the run ends without intake", async () => {

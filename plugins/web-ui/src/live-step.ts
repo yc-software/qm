@@ -4,8 +4,9 @@ import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
 import { activityDescription, activityLabel, sessionPresentation, thinkingPresentation } from "./activity-presentation";
 import type { WorkBlock } from "./core-bridge";
-import { BookOpen, Bot, Brain, ChevronRight, MessageSquare, Search, type IconNode } from "lucide";
+import { BookOpen, Bot, Brain, ChevronRight, MessageSquare, RefreshCw, RotateCcw, Search, type IconNode } from "lucide";
 import { icon } from "./icons";
+import { proddedReason, retractedReason } from "./items";
 import { messageWorkTimeline, postSpeechText, rowArgs, rowTool, type TimelineItem, type ToolPayload } from "./timeline";
 import { sheenLabel } from "./ui";
 
@@ -24,6 +25,14 @@ export function preStepWork(work: WorkBlock | null | undefined): work is WorkBlo
     !work.pendingApprovals?.length &&
     messageWorkTimeline(work, "").length === 0,
   );
+}
+
+export function checkedReplyStep(item: TimelineItem | undefined): LiveStep | null {
+  if (item?.kind !== "text") return null;
+  const retracted = retractedReason(item.item);
+  if (retracted) return { icon: RotateCcw, label: `Retrying: ${retracted}` };
+  const prodded = proddedReason(item.item);
+  return prodded ? { icon: RefreshCw, label: `Continuing: ${prodded}` } : null;
 }
 
 export function currentStep(

@@ -2,15 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { JSDOM } from "jsdom";
-import { createServer } from "vite";
+import { testViteServer } from "./vite-server.ts";
 
 test("confetti celebrates only the highest supported effort and respects reduced motion", async () => {
-  const vite = await createServer({
+  const vite = await testViteServer({
     root: fileURLToPath(new URL("..", import.meta.url)),
     configFile: false,
-    server: { middlewareMode: true, hmr: false },
-    optimizeDeps: { noDiscovery: true },
-    appType: "custom",
   });
   const dom = new JSDOM('<button><span class="effort-peak">Extra high</span></button>');
   const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");

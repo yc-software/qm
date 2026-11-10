@@ -10,8 +10,13 @@ to this", "write back to her for me", "answer my inbox in my voice".
 
 ## Load the profile first — never freehand
 
-Read `voice/email-voice-profile.md` from the workspace. If it doesn't exist, run the
-`email-voice-profile` skill first (personal DM only) — do not improvise a voice from
+The profile lives in the user's Files, never on a particular computer. Find it by the
+memory fact "Email voice profile is Files <id>", or failing that
+`GET $AGENT_API_URL/v1/files?q=email-voice-profile` (header
+`x-agent-capability: $AGENT_API_TOKEN`; take the newest match), then download it with
+`GET $AGENT_API_URL/v1/files/<id>/content`. A missing file on disk means nothing; only
+when memory and Files both come back empty does the profile not exist, and then run
+the `email-voice-profile` skill first (personal DM only). Do not improvise a voice from
 memory or from this conversation's tone. The profile's **Hard rules** and
 **Anti-patterns** sections are constraints, not suggestions.
 
@@ -21,7 +26,7 @@ memory or from this conversation's tone. The profile's **Hard rules** and
    never draft from a snippet or excerpt; a question below the fold would go silently
    unanswered. Match the register the profile prescribes for this audience.
 2. Write the body to a file — plain text, one line per paragraph, blank line between.
-   Plain text only — never styled HTML (fonts, colors, buttons).
+   No styled HTML (fonts, colors, buttons); the email access skill sets the draft's format.
 3. Self-check against the profile before showing anything: opener and sign-off drawn
    from their real ones, sentence rhythm right, no anti-pattern present. If a sentence
    could appear in anyone's email, rewrite it or cut it.
@@ -35,6 +40,7 @@ approval of the draft for sending.
 
 ## Afterward
 
-Tell the user where the draft landed in Gmail Drafts and keep the draft id in the
-workspace so it can be updated. If they edit your text, notice what they changed —
-recurring corrections belong in the voice profile as hard rules; offer to add them.
+Tell the user where the draft landed in Gmail Drafts and keep the draft id in memory
+(one fact naming the thread and draft id) so a later turn on any computer can update it.
+If they edit your text, notice what they changed — recurring corrections belong in the
+voice profile as hard rules; offer to add them and republish the profile.

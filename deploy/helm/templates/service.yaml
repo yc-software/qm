@@ -1,6 +1,6 @@
 {{- $root := . -}}
 {{- range $name, $svc := .Values.services }}
-{{- if and $svc.enabled (ne $name "auth") }}
+{{- if $svc.enabled }}
 ---
 apiVersion: v1
 kind: Service
@@ -18,5 +18,10 @@ spec:
     - name: http
       port: {{ $svc.port }}
       targetPort: {{ $svc.port }}
+    {{- if eq $name "core" }}
+    - name: public
+      port: {{ $svc.publicPort }}
+      targetPort: {{ $svc.publicPort }}
+    {{- end }}
 {{- end }}
 {{- end }}

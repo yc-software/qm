@@ -58,14 +58,17 @@ async function runReporting(body: string, enabled = true, env: Record<string, st
     },
   );
   let output = "";
+  let errors = "";
   child.stdout.on("data", (chunk) => {
     output += chunk;
   });
-  child.stderr.on("data", () => {});
+  child.stderr.on("data", (chunk) => {
+    errors += chunk;
+  });
   const timeout = setTimeout(() => child.kill("SIGKILL"), 10_000);
   try {
     const [code, signal] = await once(child, "exit");
-    return { events, transactions, headers, outbound, code, signal, output };
+    return { events, transactions, headers, outbound, code, signal, output, errors };
   } finally {
     clearTimeout(timeout);
     collector.closeAllConnections();
@@ -125,7 +128,7 @@ test("unhandled rejection flushes a fatal unhandled event and exits", async () =
 });
 
 test("fatal reporting preserves the core drain handler and avoids duplicate console events", async () => {
-  const { events, code, output } = await runReporting(`
+  const { events, code, output, errors } = await runReporting(`
     const { shutdownOnUncaught } = await import('./src/util/process-guard.ts');
     shutdownOnUncaught('qm', () => {
       setTimeout(async () => { console.log('drained'); await flushErrorReporting(); process.exit(1); }, 100);
@@ -134,7 +137,64 @@ test("fatal reporting preserves the core drain handler and avoids duplicate cons
   `);
   assert.equal(code, 1);
   assert.equal(output.trim(), "drained");
+  assert.match(errors, /^\[qm\] uncaught exception; draining and exiting: TypeError: private-fatal$/m);
   assert.equal(events.length, 1);
+  assert.equal(events[0]!.tags["request.surface"], undefined);
+});
+
+test("fatal log and report name the core route and request id in flight", async () => {
+  const { events, code, errors } = await runReporting(`
+    const { shutdownOnUncaught } = await import('./src/util/process-guard.ts');
+    const { createInsecureTestServer } = await import('./src/api/server.ts');
+    const { bindBootTenant } = await import('./src/tenants/boot.ts');
+    await bindBootTenant(async () => '00000000-0000-4000-8000-0000000000a1');
+    shutdownOnUncaught('qm', () => setTimeout(async () => { await flushErrorReporting(); process.exit(1); }, 50));
+    const blobTransfer = { open: () => new Promise(() => setTimeout(() => Promise.reject(new TypeError('terminated')), 0)) };
+    const server = createInsecureTestServer({}, { blobTransfer });
+    server.listen(0, '127.0.0.1', () => {
+      void fetch('http://127.0.0.1:' + server.address().port + '/v1/blobs/blob_7f3a9c?token=private-query', { headers: { 'x-request-id': 'req-42' } });
+    });
+  `);
+  assert.equal(code, 1);
+  assert.match(
+    errors,
+    /^\[qm\] unhandled rejection during core GET \/v1\/blobs\/:id \(request id req-42\); draining and exiting: TypeError: terminated$/m,
+  );
+  assert.doesNotMatch(errors, /blob_7f3a9c|private-query/);
+  assert.equal(events.length, 1);
+  assert.equal(events[0]!.tags["request.surface"], "core");
+  assert.equal(events[0]!.tags["request.method"], "GET");
+  assert.equal(events[0]!.tags["request.route"], "/v1/blobs/:id");
+  assert.equal(events[0]!.tags["request.id"], "req-42");
+  assert.equal(events[0]!.tags["request.finished"], false);
+});
+
+test("fatal log marks a request that finished before its work failed", async () => {
+  const { events, code, errors } = await runReporting(`
+    const { createServer } = await import('node:http');
+    const { withRequestContext } = await import('./plugins/chassis/src/error-reporting.ts');
+    const { findRoute } = await import('./plugins/chassis/src/router.ts');
+    const { shutdownOnUncaught } = await import('./src/util/process-guard.ts');
+    shutdownOnUncaught('qm', () => setTimeout(async () => { await flushErrorReporting(); process.exit(1); }, 50));
+    const routes = [{ method: 'GET', path: '/api/files/:id/content' }];
+    const server = createServer((req, res) => withRequestContext('web-ui', req, res, () => {
+      findRoute(routes, req.method, new URL(req.url, 'http://local').pathname);
+      res.once('close', () => setTimeout(() => { throw new TypeError('private-fatal'); }, 0));
+      res.end();
+    }));
+    server.listen(0, '127.0.0.1', () => {
+      void fetch('http://127.0.0.1:' + server.address().port + '/api/files/f8c1e2/content?sig=private-query', { headers: { 'fly-request-id': 'edge-7', 'x-request-id': 'client-9' } });
+    });
+  `);
+  assert.equal(code, 1);
+  assert.match(
+    errors,
+    /^\[qm\] uncaught exception after web-ui GET \/api\/files\/:id\/content \(request id edge-7\) finished; draining and exiting:/m,
+  );
+  assert.doesNotMatch(errors, /f8c1e2|private-query|client-9/);
+  assert.equal(events.length, 1);
+  assert.equal(events[0]!.tags["request.route"], "/api/files/:id/content");
+  assert.equal(events[0]!.tags["request.finished"], true);
 });
 
 test("operator error records send one classified event with the record details", async () => {

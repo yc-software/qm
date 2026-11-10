@@ -1,6 +1,7 @@
 import { LOOP_ICON_ERROR, validLoopIcon } from "../../loops/loop-store.ts";
 import { boundLoopCron } from "../../loops/authority.ts";
 import { unattendedGrantRefusal } from "../../cron/authority.ts";
+import { livePersonCapability } from "../artifact-share.ts";
 import type { AdvisoryLock } from "../../persistence/advisory-lock.ts";
 import type { Loop, LoopState, LoopTriageConfig } from "../../loops/types.ts";
 import { scopeId, type ScopeId } from "../../types.ts";
@@ -20,7 +21,7 @@ import type { ScopedConfigStore } from "../../resolution/config-store.ts";
 import { errMessage, reportFailure, swallow } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import { isObj, resolveCapabilityDestination } from "./shared.ts";
-import { withActor, type ApiCtx, type Route } from "./route.ts";
+import { tenantOf, withActor, type ApiCtx, type Route } from "./route.ts";
 
 export interface LoopServiceDeps {
   lock?: AdvisoryLock;
@@ -44,13 +45,30 @@ interface ActingPrincipal {
   liveHuman: boolean;
 }
 
+export async function inboxPreviewEnabled(deps: ApiCtx["deps"], principalId: string): Promise<boolean> {
+  return (await deps.featureFlags?.enabled("inbox_loops", scopeId("personal", principalId))) === true;
+}
+
+export function forInboxLoopsPeople(routes: Route<ApiCtx>[]): Route<ApiCtx>[] {
+  return routes.map((route) => ({
+    ...route,
+    browser: true,
+    handle: async (ctx) => {
+      if (ctx.actor && !(await inboxPreviewEnabled(ctx.deps, ctx.actor.p)))
+        return sendJson(ctx.res, 403, { error: "feature_disabled" });
+      return route.handle(ctx);
+    },
+  }));
+}
+
 export function actingPrincipal(ctx: ApiCtx): ActingPrincipal | null {
   if (ctx.capability) {
     return {
       actorId: ctx.capability.actorId,
       scopeId: ctx.capability.scopeId as ScopeId,
       capability: ctx.capability,
-      liveHuman: ctx.actor?.p !== undefined || ctx.capability.liveActor === true,
+      liveHuman:
+        ctx.actor?.p !== undefined || (ctx.capability.liveActor === true && livePersonCapability(ctx.capability)),
     };
   }
   if (ctx.actor?.p) return { actorId: ctx.actor.p, liveHuman: true };
@@ -66,13 +84,14 @@ function requireLiveHuman(ctx: ApiCtx, acting: ActingPrincipal): boolean {
   return false;
 }
 
-export async function canAdministerLoop(ctx: ApiCtx, loop: Loop, acting: ActingPrincipal): Promise<boolean> {
-  const { app } = ctx;
-  if (await app.membershipControlsScope(loop.ownerScopeId)) {
-    return app.managesScope(acting.actorId, loop.ownerScopeId);
-  }
-  if (await app.samePerson(loop.owner, acting.actorId)) return true;
-  return app.managesScope(acting.actorId, loop.ownerScopeId);
+export async function canAdministerLoop(
+  app: Pick<ApiCtx["app"], "membershipControlsScope" | "managesScope" | "samePerson">,
+  loop: Loop,
+  actorId: string,
+): Promise<boolean> {
+  if (await app.membershipControlsScope(loop.ownerScopeId)) return app.managesScope(actorId, loop.ownerScopeId);
+  if (await app.samePerson(loop.owner, actorId)) return true;
+  return app.managesScope(actorId, loop.ownerScopeId);
 }
 
 export async function loadAdministrable(
@@ -90,7 +109,7 @@ export async function loadAdministrable(
     sendJson(ctx.res, 404, { error: "not_found", message: "no such loop" });
     return null;
   }
-  if (!(await canAdministerLoop(ctx, loop, acting))) {
+  if (!(await canAdministerLoop(ctx.app, loop, acting.actorId))) {
     sendJson(ctx.res, 403, { error: "forbidden", message: "you may not administer this loop" });
     return null;
   }
@@ -108,7 +127,7 @@ export async function requireLoopAuthority(ctx: ApiCtx, deps: LoopServiceDeps, l
   if (!cron?.unattendedGrants?.length) return true;
   const principal = ctx.capability ?? (ctx.actor?.p ? { actorId: ctx.actor.p, liveActor: true } : undefined);
   const refusal = principal
-    ? await unattendedGrantRefusal(ctx.app, ctx.deps.admin, cron, principal)
+    ? await unattendedGrantRefusal(ctx.app, ctx.deps.admin, tenantOf(ctx), cron, principal)
     : { message: "a privileged loop requires a live turn started by its owner" };
   if (!refusal) return true;
   sendJson(ctx.res, 403, { error: "forbidden", message: refusal.message });
@@ -263,6 +282,7 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
     owner: acting.actorId,
     createdBy: acting.actorId,
     ownerScopeId,
+    ...(ctx.capability?.botActor ? { botActor: true } : {}),
     name: b.name,
     ...(b.icon !== undefined ? { icon: b.icon as string | null } : {}),
     playbook: b.playbook,
@@ -291,6 +311,7 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
         owner: loop.owner,
         createdBy: loop.createdBy,
         ownerScopeId: loop.ownerScopeId,
+        ...(loop.botActor ? { botActor: true } : {}),
         schedule,
         title: `Loop: ${loop.name}`,
         action: `fire loop ${loop.id}`,
@@ -316,7 +337,7 @@ async function listLoops(ctx: ApiCtx): Promise<void> {
   const all = await deps.store.list();
   const visible: Loop[] = [];
   for (const loop of all) {
-    if (await canAdministerLoop(ctx, loop, acting)) visible.push(loop);
+    if (await canAdministerLoop(ctx.app, loop, acting.actorId)) visible.push(loop);
   }
   return sendJson(ctx.res, 200, { loops: visible });
 }
@@ -343,11 +364,6 @@ async function getLoop(ctx: ApiCtx): Promise<void> {
         ? {
             ...item,
             ...(item.sourcePayload ? { sourcePayload: agentSourcePayload(item.sourcePayload, item.source) } : {}),
-            ...(item.inboxPreview
-              ? {
-                  inboxPreview: agentSourcePayload(item.inboxPreview, item.source),
-                }
-              : {}),
           }
         : item,
     ),
@@ -683,9 +699,9 @@ async function revokeShipGrant(ctx: ApiCtx): Promise<void> {
   return sendJson(ctx.res, 200, { grant: revoked });
 }
 
-export const loopRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "POST", path: "/v1/loops/:id/triage/preview", auth: "source", handle: previewLoopTriage },
-  ...withActor("query.principalId", [
+export const loopRoutes: ReadonlyArray<Route<ApiCtx>> = withActor("query.principalId", [
+  ...forInboxLoopsPeople([
+    { method: "POST", path: "/v1/loops/:id/triage/preview", auth: "source", handle: previewLoopTriage },
     { method: "POST", path: "/v1/loops", auth: "either", handle: createLoop },
     { method: "GET", path: "/v1/loops", auth: "either", handle: listLoops },
     { method: "GET", path: "/v1/loops/:id", auth: "either", handle: getLoop },
@@ -695,6 +711,6 @@ export const loopRoutes: ReadonlyArray<Route<ApiCtx>> = [
     { method: "POST", path: "/v1/loops/:id/outputs/:outputId/decide", auth: "either", handle: decideOutput },
     { method: "POST", path: "/v1/loops/:id/grants", auth: "either", handle: graduateShipAction },
     { method: "POST", path: "/v1/loops/:id/autopilot", auth: "either", handle: setAutopilot },
-    { method: "DELETE", path: "/v1/loops/:id/grants/:grantId", auth: "either", handle: revokeShipGrant },
   ]),
-];
+  { method: "DELETE", path: "/v1/loops/:id/grants/:grantId", auth: "either", handle: revokeShipGrant },
+]);

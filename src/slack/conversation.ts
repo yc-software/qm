@@ -1,57 +1,23 @@
 import { resolveMentions } from "./mrkdwn.ts";
 export { resolveMentions } from "./mrkdwn.ts";
 import { encodeTs, summarizeReactions, type ReactionTally } from "./reactions.ts";
-import { utcMinute } from "../util/time.ts";
-
-export interface ContextWireMessage {
-  ts: string;
-  time?: string;
-  author: string;
-  text: string;
-  threadTs?: string;
-  files?: string[];
-  reactions?: ReactionTally[];
-}
-
-const MAX_CONTEXT_MESSAGE_CHARS = 600;
-
-function compareSlackTimestamps(a: { ts: string }, b: { ts: string }): number {
-  if (a.ts < b.ts) return -1;
-  if (a.ts > b.ts) return 1;
-  return 0;
-}
+import {
+  buildContextWindow as buildSurfaceContextWindow,
+  clipText,
+  compareTs as compareSlackTimestamps,
+  epochTsTime,
+} from "../surfaces/context-window.ts";
 
 export function buildContextWindow(
   scanned: readonly RecentMessage[],
   opts: { count: number; match?: string; scanHasMore?: boolean; nameById?: ReadonlyMap<string, string> },
-): { messages: ContextWireMessage[]; hasMore: boolean; nextBefore?: string; selfTs?: string[] } {
-  const asc = [...scanned].sort(compareSlackTimestamps);
-  const needle = opts.match?.trim().toLowerCase();
-  const matched = needle ? asc.filter((m) => (m.text ?? "").toLowerCase().includes(needle)) : asc;
-  const count = Math.max(1, Math.floor(opts.count));
-  const kept = matched.slice(-count);
-  const messages = kept.map((m) => {
-    const time = formatSlackTs(m.ts);
-    return {
-      ts: m.ts,
-      ...(time ? { time } : {}),
-      author: m.isSelf ? "you" : m.name || "someone",
-      text: clipMessage(resolveMentions(m.text ?? "", opts.nameById), MAX_CONTEXT_MESSAGE_CHARS),
-      ...(m.parentTs ? { threadTs: m.parentTs } : {}),
-      ...(m.files?.length ? { files: m.files } : {}),
-      ...(m.reactions ? { reactions: m.reactions } : {}),
-    };
+): ReturnType<typeof buildSurfaceContextWindow> {
+  const { nameById, ...rest } = opts;
+  return buildSurfaceContextWindow(scanned, {
+    ...rest,
+    renderText: (text) => resolveMentions(text, nameById),
+    clipChars: MAX_CONTEXT_MESSAGE_CHARS,
   });
-  const droppedMatches = matched.length > kept.length;
-  let nextBefore = opts.scanHasMore ? asc[0]?.ts : undefined;
-  if (droppedMatches) nextBefore = kept[0]?.ts;
-  const selfTs = kept.filter((m) => m.isSelf).map((m) => m.ts);
-  return {
-    messages,
-    hasMore: Boolean(opts.scanHasMore) || droppedMatches,
-    ...(nextBefore ? { nextBefore } : {}),
-    ...(selfTs.length ? { selfTs } : {}),
-  };
 }
 
 export interface RecentMessage {
@@ -67,6 +33,7 @@ export interface RecentMessage {
   files?: string[];
 }
 
+const MAX_CONTEXT_MESSAGE_CHARS = 600;
 export const MAX_RECENT_MESSAGES = 20;
 const MAX_RECENT_MESSAGE_CHARS = 300;
 const MAX_TURN_MESSAGE_CHARS = 4000;
@@ -142,16 +109,9 @@ export interface RenderedConversation {
   detectOpener?: string;
 }
 
-const clipMessage = (t: string, max: number = MAX_RECENT_MESSAGE_CHARS): string => {
-  const s = (t ?? "").replace(/\s+/g, " ").trim();
-  return s.length > max ? `${s.slice(0, max)}…` : s;
-};
+const clipMessage = (t: string, max: number = MAX_RECENT_MESSAGE_CHARS): string => clipText(t, max);
 
-export function formatSlackTs(ts: string): string {
-  const sec = Number(ts);
-  if (!Number.isFinite(sec) || sec <= 0) return "";
-  return utcMinute(sec * 1000);
-}
+export const formatSlackTs = epochTsTime;
 
 function messageTurnText(
   m: RecentMessage,

@@ -1,7 +1,21 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
+import { type IncomingMessage, type OutgoingMessage, ServerResponse } from "node:http";
+import { Readable, type Writable } from "node:stream";
 import { gzip } from "node:zlib";
 
 const COMPRESS_MIN_BYTES = 1024;
+
+const ALB_IDLE_TIMEOUT_MS = 60_000;
+export const KEEP_ALIVE_TIMEOUT_MS = ALB_IDLE_TIMEOUT_MS + 5_000;
+
+export function isLoopbackUrl(raw: string): boolean {
+  const hostname = URL.parse(raw)?.hostname.toLowerCase();
+  return (
+    hostname === "localhost" || !!hostname?.endsWith(".localhost") || hostname === "127.0.0.1" || hostname === "[::1]"
+  );
+}
+
+export const isSecureOrLoopbackUrl = (raw: string): boolean =>
+  raw.startsWith("https://") || (raw.startsWith("http://") && isLoopbackUrl(raw));
 
 export class PayloadTooLargeError extends Error {
   constructor() {
@@ -63,6 +77,31 @@ export function json(res: ServerResponse, status: number, body: unknown): void {
   sendBuffered(res, status, { "content-type": "application/json" }, JSON.stringify(body));
 }
 
+export function relayStream(
+  source: NodeJS.ReadableStream | ReadableStream<Uint8Array>,
+  dest: OutgoingMessage | Writable,
+  options: { end?: boolean; onError?: (error: Error) => void } = {},
+): void {
+  const from =
+    source instanceof ReadableStream
+      ? Readable.fromWeb(source as Parameters<typeof Readable.fromWeb>[0])
+      : (source as Readable);
+  const release = (): void => {
+    if (dest instanceof ServerResponse) from.destroy();
+    else from.unpipe(dest);
+  };
+  from.on("error", (error: Error) => {
+    options.onError?.(error);
+    dest.destroy();
+  });
+  dest.on("error", release);
+  dest.on("close", () => {
+    if (!dest.writableFinished) release();
+  });
+  if (dest.destroyed) return release();
+  from.pipe(dest, { end: options.end ?? true });
+}
+
 export async function readBodyBytes(req: IncomingMessage, maxBytes = Infinity): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let size = 0;
@@ -76,6 +115,14 @@ export async function readBodyBytes(req: IncomingMessage, maxBytes = Infinity): 
 
 export async function readBody(req: IncomingMessage, maxBytes = Infinity): Promise<string> {
   return (await readBodyBytes(req, maxBytes)).toString("utf8");
+}
+
+export function originOf(raw: string): string {
+  try {
+    return new URL(raw).origin;
+  } catch {
+    return "";
+  }
 }
 
 export function sameOriginRequest(req: IncomingMessage, expectedOrigin: string): boolean {
@@ -92,11 +139,6 @@ export function sameOriginRequest(req: IncomingMessage, expectedOrigin: string):
   const site = req.headers["sec-fetch-site"];
   if (typeof site !== "string") return originMatches;
   return site === "same-origin" && (originMatches || origin === undefined || origin === "null");
-}
-
-export function cookie(req: IncomingMessage, name: string): string | null {
-  const m = (req.headers.cookie ?? "").match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`));
-  return m ? decodeURIComponent(m[1] ?? "") || null : null;
 }
 
 export function escapeHtml(s: string): string {

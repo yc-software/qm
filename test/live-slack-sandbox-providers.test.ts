@@ -166,7 +166,7 @@ for (const failExecution of [false, true]) {
           actions.push(body);
           return { id: "box", backend: "sprites" };
         },
-        findSessionByThread: async () => ({ id: "session", items: evidence("box", expected) }),
+        findSessionTreeByThread: async () => ({ id: "session", items: evidence("box", expected) }),
       },
     } as unknown as Ctx;
     const run = sandboxProviderScenarios.find((s) => s.name === "sandbox-execute-sprites")!.run(ctx);

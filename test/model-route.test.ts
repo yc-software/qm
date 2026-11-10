@@ -1,0 +1,391 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import { createAgent } from "../src/agent/agent-run.ts";
+import { createModelRoutes } from "../src/model/model-route.ts";
+import { auxiliaryModelFor } from "../src/model/pi-models.ts";
+import { DESCRIPTIVE_TITLE_PROMPT } from "../src/agent/session-title-prompt.ts";
+import type { AgentTurnInput, CompactInput } from "../src/agent/agent.ts";
+import type { Item, NewItem } from "../src/sessions/items.ts";
+import { setCustomProviders } from "../src/model/custom-providers.ts";
+import { configurePublicFetch } from "../src/util/network.ts";
+import { ProviderTurnError } from "../src/core/turn-error.ts";
+import { runtimeConfigBody } from "../src/api/runtime-config.ts";
+import { testConfigStore } from "./support/test-database.ts";
+import { orgScope } from "../src/config.ts";
+
+const GATEWAY = {
+  url: "https://gateway.example/v1",
+  apiKey: "sk-gateway",
+  apiKeyHeader: "x-gateway-key",
+  models: { "gpt-6-astra": "openai/gpt-6-astra" },
+};
+
+const HISTORY = [
+  { seq: 1, kind: "UserMessage", text: "hello", body: {}, createdAt: 1 },
+  { seq: 2, kind: "AgentMessage", text: "hi", body: {}, createdAt: 2 },
+] as unknown as Item[];
+
+function sse(events: Array<Record<string, unknown>>): Response {
+  const body = events.map((e) => `event: ${e.type as string}\ndata: ${JSON.stringify(e)}\n\n`).join("");
+  return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+}
+
+function anthropicReply(text: string, stopReason = "end_turn"): Response {
+  const usage = { input_tokens: 10, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+  return sse([
+    { type: "message_start", message: { id: "m", type: "message", role: "assistant", content: [], model: "c", usage } },
+    { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } },
+    { type: "content_block_stop", index: 0 },
+    { type: "message_delta", delta: { stop_reason: stopReason }, usage: { output_tokens: 1 } },
+    { type: "message_stop" },
+  ]);
+}
+
+function budgetRejection(): Response {
+  return new Response(
+    JSON.stringify({
+      error: {
+        message: "Budget has been exceeded! Current cost: 12.01, Max budget: 12.0",
+        type: "budget_exceeded",
+        param: null,
+        code: "400",
+      },
+    }),
+    { status: 400, headers: { "content-type": "application/json" } },
+  );
+}
+
+function errorReply(status: number, type: string, message: string): Response {
+  return new Response(JSON.stringify({ type: "error", error: { type, message } }), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+async function withFetch<T>(
+  respond: (url: string, body: Record<string, unknown>) => Response,
+  run: (calls: Array<{ host: string; model: unknown }>) => Promise<T>,
+): Promise<T> {
+  const calls: Array<{ host: string; model: unknown }> = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input instanceof Request ? input.url : input);
+    const raw = input instanceof Request ? await input.text() : init?.body;
+    const body = (typeof raw === "string" ? JSON.parse(raw) : {}) as Record<string, unknown>;
+    calls.push({ host: new URL(url).host, model: body.model });
+    return respond(url, body);
+  }) as typeof globalThis.fetch;
+  try {
+    return await run(calls);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
+function compact(agent: ReturnType<typeof createAgent>, route: Partial<CompactInput> = {}): Promise<string> {
+  return agent.compactHistory!({
+    session: { id: "route-compaction" } as CompactInput["session"],
+    history: HISTORY,
+    recordModelCall: () => {},
+    ...route,
+  });
+}
+
+function turn(agent: ReturnType<typeof createAgent>, modelId: string): Promise<unknown> {
+  let seq = 0;
+  return agent.runTurn({
+    session: { id: `route-turn-${modelId}` } as AgentTurnInput["session"],
+    input: "hello",
+    systemPrompt: "BASE",
+    history: [],
+    tools: {} as AgentTurnInput["tools"],
+    scopeLabel: "personal:tester" as AgentTurnInput["scopeLabel"],
+    orgScopeId: "org:test" as AgentTurnInput["orgScopeId"],
+    runtime: { modelId },
+    emit: async (item: NewItem) => ({ ...item, seq: seq++, createdAt: Date.now() }) as unknown as Item,
+    recordModelCall: () => {},
+  });
+}
+
+test("compaction summarizes on the session's own provider while the shared gateway is out of budget", async (t) => {
+  const direct: unknown[] = [];
+  const server = createServer((req, res) => {
+    let raw = "";
+    req.on("data", (chunk) => (raw += chunk));
+    req.on("end", () => {
+      direct.push((JSON.parse(raw) as { model?: unknown }).model);
+      void anthropicReply("summary of the work")
+        .text()
+        .then((body) => res.writeHead(200, { "content-type": "text/event-stream" }).end(body));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  configurePublicFetch(new Set([origin]), () => false);
+  setCustomProviders([
+    {
+      id: "direct",
+      name: "Direct",
+      protocol: "anthropic",
+      baseUrl: origin,
+      models: [{ id: "claude-opus-5-5" }],
+    },
+  ]);
+  t.after(() => {
+    setCustomProviders([]);
+    configurePublicFetch(new Set());
+    server.close();
+  });
+  const agent = createAgent({
+    routes: createModelRoutes({
+      defaultModelId: "gpt-6-astra",
+      modelGateway: GATEWAY,
+      resolveProviderKeys: async () => ({ direct: "sk-direct" }),
+    }),
+  });
+  await withFetch(
+    (url) => (url.includes("gateway.example") ? budgetRejection() : anthropicReply("summary of the work")),
+    async (calls) => {
+      const text = await compact(agent, { runtime: { modelId: "custom/direct/claude-opus-5-5" } });
+      assert.match(text, /summary of the work/);
+      assert.deepEqual(calls, []);
+      assert.deepEqual(direct, ["claude-opus-5-5"]);
+    },
+  );
+});
+
+test("an out-of-budget summary moves to the configured fallback on another account", async () => {
+  const agent = createAgent({
+    routes: createModelRoutes({
+      defaultModelId: "gpt-6-astra",
+      modelGateway: GATEWAY,
+      resolveProviderKeys: async () => ({ anthropic: "sk-anthropic" }),
+      resolveFallbackRuntime: () => ({ modelId: "claude-sonnet-5" }),
+    }),
+  });
+  await withFetch(
+    (url) => (url.includes("gateway.example") ? budgetRejection() : anthropicReply("fallback summary")),
+    async (calls) => {
+      assert.match(await compact(agent), /fallback summary/);
+      assert.deepEqual(
+        calls.map((call) => call.host),
+        ["gateway.example", "api.anthropic.com"],
+      );
+    },
+  );
+});
+
+const CHATGPT_LOGIN = `x.${btoa(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acct" } }))}.y`;
+const PERSONAL_KEYS = { "openai-codex": CHATGPT_LOGIN, anthropic: "sk-personal" };
+
+test("a person with a ChatGPT login and an Anthropic key falls back to an Anthropic model on their key", async () => {
+  const agent = createAgent({
+    routes: createModelRoutes({
+      defaultModelId: "gpt-6-astra",
+      resolveFallbackRuntime: () => ({ modelId: "claude-opus-5" }),
+    }),
+  });
+  await withFetch(
+    (_url, body) =>
+      body.model === "claude-sonnet-5"
+        ? errorReply(401, "authentication_error", "key revoked")
+        : anthropicReply("fallback summary"),
+    async (calls) => {
+      const text = await compact(agent, { runtime: { modelId: "claude-sonnet-5" }, providerKeys: PERSONAL_KEYS });
+      assert.match(text, /fallback summary/);
+      assert.deepEqual(calls, [
+        { host: "api.anthropic.com", model: "claude-sonnet-5" },
+        { host: "api.anthropic.com", model: "claude-opus-5" },
+      ]);
+    },
+  );
+});
+
+test("a person with a ChatGPT login falls back to an OpenAI model through that login", async () => {
+  const agent = createAgent({
+    routes: createModelRoutes({
+      defaultModelId: "gpt-6-astra",
+      resolveFallbackRuntime: () => ({ modelId: "gpt-6-astra" }),
+    }),
+  });
+  await withFetch(
+    (url) =>
+      new URL(url).host === "chatgpt.com"
+        ? errorReply(500, "server_error", "subscription unavailable")
+        : errorReply(401, "authentication_error", "key revoked"),
+    async (calls) => {
+      const error = await compact(agent, {
+        runtime: { modelId: "claude-sonnet-5" },
+        providerKeys: PERSONAL_KEYS,
+      }).then(
+        () => assert.fail("both routes fail"),
+        (e: unknown) => e,
+      );
+      assert.ok(error instanceof ProviderTurnError);
+      assert.match(error.message, /the fallback codex\/gpt-6-astra \(billed to the person's own account\)/);
+      assert.deepEqual(calls[0], { host: "api.anthropic.com", model: "claude-sonnet-5" });
+      assert.ok(calls.slice(1).length > 0);
+      assert.ok(calls.slice(1).every((call) => call.host === "chatgpt.com"));
+    },
+  );
+});
+
+test("a summary that fails everywhere names each route it tried and why", async () => {
+  const agent = createAgent({
+    routes: createModelRoutes({
+      defaultModelId: "gpt-6-astra",
+      modelGateway: GATEWAY,
+      resolveProviderKeys: async () => ({ anthropic: "sk-anthropic" }),
+      resolveFallbackRuntime: () => ({ modelId: "claude-sonnet-5" }),
+    }),
+  });
+  await withFetch(
+    (url) =>
+      url.includes("gateway.example") ? budgetRejection() : errorReply(401, "authentication_error", "key revoked"),
+    async () => {
+      const error = await compact(agent).then(
+        () => assert.fail("the summary should fail"),
+        (e: unknown) => e,
+      );
+      assert.ok(error instanceof ProviderTurnError);
+      assert.equal(error.code, "model_budget");
+      assert.match(error.message, /shared model gateway.*Budget has been exceeded/s);
+      assert.match(error.message, /fallback .*organization's own provider key or subscription\).*key revoked/s);
+    },
+  );
+});
+
+test("a refusal with no configured fallback stays on the refused model", async () => {
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-anthropic", openaiApiKey: "sk-openai" }) });
+  await withFetch(
+    () => anthropicReply("", "refusal"),
+    async (calls) => {
+      const error = await turn(agent, "claude-sonnet-5").then(
+        () => assert.fail("the refused turn should fail"),
+        (e: unknown) => e,
+      );
+      assert.ok(error instanceof ProviderTurnError);
+      assert.equal(error.code, "refusal");
+      assert.deepEqual(
+        calls.map((call) => call.model),
+        ["claude-sonnet-5"],
+      );
+    },
+  );
+});
+
+test("a fallback that fails keeps the original refusal and says what happened to the fallback", async () => {
+  const agent = createAgent({
+    routes: createModelRoutes({
+      apiKey: "sk-anthropic",
+      modelGateway: GATEWAY,
+      resolveFallbackRuntime: () => ({ modelId: "gpt-6-astra" }),
+    }),
+  });
+  await withFetch(
+    (url) => (url.includes("gateway.example") ? budgetRejection() : anthropicReply("", "refusal")),
+    async (calls) => {
+      const error = await turn(agent, "claude-sonnet-5").then(
+        () => assert.fail("the refused turn should fail"),
+        (e: unknown) => e,
+      );
+      assert.ok(error instanceof ProviderTurnError);
+      assert.equal(error.code, "refusal");
+      assert.match(error.message, /fallback .*shared model gateway.*Budget has been exceeded/s);
+      assert.deepEqual(
+        calls.map((call) => call.host),
+        ["api.anthropic.com", "gateway.example"],
+      );
+    },
+  );
+});
+
+test("helper calls run on the org's utility model, not the deployment default", async () => {
+  const agent = createAgent({
+    routes: createModelRoutes({
+      defaultModelId: "claude-opus-5-5",
+      resolveBaseModelId: () => "gpt-5.6-sol",
+      resolveProviderKeys: async () => ({ anthropic: "sk-anthropic", openai: "sk-openai" }),
+    }),
+  });
+  await withFetch(
+    () => errorReply(400, "invalid_request_error", "stop here"),
+    async (calls) => {
+      await agent.oneShot!("system", "remember this").catch(() => undefined);
+      await agent.generateTitle!("a transcript").catch(() => undefined);
+      assert.deepEqual(
+        calls.map((call) => call.model),
+        ["gpt-5.6-luna", "gpt-5.6-luna"],
+      );
+    },
+  );
+});
+
+test("the runtime listing says which account each model bills", async () => {
+  const deps = {
+    config: testConfigStore("default-org"),
+    baseModelDefault: "claude-sonnet-5",
+    modelCredentials: {
+      availability: async () => ({ anthropic: true, modelIds: new Set(["gpt-6-astra"]) }),
+    },
+  } as unknown as Parameters<typeof runtimeConfigBody>[0]["deps"];
+  await deps.config!.setWebuiModels(orgScope(), ["claude-sonnet-5", "gpt-6-astra"]);
+  const listed = await runtimeConfigBody({ deps }, orgScope());
+  assert.equal(listed.modelCatalog["claude-sonnet-5"]?.billing, "org_key");
+  assert.equal(listed.modelCatalog["gpt-6-astra"]?.billing, "model_gateway");
+  const personal = await runtimeConfigBody({ deps }, orgScope(), async () => null);
+  assert.equal(personal.modelCatalog["claude-sonnet-5"]?.billing, "personal_account");
+  assert.equal(personal.modelCatalog["gpt-6-astra"]?.billing, "personal_account");
+});
+
+test("the runtime listing bills an OpenAI model to company ChatGPT access even when a gateway also serves it", async () => {
+  const deps = {
+    config: testConfigStore("default-org"),
+    baseModelDefault: "claude-sonnet-5",
+    modelCredentials: {
+      availability: async () => ({ anthropic: true, codexOAuth: true, modelIds: new Set(["gpt-6-astra"]) }),
+    },
+  } as unknown as Parameters<typeof runtimeConfigBody>[0]["deps"];
+  await deps.config!.setWebuiModels(orgScope(), ["claude-sonnet-5", "gpt-6-astra"]);
+  const listed = await runtimeConfigBody({ deps }, orgScope());
+  assert.equal(listed.modelCatalog["gpt-6-astra"]?.billing, "org_key");
+});
+
+test("descriptive titles run the descriptive prompt on Sonnet while plain titles keep the utility model and prompt", async () => {
+  const agent = createAgent({
+    routes: createModelRoutes({
+      defaultModelId: "claude-opus-5-5",
+      resolveProviderKeys: async () => ({ anthropic: "sk-anthropic" }),
+    }),
+  });
+  const bodies: Array<Record<string, unknown>> = [];
+  await withFetch(
+    (_url, body) => {
+      bodies.push(body);
+      return anthropicReply("How did Maria sort by activity?");
+    },
+    async (calls) => {
+      assert.equal(
+        await agent.generateTitle!("User:\nmaria has her sessions sorted by activity. how do i get that"),
+        "How did Maria sort by activity",
+      );
+      assert.equal(
+        await agent.generateTitle!("User:\nmaria has her sessions sorted by activity. how do i get that", {
+          descriptive: true,
+        }),
+        "How did Maria sort by activity?",
+      );
+      assert.deepEqual(
+        calls.map((call) => call.model),
+        [auxiliaryModelFor("claude-opus-5-5"), "claude-sonnet-5-5"],
+      );
+    },
+  );
+  assert.deepEqual(
+    bodies.map((body) => JSON.stringify(body.system).includes(JSON.stringify(DESCRIPTIVE_TITLE_PROMPT).slice(1, -1))),
+    [false, true],
+  );
+});

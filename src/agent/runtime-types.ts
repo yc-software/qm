@@ -2,7 +2,7 @@ import type { RuntimeChoice } from "./agent.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 
 export interface RuntimeRequest {
-  action: "get" | "set" | "inherit";
+  action: "get" | "set";
   model?: string;
   effort?: string;
   fastMode?: boolean;
@@ -33,6 +33,6 @@ export type RuntimeService = (
   individualAuth?: boolean,
   signal?: AbortSignal,
   cronFire?: boolean,
-  purpose?: import("../resolution/config-store.ts").RuntimePurpose,
+  purpose?: import("../resolution/config-store.ts").TurnRuntimePurpose,
   defaults?: Partial<RuntimeChoice>,
 ) => Promise<RuntimeResult>;

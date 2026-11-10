@@ -89,6 +89,16 @@ test("a transient fire failure neither counts toward quarantine nor clears earli
   assert.ok(transient?.lastFiredAt);
 });
 
+test("a recorded scan start survives later fire outcomes", async () => {
+  const store = createLoopStore(testMap());
+  const { loop } = await store.create(base);
+  assert.equal((await store.recordFireOutcome(loop.id, "ok"))?.lastScanAt, undefined);
+  assert.equal((await store.recordScan(loop.id, 200))?.lastScanAt, 200);
+  assert.equal((await store.recordFireOutcome(loop.id, "transient"))?.lastScanAt, 200);
+  assert.equal((await store.recordFireOutcome(loop.id, "failed"))?.lastScanAt, 200);
+  assert.equal((await store.recordFireOutcome(loop.id, "ok"))?.lastScanAt, 200);
+});
+
 test("re-enqueueing the same source key never doubles the work", async () => {
   const ledger = createLoopItemLedger(testMap());
   const first = await ledger.enqueue({ loopId: "L1", sourceKey: "SENTRY-42", sourceSummary: "TypeError in checkout" });

@@ -67,7 +67,8 @@ export function memoryRecallDelta(
       const outcome = outcomes.find(({ provider, scope }) => provider === shown.provider && scope === shown.scope);
       const source = sourceOf(shown);
       const room = outcome?.outcome === "ok" ? Math.max(1, answered.get(source) ?? 0) : Infinity;
-      if (!outcome || outcome.outcome === "denied" || DENIED_CODES.has(outcome.code ?? "")) unauthorized = true;
+      if (!outcome || ["denied", "disabled"].includes(outcome.outcome) || DENIED_CODES.has(outcome.code ?? ""))
+        unauthorized = true;
       else if ((kept.get(source) ?? 0) < room) {
         record.shown.push(shown);
         kept.set(source, (kept.get(source) ?? 0) + 1);

@@ -12,28 +12,19 @@ import { detectOnboardingStatus, setOnboardingStatus, PROACTIVE_OPENER_PROMPT } 
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { settle } from "./support/settle.ts";
 
 const actor = { externalId: "U1" };
 const onboardingSkillDir = join(process.cwd(), "plugins/onboarding/skills");
 
-function freshApp(overrides: Partial<Config> = {}) {
+async function freshApp(overrides: Partial<Config> = {}) {
   const config: Config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-onboarding-")),
     pluginSkillDirs: [onboardingSkillDir],
     ...overrides,
   });
-  return buildApp(config);
-}
-
-async function waitForOnboardingSkill(skills: ReturnType<typeof buildApp>["skills"]): Promise<void> {
-  await settle(async () =>
-    (await skills.list()).some((s) => s.manifest.name === "onboarding" && s.status === "published"),
-  );
-  assert.ok(
-    (await skills.list()).some((s) => s.manifest.name === "onboarding" && s.status === "published"),
-    "onboarding skill was not seeded",
-  );
+  const built = buildApp(config);
+  await built.ownSharedState();
+  return built;
 }
 
 test("onboarding memory markers are detected from readable memory bullets", () => {
@@ -48,20 +39,19 @@ test("setOnboardingStatus replaces the marker fact and round-trips through detec
   const scope = scopeId("personal", "U1");
   await memory.capture(scope, ["some prefs", "onboarding:  Pending v2."], Date.UTC(2026, 5, 1));
 
-  await setOnboardingStatus(memory, scope, "completed", "2026-06-22", "admin");
+  await setOnboardingStatus(memory, scope, "completed", "2026-06-22", { actorId: "admin", context: "admin" });
   const completed = await memory.read(scope);
   assert.equal(detectOnboardingStatus(completed), "completed");
   assert.doesNotMatch(completed, /pending/i);
   assert.match(completed, /some prefs/);
 
-  await setOnboardingStatus(memory, scope, "not_started", "2026-06-22", "admin");
+  await setOnboardingStatus(memory, scope, "not_started", "2026-06-22", { actorId: "admin", context: "admin" });
   assert.equal(detectOnboardingStatus(await memory.read(scope)), "not_started");
   assert.match(await memory.read(scope), /some prefs/);
 });
 
 test("a new personal DM offers onboarding through the skills index", async () => {
-  const { app, skills } = freshApp();
-  await waitForOnboardingSkill(skills);
+  const { app } = await freshApp();
 
   const sys = await app.turn({
     surface: "test",
@@ -82,8 +72,7 @@ test("the opener defers Slack setup until status can be checked without requirin
 });
 
 test("ideas web conversations bypass onboarding on every turn without completing it", async () => {
-  const { app, skills, memory } = freshApp();
-  await waitForOnboardingSkill(skills);
+  const { app, memory } = await freshApp();
   const threadRef = "web:U1:ideas:12345678-1234-4123-8123-123456789abc";
   for (let i = 0; i < 2; i++) {
     const sys = await app.turn({

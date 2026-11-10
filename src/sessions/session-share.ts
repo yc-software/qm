@@ -20,7 +20,6 @@ export interface SessionShare {
   audience: "internal" | "external";
   createdBy: string;
   createdAt: number;
-  visibility: { minSeq: number; maxSeq: number; minCreatedAt: number; maxCreatedAt: number };
   messages: SharedMessage[];
   files: Array<SharedAttachment & { blobKey: string }>;
 }

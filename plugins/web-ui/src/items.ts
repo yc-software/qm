@@ -70,6 +70,18 @@ export const isUserMessage = (item: Pick<Item, "kind">): boolean =>
 export const isNarration = (item: Pick<Item, "kind" | "variant">): boolean =>
   item.kind === "AgentMessage" && item.variant === "narration";
 
+function replyCheckMark(item: Pick<Item, "kind" | "variant" | "body">, key: "retracted" | "prodded"): string | null {
+  if (!isNarration(item)) return null;
+  const reason = item.body[key];
+  return typeof reason === "string" && reason.trim() ? reason.trim() : null;
+}
+
+export const retractedReason = (item: Pick<Item, "kind" | "variant" | "body">): string | null =>
+  replyCheckMark(item, "retracted");
+
+export const proddedReason = (item: Pick<Item, "kind" | "variant" | "body">): string | null =>
+  replyCheckMark(item, "prodded");
+
 export const isHidden = (item: Pick<Item, "hidden" | "body">): boolean =>
   item.hidden === true || item.body.hidden === true;
 

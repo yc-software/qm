@@ -89,6 +89,26 @@ test("no gateway context: prompt names the surface but adds no identifier lines"
   assert.doesNotMatch(res.reply ?? "", /Identifiers for this conversation/);
 });
 
+test("a DM names the person by the name stored at sign-in, then by email, never by the raw sign-in id", async () => {
+  const { app, users } = freshApp();
+  const dmWith = async (externalId: string) => {
+    const res = await app.turn({
+      surface: "web",
+      actor: { externalId },
+      conversation: { kind: "dm", threadRef: `web:${externalId}:t1` },
+      text: "!sysprompt",
+    });
+    assert.equal(res.status, "ok", JSON.stringify(res));
+    return res.reply ?? "";
+  };
+  await users.setDisplayName("oidc:issuer:ada", "Ada Founder");
+  const named = await dmWith("oidc:issuer:ada");
+  assert.match(named, /^Web DM with Ada Founder\.$/m);
+  assert.doesNotMatch(named, /oidc:issuer:ada\./);
+  assert.match(await dmWith("grace@example.com"), /^Web DM with grace@example\.com\.$/m);
+  assert.match(await dmWith("oidc:issuer:nobody"), /^Web DM with Unknown person\.$/m);
+});
+
 test("web prompt tells cron creators to use a real notification destination", async () => {
   const { app } = freshApp();
   const res = await app.turn({
@@ -109,12 +129,14 @@ test("triggered destination turns tell the agent to return the deliverable, not 
     actor: { externalId: "U1" },
     conversation: { kind: "dm", threadRef: "cron:c1:slot" },
     text: "!sysprompt",
-    triggered: true,
-    triggerDestination: {
-      type: "principal",
-      target: "U1",
-      audienceScopeId: scopeId("personal", "U1"),
-      onBehalfOf: "U1",
+    origin: {
+      kind: "automation",
+      destination: {
+        type: "principal",
+        target: "U1",
+        audienceScopeId: scopeId("personal", "U1"),
+        onBehalfOf: "U1",
+      },
     },
   });
   assert.equal(res.status, "ok");
@@ -125,7 +147,10 @@ test("triggered destination turns tell the agent to return the deliverable, not 
 
 test("a web turn's default delivery destination is its own web session", async () => {
   const { deliveryCandidatesFor } = await import("../src/core/orchestrator/turn-helpers.ts");
-  const delivery = deliveryCandidatesFor("web", "web:session-1", undefined, scopeId("personal", "a@example.com"));
+  const delivery = deliveryCandidatesFor(
+    { surface: "web", deliveryTarget: "web:session-1" },
+    scopeId("personal", "a@example.com"),
+  );
   const chosen = delivery.candidates.find((c) => c.key === delivery.defaultKey);
   assert.equal(chosen?.type, "web");
   assert.equal(chosen?.target, "web:session-1");

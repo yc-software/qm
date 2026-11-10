@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { applyReasoningMode, createAgent } from "../src/agent/agent-run.ts";
+import { createAgent } from "../src/agent/agent-run.ts";
+import { applyReasoningMode } from "../src/agent/turn-effort.ts";
+import { createModelRoutes } from "../src/model/model-route.ts";
 import { getRequiredModel, thinkingLevelsFor, safeModelMetadata } from "../src/model/pi-models.ts";
 import { validateRuntimeChoice } from "../src/api/runtime-config.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
@@ -110,17 +112,19 @@ test("real Pi AgentSession and Anthropic serializer send Auto without a fixed ef
     for (const route of ["api-key", "personal-key", "oauth", "gateway"] as const) {
       await t.test(`${modelId}/${route}`, async () => {
         const agent = createAgent({
-          defaultModelId: modelId,
-          ...(route === "gateway"
-            ? {
-                modelGateway: {
-                  url: "https://gateway.invalid",
-                  apiKey: "test-key",
-                  apiKeyHeader: "x-gateway-key",
-                  models: { [modelId]: "routed-model" },
-                },
-              }
-            : { apiKey: "sk-offline-test-key" }),
+          routes: createModelRoutes({
+            defaultModelId: modelId,
+            ...(route === "gateway"
+              ? {
+                  modelGateway: {
+                    url: "https://gateway.invalid",
+                    apiKey: "test-key",
+                    apiKeyHeader: "x-gateway-key",
+                    models: { [modelId]: "routed-model" },
+                  },
+                }
+              : { apiKey: "sk-offline-test-key" }),
+          }),
         });
         t.after(() => agent.close?.());
         const mandatoryThinking = getRequiredModel(modelId).thinkingLevelMap?.off === null;

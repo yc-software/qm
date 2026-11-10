@@ -2,8 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/agent/agent-tools.ts";
 import { createGrindMeter } from "../src/agent/goal.ts";
-import { turnToolContext } from "../src/agent/turn-support.ts";
-import { emptyEndingNote } from "../src/agent/agent-run.ts";
+import { emptyEndingNote } from "../src/agent/turn-wall-clock.ts";
 import {
   GovernorUndecided,
   supersedeGoal,
@@ -526,11 +525,7 @@ test("a turn resumed mid-way cannot cancel: it is not answering a fresh message 
   const first = toolbox();
   await first.create.execute("c1", { objective: "long haul" });
   const resumed = nextTurn(first.ref.goal!);
-  Object.assign(
-    resumed.ref,
-    turnToolContext({ continueTurn: true, history: [], tools: { humanTurn: true } } as never),
-    { goal: resumed.ref.goal },
-  );
+  Object.assign(resumed.ref, { current: { humanTurn: true }, goalRound: 1 });
   const result = await resumed.update.execute("u1", { status: "cancel", note: "user: cancel" });
   assert.match(textOf(result as never), /Only the user's own message can cancel/);
   assert.equal(resumed.ref.goal?.status, "active");

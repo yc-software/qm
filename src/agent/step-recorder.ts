@@ -90,12 +90,18 @@ export function createStepRecorder(turn: Pick<AgentTurnInput, "emit" | "shutdown
     const fields = stepFields(call.step, toolCallWire(item, call.block));
     return { ...item, step: fields.step, body: { ...item.body, ...fields.body } };
   };
-  const flush = (): void => {
+  const flush = (mark?: { retracted: string } | { prodded: string }): void => {
     if (!pending) return;
     for (const { index, block } of pending.parts) {
       const { text, ...rest } = block;
       const fields = stepFields({ ...pending.step, index });
-      write({ kind: "AgentMessage", variant: "narration", text, step: fields.step, body: { ...rest, ...fields.body } });
+      write({
+        kind: "AgentMessage",
+        variant: "narration",
+        text,
+        step: fields.step,
+        body: { ...rest, ...fields.body, ...mark },
+      });
     }
     pending = null;
   };
@@ -148,7 +154,7 @@ export function createStepRecorder(turn: Pick<AgentTurnInput, "emit" | "shutdown
         } else calls.set(block.id, { step: { ...step, index }, block });
       });
       pending = { step, parts };
-      if (message.content.some((block) => block.type === "toolCall")) flush();
+      if (stopReason !== "aborted" && message.content.some((block) => block.type === "toolCall")) flush();
     },
     startStreaming(): void {
       streamingStep = undefined;
@@ -160,7 +166,9 @@ export function createStepRecorder(turn: Pick<AgentTurnInput, "emit" | "shutdown
     toolResult(message: ToolResultMessage): void {
       recordResult(message.toolCallId, message.content, message.isError);
     },
-    flush,
+    flush: () => flush(),
+    mark: (verdict: { action: "retry" | "prod"; reason: string }) =>
+      flush(verdict.action === "retry" ? { retracted: verdict.reason } : { prodded: verdict.reason }),
     settleResults(): void {
       for (const item of executing.values()) write(item);
       executing.clear();

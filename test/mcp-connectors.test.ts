@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { tenantTest as test } from "./support/tenant-test.ts";
 import assert from "node:assert/strict";
 import { createMcpClient, mcpResultText } from "../src/mcp/mcp-client.ts";
 import { createMcpServerStore, isValidMcpServerId, type McpServer } from "../src/mcp/mcp-server-store.ts";
@@ -10,7 +10,8 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { settle } from "./support/settle.ts";
 import { loopbackFetch, startMcpTestServer } from "./support/mcp-test-server.ts";
-import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { installPrincipalLinks, UnattestableActor } from "../src/directory/person.ts";
 
 function server(partial?: Partial<McpServer>): McpServer {
@@ -132,7 +133,7 @@ test("mcp client mints client-credentials tokens on the server's origin and reus
     url: mcp.url,
     auth: { mode: "client-credentials", clientId: "id", clientSecret: "guess" },
   });
-  await assert.rejects(wrong.listTools());
+  await assert.rejects(wrong.listTools(), { code: "invalid_client", status: 401 });
 });
 
 test("mcp client never sends client credentials to an authorization server on another origin", async (t) => {
@@ -162,7 +163,7 @@ test("tool service exposes namespaced tools and calls through", async (t) => {
   const service = createMcpToolService({ fetch: loopbackFetch, servers: store, refreshIntervalMs: 3600_000 });
   await store.put(server({ url: `${mcp.url}/mcp` }));
   await service.refresh();
-  const defs = service.toolDefs();
+  const defs = await service.toolDefs();
   assert.deepEqual(defs.map((d) => d.name).sort(), ["crm_query", "crm_update"]);
   assert.ok(defs.every((d) => d.readOnly && d.serverAbout === "CRM records"));
   const out = await service.call("crm_query", { q: "hello" }, "internal:U1");
@@ -183,11 +184,18 @@ test("destructive annotations mark MCP tools for approval unless the server over
   const approvals = async (partial: Partial<McpServer>) => {
     await store.put(server({ url: mcp.url, ...partial }));
     await service.refresh();
-    return Object.fromEntries(service.toolDefs().map((d) => [d.remoteName, d.needsApproval]));
+    return Object.fromEntries((await service.toolDefs()).map((d) => [d.remoteName, d.needsApproval]));
   };
   assert.deepEqual(await approvals({}), { read: false, drop: true, plain: false });
   assert.deepEqual(await approvals({ approval: "all" }), { read: true, drop: true, plain: true });
   assert.deepEqual(await approvals({ approval: "none" }), { read: false, drop: false, plain: false });
+  const readOnly = async (partial: Partial<McpServer>) => {
+    await store.put(server({ url: mcp.url, ...partial }));
+    await service.refresh();
+    return Object.fromEntries((await service.toolDefs()).map((d) => [d.remoteName, d.readOnly]));
+  };
+  assert.deepEqual(await readOnly({ readOnly: false }), { read: true, drop: false, plain: false });
+  assert.deepEqual(await readOnly({ readOnly: true }), { read: true, drop: true, plain: true });
   service.close();
 });
 
@@ -209,33 +217,69 @@ test("a catalog server is one tool that searches, describes, and invokes as the 
   await store.put(server({ id: "records", name: "Records", url: mcp.url, catalog: true, attestActor: true }));
   await service.refresh();
   assert.deepEqual(
-    service.toolDefs().map((d) => [d.name, d.catalog]),
+    (await service.toolDefs()).map((d) => [d.name, d.catalog]),
     [["records", true]],
   );
   assert.equal(mcp.requests.filter((r) => r.rpc === "tools/list").length, 0, "a catalog is listed per person on use");
   assert.equal(
-    await service.call("records", { operation: "search", query: "message" }, "alice@example.com"),
+    await service.call(
+      "records",
+      { operation: "search", query: "message" },
+      "alice@example.com",
+      undefined,
+      "personal:alice@example.com",
+    ),
     "- send-message (needs approval): Send a message to a contact",
   );
   assert.match(
-    await service.call("records", { operation: "describe", tool: "send-message" }, "alice@example.com"),
+    await service.call(
+      "records",
+      { operation: "describe", tool: "send-message" },
+      "alice@example.com",
+      undefined,
+      "personal:alice@example.com",
+    ),
     /"needsApproval":true/,
   );
   assert.equal(
-    await service.needsApproval("records", { operation: "invoke", tool: "send-message" }, "alice@example.com"),
+    await service.needsApproval(
+      "records",
+      { operation: "invoke", tool: "send-message" },
+      "alice@example.com",
+      "personal:alice@example.com",
+    ),
     true,
   );
   assert.equal(
-    await service.needsApproval("records", { operation: "invoke", tool: "find-record" }, "alice@example.com"),
+    await service.needsApproval(
+      "records",
+      { operation: "invoke", tool: "find-record" },
+      "alice@example.com",
+      "personal:alice@example.com",
+    ),
     false,
   );
-  assert.equal(await service.needsApproval("records", { operation: "search" }, "alice@example.com"), false);
+  assert.equal(
+    await service.needsApproval("records", { operation: "search" }, "alice@example.com", "personal:alice@example.com"),
+    false,
+  );
   await assert.rejects(
-    service.needsApproval("records", { operation: "invoke", tool: "send_message" }, "alice@example.com"),
+    service.needsApproval(
+      "records",
+      { operation: "invoke", tool: "send_message" },
+      "alice@example.com",
+      "personal:alice@example.com",
+    ),
     /Unknown Records tool: send_message\. Search for it first/,
   );
   await assert.rejects(
-    service.call("records", { operation: "invoke", tool: "send-message", arguments: { to: "x" } }, "alice@example.com"),
+    service.call(
+      "records",
+      { operation: "invoke", tool: "send-message", arguments: { to: "x" } },
+      "alice@example.com",
+      undefined,
+      "personal:alice@example.com",
+    ),
     /needs the person's approval/,
     "an approval-requiring tool never goes out without an approval",
   );
@@ -245,6 +289,7 @@ test("a catalog server is one tool that searches, describes, and invokes as the 
       { operation: "invoke", tool: "send-message", arguments: { to: "x" } },
       "alice@example.com",
       "tool-call:abc",
+      "personal:alice@example.com",
     ),
     'send-message {"to":"x"}',
   );
@@ -253,15 +298,18 @@ test("a catalog server is one tool that searches, describes, and invokes as the 
     [["alice@example.com", "tool-call:abc"]],
   );
   assert.equal(mcp.requests.filter((r) => r.rpc === "tools/list").length, 1, "the catalog is cached per person");
-  await service.call("records", { operation: "search" }, "bob@example.com");
+  await service.call("records", { operation: "search" }, "bob@example.com", undefined, "personal:bob@example.com");
   assert.equal(mcp.requests.filter((r) => r.rpc === "tools/list").length, 2, "each person gets their own catalog");
   assert.ok(mcp.requests.every((r) => r.actor === "alice@example.com" || r.actor === "bob@example.com"));
-  await assert.rejects(service.call("records", { operation: "search" }), /needs a signed-in person/);
+  await assert.rejects(
+    service.call("records", { operation: "search" }),
+    /answers only to them in their own private conversation/,
+  );
   await service.refresh();
   const lists = mcp.requests.filter((r) => r.rpc === "tools/list").length;
   await Promise.all([
-    service.call("records", { operation: "search" }, "alice@example.com"),
-    service.call("records", { operation: "search" }, "alice@example.com"),
+    service.call("records", { operation: "search" }, "alice@example.com", undefined, "personal:alice@example.com"),
+    service.call("records", { operation: "search" }, "alice@example.com", undefined, "personal:alice@example.com"),
   ]);
   assert.equal(
     mcp.requests.filter((r) => r.rpc === "tools/list").length,
@@ -271,12 +319,7 @@ test("a catalog server is one tool that searches, describes, and invokes as the 
   service.close();
 });
 
-test("attested connectors send one canonical person and never call for an actor QM can't attest", async (t) => {
-  installPrincipalLinks({
-    canonical: (key) => (key === "alice@example.com" || key === "U_ALICE" ? "U_ALICE" : undefined),
-    aliases: () => [],
-  });
-  t.after(() => installPrincipalLinks(null));
+test("an attested connector is offered only to its person in their own private conversation", async (t) => {
   const mcp = await startMcpTestServer(t, {
     tools: [{ name: "find-record", description: "Find a record", inputSchema: { type: "object" } }],
   });
@@ -284,17 +327,94 @@ test("attested connectors send one canonical person and never call for an actor 
   const service = createMcpToolService({ fetch: loopbackFetch, servers: store, refreshIntervalMs: 3600_000 });
   await store.put(server({ id: "records", name: "Records", url: mcp.url, catalog: true, attestActor: true }));
   await service.refresh();
+  const offered = async (principalId: string, scopeId: string) =>
+    (await service.toolDefsFor(principalId, scopeId)).map((d) => d.serverId);
+  assert.deepEqual(await offered("U1", "personal:U1"), ["records"]);
+  assert.deepEqual(await offered("U2", "personal:U1"), []);
+  assert.deepEqual(await offered("system:ambient:acme", "personal:system:ambient:acme"), []);
+  assert.deepEqual(await offered("U1", "channel:C1"), []);
+  service.close();
+});
+
+test("an attested connector refuses a call outside its person's own conversation even before this instance refreshes", async (t) => {
+  const mcp = await startMcpTestServer(t, {
+    tools: [{ name: "find-record", description: "Find a record", inputSchema: { type: "object" } }],
+  });
+  const shared = testMap<McpServer>();
+  const otherInstance = createMcpServerStore(shared);
+  const store = createMcpServerStore(shared);
+  const audit = createPostgresAuditLog(testDatabaseUrl());
+  const service = createMcpToolService({ fetch: loopbackFetch, servers: store, audit, refreshIntervalMs: 3600_000 });
+  const records = server({ id: "records", name: "Records", url: mcp.url, catalog: true });
+  await store.put(records);
+  await service.refresh();
+  assert.deepEqual(
+    (await service.toolDefsFor("U1", "channel:C1")).map((d) => d.serverId),
+    ["records"],
+  );
+  await otherInstance.put({ ...records, attestActor: true, updatedAt: 1 });
+  const invoke = { operation: "invoke", tool: "find-record", arguments: {} };
+  const privateOnly = /answers only to them in their own private conversation/;
+  await assert.rejects(service.needsApproval("records", invoke, "U1", "channel:C1"), privateOnly);
+  await assert.rejects(service.call("records", invoke, "U1", undefined, "channel:C1"), privateOnly);
+  await assert.rejects(service.call("records", invoke, "U2", undefined, "personal:U1"), privateOnly);
+  assert.equal(mcp.requests.length, 0);
+  assert.deepEqual(
+    (await audit.tail({ limit: 10, action: "mcp.call", resourceContains: "records" }))
+      .filter((event) => privateOnly.test(event.status ?? ""))
+      .map((event) => event.principalId)
+      .sort(),
+    ["U1", "U1", "U2"],
+  );
+  await service.call("records", invoke, "U1", undefined, "personal:U1");
+  assert.deepEqual(
+    mcp.requests.filter((r) => r.rpc === "tools/call").map((r) => r.actor),
+    ["U1"],
+  );
+  service.close();
+});
+
+test("attested connectors send one canonical person and never call for an actor QM can't attest", async (t) => {
+  installPrincipalLinks({
+    canonical: (key) => (["alice@example.com", "U_ALICE", "system:digest"].includes(key) ? "U_ALICE" : undefined),
+    aliases: () => [],
+  });
+  t.after(() => installPrincipalLinks(null));
+  const mcp = await startMcpTestServer(t, {
+    tools: [{ name: "find-record", description: "Find a record", inputSchema: { type: "object" } }],
+  });
+  const store = createMcpServerStore(testMap<McpServer>());
+  const audit = createPostgresAuditLog(testDatabaseUrl());
+  const service = createMcpToolService({ fetch: loopbackFetch, servers: store, audit, refreshIntervalMs: 3600_000 });
+  await store.put(server({ id: "records", name: "Records", url: mcp.url, catalog: true, attestActor: true }));
+  await service.refresh();
   for (const person of ["alice@example.com", "U_ALICE"])
-    await service.call("records", { operation: "invoke", tool: "find-record", arguments: {} }, person);
+    await service.call(
+      "records",
+      { operation: "invoke", tool: "find-record", arguments: {} },
+      person,
+      undefined,
+      `personal:${person}`,
+    );
   assert.ok(mcp.requests.length > 0);
   assert.deepEqual(new Set(mcp.requests.map((request) => request.actor)), new Set(["U_ALICE"]));
   const sent = mcp.requests.length;
+  await assert.rejects(
+    service.call("records", { operation: "search" }, "system:digest", undefined, "personal:U_ALICE"),
+    /answers only to them in their own private conversation/,
+  );
   for (const person of ["jörg@example.com", "x".repeat(257)])
     await assert.rejects(
-      service.call("records", { operation: "search" }, person),
+      service.call("records", { operation: "search" }, person, undefined, `personal:${person}`),
       (error: unknown) => error instanceof UnattestableActor && /POST \/v1\/admin\/principal-links/.test(error.message),
     );
   assert.equal(mcp.requests.length, sent);
+  assert.equal(
+    (await audit.tail({ limit: 10, action: "mcp.call", resourceContains: "records" })).filter((event) =>
+      /principal-links/.test(event.status ?? ""),
+    ).length,
+    2,
+  );
   service.close();
 });
 
@@ -304,10 +424,10 @@ test("disabled server's tools disappear and calls fail", async (t) => {
   const service = createMcpToolService({ fetch: loopbackFetch, servers: store, refreshIntervalMs: 3600_000 });
   await store.put(server({ url: mcp.url }));
   await service.refresh();
-  assert.equal(service.toolDefs().length, 2);
+  assert.equal((await service.toolDefs()).length, 2);
   await store.put(server({ url: mcp.url, enabled: false }));
   await service.refresh();
-  assert.equal(service.toolDefs().length, 0);
+  assert.equal((await service.toolDefs()).length, 0);
   service.close();
 });
 
@@ -455,8 +575,7 @@ test("per-user connectors select an explicit account slot without falling back t
   await assert.rejects(service.call("crm_query", {}, "internal:alice"), /Connect your account/);
 });
 
-test("background MCP refresh contains registry failures at startup, on change, and on its timer", async (t) => {
-  t.mock.timers.enable({ apis: ["setInterval"] });
+test("MCP refresh contains registry failures on change and on a stale read, then recovers", async (t) => {
   const backing = testMap<McpServer>();
   const store = createMcpServerStore(backing);
   const mcp = await startMcpTestServer(t);
@@ -464,24 +583,33 @@ test("background MCP refresh contains registry failures at startup, on change, a
     throw new Error("registry unavailable");
   });
   const errors = t.mock.method(console, "error", () => {});
-  const service = createMcpToolService({ fetch: loopbackFetch, servers: store, refreshIntervalMs: 100 });
+  let clock = 1_000;
+  const service = createMcpToolService({
+    fetch: loopbackFetch,
+    servers: store,
+    refreshIntervalMs: 100,
+    now: () => clock,
+  });
   t.after(() => service.close());
   const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
   await tick();
-  assert.equal(list.mock.callCount(), 1);
+  assert.equal(list.mock.callCount(), 0);
   await store.put(server({ url: mcp.url }));
   await tick();
-  assert.equal(list.mock.callCount(), 2);
-  t.mock.timers.tick(100);
+  assert.equal(list.mock.callCount(), 1);
+  assert.deepEqual(await service.toolDefs(), []);
+  assert.equal(list.mock.callCount(), 1);
+  clock += 100;
+  await service.toolDefs();
   await tick();
-  assert.equal(list.mock.callCount(), 3);
-  assert.equal(errors.mock.callCount(), 3);
+  assert.equal(list.mock.callCount(), 2);
+  assert.equal(errors.mock.callCount(), 2);
   await assert.rejects(service.refresh(), /registry unavailable/);
   list.mock.restore();
-  t.mock.timers.tick(100);
-  await settle(async () => service.toolDefs().length > 0);
+  clock += 100;
+  await settle(async () => (await service.toolDefs()).length > 0);
   assert.deepEqual(
-    service.toolDefs().map((tool) => tool.name),
+    (await service.toolDefs()).map((tool) => tool.name),
     ["crm_query", "crm_update"],
   );
   assert.equal(await service.call("crm_query", {}), "ran query");
@@ -524,10 +652,52 @@ test("optional intent and locale parameters are left out of the schema the model
   t.after(() => service.close());
   await store.put(server({ url: `${mcp.url}/mcp` }));
   await service.refresh();
-  const schemas = Object.fromEntries(service.toolDefs().map((d) => [d.name, d.inputSchema]));
+  const schemas = Object.fromEntries((await service.toolDefs()).map((d) => [d.name, d.inputSchema]));
   assert.deepEqual(Object.keys(schemas.crm_search!.properties as object), ["query"]);
   assert.deepEqual(schemas.crm_search!.required, ["query"]);
   assert.deepEqual(Object.keys(schemas.crm_translate!.properties as object), ["text", "locale"]);
   assert.equal(await service.call("crm_search", { query: "tacos" }), "ok");
   assert.deepEqual(sent, [{ query: "tacos" }]);
+});
+
+test("a connector set to attest in any audience acts as the signed-in person who asked, wherever they ask, and never for anyone else", async (t) => {
+  const mcp = await startMcpTestServer(t, {
+    tools: [{ name: "find-record", description: "Find a record", inputSchema: { type: "object" } }],
+  });
+  const store = createMcpServerStore(testMap<McpServer>());
+  const service = createMcpToolService({ fetch: loopbackFetch, servers: store, refreshIntervalMs: 3600_000 });
+  const attested = { url: mcp.url, catalog: true, attestActor: true } as const;
+  await store.put(server({ id: "records", name: "Records", ...attested, attestAudience: "any" }));
+  await store.put(server({ id: "strict", name: "Strict", ...attested }));
+  await service.refresh();
+  const offered = async (principalId: string, scopeId: string, actAsActor?: boolean) =>
+    (await service.toolDefsFor(principalId, scopeId, actAsActor)).map((d) => d.serverId).sort();
+  assert.deepEqual(await offered("U1", "personal:U1"), ["records", "strict"]);
+  assert.deepEqual(await offered("U1", "channel:C1", true), ["records"]);
+  assert.deepEqual(await offered("U1", "group:G1", true), ["records"]);
+  assert.deepEqual(await offered("G9", "channel:C1", false), []);
+  assert.deepEqual(await offered("U1", "channel:C1"), []);
+  assert.deepEqual(await offered("system:channel:C1", "channel:C1", true), []);
+
+  const invoke = { operation: "invoke", tool: "find-record", arguments: {} };
+  const privateOnly = /answers only to them in their own private conversation/;
+  assert.equal(await service.needsApproval("records", invoke, "U1", "channel:C1", true), false);
+  await service.call("records", invoke, "U1", undefined, "channel:C1", true);
+  await service.call("records", invoke, "U2", undefined, "personal:U1", true);
+  await assert.rejects(service.call("records", invoke, "G9", undefined, "channel:C1", false), privateOnly);
+  await assert.rejects(service.call("records", invoke, "U1", undefined, "channel:C1"), privateOnly);
+  await assert.rejects(
+    service.call("records", invoke, "system:channel:C1", undefined, "channel:C1", true),
+    privateOnly,
+  );
+  await assert.rejects(
+    service.call("records", invoke, "jörg@example.com", undefined, "channel:C1", true),
+    (error: unknown) => error instanceof UnattestableActor,
+  );
+  await assert.rejects(service.call("strict", invoke, "U1", undefined, "channel:C1", true), privateOnly);
+  assert.deepEqual(
+    mcp.requests.filter((r) => r.rpc === "tools/call").map((r) => r.actor),
+    ["U1", "U2"],
+  );
+  service.close();
 });

@@ -1,4 +1,4 @@
-import { toolCallApprovalKey } from "../../core/approval-id.ts";
+import { approvalCardId, toolCallApprovalKey } from "../../core/approval-id.ts";
 import { canonicalJson } from "../../../cli/src/canonical-json.ts";
 import { type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -64,7 +64,7 @@ export function withRetrySafety(tool: ToolDefinition, marks: Map<string, RetryMa
 }
 
 const RESOURCE_TOOL_NAMES = new Set(["sandbox", "background", "files", "apps", "skills", "goal", "cron", "admin"]);
-const TOOL_APPROVAL_EXEMPT = new Set(["finish_silently", "tool_search", "mcp_call"]);
+const TOOL_APPROVAL_EXEMPT = new Set(["finish_silently", "tool_search", "mcp_call", "withdraw_approval"]);
 const STRICT_TOOL_APPROVAL_REASON = "strict posture: this tool call requires human approval";
 const DECLARED_TOOL_APPROVAL_REASON = "this tool asks for approval before each call";
 const APPROVAL_ARGS_MAX_CHARS = 16_000;
@@ -78,6 +78,15 @@ async function declaredApprovalReason(tool: ToolApprovalDeclaration, params: unk
   const needed =
     typeof tool.needsApproval === "function" ? await tool.needsApproval(params) : tool.needsApproval === true;
   return needed ? (tool.approvalReason ?? DECLARED_TOOL_APPROVAL_REASON) : undefined;
+}
+
+function keyedApprovalBlockedText(reason: string, callKey: string): string {
+  return (
+    `[blocked: needs human approval] ${reason}. ` +
+    `An approval card for this exact call (card ${approvalCardId(callKey)}) is now waiting for the person. ` +
+    "If they approve it, QM runs exactly this call and records its result in this conversation, so do not propose it again. " +
+    "If they change their mind before approving, withdraw the card with withdraw_approval."
+  );
 }
 
 function approvalCallText(label: string, params: unknown): string {
@@ -147,6 +156,7 @@ export function withToolApprovalGate(
                 summary: commandLabel,
                 grantModes: { session: false, always: false },
                 ...(isObj(params) && typeof params.purpose === "string" ? { purpose: params.purpose } : {}),
+                ...(isObj(params) ? { call: { tool: tool.name, input: params } } : {}),
               }
             : {
                 command: commandLabel,
@@ -174,7 +184,15 @@ export function withToolApprovalGate(
             reason,
           },
           {
-            content: [{ type: "text" as const, text: `[blocked: needs human approval] ${reason}` }],
+            content: [
+              {
+                type: "text" as const,
+                text:
+                  callKey && isObj(params)
+                    ? keyedApprovalBlockedText(reason, callKey)
+                    : `[blocked: needs human approval] ${reason}`,
+              },
+            ],
             details: {},
             terminate: true,
           },

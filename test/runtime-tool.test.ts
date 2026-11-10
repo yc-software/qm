@@ -39,14 +39,11 @@ test("runtime exposes actual dispatch separately from saved defaults and resolve
   assert.equal(await config.getRuntimeSelectionDurable(claims.scopeId), null);
 });
 
-test("scope defaults persist and inherit clears them", async () => {
+test("scope defaults persist", async () => {
   const { config, service } = await setup();
   const result = await service(claims, active, { action: "set", model: "Astra", lifetime: "scope" });
   assert.equal(result.ok, true);
   assert.equal((await config.getRuntimeSelectionDurable(claims.scopeId))?.modelId, "gpt-6-astra");
-  const inherited = await service(claims, active, { action: "inherit", lifetime: "scope" });
-  assert.equal(inherited.ok, true);
-  assert.equal(await config.getRuntimeSelectionDurable(claims.scopeId), null);
 });
 
 test("runtime changes reject revoked access, bots, triggers and foreign personal scopes", async () => {
@@ -172,20 +169,18 @@ test("cron fires may change their task runtime without changing saved defaults",
   );
   assert.deepEqual(result, { ok: true, handoff: { lifetime: "task", choice: { ...active, modelId: "gpt-6-astra" } } });
   assert.equal(await config.getRuntimeSelectionDurable(claims.scopeId), null);
-  for (const action of ["set", "inherit"] as const) {
-    assert.deepEqual(
-      await service(
-        cronClaims,
-        active,
-        { action, model: "Astra", lifetime: "scope" },
-        undefined,
-        false,
-        undefined,
-        true,
-      ),
-      { ok: false, error: "live_actor_required" },
-    );
-  }
+  assert.deepEqual(
+    await service(
+      cronClaims,
+      active,
+      { action: "set", model: "Astra", lifetime: "scope" },
+      undefined,
+      false,
+      undefined,
+      true,
+    ),
+    { ok: false, error: "live_actor_required" },
+  );
   assert.equal(await config.getRuntimeSelectionDurable(claims.scopeId), null);
 });
 
@@ -235,24 +230,6 @@ test("cron task handoffs still enforce actor, access, model and account policy",
   await config.setWebuiModels("org:default-org", ["claude-sonnet-5"]);
   assert.deepEqual(
     await service(cronClaims, active, { action: "set", model: "Astra" }, undefined, false, undefined, true),
-    { ok: false, error: "model_not_enabled" },
-  );
-});
-
-test("cron inherit cannot select a saved model removed from policy", async () => {
-  const { service, config } = await setup();
-  await config.setRuntimeSelection(claims.scopeId, { ...active, modelId: "gpt-6-astra" });
-  await config.setWebuiModels("org:default-org", ["claude-sonnet-5"]);
-  assert.deepEqual(
-    await service(
-      { ...claims, liveActor: false, triggered: true },
-      active,
-      { action: "inherit" },
-      undefined,
-      false,
-      undefined,
-      true,
-    ),
     { ok: false, error: "model_not_enabled" },
   );
 });

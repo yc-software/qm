@@ -1,4 +1,4 @@
-import type { ScopedConfigStore, RuntimePurpose } from "../resolution/config-store.ts";
+import type { ScopedConfigStore, TurnRuntimePurpose } from "../resolution/config-store.ts";
 import {
   defaultModel,
   fastModeModelIds,
@@ -10,28 +10,30 @@ import {
 } from "../model/pi-models.ts";
 import type { ScopeId } from "../types.ts";
 import { SEAT_MODEL_ID } from "../model/seat-model.ts";
-import type { Agent, AgentTurnInput, RuntimeChoice } from "./agent.ts";
+import type { Agent, AgentTurnInput, CompactInput, RuntimeChoice, SessionRoute } from "./agent.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { governGoal, type GoalGovernorInput } from "./goal.ts";
-import { turnRuntimePurpose } from "../core/turn-options.ts";
+import { infrequentCronTurn, turnRuntimePurpose } from "../core/turn-options.ts";
 
 export const NON_INTERACTIVE_THINKING_LEVEL = "xhigh";
 export const NON_INTERACTIVE_FAST_MODE = false;
 
 export function turnModelOptions(input: {
-  triggered?: boolean;
+  triggered: boolean;
   surface?: string;
+  infrequentCron?: boolean;
   thinkingLevel?: string;
   fastMode?: boolean;
 }): {
   thinkingLevel?: string;
   fastMode?: boolean;
 } {
-  const nonInteractiveDefaults = input.triggered && turnRuntimePurpose(input) !== "cron";
+  const chatDefaults = infrequentCronTurn(input);
+  const nonInteractiveDefaults = input.triggered && !chatDefaults && turnRuntimePurpose(input) !== "cron";
   let thinkingLevel = input.thinkingLevel;
   if (!thinkingLevel && nonInteractiveDefaults) thinkingLevel = NON_INTERACTIVE_THINKING_LEVEL;
   let fastMode = input.fastMode;
-  if (typeof fastMode !== "boolean" && nonInteractiveDefaults) fastMode = NON_INTERACTIVE_FAST_MODE;
+  if (typeof fastMode !== "boolean" && (nonInteractiveDefaults || chatDefaults)) fastMode = NON_INTERACTIVE_FAST_MODE;
   return {
     ...(thinkingLevel ? { thinkingLevel } : {}),
     ...(typeof fastMode === "boolean" ? { fastMode } : {}),
@@ -70,9 +72,10 @@ export async function resolveRuntimeChoice(
   fallback: RuntimeChoice,
   requested?: Partial<RuntimeChoice>,
   hydrateModelCatalog?: () => Promise<unknown>,
-  purpose?: RuntimePurpose,
+  purpose?: TurnRuntimePurpose,
 ): Promise<RuntimeChoice> {
   if (requested?.modelId === SEAT_MODEL_ID) return { modelId: SEAT_MODEL_ID };
+  if (purpose === "infrequentCron") scope = orgScopeId;
   const [orgStored, scopedStored, orgLegacy, scopedLegacy, purposeRuntime] = await Promise.all([
     config.getRuntimeSelectionDurable(orgScopeId),
     scope === orgScopeId ? null : config.getRuntimeSelectionDurable(scope),
@@ -118,9 +121,18 @@ export async function resolveRuntimeChoice(
 export function withResolvedRuntime(
   agent: Agent,
   resolve: (input: AgentTurnInput, routedBy: (ruleId: string) => void) => RuntimeChoice | Promise<RuntimeChoice>,
+  resolveSession: (route: SessionRoute) => Promise<RuntimeChoice>,
 ): Agent {
+  const compactHistory = agent.compactHistory?.bind(agent);
   return {
     ...agent,
+    ...(compactHistory
+      ? {
+          async compactHistory(input: CompactInput) {
+            return compactHistory({ ...input, runtime: await resolveSession(input) });
+          },
+        }
+      : {}),
     async runTurn(input) {
       let routedBy: string | undefined;
       const choice = await resolve(input, (ruleId) => {

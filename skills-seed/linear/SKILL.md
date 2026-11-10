@@ -1,6 +1,6 @@
 ---
 name: linear
-description: Search, read, create, and update the user's Linear issues, projects, and comments through per-user OAuth.
+description: Search, read, create, and update the user's Linear issues, projects, and comments through their own Linear connection.
 requiredCapabilities:
   - egress:api.linear.app
 ---
@@ -11,17 +11,27 @@ Use this skill when the user asks about Linear issues, tickets, projects, cycles
 their team's work tracking — finding issues, checking status, filing a bug, leaving a
 comment, or updating an issue.
 
-This is an OAuth connector. The resolved user's Linear token already lives on your
-computer as an environment variable (the way a logged-in CLI's cached credential would):
+Linear's API is GraphQL at `https://api.linear.app/graphql`, reached one of two ways:
 
-- `$VAULT_TOKEN_API_LINEAR_APP` — for `api.linear.app`
+- **Direct token:** `$VAULT_TOKEN_API_LINEAR_APP` holds the user's Linear token; pass it as
+  `-H "Authorization: Bearer $VAULT_TOKEN_API_LINEAR_APP"`. The examples below use it as
+  written.
+- **App connection:** with no token, the user connects Linear as an
+  app instead (composio skill). Send the same request through QM — same method, URL, `query`,
+  headers and JSON `body`, but no Authorization header:
 
-Linear's API is GraphQL at `https://api.linear.app/graphql`. Pass the token as a bearer
-header (`-H "Authorization: Bearer $VAULT_TOKEN_API_LINEAR_APP"`). Do not ask the user for
-a token, log it, or use another principal's credential.
+  ```bash
+  curl -sS "$AGENT_API_URL/v1/composio/proxy" -H "X-Agent-Capability: $AGENT_API_TOKEN" \
+    -H 'content-type: application/json' \
+    --data '{"method":"POST","url":"https://api.linear.app/graphql","body":{"query":"{ viewer { name email } }"}}'
+  ```
 
-If the variable is empty or the API returns 401/400 (`authentication`), tell the user they
-need to connect Linear (Connectors page) and stop — don't guess at issue data.
+  The reply is the provider's own status and body; the composio skill's "Raw requests"
+  section covers `409` answers, choosing an account, and file bodies. The GraphQL `{"query":…}` object goes in `body`.
+
+Do not ask the user for a token, log it, or use another principal's credential. With no
+connection, or a 401/400 (`authentication`) from the API, tell the user they need to connect
+Linear and stop — don't guess at issue data.
 
 ## Find / read issues
 

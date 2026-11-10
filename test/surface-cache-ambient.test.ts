@@ -457,7 +457,7 @@ test("the ambient wake prompt is structured XML (<wake>/<message trigger>), untr
   }
 });
 
-test("ambient judge: backdrop renders before NEW MESSAGES, absent on the first judgment (§2.1)", async () => {
+test("ambient judge: earlier messages render as context, only the new ones as triggers (§2.1)", async () => {
   const built = freshApp();
   built.runtime.start();
   try {
@@ -471,28 +471,93 @@ test("ambient judge: backdrop renders before NEW MESSAGES, absent on the first j
       { container, ts: "2.0", authorId: "Bob", text: "second message", createdAt: 2 },
     ]);
     await built.app.judgeAmbientContainer("slack", container);
-    const rows = await judged(
-      built.ambientJudgments!,
-      container,
-      (rows) =>
-        rows.some((r: any) => r.prompt?.includes("second message")) &&
-        rows.some((r: any) => r.prompt?.includes("first message") && !r.prompt?.includes("second message")),
+    const rows = await judged(built.ambientJudgments!, container, (rows) =>
+      rows.some((r: any) => r.prompt?.includes("second message")),
     );
     const second = rows.find((r: any) => r.prompt?.includes("second message"))!;
-    const first = rows.find((r: any) => r.prompt?.includes("first message") && !r.prompt?.includes("second message"))!;
-    assert.ok(first && !first.prompt!.includes("EARLIER CONTEXT"), "the first judgment has no backdrop");
-    assert.ok(second.prompt!.includes("EARLIER CONTEXT"), "the second judgment shows the backdrop section");
-    assert.ok(
-      second.prompt!.indexOf("EARLIER CONTEXT") < second.prompt!.indexOf("NEW MESSAGES"),
-      "backdrop is rendered before NEW MESSAGES",
-    );
-    assert.ok(second.prompt!.includes("Alice: first message"), "the earlier message is the backdrop");
+    assert.match(second.prompt!, /<message id="1\.0"(?:(?!trigger)[^>])*>first message<\/message>/);
+    assert.match(second.prompt!, /<message id="2\.0"[^>]*trigger="true">second message<\/message>/);
+    assert.ok(second.prompt!.indexOf("first message") < second.prompt!.indexOf("second message"));
   } finally {
     await built.runtime.stop();
   }
 });
 
-test("ambient judge: backdrop is capped at the last 10 (§2.1)", async () => {
+test("ambient judge: a thread reply carries its thread, so a request inside someone else's thread reads as theirs", async () => {
+  const built = freshApp();
+  built.runtime.start();
+  try {
+    const container = "C-thread";
+    await built.app.setChannelPolicy(container, "watch this channel", "U-admin");
+    await built.app.ingestSurfaceEvents([
+      { container, ts: "1.0", authorId: "Carol", text: "I'll draft the memo tonight", createdAt: 1 },
+    ]);
+    await built.app.judgeAmbientContainer("slack", container);
+    await built.app.ingestSurfaceEvents([
+      { container, ts: "2.0", sub: "1.0", authorId: "Bob", text: "can you add the reference notes too?", createdAt: 2 },
+    ]);
+    await built.app.judgeAmbientContainer("slack", container);
+    const rows = await judged(built.ambientJudgments!, container, (rows) =>
+      rows.some((r: any) => r.prompt?.includes("reference notes")),
+    );
+    const reply = rows.find((r: any) => r.prompt?.includes("reference notes"))!;
+    assert.match(reply.prompt!, /<message id="1\.0"(?:(?!thread=)[^>])*>I'll draft the memo tonight<\/message>/);
+    assert.match(
+      reply.prompt!,
+      /<message id="2\.0"[^>]*thread="1\.0"[^>]*trigger="true">can you add the reference notes too\?<\/message>/,
+    );
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("ambient judge: a thread follow-up keeps the thread's opener and the assistant's reply in view after they scroll out of the backdrop", async () => {
+  const built = freshApp();
+  built.runtime.start();
+  try {
+    const container = "C-thread-anchor";
+    await built.app.setChannelPolicy(container, "watch this channel", "U-admin");
+    await built.app.ingestSurfaceEvents([
+      { container, ts: "1001.0", authorId: "Alice", text: "let's back Example Co", createdAt: 1 },
+      {
+        container,
+        ts: "1002.0",
+        sub: "1001.0",
+        authorId: "UQM",
+        self: true,
+        text: "Want me to draft the memo?",
+        createdAt: 2,
+      },
+      ...Array.from({ length: 12 }, (_, i) => ({
+        container,
+        ts: `${1003 + i}.0`,
+        authorId: "Bob",
+        text: `unrelated ${i}`,
+        createdAt: 3 + i,
+      })),
+    ]);
+    await built.app.judgeAmbientContainer("slack", container);
+    await built.app.ingestSurfaceEvents([
+      { container, ts: "1020.0", sub: "1001.0", authorId: "Alice", text: "update the existing one", createdAt: 20 },
+    ]);
+    await built.app.judgeAmbientContainer("slack", container);
+    const rows = await judged(built.ambientJudgments!, container, (rows) =>
+      rows.some((r: any) => r.prompt?.includes("update the existing one")),
+    );
+    const prompt = rows.find((r: any) => r.prompt?.includes("update the existing one"))!.prompt!;
+    assert.doesNotMatch(prompt, /unrelated 0</);
+    assert.match(prompt, /<message id="1001\.0"[^>]*>let's back Example Co<\/message>/);
+    assert.match(
+      prompt,
+      /<message id="1002\.0" from="agent"[^>]*thread="1001\.0"[^>]*>Want me to draft the memo\?<\/message>/,
+    );
+    assert.ok(prompt.indexOf("Want me to draft") < prompt.indexOf("unrelated 2<"));
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("ambient judge: earlier context is capped at the 10 messages before the new ones (§2.1)", async () => {
   const built = freshApp();
   built.runtime.start();
   try {
@@ -510,16 +575,13 @@ test("ambient judge: backdrop is capped at the last 10 (§2.1)", async () => {
     await settle(async () => (await built.ambientJudgments!.list({ container })).length > 0);
     await built.app.ingestSurfaceEvents([{ container, ts: "1013.0", authorId: "U13", text: "m13", createdAt: 13 }]);
     await settle(async () =>
-      (await listFull(built.ambientJudgments!, { container })).some(
-        (r: any) => r.prompt?.includes("m13") && r.prompt?.includes("EARLIER CONTEXT"),
-      ),
+      (await listFull(built.ambientJudgments!, { container })).some((r: any) => r.prompt?.includes(">m13<")),
     );
     const rows = await listFull(built.ambientJudgments!, { container });
-    const last = rows.find((r: any) => r.prompt?.includes("m13") && r.prompt?.includes("EARLIER CONTEXT"))!;
-    const backdrop = last.prompt!.slice(last.prompt!.indexOf("EARLIER CONTEXT"), last.prompt!.indexOf("NEW MESSAGES"));
-    const backdropCount = (backdrop.match(/^U\d+: m\d+$/gm) ?? []).length;
-    assert.equal(backdropCount, 10, "backdrop capped at the last 10");
-    assert.ok(!/: m1$/m.test(backdrop) && !/: m2$/m.test(backdrop), "the oldest messages fell off the cap");
+    const last = rows.find((r: any) => r.prompt?.includes(">m13<"))!;
+    const earlier = [...last.prompt!.matchAll(/<message (?:(?!trigger)[^>])*>(m\d+)<\/message>/g)].map((m) => m[1]);
+    assert.deepEqual(earlier, ["m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11", "m12"]);
+    assert.match(last.prompt!, /trigger="true">m13</);
   } finally {
     await built.runtime.stop();
   }
@@ -536,7 +598,7 @@ test("a judged batch records a durable judgment row: prompt, decision, model, ts
     const rows = await judged(built.ambientJudgments!, container);
     assert.equal(rows.length, 1, "one row for the judged batch");
     assert.equal(rows[0]!.decision, "act");
-    assert.ok(rows[0]!.prompt && rows[0]!.prompt.includes("NEW MESSAGES"));
+    assert.match(rows[0]!.prompt ?? "", /<message id="5\.0"[^>]*trigger="true">need help<\/message>/);
     assert.equal(rows[0]!.model, "claude-haiku-5-5", "the resolved judge model is recorded (default Haiku)");
     assert.equal(rows[0]!.tsFrom, "5.0");
     assert.equal(rows[0]!.tsTo, "5.0");
@@ -627,29 +689,31 @@ test("a formal-mention fastlane records a fastlane row (§2.2)", async () => {
   }
 });
 
-test("worker seed is the trigger plus the 3 messages before it (§2.4)", async () => {
+test("the worker's wake shows the same recent messages the judge saw (§2.4)", async () => {
   const built = freshApp();
   built.runtime.start();
   try {
     const container = "C-seed";
     await built.app.setChannelPolicy(container, "watch", "U-admin");
     await built.app.ingestSurfaceEvents([
-      ...Array.from({ length: 5 }, (_v, i) => ({
+      ...Array.from({ length: 12 }, (_v, i) => ({
         container,
-        ts: `40${i + 1}.0`,
+        ts: `${401 + i}.0`,
         authorId: `U${i + 1}`,
         text: `msg ${i + 1}`,
         createdAt: i + 1,
       })),
-      { container, ts: "406.0", authorId: "U6", text: "trigger !engage !post reply", createdAt: 6 },
+      { container, ts: "413.0", authorId: "U13", text: "trigger !engage !post reply", createdAt: 13 },
     ]);
     await pollDeliveries(built.deliveries);
-    const sub = await built.sessions.getByThread(`slack:${container}:ambient:406.0`);
+    const sub = await built.sessions.getByThread(`slack:${container}:ambient:413.0`);
     assert.ok(sub, "the ambient worker session exists");
     const entries = await built.sessions.getItems(sub!.id);
     const wake = entries.find((e) => e.kind === "UserMessage" && e.text !== null)?.text as string;
-    assert.ok(wake.includes(`id="406.0"`) && wake.includes(`id="403.0"`), "the trigger and the 3 before it are seeded");
-    assert.ok(!wake.includes(`id="402.0"`), "the 4th-back message is not seeded (seed is trigger + 3)");
+    const [judgment] = await judged(built.ambientJudgments!, container, (rows) => rows.some((r: any) => r.prompt));
+    const block = (text: string) => text.slice(text.indexOf("  <recent-messages"), text.indexOf("</recent-messages>"));
+    assert.equal(block(wake), block(judgment!.prompt!), "the judge and the worker read the same rendered messages");
+    assert.ok(block(wake).includes(`id="401.0"`), "the window reaches back past the old three-message seed");
     assert.ok(
       wake.includes("read_thread") && wake.includes("search"),
       "the instructions point at read_thread/search for more context",
@@ -684,7 +748,7 @@ test("bot ledger — ignore: an ignored-bot-only delta never wakes the judge and
   }
 });
 
-test("bot ledger — action tags the bot as a trigger; user sheds the (bot) tag; unlisted bots keep it (§3.3)", async () => {
+test("bot ledger — action tags the bot as a trigger; user-mode bots render as people; unlisted bots stay bots (§3.3)", async () => {
   const built = freshApp();
   built.runtime.start();
   try {
@@ -711,15 +775,19 @@ test("bot ledger — action tags the bot as a trigger; user sheds the (bot) tag;
       act.prompt!.includes('Posts from bot "DeployBot" are triggers you should act on.'),
       "action bot is tagged as a trigger",
     );
-    assert.ok(
-      act.prompt!.includes("DeployBot (bot): deploy finished"),
-      "action bot still renders with the (bot) suffix",
+    assert.match(
+      act.prompt!,
+      /from="bot" author="DeployBot"[^>]*>deploy finished</,
+      "action bot still renders as a bot",
     );
     const user = (await listFull(built.ambientJudgments!, { container: "C-botuser" }))[0]!;
-    assert.ok(user.prompt!.includes("HelperBot: hello team"), "a user-mode bot renders like a person");
-    assert.ok(!user.prompt!.includes("HelperBot (bot)"), "a user-mode bot sheds the (bot) suffix");
+    assert.match(
+      user.prompt!,
+      /from="human" author="HelperBot"[^>]*>hello team</,
+      "a user-mode bot renders like a person",
+    );
     const unlisted = (await listFull(built.ambientJudgments!, { container: "C-botunlisted" }))[0]!;
-    assert.ok(unlisted.prompt!.includes("RandomBot (bot): beep boop"), "an unlisted bot keeps the (bot) suffix");
+    assert.match(unlisted.prompt!, /from="bot" author="RandomBot"[^>]*>beep boop</, "an unlisted bot renders as a bot");
   } finally {
     await built.runtime.stop();
   }
@@ -1076,6 +1144,7 @@ test("a bot post whose content lives only in attachment blocks reaches the ambie
       "Amazon Q Developer": { mode: "action" },
     });
     const mirror = createMirror({
+      account: "default",
       core: {
         ingestSurfaceEvents: async (events, self) => {
           await built.app.ingestSurfaceEvents(events, "slack", self);
@@ -1097,7 +1166,7 @@ test("a bot post whose content lives only in attachment blocks reaches the ambie
     assert.equal(rows[0]!.decision, "act");
     assert.match(
       rows[0]!.prompt!,
-      /Amazon Q Developer \(bot\): \*<https:[^>]*CloudWatch Alarm \| qm-fleet-http-error-rate/,
+      /from="bot" author="Amazon Q Developer"[^>]*>\*&lt;https:[^\n]*CloudWatch Alarm \| qm-fleet-http-error-rate/,
     );
     assert.match(rows[0]!.prompt!, /Threshold Crossed: 2 out of the last 3 datapoints/);
     assert.doesNotMatch(rows[0]!.prompt!, /List dashboards|cloudwatch list-dashboards/);
@@ -1127,6 +1196,242 @@ test("a batch with no readable text records an ignore without claiming a model c
     assert.equal(rows[0]!.model, undefined);
     assert.equal(rows[0]!.latencyMs, undefined);
     assert.equal(rows[0]!.prompt, undefined);
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+const partnerSlackPolicies = {
+  partner: { companyDomains: ["acme.com"], companyTeamIds: ["TINTERNAL"], serviceCredentials: [] },
+};
+
+function isolatedApp() {
+  const dataDir = mkdtempSync(join(tmpdir(), "ap-surfcache-"));
+  return buildApp(testConfig({ dataDir, externalSlackPolicies: partnerSlackPolicies }));
+}
+
+function internalMirror(built: ReturnType<typeof isolatedApp>) {
+  return createMirror({
+    account: "default",
+    core: {
+      ingestSurfaceEvents: async (events, self) => {
+        await built.app.ingestSurfaceEvents(events, "slack", self);
+      },
+    } as SlackCoreClient,
+    ids: { botUserId: "UBOT", ownBotId: "BBOT", botHandle: "qm", ownTeamId: "TINTERNAL" } as BotIdentity,
+    directory: {} as Directory,
+    externalParticipantsEnabled: async () => true,
+  });
+}
+
+test("with an external Slack account configured, an internal channel's proactive ambient wake still starts a worker", async () => {
+  const built = isolatedApp();
+  built.runtime.start();
+  try {
+    const container = "C-internal-proactive";
+    await built.app.setChannelPolicy(container, "!engage !post ambient reply", "U-admin");
+    await internalMirror(built).mirrorMessageEvent(
+      { channel: container, channel_type: "channel", ts: "500.1", user: "U1", text: "we're in for the round" },
+      {},
+    );
+
+    const pending = await pollDeliveries(built.deliveries);
+    assert.equal(pending.length, 1, "the proactive worker posted");
+    assert.match(pending[0].text, /^ambient reply/);
+    const worker = await built.sessions.getByThread(`slack:${container}:ambient:500.1`);
+    assert.ok(worker, "the worker session exists");
+    assert.deepEqual(
+      worker!.surfaceBinding,
+      { author: { surface: "slack", account: "default", id: "UBOT" }, workspace: "TINTERNAL", audience: "internal" },
+      "a proactive worker's Slack origin is the assistant itself, not the person who spoke",
+    );
+    assert.deepEqual(
+      await built.sessions.participantsOf(worker!.id),
+      [],
+      "the proactive worker does not take on the message author's identity",
+    );
+    const rows = await judged(built.ambientJudgments!, container);
+    assert.equal(rows[0]!.decision, "act");
+    assert.equal(rows[0]!.startError, undefined);
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("with an external Slack account configured, an internal channel's solicited ambient wake runs as the asker", async () => {
+  const built = isolatedApp();
+  built.runtime.start();
+  try {
+    const container = "C-internal-solicited";
+    await built.directory.replace([
+      { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U1" },
+    ]);
+    await built.directory.replaceChannels(
+      [{ channelId: container, name: "internal-solicited", isPrivate: false }],
+      [{ channelId: container, principalId: "alice@acme.com" }],
+    );
+    await built.app.setChannelPolicy(container, "!engage-asked", "U-admin");
+    await internalMirror(built).mirrorMessageEvent(
+      { channel: container, channel_type: "channel", ts: "510.1", user: "U1", text: "!post solicited reply" },
+      {},
+    );
+
+    const pending = await pollDeliveries(built.deliveries);
+    assert.equal(pending.length, 1, "the solicited worker posted");
+    assert.match(pending[0].text, /^solicited reply/);
+    const worker = await built.sessions.getByThread(`slack:${container}:ambient:510.1`);
+    assert.ok(worker);
+    assert.deepEqual(await built.sessions.participantsOf(worker!.id), ["alice@acme.com"]);
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("under external Slack isolation, an ambient wake without a recorded source is refused and the refusal is recorded", async () => {
+  const built = isolatedApp();
+  built.runtime.start();
+  try {
+    const container = "C-unsourced";
+    await built.app.setChannelPolicy(container, "!engage !post ambient reply", "U-admin");
+    await built.app.ingestSurfaceEvents([
+      { container, ts: "520.1", authorId: "U1", text: "we're in for the round", createdAt: 1 },
+    ]);
+
+    const rows = await judged(built.ambientJudgments!, container);
+    assert.equal(rows[0]!.decision, "act");
+    assert.match(rows[0]!.startError ?? "", /^refused: External Slack requests require/);
+    assert.equal(await built.sessions.getByThread(`slack:${container}:ambient:520.1`), null);
+    assert.deepEqual(await built.deliveries.pending("slack"), []);
+    await built.errors.flush();
+    const errors = await built.errors.list({ scopeId: `channel:${container}` });
+    assert.deepEqual(
+      errors.map((e) => [e.category, e.code, e.message]),
+      [["ambient", "worker_start_failed", rows[0]!.startError]],
+    );
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("under external Slack isolation, a source naming the external account cannot start a channel worker", async () => {
+  const built = isolatedApp();
+  built.runtime.start();
+  try {
+    const container = "C-external-source";
+    await built.app.setChannelPolicy(container, "!engage !post ambient reply", "U-admin");
+    await built.app.ingestSurfaceEvents([
+      {
+        container,
+        ts: "530.1",
+        authorId: "U1",
+        text: "we're in for the round",
+        createdAt: 1,
+        source: { account: "partner", workspace: "TPARTNER", assistant: "UBOT" },
+      },
+    ]);
+
+    const rows = await judged(built.ambientJudgments!, container);
+    assert.match(rows[0]!.startError ?? "", /^refused: External Slack requests require/);
+    assert.equal(await built.sessions.getByThread(`slack:${container}:ambient:530.1`), null);
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("a judge call that throws is recorded in the admin error log instead of vanishing", async () => {
+  const built = freshApp();
+  built.runtime.start();
+  try {
+    const container = "C-judge-outage";
+    await built.app.setChannelPolicy(container, "!judge-outage", "U-admin");
+    await built.app.ingestSurfaceEvents([
+      { container, ts: "540.1", authorId: "U1", text: "anyone around?", createdAt: 1 },
+    ]);
+
+    const rows = await judged(built.ambientJudgments!, container);
+    assert.equal(rows[0]!.decision, "ignore");
+    await built.errors.flush();
+    const errors = await built.errors.list({ scopeId: `channel:${container}` });
+    assert.deepEqual(
+      errors.map((e) => [e.category, e.code, e.message]),
+      [["ambient", "judge_failed", "mock judge outage"]],
+    );
+  } finally {
+    await built.runtime.stop();
+  }
+});
+test("with an external Slack account configured, a scheduled check-in with no new messages still starts a worker from the channel's recorded source", async () => {
+  const built = isolatedApp();
+  built.runtime.start();
+  try {
+    const container = "C-internal-scheduled";
+    await built.app.setChannelPolicy(container, "watch this channel", "U-admin");
+    await internalMirror(built).mirrorMessageEvent(
+      { channel: container, channel_type: "channel", ts: "550.1", user: "U1", text: "we're in for the round" },
+      {},
+    );
+    await judged(built.ambientJudgments!, container);
+    await built.app.setChannelPolicy(container, "!engage !post scheduled check-in", "U-admin");
+
+    await built.app.judgeAmbientContainer("slack", container, { reason: "scheduled" });
+
+    const pending = await pollDeliveries(built.deliveries);
+    assert.equal(pending.length, 1, "the scheduled worker posted");
+    assert.match(pending[0].text, /^scheduled check-in/);
+    const rows = await judged(built.ambientJudgments!, container, (rows) =>
+      rows.some((r: any) => r.decision === "act"),
+    );
+    const scheduled = rows.find((r: any) => r.decision === "act")!;
+    assert.equal(scheduled.startError, undefined);
+    const worker = await built.sessions.getByThread(`slack:${container}:ambient:`);
+    assert.deepEqual(worker?.surfaceBinding, {
+      author: { surface: "slack", account: "default", id: "UBOT" },
+      workspace: "TINTERNAL",
+      audience: "internal",
+    });
+    assert.deepEqual(await built.sessions.participantsOf(worker!.id), []);
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("the assistant's own reply after the last judged message reaches the next judge as context, never as a trigger", async () => {
+  const built = freshApp();
+  built.runtime.start();
+  try {
+    const container = "C-own-reply";
+    await built.app.setChannelPolicy(container, "watch this channel", "U-admin");
+    await built.app.ingestSurfaceEvents([
+      { container, ts: "10.0", authorId: "U1", authorName: "Alice", text: "let's back Example Co", createdAt: 1 },
+    ]);
+    await built.app.judgeAmbientContainer("slack", container);
+    await built.app.ingestSurfaceEvents([
+      {
+        container,
+        ts: "11.0",
+        authorId: "UBOT",
+        authorName: "qm",
+        self: true,
+        bot: true,
+        text: "Want me to draft the memo for Example Co?",
+        createdAt: 2,
+      },
+    ]);
+    await built.app.judgeAmbientContainer("slack", container);
+    await built.app.ingestSurfaceEvents([
+      { container, ts: "12.0", authorId: "U1", authorName: "Alice", text: "hold off on Example Co", createdAt: 3 },
+    ]);
+    await built.app.judgeAmbientContainer("slack", container);
+
+    const rows = await judged(built.ambientJudgments!, container, (rows) =>
+      rows.some((r: any) => r.prompt?.includes("hold off on Example Co")),
+    );
+    assert.ok(
+      rows.every((r: any) => !/trigger="true">Want me to draft/.test(r.prompt ?? "")),
+      "the assistant's own reply is never judged as a new message",
+    );
+    const hold = rows.find((r: any) => r.prompt?.includes("hold off on Example Co"))!;
+    assert.match(hold.prompt!, /<message id="11\.0" from="agent"(?:(?!trigger)[^>])*>Want me to draft the memo/);
   } finally {
     await built.runtime.stop();
   }

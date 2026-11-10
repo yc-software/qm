@@ -1,4 +1,4 @@
-import { errMessage } from "../util/errors.ts";
+import { createSelfApiCall, type SelfApiResponse } from "./self-api.ts";
 import { Type, type TSchema } from "typebox";
 import { Check } from "typebox/value";
 import { isObj } from "../util/objects.ts";
@@ -121,7 +121,6 @@ export const adminOperations = {
     offset: Type.Optional(Type.Integer({ minimum: 0 })),
   }),
   egress: operation("Read outbound-destination audit.", "GET", "/egress", scope),
-  retention: operation("Read usage and retention.", "GET", "/retention"),
   spend: operation("Read spend for a date range.", "GET", "/spend", {
     from: optionalString,
     to: optionalString,
@@ -189,7 +188,6 @@ export const adminOperations = {
       { additionalProperties: false },
     ),
   }),
-  slack_emoji: operation("List Slack emoji.", "GET", "/slack-emoji"),
   model_providers: operation("Read model-provider metadata.", "GET", "/model-providers"),
   custom_providers: operation("Read custom model-provider metadata.", "GET", "/custom-providers"),
   mcp_servers: operation("Read MCP-server metadata.", "GET", "/mcp-servers"),
@@ -228,7 +226,6 @@ export const adminOperations = {
     "/model-registry/:id",
     { id: string, value: object },
   ),
-  shadow_deliveries: operation("Read shadow-delivery diagnostics.", "GET", "/deliveries/shadow", scope),
   slack_mirror: operation("List mirrored Slack containers.", "GET", "/slack-mirror", scope),
   slack_messages: operation("Read mirrored Slack messages.", "GET", "/slack-mirror/messages", {
     ...scope,
@@ -245,14 +242,6 @@ export const adminOperations = {
     beforeId: Type.Optional(Type.Integer()),
     limit,
   }),
-  ack_emoji_picks: operation("Read acknowledgment emoji decisions.", "GET", "/ack-emoji-picks", {
-    ...scope,
-    container: optionalString,
-    outcome: optionalString,
-    before: Type.Optional(Type.Integer()),
-    beforeId: Type.Optional(Type.Integer()),
-    limit,
-  }),
 } satisfies Record<string, Operation>;
 
 export interface AdminToolAccess {
@@ -260,13 +249,10 @@ export interface AdminToolAccess {
   operationsAvailable: boolean;
 }
 
-type AdminCall = (
-  input: Record<string, unknown>,
-  signal?: AbortSignal,
-) => Promise<{ status: number; body: unknown; requestId?: string }>;
+type AdminCall = (input: Record<string, unknown>, signal?: AbortSignal) => Promise<SelfApiResponse>;
 
 export function createAdminCall(baseUrl: string, capability: string): AdminCall {
-  while (baseUrl.endsWith("/")) baseUrl = baseUrl.slice(0, -1);
+  const request = createSelfApiCall(baseUrl, capability);
   return async (input, signal) => {
     const { action, retrySafe: _retrySafe, ...params } = input;
     const op = Object.hasOwn(adminOperations, String(action))
@@ -283,36 +269,13 @@ export function createAdminCall(baseUrl: string, capability: string): AdminCall 
       if (key === "value") continue;
       if (path.includes(`:${key}`)) {
         const segment = String(value);
-        if (!segment || segment === "." || segment === "..") throw new Error("Invalid admin resource identifier");
+        if (!segment) throw new Error("Invalid admin resource identifier");
         path = path.replace(`:${key}`, encodeURIComponent(segment));
       } else query.set(key === "auditAction" ? "action" : key, String(value));
     }
-    const response = await fetch(`${baseUrl}/v1/admin${path}?${query}`, {
-      method: op.method,
-      headers: { "x-agent-capability": capability, "content-type": "application/json" },
-      ...(params.value !== undefined ? { body: JSON.stringify(params.value) } : {}),
-      redirect: "error",
-      signal,
-    });
-    const requestId = response.headers.get("x-request-id") ?? response.headers.get("request-id") ?? undefined;
-    const result = { status: response.status, ...(requestId ? { requestId } : {}) };
-    let raw: string;
-    try {
-      raw = await response.text();
-    } catch (error) {
-      throw new Error(
-        `Admin HTTP ${response.status}${requestId ? ` request ${requestId}` : ""}: ${errMessage(error)}`,
-        { cause: error },
-      );
-    }
-    let body: unknown;
-    try {
-      body = JSON.parse(raw);
-    } catch {
-      return { ...result, body: raw };
-    }
-    if (action === "session" && isObj(body) && Array.isArray(body.items))
-      body = { ...body, items: (body.items as Item[]).map(compactItem) };
-    return { ...result, body };
+    const response = await request(op.method, `/v1/admin${path}?${query}`, params.value, signal);
+    if (action === "session" && isObj(response.body) && Array.isArray(response.body.items))
+      return { ...response, body: { ...response.body, items: (response.body.items as Item[]).map(compactItem) } };
+    return response;
   };
 }

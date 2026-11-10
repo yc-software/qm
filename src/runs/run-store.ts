@@ -2,7 +2,7 @@ import type { SubscribeOptions } from "../util/event-bus.ts";
 import type { RunSignal, RunSignalStore } from "./run-signal-store.ts";
 import type { TurnResult } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
-import { isPersonAuthored, resolveTurnOrigin } from "../core/turn-origin.ts";
+import { isPersonAuthored } from "../core/turn-origin.ts";
 import { traceCarrier } from "../../plugins/chassis/src/error-reporting.ts";
 import { sleep } from "../util/async.ts";
 
@@ -20,7 +20,7 @@ export function withTraceCarrier(request: OrchestratorInput): OrchestratorInput 
 export function runPriority(request: OrchestratorInput, delegating: RunPriority | null): RunPriority {
   if (request.swarm || (request.delegatingRunId && delegating === null)) return 2;
   if (request.delegatingRunId) return delegating === 2 ? 2 : 1;
-  return isPersonAuthored(resolveTurnOrigin(request).kind) ? 0 : 2;
+  return isPersonAuthored(request.origin.kind) ? 0 : 2;
 }
 
 export interface ReapEvent {
@@ -45,6 +45,13 @@ export type RunStop =
 
 export const PARKED: RunStop = { kind: "parked" };
 
+export const CRASHED = { kind: "crashed" } as const;
+
+export interface TurnPark {
+  requested(): boolean;
+  now(): void;
+}
+
 export function stopErrorCode(stop: RunStop | undefined): { errorCode?: string } {
   return stop?.kind === "error" && stop.code ? { errorCode: stop.code } : {};
 }
@@ -55,6 +62,7 @@ export function handbackStop(shutdown: AbortSignal): RunStop {
 
 export interface Run {
   id: string;
+  tenantId: string;
   sessionId: string;
   status: RunStatus;
   request: OrchestratorInput;
@@ -67,6 +75,7 @@ export interface Run {
   maxAttempts: number;
   priority: RunPriority;
   preemptions: number;
+  handbacks: number;
   leaseToken: string | null;
   leaseExpiresAt: number | null;
   workerId: string | null;
@@ -113,9 +122,9 @@ export interface RunStore {
 
   claimById(runId: string, workerId: string, ttlMs: number): Promise<Run | null>;
 
-  claimForSession(sessionId: string, workerId: string, ttlMs: number): Promise<Run | null>;
-
   personWaiting(createdBefore: number): Promise<boolean>;
+
+  personWaitingIn(sessionIds: readonly string[], createdBefore: number): Promise<Set<string>>;
 
   heartbeat(runId: string, leaseToken: string, ttlMs: number): Promise<boolean>;
 
@@ -134,12 +143,9 @@ export interface RunStore {
 
   noteTurnUserSeq(runId: string, seq: number): Promise<boolean>;
 
-  latestForThreads(
-    threadRefs: readonly string[],
-    opts?: { excludePrivateMessages?: boolean },
-  ): Promise<Map<string, Run>>;
-  latestForThread(threadRef: string, opts?: { excludePrivateMessages?: boolean }): Promise<Run | null>;
-  pendingReturns(limit?: number, afterId?: string): Promise<Run[]>;
+  activeForThreads(threadRefs: readonly string[]): Promise<Map<string, Run>>;
+  lastFinishedForThreads(threadRefs: readonly string[]): Promise<Map<string, Run>>;
+  pendingReturns(limit?: number, afterId?: string, threadRefs?: readonly string[]): Promise<Run[]>;
   terminalFinished(after: TerminalCursor, beforeMs: number, limit: number): Promise<Run[]>;
   markReturned(runId: string): Promise<void>;
   deferReturn(runId: string, delayMs: number): Promise<void>;
@@ -202,12 +208,12 @@ export async function waitForNoRunningRun(
   return true;
 }
 
-export function countedClaims(run: Pick<Run, "attempts" | "preemptions">): number {
-  return run.attempts - run.preemptions;
+export function countedClaims(run: Pick<Run, "attempts" | "handbacks">): number {
+  return run.attempts - run.handbacks;
 }
 
 export function errorParks(
-  run: Pick<Run, "errorAttempts" | "maxAttempts" | "attempts" | "preemptions">,
+  run: Pick<Run, "errorAttempts" | "maxAttempts" | "attempts" | "handbacks">,
   maxClaims?: number,
 ): boolean {
   return run.errorAttempts + 1 >= run.maxAttempts || (maxClaims !== undefined && countedClaims(run) >= maxClaims);

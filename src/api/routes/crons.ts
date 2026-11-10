@@ -1,4 +1,5 @@
 import { isCronRuntime } from "../../cron/runtime.ts";
+import { CRON_SCRIPT_TOOL_ONLY } from "../../cron/script.ts";
 import type { Cron } from "../../triggers/types.ts";
 import type { CreateCronInput, CronPatch } from "../../cron/cron-store.ts";
 import { describeRunNowRefusal } from "../../cron/scheduler.ts";
@@ -63,11 +64,6 @@ function exactText(b: CapabilityCronBody): string | undefined {
   return undefined;
 }
 
-function withoutFireLog<T extends Cron>(cron: T): Omit<T, "fireLog"> {
-  const { fireLog: _fireLog, ...rest } = cron;
-  return rest;
-}
-
 async function gateSourceCron(ctx: ApiCtx, id: string): Promise<Cron | null> {
   const { res, app, url } = ctx;
   const cron = await app.getCron(id);
@@ -76,8 +72,7 @@ async function gateSourceCron(ctx: ApiCtx, id: string): Promise<Cron | null> {
     return null;
   }
   const principalId = url.searchParams.get("principalId");
-  if (!principalId) return cron;
-  if (await canAdministerCron(app, cron, principalId)) return cron;
+  if (principalId && (await canAdministerCron(app, cron, principalId))) return cron;
   sendJson(res, 404, { error: "not_found" });
   return null;
 }
@@ -90,9 +85,9 @@ async function gateSourceCronRead(ctx: ApiCtx, id: string): Promise<Cron | null>
     return null;
   }
   const principalId = url.searchParams.get("principalId");
-  if (!principalId || (await canAdministerCron(app, cron, principalId))) return cron;
-  const { visible } = await app.listCronsForViewer(principalId);
-  if (visible.some((candidate) => candidate.id === id)) return cron;
+  if (principalId && (await canAdministerCron(app, cron, principalId))) return cron;
+  if (principalId && (await app.listCronsForViewer(principalId)).visible.some((candidate) => candidate.id === id))
+    return cron;
   sendJson(res, 404, { error: "not_found" });
   return null;
 }
@@ -170,6 +165,8 @@ const CRON_ERROR_STATUS: Record<string, number> = {
 
 async function createCron(ctx: ApiCtx): Promise<void> {
   const { res, app, body, capability } = ctx;
+  if (isObj(body) && body.script !== undefined)
+    return sendJson(res, 400, { error: "bad_request", message: CRON_SCRIPT_TOOL_ONLY });
   if (capability) {
     const b = body as CapabilityCronBody;
     if (
@@ -225,7 +222,7 @@ async function createCron(ctx: ApiCtx): Promise<void> {
       });
     }
     return sendJson(res, 200, {
-      cron: withoutFireLog(result.cron),
+      cron: result.cron,
       ...(result.recipient ? { recipient: result.recipient } : {}),
       ...(result.channel ? { channel: result.channel } : {}),
       ...(result.group ? { group: result.group } : {}),
@@ -234,7 +231,7 @@ async function createCron(ctx: ApiCtx): Promise<void> {
   if (!isCreateCron(body)) return sendJson(res, 400, { error: "bad_request", message: "expected a CreateCronInput" });
   try {
     const cron = await app.createCron(body);
-    return sendJson(res, 200, { cron: withoutFireLog(cron) });
+    return sendJson(res, 200, { cron });
   } catch (e) {
     return sendJson(res, 400, { error: "cron_create_failed", message: errMessage(e) });
   }
@@ -244,13 +241,13 @@ async function listCrons(ctx: ApiCtx): Promise<void> {
   const { res, app, url, capability } = ctx;
   if (capability) {
     const { crons, visible } = await ctx.deps.control.listCrons(capability);
-    return sendJson(res, 200, { crons: crons.map(withoutFireLog), visible: visible.map(withoutFireLog) });
+    return sendJson(res, 200, { crons, visible });
   }
   const viewer = url.searchParams.get("viewer");
-  if (!viewer) return sendJson(res, 200, { crons: (await app.listCrons()).map(withoutFireLog) });
+  if (!viewer) return sendJson(res, 400, { error: "bad_request", message: "viewer required" });
   const { owned, visible } = await app.listCronsForViewer(viewer);
   const decorate = async (cron: Cron) => ({
-    ...withoutFireLog(cron),
+    ...cron,
     permission: (await canAdministerCron(app, cron, viewer)) ? "manage" : "read",
   });
   return sendJson(res, 200, {
@@ -259,17 +256,21 @@ async function listCrons(ctx: ApiCtx): Promise<void> {
   });
 }
 
-async function disableCron(ctx: ApiCtx): Promise<void> {
-  const { res, app, capability } = ctx;
-  const id = ctx.params.id!;
-  if (capability) {
-    const r = await ctx.deps.control.setCronEnabled(id, false, capability);
-    if (!r.ok) return sendJson(res, CRON_ERROR_STATUS[r.code] ?? 400, { error: r.code, message: r.message });
+function toggleCron(enabled: boolean): (ctx: ApiCtx) => Promise<void> {
+  return async (ctx) => {
+    const { res, app, capability } = ctx;
+    const id = ctx.params.id!;
+    if (capability) {
+      const r = await ctx.deps.control.setCronEnabled(id, enabled, capability);
+      if (!r.ok) return sendJson(res, CRON_ERROR_STATUS[r.code] ?? 400, { error: r.code, message: r.message });
+      return sendJson(res, 200, { ok: true });
+    }
+    const cron = await gateSourceCron(ctx, id);
+    if (!cron) return;
+    if (enabled) return patchCronAsPerson(ctx, cron, { enabled: true, archived: false });
+    await app.setCronEnabled(id, false);
     return sendJson(res, 200, { ok: true });
-  }
-  if (!(await gateSourceCron(ctx, id))) return;
-  await app.setCronEnabled(id, false);
-  return sendJson(res, 200, { ok: true });
+  };
 }
 
 async function retargetCron(ctx: ApiCtx): Promise<void> {
@@ -282,7 +283,7 @@ async function retargetCron(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: "destinationKey (string) required" });
   const r = await ctx.deps.control.retargetCron(id, dk, capability);
   if (!r.ok) return sendJson(res, CRON_ERROR_STATUS[r.code] ?? 400, { error: r.code, message: r.message });
-  return sendJson(res, 200, { cron: withoutFireLog(r.cron) });
+  return sendJson(res, 200, { cron: r.cron });
 }
 
 async function noteCron(ctx: ApiCtx): Promise<void> {
@@ -329,15 +330,15 @@ async function cronRuns(ctx: ApiCtx): Promise<void> {
   if (capability) {
     const r = await ctx.deps.control.getCronRuns(id, limit !== undefined ? { limit } : {}, capability);
     if (!r.ok) return sendJson(res, CRON_ERROR_STATUS[r.code] ?? 400, { error: r.code, message: r.message });
-    return sendJson(res, 200, { cron: withoutFireLog(r.cron), runs: r.runs, total: r.total });
+    return sendJson(res, 200, { cron: r.cron, runs: r.runs, total: r.total });
   }
   const cron = await gateSourceCron(ctx, id);
   if (!cron) return;
-  if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
+  if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1)) {
     return sendJson(res, 400, { error: "bad_request", message: "limit must be a positive integer" });
   }
   const { runs, total } = await app.listCronFires(id, limit !== undefined ? { limit } : {});
-  return sendJson(res, 200, { cron: withoutFireLog(cron), runs, total });
+  return sendJson(res, 200, { cron, runs, total });
 }
 
 const CRON_PATCH_BAD_REQUEST =
@@ -346,11 +347,13 @@ const CRON_PATCH_BAD_REQUEST =
 async function cronById(ctx: ApiCtx): Promise<void> {
   const { res, app, url, pathname, method, body, capability } = ctx;
   const id = decodeURIComponent(pathname.slice("/v1/crons/".length));
+  if (method === "PATCH" && isObj(body) && body.script !== undefined)
+    return sendJson(res, 400, { error: "bad_request", message: CRON_SCRIPT_TOOL_ONLY });
   if (capability) {
     if (method === "GET") {
       const r = await ctx.deps.control.getCron(id, capability);
       return r.ok
-        ? sendJson(res, 200, { cron: withoutFireLog(r.cron) })
+        ? sendJson(res, 200, { cron: r.cron })
         : sendJson(res, CRON_ERROR_STATUS[r.code] ?? 400, { error: r.code, message: r.message });
     }
     if (method === "DELETE") {
@@ -382,13 +385,13 @@ async function cronById(ctx: ApiCtx): Promise<void> {
       capability,
     );
     return r.ok
-      ? sendJson(res, 200, { cron: withoutFireLog(r.cron) })
+      ? sendJson(res, 200, { cron: r.cron })
       : sendJson(res, CRON_ERROR_STATUS[r.code] ?? 400, { error: r.code, message: r.message });
   }
   if (method === "GET") {
     const cron = await gateSourceCronRead(ctx, id);
     if (!cron) return;
-    return sendJson(res, 200, { cron: withoutFireLog(cron) });
+    return sendJson(res, 200, { cron });
   }
   const cron = await gateSourceCron(ctx, id);
   if (!cron) return;
@@ -398,37 +401,51 @@ async function cronById(ctx: ApiCtx): Promise<void> {
     if (editor) await notifyOwnerOfCronEdit(app, { cron, editorId: editor, changeSummary: ["deleted"] });
     return sendJson(res, 200, { ok: true });
   }
+  return patchCronAsPerson(ctx, cron, body);
+}
+
+const PERSON_CRON_PATCH_FIELDS = new Set(["runtime", "title", "task", "schedule", "enabled", "archived"]);
+
+const PERSON_CRON_PATCH_BAD_REQUEST =
+  "expected a cron patch: title (string), task (non-empty string), schedule, enabled (boolean), archived (boolean), and/or runtime";
+
+function isPersonCronPatch(b: unknown): b is {
+  runtime?: Cron["runtime"];
+  title?: string;
+  task?: string;
+  schedule?: unknown;
+  enabled?: boolean;
+  archived?: boolean;
+} {
+  return (
+    isCronPatch(b) &&
+    hasCronPatchFields(b) &&
+    Object.keys(b).every((key) => PERSON_CRON_PATCH_FIELDS.has(key)) &&
+    (b.task === undefined || b.task.trim() !== "")
+  );
+}
+
+async function patchCronAsPerson(ctx: ApiCtx, cron: Cron, body: unknown): Promise<void> {
+  const { res, app, url } = ctx;
   if ((cron.unattendedGrants?.length ?? 0) > 0) {
     return sendJson(res, 403, {
       error: "forbidden",
       message: "a privileged cron may only be patched by its owner from a live turn",
     });
   }
-  if (!isCronPatch(body)) return sendJson(res, 400, { error: "bad_request", message: CRON_PATCH_BAD_REQUEST });
-  if (!hasCronPatchFields(body)) {
-    return sendJson(res, 400, { error: "bad_request", message: CRON_PATCH_NOTHING_TO_CHANGE });
-  }
+  if (!isPersonCronPatch(body))
+    return sendJson(res, 400, { error: "bad_request", message: PERSON_CRON_PATCH_BAD_REQUEST });
   const schedule = body.schedule !== undefined ? userScheduleFromBody(body.schedule)! : undefined;
-  const task = body.action ?? body.task;
-  if (body.unfurlLinks !== undefined && !cron.destination) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "unfurlLinks can only be set on a cron with a delivery destination",
-    });
-  }
   const patch: CronPatch = {
     ...(body.runtime !== undefined ? { runtime: body.runtime } : {}),
     ...(body.title !== undefined ? { title: body.title } : {}),
-    ...(task !== undefined ? { action: task } : {}),
+    ...(body.task !== undefined ? { action: body.task } : {}),
     ...(schedule !== undefined ? { schedule } : {}),
     ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
     ...(body.archived !== undefined ? { archived: body.archived } : {}),
-    ...(body.unfurlLinks !== undefined && cron.destination
-      ? { destination: { ...cron.destination, unfurlLinks: body.unfurlLinks } }
-      : {}),
   };
   try {
-    const updated = await app.updateCron(id, patch);
+    const updated = await app.updateCron(cron.id, patch);
     const editor = url.searchParams.get("principalId");
     if (updated && editor)
       await notifyOwnerOfCronEdit(app, {
@@ -437,14 +454,14 @@ async function cronById(ctx: ApiCtx): Promise<void> {
         changeSummary: [
           ...(body.runtime !== undefined ? ["runtime"] : []),
           ...(body.title !== undefined ? ["title"] : []),
-          ...(task !== undefined ? ["task"] : []),
+          ...(body.task !== undefined ? ["task"] : []),
           ...(schedule !== undefined ? ["schedule"] : []),
           ...(body.enabled !== undefined ? [`enabled=${body.enabled}`] : []),
           ...(body.archived !== undefined ? [`archived=${body.archived}`] : []),
         ],
         ...(schedule !== undefined ? { detail: { schedule } } : {}),
       });
-    return sendJson(res, 200, { cron: updated ? withoutFireLog(updated) : null });
+    return sendJson(res, 200, { cron: updated ?? null });
   } catch (e) {
     return sendJson(res, 400, { error: "cron_update_failed", message: errMessage(e) });
   }
@@ -452,18 +469,20 @@ async function cronById(ctx: ApiCtx): Promise<void> {
 
 export const cronRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/crons", actor: "body.createdBy", auth: "either", handle: createCron },
-  { method: "GET", path: "/v1/crons", actor: "query.viewer", auth: "either", handle: listCrons },
+  { method: "GET", path: "/v1/crons", browser: true, actor: "query.viewer", auth: "either", handle: listCrons },
   { method: "POST", path: "/v1/crons/:id/note", auth: "either", handle: noteCron },
   ...withActor("query.principalId", [
-    { method: "POST", path: "/v1/crons/:id/disable", auth: "either", handle: disableCron },
+    { method: "POST", path: "/v1/crons/:id/disable", browser: true, auth: "either", handle: toggleCron(false) },
+    { method: "POST", path: "/v1/crons/:id/enable", browser: true, auth: "either", handle: toggleCron(true) },
     { method: "POST", path: "/v1/crons/:id/destination", auth: "either", handle: retargetCron },
-    { method: "POST", path: "/v1/crons/:id/run", auth: "either", handle: runCronNow },
-    { method: "GET", path: "/v1/crons/:id/runs", auth: "either", handle: cronRuns },
+    { method: "POST", path: "/v1/crons/:id/run", browser: true, auth: "either", handle: runCronNow },
+    { method: "GET", path: "/v1/crons/:id/runs", browser: true, auth: "either", handle: cronRuns },
     {
       match: (m, p) =>
         p.startsWith("/v1/crons/") &&
         !p.slice("/v1/crons/".length).includes("/") &&
         (m === "GET" || m === "PATCH" || m === "DELETE"),
+      browser: true,
       auth: "either",
       handle: cronById,
     },

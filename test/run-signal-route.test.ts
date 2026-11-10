@@ -6,23 +6,26 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
-import { attributedSteerText } from "../src/api/app-turn.ts";
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal, TurnRequest } from "../src/types.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { configureCommandRules } from "./support/command-rules.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "run-signal-")) }));
+const portalSession = { ...browserSessionDeps.portalSession };
 const core = createServer(built.app, {
+  ...browserSessionDeps,
+  portalSession,
   replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
   signingSecret: SECRET,
   webhookReceiver: built.webhookReceiver,
@@ -34,16 +37,7 @@ core.listen(0);
 const corePort = (core.address() as AddressInfo).port;
 const coreBase = `http://localhost:${corePort}`;
 
-process.env.CORE_API_URL = coreBase;
-process.env.CORE_SIGNING_SECRET = SECRET;
-process.env.WEB_UI_PRINCIPALS = "";
-const { handler } = await import("../plugins/web-ui/server/index.ts");
-const web = createHttpServer(handler);
-web.listen(0);
-const webBase = `http://localhost:${(web.address() as AddressInfo).port}`;
-
 after(async () => {
-  await new Promise<void>((r) => web.close(() => r()));
   await new Promise<void>((r) => core.close(() => r()));
   await built.runtime.stop();
 });
@@ -75,8 +69,8 @@ function asUser(user: string, init: RequestInit = {}): RequestInit {
     ...init,
     headers: {
       "content-type": "application/json",
-      cookie: `webuiuser=${encodeURIComponent(user)}`,
-      [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: user, exp: Date.now() + 60_000 }, SECRET),
+      cookie: browserSessionCookie(user),
+      origin: browserSessionDeps.portalUrl,
       ...init.headers,
     },
   };
@@ -96,7 +90,7 @@ function steererRequest(externalId: string, threadRef: string, text: string, dis
     surface: "web",
     actor: { externalId, ...(displayName ? { displayName } : {}) },
     conversation: { kind: "dm", threadRef },
-    liveActor: true,
+    origin: { kind: "human" },
     text,
   };
 }
@@ -115,10 +109,10 @@ test("core route: a steer's ts and request thread through to the signal store", 
   assert.ok(signal);
   assert.equal(signal.ts, "1712.001");
   assert.equal(signal.request?.actor.externalId, "internal:U1");
-  assert.equal(signal.text, "go left", "the run owner's own steer is not attributed");
+  assert.equal(signal.text, "go left");
 });
 
-test("core route: another person's steer is attributed with their display name", async () => {
+test("core route: another person's steer keeps their words and identity for the turn's intake", async () => {
   const { run } = await built.runs.enqueue({ sessionId: "t-foreign", request: request("hi", "t-foreign") });
   const r = await coreSignal(run.id, {
     kind: "steer",
@@ -128,8 +122,8 @@ test("core route: another person's steer is attributed with their display name",
   });
   assert.equal(r.status, 200);
   const [signal] = await built.signals.takePending(run.id);
-  assert.equal(signal?.text, "Eve Example: go right");
-  assert.equal(signal?.request?.text, "go right", "the replayable request keeps the steerer's own words");
+  assert.equal(signal?.text, "go right");
+  assert.equal(signal?.request?.actor.displayName, "Eve Example");
 });
 
 test("core route: a malformed request is rejected 400, and privileged fields are stripped", async () => {
@@ -139,7 +133,7 @@ test("core route: a malformed request is rejected 400, and privileged fields are
 
   const smuggled = {
     ...steererRequest("internal:U1", "t-sanitize", "x"),
-    ownerKeychainUnion: true,
+    origin: { kind: "automation", useOwnerKeychain: true },
     spawned: true,
     unattendedGrants: ["admin-read"],
   };
@@ -147,7 +141,7 @@ test("core route: a malformed request is rejected 400, and privileged fields are
   assert.equal(r.status, 200);
   const [signal] = await built.signals.takePending(run.id);
   assert.ok(signal?.request);
-  assert.equal("ownerKeychainUnion" in signal.request, false);
+  assert.deepEqual(signal.request.origin, { kind: "automation" });
   assert.equal("spawned" in signal.request, false);
   assert.equal("unattendedGrants" in signal.request, false);
 });
@@ -160,7 +154,7 @@ test("core route: a bare steer without a ts gets one minted so agents persist it
   assert.ok(signal?.ts, "signalRun mints a ts when the caller sends none");
 });
 
-test("signalRun attributes a bare steer from a shared-scope viewer who is not the run's owner", async () => {
+test("signalRun carries a bare steer from a shared-scope viewer who is not the run's owner as theirs", async () => {
   await built.app.upsertChannels(
     [{ channelId: "C-STEER", name: "steer-room", isPrivate: true }],
     [
@@ -176,7 +170,9 @@ test("signalRun attributes a bare steer from a shared-scope viewer who is not th
     request: {
       modelAccount: "company",
       actor: owner,
-      conversation: { kind: "channel", channelRef: "C-STEER", threadRef, audience: [owner] },
+      surface: "slack",
+      deliveryTarget: "slack:C-STEER:1.0",
+      conversation: { kind: "channel", channelRef: "C-STEER", threadRef, audience: [owner], isPrivate: true },
       origin: { kind: "direct" },
       text: "queued shared work",
     },
@@ -186,7 +182,13 @@ test("signalRun attributes a bare steer from a shared-scope viewer who is not th
   const outcome = await built.app.signalRun(run.id, { kind: "steer", text: "try harder" }, "steer-member");
   assert.equal(outcome.accepted, true);
   const [signal] = await built.signals.takePending(run.id);
-  assert.equal(signal?.text, "Steer Member: try harder");
+  assert.equal(signal?.text, "try harder");
+  assert.equal(signal?.request?.actor.externalId, "steer-member");
+  assert.equal(signal?.request?.actor.displayName, "Steer Member");
+  assert.equal(signal?.request?.deliveryTarget, "slack:C-STEER:1.0", "a replay still delivers where the run did");
+  assert.deepEqual(signal?.request?.conversation.audience, [{ externalId: "steer-owner" }]);
+  assert.equal(signal?.request?.conversation.isPrivate, true);
+  assert.deepEqual(await built.signals.steerAuthors(run.id), ["steer-member"]);
   assert.ok(signal?.ts);
 });
 
@@ -262,7 +264,7 @@ test("an orphaned steer whose own request is refused falls back to replaying on 
       surface: "web",
       actor: { externalId: "web-eve" },
       conversation: { kind: "group", threadRef: `web:web-eve:${crypto.randomUUID()}`, channelRef: "G-NOPE" },
-      liveActor: true,
+      origin: { kind: "human" },
       text: "still matters",
     },
   });
@@ -278,15 +280,6 @@ test("an orphaned steer whose own request is refused falls back to replaying on 
   assert.ok(replayed, "a refused steerer request still replays the text on the run's own request");
   assert.equal(replayed!.request.actor.id, "internal:U1");
   assert.equal(replayed!.request.text, "still matters");
-});
-
-test("attributedSteerText prefixes foreign and ambient steers only", () => {
-  const eve = { id: "web-eve", displayName: "Eve Example" };
-  assert.equal(attributedSteerText(eve, "web-eve", "hello"), "hello");
-  assert.equal(attributedSteerText(eve, "web-alice", "hello"), "Eve Example: hello");
-  assert.equal(attributedSteerText({ id: "web-eve" }, "web-alice", "hello"), "web-eve: hello");
-  assert.equal(attributedSteerText({ id: "web-eve", displayName: "  " }, "web-alice", "hi"), "web-eve: hi");
-  assert.equal(attributedSteerText(eve, null, "hello"), "Eve Example: hello");
 });
 
 test("core route: steer without text is rejected 400", async () => {
@@ -314,11 +307,11 @@ test("core route: a terminal run rejects signals with reason=terminal", async ()
   assert.deepEqual(r.json, { accepted: false, reason: "terminal" });
 });
 
-test("web proxy: the submitting user can signal their run; others (and token-less strangers) cannot", async () => {
+test("web: the submitting user can signal their run; others (and token-less strangers) cannot", async () => {
   const threadRef = `web:alice:${crypto.randomUUID()}`;
   const submit = (await (
     await fetch(
-      `${webBase}/api/turn`,
+      `${coreBase}/api/turn`,
       asUser("alice", { method: "POST", body: JSON.stringify({ text: "queue me", threadRef }) }),
     )
   ).json()) as { runId?: string; runToken?: string };
@@ -326,31 +319,31 @@ test("web proxy: the submitting user can signal their run; others (and token-les
   assert.equal(submit.runToken, undefined, "no bearer credential is exposed to browser code or URLs");
 
   const ok = await fetch(
-    `${webBase}/api/runs/${encodeURIComponent(submit.runId!)}/signal`,
+    `${coreBase}/api/runs/${encodeURIComponent(submit.runId!)}/signal`,
     asUser("alice", { method: "POST", body: JSON.stringify({ kind: "steer", text: "louder" }) }),
   );
   assert.equal(ok.status, 200);
   assert.equal(((await ok.json()) as { accepted?: boolean }).accepted, true);
 
   const stranger = await fetch(
-    `${webBase}/api/runs/${encodeURIComponent(submit.runId!)}/signal`,
+    `${coreBase}/api/runs/${encodeURIComponent(submit.runId!)}/signal`,
     asUser("bob", { method: "POST", body: JSON.stringify({ kind: "abort" }) }),
   );
   assert.equal(stranger.status, 404, "a non-owner without a token is told the run does not exist");
 });
 
-test("web proxy: a steer carries a server-built ts and TurnRequest for the signed-in user", async () => {
+test("web: a steer carries a server-built ts and TurnRequest for the signed-in user", async () => {
   const threadRef = `web:alice:${crypto.randomUUID()}`;
   const submit = (await (
     await fetch(
-      `${webBase}/api/turn`,
+      `${coreBase}/api/turn`,
       asUser("alice", { method: "POST", body: JSON.stringify({ text: "queue me", threadRef }) }),
     )
   ).json()) as { runId?: string };
   assert.ok(submit.runId);
 
   const steer = await fetch(
-    `${webBase}/api/runs/${encodeURIComponent(submit.runId!)}/signal`,
+    `${coreBase}/api/runs/${encodeURIComponent(submit.runId!)}/signal`,
     asUser("alice", {
       method: "POST",
       body: JSON.stringify({
@@ -374,9 +367,11 @@ test("web proxy: a steer carries a server-built ts and TurnRequest for the signe
   assert.equal(signal.request?.actor.externalId, "alice", "a client-supplied request/actor is ignored");
   assert.equal(signal.request?.surface, "web");
   assert.deepEqual(signal.request?.conversation, { kind: "dm", threadRef });
+  assert.equal(signal.request?.deliveryTarget, threadRef);
+  assert.deepEqual(signal.request?.origin, { kind: "human" });
 });
 
-test("web proxy: inbox steering cannot omit or disguise its context to bypass rollout gates", async () => {
+test("web: inbox steering cannot omit or disguise its context to bypass rollout gates", async () => {
   const threadRef = "web:alice:inbox";
   const { run } = await built.runs.enqueue({
     sessionId: "inbox-steer-gates",
@@ -387,11 +382,9 @@ test("web proxy: inbox steering cannot omit or disguise its context to bypass ro
       conversation: { kind: "dm", threadRef, audience: [{ id: "alice", type: "internal" }] },
     },
   });
-  const previousAllowlist = process.env.INBOX_USERS;
   const steer = (body: Record<string, unknown>) =>
-    fetch(`${webBase}/api/runs/${run.id}/signal`, asUser("alice", { method: "POST", body: JSON.stringify(body) }));
+    fetch(`${coreBase}/api/runs/${run.id}/signal`, asUser("alice", { method: "POST", body: JSON.stringify(body) }));
   try {
-    process.env.INBOX_USERS = "alice";
     for (const enabled of [false, true]) {
       await built.featureFlags.setEnabled("inbox_loops", scopeId("personal", "alice"), enabled, "test");
       for (const context of [{}, { threadRef: "" }, { threadRef: "invalid" }, { threadRef: "web:alice:ordinary" }]) {
@@ -414,20 +407,14 @@ test("web proxy: inbox steering cannot omit or disguise its context to bypass ro
         assert.match(signals[0]?.request?.conversationHeader ?? "", /fresh snapshot/);
       }
     }
-    process.env.INBOX_USERS = "bob";
-    const denied = await steer({ kind: "steer", text: "Prioritize these", threadRef });
-    assert.equal(denied.status, 403);
-    assert.deepEqual(await built.signals.takePending(run.id), []);
     const abort = await steer({ kind: "abort" });
     assert.equal(abort.status, 200);
   } finally {
     await built.featureFlags.setEnabled("inbox_loops", scopeId("personal", "alice"), false, "test");
-    if (previousAllowlist === undefined) delete process.env.INBOX_USERS;
-    else process.env.INBOX_USERS = previousAllowlist;
   }
 });
 
-test("web proxy: shared scopes cannot disguise an alias-owned inbox thread", async () => {
+test("web: shared scopes cannot disguise an alias-owned inbox thread", async () => {
   const user = "alice@example.com";
   const threadRef = "web:ALICE@example.com:inbox";
   const { run } = await built.runs.enqueue({
@@ -439,16 +426,15 @@ test("web proxy: shared scopes cannot disguise an alias-owned inbox thread", asy
       conversation: { kind: "dm", threadRef, audience: [{ id: user, type: "internal" }] },
     },
   });
-  const previousAllowlist = process.env.INBOX_USERS;
+  await built.featureFlags.setEnabled("inbox_loops", scopeId("personal", user), true, "test");
   try {
-    process.env.INBOX_USERS = "nobody";
-    for (const scopeId of ["channel:any", "group:any"]) {
+    for (const scope of ["channel:any", "group:any"]) {
       for (const path of ["/api/turn", `/api/runs/${run.id}/signal`]) {
         const response = await fetch(
-          `${webBase}${path}`,
+          `${coreBase}${path}`,
           asUser(user, {
             method: "POST",
-            body: JSON.stringify({ kind: "steer", text: "Prioritize these", threadRef, scopeId }),
+            body: JSON.stringify({ kind: "steer", text: "Prioritize these", threadRef, scopeId: scope }),
           }),
         );
         assert.equal(response.status, 403);
@@ -456,18 +442,17 @@ test("web proxy: shared scopes cannot disguise an alias-owned inbox thread", asy
       }
     }
   } finally {
-    if (previousAllowlist === undefined) delete process.env.INBOX_USERS;
-    else process.env.INBOX_USERS = previousAllowlist;
+    await built.featureFlags.setEnabled("inbox_loops", scopeId("personal", user), false, "test");
   }
 });
 
-test("web proxy: a steer claiming another user's thread is refused", async () => {
+test("web: a steer claiming another user's thread is refused", async () => {
   const submit = (await (
-    await fetch(`${webBase}/api/turn`, asUser("alice", { method: "POST", body: JSON.stringify({ text: "queue me" }) }))
+    await fetch(`${coreBase}/api/turn`, asUser("alice", { method: "POST", body: JSON.stringify({ text: "queue me" }) }))
   ).json()) as { runId?: string };
   assert.ok(submit.runId);
   const steer = await fetch(
-    `${webBase}/api/runs/${encodeURIComponent(submit.runId!)}/signal`,
+    `${coreBase}/api/runs/${encodeURIComponent(submit.runId!)}/signal`,
     asUser("alice", {
       method: "POST",
       body: JSON.stringify({ kind: "steer", text: "louder", threadRef: "web:bob:stolen" }),
@@ -478,7 +463,7 @@ test("web proxy: a steer claiming another user's thread is refused", async () =>
   assert.deepEqual(await built.signals.takePending(submit.runId!), []);
 });
 
-test("web proxy: Project roster revisions revoke pending run status, signals, and events", async () => {
+test("web: Project roster revisions revoke pending run status, signals, and events", async () => {
   await built.app.upsertDirectory([
     { principalId: "project-owner", displayName: "Project Owner", type: "internal" },
     { principalId: "project-member", displayName: "Project Member", type: "internal" },
@@ -490,7 +475,7 @@ test("web proxy: Project roster revisions revoke pending run status, signals, an
 
   const threadRef = `web:project-owner:${crypto.randomUUID()}`;
   const submitted = await fetch(
-    `${webBase}/api/turn`,
+    `${coreBase}/api/turn`,
     asUser("project-owner", {
       method: "POST",
       body: JSON.stringify({
@@ -507,7 +492,7 @@ test("web proxy: Project roster revisions revoke pending run status, signals, an
   assert.equal(queued.runToken, undefined);
 
   const discovered = (await (
-    await fetch(`${webBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`, asUser("project-member"))
+    await fetch(`${coreBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`, asUser("project-member"))
   ).json()) as { runId?: string | null; runToken?: string };
   assert.equal(
     discovered.runId,
@@ -518,13 +503,13 @@ test("web proxy: Project roster revisions revoke pending run status, signals, an
 
   assert.equal((await built.app.addProjectMember(project.id, "project-owner", "project-late-member")).status, "ok");
   const lateMember = (await (
-    await fetch(`${webBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`, asUser("project-late-member"))
+    await fetch(`${coreBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`, asUser("project-late-member"))
   ).json()) as { runId?: string | null };
   assert.equal(lateMember.runId, null, "joining a Project does not reveal a turn from the prior roster");
   assert.equal(
     (
       (await (
-        await fetch(`${webBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`, asUser("project-member"))
+        await fetch(`${coreBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`, asUser("project-member"))
       ).json()) as { runId?: string | null }
     ).runId,
     null,
@@ -532,13 +517,13 @@ test("web proxy: Project roster revisions revoke pending run status, signals, an
   );
 
   const outsider = (await (
-    await fetch(`${webBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`, asUser("project-outsider"))
+    await fetch(`${coreBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`, asUser("project-outsider"))
   ).json()) as { runId?: string | null };
   assert.equal(outsider.runId, null, "core's viewer gate hides the run from non-members");
 
   const currentThreadRef = `web:project-owner:${crypto.randomUUID()}`;
   const currentSubmit = await fetch(
-    `${webBase}/api/turn`,
+    `${coreBase}/api/turn`,
     asUser("project-owner", {
       method: "POST",
       body: JSON.stringify({
@@ -554,7 +539,7 @@ test("web proxy: Project roster revisions revoke pending run status, signals, an
   assert.ok(current.runId);
   const currentDiscovery = (await (
     await fetch(
-      `${webBase}/api/runs/active?threadRef=${encodeURIComponent(currentThreadRef)}`,
+      `${coreBase}/api/runs/active?threadRef=${encodeURIComponent(currentThreadRef)}`,
       asUser("project-member"),
     )
   ).json()) as { runId?: string | null; runToken?: string };
@@ -562,21 +547,21 @@ test("web proxy: Project roster revisions revoke pending run status, signals, an
   assert.equal(currentDiscovery.runToken, undefined);
 
   const statusPath = `/api/runs/${encodeURIComponent(current.runId!)}`;
-  assert.equal((await fetch(`${webBase}${statusPath}`, asUser("project-member"))).status, 200);
+  assert.equal((await fetch(`${coreBase}${statusPath}`, asUser("project-member"))).status, 200);
 
   assert.equal((await built.app.removeProjectMember(project.id, "project-owner", "project-member")).status, "ok");
   assert.equal((await built.app.addProjectMember(project.id, "project-owner", "project-member")).status, "ok");
   const active = (await (
     await fetch(
-      `${webBase}/api/runs/active?threadRef=${encodeURIComponent(currentThreadRef)}`,
+      `${coreBase}/api/runs/active?threadRef=${encodeURIComponent(currentThreadRef)}`,
       asUser("project-member"),
     )
   ).json()) as { runId?: string | null };
   assert.equal(active.runId, null);
-  assert.equal((await fetch(`${webBase}${statusPath}`, asUser("project-member"))).status, 404);
+  assert.equal((await fetch(`${coreBase}${statusPath}`, asUser("project-member"))).status, 404);
 
   const signal = await fetch(
-    `${webBase}/api/runs/${encodeURIComponent(current.runId!)}/signal`,
+    `${coreBase}/api/runs/${encodeURIComponent(current.runId!)}/signal`,
     asUser("project-member", {
       method: "POST",
       body: JSON.stringify({ kind: "abort" }),
@@ -585,19 +570,20 @@ test("web proxy: Project roster revisions revoke pending run status, signals, an
   assert.equal(signal.status, 404);
 
   const events = await fetch(
-    `${webBase}/api/runs/${encodeURIComponent(current.runId!)}/events`,
+    `${coreBase}/api/runs/${encodeURIComponent(current.runId!)}/events`,
     asUser("project-member"),
   );
   assert.equal(events.status, 404);
 });
 
-test("web proxy: a Project member can resolve their own approval in another member's thread", async () => {
+test("web: a Project member can resolve their own approval in another member's thread", async () => {
   await built.app.upsertDirectory([
     { principalId: "approval-owner", displayName: "Approval Owner", type: "internal" },
     { principalId: "approval-member", displayName: "Approval Member", type: "internal" },
   ]);
   const project = await built.app.createProject("approval-owner", "Shared approvals");
   assert.ok(project);
+  await configureCommandRules(built.config, project.scopeId);
   assert.equal((await built.app.addProjectMember(project.id, "approval-owner", "approval-member")).status, "ok");
   const threadRef = `web:approval-owner:${crypto.randomUUID()}`;
   const channelRef = project.scopeId.slice("group:".length);
@@ -619,7 +605,7 @@ test("web proxy: a Project member can resolve their own approval in another memb
   assert.ok(requestId);
 
   const approved = await fetch(
-    `${webBase}/api/approvals/${encodeURIComponent(requestId)}`,
+    `${coreBase}/api/approvals/${encodeURIComponent(requestId)}`,
     asUser("approval-member", { method: "POST", body: JSON.stringify({ approved: true }) }),
   );
   assert.equal(approved.status, 202);
@@ -674,7 +660,7 @@ test("run control follows current shared membership while public history require
     }
     assert.ok(
       await built.app.getSessionForViewer(session.id, "shared-member"),
-      "history remains readable through the participant window",
+      "history remains readable to a current participant",
     );
     assert.equal(await built.app.getRun(run.id, "shared-member"), null);
     assert.deepEqual(await built.app.signalRun(run.id, { kind: "abort" }, "shared-member"), {
@@ -709,11 +695,14 @@ test("run control follows current shared membership while public history require
   await built.identity.reactivate(publicMember);
 });
 
-test("web proxy: /api/runs/active tracks queued runs — the live one first, the queued one after it finishes", async () => {
+test("web: /api/runs/active tracks queued runs — the live one first, the queued one after it finishes", async () => {
   const threadRef = `web:carol:${crypto.randomUUID()}`;
   const submitTwice = async (text: string): Promise<string> => {
     const r = (await (
-      await fetch(`${webBase}/api/turn`, asUser("carol", { method: "POST", body: JSON.stringify({ text, threadRef }) }))
+      await fetch(
+        `${coreBase}/api/turn`,
+        asUser("carol", { method: "POST", body: JSON.stringify({ text, threadRef, midTurn: "queue" }) }),
+      )
     ).json()) as { runId?: string };
     assert.ok(r.runId);
     return r.runId!;
@@ -723,7 +712,7 @@ test("web proxy: /api/runs/active tracks queued runs — the live one first, the
   assert.notEqual(first, second);
 
   const active1 = (await (
-    await fetch(`${webBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`, asUser("carol"))
+    await fetch(`${coreBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`, asUser("carol"))
   ).json()) as { runId?: string | null };
   assert.equal(active1.runId, first, "the oldest live run is the active one");
 
@@ -732,7 +721,7 @@ test("web proxy: /api/runs/active tracks queued runs — the live one first, the
   await built.runs.complete(first, claimed!.leaseToken!, { status: "ok", reply: "done" });
 
   const active2 = (await (
-    await fetch(`${webBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`, asUser("carol"))
+    await fetch(`${coreBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`, asUser("carol"))
   ).json()) as { runId?: string | null };
   assert.equal(active2.runId, second, "once the live run finishes, the queued one becomes active");
 });
@@ -742,10 +731,10 @@ test("web steering atomically transfers file-only queues and deduplicates retrie
   const attachments = [{ name: "report.txt", mimetype: "text/plain", sizeBytes: 6, blobId: "steer-blob" }];
   const submit = async (text: string, files: import("../src/types.ts").IncomingAttachment[] = []) => {
     const res = await fetch(
-      `${webBase}/api/turn`,
+      `${coreBase}/api/turn`,
       asUser("U1", {
         method: "POST",
-        body: JSON.stringify({ text, threadRef, attachments: files }),
+        body: JSON.stringify({ text, threadRef, attachments: files, midTurn: "queue" }),
       }),
     );
     return ((await res.json()) as { runId: string }).runId;
@@ -754,7 +743,7 @@ test("web steering atomically transfers file-only queues and deduplicates retrie
   const queuedRunId = await submit("", attachments);
   for (let i = 0; i < 2; i++) {
     const response = await fetch(
-      `${webBase}/api/runs/${runId}/signal`,
+      `${coreBase}/api/runs/${runId}/signal`,
       asUser("U1", {
         method: "POST",
         body: JSON.stringify({ kind: "steer", text: "", threadRef, queuedRunId }),
@@ -1105,4 +1094,49 @@ test("subagent orphan replay drops a late client_result instead of starting a tu
   await built.app.replayOrphanedRunSignals(run.id);
   await settleNoReplay(threadRef);
   assert.deepEqual(await built.signals.pending(run.id), [], "the late answer is acknowledged");
+});
+
+test("web: Stop stops only the run's own conversation; tree:true stops its subagents too, even after that run ended", async () => {
+  const alice = { id: "alice", type: "internal" as const };
+  const scope = scopeId("personal", "alice");
+  const parentThread = "web:alice:stop-tree";
+  const childThread = "agent:main:subagent:stop-tree-child";
+  const parent = await built.sessions.getOrCreateByThread(parentThread, "dm", scope, undefined, "web");
+  const child = await built.sessions.getOrCreateByThread(childThread, "dm", scope, undefined, "web");
+  await built.sessions.setParentSession(child.id, parent.id);
+  const running = async (threadRef: string, text: string) => {
+    const { run } = await built.runs.enqueue({
+      sessionId: threadRef,
+      request: {
+        ...request(text, threadRef),
+        surface: "web",
+        actor: alice,
+        conversation: { kind: "dm", threadRef, audience: [alice] },
+      },
+    });
+    const claimed = await built.runs.claimById(run.id, "test-worker", 60_000);
+    return { run, leaseToken: claimed!.leaseToken! };
+  };
+  const lead = await running(parentThread, "lead the work");
+  const lane = await running(childThread, "one lane");
+  const stop = (body: Record<string, unknown>) =>
+    fetch(
+      `${coreBase}/api/runs/${lead.run.id}/signal`,
+      asUser("alice", { method: "POST", body: JSON.stringify(body) }),
+    );
+  const reasons = async (runId: string) =>
+    (await built.signals.pending(runId)).map(({ signal }) => [signal.kind, signal.reason, signal.scope]);
+
+  assert.equal((await stop({ kind: "abort" })).status, 200);
+  assert.deepEqual(await reasons(lead.run.id), [["abort", "by user", "session"]]);
+  assert.deepEqual(await reasons(lane.run.id), []);
+
+  await built.runs.complete(lead.run.id, lead.leaseToken, { status: "silent", stopped: true, stopScope: "session" });
+  assert.equal((await stop({ kind: "abort" })).status, 409);
+  assert.deepEqual(await reasons(lane.run.id), []);
+
+  assert.equal((await stop({ kind: "abort", tree: true })).status, 200);
+  assert.deepEqual(await reasons(lane.run.id), [["abort", "because the parent session was stopped", "ancestor"]]);
+  await built.runs.complete(lane.run.id, lane.leaseToken, { status: "silent", stopped: true });
+  assert.equal((await stop({ kind: "abort", tree: true })).status, 409);
 });

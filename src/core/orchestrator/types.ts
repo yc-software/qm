@@ -1,10 +1,12 @@
+import type { PersonaService } from "../../personas/persona-service.ts";
 import type { AdmittedWork } from "../../util/admitted-work.ts";
 import type { TraceCarrier } from "../../../plugins/chassis/src/error-reporting.ts";
 import type { GoalCreateInput } from "../../agent/goal.ts";
-import type { RunStop } from "../../runs/run-store.ts";
+import type { RunStop, TurnPark } from "../../runs/run-store.ts";
 import type { ExternalSlackPolicies } from "../../resolution/external-slack.ts";
 import type { RuntimeService } from "../../agent/runtime-types.ts";
 import type { SandboxResources } from "../../sandbox/sandbox-resources.ts";
+import type { AdvisoryLock } from "../../persistence/advisory-lock.ts";
 import type { AwsRoleBroker } from "../../auth/aws-role-broker.ts";
 import type {
   CommandApprovalGrant,
@@ -17,6 +19,7 @@ import type {
 import type { SurfaceContextQuery, SurfaceContextResult } from "../../reach/reach.ts";
 import type { TurnOrigin } from "../turn-origin.ts";
 import type { IdentityService } from "../../identity/identity-service.ts";
+import type { UserStore } from "../../identity/user-store.ts";
 import type { ResolutionService } from "../../resolution/resolution-service.ts";
 import type { ModelAccount, OrgBranding, ScopedConfigStore } from "../../resolution/config-store.ts";
 import type { UserModelCredentialStore } from "../../model/user-model-credential-store.ts";
@@ -41,7 +44,7 @@ import type { AuditLog } from "../../audit/audit-log.ts";
 import type { SecurityScreener } from "../../security/security-screener.ts";
 import type { BudgetTracker } from "../../ratelimit/budget.ts";
 import type { ControlService } from "../../api/control-service.ts";
-import type { Agent } from "../../agent/agent.ts";
+import type { Agent, RuntimeChoice, SessionRoute } from "../../agent/agent.ts";
 import type { AdminService } from "../../admin/admin-service.ts";
 import type { ErrorLog } from "../../admin/error-log.ts";
 import type { RunSignalStore } from "../../runs/run-signal-store.ts";
@@ -65,23 +68,11 @@ import type { AclStore } from "../../acl/acl-store.ts";
 import type { SwarmService, SwarmTurn } from "../../swarms/swarm-service.ts";
 import type { ChannelPolicyStore } from "../../surface-cache/channel-policy-store.ts";
 import type { SurfaceCache } from "../../surface-cache/types.ts";
+import type { SurfaceRegistry } from "../../surfaces/registry.ts";
 
 export interface OrchestratorInput extends Omit<
   TurnRequest,
-  | "surface"
-  | "actor"
-  | "conversation"
-  | "idempotencyKey"
-  | "spawned"
-  | "async"
-  | "triggerTs"
-  | "entryTs"
-  | "triggered"
-  | "securityScreenData"
-  | "triggerDestination"
-  | "ownerKeychainUnion"
-  | "unprompted"
-  | "liveActor"
+  "surface" | "actor" | "conversation" | "spawned" | "async"
 > {
   modelAccount?: ModelAccount;
   surface?: string;
@@ -100,6 +91,7 @@ export interface OrchestratorInput extends Omit<
   finalAttempt?: boolean;
   cancel?: AbortSignal;
   shutdown?: AbortSignal;
+  park?: TurnPark;
   sessionParticipantIds?: readonly string[];
   scopeVersion?: string;
   swarm?: SwarmTurn;
@@ -114,30 +106,33 @@ export interface OrchestratorDeps {
   swarms?: SwarmService;
   refreshModels?: () => Promise<void>;
   identity: IdentityService;
+  users: Pick<UserStore, "record" | "markApps">;
   resolution: ResolutionService;
-  config?: ScopedConfigStore;
-  defaultTurnWallClockMs?: number;
+  config: ScopedConfigStore;
+  defaultTurnWallClockMs: number;
   userModelCredentials?: UserModelCredentialStore;
   brandingDefault?: OrgBranding;
-  resolveBaseModelId?: () => string | undefined;
+  surfaces: SurfaceRegistry;
+  resolveSessionRuntime?: (route: SessionRoute) => Promise<RuntimeChoice>;
   sessions: SessionStore;
   sessionStateBus?: SessionStateBus;
   sessionSyscalls?: SessionSyscallsFactory;
   files: FileArtifactStore;
-  toolOutput?: ToolOutputStore;
+  toolOutput: ToolOutputStore;
   sandbox: Sandbox;
   sandboxResources?: SandboxResources;
+  advisoryLock: AdvisoryLock;
   auditLog: AuditLog;
   budget?: BudgetTracker;
   maxContextTokens?: number;
-  execTimeoutMs?: number;
-  execTimeoutCeilingMs?: number;
+  execTimeoutMs: number;
+  execTimeoutCeilingMs: number;
   approvalSummaryTimeoutMs?: number;
   securityScreenTimeoutMs?: number;
   securityScreener?: SecurityScreener;
-  backgroundJobTtlMs?: number;
+  backgroundJobTtlMs: number;
   sandboxCapabilityTtlMs?: number;
-  backgroundJobTtlMaxMs?: number;
+  backgroundJobTtlMaxMs: number;
   agent: Agent;
   signingSecret?: string;
   capabilitySecret?: string;
@@ -155,41 +150,38 @@ export interface OrchestratorDeps {
   memoryStrategy?: MemoryStrategy;
   skills?: SkillStore;
   skillBundles?: SkillBundleStore;
-  skillsReady?: Promise<void>;
+  skillsReady?: () => Promise<void>;
   approvals: DurableMap<PendingApprovalRecord>;
   approvalGrants: DurableMap<CommandApprovalGrant>;
-  errors?: ErrorLog;
-  signals?: RunSignalStore;
-  turnStream?: TurnStream;
+  errors: ErrorLog;
+  signals: RunSignalStore;
+  turnStream: TurnStream;
   runActivity?: RunActivityStore;
   runs?: RunStore;
   blobTransfer: BlobTransferStore;
   processes?: ProcessRegistry;
   monitors?: MonitorStore;
   crons?: CronStore;
+  notebookOnlyMemory?: (threadRef: string) => Promise<boolean>;
   webhooks?: WebhookStore;
   control?: ControlService;
   runtime?: RuntimeService;
   validateScheduledRuntime?: (
     scope: import("../../types.ts").ScopeId,
     choice: import("../../agent/agent.ts").RuntimeChoice,
-    purpose?: import("../../resolution/config-store.ts").RuntimePurpose,
+    purpose?: import("../../resolution/config-store.ts").TurnRuntimePurpose,
   ) => Promise<string | null>;
   connectorTokens?: ConnectorTokenStore;
   resolveConnectorClient?: OAuthClientResolver;
   featureFlags?: FeatureFlagStore;
-  installSharedCanvas?: (
-    actorId: string,
-    fileId: string,
-    at: { threadRef: string; sessionId: string },
-  ) => Promise<string | null>;
   teams?: TeamStore;
   credentialUsage?: CredentialUsageSink;
   keychain?: Keychain;
   serviceCreds?: ServiceCredentialStore;
-  deliveries?: DeliveryStore;
-  directory?: DirectoryStore;
+  deliveries: DeliveryStore;
+  directory: DirectoryStore;
   projects?: Pick<ProjectStore, "recognizes" | "name">;
+  personas?: Pick<PersonaService, "forTurn">;
   isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
   currentScopeMembers?: import("../../resolution/scope-membership.ts").CurrentScopeMembers;
   managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "members" | "version" | "withVersion" | "slackChannel">;
@@ -200,6 +192,7 @@ export interface OrchestratorDeps {
   surfaceContext?: SurfaceContextPuller;
   surfaceCache?: SurfaceCache;
   channelPolicy?: ChannelPolicyStore;
+  replyCheck?: import("../../decisions/hooks.ts").ReplyCheckFactory;
   surfaceDebugFooter?: boolean;
 }
 
@@ -217,9 +210,5 @@ export interface Orchestrator {
     sessionId?: string;
     verifiedSwarm?: boolean;
   }): Promise<"allow" | "block" | "unscreened">;
-  regenerateTitle(
-    sessionId: string,
-    principalId: string,
-    participantIds?: readonly string[],
-  ): Promise<{ title: string | null } | null>;
+  regenerateTitle(sessionId: string, principalId: string, personal?: boolean): Promise<{ title: string | null } | null>;
 }

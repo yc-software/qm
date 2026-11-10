@@ -24,6 +24,16 @@ import { test } from "node:test";
 const cliDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const execFileAsync = promisify(execFile);
 
+interface PackResult {
+  filename: string;
+  files: Array<{ path: string }>;
+}
+
+function packResults(output: string): PackResult[] {
+  const parsed = JSON.parse(output) as PackResult[] | Record<string, PackResult>;
+  return Array.isArray(parsed) ? parsed : Object.values(parsed);
+}
+
 test("the package uses the organization scope while keeping the qm command", () => {
   const packageManifest = JSON.parse(readFileSync(join(cliDir, "package.json"), "utf8")) as {
     name?: string;
@@ -41,9 +51,9 @@ test(
     let registry: Server | undefined;
     try {
       const env = { ...process.env, NPM_CONFIG_CACHE: join(dir, "npm-cache") };
-      const packed = JSON.parse(
+      const packed = packResults(
         execFileSync("npm", ["pack", "--json", "--pack-destination", dir], { cwd: cliDir, encoding: "utf8", env }),
-      ) as Array<{ filename: string; files: Array<{ path: string }> }>;
+      );
       const deployment = join(dir, "deployment");
       const awsDeployment = join(dir, "aws-deployment");
       const packageManifest = JSON.parse(readFileSync(join(cliDir, "package.json"), "utf8")) as Record<string, unknown>;
@@ -53,13 +63,13 @@ test(
       ]);
       for (const name of Object.keys(packageManifest["dependencies"] as Record<string, string>)) {
         const source = join(cliDir, "node_modules", name);
-        const [dependency] = JSON.parse(
+        const [dependency] = packResults(
           execFileSync("npm", ["pack", "--json", "--ignore-scripts", "--pack-destination", dir], {
             cwd: source,
             encoding: "utf8",
             env,
           }),
-        ) as Array<{ filename: string }>;
+        );
         published.set(name, {
           manifest: JSON.parse(readFileSync(join(source, "package.json"), "utf8")) as Record<string, unknown>,
           bytes: readFileSync(join(dir, dependency!.filename)),
@@ -219,8 +229,8 @@ test(
         webUiUrl?: string;
         adminOnboardingUrl?: string;
       };
-      assert.equal(outputs.webUiUrl, "https://acme-portal.fly.dev");
-      assert.equal(outputs.adminOnboardingUrl, "https://acme-portal.fly.dev/settings/onboarding");
+      assert.equal(outputs.webUiUrl, "https://acme-core.fly.dev");
+      assert.equal(outputs.adminOnboardingUrl, "https://acme-core.fly.dev/settings/onboarding");
       execFileSync(bin, ["slack", "render"], { cwd: deployment, stdio: "pipe", env });
       execFileSync(bin, ["conformance", "--static"], { cwd: deployment, stdio: "pipe", env });
       assert.match(execFileSync(awsBin, ["check"], { cwd: awsDeployment, encoding: "utf8", env }), /check passed/);
@@ -234,7 +244,7 @@ test(
         ),
       );
       const cluster = "acme-aws-qm";
-      const portalTarget = `arn:aws:elasticloadbalancing:us-west-2:000000000000:targetgroup/${cluster}-port-${createHash("sha1").update(`${cluster}:portal`).digest("hex").slice(0, 6)}/1`;
+      const frontDoorTarget = `arn:aws:elasticloadbalancing:us-west-2:000000000000:targetgroup/${cluster}-core-${createHash("sha1").update(`${cluster}:core-public`).digest("hex").slice(0, 6)}/1`;
       const fakeAws = join(dir, "aws");
       writeFileSync(
         fakeAws,
@@ -245,8 +255,8 @@ const option = (name) => args[args.indexOf(name) + 1];
 const json = (value) => process.stdout.write(JSON.stringify(value));
 if (command === "sts get-caller-identity") process.stdout.write("000000000000\\n");
 else if (command === "elbv2 describe-load-balancers") json({ LoadBalancers: [{ LoadBalancerArn: "arn:alb", DNSName: "replace-with-alb-hostname", State: { Code: "active" } }] });
-else if (command === "elbv2 describe-listeners") json({ Listeners: [{ ListenerArn: "arn:listener", Protocol: "HTTP", Port: 80, DefaultActions: [{ Type: "forward", TargetGroupArn: ${JSON.stringify(portalTarget)} }] }] });
-else if (command === "elbv2 describe-target-groups") json({ TargetGroups: [{ TargetGroupArn: ${JSON.stringify(portalTarget)}, TargetGroupName: ${JSON.stringify(portalTarget.split("/")[1])} }] });
+else if (command === "elbv2 describe-listeners") json({ Listeners: [{ ListenerArn: "arn:listener", Protocol: "HTTP", Port: 80, DefaultActions: [{ Type: "forward", TargetGroupArn: ${JSON.stringify(frontDoorTarget)} }] }] });
+else if (command === "elbv2 describe-target-groups") json({ TargetGroups: [{ TargetGroupArn: ${JSON.stringify(frontDoorTarget)}, TargetGroupName: ${JSON.stringify(frontDoorTarget.split("/")[1])} }] });
 else if (command === "elbv2 describe-rules") json({ Rules: [] });
 else if (command === "ecs describe-services") {
   const start = args.indexOf("--services") + 1;
@@ -256,7 +266,7 @@ else if (command === "ecs describe-services") {
     status: "ACTIVE",
     desiredCount: 0,
     taskDefinition: "arn:task/" + serviceName + ":1",
-    loadBalancers: serviceName.endsWith("-portal") ? [{ targetGroupArn: ${JSON.stringify(portalTarget)} }] : [],
+    loadBalancers: serviceName.endsWith("-core") ? [{ targetGroupArn: ${JSON.stringify(frontDoorTarget)} }] : [],
     tags: [{ key: "Deployment", value: "acme-aws" }, { key: "ManagedBy", value: "terraform" }],
   })) });
 } else if (command === "ecs describe-task-definition") json({ taskDefinition: { family: "legacy", containerDefinitions: [] } });

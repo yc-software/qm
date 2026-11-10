@@ -42,8 +42,8 @@ test("a fly config's sandbox block rewrites the core fly.toml [env] (app, image,
     "secretEnv value/name must not be written to the toml",
   );
 
-  const webUi = derivedTomlFor(cfg, "web-ui", repoRoot);
-  assert.doesNotMatch(webUi, /FLY_RESIDENT_ENV_TZ/);
+  const egress = derivedTomlFor({ ...cfg, services: ["core", "egress-proxy"] }, "egress-proxy", repoRoot);
+  assert.doesNotMatch(egress, /FLY_RESIDENT_ENV_TZ/);
 });
 
 test("the fly target routes security screen proxy configuration only to core", () => {
@@ -70,7 +70,7 @@ test("the fly target routes security screen proxy configuration only to core", (
     },
   );
   assert.deepEqual(
-    Object.keys(generatedEnv(derivedTomlFor(screened, "web-ui", repoRoot))).filter((name) =>
+    Object.keys(generatedEnv(derivedTomlFor(screened, "egress-proxy", repoRoot))).filter((name) =>
       name.startsWith("SECURITY_SCREEN_"),
     ),
     [],
@@ -281,6 +281,10 @@ test("fly secrets push stages a dual-role secret under BOTH names on the core ap
       `CONNECTOR_SECRET_KEY=${"connector".repeat(4)}`,
       `CORE_SIGNING_SECRET=${"core-signing".repeat(3)}`,
       "PORTAL_IDENTITY_SECRET=identity",
+      "OIDC_CLIENT_ID=client",
+      "OIDC_CLIENT_SECRET=oidc",
+      "PORTAL_EXPECTED_TEAM_ID=T1",
+      `PORTAL_SESSION_SECRET=${"portal-session".repeat(3)}`,
       `SKILL_SIGNING_SECRET=${"skill-signing".repeat(3)}`,
       "PUBLIC_API_URL=https://core.example.test",
       "SLACK_BOT_TOKEN=xoxb",
@@ -367,6 +371,10 @@ test("fly secrets push warns that staged secrets are not live when machines are 
       `CONNECTOR_SECRET_KEY=${"connector".repeat(4)}`,
       `CORE_SIGNING_SECRET=${"core-signing".repeat(3)}`,
       "PORTAL_IDENTITY_SECRET=portal-identity-secret-that-is-long-enough",
+      "OIDC_CLIENT_ID=client",
+      "OIDC_CLIENT_SECRET=oidc",
+      "PORTAL_EXPECTED_TEAM_ID=T1",
+      `PORTAL_SESSION_SECRET=${"portal-session".repeat(3)}`,
       `SKILL_SIGNING_SECRET=${"skill-signing".repeat(3)}`,
       "FLY_SANDBOX_API_TOKEN=fly",
     ].join("\n"),
@@ -424,6 +432,10 @@ test("fly secrets push stays quiet about staging when no machines are running", 
       `CONNECTOR_SECRET_KEY=${"connector".repeat(4)}`,
       `CORE_SIGNING_SECRET=${"core-signing".repeat(3)}`,
       "PORTAL_IDENTITY_SECRET=portal-identity-secret-that-is-long-enough",
+      "OIDC_CLIENT_ID=client",
+      "OIDC_CLIENT_SECRET=oidc",
+      "PORTAL_EXPECTED_TEAM_ID=T1",
+      `PORTAL_SESSION_SECRET=${"portal-session".repeat(3)}`,
       `SKILL_SIGNING_SECRET=${"skill-signing".repeat(3)}`,
       "FLY_SANDBOX_API_TOKEN=fly",
     ].join("\n"),
@@ -477,6 +489,10 @@ test("fly secrets push removes the disabled Fly app publisher token", async () =
       `CONNECTOR_SECRET_KEY=${"connector".repeat(4)}`,
       `CORE_SIGNING_SECRET=${"core-signing".repeat(3)}`,
       "PORTAL_IDENTITY_SECRET=portal-identity-secret-that-is-long-enough",
+      "OIDC_CLIENT_ID=client",
+      "OIDC_CLIENT_SECRET=oidc",
+      "PORTAL_EXPECTED_TEAM_ID=T1",
+      `PORTAL_SESSION_SECRET=${"portal-session".repeat(3)}`,
       `SKILL_SIGNING_SECRET=${"skill-signing".repeat(3)}`,
     ].join("\n"),
   );
@@ -522,6 +538,10 @@ test("fly secrets push falls back to an ambient secret when the scaffold entry i
       `CONNECTOR_SECRET_KEY=${"connector".repeat(4)}`,
       "CORE_SIGNING_SECRET=",
       "PORTAL_IDENTITY_SECRET=identity",
+      "OIDC_CLIENT_ID=client",
+      "OIDC_CLIENT_SECRET=oidc",
+      "PORTAL_EXPECTED_TEAM_ID=T1",
+      `PORTAL_SESSION_SECRET=${"portal-session".repeat(3)}`,
       `SKILL_SIGNING_SECRET=${"skill-signing".repeat(3)}`,
     ].join("\n"),
   );
@@ -554,22 +574,22 @@ test("fly live check requires deployed machines and a healthy public endpoint", 
     target: "fly",
     region: "sjc",
     flyOrg: "personal",
-    services: ["core", "web-ui", "portal"],
+    services: ["core", "egress-proxy"],
     plugins: [],
     skills: [],
     env: { core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" } },
     imageOverrides: {},
   };
   const liveEnvs = Object.fromEntries(
-    ["core", "web-ui", "portal"].map((service) => [
+    (["core", "egress-proxy"] as const).map((service) => [
       service,
-      generatedEnv(derivedTomlFor(config, service as "core" | "web-ui" | "portal", repoRoot)),
+      generatedEnv(derivedTomlFor(config, service, repoRoot)),
     ]),
   );
   const fake = fakeFly(
     dir,
     `
-if (a.startsWith("apps list")) console.log(JSON.stringify(["core", "web-ui", "portal"].map((service) => ({ Name: "acme-" + service }))));
+if (a.startsWith("apps list")) console.log(JSON.stringify(["core", "egress-proxy"].map((service) => ({ Name: "acme-" + service }))));
 else if (a.startsWith("status")) {
   const app = process.argv[process.argv.indexOf("-a") + 1];
   const service = app.slice("acme-".length);
@@ -591,7 +611,7 @@ else console.log("ok");`,
     });
     assert.deepEqual(lines, [], "JSON callers can suppress all human-readable live-check output");
     const calls = readFileSync(fake.log, "utf8");
-    for (const app of ["acme-core", "acme-web-ui", "acme-portal"]) {
+    for (const app of ["acme-core", "acme-egress-proxy"]) {
       assert.ok(calls.includes(`status -a ${app} --json`));
     }
     assert.match(
@@ -1119,7 +1139,7 @@ test("fly secrets push stages a secretEnv alias under its declared env name on i
     target: "fly",
     region: "sjc",
     flyOrg: "personal",
-    services: ["core", "portal"],
+    services: ["core"],
     plugins: [],
     skills: [],
     env: { core: {} },
@@ -1153,14 +1173,13 @@ test("fly secrets push stages a secretEnv alias under its declared env name on i
     await flySecretsPush(config, dir);
     const calls = readFileSync(fake.log, "utf8");
     assert.ok(
-      calls.includes("secrets set --stage -a acme-portal PORTAL_SESSION_SECRET=-"),
-      "the portal keeps its plain delivery",
+      calls.includes("secrets set --stage -a acme-core PORTAL_SESSION_SECRET=-"),
+      "core's front door keeps the plain delivery",
     );
     assert.ok(
       calls.includes("secrets set --stage -a acme-core DEPLOY_APPS_SESSION_SECRET=-"),
       "the alias delivers the stored value under its declared env name on core",
     );
-    assert.ok(!calls.includes("-a acme-core PORTAL_SESSION_SECRET"), "the alias adds no plain-name delivery on core");
     assert.ok(
       calls.includes("secrets set --stage -a acme-core EXTRA_API_KEY=-"),
       "config secretEnv extras stage on their service",

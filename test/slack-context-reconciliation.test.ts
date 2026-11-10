@@ -39,6 +39,7 @@ for (const warm of [false, true]) {
       memoryStrategy: "agent-only",
     });
     let built = buildApp(config);
+    built.runtime.start();
     const requests: string[] = [];
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
@@ -82,6 +83,7 @@ for (const warm of [false, true]) {
       assert.match(requestText, /Alex, can you approve/);
       await built.runtime.stop();
       built = buildApp(config);
+      built.runtime.start();
       const second = await built.app.turn({ ...input, text: "yes, go ahead" });
       assert.equal(second.status, "ok", second.reason);
       const next = JSON.stringify(JSON.parse(requests.at(-1)!).messages);

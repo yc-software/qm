@@ -11,11 +11,10 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../sr
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import type { SessionStateEvent } from "../src/runs/session-state-bus.ts";
 import { uiStateId } from "../src/surfaces/ui-state.ts";
-import { installSharedCanvas, readUiCanvas } from "../src/surfaces/ui-canvas.ts";
-import { Readable } from "node:stream";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { browserImpersonationCookie, browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 
 const body = async (r: Response | Promise<Response>): Promise<any> => (await r).json();
 
@@ -26,6 +25,8 @@ describe("ui canvas and ui observe", () => {
   let built: BuiltApp;
   let agentServer: Server;
   let sourceServer: Server;
+  let browserServer: Server;
+  let browserBase: string;
   let agentBase: string;
   let sourceBase: string;
   let sessionId: string;
@@ -84,6 +85,15 @@ describe("ui canvas and ui observe", () => {
       ...deps,
     });
     sourceServer = createInsecureTestServer(built.app, deps);
+    browserServer = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+      signingSecret: SECRET,
+      ...browserSessionDeps,
+      admin: built.admin,
+      ...deps,
+    });
+    await new Promise<void>((resolve) => browserServer.listen(0, resolve));
+    browserBase = `http://localhost:${(browserServer.address() as AddressInfo).port}`;
     await new Promise<void>((resolve) => agentServer.listen(0, resolve));
     await new Promise<void>((resolve) => sourceServer.listen(0, resolve));
     agentBase = `http://localhost:${(agentServer.address() as AddressInfo).port}`;
@@ -103,6 +113,7 @@ describe("ui canvas and ui observe", () => {
   after(async () => {
     await new Promise<void>((resolve) => agentServer.close(() => resolve()));
     await new Promise<void>((resolve) => sourceServer.close(() => resolve()));
+    await new Promise<void>((resolve) => browserServer.close(() => resolve()));
   });
 
   it("is off until the ui_canvas flag is enabled for the person", async () => {
@@ -136,16 +147,6 @@ describe("ui canvas and ui observe", () => {
     assert.deepEqual(after, { html: "<b/>", css: "", js: "", pinned: false, rev: 3 });
     const event = events.at(-1)!;
     assert.deepEqual([event.sessionId, event.participants, event.ui], [sessionId, ["U1"], { kind: "canvas" }]);
-  });
-
-  it("installs a shared sidebar file as the always-on canvas", async () => {
-    const file = (body: string) => ({ stream: Readable.from([Buffer.from(body)]) });
-    assert.equal(await installSharedCanvas(built.uiState, "U2", null), "no such file is shared with you");
-    assert.match(String(await installSharedCanvas(built.uiState, "U2", file("{"))), /^not a shared canvas: .*JSON/);
-    assert.match(String(await installSharedCanvas(built.uiState, "U2", file('{"js":1}'))), /must be strings/);
-    await installSharedCanvas(built.uiState, "U2", file('{"html":"<nav/>","js":"1"}'));
-    const live = await readUiCanvas(built.uiState, "U2", "always-on");
-    assert.deepEqual([live?.html, live?.css, live?.js, live?.pinned], ["<nav/>", "", "1", true]);
   });
 
   it("rejects bad and oversized writes", async () => {
@@ -226,5 +227,58 @@ describe("ui canvas and ui observe", () => {
     await built.uiState.put(uiStateId("U1", "observe:forged"), { value: { runId: "run-other" }, updatedAt: 1 });
     const r = await source("POST", "/v1/ui/observe/forged/result", { principalId: "U1", snapshot: {} });
     assert.equal(r.status, 404);
+  });
+
+  it("serves the signed-in browser its canvas, script at the current revision and pin, and nothing while impersonating", async () => {
+    const browser = (cookie: string, method = "GET", path = "", payload?: unknown) =>
+      fetch(`${browserBase}${path}`, {
+        method,
+        headers: { cookie, origin: browserSessionDeps.portalUrl, "content-type": "application/json" },
+        ...(payload !== undefined ? { body: JSON.stringify(payload) } : {}),
+      });
+    const owner = browserSessionCookie("U1");
+    const rev = (await body(agent("POST", "/v1/ui/canvas", { replace: true, html: "<p/>", js: "canvas.send('hi')" })))
+      .canvas.rev;
+    const read = await browser(owner, "GET", `/api/ui-canvas/${sessionId}`);
+    assert.equal((await body(read)).canvas.js, "canvas.send('hi')");
+    const script = await browser(owner, "GET", `/api/ui-canvas/${sessionId}/script.js?rev=${rev}`);
+    assert.equal(script.status, 200);
+    assert.match(script.headers.get("content-type") ?? "", /^application\/javascript/);
+    assert.equal(script.headers.get("x-content-type-options"), "nosniff");
+    assert.equal(script.headers.get("cache-control"), "no-store");
+    assert.equal(
+      await script.text(),
+      `((canvas) => {\ncanvas.send('hi')\n})(window.qmUiCanvasTake?.(${JSON.stringify(sessionId)}, ${rev}));\n`,
+    );
+    for (const site of ["cross-site", "same-site"]) {
+      const included = await fetch(`${browserBase}/api/ui-canvas/${sessionId}/script.js?rev=${rev}`, {
+        headers: { cookie: owner, "sec-fetch-site": site, "sec-fetch-dest": "script" },
+      });
+      assert.equal(included.status, 403, site);
+    }
+    const stale = await browser(owner, "GET", `/api/ui-canvas/${sessionId}/script.js?rev=${rev - 1}`);
+    assert.deepEqual([stale.status, await body(stale)], [409, { error: "stale_revision" }]);
+    assert.equal((await browser(browserSessionCookie("U2"), "GET", `/api/ui-canvas/${sessionId}`)).status, 404);
+    const named = await browser(owner, "POST", `/api/ui-canvas/${sessionId}`, { pinned: true, principalId: "U2" });
+    assert.equal(named.status, 403);
+    const pinned = await browser(owner, "POST", `/api/ui-canvas/${sessionId}`, { pinned: true });
+    assert.equal((await body(pinned)).canvas.pinned, true);
+    assert.equal((await browser(owner, "POST", "/api/ui-canvas/observe/forged", { snapshot: {} })).status, 404);
+    const impersonating = `${browserSessionCookie("admin-alice")}; ${browserImpersonationCookie("admin-alice", "U1")}`;
+    for (const [method, path, payload] of [
+      ["GET", `/api/ui-canvas/${sessionId}`],
+      ["GET", `/api/ui-canvas/${sessionId}/script.js?rev=${rev}`],
+      ["POST", `/api/ui-canvas/${sessionId}`, { dismiss: true }],
+      ["POST", "/api/ui-canvas/observe/forged", { snapshot: {} }],
+    ] as const) {
+      const refused = await browser(impersonating, method, path, payload);
+      assert.deepEqual(
+        [refused.status, await body(refused)],
+        [403, { error: "forbidden", message: "Unavailable while impersonating." }],
+        path,
+      );
+    }
+    assert.equal((await body(agent("GET", "/v1/ui/canvas"))).canvas.pinned, true);
+    await agent("DELETE", "/v1/ui/canvas");
   });
 });

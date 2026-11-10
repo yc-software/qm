@@ -8,6 +8,7 @@ import { credentialHandle } from "../src/credentials/keychain.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { installGlobalFakeSprites, type FakeSprites } from "./support/fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
+import { failedTurnError } from "./support/failed-turn.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 
 let ff: FakeSprites;
@@ -21,7 +22,11 @@ const actor = { externalId: "U1" };
 
 async function setup() {
   const built = buildApp(
-    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "own-cred-automation-")), signingSecret: "own-cred-test" }),
+    testConfig({
+      dataDir: mkdtempSync(join(tmpdir(), "own-cred-automation-")),
+      signingSecret: "own-cred-test",
+      maxAttempts: 1,
+    }),
   );
   await selectDefaultSandbox(built, "U1", scopeId("personal", "U1"), scopeId("channel", "C1"));
   const credential = await built.keychain!.save({
@@ -43,7 +48,7 @@ test("a scheduled turn in the owner's DM uses the owner's credential without a g
     actor,
     conversation: { kind: "dm", threadRef: "dm:U1:cron" },
     text: read,
-    triggered: true,
+    origin: { kind: "automation" },
   } as TurnRequest);
   assert.equal(fired.status, "ok", fired.reason);
   assert.match(fired.reply ?? "", /own-login/);
@@ -68,7 +73,7 @@ test("a subagent of the owner's DM uses the owner's credential without a grant",
     actor,
     conversation: { kind: "dm", threadRef: child.threadRef },
     text: read,
-    triggered: true,
+    origin: { kind: "automation" },
   } as TurnRequest);
   assert.equal(result.status, "ok", result.reason);
   assert.match(result.reply ?? "", /own-login/);
@@ -77,13 +82,13 @@ test("a subagent of the owner's DM uses the owner's credential without a grant",
 
 test("a scheduled turn in a shared channel cannot use the owner's credential without a grant", async () => {
   const { built, read } = await setup();
-  await assert.rejects(
-    built.app.turn({
+  assert.match(
+    await failedTurnError(built, {
       surface: "cron",
       actor,
       conversation: { kind: "channel", threadRef: "ch:C1:cron", channelRef: "C1", audience: [actor] },
       text: read,
-      triggered: true,
+      origin: { kind: "automation" },
     } as TurnRequest),
     /credential handle is not available/,
   );

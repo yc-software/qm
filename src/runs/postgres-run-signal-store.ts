@@ -3,6 +3,9 @@ import { createPgPool, type Rows } from "../persistence/pg-pool.ts";
 import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 import { subscribePostgresChannel } from "../persistence/postgres-listener.ts";
 import type { RunSignal, RunSignalKind, RunSignalStore } from "./run-signal-store.ts";
+import { spokenByPerson } from "../core/turn-origin.ts";
+import { tenantTables } from "../tenants/migrations.ts";
+import { claimFunction, claimRows } from "../tenants/claim.ts";
 
 const CHANNEL = "run_signals";
 
@@ -44,6 +47,28 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
         `CREATE UNIQUE INDEX IF NOT EXISTS run_signals_by_dedupe_key ON run_signals(dedupe_key) WHERE dedupe_key IS NOT NULL`,
       ],
     },
+    ...tenantTables("runs/signals/0003-tenants", [
+      {
+        table: "run_signals",
+        primaryKey: "id",
+        unique: [{ name: "run_signals_by_dedupe_key", columns: "dedupe_key", where: "dedupe_key IS NOT NULL" }],
+      },
+    ]),
+    {
+      id: "runs/signals/0004-claims",
+      statements: [
+        claimFunction(
+          "claim_signaled_runs",
+          "",
+          "SELECT DISTINCT tenant_id, run_id FROM run_signals WHERE consumed_at IS NULL ORDER BY tenant_id, run_id",
+        ),
+        claimFunction(
+          "claim_pruned_signals",
+          "before bigint",
+          "DELETE FROM run_signals WHERE consumed_at IS NOT NULL AND consumed_at < $1 RETURNING tenant_id, id::text",
+        ),
+      ],
+    },
   ]);
   const q = pg.query;
 
@@ -74,7 +99,7 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
       const { rows } = await q(
         `WITH ins AS (
            INSERT INTO run_signals(run_id, kind, text, payload, created_at, dedupe_key) VALUES ($1,$2,$3,$4,$5,$6)
-           ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
+           ON CONFLICT (tenant_id, dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
            RETURNING id
          )
          SELECT pg_notify('${CHANNEL}', $1) FROM ins`,
@@ -90,9 +115,9 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
       return rows.length > 0;
     },
 
-    async hasDedupeKey(dedupeKey) {
-      const { rows } = await q(`SELECT 1 FROM run_signals WHERE dedupe_key = $1 LIMIT 1`, [dedupeKey]);
-      return rows.length > 0;
+    async runForDedupeKey(dedupeKey) {
+      const { rows } = await q(`SELECT run_id FROM run_signals WHERE dedupe_key = $1 LIMIT 1`, [dedupeKey]);
+      return rows[0]?.run_id as string | undefined;
     },
 
     async steerAuthors(runId) {
@@ -101,7 +126,9 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
         [runId],
       );
       const ids = rows
-        .map((r) => (r.payload as RunSignal).request?.actor?.externalId)
+        .map((r) => (r.payload as RunSignal).request)
+        .filter((request) => request?.origin && spokenByPerson(request.origin))
+        .map((request) => request?.actor?.externalId)
         .filter((id): id is string => typeof id === "string" && id !== "");
       return [...new Set(ids)];
     },
@@ -130,13 +157,10 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
       return toSignals(rows);
     },
 
-    async pendingRunIds() {
-      const { rows } = await q(`SELECT DISTINCT run_id FROM run_signals WHERE consumed_at IS NULL`);
-      return rows.map((r) => r.run_id as string);
-    },
+    pendingRuns: () => claimRows(pg, "claim_signaled_runs"),
 
     async prune(olderThanMs) {
-      await q(`DELETE FROM run_signals WHERE consumed_at IS NOT NULL AND consumed_at < $1`, [Date.now() - olderThanMs]);
+      await claimRows(pg, "claim_pruned_signals", [Date.now() - olderThanMs]);
     },
 
     onSignal(runId, cb) {

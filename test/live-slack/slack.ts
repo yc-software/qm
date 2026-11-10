@@ -1,4 +1,5 @@
 import { WebClient } from "@slack/web-api";
+import { trimTrailingSlashes } from "../../src/util/text.ts";
 
 export interface SlackMessage {
   ts: string;
@@ -13,7 +14,7 @@ export interface SlackMessage {
 }
 
 function apiUrlOf(raw: string): string {
-  const trimmed = raw.replace(/\/+$/, "");
+  const trimmed = trimTrailingSlashes(raw);
   return trimmed.endsWith("/api") ? `${trimmed}/` : `${trimmed}/api/`;
 }
 

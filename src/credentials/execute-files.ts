@@ -188,12 +188,17 @@ async function finishExecutionFiles(
     retry = [];
     return new Error(message);
   };
+  const roots = [...new Set(plan.credentials.flatMap((credential) => credential.roots.map((root) => root.path)))];
+  const archiveLimit = MAX_CREDENTIAL_BYTES + MAX_CREDENTIAL_FILES * 1024;
   const work = async () => {
     const captured = await sandbox.run(
       handle,
-      `cd ${shq(home)} && [ ! -L ${shq(home)} ] && find . -type f -print0 > ${shq(`${directory}/paths`)} && ` +
+      `cd ${shq(home)} && [ ! -L ${shq(home)} ] && set -- && ` +
+        `for p in ${roots.map((root) => shq(`./${root}`)).join(" ")}; do if [ -e "$p" ] || [ -L "$p" ]; then set -- "$@" "$p"; fi; done && ` +
+        `: > ${shq(`${directory}/paths`)} && { [ $# -eq 0 ] || find "$@" -type f -print0 > ${shq(`${directory}/paths`)}; } && ` +
         `COPYFILE_DISABLE=1 tar --null -T ${shq(`${directory}/paths`)} -cf ${shq(`${directory}/files.tar`)} && ` +
-        `[ "$(wc -c < ${shq(`${directory}/files.tar`)})" -le ${MAX_CREDENTIAL_BYTES + MAX_CREDENTIAL_FILES * 1024} ]`,
+        `size=$(wc -c < ${shq(`${directory}/files.tar`)}) && { [ "$size" -le ${archiveLimit} ] || ` +
+        `{ echo "credential files archive is $size bytes, over the ${archiveLimit}-byte cap" >&2; exit 1; }; }`,
     );
     if (captured.code !== 0)
       throw permanent(

@@ -15,6 +15,6 @@ Live Slack QA used Firefox, a real model, local Docker/Postgres, and credentials
 - A failing command preserved exit code 7 and surrounding stdout/stderr while masking the synthetic value.
 - The retired tool was absent from the model tool catalog.
 
-Postgres inspection confirmed the selected executions' tool-result entries and tape result content contained the mask and no raw synthetic values. User messages and tool arguments deliberately containing the synthetic fixture are outside output masking.
+Postgres inspection confirmed the selected executions' tool-result items in the item log contained the mask and no raw synthetic values. User messages and tool arguments deliberately containing the synthetic fixture are outside output masking.
 
 The change covers known injected env values in execution output. File credential restoration, the raw keychain use endpoint, and unrelated asynchronous/file output paths are separate work.

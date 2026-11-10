@@ -27,6 +27,7 @@ import type {
   SandboxHandle,
   TeardownOptions,
 } from "./sandbox.ts";
+import { trimTrailingSlashes } from "../util/text.ts";
 
 const HOME_DIR = "/home/node";
 const WORKSPACE_BASENAME = "workspace";
@@ -103,7 +104,6 @@ export interface Agent37SandboxOptions {
   namePrefix?: string;
   template?: string;
   cpus?: number;
-  memoryGb?: number;
   diskGb?: number;
   defaultTimeoutSec?: number;
   egressProxyUrl?: string;
@@ -121,12 +121,12 @@ export interface Agent37SandboxOptions {
 export function createAgent37Sandbox(opts: Agent37SandboxOptions): Sandbox {
   if (!opts.apiKey && !opts.fetchImpl) throw new Error("SANDBOX_BACKEND=agent37 requires AGENT37_API_KEY");
   const fetchImpl = opts.fetchImpl ?? fetch;
-  const baseUrl = (opts.baseUrl ?? DEFAULT_AGENT37_BASE_URL).replace(/\/+$/, "");
+  const baseUrl = trimTrailingSlashes(opts.baseUrl ?? DEFAULT_AGENT37_BASE_URL);
   const prefix = opts.namePrefix ?? "qm";
   const template = opts.template ?? DEFAULT_TEMPLATE;
   const resources = {
     cpu: opts.cpus ?? DEFAULT_CPUS,
-    memory: opts.memoryGb ?? DEFAULT_MEMORY_GB,
+    memory: DEFAULT_MEMORY_GB,
     disk: opts.diskGb ?? DEFAULT_DISK_GB,
   };
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
@@ -196,10 +196,17 @@ export function createAgent37Sandbox(opts: Agent37SandboxOptions): Sandbox {
     }
   }
 
-  async function createInstance(name: string): Promise<InstanceInfo> {
+  async function createInstance(name: string, memoryGb?: number): Promise<InstanceInfo> {
+    const sized = memoryGb ? { ...resources, memory: memoryGb } : resources;
     const res = await fetchWithRetry(
       (signal) =>
-        send("POST", "/v1/instances", { template, name, resources, auto_sleep: true }, CREATE_TIMEOUT_MS, signal),
+        send(
+          "POST",
+          "/v1/instances",
+          { template, name, resources: sized, auto_sleep: true },
+          CREATE_TIMEOUT_MS,
+          signal,
+        ),
       "refused",
       { timeoutMs: CREATE_TIMEOUT_MS },
     );
@@ -405,6 +412,7 @@ export function createAgent37Sandbox(opts: Agent37SandboxOptions): Sandbox {
     key: string,
     name: string,
     onStatus?: (text: string) => void,
+    memoryGb?: number,
   ): Promise<{ coldStart: boolean }> {
     return provisionQueue(key, () =>
       advisoryLock.withLock(`agent37-provision:${key}`, async () => {
@@ -416,7 +424,7 @@ export function createAgent37Sandbox(opts: Agent37SandboxOptions): Sandbox {
           return { coldStart: false };
         }
         onStatus?.("Creating the sandbox…");
-        const info = await createInstance(name);
+        const info = await createInstance(name, memoryGb);
         idByName.set(name, info.id);
         return { coldStart: true };
       }),
@@ -440,6 +448,7 @@ export function createAgent37Sandbox(opts: Agent37SandboxOptions): Sandbox {
 
   const profile: AgentComputerProfile = {
     backend: "agent37",
+    sizesMemory: true,
     writablePersistence: "resident_disk",
     processSessions: true,
     egressEnforcement: "none",
@@ -503,7 +512,7 @@ export function createAgent37Sandbox(opts: Agent37SandboxOptions): Sandbox {
       } else {
         name = sandboxScopeName(prefix, scope);
         scopeByName.set(name, scope);
-        ({ coldStart } = await ensureInstance(scope, name, provOpts?.onStatus));
+        ({ coldStart } = await ensureInstance(scope, name, provOpts?.onStatus, provOpts?.memoryGb));
       }
 
       const forceEgress = !!opts.egressProxyUrl && !!provOpts?.egressToken;

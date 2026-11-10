@@ -3,13 +3,14 @@ import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { ScopeId } from "../types.ts";
 import {
+  foreignSkillCollision,
   safeSkillFilePath,
   type Skill,
   type SkillFile,
   type SkillManifest,
   type SkillStore,
 } from "../skills/skill-store.ts";
-import { foreignSkillCollision, parseSeedSkill, sameManifest, upsertSeedSkill } from "../skills/seed.ts";
+import { parseSeedSkill, sameManifest, upsertSeedSkill } from "../skills/seed.ts";
 import {
   bundleFilePaths,
   detectPathCollisions,
@@ -252,7 +253,7 @@ export function createDeploymentLayerStore(opts: {
   skills: SkillStore;
   skillBundles?: SkillBundleStore;
   scopeId: ScopeId;
-  seedFallback?: () => Promise<unknown>;
+  seedFallback?: () => Promise<boolean>;
   now?: () => number;
   retryDelaysMs?: readonly number[];
   advisoryLock: AdvisoryLock;
@@ -443,8 +444,7 @@ export function createDeploymentLayerStore(opts: {
     } catch (error) {
       reportApplyFailure(record, error);
       if (!(error instanceof DeploymentLayerMutationError) && opts.seedFallback && !seeded) {
-        await opts.seedFallback();
-        seeded = true;
+        seeded = await opts.seedFallback();
       }
     }
     return record;
@@ -478,8 +478,8 @@ export function createDeploymentLayerStore(opts: {
             return applyForHydrate(record);
           }
           if (opts.seedFallback && !seeded) {
-            await opts.seedFallback();
-            seeded = true;
+            seeded = await opts.seedFallback();
+            if (!seeded) return null;
             let appeared: StoredDeploymentLayer | null = null;
             try {
               appeared = await retrying(() => opts.backing.get(CURRENT));

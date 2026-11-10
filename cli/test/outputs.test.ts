@@ -13,7 +13,7 @@ const config: QmConfig = {
   target: "fly",
   region: "sjc",
   flyOrg: "personal",
-  services: ["core", "slack", "web-ui", "portal"],
+  services: ["core", "slack"],
   plugins: [],
   skills: [],
   env: {},
@@ -22,7 +22,7 @@ const config: QmConfig = {
 
 const slackOidcConfig: QmConfig = {
   ...config,
-  env: { portal: { OIDC_AUTH_ENDPOINT: "https://slack.com/openid/connect/authorize" } },
+  env: { core: { OIDC_AUTH_ENDPOINT: "https://slack.com/openid/connect/authorize" } },
 };
 
 test("email-first outputs return the bot, web, and settings URLs without advertising Slack SSO", () => {
@@ -88,9 +88,6 @@ test("outputs rejects stale manifests and slack render repairs them", () => {
   }
 });
 
-test("outputs requires the hosted user surfaces", () => {
-  assert.throws(
-    () => deploymentOutputs({ ...config, services: ["core"] }, "/tmp"),
-    /requires the slack, web-ui, and portal services/,
-  );
+test("outputs requires the Slack surface", () => {
+  assert.throws(() => deploymentOutputs({ ...config, services: ["core"] }, "/tmp"), /requires the slack service/);
 });

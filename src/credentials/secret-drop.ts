@@ -25,6 +25,7 @@ export interface SecretDropRecord {
   destination?: Destination;
   threadRef?: string;
   requiresToken?: boolean;
+  memoryBrain?: { id: string; url: string };
   createdAt: number;
 }
 
@@ -71,6 +72,7 @@ export function createSecretDropStore(
           continue;
         }
         if (
+          !r.memoryBrain &&
           r.orgId === rec.orgId &&
           r.audienceScopeId === rec.audienceScopeId &&
           r.threadRef === rec.threadRef &&

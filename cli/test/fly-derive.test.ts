@@ -25,26 +25,27 @@ test("Fly core defaults can sustain the 16-worker baseline", () => {
   assert.match(core, /\[\[vm\]\]\n\s*size = "performance-2x"\n\s*memory = "4gb"/);
 });
 
-test("web-ui serves at the root in both shapes — publicUrl IS the web-ui URL (no /web-ui suffix)", () => {
-  const url = "https://acme-web-ui.fly.dev";
-  assert.equal(orgEnv("core", "acme", url).WEB_UI_PUBLIC_URL, url);
-  assert.equal(orgEnv("web-ui", "acme", url).WEB_UI_PUBLIC_URL, url);
-  assert.equal(orgEnv("core", "acme", `${url}/`).WEB_UI_PUBLIC_URL, url);
-  assert.equal(orgEnv("web-ui", "acme", url).WEB_UI_PUBLIC_URL, url);
+test("core serves the web UI and sign-in at the root of publicUrl on the public port", () => {
+  const url = "https://acme-core.fly.dev";
+  for (const publicUrl of [url, `${url}/`]) {
+    const env = orgEnv("core", "acme", publicUrl);
+    assert.equal(env.PUBLIC_WEB_URL, url);
+    assert.equal(env.PUBLIC_PORT, "8000");
+  }
 });
 
-test("brand env reaches core as ORG_BRAND_* and auth as AUTH_BRAND_NAME, and only when configured", () => {
-  const url = "https://acme-web-ui.fly.dev";
+test("brand env reaches core as ORG_BRAND_* and AUTH_BRAND_NAME, and only when configured", () => {
+  const url = "https://acme-core.fly.dev";
   const brand = { botName: "straylight", orgName: "Acme Corp" };
   const core = orgEnv("core", "acme", url, brand);
   assert.equal(core.ORG_BRAND_SELF_LABEL, "straylight");
   assert.equal(core.ORG_BRAND_ORG_NAME, "Acme Corp");
-  assert.equal(orgEnv("auth", "acme", url, brand).AUTH_BRAND_NAME, "straylight");
+  assert.equal(core.AUTH_BRAND_NAME, "straylight");
   const bare = orgEnv("core", "acme", url);
   assert.equal(bare.ORG_BRAND_SELF_LABEL, undefined);
   assert.equal(bare.ORG_BRAND_ORG_NAME, undefined);
-  assert.equal(orgEnv("auth", "acme", url).AUTH_BRAND_NAME, undefined);
-  assert.equal(orgEnv("web-ui", "acme", url, brand).ORG_BRAND_SELF_LABEL, undefined);
+  assert.equal(bare.AUTH_BRAND_NAME, undefined);
+  assert.equal(orgEnv("egress-proxy", "acme", url, brand).ORG_BRAND_SELF_LABEL, undefined);
 });
 
 const imageFromStack = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "imagefrom-stack.json");
@@ -55,7 +56,7 @@ test("an imageFrom stack reuses the reference images and overrides only its own 
   const coreToml = derivedTomlFor(config, "core", repoRoot);
   assert.match(coreToml, /app = "beta-core"/);
   assert.match(coreToml, /ORG_ID = "beta"/);
-  assert.match(coreToml, /PUBLIC_WEB_URL = "https:\/\/beta-portal\.fly\.dev"/);
+  assert.match(coreToml, /PUBLIC_WEB_URL = "https:\/\/beta-core\.fly\.dev"/);
   assert.match(coreToml, /STACK_MARKER = "beta-sandboxes"/);
 });
 
@@ -71,53 +72,34 @@ const exampleFlyConfig = (): QmConfig => ({
   sandbox: {
     app: "example-sandboxes",
   },
-  services: ["core", "web-ui", "portal"],
+  services: ["core"],
   plugins: [],
   skills: [],
   env: {},
   imageOverrides: {},
 });
 
-test("a configured bot identity lands in the derived fly toml for core and auth only", () => {
+test("a configured bot identity lands in the derived core fly toml", () => {
   const config = { ...exampleFlyConfig(), botName: "straylight", orgName: "Straylight Industries" };
-  config.services = ["core", "web-ui", "portal", "auth"];
+  config.services = ["core", "auth"];
   const core = derivedTomlFor(config, "core", repoRoot);
   assert.match(core, /^\s*ORG_BRAND_SELF_LABEL = "straylight"$/m);
   assert.match(core, /^\s*ORG_BRAND_ORG_NAME = "Straylight Industries"$/m);
-  const auth = derivedTomlFor(config, "auth", repoRoot);
-  assert.match(auth, /^\s*AUTH_BRAND_NAME = "straylight"$/m);
-  const webUi = derivedTomlFor(config, "web-ui", repoRoot);
-  assert.doesNotMatch(webUi, /ORG_BRAND_SELF_LABEL/);
+  assert.match(core, /^\s*AUTH_BRAND_NAME = "straylight"$/m);
   const bare = derivedTomlFor(exampleFlyConfig(), "core", repoRoot);
-  assert.doesNotMatch(bare, /ORG_BRAND_SELF_LABEL/);
+  assert.doesNotMatch(bare, /ORG_BRAND_SELF_LABEL|AUTH_BRAND_NAME/);
 });
 
-test("a configured bot identity lands in the derived fly toml for core and auth only", () => {
-  const config = { ...exampleFlyConfig(), botName: "straylight", orgName: "Straylight Industries" };
-  config.services = ["core", "web-ui", "portal", "auth"];
-  const core = derivedTomlFor(config, "core", repoRoot);
-  assert.match(core, /^\s*ORG_BRAND_SELF_LABEL = "straylight"$/m);
-  assert.match(core, /^\s*ORG_BRAND_ORG_NAME = "Straylight Industries"$/m);
-  const auth = derivedTomlFor(config, "auth", repoRoot);
-  assert.match(auth, /^\s*AUTH_BRAND_NAME = "straylight"$/m);
-  const webUi = derivedTomlFor(config, "web-ui", repoRoot);
-  assert.doesNotMatch(webUi, /ORG_BRAND_SELF_LABEL/);
-  const bare = derivedTomlFor(exampleFlyConfig(), "core", repoRoot);
-  assert.doesNotMatch(bare, /ORG_BRAND_SELF_LABEL/);
-});
-
-test("derived Fly configs contain only the deployment's region, org, sandbox, and portal policy", () => {
+test("derived Fly configs contain only the deployment's region, org, sandbox, and sign-in policy", () => {
   const config = exampleFlyConfig();
   const core = derivedTomlFor(config, "core", repoRoot);
-  const portal = derivedTomlFor(config, "portal", repoRoot);
 
   assert.match(core, /^primary_region = "ord"$/m);
-  assert.match(portal, /^primary_region = "ord"$/m);
   assert.match(core, /^\s*FLY_ORG = "example-org"$/m);
   assert.match(core, /^\s*PI_MODEL = "example-model"$/m);
   assert.match(core, /^\s*QM_DEPLOYMENT_ID = "qm-v2:example-org:example:example-stack"$/m);
   assert.doesNotMatch(core, /PI_DETECT_MODEL/);
-  assert.doesNotMatch(portal, /OIDC_ALLOWED_EMAIL_DOMAIN/);
+  assert.doesNotMatch(core, /OIDC_ALLOWED_EMAIL_DOMAIN|OIDC_AUTH_ENDPOINT/);
 });
 
 test("virtual-service env folds into the core [env] (core's own block wins)", () => {
@@ -125,26 +107,19 @@ test("virtual-service env folds into the core [env] (core's own block wins)", ()
   const coreToml = derivedTomlFor(config, "core", repoRoot);
   assert.match(
     coreToml,
-    /WEB_UI_PUBLIC_URL = "https:\/\/beta-portal\.fly\.dev"/,
+    /PUBLIC_WEB_URL = "https:\/\/beta-core\.fly\.dev"/,
     "env.slack reaches the in-process slack surface on core",
   );
   const coreWins = {
     ...config,
-    env: { ...config.env, core: { ...config.env.core, WEB_UI_PUBLIC_URL: "https://core-wins.example.com" } },
+    env: { ...config.env, core: { ...config.env.core, PUBLIC_WEB_URL: "https://core-wins.example.com" } },
   };
-  assert.match(derivedTomlFor(coreWins, "core", repoRoot), /WEB_UI_PUBLIC_URL = "https:\/\/core-wins\.example\.com"/);
+  assert.match(derivedTomlFor(coreWins, "core", repoRoot), /PUBLIC_WEB_URL = "https:\/\/core-wins\.example\.com"/);
 });
 
-test("a vms override rewrites the core [[vm]] size/memory without touching other services", () => {
+test("a vms override rewrites the core [[vm]] size/memory", () => {
   const { config } = loadConfigAt(imageFromStack);
   const coreToml = derivedTomlFor(config, "core", repoRoot);
   assert.match(coreToml, /\[\[vm\]\]\n\s*size = "shared-cpu-2x"\n\s*memory = "4gb"/);
-  assert.doesNotMatch(coreToml, /size = "shared-cpu-1x"/);
-  assert.doesNotMatch(coreToml, /memory = "2gb"/);
-  const webUiToml = derivedTomlFor(config, "web-ui", repoRoot);
-  const webUiVm = readFileSync(join(repoRoot, "cli", "templates", "fly", "web-ui.toml"), "utf8").match(
-    /\[\[vm\]\][\s\S]*?(?=\n\[|\n\n|$)/,
-  );
-  if (webUiVm) assert.ok(webUiToml.includes(webUiVm[0]), "web-ui [[vm]] block changed despite no vms override");
-  assert.doesNotMatch(webUiToml, /shared-cpu-2x|memory = "4gb"/);
+  assert.doesNotMatch(coreToml, /performance-2x/);
 });

@@ -1,3 +1,4 @@
+import type { TurnOrigin } from "../src/types.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createCronStore } from "../src/cron/cron-store.ts";
@@ -10,6 +11,9 @@ import type { Destination, TurnRequest } from "../src/types.ts";
 import type { Cron } from "../src/triggers/types.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+
+const automationOrigin = (request?: { origin?: TurnOrigin }) =>
+  request?.origin?.kind === "automation" ? request.origin : undefined;
 
 const recipient: Destination = {
   type: "principal",
@@ -74,10 +78,10 @@ test("cron credential approval resumes the original fire once and delivers to th
 
   assert.equal(f.requests.length, 1);
   const request = f.requests[0]!;
-  assert.equal(request.triggered, true);
+  assert.equal(request.origin?.kind, "automation");
   assert.equal(request.actor.externalId, "U_ALICE");
   assert.equal(request.conversation.threadRef, f.ask.requesterThreadRef);
-  assert.deepEqual(request.triggerDestination, destination);
+  assert.deepEqual(automationOrigin(request)?.destination, destination);
   assert.deepEqual(
     request.unattendedGrants,
     ["allowed-job-grant"],
@@ -131,7 +135,7 @@ test("cron credential approval does not restore a removed delivery destination",
   await fireAskResolution(f.deps, f.ask);
 
   assert.equal(f.requests.length, 1);
-  assert.equal(f.requests[0]!.triggerDestination, undefined);
+  assert.equal(automationOrigin(f.requests[0]!)?.destination, undefined);
   assert.equal((await f.deliveries.pending("principal")).length, 0);
 });
 

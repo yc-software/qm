@@ -31,6 +31,7 @@ import { createIdempotencyStore, type IdempotencyRecord } from "../src/idempoten
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
+import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -395,7 +396,7 @@ test("runTrigger marks every trigger-fired turn `triggered` (the consent-gate cl
     },
   );
   assert.equal(outcome.ran, true);
-  assert.equal(seen?.triggered, true);
+  assert.equal(seen?.origin?.kind, "automation");
   assert.equal(seen?.thinkingLevel, undefined);
   assert.equal(seen?.fastMode, undefined);
   assert.equal(seen?.conversation.threadRef, "ch:C1-t1", "an explicit threadRef overrides the per-fire fireKey thread");
@@ -592,18 +593,22 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     await built.app.upsertDirectory([
       { principalId: "U_ALICE", displayName: "Alice", type: "internal" },
       { principalId: "U_BOB", displayName: "Bob", type: "internal" },
+      { principalId: "U_RELEASE_BOT", displayName: "Release bot", type: "internal" },
     ]);
     await built.app.upsertChannels(
       [
         { channelId: "C_INFRA", name: "infra", isPrivate: true },
         { channelId: "C_NOALICE", name: "no-alice", isPrivate: true },
         { channelId: "C_PUBLIC", name: "public-room" },
+        { channelId: "C_RELEASE", name: "release", isPrivate: true },
       ],
       [
         { channelId: "C_INFRA", principalId: "U_ALICE" },
         { channelId: "C_INFRA", principalId: "U_BOB" },
         { channelId: "C_NOALICE", principalId: "U_BOB" },
         { channelId: "C_PUBLIC", principalId: "U_BOB" },
+        { channelId: "C_RELEASE", principalId: "U_ALICE" },
+        { channelId: "C_RELEASE", principalId: "U_RELEASE_BOT" },
       ],
     );
     approvals = createKeychainApprovals({
@@ -688,11 +693,11 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     };
     assert.deepEqual(await inline("U_ALICE"), [`keychain:${ask.id}`], "the owner sees the card inline in the session");
     const path = `/v1/keychain/approvals/${ask.id}`;
-    const signed = (principalId: string) => {
-      const body = JSON.stringify({ principalId, decision: "standing" });
+    const signed = (principalId: string, identity: Record<string, string> = {}, decision = "standing") => {
+      const body = JSON.stringify({ principalId, decision });
       return fetch(`${base}${path}`, {
         method: "POST",
-        headers: signedRequestHeaders(SECRET, "POST", path, body),
+        headers: { ...signedRequestHeaders(SECRET, "POST", path, body), ...identity },
         body,
       });
     };
@@ -701,6 +706,13 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
       200,
     );
     assert.equal((await signed("U_BOB")).status, 403);
+    const impersonation = await mintSignedPayload({ p: "U_ALICE", imp: "U_BOB", exp: Date.now() + 60_000 }, SECRET);
+    const impersonated = await signed("U_ALICE", { "x-portal-identity": impersonation }, "once");
+    assert.deepEqual(
+      [impersonated.status, ((await impersonated.json()) as { message?: string }).message],
+      [403, "Sign in as yourself to decide on credential use."],
+      "an admin impersonating the owner cannot decide for them",
+    );
     const res = await signed("U_ALICE");
     assert.equal(res.status, 200);
     const view = (await res.json()) as any;
@@ -926,6 +938,27 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     assert.equal((await decide(made.ask.id, "U_ALICE", "once")).ask.status, "declined", "a decided card stays decided");
   });
 
+  it("a credential request a Slack bot's turn makes resumes as the bot's work", async () => {
+    const { credential } = (await (
+      await post("/v1/keychain/credentials", { service: "release-signing", secret: "s" }, await capFor("U_ALICE"))
+    ).json()) as any;
+    const threadRef = "ch:C_RELEASE-thread";
+    const made = (await (
+      await post(
+        "/v1/keychain/asks",
+        { credential: credential.id, purpose: "sign the release" },
+        await capFor("U_RELEASE_BOT", "channel:C_RELEASE", {
+          threadRef,
+          destination: { type: "slack", target: "C_RELEASE", audienceScopeId: "channel:C_RELEASE" },
+          botActor: true,
+        }),
+      )
+    ).json()) as any;
+    await decide(made.ask.id, "U_ALICE", "deny");
+    const [run] = await waitFor(() => built.runs.list({ threadRef }));
+    assert.equal(run?.request.botActor, true);
+  });
+
   it("the removed chat-approval routes are gone; background requests may still ask", async () => {
     const creds = (await (await get("/v1/keychain/credentials", await capFor("U_ALICE"))).json()) as any;
     const gh = creds.credentials.find((c: any) => c.service === "github");
@@ -993,7 +1026,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
         });
         const seed = await built.app.turn({
           surface: "cron",
-          triggered: true,
+          origin: { kind: "automation" },
           actor: { externalId: requesterId },
           conversation: {
             kind: kind === "channel" ? "channel" : "group",
@@ -1251,7 +1284,7 @@ test("turn e2e: trigger-fired turns mint `triggered` into the capability token; 
       actor: { externalId: "U_ALICE" },
       conversation: { kind: "channel", threadRef: "ch:C9-t", channelRef: "C9", audience: [{ externalId: "U_ALICE" }] },
       text: "!run true",
-      ...(triggered ? { triggered: true } : {}),
+      ...(triggered ? { origin: { kind: "automation" } } : {}),
     }) as TurnRequest;
 
   assert.equal((await built.app.turn(turn(false))).status, "ok");

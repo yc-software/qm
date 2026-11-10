@@ -1,12 +1,9 @@
 import { createHash } from "node:crypto";
 import { extractDirectives } from "./directives.ts";
 import type { SlackUser, ActorAssertion } from "./identity.ts";
+import type { ExternalAudienceAccess } from "../surfaces/contract.ts";
 
-export interface ExternalSlackAccess {
-  companyDomains: string[];
-  companyTeamIds: string[];
-  serviceCredentials: string[];
-}
+export type ExternalSlackAccess = ExternalAudienceAccess;
 
 export function parseExternalSlackAccess(value: unknown): ExternalSlackAccess | undefined {
   if (value === undefined) return undefined;

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { TenantLookup } from "../tenants/lookup.ts";
 import type { ScopeId, Session, SessionType, SpawnMeta } from "../types.ts";
 import type { GoalRecord } from "../agent/goal.ts";
 import { isUserItem, type Item, type NewItem } from "./items.ts";
@@ -149,34 +150,9 @@ export interface NewLlmRequest {
   transport?: LlmTransportMeta | null;
 }
 
-export interface ParticipantWindow {
+export interface Participant {
   sessionId: string;
   principalId: string;
-  validFrom: number;
-  validTo: number | null;
-  validFromSeq: number | null;
-  validToSeq: number | null;
-}
-
-export function itemWithinTenure(
-  item: Pick<Item, "seq" | "createdAt">,
-  window: Pick<ParticipantWindow, "validFrom" | "validTo" | "validFromSeq" | "validToSeq">,
-): boolean {
-  const fromOk = window.validFromSeq !== null ? item.seq >= window.validFromSeq : item.createdAt >= window.validFrom;
-  const toOk =
-    window.validToSeq !== null
-      ? item.seq < window.validToSeq
-      : window.validTo === null || item.createdAt < window.validTo;
-  return fromOk && toOk;
-}
-
-export interface AttributedTurn {
-  principalId: string;
-  sessionId: string;
-  day: number;
-  turns: number;
-  firstAt: number;
-  lastAt: number;
 }
 
 export type SessionOrigin = "conversation" | "cron" | "webhook" | "monitor" | "loop" | "swarm";
@@ -231,6 +207,12 @@ export interface ParticipantPageQuery {
 export interface ParticipantPage {
   sessions: Session[];
   next: { activity: number; id: string } | null;
+}
+
+export interface ToolStep {
+  tool: string;
+  at: number;
+  purpose?: string;
 }
 
 export interface SessionDescendant {
@@ -402,11 +384,13 @@ export class DuplicateCallError extends Error {
   }
 }
 
-interface AddParticipantOptions {
-  includeHistory?: boolean;
+interface SessionFacts {
+  surfaceBinding?: Session["surfaceBinding"];
+  context?: SpawnMeta;
 }
 
 export interface SessionStore {
+  tenantLookup: TenantLookup;
   getOrCreateByThread(
     threadRef: string,
     type: SessionType,
@@ -414,6 +398,7 @@ export interface SessionStore {
     channelName?: string,
     surface?: string,
     clientTools?: Session["clientTools"],
+    facts?: SessionFacts,
   ): Promise<Session>;
   getByThread(threadRef: string): Promise<Session | null>;
   get(sessionId: string): Promise<Session | null>;
@@ -421,6 +406,10 @@ export interface SessionStore {
   updateTitle(sessionId: string, title: string): Promise<void>;
   setParentSession(sessionId: string, parentSessionId: string | null): Promise<void>;
   setSpawnMeta(sessionId: string, meta: SpawnMeta): Promise<void>;
+  setRuntime(sessionId: string, runtime: NonNullable<Session["runtime"]>): Promise<void>;
+  setPersona(sessionId: string, personaId: string | null): Promise<void>;
+  threadsWithPersona(personaId: string, threadRefs: readonly string[]): Promise<Set<string>>;
+  endedInFailure(sessionIds: readonly string[]): Promise<Set<string>>;
   childrenOf(parentSessionId: string): Promise<Session[]>;
   sideChatsOf(sessionId: string): Promise<Session[]>;
   expandSideChat(sessionId: string): Promise<void>;
@@ -441,7 +430,7 @@ export interface SessionStore {
   getContextWindow(sessionId: string): Promise<ContextWindow>;
   getItem(sessionId: string, seq: number): Promise<Item | undefined>;
   latestItemSeq(sessionId: string): Promise<number>;
-  latestToolPurposes(turnIds: readonly string[]): Promise<Map<string, string>>;
+  latestToolSteps(turnIds: readonly string[]): Promise<Map<string, ToolStep>>;
   goals(sessionIds: readonly string[]): Promise<Map<string, GoalRecord>>;
   setGoal(writer: SessionWriter, goal: GoalRecord, notices?: readonly NewItem[]): Promise<void>;
 
@@ -449,7 +438,7 @@ export interface SessionStore {
   listLlmRequests(sessionId: string, opts?: ListLlmRequestsOptions): Promise<LlmRequestRecord[]>;
   purgeLlmCaptures?(cutoff: number, opts?: { deadline?: number; stop?: () => boolean }): Promise<number>;
 
-  addParticipant(sessionId: string, principalId: string, title?: string, opts?: AddParticipantOptions): Promise<void>;
+  addParticipant(sessionId: string, principalId: string, title?: string): Promise<void>;
   removeParticipant(sessionId: string, principalId: string): Promise<void>;
   listByParticipant(principalId: string, opts?: { limit: number }): Promise<Session[]>;
   participantScopes(principalId: string): Promise<ParticipantScope[]>;
@@ -475,8 +464,6 @@ export interface SessionStore {
 
   searchSessionTitles(principalId: string, query: string, limit?: number): Promise<Session[]>;
 
-  scanAll(): Promise<Session[]>;
-
   countSessions(): Promise<number>;
 
   listByScope(scope: ScopeId): Promise<Session[]>;
@@ -493,19 +480,15 @@ export interface SessionStore {
 
   scopeConversationCount(scope: ScopeId): Promise<number>;
 
-  attributedTurns(): Promise<AttributedTurn[]>;
-
   spendRollup(range: { from: number; to: number }): Promise<SpendRow[]>;
 
   spendReport?(range: { from: number; to: number }): Promise<{ rows: SpendRow[]; asOf?: number }>;
 
   refreshSpendRollup?(): Promise<void>;
 
-  listParticipants(): Promise<ParticipantWindow[]>;
+  listParticipants(): Promise<Participant[]>;
 
   distinctParticipants(): Promise<string[]>;
-
-  participantWindowsOf(sessionId: string): Promise<ParticipantWindow[]>;
 
   participantsOf(sessionId: string): Promise<string[]>;
 }

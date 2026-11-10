@@ -5,6 +5,7 @@ import type { Pool } from "pg";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { seedTestTenant } from "./support/test-tenant.ts";
 
 const request: OrchestratorInput = {
   actor: { id: "retry-test", type: "internal" },
@@ -28,7 +29,8 @@ for (const backend of ["memory", "postgres"] as const) {
         admin = new pg.Pool({ connectionString });
         await admin.query(`CREATE SCHEMA ${schema}`);
         const url = new URL(connectionString);
-        url.searchParams.set("options", `-c search_path=${schema}`);
+        url.searchParams.set("options", `${url.searchParams.get("options") ?? ""} -c search_path=${schema}`.trim());
+        await seedTestTenant(url.toString());
         connectionString = url.toString();
       }
       const runtime =
@@ -50,15 +52,14 @@ for (const backend of ["memory", "postgres"] as const) {
         const other = (await runs.enqueue({ sessionId: randomUUID(), request })).run;
         assert.equal(await runs.claimById(first.id, "worker-2", 60_000), null);
         assert.equal(await runs.claimById(later.id, "worker-2", 60_000), null);
-        assert.equal(await runs.claimForSession(sessionId, "inline-worker", 60_000), null);
         const unrelated = (await runs.claim("worker-2", 60_000))[0] ?? null;
         assert.equal(unrelated?.id, other.id);
         await runs.complete(other.id, unrelated!.leaseToken!, { status: "ok", sessionId: other.sessionId });
         t.mock.timers.tick(29_999);
         assert.equal((await runs.claim("worker-3", 60_000))[0] ?? null, null);
         t.mock.timers.tick(1);
-        assert.equal(await runs.claimById(later.id, "inline-worker", 60_000), null);
-        const retried = await runs.claimForSession(sessionId, "worker-3", 60_000);
+        assert.equal(await runs.claimById(later.id, "worker-3", 60_000), null);
+        const retried = (await runs.claim("worker-3", 60_000))[0] ?? null;
         assert.equal(retried?.id, first.id);
         assert.equal(retried?.attempts, 2);
         assert.equal(retried?.errorAttempts, 1);
@@ -92,7 +93,8 @@ for (const backend of ["memory", "postgres"] as const) {
         admin = new pg.Pool({ connectionString });
         await admin.query(`CREATE SCHEMA ${schema}`);
         const url = new URL(connectionString);
-        url.searchParams.set("options", `-c search_path=${schema}`);
+        url.searchParams.set("options", `${url.searchParams.get("options") ?? ""} -c search_path=${schema}`.trim());
+        await seedTestTenant(url.toString());
         connectionString = url.toString();
       }
       let { runs } =
@@ -152,7 +154,7 @@ for (const backend of ["memory", "postgres"] as const) {
 }
 
 test(
-  "postgres: latest session history uses its ordered index and excludes private messages",
+  "postgres: the recent runs read uses its ordered index",
   {
     skip: !process.env.DATABASE_URL,
   },
@@ -162,30 +164,17 @@ test(
     const schema = `run_history_${randomUUID().replaceAll("-", "")}`;
     await admin.query(`CREATE SCHEMA ${schema}`);
     const url = new URL(process.env.DATABASE_URL!);
-    url.searchParams.set("options", `-c search_path=${schema}`);
+    url.searchParams.set("options", `${url.searchParams.get("options") ?? ""} -c search_path=${schema}`.trim());
+    await seedTestTenant(url.toString());
     const runtime = createPostgresRunStore(url.toString());
     const pool = new pg.Pool({ connectionString: url.toString() });
     try {
-      const sessionId = randomUUID();
-      const publicRun = (await runtime.runs.enqueue({ sessionId, request })).run;
-      const privateRun = (
-        await runtime.runs.enqueue({ sessionId, request: { ...request, privateSessionMessage: true } })
-      ).run;
-      await pool.query("UPDATE runs SET created_at = 1 WHERE session_id = $1", [sessionId]);
-      assert.equal((await runtime.runs.latestForThread(sessionId))?.id, privateRun.id);
-      assert.equal((await runtime.runs.latestForThread(sessionId, { excludePrivateMessages: true }))?.id, publicRun.id);
+      await runtime.runs.list({ limit: 1 });
       const client = await pool.connect();
       try {
         await client.query("SET enable_seqscan = off");
-        const { rows } = await client.query(
-          "EXPLAIN (FORMAT JSON) SELECT * FROM runs WHERE session_id = $1 AND COALESCE(request::jsonb->>'privateSessionMessage', 'false') <> 'true' ORDER BY created_at DESC, seq DESC LIMIT 1",
-          [sessionId],
-        );
-        const plan = JSON.stringify(rows);
-        assert.match(plan, /idx_runs_session_created_seq/);
-        assert.doesNotMatch(plan, /"Node Type":"Sort"/);
         const recent = await client.query(
-          "EXPLAIN (FORMAT JSON) SELECT * FROM runs ORDER BY created_at DESC LIMIT 500",
+          "EXPLAIN (FORMAT JSON) SELECT * FROM runs ORDER BY created_at DESC, seq DESC LIMIT 500",
         );
         assert.match(JSON.stringify(recent.rows), /idx_runs_created/);
         assert.doesNotMatch(JSON.stringify(recent.rows), /"Node Type":"Sort"/);

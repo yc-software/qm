@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
@@ -10,8 +11,9 @@ import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Agent, AgentTurnInput } from "../src/agent/agent.ts";
-import { bridgedTools, resumeInterruptedToolCall } from "../src/agent/turn-support.ts";
-import type { ToolContextRef } from "../src/agent/agent-tools.ts";
+import { resumeInterruptedToolCall, type BridgedTool } from "../src/agent/turn-support.ts";
+import { toolCallApprovalKey } from "../src/core/approval-id.ts";
+import { createAgentTools, type ToolContextRef } from "../src/agent/agent-tools.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
@@ -20,6 +22,7 @@ import type { ToolContext } from "../src/tools/primitives.ts";
 import { scopeId, type Conversation, type Principal } from "../src/types.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { orchestratorTestDeps } from "./support/orchestrator-deps.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
@@ -92,7 +95,7 @@ test("resumeInterruptedToolCall re-runs the recorded input exactly once and reco
   const emit: ToolContextRef["emit"] = (item) => turn.emit(item);
   const ref: ToolContextRef = { current: tools, emit, scopeLabel: personal, orgScopeId: turn.orgScopeId };
 
-  const resumed = await resumeInterruptedToolCall(turn, ref, bridgedTools(ref, {}));
+  const resumed = await resumeInterruptedToolCall(turn, ref, createAgentTools(ref) as unknown as BridgedTool[]);
 
   assert.deepEqual(queries, ["budget"], "the tool body ran exactly once with the stripped input");
   assert.deepEqual(
@@ -127,7 +130,7 @@ test("resumeInterruptedToolCall does nothing without a call to resume", async ()
   const tools = historyToolContext(queries);
   const idle = turnFor([danglingCall], undefined, sink, tools);
   const ref: ToolContextRef = { current: tools, emit: (item) => idle.emit(item), scopeLabel: personal };
-  assert.equal(await resumeInterruptedToolCall(idle, ref, bridgedTools(ref, {})), null);
+  assert.equal(await resumeInterruptedToolCall(idle, ref, createAgentTools(ref) as unknown as BridgedTool[]), null);
   assert.deepEqual(queries, []);
   assert.deepEqual(sink, []);
 });
@@ -138,7 +141,7 @@ test("when the tool is unavailable on the retried turn the call is closed as int
   const tools = historyToolContext(queries);
   const missing = turnFor([danglingCall], { callId: "c-x", tool: "no_such_tool", input: {} }, sink, tools);
   const ref: ToolContextRef = { current: tools, emit: (item) => missing.emit(item), scopeLabel: personal };
-  const resumed = await resumeInterruptedToolCall(missing, ref, bridgedTools(ref, {}));
+  const resumed = await resumeInterruptedToolCall(missing, ref, createAgentTools(ref) as unknown as BridgedTool[]);
   assert.ok(resumed);
   assert.equal(resumed.message.isError, true);
   assert.equal(resumed.message.content[0]!.text, INTERRUPTED_TOOL_RESULT);
@@ -162,7 +165,7 @@ test("a cancelled turn does not re-run anything and closes the call as interrupt
   );
   turn.cancel = AbortSignal.abort();
   const ref: ToolContextRef = { current: tools, emit: (item) => turn.emit(item), scopeLabel: personal };
-  const resumed = await resumeInterruptedToolCall(turn, ref, bridgedTools(ref, {}));
+  const resumed = await resumeInterruptedToolCall(turn, ref, createAgentTools(ref) as unknown as BridgedTool[]);
   assert.equal(resumed?.message.isError, true);
   assert.deepEqual(queries, []);
   assert.equal(sink.length, 1);
@@ -183,7 +186,7 @@ test("a tool that throws during the re-run still records an error result so the 
     tools,
   );
   const ref: ToolContextRef = { current: tools, emit: (item) => turn.emit(item), scopeLabel: personal };
-  const resumed = await resumeInterruptedToolCall(turn, ref, bridgedTools(ref, {}));
+  const resumed = await resumeInterruptedToolCall(turn, ref, createAgentTools(ref) as unknown as BridgedTool[]);
   assert.ok(resumed);
   assert.equal(resumed.message.isError, true);
   assert.match(resumed.message.content[0]!.text ?? "", /transcript index offline/);
@@ -216,6 +219,8 @@ function buildScenario() {
     input: string;
     continueTurn?: boolean;
     resumeToolCall?: ResumableToolCall;
+    approvedToolCalls?: AgentTurnInput["approvedToolCalls"];
+    toolApprovalGate?: AgentTurnInput["toolApprovalGate"];
     historyKinds: string[];
   }> = [];
   const agent: Agent = {
@@ -224,6 +229,8 @@ function buildScenario() {
         input: turn.input,
         ...(turn.continueTurn ? { continueTurn: true } : {}),
         ...(turn.resumeToolCall ? { resumeToolCall: turn.resumeToolCall } : {}),
+        ...(turn.approvedToolCalls ? { approvedToolCalls: turn.approvedToolCalls } : {}),
+        ...(turn.toolApprovalGate ? { toolApprovalGate: turn.toolApprovalGate } : {}),
         historyKinds: turn.history.map((e) => e.kind),
       });
       if (turn.resumeToolCall) {
@@ -249,9 +256,10 @@ function buildScenario() {
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const orchestrator = createOrchestrator({
-    ...singleProcessDeps(),
+    ...orchestratorTestDeps(),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     resolution: createResolutionService(ORG, testConfigStore(ORG), acl),
+    config: testConfigStore(ORG),
     sessions,
     runs,
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
@@ -346,3 +354,103 @@ for (const [label, payload] of [
     assert.ok(turn.historyKinds.includes("ToolResult"), "the model sees the recorded result");
   });
 }
+
+test("a retry with two dangling calls records both as interrupted and re-runs neither, even if one is retry-safe", async () => {
+  const { orchestrator, sessions, runs, received, input } = buildScenario();
+  const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+  const { sessionId, userSeq } = await seedDeadAttempt(sessions, {
+    kind: "ToolCall",
+    tool: "history",
+    callId: "c-budget",
+    body: { query: "budget", retrySafe: true, rerun: { tool: "history", input: { query: "budget" } } },
+  });
+  await sessions.append({ sessionId }, { kind: "ToolCall", tool: "execute", callId: "c-build", body: {} });
+  await runs.noteTurnUserSeq(run.id, userSeq);
+
+  const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
+  assert.equal(retry.status, "ok");
+  assert.equal(received[0]!.resumeToolCall, undefined);
+  const results = (await sessions.getItems(sessionId)).filter((item) => item.kind === "ToolResult");
+  assert.deepEqual(
+    results.map((item) => [item.callId, item.isError, item.body.interrupted]),
+    [
+      ["c-budget", true, true],
+      ["c-build", true, true],
+    ],
+  );
+});
+
+for (const [label, resultTurn] of [
+  ["in its own turn", undefined],
+  ["under another turn", "00000000-0000-4000-8000-0000000000ff"],
+] as const) {
+  test(`a retry-safe call whose result is already recorded ${label} is not re-run or answered twice`, async () => {
+    const { orchestrator, sessions, runs, received, input } = buildScenario();
+    const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+    const session = await sessions.getOrCreateByThread(conversation.threadRef, "dm", personal);
+    const writer = { sessionId: session.id, turnId: run.id };
+    const user = await sessions.append(writer, { kind: "UserMessage", text: ASK });
+    await sessions.append(writer, {
+      kind: "ToolCall",
+      tool: "history",
+      callId: "c-budget",
+      body: { query: "budget", retrySafe: true, rerun: { tool: "history", input: { query: "budget" } } },
+    });
+    await sessions.append(
+      { sessionId: session.id, turnId: resultTurn ?? run.id },
+      {
+        kind: "ToolResult",
+        tool: "history",
+        callId: "c-budget",
+        isError: true,
+        text: "[exit 143]",
+        body: { interrupted: true, stop: { kind: "shutdown" } },
+      },
+    );
+    await runs.noteTurnUserSeq(run.id, user.seq);
+
+    const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
+    assert.equal(retry.status, "ok");
+    assert.equal(received[0]!.resumeToolCall, undefined);
+    const results = (await sessions.getItems(session.id)).filter((item) => item.kind === "ToolResult");
+    assert.deepEqual(
+      results.map((item) => item.text),
+      ["[exit 143]"],
+    );
+  });
+}
+
+test("a retried turn runs an approved call its first attempt recorded but never started, through the gate, once", async () => {
+  const { orchestrator, sessions, runs, received, input } = buildScenario();
+  const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+  const session = await sessions.getOrCreateByThread(conversation.threadRef, "dm", personal);
+  const writer = { sessionId: session.id, turnId: run.id };
+  const call = { callId: "approved_req7_aa11", requestId: "req7", tool: "history", input: { query: "budget" } };
+  const approvalKey = toolCallApprovalKey(call.tool, call.input);
+  await sessions.append(writer, { kind: "UserMessage", text: ASK });
+  await sessions.append(writer, {
+    kind: "ElicitationResponse",
+    elicitId: "req7",
+    approved: true,
+    author: "U1",
+    body: { command: "history", scope: "once", call, approvalKey },
+  });
+
+  await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
+  const turn = received.at(-1)!;
+  assert.deepEqual(turn.approvedToolCalls, [call], "the stored call is run on the retry");
+  assert.equal(turn.toolApprovalGate?.(call.tool, approvalKey), true, "the retry carries the once-use approval");
+  assert.equal(turn.toolApprovalGate?.(call.tool, approvalKey), false, "and only once");
+
+  await sessions.append(
+    { sessionId: session.id, turnId: randomUUID() },
+    {
+      kind: "ToolCall",
+      tool: call.tool,
+      callId: call.callId,
+      body: { approvedRequestId: "req7" },
+    },
+  );
+  await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 3 }));
+  assert.equal(received.at(-1)!.approvedToolCalls, undefined, "a call that started in any run is never run again");
+});

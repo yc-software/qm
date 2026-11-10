@@ -41,7 +41,6 @@ import {
   isExternallyShared,
   isMpim,
   type SurfaceHeaderClient,
-  maybeInterceptStop,
   postThenAckRunDelivery,
   type PostMessageArgs,
   postWithVerify,
@@ -55,12 +54,15 @@ import {
   resolveReactionTargets,
   shouldSurfaceReaction,
   slackReplyArgs,
+  blocksWithContext,
+  plainContext,
   threadHasBotStake,
   toSlackMrkdwn,
   uploadAttachments,
   uploadFailureNote,
 } from "./lib.ts";
 import type { GatewayContext, TurnResult } from "../types.ts";
+import { replyEditNote } from "../delivery/run-result-delivery.ts";
 import type { AckGate } from "./deferred-ack.ts";
 import type { AckPresenter } from "./presenters.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
@@ -72,6 +74,7 @@ import { reactionTallies } from "./conversation-view.ts";
 import type { SlackMessageEvent, SlackReactionEvent } from "./payloads.ts";
 import { slackMessageContent } from "./message-content.ts";
 import type { AckEmojiPicker } from "./ack-emoji.ts";
+import { slackSurfaceOrigin } from "../surfaces/slack/adapter.ts";
 import {
   type SlackConversationKind,
   applyAndLogReactions,
@@ -163,7 +166,7 @@ export function createTurnHandler(deps: {
     deps;
   const { classifyUserCached, classifyActor, getChannelInfo, channelMembership } = directory;
   const { mirrorMessageEvent } = mirror;
-  const { callCore, inFlightRuns, inFlightRunByThread, ackRunDelivery } = flow;
+  const { callCore, inFlightRuns, ackRunDelivery } = flow;
 
   const reactionsInFlight = new Set<string>();
 
@@ -250,14 +253,19 @@ export function createTurnHandler(deps: {
       return firstTs;
     };
 
+    const postEphemeral = async (msg: string, threadTs?: string): Promise<void> => {
+      await client.chat
+        .postEphemeral({
+          channel: inc.channel,
+          user: inc.userId,
+          text: msg,
+          ...(threadTs ? { thread_ts: threadTs } : {}),
+        })
+        .catch(swallowAs("slack: chat.postEphemeral", undefined));
+    };
     const ephemeralOrSay = async (msg: string): Promise<void> => {
-      if (inc.kind === "channel") {
-        await client.chat
-          .postEphemeral({ channel: inc.channel, user: inc.userId, text: msg })
-          .catch(swallowAs("slack: chat.postEphemeral", undefined));
-      } else {
-        await postReply(msg);
-      }
+      if (inc.kind === "channel") await postEphemeral(msg);
+      else await postReply(msg);
     };
 
     if (inc.kind === "dm") {
@@ -361,19 +369,6 @@ export function createTurnHandler(deps: {
     const finishTaskAck = async () => {
       if (taskManaged && queuedRunId) await core.taskAcknowledgements!.finish(client, queuedRunId);
     };
-    if (!inc.unprompted) {
-      const intercepted = await maybeInterceptStop({
-        text,
-        botHandle: ids.botHandle,
-        threadRef,
-        getInFlightRun: async (ref) =>
-          (await core.activeRunForThread(ref).catch(swallowAs("slack: active-run lookup", undefined))) ??
-          inFlightRunByThread.get(ref),
-        signalAbort: (runId) => core.signalRunAbort(runId),
-        stopConversation: (ref) => core.stopConversation(ref),
-      }).catch(swallowAs("slack: abort signal", true));
-      if (intercepted) return;
-    }
 
     let ack: AckPresenter | undefined;
     const statusKey = (): string | undefined => (queuedRunId ? statusPlaceholderKey(queuedRunId) : undefined);
@@ -489,25 +484,16 @@ export function createTurnHandler(deps: {
       actor,
       ...(inc.userId
         ? {
-            slackSource: {
+            surfaceOrigin: slackSurfaceOrigin({
               accountId: deps.accountId ?? "default",
               teamId: ids.ownTeamId,
               userId: inc.userId,
               ...(deps.externalAccess
-                ? { externalPolicyNamespace: externalSlackNamespace(ids.ownTeamId, deps.externalAccess) }
+                ? { policyNamespace: externalSlackNamespace(ids.ownTeamId, deps.externalAccess) }
                 : {}),
               ...(replyThreadTs ? { replyThreadTs } : {}),
-            },
-          }
-        : {}),
-      ...(deps.externalAccess && inc.kind === "channel" && inc.userId
-        ? {
-            externalSlack: {
-              accountId: deps.accountId ?? "default",
-              teamId: ids.ownTeamId,
-              userId: inc.userId,
-              ...deps.externalAccess,
-            },
+              ...(deps.externalAccess && inc.kind === "channel" ? { external: deps.externalAccess } : {}),
+            }),
           }
         : {}),
       conversation: {
@@ -527,14 +513,14 @@ export function createTurnHandler(deps: {
       })(),
       text,
       gatewayContext,
-      ...(inc.unprompted
+      origin: inc.unprompted
         ? {
-            unprompted: true,
+            kind: "ambient",
             ...(inc.synthetic
               ? {}
-              : { entryTs: inc.ts, ...(actor.isBot || inc.botAuthored ? {} : { liveActor: true }) }),
+              : { ...(inc.ts ? { entryTs: inc.ts } : {}), ...(actor.isBot || inc.botAuthored ? {} : { live: true }) }),
           }
-        : { liveActor: true, triggerTs: inc.ts }),
+        : { kind: "human", ...(inc.ts ? { messageTs: inc.ts } : {}) },
       ...(actor.isBot ? { botActor: true } : {}),
       ...(conversationHeader ? { conversationHeader } : {}),
       ...(priorTurns ? { priorTurns } : {}),
@@ -562,7 +548,6 @@ export function createTurnHandler(deps: {
             }),
         onQueued: async (runId) => {
           queuedRunId = runId;
-          inFlightRunByThread.set(threadRef, runId);
           accepted = true;
           inc.ackGate?.persisted();
           await moveTaskAck(runId, inc.ts, true);
@@ -605,7 +590,6 @@ export function createTurnHandler(deps: {
       return;
     } finally {
       if (queuedRunId) {
-        inFlightRunByThread.clear(threadRef, queuedRunId);
         deps.onSettled?.();
       }
     }
@@ -615,6 +599,7 @@ export function createTurnHandler(deps: {
     // trigger's own ack and stand down.
     if (result.steered) {
       await settleAck();
+      if (result.stopped) await postEphemeral("Stopped.", replyThreadTs);
       return;
     }
 
@@ -646,7 +631,7 @@ export function createTurnHandler(deps: {
       if (inc.kind === "channel" && replyThreadTs) threads.mark(inc.channel, replyThreadTs, true);
       const { text: replyBody, reactions } = cleanAgentReplyForSlack(result.reply ?? "");
       const hasNonText = !!(result.attachments?.length || reactions.length || result.pendingApprovals?.length);
-      let reply = result.stopped ? "Stopped." : "(no response)";
+      let reply = result.stopped ? "" : "(no response)";
       if (replyBody) reply = toSlackMrkdwn(replyBody);
       else if (hasNonText) reply = "";
       const postText = reply;
@@ -662,7 +647,9 @@ export function createTurnHandler(deps: {
           }
         }
         await ack?.drain();
-        if (postText) await postReply(postText, undefined, runKey);
+        const editNote = replyEditNote(result.retracted);
+        const noteBlocks = editNote ? blocksWithContext(postText, [plainContext(editNote)]) : undefined;
+        if (postText) await postReply(postText, noteBlocks, runKey);
         if (uploadError) await postReply(uploadFailureNote(uploadError));
         const { directives, dropped } = resolveReactionTargets(reactions, allowedTs);
         if (dropped) console.error(`[slack-plugin] dropped ${dropped} reaction(s) with an unresolvable message id`);
@@ -787,19 +774,22 @@ export function createTurnHandler(deps: {
     channel: string,
     ts: string,
     full: boolean,
-  ): Promise<{ text: string; threadTs?: string; reactions: ReactionTally[]; authorId?: string } | undefined> {
+  ): Promise<
+    { text: string; threadTs?: string; reactions: ReactionTally[]; authorId?: string; own: boolean } | undefined
+  > {
     try {
       const res = await client.reactions.get({ channel, timestamp: ts, full });
       const m = res?.message;
       if (!m) return undefined;
       return {
+        own: Boolean((ids.botUserId && m.user === ids.botUserId) || (ids.ownBotId && m.bot_id === ids.ownBotId)),
         text: decodeSlackEntities(slackMessageContent(m).text.trim()),
         ...(m.thread_ts && m.thread_ts !== ts ? { threadTs: String(m.thread_ts) } : {}),
         reactions: reactionTallies(m.reactions),
         ...(m.user ? { authorId: String(m.user) } : {}),
       };
-    } catch {
-      return undefined;
+    } catch (error) {
+      return swallowAs("slack: reacted message read", undefined)(error);
     }
   }
 
@@ -816,20 +806,22 @@ export function createTurnHandler(deps: {
     if (!reactorId || !channel || !messageTs || !emoji) return;
 
     const isDM = channel.startsWith("D");
-    const onBotMessage = Boolean(ids.botUserId && evt.item_user === ids.botUserId);
     const onFollowedRoot = threads.get(channel, messageTs) === true;
-    if (
-      !shouldSurfaceReaction({
+    const surfaces = (onBotMessage: boolean) =>
+      shouldSurfaceReaction({
         itemType: evt.item?.type,
         reactorId,
         botUserId: ids.botUserId,
         isDM,
         onBotMessage,
         onFollowedRoot,
-      })
-    ) {
-      return;
-    }
+      });
+    if (!surfaces(true)) return;
+    const reacted = evt.item_user ? undefined : getReactedMessage(client, channel, messageTs, added);
+    const onBotMessage = evt.item_user
+      ? Boolean(ids.botUserId && evt.item_user === ids.botUserId)
+      : Boolean((await reacted)?.own);
+    if (!surfaces(onBotMessage)) return;
 
     const flightKey = `${channel}:${messageTs}:${emoji}:${reactorId}:${added ? "+" : "-"}`;
     if (reactionsInFlight.has(flightKey)) return;
@@ -865,7 +857,7 @@ export function createTurnHandler(deps: {
           }
           const reactorName = reactor.displayName || "Someone";
 
-          const msg = await getReactedMessage(client, channel, messageTs, added);
+          const msg = await (reacted ?? getReactedMessage(client, channel, messageTs, added));
           let authorName: string | undefined;
           if (!onBotMessage && msg?.authorId && msg.authorId !== reactorId) {
             authorName = (await classifyActor(client, msg.authorId)).displayName;

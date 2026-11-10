@@ -259,6 +259,7 @@ for (const protocol of ["openai", "anthropic", "unknown"] as const)
       "Discovered model replied",
     );
     assert.ok(requests.filter((r) => r.path === "/v1/models").length > beforeRefresh);
+    built.runtime.start();
     const result = await built.app.turn({
       surface: "test",
       actor: { externalId: "U1" },

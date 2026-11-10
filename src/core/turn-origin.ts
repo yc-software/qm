@@ -1,114 +1,21 @@
-import type { TurnOrigin, TurnRequest } from "../types.ts";
+import type { DeliveryWebhook, TurnOrigin, TurnRequest } from "../types.ts";
 export type { TurnOrigin } from "../types.ts";
-
-type LegacyTurnOrigin = Pick<
-  TurnRequest,
-  | "triggerTs"
-  | "entryTs"
-  | "triggered"
-  | "securityScreenData"
-  | "triggerDestination"
-  | "ownerKeychainUnion"
-  | "unprompted"
-  | "liveActor"
->;
-
-export function resolveTurnOrigin(input: Partial<LegacyTurnOrigin> & { origin?: TurnOrigin }): TurnOrigin {
-  const typed = input.origin;
-  const hasLegacy = input.triggered === true || input.unprompted === true || input.liveActor === true;
-  if (!typed) return normalizeTurnOrigin(input);
-  if (!hasLegacy) return typed;
-  const legacy = normalizeTurnOrigin(input);
-  const rank: Record<TurnOrigin["kind"], number> = { direct: 0, human: 1, ambient: 2, automation: 3 };
-  if (rank[typed.kind] !== rank[legacy.kind]) return rank[typed.kind] > rank[legacy.kind] ? typed : legacy;
-  if (typed.kind === "automation" && legacy.kind === "automation") {
-    let screenData = typed.screenData;
-    if (screenData === undefined) screenData = legacy.screenData;
-    else if (legacy.screenData !== undefined && screenData !== legacy.screenData) {
-      screenData = `Typed automation data:\n${screenData}\n\nLegacy automation data:\n${legacy.screenData}`;
-    }
-    return {
-      kind: "automation",
-      ...(screenData !== undefined ? { screenData } : {}),
-      ...((typed.destination ?? legacy.destination) ? { destination: typed.destination ?? legacy.destination! } : {}),
-      ...(typed.useOwnerKeychain || legacy.useOwnerKeychain ? { useOwnerKeychain: true } : {}),
-    };
-  }
-  if (typed.kind === "human" && legacy.kind === "human") {
-    return {
-      kind: "human",
-      ...((typed.messageTs ?? legacy.messageTs) ? { messageTs: typed.messageTs ?? legacy.messageTs! } : {}),
-      ...((typed.entryTs ?? legacy.entryTs) ? { entryTs: typed.entryTs ?? legacy.entryTs! } : {}),
-    };
-  }
-  if (typed.kind === "ambient" && legacy.kind === "ambient") {
-    return {
-      kind: "ambient",
-      ...((typed.entryTs ?? legacy.entryTs) ? { entryTs: typed.entryTs ?? legacy.entryTs! } : {}),
-      ...(typed.live === true || legacy.live === true ? { live: true } : {}),
-    };
-  }
-  return typed;
-}
-
-export function normalizeTurnOrigin(input: LegacyTurnOrigin): TurnOrigin {
-  if (input.triggered === true) {
-    return {
-      kind: "automation",
-      ...(input.securityScreenData !== undefined ? { screenData: input.securityScreenData } : {}),
-      ...(input.triggerDestination ? { destination: input.triggerDestination } : {}),
-      ...(input.ownerKeychainUnion === true ? { useOwnerKeychain: true } : {}),
-    };
-  }
-  if (input.unprompted === true) {
-    return {
-      kind: "ambient",
-      ...(typeof input.entryTs === "string" && input.entryTs ? { entryTs: input.entryTs } : {}),
-      ...(input.liveActor === true ? { live: true } : {}),
-    };
-  }
-  if (input.liveActor === true) {
-    return {
-      kind: "human",
-      ...(typeof input.triggerTs === "string" && input.triggerTs ? { messageTs: input.triggerTs } : {}),
-      ...(typeof input.entryTs === "string" && input.entryTs ? { entryTs: input.entryTs } : {}),
-    };
-  }
-  return { kind: "direct" };
-}
-
-export function turnOriginRequestFields(origin: TurnOrigin): Partial<LegacyTurnOrigin> {
-  switch (origin.kind) {
-    case "human":
-      return {
-        liveActor: true,
-        ...(origin.messageTs ? { triggerTs: origin.messageTs } : {}),
-        ...(origin.entryTs ? { entryTs: origin.entryTs } : {}),
-      };
-    case "ambient":
-      return {
-        unprompted: true,
-        ...(origin.entryTs ? { entryTs: origin.entryTs } : {}),
-        ...(origin.live === true ? { liveActor: true } : {}),
-      };
-    case "automation":
-      return {
-        triggered: true,
-        ...(origin.screenData !== undefined ? { securityScreenData: origin.screenData } : {}),
-        ...(origin.destination ? { triggerDestination: origin.destination } : {}),
-        ...(origin.useOwnerKeychain ? { ownerKeychainUnion: true } : {}),
-      };
-    case "direct":
-      return {};
-  }
-}
 
 export function isPersonAuthored(kind: TurnOrigin["kind"]): boolean {
   return kind === "human" || kind === "direct";
 }
 
+export function spokenByPerson(origin: TurnOrigin): boolean {
+  return origin.kind === "human" || (origin.kind === "ambient" && origin.live === true);
+}
+
 export function isSessionTurn(input: Pick<TurnRequest, "sessionSenderId" | "delegatingRunId">): boolean {
   return !!input.sessionSenderId || !!input.delegatingRunId;
+}
+
+export function midTurnSessionMessage(message: string, fromParent: boolean): string {
+  const sender = fromParent ? "your parent session" : "another session";
+  return `A message from ${sender} arrived while you were working. Address it as you continue this turn; it is not a new task.\n${message}`;
 }
 
 export function sessionTurnOrigin(origin: TurnOrigin | undefined, text: string): TurnOrigin {
@@ -119,12 +26,11 @@ export function sessionTurnOrigin(origin: TurnOrigin | undefined, text: string):
 }
 
 export function desktopClientForTurn(
-  input: Partial<LegacyTurnOrigin> &
-    Partial<
-      Pick<TurnRequest, "origin" | "surface" | "desktopClientId" | "proactiveOpener" | "spawned" | "botActor">
-    > & { attempt?: number },
+  input: Partial<
+    Pick<TurnRequest, "origin" | "surface" | "desktopClientId" | "proactiveOpener" | "spawned" | "botActor">
+  > & { attempt?: number },
 ): string | undefined {
-  return resolveTurnOrigin(input).kind === "human" &&
+  return input.origin?.kind === "human" &&
     input.surface === "web" &&
     !input.proactiveOpener &&
     !input.spawned &&
@@ -132,4 +38,26 @@ export function desktopClientForTurn(
     (input.attempt ?? 1) <= 1
     ? input.desktopClientId
     : undefined;
+}
+
+export function boundWebhook(
+  request: Pick<Partial<TurnRequest>, "deliveryWebhook" | "deliveryTarget" | "approval" | "origin">,
+): { webhook: DeliveryWebhook; target: string } | undefined {
+  if (request.deliveryWebhook && request.deliveryTarget)
+    return { webhook: request.deliveryWebhook, target: request.deliveryTarget };
+  const destination = request.origin?.kind === "automation" ? request.origin.destination : undefined;
+  if (destination?.type !== "webhook" || !destination.webhook) return undefined;
+  if (!request.approval && request.deliveryTarget !== destination.target) return undefined;
+  return { webhook: destination.webhook, target: destination.target };
+}
+
+export function introducesUser(
+  origin: TurnOrigin,
+  input: Pick<TurnRequest, "sessionSenderId" | "delegatingRunId" | "surfaceOrigin">,
+): boolean {
+  return (
+    (isPersonAuthored(origin.kind) || spokenByPerson(origin)) &&
+    !isSessionTurn(input) &&
+    input.surfaceOrigin?.audience !== "external"
+  );
 }

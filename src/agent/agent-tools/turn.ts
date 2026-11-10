@@ -94,9 +94,9 @@ export function turnTools(kit: ToolKit) {
     name: "runtime",
     label: "runtime",
     description:
-      "Inspect or change your model, effort and fast mode. get: active runtime and choices. set: change it (omitted settings kept). inherit: back to the scope default (with lifetime scope, clears the scope override). A change stops this runtime and resumes the task on the new one, so call it alone after other tools finish. lifetime task (default) covers this request or cron fire; scope also sets the scope default. Changes need a live user, except task changes in a cron fire, and are refused while a goal is open. Check here before claiming you cannot switch.",
+      "Inspect or change your model, effort and fast mode. get: active runtime and choices, with the account each model bills. set: change it (omitted settings kept). A change stops this runtime and resumes the task on the new one, so call it alone after other tools finish. lifetime task (default) covers this request or cron fire; scope also sets the scope default. Changes need a live user, except task changes in a cron fire, and are refused while a goal is open. Check here before claiming you cannot switch.",
     parameters: Type.Object({
-      action: Type.Union([Type.Literal("get"), Type.Literal("set"), Type.Literal("inherit")]),
+      action: Type.Union([Type.Literal("get"), Type.Literal("set")]),
       model: Type.Optional(Type.String({ description: "Model ID or exact display name from get." })),
       effort: Type.Optional(
         Type.String({
@@ -142,5 +142,39 @@ export function turnTools(kit: ToolKit) {
     },
   });
 
-  return { attach, finishSilently, context, runtime };
+  const withdrawApproval = defineTool({
+    name: "withdraw_approval",
+    label: "withdraw_approval",
+    description:
+      "Withdraw a pending approval card you raised in this conversation so it can no longer be approved, e.g. when the person changes their mind before approving. Pass the card id from the blocked call's result.",
+    parameters: Type.Object({
+      card: Type.String({ description: "Card id shown in the blocked call's result." }),
+    }),
+    async execute(callId, params) {
+      await recordCall(callId, { tool: "withdraw_approval", card: params.card });
+      const withdraw = ref.current?.withdrawApproval;
+      if (!withdraw)
+        return recordResult(
+          callId,
+          { tool: "withdraw_approval", ok: false },
+          text("[error] approval cards can't be withdrawn on this turn."),
+          true,
+        );
+      const { withdrawn } = await withdraw(params.card);
+      if (!withdrawn.length)
+        return recordResult(
+          callId,
+          { tool: "withdraw_approval", ok: false },
+          text(`[not found] no pending approval card ${params.card} in this conversation; it may already be resolved.`),
+          true,
+        );
+      return recordResult(
+        callId,
+        { tool: "withdraw_approval", ok: true, withdrawn },
+        text(`[withdrawn] ${withdrawn.join("; ")} — the card can no longer be approved.`),
+      );
+    },
+  });
+
+  return { attach, finishSilently, context, runtime, withdrawApproval };
 }

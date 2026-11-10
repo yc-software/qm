@@ -40,13 +40,13 @@ for (const backend of backends) {
     const finished: string[] = [];
     for (const ref of ["a", "b", "c"]) {
       const run = (await runs.enqueue({ sessionId: ref, request: turn(ref) })).run;
-      const claimed = await runs.claimForSession(ref, "w", 5_000);
+      const claimed = await runs.claimById(run.id, "w", 5_000);
       await runs.complete(run.id, claimed?.leaseToken ?? "", { status: "ok", reply: ref });
       finished.push(run.id);
     }
     await runs.enqueue({ sessionId: "pending", request: turn("pending") });
     const running = (await runs.enqueue({ sessionId: "running", request: turn("running") })).run;
-    await runs.claimForSession("running", "w", 5_000);
+    await runs.claimById(running.id, "w", 5_000);
     const far = Date.now() + 60_000;
     const all = await runs.terminalFinished({ finishedAt: 0, id: "" }, far, 10);
     assert.deepEqual(new Set(all.map((run) => run.id)), new Set(finished), "only terminal runs are listed");
@@ -199,13 +199,13 @@ for (const backend of backends) {
     assert.equal((await runs.claim("w3", 5_000))[0] ?? null, null);
   });
 
-  test(`[${backend.name}] inline claims cannot overtake an earlier pending run`, async () => {
+  test(`[${backend.name}] a targeted claim cannot overtake an earlier pending run`, async () => {
     const { runs } = backend.make();
     const unrelated = (await runs.enqueue({ sessionId: "unrelated", request: turn("other") })).run;
     const first = (await runs.enqueue({ sessionId: "inline-order", request: turn("first") })).run;
     const second = (await runs.enqueue({ sessionId: "inline-order", request: turn("second") })).run;
     assert.equal(await runs.claimById(second.id, "second-worker", 5_000), null);
-    const claimedFirst = await runs.claimForSession("inline-order", "first-worker", 5_000);
+    const claimedFirst = await runs.claimById(first.id, "first-worker", 5_000);
     assert.equal((await runs.get(unrelated.id))?.status, "pending");
     assert.equal(claimedFirst?.id, first.id);
     await runs.complete(first.id, claimedFirst!.leaseToken!, { status: "ok" });

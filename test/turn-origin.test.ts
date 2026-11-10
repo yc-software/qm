@@ -1,122 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  desktopClientForTurn,
-  normalizeTurnOrigin,
-  resolveTurnOrigin,
-  turnOriginRequestFields,
-  type TurnOrigin,
-} from "../src/core/turn-origin.ts";
-
-test("legacy turn provenance normalizes to one origin", () => {
-  assert.deepEqual(normalizeTurnOrigin({ liveActor: true, triggerTs: "1", entryTs: "1" }), {
-    kind: "human",
-    messageTs: "1",
-    entryTs: "1",
-  });
-  assert.deepEqual(normalizeTurnOrigin({ unprompted: true, entryTs: "2" }), { kind: "ambient", entryTs: "2" });
-  assert.deepEqual(
-    normalizeTurnOrigin({
-      triggered: true,
-      securityScreenData: "external payload",
-      triggerDestination: { type: "channel", target: "C1" },
-      ownerKeychainUnion: true,
-    }),
-    {
-      kind: "automation",
-      screenData: "external payload",
-      destination: { type: "channel", target: "C1" },
-      useOwnerKeychain: true,
-    },
-  );
-  assert.deepEqual(normalizeTurnOrigin({}), { kind: "direct" });
-});
-
-test("combined legacy provenance resolves toward the least interactive origin, keeping authorship", () => {
-  assert.deepEqual(
-    normalizeTurnOrigin({
-      triggered: true,
-      unprompted: true,
-      liveActor: true,
-      triggerTs: "human-ts",
-      entryTs: "ambient-ts",
-    }),
-    { kind: "automation" },
-  );
-  assert.deepEqual(
-    normalizeTurnOrigin({ unprompted: true, liveActor: true, triggerTs: "human-ts", entryTs: "ambient-ts" }),
-    {
-      kind: "ambient",
-      entryTs: "ambient-ts",
-      live: true,
-    },
-    "unprompted + liveActor is a verbatim thread-follow: ambient engagement, live author",
-  );
-});
-
-test("canonical origins replay through the legacy surface contract", () => {
-  const origins: TurnOrigin[] = [
-    { kind: "direct" },
-    { kind: "human", messageTs: "1", entryTs: "1" },
-    { kind: "ambient", entryTs: "2" },
-    { kind: "ambient", entryTs: "3", live: true },
-    {
-      kind: "automation",
-      screenData: "payload",
-      destination: { type: "channel", target: "C1" },
-      useOwnerKeychain: true,
-    },
-  ];
-  for (const origin of origins) assert.deepEqual(normalizeTurnOrigin(turnOriginRequestFields(origin)), origin);
-});
-
-test("durable requests from before the origin migration normalize lazily", () => {
-  assert.deepEqual(resolveTurnOrigin({ liveActor: true, triggerTs: "1" }), { kind: "human", messageTs: "1" });
-  assert.deepEqual(resolveTurnOrigin({ origin: { kind: "ambient", entryTs: "2" }, liveActor: true }), {
-    kind: "ambient",
-    entryTs: "2",
-  });
-});
-
-test("typed and legacy provenance resolve toward the least interactive origin", () => {
-  assert.deepEqual(resolveTurnOrigin({ origin: { kind: "human" }, triggered: true, securityScreenData: "external" }), {
-    kind: "automation",
-    screenData: "external",
-  });
-  assert.deepEqual(resolveTurnOrigin({ origin: { kind: "automation", screenData: "external" }, liveActor: true }), {
-    kind: "automation",
-    screenData: "external",
-  });
-});
-
-test("matching automation origins preserve or combine every screening payload", () => {
-  assert.deepEqual(
-    resolveTurnOrigin({ origin: { kind: "automation" }, triggered: true, securityScreenData: "legacy" }),
-    { kind: "automation", screenData: "legacy" },
-  );
-  const merged = resolveTurnOrigin({
-    origin: { kind: "automation", screenData: "typed" },
-    triggered: true,
-    securityScreenData: "legacy",
-  });
-  assert.equal(merged.kind, "automation");
-  assert.match(merged.kind === "automation" ? (merged.screenData ?? "") : "", /typed/);
-  assert.match(merged.kind === "automation" ? (merged.screenData ?? "") : "", /legacy/);
-});
-
-test("the owner-keychain flag survives legacy and typed automation normalization", () => {
-  const origin: TurnOrigin = { kind: "automation", useOwnerKeychain: true };
-  assert.deepEqual(normalizeTurnOrigin(turnOriginRequestFields(origin)), origin);
-  assert.deepEqual(resolveTurnOrigin({ origin, triggered: true }), origin);
-});
+import { desktopClientForTurn, introducesUser } from "../src/core/turn-origin.ts";
 
 test("desktop execution requires a human web turn with a live desktop binding", () => {
   const human = { origin: { kind: "human" as const }, surface: "web", desktopClientId: "desktop-turn" };
   assert.equal(desktopClientForTurn(human), "desktop-turn");
-  assert.equal(
-    desktopClientForTurn({ liveActor: true, surface: "web", desktopClientId: "desktop-turn" }),
-    "desktop-turn",
-  );
   for (const kind of ["direct", "ambient", "automation"] as const)
     assert.equal(desktopClientForTurn({ ...human, origin: { kind } }), undefined);
   for (const patch of [
@@ -125,9 +13,22 @@ test("desktop execution requires a human web turn with a live desktop binding", 
     { proactiveOpener: true },
     { spawned: true },
     { botActor: true },
-    { triggered: true },
-    { unprompted: true },
+    { origin: undefined },
     { attempt: 2 },
   ])
     assert.equal(desktopClientForTurn({ ...human, ...patch }), undefined);
+});
+
+test("only a person's own message introduces them to the roster", () => {
+  assert.equal(introducesUser({ kind: "direct" }, {}), true);
+  assert.equal(introducesUser({ kind: "human" }, {}), true);
+  assert.equal(introducesUser({ kind: "automation" }, {}), false);
+  assert.equal(introducesUser({ kind: "ambient", live: true }, {}), true, "a live reply in a thread QM follows counts");
+  assert.equal(introducesUser({ kind: "ambient" }, {}), false);
+  assert.equal(introducesUser({ kind: "direct" }, { sessionSenderId: "s1" }), false);
+  assert.equal(
+    introducesUser({ kind: "direct" }, { surfaceOrigin: { audience: "external" } as never }),
+    false,
+    "someone from another Slack workspace is not one of ours",
+  );
 });

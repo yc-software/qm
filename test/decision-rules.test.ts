@@ -1,6 +1,9 @@
 import "./support/auto-fake-sprites.ts";
 import { gatewayActorId } from "../src/model/provider-endpoints.ts";
 import assert from "node:assert/strict";
+import { once } from "node:events";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import test from "node:test";
 import {
   checkRuleSet,
@@ -309,6 +312,34 @@ test("a missing, disabled or mismatched credential is an error, so the rule fall
   await assert.rejects(ask(noGateway, { provider: "gw", model: "m" }), /no model gateway/);
 });
 
+test("a custom decision endpoint on a private network address is refused before connecting, and the model gateway is not", async (t) => {
+  for (const host of ["127.0.0.1", "169.254.169.254"]) {
+    const backend = createDecisionBackend({
+      providers: () => [{ id: "oa", protocol: "decisions", baseUrl: `http://${host}/v1`, credential: "dec" }],
+      credential: async () => ({ host, enabled: true, headers: { Authorization: "Bearer x" } }),
+    });
+    await assert.rejects(ask(backend, { provider: "oa", model: "m" }), {
+      message: `${host} is a private network address; a deployment operator can allow this exact origin with PRIVATE_NETWORK_ALLOWED_ORIGINS`,
+    });
+  }
+  const content = JSON.stringify({ answers: { decision: { type: "choice", probabilities: { yes: 1, no: 0 } } } });
+  const gateway = createServer((_req, res) => res.end(JSON.stringify({ choices: [{ message: { content } }] })));
+  gateway.listen(0, "127.0.0.1");
+  await once(gateway, "listening");
+  t.after(() => gateway.close());
+  const backend = createDecisionBackend({
+    providers: () => PROVIDERS,
+    gateway: {
+      url: `http://127.0.0.1:${(gateway.address() as AddressInfo).port}/`,
+      apiKey: "gk",
+      apiKeyHeader: "api-key",
+      actorKey: "test-actor-key",
+    },
+    credential: async () => null,
+  });
+  assert.deepEqual(await ask(backend, { provider: "gw", model: "m" }), { yes: 1, no: 0 });
+});
+
 test("each hook point only accepts its own actions; use_runtime carries a runtime", () => {
   const router = (options: Record<string, unknown>) =>
     parse({ ...injection(), id: "router", hook: "turn_start", onError: "keep", options });
@@ -502,4 +533,131 @@ test("a turn_start rule only counts as routing the turn when it changes the runt
     }),
     { choice: haiku },
   );
+});
+
+const guidanceCheck = (): DecisionRule =>
+  injection({
+    id: "house-style",
+    hook: "turn_end",
+    onError: "ok",
+    options: {
+      ok: { description: "The reply follows the guidance", action: "keep" },
+      table: {
+        description: "The reply has a table the user did not ask for",
+        action: "retry",
+        message: "Drop the table and write it as prose.",
+      },
+      unfinished: {
+        description: "The reply leaves an open question the agent could answer with its tools",
+        action: "prod",
+        message: "Investigate the open question now, then reply with what you found.",
+      },
+    },
+  });
+
+test("turn_end rules accept keep, retry and prod, and retry and prod options need a message", () => {
+  assert.ok("rule" in parse(guidanceCheck()));
+  assert.match(
+    err(
+      parse({
+        ...guidanceCheck(),
+        options: { ...guidanceCheck().options, table: { description: "t", action: "retry" } },
+      }),
+    ),
+    /retry needs a message/,
+  );
+  assert.match(
+    err(
+      parse({
+        ...guidanceCheck(),
+        options: { ...guidanceCheck().options, unfinished: { description: "u", action: "prod" } },
+      }),
+    ),
+    /prod needs a message/,
+  );
+  assert.match(
+    err(
+      parse({
+        ...guidanceCheck(),
+        options: { ok: { description: "a", action: "keep" }, no: { description: "b", action: "block" } },
+      }),
+    ),
+    /turn_end must be one of keep, retry, prod/,
+  );
+});
+
+test("turn_end state carries the guidance, the user's message, measured facts and the draft", async () => {
+  const { turnEndState, replyFacts } = await import("../src/decisions/hooks.ts");
+  const reply =
+    "Here you go \u2014 two of them.\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n```\nx \u2014 y\n|---|---|\n```\n\nDone.";
+  assert.deepEqual(replyFacts(reply), [
+    "- paragraphs: 2",
+    "- markdown tables: 1",
+    "- em dashes: 2",
+    `- characters: ${reply.length}`,
+  ]);
+  const state = turnEndState({ guidance: "No tables unless asked.", input: "status?", reply });
+  assert.match(state, /Guidance for this conversation:\nNo tables unless asked\./);
+  assert.match(state, /Latest message from the user:\nstatus\?/);
+  assert.match(state, /- markdown tables: 1/);
+  assert.ok(state.endsWith(`Draft reply:\n${reply}`));
+  assert.match(turnEndState({ input: "hi", reply: "hello" }), /Guidance for this conversation:\n\(none\)/);
+});
+
+test("turn_end onError must name a keep option", () => {
+  assert.match(err(parse({ ...guidanceCheck(), onError: "table" })), /onError must name a keep option/);
+  assert.match(err(parse({ ...guidanceCheck(), onError: "unfinished" })), /onError must name a keep option/);
+});
+
+test("the reply check is armed only when a turn_end rule is active, enforces only with an enforcing rule, and returns the retraction reason and message", async () => {
+  const { createDecisionHooks, createReplyCheck } = await import("../src/decisions/hooks.ts");
+  const audit = { record: () => {} } as never;
+  const states: string[] = [];
+  const backend = (p: Record<string, number>): DecisionBackend => ({
+    async choose({ questions, state }) {
+      states.push(state);
+      return Object.fromEntries(Object.keys(questions).map((k) => [k, p]));
+    },
+  });
+  const turn = { scopeLabel: "personal:a", sessionId: "s1" };
+  const factory = (rules: DecisionRule[], p: Record<string, number>) =>
+    createReplyCheck(
+      { rules: async () => rules },
+      createDecisionHooks({ rules: async () => rules } as never, backend(p), audit),
+    );
+  let guidanceReads = 0;
+  const context = (guidance = "") => ({
+    surfaceName: "web",
+    runtimePurpose: "interactive",
+    guidance: async () => (guidanceReads++, guidance),
+    input: "status?",
+    turn,
+  });
+  const armed = await factory([guidanceCheck()], { ok: 0.1, table: 0.9 })(context("No tables."));
+  assert.ok(armed?.enforce);
+  assert.deepEqual(await armed.check("| a |\n|---|"), {
+    action: "retry",
+    reason: "table",
+    message: "Drop the table and write it as prose.",
+  });
+  assert.match(states[0]!, /- surface: web\n- purpose: interactive/);
+  assert.match(states[0]!, /No tables\./);
+  const prodding = await factory([guidanceCheck()], { ok: 0.1, table: 0.05, unfinished: 0.85 })(context());
+  assert.deepEqual(await prodding!.check("I haven't traced the CPU yet."), {
+    action: "prod",
+    reason: "unfinished",
+    message: "Investigate the open question now, then reply with what you found.",
+  });
+  const passing = await factory([guidanceCheck()], { ok: 0.9, table: 0.1 })(context());
+  assert.equal(await passing!.check("fine"), undefined);
+  const observed = await factory([{ ...guidanceCheck(), mode: "observe" }], { ok: 0.1, table: 0.9 })(context());
+  assert.equal(observed?.enforce, false);
+  assert.equal(await observed!.check("| a |"), undefined);
+  assert.equal(guidanceReads, 4);
+  assert.equal(await factory([], {})(context()), undefined);
+  assert.equal(
+    await createReplyCheck(undefined, createDecisionHooks(undefined, backend({}), audit))(context()),
+    undefined,
+  );
+  assert.equal(guidanceReads, 4, "guidance is not read when no rule is active");
 });

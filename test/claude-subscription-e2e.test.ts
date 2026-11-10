@@ -4,6 +4,7 @@ import { test, type TestContext } from "node:test";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createAgent } from "../src/agent/agent-run.ts";
+import { createModelRoutes } from "../src/model/model-route.ts";
 
 const SUBSCRIPTION_TOKEN = "sk-ant-oat01-personal-e2e";
 
@@ -115,7 +116,10 @@ test("a personal Claude subscription turn runs end to end on Pi with OAuth beare
   const seen = fakeAnthropic(t);
 
   const built = buildApp(testConfig({ anthropicApiKey: "sk-ant-api03-company" }), {
-    agent: createAgent({ captureRequests: false, resolveProviderKeys: async () => ({}) }),
+    agent: createAgent({
+      routes: createModelRoutes({ resolveProviderKeys: async () => ({}) }),
+      captureRequests: false,
+    }),
   });
   await built.userModelCredentials.setOAuth("U1", "anthropic", {
     accessToken: SUBSCRIPTION_TOKEN,
@@ -128,7 +132,7 @@ test("a personal Claude subscription turn runs end to end on Pi with OAuth beare
     actor: { externalId: "U1" },
     conversation: { kind: "dm", threadRef: "claude-subscription-e2e" },
     text: "ping",
-    liveActor: true,
+    origin: { kind: "human" },
     async: true,
   });
   built.runtime.start();
@@ -152,7 +156,7 @@ test("a company Claude subscription token in ANTHROPIC_API_KEY serves company tu
     actor: { externalId: "U1" },
     conversation: { kind: "dm", threadRef: "claude-company-subscription-e2e" },
     text: "ping",
-    liveActor: true,
+    origin: { kind: "human" },
     async: true,
   });
   built.runtime.start();

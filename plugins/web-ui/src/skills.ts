@@ -3,7 +3,7 @@ import { api, type CoreContext } from "./core-bridge";
 import type { SkillItem } from "./composer";
 import { errMessage } from "../../chassis/src/errors";
 import { fieldSelect } from "./ui";
-import { appState } from "./shell";
+import { appState, switchView } from "./shell";
 import { skillActions } from "./skill-actions";
 import {
   createReviewMatches,
@@ -179,14 +179,29 @@ function closeFocusedFlow(): void {
   restoreFocusedFlow(target);
 }
 
-function startCreate(): void {
+let pendingCreateScope: { scopeId: string; name: string } | null = null;
+
+export function startSkillCreateIn(scopeId: string, name: string): void {
+  pendingCreateScope = { scopeId, name };
+  switchView("skills");
+}
+
+function startCreate(preset?: { scopeId: string; name: string }): void {
   if (creating) return;
   flowFocusTarget = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   skillMutations.invalidate();
   editing = null;
   editingTarget = null;
   editRequestSeq += 1;
-  creating = { name: "", description: "", body: "", scopeId: createScopes[0]?.scopeId ?? "", review: null };
+  if (preset && !createScopes.some((scope) => scope.scopeId === preset.scopeId))
+    createScopes = [...createScopes, preset];
+  creating = {
+    name: "",
+    description: "",
+    body: "",
+    scopeId: preset?.scopeId ?? createScopes[0]?.scopeId ?? "",
+    review: null,
+  };
   createError = "";
   creatingSaving = false;
   drawSkills();
@@ -453,7 +468,10 @@ function creatorPane() {
             c.review = null;
             drawSkills();
           },
-          options: createScopes.map((scope) => html`<option value=${scope.scopeId}>${scope.name}</option>`),
+          options: createScopes.map(
+            (scope) =>
+              html`<option value=${scope.scopeId} ?selected=${scope.scopeId === c.scopeId}>${scope.name}</option>`,
+          ),
         })}
         <small class="card-meta">Everyone in a shared context can invoke and edit this skill.</small>
       </label>
@@ -575,7 +593,7 @@ function drawSkills(loading = false): void {
   render(
     html`${scopedViewTopbar("skills", () => drawSkills())}${listPageTpl({
       title: "Skills",
-      action: { label: "New skill", onClick: startCreate },
+      action: { label: "New skill", onClick: () => startCreate() },
       search: {
         value: skillSearch,
         placeholder: "Search skills…",
@@ -910,6 +928,9 @@ export async function renderSkills(): Promise<void> {
   if (!skillsRefreshes.isCurrent(request)) return;
   const skill = wanted ? skillRows.find((candidate) => candidate.id === wanted) : undefined;
   if (wanted && !skill) skillsNotice = "That skill wasn't found, or you don't have access to it.";
+  const preset = pendingCreateScope;
+  pendingCreateScope = null;
   if (skill) openSkill(skill);
+  else if (preset) startCreate(preset);
   else drawSkills(false);
 }

@@ -17,7 +17,7 @@ test(
   },
   async (t) => {
     assert.ok(env);
-    const publicUrl = env.PORTAL_PUBLIC_URL!;
+    const publicUrl = env.PUBLIC_WEB_URL!;
     const secret = env.PORTAL_SESSION_SECRET!;
     const configuredAdmin = env.ADMIN_GRANTS!.split(":")[0]!.toLowerCase();
     const cli = () => {
@@ -60,7 +60,7 @@ test(
     await t.test("all services start without email, and email sign-in reports its unavailable state", async () => {
       assert.equal(env.RESEND_API_KEY ?? "", "");
       assert.equal(env.AUTH_EMAIL_FROM ?? "", "");
-      for (const base of [env.CORE_API_URL!, env.WEB_UI_UPSTREAM!, env.AUTH_BROKER_UPSTREAM!, publicUrl]) {
+      for (const base of [env.CORE_API_URL!, env.AUTH_BROKER_UPSTREAM!, publicUrl]) {
         assert.equal((await fetch(`${base}/healthz`)).status, 200, base);
       }
       const redirect = await fetch(`${publicUrl}/auth/login`, { redirect: "manual" });

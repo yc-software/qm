@@ -89,8 +89,14 @@ test("pg memory: notebooks written before the records column migrate into fact r
 test("pg memory: add, edit and delete by id; a bad id rolls back the whole call", { skip }, async () => {
   const memory = createPostgresMemoryService(URL!);
   const sid = scopeId("personal", "U1");
-  assert.equal(await memory.capture(sid, ["Prefers terse replies", "Owns billing"], at, "U1"), 2);
-  assert.equal(await memory.capture(sid, ["prefers terse replies"], at, "U1"), 0);
+  assert.equal(
+    await memory.capture(sid, ["Prefers terse replies", "Owns billing"], at, {
+      actorId: "U1",
+      context: "conversation",
+    }),
+    2,
+  );
+  assert.equal(await memory.capture(sid, ["prefers terse replies"], at, { actorId: "U1", context: "conversation" }), 0);
   const [terse, billing] = await memory.facts!(sid);
 
   await assert.rejects(
@@ -106,7 +112,10 @@ test("pg memory: add, edit and delete by id; a bad id rolls back the whole call"
   await memory.edit!(sid, [{ id: `#${terse!.id}`, text: "- (2020-01-01) Prefers short replies" }]);
   await memory.delete!(sid, [billing!.id]);
   const second = createPostgresMemoryService(URL!);
-  assert.deepEqual(await second.query(sid, "short", 5), [`#${terse!.id} (2026-05-31) Prefers short replies`]);
+  assert.deepEqual(
+    (await second.query(sid, "short", 5)).map(({ text }) => text),
+    [`#${terse!.id} (2026-05-31) Prefers short replies`],
+  );
   assert.equal(await second.read(sid), "- (2026-05-31) Prefers short replies");
   const [row] = await sql("SELECT deleted_at FROM memory_facts WHERE id = $1", [billing!.id]);
   assert.ok(row?.deleted_at, "delete keeps the row, marked deleted");

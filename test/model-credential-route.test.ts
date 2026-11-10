@@ -64,6 +64,7 @@ test("admin model credentials are encrypted, write-only, live, and removable", a
       ],
       models: [
         { id: "claude-opus-5-5", name: "Claude Opus 5.5", provider: "anthropic" },
+        { id: "claude-fable-5-2", name: "Claude Fable 5.2", provider: "anthropic" },
         { id: "claude-fable-5-1", name: "Claude Fable 5.1", provider: "anthropic" },
         { id: "claude-fable-5", name: "Claude Fable 5", provider: "anthropic" },
         { id: "claude-opus-5", name: "Claude Opus 5", provider: "anthropic" },
@@ -589,7 +590,7 @@ test("inbox runtime overrides use the web model allowlist without changing defau
       conversation: { kind: "dm", threadRef: "loop:test:item:runtime" },
       text: "Make it shorter",
       model: "claude-haiku-4-5",
-      triggered: true,
+      origin: { kind: "automation" },
       async: true,
     });
     assert.equal(rejected.status, "refused");

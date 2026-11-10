@@ -92,7 +92,7 @@ for (const scenario of scenarios)
             finishedAt: Date.now(),
             attempt: 1,
             activity,
-            result: { status: "ok", reply: "(stopped)", stopped: true },
+            result: { status: "ok", reply: "", stopped: true },
           }
         : { status: "running", alive: true, startedAt, attempt: 1, activity, result: null };
     const h = await harness({

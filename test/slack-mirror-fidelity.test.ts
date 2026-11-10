@@ -153,6 +153,7 @@ test("event mirroring preserves mention IDs for current-context rendering", asyn
     classifyUserCached: async () => ({ actor: { displayName: "Old name" } }),
   } as unknown as Directory;
   const mirror = createMirror({
+    account: "default",
     core,
     ids,
     directory: mentionDirectory,

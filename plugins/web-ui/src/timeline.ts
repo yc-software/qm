@@ -6,6 +6,7 @@ import {
   isNarration,
   isUserMessage,
   reasoningStepKey,
+  retractedReason,
   type Item,
   type RunActivityEntry,
 } from "./items.ts";
@@ -305,7 +306,7 @@ export function sessionToolView(
   const sessionId = session?.id ?? result.sessionId;
   let chipTitle = session?.title || result.title || call.name || "Subagent";
   let detail = "";
-  if (action === "wait") return { action, detail: "for agent messages" };
+  if (action === "wait") return { action, detail: "agent messages" };
   if (action === "read" && !target && result.children === undefined) return { action, detail: "subagents" };
   if (action === "read" && result.children !== undefined) {
     return { action, detail: `${result.children} subagent${result.children === 1 ? "" : "s"}` };
@@ -376,8 +377,18 @@ export function streamingTextTail(text: string, activity: readonly RunActivityEn
   return tail;
 }
 
+export function retractedReplies(work: WorkBlock): Array<{ item: Item; reason: string; text: string }> {
+  return activityItems(work.activity).flatMap((item) => {
+    const reason = retractedReason(item);
+    const text = item.text ?? "";
+    return reason && text.trim() ? [{ item, reason, text }] : [];
+  });
+}
+
 export function messageWorkTimeline(work: WorkBlock, finalText: string): TimelineItem[] {
-  const timeline = buildTimeline(work);
+  const timeline = buildTimeline(work).filter(
+    (item) => !(finalText.trim() && item.kind === "text" && retractedReason(item.item)),
+  );
   const lastText = finalText.trim() ? timeline.findLastIndex((item) => item.kind === "text") : -1;
   return timeline.filter((item, index) => {
     if (item.kind === "thinking") return Boolean(item.text.trim());

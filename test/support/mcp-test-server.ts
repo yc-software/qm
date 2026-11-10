@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { addressGuardedFetch } from "../../src/util/network.ts";
+import { addressGuardedFetch, type AddressFetch } from "../../src/util/network.ts";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
@@ -63,6 +63,7 @@ export async function startMcpTestServer(
       name: string,
       args: Record<string, unknown>,
       authorization?: string,
+      actor?: string,
     ) => CallToolResult | Promise<CallToolResult>;
     description?: string;
     instructions?: string;
@@ -93,10 +94,15 @@ export async function startMcpTestServer(
       const { name } = req.params;
       if (!tools.some((tool) => tool.name === name))
         throw new McpError(ErrorCode.InvalidParams, `Unknown tool: ${name}`);
-      const authorization = extra.requestInfo?.headers.authorization;
+      const { authorization, "x-qm-actor": actor } = extra.requestInfo?.headers ?? {};
       const args = req.params.arguments ?? {};
       return (
-        opts.call?.(name, args, typeof authorization === "string" ? authorization : undefined) ?? {
+        opts.call?.(
+          name,
+          args,
+          typeof authorization === "string" ? authorization : undefined,
+          typeof actor === "string" ? actor : undefined,
+        ) ?? {
           content: [{ type: "text", text: `ran ${name}` }],
         }
       );
@@ -209,3 +215,12 @@ export async function startMcpTestServer(
 }
 
 export const loopbackFetch = addressGuardedFetch(() => false);
+
+export const routedTo =
+  (server: string): AddressFetch =>
+  (input, init) => {
+    const url = new URL(input);
+    const { protocol, host } = new URL(server);
+    Object.assign(url, { protocol, host });
+    return loopbackFetch(url, init);
+  };

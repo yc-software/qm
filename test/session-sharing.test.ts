@@ -1,5 +1,4 @@
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { createSessionMethods } from "../src/api/app-sessions.ts";
 import { Readable } from "node:stream";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { test } from "node:test";
@@ -146,8 +145,7 @@ test("fresh shares freeze messages and authorized attachments with separate audi
       actor: null,
       deps: { identity, sessionShares: store, sessionShareBytes: countedBytes, deliveries },
       app: {
-        canViewSessionSnapshot: async (_id: string, user: string, bounds: { minSeq: number }) =>
-          accessible && user === "alice" && visible.some((entry) => entry.seq === bounds.minSeq),
+        canViewSessionSnapshot: async (_id: string, user: string) => accessible && user === "alice",
         getSessionForViewer: async (_id: string, user: string) =>
           accessible && user === "alice"
             ? {
@@ -256,9 +254,6 @@ test("fresh shares freeze messages and authorized attachments with separate audi
   assert.match(download.headers.get("content-security-policy")!, /sandbox/);
   assert.equal(await download.text(), "<script>attachment contents</script>");
   assert.equal((await create()).status, 409);
-  visible = visible.slice(1);
-  assert.equal((await read(token)).status, 404);
-  visible = original;
   await identity.deactivate("bob");
   assert.equal((await read(token)).status, 403);
   accessible = false;
@@ -286,38 +281,6 @@ test("attachment projection includes only user and delivered attachments", () =>
     { role: "assistant", text: "Here" },
     { role: "assistant", text: "Posted", attachmentIds: ["posted"] },
   ]);
-});
-
-test("snapshot authorization checks mixed tenure bounds without reading transcript payloads", async () => {
-  let allowed = true;
-  let window = {
-    principalId: "alice",
-    validFrom: 100,
-    validTo: 500,
-    validFromSeq: 2 as number | null,
-    validToSeq: null as number | null,
-  };
-  const methods = createSessionMethods(
-    { sessions: { participantWindowsOf: async () => [window] } } as unknown as Parameters<
-      typeof createSessionMethods
-    >[0],
-    { sessionForViewer: async () => (allowed ? {} : null) } as unknown as Parameters<typeof createSessionMethods>[1],
-  );
-  const bounds = { minSeq: 2, maxSeq: 9, minCreatedAt: 50, maxCreatedAt: 499 };
-  assert.equal(await methods.canViewSessionSnapshot("s1", "alice", bounds), true);
-  assert.equal(await methods.canViewSessionSnapshot("s1", "bob", bounds), false);
-  assert.equal(await methods.canViewSessionSnapshot("s1", "alice", { ...bounds, minSeq: 1 }), false);
-  assert.equal(await methods.canViewSessionSnapshot("s1", "alice", { ...bounds, maxCreatedAt: 500 }), false);
-  window = { ...window, validFromSeq: null, validToSeq: 10 };
-  assert.equal(await methods.canViewSessionSnapshot("s1", "alice", bounds), false);
-  assert.equal(await methods.canViewSessionSnapshot("s1", "alice", { ...bounds, minCreatedAt: 100 }), true);
-  assert.equal(
-    await methods.canViewSessionSnapshot("s1", "alice", { ...bounds, minCreatedAt: 100, maxSeq: 10 }),
-    false,
-  );
-  assert.equal(await methods.canViewSessionSnapshot("s1", "alice", { ...bounds, minSeq: NaN }), false);
-  allowed = false;
-  assert.equal(await methods.canViewSessionSnapshot("s1", "alice", { ...bounds, minCreatedAt: 100 }), false);
 });
 
 test("staged tool attachments are never shared without confirmed delivery", () => {

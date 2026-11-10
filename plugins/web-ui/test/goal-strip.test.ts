@@ -36,7 +36,7 @@ test("a goal cancelled from the goal bar leaves one note in the transcript", () 
     item("UserMessage", { createdAt: 900, text: "work for 20 minutes" }),
     item("ToolCall", { createdAt: 1000, tool: "goal", callId: "c1", body: { action: "create" } }),
     item("ToolResult", { createdAt: 1001, tool: "goal", callId: "c1", body: { action: "create", goal } }),
-    item("AgentMessage", { createdAt: 1003, text: "(stopped)", body: { stopped: true } }),
+    item("Stop", { createdAt: 1003, body: { reason: "by user" } }),
     item("Wake", {
       createdAt: 1004,
       wakeCause: "system",

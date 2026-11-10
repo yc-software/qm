@@ -26,7 +26,7 @@ interface Rig {
   syscallsFor(session: Session): ReturnType<ReturnType<typeof createSessionSyscalls>["forTurn"]>;
 }
 
-async function rig(opts?: { treeRunCap?: number }): Promise<Rig> {
+async function rig(): Promise<Rig> {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const signals = createPostgresRunSignalStore(testDatabaseUrl());
@@ -37,9 +37,9 @@ async function rig(opts?: { treeRunCap?: number }): Promise<Rig> {
     sessions,
     runs,
     signals,
+    steerRun: async (run, signal) => ({ sent: await signals.send(run.id, signal) }),
     advisoryLock,
     maxAttempts: 3,
-    ...(opts?.treeRunCap !== undefined ? { treeRunCap: opts.treeRunCap } : {}),
   });
   const room = await sessions.getOrCreateByThread("slack:dm:D1", "dm", scope, undefined, "slack");
   await sessions.updateTitle(room.id, "dm with alex");

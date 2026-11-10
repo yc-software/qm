@@ -1,10 +1,12 @@
 import { test } from "node:test";
+import { PEER_TASK_BANNER } from "../src/sessions/session-mailbox.ts";
 import { createGoalRecord } from "../src/agent/goal.ts";
 import assert from "node:assert/strict";
 import { Check } from "typebox/value";
 import { fromJSONSchema, z, type ZodObject } from "zod";
 import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/agent/agent-tools.ts";
-import { resumeStrategy } from "../src/core/turn-resume.ts";
+import { surfaceToolPrompt } from "../src/surfaces/registry.ts";
+import { reconcile } from "../src/core/turn-resume.ts";
 import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
 import { waitForClientResult } from "../src/runs/run-signal-store.ts";
 import { CommandDenied, NeedsApproval, type ToolContext } from "../src/tools/primitives.ts";
@@ -14,11 +16,12 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { storedItem, type Item, type NewItem } from "../src/sessions/items.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { scopeId, type ClientToolDeclaration } from "../src/types.ts";
+import { scopeId, type ChildIsolation, type ClientToolDeclaration } from "../src/types.ts";
 import type { ComputerStatus } from "../src/sandbox/sandbox.ts";
 import type { McpToolDescriptor } from "../src/mcp/mcp-tool-service.ts";
 import { connectorToolsNote, deferredMcpTools } from "../src/agent/deferred-tools.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import { testSurfaces } from "./support/single-process.ts";
 
 function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute"]>[1] }): ToolContext {
   return {
@@ -348,9 +351,6 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
           }
         : { ok: true, source: "cache", hits: [] };
     },
-    async readMembers() {
-      return { ok: true, members: [{ displayName: "Ada" }, { displayName: "Bob" }] };
-    },
     async getStandingOrder() {
       return { ok: true, orders: "" };
     },
@@ -513,6 +513,14 @@ test("sandbox creation and default routing remain independent", async () => {
   assert.deepEqual(calls, [{ action: "create", input: { backend: "modal", name: "analysis", sandboxId: undefined } }]);
   await call(sandbox, { action: "set_default", sandbox_id: null, purpose: "p" });
   assert.deepEqual(calls[1], { action: "default", input: { backend: undefined, name: undefined, sandboxId: null } });
+  assert.match(
+    textOut(await call(sandbox, { action: "list", sandbox_id: null, backend: "", name: "", purpose: "p" })),
+    /list doesn't take `sandbox_id`, `backend`, `name`; omit them/,
+  );
+  assert.match(
+    textOut(await call(sandbox, { action: "status", sandbox_id: null, purpose: "p" })),
+    /`sandbox_id: null` only clears the default/,
+  );
 });
 
 test("sandbox management preserves approval handling", async () => {
@@ -1056,7 +1064,7 @@ test("the surface tool registers only when surfaceTools is on, and post/read_thr
   const refOff: ToolContextRef = { current: fakeToolContext(), scopeLabel: "channel:C1" };
   const off = createAgentTools(refOff).map((t) => t.name);
   assert.ok(!off.includes("slack"), "off by default (overheard path unchanged)");
-  for (const n of ["post", "react", "edit", "delete", "read_thread", "whats_new", "search", "read_members"]) {
+  for (const n of ["post", "react", "edit", "delete", "read_thread", "whats_new", "search"]) {
     assert.ok(!off.includes(n), `${n} is not a standalone tool`);
   }
 
@@ -1333,11 +1341,7 @@ test("the surface tool's pull-query actions return pointers/data (not raw bytes)
   const miss = textOf(await call(slack, { action: "search", query: "nothing-here" }));
   assert.match(miss, /nothing here matches/);
 
-  const members = textOf(await call(slack, { action: "read_members" }));
-  assert.match(members, /Ada/);
-  assert.match(members, /Bob/);
-
-  for (const n of ["whats_new", "search", "read_members"]) {
+  for (const n of ["whats_new", "search"]) {
     const pair = emitted.filter((e) => e.body.action === n).map((e) => e.kind);
     assert.ok(pair.includes("ToolCall") && pair.includes("ToolResult"), `${n} emits call + result`);
   }
@@ -1406,7 +1410,6 @@ test("each action dispatches to exactly its matching tool-context method", async
     readThread: spy("readThread", { ok: true, messages: [] }),
     whatsNew: spy("whatsNew", { ok: true, hereNew: 0, activeSubConversations: 0 }),
     search: spy("search", { ok: true, hits: [], source: "live" }),
-    readMembers: spy("readMembers", { ok: true, members: [] }),
   } as unknown as ToolContext;
   const slack = surfaceTool({ current: tc, scopeLabel: "channel:C1" });
 
@@ -1417,22 +1420,20 @@ test("each action dispatches to exactly its matching tool-context method", async
   await call(slack, { action: "read_thread", limit: 5 });
   await call(slack, { action: "whats_new", since: "1.0" });
   await call(slack, { action: "search", query: "q", source: "slack" });
-  await call(slack, { action: "read_members" });
   await call(slack, { action: "reach", text: "hi", channel: "eng", files: ["report.md"], sandbox_id: "box" });
 
   assert.deepEqual(
     calls.map((c) => c[0]),
-    ["post", "react", "edit", "delete", "readThread", "whatsNew", "search", "readMembers", "reach"],
+    ["post", "react", "edit", "delete", "readThread", "whatsNew", "search", "reach"],
   );
   assert.deepEqual(calls[0]![1], ["hi", {}, [{ file_id: "saved" }], "box"]);
-  assert.deepEqual(calls[8]![1], ["hi", { channel: "eng" }, ["report.md"], "box"]);
+  assert.deepEqual(calls[7]![1], ["hi", { channel: "eng" }, ["report.md"], "box"]);
   assert.deepEqual(calls[1]![1], [{ ts: "1.1", emoji: "eyes" }]);
   assert.deepEqual(calls[2]![1], [{ ref: "1.1", text: "y" }]);
   assert.deepEqual(calls[3]![1], [{ ref: "1.1" }]);
   assert.deepEqual(calls[4]![1], [{ limit: 5 }]);
   assert.deepEqual(calls[5]![1], [{ since: "1.0" }]);
   assert.deepEqual(calls[6]![1], ["q", { source: "slack" }]);
-  assert.deepEqual(calls[7]![1], []);
 });
 
 test("the surface tool is NAMED after its surface — a telegram surface produces a `telegram` tool", async () => {
@@ -1821,6 +1822,19 @@ test("background per-action validation returns a crisp [error] instead of throwi
     /\[error\].*requires `data`/,
   );
   assert.match(textOf(await call(background, { action: "send_input", data: "x" })), /\[error\].*requires `process_id`/);
+  assert.match(textOf(await call(background, { action: "start" })), /unknown action `start`/);
+  const watched = textOf(
+    await call(background, {
+      action: "watch",
+      process_id: "bg-1",
+      data: "",
+      monitor_id: "",
+      wait_seconds: 0,
+      max_bytes: 65536,
+      signal: "TERM",
+    }),
+  );
+  assert.match(watched, /watch doesn't take `data`, `monitor_id`, `wait_seconds`, `max_bytes`, `signal`; omit them/);
 });
 
 test("background surfaces a policy denial/approval as a tool_result, not a throw", async () => {
@@ -2397,9 +2411,6 @@ test("pauseStampAfterToolCall stamps terminate on sibling results once the turn 
 
   ref.pausedOnApproval = true;
   assert.deepEqual(await hook({}, undefined), { terminate: true });
-
-  const withPrior = pauseStampAfterToolCall(ref, () => ({ terminate: false }));
-  assert.deepEqual(await withPrior({}, undefined), { terminate: true });
 });
 
 test("execute output is external regardless of what the command looks like", async () => {
@@ -2507,6 +2518,44 @@ test("sandbox management and explicit execution preserve independent target argu
     { action: "default", input: { backend: undefined, name: undefined, sandboxId: null } },
   ]);
   assert.equal(sink.lastExecOpts?.sandboxId, "box-a");
+});
+
+test("sandbox offers memory_gib only when a configured provider sizes memory, and names those providers", async () => {
+  const schema = (memorySizedBackends?: string[]) =>
+    createAgentTools(
+      { current: fakeToolContext(), emit: async () => undefined, scopeLabel: "personal:U1" },
+      { sandboxResources: true, ...(memorySizedBackends ? { memorySizedBackends } : {}) },
+    ).find((t) => t.name === "sandbox")!.parameters as { properties: Record<string, { description?: string }> };
+  assert.equal(schema().properties.memory_gib, undefined);
+  assert.equal(schema([]).properties.memory_gib, undefined);
+  assert.match(schema(["porter", "modal"]).properties.memory_gib?.description ?? "", /porter, modal only/);
+});
+
+test("sandbox memory_gib reaches create and restart only", async () => {
+  const operations: unknown[] = [];
+  const restarts: unknown[][] = [];
+  const tc: ToolContext = {
+    ...fakeToolContext(),
+    sandboxResources: async (action, input) => {
+      operations.push({ action, input });
+      return { ok: true };
+    },
+    restartComputer: async (...args) => {
+      restarts.push(args);
+    },
+  };
+  const tools = createAgentTools(
+    { current: tc, emit: async () => undefined, scopeLabel: "personal:U1" },
+    { sandboxResources: true, memorySizedBackends: ["porter"] },
+  );
+  const sandbox = tools.find((t) => t.name === "sandbox")!;
+  await call(sandbox, { action: "create", backend: "porter", name: "big", memory_gib: 6, purpose: "p" });
+  await call(sandbox, { action: "restart", sandbox_id: "box-a", memory_gib: 8, purpose: "p" });
+  await call(sandbox, { action: "retire", sandbox_id: "box-a", memory_gib: 8, purpose: "p" });
+  assert.deepEqual(operations, [
+    { action: "create", input: { backend: "porter", name: "big", sandboxId: undefined, memoryGb: 6 } },
+  ]);
+  assert.deepEqual(restarts, [["box-a", 8]]);
 });
 
 test("execute and background dispatch every process action and preserves cursors, signals, targets and watches", async () => {
@@ -2960,6 +3009,7 @@ test("runtime persistence failure does not latch a handoff", async () => {
     scopeLabel: "personal:U1",
     emit: async (e) => {
       if (e.kind === "ToolResult") throw new Error("disk failed");
+      return undefined;
     },
   };
   await assert.rejects(
@@ -3068,15 +3118,49 @@ test("a queued runtime change cannot mutate after cancellation while draining to
   assert.equal(ref.runtimeHandoff, undefined);
 });
 
-test("surface messages use Markdown and only Slack tools teach Slack mentions", () => {
+test("surface messages use Markdown and teach only the mention syntax their registered surface supplies", () => {
   const ref: ToolContextRef = { current: fakeToolContext(), scopeLabel: "channel:C1" };
+  const surfaces = testSurfaces();
   for (const name of ["web", "slack", "telegram"]) {
-    const tool = surfaceTool(ref, name);
+    const registered = surfaces.get(name);
+    const tool = createAgentTools(ref, {
+      surfaceTools: true,
+      surfaceName: name,
+      ...(registered ? { surfacePrompt: surfaceToolPrompt(registered) } : {}),
+    }).find((t) => t.name === name)!;
     const text = (tool.parameters as { properties: { text: { description: string } } }).properties.text.description;
     assert.match(text, /Use Markdown, including \[label\]\(url\) links/);
     if (name === "slack") assert.match(text, /<@U…>/);
     else assert.doesNotMatch(text, /Slack|<@U…>|<!subteam/);
   }
+});
+
+test("a text-only surface's tool offers only the actions and fields it can carry out", () => {
+  const ref: ToolContextRef = { current: fakeToolContext(), scopeLabel: "channel:C1" };
+  const base = testSurfaces().get("slack")!;
+  const schemaOf = (textOnly: boolean) => {
+    const registered = { ...base, capabilities: { ...base.capabilities, textOnly } };
+    const tool = createAgentTools(ref, {
+      surfaceTools: true,
+      surfaceName: "chat",
+      surfacePrompt: surfaceToolPrompt(registered),
+    }).find((t) => t.name === "chat")!;
+    const properties = (tool.parameters as { properties: Record<string, { anyOf?: { const: string }[] }> }).properties;
+    return {
+      fields: Object.keys(properties).sort(),
+      actions: properties.action!.anyOf!.map((a) => a.const),
+      text: JSON.stringify({ description: tool.description, properties }),
+    };
+  };
+  const full = schemaOf(false);
+  const textOnly = schemaOf(true);
+  assert.deepEqual(textOnly.actions, ["post", "reach", "read_thread", "whats_new", "search"]);
+  assert.deepEqual(
+    full.fields.filter((f) => !textOnly.fields.includes(f)),
+    ["emoji", "files", "ref", "sandbox_id", "source"],
+  );
+  assert.ok(["react", "edit", "delete"].every((a) => full.actions.includes(a)));
+  assert.doesNotMatch(textOnly.text, /react:|react\/edit\/delete:|edit: the new|reacting/);
 });
 
 test("read passes turn cancellation through and cannot record a late success", async () => {
@@ -3161,6 +3245,44 @@ test("agent mail is screened separately, logged privately, and delivered once ac
     emitted.filter((entry) => entry.kind === "ToolResult" && String(entry.text).includes("child finding")).length,
     1,
   );
+});
+
+test("a peer task arrives mid-turn as handed-off work while other mail keeps the routine banner", async () => {
+  const tc = fakeToolContext();
+  const mail = (id: string, text: string, peerDepth?: number) => ({
+    id,
+    senderId: "other",
+    recipientId: "here",
+    actor: { id: "U1", type: "internal" as const },
+    audience: [],
+    text,
+    createdAt: 1,
+    ...(peerDepth === undefined ? {} : { peerDepth }),
+  });
+  let pending = [mail("task", "please migrate the table", 1), mail("fyi", "build is green")];
+  tc.sessionSyscalls = {
+    open: async () => ({ ok: false, message: "unused" }),
+    write: async () => ({ ok: false, message: "unused" }),
+    read: async () => ({ ok: false, message: "unused" }),
+    receive: async () => pending,
+    acknowledge: async () => {
+      pending = [];
+    },
+  };
+  tc.read = async () => ({ content: "workspace data", sourceScopeId: "org:default-org" });
+  const ref: ToolContextRef = {
+    current: tc,
+    scopeLabel: "personal:U1",
+    orgScopeId: "org:default-org",
+    emit: sink([]),
+    screenToolResult: async () => ({ outcome: "allow" }),
+  };
+  const read = createAgentTools(ref).find((tool) => tool.name === "files");
+  const result = (await call(read, { action: "read", path: "a.txt" })) as { content: Array<{ text?: string }> };
+  const out = result.content.map((part) => part.text ?? "").join("\n");
+  assert.ok(out.includes(`${PEER_TASK_BANNER}\nplease migrate the table`));
+  assert.ok(out.includes("do not acknowledge routine completions):\nbuild is green"));
+  assert.ok(!out.includes("do not acknowledge routine completions):\nplease migrate the table"));
 });
 
 test("quarantined mail remains pending for release and mailbox failures preserve carrier output", async () => {
@@ -3257,7 +3379,7 @@ test("subagents open exposes noComputer and preserves the internal restriction",
   tc.sessionSyscalls = {
     open: async (input) => {
       opened.push(input);
-      return { ok: true, sessionId: "child", title: "child", liveRunsRemaining: 9 };
+      return { ok: true, sessionId: "child", title: "child" };
     },
     write: async () => ({ ok: false, message: "unused" }),
     read: async () => ({ ok: false, message: "unused" }),
@@ -3277,12 +3399,50 @@ test("subagents open exposes noComputer and preserves the internal restriction",
   assert.equal(opened.length, 3);
 });
 
+test("subagents open forwards isolation and reports where the child works", async () => {
+  const opened: Array<{ isolation?: string }> = [];
+  const placement: ChildIsolation = { mode: "worktree", workdir: "subagents/fix-1", branch: "subagent/fix-1" };
+  const tc = fakeToolContext();
+  tc.sessionSyscalls = {
+    open: async (input) => {
+      opened.push(input);
+      return { ok: true, sessionId: "child", title: "child", ...(input.isolation ? { isolation: placement } : {}) };
+    },
+    write: async () => ({ ok: false, message: "unused" }),
+    read: async () => ({
+      ok: true,
+      mode: "children",
+      children: [
+        {
+          sessionId: "child",
+          title: "child",
+          status: "idle",
+          activity: { status: "idle", unread: 0 },
+          isolation: placement,
+        },
+        { sessionId: "other", title: "other", status: "idle", activity: { status: "idle", unread: 0 } },
+      ],
+    }),
+  };
+  const session = createAgentTools({ current: tc }).find((tool) => tool.name === "subagents");
+  assert.ok(session);
+  assert.ok(!Check(session.parameters, { action: "open", task: "test", isolation: "container" }));
+  assert.doesNotMatch(textOut(await call(session, { action: "open", task: "test" })), /subagents\/fix-1/);
+  assert.equal(opened.at(-1)?.isolation, undefined);
+  const out = textOut(await call(session, { action: "open", task: "test", isolation: "worktree" }));
+  assert.equal(opened.at(-1)?.isolation, "worktree");
+  assert.ok(out.includes("subagents/fix-1") && out.includes("subagent/fix-1"));
+  const [child, other] = textOut(await call(session, { action: "read" })).split("\n");
+  assert.ok(child?.includes("subagents/fix-1"));
+  assert.equal(other, "- other (other) — idle");
+});
+
 test("subagents open schema and dispatch preserve an explicit false fast mode", async () => {
   const tc = fakeToolContext();
   tc.sessionSyscalls = {
     open: async (input) => {
       assert.equal(input.fastMode, false);
-      return { ok: true, sessionId: "child", title: "child", liveRunsRemaining: 9 };
+      return { ok: true, sessionId: "child", title: "child" };
     },
     write: async () => ({ ok: false, message: "unused" }),
     read: async () => ({ ok: false, message: "unused" }),
@@ -3299,6 +3459,7 @@ test("subagents send_message wakes by default and says what happened", async () 
   const replies: Array<Awaited<ReturnType<NonNullable<typeof tc.sessionSyscalls>["write"]>>> = [
     { ok: true, sessionId: "child", title: "child", delivered: "queued_turn", busy: false },
     { ok: true, sessionId: "child", title: "child", delivered: "queued_turn", busy: true },
+    { ok: true, sessionId: "child", title: "child", delivered: "steered", busy: true },
     { ok: true, sessionId: "child", title: "child", delivered: "queued_message", busy: false },
     { ok: true, sessionId: "child", title: "child", delivered: "queued_message", busy: true },
     {
@@ -3309,6 +3470,8 @@ test("subagents send_message wakes by default and says what happened", async () 
       busy: false,
       notWoken: "a message cannot start a turn in a top-level conversation",
     },
+    { ok: true, sessionId: "child", title: "child", delivered: "interrupted" },
+    { ok: true, sessionId: "child", title: "child", delivered: "interrupted" },
   ];
   tc.sessionSyscalls = {
     open: async () => ({ ok: false, message: "unused" }),
@@ -3328,6 +3491,10 @@ test("subagents send_message wakes by default and says what happened", async () 
     /^Queued for "child": it is busy and starts on this when its current turn ends/,
   );
   assert.equal(
+    await send({}),
+    `Delivered into "child"'s running turn; it sees this at its next step. Don't re-send it.`,
+  );
+  assert.equal(
     await send({ wake: false }),
     `Left in "child"'s mailbox. It is idle and won't see this until something wakes it.`,
   );
@@ -3336,9 +3503,20 @@ test("subagents send_message wakes by default and says what happened", async () 
     `Left in "child"'s mailbox. It has work running or queued and sees this at its next step.`,
   );
   assert.match(await send({}), /^Left in "root"'s mailbox without waking it: a message cannot start a turn/);
+  assert.match(await send({ interrupt: true }), /^Stopped "child"'s current run; it starts on this message next/);
+  assert.match(await send({ interrupt: true, text: undefined }), /^Stopped "child"'s current run; it is idle/);
   assert.deepEqual(
-    writes.map(({ wake }) => wake),
-    [true, true, false, false, true],
+    writes.map(({ wake, interrupt }) => [wake, interrupt]),
+    [
+      [true, undefined],
+      [true, undefined],
+      [true, undefined],
+      [false, undefined],
+      [false, undefined],
+      [true, undefined],
+      [true, true],
+      [true, true],
+    ],
   );
 });
 
@@ -3408,11 +3586,6 @@ test("resource catalog exposes one home per operation and leaves MCP tools intac
       { action: "publish", name: "demo", public: true },
       { action: "publish", name: "demo", share: [{ scope: "org", permission: "read" }] },
     ],
-    [
-      "apps",
-      { action: "move", id: "app", toScope: "personal:bob" },
-      { action: "move", id: "app", toScope: "personal:bob", permission: "write" },
-    ],
     ["goal", { action: "create", objective: "finish" }, { action: "get", objective: "finish" }],
     ["skills", { action: "read", name: "design" }, { action: "read", name: "design", toScope: "org" }],
   ] as const) {
@@ -3423,7 +3596,7 @@ test("resource catalog exposes one home per operation and leaves MCP tools intac
   assert.ok(JSON.stringify(tools.find((tool) => tool.name === "cron")!.parameters).length < 20000);
 });
 
-test("resource actions preserve sharing targets, transfer semantics and file contents", async () => {
+test("resource actions preserve sharing targets and file contents", async () => {
   const writes: unknown[] = [];
   const shares: unknown[] = [];
   const publicChanges: unknown[] = [];
@@ -3457,9 +3630,7 @@ test("resource actions preserve sharing targets, transfer semantics and file con
   for (const [name, type, action] of [
     ["files", "file", "share"],
     ["apps", "deploy", "share"],
-    ["apps", "deploy", "move"],
     ["skills", "skill", "share"],
-    ["skills", "skill", "move"],
     ["cron", "cron", "share"],
   ]) {
     const result = await call(
@@ -3467,12 +3638,7 @@ test("resource actions preserve sharing targets, transfer semantics and file con
       { action, id: "artifact", toScope: "Bob" },
     );
     assert.match(textOut(result), /not the owner/);
-    assert.deepEqual(shares.at(-1), {
-      type,
-      id: "artifact",
-      recipient: "Bob",
-      ...(action === "move" ? { move: true } : {}),
-    });
+    assert.deepEqual(shares.at(-1), { type, id: "artifact", recipient: "Bob" });
   }
   const publicResult = await call(
     tools.find((tool) => tool.name === "apps"),
@@ -3739,6 +3905,7 @@ for (const cancel of [false, true]) {
       runtimeInFlight: new Set([gate.promise]),
       emit: async (entry) => {
         if (!cancel && entry.kind === "ToolResult") throw new Error("write failed");
+        return undefined;
       },
     };
     const tool = createAgentTools(ref).find((t) => t.name === "context");
@@ -3839,6 +4006,82 @@ test("thrown execution errors leave pending child messages for the next delivere
   }
 });
 
+test("subagents read renders each child's liveness compactly", async () => {
+  const tc = fakeToolContext();
+  tc.sessionSyscalls = {
+    open: async () => ({ ok: false, message: "unused" }),
+    write: async () => ({ ok: false, message: "unused" }),
+    read: async (input) =>
+      input.target
+        ? {
+            ok: true,
+            mode: "transcript",
+            sessionId: "s1",
+            title: "builder",
+            status: "idle",
+            activity: { status: "idle", outcome: "final_answer", unread: 0 },
+            rendered: "AgentMessage#4 done",
+          }
+        : {
+            ok: true,
+            mode: "children",
+            children: [
+              {
+                sessionId: "s1",
+                title: "builder",
+                activity: {
+                  status: "running",
+                  stepAgoMs: 42_000,
+                  tool: "execute",
+                  purpose: "Running\n  tests",
+                  outcome: "final_answer",
+
+                  unread: 1,
+                },
+                lastSaid: "on it",
+              },
+              {
+                sessionId: "s2",
+                title: "fresh",
+                activity: { status: "running", startedAgoMs: 5_000, unread: 0 },
+              },
+              {
+                sessionId: "s3",
+                title: "reviewer",
+                activity: {
+                  status: "idle",
+                  stepAgoMs: 7_200_000,
+                  tool: "files",
+                  outcome: "errored",
+
+                  unread: 0,
+                },
+              },
+              {
+                sessionId: "s4",
+                title: "quiet",
+                activity: { status: "idle", stepAgoMs: 5_000, tool: "", unread: 2 },
+              },
+            ],
+          },
+  };
+  const subagents = createAgentTools({ current: tc }).find((tool) => tool.name === "subagents");
+  assert.ok(subagents);
+  assert.equal(
+    textOut(await call(subagents, { action: "read" })),
+    [
+      "- builder (s1) — running; last step execute 42s ago; working on: Running tests; 1 message it has not read yet — last said: on it",
+      "- fresh (s2) — running; started 5s ago, no tool step yet",
+      "- reviewer (s3) — idle; last turn errored; last step files 2h ago",
+      "- quiet (s4) — idle; last step 5s ago; 2 messages it has not read yet",
+    ].join("\n"),
+  );
+  assert.equal(
+    textOut(await call(subagents, { action: "read", target: "builder" })),
+    '"builder" — idle; last turn final_answer\nAgentMessage#4 done',
+  );
+});
+
 test("subagents and sessions are separate tools with one noun each", async () => {
   const writes: Array<{ wake?: boolean; target: string; text?: string }> = [];
   const starts: Array<{ fork: boolean; text?: string; title?: string }> = [];
@@ -3869,12 +4112,19 @@ test("subagents and sessions are separate tools with one noun each", async () =>
   assert.match(textOut(await call(sessions, { action: "list" })), /peer \(peer\) — idle/);
   assert.match(textOut(await call(sessions, { action: "new", text: "hi", title: "t" })), /Started session "made"/);
   assert.match(textOut(await call(sessions, { action: "fork" })), /Forked this conversation into session "made"/);
-  assert.match(textOut(await call(sessions, { action: "send_message", target: "peer", text: "fyi" })), /queued/);
+  assert.match(
+    textOut(await call(sessions, { action: "send_message", target: "peer", text: "fyi" })),
+    /Left in "peer"'s mailbox/,
+  );
+  await call(sessions, { action: "send_message", target: "peer", text: "later", wake: false });
   assert.match(textOut(await call(sessions, { action: "read" })), /requires `target`/);
   assert.deepEqual(starts, [{ fork: false, text: "hi", title: "t" }, { fork: true }]);
   assert.deepEqual(
     writes.map(({ wake, target, text }) => ({ wake, target, text })),
-    [{ wake: undefined, target: "peer", text: "fyi" }],
+    [
+      { wake: true, target: "peer", text: "fyi" },
+      { wake: false, target: "peer", text: "later" },
+    ],
   );
 });
 
@@ -3976,7 +4226,7 @@ test("a tool result produced after shutdown is marked interrupted; user Stop and
   };
   const strategy = (emitted: Emitted[]) => {
     const items = emitted.map((e, i) => ({ ...e, seq: i + 2 }));
-    return resumeStrategy(items, { userSeq: 1, workEntries: items.length });
+    return reconcile(items, { userSeq: 1, workEntries: items.length });
   };
 
   const interrupted = await record("shutdown");
@@ -3984,17 +4234,17 @@ test("a tool result produced after shutdown is marked interrupted; user Stop and
   assert.deepEqual(interrupted.find((e) => e.kind === "ToolResult")?.body.stop, { kind: "shutdown" });
   assert.deepEqual(
     strategy(interrupted),
-    { kind: "continue" },
+    { settleItems: [], resumed: true },
     "a killed call is not re-run; its replayed result says what happened",
   );
-  assert.deepEqual(strategy(await record("shutdown", false)), { kind: "continue" });
+  assert.deepEqual(strategy(await record("shutdown", false)), { settleItems: [], resumed: true });
 
   for (const abort of ["stop", "none"] as const) {
     const emitted = await record(abort);
     const payload = emitted.find((e) => e.kind === "ToolResult")!;
     assert.ok(!("interrupted" in payload.body), `${abort}: an ordinary result stays a real answer`);
     assert.equal(payload.body.stopped === true, abort === "stop", `${abort}: only a Stop marks the result as cut off`);
-    assert.deepEqual(strategy(emitted), { kind: "continue" });
+    assert.deepEqual(strategy(emitted), { settleItems: [], resumed: true });
   }
 });
 
@@ -4249,45 +4499,6 @@ test("client screenshots reach the model as images and remain subject to output 
     { type: "image", ...image },
   ]);
   assert.equal(unscreenable, true);
-});
-
-test("installing a shared sidebar always waits for the person's approval", async () => {
-  const installed: string[] = [];
-  const approved = new Set<string>();
-  const ref: ToolContextRef = {
-    current: {
-      ...fakeToolContext(),
-      installSharedCanvas: async (id) => {
-        installed.push(id);
-        return null;
-      },
-    },
-    pendingApprovals: [],
-    scopeLabel: "personal:U1",
-    toolApprovalGate: (_tool, callKey) => !callKey || approved.has(callKey),
-  };
-  const files = createAgentTools(ref).find((t) => t.name === "files")!;
-  await call(files, { action: "install_canvas", id: "f1" });
-  assert.deepEqual(installed, []);
-  const card = ref.pendingApprovals?.[0];
-  assert.deepEqual(
-    [card?.command, card?.summary, card?.reason, card?.grantModes],
-    [
-      'files install_canvas {"action":"install_canvas","id":"f1"}',
-      "files install_canvas",
-      "install an always-on canvas someone shared with you; its code runs in your QM web UI",
-      { session: false, always: false },
-    ],
-  );
-  approved.add(card!.approvalKey!);
-  ref.pausedOnApproval = false;
-  await call(files, { action: "install_canvas", id: "f2" });
-  assert.deepEqual(installed, [], "the approval covers only the approved arguments");
-  assert.match(textOut(await call(files, { action: "install_canvas", id: "f1" })), /Installed/);
-  assert.deepEqual(installed, ["f1"]);
-  ref.current = fakeToolContext();
-  const plain = createAgentTools(ref).find((t) => t.name === "files")!;
-  assert.doesNotMatch(JSON.stringify(plain.parameters), /install_canvas/);
 });
 
 test("an MCP tool that needs approval is not called until its exact arguments are approved", async () => {

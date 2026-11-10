@@ -11,7 +11,7 @@ import { relTime } from "./ui.ts";
 
 type ProjectAwareContext = CoreContext & { project?: CoreProject };
 
-type RecentGroupKind = "personal" | "project" | "channel" | "group";
+type RecentGroupKind = "personal" | "project" | "channel" | "group" | "persona";
 
 export interface RecentProjectSeed {
   scopeId: string;
@@ -77,6 +77,13 @@ export function recentProjectSeeds(contexts: readonly ProjectAwareContext[]): Re
   });
 }
 
+export function sidebarProjectSeeds(
+  contexts: readonly ProjectAwareContext[],
+  groupByActivity: boolean,
+): RecentProjectSeed[] {
+  return groupByActivity ? [] : recentProjectSeeds(contexts);
+}
+
 export function groupProjectSessions(
   sessions: readonly CoreSession[],
   projectSeeds: readonly RecentProjectSeed[],
@@ -85,21 +92,23 @@ export function groupProjectSessions(
   const projects = new Map<string, Extract<RecentItem, { kind: "project" }>>();
   const items: RecentItem[] = [];
   for (const session of [...sessions].sort((a, b) => activityOf(b) - activityOf(a))) {
-    const seed = seeds.get(session.scopeId);
+    const personaKey = session.personaId ? `persona:${session.personaId}` : null;
+    const key = personaKey && seeds.has(personaKey) ? personaKey : session.scopeId;
+    const seed = seeds.get(key);
     if (!seed) {
       items.push({ kind: "session", session });
       continue;
     }
-    let project = projects.get(session.scopeId);
+    let project = projects.get(key);
     if (!project) {
       project = {
         kind: "project",
-        scopeId: session.scopeId,
+        scopeId: key,
         name: seed.name,
         groupKind: seed.kind ?? "project",
         sessions: [],
       };
-      projects.set(session.scopeId, project);
+      projects.set(key, project);
       items.push(project);
     }
     project.sessions.push(session);
@@ -244,7 +253,6 @@ export interface BackgroundCounts {
   jobs: number;
   watches: number;
   crons: number;
-  subagents: number;
   goal: boolean;
   label: string;
 }
@@ -253,8 +261,6 @@ export function backgroundLabel(
   jobs: number,
   watches: number,
   crons: number,
-  subagents = 0,
-  subagentsWaiting = 0,
   goal?: { activeMs: number; runningSince?: number; floor?: Record<string, number> },
   now = Date.now(),
 ): BackgroundCounts | null {
@@ -263,15 +269,10 @@ export function backgroundLabel(
     parts.push(
       `goal · ${goalWorkedLabel(goal.activeMs + (goal.runningSince ? Math.max(0, now - goal.runningSince) : 0), goalFloorLabel(goal.floor ?? null))}`,
     );
-  if (subagents > 0) parts.push(`${subagents} subagent${subagents === 1 ? "" : "s"} running`);
-  if (subagentsWaiting > 0)
-    parts.push(`${subagentsWaiting} subagent${subagentsWaiting === 1 ? " needs" : "s need"} you`);
   if (jobs > 0) parts.push(`${jobs} background job${jobs === 1 ? "" : "s"} running`);
   if (watches > 0) parts.push(`${watches} watch${watches === 1 ? "" : "es"} armed`);
   if (crons > 0) parts.push(`${crons} cron${crons === 1 ? "" : "s"} scheduled here`);
-  return parts.length
-    ? { jobs, watches, crons, subagents: subagents + subagentsWaiting, goal: Boolean(goal), label: parts.join(" · ") }
-    : null;
+  return parts.length ? { jobs, watches, crons, goal: Boolean(goal), label: parts.join(" · ") } : null;
 }
 
 export function watchActivityLabel(w: { lastFiredAt?: number }): string {
@@ -280,18 +281,10 @@ export function watchActivityLabel(w: { lastFiredAt?: number }): string {
 
 export function rowIndicators(s: CoreSession, liveThreads: ReadonlySet<string> | string | null): RowIndicators {
   const live = typeof liveThreads === "string" ? new Set([liveThreads]) : (liveThreads ?? new Set<string>());
-  const children = s.subagents ?? { running: 0, waiting: 0 };
   return {
     working: Boolean(s.working) || (Boolean(s.threadRef) && live.has(s.threadRef)),
-    awaiting: Boolean(s.awaitingInput) || children.waiting > 0,
-    background: backgroundLabel(
-      s.backgroundJobs ?? 0,
-      s.watches ?? 0,
-      s.crons ?? 0,
-      children.running,
-      children.waiting,
-      s.goal,
-    ),
+    awaiting: Boolean(s.awaitingInput) || (s.subagents?.waiting ?? 0) > 0,
+    background: backgroundLabel(s.backgroundJobs ?? 0, s.watches ?? 0, s.crons ?? 0, s.goal),
   };
 }
 

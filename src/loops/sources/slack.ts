@@ -66,6 +66,13 @@ export function slackConversationRef(
   return isDirectMessage && !threadTs ? channelId : `${channelId}:${threadTs ?? ts}`;
 }
 
+export function slackConversationOf(item: LoopItem): { channelId: string; threadTs?: string } | undefined {
+  const slack = metaOf(item);
+  if (!slack) return undefined;
+  const threadTs = slackReplyThreadTs(item);
+  return { channelId: slack.channelId, ...(threadTs ? { threadTs } : {}) };
+}
+
 export function slackReplyThreadTs(item: LoopItem): string | undefined {
   const slack = metaOf(item);
   if (!slack) return undefined;

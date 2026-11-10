@@ -8,6 +8,8 @@ import type { SessionStore } from "../../src/sessions/session-store.ts";
 import type { RunStore } from "../../src/runs/run-store.ts";
 import type { AdvisoryLock } from "../../src/persistence/advisory-lock.ts";
 import type { OrchestratorInput } from "../../src/core/orchestrator.ts";
+import type { SpawnMeta } from "../../src/types.ts";
+import type { CapabilityClaims } from "../../src/auth/capability-token.ts";
 import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./test-database.ts";
 import { createPostgresRunStore } from "../../src/runs/postgres-run-store.ts";
@@ -19,13 +21,17 @@ export async function swarmFixture(
     runs?: RunStore;
     lock?: AdvisoryLock;
     backend?: Sandbox;
-    runtime?: Pick<OrchestratorInput, "model" | "thinkingLevel" | "fastMode">;
+    runtime?: Pick<OrchestratorInput, "model" | "thinkingLevel" | "fastMode" | "botActor">;
+    request?: Pick<OrchestratorInput, "memoryNotebookOnly">;
+    spawnMeta?: Pick<SpawnMeta, "memoryNotebookOnly">;
+    claims?: Pick<CapabilityClaims, "memory">;
+    channel?: string;
   } = {},
 ) {
   const sessions = options.sessions ?? createPostgresSessionStore(testDatabaseUrl());
   const runs = options.runs ?? createPostgresRunStore(testDatabaseUrl()).runs;
   const lock = options.lock ?? testAdvisoryLock();
-  const store = options.store ?? createSwarmStore(testMap(), { runs, sessions });
+  const store = options.store ?? createSwarmStore(testMap(["pending"]), { runs, sessions });
   const records = testMap<SandboxResource>();
   const disks = new Map<string, Map<string, string>>();
   const provisioned: string[] = [];
@@ -66,7 +72,8 @@ export async function swarmFixture(
     backends: { modal: backend },
     defaultBackend: "modal",
     lock,
-    canUseScope: async (actorId, scopeId) => scopeId === `personal:${actorId}`,
+    canUseScope: async (actorId, scopeId) =>
+      scopeId === `personal:${actorId}` || (options.channel !== undefined && scopeId === `channel:${options.channel}`),
   });
   const sandbox = createSandboxRouter({
     backends: { modal: backend },
@@ -76,20 +83,26 @@ export async function swarmFixture(
   const actor = { id: "alice", type: "internal" as const };
   const root = await sessions.getOrCreateByThread(
     `web:alice:${randomUUID()}`,
-    "dm",
-    "personal:alice",
+    options.channel ? "channel" : "dm",
+    options.channel ? `channel:${options.channel}` : "personal:alice",
     undefined,
     "web",
   );
   await sessions.addParticipant(root.id, actor.id);
+  const conversation: OrchestratorInput["conversation"] = options.channel
+    ? { kind: "channel", threadRef: root.threadRef, channelRef: options.channel, audience: [actor] }
+    : { kind: "dm", threadRef: root.threadRef, audience: [actor] };
+  if (options.spawnMeta)
+    await sessions.setSpawnMeta(root.id, { surface: "web", actor, conversation, ...options.spawnMeta });
   const template: OrchestratorInput = {
     actor,
-    conversation: { kind: "dm", threadRef: root.threadRef, audience: [actor] },
+    conversation,
     origin: { kind: "human" },
     text: "Start workers",
     surface: "slack",
     deliveryTarget: "private-dm",
     ...options.runtime,
+    ...options.request,
   };
   const { run } = await runs.enqueue({ sessionId: root.threadRef, request: template });
   const claim = (await runs.claimById(run.id, "swarm-fixture", 60_000))!;
@@ -105,6 +118,7 @@ export async function swarmFixture(
       threadRef: root.threadRef,
       liveActor: true,
       exp: Date.now() + 60_000,
+      ...options.claims,
     },
   };
   const serviceOptions = { store, sessions, runs, sandboxes, lock, authorize: async () => state.allowed };
@@ -120,7 +134,7 @@ export async function swarmFixture(
     return {
       kind: "agent",
       claims: {
-        actorId: actor.id,
+        actorId: run!.request.actor.id,
         scopeId: root.scopeId,
         runId: notification.runId!,
         sessionId: member.sessionId!,
@@ -128,7 +142,31 @@ export async function swarmFixture(
         runLeaseToken: run!.leaseToken!,
         threadRef: member.threadRef,
         exp: Date.now() + 60_000,
+        ...(run!.request.botActor ? { botActor: true } : {}),
       },
+    };
+  };
+  const rootTurn = async (actorId: string, botActor: boolean) => {
+    const { run } = await runs.enqueue({
+      sessionId: root.threadRef,
+      request: { ...template, actor: { id: actorId, type: "internal" }, ...(botActor ? { botActor } : {}) },
+    });
+    const claim = (await runs.claimById(run.id, "root-turn", 60_000))!;
+    const turn: SwarmCaller = {
+      kind: "agent",
+      claims: {
+        ...caller.claims,
+        actorId,
+        runId: run.id,
+        runAttempt: claim.attempts,
+        runLeaseToken: claim.leaseToken!,
+        ...(botActor ? { botActor } : {}),
+      },
+    };
+    return {
+      caller: turn,
+      claim,
+      done: () => runs.complete(run.id, claim.leaseToken!, { status: "ok", reply: "done" }),
     };
   };
   return {
@@ -147,6 +185,7 @@ export async function swarmFixture(
     root,
     caller,
     workerCaller,
+    rootTurn,
     template,
   };
 }

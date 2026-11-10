@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createServer } from "vite";
+import { testViteServer } from "./vite-server.ts";
 
 test("generation coalesces requests, honors empty fallback, and stays disabled by default", async () => {
   const oldFetch = globalThis.fetch;
@@ -15,7 +15,7 @@ test("generation coalesces requests, honors empty fallback, and stays disabled b
     return Response.json({ activities });
   };
   Date.now = () => time;
-  const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  const vite = await testViteServer();
   try {
     const { loadGeneratedActivities } = await vite.ssrLoadModule("/src/generated-activities.ts");
     await loadGeneratedActivities({ user: "off", org: "test" });
@@ -45,7 +45,7 @@ test("a pending refresh displays its cached result and then publishes the comple
   const second = [{ id: "second", title: "Plan my next steps", prompt: "Plan my next steps.", icon: "🧭" }];
   globalThis.fetch = async () =>
     Response.json(++calls === 1 ? { activities: first, pending: true } : { activities: second, pending: false });
-  const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  const vite = await testViteServer();
   try {
     const { loadGeneratedActivities } = await vite.ssrLoadModule("/src/generated-activities.ts");
     t.mock.timers.enable({ apis: ["setTimeout"] });

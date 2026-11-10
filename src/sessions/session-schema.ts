@@ -1,5 +1,9 @@
+import { PUBLISHED_SESSION_UPGRADE } from "./published-upgrade.ts";
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
-import { TENANCY_BASE } from "../tenants/migrations.ts";
+import { authoredUserTurn } from "./items.ts";
+import { TENANCY, tenantRowSecurity, tenantTables } from "../tenants/migrations.ts";
+import { DROP_TENANT_PREBUILD_INDEXES } from "../tenants/prebuilt-indexes.ts";
+import { claimFunction } from "../tenants/claim.ts";
 
 export const SPEND_INDEXABLE = `(spend_usage_json(usage_json) IS NOT NULL
   AND octet_length(session_id) + octet_length(model) + octet_length(usage_json) <= 2000)`;
@@ -312,10 +316,298 @@ export const TENANT_BACKFILL: PgMigrationDefinition = {
   ],
 };
 
+const SPEND_RECOVERY_INDEX: PgMigrationDefinition = {
+  id: "sessions/store/0051-spend-recovery-index",
+  statements: [
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS session_llm_requests_session_spend_recovery
+      ON session_llm_requests(session_id, created_at) WHERE usage_json IS NOT NULL`,
+  ],
+};
+
+const SESSION_FACTS: PgMigrationDefinition = {
+  id: "sessions/store/0052-session-facts",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS slack_binding JSONB, ADD COLUMN IF NOT EXISTS runtime JSONB`,
+  ],
+};
+
+const SESSION_FACTS_COPY: PgMigrationDefinition = {
+  id: "sessions/store/0054-session-facts-copy",
+  autocommit: true,
+  statements: [
+    `CREATE OR REPLACE FUNCTION qm_session_fact_json(run_id TEXT, raw TEXT) RETURNS JSONB LANGUAGE plpgsql IMMUTABLE AS $fact_json$
+BEGIN
+  RETURN raw::jsonb;
+EXCEPTION WHEN invalid_text_representation OR untranslatable_character THEN
+  RAISE WARNING 'session facts copy skipped run %: % (SQLSTATE %)', run_id, SQLERRM, SQLSTATE;
+  RETURN NULL;
+END $fact_json$`,
+    `CREATE OR REPLACE PROCEDURE qm_copy_session_facts() LANGUAGE plpgsql AS $session_facts$
+DECLARE
+  after_id TEXT := '';
+  page TEXT[];
+BEGIN
+  IF to_regclass('runs') IS NULL THEN
+    RETURN;
+  END IF;
+  LOOP
+  SELECT array_agg(id ORDER BY id) INTO page FROM (SELECT id FROM sessions WHERE id > after_id ORDER BY id LIMIT 2000) next_page;
+  EXIT WHEN page IS NULL;
+  after_id := page[array_length(page, 1)];
+  UPDATE sessions s
+  SET slack_binding = COALESCE(s.slack_binding, facts.slack_binding),
+      runtime = COALESCE(s.runtime, facts.runtime),
+      spawn_meta = COALESCE(s.spawn_meta, facts.context::text)
+  FROM (
+    SELECT x.id,
+      binding.value AS slack_binding,
+      label.value AS runtime,
+      CASE WHEN public.request IS NOT NULL THEN (
+        SELECT COALESCE(jsonb_object_agg(key, value), '{}') FROM jsonb_each(public.request)
+        WHERE key IN ('surfaceTools', 'deliveryCandidates', 'unattendedGrants', 'externalSlack', 'scopeVersion',
+          'sessionParticipantIds', 'conversation', 'actor', 'deliveryTarget', 'timezone', 'readOnly', 'model',
+          'thinkingLevel', 'fastMode')
+          AND value <> 'null' AND (key = 'fastMode' OR value NOT IN ('false', '""'))
+      ) || jsonb_build_object(
+        'surface', COALESCE(NULLIF(public.request->'surface', 'null'), '"web"'),
+        'origin', CASE
+          WHEN public.request->'origin'->>'kind' = 'automation' OR public.request->>'triggered' = 'true' THEN
+            jsonb_strip_nulls(jsonb_build_object('kind', 'automation', 'destination',
+              COALESCE(public.request->'origin'->'destination', public.request->'triggerDestination')))
+          WHEN public.request->'origin'->>'kind' = 'ambient' OR public.request->>'unprompted' = 'true' THEN
+            CASE WHEN public.request->'origin'->>'live' = 'true' OR public.request->>'liveActor' = 'true'
+              THEN '{"kind": "ambient", "live": true}'::jsonb ELSE '{"kind": "ambient"}'::jsonb END
+          WHEN public.request->'origin'->>'kind' = 'human' OR public.request->>'liveActor' = 'true' THEN '{"kind": "human"}'::jsonb
+          WHEN public.request->'origin' IS NULL OR public.request->'origin'->>'kind' = 'direct' THEN '{"kind": "direct"}'::jsonb
+          ELSE '{"kind": "automation"}'::jsonb
+        END)
+      END AS context
+    FROM sessions x
+    LEFT JOIN LATERAL (
+      SELECT qm_session_fact_json(id, request)->'slackSource' AS value FROM runs
+      WHERE session_id = x.thread_ref AND COALESCE(qm_session_fact_json(id, request)->'slackSource', 'null') <> 'null'
+      ORDER BY created_at DESC, seq DESC LIMIT 1
+    ) binding ON x.surface = 'slack'
+    LEFT JOIN LATERAL (
+      SELECT qm_session_fact_json(id, result)->'runtime' AS value FROM runs
+      WHERE session_id = x.thread_ref AND COALESCE(qm_session_fact_json(id, result)->'runtime', 'null') <> 'null'
+      ORDER BY created_at DESC, seq DESC LIMIT 1
+    ) label ON true
+    LEFT JOIN LATERAL (
+      SELECT request FROM (SELECT qm_session_fact_json(id, request) AS request, created_at, seq FROM runs WHERE session_id = x.thread_ref) owned
+      WHERE request IS NOT NULL AND COALESCE(request->>'privateSessionMessage', 'false') <> 'true'
+        AND COALESCE(request->>'sessionSenderId', '') = ''
+        AND COALESCE(request->>'delegatingRunId', '') = ''
+        AND COALESCE(request->'swarm', 'null') IN ('null', 'false')
+      ORDER BY created_at DESC, seq DESC LIMIT 1
+    ) public ON x.thread_ref NOT LIKE 'agent:main:subagent:%' AND x.thread_ref NOT LIKE 'swarm:%'
+    WHERE x.id = ANY(page) AND ((x.surface = 'slack' AND x.slack_binding IS NULL) OR x.runtime IS NULL OR x.spawn_meta IS NULL)
+  ) facts
+  WHERE s.id = facts.id
+    AND ((s.slack_binding IS NULL AND facts.slack_binding IS NOT NULL) OR (s.runtime IS NULL AND facts.runtime IS NOT NULL)
+      OR (s.spawn_meta IS NULL AND facts.context IS NOT NULL));
+  COMMIT;
+  END LOOP;
+END $session_facts$`,
+    `CALL qm_copy_session_facts()`,
+    `DROP PROCEDURE qm_copy_session_facts()`,
+    `DROP FUNCTION qm_session_fact_json(TEXT, TEXT)`,
+  ],
+};
+
+const PARTICIPANT_MEMBERSHIP: PgMigrationDefinition = {
+  id: "sessions/store/0055-participant-membership",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `ALTER TABLE participants ALTER COLUMN valid_from SET DEFAULT 0, ALTER COLUMN valid_from_seq SET DEFAULT 0`,
+    `DELETE FROM participants WHERE valid_to IS NOT NULL OR valid_to_seq IS NOT NULL`,
+  ],
+};
+
+const SPEND_TRIGGERS = [
+  `CREATE OR REPLACE FUNCTION invalidate_request_spend() RETURNS trigger LANGUAGE plpgsql AS $invalidate_request_spend$
+   BEGIN
+     INSERT INTO session_spend_dirty(tenant_id, day)
+     SELECT DISTINCT tenant, floor(at::numeric / 86400000)::bigint
+       FROM (VALUES
+         (CASE WHEN TG_OP <> 'INSERT' AND OLD.usage_json IS NOT NULL THEN OLD.tenant_id END,
+          CASE WHEN TG_OP <> 'INSERT' AND OLD.usage_json IS NOT NULL THEN OLD.created_at END),
+         (CASE WHEN TG_OP <> 'DELETE' AND NEW.usage_json IS NOT NULL THEN NEW.tenant_id END,
+          CASE WHEN TG_OP <> 'DELETE' AND NEW.usage_json IS NOT NULL THEN NEW.created_at END)
+       ) changed(tenant, at) WHERE at IS NOT NULL
+     ON CONFLICT DO NOTHING;
+     RETURN NULL;
+   END $invalidate_request_spend$`,
+  `CREATE OR REPLACE FUNCTION invalidate_session_spend() RETURNS trigger LANGUAGE plpgsql AS $invalidate_session_spend$
+   BEGIN
+     IF TG_OP = 'UPDATE' AND ROW(OLD.id, OLD.scope_id, OLD.origin, OLD.thread_ref, OLD.parent_session_id)
+          IS NOT DISTINCT FROM ROW(NEW.id, NEW.scope_id, NEW.origin, NEW.thread_ref, NEW.parent_session_id) THEN
+       RETURN NULL;
+     END IF;
+     INSERT INTO session_spend_dirty(tenant_id, session_id)
+     SELECT DISTINCT tenant, id FROM (VALUES (OLD.tenant_id, OLD.id), (NEW.tenant_id, NEW.id)) changed(tenant, id)
+      WHERE id IS NOT NULL;
+     RETURN NULL;
+   END $invalidate_session_spend$`,
+];
+
+const SESSION_TABLES = tenantTables(
+  "sessions/store/0056-tenants",
+  [
+    {
+      table: "sessions",
+      primaryKey: "id",
+      unique: [{ name: "sessions_thread_ref_key", columns: "thread_ref", constraint: true }],
+    },
+    { table: "participants", primaryKey: "session_id, principal_id" },
+    { table: "session_goals", primaryKey: "session_id" },
+    { table: "session_leases", primaryKey: "session_id" },
+    { table: "session_llm_requests", primaryKey: "id" },
+    { table: "session_pins", primaryKey: "id" },
+    { table: "session_spend_days", primaryKey: "day" },
+    {
+      table: "session_spend_dirty",
+      unique: [{ name: "session_spend_dirty_day_writer_key", columns: "day, writer", constraint: true }],
+    },
+    { table: "llm_prompt_envelopes", primaryKey: "hash" },
+  ],
+  {
+    tenanted: ["items", "blobs"],
+    references: [
+      {
+        table: "items",
+        name: "items_session_id_fkey",
+        columns: "session_id",
+        references: "sessions(tenant_id, id)",
+        onDelete: "CASCADE",
+      },
+      {
+        table: "session_goals",
+        name: "session_goals_session_id_fkey",
+        columns: "session_id",
+        references: "sessions(tenant_id, id)",
+        onDelete: "CASCADE",
+      },
+    ],
+    after: [
+      ...SPEND_TRIGGERS,
+      ...["items", "blobs"].flatMap(tenantRowSecurity),
+      `DO $unstamped$
+       BEGIN
+         DELETE FROM tenants WHERE id = (SELECT id FROM qm_tenant) AND settings = '{}'::jsonb;
+       EXCEPTION WHEN foreign_key_violation THEN NULL;
+       END $unstamped$`,
+      `DROP FUNCTION qm_tenant_id()`,
+      `DROP TABLE qm_tenant`,
+    ],
+  },
+);
+
+const SESSION_CLAIMS: PgMigrationDefinition = {
+  id: "sessions/store/0057-claims",
+  statements: [
+    claimFunction(
+      "claim_dirty_spend",
+      "",
+      "SELECT DISTINCT tenant_id, 'spend'::text FROM session_spend_dirty ORDER BY tenant_id",
+    ),
+    claimFunction(
+      "claim_purged_envelopes",
+      "cutoff bigint, lim integer",
+      `DELETE FROM llm_prompt_envelopes
+        WHERE (tenant_id, hash) IN (SELECT tenant_id, hash FROM llm_prompt_envelopes WHERE created_at < $1
+                                     ORDER BY created_at LIMIT $2 FOR UPDATE SKIP LOCKED)
+          AND created_at < $1
+        RETURNING tenant_id, hash`,
+    ),
+  ],
+};
+
+const SESSION_PERSONA: PgMigrationDefinition = {
+  id: "sessions/store/0056-persona",
+  statements: [`SET LOCAL lock_timeout = '5s'`, `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS persona_id TEXT`],
+};
+
+const DROP_STOPPED_PLACEHOLDERS: PgMigrationDefinition = {
+  id: "sessions/store/0057-drop-stopped-placeholders",
+  statements: [
+    `CREATE TEMP TABLE stopped_placeholders ON COMMIT DROP AS
+      SELECT m.tenant_id, m.session_id, m.seq
+        FROM items m
+       WHERE m.kind = 'AgentMessage' AND m.variant IS DISTINCT FROM 'files_delivered'
+         AND m.search @@ 'stopped'::tsquery AND m.text = '(stopped)'
+         AND (SELECT p.kind FROM items p
+               WHERE p.tenant_id = m.tenant_id AND p.session_id = m.session_id AND p.seq < m.seq
+               ORDER BY p.seq DESC LIMIT 1) = 'Stop'`,
+    `SET LOCAL lock_timeout = '5s'`,
+    `ALTER TABLE items DISABLE TRIGGER items_delete_through_session`,
+    `DELETE FROM items i USING stopped_placeholders s
+      WHERE i.tenant_id = s.tenant_id AND i.session_id = s.session_id AND i.seq = s.seq`,
+    `ALTER TABLE items ENABLE TRIGGER items_delete_through_session`,
+  ],
+};
+
+const USER_TURNS_BY_AUTHOR: PgMigrationDefinition = {
+  id: "sessions/store/0058-user-turns-by-author",
+  statements: [
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS items_user_turns_by_author ON items(tenant_id, author, created_at)
+      WHERE ${authoredUserTurn("items")}`,
+  ],
+};
+
+export const DROP_SESSION_LEASES: PgMigrationDefinition = {
+  id: "sessions/store/0059-drop-session-leases",
+  statements: [`SET LOCAL lock_timeout = '5s'`, `DROP TABLE IF EXISTS session_leases`],
+};
+
+const DROP_ITEMS_TARGET_SEQ: PgMigrationDefinition = {
+  id: "sessions/store/0060-drop-items-target-seq",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `ALTER TABLE items DROP CONSTRAINT IF EXISTS items_target_seq_kind, DROP COLUMN IF EXISTS target_seq`,
+  ],
+};
+
+const DROP_PARTICIPANT_WINDOWS: PgMigrationDefinition = {
+  id: "sessions/store/0061-drop-participant-windows",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `DELETE FROM participants WHERE valid_to IS NOT NULL OR valid_to_seq IS NOT NULL`,
+    `ALTER TABLE participants DROP COLUMN IF EXISTS valid_from, DROP COLUMN IF EXISTS valid_to,
+       DROP COLUMN IF EXISTS valid_from_seq, DROP COLUMN IF EXISTS valid_to_seq`,
+  ],
+};
+
 export const SESSION_MIGRATIONS = [
-  TENANCY_BASE,
+  ...TENANCY,
+  ...PUBLISHED_SESSION_UPGRADE,
   SESSION_SCHEMA,
   MESSAGE_SEARCH_INDEX,
   DROP_ITEMS_SEARCH,
   TENANT_BACKFILL,
+  SPEND_RECOVERY_INDEX,
+  SESSION_FACTS,
+  SESSION_FACTS_COPY,
+  PARTICIPANT_MEMBERSHIP,
+  DROP_TENANT_PREBUILD_INDEXES,
+  ...SESSION_TABLES,
+  SESSION_CLAIMS,
+  SESSION_PERSONA,
+  DROP_STOPPED_PLACEHOLDERS,
+  USER_TURNS_BY_AUTHOR,
+  DROP_SESSION_LEASES,
+  DROP_ITEMS_TARGET_SEQ,
+  DROP_PARTICIPANT_WINDOWS,
 ];
+
+export const ancestry = (seed: string): string => `ancestry AS (
+         SELECT s.id AS session_id, s.parent_session_id, s.origin AS origin, s.origin_id AS cron_id,
+                ARRAY[s.id] AS path
+           FROM sessions s
+          WHERE ${seed}
+         UNION ALL
+         SELECT a.session_id, p.parent_session_id, p.origin, p.origin_id, a.path || p.id
+           FROM ancestry a JOIN sessions p ON p.id = a.parent_session_id
+          WHERE a.origin = 'conversation' AND NOT p.id = ANY(a.path) AND cardinality(a.path) < 64
+       )`;

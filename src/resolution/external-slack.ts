@@ -8,36 +8,36 @@ import type { TurnRequest } from "../types.ts";
 export type ExternalSlackPolicies = Readonly<Record<string, ExternalSlackAccess>>;
 
 export function externalSlackRequestAllowed(
-  request: Pick<TurnRequest, "externalSlack" | "slackSource" | "surface"> & {
+  request: Pick<TurnRequest, "surfaceOrigin" | "surface"> & {
     conversation: Pick<TurnRequest["conversation"], "kind" | "channelRef" | "threadRef">;
   },
   policies: ExternalSlackPolicies = {},
   historicalSlack = false,
 ): boolean {
   const ref = request.conversation.channelRef ?? request.conversation.threadRef;
-  if (request.externalSlack) {
-    const supplied = request.externalSlack;
-    const current = policies[supplied.accountId];
+  const origin = request.surfaceOrigin;
+  if (origin?.audience === "external") {
+    const supplied = origin.access;
+    const current = policies[origin.author.account];
     return (
       !!current &&
       request.conversation.kind !== "dm" &&
-      externalSlackNamespace(supplied.teamId, current) ===
-        externalSlackNamespace(supplied.teamId, {
+      externalSlackNamespace(origin.workspace, current) ===
+        externalSlackNamespace(origin.workspace, {
           companyDomains: supplied.companyDomains,
           companyTeamIds: supplied.companyTeamIds,
           serviceCredentials: supplied.serviceCredentials,
         }) &&
-      ref.startsWith(`${externalSlackNamespace(supplied.teamId, current)}:`)
+      ref.startsWith(`${externalSlackNamespace(origin.workspace, current)}:`)
     );
   }
   if (ref.includes("external-slack:")) return false;
-  if (request.slackSource) {
-    const source = request.slackSource;
-    const policy = policies[source.accountId];
+  if (origin) {
+    const policy = policies[origin.author.account];
     return (
       !policy ||
       (request.conversation.kind === "dm" &&
-        source.externalPolicyNamespace === externalSlackNamespace(source.teamId, policy))
+        origin.policyNamespace === externalSlackNamespace(origin.workspace, policy))
     );
   }
   if (ref.startsWith("slack-account:")) return false;
@@ -59,7 +59,7 @@ export async function currentExternalSlackRun(
     run.sessionId !== claims.threadRef ||
     !samePerson(run.request.actor.id, claims.actorId) ||
     (run.leaseExpiresAt ?? 0) <= Date.now() ||
-    !run.request.externalSlack ||
+    run.request.surfaceOrigin?.audience !== "external" ||
     !externalSlackRequestAllowed({ ...run.request, surface: run.request.surface ?? "" }, deps.externalSlackPolicies) ||
     conversationScope(run.request.conversation, run.request.actor.id) !== claims.scopeId
   )

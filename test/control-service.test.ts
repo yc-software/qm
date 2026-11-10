@@ -1,3 +1,4 @@
+import type { TurnOrigin } from "../src/types.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
@@ -12,6 +13,7 @@ import { scopeId, type ScopeId } from "../src/types.ts";
 import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";
+import { failedTurnError } from "./support/failed-turn.ts";
 
 const SECRET = "control-service-test";
 
@@ -610,7 +612,7 @@ test("a channel cron belongs to its creator: members see it, only the owner or a
   assert.equal(viaOldGrant.ok ? "" : viaOldGrant.code, "forbidden", "an older write grant can't steer a personal cron");
 });
 
-test("app.turn forwards ownerKeychainUnion onto the persisted run request (else scheduled fires lose the union)", async () => {
+test("app.turn forwards origin.useOwnerKeychain onto the persisted run request (else scheduled fires lose the union)", async () => {
   const { built } = setup();
   const base = {
     surface: "cron",
@@ -622,10 +624,10 @@ test("app.turn forwards ownerKeychainUnion onto the persisted run request (else 
       audience: [{ externalId: "U1" }],
     },
     text: "compute digest",
-    triggered: true,
+    origin: { kind: "automation" } as TurnOrigin,
     async: true,
   };
-  const withUnion = await built.app.turn({ ...base, ownerKeychainUnion: true });
+  const withUnion = await built.app.turn({ ...base, origin: { kind: "automation", useOwnerKeychain: true } });
   assert.equal(withUnion.status, "queued");
   const runU = await built.runs.get((withUnion as { runId?: string }).runId!);
   assert.deepEqual(
@@ -641,20 +643,10 @@ test("app.turn forwards ownerKeychainUnion onto the persisted run request (else 
   const typed = await built.app.turn({
     ...base,
     conversation: { ...base.conversation, threadRef: "t-typed-origin" },
-    triggered: undefined,
     origin: { kind: "automation", screenData: "external event" },
   });
   const runT = await built.runs.get((typed as { runId?: string }).runId!);
   assert.deepEqual(runT?.request.origin, { kind: "automation", screenData: "external event" });
-
-  const conflicted = await built.app.turn({
-    ...base,
-    conversation: { ...base.conversation, threadRef: "t-conflicting-origin" },
-    origin: { kind: "human" },
-    securityScreenData: "external event",
-  });
-  const runC = await built.runs.get((conflicted as { runId?: string }).runId!);
-  assert.deepEqual(runC?.request.origin, { kind: "automation", screenData: "external event" });
 });
 
 test("cron list / get / patch / delete / run round-trip with owner authz", async () => {
@@ -754,6 +746,24 @@ test("cron get honors read-only visibility: a delivery-targeted viewer reads, ne
   const patched = await control.patchCron(id, { title: "hijack" }, claims("U9"));
   assert.equal(patched.ok, false, "visibility never grants administration");
   assert.equal(patched.ok ? "" : patched.code, "forbidden");
+});
+
+test("a Slack bot's turn is not a live person: it cannot register webhooks or set unattended cron grants", async () => {
+  const { control } = setup();
+  const bot = claims("admin-bob", scopeId("personal", "admin-bob"), { liveActor: true, botActor: true });
+  const webhook = await control.createWebhook(
+    { action: "handle the event", verification: { scheme: "github", secret: "shh-secret" } },
+    bot,
+    "https://portal.example",
+  );
+  const cron = await control.createCron(
+    { schedule: { everyMs: 3_600_000 }, action: "scan failures", unattendedGrants: ["admin.sessions.read"] },
+    bot,
+  );
+  assert.deepEqual(
+    [webhook.ok ? "registered" : webhook.code, cron.ok ? "granted" : cron.code],
+    ["forbidden", "forbidden"],
+  );
 });
 
 test("webhook create surfaces the inbound url + the secret verbatim; list elides; disable is owner-gated", async () => {
@@ -1053,7 +1063,7 @@ test("scheduled runtime is refused before execution when its model is no longer 
   for (const surface of ["cron", "keychain-ask"]) {
     const result = await built.app.turn({
       surface,
-      triggered: true,
+      origin: { kind: "automation" },
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: `cron-runtime-${surface}` },
       text: "must not execute",
@@ -1074,10 +1084,10 @@ test("queued cron rechecks its runtime after admission and preserves the overrid
     await built.config.setWebuiModels("org:default-org", ["gpt-6-astra"]);
     return result;
   });
-  await assert.rejects(
-    built.app.turn({
+  assert.match(
+    await failedTurnError(built, {
       surface: "cron",
-      triggered: true,
+      origin: { kind: "automation" },
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: "cron-runtime-revoked-after-enqueue" },
       text: "must not execute",
@@ -1086,4 +1096,31 @@ test("queued cron rechecks its runtime after admission and preserves the overrid
     }),
     /runtime is no longer available/,
   );
+});
+
+test("a cron created and retargeted through capabilities preserves webhook routing when fired", async () => {
+  const { built, control } = setup();
+  const candidate = {
+    key: "webhook",
+    label: "this conversation",
+    type: "webhook",
+    target: "web:U1:conversation",
+    audienceScopeId: scopeId("personal", "U1"),
+    webhook: { binding: "00000000-0000-4000-8000-000000000001", url: "https://receiver.example/qm" },
+  };
+  const capability = claims("U1", scopeId("personal", "U1"), {
+    destinations: [candidate],
+    defaultDestinationKey: candidate.key,
+  });
+  const created = await control.createCron({ schedule: { everyMs: 300_000 }, text: "five-minute update" }, capability);
+  assert.ok(created.ok, JSON.stringify(created));
+  assert.deepEqual(created.cron.destination?.webhook, candidate.webhook);
+  const retargeted = await control.retargetCron(created.cron.id, candidate.key, capability);
+  assert.ok(retargeted.ok, JSON.stringify(retargeted));
+  await runNowSettled(built.scheduler, created.cron.id);
+  const delivery = (await built.deliveries.pending("webhook"))[0]!;
+  assert.ok(delivery);
+  assert.equal(delivery.text, "five-minute update");
+  assert.deepEqual(delivery.destination.webhook, candidate.webhook);
+  assert.equal(delivery.destination.target, candidate.target);
 });

@@ -23,7 +23,7 @@ import { contextsState, ensureContexts, personalScopeId, scopeTitle } from "./co
 import { appState } from "./shell";
 import { fileListNeedsAllPages } from "./file-list";
 import { scopedSession, scopedViewTopbar } from "./session-scope";
-import { listRowsTpl } from "./list-page";
+import { listGroupsTpl, listRowsTpl } from "./list-page";
 import { isTouch } from "./viewport";
 
 interface FileItem {
@@ -243,19 +243,15 @@ function drawFiles(loading = false): void {
       </button>
       ${
         visible.length
-          ? html`<div class="file-groups">
-              ${groups.map(
-                (group) =>
-                  html`<section class="file-scope-group">
-                    <h2>${scopeTitle(group.scope)}</h2>
-                    ${
-                      filesLayout === "grid"
-                        ? html`<div class="file-grid">${group.files.map(fileCard)}</div>`
-                        : listRowsTpl(group.files.map(fileRow), "file-list")
-                    }
-                  </section>`,
-              )}
-            </div>`
+          ? listGroupsTpl(
+              groups.map((group) => ({
+                label: scopeTitle(group.scope),
+                body:
+                  filesLayout === "grid"
+                    ? html`<div class="file-grid">${group.files.map(fileCard)}</div>`
+                    : listRowsTpl(group.files.map(fileRow), "file-list"),
+              })),
+            )
           : html`<div class="empty compact">${filtered ? "No files match these filters." : "No files yet."}</div>`
       }
       ${filesNextCursor ? html`<div class="list-footer"><button class="btn" type="button" ?disabled=${filesLoadingMore} @click=${() => void loadMoreFiles()}>${filesLoadingMore ? "Loading…" : "Load more"}</button></div>` : nothing}

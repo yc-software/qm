@@ -7,13 +7,15 @@ import {
   createRelayAuditSink,
   tokenFromRequest,
   hostFromAuthority,
-  isBlockedDestinationIp,
   type EgressAuthzDeps,
 } from "../src/egress-authz-main.ts";
+import { isNeverAllowedIp } from "../src/util/network.ts";
 import { verifySignature } from "../src/auth/source-auth.ts";
 import { mintCapabilityToken, EGRESS_PROXY_AUD, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import type { EgressAuditRecord } from "../src/admin/egress-audit-sink.ts";
 import { scopeId, type EgressPolicy } from "../src/types.ts";
+import { randomUUID } from "node:crypto";
+import { boundTenant, withTenant, withoutTenant } from "../src/tenants/context.ts";
 
 const CAPABILITY_SECRET = "test-egress-capability-secret";
 const SOURCE_SECRET = "test-egress-source-secret";
@@ -111,31 +113,49 @@ test("hostFromAuthority strips ports and IPv6 brackets", () => {
   assert.equal(hostFromAuthority(""), null);
 });
 
-test("isBlockedDestinationIp covers IMDS, 169.254/16, fe80::/10, v4-mapped, AWS v6 IMDS", () => {
-  assert.equal(isBlockedDestinationIp("169.254.169.254"), true);
-  assert.equal(isBlockedDestinationIp("169.254.1.1"), true);
-  assert.equal(isBlockedDestinationIp("::ffff:169.254.169.254"), true);
-  assert.equal(isBlockedDestinationIp("fe80::1"), true);
-  assert.equal(isBlockedDestinationIp("febf::1"), true);
-  assert.equal(isBlockedDestinationIp("fd00:ec2::254"), true);
-  assert.equal(isBlockedDestinationIp("[fd00:ec2::254]"), true);
-  assert.equal(isBlockedDestinationIp("8.8.8.8"), false);
-  assert.equal(isBlockedDestinationIp("2606:4700::1111"), false);
-  assert.equal(isBlockedDestinationIp("fec0::1"), false);
+test("isNeverAllowedIp covers IMDS, 169.254/16, fe80::/10, v4-mapped, IPv6 cloud metadata, loopback, NAT64 forms and Tailscale and Alibaba addresses", () => {
+  assert.equal(isNeverAllowedIp("169.254.169.254"), true);
+  assert.equal(isNeverAllowedIp("169.254.1.1"), true);
+  assert.equal(isNeverAllowedIp("::ffff:169.254.169.254"), true);
+  assert.equal(isNeverAllowedIp("fe80::1"), true);
+  assert.equal(isNeverAllowedIp("febf::1"), true);
+  assert.equal(isNeverAllowedIp("fd00:ec2::254"), true);
+  assert.equal(isNeverAllowedIp("[fd00:ec2::254]"), true);
+  assert.equal(isNeverAllowedIp("8.8.8.8"), false);
+  assert.equal(isNeverAllowedIp("2606:4700::1111"), false);
+  assert.equal(isNeverAllowedIp("fec0::1"), false);
+  for (const ip of [
+    "127.0.0.1",
+    "::1",
+    "::ffff:127.0.0.1",
+    "64:ff9b::7f00:1",
+    "64:ff9b::a9fe:a9fe",
+    "100.100.100.100",
+    "100.100.100.200",
+    "64:ff9b::6464:64c8",
+    "fd20:ce::254",
+    "fd00:c1::a9fe:a9fe",
+    "fd00:ec2::23",
+    "fd00:a9fe:a9fe::1",
+    "fd00:42::42",
+  ])
+    assert.equal(isNeverAllowedIp(ip), true, ip);
+  for (const ip of ["10.0.12.7", "172.18.0.4", "100.101.102.103", "fdaa:0:1::3", "64:ff9b:1::a9fe:a9fe"])
+    assert.equal(isNeverAllowedIp(ip), false, ip);
 });
 
-test("isBlockedDestinationIp catches non-canonical spellings of blocked addresses", () => {
-  assert.equal(isBlockedDestinationIp("::ffff:a9fe:a9fe"), true);
-  assert.equal(isBlockedDestinationIp("[::ffff:a9fe:a9fe]"), true);
-  assert.equal(isBlockedDestinationIp("fd00:ec2:0:0:0:0:0:254"), true);
-  assert.equal(isBlockedDestinationIp("fd00:0ec2::0254"), true);
-  assert.equal(isBlockedDestinationIp("FE80::1"), true);
-  assert.equal(isBlockedDestinationIp("fe80::1%eth0"), true);
-  assert.equal(isBlockedDestinationIp("0.0.0.0"), true);
-  assert.equal(isBlockedDestinationIp("0.0.0.7"), true);
-  assert.equal(isBlockedDestinationIp("::"), true);
-  assert.equal(isBlockedDestinationIp("::ffff:0:0"), true);
-  assert.equal(isBlockedDestinationIp("[::]"), true);
+test("isNeverAllowedIp catches non-canonical spellings of blocked addresses", () => {
+  assert.equal(isNeverAllowedIp("::ffff:a9fe:a9fe"), true);
+  assert.equal(isNeverAllowedIp("[::ffff:a9fe:a9fe]"), true);
+  assert.equal(isNeverAllowedIp("fd00:ec2:0:0:0:0:0:254"), true);
+  assert.equal(isNeverAllowedIp("fd00:0ec2::0254"), true);
+  assert.equal(isNeverAllowedIp("FE80::1"), true);
+  assert.equal(isNeverAllowedIp("fe80::1%eth0"), true);
+  assert.equal(isNeverAllowedIp("0.0.0.0"), true);
+  assert.equal(isNeverAllowedIp("0.0.0.7"), true);
+  assert.equal(isNeverAllowedIp("::"), true);
+  assert.equal(isNeverAllowedIp("::ffff:0:0"), true);
+  assert.equal(isNeverAllowedIp("[::]"), true);
 });
 
 test("valid token, open policy => 200 + audited as ok with scope/principal", async () => {
@@ -148,6 +168,22 @@ test("valid token, open policy => 200 + audited as ok with scope/principal", asy
     assert.equal(records.at(-1)?.host, "example.com");
     assert.equal(records.at(-1)?.scopeLabel, scopeId("personal", "U_actor"));
     assert.equal(records.at(-1)?.principalId, "U_actor");
+  } finally {
+    await close(server);
+  }
+});
+
+test("a decision is audited under the tenant named in the capability token", async () => {
+  const tenant = "0b7e9c7e-6a43-4c55-9a51-3d3c1f2b8e11";
+  const { server, records } = boot();
+  const port = await listen(server);
+  try {
+    const token = await withTenant(tenant, () => egressToken({ allowedHosts: [] }));
+    assert.equal(await check(port, "example.com:443", token), 200);
+    assert.equal(records.at(-1)?.tenant, tenant);
+    const untenanted = await withoutTenant(() => egressToken({ allowedHosts: [] }));
+    assert.equal(await check(port, "example.com:443", untenanted), 200);
+    assert.equal(records.at(-1)?.tenant, undefined);
   } finally {
     await close(server);
   }
@@ -235,7 +271,7 @@ test("tokenless=open is an explicit compatibility escape hatch; valid tokens sti
   }
 });
 
-test("IMDS + link-local + cloud metadata names are denied even tokenless / with open policy", async () => {
+test("IMDS + link-local + cloud metadata + localhost names are denied even tokenless / with open policy", async () => {
   const { server, records } = boot();
   const port = await listen(server);
   const open = await egressToken({ allowedHosts: [], deniedHosts: [] });
@@ -247,6 +283,8 @@ test("IMDS + link-local + cloud metadata names are denied even tokenless / with 
       "[fd00:ec2::254]:80",
       "metadata.google.internal:80",
       "metadata.google.internal",
+      "localhost:443",
+      "brain.localhost.:443",
     ]) {
       assert.equal(await check(port, authority), 407, `tokenless ${authority}`);
       assert.equal(await check(port, authority, open), 403, `open-policy ${authority}`);
@@ -456,4 +494,60 @@ test("relay sink: a batch is only dequeued once core acknowledges it", async () 
   );
   await sink.flush();
   assert.equal(calls.length, 2, "acknowledged records are not re-sent");
+});
+
+test("the proxy stamps each decision with the tenant from the verified token and records it in that tenant", () =>
+  withoutTenant(async () => {
+    const tenant = randomUUID();
+    const seen: Array<{ tenant: string | undefined; bound: string | undefined }> = [];
+    const server = buildEgressAuthzServer({
+      capabilitySecret: CAPABILITY_SECRET,
+      audit: { record: (r) => seen.push({ tenant: r.tenant, bound: boundTenant() }) },
+      lookup: async () => ["93.184.216.34"],
+    });
+    const port = await listen(server);
+    try {
+      const token = await withTenant(tenant, () => egressToken({ allowedHosts: [] }));
+      assert.equal(await check(port, "example.com:443", token), 200);
+      assert.equal(await check(port, "example.com:443", await egressToken({ allowedHosts: [] })), 200);
+      assert.deepEqual(seen, [
+        { tenant, bound: tenant },
+        { tenant: undefined, bound: undefined },
+      ]);
+    } finally {
+      await close(server);
+    }
+  }));
+
+test("the proxy never takes a tenant from a token it could not verify", () =>
+  withoutTenant(async () => {
+    const { server, records } = boot();
+    const port = await listen(server);
+    try {
+      const forged = await withTenant(randomUUID(), () => egressToken({ allowedHosts: [] }, { secret: "other" }));
+      assert.equal(await check(port, "example.com:443", forged), 403);
+      assert.equal(records.at(-1)?.tenant, undefined);
+    } finally {
+      await close(server);
+    }
+  }));
+
+test("relay sink: forwards each decision's tenant to core", async () => {
+  const tenant = randomUUID();
+  const bodies: any[] = [];
+  const fakeFetch = (async (_url: any, init: any) => {
+    bodies.push(JSON.parse(init.body));
+    return new Response("{}", { status: 200 });
+  }) as typeof fetch;
+  const sink = createRelayAuditSink("http://core.example:4000", SOURCE_SECRET, fakeFetch);
+  sink.record({
+    source: "proxy",
+    host: "a.example",
+    allowed: true,
+    verdict: "ok",
+    scopeLabel: scopeId("personal", "U1"),
+    tenant,
+  });
+  await sink.flush();
+  assert.equal(bodies[0].records[0].tenant, tenant);
 });

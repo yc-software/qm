@@ -1,9 +1,16 @@
 import { html, nothing } from "lit";
 import type { AdminPage } from "./sections.ts";
+import { formatMessageTime } from "../message-time.ts";
 import { badge, card, stacked, subline, table } from "./shared.ts";
 
-export function offboardingCard(page: AdminPage, principal: string, deactivatedAtLoad: boolean, draw: () => void) {
-  let [plan, hint, busy, deactivated] = [null as any, "", false, deactivatedAtLoad];
+export function offboardingCard(
+  page: AdminPage,
+  principal: string,
+  deactivatedAtLoad: boolean,
+  recordAtLoad: any,
+  draw: () => void,
+) {
+  let [plan, hint, busy, deactivated, record] = [null as any, "", false, deactivatedAtLoad, recordAtLoad];
   const path = (action: string) => "/api/users/" + encodeURIComponent(principal) + "/" + action;
   async function send(action: string, body: unknown, label: string) {
     [busy, hint] = [true, label];
@@ -28,6 +35,7 @@ export function offboardingCard(page: AdminPage, principal: string, deactivatedA
       return;
     plan = await send("offboard", { apply: true }, "Offboarding…");
     if (!plan) return;
+    record = plan.user ?? record;
     deactivated ||= plan.changes.some((c: any) => c.kind === "principal" && c.result === "done");
     const failed = plan.changes.filter((c: any) => c.result === "failed").length;
     hint = failed ? `${failed} failed. Preview again to retry.` : "Done.";
@@ -35,19 +43,27 @@ export function offboardingCard(page: AdminPage, principal: string, deactivatedA
   }
   async function reactivate() {
     if (!window.confirm(`Turn sign-in back on for ${principal}? Archived items stay archived.`)) return;
-    if (await send("reactivate", undefined, "Reactivating…"))
-      [deactivated, plan, hint] = [false, null, "Sign-in is back on."];
+    const done = await send("reactivate", undefined, "Reactivating…");
+    if (done) [deactivated, plan, hint, record] = [false, null, "Sign-in is back on.", done.user ?? null];
     draw();
   }
   function result(c: any) {
     if (!c.result) return subline("planned");
     return c.result === "done" ? badge("done", "ok") : stacked(badge("failed", "warn"), c.error);
   }
+  const when = (at: number, by?: string) => formatMessageTime(at) + (by ? " by " + by : "");
+  const history = () =>
+    record?.offboardedAt
+      ? html`<p class="obstatus">
+          ${badge("offboarded", "warn")} ${subline("Offboarded " + when(record.offboardedAt, record.offboardedBy))}
+        </p>`
+      : nothing;
   return () =>
     card(
       "Offboarding",
       "Turn off a departed person's sign-in and stop or archive what they own. Conversations, memory and files stay.",
-      html`${
+      html`${history()}
+        ${
           deactivated
             ? html`<p class="obstatus">
                 Sign-in: ${badge("deactivated", "warn")}

@@ -1,5 +1,6 @@
 import { request, type IncomingHttpHeaders, type OutgoingHttpHeaders } from "node:http";
 import { sendJson } from "../http.ts";
+import { relayStream } from "../../../plugins/chassis/src/http.ts";
 import type { BaseCtx, Route } from "./route.ts";
 
 const HOP_BY_HOP = new Set([
@@ -47,12 +48,8 @@ async function proxySlackEvents(ctx: BaseCtx): Promise<void> {
       },
       (upstreamRes) => {
         ctx.res.writeHead(upstreamRes.statusCode ?? 502, responseHeaders(upstreamRes.headers));
-        upstreamRes.pipe(ctx.res);
-        upstreamRes.once("end", finish);
-        upstreamRes.once("error", (error) => {
-          ctx.res.destroy(error);
-          finish();
-        });
+        upstreamRes.once("close", finish);
+        relayStream(upstreamRes, ctx.res);
       },
     );
     upstream.once("error", () => {
@@ -64,7 +61,7 @@ async function proxySlackEvents(ctx: BaseCtx): Promise<void> {
       upstream.destroy();
       finish();
     });
-    ctx.req.pipe(upstream);
+    relayStream(ctx.req, upstream);
   });
 }
 

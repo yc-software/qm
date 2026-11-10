@@ -70,7 +70,7 @@ A chunk whose score is at or above its threshold resolves to Strict, and any Str
 
 ## Spend export
 
-`secretEnv.core.SPEND_EXPORT_TOKEN` (at least 32 characters, without surrounding whitespace, and distinct from every other environment value) turns on `GET /v1/spend/export?from=YYYY-MM-DD&to=YYYY-MM-DD` for an external spend or chargeback system. Requests send `Authorization: Bearer <token>`; the window is whole UTC days, half-open, and at most 93 days long. The response carries `scopeId`, the `window`, `asOf` when the report is served from saved daily totals, `rows` at the Spend page's ledger grain — one per UTC day, scope, source, cron and model — each with `scopeId`, `kind`, `principalId` (people only, after identity links), `displayName`, `source` (`live`, or the background kind: `cron`, `loop`, `swarm`, `webhook` or `monitor`), `cronId` (the cron that ran it, including its subagents' calls, else `null`), `calls`, `costUsd` and the four token counts, and `crons`: each billed cron's `id`, `title`, `owner`, `ownerScopeId`, `schedule`, `enabled` and `archived`, without its task. A deleted cron keeps its `cronId` on rows but has no `crons` entry. `costUsd` is the same estimate the admin Spend page shows, not a provider bill. Without the secret the route answers 404, and every export is audited as `spend.export`. Portal does not forward the route, so callers use the origin that reaches core directly.
+`secretEnv.core.SPEND_EXPORT_TOKEN` (at least 32 characters, without surrounding whitespace, and distinct from every other environment value) turns on `GET /v1/spend/export?from=YYYY-MM-DD&to=YYYY-MM-DD` for an external spend or chargeback system. Requests send `Authorization: Bearer <token>`; the window is whole UTC days, half-open, and at most 93 days long. The response carries `scopeId`, the `window`, `asOf` when the report is served from saved daily totals, `rows` at the Spend page's ledger grain — one per UTC day, scope, source, cron and model — each with `scopeId`, `kind`, `principalId` (people only, after identity links), `displayName`, `source` (`live`, or the background kind: `cron`, `loop`, `swarm`, `webhook` or `monitor`), `cronId` (the cron that ran it, including its subagents' calls, else `null`), `calls`, `costUsd` and the four token counts, and `crons`: each billed cron's `id`, `title`, `owner`, `ownerScopeId`, `schedule`, `enabled` and `archived`, without its task. A deleted cron keeps its `cronId` on rows but has no `crons` entry. `costUsd` is the same estimate the admin Spend page shows, not a provider bill. Without the secret the route answers 404, and every export is audited as `spend.export`. Callers may use the public URL; the front door forwards this route to core.
 
 ## Secrets
 
@@ -211,8 +211,7 @@ namespace. Each of the one to five unique patterns must start with the plugin
 name and end in `/*`; broader catch-all paths and paths outside that namespace
 are rejected. The plugin must authenticate its requests.
 
-The AWS scaffold renders these paths before core host rules and portal catch-all
-rules. Deployment preflight verifies the exact paths, target-group attachments
+The AWS scaffold renders these paths before core's front-door catch-all rule. Deployment preflight verifies the exact paths, target-group attachments
 and listener precedence, including native blue/green weighted routing. Update
 vendored Terraform with the `public_paths` service attribute and
 `public_path_services` routing before enabling this setting.
@@ -231,16 +230,15 @@ services' private network, so it relays audit records through `apiUrl` (or
 `publicUrl`). Point a hostname covered by the certificate at the
 `egress_proxy_hostname` output. On Fly it serves TLS on 443 at
 `<appPrefix>-egress-proxy.fly.dev`. Docker publishes the plain listener on a host
-port and leaves TLS to the operator. Then set the sandbox backend's proxy URL, for
-example `env.core.SPRITES_EGRESS_PROXY_URL` or `MODAL_EGRESS_PROXY_URL`, to
-`https://<proxy hostname>`. Update vendored Terraform from the current scaffold
+port and leaves TLS to the operator. Then set `env.core.EGRESS_PROXY_URL` to
+`https://<proxy hostname>`; every sandbox provider that can force traffic through it does, except those listed in `env.core.EGRESS_PROXY_EXEMPT_BACKENDS` (DigitalOcean Managed Agents is never proxied, see [do-managed-agents.md](do-managed-agents.md)). Update vendored Terraform from the current scaffold
 before enabling it on AWS.
 
 ### Shared AWS foundations
 
 Existing AWS deployments retain their company-owned resources by default. For a shared DynamoDB deployment table, set `aws.deploymentState` to `{ "table": "fleet-deploy-locks", "namespace": "acme" }`. Every lease, current pointer, label pointer and immutable manifest uses that namespace. Use a unique namespace for each company and scope its item IAM permissions with `dynamodb:LeadingKeys` to `acme/*`; grant `DescribeTable` separately. Changing an existing deployment's state location requires explicitly migrating its history while deployment operations are stopped.
 
-To use a shared ALB, set `aws.alb` and `aws.sharedAlb: true`. The supported shared topology has one blue/green portal ingress per company, with an exact host-header condition plus `/*` path, a fixed-404 listener default, separate primary/alternate target groups and a company-owned production rule. Additional public plugin/core routes are not supported in this topology. Other companies' rules must use explicit non-wildcard hostnames and must not reference this company's target groups. Set each service's `targetGroup`, `taskRoleArn`, and `executionRoleArn` explicitly when sharing an ECS cluster. Retain company-specific service permissions and allow ECS to modify only that company's listener rule.
+To use a shared ALB, set `aws.alb` and `aws.sharedAlb: true`. The supported shared topology has one blue/green core front-door ingress on port 8000 per company, with an exact host-header condition plus `/*` path, a fixed-404 listener default, separate primary/alternate target groups and a company-owned production rule. Additional public plugin/core routes are not supported in this topology. Other companies' rules must use explicit non-wildcard hostnames and must not reference this company's target groups. Name the front door's primary target group in `aws.services.core.targetGroup`, and set each service's `taskRoleArn` and `executionRoleArn` explicitly when sharing an ECS cluster. Retain company-specific service permissions and allow ECS to modify only that company's listener rule.
 
 An exact `--candidate` deployment consumes its digest-pinned images without changing ECR tags. Its publisher owns image retention; retain every active and rollback digest. Builds performed by the deployment CLI still stage and promote their images as before.
 

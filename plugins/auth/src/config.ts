@@ -1,4 +1,5 @@
 import { isMissingOrPlaceholder } from "../../chassis/src/env.ts";
+import { isSecureOrLoopbackUrl } from "../../chassis/src/http.ts";
 import { parsePasswordHash } from "./password.ts";
 
 type EmailTransportKind = "resend" | "smtp";
@@ -28,6 +29,7 @@ export interface AuthConfig {
   passwordLimitPerEmail: number;
   passwordLimitPerIp: number;
   emailFrom: string;
+  emailSignIn: boolean;
   brandName: string;
   faviconSvg: string | undefined;
   transport: EmailTransportKind;
@@ -104,6 +106,7 @@ export function readConfig(env: NodeJS.ProcessEnv): AuthConfig {
     passwordLimitPerEmail: numberFrom(env.AUTH_PASSWORD_LIMIT_PER_EMAIL, 10),
     passwordLimitPerIp: numberFrom(env.AUTH_PASSWORD_LIMIT_PER_IP, 30),
     emailFrom: env.AUTH_EMAIL_FROM?.trim() ?? "",
+    emailSignIn: !/^(off|false|0|no)$/i.test(env.AUTH_EMAIL_SIGN_IN?.trim() ?? ""),
     brandName: env.AUTH_BRAND_NAME?.trim() || "qm",
     faviconSvg: env.AUTH_FAVICON_SVG?.trim() || undefined,
     transport,
@@ -181,7 +184,8 @@ function httpsUrlProblem(label: string, value: string, requireHttps: boolean): s
   } catch {
     return `${label} must be an absolute URL`;
   }
-  if (requireHttps && url.protocol !== "https:") return `${label} must be https in production`;
+  if (requireHttps && !isSecureOrLoopbackUrl(url.href))
+    return `${label} must be https in production unless it is a loopback address`;
   if (url.search || url.hash) return `${label} must not carry a query string or fragment`;
   return null;
 }

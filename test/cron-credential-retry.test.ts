@@ -71,7 +71,7 @@ test("cron credential resolution resumes in the original conversation exactly on
 
   assert.equal(requests.length, 1);
   assert.ok(requests.every((request) => request.conversation.threadRef === f.ask.requesterThreadRef));
-  assert.ok(requests.every((request) => request.triggered === true));
+  assert.ok(requests.every((request) => request.origin?.kind === "automation"));
   const pending = await f.deliveries.pending("principal");
   assert.equal(pending.length, 1);
   assert.equal(pending[0]!.destination.target, "U_BOB");

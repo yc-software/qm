@@ -52,7 +52,7 @@ async function resolveSurfaceTarget(
     return { source: "slack", target: { channelId: r.channel.channelId, channelName: r.channel.name } };
   }
   const dest = cap.destination;
-  if (!dest?.target || dest.type !== "slack") {
+  if (!dest?.target || !app.surfaceMirrored(dest.type)) {
     sendJson(res, 400, {
       error: "no_conversation",
       message: "this conversation has no surface history to pull — name a channel instead",

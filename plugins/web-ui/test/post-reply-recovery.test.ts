@@ -3,7 +3,7 @@ import { item } from "./item-fixture.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { JSDOM } from "jsdom";
-import { createServer } from "vite";
+import { testViteServer } from "./vite-server.ts";
 import { metadata } from "./model-metadata.ts";
 import type { Conversation } from "../src/conv-types.ts";
 import type { AssistantWork, WorkBlock } from "../src/core-bridge.ts";
@@ -146,7 +146,7 @@ test("post replies remain visible in new and continuing conversations", async (t
     if (path === "/api/contexts") return Response.json({ contexts: [] });
     throw new Error(`Unexpected request: ${path}`);
   };
-  const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  const vite = await testViteServer();
   let conv: Conversation | undefined;
   try {
     await vite.ssrLoadModule("/src/shell.ts");

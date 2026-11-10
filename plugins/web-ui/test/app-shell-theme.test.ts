@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM, type DOMWindow } from "jsdom";
-import { createServer } from "vite";
+import { testViteServer } from "./vite-server.ts";
 import { appShellHtml } from "../../../src/deploy/app-shell.ts";
 import { harness } from "./deep-link-boot-fixture.ts";
 
@@ -73,7 +73,7 @@ test("embedded chat publishes active colors and tracks theme changes from other 
     descriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
     Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
   }
-  const vite = await createServer({ server: { middlewareMode: true, hmr: false, ws: false }, appType: "custom" });
+  const vite = await testViteServer();
   t.after(async () => {
     await vite.close();
     for (const [key, descriptor] of descriptors) {

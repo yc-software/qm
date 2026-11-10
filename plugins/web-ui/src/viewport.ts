@@ -1,10 +1,21 @@
-export const PHONE_MAX_WIDTH = 860;
+const PHONE_MAX_WIDTH = 860;
 
 let query: MediaQueryList | undefined;
 const phoneQuery = () => (query ??= window.matchMedia(`(max-width: ${PHONE_MAX_WIDTH}px)`));
 
+const isDesktopEmbed = (): boolean => document.documentElement.classList.contains("desktop-embed");
+
+export function markDesktopEmbed(embedded: boolean): void {
+  const desktop = embedded && window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+  document.documentElement.classList.toggle("desktop-embed", desktop);
+}
+
 export function isPhone(): boolean {
-  return phoneQuery().matches;
+  return phoneQuery().matches && !isDesktopEmbed();
+}
+
+export function isCompactLayout(): boolean {
+  return phoneQuery().matches || isDesktopEmbed();
 }
 
 export function isTouch(): boolean {
@@ -13,7 +24,7 @@ export function isTouch(): boolean {
 
 export function onPhoneChange(fn: (phone: boolean) => void): () => void {
   const query = phoneQuery();
-  const listener = (e: MediaQueryListEvent) => fn(e.matches);
+  const listener = (e: MediaQueryListEvent) => fn(e.matches && !isDesktopEmbed());
   query.addEventListener("change", listener);
   return () => query.removeEventListener("change", listener);
 }

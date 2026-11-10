@@ -531,6 +531,20 @@ test("a durable turn_failure entry renders like the live inline error (survives 
   assert.equal(err.errorMessage, "API integrators: you can reduce refusals…");
 });
 
+test("a mid-turn withheld-message note renders as a system note, not a turn failure", () => {
+  const items: Item[] = [
+    item("UserMessage", { createdAt: 100, text: "prepare the report" }),
+    item("Error", { createdAt: 110, errorCode: "steer_withheld", text: "A message from U2 was withheld." }),
+  ];
+  const msgs = itemsToMessages(items, MODEL);
+  assert.deepEqual(msgs[1], {
+    role: "system-note",
+    note: "notice",
+    content: "A message from U2 was withheld.",
+    timestamp: 110,
+  });
+});
+
 test("user items carry the stored speaker identity, name and slack ts onto the rebuilt message", () => {
   const items: Item[] = [
     item("UserMessage", {
@@ -1473,7 +1487,7 @@ test("a surface post's sent files render as delivered files on the reply bubble"
   );
 });
 
-for (const text of ["Partial answer", "", "(stopped)"]) {
+for (const text of ["Partial answer", ""]) {
   test(`stopped history retains its state without promoting commentary: ${text || "empty"}`, () => {
     const items: Item[] = [
       item("UserMessage", { seq: 1, createdAt: 1, text: "check" }),
@@ -1638,7 +1652,7 @@ test("live consumed steers join canonical history once and survive stopped/error
     item("ToolCall", { seq: 2, createdAt: 2, tool: "execute", callId: "a" }),
     item("SteeringMessage", { seq: 3, createdAt: 3, text: "Change direction" }),
     item("ToolResult", { seq: 4, createdAt: 4, tool: "execute", callId: "a" }),
-    item("AgentMessage", { seq: 5, createdAt: 5, text: "(stopped)", body: { stopped: true } }),
+    item("Stop", { seq: 5, createdAt: 5, body: { reason: "by user" } }),
   ];
   const work = (itemsToMessages(items).at(-1) as AssistantWork).work!;
   for (const reason of ["aborted", "error"] as const) {

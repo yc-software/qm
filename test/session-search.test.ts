@@ -14,7 +14,7 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 
 async function seed(sessions: SessionStore, threadRef: string, principal: string, texts: string[]): Promise<string> {
   const s = await sessions.getOrCreateByThread(threadRef, "dm", scopeId("personal", principal));
-  await sessions.addParticipant(s.id, principal, undefined, { includeHistory: true });
+  await sessions.addParticipant(s.id, principal);
   const writer = { sessionId: s.id };
   for (const [i, text] of texts.entries()) {
     await sessions.append(
@@ -45,28 +45,26 @@ test("session store: searchEntries matches user and assistant text, newest first
   assert.equal((await store.searchEntries("U1", "memo"))[0]!.text.includes("memo"), true);
 });
 
-test("session store: search respects participant visibility windows and identity", async () => {
+test("session store: search follows current membership and identity", async () => {
   const store = createPostgresSessionStore(testDatabaseUrl());
   const s = await store.getOrCreateByThread("web:U1:w", "dm", scopeId("personal", "U1"));
-  await store.addParticipant(s.id, "U1", undefined, { includeHistory: true });
+  await store.addParticipant(s.id, "U1");
   const writer = { sessionId: s.id };
   await store.append(writer, { kind: "UserMessage", text: "secret prelude" });
-  // U2 joins WITHOUT history — the prelude is outside their window.
   await store.addParticipant(s.id, "U2");
   await store.append(writer, { kind: "UserMessage", text: "shared secret plans" });
 
-  const u2 = await store.searchEntries("U2", "secret");
-  assert.equal(u2.length, 1, "U2 sees only the post-join message");
-  assert.equal(u2[0]!.text, "shared secret plans");
-
+  assert.equal((await store.searchEntries("U2", "secret")).length, 2, "a late joiner finds the earlier message too");
   assert.deepEqual(await store.searchEntries("U3", "secret"), [], "a non-participant sees nothing");
-  assert.equal((await store.searchEntries("U1", "secret")).length, 2, "a full-history participant sees both");
+  await store.removeParticipant(s.id, "U2");
+  assert.deepEqual(await store.searchEntries("U2", "secret"), [], "a removed participant sees nothing");
+  assert.equal((await store.searchEntries("U1", "secret")).length, 2);
 });
 
 test("session store: search ignores non-conversational entry types", async () => {
   const store = createPostgresSessionStore(testDatabaseUrl());
   const s = await store.getOrCreateByThread("web:U1:t", "dm", scopeId("personal", "U1"));
-  await store.addParticipant(s.id, "U1", undefined, { includeHistory: true });
+  await store.addParticipant(s.id, "U1");
   const writer = { sessionId: s.id };
   await store.append(writer, { kind: "ToolCall", tool: "execute", callId: "c1", body: { text: "grep zanzibar" } });
   await store.append(writer, { kind: "AgentMessage", variant: "narration", text: "zanzibar itinerary" });

@@ -5,7 +5,7 @@ import { DEFAULT_AGENT_MODEL_ID } from "../src/model/pi-models.ts";
 
 const read = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 const readme = read("README.md");
-const index = read("src/index.ts");
+const start = read("src/start.ts");
 const server = read("src/api/server.ts");
 const agentTools = read("src/agent/agent-tools/wrappers.ts");
 const rootPackage = JSON.parse(read("package.json")) as { dependencies: Record<string, string> };
@@ -33,7 +33,7 @@ test(".env.example does not pin a base model that drifts from the shipped defaul
 });
 
 test("README describes the shipped Slack topology", () => {
-  assert.match(index, /startSlackPlugin\(desired, built\.slackCore\)/);
+  assert.match(start, /startSlackPlugin\(desired, built\.slackCore\b/);
   assert.match(readme, /Slack is an optional in-process plugin that core starts\s+and supervises/);
   assert.doesNotMatch(readme, /nothing in the core knows about Slack/);
 });
@@ -51,6 +51,9 @@ test("README names the frameworks the shipped surfaces use", () => {
 });
 
 test("Strict posture describes its approval gate, exemptions, and direct-mutation boundary", () => {
-  assert.match(agentTools, /TOOL_APPROVAL_EXEMPT = new Set\(\["finish_silently", "tool_search", "mcp_call"\]\)/);
+  assert.match(
+    agentTools,
+    /TOOL_APPROVAL_EXEMPT = new Set\(\["finish_silently", "tool_search", "mcp_call", "withdraw_approval"\]\)/,
+  );
   assert.doesNotMatch(server, /Strict posture permits observation only/);
 });

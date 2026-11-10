@@ -1,4 +1,5 @@
-import { desktopTurnId, serveDesktopRun } from "./desktop-computer.ts";
+import { desktopTurnId, serveDesktopRun, webClientSurface } from "./desktop-computer.ts";
+import { CLIENT_SURFACE_HEADER } from "../../chassis/src/client-surface.ts";
 import { reportHandledError, reportRequestTiming, stopBrowserErrors } from "./browser-errors.ts";
 import { captureMessage, stopAnalytics } from "./product-analytics.ts";
 import { streamedAnswer } from "./timeline.ts";
@@ -24,6 +25,8 @@ import {
   isNarration,
   isUserMessage,
   messageTs,
+  proddedReason,
+  retractedReason,
   stepMessage,
   type Item,
   type RunActivityEntry,
@@ -126,7 +129,6 @@ type WebUserMessage = AgentMessage & {
   role: "user" | "user-with-attachments";
   content: string | Array<{ type: string; text?: string }>;
   attachments?: PiAttachment[];
-  clientTurnId?: string;
   sendFailure?: string;
 };
 
@@ -166,6 +168,7 @@ export interface CoreSession {
   subagents?: { running: number; waiting: number };
   workingSince?: number;
   purpose?: string;
+  personaId?: string;
 }
 
 export interface SessionPageQuery {
@@ -307,7 +310,10 @@ export interface CoreContext {
   sessionCount: number;
   lastActivityAt: number | null;
   project?: CoreProject;
+  groupMembers?: Array<{ principalId: string; displayName: string; avatarUrl?: string }>;
 }
+
+export type ProjectIcon = { kind: "emoji"; value: string } | { kind: "custom"; name: string };
 
 export interface CoreProject {
   id: string;
@@ -318,6 +324,8 @@ export interface CoreProject {
   scopeId: string;
   members: Array<{ principalId: string; displayName: string; avatarUrl?: string; viaChannel?: boolean }>;
   slackChannel?: { channelId: string; channelName: string; linkedBy?: string; linkedAt?: number };
+  /** Sidebar icon; absent shows the folder. */
+  icon?: ProjectIcon;
   createdAt?: number;
   updatedAt?: number;
 }
@@ -435,8 +443,13 @@ function withItems<T extends { items: Item[] }>(page: T): T {
 
 const resolvedCredentialApprovals = new Set<string>();
 
+const decidedDuringRunApprovals = new Set<string>();
+
 export function unresolvedApprovals(approvals: PendingApproval[]): PendingApproval[] {
-  const pending = approvals.filter((approval) => !resolvedCredentialApprovals.has(approval.requestId));
+  const pending = approvals.filter(
+    (approval) =>
+      !resolvedCredentialApprovals.has(approval.requestId) && !decidedDuringRunApprovals.has(approval.requestId),
+  );
   return pending.length === approvals.length ? approvals : pending;
 }
 
@@ -516,6 +529,11 @@ export interface PendingApproval {
   matched?: string;
   grantModes?: { session: boolean; always: boolean };
   blocksInput?: boolean;
+  executesOnApprove?: boolean;
+}
+
+export function approvalDecidableDuringRun(approval: PendingApproval): boolean {
+  return approval.executesOnApprove === true && approval.blocksInput === false;
 }
 
 export function approvalBlocksComposer(approval: PendingApproval): boolean {
@@ -537,6 +555,8 @@ export type AssistantWork = AssistantMessage & {
   sendBlocked?: "pending_approval";
   sendFailed?: "attachments";
   droppedAttachmentIds?: string[];
+  continuing?: string;
+  via?: string;
 };
 
 export interface RunPoll {
@@ -645,8 +665,8 @@ export function continuableMessages(
     return { messages: [...kept, user as AgentMessage], popped };
   }
   while (kept.length && (kept[kept.length - 1] as { role?: string }).role === "assistant") {
-    const work = (kept.at(-1) as AssistantWork).work;
-    if (!input && work && workPausedForApproval(work)) {
+    const last = kept.at(-1) as AssistantWork;
+    if (last.stopReason === "aborted" || (!input && last.work && workPausedForApproval(last.work))) {
       kept.push(resumeAnchor());
       break;
     }
@@ -757,7 +777,6 @@ export class ApiError extends Error {
 
 export interface SigninRequired {
   mode?: "portal" | "dev";
-  reason?: "unauthenticated" | "not_allowed";
 }
 
 let onSigninRequired: ((detail: SigninRequired) => void) | null = null;
@@ -909,7 +928,10 @@ export async function loadChatPrefs(): Promise<void> {
 }
 
 export async function api<T = unknown>(path: string, init?: RequestInit): Promise<T> {
-  const r = await webFetch(withBase(path), { headers: { "content-type": "application/json" }, ...init });
+  const headers = new Headers({ "content-type": "application/json" });
+  new Headers(init?.headers).forEach((value, name) => headers.set(name, value));
+  headers.set(CLIENT_SURFACE_HEADER, webClientSurface());
+  const r = await webFetch(withBase(path), { ...init, headers });
   const text = await r.text();
   let body: unknown = {};
   try {
@@ -984,7 +1006,7 @@ export function hasLiveRun(slot: RunSlot): boolean {
   return slot.runId !== null;
 }
 
-export type SignalOutcome = { ok: true } | { ok: false; reason: string; replayed?: boolean };
+export type SignalOutcome = { ok: true } | { ok: false; reason: string; why?: string; replayed?: boolean };
 
 export interface SteerContext {
   threadRef: string | null;
@@ -1026,10 +1048,11 @@ export async function signalLiveRun(
     // text as a fresh turn when it can; surface that outcome instead of failing so the
     // caller can attach to the replay run or resend, rather than dropping the message.
     if (err instanceof ApiError && (err.status === 409 || err.status === 404)) {
-      const body = (err.body ?? {}) as { reason?: string; replayed?: boolean };
+      const body = (err.body ?? {}) as { reason?: string; why?: string; replayed?: boolean };
       return {
         ok: false,
         reason: body.reason ?? (err.status === 404 ? "not_found" : "terminal"),
+        ...(body.why ? { why: body.why } : {}),
         ...(body.replayed ? { replayed: true } : {}),
       };
     }
@@ -1075,16 +1098,27 @@ export async function queueTurn(
   getTurnOptions?: () => TurnOptions,
   idempotencyKey?: string,
   attachments: CoreAttachment[] = [],
-): Promise<QueuedRun> {
-  const submit = await api<{ status?: string; runId?: string; reason?: string }>("/api/turn", {
-    method: "POST",
-    body: JSON.stringify(
-      turnRequestBody(threadRef, text, agent.state.model, agent, getTurnOptions, { idempotencyKey, attachments }),
-    ),
-  });
+  midTurn: "steer" | "queue" = "queue",
+): Promise<QueuedRun & { steered?: boolean; steerTs?: string }> {
+  const submit = await api<{ status?: string; runId?: string; reason?: string; steered?: boolean; steerTs?: string }>(
+    "/api/turn",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        ...turnRequestBody(threadRef, text, agent.state.model, agent, getTurnOptions, { idempotencyKey, attachments }),
+        midTurn,
+      }),
+    },
+  );
   if (submit.status === "pending_approval") throw new Error(submit.reason ?? PENDING_APPROVAL_REASON);
-  if (!submit.runId) throw new Error("Could not queue the message.");
-  return { runId: submit.runId, text, ...(attachments.length ? { hasAttachments: true } : {}) };
+  if (!submit.runId && !submit.steered) throw new Error("Could not queue the message.");
+  return {
+    runId: submit.runId ?? "",
+    text,
+    ...(attachments.length ? { hasAttachments: true } : {}),
+    ...(submit.steered ? { steered: true } : {}),
+    ...(submit.steerTs ? { steerTs: submit.steerTs } : {}),
+  };
 }
 
 export async function editQueuedRun(runId: string, text: string, expectedText: string): Promise<void> {
@@ -1130,15 +1164,19 @@ export async function resolveApproval(decision: ApprovalDecision): Promise<strin
     resolvedCredentialApprovals.add(decision.requestId);
     return "";
   }
-  const submit = await api<{ runId?: string }>(`/api/approvals/${encodeURIComponent(decision.requestId)}`, {
-    method: "POST",
-    body: JSON.stringify({ approved: decision.approved, ...(decision.scope ? { scope: decision.scope } : {}) }),
-  }).catch((err: unknown) => {
+  const submit = await api<{ runId?: string; steered?: boolean }>(
+    `/api/approvals/${encodeURIComponent(decision.requestId)}`,
+    {
+      method: "POST",
+      body: JSON.stringify({ approved: decision.approved, ...(decision.scope ? { scope: decision.scope } : {}) }),
+    },
+  ).catch((err: unknown) => {
     if (err instanceof ApiError && err.status === 404) return null;
     throw err;
   });
   if (!submit) return null;
   if (!submit.runId) throw new Error("Could not continue after the approval.");
+  if (submit.steered) decidedDuringRunApprovals.add(decision.requestId);
   return submit.runId;
 }
 
@@ -1333,6 +1371,7 @@ async function drive(
       method: "POST",
       body: JSON.stringify({
         ...turnRequestBody(threadRef, text, model, agent, getTurnOptions, { idempotencyKey, attachments }),
+        midTurn: "queue",
         ...(opener ? { proactiveOpener: true, desktopClientId: undefined } : {}),
       }),
     });
@@ -1451,6 +1490,15 @@ async function followRun(
   } finally {
     if (slot?.runId === runId) slot.runId = null;
   }
+}
+
+export async function stopThreadRun(threadRef: string): Promise<"stopped" | "ended"> {
+  const { runId } = await activeRunForThread(threadRef);
+  if (!runId) return "ended";
+  const outcome = await signalLiveRun({ ...createRunSlot(), runId }, "abort", undefined, { threadRef: null });
+  if (outcome.ok) return "stopped";
+  if (outcome.reason === "terminal" || outcome.reason === "not_found") return "ended";
+  throw new Error(outcome.why ?? outcome.reason);
 }
 
 function runPath(runId: string, suffix: string): string {
@@ -1935,7 +1983,14 @@ interface GoalCancelledNote {
   timestamp?: number;
 }
 
-export type HistorySystemNote = MessageRevisionNote | GoalCancelledNote;
+interface TranscriptNotice {
+  role: "system-note";
+  note: "notice";
+  content: string;
+  timestamp?: number;
+}
+
+export type HistorySystemNote = MessageRevisionNote | GoalCancelledNote | TranscriptNotice;
 
 export interface HistoryApprovalDecision {
   role: "approval-decision";
@@ -2091,7 +2146,12 @@ function deliveredSilence(item: Item): boolean {
 }
 
 function isFinishedReplyItem(item: Item): boolean {
-  return isNarration(item) && stepMessage(item)?.stopReason === "stop" && Boolean(item.text?.trim());
+  return (
+    isNarration(item) &&
+    !retractedReason(item) &&
+    stepMessage(item)?.stopReason === "stop" &&
+    Boolean(item.text?.trim())
+  );
 }
 
 function isWorkHistoryItem(item: Item): boolean {
@@ -2153,7 +2213,7 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
       }
     }
     entrySeqs = [...entrySeqs, ...pending.map((item) => item.seq)];
-    const lastText = pending.findLastIndex(isNarration);
+    const lastText = pending.findLastIndex((item) => isNarration(item) && !retractedReason(item));
     if (lastText >= 0) {
       const segment = (pending[lastText]!.text ?? "").trim();
       if (text) {
@@ -2204,6 +2264,9 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
     if (isFinishedReplyItem(e)) {
       spillHeldPosts();
       flushWork(text, e.createdAt, true, undefined, false, [e.seq]);
+      const prodded = proddedReason(e);
+      const flushed = out.at(-1) as AssistantWork | undefined;
+      if (prodded && flushed?.role === "assistant") flushed.continuing = prodded;
       posted = false;
       continue;
     }
@@ -2261,8 +2324,13 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
         ...(typeof workStartedAt === "number" ? { startedAt: workStartedAt } : {}),
         ...(typeof workFinishedAt === "number" ? { finishedAt: workFinishedAt } : {}),
       };
-      const stopped = e.body.stopped === true || text.trim() === "(stopped)";
-      if (text || pending.length || heldPosts.size || stopped) {
+      const stopped = e.body.stopped === true;
+      if (typeof e.body.via === "string" && text.trim()) {
+        spillHeldPosts();
+        flushWork("", e.createdAt);
+        flushWork(text, e.createdAt, true, timing, stopped, [e.seq]);
+        (out.at(-1) as AssistantWork).via = e.body.via;
+      } else if (text || pending.length || heldPosts.size || stopped) {
         spillHeldPosts();
         if (posted && text) {
           pending.push({ ...e, variant: "narration", body: { demoted: true } });
@@ -2292,6 +2360,15 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
         else original.edited = true;
       }
       out.push({ ...revision, timestamp: e.createdAt } as unknown as AgentMessage);
+    } else if (e.kind === "Error" && e.text && e.errorCode === "steer_withheld") {
+      spillHeldPosts();
+      flushWork("", e.createdAt);
+      out.push({
+        role: "system-note",
+        note: "notice",
+        content: e.text,
+        timestamp: e.createdAt,
+      } as unknown as AgentMessage);
     } else if (e.kind === "Error" && e.text) {
       spillHeldPosts();
       flushWork("", e.createdAt);

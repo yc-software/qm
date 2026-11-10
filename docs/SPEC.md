@@ -12,7 +12,9 @@
 
 ## Subsystems, most central first
 
-**Agent turns.** The system revolves around durable execution against a central writeahead log: the session tape. To execute an agent turn, a session offers up a write lease, at which point a worker claims it from the run queue. The _orchestrator_ assembles context and drives a harness, which fulfills tool calls, and the result is committed to the session tape. The system should be robust to interruption at any time, end to end, and scale to swarms that are millions of agents strong.
+**Agent turns.** The system revolves around durable execution against a central write-ahead log: the session's item log, stored in the `items` table. To execute an agent turn, a worker claims a queued run from the run queue; that run claim is the session's only turn lock and fences the turn's writes. The _orchestrator_ assembles context and drives a harness, which fulfills tool calls, and the result is committed to the item log. The system should be robust to interruption at any time, end to end, and scale to swarms that are millions of agents strong.
+
+**Delegation.** Subagents are ring 0: open, message, wake, interrupt, stop, wait and tree status sit on the per-turn hot path and meet the same bar as the turn loop. The contract: an interrupt stops only its target's current run and delivers its text as the target's next turn; a parent agent's interrupt and the user's Stop button leave the stopped session's subagents running, and their results still wake it; a user's stop of everything (a typed stop, or the explicit whole-tree stop), a goal cancel or the swarm also stops the stopped run's descendants; a child that is not read-only can wake its parent at any depth, and a finished child wakes its parent; a writable top-level conversation's message wakes another idle top-level conversation in its context, which runs on the recipient's own context, and peer wakes stop after eight in a row; a turn that ends while its own subagents still work reports progress, not a final answer; liveness is the latest tool step, not the turn end; a child shares its parent's sandbox unless told to use its own directory or sandbox; tool result text states what happened and never recommends a destructive action.
 
 **Models.** Agents have a single tool catalog; their turns are fulfilled by Pi, which calls into the model catalog, the canonical source for model varieties, effort levels, speed multipliers, and their prices. A particular selection of those variables fulfilling a turn is called the _runtime_.
 
@@ -170,13 +172,25 @@ Replacing or swallowing a failure so the evidence needed to diagnose it disappea
 
 ### Arbitrary limits (5 examples)
 
-Inventing a small cap (a count, length, byte size, page size, timeout or retry budget) that no real constraint requires. Tests sized to the cap pass; real workloads cross it after deploy, and the bug, once found, is the limit. Add a limit only when an external constraint forces it (a documented provider, Slack, Postgres or model limit, cited where the constant is defined), a measured memory, cost or abuse bound requires it, or the user asks for one. When a bound is truly needed, make it generous, page instead of dropping, and fail loudly with the limit's name and what was cut. Raising a made-up cap to a bigger made-up cap repeats the mistake.
+Inventing a small cap (a count, length, byte size, page size, timeout or retry budget) that no real constraint requires. Tests sized to the cap pass; real workloads cross it after deploy, and the bug, once found, is the limit. Add a limit only when an external constraint forces it (a documented provider, Slack, Postgres or model limit, cited where the constant is defined), a measured memory, cost or abuse bound requires it, or the user asks for one. Every cap needs a documented, extremely strong reason stated where it is defined; guarding against a failure that has not been observed or measured, such as hypothetical runaway work or spend, is not one. When a bound is truly needed, make it generous, page instead of dropping, and fail loudly with the limit's name and what was cut. Raising a made-up cap to a bigger made-up cap repeats the mistake.
 
 - **Decision questions** (2026-10-14): The server rejected decision-rule questions longer than 500 characters though the editor accepted longer text. _Status:_ removed in [qm#2338](https://github.com/yc-software/qm/pull/2338).
-- **Swarm settings and subagent runs** (2026-10-09): Swarms carried invented maximums (256 agents, 16 KB of context, 30 s waits) and were removed in [qm#2141](https://github.com/yc-software/qm/pull/2141). The same day the subagent tree run cap was raised from 10 to 50 in [qm#2169](https://github.com/yc-software/qm/pull/2169), trading one made-up number for another. _Status:_ the cap of 50 is still on main.
+- **Swarm settings and subagent runs** (2026-10-09): Swarms carried invented maximums (256 agents, 16 KB of context, 30 s waits) and were removed in [qm#2141](https://github.com/yc-software/qm/pull/2141). The same day the subagent tree run cap was raised from 10 to 50 in [qm#2169](https://github.com/yc-software/qm/pull/2169), trading one made-up number for another. `SUBAGENT_TREE_RUN_CAP` had no documented reason, and refused new subagents and wakes once a conversation tree had 50 runs in flight. _Status:_ removed in [qm#3002](https://github.com/yc-software/qm/pull/3002).
 - **Unprompted-reply judge:** `renderDetectPrompt` passes only the first 2,000 characters of the system prompt to the model deciding whether to chime in. Organization instructions come first, so a long org block silently cuts off the conversation's own instructions, including any about when to chime in. _Status:_ still present on main.
 - **Approval summaries:** `redactCommand` both redacts secrets and cuts its output to 500 characters, and approval cards are built from it, so a person can approve a call whose arguments they were shown only in part, with no marker. _Status:_ still present on main.
 - **Slack context and inbox snippets:** Every message from `/v1/surface-context` is clipped to 600 characters, the agent's built-in route to Slack history beyond the injected window. Inbox items cut snippets to 500 characters while the sync task tells the agent to send the full text, "never shortened". _Status:_ still present on main.
+
+### Explaining-away UI (1 example)
+
+The UI form of a band-aid: if the UI needs a sentence to explain why it didn't do what the person asked, the rule is wrong, not the copy. Treat any note, toast or tooltip that justifies a refusal or a quiet reroute as a reason to question the rule behind it; keep such text only for a real constraint the person can act on.
+
+- **Steer refused with an explanation** (2026-11-04): The web composer answered a refused Steer with "This message will run as its own turn after the current one." In a person's own web chat, a Steer during a turn woken by another conversation's message got that note, so the copy made a wrong refusal look intended. _Status:_ the refusal is removed for explicit steers in [qm#3109](https://github.com/yc-software/qm/pull/3109); the note remains for a model-account change, which the person can act on.
+
+### Category gate without census (1 example)
+
+Gating behaviour on a category (origin, kind, role, surface) without listing what falls into it. Before adding or moving such a gate, grep every assignment of the category, list the real cases it catches, and say which of them change. A category named for its first use quietly grows to cover unrelated producers.
+
+- **Automation origin in the mid-turn router** (2026-11-03): [qm#2907](https://github.com/yc-software/qm/pull/2907) moved "a person's message never steers into a live automation turn", written for cron posts in shared Slack channels, into the one router for every surface. Automation origin also covers webhooks, job watches, loops, swarms, Slack ambient wakes, orphan-steer replays, and messages handed over from other conversations, so web steers into those turns were refused. _Status:_ [qm#3109](https://github.com/yc-software/qm/pull/3109) applies the gate only to messages that did not explicitly ask to steer.
 
 ### Historylessness (always reviewed, 5 examples)
 
@@ -192,11 +206,12 @@ Growing the codebase to keep every path it ever took alive. The canonical case: 
 
 Description and examples pending human input.
 
-### Prod-like QA (1 example)
+### Prod-like QA (2 examples)
 
-QA every behavior change in a prod-like setting on the real system it touches before merge. Mocks and unit tests don't count; a missing credential is a blocker to solve or report, not a reason to merge.
+QA every behavior change in a prod-like setting on the real system it touches before merge. Mocks and unit tests don't count; a missing credential is a blocker to solve or report, not a reason to merge. "The real system" means the provider and path production uses, not a convenient local stand-in; a production path the reviewer can name as untested is a reason to request changes, not a footnote to an accept.
 
 - **Shipped changes for a provider without testing on that provider** (2026-10-12): [qm#2226](https://github.com/yc-software/qm/pull/2226) changed how the Fly deploy provider starts and supervises apps, and merged with only mocked unit tests for Fly. The agent had no working Fly token and shipped anyway.
+- **QA on a local provider for a change that ships on another** (2026-11-05): [qm#3137](https://github.com/yc-software/qm/pull/3137) added WebSocket upgrades to the app gateway. Its live QA ran a Vite dev server on the local Docker deploy provider, while published apps in production run on AWS microVMs, which core dials over TLS with proxy-auth headers. A separate probe exercised the AWS ingress directly, bypassing core. The Prod-like QA reviewer, given the author's summary rather than the raw evidence, named the untested AWS dial as a gap and accepted anyway. _Status:_ overridden to Request changes; the PR was then QA'd on a real AWS microVM and the lens accepted.
 
 ### Performance (3 examples)
 

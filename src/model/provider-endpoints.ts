@@ -2,20 +2,26 @@ import { createHmac } from "node:crypto";
 import { isGatewayModelId } from "./gateway-models.ts";
 import { currentModelRequestContext } from "./request-context.ts";
 import { attestableActor } from "../directory/person.ts";
+import { tenantSettings } from "../tenants/settings.ts";
+import { trimTrailingSlashes } from "../util/text.ts";
 
-export const PROVIDER_IDS = ["anthropic", "openai", "openrouter"] as const;
-type ProviderId = (typeof PROVIDER_IDS)[number];
+export const MODEL_PROVIDERS = ["anthropic", "openai", "openrouter"] as const;
+export type ModelProvider = (typeof MODEL_PROVIDERS)[number];
 
-const PROVIDER_BASE_URL_ENV: Record<ProviderId, string> = {
+export function isModelProvider(value: unknown): value is ModelProvider {
+  return typeof value === "string" && (MODEL_PROVIDERS as readonly string[]).includes(value);
+}
+
+const PROVIDER_BASE_URL_ENV: Record<ModelProvider, string> = {
   anthropic: "ANTHROPIC_BASE_URL",
   openai: "OPENAI_BASE_URL",
   openrouter: "OPENROUTER_BASE_URL",
 };
 
-export type ProviderBaseUrls = Partial<Record<ProviderId, string>>;
+export type ProviderBaseUrls = Partial<Record<ModelProvider, string>>;
 
 export function gatewayRoot(url: string): string {
-  return url.replace(/\/+$/, "").replace(/\/v1$/, "");
+  return trimTrailingSlashes(url).replace(/\/v1$/, "");
 }
 
 export interface ModelGatewayTransportConfig {
@@ -29,7 +35,7 @@ export interface ModelGatewayTransportConfig {
 }
 
 export function parseProviderBaseUrl(envName: string, value: string): string {
-  const trimmed = value.trim().replace(/\/+$/, "");
+  const trimmed = trimTrailingSlashes(value.trim());
   let url: URL;
   try {
     url = new URL(trimmed);
@@ -46,7 +52,7 @@ export function parseProviderBaseUrl(envName: string, value: string): string {
 
 export function providerBaseUrlsFromEnv(env: NodeJS.ProcessEnv): ProviderBaseUrls {
   const urls: ProviderBaseUrls = {};
-  for (const provider of PROVIDER_IDS) {
+  for (const provider of MODEL_PROVIDERS) {
     const envName = PROVIDER_BASE_URL_ENV[provider];
     const raw = env[envName];
     if (raw?.trim()) urls[provider] = parseProviderBaseUrl(envName, raw);
@@ -61,7 +67,7 @@ export function setProviderBaseUrls(urls: ProviderBaseUrls): void {
 }
 
 export function providerBaseUrl(provider: string): string | undefined {
-  return (PROVIDER_IDS as readonly string[]).includes(provider) ? configured[provider as ProviderId] : undefined;
+  return isModelProvider(provider) ? configured[provider] : undefined;
 }
 
 export class ModelUnavailableError extends Error {
@@ -115,6 +121,10 @@ function gatewayScopeId(scopeId: string | undefined, key: string | undefined): s
   return key ? `personal:${gatewayActorId(scopeId.slice("personal:".length), key)}` : undefined;
 }
 
+export function gatewayKey(config: Pick<ModelGatewayTransportConfig, "apiKey">): string {
+  return tenantSettings().modelGatewayKey ?? config.apiKey;
+}
+
 export function modelGatewayHeaders(
   config: Pick<ModelGatewayTransportConfig, "apiKey" | "apiKeyHeader" | "actorKey">,
   purpose?: ModelRequestPurpose,
@@ -127,7 +137,7 @@ export function modelGatewayHeaders(
     scopeId: gatewayScopeId(attestableActor(scopeId), config.actorKey),
     purpose,
   };
-  const headers: Record<string, string> = { [config.apiKeyHeader]: config.apiKey };
+  const headers: Record<string, string> = { [config.apiKeyHeader]: gatewayKey(config) };
   for (const [name, field] of Object.entries(MODEL_REQUEST_CONTEXT_HEADERS)) {
     const value = context[field];
     const attested = attestableActor(value);
@@ -136,11 +146,10 @@ export function modelGatewayHeaders(
   return headers;
 }
 
-export function modelGatewayRequest<T extends { id: string; baseUrl: string; api?: string; compat?: object }>(
+export function modelGatewayRoute<T extends { id: string; baseUrl: string; api?: string; compat?: object }>(
   config: ModelGatewayTransportConfig | undefined,
   model: T,
-  purpose?: ModelRequestPurpose,
-): { model: T; target: string; apiKey: string; headers: Record<string, string> } | undefined {
+): { model: T; target: string } | undefined {
   const target = config?.models[model.id];
   if (!target || !config) {
     if (isGatewayModelId(model.id) || config?.reservedModelIds?.has(model.id))
@@ -156,7 +165,15 @@ export function modelGatewayRequest<T extends { id: string; baseUrl: string; api
         : config.url,
     },
     target,
-    apiKey: config.apiKey,
-    headers: modelGatewayHeaders(config, purpose),
   };
+}
+
+export function modelGatewayRequest<T extends { id: string; baseUrl: string; api?: string; compat?: object }>(
+  config: ModelGatewayTransportConfig | undefined,
+  model: T,
+  purpose?: ModelRequestPurpose,
+): { model: T; target: string; apiKey: string; headers: Record<string, string> } | undefined {
+  const route = modelGatewayRoute(config, model);
+  if (!route || !config) return undefined;
+  return { ...route, apiKey: gatewayKey(config), headers: modelGatewayHeaders(config, purpose) };
 }

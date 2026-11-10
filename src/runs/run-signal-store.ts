@@ -1,6 +1,6 @@
-import type { OrchestratorInput } from "../core/orchestrator/types.ts";
-import type { ClientToolResult, TurnRequest } from "../types.ts";
+import type { ClientToolResult, StopScope, TurnRequest } from "../types.ts";
 import { swallowAs } from "../util/errors.ts";
+import type { ClaimedRow } from "../tenants/claim.ts";
 
 export type RunSignalKind = "abort" | "steer" | "client_result";
 
@@ -10,21 +10,21 @@ export interface RunSignal {
   ts?: string;
   request?: TurnRequest;
   dedupeKey?: string;
-  sessionRequest?: OrchestratorInput;
   queuedRunId?: string;
   callId?: string;
   result?: ClientToolResult;
   reason?: string;
+  scope?: StopScope;
 }
 
 export interface RunSignalStore {
   send(runId: string, signal: RunSignal): Promise<boolean>;
-  hasDedupeKey(dedupeKey: string): Promise<boolean>;
+  runForDedupeKey(dedupeKey: string): Promise<string | undefined>;
   pending(runId: string): Promise<Array<{ id: string; signal: RunSignal }>>;
   acknowledge(runId: string, id: string): Promise<void>;
   takePending(runId: string): Promise<RunSignal[]>;
   steerAuthors(runId: string): Promise<string[]>;
-  pendingRunIds(): Promise<string[]>;
+  pendingRuns(): Promise<ClaimedRow[]>;
   prune(olderThanMs: number): Promise<void>;
   onSignal(runId: string, cb: () => void): () => void;
   close?(): Promise<void>;
@@ -79,10 +79,13 @@ export function waitForClientResult(
       }
     };
     const timer = setTimeout(() => finish("timeout"), opts.timeoutMs);
-    const unsubscribe = signals.onSignal(runId, () => void check());
+    const checkInBackground = (): void => {
+      check().catch(swallowAs("client result check", undefined));
+    };
+    const unsubscribe = signals.onSignal(runId, checkInBackground);
     if (opts.signal?.aborted) return finish("cancelled");
     opts.signal?.addEventListener("abort", onAbort, { once: true });
-    void check();
+    checkInBackground();
   });
 }
 
@@ -90,7 +93,7 @@ const SIGNAL_POLL_MS = 5_000;
 
 export interface SignalPollHandlers {
   onSteer(text: string, ts?: string, request?: TurnRequest, acknowledge?: () => Promise<void>): Promise<void | boolean>;
-  onAbort(reason?: string): Promise<void>;
+  onAbort(stop: RunSignal): Promise<void>;
 }
 
 export function startSignalPoll(
@@ -104,35 +107,46 @@ export function startSignalPoll(
   let redrain = false;
   let accepting = true;
   let inFlight: Promise<void> = Promise.resolve();
+  let stopDelivered = false;
+  let stopCheck: Promise<void> = Promise.resolve();
+  const deliverStop = (known?: Awaited<ReturnType<RunSignalStore["pending"]>>): Promise<void> => {
+    const check = async (): Promise<void> => {
+      if (stopDelivered) return;
+      const stop = (known ?? (await signals.pending(runId))).find(({ signal }) => signal.kind === "abort");
+      if (stop?.signal.kind !== "abort") return;
+      await handlers.onAbort(stop.signal);
+      stopDelivered = true;
+    };
+    return (stopCheck = stopCheck.then(check, check));
+  };
   const drain = (forced = false): void => {
     if (!accepting && !forced) return;
     if (draining) {
       redrain = true;
+      void deliverStop().catch((e: unknown) => opts?.onError?.(e));
       return;
     }
     draining = true;
+    stopDelivered = false;
     inFlight = (async () => {
-      let abortDelivered = false;
-      for (const { id, signal: s } of await signals.pending(runId)) {
-        if (s.kind === "client_result") continue;
+      const pending = await signals.pending(runId);
+      await deliverStop(pending).catch((e: unknown) => opts?.onError?.(e));
+      let tookOne = false;
+      for (const { id, signal: s } of pending) {
+        if (s.kind === "abort" || s.kind === "client_result" || declined.has(id)) continue;
         try {
-          if (s.kind === "abort") {
-            if (!abortDelivered) {
-              await handlers.onAbort(s.reason);
-              abortDelivered = true;
+          if (tookOne) await deliverStop();
+          tookOne = true;
+          if (s.text || s.request?.attachments?.length) {
+            const delivered = await handlers.onSteer(s.text ?? "", s.ts, s.request, () =>
+              signals.acknowledge(runId, id),
+            );
+            if (delivered === false) {
+              declined.add(id);
+              continue;
             }
-          } else if (!declined.has(id)) {
-            if (s.text || s.request?.attachments?.length) {
-              const delivered = await handlers.onSteer(s.text ?? "", s.ts, s.request, () =>
-                signals.acknowledge(runId, id),
-              );
-              if (delivered === false) {
-                declined.add(id);
-                continue;
-              }
-            }
-            await signals.acknowledge(runId, id);
           }
+          await signals.acknowledge(runId, id);
         } catch (e) {
           opts?.onError?.(e);
         }

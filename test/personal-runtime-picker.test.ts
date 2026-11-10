@@ -108,7 +108,7 @@ test("personal picker keeps org restrictions and shared-scope caller isolation",
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: "web:U1:excluded-saved-model" },
       text: "hello",
-      liveActor: true,
+      origin: { kind: "human" },
       async: true,
       model: "gpt-5.6-terra",
     });

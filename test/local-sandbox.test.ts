@@ -319,3 +319,14 @@ test("core attachment trusts the core's actual networks, not docker's connect er
   });
   await assert.rejects(refusing.provision(scope), /network connect .* failed: endpoint already exists/);
 });
+
+test("a computer's memory size is the container's memory limit", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const sb = makeSandbox(fake);
+  const sized = await sb.provision(scopeId("personal", "U41"), { memoryGb: 3 });
+  const args = fake.containers.get(sized.id)!.args;
+  assert.equal(args[args.indexOf("--memory") + 1], "3g");
+  const unsized = await sb.provision(scopeId("personal", "U42"));
+  assert.equal(fake.containers.get(unsized.id)!.args.includes("--memory"), false);
+  assert.equal(sb.profile.sizesMemory, true);
+});

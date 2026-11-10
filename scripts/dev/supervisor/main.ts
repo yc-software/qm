@@ -271,7 +271,6 @@ function writeLegacyMeta(booting: boolean): void {
     worktree,
     branch,
     port: String(ports.core),
-    web_port: String(ports.web),
     portal_port: String(ports.portal),
     handle,
     supervisor_pid: String(process.pid),
@@ -317,11 +316,7 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
   phase("env", "ok", `live turns (anthropic key from ${assembled.anthropicKeySource})`);
 
   phase("deps", "start");
-  await ensureDeps(
-    worktree,
-    { web: spec.web, watch: spec.watch, webUiBasePath: spec.callerEnv.DEV_INSTANCE_WEB_UI_BASE || "/" },
-    log,
-  );
+  await ensureDeps(worktree, { web: spec.web, webUiBasePath: spec.callerEnv.DEV_INSTANCE_WEB_UI_BASE || "/" }, log);
   phase("deps", "ok");
 
   phase("sandbox", "start");
@@ -691,8 +686,7 @@ async function reload(body: Record<string, unknown>): Promise<Record<string, unk
     });
     const dryEnvSha = computeEnvSha(assembled.env);
     const allHealthy =
-      children.size === (spec.web === false ? 1 : CHILD_ORDER.length) &&
-      [...children.values()].every((c) => c.state === "healthy");
+      children.size === CHILD_ORDER.length && [...children.values()].every((c) => c.state === "healthy");
     return {
       ok: true,
       noop: dryEnvSha === currentEnvSha && allHealthy,
@@ -708,7 +702,7 @@ async function reload(body: Record<string, unknown>): Promise<Record<string, unk
   const newGitSha = gitHead(worktree);
   const noopEligible =
     newEnvSha === currentEnvSha &&
-    children.size === (spec.web === false ? 1 : CHILD_ORDER.length) &&
+    children.size === CHILD_ORDER.length &&
     [...children.values()].every((c) => c.state === "healthy");
   if (!force && noopEligible) {
     return {

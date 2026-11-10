@@ -105,16 +105,6 @@ test("answerWebContextRequest reads the log as the asking viewer, refuses gracef
     async countItemsBefore(_id: string, beforeSeq: number) {
       return items.filter((item) => item.seq < beforeSeq).length;
     },
-    async participantWindowsOf(sessionId: string) {
-      return ["steve@acme.com", "carol@acme.com"].map((principalId) => ({
-        sessionId,
-        principalId,
-        validFrom: 0,
-        validTo: null,
-        validFromSeq: null,
-        validToSeq: null,
-      }));
-    },
   };
 
   const asViewer = await answerWebContextRequest(sessions, {

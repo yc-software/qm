@@ -2,6 +2,7 @@ import type { RuntimeChoice } from "../agent/agent.ts";
 import { unrecordedToolResult } from "../agent/context-compaction.ts";
 import type { RunStop } from "../runs/run-store.ts";
 import { isAgentReply, isOverheard, type Item, type NewItem } from "../sessions/items.ts";
+import { isObj } from "../util/objects.ts";
 
 const differentTurn = (item: Item, turn: Item): boolean =>
   item.turnId !== null && turn.turnId !== null && item.turnId !== turn.turnId;
@@ -22,9 +23,10 @@ export function findTrailingPartialTurn(items: readonly Item[], runId: string | 
   let workEntries = 0;
   for (let i = items.length - 1; i >= 0; i--) {
     const e = items[i]!;
+    if (e.turnId !== null && e.turnId !== runId) continue;
     if (e.kind === "Stop") return null;
     if (isAgentReply(e)) {
-      const start = items.slice(0, i).findLast(isTurnStart);
+      const start = items.slice(0, i).findLast((x) => isTurnStart(x) && (x.turnId === null || x.turnId === runId));
       if (!start || !differentTurn(e, start)) return null;
       continue;
     }
@@ -39,8 +41,15 @@ export function findTrailingPartialTurn(items: readonly Item[], runId: string | 
   return null;
 }
 
+export function overtaken(items: readonly Item[], partial: PartialTurn, runId: string | undefined): boolean {
+  return items.some(
+    (e) =>
+      e.seq > partial.userSeq && e.kind === "UserMessage" && !isOverheard(e) && e.turnId !== null && e.turnId !== runId,
+  );
+}
+
 export interface RecordedTurn extends PartialTurn {
-  answer?: { seq: number; text: string };
+  answer?: { seq: number; text: string; stopped?: true; cancelled?: true };
 }
 
 export function turnAtSeq(items: readonly Item[], userSeq: number): RecordedTurn | null {
@@ -50,9 +59,14 @@ export function turnAtSeq(items: readonly Item[], userSeq: number): RecordedTurn
   let answer: RecordedTurn["answer"];
   for (let i = start + 1; i < items.length; i++) {
     const e = items[i]!;
-    if (e.kind !== "UserMessage" && e.kind !== "SteeringMessage" && differentTurn(e, items[start]!)) continue;
+    if (differentTurn(e, items[start]!)) continue;
     if (isAgentReply(e)) {
-      answer = { seq: e.seq, text: (e.text ?? "").trim() };
+      answer = {
+        seq: e.seq,
+        text: (e.text ?? "").trim(),
+        ...(e.body.stopped === true ? { stopped: true } : {}),
+        ...(e.body.cancelled === true ? { cancelled: true } : {}),
+      };
       continue;
     }
     if (e.kind === "ToolCall" || e.kind === "ToolResult" || e.kind === "SteeringMessage") {
@@ -71,51 +85,43 @@ export interface ResumableToolCall {
   input: Record<string, unknown>;
 }
 
-export type ResumeStrategy =
-  | { kind: "restart" }
-  | { kind: "continue" }
-  | { kind: "retry"; call: ResumableToolCall }
-  | { kind: "settle"; calls: Array<{ callId: string; tool: string }> };
-
-export function resumeStrategy(items: readonly Item[], partial: PartialTurn): ResumeStrategy {
-  if (partial.workEntries === 0) return { kind: "restart" };
-  const anchor = items.find((e) => e.seq === partial.userSeq);
-  const turn = items.filter((e) => e.seq > partial.userSeq && (!anchor || !differentTurn(e, anchor)));
-  const withResult = new Set(turn.flatMap((e) => (e.kind === "ToolResult" ? [e.callId] : [])));
-  const dangling = turn.filter((e) => e.kind === "ToolCall" && !withResult.has(e.callId));
-  if (dangling.length === 0) return { kind: "continue" };
-  const unrecorded = dangling.flatMap((e) => (e.callId ? [{ callId: e.callId, tool: e.tool ?? "tool" }] : []));
-  const settle: ResumeStrategy = unrecorded.length ? { kind: "settle", calls: unrecorded } : { kind: "continue" };
-  if (dangling.length !== 1) return settle;
-  const call = dangling[0]!;
-  const rerun = call.body.rerun as { tool?: unknown; input?: unknown } | undefined;
-  if (
-    call.body.retrySafe !== true ||
-    !call.callId ||
-    typeof rerun?.tool !== "string" ||
-    rerun.input === null ||
-    typeof rerun.input !== "object" ||
-    Array.isArray(rerun.input)
-  )
-    return settle;
-  return {
-    kind: "retry",
-    call: { callId: call.callId, tool: rerun.tool, input: rerun.input as Record<string, unknown> },
-  };
+export interface Reconciled {
+  settleItems: NewItem<"ToolResult">[];
+  resumed: boolean;
+  rerun?: ResumableToolCall;
 }
 
-export function unrecordedResultItems(
-  strategy: Extract<ResumeStrategy, { kind: "settle" }>,
-  stop: RunStop | undefined,
-): NewItem<"ToolResult">[] {
-  return strategy.calls.map((call) => ({
-    kind: "ToolResult",
-    tool: call.tool,
-    callId: call.callId,
-    isError: true,
-    text: unrecordedToolResult(stop),
-    body: { interrupted: true },
-  }));
+export function reconcile(history: readonly Item[], turn: PartialTurn, stop?: RunStop): Reconciled {
+  if (turn.workEntries === 0) return { settleItems: [], resumed: false };
+  const anchor = history.find((e) => e.seq === turn.userSeq);
+  const answered = new Set(history.flatMap((e) => (e.kind === "ToolResult" ? [e.callId] : [])));
+  const dangling = history.flatMap((e) =>
+    e.kind === "ToolCall" &&
+    e.callId &&
+    !answered.has(e.callId) &&
+    e.seq > turn.userSeq &&
+    !differentTurn(e, anchor ?? e)
+      ? [{ callId: e.callId, tool: e.tool ?? "tool", retrySafe: e.body.retrySafe, rerun: e.body.rerun }]
+      : [],
+  );
+  const lone = dangling.length === 1 && dangling[0]!.retrySafe === true ? dangling[0]!.rerun : undefined;
+  if (isObj(lone) && typeof lone.tool === "string" && isObj(lone.input) && !Array.isArray(lone.input))
+    return {
+      settleItems: [],
+      resumed: true,
+      rerun: { callId: dangling[0]!.callId, tool: lone.tool, input: lone.input },
+    };
+  return {
+    settleItems: dangling.map(({ callId, tool }) => ({
+      kind: "ToolResult",
+      tool,
+      callId,
+      isError: true,
+      text: unrecordedToolResult(stop),
+      body: { interrupted: true },
+    })),
+    resumed: true,
+  };
 }
 
 export function runtimeSwitchNote(choice: RuntimeChoice | undefined): string {

@@ -79,8 +79,8 @@ test("enqueue stays a plain insert; the drain writes the text durably before the
     ],
   );
   const messages = reconstructMessagesFromHistory(entries);
-  assert.equal(messages.at(-1)!.role, "assistant");
-  assert.match(JSON.stringify(messages), /Reminder: standup in 10 minutes/);
+  assert.equal(messages.at(-1)!.role, "user");
+  assert.match(JSON.stringify(messages), /<message from=\\"agent\\" via=\\"cron\\">Reminder: standup in 10 minutes/);
   assert.doesNotMatch(JSON.stringify(messages), /toolCall|toolResult/);
 });
 
@@ -255,7 +255,7 @@ test("a web delivery whose target session is missing is delivered as a nudge, lo
     restore();
   }
   assert.ok(lines.some((line) => line.includes("web:nobody@example.com:gone")));
-  assert.equal((await sessions.scanAll()).length, 1, "no odd session state is invented for the dead target");
+  assert.equal(await sessions.countSessions(), 1, "no odd session state is invented for the dead target");
 });
 
 const actor: Principal = { id: "alice@example.com", type: "internal" };

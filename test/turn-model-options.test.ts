@@ -32,7 +32,7 @@ test("web model controls are bounded by admin configuration", () => {
 });
 
 test("interactive turns do not force model options", () => {
-  assert.deepEqual(turnModelOptions({}), {});
+  assert.deepEqual(turnModelOptions({ triggered: false }), {});
 });
 
 test("a triggered turn with an explicit low thinking level overrides the xhigh trigger default", () => {

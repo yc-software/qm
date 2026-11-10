@@ -40,14 +40,12 @@ await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
 const upstreamUrl = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
 Object.assign(process.env, {
   NODE_ENV: "test",
-  PORTAL_PUBLIC_URL: origin,
+  PUBLIC_WEB_URL: origin,
   PORTAL_SESSION_SECRET: sessionSecret,
   CORE_SIGNING_SECRET: coreSecret,
   CORE_ORG_ID: "invite-test",
   CORE_API_URL: upstreamUrl,
-  WEB_UI_UPSTREAM: upstreamUrl,
   PORTAL_LOCAL_AUTH_BYPASS: "0",
-  PORTAL_PLAYGROUND: "0",
 });
 const { server } = await import("../src/index.ts");
 await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));

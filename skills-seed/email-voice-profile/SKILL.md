@@ -10,8 +10,16 @@ Use this when the user asks you to learn how they write email — "learn my voic
 `email-draft-in-voice` needs a profile that doesn't exist yet.
 
 **Personal DMs only.** Sent mail is private; refuse to run this from a channel or group
-and offer to continue in the user's DM. The profile you produce lives in their personal
-workspace, so only their own conversations can read it.
+and offer to continue in the user's DM. The profile you produce is published to their
+personal Files, so only their own conversations and their own Inbox drafting can read it.
+
+## 0. Check Files first
+
+Computers are replaced without notice, so nothing durable lives on one. Before building,
+search memory for "email voice profile" and `GET $AGENT_API_URL/v1/files?q=email-voice-profile`
+(header `x-agent-capability: $AGENT_API_TOKEN`). An existing profile is refreshed, not
+rebuilt blind: download it with `GET $AGENT_API_URL/v1/files/<id>/content` and carry its
+validated hard rules forward unless the new corpus contradicts them.
 
 ## 1. Pull the corpus
 
@@ -34,7 +42,8 @@ it in the profile so drafts never include it (Gmail appends it on send).
 
 ## 3. Write the profile
 
-Write `voice/email-voice-profile.md` in the workspace with exactly these sections,
+Write `email-voice-profile.md` (that exact name; the Inbox drafting loop looks it up by
+name) with exactly these sections,
 every claim backed by observed frequency ("uses 'Best,' in 80% of external mail"),
 with 2–3 verbatim example lines each:
 
@@ -61,5 +70,14 @@ distinction. Record `validated: <date>` at the top of the profile once the draft
 as plausibly theirs.
 
 Show the user the finished profile and ask what feels wrong; their corrections go in
-as hard rules. Re-run this skill any time they want it refreshed — it overwrites the
-corpus and profile in place.
+as hard rules.
+
+## 5. Publish it
+
+Upload the finished file to Files: `curl -fsS "$AGENT_API_URL/v1/files/upload-client"
+-H "x-agent-capability: $AGENT_API_TOKEN" -o /tmp/qm-upload.py && python3 /tmp/qm-upload.py
+email-voice-profile.md`, then record one memory fact: "Email voice profile is Files
+<id> (built <date>)". The Inbox drafting loop reads the newest `email-voice-profile.md`
+in the user's Files on every pass, so publishing is what makes drafts sound like them.
+The corpus stays on the computer; only the profile is durable. Re-run this skill any
+time they want it refreshed — publish the new version and update the memory fact.

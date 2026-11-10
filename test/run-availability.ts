@@ -8,6 +8,7 @@ import { createMemoryEventBus } from "../src/util/event-bus.ts";
 import { createWorker } from "../src/runs/worker.ts";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { seedTestTenant } from "./support/test-tenant.ts";
 
 const actor = { id: "internal:U1", type: "internal" as const };
 const request: OrchestratorInput = {
@@ -29,8 +30,9 @@ async function isolatedPostgres(): Promise<{ url: string; admin: pg.Pool; cleanu
   const schema = `run_availability_${randomUUID().replaceAll("-", "")}`;
   await admin.query(`CREATE SCHEMA ${schema}`);
   const url = new URL(process.env.DATABASE_URL!);
-  url.searchParams.set("options", `-c search_path=${schema}`);
+  url.searchParams.set("options", `${url.searchParams.get("options") ?? ""} -c search_path=${schema}`.trim());
   url.searchParams.set("application_name", schema);
+  await seedTestTenant(url.toString());
   return {
     url: url.toString(),
     admin,
@@ -136,7 +138,7 @@ test(
     let resyncs = 0;
     const off = reader.runs.subscribeAvailable!(() => notifications++, {
       pollMs: 60_000,
-      onResync: () => resyncs++,
+      onResync: () => void resyncs++,
     });
     const ids: string[] = [];
     try {
@@ -339,14 +341,13 @@ test(
       const claimedOther = (await runtime.runs.claim("other-worker", 5_000))[0] ?? null;
       assert.equal(claimedOther?.id, other.id, "a locked head blocks its siblings without blocking another session");
       assert.equal((await runtime.runs.claim("waiting-worker", 5_000))[0] ?? null, null);
-      assert.equal(await runtime.runs.claimById(second.id, "inline-worker", 5_000), null);
-      assert.equal(await runtime.runs.claimForSession("ordered", "inline-worker", 5_000), null);
+      assert.equal(await runtime.runs.claimById(second.id, "targeted-worker", 5_000), null);
       await holder.query("ROLLBACK");
-      const claimedFirst = await runtime.runs.claimForSession("ordered", "head-worker", 5_000);
+      const claimedFirst = await runtime.runs.claimById(first.id, "head-worker", 5_000);
       assert.equal(claimedFirst?.id, first.id);
-      assert.equal(await runtime.runs.claimById(second.id, "inline-worker", 5_000), null);
+      assert.equal(await runtime.runs.claimById(second.id, "targeted-worker", 5_000), null);
       await runtime.runs.complete(first.id, claimedFirst!.leaseToken!, { status: "ok" });
-      const claimedSecond = await runtime.runs.claimById(second.id, "inline-worker", 5_000);
+      const claimedSecond = await runtime.runs.claimById(second.id, "targeted-worker", 5_000);
       assert.equal(claimedSecond?.id, second.id);
     } finally {
       await holder.query("ROLLBACK");

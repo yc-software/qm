@@ -202,7 +202,7 @@ function useAppRegionAsCustomProperty(document) {
     document.defaultView.getComputedStyle(document.querySelector(selector)).getPropertyValue("--app-region").trim();
 }
 
-test("Mac pane strip controls stay outside the window drag region", async () => {
+test("Mac pane strips drag the window only in single-pane mode", async () => {
   const app = await workspace();
   try {
     const { document } = app.window;
@@ -217,11 +217,13 @@ test("Mac pane strip controls stay outside the window drag region", async () => 
       </div></div></div>`,
     );
     const region = useAppRegionAsCustomProperty(document);
-    assert.equal(region(".dv-void-container"), "drag");
+    assert.notEqual(region(".dv-void-container"), "drag");
     assert.equal(region(".dv-tab"), "no-drag");
     assert.equal(region(".dv-tabs-overflow-dropdown-default span"), "no-drag");
     document.querySelector(".split-canvas").classList.add("single-pane");
+    assert.equal(region(".dv-void-container"), "drag");
     assert.equal(region(".dv-tab"), "drag");
+    assert.equal(region(".dv-tabs-overflow-dropdown-default span"), "no-drag");
   } finally {
     app.close();
   }

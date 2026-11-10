@@ -241,7 +241,8 @@ the local sandbox from that source, then invokes the candidate's real applicatio
 Pi harness, model, and sandbox tools. Only the probe and transcript assertion are
 mounted into the core container; application code comes from the candidate image.
 The probe keeps its state in a disposable Postgres container that the script
-starts beside it and removes afterwards.
+starts beside it and removes afterwards. The probe streams its output and has eight
+minutes to finish before the script fails.
 Provide AWS ECR access and `ANTHROPIC_API_KEY`. Require this job alongside cloud
 qualification before promotion. If capturing output through a pipe, use a shell
 with `pipefail` so a failed probe cannot become a successful job.

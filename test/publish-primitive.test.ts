@@ -13,6 +13,7 @@ import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testConfigStore, testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { trimTrailingSlashes } from "../src/util/text.ts";
 
 function svc() {
   const deployStore: DeployStore = createDeployStore(testDeployBackings());
@@ -53,7 +54,7 @@ interface CtxOpts {
 
 function fileSandbox(files: Array<{ path: string; data: Uint8Array }>): Sandbox {
   const under = (dir: string) => {
-    const d = (dir ?? "").replace(/^\.?\/+/, "").replace(/\/+$/, "");
+    const d = trimTrailingSlashes((dir ?? "").replace(/^\.?\/+/, ""));
     return files.filter((f) => !d || d === "." || f.path === d || f.path.startsWith(`${d}/`));
   };
   return {
@@ -199,7 +200,10 @@ test("publish by name inherits the current entrypoint when redeploying without o
   assert.equal(second.version, 2);
   assert.equal(d.versions[1]!.entrypoint, "node server.js");
   assert.deepEqual(
-    (await s.deployStore.filesOf(d.id, 2))?.map((f) => ({ path: f.path, data: [...f.data] })),
+    (await s.deployStore.filesOf(d.id, (await s.deployStore.versionOf(d.id, 2))!.commit!)).map((f) => ({
+      path: f.path,
+      data: [...f.data],
+    })),
     [{ path: "server.js", data: [...bytes("v2")] }],
   );
 });
@@ -397,7 +401,7 @@ test("publish on a sandbox WITHOUT exportFiles (AWS) still collects the tree, an
   const awsLike = (readFor: (p: string) => Uint8Array | null): Sandbox =>
     ({
       listDir: async (_h: SandboxHandle, dir: string) => {
-        const d = (dir ?? "").replace(/^\.?\/+/, "").replace(/\/+$/, "");
+        const d = trimTrailingSlashes((dir ?? "").replace(/^\.?\/+/, ""));
         return files.filter((f) => !d || d === "." || f.path.startsWith(`${d}/`)).map((f) => f.path);
       },
       readFileBytes: async (_h: SandboxHandle, p: string) => readFor(p),

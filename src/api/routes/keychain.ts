@@ -14,7 +14,7 @@ import { sendJson } from "../http.ts";
 import { normalizeInboundExpiresAt } from "../expiry.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
-import { audit, resolveCapabilityDestination } from "./shared.ts";
+import { audit, personalCapability, resolveCapabilityDestination } from "./shared.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { cronIdOf } from "../../sessions/session-store.ts";
 import { connectorHostLabel } from "../../connectors/oauth.ts";
@@ -67,9 +67,13 @@ async function resolveScopeNames(
 }
 
 const keychainRoute =
-  (handle: (ctx: ApiCtx, kc: NonNullable<ApiCtx["deps"]["keychain"]>, capability: CapabilityClaims) => Promise<void>) =>
+  (
+    handle: (ctx: ApiCtx, kc: NonNullable<ApiCtx["deps"]["keychain"]>, capability: CapabilityClaims) => Promise<void>,
+    signedInPerson = false,
+  ) =>
   async (ctx: ApiCtx): Promise<void> => {
-    const { res, deps, capability } = ctx;
+    const { res, deps } = ctx;
+    const capability = signedInPerson ? personalCapability(ctx) : ctx.capability;
     if (!deps.keychain)
       return sendJson(res, 503, {
         error: "keychain_unavailable",
@@ -184,14 +188,14 @@ const keychainOverview = keychainRoute(async ({ res, app, deps }, kc, { actorId 
     ...asks.map((ask) => ask.requesterScopeId),
   ]);
   return sendJson(res, 200, { credentials, connectorCredentials, grants, asks, scopeNames });
-});
+}, true);
 
 const deleteCredential = keychainRoute(async ({ res, deps, params }, kc, { actorId, scopeId }) => {
   const id = params.id!;
   const ok = await kc.remove(actorId, id);
   if (ok) audit(deps, { principalId: actorId, action: "keychain.delete", resource: id, scopeLabel: scopeId });
   return ok ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: "not_found" });
-});
+}, true);
 
 const listGrants = keychainRoute(async ({ res }, kc, { actorId, scopeId }) => {
   const mine = await kc.listGrants({ ownerId: actorId });
@@ -205,7 +209,7 @@ const revokeGrant = keychainRoute(async ({ res, deps, params }, kc, { actorId, s
   const ok = await kc.revokeGrant(actorId, id);
   if (ok) audit(deps, { principalId: actorId, action: "keychain.revoke", resource: id, scopeLabel: scopeId });
   return ok ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: "not_found" });
-});
+}, true);
 
 type KeychainStore = NonNullable<ApiCtx["deps"]["keychain"]>;
 
@@ -343,6 +347,7 @@ const createAsk = keychainRoute(async (ctx, kc, capability) => {
     ...(capability.threadRef ? { requesterThreadRef: capability.threadRef } : {}),
     purpose: b.purpose,
     ...(b.requestedMode !== undefined ? { requestedMode: b.requestedMode as GrantMode } : {}),
+    ...(capability.botActor ? { botActor: true } : {}),
     ...(expiresAt.value !== undefined ? { expiresAt: expiresAt.value } : {}),
   });
   const notice = renderAskNotice({
@@ -384,6 +389,8 @@ async function handleApproval(ctx: ApiCtx): Promise<void> {
   const b = (body ?? {}) as { principalId?: unknown; decision?: unknown };
   if (!deps.keychainApprovals || typeof b.principalId !== "string" || !b.principalId)
     return sendJson(res, 404, { error: "not_found" });
+  if (ctx.actor?.imp)
+    return sendJson(res, 403, { error: "forbidden", message: "Sign in as yourself to decide on credential use." });
   try {
     if (b.decision !== "once" && b.decision !== "standing" && b.decision !== "deny")
       return sendJson(res, 400, {
@@ -401,11 +408,39 @@ async function handleApproval(ctx: ApiCtx): Promise<void> {
 export const keychainRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/keychain/credentials", actor: "system", auth: "either", handle: saveCredential },
   { method: "GET", path: "/v1/keychain/credentials", auth: "either", handle: listCredentials },
-  { method: "GET", path: "/v1/keychain/overview", auth: "either", handle: keychainOverview },
-  { method: "DELETE", path: "/v1/keychain/credentials/:id", actor: "system", auth: "either", handle: deleteCredential },
+  {
+    method: "GET",
+    path: "/v1/keychain/overview",
+    browser: true,
+    actor: "person",
+    auth: "either",
+    handle: keychainOverview,
+  },
+  {
+    method: "DELETE",
+    path: "/v1/keychain/credentials/:id",
+    browser: true,
+    actor: "person",
+    auth: "either",
+    handle: deleteCredential,
+  },
   { method: "GET", path: "/v1/keychain/grants", auth: "either", handle: listGrants },
-  { method: "POST", path: "/v1/keychain/grants/:id/revoke", actor: "system", auth: "either", handle: revokeGrant },
+  {
+    method: "POST",
+    path: "/v1/keychain/grants/:id/revoke",
+    browser: true,
+    actor: "person",
+    auth: "either",
+    handle: revokeGrant,
+  },
   { method: "POST", path: "/v1/keychain/asks", actor: "system", auth: "either", handle: createAsk },
   { method: "GET", path: "/v1/keychain/asks", auth: "either", handle: listAsks },
-  { method: "POST", path: "/v1/keychain/approvals/:id", auth: "source", handle: handleApproval },
+  {
+    method: "POST",
+    path: "/v1/keychain/approvals/:id",
+    browser: true,
+    actor: "body.principalId",
+    auth: "source",
+    handle: handleApproval,
+  },
 ];

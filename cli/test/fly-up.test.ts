@@ -84,7 +84,11 @@ else if (a[0] === "secrets" && a[1] === "list") {
       "CORE_SIGNING_SECRET",
       "FLY_DEPLOY_API_TOKEN",
       "FLY_API_TOKEN",
+      "OIDC_CLIENT_ID",
+      "OIDC_CLIENT_SECRET",
+      "PORTAL_EXPECTED_TEAM_ID",
       "PORTAL_IDENTITY_SECRET",
+      "PORTAL_SESSION_SECRET",
       "PUBLIC_API_URL",
       "SECURITY_SCREEN_PROXY_TOKEN",
       "SKILL_SIGNING_SECRET",
@@ -93,7 +97,8 @@ else if (a[0] === "secrets" && a[1] === "list") {
       .join("\n"),
   )});
   if (fs.existsSync(${JSON.stringify(state)})) console.log("AWS_ACCESS_KEY_ID digest\\nAWS_ENDPOINT_URL_S3 digest\\nAWS_SECRET_ACCESS_KEY digest");
-} else if (a[0] === "storage" && a[1] === "create") fs.writeFileSync(${JSON.stringify(state)}, "1");
+} else if (a[0] === "ips" && a[1] === "list") console.log(JSON.stringify([{ Type: "v6" }, { Type: "shared_v4" }]));
+else if (a[0] === "storage" && a[1] === "create") fs.writeFileSync(${JSON.stringify(state)}, "1");
 else if (a[0] === "status") console.log(JSON.stringify({ Machines: [{ config: { image: "registry.fly.io/acme-core:deployment-123" } }] }));
 else if (a[0] === "image" && a[1] === "show") console.log(JSON.stringify([{ Registry: "registry.fly.io", Repository: "acme-core", Tag: "deployment-123", Digest: "sha256:${"b".repeat(64)}" }]));
 else if (a[0] === "mpg" && a[1] === "list") console.log("pg-1 acme-pg");
@@ -147,7 +152,7 @@ test('--only "slack" explains the virtual service runs in-process on the core', 
   const config: QmConfig = {
     contract: 1,
     orgId: "acme2",
-    publicUrl: "https://acme2-portal.fly.dev",
+    publicUrl: "https://acme2-core.fly.dev",
     target: "fly",
     region: "sjc",
     flyOrg: "personal",

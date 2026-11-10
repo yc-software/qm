@@ -133,13 +133,14 @@ Do not suppress a nonzero exit or print a success marker after it. Keep `set -e`
 
 Success means the checks observed for the expected head passed, not permission to
 merge. Re-read checks and review threads immediately before merging. Wait for async
-reviewers on that exact head; resolve findings and obtain a fresh-context adversarial
-review. After any push or head change, discard old success/review evidence and repeat.
+reviewers on that exact head; resolve findings and complete any review the repo
+requires. After any push or head change, discard old success/review evidence and repeat.
 Only merge when all gates pass, with GitHub's atomic head guard:
 
 ```bash
 gh pr merge NUMBER --repo OWNER/REPO --squash --match-head-commit REVIEWED_HEAD_SHA
 ```
 
-Never use auto-merge or bypass repository gates. This helper does not retry GitLab
-commands or change their authentication behavior.
+On a branch that requires a merge queue, this queues the PR; it is merged only once
+GitHub shows it as merged. Never use auto-merge or bypass repository gates. This
+helper does not retry GitLab commands or change their authentication behavior.

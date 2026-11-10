@@ -16,6 +16,23 @@ export function listRowsTpl(rows: TemplateResult[], className = ""): TemplateRes
   </div>`;
 }
 
+interface ListGroup {
+  label: string;
+  body: TemplateResult;
+}
+
+export function listGroupsTpl(groups: ListGroup[]): TemplateResult {
+  return html`<div class="list-groups">
+    ${groups.map(
+      (group) =>
+        html`<section class="list-group" aria-label=${group.label}>
+          <h2>${group.label}</h2>
+          ${group.body}
+        </section>`,
+    )}
+  </div>`;
+}
+
 export interface ListPageOpts {
   title: string;
   subtitle?: string;
@@ -26,7 +43,17 @@ export interface ListPageOpts {
   search?: { value: string; placeholder: string; onInput: (value: string) => void };
   filters?: TemplateResult;
   rows: TemplateResult[];
+  groups?: Array<{ label: string; rows: TemplateResult[] }>;
   empty: string | TemplateResult;
+}
+
+function listBodyTpl(o: ListPageOpts): TemplateResult {
+  const groups = (o.groups ?? []).filter((group) => group.rows.length);
+  if (groups.length)
+    return html`${o.rows.length ? listRowsTpl(o.rows) : nothing}${listGroupsTpl(
+      groups.map((group) => ({ label: group.label, body: listRowsTpl(group.rows) })),
+    )}`;
+  return o.rows.length ? listRowsTpl(o.rows) : html`<div class="empty compact">${o.empty}</div>`;
 }
 
 export function listPageTpl(o: ListPageOpts): TemplateResult {
@@ -61,6 +88,6 @@ export function listPageTpl(o: ListPageOpts): TemplateResult {
           : nothing
       }
     </div>
-    ${o.filters ?? nothing} ${o.rows.length ? listRowsTpl(o.rows) : html`<div class="empty compact">${o.empty}</div>`}
+    ${o.filters ?? nothing} ${listBodyTpl(o)}
   `;
 }
