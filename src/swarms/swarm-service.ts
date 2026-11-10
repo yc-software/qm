@@ -93,6 +93,7 @@ export interface SwarmService {
     computer: Pick<SandboxResource, "swarmId">,
     turn: { actorId: string; threadRef: string; sessionId: string },
   ): Promise<boolean>;
+  notePersonUse(computer: Pick<SandboxResource, "swarmId">): Promise<void>;
   binding(input: OrchestratorInput): Promise<{ sandboxId?: string; rootSessionId: string; member: SwarmMember } | null>;
   queuedMessages(
     input: OrchestratorInput,
@@ -158,7 +159,7 @@ function rosterMatches(current: readonly string[], expected: readonly string[]):
 
 function botMayDirect(swarm: Swarm, memberId: string, actorId: string): boolean {
   if (swarm.template.botActor !== true) return false;
-  if (swarm.messages.every((message) => message.actorId === actorId)) return true;
+  if (!swarm.personUsedComputers && swarm.messages.every((message) => message.actorId === actorId)) return true;
   let lineage = memberById(swarm, memberId);
   while (lineage?.parentId && lineage.parentId !== swarm.id) lineage = memberById(swarm, lineage.parentId);
   const head = lineage?.parentId ? lineage : undefined;
@@ -865,6 +866,13 @@ export function createSwarmService(deps: {
       if (!swarm) return false;
       const { rootId, memberId } = threadIdentity(turn.threadRef, turn.sessionId);
       return botMayDirect(swarm, rootId === swarm.id ? memberId : swarm.id, turn.actorId);
+    },
+    async notePersonUse(computer) {
+      const swarm = computer.swarmId ? await store.get(computer.swarmId) : null;
+      if (swarm?.template.botActor && !swarm.personUsedComputers)
+        await store.update(swarm.id, (current) => {
+          current.personUsedComputers = true;
+        });
     },
     async control(caller, input) {
       const { auth, swarm } = await load(caller);
