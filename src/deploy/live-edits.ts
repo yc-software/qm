@@ -76,7 +76,7 @@ export function createLiveEdits(deps: LiveEditDeps) {
 
   async function runningVersion(d: Deployment): Promise<DeploymentVersion | undefined> {
     const current = currentVersionOf(d);
-    const draft = current && deps.provider.liveEdit ? await store.draftOf(d.id) : null;
+    const draft = current ? await store.draftOf(d.id) : null;
     return current && draft ? draftVersion(current, draft) : current;
   }
 
@@ -103,8 +103,7 @@ export function createLiveEdits(deps: LiveEditDeps) {
 
   async function save(before: Deployment, actor: string, source: SavedSource): Promise<LiveEditSaved | null> {
     const current = currentVersionOf(before);
-    const liveEdit = deps.provider.liveEdit;
-    if (!liveEdit || before.status !== "running" || !current?.commit) return null;
+    if (before.status !== "running" || !current?.commit) return null;
     const draft = await store.draftOf(before.id);
     const base = draft?.commit ?? current.commit;
     const known = new Map((await store.commitTreeOf(before.id, base)).map((f) => [f.path, f.sha]));
@@ -129,7 +128,7 @@ export function createLiveEdits(deps: LiveEditDeps) {
       next.commit(base),
       deps
         .withDeploymentEnv(before, target)
-        .then((version) => liveEdit(before, version, { files: changed, deletedPaths, restart })),
+        .then((version) => deps.provider.liveEdit(before, version, { files: changed, deletedPaths, restart })),
     ]);
     if (committed.status === "rejected")
       throw edited.status === "rejected"

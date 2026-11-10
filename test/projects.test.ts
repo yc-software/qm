@@ -502,6 +502,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
     deployStore: createDeployStore(testDeployBackings()),
     provider: {
       profile: { managedScaleToZero: false },
+      liveEdit: async () => false,
       apply: async () => ({ host: "127.0.0.1", port: 19999 }),
       destroy: async () => {},
     },

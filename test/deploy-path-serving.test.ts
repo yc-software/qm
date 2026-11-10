@@ -55,6 +55,7 @@ async function fixture(
     deployStore,
     provider: {
       profile: { managedScaleToZero: false },
+      liveEdit: async () => false,
       apply: async () => ({ host: "127.0.0.1", port: upstreamPort }),
       destroy: async () => {},
     },

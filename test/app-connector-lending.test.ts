@@ -44,6 +44,7 @@ async function agent(t: { after: (fn: () => Promise<void>) => void }) {
     deployStore: createDeployStore(testDeployBackings()),
     provider: {
       profile: { managedScaleToZero: false },
+      liveEdit: async () => false,
       apply: async () => ({ host: "127.0.0.1", port: 1 }),
       destroy: async () => {},
     },

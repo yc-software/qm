@@ -95,6 +95,7 @@ test("a provider without reconcile receives durable Git contents after a push", 
     deployStore,
     provider: {
       profile: { managedScaleToZero: false },
+      liveEdit: async () => false,
       apply: async (_deployment, version) => {
         applied.push(readFileSync(join(version.snapshotDir, "server.js"), "utf8"));
         return { host: "127.0.0.1", port: 8080 };
@@ -571,6 +572,7 @@ test("resident home files are held to the same path rules as app files", async (
     deployStore: s,
     provider: {
       profile: { managedScaleToZero: false },
+      liveEdit: async () => false,
       apply: async () => ({ host: "127.0.0.1", port: 20000 }),
       destroy: async () => {},
     },

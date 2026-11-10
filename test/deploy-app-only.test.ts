@@ -67,6 +67,7 @@ test("app-only gateway checks exact current personal read grants without inherit
     deployStore: createDeployStore(backings),
     provider: {
       profile: { managedScaleToZero: false },
+      liveEdit: async () => false,
       apply: async () => ({ host: "127.0.0.1", port: (upstream.address() as AddressInfo).port }),
       destroy: async () => {},
     },

@@ -100,6 +100,7 @@ bypass.listen(Number(process.env.QM_QA_GATEWAY_PORT), "0.0.0.0");`,
     deployStore: readerStore,
     provider: {
       profile: { managedScaleToZero: false },
+      liveEdit: async () => false,
       apply: async () => ({ host: "unused", port: 8080 }),
       destroy: async (deployment) => artifacts.revoke(deployment.id),
     },

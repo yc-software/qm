@@ -43,6 +43,7 @@ function fixture(urls: { apiBaseUrl?: string; publicUrl?: string } = {}) {
     deployStore,
     provider: {
       profile: { managedScaleToZero: false },
+      liveEdit: async () => false,
       apply: async () => ({ host: "127.0.0.1", port: 19998 }),
       destroy: async () => {},
     },

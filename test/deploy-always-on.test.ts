@@ -28,6 +28,7 @@ function svc(
   let resolves = 0;
   const provider: DeployProvider = {
     profile: { managedScaleToZero: opts.managedScaleToZero ?? true },
+    liveEdit: async () => false,
     apply: async (d, version) => {
       applies++;
       if (opts.apply) return opts.apply(d, version);
@@ -137,6 +138,7 @@ test("alwaysOn is visible to the provider at first launch (not applied after the
   const seen: Array<boolean | undefined> = [];
   const provider: DeployProvider = {
     profile: { managedScaleToZero: true },
+    liveEdit: async () => false,
     apply: async (d) => {
       seen.push(d.alwaysOn);
       return { host: "127.0.0.1", port: 5000 };
@@ -172,6 +174,7 @@ test("reaper re-checks alwaysOn under the deploy lock (no stale-snapshot destroy
   let destroys = 0;
   const provider: DeployProvider = {
     profile: { managedScaleToZero: false },
+    liveEdit: async () => false,
     apply: async () => ({ host: "127.0.0.1", port: 5000 }),
     destroy: async () => {
       destroys++;

@@ -3,25 +3,37 @@ import { LRUCache } from "lru-cache";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
-import { swallow } from "../util/errors.ts";
-import type { DeployProvider } from "./deploy-provider.ts";
+import { swallow, swallowAs } from "../util/errors.ts";
+import { z } from "zod";
+import type { DeployLiveEdit, DeployProvider } from "./deploy-provider.ts";
 import type { Deployment, DeploymentVersion, DeployEndpoint } from "./deploy-store.ts";
 import type { RenderDeployArtifacts } from "./render-deploy-artifacts.ts";
 import { createRenderApi, list, RenderApiError } from "./render-api.ts";
 import { createRenderAppNetwork } from "./render-app-network.ts";
 import { appEnv } from "./shared-deploy-provider.ts";
+import { makeTar } from "../sandbox/tar.ts";
+import { gzipSync } from "node:zlib";
 
 const FAILED = new Set(["build_failed", "update_failed", "pre_deploy_failed", "canceled", "deactivated"]);
 const OWNER_MARKER = "QM_DEPLOYMENT_ID";
 const RENDER_APP_AUTH_HEADER = "x-qm-render-app-token";
+const RENDER_APP_EDIT_HEADER = "x-qm-render-app-edit";
+const RENDER_APP_BOOT_HEADER = "x-qm-render-app-boot";
+const EDIT_KEY_LABEL = "qm-render-app-edit";
+const EDIT_TIMEOUT_MS = 60_000;
+const RESTART_TIMEOUT_MS = 600_000;
 const GATEWAY_TOKEN_TTL_MS = 30 * 60_000;
 const GATEWAY_TOKEN_STEP_MS = 10 * 60_000;
 const READINESS_PROBE_MS = 250;
 const READINESS_SUCCESS_THRESHOLD = 40;
+const editResult = z.object({ boot: z.string().min(1) });
 
 export function renderGatewayToken(secret: string, expiresAtMs: number): string {
   return `${expiresAtMs}.${createHmac("sha256", secret).update(String(expiresAtMs)).digest("base64url")}`;
 }
+
+export const renderEditKey = (token: string): string =>
+  createHmac("sha256", token).update(EDIT_KEY_LABEL).digest("base64url");
 
 interface Service {
   id: string;
@@ -60,6 +72,7 @@ export interface StoredRenderDeploy {
   host?: string;
   token: string;
   liveVersion?: number;
+  editedBoot?: string;
   suspended: boolean;
   pending?: RenderPending;
 }
@@ -295,6 +308,7 @@ export function createRenderDeployProvider(opts: RenderDeployProviderOptions): D
               ...record,
               host: address.host,
               liveVersion: version,
+              editedBoot: undefined,
               suspended: false,
               pending: undefined,
             };
@@ -321,7 +335,46 @@ export function createRenderDeployProvider(opts: RenderDeployProviderOptions): D
     if (!service || service.suspended === "suspended") return null;
     const host = hostOf(service);
     if (host !== record.host) await opts.store.merge(deployment.id, { host });
-    return endpoint(host, record.token);
+    const address = endpoint(host, record.token);
+    return record.editedBoot && (await rebooted(address, record.editedBoot)) ? null : address;
+  }
+
+  async function rebooted(address: DeployEndpoint, editedBoot: string): Promise<boolean> {
+    const response = await probe(address).catch(swallowAs<Response | null>("render-deploy: read the app boot", null));
+    const boot = response?.status === 204 ? response.headers.get(RENDER_APP_BOOT_HEADER) : null;
+    return boot !== null && boot !== editedBoot;
+  }
+
+  async function liveEdit(deployment: Deployment, version: DeploymentVersion, edit: DeployLiveEdit): Promise<boolean> {
+    const record = await opts.store.get(deployment.id);
+    if (!record?.host || record.suspended || record.pending || record.liveVersion === undefined) return false;
+    const expiresAtMs = Date.now() + GATEWAY_TOKEN_TTL_MS;
+    const tar = edit.files.length ? gzipSync(await makeTar(edit.files)).toString("base64") : "";
+    const response = await fetchImpl(`https://${record.host}/__qm_edit`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        [RENDER_APP_EDIT_HEADER]: renderGatewayToken(renderEditKey(record.token), expiresAtMs),
+      },
+      body: JSON.stringify({
+        tar,
+        deletedPaths: edit.deletedPaths,
+        ...(edit.restart ? { entrypoint: version.entrypoint } : {}),
+      }),
+      redirect: "manual",
+      signal: AbortSignal.timeout(edit.restart ? RESTART_TIMEOUT_MS : EDIT_TIMEOUT_MS),
+    });
+    if (response.status === 404) {
+      await response.body?.cancel();
+      return false;
+    }
+    if (!response.ok)
+      throw new Error(`Render app live edit returned HTTP ${response.status}: ${(await response.text()).trim()}`);
+    const boot = editResult.safeParse(await response.json());
+    if (!boot.success) throw new Error("Render app live edit returned no boot id");
+    if (record.editedBoot !== boot.data.boot) await opts.store.merge(deployment.id, { editedBoot: boot.data.boot });
+    endpoints.delete(deployment.id);
+    return true;
   }
 
   async function idle(service: Service): Promise<void> {
@@ -450,6 +503,7 @@ export function createRenderDeployProvider(opts: RenderDeployProviderOptions): D
   return {
     profile: { managedScaleToZero: false, dataDir: "/data" },
     apply: (deployment, version) => serialized(deployment, () => apply(deployment, version)),
+    liveEdit,
     async resolveEndpoint(deployment) {
       if (deployment.status === "archived") return null;
       const record = await opts.store.get(deployment.id);

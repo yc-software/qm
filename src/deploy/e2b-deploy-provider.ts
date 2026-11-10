@@ -8,12 +8,14 @@ import {
   appLogs,
   appReporter,
   bundleEntries,
+  editRunningApp,
   exportEnv,
   extractBundle,
   STOP_APP,
   waitAppReady,
   type AppErrorSink,
 } from "./shared-deploy-provider.ts";
+import { posixJoin } from "./deploy-fs.ts";
 import { makeTar } from "../sandbox/tar.ts";
 import { E2bSandboxGoneError, runE2bScript, type E2bClient, type E2bSession } from "../sandbox/e2b-client.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
@@ -89,6 +91,18 @@ export function createE2bDeployProvider(opts: E2bDeployProviderOptions): DeployP
     if (r.code !== 0) throw execFailure(`e2b deploy: unpacking into ${guestDir}`, r);
   }
 
+  async function startApp(d: Deployment, session: E2bSession, version: DeploymentVersion): Promise<void> {
+    const env = appEnv(version.env, { HOME: HOME_DIR, PORT: String(appPort), DATA_DIR });
+    const inner = `${exportEnv(env)}; cd ${shq(APP_DIR)}; ${version.entrypoint}`;
+    const started = await runE2bScript(session, `${STOP_APP}; ${appLaunch(inner, appPort)}`, 60);
+    if (started.code !== 0) throw execFailure("e2b deploy: app start", started);
+    await waitAppReady((script, timeoutSec) => runE2bScript(session, script, timeoutSec), {
+      appPort,
+      windowSec: readyWindowSec,
+      report: appReporter(opts.onError, d, version.env),
+    });
+  }
+
   async function install(d: Deployment, session: E2bSession, version: DeploymentVersion): Promise<void> {
     const stopped = await runE2bScript(
       session,
@@ -98,15 +112,7 @@ export function createE2bDeployProvider(opts: E2bDeployProviderOptions): DeployP
     if (stopped.code !== 0) throw execFailure("e2b deploy: stopping the previous version", stopped);
     await unpackTree(session, APP_DIR, version.snapshotDir);
     if (version.homeDir) await unpackTree(session, HOME_DIR, version.homeDir);
-    const env = appEnv(version.env, { HOME: HOME_DIR, PORT: String(appPort), DATA_DIR });
-    const inner = `${exportEnv(env)}; cd ${shq(APP_DIR)}; ${version.entrypoint}`;
-    const started = await runE2bScript(session, appLaunch(inner, appPort), 60);
-    if (started.code !== 0) throw execFailure("e2b deploy: app start", started);
-    await waitAppReady((script, timeoutSec) => runE2bScript(session, script, timeoutSec), {
-      appPort,
-      windowSec: readyWindowSec,
-      report: appReporter(opts.onError, d, version.env),
-    });
+    await startApp(d, session, version);
   }
 
   const forget = (d: Deployment): Promise<void> =>
@@ -176,6 +182,24 @@ export function createE2bDeployProvider(opts: E2bDeployProviderOptions): DeployP
           throw e;
         }
       }),
+
+    async liveEdit(d, version, edit): Promise<boolean> {
+      const live = await connectStored(d);
+      if (!live) return false;
+      const { session } = live;
+      await editRunningApp(
+        {
+          appDir: APP_DIR,
+          exec: (script, timeoutSec) => runE2bScript(session, script, timeoutSec),
+          write: async (files) => {
+            await Promise.all(files.map((f) => session.writeFileBytes(posixJoin(APP_DIR, f.path), f.data)));
+          },
+          start: () => startApp(d, session, version),
+        },
+        edit,
+      );
+      return true;
+    },
 
     async setAlwaysOn(d, alwaysOn): Promise<void> {
       if (alwaysOn) await (await connectStored(d))?.session.keepAlive(ALWAYS_ON_TIMEOUT_MS);

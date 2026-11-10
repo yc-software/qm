@@ -18,6 +18,7 @@ import {
   appLaunch,
   appLogs,
   appReporter,
+  editRunningApp,
   exportEnv,
   listeningOn,
   STOP_APP,
@@ -663,18 +664,19 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       const stored = await store.get(d.id);
       const desc = stored ? await api.tryGetMicrovm(stored.microvmId) : null;
       if (!stored || !desc || desc.state === "TERMINATED" || desc.state === "TERMINATING") return false;
-      await ensureRunning(stored.microvmId, stored.endpoint, desc);
-      await Promise.all(
-        edit.files.map((f) =>
-          writeAbs(stored.microvmId, stored.endpoint, posixJoin(APP_DIR, normalizeRelPath(f.path)), f.data),
-        ),
+      const { microvmId, endpoint } = stored;
+      await ensureRunning(microvmId, endpoint, desc);
+      await editRunningApp(
+        {
+          appDir: APP_DIR,
+          exec: (script, timeoutSec) => execRaw(microvmId, endpoint, script, timeoutSec),
+          write: async (files) => {
+            await Promise.all(files.map((f) => writeAbs(microvmId, endpoint, posixJoin(APP_DIR, f.path), f.data)));
+          },
+          start: () => startApp(d, microvmId, endpoint, version),
+        },
+        edit,
       );
-      if (edit.deletedPaths.length) {
-        const paths = edit.deletedPaths.map((p) => shq(posixJoin(APP_DIR, normalizeRelPath(p)))).join(" ");
-        const r = await execRaw(stored.microvmId, stored.endpoint, `rm -f ${paths}`, 30);
-        if (r.code !== 0) throw execFailure("aws live edit delete", r);
-      }
-      if (edit.restart) await startApp(d, stored.microvmId, stored.endpoint, version);
       return true;
     },
 

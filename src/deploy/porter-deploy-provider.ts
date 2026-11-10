@@ -10,7 +10,9 @@ import {
   appLogs,
   appReporter,
   bundleEntries,
+  editRunningApp,
   extractBundle,
+  STOP_APP,
   waitAppReady,
   type AppErrorSink,
 } from "./shared-deploy-provider.ts";
@@ -161,6 +163,7 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
     const script = [
       `mkdir -p ${shq(APP_DIR)} ${shq(DATA_DIR)}`,
       `export HOME=${shq(HOME_DIR)} PORT=${appPort} DATA_DIR=${shq(DATA_DIR)}`,
+      STOP_APP,
       appLaunch(inner, appPort),
     ].join("; ");
     const r = await execRaw(sandboxId, script, APP_START_EXEC_TIMEOUT_SEC);
@@ -249,6 +252,24 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
           throw e;
         }
       }),
+
+    async liveEdit(d, version, edit): Promise<boolean> {
+      const stored = await liveStored(d);
+      if (!stored) return false;
+      const { sandboxId } = stored;
+      await editRunningApp(
+        {
+          appDir: APP_DIR,
+          exec: (script, timeoutSec) => execRaw(sandboxId, script, timeoutSec),
+          write: async (files) => {
+            await Promise.all(files.map((f) => writeAbsBytes(sandboxId, posixJoin(APP_DIR, f.path), f.data)));
+          },
+          start: () => startApp(d, sandboxId, version),
+        },
+        edit,
+      );
+      return true;
+    },
 
     async resolveEndpoint(d, version): Promise<DeployEndpoint | null> {
       const cached = resolveCache.get(d.id);

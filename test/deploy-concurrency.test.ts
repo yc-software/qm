@@ -25,6 +25,7 @@ function svc(opts: { lease?: LeaderLease; lock?: AdvisoryLock; managed?: boolean
   let destroys = 0;
   const provider: DeployProvider = {
     profile: { managedScaleToZero: opts.managed ?? false },
+    liveEdit: async () => false,
     apply: async () => ({ host: "127.0.0.1", port: 5000 }),
     destroy: async () => {
       destroys++;
@@ -116,6 +117,7 @@ test("withDeployLock: same-instance lifecycle ops still serialize (no overlap)",
   let maxActive = 0;
   const provider: DeployProvider = {
     profile: { managedScaleToZero: false },
+    liveEdit: async () => false,
     apply: async () => {
       active++;
       maxActive = Math.max(maxActive, active);
@@ -163,6 +165,7 @@ for (const [visit, stop, status] of [
     const resolving = Promise.withResolvers<void>();
     const provider: DeployProvider = {
       profile: { managedScaleToZero: false },
+      liveEdit: async () => false,
       apply: async () => {
         applies++;
         return { host: "127.0.0.1", port: 5000 };

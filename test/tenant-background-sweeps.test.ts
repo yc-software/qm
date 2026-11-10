@@ -318,6 +318,7 @@ describeTwoTenants("background sweeps claim across tenants and work each row und
     const destroyed: string[] = [];
     const provider: DeployProvider = {
       profile: { managedScaleToZero: false },
+      liveEdit: async () => false,
       apply: async () => ({ host: "127.0.0.1", port: 5000 }),
       destroy: async () => void destroyed.push(currentTenant()),
     };

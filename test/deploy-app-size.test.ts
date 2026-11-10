@@ -21,6 +21,7 @@ function service(maxAppBytes?: number) {
     deployStore: store,
     provider: {
       profile: { managedScaleToZero: false, ...(maxAppBytes ? { maxAppBytes } : {}) },
+      liveEdit: async () => false,
       apply: async () => {
         applies++;
         return { host: "127.0.0.1", port: 1 };

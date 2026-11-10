@@ -19,6 +19,7 @@ function agent(failRestore = false) {
     deployStore: createDeployStore(testDeployBackings()),
     provider: {
       profile: { managedScaleToZero: false },
+      liveEdit: async () => false,
       apply: async () => {
         applies++;
         if (failRestore && applies > 1) throw new Error("runtime unavailable");
@@ -58,6 +59,7 @@ function persistenceFailureHarness(failMethod: "setVersionImage" | "setEndpoint"
     deployStore: store,
     provider: {
       profile: { managedScaleToZero: false },
+      liveEdit: async () => false,
       apply: async () => ({ host: "127.0.0.1", port: 20300, image: `image:${++applies}` }),
       destroy: async () => {
         destroys++;

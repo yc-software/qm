@@ -37,7 +37,7 @@ interface ProviderState {
   edits: Edit[];
 }
 
-function harness(opts: { liveEdits?: boolean } = {}) {
+function harness() {
   const state: ProviderState = { body: true, resolved: ENDPOINT, reconciles: [], edits: [] };
   const provider: DeployProvider = {
     profile: { managedScaleToZero: true },
@@ -53,21 +53,17 @@ function harness(opts: { liveEdits?: boolean } = {}) {
     resolveEndpoint: async () => state.resolved,
     rotationDue: async () => state.rotate === true,
     destroy: async () => {},
-    ...(opts.liveEdits === false
-      ? {}
-      : {
-          liveEdit: async (_d, version, edit) => {
-            if (!state.body) return false;
-            state.edits.push({
-              entrypoint: version.entrypoint,
-              files: edit.files.map((f) => f.path),
-              contents: edit.files.map((f) => Buffer.from(f.data).toString()),
-              deletedPaths: edit.deletedPaths,
-              restart: edit.restart,
-            });
-            return true;
-          },
-        }),
+    liveEdit: async (_d, version, edit) => {
+      if (!state.body) return false;
+      state.edits.push({
+        entrypoint: version.entrypoint,
+        files: edit.files.map((f) => f.path),
+        contents: edit.files.map((f) => Buffer.from(f.data).toString()),
+        deletedPaths: edit.deletedPaths,
+        restart: edit.restart,
+      });
+      return true;
+    },
   };
   const audits: AuditEvent[] = [];
   const deployStore = createDeployStore(testDeployBackings());
@@ -290,15 +286,6 @@ test("a new entrypoint publishes a version at once and discards saved edits", as
     entrypoint: "node server.js",
     files: tree(true, "v3"),
   });
-  assert.equal((await h.deployStore.get(d.id))!.versions.length, 2);
-  assert.equal(await h.deployStore.draftOf(d.id), null);
-});
-
-test("a provider without live edits publishes a version for every change", async () => {
-  const h = harness({ liveEdits: false });
-  const d = await publishApp(h, "live-g");
-  const r = await h.save("live-g", tree(true, "v2"));
-  assert.equal(r.liveEdit, undefined);
   assert.equal((await h.deployStore.get(d.id))!.versions.length, 2);
   assert.equal(await h.deployStore.draftOf(d.id), null);
 });

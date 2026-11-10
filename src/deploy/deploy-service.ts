@@ -687,7 +687,6 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     publishDueLiveEdits: () => liveEdits.publishDue(),
 
     async liveEditOf(idOrName) {
-      if (!deps.provider.liveEdit) return null;
       const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
       return d ? { draft: await deps.deployStore.draftOf(d.id) } : null;
     },

@@ -31,6 +31,7 @@ function flyLikeService(): { deploy: DeployService; deployStore: DeployStore; pr
     deployDir: mkdtempSync(join(tmpdir(), "deploy-img-")),
     provider: {
       profile: { managedScaleToZero: true },
+      liveEdit: async () => false,
       apply: async (_d: Deployment, version: DeploymentVersion) => {
         probe.appliedImages.push(version.image);
         const image = version.image ?? `registry.fly.io/app:v${version.version}`;
@@ -103,6 +104,7 @@ test("a runtime-mount provider (no image) leaves versions image-less — Docker 
     deployDir: mkdtempSync(join(tmpdir(), "deploy-noimg-")),
     provider: {
       profile: { managedScaleToZero: false },
+      liveEdit: async () => false,
       apply: async () => ({ host: "127.0.0.1", port: 9200 }),
       destroy: async () => {},
     },
@@ -131,6 +133,7 @@ test("a reconcile-capable provider receives each version's git bundle and marks 
     deployDir: mkdtempSync(join(tmpdir(), "deploy-reconcile-")),
     provider: {
       profile: { managedScaleToZero: true },
+      liveEdit: async () => false,
       apply: async () => {
         throw new Error("image path should not be used for git-backed versions");
       },
@@ -187,6 +190,7 @@ test("applied version is marked only after endpoint metadata is persisted", asyn
     deployDir: mkdtempSync(join(tmpdir(), "deploy-applied-order-")),
     provider: {
       profile: { managedScaleToZero: false },
+      liveEdit: async () => false,
       apply: async () => ({ host: "127.0.0.1", port: 9200 }),
       destroy: async () => {},
     },
@@ -217,6 +221,7 @@ test("a failed redeploy does not move the hosted git current ref", async () => {
     deployDir: mkdtempSync(join(tmpdir(), "deploy-current-ref-")),
     provider: {
       profile: { managedScaleToZero: false },
+      liveEdit: async () => false,
       apply: async () => {
         applies++;
         if (applies > 1) throw new Error("apply failed");

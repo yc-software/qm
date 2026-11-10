@@ -8,7 +8,7 @@ export interface DeployProfile {
   maxAppBytes?: number;
 }
 
-interface DeployLiveEdit {
+export interface DeployLiveEdit {
   files: Array<{ path: string; data: Uint8Array }>;
   deletedPaths: string[];
   restart: boolean;
@@ -18,7 +18,7 @@ export interface DeployProvider {
   readonly profile: DeployProfile;
   apply(d: Deployment, version: DeploymentVersion): Promise<DeployEndpoint>;
   reconcile?(d: Deployment, version: DeploymentVersion, gitBundle: Uint8Array): Promise<DeployEndpoint>;
-  liveEdit?(d: Deployment, version: DeploymentVersion, edit: DeployLiveEdit): Promise<boolean>;
+  liveEdit(d: Deployment, version: DeploymentVersion, edit: DeployLiveEdit): Promise<boolean>;
   destroy(d: Deployment): Promise<void>;
   setAlwaysOn?(d: Deployment, alwaysOn: boolean): Promise<void>;
   resolveEndpoint?(d: Deployment, version: DeploymentVersion): Promise<DeployEndpoint | null>;

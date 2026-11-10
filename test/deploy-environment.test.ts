@@ -19,6 +19,7 @@ function svc(deploymentEnv?: (deployment: Deployment) => Promise<Record<string, 
   let applied: DeploymentVersion | undefined;
   const provider: DeployProvider = {
     profile: { managedScaleToZero: false },
+    liveEdit: async () => false,
     apply: async (_d, version) => {
       applied = version;
       return { host: "127.0.0.1", port: 5000 };

@@ -6,15 +6,20 @@ import type { DeployEndpoint, DeployProvider } from "./deploy-provider.ts";
 import { readTree } from "./deploy-fs.ts";
 import { makeTar } from "../sandbox/tar.ts";
 import { sleep } from "../util/async.ts";
-import { swallow, swallowAs } from "../util/errors.ts";
+import { execFailure, swallow, swallowAs } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import {
   appBoot,
+  appEnv,
   appGone,
+  appLaunch,
   appLogs,
   appReporter,
+  editRunningApp,
+  exportEnv,
   recentAppChecks,
+  STOP_APP,
   waitAppReady,
   type AppErrorSink,
   type Exec,
@@ -32,6 +37,8 @@ const MACHINE_START_TIMEOUT_MS = 90_000;
 const APP_READY_TIMEOUT_MS = 90_000;
 const POLL_INTERVAL_MS = 1_000;
 const API_TIMEOUT_MS = 30_000;
+const EDITED_BOOT_KEY = "qm_edited_boot";
+const BOOT_ID = "cat /proc/sys/kernel/random/boot_id";
 
 interface FlyApp {
   name: string;
@@ -102,7 +109,8 @@ interface FlyMachinesApi {
   getMachine(appName: string, machineId: string): Promise<FlyMachine | null>;
   setCordon(appName: string, machineId: string, cordoned: boolean): Promise<void>;
   destroyMachine(appName: string, machineId: string): Promise<void>;
-  exec(appName: string, machineId: string, script: string, timeoutSec: number): ReturnType<Exec>;
+  setMetadata(appName: string, machineId: string, key: string, value: string): Promise<void>;
+  exec(appName: string, machineId: string, script: string, timeoutSec: number, stdin?: string): ReturnType<Exec>;
 }
 
 interface FlyApiResponse {
@@ -298,12 +306,16 @@ function createFlyMachinesApi(opts: { token: string; fetchImpl?: typeof fetch })
       if (r.ok || r.status === 404) return;
       throw failure(`destroy machine ${machineId}`, r);
     },
-    async exec(appName, machineId, script, timeoutSec) {
+    async setMetadata(appName, machineId, key, value): Promise<void> {
+      const r = await request("POST", `${machine(appName, machineId)}/metadata/${encodeURIComponent(key)}`, { value });
+      if (!r.ok) throw failure(`set metadata ${key} on machine ${machineId}`, r);
+    },
+    async exec(appName, machineId, script, timeoutSec, stdin) {
       const what = `exec in machine ${machineId}`;
       const r = await request(
         "POST",
         `${machine(appName, machineId)}/exec`,
-        { cmd: `sh -c ${shq(script)}`, timeout: timeoutSec },
+        { cmd: `sh -c ${shq(script)}`, timeout: timeoutSec, ...(stdin === undefined ? {} : { stdin }) },
         (timeoutSec + 10) * 1000,
       );
       if (!r.ok) throw failure(what, r);
@@ -448,6 +460,47 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
     },
   });
 
+  async function bootId(exec: Exec): Promise<string> {
+    const r = await exec(BOOT_ID, 30);
+    if (r.code !== 0 || !r.stdout.trim()) throw execFailure("fly deploy: reading the machine boot id", r);
+    return r.stdout.trim();
+  }
+
+  const lostEdits = async (machine: FlyMachine, exec: Exec): Promise<boolean> => {
+    const edited = machine.config?.metadata?.[EDITED_BOOT_KEY];
+    return edited !== undefined && edited !== (await bootId(exec));
+  };
+
+  async function writeFiles(
+    appName: string,
+    machineId: string,
+    files: Array<{ path: string; data: Uint8Array }>,
+  ): Promise<void> {
+    const tar = gzipSync(await makeTar(files)).toString("base64");
+    const r = await api.exec(appName, machineId, `base64 -d | tar -xzmf - -C ${shq(APP_DIR)}`, 120, tar);
+    if (r.code !== 0) throw execFailure("fly deploy: writing edited files", r);
+  }
+
+  async function startApp(
+    d: Deployment,
+    appName: string,
+    machineId: string,
+    version: DeploymentVersion,
+  ): Promise<void> {
+    const env = appEnv(version.env, {
+      PORT: String(APP_PORT),
+      ...(opts.dataVolumeSizeGb ? { DATA_DIR: "/data" } : {}),
+    });
+    const inner = `${exportEnv(env)}; cd ${shq(APP_DIR)}; ${version.entrypoint}`;
+    const r = await api.exec(appName, machineId, `${STOP_APP}; ${appLaunch(inner, APP_PORT)}`, 60);
+    if (r.code !== 0) throw execFailure("fly deploy: app start", r);
+    await waitAppReady(execIn(appName, machineId), {
+      appPort: APP_PORT,
+      windowSec: Math.ceil(appReadyTimeoutMs / 1000),
+      report: appReporter(opts.onError, d, version.env),
+    });
+  }
+
   async function waitStarted(appName: string, machineId: string): Promise<void> {
     const deadline = Date.now() + machineStartTimeoutMs;
     let last: FlyMachine | null = null;
@@ -506,20 +559,45 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
       if (!checked.has(d.id)) {
         ensureConfigured();
         const machines = await deploymentMachines(d).catch(
-          swallowAs<FlyMachine[]>("fly-deploy: list app machines", []),
+          swallowAs<FlyMachine[] | null>("fly-deploy: list app machines", null),
         );
+        if (machines?.length === 0) return null;
         const appName = appNameFor(d);
         const report = appReporter(opts.onError, d, version.env);
-        if (
-          machines.length === 1 &&
-          machines[0]!.state === "started" &&
-          (await appGone(execIn(appName, machines[0]!.id), { appPort: APP_PORT, report }))
-        )
-          return null;
+        const only = machines?.length === 1 && machines[0]!.state === "started" ? machines[0]! : undefined;
+        if (only) {
+          const exec = execIn(appName, only.id);
+          if ((await appGone(exec, { appPort: APP_PORT, report })) || (await lostEdits(only, exec))) return null;
+        }
         checked.set(d.id, true);
       }
       if (!opts.privateTransport) return d.endpoint;
       return endpointFor(d, await portFor(d));
+    },
+
+    async liveEdit(d, version, edit): Promise<boolean> {
+      ensureConfigured();
+      const appName = appNameFor(d);
+      const machines = await deploymentMachines(d);
+      if (machines.length !== 1) return false;
+      const machine = machines[0]!;
+      await waitStarted(appName, machine.id);
+      const exec = execIn(appName, machine.id);
+      if (await lostEdits(machine, exec)) return false;
+      const boot = await bootId(exec);
+      if (machine.config?.metadata?.[EDITED_BOOT_KEY] !== boot)
+        await api.setMetadata(appName, machine.id, EDITED_BOOT_KEY, boot);
+      await editRunningApp(
+        {
+          appDir: APP_DIR,
+          exec,
+          write: (files) => writeFiles(appName, machine.id, files),
+          start: () => startApp(d, appName, machine.id, version),
+        },
+        edit,
+      );
+      checked.delete(d.id);
+      return true;
     },
 
     async logs(d, logOpts): Promise<string | null> {
@@ -542,6 +620,7 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
         : machine.config;
       const config = {
         ...accepted,
+        ...(machine.config.metadata ? { metadata: machine.config.metadata } : {}),
         services: accepted.services.map((service) => ({ ...service, min_machines_running: alwaysOn ? 1 : 0 })),
       };
       try {

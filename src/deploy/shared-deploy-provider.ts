@@ -1,11 +1,12 @@
 import { LRUCache } from "lru-cache";
 import type { ExecResult } from "../sandbox/sandbox.ts";
 import { shq } from "../util/shell.ts";
-import { errMessage, swallow } from "../util/errors.ts";
+import { errMessage, execFailure, swallow } from "../util/errors.ts";
 import { redactSecrets } from "../../plugins/chassis/src/redact-secrets.ts";
 import { createSecretValueMasker } from "../security/secret-masking.ts";
 import type { Deployment } from "./deploy-store.ts";
-import { normalizeRelPath, readTree } from "./deploy-fs.ts";
+import { normalizeRelPath, posixJoin, readTree } from "./deploy-fs.ts";
+import type { DeployLiveEdit } from "./deploy-provider.ts";
 
 const EXIT_APP_SERVER_ERROR = 96;
 const EXIT_APP_EXITED = 98;
@@ -188,4 +189,22 @@ export async function waitAppReady(exec: Exec, opts: AppReadyOptions): Promise<v
     why = `app answered HTTP ${r.stdout.trim()} on / for the whole ${opts.windowSec}s readiness window`;
   const message = why + (log ? `; last output from the entrypoint:\n${log}` : "; the entrypoint produced no output");
   throw opts.report?.("app_start_failed", message) ?? new Error(message);
+}
+
+export interface RunningApp {
+  appDir: string;
+  exec: Exec;
+  write(files: Array<{ path: string; data: Uint8Array }>): Promise<void>;
+  start(): Promise<void>;
+}
+
+export async function editRunningApp(app: RunningApp, edit: DeployLiveEdit): Promise<void> {
+  const files = edit.files.map((f) => ({ path: normalizeRelPath(f.path), data: f.data }));
+  const deleted = edit.deletedPaths.map((p) => shq(posixJoin(app.appDir, normalizeRelPath(p))));
+  const remove = async (): Promise<void> => {
+    const r = await app.exec(`rm -f ${deleted.join(" ")}`, 30);
+    if (r.code !== 0) throw execFailure("live edit: removing deleted files", r);
+  };
+  await Promise.all([files.length ? app.write(files) : undefined, deleted.length ? remove() : undefined]);
+  if (edit.restart) await app.start();
 }

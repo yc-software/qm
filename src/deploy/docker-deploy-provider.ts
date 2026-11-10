@@ -6,13 +6,18 @@ import {
   spawnDockerExec,
   type DockerExec,
 } from "../sandbox/docker-exec.ts";
-import { errMessage } from "../util/errors.ts";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { errMessage, execFailure } from "../util/errors.ts";
 import {
-  appBoot,
   appGone,
+  appLaunch,
   appLogs,
   appReporter,
+  editRunningApp,
   recentAppChecks,
+  STOP_APP,
   waitAppReady,
   type AppErrorSink,
   type Exec,
@@ -22,6 +27,8 @@ const APP_PORT = 8080;
 const APP_READY_WINDOW_SEC = 60;
 const RUN_TIMEOUT_MS = 300_000;
 const DAEMON_PROBE_TIMEOUT_MS = 10_000;
+const APP_DIR = "/app";
+const KEEP_RUNNING = "trap 'exit 0' INT TERM; while :; do sleep 3600 & wait $!; done";
 
 export interface DockerDeployProviderOptions {
   image?: string;
@@ -80,6 +87,40 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
   const checked = recentAppChecks();
   const network = (d: Deployment) => `${name(d)}-net`;
   const exists = async (d: Deployment): Promise<boolean> => (await dockerContainerNetworks(dexec, name(d))) !== null;
+  const running = async (d: Deployment): Promise<boolean> => {
+    const r = await dexec(["inspect", "-f", "{{.State.Running}}", name(d)]);
+    if (r.code === 0) return r.stdout.trim() === "true";
+    if (await exists(d)) throw new Error(`docker inspect ${name(d)} failed: ${r.stderr.trim()}`);
+    return false;
+  };
+
+  async function copyInto(d: Deployment, hostDir: string): Promise<void> {
+    const r = await dexec(["cp", `${hostDir}/.`, `${name(d)}:${APP_DIR}`], RUN_TIMEOUT_MS);
+    if (r.code !== 0) throw new Error(`docker cp into ${APP_DIR} failed: ${r.stderr.trim()}`);
+  }
+
+  async function writeFiles(d: Deployment, files: Array<{ path: string; data: Uint8Array }>): Promise<void> {
+    const staging = await mkdtemp(join(tmpdir(), "qm-live-edit-"));
+    try {
+      for (const f of files) {
+        await mkdir(dirname(join(staging, f.path)), { recursive: true });
+        await writeFile(join(staging, f.path), f.data);
+      }
+      await copyInto(d, staging);
+    } finally {
+      await rm(staging, { recursive: true, force: true });
+    }
+  }
+
+  async function startApp(d: Deployment, version: DeploymentVersion): Promise<void> {
+    const r = await execIn(d)(`${STOP_APP}; ${appLaunch(`cd ${APP_DIR}; ${version.entrypoint}`, APP_PORT)}`, 60);
+    if (r.code !== 0) throw execFailure("docker deploy app start", r);
+    await waitAppReady(execIn(d), {
+      appPort: APP_PORT,
+      windowSec: APP_READY_WINDOW_SEC,
+      report: appReporter(opts.onError, d, version.env),
+    });
+  }
 
   return {
     profile: { managedScaleToZero: false },
@@ -107,27 +148,22 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
           "256",
           "-p",
           `127.0.0.1:${hostPort}:${APP_PORT}`,
-          "-v",
-          `${version.snapshotDir}:/app:ro`,
           "-w",
-          "/app",
+          APP_DIR,
           "-e",
           `PORT=${APP_PORT}`,
           ...envArgs,
           image,
           "sh",
           "-c",
-          appBoot(`cd /app; ${version.entrypoint}`, APP_PORT),
+          KEEP_RUNNING,
         ],
         RUN_TIMEOUT_MS,
       );
       try {
         if (r.code !== 0) throw new Error(`deploy run failed: ${r.stderr.trim()}`);
-        await waitAppReady(execIn(d), {
-          appPort: APP_PORT,
-          windowSec: APP_READY_WINDOW_SEC,
-          report: appReporter(opts.onError, d, version.env),
-        });
+        await copyInto(d, version.snapshotDir);
+        await startApp(d, version);
       } catch (e) {
         await dexec(["rm", "-f", name(d)]);
         await dexec(["network", "rm", net]);
@@ -135,6 +171,20 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
         throw e;
       }
       return { host: "127.0.0.1", port: hostPort };
+    },
+
+    async liveEdit(d, version, edit): Promise<boolean> {
+      if (!(await running(d))) return false;
+      await editRunningApp(
+        {
+          appDir: APP_DIR,
+          exec: execIn(d),
+          write: (files) => writeFiles(d, files),
+          start: () => startApp(d, version),
+        },
+        edit,
+      );
+      return true;
     },
 
     async logs(d: Deployment, opts: { tailLines: number }): Promise<string | null> {

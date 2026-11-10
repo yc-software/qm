@@ -64,6 +64,7 @@ async function fixture(t: { after(fn: () => void): void }) {
     deployDir: dir,
     provider: {
       profile: { managedScaleToZero: false },
+      liveEdit: async () => false,
       apply: async () => ({ host: "h", port: 1 }),
       destroy: async () => {},
     },

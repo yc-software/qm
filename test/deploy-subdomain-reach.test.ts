@@ -71,6 +71,7 @@ test("reachDeployment: a provider's resolveEndpoint refreshes (and persists) the
   let resolved: DeployEndpoint | null = null;
   const provider: DeployProvider = {
     profile: { managedScaleToZero: true },
+    liveEdit: async () => false,
     apply: async () => {
       applies++;
       return { host: "stored", port: 443, tls: true };
@@ -103,6 +104,7 @@ test("reachDeployment: a null resolveEndpoint re-applies the current version fro
   let applies = 0;
   const provider: DeployProvider = {
     profile: { managedScaleToZero: true },
+    liveEdit: async () => false,
     apply: async () => {
       applies++;
       return { host: `body-${applies}`, port: 443, tls: true };
@@ -128,6 +130,7 @@ test("reachDeployment: a null resolveEndpoint re-applies the current version fro
 test("reachDeployment: a provider without resolveEndpoint returns the frozen stored endpoint", async () => {
   const provider: DeployProvider = {
     profile: { managedScaleToZero: false },
+    liveEdit: async () => false,
     apply: async () => ({ host: "frozen", port: 9000 }),
     destroy: async () => {},
   };
@@ -150,6 +153,7 @@ function appServingUpstream(upstreamPort: number) {
     deployStore,
     provider: {
       profile: { managedScaleToZero: false },
+      liveEdit: async () => false,
       apply: async () => ({ host: "127.0.0.1", port: upstreamPort }),
       destroy: async () => {},
     },

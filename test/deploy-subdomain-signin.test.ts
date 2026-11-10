@@ -190,6 +190,7 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     deployStore,
     provider: {
       profile: { managedScaleToZero: false },
+      liveEdit: async () => false,
       apply: async () => ({ host: "127.0.0.1", port: upstreamPort }),
       destroy: async () => {},
     },
@@ -393,6 +394,7 @@ test("org-wide app access admits only signed-in org members", async () => {
     deployStore: createDeployStore(backings),
     provider: {
       profile: { managedScaleToZero: false },
+      liveEdit: async () => false,
       apply: async () => ({ host: "127.0.0.1", port: (upstream.address() as AddressInfo).port }),
       destroy: async () => {},
     },
@@ -477,6 +479,7 @@ test("subdomain ingress: without the session config the domain has no door — a
     deployStore,
     provider: {
       profile: { managedScaleToZero: false },
+      liveEdit: async () => false,
       apply: async () => ({ host: "127.0.0.1", port: 1 }),
       destroy: async () => {},
     },

@@ -1,11 +1,11 @@
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
 import { cp, lchown, mkdir, mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer, request, ServerResponse } from "node:http";
 import { connect } from "node:net";
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { startSqliteBackup } from "./sqlite.mjs";
 
 const SHUTDOWN_GRACE_MS = 20_000;
@@ -13,6 +13,45 @@ const READINESS_SWEEP_MS = 5_000;
 const READINESS_MISSES = 3;
 const APP_UID = 10001;
 const APP_GID = 10001;
+const APP_READY_TIMEOUT_MS = 90_000;
+const EDIT_KEY_LABEL = "qm-render-app-edit";
+
+export const renderEditKey = (token) => createHmac("sha256", token).update(EDIT_KEY_LABEL).digest("base64url");
+
+function run(command, args, { cwd, input, uid, gid } = {}) {
+  return new Promise((done, fail) => {
+    const child = spawn(command, args, {
+      cwd,
+      stdio: ["pipe", "ignore", "pipe"],
+      ...(uid === undefined ? {} : { uid, gid }),
+    });
+    const stderr = [];
+    child.stderr.on("data", (chunk) => stderr.push(chunk));
+    child.on("error", fail);
+    child.on("exit", (code, signal) =>
+      code === 0
+        ? done()
+        : fail(new Error(`${command} failed (${signal ?? code}): ${Buffer.concat(stderr).toString("utf8").trim()}`)),
+    );
+    child.stdin.end(input);
+  });
+}
+
+function editedPath(appDir, path) {
+  if (typeof path !== "string" || !path || isAbsolute(path) || path.includes("\0")) return null;
+  const relative = normalize(path);
+  return relative === "." || relative === ".." || relative.startsWith("../") ? null : join(appDir, relative);
+}
+
+async function applyEdit(appDir, body, owner) {
+  if (typeof body.tar !== "string" || !Array.isArray(body.deletedPaths))
+    throw new Error("A live edit needs a tar archive and a list of deleted paths");
+  const deleted = body.deletedPaths.map((path) => editedPath(appDir, path));
+  if (deleted.some((path) => path === null)) throw new Error("A live edit named a path outside the app");
+  const archive = Buffer.from(body.tar, "base64");
+  if (archive.length) await run("tar", ["-xzmf", "-", "-C", appDir], { input: archive, ...owner });
+  if (deleted.length) await run("rm", ["-f", "--", ...deleted], owner);
+}
 
 function git(args, cwd, env) {
   return new Promise((resolveGit, rejectGit) => {
@@ -109,6 +148,8 @@ export async function runRenderApp({
       throw new Error(`Render app runner refuses a manifest the app user can read: ${manifestPath}`);
   }
   const entrypoint = await prepareRenderApp(manifestPath, appDir, env);
+  const bootId = randomBytes(16).toString("base64url");
+  const owner = privileged ? { uid: APP_UID, gid: APP_GID } : {};
   const appEnv = { ...env, ...manifest.runtimeEnv, PORT: String(appPort), DATA_DIR: dataDir };
   delete appEnv.QM_RENDER_APP_TOKEN;
   if (privileged) {
@@ -145,8 +186,14 @@ export async function runRenderApp({
   const server = createRenderAppGateway({
     token: gatewayToken,
     readinessNonce: manifest.readinessNonce,
+    bootId,
     appPort,
     isReady: () => appReady,
+    edit: async (body) => {
+      await applyEdit(appDir, body, owner);
+      if (typeof body.entrypoint === "string" && body.entrypoint.trim()) await restart(body.entrypoint);
+      return { boot: bootId };
+    },
   });
   const sockets = new Set();
   server.on("connection", (socket) => {
@@ -168,23 +215,71 @@ export async function runRenderApp({
     await new Promise((done) => server.close(done));
     throw error;
   }
-  const child = spawn("bash", ["-c", entrypoint], {
-    cwd: appDir,
-    env: appEnv,
-    stdio: "inherit",
-    detached: true,
-    ...(privileged ? { uid: APP_UID, gid: APP_GID } : {}),
-  });
+  let child;
   let spawnError;
-  const completion = new Promise((resolveExit) => {
-    child.on("error", (error) => {
+  let resolveExit;
+  const completion = new Promise((settle) => {
+    resolveExit = settle;
+  });
+  const launch = (command) => {
+    const started = spawn("bash", ["-c", command], {
+      cwd: appDir,
+      env: appEnv,
+      stdio: "inherit",
+      detached: true,
+      ...owner,
+    });
+    child = started;
+    started.on("error", (error) => {
+      if (child !== started) return;
       spawnError = error;
       resolveExit(1);
     });
-    child.on("exit", (code, signal) => resolveExit(code ?? (signal === "SIGTERM" ? 143 : 1)));
-  });
+    started.on("exit", (code, signal) => {
+      if (child === started) resolveExit(code ?? (signal === "SIGTERM" ? 143 : 1));
+    });
+    return started;
+  };
+  const exitedBeforeReady = (started) => started.exitCode !== null || started.signalCode !== null;
+  const untilListening = async (started) => {
+    const deadline = Date.now() + APP_READY_TIMEOUT_MS;
+    while (true) {
+      sqliteBackup.assertRunning();
+      if (spawnError) throw new Error(`Render app could not start: ${spawnError.message}`);
+      if (exitedBeforeReady(started))
+        throw new Error(`Render app exited before it was ready (${started.signalCode ?? started.exitCode})`);
+      if (await listening(1_000)) return;
+      if (Date.now() >= deadline) throw new Error("Render app did not become ready");
+      await new Promise((done) => setTimeout(done, 200));
+    }
+  };
+  const restart = async (command) => {
+    if (stopping) throw new Error("The Render app is shutting down");
+    const previous = child;
+    child = undefined;
+    appReady = false;
+    const gone = new Promise((done) => (exitedBeforeReady(previous) ? done() : previous.once("exit", done)));
+    const signalPrevious = (signal) => {
+      try {
+        process.kill(-previous.pid, signal);
+      } catch (error) {
+        if (error.code !== "ESRCH" && error.code !== "EPERM") throw error;
+      }
+    };
+    signalPrevious("SIGTERM");
+    const killer = setTimeout(() => signalPrevious("SIGKILL"), shutdownGraceMs);
+    await gone;
+    clearTimeout(killer);
+    if (stopping) {
+      resolveExit(143);
+      throw new Error("The Render app is shutting down");
+    }
+    await untilListening(launch(command));
+    appReady = !stopping;
+  };
+  launch(entrypoint);
   const forward = (signal) => {
-    if (!child.pid) return false;
+    if (!child?.pid) return false;
     try {
       process.kill(-child.pid, signal);
       return true;
@@ -224,16 +319,7 @@ export async function runRenderApp({
   process.on("SIGINT", interrupt);
   let failure;
   try {
-    const deadline = Date.now() + 90_000;
-    while (true) {
-      sqliteBackup.assertRunning();
-      if (spawnError) throw new Error(`Render app could not start: ${spawnError.message}`);
-      if (child.exitCode !== null || child.signalCode !== null)
-        throw new Error(`Render app exited before it was ready (${child.signalCode ?? child.exitCode})`);
-      if (await listening(1_000)) break;
-      if (Date.now() >= deadline) throw new Error("Render app did not become ready");
-      await new Promise((done) => setTimeout(done, 200));
-    }
+    await untilListening(child);
     appReady = !stopping;
     sweep = setInterval(async () => {
       if (stopping) return;
@@ -267,17 +353,38 @@ export async function runRenderApp({
   }
 }
 
-export function createRenderAppGateway({ token, readinessNonce, appPort = 8081, isReady = () => true }) {
-  const authorized = (req) => {
-    const value = req.headers["x-qm-render-app-token"];
+export function createRenderAppGateway({ token, readinessNonce, bootId, appPort = 8081, isReady = () => true, edit }) {
+  const signed = (req, header, key) => {
+    const value = req.headers[header];
     if (typeof value !== "string") return false;
     const [expiresAt, signature = ""] = value.split(".");
     if (!/^[0-9]{1,15}$/.test(expiresAt) || Number(expiresAt) <= Date.now()) return false;
-    const expected = createHmac("sha256", token).update(expiresAt).digest("base64url");
+    const expected = createHmac("sha256", key).update(expiresAt).digest("base64url");
     return (
       Buffer.byteLength(signature) === Buffer.byteLength(expected) &&
       timingSafeEqual(Buffer.from(signature), Buffer.from(expected))
     );
+  };
+  const authorized = (req) => signed(req, "x-qm-render-app-token", token);
+  const editKey = renderEditKey(token);
+  const editing = async (req, res) => {
+    if (req.method !== "POST" || !edit || !signed(req, "x-qm-render-app-edit", editKey)) {
+      req.resume();
+      res.writeHead(403).end();
+      return;
+    }
+    try {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const result = await edit(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      res
+        .writeHead(200, { "content-type": "application/json", "cache-control": "no-store" })
+        .end(JSON.stringify(result));
+    } catch (error) {
+      res
+        .writeHead(500, { "content-type": "text/plain; charset=utf-8" })
+        .end(error instanceof Error ? error.message : String(error));
+    }
   };
   const options = (req) => {
     const headers = { ...req.headers };
@@ -288,8 +395,15 @@ export function createRenderAppGateway({ token, readinessNonce, appPort = 8081, 
     if (req.url === "/__qm_ready") {
       const ready = isReady();
       const headers = { "cache-control": "no-store" };
-      if (ready && authorized(req)) headers["x-qm-render-app-ready"] = readinessNonce;
+      if (ready && authorized(req)) {
+        headers["x-qm-render-app-ready"] = readinessNonce;
+        if (bootId) headers["x-qm-render-app-boot"] = bootId;
+      }
       res.writeHead(ready ? 204 : 503, headers).end();
+      return;
+    }
+    if (req.url === "/__qm_edit") {
+      await editing(req, res);
       return;
     }
     if (!authorized(req)) {

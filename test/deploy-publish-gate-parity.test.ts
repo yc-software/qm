@@ -42,6 +42,7 @@ async function setup(opts: { withResolver: boolean } = { withResolver: true }) {
     deployStore,
     provider: {
       profile: { managedScaleToZero: false },
+      liveEdit: async () => false,
       apply: async () => ({ host: "127.0.0.1", port: 19996 }),
       destroy: async () => {},
     },

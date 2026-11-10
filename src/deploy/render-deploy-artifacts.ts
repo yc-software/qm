@@ -26,7 +26,7 @@ export function createRenderDeployArtifacts(opts: {
   baseUrl: string;
   signingSecret: string;
   store: DurableMap<StoredRenderDeployCredential>;
-  deployStore: Pick<DeployStore, "versionOf">;
+  deployStore: Pick<DeployStore, "versionOf" | "draftOf">;
 }): RenderDeployArtifacts {
   return {
     async prepare(deployment, version) {
@@ -42,13 +42,14 @@ export function createRenderDeployArtifacts(opts: {
         base.hash
       )
         throw new Error("Render app deployment requires an HTTPS PUBLIC_API_URL without credentials");
-      const saved = await opts.deployStore.versionOf(deployment.id, version.version);
-      if (
-        !saved?.commit ||
-        !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(saved.commit) ||
-        saved.commit !== version.commit ||
-        saved.entrypoint !== version.entrypoint
-      )
+      const durable = [
+        await opts.deployStore.versionOf(deployment.id, version.version),
+        await opts.deployStore.draftOf(deployment.id),
+      ];
+      const saved = durable.find(
+        (source) => source?.commit === version.commit && source?.entrypoint === version.entrypoint,
+      );
+      if (!saved?.commit || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(saved.commit))
         throw new Error(`Render app version ${deployment.id}@${version.version} has no matching durable Git commit`);
       let credential = await opts.store.get(deployment.id);
       if (!credential) {

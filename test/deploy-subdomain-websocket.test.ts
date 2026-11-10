@@ -118,7 +118,12 @@ async function gateway(endpoint: DeployEndpoint) {
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore,
-    provider: { profile: { managedScaleToZero: false }, apply: async () => endpoint, destroy: async () => {} },
+    provider: {
+      profile: { managedScaleToZero: false },
+      apply: async () => endpoint,
+      liveEdit: async () => false,
+      destroy: async () => {},
+    },
     auditLog,
     acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
     deployDir: mkdtempSync(join(tmpdir(), "websocket-")),

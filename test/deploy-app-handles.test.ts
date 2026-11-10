@@ -70,6 +70,7 @@ test("a <handle>-<app> host serves the handle's own app, refuses other companies
     deployStore: createDeployStore(backings),
     provider: {
       profile: { managedScaleToZero: false },
+      liveEdit: async () => false,
       apply: async () => ({ host: "127.0.0.1", port: upstreamPort }),
       destroy: async () => {},
     },

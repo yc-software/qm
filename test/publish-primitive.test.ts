@@ -24,6 +24,7 @@ function svc() {
     deployStore,
     provider: {
       profile: { managedScaleToZero: false },
+      liveEdit: async () => false,
       apply: async () => {
         starts++;
         return { host: "127.0.0.1", port: 20000 };

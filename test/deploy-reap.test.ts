@@ -17,6 +17,7 @@ function svc(managedScaleToZero: boolean) {
   let destroys = 0;
   const provider: DeployProvider = {
     profile: { managedScaleToZero },
+    liveEdit: async () => false,
     apply: async () => ({ host: "127.0.0.1", port: 5000 }),
     destroy: async () => {
       destroys++;
