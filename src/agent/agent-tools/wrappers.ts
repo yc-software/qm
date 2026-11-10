@@ -114,11 +114,13 @@ export function withToolApprovalGate(
         : tool.name;
       const commandLabel = resourceAction ? `${tool.name} ${resourceAction}` : tool.name;
       let declaredReason: string | undefined;
+      let approvalStage = "canonical tool name";
       try {
         if (tool.canonicalParams) params = await tool.canonicalParams(params);
+        approvalStage = "needsApproval check";
         declaredReason = await declaredApprovalReason(tool, params);
       } catch (error) {
-        reportFailure("tool approval: needsApproval check", error, tool.name);
+        reportFailure(`tool approval: ${approvalStage}`, error, tool.name);
         await recordCall(callId, { tool: tool.name, blocked: "approval_check_failed", error: errMessage(error) });
         return recordResult(
           callId,

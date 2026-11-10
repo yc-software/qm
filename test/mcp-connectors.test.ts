@@ -256,7 +256,7 @@ test("a catalog invoke by alias is approved and sent under the catalog's own nam
   assert.equal(await service.canonicalArgs("records", search, ...who), search);
   await assert.rejects(
     service.call("records", aliased, who[0], "tool-call:abc", who[1]),
-    /send-message no longer names a Records tool/,
+    /send-message is not the exact name of a Records tool \(it resolves to /,
     "an approval only ever goes out with the exact name it was keyed to",
   );
   assert.equal(

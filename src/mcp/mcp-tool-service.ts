@@ -350,7 +350,9 @@ export function createMcpToolService(opts: {
     const input = args.arguments ?? {};
     if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("arguments must be an object");
     if (approval && entry.name !== args.tool)
-      throw new Error(`${String(args.tool)} no longer names a ${server.name} tool; search for it and call it again.`);
+      throw new Error(
+        `${String(args.tool)} is not the exact name of a ${server.name} tool (it resolves to ${entry.name}); call ${entry.name} so the approval names that tool.`,
+      );
     if (mcpToolNeedsApproval(server, entry.annotations) && !approval)
       throw new Error(`${entry.name} needs the person's approval; call it again so they get an approval card.`);
     const client = await callerClient(server, principalId);
