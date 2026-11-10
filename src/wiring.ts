@@ -1520,7 +1520,7 @@ export function buildApp(
     decisions,
     overrides.decisionBackend ??
       createDecisionBackend({
-        providers: async (ids) => (await decisions?.providers(ids)) ?? [],
+        providers: async (tenant, ids) => (await decisions?.providers(tenant, ids)) ?? [],
         ...(modelRoutes.gateway ? { gateway: modelRoutes.gateway } : {}),
         credential: async (slug) => {
           const rec = keychain
@@ -1558,6 +1558,7 @@ export function buildApp(
     async (input, routedBy) => {
       const decision = await tracePhase("turn.decision", () =>
         decide("turn_start", turnStartState(input), {
+          tenant: ambientTenant(),
           ...(input.runtimeActorId ? { actorId: input.runtimeActorId } : {}),
           scopeLabel: input.scopeLabel,
           sessionId: input.session.id,
@@ -1915,6 +1916,7 @@ export function buildApp(
           deploymentEnv: async (deployment: Deployment): Promise<Record<string, string>> => {
             const orgScope = scopeId("org", config.orgId);
             const credentials = await deploymentCredentialSlugs(
+              ambientTenant(),
               await serviceCreds.listServiceCredentials(orgScope),
               orgScope,
               acl,

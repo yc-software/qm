@@ -16,6 +16,7 @@ import {
   type PersonaStore,
   type PersonaVersionPage,
 } from "./persona-store.ts";
+import { ambientTenant } from "../tenants/context.ts";
 
 const personaScope = (id: string): ScopeId => scopeId("persona", id);
 
@@ -101,7 +102,7 @@ export function createPersonaService(deps: {
   const enabledFor = (principalId: string) => deps.flags.enabled("personas", scopeId("personal", principalId));
 
   async function granteeScopes(principalId: string, contextScope?: ScopeId): Promise<ScopeId[]> {
-    const teams = (await deps.teams?.forTurn("", [principalId])) ?? [];
+    const teams = (await deps.teams?.forTurn(ambientTenant(), "", [principalId])) ?? [];
     return [
       ...personIds(principalId).map((id) => scopeId("personal", id)),
       deps.orgScope,

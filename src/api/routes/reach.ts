@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
-import { type ApiCtx, type Route } from "./route.ts";
+import { tenantOf, type ApiCtx, type Route } from "./route.ts";
 import { collectNamedOutbound, parseOutboundFiles, type ArtifactRegistration } from "../../core/attachments.ts";
 import type { SandboxHandle } from "../../sandbox/sandbox.ts";
 import {
@@ -220,7 +220,7 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
         : sandbox!.provision(envScope));
     try {
       const r = await collectNamedOutbound(sandbox, handle, files, blobTransfer, register, [], (id) =>
-        app.openFileForViewer(id, capability.actorId),
+        app.openFileForViewer(tenantOf(ctx), id, capability.actorId),
       );
       const bad = [
         ...r.missing.map((p) => `${p} (not found)`),

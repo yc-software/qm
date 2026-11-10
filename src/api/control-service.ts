@@ -946,6 +946,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
             : undefined;
         if (!invite)
           await app.grant(
+            ambientTenant(),
             {
               ownerScopeId: home.ownerScopeId,
               ref: home.grantRef,

@@ -5,8 +5,10 @@ import { orgId } from "../config.ts";
 import { entitledScopes } from "../resolution/context-filter.ts";
 import { scopeId } from "../types.ts";
 import type { ServerDeps } from "./deps.ts";
+import type { Tenant } from "../tenants/context.ts";
 
 export async function externalSlackCapabilityAllowed(
+  tenant: Tenant,
   claims: CapabilityClaims,
   deps: Pick<ServerDeps, "runs" | "acl" | "externalSlackPolicies">,
 ): Promise<boolean> {
@@ -15,6 +17,7 @@ export async function externalSlackCapabilityAllowed(
   if (!run || origin?.audience !== "external" || !deps.acl) return false;
   const allowed = new Set(origin.access.serviceCredentials);
   const grants = await deps.acl.grantsOfKind(
+    tenant,
     "service-cred",
     run.request.conversation.audience,
     claims.scopeId,

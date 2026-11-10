@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { createPostgresAdminGrantStore } from "../src/admin/postgres-admin-grant-store.ts";
 import { createAdminGrantStore, type AdminGrant } from "../src/admin/admin-grant-store.ts";
 import { scopeId } from "../src/types.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres admin-grant tests";
@@ -18,7 +19,6 @@ beforeEach(async () => {
   await p.end();
 });
 
-const tenant = withTenant(TEST_TENANT, (t) => t);
 const org = scopeId("org", "default-org");
 const grant = (over: Partial<AdminGrant> = {}): AdminGrant => ({
   principalId: "U1",
