@@ -957,10 +957,10 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     }
     if (isShellRequest) {
       if (pathname === "/__claw__/version" && deployment) {
-        const live = await app.deploymentLiveEdit(deployment.id);
+        const draft = (await app.deploymentLiveEdit(deployment.id))?.draft;
         sendJson(res, 200, {
           version: deployment.appliedVersion ?? deployment.currentVersion,
-          ...(live ? { live: live.reloads } : {}),
+          ...(draft ? { live: draft.reloads } : {}),
         });
       } else if (
         annotationsEnabled &&

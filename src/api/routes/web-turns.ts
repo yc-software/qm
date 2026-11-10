@@ -1,5 +1,6 @@
 import { clientSurfaceOf } from "../../../plugins/chassis/src/client-surface.ts";
 import { appEditSlug } from "../../../plugins/chassis/src/app-edit.ts";
+import { LIVE_EDIT_PUBLISH_DELAY_MS } from "../../deploy/live-edits.ts";
 import { isSubagentThreadRef } from "../../sessions/session-syscalls.ts";
 import type { TurnRequest } from "../../types.ts";
 import { sendJson } from "../http.ts";
@@ -114,10 +115,9 @@ async function webTurnBase(
   const displayName = ctx.actor?.n;
   const appSlug = appEditSlug(threadRef, user);
   const inbox = threadRef === `web:${user}:inbox` ? await inboxContext(ctx) : undefined;
-  const failedPublish =
-    appSlug && (await ctx.app.canManageDeployment(appSlug, user))
-      ? (await ctx.app.deploymentLiveEdit(appSlug))?.failure
-      : undefined;
+  const liveEdit = appSlug ? await ctx.app.deploymentLiveEdit(appSlug) : null;
+  const failure = liveEdit?.draft?.failure;
+  const failedPublish = appSlug && failure && (await ctx.app.canManageDeployment(appSlug, user)) ? failure : undefined;
   return {
     surface: "web",
     clientSurface: clientSurfaceOf(ctx.req.headers),
@@ -128,7 +128,7 @@ async function webTurnBase(
     ...(inbox ? { conversationHeader: inbox } : {}),
     ...(appSlug
       ? {
-          conversationHeader: `The user is chatting beside their deployed app ${JSON.stringify(appSlug)}. Requests about this app refer to that deployment. Use the existing app source and publish updates to the same deployment when requested. This context does not grant additional permissions.${failedPublish ? ` The last automatic publish of this app failed, so it is still running the saved edits: ${failedPublish}` : ""}`,
+          conversationHeader: `The user is chatting beside their deployed app ${JSON.stringify(appSlug)}. Requests about this app refer to that deployment. Use the existing app source and publish updates to the same deployment when requested. This context does not grant additional permissions.${liveEdit ? ` Pushing to the app's git remote or republishing it updates the running app within seconds, and it becomes a new version on its own ${LIVE_EDIT_PUBLISH_DELAY_MS / 60_000} minutes after the last change, so an unchanged version number right after a change is expected.` : ""}${failedPublish ? ` The last automatic publish of this app failed, so it is still running the saved edits: ${failedPublish}` : ""}`,
         }
       : {}),
     text,

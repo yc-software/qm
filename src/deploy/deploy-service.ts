@@ -100,7 +100,7 @@ export interface DeployService {
 
   maintainDeployments(): Promise<number>;
   publishDueLiveEdits(): Promise<number>;
-  liveEditOf(idOrName: string): Promise<DeploymentDraft | null>;
+  liveEditOf(idOrName: string): Promise<{ draft: DeploymentDraft | null } | null>;
   reachDeployment(idOrName: string, principalId: string, opts?: ReachOptions): Promise<Reach>;
   /** Recent app output (entrypoint stdout+stderr) for a deployment, newest last; null when the provider keeps none. */
   deploymentLogs(idOrName: string, opts: { tailLines: number }): Promise<string | null>;
@@ -679,8 +679,9 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     publishDueLiveEdits: () => liveEdits.publishDue(),
 
     async liveEditOf(idOrName) {
+      if (!deps.provider.liveEdit) return null;
       const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
-      return d ? deps.deployStore.draftOf(d.id) : null;
+      return d ? { draft: await deps.deployStore.draftOf(d.id) } : null;
     },
 
     async reachDeployment(idOrName, principalId, opts = {}): Promise<Reach> {

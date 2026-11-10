@@ -612,7 +612,7 @@ export interface App {
   setDeploymentConnectors(idOrName: string, connectors: string[], actor: { createdBy: string }): Promise<Deployment>;
   maintainDeployments(): Promise<number>;
   publishDueLiveEdits(): Promise<number>;
-  deploymentLiveEdit(id: string): Promise<DeploymentDraft | null>;
+  deploymentLiveEdit(id: string): Promise<{ draft: DeploymentDraft | null } | null>;
   reachDeployment(id: string, principalId: string, opts?: ReachOptions): Promise<Reach>;
   deploymentLogsFor(
     id: string,
