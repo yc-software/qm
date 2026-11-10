@@ -6,6 +6,7 @@ import type { CapturedAssistantMessage, ProviderErrorInfo } from "../src/model/p
 import { buildModelRuntime } from "../src/model/model-runtime.ts";
 import { getRequiredModel } from "../src/model/pi-models.ts";
 import { providerTurnError } from "../src/model/provider-error.ts";
+import { isNonRetryable } from "../src/core/turn-error.ts";
 
 async function serve(t: test.TestContext, reply: (res: ServerResponse) => void): Promise<string> {
   const server = createServer((_req, res) => reply(res));
@@ -39,7 +40,7 @@ test("a LiteLLM 429 budget_exceeded keeps its status, type, code and body as pro
     name: "litellm-model",
     api: "openai-completions",
     provider: "openai",
-    baseUrl: `${url}/v1`,
+    baseUrl: url,
     reasoning: false,
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -158,4 +159,73 @@ test("over-window prompts classify as context_too_long from structured signals",
     providerTurnError(anthropic400, { contextWindow: 200_000, lastInputTokens: 20_000 }).code,
     "bad_request",
   );
+});
+
+const sse = (events: ({ type?: string } & Record<string, unknown>)[]) =>
+  events.map((event) => `event: ${event.type ?? "chunk"}\ndata: ${JSON.stringify(event)}\n\n`).join("");
+const usage = { input_tokens: 1, output_tokens: 0, total_tokens: 1 };
+const served: Record<string, { provider: string; body: (reason: string) => string }> = {
+  "anthropic-messages": {
+    provider: "anthropic",
+    body: (reason) =>
+      sse([
+        { type: "message_start", message: { id: "m", role: "assistant", content: [], usage } },
+        { type: "message_delta", delta: { stop_reason: reason }, usage },
+        { type: "message_stop" },
+      ]),
+  },
+  "openai-responses": {
+    provider: "openai",
+    body: (reason) =>
+      sse([
+        {
+          type: "response.incomplete",
+          response: { id: "r", status: "incomplete", incomplete_details: { reason }, output: [], usage },
+        },
+      ]),
+  },
+  "openai-completions": {
+    provider: "openrouter",
+    body: (reason) =>
+      sse([{ id: "c", choices: [{ index: 0, delta: {}, finish_reason: reason }] }]) + "data: [DONE]\n\n",
+  },
+};
+
+test("a stop the provider made on purpose is not retried; every other error stop is", async (t) => {
+  for (const [api, reason, rawStopReason, code, retried] of [
+    ["anthropic-messages", "refusal", "refusal", "refusal", false],
+    ["anthropic-messages", "sensitive", "sensitive", "unknown", false],
+    ["anthropic-messages", "new_reason", "new_reason", "unknown", true],
+    ["openai-responses", "content_filter", "incomplete.content_filter", "unknown", false],
+    ["openai-responses", "new_reason", "incomplete.new_reason", "unknown", true],
+    ["openai-completions", "content_filter", "content_filter", "unknown", false],
+    ["openai-completions", "network_error", "network_error", "unknown", true],
+    ["openai-completions", "new_reason", "new_reason", "unknown", true],
+    ...[
+      ...["guardrail_intervened", "content_filtered", "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT"],
+      ...["SPII", "IMAGE_SAFETY", "IMAGE_PROHIBITED_CONTENT", "IMAGE_RECITATION"],
+    ].map((raw) => [undefined, raw, raw, "unknown", false] as const),
+    ...["malformed_model_output", "malformed_tool_use", "OTHER", "MALFORMED_FUNCTION_CALL", "LANGUAGE"].map(
+      (raw) => [undefined, raw, raw, "unknown", true] as const,
+    ),
+  ] as const) {
+    let failed = { role: "assistant", stopReason: "error", rawStopReason } as CapturedAssistantMessage;
+    if (api) {
+      const url = await serve(t, (res) => {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.end(served[api]!.body(reason));
+      });
+      const model = {
+        ...getRequiredModel("claude-opus-5"),
+        id: api,
+        api,
+        provider: served[api]!.provider,
+        baseUrl: url,
+      };
+      failed = await failedCall(model as Model<Api>, served[api]!.provider);
+      assert.deepEqual([failed.stopReason, failed.rawStopReason], ["error", rawStopReason], `${api} ${reason}`);
+    }
+    const err = providerTurnError(failed);
+    assert.deepEqual([err.code, isNonRetryable(err)], [code, !retried], `${api} ${reason}`);
+  }
 });

@@ -12,8 +12,17 @@ const DELIBERATE_STOP_REASONS = new Set([
   "refusal",
   "sensitive",
   "content_filter",
+  "incomplete.content_filter",
   "guardrail_intervened",
   "content_filtered",
+  "SAFETY",
+  "RECITATION",
+  "BLOCKLIST",
+  "PROHIBITED_CONTENT",
+  "SPII",
+  "IMAGE_SAFETY",
+  "IMAGE_PROHIBITED_CONTENT",
+  "IMAGE_RECITATION",
 ]);
 
 export interface ContextUsage {
