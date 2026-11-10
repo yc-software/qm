@@ -8,9 +8,9 @@ const file = (path: string, content: unknown): CredentialFile => ({
   contentBase64: Buffer.from(typeof content === "string" ? content : JSON.stringify(content)).toString("base64"),
 });
 const hash = (f: CredentialFile) => `${f.path}:${f.contentBase64}`;
-const merge = (base: CredentialFile[] | null, stored: CredentialFile[], refreshed: CredentialFile[]) => {
+const merge = (base: CredentialFile[], stored: CredentialFile[], refreshed: CredentialFile[]) => {
   const result = mergeCredentialFiles({
-    baseline: new Map((base ?? []).map((f) => [f.path, hash(f)])),
+    baseline: new Map(base.map((f) => [f.path, hash(f)])),
     stored,
     refreshed,
     hash,
@@ -67,16 +67,4 @@ test("true conflicts keep the later declared expiry without a report, else the s
     assert.equal(files.blob, "b-store");
     assert.deepEqual(overruled, ["blob"]);
   }
-});
-
-test("with an unknown baseline, the stored version wins unless the command's expiry is later", () => {
-  const { files } = merge(
-    null,
-    [file(TOKEN, { v: "store", expiresAt: "2026-11-09T18:00:00Z" }), file("config", "c-store"), file("added", "a")],
-    [file(TOKEN, { v: "login", expiresAt: "2026-11-09T19:00:00Z" }), file("config", "c-launch")],
-  );
-  assert.deepEqual(
-    { ...files, [TOKEN]: JSON.parse(files[TOKEN]!).v },
-    { added: "a", config: "c-store", [TOKEN]: "login" },
-  );
 });

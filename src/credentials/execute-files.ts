@@ -7,7 +7,7 @@ import { pathUnder } from "../util/paths.ts";
 import { homeRelativePath } from "./paths.ts";
 import { builtInCredentialPaths, type CredentialPathSpec } from "./resident-paths.ts";
 import {
-  credentialFilesFingerprint,
+  credentialFileHashes,
   fileCredentialEnvironment,
   KeychainError,
   MAX_CREDENTIAL_BYTES,
@@ -20,7 +20,7 @@ import {
 
 export interface ExecutionFileCredential {
   files: CredentialFile[];
-  save(files: CredentialFile[]): Promise<string[] | void>;
+  save(files: CredentialFile[]): Promise<string[]>;
   source?: FileCredentialSource;
 }
 
@@ -31,7 +31,7 @@ export interface ExecutionFilePlan {
 
 export interface ProcessCredentialFiles {
   plan: ExecutionFilePlan;
-  sources: Array<FileCredentialSource & { fingerprint: string }>;
+  sources: Array<FileCredentialSource & { fileHashes: Record<string, string> }>;
 }
 
 export function processCredentialFiles(
@@ -42,7 +42,7 @@ export function processCredentialFiles(
     plan,
     sources: credentials.map((credential) => {
       if (!credential.source) throw new Error("Background credentials need a keychain source");
-      return { ...credential.source, fingerprint: credentialFilesFingerprint(credential.files) };
+      return { ...credential.source, fileHashes: credentialFileHashes(credential.files) };
     }),
   };
 }
@@ -63,10 +63,9 @@ export async function finishProcessCredentials(
     deps.sandbox,
     handle,
     stored.plan,
-    stored.sources.map(({ fingerprint, ...source }) => async (files: CredentialFile[]) => {
-      if (credentialFilesFingerprint(files) === fingerprint) return [];
+    stored.sources.map(({ fileHashes, ...source }) => async (files: CredentialFile[]) => {
       if (!keychain) throw new Error("Refreshed credentials cannot be saved without a keychain");
-      return keychain.updateFiles(await keychain.writebackBaseline(source, fingerprint), files);
+      return keychain.updateFiles(await keychain.writebackBaseline(source, fileHashes ?? {}), files);
     }),
     (retry) =>
       deps.processes.setCredentialFiles(
@@ -180,7 +179,7 @@ async function finishExecutionFiles(
   sandbox: Sandbox,
   handle: SandboxHandle,
   plan: ExecutionFilePlan,
-  saves: ReadonlyArray<(files: CredentialFile[]) => Promise<string[] | void>>,
+  saves: ReadonlyArray<(files: CredentialFile[]) => Promise<string[]>>,
   settle?: (retry: number[]) => Promise<void>,
 ): Promise<string | undefined> {
   const { directory } = plan;
@@ -233,7 +232,7 @@ async function finishExecutionFiles(
           notes.push(`deleted all of its credential files (${deleted.join(", ")}); the saved login was left unchanged`);
           return;
         }
-        const overruled = (await saves[index]!(remaining)) ?? [];
+        const overruled = await saves[index]!(remaining);
         const removed = deleted.filter((path) => !overruled.includes(path));
         if (removed.length)
           notes.push(

@@ -367,7 +367,7 @@ interface MaterializedFileCred {
   grantId?: string;
   purpose?: string;
   writeback?: boolean;
-  baselineUnknown?: true;
+  baseline?: Record<string, string>;
 }
 
 export type MaterializedCred = ({ kind: "env" } & MaterializedEnvCred) | ({ kind: "file" } & MaterializedFileCred);
@@ -391,7 +391,7 @@ export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   updateFiles(materialized: Extract<MaterializedCred, { kind: "file" }>, files: CredentialFile[]): Promise<string[]>;
   writebackBaseline(
     source: FileCredentialSource,
-    fingerprint: string,
+    fileHashes: Record<string, string>,
   ): Promise<Extract<MaterializedCred, { kind: "file" }>>;
   listAllMetadata(): Promise<KeychainCredentialMeta[]>;
   listByOwner(ownerId: string): Promise<KeychainCredentialMeta[]>;
@@ -456,7 +456,7 @@ export interface FileCredentialSource {
   writeback?: boolean;
 }
 
-export function credentialFilesFingerprint(files: CredentialFile[]): string {
+function credentialFilesFingerprint(files: CredentialFile[]): string {
   return fileCredentialFingerprint(
     files
       .map((file) => ({ ...file, mode: restoredFileMode(file.mode) }))
@@ -466,6 +466,10 @@ export function credentialFilesFingerprint(files: CredentialFile[]): string {
 
 function fileCredentialFingerprint(files: CredentialFile[]): string {
   return fingerprintOf(JSON.stringify(files.map((f) => ({ ...f, path: homeRelativePath(f.path) }))));
+}
+
+export function credentialFileHashes(files: CredentialFile[]): Record<string, string> {
+  return Object.fromEntries(files.map((file) => [file.path, credentialFilesFingerprint([file])]));
 }
 
 function keychainFilePath(path: string): string {
@@ -1080,10 +1084,9 @@ export function createKeychain(deps: {
       const normalized = checkedFiles(files.map((file) => ({ ...file, path: keychainFilePath(file.path) })));
       if (!normalized.length) throw new KeychainError(409, "Refreshed credential files are missing");
       const fingerprint = credentialFilesFingerprint;
-      if (!materialized.baselineUnknown && fingerprint(normalized) === fingerprint(materialized.files)) return [];
-      const baseline = new Map(
-        materialized.baselineUnknown ? [] : materialized.files.map((file) => [file.path, fingerprint([file])]),
-      );
+      const baseline = new Map(Object.entries(materialized.baseline ?? credentialFileHashes(materialized.files)));
+      const ours = Object.entries(credentialFileHashes(normalized));
+      if (ours.length === baseline.size && ours.every(([path, hash]) => baseline.get(path) === hash)) return [];
       let overruled: string[] = [];
 
       const updated = await deps.creds.update(materialized.credentialId, (current) => {
@@ -1112,7 +1115,7 @@ export function createKeychain(deps: {
       return overruled;
     },
 
-    async writebackBaseline(source, fingerprint) {
+    async writebackBaseline(source, fileHashes) {
       const current = await deps.creds.get(source.credentialId);
       if (!current || current.kind !== "file" || !samePerson(current.ownerId, source.ownerId))
         throw new KeychainError(410, "Credential was removed during execution");
@@ -1123,7 +1126,7 @@ export function createKeychain(deps: {
         ownerId: current.ownerId,
         service: current.service,
         files,
-        ...(credentialFilesFingerprint(files) === fingerprint ? {} : { baselineUnknown: true as const }),
+        baseline: fileHashes,
         ...(source.grantId ? { grantId: source.grantId } : {}),
         ...(source.writeback ? { writeback: true } : {}),
       };

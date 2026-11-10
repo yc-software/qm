@@ -380,8 +380,8 @@ test("refreshes made through a use grant never change the owner's saved login", 
 
 test("an execution sweeps only stale credential directories", async (t) => {
   const f = await fixture(t);
-  const stale = await prepareExecutionFiles(f.sandbox, f.handle, [{ files: files("stale"), save: async () => {} }]);
-  const live = await prepareExecutionFiles(f.sandbox, f.handle, [{ files: files("live"), save: async () => {} }]);
+  const stale = await prepareExecutionFiles(f.sandbox, f.handle, [{ files: files("stale"), save: async () => [] }]);
+  const live = await prepareExecutionFiles(f.sandbox, f.handle, [{ files: files("live"), save: async () => [] }]);
   const staleDir = stale.env.HOME!.replace(/\/home$/, "");
   await f.sandbox.run(f.handle, `touch -d '3 hours ago' ${staleDir}`);
   await f.context().execute("true", { credentials: ["aws"] });
