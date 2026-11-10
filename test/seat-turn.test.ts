@@ -70,7 +70,6 @@ const webTurn = (built: ReturnType<typeof buildApp>, threadRef: string, kind: "d
     conversation: kind === "dm" ? { kind, threadRef } : { kind, threadRef, channelRef: "C-seat" },
     text: "What did we talk about?",
     model: SEAT_MODEL_ID,
-    liveActor: true,
     async: true,
   });
 

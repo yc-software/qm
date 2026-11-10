@@ -29,6 +29,8 @@ import type { SessionStateEvent } from "../runs/session-state-bus.ts";
 import { turnRuntimePurpose } from "../core/turn-options.ts";
 import { SEAT_MODEL_ID } from "../model/seat-model.ts";
 import { SEAT_PERSONAL_ONLY } from "../seat/seat.ts";
+import { conversationScope } from "../resolution/resolution-service.ts";
+import { scopeId } from "../types.ts";
 import { turnModelOptions } from "../agent/runtime-choice.ts";
 import { samePerson } from "../directory/person.ts";
 import { swallowAs } from "../util/errors.ts";
@@ -258,7 +260,9 @@ export function createTurnMethods(
         { surface: req.surface, triggered: automated, infrequentCron: req.infrequentCron },
         isSubagentThreadRef(req.conversation.threadRef),
       );
-      const modelRefusal = seatTurn ? undefined : await turnModelRefusal(deps, req, actor.id, individualAuth, runtimePurpose);
+      const modelRefusal = seatTurn
+        ? undefined
+        : await turnModelRefusal(deps, req, actor.id, individualAuth, runtimePurpose);
       if (modelRefusal) return { status: "refused", reason: modelRefusal };
 
       const rawAudience = req.conversation.audience ?? [req.actor];

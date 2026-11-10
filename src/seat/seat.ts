@@ -10,9 +10,9 @@ import type {
 } from "@earendil-works/pi-ai";
 import { stream as anthropicStream } from "@earendil-works/pi-ai/api/anthropic-messages";
 import { createPgPool } from "../persistence/pg-pool.ts";
-import { buildModelRuntime, type ProviderKeys } from "../model/model-runtime.ts";
+import { buildModelRuntime } from "../model/model-runtime.ts";
+import type { ModelRoutes } from "../model/model-route.ts";
 import { DEFAULT_AGENT_MODEL_ID, resolveModel } from "../model/pi-models.ts";
-import type { ModelGatewayTransportConfig } from "../model/provider-endpoints.ts";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import {
   currentModelRequestContext,
@@ -197,19 +197,17 @@ export function seatRuntime(
   return runtime;
 }
 
-export function seatAsk(deps: {
-  modelId: () => string;
-  providerKeys: () => Promise<ProviderKeys>;
-  modelGateway?: ModelGatewayTransportConfig;
-}): SeatOptions["ask"] {
+export function seatAsk(routes: Pick<ModelRoutes, "baseModelId" | "route">): SeatOptions["ask"] {
   return async (request, signal) => {
-    const model = [deps.modelId(), DEFAULT_AGENT_MODEL_ID]
-      .map((id) => resolveModel(id))
-      .find((candidate) => candidate?.api === "anthropic-messages");
-    if (!model)
+    const modelId = [routes.baseModelId(), DEFAULT_AGENT_MODEL_ID].find(
+      (id) => resolveModel(id)?.api === "anthropic-messages",
+    );
+    if (!modelId)
       throw new SeatError("ask_failed", "Ask model needs an Anthropic Messages model, and none is configured.");
+    const route = await routes.route(modelId);
+    const model = route.model;
     const body = Object.fromEntries(Object.entries(request).filter(([key]) => key !== "thinking" && key !== "stream"));
-    const result = await buildModelRuntime(await deps.providerKeys(), deps.modelGateway, "turn")
+    const result = await buildModelRuntime(route.keys, route.gateway, "turn")
       .then((runtime) =>
         runtime.completeSimple(
           model,

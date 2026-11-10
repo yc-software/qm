@@ -1494,19 +1494,6 @@ export function buildApp(
           ? { ...directProviderAvailability, modelIds: new Set(Object.keys(gatewayTransport.models)) }
           : undefined),
     );
-  const seat = createSeat(databaseUrl, {
-    enabled: (actorId) => featureFlags.enabled("agent_seat", scopeId("personal", actorId)),
-    signals: runSignals,
-    runLive: async (runId) => {
-      const run = await runStore.runs.get(runId);
-      return Boolean(run && !isTerminal(run.status));
-    },
-    ask: seatAsk({
-      modelId: () => orgBaseModelId() ?? deploymentDefaultModel(),
-      providerKeys: resolveCompanyProviderKeys,
-      modelGateway: gatewayTransport,
-    }),
-  });
   const configDefault = configRouteOptions(config).defaultModelId;
   const modelRoutes = createModelRoutes({
     resolveBaseModelId: () => orgBaseModelId() ?? deploymentDefaultModel(),
@@ -1515,6 +1502,15 @@ export function buildApp(
     ...(gatewayTransport ? { modelGateway: gatewayTransport } : {}),
     companyModelId: (id: string) => companyModelId(id, directProviderAvailability),
     resolveFallbackRuntime: () => configStore.getPurposeRuntime("fallback"),
+  });
+  const seat = createSeat(databaseUrl, {
+    enabled: (actorId) => featureFlags.enabled("agent_seat", scopeId("personal", actorId)),
+    signals: runSignals,
+    runLive: async (runId) => {
+      const run = await runStore.runs.get(runId);
+      return Boolean(run && !isTerminal(run.status));
+    },
+    ask: seatAsk(modelRoutes),
   });
   const baseAgent =
     overrides.agent ??
