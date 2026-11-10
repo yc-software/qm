@@ -151,10 +151,10 @@ test("swallow logs the cause chain, structured error fields and stack instead of
   assert.match(logged[2]!, /^\[swallowed\] lookup: db down \{stack: /);
 });
 
-test("httpFailure names the status, a clipped body, and the provider request id", async () => {
+test("httpFailure names the status, the whole body, and the provider request id", async () => {
   const res = new Response("x".repeat(300), { status: 502, headers: { "x-request-id": "req-7" } });
   const text = await httpFailure(res);
-  assert.match(text, /^http 502 x{200} \[request id req-7\]$/);
+  assert.match(text, /^http 502 x{300} \[request id req-7\]$/);
   assert.equal(await httpFailure(new Response("plain", { status: 429 })), "http 429 plain");
   assert.equal(
     withRequestId("lambda -> 429: throttled", new Headers({ "x-amzn-requestid": "aws-1" })),

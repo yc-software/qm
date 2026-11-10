@@ -48,8 +48,8 @@ export function withRequestId(message: string, headers: Headers): string {
   return message;
 }
 
-export async function httpFailure(res: Response, bodyChars = 200): Promise<string> {
-  const body = (await res.text().catch(() => "")).slice(0, bodyChars);
+export async function httpFailure(res: Response): Promise<string> {
+  const body = await res.text().catch(() => "");
   return withRequestId(`http ${res.status} ${body}`, res.headers);
 }
 
