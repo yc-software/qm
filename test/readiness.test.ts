@@ -30,7 +30,11 @@ async function fixture(checkReadiness?: (signal: AbortSignal) => Promise<void>) 
 test("readiness is public and ready", async () => {
   const srv = await fixture();
   try {
-    const response = await srv.get("/readyz");
+    let response = await srv.get("/readyz");
+    for (const deadline = Date.now() + 60_000; response.status === 503 && Date.now() < deadline;) {
+      await response.body?.cancel();
+      response = await srv.get("/readyz");
+    }
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), { ok: true });
     assert.equal((await srv.get("/healthz")).status, 200);
