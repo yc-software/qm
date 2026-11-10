@@ -206,12 +206,12 @@ export async function waitForNoRunningRun(
   return true;
 }
 
-export function countedClaims(run: Pick<Run, "attempts" | "preemptions" | "handbacks">): number {
-  return run.attempts - run.preemptions - run.handbacks;
+export function countedClaims(run: Pick<Run, "attempts" | "handbacks">): number {
+  return run.attempts - run.handbacks;
 }
 
 export function errorParks(
-  run: Pick<Run, "errorAttempts" | "maxAttempts" | "attempts" | "preemptions" | "handbacks">,
+  run: Pick<Run, "errorAttempts" | "maxAttempts" | "attempts" | "handbacks">,
   maxClaims?: number,
 ): boolean {
   return run.errorAttempts + 1 >= run.maxAttempts || (maxClaims !== undefined && countedClaims(run) >= maxClaims);

@@ -98,12 +98,12 @@ for (const backend of backends) {
         const parked = (await runs.get(queued.id))!;
         assert.deepEqual(
           [parked.status, parked.preemptions, parked.handbacks, parked.lastStop],
-          ["pending", 1, 0, { kind: "parked" }],
+          ["pending", 1, 1, { kind: "parked" }],
         );
         const again = ((await runs.claim("w", 60_000))[0] ?? null)!;
         await runs.releaseLease(again.id, again.leaseToken!, { kind: "shutdown" });
         const handedBack = (await runs.get(queued.id))!;
-        assert.deepEqual([handedBack.preemptions, handedBack.handbacks], [1, 1], "a deploy handback is not a park");
+        assert.deepEqual([handedBack.preemptions, handedBack.handbacks], [1, 2], "a deploy handback is not a park");
       } finally {
         await runs.close?.();
       }
