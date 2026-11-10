@@ -10,7 +10,7 @@ import type { Grant, Permission, ScopeId } from "../types.ts";
 import { isManageableCreationScope, parseScopeId, scopeId } from "../types.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import { deployRef, encodeRef } from "../acl/resource-ref.ts";
-import { normalizeRelPath } from "./deploy-fs.ts";
+import { bytes, normalizeRelPath } from "./deploy-fs.ts";
 import { samePerson } from "../directory/person.ts";
 import { personOrOwningBot, type CapabilityClaims } from "../auth/capability-token.ts";
 import { CONNECTOR_HOSTS } from "../connectors/oauth.ts";
@@ -33,7 +33,7 @@ import { errMessage, reportFailure, swallow } from "../util/errors.ts";
 import { uuidSchema } from "../util/ids.ts";
 import { claimThenBind } from "../tenants/claim.ts";
 import { assertAppLabelFits } from "../tenants/settings.ts";
-import { createLiveEdits, type LiveEditSaved } from "./live-edits.ts";
+import { createLiveEdits, gitBlobSha, type LiveEditSaved } from "./live-edits.ts";
 
 export interface DeployFile {
   path: string;
@@ -61,6 +61,24 @@ export type Reach =
   { status: "ok"; id: string; endpoint: DeployEndpoint } | { status: "denied" } | { status: "not_found" };
 
 type PublishedDeployment = Deployment & { liveEdit?: LiveEditSaved };
+
+export interface DeploymentSource {
+  commit: string;
+  tree: Array<{ path: string; sha: string; size: number }>;
+  files: Array<{ path: string; data: Uint8Array }>;
+}
+
+export interface SourceEdit {
+  files: DeployFile[];
+  deletedPaths: string[];
+}
+
+export interface SourceSaved {
+  saved: Array<{ path: string; sha: string }>;
+  deleted: string[];
+  version: number;
+  liveEdit?: LiveEditSaved;
+}
 
 export interface DeployOrUpdateInput {
   ownerScopeId: ScopeId;
@@ -108,6 +126,12 @@ export interface DeployService {
   deploymentLogs(idOrName: string, opts: { tailLines: number }): Promise<string | null>;
   gitRepoPath(idOrName: string): Promise<string | null>;
   pushGit<T>(id: string, runReceivePack: () => Promise<{ result: T; ok: boolean }>, actor?: string): Promise<T>;
+  source(idOrName: string, paths?: string[]): Promise<DeploymentSource | null>;
+  editSource(
+    idOrName: string,
+    actor: string,
+    edit: (read: (paths: string[]) => Promise<DeploymentSource>) => Promise<SourceEdit>,
+  ): Promise<SourceSaved>;
   reapIdleDeployments(ttlMs: number, now?: number): Promise<number>;
   deployOrUpdate(input: DeployOrUpdateInput): Promise<PublishedDeployment>;
   deploymentGrantees(idOrName: string): Promise<DeploymentGrantee[]>;
@@ -294,6 +318,33 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     applyVersion: (id, version) => applyVersion(id, version),
     markVersionRunning,
     withDeploymentEnv,
+  });
+
+  const publishCommit = async (before: Deployment, commit: string): Promise<DeploymentVersion | null> => {
+    const v = await deps.deployStore.addVersionFromCommit(before.id, commit);
+    if (!v) return null;
+    await deps.deployStore.deleteDraft(before.id);
+    const endpoint = await applyVersion(before.id, v);
+    await markVersionRunning(before.id, v.version, endpoint);
+    deps.auditLog.record({
+      at: Date.now(),
+      principalId: before.createdBy,
+      action: "deploy_git_push",
+      resource: `${before.id}@v${v.version}`,
+      scopeLabel: before.ownerScopeId,
+    });
+    return v;
+  };
+
+  const savedCommit = async (d: Deployment): Promise<string | undefined> =>
+    (await deps.deployStore.draftOf(d.id))?.commit ?? currentVersionOf(d)?.commit;
+
+  const sourceAt = async (id: string, commit: string, paths: string[] = []): Promise<DeploymentSource> => ({
+    commit,
+    tree: (await deps.deployStore.commitTreeOf(id, commit)).map(({ path, sha, size }) => ({ path, sha, size })),
+    files: paths.length
+      ? (await deps.deployStore.filesOf(id, commit, paths)).map((f) => ({ path: f.path, data: bytes(f.data) }))
+      : [],
   });
 
   const liveEndpoint = async (d: Deployment): Promise<DeployEndpoint | null> => {
@@ -738,18 +789,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           );
           await withdrawLoanUnlessPublisher(before, actor);
           if (await liveEdits.save(before, actor ?? before.createdBy, { commit: pushed })) return result;
-          const v = await deps.deployStore.addVersionFromCommit(id, pushed);
-          if (!v) return result;
-          await deps.deployStore.deleteDraft(id);
-          const endpoint = await applyVersion(id, v);
-          await markVersionRunning(id, v.version, endpoint);
-          deps.auditLog.record({
-            at: Date.now(),
-            principalId: before.createdBy,
-            action: "deploy_git_push",
-            resource: `${id}@v${v.version}`,
-            scopeLabel: before.ownerScopeId,
-          });
+          await publishCommit(before, pushed);
         } catch (e) {
           reportFailure("deploy: register pushed version", e, `deployment=${id}`);
           deps.auditLog.record({
@@ -762,6 +802,45 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           });
         }
         return result;
+      });
+    },
+
+    async source(idOrName, paths) {
+      const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
+      const commit = d ? await savedCommit(d) : undefined;
+      return d && commit ? sourceAt(d.id, commit, paths) : null;
+    },
+
+    async editSource(idOrName, actor, edit) {
+      const found = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
+      if (!found) throw new Error(`no such app: ${idOrName}`);
+      return withDeployLock(found.id, async () => {
+        const before = await deps.deployStore.get(found.id);
+        const base = before ? await savedCommit(before) : undefined;
+        if (!before || !base) throw new Error(`${idOrName} has no saved source; publish it again first`);
+        const known = new Map((await deps.deployStore.commitTreeOf(before.id, base)).map((f) => [f.path, f]));
+        const wanted = await edit((paths) => sourceAt(before.id, base, paths));
+        const changed = wanted.files
+          .map((f) => ({ path: normalizeRelPath(f.path), data: bytes(f.data) }))
+          .map((f) => ({ ...f, sha: gitBlobSha(f.data) }))
+          .filter((f) => known.get(f.path)?.sha !== f.sha);
+        const deletedPaths = wanted.deletedPaths.map(normalizeRelPath).filter((path) => known.has(path));
+        const done = {
+          saved: changed.map(({ path, sha }) => ({ path, sha })),
+          deleted: deletedPaths,
+          version: before.currentVersion,
+        };
+        if (!changed.length && !deletedPaths.length) return done;
+        for (const path of [...deletedPaths, ...changed.map((f) => f.path)]) known.delete(path);
+        assertAppSize(
+          [...[...known.values()].map((f) => f.size), ...changed.map((f) => f.data.byteLength)],
+          deps.provider.profile.maxAppBytes,
+        );
+        await withdrawLoanUnlessPublisher(before, actor);
+        const liveEdit = await liveEdits.save(before, actor, { changed, deletedPaths });
+        if (liveEdit) return { ...done, liveEdit };
+        const commit = await deps.deployStore.commitDraft(before.id, changed, base, deletedPaths);
+        return { ...done, version: (await publishCommit(before, commit))?.version ?? before.currentVersion };
       });
     },
 

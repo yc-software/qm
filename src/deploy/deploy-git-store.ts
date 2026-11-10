@@ -27,6 +27,7 @@ export interface DeployGitStore {
     deploymentId: string;
     version: number;
     files: DeployGitInputFile[];
+    deletedPaths?: string[];
     parent?: string;
     message?: string;
     ref?: string;
@@ -197,12 +198,13 @@ export function createDeployGitStore(opts: DeployGitStoreOptions = {}): DeployGi
   async function checkoutForCommit(
     deploymentId: string,
     parent: string | undefined,
+    keepParentFiles: boolean,
   ): Promise<{ repo: string; workdir: string }> {
     const repo = await ensureRepo(deploymentId);
     const workdir = await mkdtemp(join(tmpdir(), "qm-deploy-git-"));
     await git(["clone", "--quiet", repo, workdir]);
     if (parent) await git(["checkout", "--quiet", parent], { cwd: workdir });
-    await clearWorktree(workdir);
+    if (!keepParentFiles) await clearWorktree(workdir);
     return { repo, workdir };
   }
 
@@ -232,9 +234,14 @@ export function createDeployGitStore(opts: DeployGitStoreOptions = {}): DeployGi
 
   return {
     async commit(input) {
-      const { repo, workdir } = await checkoutForCommit(input.deploymentId, input.parent);
+      const { repo, workdir } = await checkoutForCommit(
+        input.deploymentId,
+        input.parent,
+        input.deletedPaths !== undefined,
+      );
       try {
         await writeFiles(workdir, input.files);
+        for (const path of input.deletedPaths ?? []) await rm(join(workdir, normalizeRelPath(path)), { force: true });
         await git(["add", "-A", "--force"], { cwd: workdir });
         const diff = await gitResult(["diff", "--cached", "--quiet"], { cwd: workdir, okExitCodes: [0, 1] });
         const changed = diff.code === 1;

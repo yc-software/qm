@@ -42,7 +42,10 @@ interface LiveEditDeps {
 }
 
 type AppFile = { path: string; data: Uint8Array };
-type SavedSource = { files: ReadonlyArray<{ path: string; data: string | Uint8Array }> } | { commit: string };
+type SavedSource =
+  | { files: ReadonlyArray<{ path: string; data: string | Uint8Array }> }
+  | { commit: string }
+  | { changed: readonly AppFile[]; deletedPaths: readonly string[] };
 
 interface Snapshot {
   tree: Map<string, string>;
@@ -50,7 +53,7 @@ interface Snapshot {
   commit(base: string): Promise<string>;
 }
 
-function gitBlobSha(data: Uint8Array): string {
+export function gitBlobSha(data: Uint8Array): string {
   return createHash("sha1").update(`blob ${data.byteLength}\0`).update(data).digest("hex");
 }
 
@@ -80,7 +83,30 @@ export function createLiveEdits(deps: LiveEditDeps) {
     return current && draft ? draftVersion(current, draft) : current;
   }
 
-  async function snapshotOf(id: string, source: SavedSource): Promise<Snapshot> {
+  async function snapshotOf(
+    id: string,
+    source: SavedSource,
+    base: string,
+    known: Map<string, string>,
+  ): Promise<Snapshot> {
+    if ("changed" in source) {
+      const { changed, deletedPaths } = source;
+      const tree = new Map(known);
+      for (const path of deletedPaths) tree.delete(path);
+      for (const f of changed) tree.set(f.path, gitBlobSha(f.data));
+      return {
+        tree,
+        read: async (paths) => {
+          const kept = paths.filter((path) => !changed.some((f) => f.path === path));
+          const unchanged = kept.length ? await store.filesOf(id, base, kept) : [];
+          return [
+            ...changed.filter((f) => paths.includes(f.path)),
+            ...unchanged.map((f) => ({ path: f.path, data: bytes(f.data) })),
+          ];
+        },
+        commit: () => store.commitDraft(id, [...changed], base, [...deletedPaths]),
+      };
+    }
     if ("commit" in source) {
       const tree = new Map((await store.commitTreeOf(id, source.commit)).map((f) => [f.path, f.sha]));
       return {
@@ -108,7 +134,7 @@ export function createLiveEdits(deps: LiveEditDeps) {
     const draft = await store.draftOf(before.id);
     const base = draft?.commit ?? current.commit;
     const known = new Map((await store.commitTreeOf(before.id, base)).map((f) => [f.path, f.sha]));
-    const next = await snapshotOf(before.id, source);
+    const next = await snapshotOf(before.id, source, base, known);
     const changedPaths = [...next.tree].filter(([path, sha]) => known.get(path) !== sha).map(([path]) => path);
     const deletedPaths = [...known.keys()].filter((path) => !next.tree.has(path));
     if (!changedPaths.length && !deletedPaths.length)

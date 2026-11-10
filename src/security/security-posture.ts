@@ -100,7 +100,7 @@ const INTERNAL_RESULT_TOOLS = new Set([
 ]);
 
 export function toolResultProvenance(tool: string, action?: string): ToolResultProvenance {
-  if (tool === "files") return action === "read" ? "workspace" : "internal";
+  if (tool === "files" || tool === "app_files") return action === "read" ? "workspace" : "internal";
   if (tool === "goal" || tool === "apps" || (tool === "skills" && action !== "read")) return "internal";
   if (INTERNAL_RESULT_TOOLS.has(tool)) return "internal";
   if (tool === "read") return "workspace";

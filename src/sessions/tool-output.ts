@@ -49,13 +49,16 @@ export function parkedOutputKey(path: string): ParkedOutputKey | null {
   return name && !name.includes("/") ? { digest: md5Hex(name), callId: name } : null;
 }
 
+export function inlineChars(inlineTokens: number): number {
+  return inlineTokens > 0 ? inlineTokens * CHARS_PER_TOKEN : Infinity;
+}
+
 export function cutToInline(
   text: string,
   inlineTokens: number,
   where = "",
 ): { text: string; shownChars: number } | null {
-  if (inlineTokens <= 0) return null;
-  const budget = inlineTokens * CHARS_PER_TOKEN;
+  const budget = inlineChars(inlineTokens);
   if (text.length <= budget) return null;
   const head = headSlice(text, Math.floor(budget / 2));
   const tail = tailSlice(text, Math.floor(budget / 2));
