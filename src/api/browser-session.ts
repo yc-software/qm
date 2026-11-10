@@ -74,6 +74,7 @@ export const API_ALIASES: ReadonlyMap<string, string> = new Map([
   ["PUT /api/sessions/:id/persona", "/v1/sessions/:id/persona"],
   ["POST /api/sessions/:id/share", "/v1/sessions/:id/share"],
   ["POST /api/sessions/:id/title", "/v1/sessions/:id/title"],
+  ["POST /api/sessions/:id/next-prompt", "/v1/sessions/:id/next-prompt"],
   ["POST /api/sessions/:id/detach", "/v1/sessions/:id/detach"],
   ["POST /api/sessions/:id/goal/cancel", "/v1/sessions/:id/goal/cancel"],
   ["POST /api/sessions/:id/expand", "/v1/sessions/:id/expand"],

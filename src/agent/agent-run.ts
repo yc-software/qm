@@ -1181,7 +1181,7 @@ export function createAgent(opts?: AgentOptions): Agent {
       const reply = await runtime.completeSimple(
         route.model,
         { systemPrompt: NEXT_PROMPT_PROMPT, messages: [{ role: "user", content: transcript, timestamp: Date.now() }] },
-        { maxTokens: 64 },
+        { reasoning: "minimal" },
       );
       if (reply.stopReason === "error") throw providerTurnError(reply);
       return reply.content.find((block) => block.type === "text")?.text.trim() || undefined;

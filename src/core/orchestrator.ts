@@ -289,6 +289,8 @@ const DEFAULT_APPROVAL_SUMMARY_TIMEOUT_MS = 6_000;
 
 const DIRECTORY_INDEX_CACHE_MAX_ENTRIES = 100;
 
+const NEXT_PROMPT_READ_ITEMS = 20;
+
 export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   const config = deps.config;
   const spendReport = deps.sessions.spendReport?.bind(deps.sessions);
@@ -480,7 +482,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         scopeId: session.scopeId,
         origin: await originOf(session),
       });
-      const transcript = renderNextPromptTranscript((await transcripts.forViewer(sessionId, principalId)).items);
+      const recent = await transcripts.forViewer(sessionId, principalId, {
+        messagesOnly: true,
+        limit: NEXT_PROMPT_READ_ITEMS,
+      });
+      const transcript = renderNextPromptTranscript(recent.items);
       if (!transcript) return { enabled: true, suggestion: null };
       try {
         return { enabled: true, suggestion: (await deps.agent.suggestNextPrompt(transcript)) ?? null };

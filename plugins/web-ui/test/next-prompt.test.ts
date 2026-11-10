@@ -1,50 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Agent } from "@earendil-works/pi-agent-core";
-import { JSDOM } from "jsdom";
-import { testViteServer } from "./vite-server.ts";
+import { browserEnv } from "./browser-env.ts";
 import type { ComposerSurface, ConvCtx } from "../src/conv-types.ts";
 
 test("a finished reply shows the predicted next message in the empty composer and Tab fills it in", async () => {
-  const dom = new JSDOM('<!doctype html><div id="app"></div><div id="composer"></div>', {
-    url: "http://localhost/",
-    pretendToBeVisual: true,
-  });
-  Object.defineProperty(dom.window, "matchMedia", {
-    value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
-  });
   const requests: string[] = [];
-  const globals = {
-    window: dom.window,
-    document: dom.window.document,
-    location: dom.window.location,
-    history: dom.window.history,
-    localStorage: dom.window.localStorage,
-    navigator: dom.window.navigator,
-    HTMLElement: dom.window.HTMLElement,
-    HTMLInputElement: dom.window.HTMLInputElement,
-    HTMLTextAreaElement: dom.window.HTMLTextAreaElement,
-    Element: dom.window.Element,
-    Node: dom.window.Node,
-    Event: dom.window.Event,
-    KeyboardEvent: dom.window.KeyboardEvent,
-    customElements: dom.window.customElements,
-    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
-    requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
-    cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window),
-    fetch: async (input: RequestInfo | URL) => {
+  const { dom, vite, close } = await browserEnv({
+    html: '<!doctype html><div id="app"></div><div id="composer"></div>',
+    fetch: async (input) => {
       requests.push(String(input));
       return String(input).endsWith("/next-prompt")
         ? Response.json({ enabled: true, suggestion: "merge it" })
         : Response.json({ sessions: [] });
     },
-  };
-  const descriptors = new Map<string, PropertyDescriptor | undefined>();
-  for (const [key, value] of Object.entries(globals)) {
-    descriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
-    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
-  }
-  const vite = await testViteServer();
+  });
   let composer: ComposerSurface | undefined;
   try {
     const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
@@ -130,11 +100,6 @@ test("a finished reply shows the predicted next message in the empty composer an
     assert.equal(input().value, "merge it");
   } finally {
     composer?.dispose();
-    await vite.close();
-    dom.window.close();
-    for (const [key, descriptor] of descriptors) {
-      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
-      else delete (globalThis as Record<string, unknown>)[key];
-    }
+    await close();
   }
 });
