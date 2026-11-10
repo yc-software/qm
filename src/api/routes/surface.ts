@@ -132,6 +132,25 @@ async function cancelSessionGoal(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, out);
 }
 
+async function resumeSessionGoal(ctx: ApiCtx): Promise<void> {
+  const { res, app, body } = ctx;
+  const principalId = (body as { principalId?: unknown }).principalId;
+  if (typeof principalId !== "string" || !principalId) {
+    return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
+  }
+  const out = await app.resumeSessionGoal(ctx.params.id!, principalId);
+  if (!out) return sendJson(res, 404, { error: "not_found" });
+  if (!out.resumed)
+    return sendJson(res, 409, {
+      error: out.reason,
+      message:
+        out.reason === "busy"
+          ? "The conversation is still working on a reply. Try again when it finishes."
+          : "This conversation has no active or paused goal to resume.",
+    });
+  return sendJson(res, 200, out);
+}
+
 async function spawnWebSession(ctx: ApiCtx): Promise<void> {
   const b = (isObj(ctx.body) ? ctx.body : {}) as { principalId?: unknown; scopeId?: unknown };
   if (typeof b.principalId !== "string" || !b.principalId || typeof b.scopeId !== "string" || !b.scopeId)
@@ -1498,6 +1517,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
     { method: "POST", path: "/v1/sessions/:id/fork", browser: true, auth: "source", handle: forkSession },
     { method: "POST", path: "/v1/sessions/:id/detach", browser: true, auth: "source", handle: detachSession },
     { method: "POST", path: "/v1/sessions/:id/goal/cancel", browser: true, auth: "source", handle: cancelSessionGoal },
+    { method: "POST", path: "/v1/sessions/:id/goal/resume", browser: true, auth: "source", handle: resumeSessionGoal },
     { method: "POST", path: "/v1/sessions/:id", browser: true, auth: "source", handle: patchSession },
     { method: "PATCH", path: "/v1/memory", browser: true, auth: "source", handle: selfMemory },
     { method: "DELETE", path: "/v1/memory", browser: true, auth: "source", handle: selfMemory },
