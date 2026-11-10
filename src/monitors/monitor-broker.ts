@@ -107,6 +107,7 @@ export interface MonitorBrokerDeps {
   destination?: Destination;
   returnsToParent?: boolean;
   graceMs?: number;
+  assertComputerUsable?: (sandboxId: string | undefined) => Promise<void>;
 }
 
 export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
@@ -117,6 +118,7 @@ export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
       if (!rec || rec.scopeId !== deps.scopeId || rec.kind !== "background") {
         throw new Error("no such background job to watch");
       }
+      await deps.assertComputerUsable?.(rec.sandboxId);
       if (rec.status !== "running") {
         const tail = await deps.readOutputTail(processId, WATCH_COMPLETED_TAIL_BYTES);
         return {

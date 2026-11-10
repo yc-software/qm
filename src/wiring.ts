@@ -2812,6 +2812,8 @@ export function buildApp(
           leaderLease,
           onProcessExit: finishCredentials,
           heartbeatMs: config.monitorHeartbeatMs,
+          sandboxResources,
+          ...(swarms ? { swarms } : {}),
         })
       : null;
   const skillSyncEngine = createSkillSyncEngine({

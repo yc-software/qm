@@ -267,7 +267,9 @@ spawned the top of its branch. The same rule covers the board and worker compute
 swarm creates: a bot's turn that may not direct the swarm cannot list them, reach them with
 `sandbox_id`, make one the conversation's default, use one a person made the default, or
 run on its own worker computer. The check runs each time the turn uses a computer, so a
-turn that is already running loses that access as soon as someone else posts.
+turn that is already running loses that access as soon as someone else posts. Background
+jobs on those computers are covered too: the bot's `background` list leaves them out, it
+cannot watch them, and a watch it armed while it could stops reading the job's output.
 A computer supplied as `forumSandboxId` stays an ordinary computer of its scope.
 Worker sessions never inherit the root session's command or security-screen
 approval grants; a worker must obtain its own approval. Auto screening receives host-verified swarm delegation provenance, so routine delegated tasks and in-swarm reporting are distinguished from external instructions. Delegation does not authorize credential disclosure, permission changes, or overriding higher-priority instructions; those remain screened. Frozen swarm roster checks

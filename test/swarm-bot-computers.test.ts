@@ -6,7 +6,7 @@ import { createRuntimeService } from "../src/agent/runtime-control.ts";
 import type { Run } from "../src/runs/run-store.ts";
 import type { Agent } from "../src/agent/agent.ts";
 import { createAgentTools } from "../src/agent/agent-tools.ts";
-import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
+import { createOrchestrator, type OrchestratorDeps, type OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
@@ -14,7 +14,13 @@ import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
-import type { Principal } from "../src/types.ts";
+import type { Principal, TurnRequest } from "../src/types.ts";
+import type { ProcessSandbox } from "../src/sandbox/sandbox.ts";
+import { createPostgresProcessRegistry, type ProcessRegistry } from "../src/processes/process-registry.ts";
+import { createMonitorStore, type MonitorStore } from "../src/monitors/monitor-store.ts";
+import { createMonitorPoller } from "../src/monitors/monitor-poller.ts";
+import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import type { SwarmCaller } from "../src/swarms/swarm-service.ts";
 import { orchestratorTestDeps } from "./support/orchestrator-deps.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
@@ -35,9 +41,10 @@ const refusedComputer = "a Slack bot's turn cannot use the computers of a person
 
 type Fixture = Awaited<ReturnType<typeof swarmFixture>>;
 
-function channelSwarm() {
+function channelSwarm(backend?: ProcessSandbox) {
   const url = testDatabaseUrl();
   return swarmFixture({
+    ...(backend ? { backend } : {}),
     channel: "C1",
     sessions: createPostgresSessionStore(url),
     runs: createPostgresRunStore(url).runs,
@@ -73,6 +80,7 @@ async function drive(
   f: Fixture,
   queued: Run,
   act: (call: Call, run: Run) => Promise<Record<string, unknown>>,
+  jobs: Pick<OrchestratorDeps, "processes" | "monitors"> = {},
 ): Promise<Record<string, unknown>> {
   let calls = 0;
   let observed: Record<string, unknown> = {};
@@ -108,6 +116,7 @@ async function drive(
     sandbox: f.sandbox,
     sandboxResources: f.sandboxes,
     swarms: f.service,
+    ...jobs,
     auditLog,
     agent,
     memory: createPostgresMemoryService(testDatabaseUrl()),
@@ -221,8 +230,8 @@ async function channelTurn(f: Fixture, actor: Principal, botActor: boolean): Pro
   };
 }
 
-async function personSwarm() {
-  const f = await channelSwarm();
+async function personSwarm(backend?: ProcessSandbox) {
+  const f = await channelSwarm(backend);
   if (f.caller.kind !== "agent") throw new Error("wrong caller");
   await f.sessions.addParticipant(f.root.id, releaseBot.id);
   await f.service.spawn(f.caller, { requestId: "initial", text: "alice's work" });
@@ -231,8 +240,8 @@ async function personSwarm() {
   return f;
 }
 
-async function botSwarm() {
-  const f = await channelSwarm();
+async function botSwarm(backend?: ProcessSandbox) {
+  const f = await channelSwarm(backend);
   if (f.caller.kind !== "agent") throw new Error("wrong caller");
   await f.sessions.addParticipant(f.root.id, releaseBot.id);
   await f.runs.complete(f.caller.claims.runId!, f.caller.claims.runLeaseToken!, { status: "ok", reply: "idle" });
@@ -358,4 +367,142 @@ test("a bot's turn loses the swarm computer it already opened once a person send
     ran.map((entry) => entry.command),
     ["cat board.md"],
   );
+});
+
+function jobComputers() {
+  const output = new Map<string, string>();
+  const reads: string[] = [];
+  const backend: ProcessSandbox = {
+    profile: { backend: "modal", writablePersistence: "resident_disk", processSessions: true },
+    async provision(id) {
+      return { id, rootDir: "/workspace" };
+    },
+    async run() {
+      return { stdout: "", stderr: "", code: 0, timedOut: false };
+    },
+    async readFile() {
+      return null;
+    },
+    async writeFile() {},
+    async readFileBytes() {
+      return null;
+    },
+    async writeFileBytes() {},
+    async listDir() {
+      return [];
+    },
+    async removeDir() {},
+    async teardown() {},
+    async destroyScope() {},
+    async startProcess() {
+      throw new Error("jobs here are registered by the test");
+    },
+    async readProcess(_handle, processId, options) {
+      reads.push(processId);
+      const text = output.get(processId) ?? "";
+      return { chunks: text.slice(options?.sinceCursor ?? 0), cursor: text.length, status: { state: "running" } };
+    },
+    async writeStdin() {},
+    async signalProcess() {},
+    async listProcesses() {
+      return [];
+    },
+  };
+  return { backend, output, reads };
+}
+
+async function workerJob(f: Fixture, processes: ProcessRegistry, output: Map<string, string>, text: string) {
+  const swarm = (await f.store.get(f.root.id))!;
+  const worker = swarm.members.find((member) => member.id !== swarm.id)!;
+  const job = await processes.register({
+    processId: `build-${f.root.id}`,
+    scopeId: f.root.scopeId,
+    sandboxId: worker.sandboxId!,
+    kind: "background",
+    command: "npm run build",
+    purpose: "alice's build",
+    ttlMs: 600_000,
+  });
+  output.set(job.processId, text);
+  return { job, worker };
+}
+
+function jobPoller(f: Fixture, processes: ProcessRegistry, monitors: MonitorStore, wakes: TurnRequest[]) {
+  return createMonitorPoller({
+    ...singleProcessDeps(),
+    monitors,
+    processes,
+    sandbox: f.sandbox,
+    deliveries: createDeliveryStore(),
+    idempotency: createIdempotencyStore(testMap()),
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    sandboxResources: f.sandboxes,
+    swarms: f.service,
+    run: async (request) => {
+      wakes.push(request);
+      return { status: "ok", reply: "noted" };
+    },
+  });
+}
+
+async function botWatchTurn(f: Fixture, processes: ProcessRegistry, monitors: MonitorStore, processId: string) {
+  const { run: queued } = await f.runs.enqueue({
+    sessionId: f.root.threadRef,
+    request: channelRequest(f, releaseBot, true),
+    maxAttempts: 1,
+  });
+  return drive(
+    f,
+    queued,
+    async (call) => ({
+      list: await call("background", { action: "list", purpose: "Listing jobs" }),
+      watch: await call("background", { action: "watch", process_id: processId, purpose: "Watching the build" }),
+    }),
+    { processes, monitors },
+  );
+}
+
+test("a Slack bot's channel turn cannot list, watch or stream the background jobs on a person's swarm computers", async (t) => {
+  const computers = jobComputers();
+  const f = await personSwarm(computers.backend);
+  const processes = createPostgresProcessRegistry(testDatabaseUrl());
+  const monitors = createMonitorStore(testMap());
+  const { job } = await workerJob(f, processes, computers.output, "alice's build log\n");
+  const observed = await botWatchTurn(f, processes, monitors, job.processId);
+  const wakes: TurnRequest[] = [];
+  await jobPoller(f, processes, monitors, wakes).tick();
+  t.diagnostic(`observed: ${JSON.stringify(observed)}`);
+  assert.ok(!String(observed.list).includes(job.processId), String(observed.list));
+  assert.ok(String(observed.watch).endsWith(refusedComputer), String(observed.watch));
+  assert.deepEqual(await monitors.list(), []);
+  assert.deepEqual(computers.reads, []);
+  assert.deepEqual(wakes, []);
+});
+
+test("a bot's watch of a job in a swarm only it directs stops reading the job once a person sends work into the swarm", async () => {
+  const computers = jobComputers();
+  const f = await botSwarm(computers.backend);
+  const processes = createPostgresProcessRegistry(testDatabaseUrl());
+  const monitors = createMonitorStore(testMap());
+  const { job, worker } = await workerJob(f, processes, computers.output, "bot step\n");
+  const observed = await botWatchTurn(f, processes, monitors, job.processId);
+  assert.ok(String(observed.list).includes(job.processId), String(observed.list));
+  const wakes: TurnRequest[] = [];
+  const poller = jobPoller(f, processes, monitors, wakes);
+  await poller.tick();
+  assert.deepEqual(
+    wakes.map((wake) => [wake.botActor, wake.text.includes("bot step")]),
+    [[true, true]],
+  );
+  await f.service.send(
+    { kind: "human", actorId: alice.id, sessionId: f.root.id },
+    { requestId: "person-send", audience: [worker.id], text: "alice's work" },
+  );
+  computers.output.set(job.processId, "bot step\nalice's step\n");
+  const reads = computers.reads.length;
+  await poller.tick();
+  assert.equal(wakes.length, 1);
+  assert.equal(computers.reads.length, reads);
+  const [monitor] = await monitors.list();
+  assert.deepEqual([monitor?.enabled, monitor?.lastError], [false, refusedComputer]);
 });
