@@ -8,10 +8,15 @@ import { serverDeps } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bootTenant, inBootTenant } from "../src/tenants/boot.ts";
 
 async function fixture(checkReadiness?: (signal: AbortSignal) => Promise<void>) {
   const config = testConfig({ signingSecret: "readiness-test-source-secret".repeat(3) });
   const built = buildApp(config);
+  // Production runs migrate-main (which calls checkReadiness once) before the server starts,
+  // so the first /readyz never does schema work. Mirror that here: on a fresh test database
+  // the first check creates the settings tables, which can overrun the 1s readiness deadline.
+  await inBootTenant(bootTenant(), () => built.checkReadiness(new AbortController().signal));
   const server = createServer(built.app, {
     ...serverDeps(config, built),
     ...(checkReadiness ? { checkReadiness } : {}),
