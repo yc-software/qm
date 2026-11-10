@@ -20,6 +20,7 @@ import { securityScreenPayload } from "../../security/security-posture.ts";
 import type { CommandApprovalGrant } from "../../types.ts";
 import { isVisionAttachment, safeAttachmentName } from "../attachments.ts";
 import { wordsToScreen } from "./intake.ts";
+import { documentText, type ExtractedDocumentText, isTextDocument, type loadDocumentInputs } from "../documents.ts";
 import { senderNote } from "./prompt-blocks.ts";
 import { isScreenableTextAttachment, MAX_AUTO_ATTACHMENT_SCREEN_BYTES } from "./turn-helpers.ts";
 import { tracePhase } from "../../../plugins/chassis/src/error-reporting.ts";
@@ -629,5 +630,54 @@ export function createToolResultScreen(turn: ToolResultScreenTurn) {
       }),
     });
     return { outcome: "unscreened" };
+  };
+}
+
+export function createDocumentScreen(turn: {
+  deps: OrchestratorDeps;
+  session: Session;
+  securityPolicy: InboundScreenTurn["resolution"]["securityPolicy"];
+  enforceScreen: boolean;
+  classifyAs: ClassifyAs;
+  turnAbort: AbortController;
+}) {
+  const { deps, session, securityPolicy, enforceScreen, classifyAs, turnAbort } = turn;
+  return async (
+    documentInputs: Awaited<ReturnType<typeof loadDocumentInputs>>,
+    requestText: string,
+  ): Promise<boolean> => {
+    let documentsUnscreened = false;
+    if (securityPolicy.screening !== "off") {
+      for (const document of documentInputs.documents.slice()) {
+        documentsUnscreened ||= !isTextDocument(document);
+        if (!(deps.securityScreener || deps.agent.screenSecurity)) {
+          documentsUnscreened = true;
+          continue;
+        }
+        let extracted: ExtractedDocumentText;
+        try {
+          extracted = await documentText(document, turnAbort.signal);
+        } catch {
+          turnAbort.signal.throwIfAborted();
+          documentsUnscreened = true;
+          continue;
+        }
+        const verdict = await screenChunks(
+          securityScreenChunks("tool_result:inbound_document", extracted.text),
+          classifyAs({
+            sessionId: session.id,
+            hook: "tool_response",
+            request: requestText,
+            surface: "inbound_file",
+          }),
+          { signal: turnAbort.signal },
+        );
+        if (verdict.decision === "strict") {
+          documentInputs.documents.splice(documentInputs.documents.indexOf(document), 1);
+          documentInputs.notices.push(`${document.name}: document withheld by the external-data security screen.`);
+        } else if (verdict.unscreened || extracted.truncated) documentsUnscreened = true;
+      }
+    }
+    return enforceScreen && documentsUnscreened;
   };
 }
