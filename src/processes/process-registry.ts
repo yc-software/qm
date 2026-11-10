@@ -50,6 +50,7 @@ export interface ProcessRegistry {
   markStatus(processId: string, status: ProcessStatus): Promise<boolean>;
   credentialFiles(processId: string): Promise<ProcessCredentialFiles | null>;
   setCredentialFiles(processId: string, files: ProcessCredentialFiles | null): Promise<void>;
+  advanceCredentialFiles(processId: string, from: ProcessCredentialFiles, to: ProcessCredentialFiles): Promise<boolean>;
   claimExpired(now?: number): Promise<ClaimedRow[]>;
   delete(processId: string): Promise<void>;
   close?(): void;
@@ -177,6 +178,13 @@ export function createPostgresProcessRegistry(connectionString: string): Process
         processId,
         files ? JSON.stringify(files) : null,
       ]);
+    },
+    async advanceCredentialFiles(processId, from, to) {
+      const rows = await q(
+        "UPDATE process_sessions SET credential_files = $3 WHERE process_id = $1 AND credential_files = $2::jsonb RETURNING process_id",
+        [processId, JSON.stringify(from), JSON.stringify(to)],
+      );
+      return rows.length > 0;
     },
     async get(processId) {
       const rows = await q("SELECT * FROM process_sessions WHERE process_id = $1", [processId]);

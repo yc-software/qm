@@ -12,7 +12,7 @@ import { runTrigger, type TriggerDeps, type TriggerOutcome } from "../triggers/r
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { createSweeper } from "../util/sweeper.ts";
 import { currentTenant, withTenant } from "../tenants/context.ts";
-import { errMessage, reportFailureAs } from "../util/errors.ts";
+import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { compileMonitorPattern } from "./monitor-broker.ts";
 import { buildEventWakeEnvelope, capForEscaping } from "../wake/wake-envelope.ts";
@@ -204,7 +204,10 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
     const exited = read.status.state === "exited";
     const expired = !exited && t >= m.expiresAt;
     if (!exited && read.chunks)
-      await deps.onProcessOutput?.(handle, m.processId).catch((e) => deps.monitors.recordError(m.id, errMessage(e)));
+      await deps.onProcessOutput?.(handle, m.processId).catch((e) => {
+        reportFailure("monitor: save refreshed credentials", e);
+        return deps.monitors.recordError(m.id, errMessage(e));
+      });
     const raw = (m.tail ?? "") + read.chunks;
     let events = raw;
     let tail: string | undefined;

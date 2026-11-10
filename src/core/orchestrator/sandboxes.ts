@@ -18,7 +18,7 @@ import {
 import { ensureChildSandbox, prepareChildWorkdir } from "../../sessions/child-isolation.ts";
 import { reconcileProcesses } from "../../processes/reconcile.ts";
 import { leaseLapsed } from "../../runs/run-store.ts";
-import { finishProcessCredentials } from "../../credentials/execute-files.ts";
+import { finishProcessCredentials, syncProcessCredentials } from "../../credentials/execute-files.ts";
 import {
   materializeSkillTree as laySkillTree,
   packRoot,
@@ -169,12 +169,15 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       return run?.status === "running" && !leaseLapsed(run, Date.now());
     });
   };
+  const processCredentialDeps = () => ({
+    sandbox: deps.sandbox,
+    processes: deps.processes!,
+    ...(deps.keychain ? { keychain: deps.keychain } : {}),
+  });
   const finishProcess = (handle: SandboxHandle, processId: string): Promise<void> =>
-    finishProcessCredentials(
-      { sandbox: deps.sandbox, processes: deps.processes!, ...(deps.keychain ? { keychain: deps.keychain } : {}) },
-      handle,
-      processId,
-    );
+    finishProcessCredentials(processCredentialDeps(), handle, processId);
+  const syncProcess = (handle: SandboxHandle, processId: string): Promise<void> =>
+    syncProcessCredentials(processCredentialDeps(), handle, processId);
   const provision = (eager = false): Promise<SandboxHandle> => {
     if (!eager) scopedUsed = true;
     return (
@@ -528,6 +531,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     useSkill,
     reclaimBox,
     finishProcess,
+    syncProcess,
     invalidateProvision: () => {
       const slot = pool.get(SCOPED);
       if (slot) {

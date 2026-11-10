@@ -546,7 +546,7 @@ test("a failed background writeback keeps the refresh for a later retry", async 
     writebackBaseline: (...args) => f.keychain.writebackBaseline(...args),
     async updateFiles(materialized, updated) {
       if (outage) throw new Error("keychain database unavailable");
-      await f.keychain.updateFiles(materialized, updated);
+      return f.keychain.updateFiles(materialized, updated);
     },
   };
   const bg = background(f, { keychain });
@@ -603,7 +603,6 @@ test("a running background job's login is saved when it prints, and later saves 
     const read = await ctx.backgroundPoll(started.processId, { sinceCursor: output.length, waitSeconds: 1 });
     output += read.chunks;
   }
-  if (started.output.includes("Successfully")) await ctx.backgroundPoll(started.processId, { sinceCursor: 0 });
   assert.equal(bg.running(started.processId), true);
   assert.equal(await savedValue(f), "logged-in");
   assert.equal(
@@ -633,4 +632,47 @@ test("a deletion and a concurrent refresh of another file both survive the merge
   await f.keychain.updateFiles(refresher, [...files("refreshed"), wal]);
   await f.keychain.updateFiles(deleter, files("original"));
   assert.deepEqual(await savedFiles(f), { ".aws/sso/cache/session.json": "refreshed" });
+});
+
+test("a command whose change loses a conflict says so on stderr", async (t) => {
+  const f = await fixture(t);
+  const other = await startCommand(f);
+  const result = await f
+    .context({
+      commandCredentials: [
+        {
+          handle: "aws",
+          async resolve() {
+            const m = await startCommand(f);
+            await f.keychain.updateFiles(other, files("saved-meanwhile"));
+            return {
+              env: [],
+              files: { files: m.files, save: (updated: CredentialFile[]) => f.keychain.updateFiles(m, updated) },
+            };
+          },
+        },
+      ],
+    })
+    .execute('printf mine > "$HOME/.aws/sso/cache/session.json"', { credentials: ["aws"] });
+  assert.equal(result.code, 0);
+  assert.match(
+    result.stderr,
+    /\[credentials\] This command changed \.aws\/sso\/cache\/session\.json, but another command saved a newer or concurrent version first; the saved login keeps that version\.$/,
+  );
+  assert.equal(await savedValue(f), "saved-meanwhile");
+});
+
+test("a background job registered before per-file hashes still saves its refresh at exit", async (t) => {
+  const f = await fixture(t);
+  const bg = background(f);
+  const started = await bg.ctx().backgroundStart(refresh, { purpose: "Refresh a login", credentials: ["aws"] });
+  const stored = (await bg.registry.credentialFiles(started.processId))!;
+  await bg.registry.setCredentialFiles(started.processId, {
+    ...stored,
+    sources: stored.sources.map(({ fileHashes: _, ...source }) => ({ ...source, fingerprint: "legacy" }) as never),
+  });
+  await bg.waitForExit(started.processId);
+  await bg.ctx().backgroundPoll(started.processId);
+  assert.equal(await savedValue(f), "background");
+  assert.equal(await bg.registry.credentialFiles(started.processId), null);
 });

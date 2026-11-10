@@ -8,11 +8,20 @@ const file = (path: string, content: unknown): CredentialFile => ({
   contentBase64: Buffer.from(typeof content === "string" ? content : JSON.stringify(content)).toString("base64"),
 });
 const hash = (f: CredentialFile) => `${f.path}:${f.contentBase64}`;
-const baselineOf = (files: CredentialFile[]) => new Map(files.map((f) => [f.path, hash(f)]));
-const text = (files: CredentialFile[]) =>
-  Object.fromEntries(files.map((f) => [f.path, Buffer.from(f.contentBase64, "base64").toString()]));
+const merge = (base: CredentialFile[], stored: CredentialFile[], refreshed: CredentialFile[]) => {
+  const result = mergeCredentialFiles({
+    baseline: new Map(base.map((f) => [f.path, hash(f)])),
+    stored,
+    refreshed,
+    hash,
+  });
+  return {
+    files: Object.fromEntries(result.files.map((f) => [f.path, Buffer.from(f.contentBase64, "base64").toString()])),
+    overruled: result.overruled,
+  };
+};
 
-test("expiry is read from AWS SSO, AWS CLI and epoch-style fields", () => {
+test("expiry is read from the AWS SSO token cache and the AWS CLI credential cache", () => {
   assert.equal(
     credentialFileExpiry(file("a", { expiresAt: "2026-11-09T18:00:00Z" })),
     Date.parse("2026-11-09T18:00:00Z"),
@@ -21,44 +30,37 @@ test("expiry is read from AWS SSO, AWS CLI and epoch-style fields", () => {
     credentialFileExpiry(file("b", { Credentials: { Expiration: "2026-11-09T19:00:00+00:00" } })),
     Date.parse("2026-11-09T19:00:00Z"),
   );
-  assert.equal(credentialFileExpiry(file("c", { expires_at: 1_800_000_000 })), 1_800_000_000_000);
-  assert.equal(credentialFileExpiry(file("d", { expiry: "1800000000000" })), 1_800_000_000_000);
-  assert.equal(credentialFileExpiry(file("e", "[default]\nregion = us-east-1\n")), undefined);
-  assert.equal(credentialFileExpiry(file("f", { expiresAt: "soon" })), undefined);
+  assert.equal(credentialFileExpiry(file("c", { expiresAt: 1_800_000_000 })), 1_800_000_000_000);
+  assert.equal(credentialFileExpiry(file("d", "[default]\nregion = us-east-1\n")), undefined);
+  assert.equal(credentialFileExpiry(file("e", { expiresAt: "soon" })), undefined);
 });
 
 test("each side keeps the files only it changed, including deletions", () => {
   const base = [file("config", "c0"), file("token", "t0"), file("wal", "w0"), file("extra", "x0")];
-  const merged = mergeCredentialFiles({
-    baseline: baselineOf(base),
-    stored: [file("config", "c-store"), file("token", "t0"), file("wal", "w0"), file("extra", "x0")],
-    refreshed: [file("config", "c0"), file("token", "t-cmd"), file("extra", "x0"), file("new", "n")],
-    hash,
-  });
-  assert.deepEqual(text(merged), { config: "c-store", extra: "x0", new: "n", token: "t-cmd" });
+  assert.deepEqual(
+    merge(
+      base,
+      [file("config", "c-store"), file("token", "t0"), file("wal", "w0"), file("extra", "x0")],
+      [file("config", "c0"), file("token", "t-cmd"), file("extra", "x0"), file("new", "n")],
+    ),
+    { files: { config: "c-store", extra: "x0", new: "n", token: "t-cmd" }, overruled: [] },
+  );
 });
 
-test("a deletion never removes a file the other side changed", () => {
+test("a deletion never removes a file the other side changed, and is reported as overruled", () => {
   const base = [file("token", "t0")];
-  assert.deepEqual(
-    text(mergeCredentialFiles({ baseline: baselineOf(base), stored: [file("token", "t-store")], refreshed: [], hash })),
-    { token: "t-store" },
-  );
-  assert.deepEqual(
-    text(mergeCredentialFiles({ baseline: baselineOf(base), stored: [], refreshed: [file("token", "t-cmd")], hash })),
-    { token: "t-cmd" },
-  );
+  assert.deepEqual(merge(base, [file("token", "t-store")], []), { files: { token: "t-store" }, overruled: ["token"] });
+  assert.deepEqual(merge(base, [], [file("token", "t-cmd")]), { files: { token: "t-cmd" }, overruled: [] });
 });
 
-test("true conflicts keep the later expiry, else the stored version", () => {
+test("true conflicts keep the later expiry, else the stored version, and report what the command lost", () => {
   const base = [file("token", { expiresAt: "2026-11-09T17:00:00Z" }), file("blob", "b0")];
-  const merged = mergeCredentialFiles({
-    baseline: baselineOf(base),
-    stored: [file("token", { v: "store", expiresAt: "2026-11-09T18:00:00Z" }), file("blob", "b-store")],
-    refreshed: [file("token", { v: "cmd", expiresAt: "2026-11-09T19:00:00Z" }), file("blob", "b-cmd")],
-    hash,
-  });
-  const out = text(merged);
-  assert.equal(JSON.parse(out.token!).v, "cmd");
-  assert.equal(out.blob, "b-store");
+  const { files, overruled } = merge(
+    base,
+    [file("token", { v: "store", expiresAt: "2026-11-09T18:00:00Z" }), file("blob", "b-store")],
+    [file("token", { v: "cmd", expiresAt: "2026-11-09T19:00:00Z" }), file("blob", "b-cmd")],
+  );
+  assert.equal(JSON.parse(files.token!).v, "cmd");
+  assert.equal(files.blob, "b-store");
+  assert.deepEqual(overruled, ["blob"]);
 });

@@ -14,7 +14,6 @@ import { desktopComputerTool } from "../../plugins/chassis/src/desktop-computer.
 import { startDispatchTrace, tracePhase, type DispatchTrace } from "../../plugins/chassis/src/error-reporting.ts";
 import { externalTools } from "./orchestrator/external-tools.ts";
 import { isBackendCredential } from "../credentials/keychain.ts";
-import { syncProcessCredentials } from "../credentials/execute-files.ts";
 import { memoryRecallDelta } from "../memory/recall-delta.ts";
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import type { MemoryProviderOutcome } from "../memory/memory-service.ts";
@@ -1972,6 +1971,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         useSkill,
         reclaimBox,
         finishProcess,
+        syncProcess,
         invalidateProvision,
       } = createTurnSandboxes({
         deps: { ...deps, sandboxResources: turnSandboxResources, isCurrentSharedScopeMember },
@@ -2516,16 +2516,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 registry: deps.processes,
                 provisionSandbox: provisionJobSandbox,
                 onExit: finishProcess,
-                onOutput: (handle, processId) =>
-                  syncProcessCredentials(
-                    {
-                      sandbox: deps.sandbox,
-                      processes: deps.processes!,
-                      ...(deps.keychain ? { keychain: deps.keychain } : {}),
-                    },
-                    handle,
-                    processId,
-                  ),
+                onOutput: syncProcess,
                 scopeId: memoryScopeId,
                 sessionRef: conversation.threadRef,
                 ...(deps.backgroundJobTtlMs !== undefined ? { ttlMs: deps.backgroundJobTtlMs } : {}),

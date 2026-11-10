@@ -6,7 +6,7 @@ import { pollProcess } from "../sandbox/process-poll.ts";
 import { ProcessSessionGoneError, redactCommand } from "../sandbox/exec-process-session.ts";
 import { CONFIG_DEFAULTS } from "../config.ts";
 import { createExactSecretValueMasker } from "../security/secret-masking.ts";
-import { swallowAs, withCleanup } from "../util/errors.ts";
+import { reportFailureAs, withCleanup } from "../util/errors.ts";
 
 export interface BackgroundExecBrokerDeps {
   sandbox: ProcessSandbox;
@@ -107,6 +107,15 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
     await deps.registry.markStatus(processId, "exited");
     await deps.onExit?.(handle, processId);
   };
+  const outputSeen = new Map<string, number>();
+  const settle = async (handle: SandboxHandle, processId: string, status: ProcessState, cursor: number) => {
+    if (status.state === "exited") return exited(handle, processId);
+    if (cursor <= (outputSeen.get(processId) ?? 0)) return;
+    outputSeen.set(processId, cursor);
+    await deps
+      .onOutput?.(handle, processId)
+      .catch(reportFailureAs("background job: save refreshed credentials", undefined));
+  };
   return {
     async handleFor(processId) {
       const rec = await deps.registry.get(processId);
@@ -201,7 +210,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
         const { output, cursor, status } = await pollProcess(deps.sandbox, handle, processId, {
           deadlineMs: POLL_MS,
         });
-        if (status.state === "exited") await exited(handle, processId);
+        await settle(handle, processId, status, cursor);
         return { processId, output: mask(output), cursor, status, reattached: false };
       } catch (error) {
         return withCleanup(
@@ -227,11 +236,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
         maxBytes: opts?.maxBytes ?? DEFAULT_MAX_BYTES,
         waitMs: opts?.waitMs ?? 0,
       });
-      if (read.status.state === "exited") await exited(handle, processId);
-      else if (read.chunks)
-        await deps
-          .onOutput?.(handle, processId)
-          .catch(swallowAs("background poll: save refreshed credentials", undefined));
+      await settle(handle, processId, read.status, read.cursor);
       return { processId, chunks: read.chunks, cursor: read.cursor, status: read.status };
     },
 

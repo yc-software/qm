@@ -8,7 +8,6 @@ import { homeRelativePath } from "./paths.ts";
 import { builtInCredentialPaths, type CredentialPathSpec } from "./resident-paths.ts";
 import {
   credentialFileHashes,
-  credentialFilesFingerprint,
   fileCredentialEnvironment,
   KeychainError,
   MAX_CREDENTIAL_BYTES,
@@ -21,7 +20,7 @@ import {
 
 export interface ExecutionFileCredential {
   files: CredentialFile[];
-  save(files: CredentialFile[]): Promise<void>;
+  save(files: CredentialFile[]): Promise<string[] | void>;
   source?: FileCredentialSource;
 }
 
@@ -32,7 +31,7 @@ export interface ExecutionFilePlan {
 
 export interface ProcessCredentialFiles {
   plan: ExecutionFilePlan;
-  sources: Array<FileCredentialSource & { fingerprint: string; fileHashes: Record<string, string> }>;
+  sources: Array<FileCredentialSource & { fileHashes: Record<string, string> }>;
 }
 
 export function processCredentialFiles(
@@ -43,35 +42,36 @@ export function processCredentialFiles(
     plan,
     sources: credentials.map((credential) => {
       if (!credential.source) throw new Error("Background credentials need a keychain source");
-      return {
-        ...credential.source,
-        fingerprint: credentialFilesFingerprint(credential.files),
-        fileHashes: credentialFileHashes(credential.files),
-      };
+      return { ...credential.source, fileHashes: credentialFileHashes(credential.files) };
     }),
   };
 }
 
+type ProcessCredentialDeps = {
+  sandbox: Sandbox;
+  processes: Pick<ProcessRegistry, "credentialFiles" | "setCredentialFiles" | "advanceCredentialFiles">;
+  keychain?: Pick<Keychain, "writebackBaseline" | "updateFiles">;
+};
+
+const saveSource =
+  (keychain: ProcessCredentialDeps["keychain"], { fileHashes, ...source }: ProcessCredentialFiles["sources"][number]) =>
+  async (files: CredentialFile[]) => {
+    if (!keychain) throw new Error("Refreshed credentials cannot be saved without a keychain");
+    return keychain.updateFiles(await keychain.writebackBaseline(source, fileHashes), files);
+  };
+
 export async function finishProcessCredentials(
-  deps: {
-    sandbox: Sandbox;
-    processes: Pick<ProcessRegistry, "credentialFiles" | "setCredentialFiles">;
-    keychain?: Pick<Keychain, "writebackBaseline" | "updateFiles">;
-  },
+  deps: ProcessCredentialDeps,
   handle: SandboxHandle,
   processId: string,
 ): Promise<void> {
   const stored = await deps.processes.credentialFiles(processId);
   if (!stored) return;
-  const keychain = deps.keychain;
-  await finishExecutionFiles(
+  const note = await finishExecutionFiles(
     deps.sandbox,
     handle,
     stored.plan,
-    stored.sources.map(({ fingerprint, fileHashes, ...source }) => async (files: CredentialFile[]) => {
-      if (!keychain) throw new Error("Refreshed credentials cannot be saved without a keychain");
-      await keychain.updateFiles(await keychain.writebackBaseline(source, fingerprint, fileHashes), files);
-    }),
+    stored.sources.map((source) => saveSource(deps.keychain, source)),
     (retry) =>
       deps.processes.setCredentialFiles(
         processId,
@@ -83,47 +83,53 @@ export async function finishProcessCredentials(
           : null,
       ),
   );
+  if (note) console.warn(`[credentials] background job ${processId}: ${note}`);
 }
 
 export async function syncProcessCredentials(
-  deps: {
-    sandbox: Sandbox;
-    processes: Pick<ProcessRegistry, "credentialFiles" | "setCredentialFiles">;
-    keychain?: Pick<Keychain, "writebackBaseline" | "updateFiles">;
-  },
+  deps: ProcessCredentialDeps,
   handle: SandboxHandle,
   processId: string,
 ): Promise<void> {
   const stored = await deps.processes.credentialFiles(processId);
-  const keychain = deps.keychain;
-  if (!stored || !keychain) return;
-  const saved = new Map<number, CredentialFile[]>();
-  try {
-    await finishExecutionFiles(
-      deps.sandbox,
-      handle,
-      stored.plan,
-      stored.sources.map(({ fingerprint, fileHashes, ...source }, index) => async (files: CredentialFile[]) => {
-        if (credentialFilesFingerprint(files) === fingerprint) return;
-        await keychain.updateFiles(await keychain.writebackBaseline(source, fingerprint, fileHashes), files);
-        saved.set(index, files);
-      }),
-      undefined,
-      { keepDirectory: true },
-    );
-  } finally {
-    if (saved.size && (await deps.processes.credentialFiles(processId)))
-      await deps.processes.setCredentialFiles(processId, {
+  if (!stored || !deps.keychain) return;
+  const saved = new Map<number, Record<string, string>>();
+  let failure: unknown;
+  const note = await finishExecutionFiles(
+    deps.sandbox,
+    handle,
+    stored.plan,
+    stored.sources.map((source, index) => async (files: CredentialFile[]) => {
+      const hashes = credentialFileHashes(files);
+      if (sameHashes(hashes, source.fileHashes)) return [];
+      const overruled = await saveSource(deps.keychain, source)(files);
+      saved.set(index, hashes);
+      return overruled;
+    }),
+    undefined,
+    { keepDirectory: true },
+  ).catch((error: unknown) => {
+    failure = error;
+    return undefined;
+  });
+  if (note) console.warn(`[credentials] background job ${processId}: ${note}`);
+  if (saved.size)
+    await deps.processes
+      .advanceCredentialFiles(processId, stored, {
         ...stored,
-        sources: stored.sources.map((source, index) => {
-          const files = saved.get(index);
-          return files
-            ? { ...source, fingerprint: credentialFilesFingerprint(files), fileHashes: credentialFileHashes(files) }
-            : source;
-        }),
+        sources: stored.sources.map((source, index) => ({
+          ...source,
+          fileHashes: saved.get(index) ?? source.fileHashes,
+        })),
+      })
+      .catch((error: unknown) => {
+        throw failure ? new AggregateError([failure, error], errMessage(failure)) : error;
       });
-  }
+  if (failure) throw failure;
 }
+
+const sameHashes = (a: Record<string, string>, b: Record<string, string> | undefined) =>
+  !!b && Object.keys(a).length === Object.keys(b).length && Object.entries(a).every(([path, hash]) => b[path] === hash);
 
 async function runOrThrow(sandbox: Sandbox, handle: SandboxHandle, command: string, failure: string) {
   const result = await sandbox.run(handle, command);
@@ -223,7 +229,7 @@ async function finishExecutionFiles(
   sandbox: Sandbox,
   handle: SandboxHandle,
   plan: ExecutionFilePlan,
-  saves: ReadonlyArray<(files: CredentialFile[]) => Promise<void>>,
+  saves: ReadonlyArray<(files: CredentialFile[]) => Promise<string[] | void>>,
   settle?: (retry: number[]) => Promise<void>,
   opts?: { keepDirectory?: boolean },
 ): Promise<string | undefined> {
@@ -277,11 +283,16 @@ async function finishExecutionFiles(
           notes.push(`deleted all of its credential files (${deleted.join(", ")}); the saved login was left unchanged`);
           return;
         }
-        if (deleted.length)
+        const overruled = (await saves[index]!(remaining)) ?? [];
+        const removed = deleted.filter((path) => !overruled.includes(path));
+        if (removed.length)
           notes.push(
-            `deleted ${deleted.join(", ")}; the saved login no longer includes ${deleted.length === 1 ? "it" : "them"}`,
+            `deleted ${removed.join(", ")}; the saved login no longer includes ${removed.length === 1 ? "it" : "them"}`,
           );
-        await saves[index]!(remaining);
+        if (overruled.length)
+          notes.push(
+            `changed ${overruled.join(", ")}, but another command saved a newer or concurrent version first; the saved login keeps that version`,
+          );
       }),
     );
     const failures = results.flatMap((result, index) =>
