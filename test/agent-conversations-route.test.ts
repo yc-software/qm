@@ -1,9 +1,12 @@
 import "./support/auto-fake-sprites.ts";
-import { describe, it, before, after } from "node:test";
+import { describe, it, before, after, test } from "node:test";
 import assert from "node:assert/strict";
-import type { AddressInfo } from "node:net";
+import { once } from "node:events";
+import { createServer as createNetServer, type AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { type BuiltApp } from "../src/wiring.ts";
+import { serverDeps, type BuiltApp } from "../src/wiring.ts";
+import { createMockAgent } from "./support/mock-agent.ts";
+import type { ToolContext } from "../src/tools/primitives.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
@@ -13,6 +16,8 @@ import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import type { Item } from "../src/sessions/items.ts";
+
+const asU1 = { actorId: "U1" };
 
 const SECRET = "agent-conversations-secret".repeat(2);
 
@@ -63,11 +68,11 @@ describe("agent conversations self-API", async () => {
   });
 
   it("web conversations go unread on an agent reply until read; other threads never do", async () => {
-    const unread = async (id: string) => (await built.app.listSessions("U1")).find((s) => s.id === id)?.unread === true;
+    const unread = async (id: string) => (await built.app.listSessions(asU1)).find((s) => s.id === id)?.unread === true;
     assert.equal(await unread(mineId), true);
-    await built.app.updateSession(mineId, "U1", { readAt: Date.now() });
+    await built.app.updateSession(mineId, asU1, { readAt: Date.now() });
     assert.equal(await unread(mineId), false);
-    await built.app.updateSession(mineId, "U1", { readAt: 0 });
+    await built.app.updateSession(mineId, asU1, { readAt: 0 });
     assert.equal(await unread(mineId), true);
     const slackId = (await built.app.turn(dm("U1", "from slack", "dm:D1")))!.sessionId!;
     assert.equal(await unread(slackId), false);
@@ -87,7 +92,7 @@ describe("agent conversations self-API", async () => {
     assert.equal(run?.request.surface, "web");
     const entries = await built.sessions.getItems(out.session.id);
     assert.ok(!entries.some((e) => e.text?.includes("plan the launch")));
-    const listed = await built.app.listSessions("U1");
+    const listed = await built.app.listSessions(asU1);
     assert.ok(listed.some((s) => s.id === out.session.id));
   });
 
@@ -161,7 +166,7 @@ describe("agent conversations self-API", async () => {
           ? { status: "refused", reason: "project membership changed" }
           : built.app.turn(req),
     };
-    const ids = async () => (await built.app.listSessions("U1")).map((s) => s.id).sort();
+    const ids = async () => (await built.app.listSessions(asU1)).map((s) => s.id).sort();
     const before = await ids();
     assert.deepEqual(
       await startSession(raced, built.sessions, "U1", { scopeId: scopeId("personal", "U1"), text: "refused" }),
@@ -217,7 +222,7 @@ describe("agent conversations self-API", async () => {
   it("archiving is per-participant view state, not visible to the other viewer's list semantics", async () => {
     const token = await capFor("U1");
     await post(`/v1/conversations/${mineId}`, { archived: true }, token);
-    const other = await built.app.listSessions("U2");
+    const other = await built.app.listSessions({ actorId: "U2" });
     assert.ok(!other.some((s) => s.id === mineId && s.archived), "U1's archive never marks U2's view");
     await post(`/v1/conversations/${mineId}`, { archived: false }, token);
   });
@@ -259,7 +264,7 @@ describe("agent conversations self-API", async () => {
     assert.notEqual(out.session.id, mineId);
     const entries = await built.sessions.getItems(out.session.id);
     assert.ok(entries.some((e) => e.text?.includes("plan the launch")));
-    assert.ok((await built.app.listSessions("U1")).some((s) => s.id === out.session.id));
+    assert.ok((await built.app.listSessions(asU1)).some((s) => s.id === out.session.id));
   });
 
   it("refuses to color a conversation the actor can't see", async () => {
@@ -304,4 +309,43 @@ describe("agent conversations self-API", async () => {
     assert.equal(conversation.title, "Launch plan");
     assert.equal(conversation.pinned, true);
   });
+});
+
+test("bot work in a person's name sees only conversations bot work ran in; the person still sees all of theirs", async (t) => {
+  const probe = createNetServer().listen(0, "127.0.0.1");
+  await once(probe, "listening");
+  const { port } = probe.address() as AddressInfo;
+  probe.close();
+  const config = testConfig({ signingSecret: SECRET, apiBaseUrl: `http://127.0.0.1:${port}` });
+  const mock = createMockAgent();
+  const turnTools = new Map<string, ToolContext>();
+  const built = buildApp(config, {
+    agent: { ...mock, runTurn: (turn) => (turnTools.set(turn.session.threadRef, turn.tools), mock.runTurn(turn)) },
+  });
+  const server = createServer(built.app, serverDeps(config, built)).listen(port, "127.0.0.1");
+  t.after(() => server.close());
+  await once(server, "listening");
+  const web = async (thread: string, text: string, botActor?: true) =>
+    (await built.app.turn({ ...dm("U1", text, thread), surface: "web", ...(botActor ? { botActor } : {}) })).sessionId!;
+  const diary = await web("web:U1:diary", "ALICE-DIARY private notes about the deploy");
+  const own = await web("web:U1:bot", "summarize the deploy", true);
+  await web("web:U1:person", "summarize the deploy");
+  const sees = async (thread: string) => {
+    const { selfApi, sessionSyscalls: tool } = turnTools.get(thread)!;
+    const ids = (value: unknown) => [own, diary].filter((id) => JSON.stringify(value).includes(id));
+    return {
+      list: ids((await selfApi!("GET", "/v1/conversations")).body),
+      read: (await selfApi!("GET", `/v1/conversations/${diary}`)).status === 200,
+      search: ids((await selfApi!("POST", "/v1/search", { query: "deploy" })).body),
+      toolList: ids(await tool!.list!()),
+      toolRead: (await tool!.read({ target: diary, peer: true })).ok,
+      toolSearch: ids(await tool!.search!({ query: "deploy" })),
+    };
+  };
+  const seen = (visible: string[]) => {
+    const read = visible.includes(diary);
+    return { list: visible, read, search: visible, toolList: visible, toolRead: read, toolSearch: visible };
+  };
+  assert.deepEqual(await sees("web:U1:bot"), seen([own]));
+  assert.deepEqual(await sees("web:U1:person"), seen([own, diary]));
 });

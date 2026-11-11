@@ -3,7 +3,7 @@ import { composeSoul } from "../resolution/resolution-service.ts";
 import { createCurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { notifyDeploymentShared } from "../deploy/share-notice.ts";
 import { deploymentShareScope } from "../deploy/email-access.ts";
-import { workingSessionThreadRefs } from "../sessions/session-syscalls.ts";
+import { sessionVisibleTo, workingSessionThreadRefs } from "../sessions/session-syscalls.ts";
 import type { ParticipantPageQuery, ToolStep } from "../sessions/session-store.ts";
 import type { PendingApprovalRecord, ScopeId, Session } from "../types.ts";
 import { isUserItem, type Item, messageTs, proseText } from "../sessions/items.ts";
@@ -129,6 +129,7 @@ export function createSessionMethods(
   const {
     sessionsForViewer,
     sessionForViewer,
+    visibleSessionRows,
     mayWriteSession,
     managedProjectMemberships,
     filesForViewer,
@@ -417,9 +418,10 @@ export function createSessionMethods(
       return !!(await sessionForViewer(sessionId, principalId));
     },
 
-    async getSessionForViewer(sessionId, principalId, window) {
+    async getSessionForViewer(sessionId, viewer, window) {
+      const principalId = viewer.actorId;
       const found = await sessionForViewer(sessionId, principalId);
-      if (!found) return null;
+      if (!found || !sessionVisibleTo(viewer, found)) return null;
       const session = { ...withoutStoredFacts(found), canContinue: await canContinueOnWeb(principalId, found) };
       let limit = tailWindowLimit(window);
       const [initialRead, pinRecords, goals] = await Promise.all([
@@ -566,8 +568,9 @@ export function createSessionMethods(
       return { name: art.name, mimetype: art.mimetype, sizeBytes: opened.sizeBytes, stream: opened.stream };
     },
 
-    async listSessions(principalId) {
-      return decorateSessions(principalId, await sessionsForViewer(principalId));
+    async listSessions(viewer) {
+      const sessions = await sessionsForViewer(viewer.actorId);
+      return decorateSessions(viewer.actorId, await visibleSessionRows(viewer, sessions, (session) => session.id));
     },
 
     async listSessionPage(principalId, query) {
@@ -1015,9 +1018,10 @@ export function createSessionMethods(
       return authorizesCapabilityScope(claims);
     },
 
-    async updateSession(sessionId, principalId, patch) {
+    async updateSession(sessionId, viewer, patch) {
+      const principalId = viewer.actorId;
       const session = await sessionForViewer(sessionId, principalId);
-      if (!session) return null;
+      if (!session || !sessionVisibleTo(viewer, session)) return null;
       await deps.sessions.updateParticipantView(sessionId, principalId, patch);
       const updated = await sessionForViewer(sessionId, principalId);
       return updated && { ...withoutStoredFacts(updated), canContinue: await canContinueOnWeb(principalId, updated) };

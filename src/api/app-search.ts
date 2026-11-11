@@ -10,8 +10,8 @@ import type { App, AppDeps } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import { ambientTenant } from "../tenants/context.ts";
 
-function conversationBackend(app: App, publicWebUrl: string | undefined): SearchBackend {
-  return createIntersectionBackend({
+function conversationBackend(app: App, helpers: AppHelpers, publicWebUrl: string | undefined): SearchBackend {
+  const backend = createIntersectionBackend({
     name: "conversations",
     key: (hit) => hit.id,
     searchForPrincipal: async (principal, query, limit) =>
@@ -36,6 +36,11 @@ function conversationBackend(app: App, publicWebUrl: string | undefined): Search
         };
       }),
   });
+  return {
+    name: backend.name,
+    search: async (request) =>
+      helpers.visibleSessionRows(request, await backend.search(request), (hit) => String(hit.metadata?.sessionId)),
+  };
 }
 function searchableFile(mimetype: string, name: string): boolean {
   return (
@@ -150,14 +155,11 @@ export function createSearchMethods(
         error instanceof Error ? error.message : String(error),
       ),
   };
-  const conversationsBackend = conversationBackend(app, deps.publicWebUrl);
+  const conversationsBackend = conversationBackend(app, helpers, deps.publicWebUrl);
   const core = createCoreSearch(
     [conversationsBackend, ...(slack ? [slack] : []), fileBackend(deps, app, helpers)],
     options,
   );
   const conversations = createCoreSearch([conversationsBackend], options);
-  return {
-    search: (query, principals, limit) => core.search({ query, principals, limit }),
-    searchConversations: (query, principals, limit) => conversations.search({ query, principals, limit }),
-  };
+  return { search: core.search, searchConversations: conversations.search };
 }

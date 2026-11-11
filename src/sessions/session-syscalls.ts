@@ -146,6 +146,10 @@ export function ownsSessionContext(
 export const isSidebarSession = (session: Session): boolean =>
   !session.parentSessionId && !isSubagentThreadRef(session.threadRef) && !session.threadRef.startsWith("swarm:");
 
+export function sessionVisibleTo(viewer: { botActor?: boolean }, session: Pick<Session, "spawnMeta">): boolean {
+  return viewer.botActor !== true || session.spawnMeta?.botActor === true;
+}
+
 export function storedContext(session: Session): SpawnMeta | undefined {
   return (
     session.spawnMeta && {
@@ -357,7 +361,7 @@ export interface SessionSyscallDeps {
   defaultModel?: (scopeId: ScopeId) => Promise<string>;
   conversations?: {
     search?: CoreSearch["search"];
-    list(actorId: string): Promise<Session[]>;
+    list(viewer: { actorId: string; botActor?: boolean }): Promise<Session[]>;
     start(
       actorId: string,
       input: {
@@ -1135,7 +1139,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
             return { ok: true, mode: "children", children: summaries };
           }
           const target = await resolveTarget(input.target);
-          if (!target)
+          if (!target || !sessionVisibleTo(binding.request, target))
             return {
               ok: false,
               message: `no session matches "${input.target}" — use a sessionId from open, read, or list.`,
@@ -1188,6 +1192,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
             query: input.query,
             principals: [caller.actor, ...(members ?? caller.conversation.audience)],
             ...(input.limit !== undefined ? { limit: input.limit } : {}),
+            botActor: caller.botActor,
           });
         },
         async list() {
@@ -1199,7 +1204,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           const audience = binding.request.conversation.audience.length
             ? binding.request.conversation.audience
             : [binding.request.actor];
-          const candidates = (await conversations.list(binding.request.actor.id)).filter(
+          const viewer = { actorId: binding.request.actor.id, botActor: binding.request.botActor };
+          const candidates = (await conversations.list(viewer)).filter(
             (s) => s.scopeId === binding.scopeId && isSidebarSession(s) && !s.archived,
           );
           const visible: Session[] = [];

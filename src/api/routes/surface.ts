@@ -254,7 +254,7 @@ async function getSession(ctx: ApiCtx): Promise<void> {
       message: "tailTurns and beforeSeq must be positive integers, sinceSeq a non-negative one",
     });
   }
-  const found = await app.getSessionForViewer(id, viewer, Object.keys(window).length ? window : undefined);
+  const found = await app.getSessionForViewer(id, { actorId: viewer }, Object.keys(window).length ? window : undefined);
   if (!found) return sendJson(res, 404, { error: "not_found" });
   return sendJson(res, 200, found);
 }
@@ -288,7 +288,7 @@ async function getAgentConversation(ctx: ApiCtx): Promise<void> {
       message: "tailTurns and beforeSeq must be positive integers, sinceSeq a non-negative one",
     });
   }
-  const found = await app.getSessionForViewer(ctx.params.id!, capability.actorId, window);
+  const found = await app.getSessionForViewer(ctx.params.id!, capability, window);
   if (!found) return sendJson(res, 404, { error: "not_found", message: "not a conversation you can see" });
   return sendJson(res, 200, {
     session: agentConversation(found.session),
@@ -428,7 +428,7 @@ async function patchSession(ctx: ApiCtx): Promise<void> {
   const parsed = parseSessionPatch(b);
   if ("error" in parsed) return sendJson(res, 400, { error: "bad_request", message: parsed.error });
   const patch = parsed.patch;
-  const session = await app.updateSession(id, principalId, patch);
+  const session = await app.updateSession(id, { actorId: principalId }, patch);
   if (!session) return sendJson(res, 404, { error: "not_found" });
   return sendJson(res, 200, { session });
 }
@@ -438,7 +438,7 @@ async function listAgentConversations(ctx: ApiCtx): Promise<void> {
   if (!capability) {
     return sendJson(res, 401, { error: "capability_required", message: "this endpoint is for the agent self-API" });
   }
-  const sessions = await app.listSessions(capability.actorId);
+  const sessions = await app.listSessions(capability);
   return sendJson(res, 200, {
     conversations: sessions.map(agentConversation),
   });
@@ -453,7 +453,7 @@ async function patchAgentConversation(ctx: ApiCtx): Promise<void> {
   const parsed = parseSessionPatch(b);
   if ("error" in parsed) return sendJson(res, 400, { error: "bad_request", message: parsed.error });
   const patch = parsed.patch;
-  const session = await app.updateSession(ctx.params.id!, capability.actorId, patch);
+  const session = await app.updateSession(ctx.params.id!, capability, patch);
   if (!session) return sendJson(res, 404, { error: "not_found", message: "not a conversation you can see" });
   audit(ctx, {
     principalId: capability.actorId,
