@@ -450,7 +450,10 @@ export interface App {
     input: { scopeId?: ScopeId; name: string; mimetype?: string; data: AsyncIterable<Uint8Array> },
   ): Promise<FileListItem | null>;
   listScopeResources(tenant: Tenant, principalId: string, scope: ScopeId): Promise<ScopeResources | null>;
-  loopAdministration(actorId: string, loops: readonly { owner: string; ownerScopeId: ScopeId }[]): Promise<boolean[]>;
+  loopAdministration(
+    actor: Pick<CapabilityClaims, "actorId" | "botActor">,
+    loops: readonly { owner: string; ownerScopeId: ScopeId }[],
+  ): Promise<boolean[]>;
   managesScope(principalId: string, scope: ScopeId): Promise<boolean>;
   currentScopeMembers(scope: ScopeId): Promise<Principal[] | undefined>;
   isCurrentSharedScopeMember(principalId: string, scope: ScopeId): Promise<boolean>;

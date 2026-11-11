@@ -546,7 +546,7 @@ export function createMessagingMethods(
         (await identityMembers()).find((member) => personKey(member.principalId) === personKey(principalId)) ?? null
       );
     },
-    loopAdministration: (actorId, loops) => loopAdministration(deps, actorId, loops),
+    loopAdministration: (actor, loops) => loopAdministration(deps, actor, loops),
     samePerson(a, b) {
       return samePersonInDirectory(deps.directory, a, b);
     },

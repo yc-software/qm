@@ -326,7 +326,7 @@ async function listLoops(ctx: ApiCtx): Promise<void> {
   const acting = actingPrincipal(ctx);
   if (!acting) return;
   const all = await deps.store.list();
-  const permissions = await ctx.app.loopAdministration(acting.actorId, all);
+  const permissions = await ctx.app.loopAdministration(acting.capability ?? acting, all);
   const visible = all.filter((_loop, i) => permissions[i]);
   return sendJson(ctx.res, 200, { loops: visible });
 }

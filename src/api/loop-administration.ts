@@ -20,10 +20,11 @@ export async function canAdministerLoop(
 
 export async function loopAdministration(
   deps: AppDeps,
-  actorId: string,
+  actor: Pick<CapabilityClaims, "actorId" | "botActor">,
   loops: readonly { owner: string; ownerScopeId: ScopeId }[],
 ) {
   if (!loops.length) return [];
+  const { actorId } = actor;
   const scopes = [...new Set(loops.map((loop) => loop.ownerScopeId))];
   const ids = [...new Set([actorId, ...loops.map((loop) => loop.owner)].flatMap((id) => [id, canonicalPerson(id)]))];
   const members = await deps.directory
@@ -98,5 +99,5 @@ export async function loopAdministration(
     managesScope: async (_actor: string, scope: ScopeId) => permissions.get(scope)!.manages,
     samePerson: (a: string, b: string) => samePersonInDirectory(snapshot.directory, a, b),
   };
-  return Promise.all(loops.map((loop) => canAdministerLoop(policy, loop, { actorId })));
+  return Promise.all(loops.map((loop) => canAdministerLoop(policy, loop, actor)));
 }
