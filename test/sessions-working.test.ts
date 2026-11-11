@@ -10,6 +10,7 @@ import { buildApp } from "./support/build-app.ts";
 import type { Principal, TurnRequest } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testConfig } from "./support/test-config.ts";
+import { settle } from "./support/settle.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-working-"));
@@ -78,16 +79,16 @@ test("listSessions flags a subagent whose latest turn failed, and only while it 
   await sessions.setParentSession(child.sessionId!, parent.sessionId!);
 
   for (const thread of ["web:U1:child", "web:U1:loose"]) {
-    await runs.enqueue({ sessionId: thread, request: enqueueRequest() });
-    const claimed = (await runs.claim("w1", 5_000))[0] ?? null;
+    const { run } = await runs.enqueue({ sessionId: thread, request: enqueueRequest() });
+    let claimed = await runs.claimById(run.id, "w1", 5_000);
+    await settle(async () => (claimed ??= await runs.claimById(run.id, "w1", 5_000)) !== null);
     await runs.fail(claimed!.id, claimed!.leaseToken ?? "", "boom", { retry: false });
   }
 
   let list = await app.listSessions("U1");
-  for (let i = 0; i < 100 && !list.find((s) => s.id === child.sessionId)?.lastTurnFailed; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    list = await app.listSessions("U1");
-  }
+  await settle(async () =>
+    (list = await app.listSessions("U1")).some((s) => s.id === child.sessionId && s.lastTurnFailed),
+  );
   assert.equal(list.find((s) => s.id === child.sessionId)?.lastTurnFailed, true);
   assert.ok(!list.find((s) => s.id === loose.sessionId)?.lastTurnFailed, "only subagents carry the flag");
 

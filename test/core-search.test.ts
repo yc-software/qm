@@ -113,7 +113,7 @@ test("POST /v1/search derives principals from capability and shared scopes fail 
     assert.equal(missing.status, 409);
     assert.equal(((await missing.json()) as { error: string }).error, "principal_set_unavailable");
 
-    const events = (await built.auditLog.events()).filter((e) => e.action === "search.query");
+    const events = (await built.auditLog.events(tenant)).filter((e) => e.action === "search.query");
     assert.equal(events.length, 1, "a fail-closed request runs no search and records none");
     assert.match(events[0]!.detail ?? "", /"principals":\["alice@example.com","bob@example.com"\]/);
     assert.doesNotMatch(events[0]!.detail ?? "", /pelican/, "query text is not copied into the audit log");

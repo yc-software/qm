@@ -424,7 +424,7 @@ test("admin deployment proxy bypasses deployment ACL after admin auth and audits
     admin: createAdminService(testAdminGrantStore(), { users: testUsers() }),
     signingSecret: SECRET,
     auditLog: {
-      record: (e) => auditEvents.push(e),
+      record: (_t, e) => auditEvents.push(e),
       events: async () => auditEvents as any,
       tail: async () => auditEvents as any,
     },

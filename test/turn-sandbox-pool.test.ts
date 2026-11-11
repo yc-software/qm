@@ -90,7 +90,7 @@ function fixture(over: { holdKeepsWarm?: boolean | Error; live?: string[] | Erro
         resolveSharingPostureDurable: async () => "open",
       },
       isCurrentSharedScopeMember: async () => true,
-      errors: { record: (event: { code: string; message: string }) => errors.push(event) },
+      errors: { record: (_t: unknown, event: { code: string; message: string }) => errors.push(event) },
     },
     input: { origin: { kind: "user" }, runId: "run-1" },
     actor: { id: "alice", type: "internal" },

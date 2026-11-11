@@ -68,6 +68,7 @@ for (const carried of [false, true]) {
       throw new Error("must not provision a computer");
     };
     const ctx = createToolContext({
+      tenant: tenant,
       sandbox: {} as Sandbox,
       provision: noComputer,
       writableScopeId: grantee,

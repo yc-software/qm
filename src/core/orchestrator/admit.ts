@@ -123,6 +123,7 @@ export async function admitAudienceAndBudget(
 }
 
 export async function checkSpendLimit(
+  tenant: Tenant,
   spendLimits: ReturnType<typeof createSpendLimits> | undefined,
   deps: OrchestratorDeps,
   scopeId: ScopeId,
@@ -131,6 +132,7 @@ export async function checkSpendLimit(
   const spendLimit = spendLimits
     ? await spendLimits.status(scopeId).catch((e: unknown) => {
         deps.errors.record(
+          tenant,
           { category: "turn", code: "spend_limit_check", message: errMessage(e), scopeLabel: scopeId },
           e,
         );

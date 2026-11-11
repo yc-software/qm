@@ -395,7 +395,7 @@ import { createProjectStore, type Project, type ProjectStore } from "./projects/
 import { createPersonaHandover } from "./personas/persona-handover.ts";
 import { createPersonaService } from "./personas/persona-service.ts";
 import { createPostgresPersonaStore } from "./personas/persona-store.ts";
-import { withErrorReporting, type ErrorLog } from "./admin/error-log.ts";
+import { recordErrorInBinding, withErrorReporting, type ErrorEvent, type ErrorLog } from "./admin/error-log.ts";
 import { createPostgresReplayDedupe, type ReplayDedupe } from "./auth/replay-dedupe.ts";
 import {
   emptyDeploymentLayer,
@@ -721,7 +721,7 @@ export function buildApp(
     scopeId: orgScope,
     advisoryLock,
     auditPersisted: (record) =>
-      auditLog.recordOnce!(`deployment-layer:${orgScope}:${record.version}`, {
+      auditLog.recordOnce!(ambientTenant(), `deployment-layer:${orgScope}:${record.version}`, {
         at: record.updatedAt,
         principalId: record.updatedBy,
         action: "deployment_layer.updated",
@@ -860,11 +860,13 @@ export function buildApp(
   );
   const mcpServers = createMcpServerStore(artifactMap<McpServer>("mcp_servers"));
   const errors = withErrorReporting(createPostgresErrorLog(databaseUrl));
+  const recordAmbientError = (event: Omit<ErrorEvent, "ts">, error?: unknown): void =>
+    recordErrorInBinding(errors, event, error);
   const sandboxOnError = (
     e: { category: string; code: string; message: string; scopeLabel?: string },
     error?: unknown,
   ) =>
-    errors.record(
+    recordAmbientError(
       {
         category: e.category,
         code: e.code,
@@ -1842,7 +1844,7 @@ export function buildApp(
     captureQuietMs: config.memoryCaptureQuietMs,
     ...(config.memoryCaptureMaxTurns !== undefined ? { captureMaxTurns: config.memoryCaptureMaxTurns } : {}),
     onCaptureError: (e, scope) =>
-      errors.record({ category: "memory", code: "capture_failed", message: errMessage(e), scopeLabel: scope }, e),
+      recordAmbientError({ category: "memory", code: "capture_failed", message: errMessage(e), scopeLabel: scope }, e),
   });
   const vouchedInternalEmail = async (email: string): Promise<boolean> => {
     await identity.refresh();
@@ -2886,7 +2888,7 @@ export function buildApp(
                 processes: processes!,
                 finish: finishCredentials,
                 onError: (error, scopeId) =>
-                  errors.record(
+                  recordAmbientError(
                     {
                       category: "process_session",
                       code: "job_computer_retire_failed",

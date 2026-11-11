@@ -17,7 +17,7 @@ export async function manageSandboxResources(ctx: ApiCtx): Promise<void> {
       const record = await resources.access(actor.id, input.sandboxId);
       if (record.ownerScopeId !== scopeId) throw new Error("sandbox belongs to another scope");
       await resources.retire(actor.id, input.sandboxId);
-      audit(ctx.deps, {
+      audit(ctx, {
         principalId: actor.id,
         action: "sandbox.retire",
         resource: input.sandboxId,
@@ -29,7 +29,7 @@ export async function manageSandboxResources(ctx: ApiCtx): Promise<void> {
       if (input.sandboxId !== null && typeof input.sandboxId !== "string")
         throw new Error("sandboxId must be an ID or null");
       await resources.setDefault(actor.id, scopeId, input.sandboxId);
-      audit(ctx.deps, {
+      audit(ctx, {
         principalId: actor.id,
         action: "sandbox.default",
         resource: String(input.sandboxId),
@@ -45,7 +45,7 @@ export async function manageSandboxResources(ctx: ApiCtx): Promise<void> {
       input.backend,
       typeof input.name === "string" ? input.name : undefined,
     );
-    audit(ctx.deps, { principalId: actor.id, action: "sandbox.create", resource: record.id, scopeLabel: scopeId });
+    audit(ctx, { principalId: actor.id, action: "sandbox.create", resource: record.id, scopeLabel: scopeId });
     return sendJson(ctx.res, 201, record);
   } catch (error) {
     return sendJson(ctx.res, 400, { error: "sandbox_request_failed", message: errMessage(error) });

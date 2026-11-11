@@ -4,7 +4,13 @@ import type { ErrorLog } from "../admin/error-log.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import type { TurnResult } from "../types.ts";
 import type { Orchestrator } from "../core/orchestrator.ts";
-import { isNonRetryable, NonRetryableTurnError, ProviderTurnError, turnFailureMessage } from "../core/turn-error.ts";
+import {
+  HeldTurnError,
+  isNonRetryable,
+  NonRetryableTurnError,
+  ProviderTurnError,
+  turnFailureMessage,
+} from "../core/turn-error.ts";
 import {
   countedClaims,
   CRASHED,
@@ -21,7 +27,7 @@ import { errMessage, errorAlreadyReported, reportFailure, swallow, swallowAs } f
 import { sleep } from "../util/async.ts";
 import { retryDelay } from "./retry-delay.ts";
 import { FLUSH_MS, traceQueued } from "../../plugins/chassis/src/error-reporting.ts";
-import { withTenant } from "../tenants/context.ts";
+import { type Tenant, withTenant } from "../tenants/context.ts";
 
 export interface ProcessDeps {
   runs: RunStore;
@@ -49,7 +55,7 @@ export async function processRun(
   opts?: { shutdown?: AbortSignal; park?: TurnPark },
 ): Promise<TurnResult> {
   const { trace, ...request } = run.request;
-  return withTenant(run.tenantId, () =>
+  return withTenant(run.tenantId, (tenant) =>
     traceQueued(
       trace,
       "run",
@@ -63,13 +69,14 @@ export async function processRun(
         "qm.surface": request.surface,
         "qm.origin": "origin" in request ? request.origin.kind : undefined,
       },
-      () => attemptRun(deps, { ...run, request }, opts),
+      () => attemptRun(tenant, deps, { ...run, request }, opts),
       (result) => opts?.shutdown?.aborted === true || result.stopped === true || result.status === "queued",
     ),
   );
 }
 
 async function attemptRun(
+  tenant: Tenant,
   deps: ProcessDeps,
   run: Run,
   opts?: { shutdown?: AbortSignal; park?: TurnPark },
@@ -154,9 +161,16 @@ async function attemptRun(
   } catch (err) {
     stopBeat();
     if (opts?.shutdown?.aborted) throw err;
+    if (err instanceof HeldTurnError) {
+      console.warn(`[worker] run ${run.id} held: ${err.message}`);
+      if (!(await deps.runs.releaseLease(run.id, token, undefined, Date.now() + err.retryAfterMs)))
+        throw new Error(`run ${run.id} lost its lease before it could be held`, { cause: err });
+      return { status: "queued", sessionId: run.sessionId, runId: run.id };
+    }
     console.error(`[worker] run ${run.id} turn failed: ${errMessage(err)}`);
     if (!errorAlreadyReported(err))
       deps.errors?.record(
+        tenant,
         {
           category: "turn",
           code: "error",

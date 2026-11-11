@@ -58,7 +58,7 @@ export const FIRE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 export interface CronStore {
   create(input: CreateCronInput): Promise<Cron>;
   get(id: string): Promise<Cron | null>;
-  list(): Promise<Cron[]>;
+  list(ids?: readonly string[]): Promise<Cron[]>;
   claimTenants(): Promise<ClaimedRow[]>;
   ownedBy(scopeId: string): Promise<Cron[]>;
   update(id: string, patch: CronPatch): Promise<Cron | null>;
@@ -150,7 +150,12 @@ export function createCronStore(
       }));
     },
     get: (id) => backing.get(id),
-    list: () => backing.all(),
+    list: async (ids) => {
+      if (!ids) return backing.all();
+      if (!ids.length) return [];
+      const wanted = new Set(ids);
+      return (await backing.select({ where: { field: "id", anyOfFold: ids } })).filter((cron) => wanted.has(cron.id));
+    },
     claimTenants: () => backing.claimTenants(),
     ownedBy: (scopeId) => ownedBy(backing, scopeId),
     async update(id, patch) {

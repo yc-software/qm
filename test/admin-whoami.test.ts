@@ -95,7 +95,7 @@ test("whoami audits an admin.whoami event for a resolved actor", async () => {
   const s = start();
   try {
     await whoami(s.base, "admin-alice@default-org");
-    const actions = (await s.built.auditLog.events()).map((e) => e.action);
+    const actions = (await s.built.auditLog.events(tenant)).map((e) => e.action);
     assert.ok(actions.includes("admin.whoami"), "the whoami read is audited");
   } finally {
     await s.close();

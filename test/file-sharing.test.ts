@@ -1,3 +1,4 @@
+import { testTenant } from "./support/test-tenant.ts";
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
@@ -145,6 +146,7 @@ test("reading shared/ lists the files shared with you without touching a compute
     permission: "read",
   });
   const tc = createToolContext({
+    tenant: testTenant,
     sandbox: {} as Sandbox,
     provision: async () => {
       throw new Error("must not provision");

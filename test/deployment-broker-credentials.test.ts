@@ -287,7 +287,7 @@ test("the broker serves a deployment credential with its pins, injection, usage 
     assert.equal(calls.length, 2);
     assert.equal(calls[0]!.headers["X-API-KEY"], KEY);
     assert.equal(calls[0]!.headers["x-api-version"], undefined);
-    const usage = await srv.built.credentialUsage.list({ slug: "search" });
+    const usage = await srv.built.credentialUsage.list(tenant, { slug: "search" });
     assert.equal(usage.filter((u) => u.status === "ok").length, 2);
     assert.equal(usage.filter((u) => u.status === "denied").length, 4);
   } finally {

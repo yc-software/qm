@@ -39,7 +39,7 @@ function fixture() {
     composioReturns: testMap(),
     portalUrl: "https://qm.example",
     auditLog: {
-      record: (e: { action: string; resource?: string }) => audits.push(e),
+      record: (_t: unknown, e: { action: string; resource?: string }) => audits.push(e),
     } as unknown as ServerDeps["auditLog"],
     runs: {
       get: async () => ({

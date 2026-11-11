@@ -191,14 +191,14 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
         },
         judgeBatch,
       ).catch((e: unknown) => {
-        deps.errors?.record(
+        h.recordError(
           { category: "ambient", code: "judge_failed", message: errMessage(e), scopeLabel: containerScope },
           e,
         );
         return { act: false } as AmbientDecision;
       });
       if (decision.startError)
-        deps.errors?.record({
+        h.recordError({
           category: "ambient",
           code: "worker_start_failed",
           message: decision.startError,

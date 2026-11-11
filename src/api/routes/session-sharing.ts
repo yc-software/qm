@@ -93,7 +93,7 @@ async function createShare(ctx: ApiCtx): Promise<void> {
     files,
   };
   await deps.sessionShares.putIfAbsent(share.token, share);
-  audit(deps, {
+  audit(ctx, {
     principalId: viewer,
     action: "session.share",
     resource: share.sessionId,

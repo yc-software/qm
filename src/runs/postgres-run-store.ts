@@ -1,3 +1,4 @@
+import type { Tenant } from "../tenants/context.ts";
 import { randomUUID } from "node:crypto";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { jsonbStringify, pgTextSafe } from "../util/text.ts";
@@ -420,12 +421,12 @@ END $base_schema$`,
 
     async reapExpired(opts?: {
       maxAgeMs?: number;
-      onReap?: (event: ReapEvent) => void;
+      onReap?: (event: ReapEvent, tenant: Tenant) => void;
     }): Promise<{ requeued: number; parked: number }> {
       const now = Date.now();
       let requeued = 0;
       let parked = 0;
-      const reap = async (id: string): Promise<void> => {
+      const reap = async (id: string, tenant: Tenant): Promise<void> => {
         const run = await getRun(id);
         if (!run) return;
         const tooOld = opts?.maxAgeMs !== undefined && run.startedAt !== null && now - run.startedAt > opts.maxAgeMs;
@@ -440,14 +441,17 @@ END $base_schema$`,
         if (!r.applied) return;
         if (r.requeued) requeued++;
         else parked++;
-        opts?.onReap?.({
-          runId: run.id,
-          sessionId: run.sessionId,
-          workerId: run.workerId,
-          attempts: run.attempts,
-          errorAttempts: run.errorAttempts,
-          outcome: r.requeued ? "requeued" : "parked",
-        });
+        opts?.onReap?.(
+          {
+            runId: run.id,
+            sessionId: run.sessionId,
+            workerId: run.workerId,
+            attempts: run.attempts,
+            errorAttempts: run.errorAttempts,
+            outcome: r.requeued ? "requeued" : "parked",
+          },
+          tenant,
+        );
       };
       await claimThenBind(() => claimRows(pg, "claim_expired_runs", [now]), reap);
       return { requeued, parked };

@@ -147,6 +147,7 @@ export function createFileRegistration(turn: {
       : {}),
     onError: (e) =>
       deps.errors.record(
+        tenant,
         {
           category: "file_store",
           code: "register_failed",

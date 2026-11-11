@@ -1,3 +1,4 @@
+import type { Tenant } from "../tenants/context.ts";
 import { isComposioHost } from "../credentials/keychain.ts";
 import { errMessage } from "../util/errors.ts";
 import { attestableActor, attestsInAudience, OutsideAudience, UNATTESTABLE_ACTOR_FIX } from "../directory/person.ts";
@@ -159,6 +160,7 @@ export async function grantedCredential(
 }
 
 export async function brokerCredentialCall(opts: {
+  tenant: Tenant;
   claims: CapabilityClaims;
   body: BrokerRequest;
   orgScopeId: ScopeId;
@@ -167,13 +169,19 @@ export async function brokerCredentialCall(opts: {
   usage?: CredentialUsageSink;
   audit?: BrokerAudit;
 }): Promise<BrokerResult> {
-  const { claims, body, orgScopeId, reader, fetchImpl } = opts;
+  const { tenant, claims, body, orgScopeId, reader, fetchImpl } = opts;
   const slug = typeof body.credential === "string" ? body.credential : "";
   const method = (typeof body.method === "string" ? body.method : "GET").toUpperCase();
   const rawUrl = typeof body.url === "string" ? body.url : "";
 
   const deny = (httpStatus: number, code: string, message: string, host: string): BrokerResult => {
-    opts.usage?.record({ slug, host, status: "denied", scopeLabel: claims.scopeId, principalId: claims.actorId });
+    opts.usage?.record(tenant, {
+      slug,
+      host,
+      status: "denied",
+      scopeLabel: claims.scopeId,
+      principalId: claims.actorId,
+    });
     opts.audit?.({
       principalId: claims.actorId,
       action: "credential.broker.denied",
@@ -249,7 +257,7 @@ export async function brokerCredentialCall(opts: {
     let admitted: boolean;
     try {
       if (!opts.usage) throw new Error("no usage ledger");
-      admitted = await opts.usage.admitDailyCall(slug, rec.maxRequestsPerDay);
+      admitted = await opts.usage.admitDailyCall(tenant, slug, rec.maxRequestsPerDay);
     } catch (err) {
       console.error(`[credential-broker] daily cap check failed for ${slug}:`, errMessage(err));
       return deny(503, "daily_cap_unavailable", "the credential's daily request cap could not be checked", rec.host);
@@ -274,7 +282,7 @@ export async function brokerCredentialCall(opts: {
       ...(typeof body.body === "string" ? { body: body.body } : {}),
     });
   } catch (err) {
-    opts.usage?.record({
+    opts.usage?.record(tenant, {
       slug,
       host: rec.host,
       status: "error",
@@ -293,7 +301,7 @@ export async function brokerCredentialCall(opts: {
   }
 
   const result = await relayedResult(resp);
-  opts.usage?.record({
+  opts.usage?.record(tenant, {
     slug,
     host: rec.host,
     status: "ok",

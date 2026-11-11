@@ -1,3 +1,4 @@
+import { testTenant } from "./support/test-tenant.ts";
 import { SandboxProvisionCleanupError, cleanupFailedProvision } from "../src/sandbox/sandbox.ts";
 import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
@@ -27,6 +28,7 @@ function routingCtx(extra: Partial<ToolContextDeps> = {}) {
     },
   } as unknown as Sandbox;
   const ctx = createToolContext({
+    tenant: testTenant,
     sandbox,
     provision: async () => {
       calls.provision++;
@@ -450,7 +452,7 @@ function turnBoxes(sandbox: Partial<Sandbox>, transferId = "turn-a", actorId = "
   const boxes = createTurnSandboxes({
     deps: {
       sandbox,
-      auditLog: { record: (event: import("../src/audit/audit-log.ts").AuditEvent) => events.push(event) },
+      auditLog: { record: (_t: unknown, event: import("../src/audit/audit-log.ts").AuditEvent) => events.push(event) },
       errors: { record: (...args: unknown[]) => errors.push(args) },
     },
     input: { runId: "run-1" },

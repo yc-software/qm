@@ -69,7 +69,7 @@ async function getOwnBrain(ctx: ApiCtx): Promise<void> {
   const found = await member(ctx);
   if (!found) return;
   const { owner, registry } = found;
-  audit(ctx.deps, {
+  audit(ctx, {
     principalId: owner,
     action: "memory-registry.member-brain.read",
     resource: memberBrainId(owner),

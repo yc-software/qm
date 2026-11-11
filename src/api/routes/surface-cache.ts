@@ -68,7 +68,7 @@ async function ingestSurfaceEvents(ctx: ApiCtx): Promise<void> {
         }
       : undefined;
   const { upserted } = await app.ingestSurfaceEvents(events, surface, self);
-  audit(deps, {
+  audit(ctx, {
     principalId: `surface:${surface}`,
     action: "surface.ingest",
     resource: "surface_cache",
@@ -95,7 +95,7 @@ async function setChannelPolicy(ctx: ApiCtx): Promise<void> {
   const setBy = typeof b.setBy === "string" ? b.setBy : undefined;
   const policy = await app.setChannelPolicy(b.container, b.orders, setBy);
   if (!policy) return sendJson(res, 404, { error: "not_found", message: "surface cache not enabled" });
-  audit(deps, {
+  audit(ctx, {
     principalId: setBy ?? "system",
     action: "surface.policy.set",
     resource: b.container,

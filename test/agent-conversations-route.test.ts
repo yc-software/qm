@@ -273,6 +273,16 @@ describe("agent conversations self-API", async () => {
     assert.equal((await post(`/v1/conversations/${mineId}`, { archived: "yes" }, token)).status, 400);
     assert.equal((await post(`/v1/conversations/${mineId}`, { title: 5 }, token)).status, 400);
     assert.equal((await post(`/v1/conversations/${mineId}`, { color: "red" }, token)).status, 400);
+    assert.equal((await post(`/v1/conversations/${mineId}`, { unread: "no" }, token)).status, 400);
+  });
+
+  it("marks a conversation read and unread", async () => {
+    const token = await capFor("U1");
+    const read = await post(`/v1/conversations/${mineId}`, { unread: false }, token);
+    assert.equal(read.status, 200);
+    assert.equal(((await read.json()) as { conversation: { unread: boolean } }).conversation.unread, false);
+    const back = await post(`/v1/conversations/${mineId}`, { unread: true }, token);
+    assert.equal(((await back.json()) as { conversation: { unread: boolean } }).conversation.unread, true);
   });
 
   it("sets and clears the sidebar color", async () => {

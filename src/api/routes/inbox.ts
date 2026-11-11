@@ -11,7 +11,7 @@ import {
 } from "../../loops/ledger-view.ts";
 import { uiStateId } from "../../surfaces/ui-state.ts";
 import { sendJson } from "../http.ts";
-import { actingPrincipal, canAdministerLoop, forInboxLoopsPeople, inboxPreviewEnabled, loopDeps } from "./loops.ts";
+import { actingPrincipal, forInboxLoopsPeople, inboxPreviewEnabled, loopDeps } from "./loops.ts";
 import { cronSummary } from "./loop-items.ts";
 import { isObj } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
@@ -35,13 +35,13 @@ function inboxItemVisible(item: Pick<LoopItemSummary, "verdict" | "sourcePayload
   return filter === "all";
 }
 
-async function selectedLoopView(
-  ctx: ApiCtx,
-  deps: NonNullable<ReturnType<typeof loopDeps>>,
+function selectedLoopView(
+  crons: Map<string, NonNullable<Parameters<typeof cronSummary>[0]>>,
+  activeIngress: Set<string>,
   loop: Loop,
   summaries: Array<{ loopId: string; source?: string }>,
   counts: Map<string, number>,
-): Promise<Record<string, unknown>> {
+): Record<string, unknown> {
   return {
     id: loop.id,
     name: loop.name,
@@ -55,8 +55,8 @@ async function selectedLoopView(
     count: counts.get(loop.id) ?? 0,
     state: loop.state,
     cronId: loop.cronId,
-    syncCron: loop.cronId ? cronSummary((await deps.crons?.get(loop.cronId)) ?? null) : null,
-    ingestionActive: (await ctx.deps.loopIngress?.list(loop.id))?.some((source) => source.enabled) ?? false,
+    syncCron: loop.cronId ? cronSummary(crons.get(loop.cronId) ?? null) : null,
+    ingestionActive: activeIngress.has(loop.id),
     source: loop.surface?.startsWith("inbox:") ? loop.sources?.[0] : undefined,
     prioritize: prioritizes(loop),
     consolidate: consolidates(loop),
@@ -77,10 +77,9 @@ export async function inboxView(ctx: ApiCtx): Promise<InboxView | null> {
     value: defaults.map((loop) => loop.id),
     updatedAt: Date.now(),
   });
-  const available: Loop[] = [];
-  for (const loop of await deps.store.list()) {
-    if (loop.state !== "archived" && (await canAdministerLoop(ctx.app, loop, acting.actorId))) available.push(loop);
-  }
+  const loops = (await deps.store.list()).filter((loop) => loop.state !== "archived");
+  const permissions = await ctx.app.loopAdministration(acting.actorId, loops);
+  const available = loops.filter((_loop, i) => permissions[i]);
   let ids = Array.isArray(pref.value) ? pref.value.filter((value): value is string => typeof value === "string") : [];
   if (ctx.method === "POST") {
     const body = isObj(ctx.body) ? ctx.body : {};
@@ -165,8 +164,14 @@ export async function inboxView(ctx: ApiCtx): Promise<InboxView | null> {
   }
   const page = feed.slice(0, 40);
   const last = page.at(-1);
+  const [crons, ingress] = await Promise.all([
+    deps.crons?.list([...new Set(selected.flatMap((loop) => (loop.cronId ? [loop.cronId] : [])))]) ?? [],
+    ctx.deps.loopIngress?.list(selectedIds) ?? [],
+  ]);
+  const cronLookup = new Map(crons.map((cron) => [cron.id, cron]));
+  const activeIngress = new Set(ingress.filter((source) => source.enabled).map((source) => source.loopId));
   return reply(200, {
-    selected: await Promise.all(selected.map((loop) => selectedLoopView(ctx, deps, loop, summaries, counts))),
+    selected: selected.map((loop) => selectedLoopView(cronLookup, activeIngress, loop, summaries, counts)),
     available: available.map((loop) => ({
       id: loop.id,
       name: loop.name,

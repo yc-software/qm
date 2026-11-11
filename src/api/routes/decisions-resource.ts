@@ -59,7 +59,7 @@ export const decisionsResource: AdminResource = {
     } catch (error) {
       return { error: errMessage(error) };
     }
-    audit(ctx.deps, { principalId: actor.id, action: change[0], resource: change[1], scopeLabel: scope });
+    audit(ctx, { principalId: actor.id, action: change[0], resource: change[1], scopeLabel: scope });
     return { ok: true };
   },
 };

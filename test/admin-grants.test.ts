@@ -58,7 +58,7 @@ test("an org admin promotes a user to org_admin; whoami reflects it; audited", a
       permissions: ["admin"],
     });
     assert.ok(
-      (await s.built.auditLog.events()).some((e) => e.action === "grant.create" && e.resource === "U1/org_admin"),
+      (await s.built.auditLog.events(tenant)).some((e) => e.action === "grant.create" && e.resource === "U1/org_admin"),
     );
   } finally {
     await s.close();
@@ -124,7 +124,7 @@ test("revoke flips a promoted user back to non-admin; audited", async () => {
     assert.equal(r.status, 200);
     assert.deepEqual(await whoami(s.base, "U1@default-org"), { isAdmin: false, permissions: [] });
     assert.ok(
-      (await s.built.auditLog.events()).some((e) => e.action === "grant.revoke" && e.resource === "U1/org_admin"),
+      (await s.built.auditLog.events(tenant)).some((e) => e.action === "grant.revoke" && e.resource === "U1/org_admin"),
     );
   } finally {
     await s.close();

@@ -1,3 +1,4 @@
+import type { Tenant } from "../tenants/context.ts";
 import { isSessionTurn } from "../core/turn-origin.ts";
 import type {
   Conversation,
@@ -62,6 +63,7 @@ export interface SpineState {
 }
 
 export interface SurfaceToolsContext {
+  tenant: Tenant;
   deps: OrchestratorDeps;
   input: OrchestratorInput;
   actor: Principal;
@@ -146,6 +148,7 @@ export async function replayRecordedSurfaceAnswer(ctx: {
 
 export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps | undefined {
   const {
+    tenant,
     deps,
     input,
     actor,
@@ -567,7 +570,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       } catch (error) {
         return { ok: false, message: errMessage(error) };
       }
-      deps.auditLog.record({
+      deps.auditLog.record(tenant, {
         at: Date.now(),
         principalId: actor.id,
         action: "surface.policy.set",
