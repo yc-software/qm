@@ -1,11 +1,11 @@
 import { externalAppSharingAllowed } from "../../feature-flags.ts";
-import { appAccess, canEditAppPermissions } from "../../deploy/app-access.ts";
+import { canEditAppPermissions } from "../../deploy/app-access.ts";
 import { DeployAccessError, type DeployAccessErrorCode } from "../../deploy/deploy-service.ts";
 import { deploymentView, type App } from "../app.ts";
 import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
-import type { Permission } from "../../types.ts";
+import { parseScopeId, type Permission } from "../../types.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { personAtKeyboard, resolveShareTarget as resolveShareTargetGrammar } from "../artifact-share.ts";
 
@@ -91,17 +91,11 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
       });
     try {
       const deployment = await app.setDeploymentPublic(params.id!, b.public, actor);
-      const grantees = await app.deploymentGrantees(deployment.id);
       return sendJson(res, 200, {
         ok: true,
         public: deployment.public === true,
-        reach: appAccess({
-          ownerScopeId: deployment.ownerScopeId,
-          public: deployment.public === true,
-          grantees,
-          viewer: principalId,
-        }).detail,
-        grantees,
+        reach: deployment.public === true ? "anyone with the link" : "restricted",
+        grantees: await app.deploymentGrantees(deployment.id),
       });
     } catch (e) {
       return sendShareFailure(res, e);
@@ -142,21 +136,20 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
         : undefined;
     const grantees =
       invite?.grantees ?? (await app.shareDeployment(params.id!, target.scope, permission, actor, notify));
+    const orgGrant = grantees.find((g) => parseScopeId(g.scope).kind === "org");
+    let reach = "owner-only";
+    if (orgGrant) reach = `everyone in ${parseScopeId(orgGrant.scope).ref}`;
+    else if (grantees.length) reach = `${grantees.length} grantee${grantees.length === 1 ? "" : "s"}`;
     const deployment = await app.getDeployment(params.id!);
-    const isPublic =
-      deployment?.public === true && (await externalAppSharingAllowed(ctx.deps.featureFlags, deployment.ownerScopeId));
     return sendJson(res, 200, {
       ok: true,
       target: { scope: target.scope, label: target.label },
       access,
-      ...(deployment
-        ? {
-            reach: appAccess({ ownerScopeId: deployment.ownerScopeId, public: isPublic, grantees, viewer: principalId })
-              .detail,
-          }
-        : {}),
+      reach,
       ...(invite ? { invitation: invite.invitation } : {}),
-      public: isPublic,
+      public:
+        deployment?.public === true &&
+        (await externalAppSharingAllowed(ctx.deps.featureFlags, deployment.ownerScopeId)),
       grantees,
     });
   } catch (e) {

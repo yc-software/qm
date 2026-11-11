@@ -1,4 +1,4 @@
-import { isOrgScope, orgAccessNote, PUBLIC_ACCESS_NOTE } from "../../plugins/chassis/src/app-access.ts";
+import { generalAccessOf, orgAccessNote, PUBLIC_ACCESS_NOTE } from "../../plugins/chassis/src/app-access.ts";
 import { parseScopeId, type ScopeKind } from "../types.ts";
 
 export function canEditAppPermissions(ownerScopeId: string, principalId: string): boolean {
@@ -12,13 +12,14 @@ export type AppAccess = {
   canEdit: boolean;
 };
 
-const NOUNS: Partial<Record<ScopeKind, [one: string, many: string]>> = {
+const NOUNS: Record<ScopeKind, [one: string, many: string]> = {
   personal: ["person", "people"],
   channel: ["channel", "channels"],
   group: ["group chat", "group chats"],
   team: ["team", "teams"],
+  org: ["organization", "organizations"],
+  persona: ["persona", "personas"],
 };
-const OTHER_NOUN: [string, string] = ["project", "projects"];
 
 export function appAccess(opts: {
   ownerScopeId: string;
@@ -26,32 +27,32 @@ export function appAccess(opts: {
   grantees: ReadonlyArray<{ scope: string }>;
   viewer: string;
 }): AppAccess {
-  const ownedByViewer = canEditAppPermissions(opts.ownerScopeId, opts.viewer);
-  const canEdit = ownedByViewer;
-  const kindOf = (scope: string) => parseScopeId(scope).kind;
-  if (opts.public) return { level: "public", label: "Public", detail: PUBLIC_ACCESS_NOTE, canEdit };
-  if (opts.grantees.some((g) => isOrgScope(g.scope)))
+  const canEdit = canEditAppPermissions(opts.ownerScopeId, opts.viewer);
+  const general = generalAccessOf(opts);
+  if (general === "public") return { level: "public", label: "Public", detail: PUBLIC_ACCESS_NOTE, canEdit };
+  if (general === "org")
     return { level: "org", label: "Organization", detail: orgAccessNote("your organization"), canEdit };
-  const owner = kindOf(opts.ownerScopeId) === "personal" ? [] : [opts.ownerScopeId];
+  const owner = opts.ownerScopeId.startsWith("personal:") ? [] : [opts.ownerScopeId];
   const reach = new Set([...owner, ...opts.grantees.map((g) => g.scope)]);
   if (!reach.size)
     return {
       level: "private",
       label: "Private",
-      detail: ownedByViewer ? "Only you can open" : "Only the owner can open",
+      detail: canEdit ? "Only you can open" : "Only the owner can open",
       canEdit,
     };
-  const counts = new Map<[string, string], number>();
+  const counts = new Map<ScopeKind, number>();
   for (const scope of reach) {
-    const kind = kindOf(scope);
-    const noun = (kind && NOUNS[kind]) || OTHER_NOUN;
-    counts.set(noun, (counts.get(noun) ?? 0) + 1);
+    const kind = parseScopeId(scope).kind ?? "group";
+    counts.set(kind, (counts.get(kind) ?? 0) + 1);
   }
-  const words = [...counts].map(([[one, many], n]) => `${n} ${n === 1 ? one : many}`);
-  const onlyPeople = counts.size === 1 && counts.has(NOUNS.personal!);
-  const [[[one], n] = [[""], 0]] = counts;
-  let label = counts.size === 1 ? words[0]! : "Shared";
-  if (counts.size === 1 && n === 1 && !onlyPeople) label = one[0]!.toUpperCase() + one.slice(1);
+  const words = [...counts].map(([kind, n]) => `${n} ${NOUNS[kind][n === 1 ? 0 : 1]}`);
+  const [only] = counts;
+  let label = only && counts.size === 1 ? words[0]! : "Shared";
+  if (only && counts.size === 1 && only[1] === 1 && only[0] !== "personal") {
+    const noun = NOUNS[only[0]][0];
+    label = noun[0]!.toUpperCase() + noun.slice(1);
+  }
   return {
     level: "shared",
     label,

@@ -1054,12 +1054,15 @@ async function openAppEditChat(slug: string): Promise<void> {
 async function bootAppShare(params: URLSearchParams): Promise<void> {
   document.documentElement.classList.add("app-share-embed");
   const done = () => tellEmbedder({ type: "qm:app-share-closed" });
-  const slug = params.get("slug") ?? "";
+  const fail = (reason: string) => {
+    swallow("web-ui: app-share", new Error(reason));
+    renderAuthGate({ kind: "unreachable" });
+  };
+  const slug = params.get("slug");
+  if (!slug) return fail("app-share opened without an app slug");
   const r = await webFetch(withBase("/me"));
-  if (!r.ok || !slug) {
-    renderAuthGate(r.status === 401 ? gateFor("portal") : { kind: "unreachable" });
-    return;
-  }
+  if (r.status === 401) return renderAuthGate(gateFor("portal"));
+  if (!r.ok) return fail(`app-share: /me answered ${r.status} ${(await r.text()).slice(0, 200)}`);
   appState.me = (await r.json()) as Me;
   const { openDeploymentPermissions } = await import("./deploy-permissions");
   await openDeploymentPermissions(slug, params.get("name") || slug, `personal:${appState.me.user}`, {

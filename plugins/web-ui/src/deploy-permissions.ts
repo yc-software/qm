@@ -1,4 +1,10 @@
-import { isOrgScope, orgAccessNote, PUBLIC_ACCESS_NOTE } from "../../chassis/src/app-access.ts";
+import {
+  generalAccessOf,
+  isOrgScope,
+  orgAccessNote,
+  PUBLIC_ACCESS_NOTE,
+  type GeneralAccess,
+} from "../../chassis/src/app-access.ts";
 import { html, render, nothing } from "lit";
 import { live } from "lit/directives/live.js";
 import { Building2, Globe, Lock, Search, X } from "lucide";
@@ -15,8 +21,6 @@ interface Grant {
   scope: string;
   permission: "read" | "write";
 }
-
-type GeneralAccess = "restricted" | "org" | "public";
 
 const isOrgGrant = (grant: Grant): boolean => isOrgScope(grant.scope);
 
@@ -93,10 +97,7 @@ export async function openDeploymentPermissions(
     }
   };
   const orgGrant = (): Grant | undefined => grantees.find(isOrgGrant);
-  const generalAccess = (): GeneralAccess => {
-    if (publicAccess) return "public";
-    return orgGrant() ? "org" : "restricted";
-  };
+  const generalAccess = (): GeneralAccess => generalAccessOf({ public: publicAccess, grantees });
   const post = async (body: Record<string, unknown>) => {
     const response = await api<{ public: boolean; grantees: Grant[] }>(endpoint, {
       method: "POST",
