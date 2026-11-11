@@ -907,10 +907,8 @@ export function createSwarmService(deps: {
     },
     authorizes: (claims) => deps.authorize(claims),
     async botMayUseComputer(computer, turn) {
-      if (!computer.swarmId) return true;
-      const swarm = await store.get(computer.swarmId);
-      if (!swarm) return false;
-      return botMayDirect(swarm, turn.actorId);
+      const swarm = computer.swarmId ? await store.get(computer.swarmId) : null;
+      return !!swarm && botMayDirect(swarm, turn.actorId);
     },
     async notePersonUse(computer) {
       const swarm = computer.swarmId ? await store.get(computer.swarmId) : null;
