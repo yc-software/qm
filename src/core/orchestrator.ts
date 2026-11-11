@@ -526,7 +526,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         !external &&
         ((!sessionTurn && (humanTurn || authoredDetection)) || (delegatedOrigin !== undefined && !ownerFireTurn)) &&
         allInternal;
-      const livePersonTurn = liveAuthorTurn && input.botActor !== true;
       const messageTs = humanInput && input.origin.kind === "human" ? input.origin.messageTs : undefined;
       const entryTs =
         !sessionTurn && (input.origin.kind === "human" || input.origin.kind === "ambient")
@@ -745,6 +744,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const appEdit = appEditTurnPolicy(editingApp !== null);
       const mcpToolsReady =
         !external && !appEdit && deps.mcp ? deps.mcp.toolDefsFor(actor.id, audienceScopeId, actAsActor) : undefined;
+      const livePersonTurn = liveAuthorTurn && input.botActor !== true;
       const useMemory =
         !external && input.skipMemory !== true && !(input.botActor && scopeId === personalScope(actor.id));
       const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);
