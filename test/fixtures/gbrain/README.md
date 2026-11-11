@@ -5,8 +5,8 @@
 | Field   | Value                                                                                                |
 | ------- | ---------------------------------------------------------------------------------------------------- |
 | Source  | `docs/contracts/qm-memory-provider/v3.json` in [garrytan/gbrain](https://github.com/garrytan/gbrain) |
-| Status  | Tagged release `v0.60.655.0` at `79781ec0`                                                           |
-| SHA-256 | `2a72688987f0b6d5179b2ebdd6de7fcbb8e5ae13ba09c5b4b8e6a0f7aa48f5ad`                                   |
+| Status  | Release `v0.60.662.0` at `afabc9ce`                                                                  |
+| SHA-256 | `cf4e3f514c57bcd381c1bc0846a0de105dd2a0fbbf361aaa08175cd8bfe0760b`                                   |
 
 The file is gbrain's bytes, unchanged, so `sha256sum qm-memory-provider-v3.json` proves which release it came from. Prettier skips it for that reason.
 

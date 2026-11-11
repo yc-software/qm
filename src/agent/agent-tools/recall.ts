@@ -2,7 +2,7 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { MemoryFactsMissing, MemoryForgetRefused } from "../../memory/facts.ts";
 import { MemoryDisclosureDenied } from "../../memory/disclosure.ts";
-import { MAX_FACTS_PER_WRITE, problemLine } from "../../memory/provider-outcome.ts";
+import { forgetFinished, MAX_FACTS_PER_WRITE, problemLine } from "../../memory/provider-outcome.ts";
 import { quotedData } from "../../util/text.ts";
 import { text, type ToolKit } from "./kit.ts";
 
@@ -155,10 +155,14 @@ export function recallTools(kit: ToolKit) {
             if (forgot === null) return unavailable();
             const { forgotten, outcomes, problems } = forgot;
             const notebook = ids.length - outcomes.length;
+            const plural = notebook === 1 ? "" : "s";
+            const notebookLine = forgetFinished(outcomes)
+              ? `Forgot ${notebook} fact${plural}.`
+              : `Kept ${notebook} notebook fact${plural} until every brain ref in this delete is forgotten; send the same delete again to finish.`;
             const refs = (state: string) =>
               outcomes.flatMap(({ outcome, ref }) => (outcome === state && ref ? [ref] : [])).join(", ");
             const lines = [
-              ...(notebook ? [`Forgot ${notebook} fact${notebook === 1 ? "" : "s"}.`] : []),
+              ...(notebook ? [notebookLine] : []),
               ...(refs("committed") ? [`Forgot ${refs("committed")}.`] : []),
               ...(refs("pending") ? [`Accepted forgetting ${refs("pending")}; the brain finishes it later.`] : []),
               ...problems.map(problemLine),

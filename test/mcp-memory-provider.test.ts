@@ -166,7 +166,7 @@ test("a brain forget reports each ref done, pending, unknown or failed, and a re
     },
     async callTool(_tool, args) {
       sent.push(args);
-      if (sent.length === 2) await sleep(300);
+      if (args.id === 2 && sent.filter(({ id }) => id === 2).length === 1) await sleep(300);
       if (args.id === 9) throw new McpCallError("mcp tools/call failed (HTTP 502)", { status: 502 });
       if (args.id === 7) throw new McpCallError("Fact id 7 already expired.", { code: "fact_already_expired" });
       const state = states[args.id as number];
@@ -203,14 +203,13 @@ test("a brain forget reports each ref done, pending, unknown or failed, and a re
   const lines = ({ outcomes }: Awaited<ReturnType<typeof forget>>) =>
     outcomes.map(({ ref, outcome, code }) => `${ref} ${outcome}${code ? ` ${code}` : ""}`);
 
-  const first = await forget(["acme:1", "acme:2", "acme:3", "acme:6", "acme:9", "acme:4", "acme:5", "acme:x"]);
+  const first = await forget(["acme:1", "acme:3", "acme:6", "acme:9", "acme:4", "acme:5", "acme:x"]);
   assert.equal(
     first.problems.find(({ detail }) => detail.includes("fact_not_found"))?.detail,
     "Memory provider acme failed to forget acme:5, acme:x (fact_not_found), so this call changed nothing there.",
   );
   assert.deepEqual(lines(first), [
     "acme:1 committed",
-    "acme:2 unknown",
     "acme:3 pending queued",
     "acme:6 unknown applying",
     "acme:9 unknown http_502",
@@ -218,10 +217,13 @@ test("a brain forget reports each ref done, pending, unknown or failed, and a re
     "acme:5 failed fact_not_found",
     "acme:x failed fact_not_found",
   ]);
+  assert.deepEqual(lines(await forget(["acme:2", "acme:3"])), ["acme:2 unknown", "acme:3 unknown"]);
   assert.deepEqual(lines(await forget(["acme:2"])), ["acme:2 committed"]);
+  const twice = sent.filter(({ id }) => id === 2);
   assert.deepEqual(sent[0], { id: 1, request_id: sent[0]?.request_id });
-  assert.equal(sent.at(-1)?.request_id, sent[1]?.request_id);
-  assert.notEqual(sent[0]?.request_id, sent[1]?.request_id);
+  assert.equal(twice.length, 2);
+  assert.equal(twice[1]?.request_id, twice[0]?.request_id);
+  assert.notEqual(sent[0]?.request_id, twice[0]?.request_id);
   assert.deepEqual(lines(await forget(["acme:7"])), ["acme:7 committed"]);
   assert.deepEqual(lines(await forget(["acme:8"])), ["acme:8 unknown no_state"]);
   assert.deepEqual(lines(await forget(["down:1"])), ["down:1 failed unreachable"]);
