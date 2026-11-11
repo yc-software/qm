@@ -217,7 +217,20 @@ test("a brain forget reports each ref done, pending, unknown or failed, and a re
     "acme:5 failed fact_not_found",
     "acme:x failed fact_not_found",
   ]);
-  assert.deepEqual(lines(await forget(["acme:2", "acme:3"])), ["acme:2 unknown", "acme:3 unknown"]);
+  const before = sent.length;
+  const late: string[] = [];
+  await memory.delete!(
+    "personal:U1",
+    ["acme:2", "acme:3"],
+    { actorId: "U1", context: "conversation", personTurn: true },
+    {
+      audienceScopeId: "personal:U1",
+      startedAt: Date.now() - 1000,
+      report: ({ ref, outcome }) => late.push(`${ref} ${outcome}`),
+    },
+  );
+  assert.deepEqual([late, sent.length], [["acme:2 unknown", "acme:3 unknown"], before]);
+  assert.deepEqual(lines(await forget(["acme:2"])), ["acme:2 unknown"]);
   assert.deepEqual(lines(await forget(["acme:2"])), ["acme:2 committed"]);
   const twice = sent.filter(({ id }) => id === 2);
   assert.deepEqual(sent[0], { id: 1, request_id: sent[0]?.request_id });
