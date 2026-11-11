@@ -41,7 +41,7 @@ async function inferSingleParticipantName(app: App, deps: ServerDeps, sessionId:
 }
 
 function withSpeakerName(item: Item, name: string): Item {
-  if (!isUserItem(item) || !name.trim()) return item;
+  if (!isUserItem(item) || item.body.sourceRole === "agent" || !name.trim()) return item;
   if (typeof item.body.name === "string" && item.body.name.trim()) return item;
   return { ...item, body: { ...item.body, name } };
 }
