@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { renderAgentApis } from "../src/api/agent-api-catalog.ts";
-import { UNATTENDED_ADMIN_GRANTS } from "../src/api/control-service.ts";
 import { findRoute } from "../src/api/routes/route.ts";
 import { apiRoutes, rawRoutes } from "../src/api/routes/index.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
@@ -16,10 +15,11 @@ function advertised(): Array<{ method: string; path: string }> {
       { swarmsEnabled: true, personasEnabled: true },
     ),
     renderAgentApis(
-      { ...base, grants: [...UNATTENDED_ADMIN_GRANTS] },
-      { isAdmin: false },
-      { swarmsEnabled: false, personasEnabled: false },
+      { ...base, liveActor: true, triggered: true, memory: { read: ["personal:U1"], write: "personal:U1" } },
+      { isAdmin: true },
+      { swarmsEnabled: true, personasEnabled: true },
     ),
+    renderAgentApis({ ...base }, { isAdmin: false }, { swarmsEnabled: false, personasEnabled: false }),
   ];
   return listings.flatMap((listing) =>
     listing.endpoints.flatMap(({ method, path }) => {

@@ -225,13 +225,10 @@ export function createMessagingMethods(
       if (patch.runtime !== undefined) await validateRuntime({ ...before, ...patch });
       if (patch.schedule) validateUserSchedule(patch.schedule);
       await trialBeforeSave(patch.script, patch.schedule, trial);
-      const grantsReaffirmed = patch.unattendedGrants !== undefined;
-      const guardedPatch =
-        (before.unattendedGrants?.length ?? 0) > 0 && !grantsReaffirmed ? { ...patch, unattendedGrants: [] } : patch;
-      const updated = await deps.crons.update(id, guardedPatch);
+      const updated = await deps.crons.update(id, patch);
       h.recordAudit({
         at: Date.now(),
-        principalId: before.owner,
+        principalId: patch.owner ?? before.owner,
         action: "cron_update",
         resource: id,
         scopeLabel: before.ownerScopeId,
@@ -546,7 +543,7 @@ export function createMessagingMethods(
         (await identityMembers()).find((member) => personKey(member.principalId) === personKey(principalId)) ?? null
       );
     },
-    loopAdministration: (actorId, loops) => loopAdministration(deps, actorId, loops),
+    loopAdministration: (actor, loops) => loopAdministration(deps, actor, loops),
     samePerson(a, b) {
       return samePersonInDirectory(deps.directory, a, b);
     },

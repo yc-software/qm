@@ -35,7 +35,7 @@ function claims(): CapabilityClaims {
 async function setup() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "cron-script-")) }));
   await selectDefaultSandbox(built, OWNER, HOME);
-  const control = createControlService(built.app, built.scheduler, built.admin);
+  const control = createControlService(built.app, built.scheduler);
   return { built, control };
 }
 

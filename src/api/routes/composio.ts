@@ -2,7 +2,7 @@ import { hasSlackAccount } from "./slack-composio.ts";
 import { slackReply } from "./slack-reply.ts";
 import { nativeSlackConfigured, nativeSlackConnection } from "./slack-native.ts";
 import { isBackendCredential } from "../../credentials/keychain.ts";
-import { livePersonCapability } from "../artifact-share.ts";
+import { livePersonCapability, personAtKeyboard } from "../artifact-share.ts";
 import { verifySignedPayload } from "../../auth/signed-token.ts";
 import { canonicalPerson, personIds, samePerson } from "../../directory/person.ts";
 import { PrincipalLinkError } from "../../identity/principal-links.ts";
@@ -341,7 +341,7 @@ async function connections(ctx: ApiCtx): Promise<void> {
 }
 
 async function disconnect(ctx: ApiCtx): Promise<void> {
-  if ((ctx.capability && !livePersonCapability(ctx.capability)) || ctx.actor?.imp)
+  if ((ctx.capability && !personAtKeyboard(ctx.capability)) || ctx.actor?.imp)
     return sendJson(ctx.res, 403, { error: "human_consent_required" });
   const access = await credential(ctx);
   if (!access) return;

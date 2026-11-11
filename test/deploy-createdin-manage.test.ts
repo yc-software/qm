@@ -402,6 +402,37 @@ test("a Slack bot's turn in the creation channel gets neither git write nor mana
   }
 });
 
+test("bot work that runs as a shared system actor cannot republish, open up or share that actor's apps", async () => {
+  const { f } = await setup();
+  try {
+    const actor = "system:ambient:default-org";
+    const ownerScopeId = scopeId("personal", actor);
+    const files = [{ path: "server.js", data: "console.log('ambient')" }];
+    const own = await f.app.deploy({
+      ownerScopeId,
+      createdBy: actor,
+      entrypoint: "node server.js",
+      files,
+      name: "ambient-app",
+    });
+    const asBot = { createdBy: actor, botActor: true };
+    const republish = f.deploy.deployOrUpdate({
+      ownerScopeId,
+      ...asBot,
+      entrypoint: "node server.js",
+      files,
+      name: "ambient-app",
+    });
+    await assert.rejects(republish, /not authorized/);
+    await assert.rejects(f.deploy.setDeploymentPublic(own.id, true, asBot), /only the owner/);
+    await assert.rejects(f.deploy.shareDeployment(own.id, scopeId("personal", "U2"), "read", asBot), /only the owner/);
+    assert.equal((await f.deploy.getDeployment(own.id))?.currentVersion, own.currentVersion);
+    assert.deepEqual(await f.deploy.deploymentGrantees(own.id), []);
+  } finally {
+    await f.close();
+  }
+});
+
 test("authority follows the person: a creation-channel member manages the app from their DM (web routes + share); a non-member may not", async () => {
   const { f, d } = await setup();
   try {

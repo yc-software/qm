@@ -111,7 +111,8 @@ test("batched loop administration preserves scope rules and observes membership 
       { owner: "other", ownerScopeId: "channel:C_PUBLIC" },
       { owner: "member", ownerScopeId: "group:unknown" },
     ] as Loop[];
-    const expected = await Promise.all(cases.map((loop) => canAdministerLoop(built.app, loop, "member")));
+    const member = { actorId: "member" };
+    const expected = await Promise.all(cases.map((loop) => canAdministerLoop(built.app, loop, member)));
     assert.deepEqual(expected, [true, true, false, true, true, false, false]);
     const getMany = built.directory.getMany.bind(built.directory);
     let reads = 0;
@@ -119,10 +120,13 @@ test("batched loop administration preserves scope rules and observes membership 
       reads++;
       return getMany(ids);
     };
-    assert.deepEqual(await built.app.loopAdministration("member", [...cases, ...cases]), [...expected, ...expected]);
+    assert.deepEqual(await built.app.loopAdministration(member, [...cases, ...cases]), [...expected, ...expected]);
     assert.equal(reads, 1);
     await built.projects.removeMember(project.id, "owner", "member");
-    assert.equal((await built.app.loopAdministration("member", cases))[3], false);
+    assert.equal((await built.app.loopAdministration(member, cases))[3], false);
+    const ambient = { owner: "system:ambient:acme", ownerScopeId: "channel:C_PUBLIC" } as Loop;
+    const ambientCaller = { actorId: "system:ambient:acme", botActor: true };
+    assert.deepEqual(await built.app.loopAdministration(ambientCaller, [ambient]), [false]);
   } finally {
     await built.runtime.stop();
   }
