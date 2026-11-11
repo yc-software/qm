@@ -423,14 +423,7 @@ function parseSessionPatch(b: Record<string, unknown>): { patch: SessionPatch } 
 async function patchSession(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
   const id = ctx.params.id!;
-  const b = body as {
-    principalId?: unknown;
-    title?: unknown;
-    archived?: unknown;
-    pinned?: unknown;
-    color?: unknown;
-    unread?: unknown;
-  };
+  const b = isObj(body) ? body : {};
   const principalId = typeof b.principalId === "string" ? b.principalId : null;
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
   const parsed = parseSessionPatch(b);
