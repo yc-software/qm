@@ -138,6 +138,8 @@ export function pauseStampAfterToolCall(
   return async () => (endedOnPurpose(ref) ? { terminate: true } : undefined);
 }
 
+const APP_EDIT_TOOL_NAMES = new Set(["app_files", "apps", "execute", "skills", "files", "history"]);
+
 export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions): ToolDefinition[] {
   const controlTools = !!opts?.controlTools;
   const surfaceTools = !!opts?.surfaceTools;
@@ -204,10 +206,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   ];
   const { inline, inlineTools, connectorTools } = mcpTools(kit, new Set(tools.map((t) => t.name)));
   tools.push(...inlineTools, ...connectorTools);
-  const active = tools.filter((t) =>
-    opts?.readOnly
-      ? READ_ONLY_TOOL_NAMES.has(t.name) || inline.has(t.name) || connectorTools.includes(t)
-      : !(opts?.memoryNotebookOnly && SCHEDULING_TOOL_NAMES.has(t.name)),
+  const active = tools.filter(
+    (t) =>
+      (!ref.current?.appFiles || APP_EDIT_TOOL_NAMES.has(t.name)) &&
+      (opts?.readOnly
+        ? READ_ONLY_TOOL_NAMES.has(t.name) || inline.has(t.name) || connectorTools.includes(t)
+        : !(opts?.memoryNotebookOnly && SCHEDULING_TOOL_NAMES.has(t.name))),
   );
   const clientNames = new Set(clientTools.map((tool) => tool.name));
   return active.map((tool) => {
