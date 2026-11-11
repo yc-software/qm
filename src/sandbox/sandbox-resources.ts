@@ -269,7 +269,7 @@ export function createSandboxResources(opts: {
     async retire(actorId, id, botActor) {
       await initialize();
       const record = await agentRecord(actorId, id);
-      if (!(await personOrOwningBot({ botActor }, async () => samePerson(record.createdBy, actorId))))
+      if (!(await personOrOwningBot({ actorId, botActor }, async () => samePerson(record.createdBy, actorId))))
         throw new SandboxAccessError("a Slack bot's turn can retire only a computer it created");
       await opts.lock.withLock(`sandbox-resource:${id}`, () =>
         opts.lock.withLock(`sandbox-default:${record.ownerScopeId}`, async () => {
