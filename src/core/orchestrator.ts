@@ -190,6 +190,7 @@ import {
 } from "./orchestrator/admit.ts";
 import { resolveTurnRuntimeAuth } from "./orchestrator/turn-runtime.ts";
 import { startStallWatchdog } from "./orchestrator/stall-watchdog.ts";
+import { appSourceShown } from "./orchestrator/app-source.ts";
 import { openSegmentGoal, segmentEnvironment } from "./orchestrator/run-segment.ts";
 import { selectTurnResult, startMemoryCapture } from "./orchestrator/settle.ts";
 import { replayRecordedAnswer } from "./orchestrator/turn-replay.ts";
@@ -2126,6 +2127,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           },
           continuation?: { history: Item[] },
         ) => {
+          const appSource = await appSourceShown(baseTools.appFiles, continuation?.history ?? history);
           const { recall, snapshot, guidance, environment, silentResume } = segmentEnvironment({
             recalled,
             continuation,
@@ -2145,6 +2147,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             memoryHeading,
             inboundIssues,
             documentInputs,
+            appSource: appSource.text,
             continueTurn,
           });
           let recordedRecall = false;
@@ -2170,6 +2173,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 if (snapshot.record) body.rosterSnapshot = snapshot.record;
                 if (guidance) body.guidanceSnapshot = guidance.record;
                 if (environment) body.environment = environment;
+                if (appSource.record) body.appSource = appSource.record;
                 if (recall.text) body.memoryRecall = recall.record;
                 if (!continuation && recallOutcomes.length) body.memoryRecallOutcomes = recallOutcomes;
               }

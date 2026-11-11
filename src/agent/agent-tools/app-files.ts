@@ -4,7 +4,7 @@ import { normalizeRelPath } from "../../deploy/deploy-fs.ts";
 import type { SourceSaved } from "../../deploy/deploy-service.ts";
 import { inlineChars, inlineTokensOf } from "../../sessions/tool-output.ts";
 import type { AppFiles } from "../../tools/app-files.ts";
-import { tryDecodeUtf8 } from "../../tools/primitives.ts";
+import { tryDecodeUtf8 } from "../../util/text.ts";
 import { errMessage } from "../../util/errors.ts";
 import { text, type ToolKit } from "./kit.ts";
 import { previousPublishFailure } from "./workspace.ts";

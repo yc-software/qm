@@ -33,7 +33,7 @@ import { errMessage, reportFailure, swallow } from "../util/errors.ts";
 import { uuidSchema } from "../util/ids.ts";
 import { claimThenBind } from "../tenants/claim.ts";
 import { assertAppLabelFits } from "../tenants/settings.ts";
-import { createLiveEdits, type LiveEditSaved, type SavedApp } from "./live-edits.ts";
+import { createLiveEdits, type LiveEditSaved } from "./live-edits.ts";
 import { ambientTenant, type Tenant } from "../tenants/context.ts";
 
 export interface DeployFile {
@@ -62,6 +62,11 @@ export type Reach =
   { status: "ok"; id: string; endpoint: DeployEndpoint } | { status: "denied" } | { status: "not_found" };
 
 type PublishedDeployment = Deployment & { liveEdit?: LiveEditSaved };
+
+export interface AppSourceReader {
+  commit: string;
+  source(paths?: string[], commit?: string): Promise<DeploymentSource>;
+}
 
 export interface DeploymentSource {
   commit: string;
@@ -126,7 +131,12 @@ export interface DeployService {
   deploymentLogs(idOrName: string, opts: { tailLines: number }): Promise<string | null>;
   gitRepoPath(idOrName: string): Promise<string | null>;
   pushGit<T>(id: string, runReceivePack: () => Promise<{ result: T; ok: boolean }>, actor?: string): Promise<T>;
-  source(idOrName: string, paths?: string[]): Promise<DeploymentSource | null>;
+  source(idOrName: string, paths?: string[], commit?: string): Promise<DeploymentSource | null>;
+  sourceReader(
+    idOrName: string,
+    caller: Pick<CapabilityClaims, "actorId" | "botActor">,
+    actingScopeId?: ScopeId,
+  ): Promise<AppSourceReader | null>;
   editSource(
     idOrName: string,
     actor: string,
@@ -340,7 +350,28 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     return v;
   };
 
-  const sourceOf = async (id: string, saved: SavedApp, paths: string[] = []): Promise<DeploymentSource> => ({
+  const getDeployment = async (idOrName: string) =>
+    (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
+
+  async function sourceReaderOf(d: Deployment): Promise<AppSourceReader | null> {
+    const head = await liveEdits.savedHeadOf(d);
+    if (!head) return null;
+    const trees = new Map<string, Promise<DeploymentSource["tree"]>>();
+    return {
+      commit: head.commit,
+      async source(paths, commit = head.commit) {
+        const tree = trees.get(commit) ?? deps.deployStore.commitTreeOf(d.id, commit);
+        trees.set(commit, tree);
+        return sourceOf(d.id, { commit, tree: await tree }, paths);
+      },
+    };
+  }
+
+  const sourceOf = async (
+    id: string,
+    saved: Pick<DeploymentSource, "commit" | "tree">,
+    paths: string[] = [],
+  ): Promise<DeploymentSource> => ({
     commit: saved.commit,
     tree: saved.tree.map(({ path, sha, size }) => ({ path, sha, size })),
     files: (
@@ -530,9 +561,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       });
     },
 
-    async getDeployment(idOrName) {
-      return (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
-    },
+    getDeployment,
 
     listDeployments() {
       return deps.deployStore.list();
@@ -810,10 +839,15 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       });
     },
 
-    async source(idOrName, paths) {
-      const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
-      const saved = d ? await liveEdits.savedOf(d) : null;
-      return d && saved ? sourceOf(d.id, saved, paths) : null;
+    async source(idOrName, paths, commit) {
+      const d = await getDeployment(idOrName);
+      const reader = d ? await sourceReaderOf(d) : null;
+      return reader ? reader.source(paths, commit) : null;
+    },
+
+    async sourceReader(idOrName, caller, actingScopeId) {
+      const d = await getDeployment(idOrName);
+      return d && (await canManage(d, caller, actingScopeId)) ? sourceReaderOf(d) : null;
     },
 
     async editSource(idOrName, actor, edit) {
@@ -961,7 +995,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     },
 
     async canManageDeployment(idOrName, caller, actingScopeId) {
-      const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
+      const d = await getDeployment(idOrName);
       if (!d) return false;
       return canManage(d, caller, actingScopeId);
     },

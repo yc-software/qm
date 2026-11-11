@@ -67,7 +67,7 @@ function baseMime(m: string): string {
   return (m.split(";")[0] ?? "").trim().toLowerCase();
 }
 
-function isTextMime(mimetype: string): boolean {
+export function isTextMime(mimetype: string): boolean {
   return (
     mimetype.startsWith("text/") ||
     mimetype === "application/json" ||
