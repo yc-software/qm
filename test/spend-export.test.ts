@@ -101,7 +101,7 @@ test("deployment export: lists the person's live Apps page apps with their addre
   const s = fixture({
     pageViews: {
       record: async () => {},
-      lastViews: async (viewer) => new Map(viewer === "alice@example.com" ? [["live", 7]] : []),
+      lastViews: async (_tenant, viewer) => new Map(viewer === "alice@example.com" ? [["live", 7]] : []),
     },
   });
   try {

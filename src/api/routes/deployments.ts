@@ -1603,7 +1603,7 @@ async function visibleDeploymentsExport(ctx: BaseCtx): Promise<void> {
   const [visible, all, viewed] = await Promise.all([
     app.listDeploymentsForViewer({ actorId: principalId }),
     app.listDeployments(),
-    deps.appPageViews?.lastViews(principalId) ?? new Map<string, number>(),
+    deps.appPageViews?.lastViews(tenantOf(ctx), principalId) ?? new Map<string, number>(),
   ]);
   const byId = new Map(all.map((d) => [d.id, d]));
   const deployments = visible

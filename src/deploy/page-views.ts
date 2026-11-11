@@ -1,6 +1,7 @@
 import { durableMapTenancy } from "../persistence/durable-map.ts";
 import { inboundIndexes } from "../tenants/lookup.ts";
 import { createPgPool, type PgMigrationDefinition } from "../persistence/pg-pool.ts";
+import type { Tenant } from "../tenants/context.ts";
 
 export const NAME_INDEX = "deployments_name_unique";
 
@@ -100,7 +101,7 @@ export interface AppPageView {
 
 export interface AppPageViewLog {
   record(view: AppPageView): Promise<void>;
-  lastViews(viewer: string): Promise<Map<string, number>>;
+  lastViews(tenant: Tenant, viewer: string): Promise<Map<string, number>>;
 }
 
 const MAX_PATH = 2048;
@@ -112,7 +113,7 @@ const DROP_REPORT_INTERVAL_MS = 60_000;
 const clip = (value: string | null, max: number): string | null => (value === null ? null : value.slice(0, max));
 
 export function createPostgresAppPageViewLog(connectionString: string): AppPageViewLog {
-  const { q } = createPgPool(connectionString, DEPLOYMENT_TABLES);
+  const pg = createPgPool(connectionString, DEPLOYMENT_TABLES);
   let inFlight = 0;
   let dropped = 0;
   let lastDropReport = 0;
@@ -129,7 +130,7 @@ export function createPostgresAppPageViewLog(connectionString: string): AppPageV
       }
       inFlight++;
       try {
-        await q(
+        await pg.q(
           `INSERT INTO app_page_views(deployment_id, version, viewer, auth_mode, at, path, ip, user_agent)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
           [
@@ -147,11 +148,13 @@ export function createPostgresAppPageViewLog(connectionString: string): AppPageV
         inFlight--;
       }
     },
-    async lastViews(viewer) {
-      const rows = await q(
-        "SELECT deployment_id, max(at) AS at FROM app_page_views WHERE viewer = $1 GROUP BY deployment_id",
-        [viewer],
-      );
+    async lastViews(tenant, viewer) {
+      const rows = await pg
+        .forTenant(tenant)
+        .q(
+          "SELECT deployment_id, max(at) AS at FROM app_page_views WHERE tenant_id = $1 AND viewer = $2 GROUP BY deployment_id",
+          [tenant.id, viewer],
+        );
       return new Map(rows.map((r) => [String(r.deployment_id), Number(r.at)]));
     },
   };
