@@ -158,23 +158,16 @@ function rosterMatches(current: readonly string[], expected: readonly string[]):
   return actual.size === frozen.size && [...actual].every((id) => frozen.has(id));
 }
 
-function botMayDirect(swarm: Swarm, memberId: string, actorId: string): boolean {
-  if (swarm.template.botActor !== true) return false;
-  if (!swarm.personUsedComputers && swarm.messages.every((message) => message.actorId === actorId)) return true;
-  let lineage = memberById(swarm, memberId);
-  while (lineage?.parentId && lineage.parentId !== swarm.id) lineage = memberById(swarm, lineage.parentId);
-  const head = lineage?.parentId ? lineage : undefined;
-  const spawn = head && swarm.messages.find((message) => message.audience.includes(head.id));
-  return spawn !== undefined && spawn.actorId !== actorId;
-}
-
-function botMayWorkIn(swarm: Swarm, threadRef: string, actorId: string): boolean {
-  const { rootId, memberId } = threadIdentity(threadRef, "");
-  return botMayDirect(swarm, rootId === swarm.id ? memberId : swarm.id, actorId);
+function botMayDirect(swarm: Swarm, actorId: string): boolean {
+  return (
+    swarm.template.botActor === true &&
+    !swarm.personUsedComputers &&
+    swarm.messages.every((message) => message.actorId === actorId)
+  );
 }
 
 function assertCallerMayDirect(caller: SwarmCaller, auth: Authority, swarm: Swarm): void {
-  if (caller.kind === "agent" && caller.claims.botActor && !botMayDirect(swarm, auth.memberId, auth.actorId))
+  if (caller.kind === "agent" && caller.claims.botActor && !botMayDirect(swarm, auth.actorId))
     throw new Error("a Slack bot's turn cannot direct a person's swarm");
 }
 
@@ -252,7 +245,7 @@ export function createSwarmService(deps: {
   const cutOffBot = async (swarm: Swarm, reason: string): Promise<void> => {
     if (!swarm.template.botActor) return;
     const lostSwarm = (run: Run | null): boolean =>
-      run?.request.botActor === true && !botMayWorkIn(swarm, run.request.conversation.threadRef, run.request.actor.id);
+      run?.request.botActor === true && !botMayDirect(swarm, run.request.actor.id);
     const active = await runs.activeForThreads(swarm.members.map((member) => member.threadRef));
     await Promise.all(
       [...active.values()]
@@ -446,7 +439,7 @@ export function createSwarmService(deps: {
         const control = controlState(swarm, recipient.id);
         const failed = recipient.state === "failed" || control === "stopped" || swarmExpired(swarm);
         if (!failed && control === "paused") continue;
-        if (failed || (swarm.template.botActor && !botMayDirect(swarm, recipient.id, swarm.template.actor.id))) {
+        if (failed || (swarm.template.botActor && !botMayDirect(swarm, swarm.template.actor.id))) {
           await step(() =>
             store.update(swarm.id, (current) => {
               const notifications = current.messages.find((item) => item.id === message.id)!.notifications;
@@ -686,7 +679,6 @@ export function createSwarmService(deps: {
       const previous = existing?.spawnRequests[key];
       if (previous) {
         if (previous.signature !== fingerprint) throw new Error("requestId reused with different content");
-        await cutOffBot(existing!, sentWork);
         return existing!.members.filter((member) => previous.memberIds.includes(member.id)).map(view);
       }
       if (existing && input.backend !== undefined) throw new Error("backend is only allowed on initial swarm creation");
@@ -733,6 +725,8 @@ export function createSwarmService(deps: {
           if (next.lifetimeMs !== undefined) swarm.expiresAt = swarm.createdAt + next.lifetimeMs;
         }
         assertCallerMayDirect(caller, auth, swarm);
+        if (swarm.template.botActor && !(caller.kind === "agent" && caller.claims.botActor))
+          throw new Error("a person's turn cannot add workers to a swarm a Slack bot started");
         assertSwarmOpen(swarm);
         const parent = swarm.members.find((member) => member.id === auth.memberId)!;
         if (parent.depth >= swarm.settings.depth) throw new Error("swarm depth budget exhausted");
@@ -789,7 +783,6 @@ export function createSwarmService(deps: {
       }
       if (updated.spawnRequests[key]!.signature !== fingerprint)
         throw new Error("requestId reused with different content");
-      await cutOffBot(updated, sentWork);
       const ids = updated.spawnRequests[key]!.memberIds;
       return updated.members.filter((member) => ids.includes(member.id)).map(view);
     },
@@ -907,7 +900,8 @@ export function createSwarmService(deps: {
     async botMayUseComputer(computer, turn) {
       if (!computer.swarmId) return true;
       const swarm = await store.get(computer.swarmId);
-      return swarm !== null && botMayWorkIn(swarm, turn.threadRef, turn.actorId);
+      if (!swarm) return false;
+      return botMayDirect(swarm, turn.actorId);
     },
     async notePersonUse(computer) {
       const swarm = computer.swarmId ? await store.get(computer.swarmId) : null;
@@ -982,7 +976,7 @@ export function createSwarmService(deps: {
       const target = input.swarm ?? (session && turnTarget(session));
       if (!target) return [];
       const swarm = await store.get(target.swarmId);
-      if (!swarm || (input.botActor && !botMayDirect(swarm, target.recipientId, input.actor.id))) return [];
+      if (!swarm || (input.botActor && !botMayDirect(swarm, input.actor.id))) return [];
       const mine = swarm.messages.filter((message) => {
         const state = message.notifications[target.recipientId]?.state;
         return state === "mailbox" || (state === "queued" && !options.mailboxOnly);
