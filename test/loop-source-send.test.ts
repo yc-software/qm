@@ -85,6 +85,12 @@ function slackSpy(fail?: string): { calls: SlackCall[]; factory: (token: string)
   };
 }
 
+const decodedMime = (raw: string): string => {
+  const qp = Buffer.from(raw, "base64url").toString("latin1").replaceAll("\r\n", "\n").replaceAll("=\n", "");
+  const bytes = qp.replace(/=([0-9A-F]{2})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+  return Buffer.from(bytes, "latin1").toString("utf8");
+};
+
 test("gmail reply MIME threads correctly and survives a UTF-8 body", async () => {
   const mime = (await buildGmailReplyMime(gmailItem, { body: "Confirmed — see attached. ✅" }, undefined))!.toString();
   assert.match(mime, /^To: ada@example\.com\r$/m);
@@ -92,8 +98,9 @@ test("gmail reply MIME threads correctly and survives a UTF-8 body", async () =>
   assert.match(mime, /^In-Reply-To: <msg-1@mail>\r$/m);
   assert.match(mime, /^References: <msg-1@mail>\r$/m);
   assert.match(mime, /^Content-Type: multipart\/alternative;/m);
-  assert.ok(mime.includes(Buffer.from("Confirmed — see attached. ✅").toString("base64")), "plain part");
-  assert.ok(mime.includes(Buffer.from('<div dir="ltr">Confirmed — see attached. ✅</div>').toString("base64")), "html");
+  const decoded = decodedMime(Buffer.from(mime).toString("base64url"));
+  assert.ok(decoded.includes("\nConfirmed — see attached. ✅\n"), "plain part");
+  assert.ok(decoded.includes('<div dir="ltr">Confirmed — see attached. ✅</div>'), "html");
 });
 
 test("subjects keep an existing Re: and non-ASCII subjects get RFC 2047 encoding", async () => {
@@ -150,8 +157,8 @@ test("gmail send posts base64url raw with the thread id", async () => {
   const body = JSON.parse(String(calls[2]!.init.body)) as { raw: string; threadId: string };
   assert.equal(body.threadId, "t1");
   assert.doesNotMatch(body.raw, /[+/=]/);
-  const sent = Buffer.from(body.raw, "base64url").toString("utf8").replaceAll("\r\n", "\n");
-  assert.ok(sent.includes("Confirmed.\n\nOn Tue, Nov 10, 2026 at 12:36 PM Ada <ada@example.com> wrote:"));
+  const sent = decodedMime(body.raw);
+  assert.ok(sent.includes("Confirmed.\n\nOn Tue, Nov 10, 2026 at 12:36\u202fPM Ada <ada@example.com> wrote:"));
   assert.ok(sent.includes("> Numbers attached.\n>> older"), "the original is quoted under the reply");
 });
 
@@ -177,7 +184,7 @@ test("the held proposal is what goes out when the action carries no draft", asyn
   let sent = "";
   const fetchImpl = gmailFetch((init) => {
     const raw = (JSON.parse(String(init.body)) as { raw: string }).raw;
-    sent = Buffer.from(raw, "base64url").toString("utf8");
+    sent = decodedMime(raw);
     return new Response("{}", { status: 200 });
   });
   const held = item(
@@ -192,7 +199,7 @@ test("the held proposal is what goes out when the action carries no draft", asyn
     {},
   );
   assert.equal(result.ok, true);
-  assert.ok(sent.replaceAll("\r\n", "\n").includes("the held draft\n\nOn "));
+  assert.ok(sent.includes("the held draft\n\nOn "));
 });
 
 test("a missing connector reads as not_connected, not an exception", async () => {

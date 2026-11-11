@@ -106,7 +106,7 @@ export async function buildGmailReplyMime(
     subject: replySubject(item, parsed),
     ...(rfcId ? { inReplyTo: rfcId, references: rfcId } : {}),
     ...gmailBodyParts(parsed.body, original, viewerZone),
-    textEncoding: "base64",
+    textEncoding: "quoted-printable",
   })
     .compile()
     .build();

@@ -23,7 +23,8 @@ test("drafted mail gets a composer-shaped html mirror with clickable links", () 
     undefined,
   );
   assert.ok(text.includes("Takes ~5 minutes"), "plain part keeps the body");
-  assert.ok(html.startsWith('<div dir="ltr">Hi Alice,<br><br>Takes ~5 minutes:<br>'), "breaks survive");
+  assert.ok(html.startsWith('<div dir="ltr">Hi Alice,<div><br></div><div>Takes ~5 minutes:</div>'), "line divs");
+  assert.equal(gmailBodyParts(`${"word ".repeat(16)}end`, undefined, undefined).text.split("\n")[0]!.length, 74);
   assert.ok(html.includes('<a href="https://forms.example.com/abc123">https://forms.example.com/abc123</a>'));
 });
 
@@ -48,17 +49,21 @@ test("replies quote the original the way Gmail's composer does", () => {
     [
       part(
         "text/html",
-        "<html><head><style>p{}</style></head><body><!-- c --><div>Caf\u00e9</div><p>para</p>a<br>b</body></html>",
+        '<html><head><style>p{}</style></head><body><!-- c --><div>Caf\u00e9</div><p>para</p>a<br><a href="u">b</a></body></html>',
       ),
     ],
   );
   const { text, html } = gmailBodyParts("Thanks", original, "America/Los_Angeles");
   assert.equal(
     text,
-    "Thanks\n\nOn Tue, Nov 10, 2026 at 6:28 PM Ann Lee <ann@x.test> wrote:\n\n> Caf\u00e9\n> para\n> a\n> b",
+    "Thanks\n\nOn Tue, Nov 10, 2026 at 6:28\u202fPM Ann Lee <ann@x.test> wrote:\n\n> Caf\u00e9\n> para\n> a\n> b",
   );
   assert.ok(html.includes('Ann Lee &lt;<a href="mailto:ann@x.test">ann@x.test</a>&gt; wrote:<br></div>'));
-  assert.ok(html.endsWith('padding-left:1ex"><div>Caf\u00e9</div><p>para</p>a<br>b</blockquote></div>'), "bare html");
+  assert.ok(
+    html.endsWith(
+      'padding-left:1ex"><div>Caf\u00e9</div><p>para</p>a<br><a href="u" target="_blank">b</a></blockquote></div>',
+    ),
+  );
   const bare = gmailBodyParts("Ok", message([{ name: "From", value: "a@b.test" }], []), undefined);
   assert.ok(bare.text.includes("On <a@b.test> wrote:\n\n>"), "nameless sender keeps brackets; empty body still quoted");
 });

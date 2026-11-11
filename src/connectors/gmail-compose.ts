@@ -18,7 +18,37 @@ const linkedLine = (line: string): string =>
     )
     .join("");
 
-const htmlMirror = (text: string): string => `<div dir="ltr">${text.split("\n").map(linkedLine).join("<br>")}</div>`;
+const GMAIL_PLAIN_WIDTH = 76;
+
+const spaced = (line: string): string => {
+  const kept = line.replaceAll("  ", "\u00a0 ");
+  return kept.endsWith(" ") ? `${kept.slice(0, -1)}\u00a0` : kept;
+};
+
+const htmlLine = (line: string): string => (line ? linkedLine(spaced(line)) : "<br>");
+
+const htmlMirror = (text: string): string => {
+  const [first = "", ...rest] = text.split("\n");
+  return `<div dir="ltr">${htmlLine(first)}${rest.map((line) => `<div>${htmlLine(line)}</div>`).join("")}</div>`;
+};
+
+function wrapped(line: string): string[] {
+  const lines: string[] = [];
+  let current = "";
+  for (const word of line.split(" ")) {
+    if (current && current.length + 1 + word.length > GMAIL_PLAIN_WIDTH) {
+      lines.push(current);
+      current = word;
+    } else current = current ? `${current} ${word}` : word;
+  }
+  return [...lines, current];
+}
+
+const plainWrapped = (text: string): string =>
+  text
+    .split("\n")
+    .flatMap((line) => (line.startsWith(">") ? [line] : wrapped(line.trimEnd())))
+    .join("\n");
 
 const quoteLine = (line: string): string => {
   if (line.startsWith(">")) return `>${line}`;
@@ -38,17 +68,35 @@ function textOf(nodes: ChildNode[]): string {
     .join("");
 }
 
+const hidden = (node: ChildNode): boolean =>
+  node.type === ElementType.Comment || (isTag(node) && HIDDEN_HTML.has(node.name));
+
+const opensNewTab = (node: ChildNode): boolean =>
+  isTag(node) && node.name === "a" && "href" in node.attribs && !("target" in node.attribs);
+
 function bodyMarkup(html: string): { markup: string; text: string } {
-  const doc = parseDocument(html);
-  const dropped = DomUtils.filter(
-    (node) => node.type === ElementType.Comment || (isTag(node) && HIDDEN_HTML.has(node.name)),
-    doc.children,
-  );
-  for (const node of dropped) DomUtils.removeElement(node);
+  const doc = parseDocument(html, { withStartIndices: true, withEndIndices: true });
   const body = DomUtils.findOne((el) => el.name === "body", doc.children);
   const html2 = DomUtils.findOne((el) => el.name === "html", doc.children);
   const root = body?.children ?? html2?.children ?? doc.children;
-  return { markup: DomUtils.getOuterHTML(root, { encodeEntities: "utf8" }), text: textOf(root) };
+  const edits = DomUtils.filter((node) => hidden(node) || opensNewTab(node), root);
+  let markup = "";
+  let at = root[0]?.startIndex ?? 0;
+  for (const node of edits) {
+    const start = node.startIndex ?? at;
+    if (start < at) continue;
+    if (hidden(node)) {
+      markup += html.slice(at, start);
+      at = (node.endIndex ?? start) + 1;
+    } else if (isTag(node)) {
+      const tagEnd = (node.children[0]?.startIndex ?? (node.endIndex ?? start) - 3) - 1;
+      markup += `${html.slice(at, tagEnd)} target="_blank"`;
+      at = tagEnd;
+    }
+  }
+  markup += html.slice(at, (root.at(-1)?.endIndex ?? html.length - 1) + 1);
+  for (const node of edits.filter(hidden)) DomUtils.removeElement(node);
+  return { markup, text: textOf(root) };
 }
 
 const isOffset = (token: string): boolean =>
@@ -66,7 +114,7 @@ function gmailDate(header: string, viewerZone: string | undefined): string {
     year: "numeric",
   });
   const time = at.toLocaleTimeString("en-US", { timeZone, hour: "numeric", minute: "2-digit" });
-  return `${day} at ${time.replaceAll("\u202f", " ")} `;
+  return `${day} at ${time.replaceAll(" ", "\u202f")} `;
 }
 
 function attribution(payload: Record<string, unknown>, viewerZone: string | undefined): { text: string; html: string } {
@@ -81,22 +129,14 @@ function attribution(payload: Record<string, unknown>, viewerZone: string | unde
   };
 }
 
-const trimNewlines = (text: string): string => {
-  let start = 0;
-  let end = text.length;
-  while (start < end && text[start] === "\n") start++;
-  while (end > start && text[end - 1] === "\n") end--;
-  return text.slice(start, end);
-};
-
 function gmailQuote(message: Record<string, unknown>, viewerZone: string | undefined): GmailParts {
   const payload = isObj(message.payload) ? message.payload : {};
   const rich = gmailPartText(payload, "text/html");
   const parsed = rich ? bodyMarkup(rich) : undefined;
-  const plain = trimNewlines((gmailPartText(payload) || parsed?.text || "").replaceAll("\r\n", "\n"));
+  const plain = (gmailPartText(payload) || parsed?.text || "").replaceAll("\r\n", "\n");
   const attr = attribution(payload, viewerZone);
   return {
-    text: `${attr.text}\n\n${plain.split("\n").map(quoteLine).join("\n")}`,
+    text: `${attr.text}\n\n${plainWrapped(plain).split("\n").map(quoteLine).join("\n")}`,
     html:
       `<br><div class="gmail_quote gmail_quote_container"><div dir="ltr" class="gmail_attr">${attr.html}<br></div>` +
       `<blockquote class="gmail_quote" style="margin:0px 0px 0px 0.8ex;border-left:1px solid rgb(204,204,204);padding-left:1ex">${parsed?.markup ?? htmlMirror(plain)}</blockquote></div>`,
@@ -110,7 +150,7 @@ export function gmailBodyParts(
 ): GmailParts {
   const quote = original && gmailQuote(original, viewerZone);
   return {
-    text: quote ? `${body}\n\n${quote.text}` : body,
+    text: quote ? `${plainWrapped(body)}\n\n${quote.text}` : plainWrapped(body),
     html: htmlMirror(body) + (quote?.html ?? ""),
   };
 }
