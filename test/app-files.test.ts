@@ -29,6 +29,7 @@ const STYLES = ".title { color: black; }\n.card { color: black; }\n";
 function harness(opts: { liveEdits?: boolean } = {}) {
   const writes: Array<{ files: Record<string, string>; deletedPaths: string[] }> = [];
   const placed: Array<string | undefined> = [];
+  const audited: Array<{ principalId: string; action: string }> = [];
   const provider: DeployProvider = {
     profile: { managedScaleToZero: true },
     apply: async () => {
@@ -57,7 +58,7 @@ function harness(opts: { liveEdits?: boolean } = {}) {
     ...singleProcessDeps(),
     deployStore,
     provider,
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
+    auditLog: { record: (event) => void audited.push(event), events: async () => [], tail: async () => [] },
     acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
     deployDir: mkdtempSync(join(tmpdir(), "app-files-")),
   });
@@ -108,7 +109,7 @@ function harness(opts: { liveEdits?: boolean } = {}) {
     };
     return { call, results, offered: tools.map((t) => t.name) };
   };
-  return { deploy, deployStore, publish, chat, writes, placed };
+  return { deploy, deployStore, publish, chat, writes, placed, audited };
 }
 
 test("replacements across two files are one save of only those files, and later reads and edits build on it", async () => {
@@ -245,11 +246,14 @@ test("an app with a dev script restarts into it on the first save and hot-reload
 test("on a provider without live edits each change is published as a version, and the result says so", async () => {
   const h = harness({ liveEdits: false });
   const d = await h.publish("notes");
-  const chat = h.chat("notes");
+  await h.deploy.shareDeployment(d.id, scopeId("personal", "U2"), "write", { createdBy: OWNER }, { notify: false });
+  const chat = h.chat("notes", "U2");
 
   const out = await chat.call({ action: "edit", edits: [{ path: "index.html", old: "Notes", new: "My notes" }] });
 
   assert.match(out, /^Saved index\.html and published it as v2\..*takes longer to show/);
+  const { principalId, action } = h.audited.at(-1)!;
+  assert.deepEqual({ principalId, action }, { principalId: "U2", action: "deploy_version" }, "audited to the editor");
   const after = (await h.deployStore.get(d.id))!;
   assert.equal(after.currentVersion, 2);
   assert.equal(h.placed.length, 2, "the app was placed again on the new version");
@@ -261,7 +265,7 @@ test("on a provider without live edits each change is published as a version, an
 test("someone without write access to the app can neither read nor change its files", async () => {
   const h = harness();
   const d = await h.publish("notes");
-  const stranger = h.chat("notes", "U2");
+  const stranger = h.chat("notes", "U3");
 
   for (const params of [
     { action: "list" },

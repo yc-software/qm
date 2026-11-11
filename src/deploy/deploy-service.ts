@@ -320,7 +320,11 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     withDeploymentEnv,
   });
 
-  const publishCommit = async (before: Deployment, commit: string): Promise<DeploymentVersion | null> => {
+  const publishCommit = async (
+    before: Deployment,
+    commit: string,
+    audit: { principalId: string; action: "deploy_git_push" | "deploy_version" },
+  ): Promise<DeploymentVersion | null> => {
     const v = await deps.deployStore.addVersionFromCommit(before.id, commit);
     if (!v) return null;
     await deps.deployStore.deleteDraft(before.id);
@@ -328,8 +332,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     await markVersionRunning(before.id, v.version, endpoint);
     deps.auditLog.record({
       at: Date.now(),
-      principalId: before.createdBy,
-      action: "deploy_git_push",
+      ...audit,
       resource: `${before.id}@v${v.version}`,
       scopeLabel: before.ownerScopeId,
     });
@@ -790,7 +793,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           );
           await withdrawLoanUnlessPublisher(before, actor);
           if (await liveEdits.save(before, actor ?? before.createdBy, { commit: pushed })) return result;
-          await publishCommit(before, pushed);
+          await publishCommit(before, pushed, { principalId: before.createdBy, action: "deploy_git_push" });
         } catch (e) {
           reportFailure("deploy: register pushed version", e, `deployment=${id}`);
           deps.auditLog.record({
@@ -841,7 +844,8 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         const liveEdit = await liveEdits.save(before, actor, { changed, deletedPaths });
         if (liveEdit) return { ...done, liveEdit };
         const commit = await deps.deployStore.commitDraft(before.id, changed, base, deletedPaths);
-        return { ...done, version: (await publishCommit(before, commit))?.version ?? before.currentVersion };
+        const published = await publishCommit(before, commit, { principalId: actor, action: "deploy_version" });
+        return { ...done, version: published?.version ?? before.currentVersion };
       });
     },
 
