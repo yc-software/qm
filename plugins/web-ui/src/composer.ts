@@ -56,7 +56,6 @@ import { clearDraft, newChatDraftKey, saveDraft } from "./drafts";
 import { tip } from "./tooltip";
 import { isCompactLayout } from "./viewport";
 import {
-  LOADOUT_CAP,
   isUltrafastModel,
   presetModelId,
   ultrafastChoice,
@@ -1046,6 +1045,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         saveLoadout(entries, loadoutKey);
       },
       add: addLoadoutEntry,
+      removesSelected: true,
     },
     activeEntry: activeLoadoutEntry,
     apply: applyLoadout,
@@ -1125,8 +1125,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   }
 
   function addLoadoutEntry(option: ModelOption, agent: Agent): void {
-    const current = currentModelOption();
-    if (!current || seededLoadout(current).length >= LOADOUT_CAP) return;
+    if (!currentModelOption()) return;
     applyLoadout({ value: option.value, effort: defaultEffortForModel(option.model), fast: false }, agent);
     composerState.menuQuery = "";
   }
