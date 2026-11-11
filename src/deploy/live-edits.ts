@@ -97,10 +97,15 @@ export function createLiveEdits(deps: LiveEditDeps) {
     return current && draft ? draftVersion(current, draft) : current;
   }
 
-  async function savedOf(d: Deployment): Promise<SavedApp | null> {
+  async function savedHeadOf(d: Deployment) {
     const draft = await store.draftOf(d.id);
     const commit = draft?.commit ?? currentVersionOf(d)?.commit;
-    return commit ? { draft, commit, tree: await store.commitTreeOf(d.id, commit) } : null;
+    return commit ? { draft, commit } : null;
+  }
+
+  async function savedOf(d: Deployment): Promise<SavedApp | null> {
+    const head = await savedHeadOf(d);
+    return head ? { ...head, tree: await store.commitTreeOf(d.id, head.commit) } : null;
   }
 
   async function snapshotOf(id: string, source: SavedSource, saved: SavedApp): Promise<Snapshot> {
@@ -296,5 +301,5 @@ export function createLiveEdits(deps: LiveEditDeps) {
     return published ?? 0;
   }
 
-  return { runningVersion, savedOf, changeOf, save, publishDue };
+  return { runningVersion, savedHeadOf, savedOf, changeOf, save, publishDue };
 }

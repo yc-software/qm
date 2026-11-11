@@ -63,6 +63,11 @@ export type Reach =
 
 type PublishedDeployment = Deployment & { liveEdit?: LiveEditSaved };
 
+export interface AppSourceReader {
+  commit: string;
+  source(paths?: string[], commit?: string): Promise<DeploymentSource>;
+}
+
 export interface DeploymentSource {
   commit: string;
   tree: Array<{ path: string; sha: string; size: number }>;
@@ -126,11 +131,8 @@ export interface DeployService {
   deploymentLogs(idOrName: string, opts: { tailLines: number }): Promise<string | null>;
   gitRepoPath(idOrName: string): Promise<string | null>;
   pushGit<T>(id: string, runReceivePack: () => Promise<{ result: T; ok: boolean }>, actor?: string): Promise<T>;
-  source(
-    idOrName: string,
-    paths?: string[],
-    at?: string | Pick<DeploymentSource, "commit" | "tree">,
-  ): Promise<DeploymentSource | null>;
+  source(idOrName: string, paths?: string[], commit?: string): Promise<DeploymentSource | null>;
+  sourceReader(idOrName: string): Promise<AppSourceReader | null>;
   editSource(
     idOrName: string,
     actor: string,
@@ -343,6 +345,21 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     });
     return v;
   };
+
+  async function sourceReader(idOrName: string): Promise<AppSourceReader | null> {
+    const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
+    const head = d ? await liveEdits.savedHeadOf(d) : null;
+    if (!d || !head) return null;
+    const trees = new Map<string, Promise<DeploymentSource["tree"]>>();
+    return {
+      commit: head.commit,
+      async source(paths, commit = head.commit) {
+        const tree = trees.get(commit) ?? deps.deployStore.commitTreeOf(d.id, commit);
+        trees.set(commit, tree);
+        return sourceOf(d.id, { commit, tree: await tree }, paths);
+      },
+    };
+  }
 
   const sourceOf = async (
     id: string,
@@ -818,17 +835,12 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       });
     },
 
-    async source(idOrName, paths, at) {
-      const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
-      const saved = d
-        ? typeof at === "object"
-          ? { draft: null, ...at }
-          : at
-            ? { draft: null, commit: at, tree: await deps.deployStore.commitTreeOf(d.id, at) }
-            : await liveEdits.savedOf(d)
-        : null;
-      return d && saved ? sourceOf(d.id, saved, paths) : null;
+    async source(idOrName, paths, commit) {
+      const reader = await sourceReader(idOrName);
+      return reader ? reader.source(paths, commit) : null;
     },
+
+    sourceReader,
 
     async editSource(idOrName, actor, edit) {
       const found = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));

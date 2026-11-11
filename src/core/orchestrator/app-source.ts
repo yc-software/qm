@@ -1,5 +1,5 @@
 import { retainedSnapshot } from "../../agent/context-snapshot.ts";
-import type { DeploymentSource } from "../../deploy/deploy-service.ts";
+import type { AppSourceReader, DeploymentSource } from "../../deploy/deploy-service.ts";
 import type { Item } from "../../sessions/items.ts";
 import { inlineChars } from "../../sessions/tool-output.ts";
 import type { AppFiles } from "../../tools/app-files.ts";
@@ -59,10 +59,13 @@ function more(count: number): string {
   return `${count} more paths not shown`;
 }
 
+function minimum(prefix: string, count: number): number {
+  return prefix.length + more(count).length + 2;
+}
+
 function boundedList(prefix: string, values: readonly string[], budget: number): string {
-  const tail = more(values.length);
   const shown: string[] = [];
-  let used = prefix.length + tail.length + 3;
+  let used = minimum(prefix, values.length) + 1;
   for (const value of values) {
     if (used + value.length + 2 > budget) break;
     shown.push(value);
@@ -73,16 +76,16 @@ function boundedList(prefix: string, values: readonly string[], budget: number):
 }
 
 async function render(
-  files: Pick<AppFiles, "app" | "source">,
+  files: AppSourceReader & Pick<AppFiles, "app">,
   history: readonly Item[],
 ): Promise<{ text: string; record: AppSourceShown }> {
   const { previous, anchorSeq } = retainedSnapshot(history, (item) => {
     const shown = item.body.appSource as Partial<AppSourceShown> | undefined;
     return shown?.app === files.app && typeof shown.commit === "string" ? (shown as AppSourceShown) : undefined;
   });
-  const snapshot = await files.source();
-  const { commit, tree } = snapshot;
+  const { commit } = files;
   if (previous?.commit === commit) return { text: "", record: { app: files.app, commit, anchorSeq } };
+  const { tree } = await files.source();
   const before = previous
     ? await files
         .source([], previous.commit)
@@ -105,10 +108,9 @@ async function render(
   ];
   const skippedPrefix = `\n${before ? "Changed but not" : "Not"} shown; read them with app_files if you need them: `;
   const deletedPrefix = "\nDeleted: ";
-  const reserve = [
-    ...(changed.length ? [skippedPrefix + more(changed.length) + "."] : []),
-    ...(deleted.length ? [deletedPrefix + more(deleted.length) + "."] : []),
-  ].reduce((size, line) => size + line.length + 1, 0);
+  const reserve =
+    (changed.length ? minimum(skippedPrefix, changed.length) : 0) +
+    (deleted.length ? minimum(deletedPrefix, deleted.length) : 0);
   let room = inlineChars(SOURCE_BUDGET_TOKENS) - chunks.join("\n").length - "\n</app-source>".length - reserve;
   let readingRoom = room;
   const fits = changed
@@ -122,7 +124,7 @@ async function render(
     })
     .map((file) => file.path);
   const texts = new Map<string, string>();
-  for (const file of fits.length ? (await files.source(fits, snapshot)).files : []) {
+  for (const file of fits.length ? (await files.source(fits, commit)).files : []) {
     const text = tryDecodeUtf8(file.data);
     if (text === null || text.includes("\u0000")) continue;
     const block = fileBlock(file.path, text);
@@ -146,10 +148,9 @@ async function render(
     [skippedPrefix, names],
   ];
   const summaries = sections.filter(([, values]) => values.length);
-  const minimum = (prefix: string, values: readonly string[]) => prefix.length + more(values.length).length + 2;
-  let reserved = summaries.reduce((size, [prefix, values]) => size + minimum(prefix, values), 0);
+  let reserved = summaries.reduce((size, [prefix, values]) => size + minimum(prefix, values.length), 0);
   for (const [prefix, values] of summaries) {
-    reserved -= minimum(prefix, values);
+    reserved -= minimum(prefix, values.length);
     const line = boundedList(prefix, values, room - reserved);
     chunks.push(line);
     room -= line.length + 1;
@@ -161,7 +162,7 @@ export async function appSourceShown(
   files: AppFiles | undefined,
   history: readonly Item[],
 ): Promise<{ text: string; record?: AppSourceShown }> {
-  const source = await files?.sourceReader();
-  if (!files || !source) return { text: "" };
-  return render({ app: files.app, source }, history).catch(swallowAs("orchestrator: app source", { text: "" }));
+  const reader = await files?.sourceReader();
+  if (!files || !reader) return { text: "" };
+  return render({ app: files.app, ...reader }, history).catch(swallowAs("orchestrator: app source", { text: "" }));
 }

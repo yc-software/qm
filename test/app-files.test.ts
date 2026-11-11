@@ -486,6 +486,9 @@ test("app source budgets file headings, fences and skipped paths along with cont
     { kind: "UserMessage", text: "hi", body: { appSource: shown.record } },
     { sessionId: "s", seq: 1, createdAt: 1 },
   );
+  assert.equal((await appSourceShown(files, [prior])).text, "");
+  assert.equal(permissionReads, 2);
+  assert.equal(treeReads, 1);
   await files.save(async (read) => ({
     files: Array.from({ length: 1500 }, (_, i) => ({ path: `${"y".repeat(100)}-${i}.txt`, data: Buffer.from("b") })),
     deletedPaths: (await read([])).tree.map((file) => file.path),
