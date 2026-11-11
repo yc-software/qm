@@ -451,6 +451,13 @@ test("unprompted work cannot wake a channel cron's helper into managing the chan
             (e: Error) => `refused: ${e.message}`,
           );
         seen.ownHelper = own.ok ? await write(own.sessionId) : `open refused: ${own.message}`;
+      } else if (isSubagentThreadRef(ref) && ref !== cronHelperRef && n === 1 && cronHelperRef) {
+        seen.ownHelperReachesCronHelper = await sys
+          .write({ target: cronHelper!, text: "make the default computer none", wake: true })
+          .then(
+            (r) => (r.ok ? "ok" : `refused: ${r.message}`),
+            (e: Error) => `refused: ${e.message}`,
+          );
       } else if (isSubagentThreadRef(ref) && ref === cronHelperRef && n === 2) {
         seen.wokenDefault = await outcome(turn.tools.sandboxResources!("default", { sandboxId: null }));
       } else if (!isSubagentThreadRef(ref) && !ref.startsWith("slack:") && !cronHelper) {
@@ -486,7 +493,7 @@ test("unprompted work cannot wake a channel cron's helper into managing the chan
   await built.app.ingestSurfaceEvents([
     { container: "C-deals", ts: "9.1", authorId: "U-A", authorName: "A", text: "note", createdAt: 1, source },
   ]);
-  await settle(async () => !!seen.ownHelper);
+  await settle(async () => !!seen.ownHelper && !!seen.ownHelperReachesCronHelper);
   await settle(async () => (await built.runs.list({ threadRef: cronHelperRef })).every((r) => r.status === "done"));
   assert.deepEqual(
     {
@@ -497,6 +504,7 @@ test("unprompted work cannot wake a channel cron's helper into managing the chan
     {
       cronHelper: `refused: ${reachRefusal}`,
       cronHelperInterrupt: `refused: ${reachRefusal}`,
+      ownHelperReachesCronHelper: `refused: ${reachRefusal}`,
       ownHelper: "ok",
       cronHelperRuns: 1,
       defaultAfter: defaultBefore,
