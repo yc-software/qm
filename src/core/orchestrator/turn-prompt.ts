@@ -18,7 +18,7 @@ import {
 } from "./prompt-blocks.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 
-const USER_REPLY_RULES_MD = loadProtocolFile("user-reply-rules");
+export const USER_REPLY_RULES_MD = loadProtocolFile("user-reply-rules");
 
 type TurnCapabilities = Awaited<ReturnType<typeof mintTurnCapabilities>>;
 
