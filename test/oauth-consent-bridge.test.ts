@@ -2,31 +2,34 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
-import { type BuiltApp } from "../src/wiring.ts";
+import { serverDeps, type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { PROVIDERS, type FetchLike } from "../src/connectors/oauth.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
-import {
-  mintCapabilityToken,
-  CAPABILITY_TTL_MS,
-  OAUTH_CONSENT_AUD,
-  CONTROL_PLANE_AUD,
-} from "../src/auth/capability-token.ts";
+import { mintCapabilityToken, CAPABILITY_TTL_MS, OAUTH_CONSENT_AUD } from "../src/auth/capability-token.ts";
+import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 
 const SECRET = "consent-bridge-secret".repeat(3);
-const oauthEnv = { GOOGLE_OAUTH_CLIENT_ID: "gid", GOOGLE_OAUTH_CLIENT_SECRET: "gsecret" } as NodeJS.ProcessEnv;
 
 async function start(
-  fetchImpl: FetchLike,
+  fetchImpl: FetchLike = async () => {
+    throw new Error("must not exchange");
+  },
   opts: { portalUrl?: string } = { portalUrl: "http://callback.test" },
 ): Promise<{ base: string; built: BuiltApp; close: () => Promise<void> }> {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "consent-")), signingSecret: SECRET }));
+  const config = testConfig({
+    signingSecret: SECRET,
+    capabilitySecret: SECRET,
+    apiBaseUrl: "https://core.example.com",
+    publicUrl: "http://callback.test",
+    ...(opts.portalUrl ? { publicWebUrl: opts.portalUrl } : {}),
+  });
+  const built = buildApp(config);
+  await built.config.setConnectorClient("org:default-org", "google", { clientId: "gid", clientSecret: "gsecret" });
   await built.directory.replaceChannels(
     [
       { channelId: "C1", name: "consent", isPrivate: false },
@@ -37,19 +40,7 @@ async function start(
       { channelId: "C9", principalId: "U1" },
     ],
   );
-  const server = createServer(built.app, {
-    signingSecret: SECRET,
-    replayDedupe: built.replayDedupe,
-    connectorTokens: built.connectorTokens,
-    keychain: built.keychain,
-    consentLinks: built.consentLinks,
-    oauthFlows: built.oauthFlows,
-    auditLog: built.auditLog,
-    oauthEnv,
-    oauthFetch: fetchImpl,
-    publicUrl: "http://callback.test",
-    ...(opts.portalUrl ? { portalUrl: opts.portalUrl } : {}),
-  });
+  const server = createServer(built.app, { ...serverDeps(config, built), oauthFetch: fetchImpl });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
@@ -61,16 +52,12 @@ const consentTok = async (actorId: string, opts: { scopeId?: string } = {}) => {
       actorId,
       scopeId: opts.scopeId ?? `personal:${actorId}`,
       aud: OAUTH_CONSENT_AUD,
+      liveActor: true,
       exp: Date.now() + CAPABILITY_TTL_MS,
     },
     SECRET,
   );
 };
-const controlTok = async (actorId: string) =>
-  await mintCapabilityToken(
-    { actorId, scopeId: `personal:${actorId}`, aud: CONTROL_PLANE_AUD, exp: Date.now() + CAPABILITY_TTL_MS },
-    SECRET,
-  );
 
 const coreRedeemPath = (connectPath: string): string =>
   connectPath.replace(/^\/connect\/redeem\//, "/v1/connectors/oauth/consent/redeem/");
@@ -147,9 +134,7 @@ test("mint → intended teammate redeems → callback connects them; the link is
 });
 
 test("redeem refuses without a verified clicker (the portal's session gate)", async () => {
-  const srv = await start(async () => {
-    throw new Error("must not exchange");
-  });
+  const srv = await start();
   try {
     const mintRes = await mint(srv.base, await consentTok("U1"), { provider: "google" });
     const { connectPath } = (await mintRes.json()) as { connectPath: string };
@@ -226,9 +211,7 @@ test("connecting from a channel never re-grants a previously private connector",
 });
 
 test("mint refuses naming anyone but the actor, and points at the self-connect page", async () => {
-  const srv = await start(async () => {
-    throw new Error("must not exchange");
-  });
+  const srv = await start();
   try {
     const cap = await consentTok("U1", { scopeId: "channel:C1" });
     for (const who of ["U2", "outsider@x"]) {
@@ -269,49 +252,71 @@ test("on an API-only host (no PUBLIC_WEB_URL) the callback does NOT default to t
   }
 });
 
-test("the consent-mint route rejects a control-plane / aud-less / missing token (the cross-onramp wall)", async () => {
-  const srv = await start(async () => {
-    throw new Error("must not exchange");
-  });
+test("the consent-mint route takes only the oauth-consent token of a turn with a person at the keyboard", async () => {
+  const srv = await start();
   try {
-    const body = JSON.stringify({ provider: "google", redirectUri: `${srv.base}/cb` });
-    const headers = (cap?: string) => ({
-      "content-type": "application/json",
-      ...(cap ? { "x-agent-capability": cap } : {}),
-    });
-    assert.equal(
-      (
-        await fetch(`${srv.base}/v1/connectors/oauth/consent/mint`, {
-          method: "POST",
-          headers: headers(await controlTok("U1")),
-          body,
-        })
-      ).status,
-      403,
-    );
+    await selectDefaultSandbox(srv.built, "U1", "personal:U1", "channel:C1");
+    await selectDefaultSandbox(srv.built, "release-bot", "personal:release-bot");
+    const envs: Record<string, string>[] = [];
+    const provision = srv.built.sandbox.provision.bind(srv.built.sandbox);
+    srv.built.sandbox.provision = (owner, options) => {
+      envs.push(options?.env ?? {});
+      return provision(owner, options);
+    };
+    const members = [{ externalId: "U1" }];
+    const turns: Partial<TurnRequest>[] = [
+      {},
+      {
+        origin: { kind: "ambient", live: true },
+        conversation: {
+          kind: "channel",
+          threadRef: "ch:C1:ambient",
+          channelRef: "C1",
+          audience: members,
+          publishMembers: members,
+        },
+      },
+      { botActor: true },
+      { actor: { externalId: "release-bot", isBot: true }, botActor: true },
+      { surface: "cron", origin: { kind: "automation", ownerFire: true } },
+    ];
+    for (const [i, extra] of turns.entries()) {
+      const res = await srv.built.app.turn({
+        surface: "test",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef: `dm:consent:${i}` },
+        text: "!run echo consent",
+        origin: { kind: "human" },
+        ...extra,
+      });
+      assert.equal(res.status, "ok", res.reason);
+    }
     const audless = await mintCapabilityToken(
       { actorId: "U1", scopeId: "personal:U1", exp: Date.now() + CAPABILITY_TTL_MS },
       SECRET,
     );
-    assert.equal(
-      (await fetch(`${srv.base}/v1/connectors/oauth/consent/mint`, { method: "POST", headers: headers(audless), body }))
-        .status,
-      403,
-    );
-    assert.equal(
-      (await fetch(`${srv.base}/v1/connectors/oauth/consent/mint`, { method: "POST", headers: headers(), body }))
-        .status,
-      401,
-    );
+    const outcomes = [];
+    for (const cap of [envs[0]!.AGENT_API_TOKEN, audless, "", ...envs.map((e) => e.AGENT_OAUTH_CONSENT_TOKEN)]) {
+      const res = await mint(srv.base, cap!, { provider: "google" });
+      outcomes.push(`${res.status} ${((await res.json()) as { error?: string }).error ?? "minted"}`);
+    }
+    assert.deepEqual(outcomes, [
+      "403 forbidden",
+      "403 forbidden",
+      "401 unauthorized",
+      "200 minted",
+      "200 minted",
+      "403 human_consent_required",
+      "403 human_consent_required",
+      "403 human_consent_required",
+    ]);
   } finally {
     await srv.close();
   }
 });
 
 test("an oauth-consent token cannot drive control-plane routes (crons)", async () => {
-  const srv = await start(async () => {
-    throw new Error("must not exchange");
-  });
+  const srv = await start();
   try {
     const res = await fetch(`${srv.base}/v1/crons`, {
       method: "POST",
@@ -325,9 +330,7 @@ test("an oauth-consent token cannot drive control-plane routes (crons)", async (
 });
 
 test("mint refuses an unconfigured provider even when PUBLIC_WEB_URL is set", async () => {
-  const srv = await start(async () => {
-    throw new Error("must not exchange");
-  });
+  const srv = await start();
   try {
     const res = await mint(srv.base, await consentTok("U1"), { provider: "github" });
     assert.equal(res.status, 501);
@@ -339,9 +342,7 @@ test("mint refuses an unconfigured provider even when PUBLIC_WEB_URL is set", as
 });
 
 test("an expired consent link reports an expiry status", async () => {
-  const srv = await start(async () => {
-    throw new Error("must not exchange");
-  });
+  const srv = await start();
   try {
     const { linkId } = await srv.built.consentLinks.mint(
       {
