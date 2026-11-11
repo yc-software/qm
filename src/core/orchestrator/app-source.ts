@@ -3,6 +3,7 @@ import type { DeploymentSource } from "../../deploy/deploy-service.ts";
 import type { Item } from "../../sessions/items.ts";
 import { inlineChars } from "../../sessions/tool-output.ts";
 import type { AppFiles } from "../../tools/app-files.ts";
+import { tryDecodeUtf8 } from "../../tools/primitives.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { flatText } from "../../util/text.ts";
 
@@ -33,15 +34,6 @@ function dependencyDir(path: string): string | undefined {
 function isLockfile(path: string): boolean {
   const name = path.slice(path.lastIndexOf("/") + 1);
   return LOCKFILES.has(name) || name.endsWith(".lock") || name.endsWith(".lockb");
-}
-
-function textOf(data: Uint8Array): string | undefined {
-  try {
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(data);
-    return text.includes("\u0000") ? undefined : text;
-  } catch {
-    return undefined;
-  }
 }
 
 function fenced(text: string): string {
@@ -81,8 +73,8 @@ async function render(files: AppFiles, history: readonly Item[]): Promise<{ text
   const texts = new Map(
     (small.length ? (await files.source(small, commit)).files : [])
       .flatMap((file) => {
-        const text = textOf(file.data);
-        return text === undefined ? [] : [[file.path, text] as const];
+        const text = tryDecodeUtf8(file.data);
+        return text === null || text.includes("\u0000") ? [] : [[file.path, text] as const];
       })
       .toSorted(([, a], [, b]) => a.length - b.length)
       .filter(([, text]) => (room -= text.length) >= 0),
