@@ -1,0 +1,1 @@
+export const CLIENT_TOOL_MAX_TIMEOUT_MS = 60_000;

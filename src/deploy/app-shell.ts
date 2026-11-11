@@ -254,42 +254,32 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
   void poll();
   setInterval(poll, 5000);
 
-  let consoleErrors = [];
-  let consoleErrorCount = 0;
-  let consoleWatchError = null;
-  const noteError = (text) => {
-    consoleErrorCount++;
-    if (consoleErrors.length < 20) consoleErrors.push(text);
-  };
-  const watchErrors = () => {
-    consoleErrors = [];
-    consoleErrorCount = 0;
-    consoleWatchError = null;
-    try {
-      const w = app.contentWindow;
-      if (w.__qmShotWatch) return;
-      w.__qmShotWatch = true;
-      const original = w.console.error.bind(w.console);
-      w.console.error = (...args) => {
-        noteError(args.map((a) => (a instanceof Error ? a.stack || a.message : String(a))).join(" "));
-        original(...args);
-      };
-      w.addEventListener("error", (e) => noteError(String(e.message || "error loading " + (e.target && (e.target.src || e.target.href) || "resource"))), true);
-      w.addEventListener("unhandledrejection", (e) => noteError("Unhandled rejection: " + String(e.reason && (e.reason.stack || e.reason.message) || e.reason)));
-    } catch (error) {
-      consoleWatchError = "could not watch the page: " + String(error && error.message || error);
-    }
-  };
-  watchErrors();
-  app.addEventListener("load", watchErrors);
   let captureLib = null;
+  let captureScript = null;
+  let notDrawn = [];
+  app.addEventListener("load", () => {
+    if (captureScript) captureScript.remove();
+    captureScript = null;
+    captureLib = null;
+    notDrawn = [];
+  });
   const loadCapture = () => captureLib || (captureLib = new Promise((resolve, reject) => {
     const s = document.createElement("script");
     s.src = "/__claw__/capture.js";
     s.onload = () => (window.htmlToImage ? resolve(window.htmlToImage) : reject(new Error("capture library missing")));
     s.onerror = () => { captureLib = null; reject(new Error("could not load the capture library")); };
+    captureScript = s;
     document.head.appendChild(s);
   }));
+  const placeholder = "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="#c8c8c8"/></svg>');
+  const describe = (error) => {
+    if (error instanceof Event) {
+      const t = error.target;
+      const where = t && (t.currentSrc || t.src || t.href || t.tagName);
+      return "a " + error.type + " event" + (where ? " from " + String(where).slice(0, 300) : "");
+    }
+    return String(error && error.message || error);
+  };
   const shoot = async () => {
     if (document.hidden) throw new Error("the app tab is hidden, so the browser will not render it; ask the person to bring it to the front");
     await checkVersion(true);
@@ -309,11 +299,22 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
     const bg = w.getComputedStyle(doc.body || doc.documentElement).backgroundColor;
     const htmlBg = w.getComputedStyle(doc.documentElement).backgroundColor;
     const opaque = (c) => c && c !== "transparent" && !/rgba\\([^)]*,\\s*0\\)$/.test(c);
-    const canvas = await lib.toCanvas(doc.documentElement, {
-      width, height, pixelRatio: 1, cacheBust: false,
-      backgroundColor: opaque(htmlBg) ? htmlBg : opaque(bg) ? bg : "#ffffff",
-      style: { transform: "translate(" + -sx + "px," + -sy + "px)", transformOrigin: "0 0" },
-    });
+    const notes = [];
+    const { warn, error: logError } = console;
+    console.warn = (...args) => { notes.push(args.map(describe).join(" ")); warn(...args); };
+    console.error = (...args) => { notes.push(args.map(describe).join(" ")); logError(...args); };
+    let canvas;
+    try {
+      canvas = await lib.toCanvas(doc.documentElement, {
+        width, height, pixelRatio: 1, cacheBust: false, imagePlaceholder: placeholder,
+        backgroundColor: opaque(htmlBg) ? htmlBg : opaque(bg) ? bg : "#ffffff",
+        style: { transform: "translate(" + -sx + "px," + -sy + "px)", transformOrigin: "0 0" },
+      });
+    } finally {
+      console.warn = warn;
+      console.error = logError;
+    }
+    for (const note of notes) if (!notDrawn.includes(note)) notDrawn.push(note);
     let dataUrl;
     try { dataUrl = canvas.toDataURL("image/jpeg", 0.85); }
     catch (error) { throw new Error("the browser refused to read the picture back (" + (error && error.name) + ": " + (error && error.message) + ")"); }
@@ -321,13 +322,13 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
       ok: true, image: dataUrl.slice(dataUrl.indexOf(",") + 1), mimeType: "image/jpeg",
       url: w.location.href, width, height, scrollY: Math.round(sy),
       dark: !!(w.matchMedia && w.matchMedia("(prefers-color-scheme: dark)").matches),
-      version: base, consoleErrors, consoleErrorCount, consoleWatchError,
+      version: base, notDrawn,
     };
   };
   const answerShot = async (id) => {
     let reply;
     try { reply = await shoot(); }
-    catch (error) { reply = { ok: false, error: String(error && error.message || error) }; }
+    catch (error) { reply = { ok: false, error: describe(error) }; }
     chat.contentWindow.postMessage({ type: "qm:app-shot-result", id, ...reply }, portalOrigin);
   };
 ${opts.annotationsEnabled ? ANNOTATE_JS : ""}

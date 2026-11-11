@@ -47,16 +47,13 @@ test("a capture carries the picture and the facts a picture cannot show", () => 
     width: 800,
     height: 600,
     dark: true,
-    consoleErrors: ["boom"],
-    consoleErrorCount: 3,
+    notDrawn: ["Failed to fetch resource: https://elsewhere.example/logo.png"],
   });
   assert.deepEqual(result.images, [{ data: "aGk=", mimeType: "image/jpeg" }]);
   assert.match(result.content, /Viewport: 800×600/);
   assert.match(result.content, /Color scheme: dark/);
-  assert.match(result.content, /Console errors since load \(3, the first 1 shown\):\nboom/);
-});
-
-test("a page whose errors could not be watched is not reported as clean", () => {
-  const result = shotResult({ ok: true, image: "aGk=", mimeType: "image/jpeg", consoleWatchError: "blocked" });
-  assert.match(result.content, /Console errors since load: unknown \(blocked\)/);
+  assert.match(
+    result.content,
+    /Not drawn in the picture.*:\nFailed to fetch resource: https:\/\/elsewhere\.example\/logo\.png/,
+  );
 });

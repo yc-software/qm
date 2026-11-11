@@ -1,9 +1,14 @@
+import { CLIENT_TOOL_MAX_TIMEOUT_MS } from "../../chassis/src/client-tools.ts";
 import { errMessage } from "../../chassis/src/errors.ts";
-import { createClientToolExecutor, type ClientToolResult, type ClientToolRun } from "./client-tools.ts";
+import {
+  createClientToolExecutor,
+  postClientResult,
+  type ClientToolResult,
+  type ClientToolRun,
+} from "./client-tools.ts";
 import { askEmbedder, hasEmbedder } from "./embedder.ts";
 
 export const APP_SCREENSHOT_TOOL = "ui__app_screenshot";
-const APP_SCREENSHOT_TIMEOUT_MS = 45_000;
 
 export type AppShot = {
   ok: boolean;
@@ -16,9 +21,7 @@ export type AppShot = {
   scrollY?: number;
   dark?: boolean;
   version?: string | null;
-  consoleErrors?: string[];
-  consoleErrorCount?: number;
-  consoleWatchError?: string;
+  notDrawn?: string[];
 };
 
 function appViewEmbedded(): boolean {
@@ -31,20 +34,11 @@ export function appViewClientTools(): Array<Record<string, unknown>> {
     {
       name: APP_SCREENSHOT_TOOL,
       description:
-        "Take a screenshot of the app exactly as the person sees it right now in their own browser tab: their sign-in, data, theme and scroll position. Waits for the tab to load the newest saved version first. Returns the picture plus the page address, viewport size, light or dark mode, and console errors since the page loaded.",
+        "Take a screenshot of the app exactly as the person sees it right now in their own browser tab: their sign-in, data, theme and scroll position. Use it after changing how the app looks, to check the result before saying it is done. Waits for the tab to load the newest saved version first. The picture shows only the color scheme the person is using now, light or dark; it cannot show the other one. Returns the picture plus the page address, viewport size, and that color scheme.",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
-      timeoutMs: APP_SCREENSHOT_TIMEOUT_MS,
+      timeoutMs: CLIENT_TOOL_MAX_TIMEOUT_MS,
     },
   ];
-}
-
-function consoleLine(shot: AppShot): string {
-  if (shot.consoleWatchError) return `Console errors since load: unknown (${shot.consoleWatchError})`;
-  const errors = shot.consoleErrors ?? [];
-  const total = shot.consoleErrorCount ?? errors.length;
-  if (!total) return "Console errors since load: none";
-  const shown = total > errors.length ? `${total}, the first ${errors.length} shown` : String(total);
-  return `Console errors since load (${shown}):\n${errors.join("\n")}`;
 }
 
 export function shotResult(shot: AppShot): ClientToolResult {
@@ -55,7 +49,9 @@ export function shotResult(shot: AppShot): ClientToolResult {
     `Viewport: ${shot.width}×${shot.height}${shot.scrollY ? `, scrolled ${shot.scrollY}px down` : ""}`,
     `Color scheme: ${shot.dark ? "dark" : "light"}`,
     ...(shot.version ? [`App version shown: ${shot.version}`] : []),
-    consoleLine(shot),
+    ...(shot.notDrawn?.length
+      ? [`Not drawn in the picture (shown as gray boxes or fallback fonts):\n${shot.notDrawn.join("\n")}`]
+      : []),
   ];
   return { content: lines.join("\n"), images: [{ data: shot.image, mimeType: shot.mimeType }] };
 }
@@ -63,7 +59,7 @@ export function shotResult(shot: AppShot): ClientToolResult {
 async function takeAppShot(): Promise<ClientToolResult> {
   try {
     return shotResult(
-      await askEmbedder<AppShot>({ type: "qm:app-shot" }, "qm:app-shot-result", APP_SCREENSHOT_TIMEOUT_MS),
+      await askEmbedder<AppShot>({ type: "qm:app-shot" }, "qm:app-shot-result", CLIENT_TOOL_MAX_TIMEOUT_MS),
     );
   } catch (error) {
     return { content: `Screenshot failed: ${errMessage(error)}`, isError: true };
@@ -75,10 +71,5 @@ export function appViewRunner(
   send: (path: string, init: RequestInit) => Promise<unknown>,
 ): ((run: ClientToolRun) => Promise<void>) | undefined {
   if (!appViewEmbedded()) return undefined;
-  return createClientToolExecutor(APP_SCREENSHOT_TOOL, takeAppShot, (callId, result) =>
-    send(`/api/runs/${encodeURIComponent(runId)}/signal`, {
-      method: "POST",
-      body: JSON.stringify({ kind: "client_result", callId, result }),
-    }),
-  );
+  return createClientToolExecutor(APP_SCREENSHOT_TOOL, takeAppShot, postClientResult(send, runId));
 }

@@ -35,3 +35,15 @@ export function createClientToolExecutor(
     }
   };
 }
+
+export function postClientResult(
+  send: (path: string, init: RequestInit) => Promise<unknown>,
+  runId: string,
+  extra: Record<string, unknown> = {},
+): (callId: string, result: ClientToolResult) => Promise<unknown> {
+  return (callId, result) =>
+    send(`/api/runs/${encodeURIComponent(runId)}/signal`, {
+      method: "POST",
+      body: JSON.stringify({ kind: "client_result", ...extra, callId, result }),
+    });
+}

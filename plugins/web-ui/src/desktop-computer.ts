@@ -1,7 +1,7 @@
 import { fetchServerSentEvents } from "@tanstack/ai-client";
 import { errMessage } from "../../chassis/src/errors.ts";
 import type { RunActivityEntry } from "./items.ts";
-import { createClientToolExecutor, type ClientToolResult } from "./client-tools.ts";
+import { createClientToolExecutor, postClientResult, type ClientToolResult } from "./client-tools.ts";
 
 type Result = ClientToolResult;
 type Desk = {
@@ -76,11 +76,10 @@ export async function serveDesktopRun(
     call: (args, _client, deadline) => desk.call(args, clientId, deadline),
   };
   let failure: unknown;
-  const execute = createDesktopExecutor(clientId, scopedDesk, (callId, result) =>
-    send(`/api/runs/${encodeURIComponent(runId)}/signal`, {
-      method: "POST",
-      body: JSON.stringify({ kind: "client_result", desktopClientId: clientId, callId, result }),
-    }),
+  const execute = createDesktopExecutor(
+    clientId,
+    scopedDesk,
+    postClientResult(send, runId, { desktopClientId: clientId }),
   );
   try {
     let connected = false;
