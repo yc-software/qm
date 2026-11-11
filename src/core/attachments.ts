@@ -96,7 +96,9 @@ export function isVisionAttachment(attachment: Pick<IncomingAttachment, "name" |
   return VISION_MIME_TYPES.has(baseMime(attachment.mimetype || mimeFromName(attachment.name)));
 }
 
-const NAME_MAX = 255;
+const FILESYSTEM_NAME_BYTES = 255;
+const LONGEST_WRITER_TEMP_SUFFIX_BYTES = `.part.${randomUUID()}`.length;
+const NAME_MAX = FILESYSTEM_NAME_BYTES - LONGEST_WRITER_TEMP_SUFFIX_BYTES;
 
 function fitName(stem: string, suffix: string): string {
   const room = NAME_MAX - Buffer.byteLength(suffix);
