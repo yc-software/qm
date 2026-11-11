@@ -20,6 +20,7 @@ import type { Directory } from "./directory.ts";
 import { slackMessageContent } from "./message-content.ts";
 import {
   type ConversationSerializer,
+  type SlackPeople,
   RECENT_HISTORY_LIMIT,
   RECENT_THREAD_LIMIT,
   slackFileName,
@@ -282,7 +283,7 @@ export function createSurfaceContextFulfiller(deps: {
         throw new Error("Live Slack thread context includes truncated channel history; read the channel separately.");
       if (!raw.length && failure?.status === "rejected") throw failure.reason;
       const note = [...notes].join(" ");
-      const people = { names: new Map<string, string>(), principals: new Map<string, string>() };
+      const people: SlackPeople = { names: new Map(), principals: new Map() };
       const shaped = await serializer.shapeRecentMessages(client, raw, "", people);
       if (q.live === true && hasMore && !shaped.length)
         throw new Error("Live Slack history contains only filtered messages; an earlier page could not be located.");
