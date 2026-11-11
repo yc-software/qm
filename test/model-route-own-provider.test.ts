@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createModelRoutes } from "../src/model/model-route.ts";
+import { moveGatewayDefaultsToProvider } from "../src/model/own-provider-defaults.ts";
 import { defaultModelForProvider } from "../src/model/pi-models.ts";
+import type { ScopedConfigStore } from "../src/resolution/config-store.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { TEST_TENANT } from "./support/test-tenant.ts";
 
@@ -16,21 +18,38 @@ const routes = (own: string[]) =>
       apiKeyHeader: "x-api-key",
       models: { [claude]: claude },
     },
-    resolveProviderKeys: async () => ({ anthropic: "env-key", ...Object.fromEntries(own.map((p) => [p, `${p}-key`])) }),
+    resolveProviderKeys: async () => Object.fromEntries(own.map((p) => [p, `${p}-key`])),
     ownProviders: async () => new Set(own),
   });
-const summary = (r: { modelId: string; billing: string; gateway?: unknown }) => [r.modelId, r.billing, !!r.gateway];
+const summary = (r: { modelId: string; billing: string }) => [r.modelId, r.billing];
 
-test("company inference leaves the gateway once the organization saves its own provider key", async () => {
-  assert.deepEqual(summary(await withTenant(TEST_TENANT, () => routes([]).route(claude))), [
+test("a plain model id uses the organization's own key for its provider; other gateway models stay on the gateway", async () => {
+  assert.deepEqual(summary(await withTenant(TEST_TENANT, () => routes([]).route(claude))), [claude, "model_gateway"]);
+  assert.deepEqual(summary(await routes(["anthropic"]).route(claude)), [claude, "org_key"]);
+  assert.deepEqual(summary(await routes(["openai"]).route(claude)), [claude, "model_gateway"]);
+  assert.deepEqual(summary(await routes(["openai"]).route(claude, { anthropic: "mine" })), [
     claude,
-    "model_gateway",
-    true,
+    "personal_account",
   ]);
-  assert.deepEqual(summary(await routes(["anthropic"]).route(claude)), [claude, "org_key", false]);
-  assert.deepEqual(summary(await routes(["openai"]).route(claude)), [gpt, "org_key", false]);
-  const direct = await routes(["openai"]).route("claude-haiku-5-5");
-  assert.deepEqual([direct.modelId, direct.billing], ["claude-haiku-5-5", "org_key"]);
-  const personal = await routes(["openai"]).route(claude, { anthropic: "mine" });
-  assert.deepEqual(summary(personal), [claude, "personal_account", false]);
+});
+
+test("saving a key for another provider moves the defaults that ran on the gateway", async () => {
+  const store = new Map<string, { modelId: string }>([
+    ["fallback", { modelId: claude }],
+    ["cron", { modelId: gpt }],
+  ]);
+  const config = {
+    getRuntimeSelectionDurable: async () => store.get("base") ?? null,
+    setRuntimeSelection: async (_: string, s: { modelId: string }) => void store.set("base", s),
+    getPurposeRuntimeDurable: async (p: string) => store.get(p),
+    setPurposeRuntime: async (p: string, s: { modelId: string }) => void store.set(p, s),
+  } as unknown as ScopedConfigStore;
+  const moved = await withTenant(TEST_TENANT, () =>
+    moveGatewayDefaultsToProvider(config, routes(["openai"]), "openai", "org:o"),
+  );
+  assert.deepEqual(moved, [
+    { setting: "base-model", from: claude, to: gpt },
+    { setting: "fallback-runtime", from: claude, to: gpt },
+  ]);
+  assert.equal(store.get("cron")?.modelId, gpt);
 });
