@@ -157,7 +157,7 @@ async function mintControlPlaneTokens(
   if (!strictReadOnly && deps.signingSecret && deps.apiBaseUrl) {
     const destination = defaultDestination;
     connectorEnv.AGENT_API_URL = deps.apiBaseUrl;
-    if (deps.admin && (liveAuthorTurn || liveTurn)) {
+    if (deps.admin && input.botActor !== true && (liveAuthorTurn || liveTurn)) {
       try {
         actorIsOrgAdmin = (await deps.admin.adminStatusOf(tenant, actor)).isAdmin;
       } catch (e) {
