@@ -453,7 +453,7 @@ export interface App {
   listScopeResources(tenant: Tenant, principalId: string, scope: ScopeId): Promise<ScopeResources | null>;
   loopAdministration(
     actor: Pick<CapabilityClaims, "actorId" | "botActor">,
-    loops: readonly { owner: string; ownerScopeId: ScopeId }[],
+    loops: readonly { owner: string; ownerScopeId: ScopeId; botActor?: boolean }[],
   ): Promise<boolean[]>;
   managesScope(principalId: string, scope: ScopeId): Promise<boolean>;
   currentScopeMembers(scope: ScopeId): Promise<Principal[] | undefined>;
