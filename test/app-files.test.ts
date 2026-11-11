@@ -213,7 +213,7 @@ test("find shows exact text around each match in a built one-line stylesheet, en
   const found = await chat.call({ action: "find", path, text: ".dark{", around: 2000 });
   const [title, heading, excerpt] = found.split("\n");
   assert.equal(title, `[".dark{" in ${path}: 1 found]`);
-  assert.equal(heading, "[match 1 at line 1]");
+  assert.equal(heading, "[match 1 from line 1]");
   assert.equal(excerpt!.length, 2000 + ".dark{".length + 2000);
   assert.ok(css.includes(excerpt!) && excerpt!.includes(".dark{--"), "the excerpt is exact saved text");
 
@@ -226,11 +226,17 @@ test("find shows exact text around each match in a built one-line stylesheet, en
   assert.match(edited, /^Saved public\/assets\/main-D4tq75Xf\.css\./);
   assert.deepEqual(h.writes[0]!.files, { [path]: css.replace(`.dark{${variable}`, `.dark{${recolored}`) });
 
-  const many = (await chat.call({ action: "find", path, text: "@media", around: 30 })).split("\n");
-  assert.equal(many[0], `["@media" in ${path}: 62 found]`);
-  const excerpts = many.filter((_, i) => i % 2 === 0).slice(1);
-  assert.equal(excerpts.length, 62);
-  assert.ok(excerpts.every((e) => e.length <= 66 && e.includes("@media") && css.includes(e)));
+  const all = await chat.call({ action: "find", path, text: "@media", around: 200 });
+  const paged = /^\["@media" in .+: 62 found; too many to show at once, find on with from (\d+)\]/.exec(all)!;
+  assert.ok(paged && all.length <= 4096 * 4, all.slice(0, 200));
+  const rest = (await chat.call({ action: "find", path, text: "@media", around: 200, from: Number(paged[1]) })).split(
+    "\n",
+  );
+  assert.match(rest[1]!, new RegExp(`^\\[match ${paged[1]}(-\\d+)? from line 1\\]$`));
+  assert.ok(rest.slice(1).every((l, i) => i % 2 === 0 || (l.includes("@media") && css.includes(l))));
+  const merged = (await chat.call({ action: "find", path, text: "--cta", around: 20 })).split("\n");
+  assert.equal(merged[1], "[match 1-3 from line 1]", "overlapping matches share one excerpt");
+  assert.ok(css.includes(merged[2]!));
   assert.equal(
     await chat.call({ action: "find", path, text: "no-such-rule", around: 10 }),
     `["no-such-rule" in ${path}: 0 found]`,

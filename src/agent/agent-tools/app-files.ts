@@ -39,6 +39,22 @@ async function savedText(files: AppFiles, wanted: string) {
   return { path, file, content: textOf(file) };
 }
 
+interface Excerpt {
+  start: number;
+  end: number;
+  line: number;
+  first: number;
+  last: number;
+}
+
+function excerptHeading(w: Excerpt): string {
+  return `[match ${w.first}${w.last > w.first ? `-${w.last}` : ""} from line ${w.line}]`;
+}
+
+function shownSize(w: Excerpt): number {
+  return excerptHeading(w).length + w.end - w.start + 2;
+}
+
 export function appFileTools(kit: ToolKit) {
   const { ref, recordCall, recordResult } = kit;
 
@@ -133,6 +149,7 @@ export function appFileTools(kit: ToolKit) {
     parameters: Type.Object({
       path: Type.String({ description: "File path relative to the app root." }),
       text: Type.String({ minLength: 1, description: "Text to look for, matched literally and case-sensitively." }),
+      from: Type.Optional(Type.Integer({ minimum: 1, description: "First match to show, counting from 1." })),
       around: Type.Integer({
         minimum: 0,
         description: "How many characters of the file to show before and after each match.",
@@ -142,18 +159,45 @@ export function appFileTools(kit: ToolKit) {
       run(callId, { action: "find", path: params.path }, async (files) => {
         const { path, content } = await savedText(files, params.path);
         const sought = params.text;
-        const excerpts: string[] = [];
+        const from = params.from ?? 1;
+        const budget =
+          inlineChars(await inlineTokensOf(ref.current?.toolOutput)) -
+          RANGE_NOTE_CHARS -
+          JSON.stringify(sought).length -
+          path.length;
+        const windows: Excerpt[] = [];
+        let used = 0;
         let line = 1;
         let counted = 0;
+        let found = 0;
+        let next: number | undefined;
         for (let at = content.indexOf(sought); at >= 0; at = content.indexOf(sought, at + sought.length)) {
+          found += 1;
+          if (found < from || next !== undefined) continue;
           line += content.slice(counted, at).split("\n").length - 1;
           counted = at;
-          const before = tailSlice(content.slice(0, at), params.around);
-          const after = headSlice(content.slice(at + sought.length), params.around);
-          excerpts.push(`[match ${excerpts.length + 1} at line ${line}]\n${before}${sought}${after}`);
+          const start = at - tailSlice(content.slice(0, at), params.around).length;
+          const end = at + sought.length + headSlice(content.slice(at + sought.length), params.around).length;
+          const previous = windows.at(-1);
+          const joined = previous && start <= previous.end ? { ...previous, end, last: found } : undefined;
+          const excerpt = joined ?? { start, end, line, first: found, last: found };
+          const grown = used - (joined ? shownSize(previous!) : 0) + shownSize(excerpt);
+          if (grown > budget) {
+            if (!windows.length)
+              throw new Error(
+                `the text around match ${found} in ${path} is more than one result can show; ask for fewer characters around it`,
+              );
+            next = found;
+            continue;
+          }
+          used = grown;
+          if (joined) windows[windows.length - 1] = joined;
+          else windows.push(excerpt);
         }
-        const title = `[${JSON.stringify(sought)} in ${path}: ${excerpts.length} found]`;
-        return { body: { matches: excerpts.length }, result: [title, ...excerpts].join("\n") };
+        const more = next ? `; too many to show at once, find on with from ${next}` : "";
+        const title = `[${JSON.stringify(sought)} in ${path}: ${found} found${more}]`;
+        const shown = windows.map((w) => `${excerptHeading(w)}\n${content.slice(w.start, w.end)}`);
+        return { body: { matches: found }, result: [title, ...shown].join("\n") };
       }),
   });
 
