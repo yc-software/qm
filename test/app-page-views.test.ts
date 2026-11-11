@@ -50,7 +50,7 @@ function get(port: number, path: string, headers: Record<string, string>): Promi
   });
 }
 
-async function agent(log: AppPageViewLog) {
+async function agent(log: Pick<AppPageViewLog, "record">) {
   const upstream = createHttpServer((_req, res) => {
     res.writeHead(200, { "content-type": "text/html" });
     res.end("UPSTREAM OK");
@@ -92,7 +92,7 @@ async function agent(log: AppPageViewLog) {
     deployGateSecret: "gate-secret",
     deployAppsSessionSecret: SESSION_SECRET,
     deployAppsLoginUrl: LOGIN_URL,
-    appPageViews: log,
+    appPageViews: { ...log, lastViews: async () => new Map() },
   });
   server.listen(0);
   return {

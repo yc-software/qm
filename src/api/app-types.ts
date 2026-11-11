@@ -72,7 +72,7 @@ import type {
   RecipientResolution,
 } from "../directory/directory-store.ts";
 import type { Delivery, Destination } from "../types.ts";
-import type { Cron, CronFireLogEntry, CronFireNote, Webhook } from "../triggers/types.ts";
+import type { Cron, CronFireLogEntry, CronFireNote, TriggerBase, Webhook } from "../triggers/types.ts";
 import type { SurfaceContextQuery, SurfaceContextRequest, SurfaceContextResult } from "../reach/reach.ts";
 import type {
   ActiveThread,
@@ -453,7 +453,7 @@ export interface App {
   listScopeResources(tenant: Tenant, principalId: string, scope: ScopeId): Promise<ScopeResources | null>;
   loopAdministration(
     actor: Pick<CapabilityClaims, "actorId" | "botActor">,
-    loops: readonly { owner: string; ownerScopeId: ScopeId }[],
+    loops: readonly Pick<TriggerBase, "owner" | "ownerScopeId" | "botActor">[],
   ): Promise<boolean[]>;
   managesScope(principalId: string, scope: ScopeId): Promise<boolean>;
   currentScopeMembers(scope: ScopeId): Promise<Principal[] | undefined>;
