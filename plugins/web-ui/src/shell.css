@@ -4224,7 +4224,11 @@ qm-draft .draft-card-body {
   gap: 7px;
   min-width: 0;
 }
+.composer-right {
+  flex: none;
+}
 .composer-attach {
+  flex: none;
   transform: scale(0.81);
 }
 .runtime-upgrade {
@@ -10784,13 +10788,7 @@ h3.ambient-field-label {
   }
   :where(html:not(.desktop-embed)) .composer-wrap .composer-toolbar {
     grid-column: 2;
-    flex-wrap: nowrap;
     gap: 6px;
-  }
-  :where(html:not(.desktop-embed)) .composer-wrap .composer-left,
-  :where(html:not(.desktop-embed)) .composer-wrap .composer-right {
-    width: auto;
-    flex-wrap: nowrap;
   }
   :where(html:not(.desktop-embed)) .composer-wrap .composer-right {
     margin-left: auto;
@@ -11740,12 +11738,6 @@ h3.ambient-field-label {
   background: white;
 }
 
-.menu-suffix {
-  flex: none;
-  white-space: nowrap;
-  color: var(--muted-foreground);
-}
-
 .effort-confetti {
   position: fixed;
   inset: auto;
@@ -12004,13 +11996,6 @@ body.app-edit-embed .composer-wrap {
   border-top: 1px solid var(--border);
   border-radius: 0;
   box-shadow: none;
-}
-
-body.app-edit-embed .composer-right {
-  flex: none;
-}
-body.app-edit-embed .composer-toolbar .loadout-button {
-  max-width: min(360px, 100%);
 }
 
 body.app-edit-embed .chat-scroll {
@@ -12371,13 +12356,10 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
 }
 .split-canvas:not(.single-pane) .composer-wrap .composer-toolbar {
   grid-column: 2;
-  flex-wrap: nowrap;
   gap: 4px;
 }
 .split-canvas:not(.single-pane) .composer-wrap .composer-left,
 .split-canvas:not(.single-pane) .composer-wrap .composer-right {
-  width: auto;
-  flex-wrap: nowrap;
   gap: 4px;
 }
 .split-canvas:not(.single-pane) .composer-wrap .composer-toolbar .menu-button.loadout-button {
@@ -12827,7 +12809,6 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
 .loadout-ultrafast-badge {
   display: inline-flex;
   align-items: center;
-  flex: none;
   gap: 3px;
   color: color-mix(in srgb, var(--ultrafast-accent) 70%, white);
 }
