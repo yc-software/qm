@@ -141,7 +141,7 @@ export async function putAdminCronRuntime(ctx: ApiCtx): Promise<void> {
 }
 
 export async function putAdminCronDestination(ctx: ApiCtx): Promise<void> {
-  const { res, app, deps, params, body } = ctx;
+  const { res, app, params, body } = ctx;
   const id = params.id!;
   const scoped = await requireScopedResource(
     ctx,
