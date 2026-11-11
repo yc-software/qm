@@ -95,23 +95,30 @@ function deniedFix(provider: string, code: string | undefined): string {
   return `Check ${provider}'s OAuth client and its grant, including the attest right when attestActor is set (${TROUBLESHOOTING}).`;
 }
 
-function failedFix(provider: string, code: string | undefined, docs: string): string {
+function failedFix(provider: string, code: string | undefined, docs: string, it: string): string {
   if (code === "unreachable") return `Check that ${provider}'s host is up and reachable from QM (${docs}).`;
+  if (code === "fact_already_expired") return `Nothing to do: ${provider} had already forgotten ${it}.`;
   if (code === "fact_not_found")
     return `${provider} forgets only facts on the person's own member page; search memory again for current refs.`;
   return `Check ${provider}'s logs, URL and tool names (${docs}).`;
 }
 
-function problemOf(outcome: MemoryProviderOutcome, operation: ProviderOperation): MemoryProviderProblem | undefined {
-  const { provider, ms, code, ref } = outcome;
+type ProblemGroup = MemoryProviderOutcome & { refs: string[] };
+
+function problemOf(group: ProblemGroup, operation: ProviderOperation): MemoryProviderProblem | undefined {
+  const { provider, ms, code } = group;
+  const refs = group.refs.join(", ");
+  const it = group.refs.length > 1 ? "them" : "it";
   const reason = code ? ` (${code})` : "";
   const forget = operation === "forget";
   const docs = forget ? FORGET_DOCS : TROUBLESHOOTING;
-  const asked = forget ? `to forget ${ref}` : "the request";
-  const effect = { search: "its results are missing", write: "it stored nothing", forget: `${ref} is unchanged there` }[
-    operation
-  ];
-  switch (outcome.outcome) {
+  const asked = forget ? `to forget ${refs}` : "the request";
+  const effect = {
+    search: "its results are missing",
+    write: "it stored nothing",
+    forget: "this call changed nothing there",
+  }[operation];
+  switch (group.outcome) {
     case "denied":
       return {
         code: "memory_provider_denied",
@@ -133,15 +140,15 @@ function problemOf(outcome: MemoryProviderOutcome, operation: ProviderOperation)
       return {
         code: "memory_provider_unknown",
         provider,
-        detail: `Memory provider ${provider} didn't confirm ${forget ? `that it forgot ${ref}` : "the write"}${code ? reason : ` within ${ms}ms`}, so whether it ${forget ? "did" : "stored the facts"} is unknown; QM did not retry.`,
-        fix: `Check ${provider}'s logs before ${forget ? "deleting it" : "sending the facts"} again (${docs}).`,
+        detail: `Memory provider ${provider} didn't confirm ${forget ? `that it forgot ${refs}` : "the write"}${code ? reason : ` within ${ms}ms`}, so whether it ${forget ? "did" : "stored the facts"} is unknown; QM did not retry.`,
+        fix: `Check ${provider}'s logs before ${forget ? `deleting ${it}` : "sending the facts"} again (${docs}).`,
       };
     case "failed":
       return {
         code: "memory_provider_failed",
         provider,
-        detail: `Memory provider ${provider} failed${forget ? ` to forget ${ref}` : ""}${reason}, so ${effect}.`,
-        fix: failedFix(provider, code, docs),
+        detail: `Memory provider ${provider} failed${forget ? ` to forget ${refs}` : ""}${reason}, so ${effect}.`,
+        fix: failedFix(provider, code, docs, it),
       };
     case "disabled":
       return {
@@ -180,13 +187,31 @@ export async function withProviders<T>(
   run: (report: OutcomeReport) => Promise<T>,
 ): Promise<MemoryProviderReport<T>> {
   const outcomes: MemoryProviderOutcome[] = [];
-  const problems = () =>
-    outcomes.flatMap((outcome) => (outcome.provider === "default" ? [] : (problemOf(outcome, operation) ?? [])));
+  const problems = () => {
+    const groups: ProblemGroup[] = [];
+    for (const { ref, ...outcome } of outcomes) {
+      if (outcome.provider === "default") continue;
+      const same = ref
+        ? groups.find(
+            (group) =>
+              group.refs.length &&
+              group.provider === outcome.provider &&
+              group.outcome === outcome.outcome &&
+              group.code === outcome.code,
+          )
+        : undefined;
+      if (same) same.refs.push(ref!);
+      else groups.push({ ...outcome, refs: ref ? [ref] : [] });
+    }
+    return groups.flatMap((group) => problemOf(group, operation) ?? []);
+  };
   try {
     const value = await run((outcome) => void outcomes.push(outcome));
     return { value, outcomes, problems: problems() };
   } catch (error) {
-    const notebookFailed = outcomes.some((outcome) => outcome.provider === "default" && problemOf(outcome, operation));
+    const notebookFailed = outcomes.some(
+      (outcome) => outcome.provider === "default" && problemOf({ ...outcome, refs: [] }, operation),
+    );
     if (notebookFailed || !problems().length || !strictFailures.has(error as object)) throw error;
     reportFailure(`memory: provider ${operation}`, error);
     return { outcomes, problems: problems() };

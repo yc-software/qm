@@ -48,9 +48,9 @@ export function createRoutedMemoryService(opts: {
   const tagged = (route: MemoryProviderRoute, rows: MemoryCandidate[]): MemoryCandidate[] =>
     route.provider === "default"
       ? rows
-      : rows.map((row) => ({
+      : rows.map(({ ref, ...row }) => ({
           ...row,
-          ...(row.ref === undefined ? {} : { ref: `${route.provider}:${row.ref}` }),
+          ...(ref === undefined || !opts.providers[route.provider]?.delete ? {} : { ref: `${route.provider}:${ref}` }),
           source: { provider: route.provider, label: route.label ?? route.provider },
         }));
   const managerFor = (scopeId: ScopeId): MemoryService | undefined => {
@@ -194,9 +194,13 @@ export function createRoutedMemoryService(opts: {
           const brain = ref.slice(0, ref.indexOf(":"));
           const route = routesFor(scopeId).find((candidate) => candidate.provider === brain);
           const provider = route && opts.providers[brain];
-          if (!route || !provider?.delete)
+          if (!route || !provider)
             throw new MemoryForgetRefused(
-              `Memory provider ${brain} can't forget ${ref} here: it doesn't serve this conversation's notebook, or it has no forget operation. Nothing was changed.`,
+              `Memory provider ${brain} doesn't serve this conversation's memory here, so QM can't forget ${ref}. Nothing was changed.`,
+            );
+          if (!provider.delete)
+            throw new MemoryForgetRefused(
+              `Memory provider ${brain} has no forget operation; only registry brains forget by ref. Nothing was changed.`,
             );
           return { ref, brain, route, provider };
         });
