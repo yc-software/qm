@@ -246,22 +246,35 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     return isPublic && active && principalCanReadScope(viewer, scope);
   }
 
-  async function projectView(project: Project): Promise<ProjectView> {
-    const memberIds = (await deps.projects?.members(projectGroupRef(project.id))) ?? project.memberIds;
-    const manual = new Set([project.ownerId, ...project.memberIds]);
-    const users = await deps.users?.resolve(memberIds).catch(() => undefined);
-    const members = await Promise.all(
-      memberIds.map(async (principalId) => {
-        const member = await deps.directory.get(principalId).catch(() => null);
+  async function projectViews(projects: Project[]): Promise<ProjectView[]> {
+    const rosters = await deps.projects?.membersMany(projects.map((project) => projectGroupRef(project.id)));
+    const ids = [
+      ...new Set(projects.flatMap((project) => rosters?.get(projectGroupRef(project.id)) ?? project.memberIds)),
+    ];
+    const [users, directory] = await Promise.all([
+      deps.users?.resolve(ids).catch(swallowAs("project members: user lookup", undefined)),
+      deps.directory
+        .getMany(ids)
+        .catch(swallowAs("project members: directory lookup", new Map<string, DirectoryMember>())),
+    ]);
+    return projects.map((project) => {
+      const memberIds = rosters?.get(projectGroupRef(project.id)) ?? project.memberIds;
+      const manual = new Set([project.ownerId, ...project.memberIds]);
+      const members = memberIds.map((principalId) => {
+        const member = directory.get(principalId);
         return {
           principalId,
           displayName: personLabel(principalId, { displayName: member?.displayName, user: users?.get(principalId) }),
           ...(member?.avatarUrl ? { avatarUrl: member.avatarUrl } : {}),
           ...(manual.has(principalId) ? {} : { viaChannel: true }),
         };
-      }),
-    );
-    return { ...project, memberIds, scopeId: projectScopeId(project.id), members };
+      });
+      return { ...project, memberIds, scopeId: projectScopeId(project.id), members };
+    });
+  }
+
+  async function projectView(project: Project): Promise<ProjectView> {
+    return (await projectViews([project]))[0]!;
   }
 
   async function projectsForViewer(principalId: string): Promise<ProjectView[]> {
@@ -269,38 +282,51 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     const projects = (await deps.projects.listForMember(principalId)).filter((project) =>
       deps.identity.isInternal(deps.identity.classify(project.ownerId)),
     );
-    return Promise.all(projects.map(projectView));
+    return projectViews(projects);
+  }
+
+  async function managedProjectMemberships(
+    scopes: readonly ScopeId[],
+    principalId: string,
+  ): Promise<Map<ScopeId, boolean>> {
+    const projectScopes = new Map<ScopeId, string>();
+    for (const scope of scopes) {
+      const { kind, ref } = parseScopeId(scope);
+      const id = kind === "group" ? projectIdFromGroupRef(ref) : null;
+      if (id) projectScopes.set(scope, id);
+    }
+    const projects =
+      deps.projects && deps.identity.isInternal(deps.identity.classify(principalId)) && projectScopes.size
+        ? await deps.projects.listForMember(principalId, [...new Set(projectScopes.values())])
+        : [];
+    const allowed = new Set(
+      projects
+        .filter((project) => deps.identity.isInternal(deps.identity.classify(project.ownerId)))
+        .map((project) => project.id),
+    );
+    return new Map([...projectScopes].map(([scope, id]) => [scope, allowed.has(id)]));
   }
 
   async function managedProjectMembership(scope: ScopeId, principalId: string): Promise<boolean | undefined> {
-    const { kind, ref } = parseScopeId(scope);
-    if (kind !== "group" || projectIdFromGroupRef(ref) === null) return undefined;
-    if (!deps.projects) return false;
-    const project = await deps.projects.get(projectIdFromGroupRef(ref)!);
-    if (!project || project.orgId !== orgIdOf()) return false;
-    if (!deps.identity.isInternal(deps.identity.classify(project.ownerId))) return false;
-    if (!deps.identity.isInternal(deps.identity.classify(principalId))) return false;
-    return (await deps.projects.membership(ref, principalId).catch(() => false)) === true;
+    return (await managedProjectMemberships([scope], principalId)).get(scope);
   }
 
   async function sessionsForViewer(principalId: string): Promise<Session[]> {
     const sessions = await deps.sessions.listByParticipant(principalId);
-    const allowed = new Map(
-      await Promise.all(
-        [...new Set(sessions.map((session) => session.scopeId))].map(
-          async (scope) => [scope, await managedProjectMembership(scope, principalId)] as const,
-        ),
-      ),
+    const allowed = await managedProjectMemberships(
+      sessions.map((session) => session.scopeId),
+      principalId,
     );
     return sessions.filter((session) => allowed.get(session.scopeId) !== false);
   }
 
   async function scopesForViewer(principalId: string): Promise<ParticipantScope[]> {
     const scopes = await deps.sessions.participantScopes(principalId);
-    const allowed = await Promise.all(
-      scopes.map(async (scope) => (await managedProjectMembership(scope.scopeId, principalId)) !== false),
+    const allowed = await managedProjectMemberships(
+      scopes.map((scope) => scope.scopeId),
+      principalId,
     );
-    return scopes.filter((_, index) => allowed[index]);
+    return scopes.filter((scope) => allowed.get(scope.scopeId) !== false);
   }
 
   async function sessionForViewer(sessionId: string, principalId: string): Promise<Session | null> {
@@ -861,6 +887,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     projectView,
     projectsForViewer,
     managedProjectMembership,
+    managedProjectMemberships,
     sessionsForViewer,
     sessionForViewer,
     contextsFor,

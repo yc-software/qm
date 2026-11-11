@@ -42,6 +42,7 @@ export interface PersonaForTurn {
 
 export interface PersonaService {
   enabledFor(principalId: string): Promise<boolean>;
+  roles(principalId: string): Promise<Map<string, PersonaRole>>;
   role(principalId: string, personaId: string, contextScope?: ScopeId): Promise<PersonaRole | null>;
   list(principalId: string): Promise<PersonaResult<PersonaView[]>>;
   detail(principalId: string, id: string): Promise<PersonaResult<PersonaDetail>>;
@@ -141,6 +142,7 @@ export function createPersonaService(deps: {
   return {
     enabledFor,
     role,
+    roles: async (principalId) => store.roles(await granteeScopes(principalId)),
     async list(principalId) {
       if (!(await enabledFor(principalId))) return { status: "disabled" };
       return { status: "ok", value: await store.listFor(await granteeScopes(principalId)) };

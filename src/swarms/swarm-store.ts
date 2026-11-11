@@ -17,6 +17,7 @@ export const SWARM_LIMITS = {
   sweepBatch: 16,
   sweepConcurrency: 4,
   reconcileMs: 30_000,
+  pausedRecheckMs: 15_000,
   provisionMs: 10_000,
 } as const;
 

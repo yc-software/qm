@@ -1,6 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { swarmFixture } from "./support/swarm-fixture.ts";
+import { processRun } from "../src/runs/worker.ts";
+import { SWARM_LIMITS } from "../src/swarms/swarm-store.ts";
+import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 
 test("a swarm provisions one shared board computer that the root and every worker share", async () => {
   const fixture = await swarmFixture();
@@ -132,4 +135,22 @@ test("pausing and stopping the root's direct children cascades across a 120-work
   swarm = (await fixture.store.get(fixture.root.id))!;
   assert.ok(workers.every((w) => swarm.messages[0]!.notifications[w.id]?.state !== "queued"));
   assert.equal((await fixture.service.inspect(fixture.caller)).peers.length, 121);
+});
+
+test("a run claimed before a pause lands is held at the start gate and runs once after resume", async () => {
+  const f = await swarmFixture();
+  const [worker] = await f.service.spawn(f.caller, { requestId: "one", text: "Work" });
+  await f.service.sweep();
+  const runId = (await f.store.get(f.root.id))!.messages[0]!.notifications[worker!.id]!.runId!;
+  const handleTurn = async (input: OrchestratorInput) => (await f.service.binding(input), { status: "ok" }) as never;
+  const run = async (claimed: Parameters<typeof processRun>[1] | null) =>
+    processRun({ runs: f.runs, leaseTtlMs: 60_000, orchestrator: { handleTurn } as never }, claimed!);
+  const claimed = await f.runs.claimById(runId, "t", 60_000);
+  await f.service.control(f.caller, { memberId: worker!.id, state: "paused" }).then(() => run(claimed));
+  assert.equal((await f.runs.get(runId))!.status, "pending");
+  await f.service.control(f.caller, { memberId: worker!.id, state: "active" }).then(() => f.service.sweep());
+  const now = Date.now;
+  Date.now = () => now() + SWARM_LIMITS.pausedRecheckMs + 1_000;
+  await run(await f.runs.claimById(runId, "t", 60_000)).finally(() => (Date.now = now));
+  assert.equal((await f.runs.get(runId))!.status, "done");
 });

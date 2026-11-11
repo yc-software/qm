@@ -101,6 +101,7 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
   const provisionQueue = createKeyedQueue<string>();
 
   const sessionByName = new Map<string, ManagedAgentsSession>();
+  const pauseFailed = new Set<string>();
   const scopeByName = new Map<string, string>();
   const scratchKeyByName = new Map<string, string>();
   const activeScratch = new Map<string, number>();
@@ -196,21 +197,25 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
     onStatus?: (text: string) => void,
   ): Promise<{ session: ManagedAgentsSession; coldStart: boolean }> {
     return provisionQueue(scope, async () => {
-      const cached = sessionByName.get(name);
-      if (cached) return { session: cached, coldStart: false };
-
-      const adopt = (session: ManagedAgentsSession): { session: ManagedAgentsSession; coldStart: boolean } => {
+      const adopt = async (session: ManagedAgentsSession) => {
+        await store.merge(scope, {
+          sandboxId: session.sandboxId,
+          preservationState: "running",
+          preservationError: undefined,
+        });
         sessionByName.set(name, session);
         return { session, coldStart: false };
       };
+
+      const cached = sessionByName.get(name);
+      if (cached) return pauseFailed.delete(name) ? adopt(cached) : { session: cached, coldStart: false };
 
       const stored = await store.get(scope);
       if (stored) {
         try {
           onStatus?.("Resuming the sandbox…");
           const session = await client.connect(stored.sessionId);
-          await store.merge(scope, { preservationState: "running", sandboxId: session.sandboxId });
-          return adopt(session);
+          return await adopt(session);
         } catch (err) {
           if (!(err instanceof ManagedAgentsSandboxGoneError)) throw err;
         }
@@ -220,7 +225,7 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
         try {
           const session = await client.connect(summary.sessionId);
           await recordSession(scope, session, Date.now());
-          return adopt(session);
+          return await adopt(session);
         } catch (err) {
           if (!(err instanceof ManagedAgentsSandboxGoneError)) throw err;
         }
@@ -584,11 +589,7 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
             recovery: { ...recovery, state: "paused" },
           };
         scopeByName.set(name, scopeId);
-        let session = sessionByName.get(name);
-        if (!session) {
-          session = await client.connect(stored.sessionId);
-          sessionByName.set(name, session);
-        }
+        const session = sessionByName.get(name) ?? (await client.connect(stored.sessionId));
         const r = await session.runCommand("echo responsive", { timeoutMs: 30_000 });
         return {
           machine,
@@ -657,7 +658,9 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
       await session.pause();
       await store.merge(scope, { preservationState: "paused", preservationError: undefined });
       sessionByName.delete(handle.id);
+      pauseFailed.delete(handle.id);
     } catch (error) {
+      pauseFailed.add(handle.id);
       await store.merge(scope, { preservationState: "pause_failed", preservationError: errMessage(error) });
       reportError("sandbox_preservation", "pause_failed", errMessage(error), scope);
       throw error;

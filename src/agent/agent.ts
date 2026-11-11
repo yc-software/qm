@@ -220,7 +220,7 @@ export interface ModelUtilities {
   ): Promise<string | undefined>;
   screenSecurity?(input: ScreenSecurityInput): Promise<SecurityScreenVerdict | undefined>;
   pickAckEmoji?(text: string, candidates: readonly string[]): Promise<string | undefined>;
-  generateTitle?(transcript: string, opts?: { descriptive?: boolean }): Promise<string | undefined>;
+  generateTitle?(transcript: string): Promise<string | undefined>;
   summarizeApproval?(command: string, reason: string, purpose?: string): Promise<string | undefined>;
   suggestNextPrompt?(transcript: string): Promise<string | undefined>;
 }

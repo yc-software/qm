@@ -152,6 +152,34 @@ describe("conversation pins self-API", async () => {
     assert.ok(entryPin?.preview, "the late joiner sees the pinned entry's preview");
   });
 
+  it("batches previews outside the requested transcript window", async () => {
+    const old = (await built.sessions.getItems(sessionId)).filter(
+      (item) => item.kind === "UserMessage" || item.kind === "AgentMessage",
+    );
+    for (const item of old) await built.sessions.addPin(sessionId, { entrySeq: item.seq, addedBy: "U1" }, 100);
+    const getItem = built.sessions.getItem.bind(built.sessions);
+    const getItems = built.sessions.getItems.bind(built.sessions);
+    let reads = 0;
+    built.sessions.getItem = async (...args) => {
+      reads++;
+      return getItem(...args);
+    };
+    built.sessions.getItems = async (...args) => {
+      reads++;
+      return getItems(...args);
+    };
+    try {
+      const view = await built.app.getSessionForViewer(sessionId, "U1", { sinceSeq: 999999 });
+      assert.deepEqual(view?.items, []);
+      assert.ok(view?.pins?.filter((pin) => pin.entrySeq !== undefined).every((pin) => pin.preview));
+      assert.equal(reads, 1);
+      assert.equal(await built.app.getSessionForViewer(sessionId, "outsider"), null);
+    } finally {
+      built.sessions.getItem = getItem;
+      built.sessions.getItems = getItems;
+    }
+  });
+
   it("unpins an item", async () => {
     const token = await capFor("U1", THREAD);
     const created = await call("POST", "/v1/pins", { text: "ephemeral" }, token);

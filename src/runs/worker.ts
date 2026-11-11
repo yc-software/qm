@@ -4,7 +4,13 @@ import type { ErrorLog } from "../admin/error-log.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import type { TurnResult } from "../types.ts";
 import type { Orchestrator } from "../core/orchestrator.ts";
-import { isNonRetryable, NonRetryableTurnError, ProviderTurnError, turnFailureMessage } from "../core/turn-error.ts";
+import {
+  HeldTurnError,
+  isNonRetryable,
+  NonRetryableTurnError,
+  ProviderTurnError,
+  turnFailureMessage,
+} from "../core/turn-error.ts";
 import {
   countedClaims,
   CRASHED,
@@ -154,6 +160,12 @@ async function attemptRun(
   } catch (err) {
     stopBeat();
     if (opts?.shutdown?.aborted) throw err;
+    if (err instanceof HeldTurnError) {
+      console.warn(`[worker] run ${run.id} held: ${err.message}`);
+      if (!(await deps.runs.releaseLease(run.id, token, undefined, Date.now() + err.retryAfterMs)))
+        throw new Error(`run ${run.id} lost its lease before it could be held`, { cause: err });
+      return { status: "queued", sessionId: run.sessionId, runId: run.id };
+    }
     console.error(`[worker] run ${run.id} turn failed: ${errMessage(err)}`);
     if (!errorAlreadyReported(err))
       deps.errors?.record(

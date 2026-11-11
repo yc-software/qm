@@ -277,6 +277,22 @@ test("teardown pauses the session and the next provision resumes it", async () =
   assert.equal(fake.createdCount(scopeName()), 1);
 });
 
+test("resuming a session whose pause failed clears the stale pause error", async () => {
+  const store = testMap<StoredManagedAgentsSandbox>();
+  const create = async (options: Parameters<typeof fake.client.create>[0]) => ({
+    ...(await fake.client.create(options)),
+    pause: async () => Promise.reject(new Error("provider pause unavailable")),
+  });
+  const first = make({ client: { ...fake.client, create }, store });
+  for (const next of [first, make({ client: { ...fake.client, create }, store })]) {
+    await assert.rejects(first.teardown(await first.provision(scope)), /pause unavailable/);
+    await next.computerStatus?.(scope);
+    await next.provision(scope);
+    const stored = await store.get(scope);
+    assert.deepEqual([stored?.preservationState, stored?.preservationError], ["running", undefined]);
+  }
+});
+
 test("keepWarm teardown leaves the session running for background work", async () => {
   const h = await sandbox.provision(scope);
   await sandbox.teardown(h, { keepWarm: true });

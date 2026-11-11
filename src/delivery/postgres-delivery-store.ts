@@ -273,6 +273,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         `UPDATE deliveries
             SET delivered_at = $2,
                 expired_at = NULL,
+                failed_reason = NULL,
                 deliver_latency_ms = GREATEST(0, $2 - created_at),
                 slack_api_ms = COALESCE($3, slack_api_ms)
           WHERE id = $1 AND delivered_at IS NULL`,
@@ -295,7 +296,8 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
          VALUES ($1, $2, '{"type":"ack-tombstone","target":""}', '', $3, $3)
          ON CONFLICT (tenant_id, idempotency_key)
          DO UPDATE SET delivered_at = COALESCE(deliveries.delivered_at, EXCLUDED.delivered_at),
-                       expired_at = CASE WHEN deliveries.delivered_at IS NULL THEN NULL ELSE deliveries.expired_at END`,
+                       expired_at = CASE WHEN deliveries.delivered_at IS NULL THEN NULL ELSE deliveries.expired_at END,
+                       failed_reason = CASE WHEN deliveries.delivered_at IS NULL THEN NULL ELSE deliveries.failed_reason END`,
         [randomUUID(), idempotencyKey, at],
       );
     },
@@ -319,6 +321,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         `UPDATE deliveries
             SET recipient_thread_ref = $2,
                 expired_at = CASE WHEN delivered_at IS NULL THEN NULL ELSE expired_at END,
+                failed_reason = CASE WHEN delivered_at IS NULL THEN NULL ELSE failed_reason END,
                 delivered_at = COALESCE(delivered_at, $3)
           WHERE id = $1 AND destination->>'type' = 'principal'`,
         [id, recipientThreadRef, at],

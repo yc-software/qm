@@ -174,6 +174,7 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
       if (d && d.deliveredAt === null) {
         d.deliveredAt = at;
         delete d.expiredAt;
+        delete d.failedReason;
         d.deliverLatencyMs = Math.max(0, at - d.createdAt);
         if (slackApiMs !== undefined) d.slackApiMs = slackApiMs;
       }
@@ -193,6 +194,7 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
         if (d && d.deliveredAt === null) {
           d.deliveredAt = at;
           delete d.expiredAt;
+          delete d.failedReason;
         }
         return;
       }
@@ -225,6 +227,7 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
       if (d.deliveredAt === null) {
         d.deliveredAt = at;
         delete d.expiredAt;
+        delete d.failedReason;
       }
     },
     async listByRecipientThread(recipientThreadRef, opts) {

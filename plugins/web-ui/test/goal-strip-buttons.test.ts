@@ -4,26 +4,23 @@ import { harness, SESSION } from "./deep-link-boot-fixture.ts";
 import { item } from "./item-fixture.ts";
 import { metadata } from "./model-metadata.ts";
 
+type Status = "active" | "paused" | "cancelled";
+
 async function settle(check: () => boolean): Promise<void> {
   for (let i = 0; i < 200 && !check(); i++) await new Promise((resolve) => setTimeout(resolve, 10));
   assert.ok(check(), "timed out waiting for the UI to settle");
 }
 
-const goal = (status: "active" | "paused") => ({
-  objective: "ship the fix",
-  status,
-  createdAt: 1000,
-  updatedAt: 1000,
-});
+const goal = (status: Status) => ({ objective: "ship the fix", status, createdAt: 1000, updatedAt: 1000 });
 
-test("the play button on a paused goal bar resumes the goal and sends the turn that continues it", async () => {
+async function openGoalBar(action: "resume" | "cancel", before: Status, after: Status) {
   const posts: string[] = [];
   const h = await harness({
     path: `/s/${SESSION.id}`,
     api: (path, init) => {
-      if (path === `/api/sessions/${SESSION.id}/goal/resume`) {
+      if (path === `/api/sessions/${SESSION.id}/goal/${action}`) {
         posts.push(`${init?.method} ${path}`);
-        return Response.json({ resumed: true, goal: goal("active") });
+        return Response.json(action === "resume" ? { resumed: true, goal: goal("active") } : { cancelled: true });
       }
       if (path.startsWith("/api/runtime-config"))
         return Response.json({
@@ -47,20 +44,25 @@ test("the play button on a paused goal bar resumes the goal and sends the turn t
               callId: "c1",
               body: { action: "create", goal: goal("active") },
             }),
-            item("Stop", { seq: 4, createdAt: 5000, body: { reason: "by user" } }),
+            ...(before === "paused" ? [item("Stop", { seq: 4, createdAt: 5000, body: { reason: "by user" } })] : []),
           ],
-          goal: goal("paused"),
+          goal: goal(posts.length ? after : before),
         });
       return undefined;
     },
   });
+  h.releaseSessions();
+  await h.boot();
+  const chat = h.visibleConversation();
+  const bar = () => chat.state.host?.querySelector(".goal-strip") ?? null;
+  await settle(() => Boolean(bar()));
+  return { h, chat, posts, bar };
+}
+
+test("the play button on a paused goal bar resumes the goal and sends the turn that continues it", async () => {
+  const { h, chat, posts, bar } = await openGoalBar("resume", "paused", "paused");
   try {
-    h.releaseSessions();
-    await h.boot();
-    const chat = h.visibleConversation();
-    await settle(() => Boolean(chat.state.host?.querySelector(".goal-strip")));
-    const host = chat.state.host!;
-    assert.match(host.querySelector(".goal-strip")!.textContent ?? "", /Goal paused/);
+    assert.match(bar()!.textContent ?? "", /Goal paused/);
     const sent: unknown[] = [];
     const agent = chat.state.agent!;
     agent.prompt = (async (message: unknown) => {
@@ -72,22 +74,32 @@ test("the play button on a paused goal bar resumes the goal and sends the turn t
     chat.state.host!.querySelector("textarea")!.value = draft;
     chat.state.host!.querySelector("textarea")!.dispatchEvent(new window.Event("input", { bubbles: true }));
 
-    const play = host.querySelector<HTMLButtonElement>(".goal-strip-resume")!;
-    assert.equal(play.getAttribute("aria-label"), "Resume goal");
-    play.click();
+    bar()!.querySelector<HTMLButtonElement>('[aria-label="Resume goal"]')!.click();
     await settle(() => sent.length > 0);
 
     assert.deepEqual(posts, [`POST /api/sessions/${SESSION.id}/goal/resume`]);
     assert.match(JSON.stringify(sent[0]), /Continue the goal\./);
     assert.equal(chat.state.host!.querySelector("textarea")!.value, draft, "the person's own draft stays put");
     chat.drawActiveChat();
-    assert.match(
-      chat.state.host!.querySelector(".goal-strip")!.textContent ?? "",
-      /Pursuing goal/,
-      "the bar follows the goal core reports, not the earlier stop in the transcript",
-    );
-    assert.equal(chat.state.host!.querySelector(".goal-strip-resume"), null, "no play button while a reply runs");
+    assert.match(bar()!.textContent ?? "", /Pursuing goal/, "the bar follows the goal core reports, not the stop");
+    assert.equal(bar()!.querySelector('[aria-label="Resume goal"]'), null, "no play button while a reply runs");
   } finally {
     await h.close();
   }
 });
+
+for (const [name, before, after] of [
+  ["cancelling an active goal removes its bar", "active", "cancelled"],
+  ["cancelling a paused goal whose reply was stopped removes its bar", "paused", "cancelled"],
+  ["a goal core still reports active after a cancel keeps its bar and a working cancel button", "active", "active"],
+] as const)
+  test(name, async () => {
+    const { h, posts, bar } = await openGoalBar("cancel", before, after);
+    try {
+      const button = () => bar()?.querySelector<HTMLButtonElement>('[aria-label="Cancel goal"]');
+      button()!.click();
+      await settle(() => posts.length > 0 && (after === "cancelled" ? !bar() : button()?.disabled === false));
+    } finally {
+      await h.close();
+    }
+  });
