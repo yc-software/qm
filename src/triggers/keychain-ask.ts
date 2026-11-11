@@ -1,4 +1,4 @@
-import { cronTriggerAuthority } from "../cron/authority.ts";
+import { ownerAuthored, cronTriggerAuthority } from "../cron/authority.ts";
 import type { Keychain, KeychainAsk, KeychainGrant } from "../credentials/keychain.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import type { Destination, ScopeId } from "../types.ts";
@@ -68,6 +68,7 @@ export async function fireAskResolution(
     input: resolutionInput(ask, grant),
     fireKey: `ask:${ask.id}:${ask.status}`,
     surface: "keychain-ask",
+    ...(cron ? { ownerFire: ownerAuthored(cron) } : {}),
     ...(cron?.runtime ? { runtime: cron.runtime } : {}),
     ...(destination ? { destination } : {}),
     ...(ask.requesterThreadRef ? { threadRef: ask.requesterThreadRef } : {}),

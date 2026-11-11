@@ -79,23 +79,19 @@ export function createDeploymentMethods(
     shareDeployment(idOrName, grantee, permission, actor, opts) {
       return deps.deploy.shareDeployment(idOrName, grantee, permission, actor, opts);
     },
-    async inviteToDeployment(idOrName, rawEmail, actorId, opts) {
+    async inviteToDeployment(idOrName, rawEmail, actor, opts) {
       const email = rawEmail.trim().toLowerCase();
       if (!validEmail(email)) throw new Error("a valid email address is required");
       const grantee = await deploymentShareScope(`personal:${email}`, "read");
       const deployment = await deps.deploy.getDeployment(idOrName);
       if (!deployment) throw new DeployAccessError("not_found", `no such app: ${idOrName}`);
-      if (deployment.ownerScopeId !== `personal:${actorId}`)
-        throw new DeployAccessError(
-          "forbidden",
-          `only the owner can change who can reach "${deployment.name ?? deployment.id}"`,
-        );
+      await deps.deploy.assertDeploymentOwner(deployment, actor);
       return invitationLock.withLock(`deployment-invite:${deployment.id}:${email}`, async () => {
         const previous = await deps.deploy.deploymentGrantees(deployment.id);
         const alreadyShared = previous.some((g) => g.scope === grantee);
         const grantees = previous.some((g) => g.scope === grantee && g.permission === "read")
           ? previous
-          : await deps.deploy.shareDeployment(deployment.id, grantee, "read", { createdBy: actorId }, opts);
+          : await deps.deploy.shareDeployment(deployment.id, grantee, "read", actor, opts);
         const handle = tenantAppHandle();
         const appUrl =
           deps.deployAppsDomain && handle
@@ -116,7 +112,7 @@ export function createDeploymentMethods(
               ...renderInviteEmail({
                 to: email,
                 brandName: deployment.displayName ?? deployment.name ?? "a shared app",
-                invitedBy: actorId,
+                invitedBy: actor.createdBy,
                 signInUrl: appUrl,
                 expiresAt: null,
                 magicLink: false,

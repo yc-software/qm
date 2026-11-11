@@ -156,13 +156,13 @@ async function mintControlPlaneTokens(
   if (!strictReadOnly && deps.signingSecret && deps.apiBaseUrl) {
     const destination = defaultDestination;
     connectorEnv.AGENT_API_URL = deps.apiBaseUrl;
-    if (deps.admin && liveAuthorTurn) {
+    if (deps.admin && (liveAuthorTurn || liveTurn)) {
       try {
         actorIsOrgAdmin = (await deps.admin.adminStatusOf(tenant, actor)).isAdmin;
       } catch (e) {
         swallow("orchestrator: admin status for turn", e);
       }
-      if (actorIsOrgAdmin && liveTurn && orgMemoryWritable) orgMemoryWrite = resolution.orgScopeId;
+      if (actorIsOrgAdmin && liveTurn && !automatedTurn && orgMemoryWritable) orgMemoryWrite = resolution.orgScopeId;
     }
     const memoryClaim = memoryAccess
       ? { ...memoryAccess, read: baseRecallScopes, ...(orgMemoryWrite ? { orgWrite: orgMemoryWrite } : {}) }
@@ -189,7 +189,6 @@ async function mintControlPlaneTokens(
       ...(memoryClaim ? { memory: memoryClaim } : {}),
       ...(liveAuthorTurn ? { liveAuthor: true } : {}),
       ...(automatedTurn ? { triggered: true } : {}),
-      ...(!liveTurn && input.unattendedGrants ? { grants: input.unattendedGrants } : {}),
       ...(input.runId ? { runId: input.runId } : {}),
       sessionId: session.id,
       origin,

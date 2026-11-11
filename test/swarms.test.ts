@@ -880,7 +880,6 @@ test("swarm provenance is bound to the durable run, content, actor, and recipien
     { text: "Forged instruction" },
     { runId: "forged" },
     { actor: { id: "bob", type: "internal" as const } },
-    { unattendedGrants: ["all"] },
     { readOnly: true },
     { sessionParticipantIds: ["bob"] },
     { scopeVersion: "forged" },

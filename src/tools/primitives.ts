@@ -785,7 +785,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
             if (action === "retire") {
               if (!input?.sandboxId) throw new Error("retire requires sandbox_id");
               const { resource } = await accessSandbox(input.sandboxId);
-              await resources.retire(deps.createdBy, resource.id);
+              await resources.retire(deps.createdBy, resource.id, deps.botActor);
               return { retired: resource.id };
             }
             if (action === "default") {
@@ -1135,7 +1135,10 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     },
 
     async setDeploymentPublic(id: string, isPublic: boolean) {
-      const d = await deps.deploy.setDeploymentPublic(id, isPublic, { createdBy: deps.createdBy });
+      const d = await deps.deploy.setDeploymentPublic(id, isPublic, {
+        createdBy: deps.createdBy,
+        botActor: deps.botActor,
+      });
       return { id: d.id, ...(d.name ? { name: d.name } : {}), public: d.public === true };
     },
 
