@@ -269,6 +269,7 @@ run on its own worker computer. The check runs each time the turn uses a compute
 turn that is already running loses that access as soon as someone else posts or a person's turn works on one of those computers. Background
 jobs on those computers are covered too: the bot's `background` list leaves them out, it
 cannot watch them, and a watch it armed while it could stops reading the job's output.
+When the bot loses that access, its turns still running in the swarm's threads or on the swarm's computers are told to stop, and background jobs its turns started on the swarm's board and worker computers are stopped and marked reaped.
 A computer supplied as `forumSandboxId` stays an ordinary computer of its scope, which is
 why a swarm a bot starts never takes one, from the bot or from a person: every computer in
 a swarm a bot starts belongs to the swarm. A person's own swarm can still take one.
