@@ -2,6 +2,7 @@ import MailComposer from "nodemailer/lib/mail-composer";
 import addressparser from "nodemailer/lib/addressparser";
 import { isTag, type ChildNode } from "domhandler";
 import { DomUtils, ElementType, parseDocument } from "htmlparser2";
+import { isValidCapabilityTimezone } from "../../auth/capability-token.ts";
 import { splitLinks } from "../../../plugins/chassis/src/links.ts";
 import type { LoopItem, LoopSourcePayload } from "../types.ts";
 import { isAccountType } from "../../connectors/oauth.ts";
@@ -297,7 +298,12 @@ export const gmailAdapter: LoopSourceAdapter = {
     const draft = args.body !== undefined ? parseReplyDraft(args) : draftOf(item);
     if (!draft || !draft.body.trim()) return { ok: false, reason: "bad_item", message: "the draft is empty" };
     try {
-      return await sendGmail(deps, item, { ...draft, body: draft.body.trim() }, deps.timezone);
+      return await sendGmail(
+        deps,
+        item,
+        { ...draft, body: draft.body.trim() },
+        deps.timezone ?? (isValidCapabilityTimezone(args.timezone) ? args.timezone : undefined),
+      );
     } catch (err) {
       return { ok: false, reason: "upstream", message: errMessage(err) };
     }
