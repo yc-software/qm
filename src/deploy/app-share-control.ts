@@ -3,18 +3,20 @@ export const SHARE_CSS = `
   header .access-btn[data-level="public"] { color: var(--brand-accent); }
   header .access-btn:disabled { cursor: default; }
   header .access-btn:disabled:hover { background: transparent; }
-  #share { display: none; position: fixed; inset: 0; width: 100%; height: 100%; border: 0; z-index: 2147483000;
-    background: transparent; color-scheme: normal; }
-  #share.open { display: block; }
+  #share-dialog { width: 100%; height: 100%; max-width: none; max-height: none; margin: 0; padding: 0; border: 0;
+    background: transparent; }
+  #share-dialog::backdrop { background: transparent; }
+  #share { display: block; width: 100%; height: 100%; border: 0; background: transparent; color-scheme: normal; }
 `;
 
 export const SHARE_BUTTON = '<button type="button" class="access-btn" id="access" hidden></button>';
 
 export const shareMarkup = (name: string): string =>
-  `<iframe id="share" title="Share ${name}" allowtransparency="true"></iframe>`;
+  `<dialog id="share-dialog" aria-label="Share ${name}"><iframe id="share" title="Share ${name}" allowtransparency="true"></iframe></dialog>`;
 
 export const SHARE_JS = String.raw`
   const accessBtn = document.getElementById("access");
+  const shareDialog = document.getElementById("share-dialog");
   const share = document.getElementById("share");
   const accessIcons = {
     private: '<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
@@ -35,16 +37,16 @@ export const SHARE_JS = String.raw`
     accessBtn.append(text);
   };
   const shareUrl = portal + "/app-share?slug=" + encodeURIComponent(slug);
-  const closeShare = () => {
-    share.classList.remove("open");
+  const closeShare = () => shareDialog.close();
+  shareDialog.addEventListener("close", () => {
     share.src = "about:blank";
-    accessBtn.focus();
-  };
+  });
   accessBtn.addEventListener("click", () => {
     share.src = shareUrl + "&name=" + encodeURIComponent(document.getElementById("name").textContent || "");
-    share.classList.add("open");
+    shareDialog.showModal();
+    share.focus();
   });
   share.addEventListener("load", () => {
-    if (share.classList.contains("open")) share.contentWindow.postMessage({ type: "qm:theme-request" }, portalOrigin);
+    if (shareDialog.open) share.contentWindow.postMessage({ type: "qm:theme-request" }, portalOrigin);
   });
 `;
