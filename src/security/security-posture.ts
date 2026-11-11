@@ -1,4 +1,5 @@
 import type { OverheardMessage, ScopeId, TurnOrigin } from "../types.ts";
+import { MAX_DOCUMENT_TEXT_CHARS } from "../core/documents.ts";
 
 export const SECURITY_POSTURES = ["dangerous", "auto", "strict"] as const;
 export type SecurityPosture = (typeof SECURITY_POSTURES)[number];
@@ -218,11 +219,13 @@ export function securityScreenPayload(input: SecurityScreenInput): SecurityScree
   return boundedPayload(securityScreenParts(input));
 }
 
-export function securityScreenPayloads(input: SecurityScreenInput): string[] {
+export function securityScreenPayloads(input: SecurityScreenInput): string[] | null {
+  const parts = securityScreenParts(input);
+  if (parts.reduce((total, part) => total + part.content.length, 0) > MAX_DOCUMENT_TEXT_CHARS) return null;
   const chunks: string[] = [];
   const groups: Array<Array<{ source: string; content: string }>> = [];
   let group: Array<{ source: string; content: string }> = [];
-  for (const part of securityScreenParts(input)) {
+  for (const part of parts) {
     if (boundedPayload([part])?.truncated) {
       chunks.push(...securityScreenChunks(part.source, part.content));
     } else if (boundedPayload([...group, part])?.truncated) {

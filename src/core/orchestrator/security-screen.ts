@@ -348,24 +348,26 @@ export async function screenInboundInput(turn: InboundScreenTurn) {
   if (screenInbound && !enforceScreen) {
     void buildInboundScreen(turn)
       .then(({ screenPayloads }) =>
-        screenPayloads.length
+        screenPayloads?.length
           ? screenChunks(screenPayloads, classifyAs({ hook: "user_input", surface: input.surface }))
           : undefined,
       )
       .catch(swallowAs("orchestrator: observed inbound screen", undefined));
   } else if (screenInbound) {
     const { hasUnscreenableAttachment, externalPromptData, screenPayloads } = await buildInboundScreen(turn);
-    if (screenPayloads.length || hasUnscreenableAttachment) {
-      const canScreenText = screenPayloads.length > 0 && (!!deps.securityScreener || !!deps.agent.screenSecurity);
-      const verdict = canScreenText
-        ? await screenChunks(
-            screenPayloads,
-            classifyAs({ hook: "user_input", surface: input.surface }, recordScreenRequest),
-            { batch: 4 },
-          )
-        : undefined;
-      let unscreenableCause: "unscreenable-attachment" | "no-screener" | undefined;
-      if (hasUnscreenableAttachment || !screenPayloads.length) unscreenableCause = "unscreenable-attachment";
+    if (!screenPayloads || screenPayloads.length || hasUnscreenableAttachment) {
+      const canScreenText = !!screenPayloads?.length && (!!deps.securityScreener || !!deps.agent.screenSecurity);
+      const verdict =
+        canScreenText && screenPayloads
+          ? await screenChunks(
+              screenPayloads,
+              classifyAs({ hook: "user_input", surface: input.surface }, recordScreenRequest),
+              { batch: 4 },
+            )
+          : undefined;
+      let unscreenableCause: "unscreenable-attachment" | "oversize-input" | "no-screener" | undefined;
+      if (hasUnscreenableAttachment) unscreenableCause = "unscreenable-attachment";
+      else if (!screenPayloads) unscreenableCause = "oversize-input";
       else if (!deps.securityScreener && !deps.agent.screenSecurity) unscreenableCause = "no-screener";
       if (verdict?.decision === "strict") {
         const sources = externalPromptData.map((item) => item.source);

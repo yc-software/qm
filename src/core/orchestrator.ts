@@ -361,6 +361,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         ...(sessionId ? { sessionId } : {}),
       } as const;
       if (screening === "observe") {
+        if (!payloads) return "allow";
         await screenChunks(
           payloads,
           (chunk) =>
@@ -384,6 +385,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (!deps.securityScreener && !deps.agent.screenSecurity) return block("no-screener");
       if (deps.budget && !(await deps.budget.check(tenant, actor.id)).allowed) return block("over-budget");
       if (securitySteersInFlight.has(conversation.threadRef)) return block("steer-in-flight");
+      if (!payloads) return block("oversize-input");
       if (!payloads.length) return block("empty-input");
       securitySteersInFlight.add(conversation.threadRef);
       const verdict = await screenChunks(

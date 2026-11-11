@@ -256,7 +256,7 @@ test("an over-limit screen input packs whole messages into as few bounded payloa
     name: `P${i}`,
     text: `status update ${i} `.repeat(25),
   }));
-  const payloads = securityScreenPayloads({ surface: "slack", text: "", overheard });
+  const payloads = securityScreenPayloads({ surface: "slack", text: "", overheard })!;
   assert.equal(payloads.length, 2);
   assert.ok(payloads.every((payload) => payload.length <= MAX_SCREEN_CHARS));
   assert.deepEqual(
@@ -267,7 +267,7 @@ test("an over-limit screen input packs whole messages into as few bounded payloa
 
 test("a very long source label does not multiply an over-limit part's payloads", () => {
   const count = (source: string, content: string) =>
-    securityScreenPayloads({ surface: "slack", text: "", externalPromptData: [{ source, content }] }).length;
+    securityScreenPayloads({ surface: "slack", text: "", externalPromptData: [{ source, content }] })!.length;
   assert.equal(count("a".repeat(16_001), "notes"), 1);
   for (const content of ['"'.repeat(30_000), "\u0001".repeat(12_000)])
     for (const length of [212, 990, 8_480])

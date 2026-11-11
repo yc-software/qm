@@ -3,6 +3,7 @@ import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { MODEL_BUDGET_TEXT } from "../src/core/turn-error.ts";
+import { MAX_DOCUMENT_TEXT_CHARS } from "../src/core/documents.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -3859,6 +3860,22 @@ test("Auto treats a fresh authenticated ambient speaker as the initiating human"
     built.modelCalls.some((call) => call.model === "mock-security"),
     false,
   );
+});
+
+test("Auto fails open on input too long to screen, flagging it unscreened to the model", async () => {
+  const built = freshApp();
+  const padded = `please note ${"x".repeat(MAX_DOCUMENT_TEXT_CHARS)} thanks`;
+
+  const result = await built.app.turn(dm(padded, { surface: "monitor", origin: { kind: "automation" } }));
+  assert.equal(result.status, "ok");
+  const oversize = (await built.auditLog.events(tenant)).find(
+    (event) => event.action === "security_posture.input_failed_open",
+  );
+  assert.match(oversize?.detail ?? "", /"cause":"oversize-input"/);
+  const main = [...(await built.sessions.listLlmRequests(result.sessionId!))]
+    .reverse()
+    .find((rec) => rec.model !== "mock-security");
+  assert.match(JSON.stringify(main?.promptEnvelope), /NOT security-screened/);
 });
 
 test("an Auto-downgraded turn is quarantined from later full-authority model history", async () => {
