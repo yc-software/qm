@@ -475,7 +475,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
       >
         <span class="menu-label">${routed ? routedName : settingLabel}</span>
         ${suffix ? html`<span class="menu-suffix">${suffix}</span>` : nothing}
-        ${ultrafastOn ? html`<span class="loadout-bolt loadout-ultrafast-badge">${icon(Zap, 13)}</span>` : nothing}
+        ${ultrafastOn ? html`<span class="loadout-ultrafast-badge">${icon(Zap, 13)}</span>` : nothing}
         ${fastOn ? html`<span class="loadout-bolt">${icon(Zap, 13)}</span>` : nothing}${icon(ChevronDown, 13)}
       </button>
       ${
