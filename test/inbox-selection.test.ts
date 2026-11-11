@@ -41,7 +41,7 @@ function world(enabled = true) {
           featureFlags: { enabled: async () => enabled },
         },
         app: {
-          loopAdministration: async (actor: string, loops: { owner: string }[]) =>
+          loopAdministration: async ({ actorId: actor }: { actorId: string }, loops: { owner: string }[]) =>
             loops.map((loop) => loop.owner === actor),
           samePerson: async (a: string, b: string) => a === b,
           membershipControlsScope: async () => false,
