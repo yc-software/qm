@@ -205,6 +205,9 @@ export function inboundIssuesNote(issues: readonly string[]): string {
   return issues.length ? `Files received this turn that did not reach ./${INBOX_DIR}/: ${issues.join("; ")}` : "";
 }
 
+export const withheldName = (name: string, verdict: SecurityScreenVerdict): string =>
+  verdict.unscreened && verdict.reason ? `${name} (${verdict.reason})` : name;
+
 export function inboundIssueList(opts: {
   tooMany?: readonly string[];
   unavailable?: readonly string[];
@@ -280,7 +283,7 @@ export async function materializeInbound(
     if (screenText && textContent !== null) {
       const verdict = await screenText({ content: textContent, name, mimetype });
       if (verdict?.decision === "strict") {
-        blocked.push(verdict.unscreened ? `${name}: ${verdict.reason}` : name);
+        blocked.push(withheldName(name, verdict));
         continue;
       }
       if (!verdict || verdict.unscreened) unscreened.push(name);

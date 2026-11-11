@@ -203,7 +203,8 @@ import {
   createDocumentScreen,
   createSkillScreen,
   createToolResultScreen,
-  withholdOversize,
+  flaggedAudit,
+  oversizeVerdict,
   screenInboundInput,
   type SecurityScreenContext,
   unscreenedVerdict,
@@ -727,6 +728,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               blocksInput: true,
               kind: "input",
               approvalKey: `security-screen:${input.surface ?? "unknown"}`,
+              ...(flaggedScreenedInput.onceOnly ? { grantModes: { session: false, always: false } } : {}),
             });
           });
         } catch (err) {
@@ -1765,18 +1767,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 securityPolicy.screening !== "off"
                   ? async ({ content, name, mimetype }) => {
                       const payload = JSON.stringify({ name, mimetype, content });
-                      if (payload.length > MAX_DOCUMENT_TEXT_CHARS)
-                        return enforceScreen ? withholdOversize(audit, "inbound_file", name) : unscreenedVerdict();
-                      return screenChunks(
-                        securityScreenChunks("tool_result:inbound_file", payload),
-                        classifyAs({
-                          sessionId: session.id,
-                          hook: "tool_response",
-                          request: requestText,
-                          surface: "inbound_file",
-                        }),
-                        { batch: 4, signal: turnAbort.signal },
-                      );
+                      let verdict = enforceScreen ? oversizeVerdict() : unscreenedVerdict();
+                      if (payload.length <= MAX_DOCUMENT_TEXT_CHARS)
+                        verdict = await screenChunks(
+                          securityScreenChunks("tool_result:inbound_file", payload),
+                          classifyAs({
+                            sessionId: session.id,
+                            hook: "tool_response",
+                            request: requestText,
+                            surface: "inbound_file",
+                          }),
+                          { batch: 4, signal: turnAbort.signal },
+                        );
+                      if (verdict.decision === "strict")
+                        audit(flaggedAudit("inbound_file", "withheld", verdict.reason, [name]));
+                      return verdict;
                     }
                   : undefined,
               )

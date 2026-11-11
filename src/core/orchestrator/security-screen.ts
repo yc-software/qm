@@ -18,7 +18,7 @@ import {
 import { collectBlob } from "../../persistence/blob-transfer.ts";
 import { securityScreenPayloads } from "../../security/security-posture.ts";
 import type { CommandApprovalGrant } from "../../types.ts";
-import { isVisionAttachment, safeAttachmentName } from "../attachments.ts";
+import { isVisionAttachment, safeAttachmentName, withheldName } from "../attachments.ts";
 import { wordsToScreen } from "./intake.ts";
 import {
   documentText,
@@ -62,23 +62,15 @@ export const unscreenedVerdict = (): SecurityScreenVerdict => ({
 export const oversizeVerdict = (): SecurityScreenVerdict => ({
   decision: "strict",
   unscreened: true,
-  reason: `too long for the security screen to read (over ${MAX_DOCUMENT_TEXT_CHARS} characters)`,
+  reason: `too long for the security screen to read, over ${MAX_DOCUMENT_TEXT_CHARS} characters`,
 });
 
-export function withholdOversize(
-  audit: InboundScreenTurn["audit"],
-  resource: string,
-  name: string,
-): SecurityScreenVerdict {
-  const verdict = oversizeVerdict();
-  audit({
-    action: SECURITY_FLAGGED,
-    resource,
-    status: "withheld",
-    detail: JSON.stringify({ cause: "strict-verdict", reason: verdict.reason, source: [name] }),
-  });
-  return verdict;
-}
+export const flaggedAudit = (resource: string, status: string, reason: string | undefined, sources: string[]) => ({
+  action: SECURITY_FLAGGED,
+  resource,
+  status,
+  detail: JSON.stringify({ cause: "strict-verdict", reason, source: sources }),
+});
 
 type ScreenStatus = "allow" | "block" | "would_block" | "error";
 type Screened = Pick<SecurityScreenClassification, "verdict"> & Partial<SecurityScreenClassification>;
@@ -370,7 +362,7 @@ export async function screenInboundInput(turn: InboundScreenTurn) {
     audit,
     approvalGrantsFor,
   } = turn;
-  let flaggedScreenedInput: { reason: string; sources: string[] } | undefined;
+  let flaggedScreenedInput: { reason: string; sources: string[]; onceOnly: boolean } | undefined;
   let inputUnscreened = false;
   if (screenInbound && !enforceScreen) {
     void buildInboundScreen(turn)
@@ -399,13 +391,9 @@ export async function screenInboundInput(turn: InboundScreenTurn) {
         flaggedScreenedInput = {
           reason: verdict.reason ?? "strict security screen verdict",
           sources,
+          onceOnly: verdict.unscreened === true,
         };
-        audit({
-          action: SECURITY_FLAGGED,
-          resource: input.surface ?? "unknown",
-          status: "pending_approval",
-          detail: JSON.stringify({ cause: "strict-verdict", reason: flaggedScreenedInput.reason, source: sources }),
-        });
+        audit(flaggedAudit(input.surface ?? "unknown", "pending_approval", flaggedScreenedInput.reason, sources));
       } else if (unscreenableCause || verdict?.unscreened) {
         inputUnscreened = true;
         audit({
@@ -417,7 +405,7 @@ export async function screenInboundInput(turn: InboundScreenTurn) {
       }
     }
   }
-  if (flaggedScreenedInput) {
+  if (flaggedScreenedInput && !flaggedScreenedInput.onceOnly) {
     const existing = await deps.sessions.getByThread(conversation.threadRef);
     const flagGrantKey = `security-screen:${input.surface ?? "unknown"}`;
     for (const grant of await approvalGrantsFor(actor.id)) {
@@ -693,7 +681,7 @@ export function createDocumentScreen(turn: {
         }
         const verdict =
           enforceScreen && extracted.truncated
-            ? withholdOversize(audit, "inbound_document", document.name)
+            ? oversizeVerdict()
             : await screenChunks(
                 securityScreenChunks("tool_result:inbound_document", extracted.text),
                 classifyAs({
@@ -706,8 +694,9 @@ export function createDocumentScreen(turn: {
               );
         if (verdict.decision === "strict") {
           documentInputs.documents.splice(documentInputs.documents.indexOf(document), 1);
+          audit(flaggedAudit("inbound_document", "withheld", verdict.reason, [document.name]));
           documentInputs.notices.push(
-            `${document.name}: document withheld by the external-data security screen${verdict.unscreened ? `, ${verdict.reason}` : ""}.`,
+            `${withheldName(document.name, verdict)}: document withheld by the external-data security screen.`,
           );
         } else if (verdict.unscreened) documentsUnscreened = true;
       }

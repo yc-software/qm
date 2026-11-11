@@ -3500,6 +3500,10 @@ test("Auto asks for input approval on suspicious data, skips re-screening on app
     }),
   );
   assert.equal(secondFlagged.status, "ok", "a session grant covers later flags in the same session");
+  const unread = await grantApp.app.turn(
+    dm("x".repeat(MAX_DOCUMENT_TEXT_CHARS + 1), { surface: "monitor", origin: { kind: "automation" } }),
+  );
+  assert.equal(unread.status, "pending_approval", "a session grant does not cover input the screen never read");
   assert.ok(
     (await grantApp.auditLog.events(tenant)).some((event) => event.action === "security_posture.flag_allowed_by_grant"),
   );
@@ -3870,6 +3874,7 @@ test("Auto holds input too long to screen until a person allows it, and withhold
   const held = await built.app.turn(request);
   assert.equal(held.status, "pending_approval");
   assert.match(held.pendingApprovals?.[0]?.reason ?? "", /too long for the security screen to read/);
+  assert.deepEqual(held.pendingApprovals?.[0]?.grantModes, { session: false, always: false });
   assert.equal(
     built.modelCalls.some((call) => call.model === "mock"),
     false,
@@ -3887,7 +3892,7 @@ test("Auto holds input too long to screen until a person allows it, and withhold
   const main = (await built.sessions.listLlmRequests(attached.sessionId!)).findLast((rec) => rec.model === "mock");
   assert.match(
     JSON.stringify(main?.promptEnvelope),
-    /notes\.txt: too long for the security screen to read \(over \d+ characters\) — withheld by the external-data security screen/,
+    /notes\.txt \(too long for the security screen to read, over \d+ characters\) — withheld by the external-data security screen/,
   );
   const withheld = (await built.auditLog.events(tenant)).find((event) => event.resource === "inbound_file");
   assert.match(withheld?.detail ?? "", /"source":\["notes\.txt"\]/);

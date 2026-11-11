@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 function freshApp() {
   return buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "document-turn-")) }));
@@ -86,8 +87,9 @@ for (const [file, extension] of [
     const calls = (await built.sessions.listLlmRequests(result.sessionId!)).filter((record) => record.model === "mock");
     assert.doesNotMatch(JSON.stringify(calls.at(-1)?.promptEnvelope), /"documents":/);
     assert.match(JSON.stringify(calls.at(-1)?.promptEnvelope), /withheld by the external-data security screen/);
-    if (file === "long")
-      assert.match(JSON.stringify(calls.at(-1)?.promptEnvelope), /screen, too long for the security/);
+    if (file === "long") assert.match(JSON.stringify(calls.at(-1)?.promptEnvelope), /long\.docx \(too long for the/);
+    const withheld = (await built.auditLog.events(tenant)).find((event) => event.resource === "inbound_document");
+    assert.ok(withheld?.detail?.includes(`"source":["${file}.${extension}"]`));
     const followup = await built.app.turn({ ...request, text: "try reading it again" });
     const followupCalls = (await built.sessions.listLlmRequests(followup.sessionId!)).filter(
       (record) => record.model === "mock",
