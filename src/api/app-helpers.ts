@@ -20,7 +20,7 @@ import { isTerminal, RUN_WAIT_FALLBACK_MS, type Run, type SessionWatch } from ".
 import type { RunSignal } from "../runs/run-signal-store.ts";
 import { deployRef, encodeRef, parseRef } from "../acl/resource-ref.ts";
 import type { Skill } from "../skills/skill-store.ts";
-import { botWorkInPersonsName, type CapabilityClaims } from "../auth/capability-token.ts";
+import type { CapabilityClaims } from "../auth/capability-token.ts";
 import {
   createCanReadScope,
   createCanManageScope,
@@ -539,11 +539,11 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       : undefined;
     const attestedBot =
       privateChannel &&
-      capabilityMembership !== true &&
       claims.botActor === true &&
       claims.liveActor === true &&
       claims.members?.some((member) => member.id === claims.actorId && member.type === "internal") === true &&
-      !(await botWorkInPersonsName(deps.admin?.users, claims));
+      capabilityMembership !== true &&
+      (await deps.users?.resolve([claims.actorId]))?.get(claims.actorId)?.kind === "app";
     if (
       (kind === "channel" &&
         !(

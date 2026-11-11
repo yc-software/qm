@@ -55,8 +55,11 @@ export async function botWorkInPersonsName(
 export async function personOrOwningBot(
   caller: Pick<CapabilityClaims, "actorId" | "botActor">,
   owns: () => Promise<boolean>,
+  record?: { botActor?: boolean } | null,
 ): Promise<boolean> {
-  return caller.botActor !== true || (!isSystemActor(caller.actorId) && owns());
+  return (
+    caller.botActor !== true || (!isSystemActor(caller.actorId) && (!record || record.botActor === true) && owns())
+  );
 }
 
 type BlobTransferClaims = CapabilityClaims & { aud: typeof BLOB_TRANSFER_AUD; blob: BlobGrant };
