@@ -3,11 +3,19 @@ import { cachedTranscript, storeTranscript } from "./transcript-cache";
 import { passageOccurrence, passageRange } from "./passage-range";
 import { html, nothing } from "lit";
 import { markdown } from "./message-markdown";
-import { isHidden, isNarration, retractedReason } from "./items";
+import { messageWorkTimeline } from "./timeline";
 import { ref } from "lit/directives/ref.js";
 import { ArrowUp, ArrowUpRight, Maximize2, Minimize2, Minus, MessageSquare, X } from "lucide";
 import { tip } from "./tooltip";
-import { api, fetchTranscript, forkCutSeq, forkSession, type CoreSession } from "./core-bridge";
+import {
+  api,
+  fetchTranscript,
+  forkCutSeq,
+  forkSession,
+  itemsToMessages,
+  type AssistantWork,
+  type CoreSession,
+} from "./core-bridge";
 import { createConversation, disposeConversation, ensureDeliveryStream } from "./conversations";
 import { openSession, openSessionInto, refreshSessions } from "./sessions";
 import type { Conversation, ConvCtx } from "./conv-types";
@@ -211,17 +219,18 @@ export function createSideChatController(ctx: ConvCtx) {
       const { items } = page;
       if (sourceId !== id || previews.get(session.id) !== preview) return;
       if (pendingQuote === null && !cachedTranscript(session.id)) storeTranscript(session.id, page);
-      const replies = items.filter(
-        (item) =>
-          item.seq > (session.forkBoundarySeq ?? -1) &&
-          item.kind === "AgentMessage" &&
-          (item.variant === null || isNarration(item)) &&
-          !retractedReason(item) &&
-          !isHidden(item),
-      );
-      preview.text =
-        replies.map((item) => item.text ?? "").join("\n\n") ||
-        ((page.session ?? session).working ? "Working…" : "No reply yet.");
+      const replies = itemsToMessages(items.filter((item) => item.seq > (session.forkBoundarySeq ?? -1)))
+        .filter((message): message is AssistantWork => message.role === "assistant")
+        .flatMap((message) => {
+          const text = message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
+          const narration = message.work
+            ? messageWorkTimeline(message.work, text).flatMap((part) =>
+                part.kind === "text" ? [part.item.text ?? ""] : [],
+              )
+            : [];
+          return text ? [text] : narration.filter(Boolean);
+        });
+      preview.text = replies.join("\n\n") || ((page.session ?? session).working ? "Working…" : "No reply yet.");
     } catch (cause) {
       reportHandledError("web:side_chat_preview", cause);
       if (sourceId !== id || previews.get(session.id) !== preview) return;

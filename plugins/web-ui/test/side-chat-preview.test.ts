@@ -38,6 +38,7 @@ test("side-chat previews show pending work and open loaded replies immediately",
   let refreshing = false;
   let working = false;
   let narration = "";
+  let finalized = false;
   const h = await harness({
     path: "/s/source",
     session: source,
@@ -49,7 +50,11 @@ test("side-chat previews show pending work and open loaded replies immediately",
         Response.json({
           session: { ...side, working },
           items: working
-            ? [...items, item("AgentMessage", { seq: 1, variant: "narration", text: narration })]
+            ? [
+                ...items,
+                item("AgentMessage", { seq: 1, variant: "narration", text: narration }),
+                ...(finalized ? [item("AgentMessage", { seq: 2, text: narration })] : []),
+              ]
             : [...items, item("AgentMessage", { seq: 1, createdAt: Date.now(), text: "The queue survives restarts." })],
         });
       if (path === "/api/sessions/side?tailTurns=1") return response();
@@ -76,6 +81,9 @@ test("side-chat previews show pending work and open loaded replies immediately",
       .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     await until(() => document.querySelector(".side-chat-preview")?.textContent?.trim() === "Working…");
     narration = "On it: I will build both halves and test them.";
+    h.visibleConversation().onDelivery(side.threadRef);
+    await until(() => document.querySelector(".side-chat-preview")?.textContent?.trim() === narration);
+    finalized = true;
     h.visibleConversation().onDelivery(side.threadRef);
     await until(() => document.querySelector(".side-chat-preview")?.textContent?.trim() === narration);
   } finally {
