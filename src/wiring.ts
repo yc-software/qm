@@ -62,7 +62,6 @@ import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/br
 import { createDirectFileUploads, type DirectFileUploads } from "./files/direct-file-upload.ts";
 import { createPostgresFileUploadStore, FILE_UPLOAD_MIGRATIONS } from "./files/file-upload-store.ts";
 import {
-  claimBarredBotJobs,
   createSandboxResources,
   type SandboxResource,
   type SandboxDefault,
@@ -356,7 +355,7 @@ import { createSweeper as createUntrackedSweeper, type Sweeper } from "./util/sw
 import { createPostgresProcessRegistry, type ProcessRegistry } from "./processes/process-registry.ts";
 import { createSessionWork } from "./sessions/session-work.ts";
 import { createProcessReaper, createReaperKillHook, type ProcessReaper } from "./processes/process-reaper.ts";
-import { createJobComputerSweep } from "./processes/job-computers.ts";
+import { claimBarredBotJobs, createJobComputerSweep } from "./processes/job-computers.ts";
 import { createMonitorStore, type MonitorStore } from "./monitors/monitor-store.ts";
 import { createMonitorPoller } from "./monitors/monitor-poller.ts";
 import { createSkillSyncEngine } from "./skills/skill-sync-engine.ts";
@@ -1239,8 +1238,6 @@ export function buildApp(
       if ((await processes?.liveByScope(record.ownerScopeId))?.some((process) => process.sandboxId === record.id))
         throw new Error("stop this sandbox's background jobs before retiring it");
     },
-    afterFirstPersonUse: () =>
-      void processReaper?.sweepNow().catch(swallowAs("sandbox: stop a bot's jobs on a computer a person used", null)),
     provisionOptions: async (scopeId) => {
       const secret = config.capabilitySecret ?? config.signingSecret;
       if (!secret) return {};

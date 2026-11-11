@@ -24,7 +24,7 @@ import { createMonitorPoller } from "../src/monitors/monitor-poller.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createSwarmService, type SwarmCaller } from "../src/swarms/swarm-service.ts";
-import { claimBarredBotJobs } from "../src/sandbox/sandbox-resources.ts";
+import { claimBarredBotJobs } from "../src/processes/job-computers.ts";
 import { orchestratorTestDeps } from "./support/orchestrator-deps.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
@@ -50,11 +50,10 @@ const forumSpawn = { requestId: "forum", text: "work", forumSandboxId: "shared-n
 
 type Fixture = Awaited<ReturnType<typeof swarmFixture>>;
 
-function channelSwarm(backend?: ProcessSandbox, afterFirstPersonUse?: () => void) {
+function channelSwarm(backend?: ProcessSandbox) {
   const url = testDatabaseUrl();
   return swarmFixture({
     ...(backend ? { backend } : {}),
-    ...(afterFirstPersonUse ? { afterFirstPersonUse } : {}),
     channel: "C1",
     sessions: createPostgresSessionStore(url),
     runs: createPostgresRunStore(url).runs,
@@ -302,8 +301,7 @@ test("outside a swarm, a Slack bot's turn can use a computer it made only until 
 
 test("outside a swarm, a Slack bot's background job on its own computer is stopped once a person's turn uses that computer, and the person's job there keeps running", async () => {
   const computers = jobComputers();
-  let swept: Promise<unknown> = Promise.resolve();
-  const f = await channelSwarm(computers.backend, () => void (swept = reaper.sweepNow()));
+  const f = await channelSwarm(computers.backend);
   if (f.caller.kind !== "agent") throw new Error("wrong caller");
   await f.runs.complete(f.caller.claims.runId!, f.caller.claims.runLeaseToken!, { status: "ok", reply: "idle" });
   const processes = createPostgresProcessRegistry(testDatabaseUrl());
@@ -338,7 +336,7 @@ test("outside a swarm, a Slack bot's background job on its own computer is stopp
     ttlMs: 600_000,
   });
   await turn(alice, false);
-  await swept;
+  await reaper.sweepNow();
   assert.deepEqual(stopped, [botJob!.processId]);
   assert.equal((await processes.get(botJob!.processId))?.status, "reaped");
   assert.equal((await processes.get(personJob.processId))?.status, "running");

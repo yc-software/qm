@@ -1,5 +1,12 @@
 import type { ProcessSandbox, SandboxHandle } from "../sandbox/sandbox.ts";
-import type { SandboxResources } from "../sandbox/sandbox-resources.ts";
+import {
+  assertBotMayUseComputer,
+  botMayUseComputers,
+  SandboxAccessError,
+  type SandboxResources,
+} from "../sandbox/sandbox-resources.ts";
+import type { SwarmService } from "../swarms/swarm-service.ts";
+import { claimThenLoad, type ClaimedRow } from "../tenants/claim.ts";
 import type { ProcessRecord, ProcessRegistry } from "./process-registry.ts";
 import { reconcileProcesses } from "./reconcile.ts";
 
@@ -8,6 +15,36 @@ const PROVISION_LIMIT_MS = 15 * 60_000;
 const RETRY_EVERY_MS = 5 * 60_000;
 
 const live = (job: ProcessRecord): boolean => job.status === "running" || Boolean(job.credentialsPending);
+
+export function claimBarredBotJobs(deps: {
+  processes: Pick<ProcessRegistry, "claimLiveBotJobs" | "listLive">;
+  resources: Pick<SandboxResources, "get" | "resolve">;
+  swarms: Pick<SwarmService, "botMayUseComputer"> | undefined;
+}): Promise<ClaimedRow[]> {
+  return claimThenLoad(deps.processes.claimLiveBotJobs, async (ids) => {
+    const claimed = new Set(ids);
+    const jobs = (await deps.processes.listLive()).filter((job) => job.botActor && claimed.has(job.processId));
+    const verdicts = new Map<string, Promise<boolean>>();
+    const barred = (job: ProcessRecord): Promise<boolean> => {
+      const key = JSON.stringify([job.scopeId, job.sandboxId, job.botActor, job.sessionRef]);
+      const known = verdicts.get(key);
+      if (known) return known;
+      const turn = { actorId: job.botActor!, threadRef: job.sessionRef ?? "", sessionId: "" };
+      const botMayUse = botMayUseComputers(deps.swarms, turn);
+      const verdict = assertBotMayUseComputer(deps.resources, job.scopeId, job.sandboxId, botMayUse).then(
+        () => false,
+        (error: unknown) => {
+          if (error instanceof SandboxAccessError) return true;
+          throw error;
+        },
+      );
+      verdicts.set(key, verdict);
+      return verdict;
+    };
+    const stops = await Promise.all(jobs.map(async (job) => ((await barred(job)) ? [{ id: job.processId }] : [])));
+    return stops.flat();
+  });
+}
 
 export function createJobComputerSweep(deps: {
   resources: Pick<SandboxResources, "eachJobComputer" | "retireJobComputer">;
