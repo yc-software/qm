@@ -168,7 +168,6 @@ interface SecurityScreenInput {
 
 const DATA_BEARING_SURFACES = new Set(["monitor", "webhook"]);
 export const MAX_SCREEN_CHARS = 16_000;
-const MAX_SCREEN_SOURCE_CHARS = 200;
 
 export interface SecurityScreenPayload {
   content: string;
@@ -225,7 +224,7 @@ export function securityScreenPayloads(input: SecurityScreenInput): string[] {
   let group: Array<{ source: string; content: string }> = [];
   for (const part of securityScreenParts(input)) {
     if (boundedPayload([part])?.truncated) {
-      chunks.push(...securityScreenChunks(part.source.slice(0, MAX_SCREEN_SOURCE_CHARS), part.content));
+      chunks.push(...securityScreenChunks(part.source, part.content));
     } else if (boundedPayload([...group, part])?.truncated) {
       groups.push(group);
       group = [part];
@@ -254,10 +253,13 @@ function boundedChunk(surface: string, slice: string, out: string[]): void {
 }
 
 export function securityScreenChunks(surface: string, data: string): string[] {
+  let label = surface;
+  while (JSON.stringify(label).length > MAX_SCREEN_CHARS - SCREEN_CHUNK_CHARS)
+    label = label.slice(0, label.length >> 1);
   const chunks: string[] = [];
   const step = SCREEN_CHUNK_CHARS - SCREEN_CHUNK_OVERLAP;
   for (let start = 0; start === 0 || start + SCREEN_CHUNK_OVERLAP < data.length; start += step) {
-    boundedChunk(surface, data.slice(start, start + SCREEN_CHUNK_CHARS), chunks);
+    boundedChunk(label, data.slice(start, start + SCREEN_CHUNK_CHARS), chunks);
   }
   return chunks;
 }
