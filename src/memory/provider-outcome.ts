@@ -248,8 +248,8 @@ export interface MemoryForget {
   problems: MemoryProviderProblem[];
 }
 
-export function forgetFinished(outcomes: readonly Pick<MemoryProviderOutcome, "outcome">[]): boolean {
-  return outcomes.every(({ outcome }) => outcome === "committed" || outcome === "pending");
+export function forgetKnown(outcomes: readonly Pick<MemoryProviderOutcome, "outcome">[]): boolean {
+  return outcomes.every(({ outcome }) => outcome !== "unknown");
 }
 
 export async function forgetFacts(
@@ -264,7 +264,7 @@ export async function forgetFacts(
   const { outcomes, problems } = await withProviders("forget", (report) =>
     memory.delete!(scope, ids, by, { ...context, idempotencyKey, startedAt: Date.now(), report }),
   );
-  const notebook = forgetFinished(outcomes) ? ids.length - outcomes.length : 0;
+  const notebook = forgetKnown(outcomes) ? ids.length - outcomes.length : 0;
   const forgotten = notebook + outcomes.filter(({ outcome }) => outcome === "committed").length;
   return { forgotten, outcomes, problems };
 }

@@ -270,6 +270,7 @@ export type TranscriptItem = Item & { truncated?: true };
 const MESSAGE_MODEL_CONTEXT: ReadonlySet<string> = new Set([
   "environment",
   "environmentSnapshot",
+  "appSource",
   "rosterSnapshot",
   "memoryRecall",
   "memoryRecallOutcomes",

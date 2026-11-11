@@ -13,7 +13,7 @@ import { MemoryForgetRefused, type MemoryCandidate } from "./facts.ts";
 import {
   changeFailure,
   failedOutcome,
-  forgetFinished,
+  forgetKnown,
   problemLine,
   problemOf,
   strictFailure,
@@ -299,7 +299,7 @@ export function createRoutedMemoryService(opts: {
         );
         if (error) opts.onError?.(error, brain, "forget");
       }
-      if (manager?.delete && forgetFinished(settled)) await manager.delete(scopeId, notebookIds, by, context);
+      if (manager?.delete && forgetKnown(settled)) await manager.delete(scopeId, notebookIds, by, context);
     },
 
     async metadata() {

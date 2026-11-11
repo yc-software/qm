@@ -34,7 +34,10 @@ export interface DeployGitStore {
   }): Promise<string>;
   treeOf(deploymentId: string, commitSha: string): Promise<DeployGitTreeFile[]>;
   filesOf(deploymentId: string, commitSha: string, paths?: string[]): Promise<DeployGitInputFile[]>;
-  filesIn(deploymentId: string, entries: readonly DeployGitTreeFile[]): Promise<DeployGitInputFile[]>;
+  filesIn(
+    deploymentId: string,
+    entries: readonly Pick<DeployGitTreeFile, "path" | "sha">[],
+  ): Promise<DeployGitInputFile[]>;
   bundle(deploymentId: string, commitSha: string): Promise<Uint8Array>;
   setRef(deploymentId: string, ref: string, sha: string): Promise<void>;
   deleteRef(deploymentId: string, ref: string): Promise<void>;
@@ -75,14 +78,24 @@ export function createDeployGitStore(opts: DeployGitStoreOptions = {}): DeployGi
   const archiveBytes = opts.archiveBytes;
   const repoPath = (deploymentId: string): string => join(repoRoot, `${safeRepoName(deploymentId)}.git`);
 
-  async function gitResult(args: string[], options: { cwd?: string; okExitCodes?: number[] } = {}): Promise<GitResult> {
+  async function gitResult(
+    args: string[],
+    options: { cwd?: string; okExitCodes?: number[]; input?: string } = {},
+  ): Promise<GitResult> {
     const ok = new Set(options.okExitCodes ?? [0]);
     return new Promise((resolveGit, rejectGit) => {
-      const child = spawn(gitBin, args, { cwd: options.cwd, stdio: ["ignore", "pipe", "pipe"] });
+      const child = spawn(gitBin, args, {
+        cwd: options.cwd,
+        stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+      });
+      if (options.input !== undefined) {
+        child.stdin!.on("error", rejectGit);
+        child.stdin!.end(options.input);
+      }
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];
-      child.stdout.on("data", (d) => stdout.push(Buffer.from(d)));
-      child.stderr.on("data", (d) => stderr.push(Buffer.from(d)));
+      child.stdout!.on("data", (d) => stdout.push(Buffer.from(d)));
+      child.stderr!.on("data", (d) => stderr.push(Buffer.from(d)));
       child.on("error", rejectGit);
       child.on("close", (code) => {
         if (ok.has(code ?? -1)) return resolveGit({ code: code ?? -1, stdout: Buffer.concat(stdout) });
@@ -90,8 +103,10 @@ export function createDeployGitStore(opts: DeployGitStoreOptions = {}): DeployGi
       });
     });
   }
-  const git = async (args: string[], options: { cwd?: string; okExitCodes?: number[] } = {}): Promise<Buffer> =>
-    (await gitResult(args, options)).stdout;
+  const git = async (
+    args: string[],
+    options: { cwd?: string; okExitCodes?: number[]; input?: string } = {},
+  ): Promise<Buffer> => (await gitResult(args, options)).stdout;
 
   async function localArchiveEtag(repo: string): Promise<string | null> {
     try {
@@ -233,14 +248,35 @@ export function createDeployGitStore(opts: DeployGitStoreOptions = {}): DeployGi
     }
   }
 
-  async function filesIn(deploymentId: string, entries: readonly DeployGitTreeFile[]): Promise<DeployGitInputFile[]> {
-    const files: DeployGitInputFile[] = [];
-    for (const entry of entries) {
-      const data = await blob(deploymentId, entry.sha);
-      if (data == null) throw new Error(`missing blob ${entry.sha} for ${entry.path}`);
-      files.push({ path: entry.path, data });
+  async function filesIn(
+    deploymentId: string,
+    entries: readonly Pick<DeployGitTreeFile, "path" | "sha">[],
+  ): Promise<DeployGitInputFile[]> {
+    if (entries.length === 0) return [];
+    const repo = await ensureRepo(deploymentId);
+    const shas = [...new Set(entries.map((entry) => entry.sha))];
+    const out = await git(["--git-dir", repo, "cat-file", "--batch"], { input: `${shas.join("\n")}\n` });
+    const blobs = new Map<string, Buffer>();
+    let at = 0;
+    for (const sha of shas) {
+      const eol = out.indexOf(10, at);
+      if (eol < 0) throw new Error(`truncated git cat-file output at ${sha}`);
+      const [name, type, sizeText] = out.subarray(at, eol).toString("utf8").split(" ");
+      if (sizeText === undefined) {
+        at = eol + 1;
+        continue;
+      }
+      const size = Number(sizeText);
+      const end = eol + 1 + size;
+      if (end + 1 > out.length || out[end] !== 10) throw new Error(`truncated git cat-file output for ${sha}`);
+      if (type === "blob") blobs.set(name!, out.subarray(eol + 1, end));
+      at = end + 1;
     }
-    return files;
+    return entries.map((entry) => {
+      const data = blobs.get(entry.sha);
+      if (!data) throw new Error(`missing blob ${entry.sha} for ${entry.path}`);
+      return { path: entry.path, data };
+    });
   }
 
   return {
