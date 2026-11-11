@@ -2,9 +2,10 @@ import type { App } from "../../api/app-types.ts";
 import type { SurfaceContextQuery, SurfaceContextResult } from "../../reach/reach.ts";
 import type { Destination, TurnResult } from "../../types.ts";
 import type { SurfaceCache } from "../../surface-cache/surface-cache.ts";
+import { inTenant } from "../../tenants/claim.ts";
 import { errMessage, reportFailureAs } from "../../util/errors.ts";
 import { buildContextWindow } from "../context-window.ts";
-import { partnerChatPrincipal } from "./adapter.ts";
+import { partnerChatPrincipal, partnerChatTenant } from "./adapter.ts";
 import {
   findMessage,
   partnerChatRef,
@@ -12,13 +13,17 @@ import {
   parsePartnerChatEvent,
   parsePartnerChatRef,
   verifyPartnerChat,
+  type PartnerChatEvent,
 } from "./protocol.ts";
 
 const SURFACE = "partner-chat";
 const CONTEXT_SCAN = 500;
 const CONTEXT_DEFAULT_COUNT = 100;
 
-type InboundApp = Pick<App, "turn" | "ingestSurfaceEvents" | "onContextRequestCreated" | "fulfillContextRequest">;
+type InboundApp = Pick<
+  App,
+  "turn" | "ingestSurfaceEvents" | "onContextRequestCreated" | "fulfillContextRequest" | "tenantFor"
+>;
 
 export function createPartnerChatInbound(deps: {
   secret: string;
@@ -58,6 +63,15 @@ export function createPartnerChatInbound(deps: {
         body: { error: "bad_request", issues: result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`) },
       };
     const event = result.data;
+    const tenant = await partnerChatTenant(deps.app, event.account);
+    if (!tenant) {
+      console.log(`[partner-chat] ignoring an event for account ${event.account}: no serving workspace is bound to it`);
+      return { status: 404, body: { error: "unknown_account" } };
+    }
+    return inTenant(tenant, () => accept(event));
+  }
+
+  async function accept(event: PartnerChatEvent) {
     const { message, chat } = event;
     const members = chat.members.filter((m) => !m.bot);
     if (chat.kind === "dm" && (members.length !== 1 || members[0]!.id !== message.user.id)) {

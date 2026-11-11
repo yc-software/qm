@@ -1,5 +1,7 @@
+import type { App } from "../../api/app-types.ts";
 import type { DeliveryStore } from "../../delivery/delivery-store.ts";
 import { reachEnqueue } from "../../reach/reach.ts";
+import { bootTenant } from "../../tenants/boot.ts";
 import type { ActorAssertion } from "../../types.ts";
 import type { Surface, SurfacePromptHints } from "../contract.ts";
 import type { SurfaceCache } from "../../surface-cache/types.ts";
@@ -22,6 +24,10 @@ const DEFAULT_PROMPT_HINTS: SurfacePromptHints = {
   conversationStyle:
     "- This is a group chat: keep each reply to a couple of sentences unless they ask for more.\n- Each chat or thread is its own session, so `history` only searches this one. If someone refers to something you can't find here (an earlier request, a file, a brief), read the chat history with `POST $AGENT_API_URL/v1/surface-context` (no body reads this conversation; use `before`/`match` to page) before asking them to repeat it.",
 };
+
+export async function partnerChatTenant(app: Pick<App, "tenantFor">, account: string): Promise<string | undefined> {
+  return (await app.tenantFor("partner_chat", account)) ?? bootTenant();
+}
 
 export function partnerChatPrincipal(user: PartnerChatUser, internal: boolean): ActorAssertion {
   const email = user.email?.trim().toLowerCase();

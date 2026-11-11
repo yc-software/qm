@@ -298,7 +298,10 @@ function outboundFor(url: string, deliveries = createDeliveryStore(), mirrored: 
   const send = partnerChatSender({
     url,
     secret: SECRET,
-    app: { ingestSurfaceEvents: async (events) => (mirrored.push(...events), { upserted: events.length }) },
+    app: {
+      tenantFor: async () => TEST_TENANT,
+      ingestSurfaceEvents: async (events) => (mirrored.push(...events), { upserted: events.length }),
+    },
   });
   return { deliveries, mirrored, settled: (until: () => Promise<boolean>) => relayUntil(deliveries, send, until) };
 }
@@ -850,7 +853,7 @@ test("a retryable failure holds back later posts to the same chat target only", 
   const send = partnerChatSender({
     url: "https://chat.example",
     secret: SECRET,
-    app: { ingestSurfaceEvents: async () => ({ upserted: 0 }) },
+    app: { tenantFor: async () => TEST_TENANT, ingestSurfaceEvents: async () => ({ upserted: 0 }) },
     fetch: async (_url, init) => {
       const body = JSON.parse(String(init?.body)) as { chat_id: string; body: string };
       sent.push(body.body);
