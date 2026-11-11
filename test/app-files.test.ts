@@ -210,12 +210,12 @@ test("find shows exact text around each match in a built one-line stylesheet, en
   const chat = h.chat("notes");
 
   assert.match(await chat.call({ action: "read", path }), /more than one result can show; find returns/);
-  const found = await chat.call({ action: "find", path, text: ".dark{" });
+  const found = await chat.call({ action: "find", path, text: ".dark{", around: 2000 });
   const [title, heading, excerpt] = found.split("\n");
   assert.equal(title, `[".dark{" in ${path}: 1 found]`);
   assert.equal(heading, "[match 1 at line 1]");
+  assert.equal(excerpt!.length, 2000 + ".dark{".length + 2000);
   assert.ok(css.includes(excerpt!) && excerpt!.includes(".dark{--"), "the excerpt is exact saved text");
-  assert.ok(found.length <= 4096 * 4, "one result's worth");
 
   const variable = /\.dark\{(--[^;]+;)/.exec(excerpt!)![1]!;
   const recolored = `${variable.split(":")[0]}: orange;`;
@@ -226,15 +226,15 @@ test("find shows exact text around each match in a built one-line stylesheet, en
   assert.match(edited, /^Saved public\/assets\/main-D4tq75Xf\.css\./);
   assert.deepEqual(h.writes[0]!.files, { [path]: css.replace(`.dark{${variable}`, `.dark{${recolored}`) });
 
-  const many = await chat.call({ action: "find", path, text: "@media" });
-  const excerpts = many.split("\n").filter((_, i) => i > 0 && i % 2 === 0);
-  assert.ok(excerpts.length > 1 && excerpts.every((e) => e.includes("@media") && css.includes(e)));
-  assert.ok(many.length <= 4096 * 4, "every match shares one result");
-  assert.match(
-    await chat.call({ action: "find", path, text: "var(--" }),
-    /are more than one result can show with the text around each/,
+  const many = (await chat.call({ action: "find", path, text: "@media", around: 30 })).split("\n");
+  assert.equal(many[0], `["@media" in ${path}: 62 found]`);
+  const excerpts = many.filter((_, i) => i % 2 === 0).slice(1);
+  assert.equal(excerpts.length, 62);
+  assert.ok(excerpts.every((e) => e.length <= 66 && e.includes("@media") && css.includes(e)));
+  assert.equal(
+    await chat.call({ action: "find", path, text: "no-such-rule", around: 10 }),
+    `["no-such-rule" in ${path}: 0 found]`,
   );
-  assert.equal(await chat.call({ action: "find", path, text: "no-such-rule" }), `["no-such-rule" in ${path}: 0 found]`);
 });
 
 test("a replacement that does not match exactly once saves nothing, even beside one that does", async () => {

@@ -41,7 +41,6 @@ async function savedText(files: AppFiles, wanted: string) {
 
 export function appFileTools(kit: ToolKit) {
   const { ref, recordCall, recordResult } = kit;
-  const resultChars = async () => inlineChars(await inlineTokensOf(ref.current?.toolOutput));
 
   async function run(
     callId: string,
@@ -109,7 +108,7 @@ export function appFileTools(kit: ToolKit) {
         const lines = content.split("\n");
         const first = Math.min(params.from ?? 1, lines.length);
         const wanted = lines.slice(first - 1, Math.max(params.to ?? lines.length, first));
-        const budget = (await resultChars()) - RANGE_NOTE_CHARS;
+        const budget = inlineChars(await inlineTokensOf(ref.current?.toolOutput)) - RANGE_NOTE_CHARS;
         const cut = truncateHead(wanted.join("\n"), { maxBytes: budget, maxLines: wanted.length });
         if (cut.firstLineExceedsLimit)
           throw new Error(
@@ -134,34 +133,27 @@ export function appFileTools(kit: ToolKit) {
     parameters: Type.Object({
       path: Type.String({ description: "File path relative to the app root." }),
       text: Type.String({ minLength: 1, description: "Text to look for, matched literally and case-sensitively." }),
+      around: Type.Integer({
+        minimum: 0,
+        description: "How many characters of the file to show before and after each match.",
+      }),
     }),
     execute: (callId, params) =>
       run(callId, { action: "find", path: params.path }, async (files) => {
         const { path, content } = await savedText(files, params.path);
         const sought = params.text;
-        const found: number[] = [];
-        for (let at = content.indexOf(sought); at >= 0; at = content.indexOf(sought, at + sought.length))
-          found.push(at);
-        const title = `[${JSON.stringify(sought)} in ${path}: ${found.length} found]`;
-        if (!found.length) return { body: { matches: 0 }, result: title };
-        const budget = (await resultChars()) - title.length;
-        const share = Math.floor(budget / found.length);
+        const excerpts: string[] = [];
         let line = 1;
         let counted = 0;
-        const shown = found.map((at, i) => {
+        for (let at = content.indexOf(sought); at >= 0; at = content.indexOf(sought, at + sought.length)) {
           line += content.slice(counted, at).split("\n").length - 1;
           counted = at;
-          const heading = `[match ${i + 1} at line ${line}]`;
-          const around = share - heading.length - 2 - sought.length;
-          if (around <= 0)
-            throw new Error(
-              `${found.length} matches of ${JSON.stringify(sought)} in ${path} are more than one result can show with the text around each; find a longer piece of text`,
-            );
-          const before = tailSlice(content.slice(0, at), Math.floor(around / 2));
-          const after = headSlice(content.slice(at + sought.length), Math.ceil(around / 2));
-          return `${heading}\n${before}${sought}${after}`;
-        });
-        return { body: { matches: found.length }, result: [title, ...shown].join("\n") };
+          const before = tailSlice(content.slice(0, at), params.around);
+          const after = headSlice(content.slice(at + sought.length), params.around);
+          excerpts.push(`[match ${excerpts.length + 1} at line ${line}]\n${before}${sought}${after}`);
+        }
+        const title = `[${JSON.stringify(sought)} in ${path}: ${excerpts.length} found]`;
+        return { body: { matches: excerpts.length }, result: [title, ...excerpts].join("\n") };
       }),
   });
 
