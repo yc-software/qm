@@ -585,11 +585,7 @@ async function ensureInboxSyncCron(ctx: ApiCtx): Promise<void> {
         }
         if (cron) {
           if (enable && cron.action !== task)
-            await ctx.app.updateCron(
-              cron.id,
-              { action: task, title: `${loop.name} sync` },
-              acting.capability ?? { actorId: acting.actorId },
-            );
+            await ctx.app.updateCron(cron.id, { action: task, title: `${loop.name} sync` }, acting);
           await ctx.app.setCronEnabled(cron.id, enable);
           if (enable && current.state === "paused") await deps.store.setState(loop.id, "enabled");
         }
