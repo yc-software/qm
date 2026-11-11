@@ -816,15 +816,6 @@ export function servedReleaseChanged(): boolean {
 
 const TRANSIENT_STATUSES = new Set([502, 503, 504]);
 const RETRY_DELAYS_MS = [500, 1500];
-const MAX_RETRY_AFTER_MS = 5000;
-
-function retryDelayMs(response: Response | null, attempt: number): number {
-  const header = response?.headers.get("retry-after");
-  const seconds = header ? Number(header) : NaN;
-  return Number.isFinite(seconds) && seconds >= 0
-    ? Math.min(seconds * 1000, MAX_RETRY_AFTER_MS)
-    : RETRY_DELAYS_MS[attempt]!;
-}
 
 async function fetchOnce(input: RequestInfo | URL, init: RequestInit | undefined, url: string, method: string) {
   const startMs = Date.now();
@@ -852,11 +843,11 @@ export async function webFetch(input: RequestInfo | URL, init?: RequestInit): Pr
       response = await fetchOnce(input, init, url, method);
     } catch (error) {
       if (!canRetry || signal?.aborted || !(error instanceof TypeError)) throw error;
-      await sleep(retryDelayMs(null, attempt));
+      await sleep(RETRY_DELAYS_MS[attempt]!);
       continue;
     }
     if (!canRetry || signal?.aborted || !TRANSIENT_STATUSES.has(response.status)) break;
-    await sleep(retryDelayMs(response, attempt));
+    await sleep(RETRY_DELAYS_MS[attempt]!);
   }
   if (response.status !== 401) return response;
   stopBrowserErrors();
