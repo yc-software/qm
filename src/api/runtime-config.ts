@@ -120,10 +120,6 @@ async function runtimeModels(
   const managedKeys = ctx.deps.modelCredentials ? await ctx.deps.modelCredentials.availability() : configuredKeys;
   const fallback = runtimeFallback(ctx);
   const org = orgScope();
-  const catalog =
-    ctx.deps.modelCredentials && managedKeys.openrouter
-      ? await selectableModelCatalog(ctx.deps.modelCredentialFetch)
-      : builtInModelCatalog();
   const orgStored = await config.getRuntimeSelectionDurable(org);
   const orgLegacyModel = orgStored ? null : await config.getBaseModelOwnDurable(org);
   let orgDefault: RuntimeChoice & { revision: number } = { ...fallback, revision: orgStored?.revision ?? 0 };
@@ -143,7 +139,11 @@ async function runtimeModels(
   const offered =
     allowlist != null
       ? allowlist.filter((id) => modelSupported(id))
-      : selectableCatalog(catalog)
+      : selectableCatalog(
+          ctx.deps.modelCredentials && managedKeys.openrouter
+            ? await selectableModelCatalog(ctx.deps.modelCredentialFetch)
+            : builtInModelCatalog(),
+        )
           .filter((model) => modelOfferedInWebui(model.id))
           .map((model) => model.id);
   for (const choice of selected) {
@@ -331,18 +331,21 @@ export async function turnModelRefusal(
     return validateWebTurnModelOptions(req, available.models);
   }
   const fallback = deps.runtimeFallback ?? { modelId: defaultModel() };
-  const providers = deps.modelCredentials
-    ? await deps.modelCredentials.availability()
-    : (deps.providerKeys ?? deps.modelProviders);
+  const picker = runtimeModels({ deps }, scope);
   const hydrate = async () =>
-    deps.modelCredentials && providers?.openrouter ? selectableModelCatalog(deps.modelCredentialFetch) : undefined;
+    deps.modelCredentials && (await picker).managedKeys.openrouter
+      ? selectableModelCatalog(deps.modelCredentialFetch)
+      : undefined;
   let runtime: RuntimeChoice;
   let pickerModels: string[];
+  let providers: ModelProviderAvailability | undefined;
   try {
-    [runtime, { models: pickerModels }] = await Promise.all([
+    let managedKeys: ModelProviderAvailability;
+    [runtime, { models: pickerModels, managedKeys }] = await Promise.all([
       resolveRuntimeChoice(deps.config, org, scope, fallback, requested, hydrate, purpose),
-      runtimeModels({ deps }, scope),
+      picker,
     ]);
+    providers = deps.modelCredentials ? managedKeys : (deps.providerKeys ?? deps.modelProviders);
   } catch (error) {
     swallow("turn: runtime resolution", error);
     return `I couldn't set up that runtime choice — ${GENERIC_FAILURE_CLAUSE}`;
