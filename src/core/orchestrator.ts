@@ -1602,9 +1602,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(automatedTurn ? { triggered: true } : {}),
         };
         const personTurn = personSentTurn(runtimeClaims);
-        const turnMcpTools = Promise.all([mcpToolsReady, context.brainTools(personTurn)]).then(
-          ([connectors, brains]) => (brains.length ? [...(connectors ?? []), ...brains] : connectors),
-        );
+        const turnMcpTools = context.mcpTools(personTurn, mcpToolsReady);
         const editingApp = appEditSlug(conversation.threadRef, actor.id);
         const baseTools = createToolContext({
           tenant,

@@ -101,7 +101,7 @@ interface MemoryReader {
   audienceScopeId?: ScopeId;
 }
 
-interface BoundBrain {
+export interface BoundBrain {
   id: string;
   label: string;
   tools: McpRemoteTool[];

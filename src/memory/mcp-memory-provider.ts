@@ -1,5 +1,6 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import {
+  CATALOG_MAX_TOOLS,
   McpCallError,
   mcpEnvelope,
   mcpResultText,
@@ -98,7 +99,7 @@ export function createMcpMemoryProvider(opts: {
           (
             await opts.read.client.listTools({
               headers: headers!,
-              maxTools: Infinity,
+              maxTools: CATALOG_MAX_TOOLS,
               signal: AbortSignal.timeout(opts.read.timeoutMs),
             })
           ).tools,
@@ -219,7 +220,7 @@ export function createMcpMemoryProvider(opts: {
       ? {
           lookupTools: (scopeId, { actorId, audienceScopeId }) => lookupTools(scopeId, actorId, audienceScopeId),
           lookup: async (scopeId, tool, args, by, context) =>
-            mcpResultText(
+            resultText(
               await opts.read.client.callTool(
                 tool,
                 args,

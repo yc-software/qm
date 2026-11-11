@@ -6,11 +6,12 @@ import { OAuthError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import { ErrorCode, McpError, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { LRUCache } from "lru-cache";
 import { boundedResponse } from "../util/bytes.ts";
-import { swallowAs } from "../util/errors.ts";
+import { reportFailureAs, swallowAs } from "../util/errors.ts";
 import { publicFetch, type AddressFetch } from "../util/network.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
 
 const MAX_TOOLS = 64;
+export const CATALOG_MAX_TOOLS = 5_000;
 const LISTING_TTL_MS = 60_000;
 const LISTING_CACHE_MAX = 1_000;
 const CALL_TIMEOUT_MS = 300_000;
@@ -114,10 +115,10 @@ export function toolListings(): ToolListings {
     ttl: LISTING_TTL_MS,
     allowStale: true,
     ignoreFetchAbort: true,
-    fetchMethod: (_key, stale, { context }) =>
+    fetchMethod: (_key, stale, { context, options }) =>
       context.list().catch((error: unknown) => {
-        if (!stale) throw error;
-        return swallowAs(context.label, stale)(error);
+        if (!stale || !options.allowStale) throw error;
+        return reportFailureAs(context.label, stale)(error);
       }),
   });
 }

@@ -22,7 +22,7 @@ export function mcpTools(kit: ToolKit, nativeNames: Set<string>) {
         try {
           const args = (params ?? {}) as Record<string, unknown>;
           const out = d.brain
-            ? await tc.lookupBrain(d.name, args)
+            ? await tc.lookupBrain(d.serverId, d.remoteName, args)
             : await tc.callMcpTool(d.name, args, ref.approvedToolCalls?.get(callId));
           return recordExternalResult(
             callId,
@@ -34,7 +34,7 @@ export function mcpTools(kit: ToolKit, nativeNames: Set<string>) {
           return recordResult(
             callId,
             { tool: d.name, mcpServer: d.serverId, failed: true },
-            text(`[error] ${errMessage(error)}`),
+            text(`[error] ${d.brain && error instanceof Error ? error.message : errMessage(error)}`),
             true,
           );
         }

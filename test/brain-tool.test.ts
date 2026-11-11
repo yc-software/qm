@@ -16,6 +16,8 @@ import type { AddressFetch } from "../src/util/network.ts";
 import { buildApp } from "./support/build-app.ts";
 import { contract, contractTools } from "./support/gbrain-contract.ts";
 import { routedTo, startMcpTestServer } from "./support/mcp-test-server.ts";
+import { connectorTool } from "../src/mcp/mcp-tool-service.ts";
+import { withBrainTools } from "../src/resolution/turn-context.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 
@@ -66,7 +68,7 @@ async function gbrain(t: { after(fn: () => Promise<void>): void }) {
   return Object.assign(server, { calls, failures });
 }
 
-async function brainApp(t: { after(fn: () => Promise<void>): void }) {
+async function brainApp(t: { after(fn: () => Promise<void>): void }, config = testConfig()) {
   const acme = await gbrain(t);
   const script: Step[] = [];
   const runs: Array<{ prompt: string; texts: string[] }> = [];
@@ -98,7 +100,7 @@ async function brainApp(t: { after(fn: () => Promise<void>): void }) {
     },
   };
   const memoryRegistryFetch: AddressFetch = routedTo(acme.url);
-  const built = buildApp(testConfig(), { memoryRegistryFetch, agent });
+  const built = buildApp(config, { memoryRegistryFetch, agent });
   const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     auditLog: built.auditLog,
@@ -202,6 +204,36 @@ test("turns the person didn't send in their own DM never list, find or call the 
   assert.equal(listings(acme), 1);
 });
 
+test("with recall off, the person's own DM offers no brain tools and never asks the brain for them", async (t) => {
+  const { acme, turn } = await brainApp(t, testConfig({ memoryRecall: "off" }));
+  assert.deepEqual((await turn([{ search: "*" }, whois]))!.texts, ["[no connector tools]", "[no connector tools]"]);
+  assert.equal(listings(acme), 0);
+});
+
+test("a brain sharing a connector's id stays hidden, only the first brain carries the guidance, and optional intent is dropped", () => {
+  const whoisTool = {
+    name: "whois",
+    description: "Who someone is",
+    inputSchema: { type: "object", properties: { query: {}, intent: {} }, required: ["query"] },
+  };
+  const connector = connectorTool({ id: "acme", name: "Acme", readOnly: false }, undefined, {
+    ...whoisTool,
+    name: "search",
+  });
+  const brains = ["acme", "team", "mine"].map((id) => ({ id, label: id, tools: [whoisTool] }));
+  const listed = withBrainTools([connector], brains)!.map(({ name, serverAbout, inputSchema, brain }) => ({
+    name,
+    guided: Boolean(serverAbout),
+    params: Object.keys(inputSchema.properties as Row),
+    brain: Boolean(brain),
+  }));
+  assert.deepEqual(listed, [
+    { name: "acme_search", guided: false, params: ["query"], brain: false },
+    { name: "team_whois", guided: true, params: ["query"], brain: true },
+    { name: "mine_whois", guided: false, params: ["query"], brain: true },
+  ]);
+});
+
 test("a lookup checks the person and the live binding when it runs, and sends nothing otherwise", async (t) => {
   const { built, acme, turn } = await brainApp(t);
   await assert.rejects(
@@ -240,8 +272,9 @@ test("a lookup outlasts recall's timeout, and a refusal or failure answers with 
   assert.match(texts[3]!, /^\[error\] \[memory_provider_failed\][\s\S]*search index is rebuilding/);
   assert.match(
     texts[4]!,
-    /Fix: Correct the arguments query takes; tool_search shows its parameters\.[\s\S]*refused with invalid_params/,
+    /Fix: Read acme's answer below: if it names the arguments, correct the call \(tool_search shows query's parameters\)[\s\S]*refused with invalid_params/,
   );
+  for (const text of texts.slice(1)) assert.equal(text.match(/refused with|rebuilding/g)?.length, 1, text);
 });
 
 test("strict posture holds a brain lookup for approval, and dangerous runs it", async (t) => {

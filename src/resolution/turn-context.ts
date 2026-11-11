@@ -16,11 +16,11 @@ import type { AuditLog } from "../audit/audit-log.ts";
 import {
   brainActsAsPerson,
   turnAuthority,
+  type BoundBrain,
   type MemoryRecallContext,
   type MemoryService,
 } from "../memory/memory-service.ts";
-import { providerRef } from "../memory/provider-router.ts";
-import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
+import { connectorTool, type McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import type { MemoryFact } from "../memory/facts.ts";
 import { recallMemoryScopes, type MemoryPolicy } from "../memory/policy.ts";
 import type { SkillStore, GrantedSkillRef } from "../skills/skill-store.ts";
@@ -49,7 +49,34 @@ type ContextInput = Omit<Parameters<typeof sharingSourcesForTurn>[0], "posture">
   projects?: Pick<ProjectStore, "recognizes" | "name">;
 };
 
-const BRAIN_ABOUT = "The person's own brain, read as them: check it before saying you don't know someone or something.";
+const BRAIN_ABOUT =
+  "The person's brains here are read as them: check them before saying you don't know someone or something.";
+
+export function withBrainTools(
+  connectors: McpToolDescriptor[] | undefined,
+  brains: readonly BoundBrain[],
+): McpToolDescriptor[] | undefined {
+  const taken = new Set(connectors?.map((tool) => tool.serverId));
+  const listed = brains.filter((brain) => {
+    if (!taken.has(brain.id)) return brain.tools.length > 0;
+    console.warn(`[memory] brain ${brain.id} is hidden because an MCP connector has the same id`);
+    return false;
+  });
+  if (!listed.length) return connectors;
+  return [
+    ...(connectors ?? []),
+    ...listed.flatMap((brain, index) =>
+      brain.tools.map((tool) => ({
+        ...connectorTool(
+          { id: brain.id, name: recallLabel(brain.label), readOnly: true },
+          index === 0 ? BRAIN_ABOUT : undefined,
+          tool,
+        ),
+        brain: true as const,
+      })),
+    ),
+  ];
+}
 
 export async function resolveTurnContext(input: ContextInput) {
   const { resolution, memoryPolicy, useMemory } = input;
@@ -107,24 +134,15 @@ export async function resolveTurnContext(input: ContextInput) {
     memoryAccess,
     memory,
     memoryLabels,
-    brainTools: async (personTurn: boolean): Promise<McpToolDescriptor[]> => {
+    mcpTools: async (personTurn: boolean, connectors: Promise<McpToolDescriptor[]> | undefined) => {
       const by = turnAuthority(input.actor.id, memoryAccess, personTurn);
-      if (!useMemory || input.external || !brainActsAsPerson(by, memoryScopeId, input.audienceScopeId)) return [];
-      const brains = (await memory.brains?.(memoryScopeId, reader).catch(swallowAs("turn context: brains", []))) ?? [];
-      return brains.flatMap((brain) =>
-        brain.tools.map((tool) => ({
-          name: providerRef(brain.id, tool.name),
-          serverId: brain.id,
-          serverName: recallLabel(brain.label),
-          serverAbout: BRAIN_ABOUT,
-          remoteName: tool.name,
-          description: tool.description,
-          inputSchema: tool.inputSchema,
-          readOnly: true,
-          needsApproval: false,
-          brain: true as const,
-        })),
-      );
+      const lookups =
+        !input.external &&
+        memoryAccess?.read.includes(memoryScopeId) &&
+        brainActsAsPerson(by, memoryScopeId, input.audienceScopeId);
+      const brains = lookups ? memory.brains?.(memoryScopeId, reader).catch(swallowAs("turn context: brains", [])) : [];
+      const [listed, bound] = await Promise.all([connectors, brains]);
+      return withBrainTools(listed, bound ?? []);
     },
     memorySnapshot: async () => {
       const notebooks = await tracePhase(
