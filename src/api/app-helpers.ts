@@ -34,6 +34,7 @@ import type { DirectoryMember } from "../directory/directory-store.ts";
 import { actorAssertionActive } from "../identity/identity-service.ts";
 import type { Deployment } from "../deploy/deploy-store.ts";
 import { reportFailureAs, swallow, swallowAs } from "../util/errors.ts";
+import { botWorkInPersonsName } from "./routes/shared.ts";
 import { adminSessionUrl } from "../util/admin-links.ts";
 import { sessionTurnOrigin } from "../core/turn-origin.ts";
 import {
@@ -539,13 +540,11 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       : undefined;
     const attestedBot =
       privateChannel &&
+      capabilityMembership !== true &&
       claims.botActor === true &&
       claims.liveActor === true &&
       claims.members?.some((member) => member.id === claims.actorId && member.type === "internal") === true &&
-      (await deps.users
-        ?.resolve([claims.actorId])
-        .then((users) => users.get(claims.actorId)?.kind)
-        .catch(swallowAs("capability scope: user kind", undefined))) !== "person";
+      !(await botWorkInPersonsName({ deps }, claims));
     if (
       (kind === "channel" &&
         !(
