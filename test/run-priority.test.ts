@@ -43,6 +43,7 @@ for (const backend of backends) {
       try {
         const nightly = (await runs.enqueue({ sessionId: "cron", request: cron("cron") })).run;
         const human = (await runs.enqueue({ sessionId: "dm", request: request("person") })).run;
+        await runs.enqueue({ sessionId: "th", request: request("reply", { origin: { kind: "ambient", live: true } }) });
         const child = (await runs.enqueue({ sessionId: "c", request: subagentOf(human, "subagent") })).run;
         await runs.enqueue({ sessionId: "g", request: subagentOf(child, "sub-subagent") });
         await runs.enqueue({ sessionId: "nc", request: subagentOf(nightly, "cron subagent") });
@@ -69,6 +70,7 @@ for (const backend of backends) {
         );
         assert.deepEqual(await claimAll(runs), [
           "person",
+          "reply",
           "subagent",
           "sub-subagent",
           "cron",

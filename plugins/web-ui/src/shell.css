@@ -1862,6 +1862,9 @@ a.chat-row-open {
      collapsed 'Worked for Ns' header). Revealing the footer still changes no layout. */
   padding-bottom: var(--meta-lane);
 }
+.message-row[tabindex="-1"]:focus:not(.linked-message) {
+  outline: none;
+}
 .user-row {
   flex-direction: column;
   align-items: flex-end;

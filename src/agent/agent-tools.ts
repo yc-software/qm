@@ -13,6 +13,7 @@ import { createToolKit } from "./agent-tools/kit.ts";
 import { computerTools, validateSandboxTool } from "./agent-tools/computer.ts";
 import { turnTools } from "./agent-tools/turn.ts";
 import { workspaceTools } from "./agent-tools/workspace.ts";
+import { appFileTools } from "./agent-tools/app-files.ts";
 import { recallTools } from "./agent-tools/recall.ts";
 import { sessionTools } from "./agent-tools/sessions.ts";
 import { cronTools } from "./agent-tools/cron.ts";
@@ -180,6 +181,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       publish,
       ...(controlTools ? { share: sharingTool("deploy") } : {}),
     }),
+    ...(ref.current?.appFiles ? [resourceTool("app_files", appFileTools(kit))] : []),
     memory,
     history,
     ...(!delegateWork ? [background] : []),

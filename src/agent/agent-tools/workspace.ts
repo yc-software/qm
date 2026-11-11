@@ -22,12 +22,16 @@ function describePublishAudience(a: PublishAudienceDescriptor | undefined): stri
   return `Owned by you; owner-only (only you can reach it — use apps action share to widen).${note}`;
 }
 
+export function previousPublishFailure(edit: LiveEditSaved): string {
+  return edit.previousFailure
+    ? `\nThe previous automatic publish failed, so the app kept running the saved edits: ${edit.previousFailure}`
+    : "";
+}
+
 function describeLiveEdit(r: { name?: string; id: string; version: number; url: string }, edit: LiveEditSaved): string {
   const app = r.name ?? r.id;
   const minutes = LIVE_EDIT_PUBLISH_DELAY_MS / 60_000;
-  const failed = edit.previousFailure
-    ? `\nThe previous automatic publish failed, so the app kept running the saved edits: ${edit.previousFailure}`
-    : "";
+  const failed = previousPublishFailure(edit);
   if (!edit.changed) {
     const pending = edit.publishAt === undefined ? "" : "; the earlier saved edits still publish as a new version";
     return `No changes to save in ${app} (v${r.version}) → ${r.url}${pending}.${failed}`;
