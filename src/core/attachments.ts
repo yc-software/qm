@@ -1,5 +1,5 @@
 import type { Readable } from "node:stream";
-import { basename } from "node:path";
+import { basename, extname } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { AttachmentMeta, IncomingAttachment, OutgoingAttachment, ScopeId } from "../types.ts";
 import { isUserItem, type Item } from "../sessions/items.ts";
@@ -12,6 +12,7 @@ import {
 } from "../persistence/blob-transfer.ts";
 import { fileArtifactId, type FileArtifactStore, type FileDirection } from "../files/file-artifact-store.ts";
 import { swallowAs } from "../util/errors.ts";
+import { clampUtf8 } from "../util/text.ts";
 import { MIME_BY_EXT, fileContentRequest } from "./documents.ts";
 import { hashId } from "../util/crypto.ts";
 import type { SecurityScreenVerdict } from "../security/security-posture.ts";
@@ -97,27 +98,16 @@ export function isVisionAttachment(attachment: Pick<IncomingAttachment, "name" |
 
 const NAME_MAX = 255;
 
-function splitExtension(name: string): [string, string] {
-  const dot = name.lastIndexOf(".");
-  return dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ""];
-}
-
 function fitName(stem: string, suffix: string): string {
-  if (Buffer.byteLength(suffix) >= NAME_MAX) return fitName(stem + suffix, "");
-  let room = NAME_MAX - Buffer.byteLength(suffix);
-  let end = 0;
-  for (const char of stem) {
-    room -= Buffer.byteLength(char);
-    if (room < 0) break;
-    end += char.length;
-  }
-  return stem.slice(0, end) + suffix;
+  const room = NAME_MAX - Buffer.byteLength(suffix);
+  return room > 0 ? clampUtf8(stem, room) + suffix : clampUtf8(stem + suffix, NAME_MAX);
 }
 
 export function safeAttachmentName(name: string): string {
   const base = basename(String(name ?? "").replace(/\\/g, "/")).trim();
   if (!base || /^\.+$/.test(base)) return "file";
-  return fitName(...splitExtension(base));
+  const ext = extname(base);
+  return fitName(base.slice(0, base.length - ext.length), ext);
 }
 
 export function mimeFromName(name: string): string {
@@ -175,7 +165,8 @@ async function registerArtifact(
 
 function uniqueName(name: string, used: Set<string>): string {
   if (!used.has(name)) return name;
-  const [stem, ext] = splitExtension(name);
+  const ext = extname(name);
+  const stem = name.slice(0, name.length - ext.length);
   let n = 2;
   while (used.has(fitName(stem, `-${n}${ext}`))) n++;
   return fitName(stem, `-${n}${ext}`);
