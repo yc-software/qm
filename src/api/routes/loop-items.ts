@@ -360,7 +360,13 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
       item = current;
       const slackClient = ctx.deps.loopSlackClient;
       const result = await adapter.act(
-        { owner: loop.owner, actor: proposalAuthor, tokens, ...(slackClient ? { slackClient } : {}) },
+        {
+          owner: loop.owner,
+          actor: proposalAuthor,
+          tokens,
+          ...(slackClient ? { slackClient } : {}),
+          ...(ctx.capability?.timezone ? { timezone: ctx.capability.timezone } : {}),
+        },
         item,
         kind,
         args,
