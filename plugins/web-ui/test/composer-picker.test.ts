@@ -653,7 +653,13 @@ test("the personal-account picker preserves composer choices and saves context d
       await composer!.refreshRuntimeSelection(null, agent, true);
       await mount();
       button('[aria-label="Ultrafast"]').click();
-      assert.equal(button(".loadout-button").getAttribute("aria-label"), `Model: ${label}, High effort, Ultrafast`);
+      const ultrafastTrigger = button(".loadout-button");
+      assert.equal(ultrafastTrigger.getAttribute("aria-label"), `Model: ${label}, High effort, Ultrafast`);
+      assert.equal(ultrafastTrigger.textContent?.replace(/\s+/g, " ").trim(), `${label} High`);
+      assert.ok(ultrafastTrigger.querySelector(".loadout-ultrafast-badge svg"), "the chip marks Ultrafast with a bolt");
+      ultrafastTrigger.dispatchEvent(new dom.window.MouseEvent("mouseenter"));
+      assert.equal(document.querySelector(".qm-tooltip")?.textContent, "Ultrafast");
+      ultrafastTrigger.dispatchEvent(new dom.window.MouseEvent("mouseleave"));
       assert.equal(button('button[aria-label="Fast"]').getAttribute("aria-checked"), "false");
       assert.equal(button('[aria-label="Ultrafast"]').getAttribute("aria-checked"), "true");
       assert.deepEqual(
