@@ -69,6 +69,7 @@ import { resolveEnvironmentId } from "../environments/environment-store.ts";
 import type { SessionWriter } from "../sessions/session-store.ts";
 import { contextSummary, sessionOrigin } from "../sessions/session-store.ts";
 import { promptChanges, systemPromptSnapshot, turnFrameNote } from "./orchestrator/prompt-snapshot.ts";
+import { APP_EDIT_FRAME_MD, APP_EDIT_TOOLS, appEditPromptBody } from "./orchestrator/app-edit.ts";
 import { currentModelRequestContext, withModelRequestContext } from "../model/request-context.ts";
 import { supportsScopeProfile } from "../sandbox/sandbox.ts";
 import { isPollSurface } from "../triggers/run-trigger.ts";
@@ -730,8 +731,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         delegatedSession?.spawnMeta?.memoryNotebookOnly === true ||
         (await deps.notebookOnlyMemory?.(conversation.threadRef)) === true;
       const actAsActor = actor.type === "internal" && !input.botActor;
+      const isWeb = input.surface === "web";
+      let modeName = "mode-fallback";
+      if (input.surfaceTools) modeName = "mode-autonomous";
+      else if (!automatedTurn && !(sessionTurn && input.envelopeWrapped) && (conversation.kind === "dm" || isWeb))
+        modeName = "mode-conversation";
+      const editingApp = appEditSlug(conversation.threadRef, actor.id);
+      const appEditChat = editingApp !== null && modeName === "mode-conversation";
       const mcpToolsReady =
-        !external && deps.mcp ? deps.mcp.toolDefsFor(actor.id, audienceScopeId, actAsActor) : undefined;
+        !external && !appEditChat && deps.mcp ? deps.mcp.toolDefsFor(actor.id, audienceScopeId, actAsActor) : undefined;
       const useMemory = !external && input.skipMemory !== true;
       const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);
       resolution.writableScopeId = environmentId;
@@ -788,7 +796,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       });
       const { sharingSources, memoryScopeId, baseRecallScopes, memoryAccess } = context;
       resolution.grantedHandles = context.listFiles();
-      const isWeb = input.surface === "web";
       const surfaceTool = input.surface ?? "slack";
       const surfaceHints = surface?.promptHints;
       const surfaceName =
@@ -801,15 +808,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const orgName = branding.orgName ?? "this organization";
       const rawHandle = cleanBrandingLabel(input.gatewayContext?.botHandle?.replace(/^@/, ""), 40);
       const botHandle = rawHandle && rawHandle.toLowerCase() !== botName.toLowerCase() ? rawHandle : undefined;
-      let modeName = "mode-fallback";
-      if (input.surfaceTools) modeName = "mode-autonomous";
-      else if (!automatedTurn && !(sessionTurn && input.envelopeWrapped) && (conversation.kind === "dm" || isWeb))
-        modeName = "mode-conversation";
       let frameMd = MODE_FALLBACK_MD;
       if (modeName === "mode-autonomous") frameMd = MODE_AUTONOMOUS_MD;
-      else if (modeName === "mode-conversation") frameMd = MODE_CONVERSATION_MD;
+      else if (modeName === "mode-conversation") frameMd = appEditChat ? APP_EDIT_FRAME_MD : MODE_CONVERSATION_MD;
       const frameVars: PromptVars = {
         botName,
+        orgName,
         surfaceTool,
         surfaceLabel: isWeb ? `the ${botName} web app` : (toolSurface?.label ?? "Slack"),
         conversationType: { dm: "private 1:1", group: "group conversation", channel: "channel conversation" }[
@@ -1305,14 +1309,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const recallOutcomes: MemoryProviderOutcome[] = [];
         const loadedFacts = snapshot.then((view) => view.loaded);
         void loadedFacts.catch(() => undefined);
-        const recallFor = (history: Item[]) =>
-          context.recallMemory(
-            memoryRecallQuery(input.text, history),
-            loadedFacts,
-            (outcome) => void recallOutcomes.push(outcome),
-            isPersonAuthored(input.origin.kind) && !sessionTurn ? titleText : undefined,
-            session.id,
-          );
+        const recallFor = async (history: Item[]) =>
+          appEditChat
+            ? []
+            : context.recallMemory(
+                memoryRecallQuery(input.text, history),
+                loadedFacts,
+                (outcome) => void recallOutcomes.push(outcome),
+                isPersonAuthored(input.origin.kind) && !sessionTurn ? titleText : undefined,
+                session.id,
+              );
         const importsOverheard = (!input.envelopeWrapped || humanInput) && !!input.overheard?.length;
         const earlyRecall =
           input.approval || importsOverheard || ambientTurn || input.cronScript
@@ -1594,7 +1600,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         });
         const liveNote = async () =>
           (await turnSessionSyscalls?.liveSubagents?.().catch(swallowAs("live note", ""))) ?? "";
-        const editingApp = appEditSlug(conversation.threadRef, actor.id);
         const baseTools = createToolContext({
           tenant,
           desktopClientId: desktopClientForTurn(input),
@@ -1928,14 +1933,19 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ? await openSwarmMailbox({ swarms: deps.swarms, input, screen: screenSwarmMessage })
             : undefined;
         const mcpTools = await mcpToolsReady;
-        const freshBody = [systemPrompt, connectorToolsNote(deferredMcpTools(mcpTools, strictReadOnly))]
-          .filter((s) => s.trim())
-          .join("\n\n");
-        const promptSnapshot = await systemPromptSnapshot(deps.promptSnapshots, session.id, {
+        const freshBody = appEditChat
+          ? appEditPromptBody(resolution.systemPrompt, personaBlock)
+          : [systemPrompt, connectorToolsNote(deferredMcpTools(mcpTools, strictReadOnly))]
+              .filter((s) => s.trim())
+              .join("\n\n");
+        const freshPrompt = {
           epoch: history.findLast((item) => contextSummary(item))?.seq ?? 0,
           frame: modeFrame,
           body: freshBody,
-        });
+        };
+        const promptSnapshot = appEditChat
+          ? freshPrompt
+          : await systemPromptSnapshot(deps.promptSnapshots, session.id, freshPrompt);
         const turnEnvironmentContents = [
           sender,
           timeBlock,
@@ -2364,6 +2374,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             history: continuation?.history ?? history,
             tools,
             ...(mcpTools ? { mcpTools } : {}),
+            ...(appEditChat ? { onlyTools: APP_EDIT_TOOLS } : {}),
             ...(reconciled?.rerun && !continuation ? { resumeToolCall: reconciled.rerun } : {}),
             ...(approvedCalls.length && !continuation ? { approvedToolCalls: approvedCalls } : {}),
             emit,

@@ -1711,3 +1711,44 @@ test("a shared thread keeps one byte-identical system prompt until compaction; c
   assert.doesNotMatch(compacted.environment, /Changed since the system prompt/);
   assert.equal((await turn(teammate)).system, compacted.system);
 });
+
+test("a live turn in an app edit chat gets a small prompt of its own and six tools, whatever prompt that chat had saved", async (t) => {
+  const requests = recordRequests(t);
+  const gateway = { url: "https://gateway.test", apiKey: "k", apiKeyHeader: "api-key", actorKey: "test-actor-key" };
+  const routes = createModelRoutes({
+    defaultModelId: "claude-haiku-4-5",
+    modelGateway: { ...gateway, models: { "claude-haiku-4-5": "m" } },
+  });
+  const { orchestrator, config, memory } = buildOrchestrator({
+    agent: createAgent({ routes, detectModelId: "claude-haiku-4-5" }),
+  });
+  await config.setSoul(scopeId("org", ORG), "ORG_RULE");
+  await config.setSoul(scopeId("personal", actor.id), "MY_RULE");
+  await memory.capture(scopeId("personal", actor.id), ["my favorite color is chartreuse"], Date.now());
+  const sent = async (thread: string, note: string, origin?: OrchestratorInput["origin"]) => {
+    const turn = dm(thread, "what is my favorite color?", { surface: "web", conversationHeader: note, origin });
+    assert.equal((await orchestrator.handleTurn(turn)).status, "ok");
+    const body = JSON.parse(requests.findLast((request) => request.headers.get("x-qm-purpose") === "turn")!.body);
+    return {
+      system: JSON.stringify(body.system),
+      message: JSON.stringify(body.messages.at(-1)),
+      tools: body.tools.map((tool: { name: string }) => tool.name).sort(),
+    };
+  };
+  const drawer = "web:U1:app-edit:notes";
+  let general = await sent(drawer, "NOTE_0", { kind: "automation" });
+  for (let i = 0; i < 200 && !general.message.includes("chartreuse"); i++) {
+    await new Promise((r) => setTimeout(r, 10));
+    general = await sent(`web:U1:general-${i}`, "NOTE_0");
+  }
+  for (const carried of ["ORG_RULE", "MY_RULE", "Deploy the app"]) assert.ok(general.system.includes(carried), carried);
+  assert.ok(general.message.includes("chartreuse") && general.tools.includes("memory"));
+
+  for (const note of ["NOTE_1", "NOTE_2"]) {
+    const edit = await sent(drawer, note);
+    assert.deepEqual(edit.tools, ["app_files", "apps", "execute", "files", "history", "skills"]);
+    for (const kept of ["ORG_RULE", "MY_RULE"]) assert.ok(edit.system.includes(kept), kept);
+    assert.ok(!edit.system.includes("Deploy the app"));
+    assert.ok(edit.message.includes(note) && !edit.message.includes("chartreuse"));
+  }
+});

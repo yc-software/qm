@@ -101,11 +101,19 @@ export interface AgentToolsOptions {
   surfaceName?: string;
   surfacePrompt?: SurfaceToolPrompt;
   clientTools?: readonly ClientToolDeclaration[];
+  onlyTools?: readonly string[];
 }
 
 export type CoreToolOptions = Omit<
   AgentToolsOptions,
-  "readOnly" | "memoryNotebookOnly" | "surfaceTools" | "surfaceName" | "surfacePrompt" | "delegateWork" | "clientTools"
+  | "readOnly"
+  | "memoryNotebookOnly"
+  | "surfaceTools"
+  | "surfaceName"
+  | "surfacePrompt"
+  | "delegateWork"
+  | "clientTools"
+  | "onlyTools"
 >;
 
 export function coreToolOptions(config: Config): CoreToolOptions {
@@ -204,10 +212,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   ];
   const { inline, inlineTools, connectorTools } = mcpTools(kit, new Set(tools.map((t) => t.name)));
   tools.push(...inlineTools, ...connectorTools);
-  const active = tools.filter((t) =>
-    opts?.readOnly
-      ? READ_ONLY_TOOL_NAMES.has(t.name) || inline.has(t.name) || connectorTools.includes(t)
-      : !(opts?.memoryNotebookOnly && SCHEDULING_TOOL_NAMES.has(t.name)),
+  const active = tools.filter(
+    (t) =>
+      (opts?.onlyTools?.includes(t.name) ?? true) &&
+      (opts?.readOnly
+        ? READ_ONLY_TOOL_NAMES.has(t.name) || inline.has(t.name) || connectorTools.includes(t)
+        : !(opts?.memoryNotebookOnly && SCHEDULING_TOOL_NAMES.has(t.name))),
   );
   const clientNames = new Set(clientTools.map((tool) => tool.name));
   return active.map((tool) => {
