@@ -57,6 +57,7 @@ interface SeenPerson {
 
 export interface UserStore extends UserLinkStore {
   list(): Promise<UserRecord[]>;
+  offboarded(): Promise<UserRecord[]>;
   get(idOrAlias: string): Promise<UserRecord | null>;
   resolve(aliases: readonly string[]): Promise<Map<string, UserRecord>>;
   activity(): Promise<UserActivity[]>;
@@ -424,6 +425,9 @@ export function createPostgresUserStore(connectionString: string): UserStore {
         `SELECT ${COLUMNS} FROM users u WHERE u.first_seen_at IS NOT NULL OR u.offboarded_at IS NOT NULL`,
       );
       return rows.map(toRecord);
+    },
+    async offboarded() {
+      return (await q(`SELECT ${COLUMNS} FROM users u WHERE u.offboarded_at IS NOT NULL`)).map(toRecord);
     },
     async get(idOrAlias) {
       const rows = await q(

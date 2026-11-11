@@ -50,11 +50,11 @@ export function actorAssertionActive(
 type DeactivationStore = Pick<DurableMap<DeactivationRecord>, "all" | "put" | "delete">;
 
 export const deactivationStore = (
-  users: Pick<UserStore, "list" | "markOffboarded" | "markReactivated">,
+  users: Pick<UserStore, "offboarded" | "markOffboarded" | "markReactivated">,
   directorySync: DeactivationStore,
 ): DeactivationStore => ({
   all: async () => [
-    ...(await users.list()).flatMap((u): DeactivationRecord[] =>
+    ...(await users.offboarded()).flatMap((u): DeactivationRecord[] =>
       u.offboardedAt === undefined
         ? []
         : [
