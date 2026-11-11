@@ -350,12 +350,18 @@ const SOURCE = {
   "logo.png": "\u0000PNG",
   "node_modules/dep/index.js": "x\n",
   "node_modules/dep/package.json": "{}\n",
-  "cities.json": "9".repeat(90_000),
+  "cities.json": "9".repeat(79_772),
+  "towns.json": "8".repeat(90_000),
+  ...Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`photo-${i}.jpg`, "\u0000JPEG"])),
 };
+const RED = ".title { color: red; }\n";
 
 test("an app edit chat is shown the app's small text files once, then only the files that changed", async () => {
   const h = harness();
   await h.publish("notes", SOURCE);
+  const read: string[] = [];
+  const { filesOf } = h.deployStore;
+  h.deployStore.filesOf = (id, commit, paths) => (read.push(...(paths ?? [])), filesOf(id, commit, paths));
   const turns: Array<{ source: string; replayed: unknown[] }> = [];
   const mock = createMockAgent();
   const config = testConfigStore("default-org");
@@ -387,36 +393,37 @@ test("an app edit chat is shown the app's small text files once, then only the f
   const ask = async (by = OWNER) => {
     const actor = { id: by, type: "internal" as const };
     const conversation = { kind: "dm" as const, threadRef: `web:${by}:app-edit:notes`, audience: [actor] };
-    const result = await orchestrator.handleTurn({
-      surface: "web",
-      actor,
-      conversation,
-      text: "hi",
-      origin: { kind: "human" },
-    });
-    assert.equal(result.status, "ok");
+    const origin = { kind: "human" as const };
+    assert.equal(
+      (await orchestrator.handleTurn({ surface: "web", actor, conversation, text: "hi", origin })).status,
+      "ok",
+    );
     return turns.at(-1)!;
   };
 
   const first = await ask();
-  assert.ok(first.source.includes(`### index.html\n\`\`\`\`untrusted-data\n${FENCED}\`\`\`\`\n`), first.source);
-  assert.ok(first.source.includes(`### styles.css\n\`\`\`untrusted-data\n${STYLES}\`\`\`\n`), first.source);
+  assert.ok(
+    first.source.includes(`### index.html\n\`\`\`\`untrusted-data\n${FENCED}\`\`\`\`\n`),
+    first.source.slice(0, 900),
+  );
+  assert.ok(first.source.includes(`### styles.css\n\`\`\`untrusted-data\n${STYLES}\`\`\`\n`), "sent as saved");
+  assert.ok(first.source.includes(`### cities.json\n\`\`\`untrusted-data\n${SOURCE["cities.json"]}\n`), "it fits");
   assert.ok(
     first.source.includes(
-      "cities.json (90000 bytes), logo.png (4 bytes), node_modules/ (2 files, 5 bytes), package-lock.json (3 bytes).",
+      "logo.png (4 bytes), node_modules/ (2 files, 5 bytes), package-lock.json (3 bytes), photo-0.jpg (5 bytes), 9 more that app_files list names.",
     ),
-    first.source,
+    first.source.slice(-400),
   );
-  assert.ok(!first.source.includes("999"), "a large file is listed, not sent");
+  assert.deepEqual(read.toSorted(), ["cities.json", "index.html", "styles.css"], "only what will be shown is read");
   assert.equal((await ask()).source, "", "nothing is sent again while the app is unchanged");
 
-  const chat = h.chat("notes");
-  await chat.call({ action: "write", path: "styles.css", data: ".title { color: red; }\n" });
-  await chat.call({ action: "delete", path: "logo.png" });
+  const someoneElse = h.chat("notes");
+  await someoneElse.call({ action: "write", path: "styles.css", data: RED });
+  await someoneElse.call({ action: "delete", path: "logo.png" });
   const third = await ask();
-  assert.ok(third.source.includes("### styles.css\n```untrusted-data\n.title { color: red; }\n```\n"), third.source);
+  assert.ok(third.source.includes(`### styles.css\n\`\`\`untrusted-data\n${RED}\`\`\`\n`), third.source);
   assert.ok(third.source.includes("Deleted: logo.png."), third.source);
-  assert.ok(!third.source.includes("index.html") && !third.source.includes("cities.json"), third.source);
+  assert.ok(!third.source.includes("index.html") && !third.source.includes("towns.json"), third.source);
   assert.equal(
     (third.replayed[0] as string).slice(-first.source.length),
     first.source,
@@ -425,7 +432,7 @@ test("an app edit chat is shown the app's small text files once, then only the f
   assert.equal((await ask("U2")).source, "", "someone who cannot manage the app is shown none of it");
 });
 
-test("the source is sent whole again once the turn that showed it has left the context", async () => {
+test("a later turn skips what this chat saved, and resends everything once the first showing left the context", async () => {
   const h = harness();
   await h.publish("notes");
   const files = createAppFiles({
@@ -434,18 +441,25 @@ test("the source is sent whole again once the turn that showed it has left the c
     actorId: OWNER,
     actingScopeId: scopeId("personal", OWNER),
   });
+  const shown = (appSource: Record<string, unknown>) =>
+    storedItem({ kind: "UserMessage", text: "hi", body: { appSource } }, { sessionId: "s", seq: 9, createdAt: 9 });
+  const first = shown({ commit: (await files.source()).commit });
+  const chat = h.chat("notes");
+  await chat.call({ action: "write", path: "styles.css", data: RED });
+  const result = storedItem(
+    { kind: "ToolResult", tool: "app_files", callId: "c", body: chat.results[0]! },
+    { sessionId: "s", seq: 11, createdAt: 11 },
+  );
   const { commit } = await files.source();
-  const shown = (appSource: Record<string, unknown>) => [
-    storedItem({ kind: "UserMessage", text: "hi", body: { appSource } }, { sessionId: "s", seq: 9, createdAt: 9 }),
-  ];
 
-  assert.equal((await appSourceShown(files, shown({ app: "notes", commit }))).text, "");
-  for (const earlier of [
-    { app: "notes", commit, anchorSeq: 2 },
-    { app: "notes", commit: "0".repeat(40) },
-  ]) {
-    const again = await appSourceShown(files, shown(earlier));
+  assert.match(
+    (await appSourceShown(files, [first])).text,
+    /changed since[^]*### styles\.css\n```untrusted-data\n\.title \{ color: red/,
+  );
+  assert.deepEqual(await appSourceShown(files, [first, result]), { text: "", record: { commit, anchorSeq: 9 } });
+  for (const earlier of [{ commit, anchorSeq: 2 }, { commit: "0".repeat(40) }]) {
+    const again = await appSourceShown(files, [shown(earlier)]);
     assert.ok(again.text.includes("### index.html") && again.text.includes("### styles.css"), again.text);
-    assert.deepEqual(again.record, { app: "notes", commit });
+    assert.deepEqual(again.record, { commit });
   }
 });
