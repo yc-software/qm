@@ -901,25 +901,19 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     assert.equal((await get("/v1/soul", { "x-agent-capability": await capChannel("U8") })).status, 200);
   });
 
-  it("a live verified bot retains private-channel tools without a Slack user principal", async () => {
+  it("a live bot QM knows as an app retains private-channel tools without a Slack user principal; a person does not", async () => {
     await built.directory.replaceChannels(
       [{ channelId: "C", name: "eng", isPrivate: true }],
       ["admin-alice", "U1", "U2"].map((principalId) => ({ channelId: "C", principalId })),
     );
-    const members = [{ id: "B-LEGACY", type: "internal" as const }];
-    const token = await capFor("B-LEGACY", scopeId("channel", "C"), {
-      botActor: true,
-      liveActor: true,
-      members,
-    });
-    assert.equal((await get("/v1/soul", { "x-agent-capability": token })).status, 200);
-    assert.equal(
-      (
-        await get("/v1/soul", {
-          "x-agent-capability": await capFor("B-LEGACY", scopeId("channel", "C"), { members }),
-        })
-      ).status,
-      403,
-    );
+    for (const botActor of [true, false]) {
+      const actorId = botActor ? "B-LEGACY" : "U8";
+      const conversation = { kind: "channel", threadRef: `ch:C:${actorId}`, channelRef: "C" } as const;
+      await built.app.turn({ surface: "test", actor: { externalId: actorId }, conversation, text: "hi", botActor });
+      const members = [{ id: actorId, type: "internal" as const }];
+      const soul = async (extra: Partial<CapabilityClaims>) =>
+        (await get("/v1/soul", { "x-agent-capability": await capChannel(actorId, { members, ...extra }) })).status;
+      assert.deepEqual([await soul({ botActor: true, liveActor: true }), await soul({})], [botActor ? 200 : 403, 403]);
+    }
   });
 });
