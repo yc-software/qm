@@ -32,8 +32,6 @@ test("validation enforces storage limits without parsing or rewriting HTML", () 
   assert.throws(() => validatePlaygroundHtml("  "), /empty/);
   assert.doesNotThrow(() => validatePlaygroundHtml("<script>document.body.append('ready')</script>"));
   assert.equal(normalizePlaygroundTitle(" "), "Playground");
-  // The 80-char cut lands mid-emoji here; it must not leave a lone surrogate behind,
-  // because the title is persisted as JSON.
   const clipped = normalizePlaygroundTitle(`${"a".repeat(78)}\u{1F680}tail`);
   assert.equal(clipped, `${"a".repeat(78)}…`);
 });

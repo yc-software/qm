@@ -689,7 +689,6 @@ export function createMockAgent(): Agent {
         usedTool = true;
         reply = r.ok ? "(posted)" : `[not sent] ${r.message ?? "failed"}`;
       } else if (command0.startsWith("!postfiles ")) {
-        // !postfiles <path>[,<path>...] <message>
         const rest = cmd.slice(cmd.indexOf("!postfiles ") + "!postfiles ".length);
         const sp = rest.indexOf(" ");
         const paths = (sp === -1 ? rest : rest.slice(0, sp)).split(",").filter(Boolean);

@@ -779,7 +779,6 @@ test("webhook create surfaces the inbound url + the secret verbatim; list elides
     "https://portal.example",
   );
   assert.ok(r.ok, JSON.stringify(r));
-  // The url is absolute (publicly reachable) and the secret is returned verbatim ONCE.
   assert.equal(r.url, `https://portal.example/v1/webhooks/incoming/${r.webhook.id}`);
   assert.equal(r.secret, "shh-secret");
   assert.equal(r.webhook.owner, "U1");
@@ -788,7 +787,6 @@ test("webhook create surfaces the inbound url + the secret verbatim; list elides
   assert.ok(Array.isArray(listed));
   assert.equal(listed.length, 1);
 
-  // a different owner can't disable it
   const otherDisable = await control.disableWebhook(r.webhook.id, claims("U9"));
   assert.equal(otherDisable.ok, false);
   assert.equal(otherDisable.ok ? "" : otherDisable.code, "forbidden");

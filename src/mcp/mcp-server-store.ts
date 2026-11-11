@@ -1,10 +1,3 @@
-// Registry of admin-configured MCP servers.
-//
-// Admin-only by design: registering a server points every scope's agents at
-// an outbound HTTP endpoint, so end users must not be able to add one (SSRF
-// and exfiltration surface). Secrets live in the record like other stored
-// connector credentials — reachable only through core, never injected into sandboxes.
-
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { tenantListeners } from "../tenants/cache.ts";
 import type { AttestAudience } from "../directory/person.ts";

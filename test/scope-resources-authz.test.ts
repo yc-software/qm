@@ -301,8 +301,6 @@ test("every file a context lists is one the viewer is authorized to open", async
 });
 
 test("webhook secrets are redacted by the route, not the app layer", async () => {
-  // The app returns the raw webhook (the route redacts). A C1 webhook created with a secret
-  // still carries it here — proving redaction is the route's job, mirroring the flat list.
   const deps = makeDeps();
   await deps.webhooks.create({
     action: "signed",

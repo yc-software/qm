@@ -419,12 +419,12 @@ test("unclaimSlot: restores a failed claim so the slot retries, and only that ex
   await store.markFired(cron, 940_000);
   const prior = (await store.get(cron.id))!.lastFiredAt;
   assert.equal(await store.claimSlot(cron.id, 1_000_000, 1_000_500), true);
-  await store.unclaimSlot(cron.id, 1_000_000, 1_000_500, prior);
+  await store.unclaimSlot(cron, 1_000_000, 1_000_500, prior);
   const restored = (await store.get(cron.id))!;
   assert.equal(restored.lastFiredAt, 940_000);
   assert.equal(restored.nextFireAt, 1_000_000, "the slot is claimable again");
   assert.equal(await store.claimSlot(cron.id, 1_000_000, 1_001_000), true);
-  await store.unclaimSlot(cron.id, 1_000_000, 999, prior);
+  await store.unclaimSlot(cron, 1_000_000, 999, prior);
   assert.equal((await store.get(cron.id))!.lastFiredAt, 1_001_000, "an unclaim for a different claim is a no-op");
 });
 

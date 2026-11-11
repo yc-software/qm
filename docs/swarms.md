@@ -104,7 +104,10 @@ it as `forumSandboxId`; the root session and all workers reach it with
 fails that worker like any other provisioning failure. The board outlives worker
 cleanup so its files remain available to the root. To use an existing computer instead,
 supply `forumSandboxId` naming an authorized sandbox in the same scope; no board is
-then created. Every worker still gets its own blank private computer.
+then created. Only a swarm a person starts can take one: a swarm a Slack bot starts
+never takes a forum, whether the bot names one or a person spawning into that swarm
+does, so it always uses its own board. Every worker still gets its own blank private
+computer.
 The forum ID appears in peer metadata and the worker prompt; select it explicitly
 with `execute`'s `sandbox_id` for commands that should use the shared computer.
 This is not a new filesystem synchronization feature. Workers using a forum share
@@ -257,17 +260,18 @@ transaction; credentials from replaced attempts cannot authorize new work. Compl
 operations. A Slack bot's turn cannot direct a person's swarm: `inspect`, `spawn`,
 `send`, `context`, `control` and message reads refuse it unless a bot's turn started
 the swarm. Once anyone other than that bot has posted a swarm message, or a person's turn has worked on one of the swarm's computers, the bot's root
-turn and every worker in a branch the bot started lose that access too. Workers in a
-branch someone else started keep it: every mail-woken worker turn in a bot-started
-swarm runs as the bot, so a worker's access comes from who sent the message that
-spawned the top of its branch. The same rule covers the board and worker computers a
+turn and every worker it started lose that access too. Only the bot's own turns
+can add workers to a swarm a bot started: a person's turn that tries is refused, so
+every worker in a bot-started swarm is the bot's work and runs as the bot. The same rule covers the board and worker computers a
 swarm creates: a bot's turn that may not direct the swarm cannot list them, reach them with
 `sandbox_id`, make one the conversation's default, use one a person made the default, or
 run on its own worker computer. The check runs each time the turn uses a computer, so a
 turn that is already running loses that access as soon as someone else posts or a person's turn works on one of those computers. Background
 jobs on those computers are covered too: the bot's `background` list leaves them out, it
 cannot watch them, and a watch it armed while it could stops reading the job's output.
-A computer supplied as `forumSandboxId` stays an ordinary computer of its scope.
+A computer supplied as `forumSandboxId` stays an ordinary computer of its scope, which is
+why a swarm a bot starts never takes one, from the bot or from a person: every computer in
+a swarm a bot starts belongs to the swarm. A person's own swarm can still take one.
 Worker sessions never inherit the root session's command or security-screen
 approval grants; a worker must obtain its own approval. Auto screening receives host-verified swarm delegation provenance, so routine delegated tasks and in-swarm reporting are distinguished from external instructions. Delegation does not authorize credential disclosure, permission changes, or overriding higher-priority instructions; those remain screened. Frozen swarm roster checks
 apply to swarm notifications, not ordinary human follow-ups in the root session.
