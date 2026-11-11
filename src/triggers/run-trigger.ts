@@ -38,7 +38,7 @@ export interface TriggerDeps {
 
 export interface TriggerSpec extends Pick<
   TurnRequest,
-  "model" | "fastMode" | "attachments" | "infrequentCron" | "memoryNotebookOnly" | "botActor"
+  "model" | "fastMode" | "attachments" | "infrequentCron" | "memoryNotebookOnly" | "botActor" | "timezone"
 > {
   runtime?: import("../agent/agent.ts").RuntimeChoice | null;
   title?: string;
@@ -317,6 +317,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       }),
       ...(spec.model ? { model: spec.model } : {}),
       ...(spec.attachments?.length ? { attachments: spec.attachments } : {}),
+      ...(spec.timezone ? { timezone: spec.timezone } : {}),
       ...(spec.readOnly ? { readOnly: true } : {}),
       ...(spec.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
       ...(typeof spec.turnWallClockMs === "number" ? { turnWallClockMs: spec.turnWallClockMs } : {}),

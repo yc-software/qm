@@ -1,3 +1,4 @@
+import { isValidCapabilityTimezone } from "../../auth/capability-token.ts";
 import { z } from "zod";
 import type { Cron } from "../../triggers/types.ts";
 import type { Loop, LoopItem, LoopSourcePayload } from "../../loops/types.ts";
@@ -404,6 +405,7 @@ const followUpOptionsSchema = z.object({
   model: z.string().trim().min(1).optional(),
   thinkingLevel: z.string().trim().pipe(z.enum(THINKING_LEVELS)).optional(),
   fastMode: z.boolean().optional(),
+  timezone: z.string().refine(isValidCapabilityTimezone).optional(),
   attachments: z
     .array(
       z.object({

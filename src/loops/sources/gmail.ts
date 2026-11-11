@@ -1,19 +1,8 @@
 import MailComposer from "nodemailer/lib/mail-composer";
-import addressparser from "nodemailer/lib/addressparser";
-import { isTag, type ChildNode } from "domhandler";
-import { DomUtils, ElementType, parseDocument } from "htmlparser2";
-import { isValidCapabilityTimezone } from "../../auth/capability-token.ts";
-import { splitLinks } from "../../../plugins/chassis/src/links.ts";
+import { gmailBodyParts } from "../../connectors/gmail-compose.ts";
 import type { LoopItem, LoopSourcePayload } from "../types.ts";
 import { isAccountType } from "../../connectors/oauth.ts";
-import {
-  GmailApiError,
-  gmailApi,
-  gmailHeader,
-  gmailPartText,
-  gmailThreadMessages,
-} from "../../connectors/gmail-api.ts";
-import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
+import { GmailApiError, gmailApi, gmailHeader, gmailThreadMessages } from "../../connectors/gmail-api.ts";
 import { errMessage } from "../../util/errors.ts";
 import {
   addressList,
@@ -98,108 +87,11 @@ export function replySubject(item: LoopItem, draft: ReplyDraft): string {
   return /^re:/i.test(original) ? original : `Re: ${original}`;
 }
 
-export interface GmailQuote {
-  text: string;
-  html: string;
-}
-
-const linkedLine = (line: string): string =>
-  splitLinks(line)
-    .map((seg) =>
-      seg.kind === "link" ? `<a href="${escapeHtml(seg.href)}">${escapeHtml(seg.href)}</a>` : escapeHtml(seg.text),
-    )
-    .join("");
-
-const htmlMirror = (text: string): string => `<div dir="ltr">${text.split("\n").map(linkedLine).join("<br>")}</div>`;
-
-const quoteLine = (line: string): string => {
-  if (line.startsWith(">")) return `>${line}`;
-  return line ? `> ${line}` : ">";
-};
-
-const HIDDEN_HTML = new Set(["head", "style", "script", "title"]);
-
-function textOf(nodes: ChildNode[]): string {
-  return nodes
-    .map((node) => {
-      if (node.type === ElementType.Text) return node.data;
-      if (!isTag(node)) return "";
-      if (node.name === "br") return "\n";
-      return textOf(node.children) + (node.name === "div" || node.name === "p" ? "\n" : "");
-    })
-    .join("");
-}
-
-function bodyMarkup(html: string): { markup: string; text: string } {
-  const doc = parseDocument(html);
-  const dropped = DomUtils.filter(
-    (node) => node.type === ElementType.Comment || (isTag(node) && HIDDEN_HTML.has(node.name)),
-    doc.children,
-  );
-  for (const node of dropped) DomUtils.removeElement(node);
-  const body = DomUtils.findOne((el) => el.name === "body", doc.children);
-  const html2 = DomUtils.findOne((el) => el.name === "html", doc.children);
-  const root = body?.children ?? html2?.children ?? doc.children;
-  return { markup: DomUtils.getOuterHTML(root, { encodeEntities: "utf8" }), text: textOf(root) };
-}
-
-const isOffset = (token: string): boolean =>
-  token.length === 5 && "+-".includes(token[0]!) && [...token.slice(1)].every((c) => c >= "0" && c <= "9");
-
-function gmailDate(header: string, viewerZone: string | undefined): string {
-  const at = new Date(Date.parse(header));
-  if (Number.isNaN(at.getTime())) return "";
-  const timeZone = viewerZone ?? header.split(" ").find(isOffset) ?? "+0000";
-  const day = at.toLocaleDateString("en-US", {
-    timeZone,
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-  const time = at.toLocaleTimeString("en-US", { timeZone, hour: "numeric", minute: "2-digit" });
-  return `${day} at ${time.replaceAll("\u202f", " ")} `;
-}
-
-function attribution(payload: Record<string, unknown>, viewerZone: string | undefined): { text: string; html: string } {
-  const from = gmailHeader(payload, "From");
-  const when = gmailDate(gmailHeader(payload, "Date"), viewerZone);
-  const [sender] = addressparser(from, { flatten: true });
-  const address = sender?.address ?? "";
-  const link = `<a href="mailto:${escapeHtml(address)}">${escapeHtml(address)}</a>`;
-  return {
-    text: `On ${when}${sender?.name ? `${sender.name} <${address}>` : address} wrote:`,
-    html: `On ${escapeHtml(when)}${sender?.name ? `${escapeHtml(sender.name)} &lt;${link}&gt;` : link} wrote:`,
-  };
-}
-
-const trimNewlines = (text: string): string => {
-  let start = 0;
-  let end = text.length;
-  while (start < end && text[start] === "\n") start++;
-  while (end > start && text[end - 1] === "\n") end--;
-  return text.slice(start, end);
-};
-
-export function gmailQuote(message: Record<string, unknown>, viewerZone?: string): GmailQuote | undefined {
-  const payload = isObj(message.payload) ? message.payload : {};
-  const rich = gmailPartText(payload, "text/html");
-  const parsed = rich ? bodyMarkup(rich) : undefined;
-  const plain = trimNewlines((gmailPartText(payload) || parsed?.text || "").replaceAll("\r\n", "\n"));
-  if (!plain) return undefined;
-  const attr = attribution(payload, viewerZone);
-  return {
-    text: `${attr.text}\n\n${plain.split("\n").map(quoteLine).join("\n")}`,
-    html:
-      `<br><div class="gmail_quote gmail_quote_container"><div dir="ltr" class="gmail_attr">${attr.html}<br></div>` +
-      `<blockquote class="gmail_quote" style="margin:0px 0px 0px 0.8ex;border-left:1px solid rgb(204,204,204);padding-left:1ex">${parsed?.markup ?? htmlMirror(plain)}</blockquote></div>`,
-  };
-}
-
 export async function buildGmailReplyMime(
   item: LoopItem,
   draft: ReplyDraft,
-  quote: GmailQuote | undefined,
+  original: Record<string, unknown> | undefined,
+  viewerZone?: string,
 ): Promise<Buffer | null> {
   const meta = metaOf(item);
   if (!meta) return null;
@@ -213,8 +105,7 @@ export async function buildGmailReplyMime(
     cc: parsed.cc ?? meta.cc ?? [],
     subject: replySubject(item, parsed),
     ...(rfcId ? { inReplyTo: rfcId, references: rfcId } : {}),
-    text: quote ? `${parsed.body}\n\n${quote.text}` : parsed.body,
-    html: htmlMirror(parsed.body) + (quote?.html ?? ""),
+    ...gmailBodyParts(parsed.body, original, viewerZone),
     textEncoding: "base64",
   })
     .compile()
@@ -231,10 +122,9 @@ async function repliedMessage(
         `threads/${encodeURIComponent(meta.threadId)}?format=metadata&metadataHeaders=Message-ID`,
       );
   const messages = thread ? gmailThreadMessages(thread) : [];
-  const answered = messages.find(
-    (m) => isObj(m.payload) && meta.rfcMessageId && gmailHeader(m.payload, "Message-ID") === meta.rfcMessageId,
-  );
-  const id = meta.messageId ?? (answered ?? messages.at(-1))?.id;
+  const answered = (rfcId: string) =>
+    messages.find((m) => isObj(m.payload) && gmailHeader(m.payload, "Message-ID").trim() === rfcId.trim());
+  const id = meta.messageId ?? (meta.rfcMessageId ? answered(meta.rfcMessageId) : messages.at(-1))?.id;
   return typeof id === "string" ? await api(`messages/${encodeURIComponent(id)}?format=full`) : undefined;
 }
 
@@ -250,9 +140,10 @@ async function sendGmail(
   const token = await gmailToken(deps.tokens, deps.owner, item);
   if (!token) return { ok: false, reason: "not_connected", message: "Google is not connected for this account" };
   const api = gmailApi(token, fetchImpl);
+  let original: Record<string, unknown> | undefined;
   try {
-    const original = await repliedMessage(api, meta);
-    const mime = await buildGmailReplyMime(item, draft, original && gmailQuote(original, viewerZone));
+    original = await repliedMessage(api, meta);
+    const mime = await buildGmailReplyMime(item, draft, original, viewerZone);
     if (!mime) return { ok: false, reason: "bad_item", message: "no recipient — add a To: address to the draft" };
     await api("messages/send", {
       timeoutMs: 30_000,
@@ -262,7 +153,11 @@ async function sendGmail(
     if (!(error instanceof GmailApiError)) throw error;
     return { ok: false, reason: "upstream", message: `${error.message}: ${error.detail}` };
   }
-  return { ok: true, result: draft.body };
+  if (original || !meta.rfcMessageId) return { ok: true, result: draft.body };
+  return {
+    ok: true,
+    result: `${draft.body}\n\n(Sent without a quote: ${meta.rfcMessageId} is no longer in thread ${meta.threadId}.)`,
+  };
 }
 
 export const gmailAdapter: LoopSourceAdapter = {
@@ -298,12 +193,7 @@ export const gmailAdapter: LoopSourceAdapter = {
     const draft = args.body !== undefined ? parseReplyDraft(args) : draftOf(item);
     if (!draft || !draft.body.trim()) return { ok: false, reason: "bad_item", message: "the draft is empty" };
     try {
-      return await sendGmail(
-        deps,
-        item,
-        { ...draft, body: draft.body.trim() },
-        deps.timezone ?? (isValidCapabilityTimezone(args.timezone) ? args.timezone : undefined),
-      );
+      return await sendGmail(deps, item, { ...draft, body: draft.body.trim() }, deps.timezone);
     } catch (err) {
       return { ok: false, reason: "upstream", message: errMessage(err) };
     }

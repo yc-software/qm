@@ -288,7 +288,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/loops/:id/items/:itemId/action",
         summary:
-          'act on a held item — body {kind, args?}. kind "edit" replaces the proposal ({args:{proposal}}), "dismiss" drops the item, "reopen" un-dismisses it, and any action the loop\'s source declares (e.g. "send", or Slack\'s "react" with {args:{name}}, which annotates the item without closing it) executes it and records the outcome. Gmail "send" also takes {args:{timezone}}, the person\'s IANA zone, so the quoted "On ... wrote:" time reads as it does in their Gmail',
+          'act on a held item — body {kind, args?}. kind "edit" replaces the proposal ({args:{proposal}}), "dismiss" drops the item, "reopen" un-dismisses it, and any action the loop\'s source declares (e.g. "send", or Slack\'s "react" with {args:{name}}, which annotates the item without closing it) executes it and records the outcome',
       },
       {
         method: "POST",

@@ -79,7 +79,7 @@ interface ItemTurnResult {
   sessionId?: string;
 }
 
-type LoopFollowUpOptions = Pick<TurnRequest, "model" | "thinkingLevel" | "fastMode" | "attachments">;
+type LoopFollowUpOptions = Pick<TurnRequest, "model" | "thinkingLevel" | "fastMode" | "attachments" | "timezone">;
 
 type StageOptions = LoopFollowUpOptions & Pick<TurnRequest, "readOnly">;
 
@@ -571,6 +571,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       ...(options?.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
       ...(typeof options?.fastMode === "boolean" ? { fastMode: options.fastMode } : {}),
       ...(options?.attachments?.length ? { attachments: options.attachments } : {}),
+      ...(options?.timezone ? { timezone: options.timezone } : {}),
       ...(options?.readOnly ? { readOnly: true } : {}),
     });
   }

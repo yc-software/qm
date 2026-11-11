@@ -1053,6 +1053,7 @@ export async function askAgent(
           body: JSON.stringify({
             message: text,
             ...options,
+            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
             ...(current.draftAt !== undefined ? { expectedProposalAt: current.draftAt } : {}),
           }),
         },

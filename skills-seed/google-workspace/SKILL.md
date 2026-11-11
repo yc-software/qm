@@ -82,9 +82,8 @@ bulk`) below personal mail, but never suppress transactional notices (DocuSign,
   narrower width). Body files stay plain text — never write HTML into them.
 - `reply` threads onto the original message and quotes it below the body the way
   Gmail's composer does ("On ... wrote:" plus the earlier thread), so recipients see the
-  whole conversation; `update-draft` keeps that quote. Run it with `TZ=<the user's IANA
-zone>` so the quoted time reads as it does in their Gmail. Write only the new text in the
-  body file. `--all` keeps every recipient. Don't rebuild To/CC by hand. To change a draft, write a fresh body file and `update-draft`
+  whole conversation; `update-draft` keeps that quote. Write only the new text in the body
+  file. `--all` keeps every recipient. Don't rebuild To/CC by hand. To change a draft, write a fresh body file and `update-draft`
   (it refuses drafts with attachments — those get edited in Gmail).
 - Every email you send goes through this helper, including pre-approved sends from
   scheduled jobs (`draft`/`reply`, then `send-draft` on the returned id), however short. Never
