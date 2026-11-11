@@ -6,6 +6,7 @@ import { claimThenBind } from "../tenants/claim.ts";
 import { errMessage, reportFailure } from "../util/errors.ts";
 import { bytes, normalizeRelPath } from "./deploy-fs.ts";
 import type { DeployProvider } from "./deploy-provider.ts";
+import type { DeployGitTreeFile } from "./deploy-git-store.ts";
 import {
   currentVersionOf,
   type DeployEndpoint,
@@ -45,15 +46,28 @@ type AppFile = { path: string; data: Uint8Array };
 type SavedSource =
   | { files: ReadonlyArray<{ path: string; data: string | Uint8Array }> }
   | { commit: string }
-  | { changed: readonly AppFile[]; deletedPaths: readonly string[] };
+  | { written: readonly AppFile[]; deletedPaths: readonly string[] };
+
+export interface SavedApp {
+  draft: DeploymentDraft | null;
+  commit: string;
+  tree: DeployGitTreeFile[];
+}
 
 interface Snapshot {
   tree: Map<string, string>;
   read(paths: string[]): Promise<AppFile[]>;
-  commit(base: string): Promise<string>;
+  commit(): Promise<string>;
 }
 
-export function gitBlobSha(data: Uint8Array): string {
+interface SourceChange {
+  saved: SavedApp;
+  next: Snapshot;
+  changed: Array<{ path: string; sha: string }>;
+  deletedPaths: string[];
+}
+
+function gitBlobSha(data: Uint8Array): string {
   return createHash("sha1").update(`blob ${data.byteLength}\0`).update(data).digest("hex");
 }
 
@@ -83,28 +97,28 @@ export function createLiveEdits(deps: LiveEditDeps) {
     return current && draft ? draftVersion(current, draft) : current;
   }
 
-  async function snapshotOf(
-    id: string,
-    source: SavedSource,
-    base: string,
-    known: Map<string, string>,
-  ): Promise<Snapshot> {
-    if ("changed" in source) {
-      const { changed, deletedPaths } = source;
-      const tree = new Map(known);
+  async function savedOf(d: Deployment): Promise<SavedApp | null> {
+    const draft = await store.draftOf(d.id);
+    const commit = draft?.commit ?? currentVersionOf(d)?.commit;
+    return commit ? { draft, commit, tree: await store.commitTreeOf(d.id, commit) } : null;
+  }
+
+  async function snapshotOf(id: string, source: SavedSource, saved: SavedApp): Promise<Snapshot> {
+    if ("written" in source) {
+      const { written, deletedPaths } = source;
+      const tree = new Map(saved.tree.map((f) => [f.path, f.sha]));
+      for (const f of written) tree.set(f.path, gitBlobSha(f.data));
       for (const path of deletedPaths) tree.delete(path);
-      for (const f of changed) tree.set(f.path, gitBlobSha(f.data));
       return {
         tree,
         read: async (paths) => {
-          const kept = paths.filter((path) => !changed.some((f) => f.path === path));
-          const unchanged = kept.length ? await store.filesOf(id, base, kept) : [];
+          const kept = saved.tree.filter((f) => paths.includes(f.path) && !written.some((w) => w.path === f.path));
           return [
-            ...changed.filter((f) => paths.includes(f.path)),
-            ...unchanged.map((f) => ({ path: f.path, data: bytes(f.data) })),
+            ...written.filter((f) => paths.includes(f.path)),
+            ...(await store.filesIn(id, kept)).map((f) => ({ path: f.path, data: bytes(f.data) })),
           ];
         },
-        commit: () => store.commitDraft(id, [...changed], base, [...deletedPaths]),
+        commit: () => store.commitDraft(id, [...written], saved.commit, [...deletedPaths]),
       };
     }
     if ("commit" in source) {
@@ -123,20 +137,35 @@ export function createLiveEdits(deps: LiveEditDeps) {
     return {
       tree: new Map(files.map((f) => [f.path, gitBlobSha(f.data)])),
       read: async (paths) => files.filter((f) => paths.includes(f.path)),
-      commit: (base) => store.commitDraft(id, files, base),
+      commit: () => store.commitDraft(id, files, saved.commit),
     };
   }
 
-  async function save(before: Deployment, actor: string, source: SavedSource): Promise<LiveEditSaved | null> {
+  async function changeOf(id: string, saved: SavedApp, source: SavedSource): Promise<SourceChange> {
+    const next = await snapshotOf(id, source, saved);
+    const known = new Map(saved.tree.map((f) => [f.path, f.sha]));
+    return {
+      saved,
+      next,
+      changed: [...next.tree].filter(([path, sha]) => known.get(path) !== sha).map(([path, sha]) => ({ path, sha })),
+      deletedPaths: [...known.keys()].filter((path) => !next.tree.has(path)),
+    };
+  }
+
+  async function save(
+    before: Deployment,
+    actor: string,
+    source: SavedSource | SourceChange,
+  ): Promise<LiveEditSaved | null> {
     const current = currentVersionOf(before);
     const liveEdit = deps.provider.liveEdit;
     if (!liveEdit || before.status !== "running" || !current?.commit) return null;
-    const draft = await store.draftOf(before.id);
-    const base = draft?.commit ?? current.commit;
-    const known = new Map((await store.commitTreeOf(before.id, base)).map((f) => [f.path, f.sha]));
-    const next = await snapshotOf(before.id, source, base, known);
-    const changedPaths = [...next.tree].filter(([path, sha]) => known.get(path) !== sha).map(([path]) => path);
-    const deletedPaths = [...known.keys()].filter((path) => !next.tree.has(path));
+    const base = "next" in source ? source.saved : await savedOf(before);
+    if (!base) return null;
+    const change = "next" in source ? source : await changeOf(before.id, base, source);
+    const { next, deletedPaths } = change;
+    const { draft } = base;
+    const changedPaths = change.changed.map((f) => f.path);
     if (!changedPaths.length && !deletedPaths.length)
       return {
         changed: 0,
@@ -152,7 +181,7 @@ export function createLiveEdits(deps: LiveEditDeps) {
     const restart = !hot || switched || changed.some((f) => DEPENDENCY_MANIFESTS.has(f.path));
     const target = { ...current, entrypoint: dev ?? current.entrypoint };
     const [committed, edited] = await Promise.allSettled([
-      next.commit(base),
+      next.commit(),
       deps
         .withDeploymentEnv(before, target)
         .then((version) => liveEdit(before, version, { files: changed, deletedPaths, restart })),
@@ -267,5 +296,5 @@ export function createLiveEdits(deps: LiveEditDeps) {
     return published ?? 0;
   }
 
-  return { runningVersion, save, publishDue };
+  return { runningVersion, savedOf, changeOf, save, publishDue };
 }

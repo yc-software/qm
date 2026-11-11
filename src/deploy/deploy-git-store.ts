@@ -34,6 +34,7 @@ export interface DeployGitStore {
   }): Promise<string>;
   treeOf(deploymentId: string, commitSha: string): Promise<DeployGitTreeFile[]>;
   filesOf(deploymentId: string, commitSha: string, paths?: string[]): Promise<DeployGitInputFile[]>;
+  filesIn(deploymentId: string, entries: readonly DeployGitTreeFile[]): Promise<DeployGitInputFile[]>;
   bundle(deploymentId: string, commitSha: string): Promise<Uint8Array>;
   setRef(deploymentId: string, ref: string, sha: string): Promise<void>;
   deleteRef(deploymentId: string, ref: string): Promise<void>;
@@ -232,6 +233,16 @@ export function createDeployGitStore(opts: DeployGitStoreOptions = {}): DeployGi
     }
   }
 
+  async function filesIn(deploymentId: string, entries: readonly DeployGitTreeFile[]): Promise<DeployGitInputFile[]> {
+    const files: DeployGitInputFile[] = [];
+    for (const entry of entries) {
+      const data = await blob(deploymentId, entry.sha);
+      if (data == null) throw new Error(`missing blob ${entry.sha} for ${entry.path}`);
+      files.push({ path: entry.path, data });
+    }
+    return files;
+  }
+
   return {
     async commit(input) {
       const { repo, workdir } = await checkoutForCommit(
@@ -274,15 +285,9 @@ export function createDeployGitStore(opts: DeployGitStoreOptions = {}): DeployGi
     async filesOf(deploymentId, commitSha, paths) {
       const wanted = paths ? new Set(paths.map(normalizeRelPath)) : null;
       const entries = await treeOf(deploymentId, commitSha);
-      const files: DeployGitInputFile[] = [];
-      for (const entry of entries) {
-        if (wanted && !wanted.has(entry.path)) continue;
-        const data = await blob(deploymentId, entry.sha);
-        if (data == null) throw new Error(`missing blob ${entry.sha} for ${entry.path}`);
-        files.push({ path: entry.path, data });
-      }
-      return files;
+      return filesIn(deploymentId, wanted ? entries.filter((entry) => wanted.has(entry.path)) : entries);
     },
+    filesIn,
     async bundle(deploymentId, commitSha) {
       const repo = await ensureRepo(deploymentId);
       const tmp = await mkdtemp(join(tmpdir(), "qm-deploy-git-bundle-"));

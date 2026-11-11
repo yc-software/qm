@@ -1,34 +1,30 @@
-import { defineTool } from "@earendil-works/pi-coding-agent";
+import { createEditTool, defineTool, formatSize, truncateHead } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { normalizeRelPath } from "../../deploy/deploy-fs.ts";
 import type { SourceSaved } from "../../deploy/deploy-service.ts";
 import { inlineChars, inlineTokensOf } from "../../sessions/tool-output.ts";
 import type { AppFiles } from "../../tools/app-files.ts";
+import { tryDecodeUtf8 } from "../../tools/primitives.ts";
 import { errMessage } from "../../util/errors.ts";
 import { text, type ToolKit } from "./kit.ts";
 import { previousPublishFailure } from "./workspace.ts";
 
 const RANGE_NOTE_CHARS = 200;
+const NO_DIRECTORY = "/app-source";
+const REPLACEMENTS = createEditTool(NO_DIRECTORY).parameters.properties.edits;
 
 function textOf(file: { path: string; data: Uint8Array }): string {
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(file.data);
-  } catch {
+  const decoded = tryDecodeUtf8(file.data);
+  if (decoded === null)
     throw new Error(`${file.path} is not UTF-8 text (${file.data.byteLength} bytes), so it cannot be read or edited`);
-  }
-}
-
-function occurrences(haystack: string, needle: string): number {
-  let count = 0;
-  for (let at = haystack.indexOf(needle); at >= 0; at = haystack.indexOf(needle, at + needle.length)) count++;
-  return count;
+  return decoded;
 }
 
 function describeSaved(r: SourceSaved): string {
   const paths = [...r.saved.map((f) => f.path), ...r.deleted.map((path) => `${path} (deleted)`)];
   if (!paths.length) return "Nothing to save: the app's files already have this content.";
   if (!r.liveEdit)
-    return `Saved ${paths.join(", ")} and published it as v${r.version}. This app cannot be edited while it runs, so each change is a full publish and takes longer to show.`;
+    return `Saved ${paths.join(", ")} and published it as v${r.version}. That was a full publish, not an edit of the running app, so it takes longer to show.`;
   const shown =
     r.liveEdit.hot && !r.liveEdit.first
       ? "It is live: open tabs hot-reloaded it."
@@ -108,15 +104,18 @@ export function appFileTools(kit: ToolKit) {
         const first = Math.min(params.from ?? 1, lines.length);
         const wanted = lines.slice(first - 1, Math.max(params.to ?? lines.length, first));
         const budget = inlineChars(await inlineTokensOf(ref.current?.toolOutput)) - RANGE_NOTE_CHARS;
-        let chars = 0;
-        const fits = wanted.findIndex((line) => (chars += line.length + 1) > budget);
-        const shown = fits > 0 ? wanted.slice(0, fits) : wanted;
-        const last = first + shown.length - 1;
-        const more = shown.length < wanted.length ? `; too long to show at once, read on with from ${last + 1}` : "";
-        const range = shown.length < lines.length ? `[${path} lines ${first}-${last} of ${lines.length}${more}]\n` : "";
+        const cut = truncateHead(wanted.join("\n"), { maxBytes: budget, maxLines: wanted.length });
+        if (cut.firstLineExceedsLimit)
+          throw new Error(
+            `line ${first} of ${path} is ${formatSize(Buffer.byteLength(wanted[0]!))}, more than one result can show, and app_files cannot show part of a line; work on this file from the shell through the app's git remote`,
+          );
+        const shown = cut.truncated ? cut.outputLines : wanted.length;
+        const last = first + shown - 1;
+        const more = cut.truncated ? `; too long to show at once, read on with from ${last + 1}` : "";
+        const range = shown < lines.length ? `[${path} lines ${first}-${last} of ${lines.length}${more}]\n` : "";
         return {
           body: { bytes: file.data.byteLength, ...(range ? { lines: [first, last, lines.length] } : {}) },
-          result: `${range}${shown.join("\n")}`,
+          result: `${range}${cut.content}`,
         };
       }),
   });
@@ -127,40 +126,32 @@ export function appFileTools(kit: ToolKit) {
     description:
       "Replace exact text in source files and save. Put every replacement for the request, across all its files, in one call: a call is one save and one reload of the running app, and it saves nothing if any replacement fails.",
     parameters: Type.Object({
-      edits: Type.Array(
-        Type.Object(
-          {
-            path: Type.String({ description: "File to change." }),
-            old: Type.String({
-              minLength: 1,
-              description: "Exact text to replace. It must occur once in the file, so include enough around it.",
-            }),
-            new: Type.String({ description: "Text to put in its place." }),
-          },
-          { additionalProperties: false },
-        ),
-        { minItems: 1, description: "Replacements, applied in order." },
-      ),
+      files: Type.Array(Type.Object({ path: Type.String({ description: "File to change." }), edits: REPLACEMENTS }), {
+        minItems: 1,
+        description: "Each file to change, with its replacements.",
+      }),
     }),
     execute: (callId, params) => {
-      const paths = [...new Set(params.edits.map((e) => e.path))];
-      return save(callId, { action: "edit", path: paths.join(", "), edits: params.edits.length }, async (source) => {
-        const texts = new Map((await source(paths)).files.map((f) => [f.path, textOf(f)]));
-        params.edits.forEach((e, i) => {
-          const path = normalizeRelPath(e.path);
-          const before = texts.get(path);
-          if (before === undefined) throw new Error(`no such file: ${path}; nothing was saved`);
-          const found = occurrences(before, e.old);
-          if (found !== 1)
-            throw new Error(
-              `replacement ${i + 1}: the old text ${found ? `occurs ${found} times` : "is not"} in ${path}; it must occur once, copied exactly from the file. Nothing was saved`,
-            );
-          texts.set(
-            path,
-            before.replace(e.old, () => e.new),
-          );
-        });
-        return { files: [...texts].map(([path, data]) => ({ path, data })), deletedPaths: [] };
+      const paths = params.files.map((f) => normalizeRelPath(f.path));
+      const count = params.files.reduce((sum, f) => sum + f.edits.length, 0);
+      return save(callId, { action: "edit", path: paths.join(", "), edits: count }, async (source) => {
+        const saved = new Map((await source(paths)).files.map((f) => [f.path, f]));
+        const edited = new Map<string, string>();
+        for (const [i, { edits }] of params.files.entries()) {
+          const path = paths[i]!;
+          const file = saved.get(path);
+          const replace = createEditTool(NO_DIRECTORY, {
+            operations: {
+              access: async () => {
+                if (!file) throw new Error(`no such file: ${path}; list shows the app's files`);
+              },
+              readFile: async () => Buffer.from(edited.get(path) ?? textOf(file!)),
+              writeFile: async (_path, content) => void edited.set(path, content),
+            },
+          });
+          await replace.execute(callId, { path, edits });
+        }
+        return { files: [...edited].map(([path, data]) => ({ path, data })), deletedPaths: [] };
       });
     },
   });

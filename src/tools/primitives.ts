@@ -1401,7 +1401,7 @@ function audienceFromGrantees(
   };
 }
 
-function tryDecodeUtf8(bytes: Uint8Array): string | null {
+export function tryDecodeUtf8(bytes: Uint8Array): string | null {
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch {

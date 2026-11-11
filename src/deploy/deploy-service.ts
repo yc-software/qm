@@ -33,7 +33,7 @@ import { errMessage, reportFailure, swallow } from "../util/errors.ts";
 import { uuidSchema } from "../util/ids.ts";
 import { claimThenBind } from "../tenants/claim.ts";
 import { assertAppLabelFits } from "../tenants/settings.ts";
-import { createLiveEdits, gitBlobSha, type LiveEditSaved } from "./live-edits.ts";
+import { createLiveEdits, type LiveEditSaved, type SavedApp } from "./live-edits.ts";
 import { ambientTenant, type Tenant } from "../tenants/context.ts";
 
 export interface DeployFile {
@@ -340,15 +340,15 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     return v;
   };
 
-  const savedCommit = async (d: Deployment): Promise<string | undefined> =>
-    (await deps.deployStore.draftOf(d.id))?.commit ?? currentVersionOf(d)?.commit;
-
-  const sourceAt = async (id: string, commit: string, paths: string[] = []): Promise<DeploymentSource> => ({
-    commit,
-    tree: (await deps.deployStore.commitTreeOf(id, commit)).map(({ path, sha, size }) => ({ path, sha, size })),
-    files: paths.length
-      ? (await deps.deployStore.filesOf(id, commit, paths)).map((f) => ({ path: f.path, data: bytes(f.data) }))
-      : [],
+  const sourceOf = async (id: string, saved: SavedApp, paths: string[] = []): Promise<DeploymentSource> => ({
+    commit: saved.commit,
+    tree: saved.tree.map(({ path, sha, size }) => ({ path, sha, size })),
+    files: (
+      await deps.deployStore.filesIn(
+        id,
+        saved.tree.filter((f) => paths.includes(f.path)),
+      )
+    ).map((f) => ({ path: f.path, data: bytes(f.data) })),
   });
 
   const liveEndpoint = async (d: Deployment): Promise<DeployEndpoint | null> => {
@@ -812,8 +812,8 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
 
     async source(idOrName, paths) {
       const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
-      const commit = d ? await savedCommit(d) : undefined;
-      return d && commit ? sourceAt(d.id, commit, paths) : null;
+      const saved = d ? await liveEdits.savedOf(d) : null;
+      return d && saved ? sourceOf(d.id, saved, paths) : null;
     },
 
     async editSource(idOrName, actor, edit) {
@@ -821,30 +821,28 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       if (!found) throw new Error(`no such app: ${idOrName}`);
       return withDeployLock(found.id, async () => {
         const before = await deps.deployStore.get(found.id);
-        const base = before ? await savedCommit(before) : undefined;
-        if (!before || !base) throw new Error(`${idOrName} has no saved source; publish it again first`);
-        const known = new Map((await deps.deployStore.commitTreeOf(before.id, base)).map((f) => [f.path, f]));
-        const wanted = await edit((paths) => sourceAt(before.id, base, paths));
-        const changed = wanted.files
-          .map((f) => ({ path: normalizeRelPath(f.path), data: bytes(f.data) }))
-          .map((f) => ({ ...f, sha: gitBlobSha(f.data) }))
-          .filter((f) => known.get(f.path)?.sha !== f.sha);
-        const deletedPaths = wanted.deletedPaths.map(normalizeRelPath).filter((path) => known.has(path));
-        const done = {
-          saved: changed.map(({ path, sha }) => ({ path, sha })),
-          deleted: deletedPaths,
-          version: before.currentVersion,
-        };
-        if (!changed.length && !deletedPaths.length) return done;
-        for (const path of [...deletedPaths, ...changed.map((f) => f.path)]) known.delete(path);
+        const saved = before ? await liveEdits.savedOf(before) : null;
+        if (!before || !saved) throw new Error(`${idOrName} has no saved source; publish it again first`);
+        const wanted = await edit((paths) => sourceOf(before.id, saved, paths));
+        const written = wanted.files.map((f) => ({ path: normalizeRelPath(f.path), data: bytes(f.data) }));
+        const change = await liveEdits.changeOf(before.id, saved, {
+          written,
+          deletedPaths: wanted.deletedPaths.map(normalizeRelPath),
+        });
+        const done = { saved: change.changed, deleted: change.deletedPaths, version: before.currentVersion };
+        if (!change.changed.length && !change.deletedPaths.length) return done;
+        const touched = new Set([...change.deletedPaths, ...change.changed.map((f) => f.path)]);
         assertAppSize(
-          [...[...known.values()].map((f) => f.size), ...changed.map((f) => f.data.byteLength)],
+          [
+            ...saved.tree.filter((f) => !touched.has(f.path)).map((f) => f.size),
+            ...written.filter((f) => touched.has(f.path)).map((f) => f.data.byteLength),
+          ],
           deps.provider.profile.maxAppBytes,
         );
         await withdrawLoanUnlessPublisher(before, actor);
-        const liveEdit = await liveEdits.save(before, actor, { changed, deletedPaths });
+        const liveEdit = await liveEdits.save(before, actor, change);
         if (liveEdit) return { ...done, liveEdit };
-        const commit = await deps.deployStore.commitDraft(before.id, changed, base, deletedPaths);
+        const commit = await change.next.commit();
         const published = await publishCommit(before, commit, { principalId: actor, action: "deploy_version" });
         return { ...done, version: published?.version ?? before.currentVersion };
       });

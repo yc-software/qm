@@ -122,9 +122,9 @@ test("replacements across two files are one save of only those files, and later 
 
   const out = await chat.call({
     action: "edit",
-    edits: [
-      { path: "styles.css", old: ".title { color: black; }", new: ".title { color: teal; }" },
-      { path: "index.html", old: "Notes", new: "My notes" },
+    files: [
+      { path: "styles.css", edits: [{ oldText: ".title { color: black; }", newText: ".title { color: teal; }" }] },
+      { path: "index.html", edits: [{ oldText: "Notes", newText: "My notes" }] },
     ],
   });
 
@@ -149,7 +149,10 @@ test("replacements across two files are one save of only those files, and later 
   );
 
   assert.equal(await chat.call({ action: "read", path: "index.html" }), INDEX.replace("Notes", "My notes"));
-  await chat.call({ action: "edit", edits: [{ path: "index.html", old: "My notes", new: "Our notes" }] });
+  await chat.call({
+    action: "edit",
+    files: [{ path: "index.html", edits: [{ oldText: "My notes", newText: "Our notes" }] }],
+  });
   assert.deepEqual(h.writes[1], { files: { "index.html": INDEX.replace("Notes", "Our notes") }, deletedPaths: [] });
 });
 
@@ -192,18 +195,16 @@ test("a replacement that does not match exactly once saves nothing, even beside 
 
   const ambiguous = await chat.call({
     action: "edit",
-    edits: [
-      { path: "index.html", old: "Notes", new: "My notes" },
-      { path: "styles.css", old: "color: black;", new: "color: teal;" },
+    files: [
+      { path: "index.html", edits: [{ oldText: "Notes", newText: "My notes" }] },
+      { path: "styles.css", edits: [{ oldText: "color: black;", newText: "color: teal;" }] },
     ],
   });
-  assert.match(ambiguous, /replacement 2: the old text occurs 2 times in styles\.css/);
-  const missing = await chat.call({ action: "edit", edits: [{ path: "styles.css", old: "color: red;", new: "x" }] });
-  assert.match(missing, /replacement 1: the old text is not in styles\.css/);
-  assert.match(
-    await chat.call({ action: "edit", edits: [{ path: "nope.css", old: "a", new: "b" }] }),
-    /no such file: nope\.css/,
-  );
+  assert.match(ambiguous, /Found 2 occurrences of the text in styles\.css/);
+  const edit = (path: string, oldText: string) =>
+    chat.call({ action: "edit", files: [{ path, edits: [{ oldText, newText: "x" }] }] });
+  assert.match(await edit("styles.css", "color: red;"), /Could not find the exact text in styles\.css/);
+  assert.match(await edit("nope.css", "a"), /no such file: nope\.css/);
 
   assert.equal(h.writes.length, 0);
   assert.equal(await h.deployStore.draftOf(d.id), null);
@@ -238,31 +239,50 @@ test("an app with a dev script restarts into it on the first save and hot-reload
   const recolor = (from: string, to: string) =>
     chat.call({
       action: "edit",
-      edits: [{ path: "src/app.css", old: `.title { color: ${from}; }`, new: `.title { color: ${to}; }` }],
+      files: [
+        {
+          path: "src/app.css",
+          edits: [{ oldText: `.title { color: ${from}; }`, newText: `.title { color: ${to}; }` }],
+        },
+      ],
     });
 
   assert.match(await recolor("black", "teal"), /^Saved src\/app\.css\. It is live: the app restarted with it/);
   assert.match(await recolor("teal", "navy"), /^Saved src\/app\.css\. It is live: open tabs hot-reloaded it\.$/);
 });
 
-test("on a provider without live edits each change is published as a version, and the result says so", async () => {
-  const h = harness({ liveEdits: false });
-  const d = await h.publish("notes");
-  await h.deploy.shareDeployment(d.id, scopeId("personal", "U2"), "write", { createdBy: OWNER }, { notify: false });
-  const chat = h.chat("notes", "U2");
+for (const [where, liveEdits] of [
+  ["a provider without live edits", false],
+  ["an archived app, which is not running to be edited,", true],
+] as const)
+  test(`on ${where} a change is published as a version, and the result says so`, async () => {
+    const h = harness({ liveEdits });
+    const d = await h.publish("notes");
+    await h.deploy.shareDeployment(d.id, scopeId("personal", "U2"), "write", { createdBy: OWNER }, { notify: false });
+    if (liveEdits) await h.deploy.archiveDeployment(d.id);
+    const chat = h.chat("notes", "U2");
 
-  const out = await chat.call({ action: "edit", edits: [{ path: "index.html", old: "Notes", new: "My notes" }] });
+    const out = await chat.call({
+      action: "edit",
+      files: [{ path: "index.html", edits: [{ oldText: "Notes", newText: "My notes" }] }],
+    });
 
-  assert.match(out, /^Saved index\.html and published it as v2\..*takes longer to show/);
-  const { principalId, action } = h.audited.at(-1)!;
-  assert.deepEqual({ principalId, action }, { principalId: "U2", action: "deploy_version" }, "audited to the editor");
-  const after = (await h.deployStore.get(d.id))!;
-  assert.equal(after.currentVersion, 2);
-  assert.equal(h.placed.length, 2, "the app was placed again on the new version");
-  assert.equal(h.placed[1], after.versions[1]!.commit);
-  assert.equal(await chat.call({ action: "read", path: "index.html" }), INDEX.replace("Notes", "My notes"));
-  assert.equal(await h.deployStore.draftOf(d.id), null);
-});
+    assert.match(out, /^Saved index\.html and published it as v2\. That was a full publish.*takes longer to show/);
+    const { principalId, action } = h.audited.at(-1)!;
+    assert.deepEqual({ principalId, action }, { principalId: "U2", action: "deploy_version" }, "audited to the editor");
+    const after = (await h.deployStore.get(d.id))!;
+    assert.deepEqual([after.currentVersion, after.status], [2, "running"]);
+    assert.deepEqual(h.placed, [after.versions[0]!.commit, after.versions[1]!.commit], "placed again on the version");
+    assert.equal(h.writes.length, 0, "nothing was written into a running app");
+    assert.equal(await chat.call({ action: "read", path: "index.html" }), INDEX.replace("Notes", "My notes"));
+    assert.equal(await h.deployStore.draftOf(d.id), null);
+    if (liveEdits) return;
+    assert.match(
+      await chat.call({ action: "delete", path: "styles.css" }),
+      /^Saved styles\.css \(deleted\) and published/,
+    );
+    assert.equal(await chat.call({ action: "list" }), `index.html (${INDEX.length + 3} bytes)`);
+  });
 
 test("someone without write access to the app can neither read nor change its files", async () => {
   const h = harness();
@@ -272,7 +292,7 @@ test("someone without write access to the app can neither read nor change its fi
   for (const params of [
     { action: "list" },
     { action: "read", path: "index.html" },
-    { action: "edit", edits: [{ path: "index.html", old: "Notes", new: "pwned" }] },
+    { action: "edit", files: [{ path: "index.html", edits: [{ oldText: "Notes", newText: "pwned" }] }] },
     { action: "write", path: "index.html", data: "pwned" },
     { action: "delete", path: "index.html" },
   ]) {

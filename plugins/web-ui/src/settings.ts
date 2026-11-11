@@ -21,6 +21,7 @@ import { ADMIN_SECTIONS, VIEW_TITLE, adminMounter, settingsRoute } from "./admin
 import { sessionsState, setGroupByActivity, setWebOnly } from "./sessions";
 import { errMessage, swallowAs } from "../../chassis/src/errors";
 import { importTheme, isPalette, themeCss, themeTokens, type Palette } from "./theme-import";
+import { answerEmbedder, hasEmbedder, tellEmbedder } from "./embedder";
 
 type ThemeChoice = "light" | "dark" | "system" | "custom";
 
@@ -69,14 +70,8 @@ function storeCustomTheme(palette: Palette | null): void {
   }
 }
 
-let embedderOrigin: string | null = null;
-
-export function tellEmbedder(message: Record<string, unknown>): void {
-  if (embedderOrigin) window.parent.postMessage(message, embedderOrigin);
-}
-
 function publishTheme(): void {
-  if (!embedderOrigin) return;
+  if (!hasEmbedder()) return;
   const root = document.documentElement;
   const style = getComputedStyle(root);
   const colors = Object.fromEntries(
@@ -148,12 +143,7 @@ async function onThemeFileChosen(e: Event): Promise<void> {
 }
 
 export function watchSystemTheme(): void {
-  window.addEventListener("message", (event) => {
-    if (window.parent === window || event.source !== window.parent || event.origin === "null") return;
-    if (event.data?.type !== "qm:theme-request") return;
-    embedderOrigin = event.origin;
-    publishTheme();
-  });
+  answerEmbedder("qm:theme-request", publishTheme);
   window.addEventListener("storage", (event) => {
     if (event.key === null || event.key === THEME_KEY || event.key === CUSTOM_THEME_KEY) applyTheme();
   });
