@@ -337,9 +337,10 @@ export function applyThinkingBinding<T>(
 
 function shortConversationCache<T>(payload: T): T {
   const messages = (payload as { messages?: unknown } | undefined)?.messages;
-  for (const message of Array.isArray(messages) ? (messages as Array<{ content?: unknown }>) : [])
-    for (const block of Array.isArray(message?.content) ? (message.content as Array<{ cache_control?: object }>) : [])
-      if (block?.cache_control) block.cache_control = { type: "ephemeral" };
+  for (const message of Array.isArray(messages) ? (messages as Array<{ role?: string; content?: unknown }>) : [])
+    if (message?.role !== "system" && message?.role !== "developer" && Array.isArray(message?.content))
+      for (const block of message.content as Array<{ cache_control?: object }>)
+        if (block?.cache_control) block.cache_control = { type: "ephemeral" };
   return payload;
 }
 
