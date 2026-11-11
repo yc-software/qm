@@ -3,7 +3,7 @@ import type { ScopeId } from "../types.ts";
 
 export interface AppFiles {
   readonly app: string;
-  source(paths?: string[]): Promise<DeploymentSource>;
+  source(paths?: string[], commit?: string): Promise<DeploymentSource>;
   save(edit: (read: (paths: string[]) => Promise<DeploymentSource>) => Promise<SourceEdit>): Promise<SourceSaved>;
 }
 
@@ -22,9 +22,9 @@ export function createAppFiles(deps: {
   };
   return {
     app,
-    async source(paths) {
+    async source(paths, commit) {
       await assertMayEdit();
-      const source = await deploy.source(app, paths);
+      const source = await deploy.source(app, paths, commit);
       if (!source) throw new Error(`${app} has no saved source; publish it again first`);
       return source;
     },

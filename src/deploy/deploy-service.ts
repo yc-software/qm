@@ -126,7 +126,7 @@ export interface DeployService {
   deploymentLogs(idOrName: string, opts: { tailLines: number }): Promise<string | null>;
   gitRepoPath(idOrName: string): Promise<string | null>;
   pushGit<T>(id: string, runReceivePack: () => Promise<{ result: T; ok: boolean }>, actor?: string): Promise<T>;
-  source(idOrName: string, paths?: string[]): Promise<DeploymentSource | null>;
+  source(idOrName: string, paths?: string[], commit?: string): Promise<DeploymentSource | null>;
   editSource(
     idOrName: string,
     actor: string,
@@ -810,9 +810,13 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       });
     },
 
-    async source(idOrName, paths) {
+    async source(idOrName, paths, commit) {
       const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
-      const saved = d ? await liveEdits.savedOf(d) : null;
+      const saved = d
+        ? commit
+          ? { draft: null, commit, tree: await deps.deployStore.commitTreeOf(d.id, commit) }
+          : await liveEdits.savedOf(d)
+        : null;
       return d && saved ? sourceOf(d.id, saved, paths) : null;
     },
 
