@@ -146,6 +146,7 @@ test("an eagerly warmed default box the turn never used is released as unchanged
   const box = await f.turn.provision(true);
   await f.turn.reclaimBox();
   assert.deepEqual(f.released(), { [box.id]: { homeUnchanged: true } });
+  assert.equal(f.notePersonUse.mock.callCount(), 1);
 });
 
 test("an eagerly warmed default box the turn opened by its id is released as used", async () => {

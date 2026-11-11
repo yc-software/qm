@@ -17,6 +17,7 @@ import { hashId } from "../util/crypto.ts";
 import type { SecurityScreenVerdict } from "../security/security-posture.ts";
 import { downscaleVisionImage } from "./image-downscale.ts";
 import { NoDefaultSandboxError } from "../sandbox/sandbox-routing.ts";
+import { SandboxAccessError } from "../sandbox/sandbox-resources.ts";
 
 export const INBOX_DIR = "inbox";
 export const TURN_FILES_DIR = ".agent-turn";
@@ -251,7 +252,7 @@ export async function materializeInbound(
   let target: Promise<SandboxHandle | null> | undefined;
   const computer = () =>
     (target ??= (typeof handle === "function" ? handle() : Promise.resolve(handle)).catch((e: unknown) => {
-      if (e instanceof NoDefaultSandboxError) return null;
+      if (e instanceof NoDefaultSandboxError || e instanceof SandboxAccessError) return null;
       throw e;
     }));
   const unstaged = new Set<string>();

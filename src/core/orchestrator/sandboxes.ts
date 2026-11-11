@@ -407,7 +407,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           tracePhase("sandbox.provision", () => openScoped(turnPool, slot, eager)),
         );
     if (opening) await assertDefaultUsable(handle.resourceId ?? boundSandboxId);
-    if (!eager) await notePersonUse(handle);
+    await notePersonUse(handle);
     return handle;
   };
   const writableScopeId = resolution.writableScopeId;
