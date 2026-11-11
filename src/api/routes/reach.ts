@@ -7,6 +7,7 @@ import type { SandboxHandle } from "../../sandbox/sandbox.ts";
 import {
   accessConversationSandbox,
   assertBotMayUseComputer,
+  BotComputerRefusedError,
   botMayUseComputers,
   SandboxAccessError,
   type SandboxResource,
@@ -200,7 +201,10 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
         if (!(e instanceof SandboxAccessError)) throw e;
         return sendJson(res, 403, {
           error: "forbidden",
-          message: "sandbox_id isn't a computer this conversation can read files from",
+          message:
+            e instanceof BotComputerRefusedError
+              ? e.message
+              : "sandbox_id isn't a computer this conversation can read files from",
         });
       }
     } else if (needsSandbox) {
