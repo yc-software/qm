@@ -3497,7 +3497,7 @@ test("Auto asks for input approval on suspicious data, skips re-screening on app
   const unread = await grantApp.app.turn(
     dm("x".repeat(MAX_DOCUMENT_TEXT_CHARS + 1), { surface: "monitor", origin: { kind: "automation" } }),
   );
-  assert.equal(unread.status, "pending_approval", "a session grant does not cover input the screen never read");
+  assert.equal(unread.status, "refused", "a session grant does not cover input the screen never read");
   assert.ok(
     (await grantApp.auditLog.events(tenant)).some((event) => event.action === "security_posture.flag_allowed_by_grant"),
   );
@@ -3860,10 +3860,10 @@ test("Auto treats a fresh authenticated ambient speaker as the initiating human"
   );
 });
 
-test("Auto holds input too long to screen until a person allows it, and withholds an attachment too long to screen", async () => {
+test("Auto holds input too long to screen until a person allows it, then runs it marked unscreened, and withholds an attachment too long to screen", async () => {
   const built = freshApp();
   const padded = `please note ${"x".repeat(MAX_DOCUMENT_TEXT_CHARS)} thanks`;
-  const request = dm(padded, { surface: "monitor", origin: { kind: "automation" } });
+  const request = channel("please summarize", { conversationHeader: padded });
 
   const held = await built.app.turn(request);
   assert.equal(held.status, "pending_approval");
@@ -3874,7 +3874,10 @@ test("Auto holds input too long to screen until a person allows it, and withhold
     false,
   );
   const approval = { requestId: held.pendingApprovals![0]!.requestId, approved: true };
-  assert.equal((await built.app.turn({ ...request, approval })).status, "ok");
+  const allowed = await built.app.turn({ ...request, approval });
+  assert.equal(allowed.status, "ok");
+  const replay = (await built.sessions.listLlmRequests(allowed.sessionId!)).findLast((rec) => rec.model === "mock");
+  assert.match(JSON.stringify(replay?.promptEnvelope), /NOT security-screened/);
 
   const blob = await built.blobTransfer.put(Buffer.from(padded));
   const attached = await built.app.turn(

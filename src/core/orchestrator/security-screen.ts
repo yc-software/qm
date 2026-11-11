@@ -254,6 +254,7 @@ export interface InboundScreenTurn {
   scopeId: ScopeId;
   resolution: Awaited<ReturnType<OrchestratorDeps["resolution"]["resolve"]>>;
   screenInbound: boolean;
+  replaysHeldInput: boolean;
   enforceScreen: boolean;
   ambientTurn: boolean;
   sessionTurn: boolean;
@@ -356,15 +357,19 @@ export async function screenInboundInput(turn: InboundScreenTurn) {
     conversation,
     resolution,
     screenInbound,
+    replaysHeldInput,
     enforceScreen,
     classifyAs,
     recordScreenRequest,
     audit,
     approvalGrantsFor,
   } = turn;
-  let flaggedScreenedInput: { reason: string; sources: string[]; onceOnly: boolean } | undefined;
+  let flaggedScreenedInput: { reason: string; sources: string[]; onceOnly: boolean; refused: boolean } | undefined;
   let inputUnscreened = false;
-  if (screenInbound && !enforceScreen) {
+  if (replaysHeldInput && enforceScreen) {
+    const { screenPayloads, hasUnscreenableAttachment } = await buildInboundScreen({ ...turn, screenInbound: true });
+    inputUnscreened = !screenPayloads || hasUnscreenableAttachment;
+  } else if (screenInbound && !enforceScreen) {
     void buildInboundScreen(turn)
       .then(({ screenPayloads }) =>
         screenPayloads?.length
@@ -388,12 +393,21 @@ export async function screenInboundInput(turn: InboundScreenTurn) {
       else if (!deps.securityScreener && !deps.agent.screenSecurity) unscreenableCause = "no-screener";
       if (verdict?.decision === "strict") {
         const sources = externalPromptData.map((item) => item.source);
+        const onceOnly = verdict.unscreened === true;
         flaggedScreenedInput = {
           reason: verdict.reason ?? "strict security screen verdict",
           sources,
-          onceOnly: verdict.unscreened === true,
+          onceOnly,
+          refused: onceOnly && input.origin.kind === "automation",
         };
-        audit(flaggedAudit(input.surface ?? "unknown", "pending_approval", flaggedScreenedInput.reason, sources));
+        audit(
+          flaggedAudit(
+            input.surface ?? "unknown",
+            flaggedScreenedInput.refused ? "refused" : "pending_approval",
+            flaggedScreenedInput.reason,
+            sources,
+          ),
+        );
       } else if (unscreenableCause || verdict?.unscreened) {
         inputUnscreened = true;
         audit({

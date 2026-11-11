@@ -645,14 +645,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         JSON.stringify(approvalRecord.request.overheard ?? []) === JSON.stringify(input.overheard ?? []) &&
         JSON.stringify(approvalRecord.request.attachments ?? []) === JSON.stringify(input.attachments ?? []) &&
         (approvalRecord.request.conversationHeader ?? "") === (input.conversationHeader ?? "");
-      const screenInbound =
-        securityPolicy.screening !== "off" &&
-        !(
-          approvalSession &&
-          approvalRecord?.sessionId === approvalSession.id &&
-          approvalRecord.kind === "input" &&
-          approvalReplaysFlaggedRequest
-        );
+      const replaysHeldInput =
+        !!approvalSession &&
+        approvalRecord?.sessionId === approvalSession.id &&
+        approvalRecord.kind === "input" &&
+        approvalReplaysFlaggedRequest;
+      const screenInbound = securityPolicy.screening !== "off" && !replaysHeldInput;
       const screenSession: { id?: string } = {};
       const pendingScreenRequests: TurnLlmRequestRecord[] = [];
       const recordScreenRequest = async (rec: TurnLlmRequestRecord): Promise<void> => {
@@ -685,6 +683,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         scopeId,
         resolution,
         screenInbound,
+        replaysHeldInput,
         enforceScreen,
         ambientTurn,
         sessionTurn,
@@ -711,13 +710,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await deps.sessions.addParticipant(session.id, actor.id);
         if (input.shutdown?.aborted)
           return { status: "queued", sessionId: session.id, ...(input.runId ? { runId: input.runId } : {}) };
-        if (botRequester)
-          return botApprovalRefusal(
-            audit,
-            session.id,
-            "security-screen",
-            `${flaggedScreenedInput.reason}; flagged sources: ${flaggedScreenedInput.sources.join(", ") || "message"}`,
-          );
+        const heldReason = `${flaggedScreenedInput.reason}; flagged sources: ${flaggedScreenedInput.sources.join(", ") || "message"}`;
+        if (botRequester) return botApprovalRefusal(audit, session.id, "security-screen", heldReason);
+        if (flaggedScreenedInput.refused) return { status: "refused", sessionId: session.id, reason: heldReason };
         let approval: PendingApproval;
         try {
           approval = await withManagedRosterVersion(async () => {
@@ -726,7 +721,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             return issueApproval(inputApprovalId(session.id, replayableRequest(input)), {
               sessionId: session.id,
               command: "security-screen",
-              reason: `${flaggedScreenedInput.reason}; flagged sources: ${flaggedScreenedInput.sources.join(", ") || "message"}`,
+              reason: heldReason,
               blocksInput: true,
               kind: "input",
               approvalKey: `security-screen:${input.surface ?? "unknown"}`,

@@ -119,3 +119,33 @@ for (const checkResult of ["passed", "failed", "missing"] as const) {
     }
   });
 }
+
+test("a loop whose triage input is too long to screen fails each fire with that reason and leaves no approval waiting", async () => {
+  const built = buildApp(testConfig());
+  const owner = scopeId("personal", "U1");
+  await built.featureFlags.setEnabled("loop_triage", owner, true, "admin");
+  const fields = { owner: "U1", createdBy: "U1", ownerScopeId: owner, playbook: "Sort.", successCondition: "Sorted." };
+  const { loop } = await built.loops.store.create({ ...fields, name: "Long inbox" });
+  await built.loops.store.update(loop.id, { triage: { prioritize: { enabled: true } } });
+  const long = "x".repeat(400);
+  await built.loops.items.ingest(
+    Array.from({ length: 150 }, (_, i) => ({
+      loopId: loop.id,
+      dedupeKey: `item-${i}`,
+      summary: long,
+      sourcePayload: { title: long, from: long, snippet: long },
+      proposal: { data: {}, by: "agent" as const },
+    })),
+  );
+  for (const fireKey of ["f1", "f2"]) {
+    const fired = await built.loops.fire!.fire(loop.id, fireKey, undefined, { enumerate: false });
+    assert.match(fired.note ?? "", /triage: .*too long for the security screen to read/);
+  }
+  const runs = (await built.runs.list()).filter((run) => run.request.surface === "loop");
+  assert.equal(runs.length, 2);
+  for (const run of runs) {
+    assert.match(run.result?.reason ?? "", /too long for the security screen to read/);
+    assert.equal(await built.app.pendingApprovalForThread(run.request.conversation.threadRef), null);
+  }
+  assert.equal((await built.loops.store.get(loop.id))?.health, "failing");
+});
