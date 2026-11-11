@@ -2730,11 +2730,15 @@ test("Slack names people set reach the screen as data, never in the trusted conv
   const files = [{ id: "F1", name: "Upload Name.key", size: 2e9, url_private: "https://files.slack.com/F1" }];
   const prefetched = { actor: internalActor, info: { name: "channel-name" }, audience: [internalActor] };
   const inc = { kind: "channel", channel: "C1", userId: "U1", rawText: "recap?", threadTs: "1.000", ts: "2.000" };
-  await createTurnHandler(deps as never).handleIncoming({ ...inc, unprompted: true, files, prefetched } as never, {});
+  const run = (extra: object) =>
+    createTurnHandler(deps as never).handleIncoming({ ...inc, unprompted: true, prefetched, ...extra } as never, {});
+  await run({ files });
   for (const name of ["channel-name", "Starter Name", "Upload Name.key"]) {
     const holders = parts.filter((part) => part.content.includes(name)).map((part) => part.source);
     assert.ok(holders.length && !holders.includes("conversation-header"), `${name} screened as ${holders}`);
   }
+  await run({ kind: "dm", channel: "D1", threadTs: undefined, rawText: "hi", files: [] });
+  assert.equal(parts.filter((part) => part.source === "conversation-metadata").length, 1);
 });
 
 test("a reply in a thread the agent STARTED chimes in, even as a bare statement (deploy-notification-reply bug)", async () => {

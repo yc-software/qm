@@ -300,11 +300,11 @@ async function buildInboundScreen(turn: InboundScreenTurn) {
         ...(input.conversationHeader?.trim()
           ? [{ source: "conversation-header", content: input.conversationHeader }]
           : []),
-        ...(input.gatewayContext?.location || input.gatewayContext?.details
+        ...(input.gatewayContext?.details?.channel_name
           ? [
               {
                 source: "conversation-metadata",
-                content: JSON.stringify({ location: input.gatewayContext.location, ...input.gatewayContext.details }),
+                content: JSON.stringify({ channel: input.gatewayContext.details.channel_name }),
               },
             ]
           : []),
