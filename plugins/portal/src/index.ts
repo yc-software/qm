@@ -983,7 +983,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     ]);
   }
 
-  if (method === "GET" && pathname === "/v1/spend/export") {
+  if (method === "GET" && (pathname === "/v1/spend/export" || pathname === "/v1/deployments/export")) {
     return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: url.search }, [
       "authorization",
       "accept",

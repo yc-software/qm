@@ -1,9 +1,8 @@
 import { parseScopeId, personalScope, type ScopeId } from "../../../types.ts";
 import type { Cron } from "../../../triggers/types.ts";
 import type { SessionOrigin, SessionStore, SpendRow } from "../../../sessions/session-store.ts";
-import { constantTimeEqual } from "../../../util/crypto.ts";
 import { contentDispositionAttachment, contentTypeWithUtf8Charset, sendJson } from "../../http.ts";
-import { audit, authorizeAdmin, orgScope } from "../shared.ts";
+import { audit, authorizeAdmin, exportTokenAccepted, orgScope } from "../shared.ts";
 import { discoverScopes } from "./common.ts";
 import { tenantOf, type ApiCtx, type BaseCtx } from "../route.ts";
 
@@ -545,12 +544,8 @@ async function peopleOf(deps: BaseCtx["deps"], rows: readonly { scopeId: ScopeId
 }
 
 export async function spendExport(ctx: BaseCtx): Promise<void> {
-  const { req, res, app, deps, url } = ctx;
-  const token = deps.spendExportToken;
-  if (!token) return sendJson(res, 404, { error: "not_found" });
-  const authorization = req.headers.authorization;
-  if (typeof authorization !== "string" || !constantTimeEqual(authorization, `Bearer ${token}`))
-    return sendJson(res, 401, { error: "unauthorized" });
+  const { res, app, deps, url } = ctx;
+  if (!exportTokenAccepted(ctx, deps.spendExportToken)) return;
   if (!deps.sessions) return sendJson(res, 503, { error: "spend_unavailable" });
   const days = spendDays(url);
   if (typeof days === "string") return sendJson(res, 400, { error: "bad_request", message: days });

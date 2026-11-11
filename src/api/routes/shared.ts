@@ -6,12 +6,24 @@ import { adminStatusFromGrants } from "../../admin/admin-service.ts";
 import { canonicalPerson, samePerson } from "../../directory/person.ts";
 import { isTerminal, type Run } from "../../runs/run-store.ts";
 import type { ServerDeps } from "../deps.ts";
-import { tenantOf, type ApiCtx } from "./route.ts";
+import { tenantOf, type ApiCtx, type BaseCtx } from "./route.ts";
 import type { Tenant } from "../../tenants/context.ts";
 import { headerValue, sendJson } from "../http.ts";
 import { currentModelRequestContext } from "../../model/request-context.ts";
+import { constantTimeEqual } from "../../util/crypto.ts";
 
 export const orgScope = (_deps?: unknown): string => configOrgScope();
+
+export function exportTokenAccepted(ctx: Pick<BaseCtx, "req" | "res">, token: string | undefined): boolean {
+  if (!token) {
+    sendJson(ctx.res, 404, { error: "not_found" });
+    return false;
+  }
+  const authorization = ctx.req.headers.authorization;
+  if (typeof authorization === "string" && constantTimeEqual(authorization, `Bearer ${token}`)) return true;
+  sendJson(ctx.res, 401, { error: "unauthorized" });
+  return false;
+}
 
 export { isObj } from "../../util/objects.ts";
 
