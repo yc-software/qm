@@ -849,7 +849,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       });
       let personaBlock = persona ? personaPrompt(persona) : "";
       if (typeof personaTurn === "string") personaBlock = `## Persona\n${personaTurn}`;
-      let systemPrompt = `${[resolution.systemPrompt, personaBlock].filter(Boolean).join("\n\n")}\n\n${sharedCore}`;
+      const basePrompt = [resolution.systemPrompt, personaBlock].filter(Boolean).join("\n\n");
+      let systemPrompt = `${basePrompt}\n\n${sharedCore}`;
       if (external)
         systemPrompt +=
           "\n\nThis conversation has an external Slack audience. Answer and run code here using only the explicitly provided shared service credentials. Personal memory, files, keychains, connected apps, organization data and administrative tools are unavailable. When personal access is needed, say briefly that you are continuing privately, and include [[continue-private: task]] in your final answer. The continuation goes only to the authenticated requester; never put private results in this channel.";
@@ -1936,7 +1937,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             : undefined;
         const mcpTools = await mcpToolsReady;
         const freshBody = appEdit
-          ? appEdit.body(resolution.systemPrompt, personaBlock)
+          ? appEdit.body(basePrompt)
           : [systemPrompt, connectorToolsNote(deferredMcpTools(mcpTools, strictReadOnly))]
               .filter((s) => s.trim())
               .join("\n\n");

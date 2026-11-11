@@ -7,7 +7,6 @@ export function appEditTurnPolicy(appEditChat: boolean) {
   if (!appEditChat) return null;
   return {
     frameMd: APP_EDIT_FRAME_MD,
-    body: (instructions: string, persona: string) =>
-      [instructions, persona, USER_REPLY_RULES_MD].filter(Boolean).join("\n\n"),
+    body: (basePrompt: string) => [basePrompt, USER_REPLY_RULES_MD].filter(Boolean).join("\n\n"),
   };
 }
