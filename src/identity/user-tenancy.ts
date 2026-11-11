@@ -168,7 +168,7 @@ const GRANTS_AND_INVITES = `
   END IF;`;
 
 export const MANUAL_DEACTIVATIONS: PgMigrationDefinition = {
-  id: "users/v2/0007-manual-deactivations",
+  id: "users/v2/0009-manual-deactivations",
   statements: [
     `DO $$
      BEGIN

@@ -290,7 +290,7 @@ test("hand deactivations move onto the roster as offboarding, per tenant", async
   try {
     const [a, b] = [randomUUID(), randomUUID()];
     await owner.q(`INSERT INTO tenants(id) VALUES ($1), ($2)`, [a, b]);
-    await owner.q(`DELETE FROM qm_schema_migrations WHERE id = 'users/v2/0007-manual-deactivations'`);
+    await owner.q(`DELETE FROM qm_schema_migrations WHERE id = 'users/v2/0009-manual-deactivations'`);
     await owner.q(
       `INSERT INTO deactivated_principals(tenant_id, id, json) VALUES
         ($1, 'gone@a.test', '{"principalId":"Gone@A.test","source":"manual","at":1700000000000}'),
