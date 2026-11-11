@@ -1,4 +1,4 @@
-import { scopeId, type ActorAssertion, type TurnRequest } from "../types.ts";
+import { scopeActor, scopeId, type ActorAssertion, type TurnRequest } from "../types.ts";
 import { personLabel } from "../identity/person-names.ts";
 import type { TurnSurfaceOrigin } from "../surfaces/contract.ts";
 import { slackSurfaceOrigin } from "../surfaces/slack/adapter.ts";
@@ -289,6 +289,10 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     return slackSurfaceOrigin({ accountId: batch.source.account, teamId: batch.source.workspace, userId });
   }
 
+  function conversationActor(batch: AmbientBatch): string {
+    return scopeActor(scopeId(batch.kind === "group" ? "group" : "channel", batch.container));
+  }
+
   async function spawnAmbientWorker(batch: AmbientBatch, decision: AmbientDecision): Promise<string | undefined> {
     const latestTs = batch.messages.reduce((max, m) => (m.ts > max ? m.ts : max), "");
     const threadRef = `${batch.surface}:${batch.container}:ambient:${latestTs}`;
@@ -331,7 +335,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
       : {
           surface: batch.surface,
           ...(surfaceOrigin ? { surfaceOrigin } : {}),
-          actor: { externalId: `system:ambient:${orgIdOf()}` },
+          actor: { externalId: conversationActor(batch) },
           ...(batch.messages.some((m) => m.bot) ? { botActor: true } : {}),
           conversation,
           deliveryTarget: batch.container,

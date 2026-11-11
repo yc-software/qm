@@ -14,7 +14,7 @@ import type {
   TurnResult,
 } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
-import { isManageableCreationScope, parseScopeId, scopeId } from "../types.ts";
+import { actsAsScope, isManageableCreationScope, parseScopeId, scopeId } from "../types.ts";
 import { type ListOwnedOptions } from "../files/file-artifact-store.ts";
 import { isTerminal, RUN_WAIT_FALLBACK_MS, type Run, type SessionWatch } from "../runs/run-store.ts";
 import type { RunSignal } from "../runs/run-signal-store.ts";
@@ -535,7 +535,8 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     const privateChannel =
       kind === "channel" && (await deps.directory.channelPrivacy?.(ref).catch(() => undefined)) === true;
     const capabilityMembership = privateChannel
-      ? await deps.directory.channelMembership(ref, claims.actorId).catch(() => undefined)
+      ? actsAsScope(claims.actorId, claims.scopeId) ||
+        (await deps.directory.channelMembership(ref, claims.actorId).catch(() => undefined))
       : undefined;
     const attestedBot =
       privateChannel &&

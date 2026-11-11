@@ -1197,7 +1197,7 @@ test("a Slack bot cannot be the asker of a solicited ambient wake, and its wake 
     ]);
     const run = await ambientRun(built, `slack:${container}:ambient:705.1`);
     assert.ok(run, "the bot's post woke an ambient worker");
-    assert.equal(run.request.actor.id, "system:ambient:default-org", "the bot is never the asking member");
+    assert.equal(run.request.actor.id, "system:channel:C-bot-asks", "the bot is never the asking member");
     assert.equal((await built.app.getChannelPolicy(container))?.orders, "watch the deploys");
     assert.equal(run.request.botActor, true, "the woken turn carries the bot marker");
   } finally {
