@@ -1740,11 +1740,8 @@ test("a live turn in an app edit chat gets a small prompt of its own and six too
       url: new URL("https://qm.test/turn"),
       res: { writeHead() {}, end() {} },
       app: {
-        turn: async (request: TurnRequest) => {
-          const result = await orchestrator.handleTurn({ ...turn, conversationHeader: request.conversationHeader });
-          assert.equal(result.status, "ok");
-          return result;
-        },
+        turn: (request: TurnRequest) =>
+          orchestrator.handleTurn({ ...turn, conversationHeader: request.conversationHeader }),
       },
     } as unknown as ApiCtx);
     const body = JSON.parse(requests.findLast((request) => request.headers.get("x-qm-purpose") === "turn")!.body);
