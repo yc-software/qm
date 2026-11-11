@@ -103,7 +103,7 @@ export function computerTools(kit: ToolKit) {
       const resultScope = scratchReroute ? { scope: "scratch" } : scopeNote;
       const parts = [r.stdout, r.stderr ? `[stderr]\n${r.stderr}` : ""].filter(Boolean).join("\n");
       const placePrefix = scratchReroute
-        ? "[ran on this turn's scratch computer, not the shared one, because it names a private credential; its files are discarded after the turn]\n"
+        ? "[ran on this turn's scratch computer, not the shared one, because it names a private credential; the shared computer's files aren't here and this one's are discarded after the turn, so carry state in and out through Files (GET /v1/files/:id/content to read, the helper at GET /v1/files/upload-client to save)]\n"
         : "";
       const localExec = !route?.scratch && !scratchReroute;
       const pressureNote =

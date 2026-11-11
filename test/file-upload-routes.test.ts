@@ -185,3 +185,17 @@ test("a quota refusal tells the caller which of its uploads hold the quota", asy
     await new Promise<void>((resolve) => full.close(() => resolve()));
   }
 });
+
+test("a token on the wrong method or an unknown path learns the right call instead of a capability refusal", async () => {
+  const cap = await token("U1");
+  const wrongMethod = await call(`/v1/files/uploads/${upload.id}/parts/1`, cap, "PUT");
+  assert.equal(wrongMethod.status, 405);
+  assert.equal(wrongMethod.headers.get("allow"), "POST");
+  assert.match(((await wrongMethod.json()) as { message: string }).message, /takes POST, not PUT; GET \/v1\/apis/);
+  const unknown = await call("/v1/files/uploadz", cap);
+  assert.equal(unknown.status, 404);
+  assert.match(
+    ((await unknown.json()) as { message: string }).message,
+    /no route GET \/v1\/files\/uploadz; GET \/v1\/apis/,
+  );
+});

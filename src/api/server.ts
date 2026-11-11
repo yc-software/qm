@@ -34,6 +34,7 @@ import { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts"
 import { KEEP_ALIVE_TIMEOUT_MS, logUnansweredCloses } from "../../plugins/chassis/src/http.ts";
 import { armBodyDeadline, PayloadTooLargeError, readRawBody, sendJson, verifyOrReject } from "./http.ts";
 import {
+  compilePath,
   findRoute,
   run,
   usesBrowserSession,
@@ -238,7 +239,7 @@ async function gate(
           return null;
         }
       }
-    } else if (!requiredAud) {
+    } else if (route && !requiredAud) {
       sendJson(res, 403, { error: "forbidden", message: "capability token not valid for this route" });
       return null;
     }
@@ -398,6 +399,28 @@ function paramsSchema(path: string): object {
   };
 }
 
+function noSuchRoute(res: ServerResponse, method: string, pathname: string): void {
+  const allowed = [
+    ...new Set(
+      apiRoutes.flatMap((route) =>
+        "path" in route && route.method !== method && compilePath(route.path).test(route.method, pathname, {})
+          ? [route.method]
+          : [],
+      ),
+    ),
+  ];
+  const catalog = "GET /v1/apis lists the available calls";
+  if (allowed.length) {
+    res.setHeader("allow", allowed.join(", "));
+    sendJson(res, 405, {
+      error: "method_not_allowed",
+      message: `${pathname} takes ${allowed.join(" or ")}, not ${method}; ${catalog}`,
+    });
+    return;
+  }
+  sendJson(res, 404, { error: "not_found", message: `no route ${method} ${pathname}; ${catalog}` });
+}
+
 function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstance; routing: RequestListener } {
   const matchRoutes = apiRoutes.filter(
     (route): route is Route<ApiCtx> & { match: (m: string, p: string) => boolean } => !("path" in route),
@@ -434,7 +457,7 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
         await run(found.route, found.params, ctx);
         return;
       }
-      sendJson(res, 404, { error: "not_found", message: `${base.method} ${base.pathname}` });
+      noSuchRoute(res, base.method, base.pathname);
     } catch (err) {
       respondError(req, res, err);
     }
