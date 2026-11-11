@@ -41,7 +41,6 @@ export const SHARE_JS = String.raw`
     share.classList.remove("open");
     share.src = "about:blank";
     accessBtn.focus();
-    void poll();
   };
   accessBtn.addEventListener("click", () => {
     if (!access?.canEdit) return;
