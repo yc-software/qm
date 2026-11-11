@@ -151,7 +151,10 @@ export function problemOf(group: ProblemGroup, operation: ProviderOperation): Me
         code: "memory_provider_failed",
         provider,
         detail: `Memory provider ${provider} failed${forget ? ` to forget ${refs}` : ""}${reason}, so ${effect}.`,
-        fix: failedFix(provider, code, docs),
+        fix:
+          operation === "lookup" && code === "invalid_params"
+            ? `Correct the arguments ${refs} takes; tool_search shows its parameters.`
+            : failedFix(provider, code, docs),
       };
     case "disabled":
       return {

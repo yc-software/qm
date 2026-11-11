@@ -225,8 +225,9 @@ test("a lookup outlasts recall's timeout, and a refusal or failure answers with 
   acme.failures.set("Nobody", refusal("actor_unlinked"));
   acme.failures.set("Unlisted", refusal("actor_not_attested"));
   acme.failures.set("Broken", { isError: true, content: [{ type: "text", text: "search index is rebuilding" }] });
+  acme.failures.set("Malformed", refusal("invalid_params"));
   const ask = (query: string) => ({ call: { server: "acme", tool: "query", args: { query } } });
-  const { texts } = (await turn([ask("slow"), ask("Nobody"), ask("Unlisted"), ask("Broken")]))!;
+  const { texts } = (await turn([ask("slow"), ask("Nobody"), ask("Unlisted"), ask("Broken"), ask("Malformed")]))!;
   assert.match(texts[0]!, /"query":"slow"/);
   assert.match(
     texts[1]!,
@@ -237,6 +238,10 @@ test("a lookup outlasts recall's timeout, and a refusal or failure answers with 
     /^\[error\] \[memory_provider_denied\] Memory provider acme refused query \(actor_not_attested\).*attest query with --attest-ops[\s\S]*refused with actor_not_attested/,
   );
   assert.match(texts[3]!, /^\[error\] \[memory_provider_failed\][\s\S]*search index is rebuilding/);
+  assert.match(
+    texts[4]!,
+    /Fix: Correct the arguments query takes; tool_search shows its parameters\.[\s\S]*refused with invalid_params/,
+  );
 });
 
 test("strict posture holds a brain lookup for approval, and dangerous runs it", async (t) => {
