@@ -240,11 +240,7 @@ async function personSwarm(backend?: ProcessSandbox, forum?: "forum") {
   await f.sessions.addParticipant(f.root.id, releaseBot.id);
   const shared = forum && (await f.sandboxes.create(alice.id, f.root.scopeId, "modal", "Swarm board"));
   if (shared) f.disks.set(shared.backingScopeId, new Map());
-  await f.service.spawn(f.caller, {
-    requestId: "initial",
-    text: "alice's work",
-    forumSandboxId: shared ? shared.id : undefined,
-  });
+  await f.service.spawn(f.caller, { requestId: "initial", text: "alice's work", forumSandboxId: shared?.id });
   await f.service.sweep();
   await f.runs.complete(f.caller.claims.runId!, f.caller.claims.runLeaseToken!, { status: "ok", reply: "started" });
   return f;
