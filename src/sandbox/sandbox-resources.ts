@@ -110,7 +110,11 @@ export interface SandboxResources {
 
 export class SandboxAccessError extends Error {}
 
-const BOT_COMPUTER_REFUSAL = "a Slack bot's turn can use only a computer it made that no person has used";
+export class BotComputerRefusedError extends SandboxAccessError {
+  constructor() {
+    super("a Slack bot's turn can use only a computer it made that no person has used");
+  }
+}
 
 const JOB_ONLY_REFUSAL =
   "this computer belongs to a background job that uses private credentials; only that job's own controls can reach it";
@@ -143,7 +147,7 @@ export async function accessConversationSandbox(
   const resource = await resources?.access(actorId, id);
   if (!resource || resource.state === "retired" || !(await canUseScope(resource.ownerScopeId)))
     throw new SandboxAccessError("sandbox access is no longer authorized in this conversation");
-  if (botMayUse && !(await botMayUse(resource))) throw new SandboxAccessError(BOT_COMPUTER_REFUSAL);
+  if (botMayUse && !(await botMayUse(resource))) throw new BotComputerRefusedError();
   return resource;
 }
 
@@ -155,7 +159,7 @@ export async function assertBotMayUseComputer(
 ): Promise<void> {
   if (!botMayUse) return;
   const resource = sandboxId ? await resources?.get(sandboxId) : await resources?.resolve(scopeId);
-  if (resource && !(await botMayUse(resource))) throw new SandboxAccessError(BOT_COMPUTER_REFUSAL);
+  if (resource && !(await botMayUse(resource))) throw new BotComputerRefusedError();
 }
 
 export function createSandboxResources(opts: {
@@ -495,7 +499,7 @@ export function createTurnSandboxAccess(ctx: {
     };
   };
   const jobComputerPlan = async (resource: SandboxResource): Promise<SandboxAccessPlan> => {
-    if (botMayUse && !(await botMayUse(resource))) throw new SandboxAccessError(BOT_COMPUTER_REFUSAL);
+    if (botMayUse && !(await botMayUse(resource))) throw new BotComputerRefusedError();
     return { resource, crossScope: false, egress: resolution.egress, commandPolicy: null };
   };
   return { accessResource, jobComputerPlan };

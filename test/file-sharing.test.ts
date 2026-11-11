@@ -3,7 +3,7 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { NoDefaultSandboxError } from "../src/sandbox/sandbox-routing.ts";
-import { SandboxAccessError } from "../src/sandbox/sandbox-resources.ts";
+import { BotComputerRefusedError, SandboxAccessError } from "../src/sandbox/sandbox-resources.ts";
 import { scopeId, type GrantedHandle, type IncomingAttachment } from "../src/types.ts";
 import { createToolContext } from "../src/tools/primitives.ts";
 import { createSpritesSandbox } from "../src/sandbox/sprites-sandbox.ts";
@@ -537,7 +537,7 @@ test("a binary file round-trips through the sandbox (base64-over-exec) without u
   assert.deepEqual(new Uint8Array(read!), raw);
 });
 
-for (const refusal of [new NoDefaultSandboxError(), new SandboxAccessError("refused")])
+for (const refusal of [new NoDefaultSandboxError(), new BotComputerRefusedError()])
   test(`materializeInbound keeps uploads registered when the scope has no usable sandbox (${refusal.constructor.name})`, async () => {
     const { sandbox, files } = fakeSandbox();
     const transfer = createMemoryBlobTransferStore();
@@ -577,10 +577,10 @@ test("materializeInbound drops an unstaged upload it could not register, and ret
   await assert.rejects(
     materializeInbound(
       sandbox,
-      () => Promise.reject(new Error("provider down")),
+      () => Promise.reject(new SandboxAccessError("sandbox not found: c9")),
       [await inFile(transfer, "b.txt", "x")],
       transfer,
     ),
-    /provider down/,
+    /sandbox not found: c9/,
   );
 });
