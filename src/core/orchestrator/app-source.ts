@@ -1,6 +1,6 @@
 import { retainedSnapshot } from "../../agent/context-snapshot.ts";
 import type { DeploymentSource } from "../../deploy/deploy-service.ts";
-import { type Item } from "../../sessions/items.ts";
+import type { Item } from "../../sessions/items.ts";
 import { inlineChars } from "../../sessions/tool-output.ts";
 import type { AppFiles } from "../../tools/app-files.ts";
 import { swallowAs } from "../../util/errors.ts";
@@ -55,8 +55,11 @@ function listed(dir: string, files: DeploymentSource["tree"]): string {
     : `${flatText(dir)} (${files.length} files, ${bytes} bytes)`;
 }
 
+function more(count: number): string {
+  return `${count} more that app_files list names`;
+}
+
 function boundedList(prefix: string, values: readonly string[], budget: number): string {
-  const more = (count: number) => `${count} more that app_files list names`;
   const tail = more(values.length);
   const shown: string[] = [];
   let used = prefix.length + tail.length + 3;
@@ -98,7 +101,6 @@ async function render(files: AppFiles, history: readonly Item[]): Promise<{ text
   ];
   const skippedPrefix = `\n${before ? "Changed but not" : "Not"} shown; read them with app_files if you need them: `;
   const deletedPrefix = "\nDeleted: ";
-  const more = (count: number) => `${count} more that app_files list names`;
   const reserve = [
     ...(changed.length ? [skippedPrefix + more(changed.length) + "."] : []),
     ...(deleted.length ? [deletedPrefix + more(deleted.length) + "."] : []),
