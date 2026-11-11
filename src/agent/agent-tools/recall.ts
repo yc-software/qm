@@ -1,6 +1,6 @@
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { MemoryFactsMissing } from "../../memory/facts.ts";
+import { MemoryFactsMissing, MemoryForgetRefused } from "../../memory/facts.ts";
 import { MemoryDisclosureDenied } from "../../memory/disclosure.ts";
 import { MAX_FACTS_PER_WRITE, problemLine } from "../../memory/provider-outcome.ts";
 import { quotedData } from "../../util/text.ts";
@@ -18,7 +18,7 @@ export function recallTools(kit: ToolKit) {
       "read: this notebook with fact #ids (pass `scope` from a search result for another notebook). " +
       "add: short, self-contained facts (preferences, identifiers, ongoing projects, how they work); never secrets, one-off trivia, or anything already recorded elsewhere. " +
       "Save pointers, not data: growing lists and working state belong in a file written with the files tool, with one memory line naming it. Files are this conversation's own; a pointer read from another notebook is a hint of where state lives, not a path you can open. " +
-      "edit: replace facts' text by id; delete: forget by `ids`. Fix changed facts instead of adding contradictions; delete stale ones.",
+      "edit: replace notebook facts' text by id; the reply names brain copies still holding the old wording. delete: forget by `ids`, either notebook #ids or brain refs from search (like acme:4821), one store per call; a brain ref is forgotten only in the person's own DM. Fix changed facts instead of adding contradictions; delete stale ones.",
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal("search"),
@@ -43,7 +43,11 @@ export function recallTools(kit: ToolKit) {
           { description: "add: [{text}, …]; edit: [{id, text}, …]." },
         ),
       ),
-      ids: Type.Optional(Type.Array(Type.String(), { description: "delete: ids of the facts to forget." })),
+      ids: Type.Optional(
+        Type.Array(Type.String(), {
+          description: "delete: notebook #ids, or refs from one brain such as acme:4821, to forget.",
+        }),
+      ),
     }),
     async execute(callId, params) {
       const tc = ref.current;
@@ -139,26 +143,63 @@ export function recallTools(kit: ToolKit) {
           case "edit": {
             if (!facts.length || facts.some((fact) => !fact.id || !fact.text))
               return fail("memory edit requires `facts` as a non-empty list of {id, text}.");
-            if ((await tc.memoryEdit(facts)) === null) return unavailable();
+            const edited = await tc.memoryEdit(facts);
+            if (edited === null) return unavailable();
+            const { copies, problems } = edited;
             return recordResult(
               callId,
-              { tool: "memory", action, edited: facts.length },
-              text(`Updated ${facts.length} fact${facts.length === 1 ? "" : "s"}.`),
+              {
+                tool: "memory",
+                action,
+                edited: facts.length,
+                ...(copies.length ? { copies } : {}),
+                ...(problems.length ? { problems } : {}),
+              },
+              text(
+                [
+                  `Updated ${facts.length} fact${facts.length === 1 ? "" : "s"}.`,
+                  ...(copies.length
+                    ? [
+                        `These brain copies still hold the old wording: ${copies.join(", ")}. They keep it until you forget them with delete.`,
+                      ]
+                    : []),
+                  ...(problems.length
+                    ? [`Couldn't check every brain for copies of the old wording:`, ...problems.map(problemLine)]
+                    : []),
+                ].join("\n"),
+              ),
             );
           }
           case "delete": {
             const ids = (params.ids ?? []).map((id) => id.trim()).filter(Boolean);
             if (!ids.length) return fail("memory delete requires `ids` (a non-empty list).");
-            if ((await tc.memoryDelete(ids)) === null) return unavailable();
+            const forgot = await tc.memoryDelete(ids, callId);
+            if (forgot === null) return unavailable();
+            const { forgotten, outcomes, problems } = forgot;
+            const done = outcomes.filter(({ outcome }) => outcome === "committed");
+            const lines = outcomes.length
+              ? [
+                  ...done.map(({ provider, ref }) => `Forgot ${ref} in memory provider ${provider}.`),
+                  ...problems.map(problemLine),
+                ]
+              : [`Forgot ${ids.length} fact${ids.length === 1 ? "" : "s"}.`];
             return recordResult(
               callId,
-              { tool: "memory", action, deleted: ids.length },
-              text(`Forgot ${ids.length} fact${ids.length === 1 ? "" : "s"}.`),
+              {
+                tool: "memory",
+                action,
+                deleted: forgotten,
+                ...(outcomes.length ? { outcomes } : {}),
+                ...(problems.length ? { problems } : {}),
+              },
+              text(lines.join("\n")),
+              problems.length > 0 && !forgotten,
             );
           }
         }
       } catch (e) {
-        if (e instanceof MemoryFactsMissing || e instanceof MemoryDisclosureDenied) return fail(e.message);
+        if (e instanceof MemoryFactsMissing || e instanceof MemoryDisclosureDenied || e instanceof MemoryForgetRefused)
+          return fail(e.message);
         throw e;
       }
     },

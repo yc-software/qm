@@ -8,6 +8,8 @@ import {
   type MemoryService,
 } from "../../memory/memory-service.ts";
 import {
+  editNotebookFacts,
+  forgetFacts,
   MAX_FACTS_PER_WRITE,
   problemLine,
   withProviders,
@@ -872,7 +874,7 @@ const captureFacts = writeMemory(async ({ res, deps, tenant, body }, memory, cap
     memory,
     write,
     facts,
-    turnAuthority(capability.actorId, capability.memory),
+    turnAuthority(capability.actorId, capability.memory, capability.botActor),
     {
       mode: "explicit",
       ...(capability.audienceScopeId ? { audienceScopeId: capability.audienceScopeId } : {}),
@@ -897,9 +899,16 @@ const captureFacts = writeMemory(async ({ res, deps, tenant, body }, memory, cap
 const editFacts = writeMemory(async ({ res, deps, tenant, body }, memory, capability, write) => {
   const edits = parseEdits(body);
   if (typeof edits === "string") return sendJson(res, 400, { error: "bad_request", message: edits });
-  await memory.edit?.(write, edits, turnAuthority(capability.actorId, capability.memory), {
-    conversationScopeId: capability.scopeId,
-  });
+  const { copies, problems } = await editNotebookFacts(
+    memory,
+    write,
+    edits,
+    turnAuthority(capability.actorId, capability.memory, capability.botActor),
+    {
+      conversationScopeId: capability.scopeId,
+      ...(capability.audienceScopeId ? { audienceScopeId: capability.audienceScopeId } : {}),
+    },
+  );
   audit(
     { deps, tenant },
     {
@@ -909,13 +918,25 @@ const editFacts = writeMemory(async ({ res, deps, tenant, body }, memory, capabi
       scopeLabel: write,
     },
   );
-  return sendJson(res, 200, { ok: true, scopeId: write });
+  return sendJson(res, 200, {
+    ok: true,
+    scopeId: write,
+    ...(copies.length ? { copies } : {}),
+    ...(problems.length ? { problems } : {}),
+  });
 });
 
 const deleteFacts = writeMemory(async ({ res, deps, tenant, body }, memory, capability, write) => {
   const ids = parseIds(body);
   if (typeof ids === "string") return sendJson(res, 400, { error: "bad_request", message: ids });
-  await memory.delete?.(write, ids, turnAuthority(capability.actorId, capability.memory));
+  const { forgotten, outcomes, problems } = await forgetFacts(
+    memory,
+    write,
+    ids,
+    turnAuthority(capability.actorId, capability.memory, capability.botActor),
+    capability.audienceScopeId ? { audienceScopeId: capability.audienceScopeId } : {},
+    capability.sessionId && capability.runId && `${capability.sessionId}:${capability.runId}`,
+  );
   audit(
     { deps, tenant },
     {
@@ -925,7 +946,9 @@ const deleteFacts = writeMemory(async ({ res, deps, tenant, body }, memory, capa
       scopeLabel: write,
     },
   );
-  return sendJson(res, 200, { ok: true, scopeId: write });
+  const result = { forgotten, scopeId: write, ...(outcomes.length ? { outcomes } : {}) };
+  if (problems.length) return sendProviderProblem(res, problems, result);
+  return sendJson(res, 200, { ok: true, ...result });
 });
 
 async function listSkills(ctx: ApiCtx): Promise<void> {

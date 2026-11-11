@@ -5,14 +5,23 @@ import { attestableAudience, attestedPerson, OutsideAudience } from "../director
 import { MemoryRecallWithheld } from "./disclosure.ts";
 import type { MemoryRecallContext, MemoryService } from "./memory-service.ts";
 import type { MemoryCandidate } from "./facts.ts";
-import { DENIED_CODES, MAX_FACTS_PER_WRITE, reportEnvelope } from "./provider-outcome.ts";
-import type { McpMemoryOperationConfig } from "./provider-config.ts";
+import {
+  DENIED_CODES,
+  MAX_FACTS_PER_WRITE,
+  MemoryWriteUnconfirmed,
+  reportEnvelope,
+  requestKey,
+} from "./provider-outcome.ts";
+import type { McpMemoryForgetConfig, McpMemoryOperationConfig } from "./provider-config.ts";
 import { RECALL_MESSAGE_CHARS } from "./semantic-recall.ts";
 import { flatText } from "../util/text.ts";
 
 const MAX_PROVENANCE_CHARS = 200;
 
 export type McpMemoryOperation = Omit<McpMemoryOperationConfig, "auth"> & { client: McpClient; timeoutMs: number };
+export type McpMemoryForget = Omit<McpMemoryForgetConfig, "auth"> & { client: McpClient; timeoutMs: number };
+
+const UNPUBLISHED_STATES = new Set(["conflict", "failed", "cancelled"]);
 
 function resultText(result: CallToolResult): string {
   if (result.content.some((block) => block.type === "text")) return mcpResultText(result);
@@ -24,6 +33,15 @@ interface ProviderFact {
   text: string;
   date?: unknown;
   kind?: unknown;
+  arm?: unknown;
+}
+
+function alternateArms(facts: ProviderFact[]): ProviderFact[] {
+  const own = facts.filter((fact) => fact.arm === "own");
+  const ranked = facts.filter((fact) => fact.arm !== "own");
+  return Array.from({ length: Math.max(own.length, ranked.length) }, (_, i) => [own[i], ranked[i]])
+    .flat()
+    .filter((fact) => fact !== undefined);
 }
 
 function providerFacts(result: CallToolResult): ProviderFact[] | undefined {
@@ -44,7 +62,9 @@ function providerFacts(result: CallToolResult): ProviderFact[] | undefined {
         code: "malformed_fact",
       });
   });
-  return (facts as ProviderFact[]).map((fact) => ({ ...fact, text: flatText(fact.text) })).filter((fact) => fact.text);
+  return alternateArms(
+    (facts as ProviderFact[]).map((fact) => ({ ...fact, text: flatText(fact.text) })).filter((fact) => fact.text),
+  );
 }
 
 const stamped = (fact: ProviderFact) => {
@@ -59,10 +79,11 @@ const stamped = (fact: ProviderFact) => {
 export function createMcpMemoryProvider(opts: {
   read: McpMemoryOperation;
   write?: McpMemoryOperation;
+  forget?: McpMemoryForget;
   attestActor?: boolean;
 }): MemoryService {
   const call = async (
-    op: McpMemoryOperation,
+    op: Pick<McpMemoryOperation, "client" | "tool" | "timeoutMs" | "actorArg">,
     args: Record<string, unknown>,
     actorId: string | undefined,
     scopeId: string,
@@ -72,7 +93,7 @@ export function createMcpMemoryProvider(opts: {
     const person = opts.attestActor ? attestedPerson(actorId, "memory provider") : actorId;
     if (opts.attestActor && !(attestableAudience(actorId, scopeId) && attestableAudience(actorId, audienceScopeId)))
       throw new OutsideAudience("memory provider");
-    if (person) args[op.actorArg ?? "acting_user"] = person;
+    if (person && op !== opts.forget) args[op.actorArg ?? "acting_user"] = person;
     const headers = opts.attestActor && person ? { "x-qm-actor": person } : undefined;
     const ms = deadline - Date.now();
     if (ms <= 0) throw new TimeoutError(`memory provider timed out after ${op.timeoutMs}ms`);
@@ -148,7 +169,15 @@ export function createMcpMemoryProvider(opts: {
         if (context?.idempotencyKey && op.idempotencyArg)
           args[op.idempotencyArg] = start ? `${context.idempotencyKey}:${start / size}` : context.idempotencyKey;
         if (op.scopeArg) args[op.scopeArg] = scopeId;
-        const { code } = mcpEnvelope(await call(op, args, actor, scopeId, context?.audienceScopeId, deadline));
+        const { code } = mcpEnvelope(
+          await call(op, args, actor, scopeId, context?.audienceScopeId, deadline).catch((error: unknown) => {
+            throw error instanceof McpCallError &&
+              error.code === "invalid_params" &&
+              /fact_withdrawn:/.test(error.message)
+              ? new McpCallError(error.message, { code: "fact_withdrawn", cause: error })
+              : error;
+          }),
+        );
         if (code && DENIED_CODES.has(code))
           throw new McpCallError(`memory provider refused the write (${code})`, { code });
       }
@@ -161,5 +190,28 @@ export function createMcpMemoryProvider(opts: {
     },
 
     read: async (scopeId) => resultText(await read(scopeId, "")),
+
+    ...(opts.forget
+      ? {
+          async delete(scopeId, ids, by, context) {
+            const op = opts.forget!;
+            for (const id of ids) {
+              const factId = Number(id);
+              if (!/^\d+$/.test(id) || !Number.isSafeInteger(factId))
+                throw new McpCallError(`memory provider fact ids are whole numbers, not ${JSON.stringify(id)}`, {
+                  code: "fact_not_found",
+                });
+              const args: Record<string, unknown> = { [op.idArg]: factId };
+              if (context?.idempotencyKey) args[op.requestIdArg] = requestKey(context.idempotencyKey, id);
+              const result = await call(op, args, by?.actorId, scopeId, context?.audienceScopeId);
+              const state = (result.structuredContent as { state?: unknown } | undefined)?.state;
+              if (state === "committed") continue;
+              if (typeof state === "string" && UNPUBLISHED_STATES.has(state))
+                throw new McpCallError(`memory provider ${op.tool} ended ${state}`, { code: state });
+              throw new MemoryWriteUnconfirmed(typeof state === "string" ? state : "no_state");
+            }
+          },
+        }
+      : {}),
   };
 }

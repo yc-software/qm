@@ -38,6 +38,8 @@ export class MemoryFactsMissing extends Error {
   }
 }
 
+export class MemoryForgetRefused extends Error {}
+
 const sensitivityOrder: MemorySensitivity[] = ["ordinary", "unknown", "sensitive", "restricted"];
 
 export function isMemorySensitivity(value: unknown): value is MemorySensitivity {

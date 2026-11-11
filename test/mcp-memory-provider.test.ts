@@ -1,12 +1,16 @@
 import { test } from "node:test";
+import { once } from "node:events";
+import { createServer, type AddressInfo } from "node:net";
 import assert from "node:assert/strict";
 import { createMcpMemoryProvider } from "../src/memory/mcp-memory-provider.ts";
 import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
-import { McpCallError, type McpClient } from "../src/mcp/mcp-client.ts";
+import { createMcpClient, McpCallError, type McpClient } from "../src/mcp/mcp-client.ts";
+import { forgetFacts } from "../src/memory/provider-outcome.ts";
 import type { MemoryProviderOutcome } from "../src/memory/memory-service.ts";
 import { sleep } from "../src/util/async.ts";
 import { recallText } from "./support/recall-text.ts";
 import { structuredRecall } from "./support/structured-recall.ts";
+import { routedTo } from "./support/mcp-test-server.ts";
 
 function client(calls: Array<{ tool: string; args: Record<string, unknown> }>, text = "result"): McpClient {
   return {
@@ -144,6 +148,75 @@ test("MCP recall reads structured facts as rows with their fact id and raw claim
     (await memory.query("personal:U1", "dana", 2)).map((row) => row.text),
     ["(2026-11-01; preference) Dana prefers email", "(2026-10-28; fact) Launch moved to Friday"],
   );
+});
+
+test("MCP recall alternates gbrain's own recent facts with its query matches, so a budget keeps both", async () => {
+  const fact = (id: string, arm: string) => ({ id, text: `Fact ${id}`, arm });
+  const facts = [fact("1", "own"), fact("2", "own"), fact("3", "own"), fact("4", "ranked"), fact("5", "ranked")];
+  const memory = createMcpMemoryProvider({
+    read: { client: structuredRecall(() => facts), tool: "memory_recall", timeoutMs: 100 },
+  });
+  assert.deepEqual(
+    (await memory.recall("personal:U1", { query: "x" })).map((row) => row.ref),
+    ["1", "4", "2", "5", "3"],
+  );
+});
+
+test("a brain forget reports each ref done, unknown or failed, and a retry reuses its receipt", async () => {
+  const sent: Array<Record<string, unknown>> = [];
+  const states: Record<number, string> = { 1: "committed", 2: "committed", 3: "queued", 4: "conflict" };
+  const brain: McpClient = {
+    async listTools() {
+      return { tools: [] };
+    },
+    async callTool(_tool, args) {
+      sent.push(args);
+      if (sent.length === 2) await sleep(300);
+      const state = states[args.id as number];
+      if (!state) throw new McpCallError("mcp tool forget_fact error: not on your page", { code: "fact_not_found" });
+      return { content: [{ type: "text", text: state }], structuredContent: { ...args, state } };
+    },
+  };
+  const forgetting = (client: McpClient) =>
+    createMcpMemoryProvider({
+      read: { client, tool: "memory_recall", timeoutMs: 100 },
+      forget: { client, tool: "forget_fact", idArg: "id", requestIdArg: "request_id", timeoutMs: 100 },
+      attestActor: true,
+    });
+  const closed = createServer().listen(0, "127.0.0.1");
+  await once(closed, "listening");
+  const gone = `http://127.0.0.1:${(closed.address() as AddressInfo).port}`;
+  closed.close();
+  const down = createMcpClient({ url: `${gone}/mcp`, auth: { mode: "none" }, fetch: routedTo(gone) });
+  const memory = createRoutedMemoryService({
+    providers: { acme: forgetting(brain), down: forgetting(down) },
+    routes: ["acme", "down"].map((provider) => ({ provider, scopes: ["personal" as const], manage: false })),
+  });
+  const forget = async (ids: string[]) =>
+    (
+      await forgetFacts(
+        memory,
+        "personal:U1",
+        ids,
+        { actorId: "U1", context: "conversation" },
+        { audienceScopeId: "personal:U1" },
+        "session:call",
+      )
+    ).outcomes.map(({ ref, outcome, code }) => `${ref} ${outcome}${code ? ` ${code}` : ""}`);
+
+  assert.deepEqual(await forget(["acme:1", "acme:2", "acme:3", "acme:4", "acme:5", "acme:x"]), [
+    "acme:1 committed",
+    "acme:2 unknown",
+    "acme:3 unknown queued",
+    "acme:4 failed conflict",
+    "acme:5 failed fact_not_found",
+    "acme:x failed fact_not_found",
+  ]);
+  assert.deepEqual(await forget(["acme:2"]), ["acme:2 committed"]);
+  assert.deepEqual(sent[0], { id: 1, request_id: sent[0]?.request_id });
+  assert.equal(sent.at(-1)?.request_id, sent[1]?.request_id);
+  assert.notEqual(sent[0]?.request_id, sent[1]?.request_id);
+  assert.deepEqual(await forget(["down:1"]), ["down:1 failed unreachable"]);
 });
 
 test("a structured fact's line breaks become spaces in its text, date and kind, and a blank fact is skipped", async () => {

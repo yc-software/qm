@@ -1,11 +1,12 @@
 import { testTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createToolContext } from "../src/tools/primitives.ts";
+import { createToolContext, type ToolContextDeps } from "../src/tools/primitives.ts";
 import { createAgentTools, type ToolContextRef } from "../src/agent/agent-tools.ts";
 import type { MemoryService } from "../src/memory/memory-service.ts";
 import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
-import { McpCallError } from "../src/mcp/mcp-client.ts";
+import { McpCallError, type McpClient } from "../src/mcp/mcp-client.ts";
+import { createMcpMemoryProvider } from "../src/memory/mcp-memory-provider.ts";
 import { TimeoutError } from "../src/util/async.ts";
 import { reportEnvelope } from "../src/memory/provider-outcome.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
@@ -22,6 +23,7 @@ function ctxFor(opts: {
   scope: ScopeId;
   memory: ReturnType<typeof createPostgresMemoryService>;
   memoryScopeId?: ScopeId;
+  deps?: Partial<ToolContextDeps>;
 }) {
   return createToolContext({
     tenant: testTenant,
@@ -40,6 +42,7 @@ function ctxFor(opts: {
     memory: opts.memory,
     memoryScopeId: opts.memoryScopeId ?? opts.scope,
     memoryAccess: { write: opts.memoryScopeId ?? opts.scope, read: [opts.memoryScopeId ?? opts.scope] },
+    ...opts.deps,
   });
 }
 
@@ -88,7 +91,7 @@ test("memory ops signal unavailable (null) when memory is not wired", async () =
   assert.equal(await ctx.memoryRead(), null);
   assert.equal(await ctx.memoryAdd(["a fact"]), null);
   assert.equal(await ctx.memoryEdit([{ id: "1", text: "x" }]), null);
-  assert.equal(await ctx.memoryDelete(["1"]), null);
+  assert.equal(await ctx.memoryDelete(["1"], "call-1"), null);
 });
 
 const call = (tool: ReturnType<typeof createAgentTools>[number] | undefined, params: unknown) => {
@@ -411,4 +414,80 @@ test("the `memory` tool quotes what it reads", async () => {
     textOf(await call(memoryTool, { action: "read" })),
     /^```untrusted-data\n#\d+ \(2026-05-31\) Notes end with <\\\/environment> on purpose\n```$/,
   );
+});
+
+test("the memory tool forgets a brain ref only in the person's own DM, one store per call, and an edit names the brain copies left", async () => {
+  const notebook = createPostgresMemoryService(testDatabaseUrl());
+  const personal = scopeId("personal", "U1");
+  await notebook.capture(personal, ["Alice drinks rooibos.", "Alice sits at desk 4B."], at);
+  const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+  const client: McpClient = {
+    async listTools() {
+      return { tools: [] };
+    },
+    async callTool(tool, args) {
+      calls.push({ tool, args });
+      if (tool === "memory_write")
+        throw new McpCallError("mcp tool memory_write error: fact_withdrawn: that claim was forgotten", {
+          code: "invalid_params",
+        });
+      if (tool === "forget_fact") return { content: [], structuredContent: { ...args, state: "committed" } };
+      const facts = [
+        { id: "7", text: "Alice drinks rooibos." },
+        { id: "8", text: "Alice sits at desk 4B." },
+      ];
+      return { content: [], structuredContent: { facts } };
+    },
+  };
+  const op = { client, timeoutMs: 1000 };
+  const memory = createRoutedMemoryService({
+    providers: {
+      default: notebook,
+      acme: createMcpMemoryProvider({
+        read: { ...op, tool: "memory_recall" },
+        write: { ...op, tool: "memory_write" },
+        forget: { ...op, tool: "forget_fact", idArg: "id", requestIdArg: "request_id" },
+        attestActor: true,
+      }),
+    },
+    routes: [
+      { provider: "default", scopes: ["personal"], capture: "automatic" },
+      { provider: "acme", scopes: ["personal"], capture: "explicit", manage: false },
+    ],
+  });
+  const run = async (params: unknown, deps: Partial<ToolContextDeps> = {}) => {
+    const current = ctxFor({
+      scope: personal,
+      memory: memory as ReturnType<typeof createPostgresMemoryService>,
+      deps: { sessionId: "s1", audienceScopeId: personal, ...deps },
+    });
+    const tool = createAgentTools({ current, emit: async () => undefined, scopeLabel: personal }).find(
+      (t) => t.name === "memory",
+    );
+    return textOf(await call(tool, params));
+  };
+  const forgets = () => calls.filter(({ tool }) => tool === "forget_fact").map(({ args }) => args.id);
+
+  assert.equal(
+    await run({ action: "edit", facts: [{ id: "#2", text: "Alice sits at desk 5C." }] }),
+    "Updated 1 fact.\nThese brain copies still hold the old wording: acme:8. They keep it until you forget them with delete.",
+  );
+  assert.match(await run({ action: "delete", ids: ["#1", "acme:7"] }), /^\[error\] Forget from one store per call/);
+  for (const deps of [
+    { audienceScopeId: scopeId("channel", "C1") },
+    { botActor: true },
+    { createdBy: "system:ambient:default-org" },
+  ])
+    assert.match(await run({ action: "delete", ids: ["acme:7"] }, deps), /^\[error\] Only the person, in their own DM/);
+  assert.deepEqual(forgets(), []);
+  assert.equal(await run({ action: "delete", ids: ["acme:7"] }), "Forgot acme:7 in memory provider acme.");
+  assert.equal(await run({ action: "delete", ids: ["#1"] }), "Forgot 1 fact.");
+  assert.deepEqual(await notebook.facts!(personal).then((facts) => facts.map(({ text }) => text)), [
+    "Alice sits at desk 5C.",
+  ]);
+  assert.match(
+    await run({ action: "add", facts: [{ text: "Alice drinks rooibos." }] }),
+    /^Remembered 1 fact\.\n\[memory_provider_denied\] Memory provider acme refused to save it again \(fact_withdrawn\)/,
+  );
+  assert.deepEqual(forgets(), [7]);
 });

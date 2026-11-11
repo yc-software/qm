@@ -1,4 +1,4 @@
-import type { ScopeId } from "../types.ts";
+import { isSystemActor, type ScopeId } from "../types.ts";
 import type { MemoryDisclosure } from "./disclosure.ts";
 import {
   MemoryFactsMissing,
@@ -23,6 +23,7 @@ export interface MemoryProviderOutcome {
   provider: string;
   scope: ScopeId;
   outcome: "ok" | "empty" | "committed" | "pending" | "unknown" | "denied" | "timed_out" | "failed" | "disabled";
+  ref?: string;
   ms: number;
   code?: string;
   added?: number;
@@ -50,6 +51,11 @@ export interface MemoryCaptureContext extends MemoryCaptureMetadata, MemoryOutco
   idempotencyKey?: string;
 }
 
+export interface MemoryForgetContext extends MemoryOutcomeSink {
+  audienceScopeId?: ScopeId;
+  idempotencyKey?: string;
+}
+
 export interface MemoryEdit {
   id: string;
   text: string;
@@ -58,14 +64,27 @@ export interface MemoryEdit {
 export interface MemoryAuthority {
   actorId: string;
   context: "conversation" | "self" | "admin" | "maintenance";
+  botActor?: true;
 }
 
 export function changesNotebookOnly(by: MemoryAuthority | undefined): boolean {
   return by?.context !== "conversation" || !by.actorId.trim();
 }
 
-export function turnAuthority(actorId: string, access: { notebookOnly?: true } | undefined): MemoryAuthority {
-  return { actorId, context: access?.notebookOnly ? "maintenance" : "conversation" };
+export function changesBrainAsPerson(by: MemoryAuthority | undefined): boolean {
+  return !changesNotebookOnly(by) && !by!.botActor && !isSystemActor(by!.actorId);
+}
+
+export function turnAuthority(
+  actorId: string,
+  access: { notebookOnly?: true } | undefined,
+  botActor?: boolean,
+): MemoryAuthority {
+  return {
+    actorId,
+    context: access?.notebookOnly ? "maintenance" : "conversation",
+    ...(botActor ? { botActor: true } : {}),
+  };
 }
 
 export interface MemoryService {
@@ -83,7 +102,7 @@ export interface MemoryService {
   read(scopeId: ScopeId): Promise<string>;
   facts?(scopeId: ScopeId): Promise<MemoryFact[]>;
   edit?(scopeId: ScopeId, edits: MemoryEdit[], by?: MemoryAuthority, context?: MemoryCaptureMetadata): Promise<void>;
-  delete?(scopeId: ScopeId, ids: string[], by?: MemoryAuthority): Promise<void>;
+  delete?(scopeId: ScopeId, ids: string[], by?: MemoryAuthority, context?: MemoryForgetContext): Promise<void>;
   metadata?(): Promise<Map<ScopeId, { bytes: number; updatedAt?: number }>>;
 }
 

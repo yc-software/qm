@@ -31,12 +31,20 @@ export interface McpMemoryOperationConfig {
   idempotencyArg?: string;
 }
 
+export interface McpMemoryForgetConfig {
+  tool: string;
+  auth: McpMemoryAuthConfig;
+  idArg: string;
+  requestIdArg: string;
+}
+
 interface McpMemoryProviderConfig {
   id: string;
   type: "mcp";
   url: string;
   read: McpMemoryOperationConfig;
   write?: McpMemoryOperationConfig;
+  forget?: McpMemoryForgetConfig;
   timeoutMs: number;
   attestActor: boolean;
 }

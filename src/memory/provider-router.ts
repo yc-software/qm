@@ -2,14 +2,15 @@ import { disclosedMemory, MemoryRecallWithheld } from "./disclosure.ts";
 import { isSystemActor, parseScopeId, type ScopeId, type ScopeKind } from "../types.ts";
 import type { McpEnvelope } from "../mcp/mcp-client.ts";
 import {
+  changesBrainAsPerson,
   changesNotebookOnly,
   type MemoryProviderOutcome,
   type MemoryRecallContext,
   type MemoryService,
 } from "./memory-service.ts";
-import type { MemoryCandidate } from "./facts.ts";
-import { failedOutcome, strictFailure, withEnvelope } from "./provider-outcome.ts";
-import { OutsideAudience } from "../directory/person.ts";
+import { MemoryForgetRefused, type MemoryCandidate } from "./facts.ts";
+import { failedOutcome, forgetFailure, strictFailure, withEnvelope } from "./provider-outcome.ts";
+import { attestableAudience, OutsideAudience } from "../directory/person.ts";
 
 export type MemoryCapturePolicy = "off" | "explicit" | "automatic";
 
@@ -36,7 +37,7 @@ function captureAllowed(policy: MemoryCapturePolicy | undefined, mode: "explicit
 export function createRoutedMemoryService(opts: {
   providers: Readonly<Record<string, MemoryService>>;
   routes: readonly MemoryProviderRoute[];
-  onError?: (error: unknown, provider: string, operation: "recall" | "query" | "capture") => void;
+  onError?: (error: unknown, provider: string, operation: "recall" | "query" | "capture" | "forget") => void;
 }): MemoryService {
   const routesFor = (scopeId: ScopeId): MemoryProviderRoute[] => opts.routes.filter((route) => matches(route, scopeId));
   const providerFor = (route: MemoryProviderRoute): MemoryService => {
@@ -186,10 +187,44 @@ export function createRoutedMemoryService(opts: {
       await manager.edit(scopeId, edits, by, context);
     },
 
-    async delete(scopeId, ids, by) {
-      const manager = managerFor(scopeId);
-      if (!manager?.delete) throw new Error(`memory for ${scopeId} is not directly editable`);
-      await manager.delete(scopeId, ids, by);
+    async delete(scopeId, ids, by, context) {
+      const brains = new Set(ids.map((id) => (id.includes(":") ? id.slice(0, id.indexOf(":")) : undefined)));
+      if (brains.size > 1)
+        throw new MemoryForgetRefused(
+          "Forget from one store per call: pass either notebook #ids or refs from one brain (like acme:4821), not both. Nothing was changed.",
+        );
+      const [brain] = brains;
+      if (brain === undefined) {
+        const manager = managerFor(scopeId);
+        if (!manager?.delete) throw new Error(`memory for ${scopeId} is not directly editable`);
+        await manager.delete(scopeId, ids, by, context);
+        return;
+      }
+      const provider = routesFor(scopeId).some((route) => route.provider === brain) ? opts.providers[brain] : undefined;
+      if (!provider?.delete || !provider.attestActor)
+        throw new MemoryForgetRefused(
+          `Memory brain ${brain} can't forget facts for this conversation's notebook: it isn't serving it, or its preset has no forget. Nothing was changed. GET /v1/admin/memory-registry shows its preset and whether its binding is disabled; gbrain-v3 forgets by ref.`,
+        );
+      if (
+        !changesBrainAsPerson(by) ||
+        !attestableAudience(by!.actorId, scopeId) ||
+        !attestableAudience(by!.actorId, context?.audienceScopeId)
+      )
+        throw new MemoryForgetRefused(
+          `Only the person, in their own DM with QM, can forget a fact in memory brain ${brain}; admin, maintenance, self-service, bot and ambient changes reach the notebook only. Nothing was changed.`,
+        );
+      for (const ref of ids) {
+        const started = Date.now();
+        const report = (fields: Pick<MemoryProviderOutcome, "outcome" | "code">) =>
+          context?.report?.({ provider: brain, scope: scopeId, ref, ms: Date.now() - started, ...fields });
+        try {
+          await provider.delete(scopeId, [ref.slice(brain.length + 1)], by, context);
+          report({ outcome: "committed" });
+        } catch (error) {
+          report(forgetFailure(error));
+          opts.onError?.(error, brain, "forget");
+        }
+      }
     },
 
     async metadata() {

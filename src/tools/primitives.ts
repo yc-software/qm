@@ -67,8 +67,12 @@ import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { MEMORY_FILE, turnAuthority, type MemoryEdit, type MemoryService } from "../memory/memory-service.ts";
 import {
+  editNotebookFacts,
+  forgetFacts,
   withProviders,
   writeFacts,
+  type MemoryEdited,
+  type MemoryForget,
   type MemoryProviderProblem,
   type MemoryWrite,
   type OutcomeReport,
@@ -249,8 +253,8 @@ export interface ToolContext extends SurfaceToolDeps {
   ): Promise<{ hits: string[]; problems: MemoryProviderProblem[] } | null>;
   memoryRead(scope?: ScopeId): Promise<string | null>;
   memoryAdd(facts: string[]): Promise<MemoryWrite | null>;
-  memoryEdit(edits: MemoryEdit[]): Promise<true | null>;
-  memoryDelete(ids: string[]): Promise<true | null>;
+  memoryEdit(edits: MemoryEdit[]): Promise<MemoryEdited | null>;
+  memoryDelete(ids: string[], callId: string): Promise<MemoryForget | null>;
   history(q: string, limit?: number): Promise<string[]>;
   historyOpen(seq: number): Promise<string | null>;
   callMcpTool(name: string, args: Record<string, unknown>, approval?: string): Promise<string>;
@@ -1160,7 +1164,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         memory,
         write,
         facts,
-        turnAuthority(deps.createdBy, deps.memoryAccess),
+        turnAuthority(deps.createdBy, deps.memoryAccess, deps.botActor),
         {
           ...deps.memoryCaptureMetadata?.(),
           mode: "explicit",
@@ -1171,21 +1175,27 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       );
     },
 
-    async memoryEdit(edits: MemoryEdit[]): Promise<true | null> {
+    async memoryEdit(edits: MemoryEdit[]) {
       const write = deps.memoryAccess?.write;
       if (!memory?.edit || !write) return null;
-      await memory.edit(write, edits, turnAuthority(deps.createdBy, deps.memoryAccess), {
+      return editNotebookFacts(memory, write, edits, turnAuthority(deps.createdBy, deps.memoryAccess, deps.botActor), {
         ...deps.memoryCaptureMetadata?.(),
         conversationScopeId: writableScopeId,
+        ...(deps.audienceScopeId ? { audienceScopeId: deps.audienceScopeId } : {}),
       });
-      return true;
     },
 
-    async memoryDelete(ids: string[]): Promise<true | null> {
+    async memoryDelete(ids: string[], callId: string) {
       const write = deps.memoryAccess?.write;
       if (!memory?.delete || !write) return null;
-      await memory.delete(write, ids, turnAuthority(deps.createdBy, deps.memoryAccess));
-      return true;
+      return forgetFacts(
+        memory,
+        write,
+        ids,
+        turnAuthority(deps.createdBy, deps.memoryAccess, deps.botActor),
+        deps.audienceScopeId ? { audienceScopeId: deps.audienceScopeId } : {},
+        deps.sessionId && `${deps.sessionId}:${callId}`,
+      );
     },
 
     ...(deps.humanTurn ? { humanTurn: true } : {}),
