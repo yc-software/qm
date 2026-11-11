@@ -1123,7 +1123,12 @@ test("a person's Steer into a bot's hand-off stops the bot's turn and runs their
   const typed = (await built.app.turn(web("set Beta as the default", "web:U1:bot", "steer"))).runId!;
   const steer = { kind: "steer" as const, queuedRunId: typed, request: web("", "web:U1:bot") };
   assert.deepEqual(await built.app.signalRun(run.id, steer, "U1"), { accepted: false, reason: "queued_started" });
-  assert.equal((await built.signals.takePending(run.id)).map((s) => s.kind).join(), "abort,abort");
+  const direct = { kind: "steer" as const, text: "and the notes", request: web("and the notes", "web:U1:bot") };
+  assert.ok(
+    (await built.app.signalRun(run.id, direct, "U1")).queuedRunId,
+    "a Steer from the canvas runs as their own turn",
+  );
+  assert.equal((await built.signals.takePending(run.id)).map((s) => s.kind).join(), "abort,abort,abort");
   assert.equal((await built.runs.get(typed))?.status, "pending", "the person's message is kept and runs next");
 });
 

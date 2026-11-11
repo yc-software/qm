@@ -458,7 +458,7 @@ export function createTurnMethods(
           return { status: "silent", steered: true, stopped };
         }
         if (route.kind === "drop") return { status: "refused", reason: "empty message" };
-        if (route.kind === "turn" && route.stopsBotTurn && live?.run) {
+        if (route.kind === "turn" && route.reason === "bot-turn" && prefs.midTurn === "steer" && live?.run) {
           const botTurn = live.run;
           await withCurrentProjectRoster(() => stopRun(botTurn, false, true));
         }
@@ -785,9 +785,9 @@ export function createTurnMethods(
       }
       if (route.kind === "drop") return { accepted: false, reason: "text_required" };
       if (route.kind === "turn") {
-        if (route.stopsBotTurn && signal.queuedRunId) {
+        if (route.reason === "bot-turn") {
           await stopRun(run, false, true);
-          return { accepted: false, reason: "queued_started" };
+          if (signal.queuedRunId) return { accepted: false, reason: "queued_started" };
         }
         const request =
           signal.request ?? (viewer ? await viewerSteerRequest(run, viewer, signal.text ?? "") : undefined);

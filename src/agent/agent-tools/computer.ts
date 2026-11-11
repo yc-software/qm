@@ -31,11 +31,12 @@ export function computerTools(kit: ToolKit) {
     capabilityTtlMs === 0
       ? "Those turn tokens do not expire here, but authorization checks still apply."
       : `Those turn tokens expire ${capabilityTtlHours} hours after the launching turn started (then they 401), so publish checkpoints to Files before that and keep the file ID.`;
+  const adoptSandbox = opts?.botActor ? "pass its sandbox_id" : "set it default";
   const EXECUTE_TIMEOUT_GUIDANCE =
     "Commands may run under POSIX sh; wrap bash-only syntax in bash -c. " +
     `Timeout default ${execTimeoutSec}s, max ${execCeilingSec}s: raise \`timeout_seconds\` for builds/installs/tests, lower it for quick commands. ` +
     "For anything longer, and for servers, use background:true (never a shell ampersand) and the background tool. " +
-    "On hangs or unexplained transport errors use sandbox status/restart; if that fails twice, create a fresh sandbox, set it default, and recover work from git or Files.";
+    `On hangs or unexplained transport errors use sandbox status/restart; if that fails twice, create a fresh sandbox, ${adoptSandbox}, and recover work from git or Files.`;
 
   const executeBaseParams = {
     command: Type.String({ description: "The shell command to run." }),
@@ -199,14 +200,13 @@ export function computerTools(kit: ToolKit) {
   const sandboxActions = [
     "status",
     "restart",
-    ...(opts?.sandboxResources ? ["list", "create", "set_default", "retire"] : []),
+    ...(opts?.sandboxResources ? ["list", "create", ...(opts.botActor ? [] : ["set_default"]), "retire"] : []),
   ];
   const memorySizedBackends = opts?.sandboxResources ? (opts.memorySizedBackends ?? []) : [];
   const sandboxManagement = defineTool({
     name: "sandbox",
     label: "sandbox",
-    description:
-      "Manage sandbox computers. list: providers, inventory, this scope's default. create: a blank sandbox (default unchanged). set_default: route commands there (null clears). status: health. restart: stop processes, recover state where supported. retire: delete (not while default or running jobs). If work needs a computer and there is no default, list, create, set_default and retry; report blocked only if creation fails. Durable outputs belong in git or Files.",
+    description: `Manage sandbox computers. list: providers, inventory, this scope's default. create: a blank sandbox (default unchanged). ${opts?.botActor ? "" : "set_default: route commands there (null clears). "}status: health. restart: stop processes, recover state where supported. retire: delete (not while default or running jobs). If work needs a computer and there is no default, ${opts?.botActor ? "list or create one and pass its sandbox_id" : "list, create, set_default and retry"}; report blocked only if creation fails. Durable outputs belong in git or Files.`,
     parameters: Type.Object({
       action: Type.String({ enum: sandboxActions }),
       sandbox_id: Type.Optional(
@@ -290,7 +290,7 @@ export function computerTools(kit: ToolKit) {
         }
         const verdictLine =
           verdict === "wedged"
-            ? " — WEDGED: a machine exists but its shell is not answering; the platform's health reporting goes stale in exactly this state, so trust the shell probe over any healthy/running claim and restart the computer; if it is still wedged after a restart or two, create a fresh sandbox, set it as the default, and retry there"
+            ? ` — WEDGED: a machine exists but its shell is not answering; the platform's health reporting goes stale in exactly this state, so trust the shell probe over any healthy/running claim and restart the computer; if it is still wedged after a restart or two, create a fresh sandbox, ${adoptSandbox}, and retry there`
             : "";
         return recordResult(
           callId,

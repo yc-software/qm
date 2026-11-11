@@ -489,6 +489,13 @@ test("sandbox advertises available management actions and retires migrate", asyn
     "restart",
   ]);
   assert.match(textOut(await call(sandbox, { action: "migrate", purpose: "p" })), /invalid sandbox arguments/);
+  const botSandbox = createAgentTools(ref, { sandboxResources: true, botActor: true }).find(
+    (t) => t.name === "sandbox",
+  )!;
+  assert.match(
+    textOut(await call(botSandbox, { action: "set_default", sandbox_id: null, purpose: "p" })),
+    /invalid sandbox/,
+  );
   assert.match(
     textOut(await call(disabled, { action: "create", backend: "e2b", purpose: "p" })),
     /invalid sandbox arguments/,

@@ -1244,19 +1244,21 @@ test("a Slack bot's legacy bot_message post marks its ambient wake as a bot's th
 
 type WakeEvent = Parameters<SlackCoreClient["ingestSurfaceEvents"]>[0][number];
 
-async function wakeBesideLiveWorker(policy: string, first: WakeEvent, second: WakeEvent) {
+async function wakeBesideLiveWorker(policy: string, first: WakeEvent, second: WakeEvent[]) {
   const built = freshApp();
   await built.app.setChannelPolicy(first.container, policy, "U-admin");
   await built.app.ingestSurfaceEvents([first]);
   await built.app.judgeAmbientContainer("slack", first.container);
   const live = await built.runs.activeForThread(`slack:${first.container}:ambient:${first.ts}`);
   assert.ok(live, "the first message spawned a live worker run");
-  await built.app.ingestSurfaceEvents([second]);
+  await built.app.ingestSurfaceEvents(second);
   const signals: any[] = [];
   let next: any;
   await settle(async () => {
     signals.push(...(await built.signals.takePending(live.id)));
-    next = (await built.runs.list()).find((r) => r.sessionId === `slack:${first.container}:ambient:${second.ts}`);
+    next = (await built.runs.list()).find(
+      (r) => r.sessionId === `slack:${first.container}:ambient:${second.at(-1)!.ts}`,
+    );
     return signals.length > 0 || Boolean(next);
   });
   assert.deepEqual(signals, [], "the second wake left the live worker alone");
@@ -1268,17 +1270,21 @@ test("a Slack bot's ambient wake does not steer into a live ambient worker a per
   const { next } = await wakeBesideLiveWorker(
     "!engage !post tag the team",
     { container, ts: "720.1", authorId: "U1", text: "events site is down", createdAt: 1 },
-    { container, ts: "720.2", authorId: "U-deploybot", bot: true, text: "rollback finished", createdAt: 2 },
+    [{ container, ts: "720.2", authorId: "U-deploybot", bot: true, text: "rollback finished", createdAt: 2 }],
   );
   assert.equal(next?.request.botActor, true, "the bot's wake runs as its own bot-marked worker");
 });
 
-test("a person's ask that degrades to proactive does not steer into a live worker a Slack bot's post started", async () => {
+test("a person's ask that degrades to proactive, beside a Slack bot's post, runs as its own worker without the bot marker", async () => {
   const container = "C-ask-after-bot";
   const { live, next } = await wakeBesideLiveWorker(
     "!engage-asked",
     { container, ts: "730.1", authorId: "U-deploybot", bot: true, text: "rollback finished", createdAt: 1 },
-    { container, ts: "730.2", authorId: "U1", text: "can you set gpu-2 as the default computer?", createdAt: 2 },
+    [
+      { container, ts: "730.2", authorId: "U1", text: "can you set gpu-2 as the default computer?", createdAt: 2 },
+      { container, ts: "730.3", authorId: "U-deploybot", bot: true, text: "deploy queued", createdAt: 3 },
+      { container, ts: "730.4", authorId: "U2", text: "+1", createdAt: 4 },
+    ],
   );
   assert.equal(live.request.botActor, true, "the bot's post spawned a bot-marked worker");
   assert.ok(next && !next.request.botActor, "the person's ask runs as its own worker without the bot marker");

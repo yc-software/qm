@@ -292,6 +292,8 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
   async function spawnAmbientWorker(batch: AmbientBatch, decision: AmbientDecision): Promise<string | undefined> {
     const latestTs = batch.messages.reduce((max, m) => (m.ts > max ? m.ts : max), "");
     const threadRef = `${batch.surface}:${batch.container}:ambient:${latestTs}`;
+    const askedByPerson = batch.messages.some((m) => m.ts === decision.askedBy && !m.bot);
+    const triggers = askedByPerson ? { ...batch, messages: batch.messages.filter((m) => !m.bot) } : batch;
     let solicited = await solicitedAsker(batch, decision);
     let audience: ActorAssertion[] = [];
     if (solicited) {
@@ -310,7 +312,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
       console.error(
         `[ambient] solicited wake degraded to proactive (asked_by=${decision.askedBy}, container=${batch.container})`,
       );
-    const shown = batch.messages.filter((m) => !m.deleted && (m.text ?? "").trim()).slice(-4);
+    const shown = triggers.messages.filter((m) => !m.deleted && (m.text ?? "").trim()).slice(-4);
     const req: TurnRequest = solicited
       ? {
           surface: batch.surface,
@@ -332,7 +334,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
           surface: batch.surface,
           ...(surfaceOrigin ? { surfaceOrigin } : {}),
           actor: { externalId: `system:ambient:${orgIdOf()}` },
-          ...(batch.messages.some((m) => m.bot) ? { botActor: true } : {}),
+          ...(triggers.messages.some((m) => m.bot) ? { botActor: true } : {}),
           conversation,
           deliveryTarget: batch.container,
           text: buildWakeEnvelope({
@@ -342,7 +344,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
             at: new Date(),
             why: decision.reason ?? "The recent messages here may warrant a reply.",
             orders: batch.orders,
-            recentMessages: recentWakeMessages(batch),
+            recentMessages: recentWakeMessages(triggers),
             instructions: `You don't need to have been @mentioned. Reply about the trigger messages. Messages in other threads are separate conversations: don't carry their facts into your reply unless they are about the same subject. Respond with the \`${batch.surface}\` tool's \`post\` action — set \`ts\` to the triggering message id to reply in its thread, or \`broadcast: true\` to post at the channel top level — or stay silent if nothing is needed. To include an image or file, name its workspace path in \`post\`'s \`files\` (it uploads with your message, in that thread). Use \`reach\` only to send to a DIFFERENT channel or person. Use the \`read_thread\` or \`search\` action if you need more context than shown.`,
           }),
           origin: {
@@ -357,8 +359,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
           spawned: true,
           idempotencyKey: `ambient:${orgIdOf()}:${batch.surface}:${batch.container}:${latestTs}`,
         };
-    if (!solicited && (await steerIntoLiveAmbientRun(batch, latestTs, req, Boolean(decision.askedBy))))
-      return undefined;
+    if (!solicited && (await steerIntoLiveAmbientRun(batch, latestTs, req, askedByPerson))) return undefined;
     const result = await app.turn(req);
     return result.status === "refused" || result.status === "failed"
       ? `${result.status}: ${result.reason ?? "no reason given"}`
@@ -379,11 +380,11 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     const liveRef = activeIds.find((id) => id.startsWith(prefix) && id !== req.conversation.threadRef);
     if (!liveRef) return false;
     const live = await deps.runs.activeForThread(liveRef);
-    if (!live || isTerminal(live.status) || (asked && live.request.botActor && !req.botActor)) return false;
+    if (!live || isTerminal(live.status)) return false;
     const route = routeIncoming(
       {
         origin: "ambient",
-        person: false,
+        person: asked,
         text: req.text,
         hasFiles: false,
         actorId: req.actor.externalId,
@@ -393,7 +394,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
         routed: false,
       },
       liveTurnOf(live),
-      {},
+      { midTurn: "steer" },
     );
     if (route.kind !== "steer") return false;
     await h.steerRun(live, {

@@ -94,6 +94,7 @@ export interface AgentToolsOptions {
   sandboxResources?: boolean;
   memorySizedBackends?: string[];
   readOnly?: boolean;
+  botActor?: boolean;
   memoryNotebookOnly?: boolean;
   surfaceTools?: boolean;
   delegateWork?: boolean;
@@ -104,7 +105,14 @@ export interface AgentToolsOptions {
 
 export type CoreToolOptions = Omit<
   AgentToolsOptions,
-  "readOnly" | "memoryNotebookOnly" | "surfaceTools" | "surfaceName" | "surfacePrompt" | "delegateWork" | "clientTools"
+  | "readOnly"
+  | "botActor"
+  | "memoryNotebookOnly"
+  | "surfaceTools"
+  | "surfaceName"
+  | "surfacePrompt"
+  | "delegateWork"
+  | "clientTools"
 >;
 
 export function coreToolOptions(config: Config): CoreToolOptions {
