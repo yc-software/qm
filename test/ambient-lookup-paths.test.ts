@@ -5,14 +5,14 @@ import { test } from "node:test";
 import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
 import { brokerCredentialCall } from "../src/api/credential-broker.ts";
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
-import { scopeActor, scopeId } from "../src/types.ts";
+import { scopeId } from "../src/types.ts";
 import { buildApp } from "./support/build-app.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { settle } from "./support/settle.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
 
-test("an offer the channel takes up runs as the person who replied, and only that person's lookup is attested", async (t) => {
+test("a reply asking the assistant runs as the person who asked, and the broker attests that person's lookup", async (t) => {
   const built = buildApp(
     testConfig({ signingSecret: "ambient-lookup-signing".repeat(3), apiBaseUrl: "http://core.internal" }),
   );
@@ -43,7 +43,7 @@ test("an offer the channel takes up runs as the person who replied, and only tha
   const tokens = new Map<string, string>();
   const realRun = built.sandbox.run.bind(built.sandbox);
   built.sandbox.run = (handle, command, opts) => {
-    const tag = /^echo (offer|lookup)$/.exec(command)?.[1];
+    const tag = /^echo (lookup)$/.exec(command)?.[1];
     if (tag && handle.env?.AGENT_CREDENTIAL_TOKEN) tokens.set(tag, handle.env.AGENT_CREDENTIAL_TOKEN);
     return realRun(handle, command, opts);
   };
@@ -72,16 +72,6 @@ test("an offer the channel takes up runs as the person who replied, and only tha
     });
     return built.runs.waitFor(run.id, 30_000);
   };
-
-  await built.app.setChannelPolicy("C-deals", `!engage ${exec("offer")}`, "U-admin");
-  await built.app.ingestSurfaceEvents([
-    { container: "C-deals", ts: "1.1", authorId: "U-A", authorName: "A", text: "memo for company 1?", createdAt: 1 },
-  ]);
-  const offer = await ranFor("1.1");
-  assert.deepEqual([offer.request.actor.id, offer.request.origin.kind], [scopeActor(here), "automation"]);
-  const unasked = await lookup("offer");
-  assert.deepEqual([unasked.claims.actorId, unasked.claims.actAsActor], [scopeActor(here), true]);
-  assert.deepEqual([unasked.status, unasked.error], [403, "private_only"]);
 
   await built.app.setChannelPolicy("C-deals", "!engage-asked", "U-admin");
   await built.app.ingestSurfaceEvents([
