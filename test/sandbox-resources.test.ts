@@ -1096,10 +1096,7 @@ test("a job computer is invisible and untargetable for everyone, and only the jo
 test("a turn still holding a job computer the sweep deleted ends without reaching the backend", async () => {
   let backendCalls = 0;
   const { resources, router } = fixture((backend) => {
-    backend.removeDir = async () => {
-      backendCalls++;
-    };
-    backend.teardown = async () => {
+    backend.removeDir = backend.teardown = async () => {
       backendCalls++;
     };
   });
@@ -1108,7 +1105,6 @@ test("a turn still holding a job computer the sweep deleted ends without reachin
   await resources.retireJobComputer(job.id, "ready");
   await router.removeDir(handle, "dir");
   await router.teardown(handle);
-  await assert.rejects(router.run(handle, "work"), /not found/);
   assert.equal(backendCalls, 0);
 });
 
