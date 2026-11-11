@@ -34,7 +34,10 @@ export async function botWorkInPersonsName(
   ctx: { deps: { admin?: Pick<AdminService, "users"> } },
   capability: Pick<CapabilityClaims, "actorId" | "botActor">,
 ): Promise<boolean> {
-  return capability.botActor === true && (await ctx.deps.admin?.users.get(capability.actorId))?.kind === "person";
+  return (
+    capability.botActor === true &&
+    (await ctx.deps.admin?.users.resolve([capability.actorId]))?.get(capability.actorId)?.kind === "person"
+  );
 }
 
 export function personalCapability(ctx: Pick<ApiCtx, "capability" | "actor">): CapabilityClaims | null {
