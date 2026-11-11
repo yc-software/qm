@@ -1,63 +1,6 @@
-import { parseScopeId, type ScopeKind } from "../types.ts";
 import { ANNOTATE_BUTTON, ANNOTATE_CSS, ANNOTATE_JS, ANNOTATE_MARKUP } from "./app-annotate.ts";
 
 export const APP_SHELL_PATH_PREFIX = "/__claw__/";
-
-export type AppShellAccess = {
-  level: "private" | "people" | "context" | "org" | "public";
-  label: string;
-  detail: string;
-  canEdit: boolean;
-};
-
-const NOUNS: Partial<Record<ScopeKind, [one: string, many: string]>> = {
-  personal: ["person", "people"],
-  channel: ["channel", "channels"],
-  group: ["group chat", "group chats"],
-  team: ["team", "teams"],
-};
-const OTHER_NOUN: [string, string] = ["project", "projects"];
-
-export function appShellAccess(opts: {
-  ownerScopeId: string;
-  public: boolean;
-  grantees: ReadonlyArray<{ scope: string }>;
-  viewer: string;
-}): AppShellAccess {
-  const ownedByViewer = opts.ownerScopeId === `personal:${opts.viewer}`;
-  const canEdit = ownedByViewer;
-  const kindOf = (scope: string) => parseScopeId(scope).kind;
-  if (opts.public)
-    return { level: "public", label: "Public", detail: "Anyone on the internet with the link can open", canEdit };
-  if (opts.grantees.some((g) => g.scope === "org" || kindOf(g.scope) === "org"))
-    return { level: "org", label: "Organization", detail: "Anyone signed in to your organization can open", canEdit };
-  const owner = kindOf(opts.ownerScopeId) === "personal" ? [] : [opts.ownerScopeId];
-  const reach = new Set([...owner, ...opts.grantees.map((g) => g.scope)]);
-  if (!reach.size)
-    return {
-      level: "private",
-      label: "Private",
-      detail: ownedByViewer ? "Only you can open" : "Only the owner can open",
-      canEdit,
-    };
-  const counts = new Map<[string, string], number>();
-  for (const scope of reach) {
-    const kind = kindOf(scope);
-    const noun = (kind && NOUNS[kind]) || OTHER_NOUN;
-    counts.set(noun, (counts.get(noun) ?? 0) + 1);
-  }
-  const words = [...counts].map(([[one, many], n]) => `${n} ${n === 1 ? one : many}`);
-  const onlyPeople = counts.size === 1 && counts.has(NOUNS.personal!);
-  const [[[one], n] = [[""], 0]] = counts;
-  let label = counts.size === 1 ? words[0]! : "Shared";
-  if (counts.size === 1 && n === 1 && !onlyPeople) label = one[0]!.toUpperCase() + one.slice(1);
-  return {
-    level: onlyPeople ? "people" : "context",
-    label,
-    detail: `Shared with ${new Intl.ListFormat("en", { type: "conjunction" }).format(words)}`,
-    canEdit,
-  };
-}
 
 function escAttr(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
@@ -189,8 +132,7 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
   const deploymentId = ${JSON.stringify(opts.deploymentId ?? opts.slug).replace(/</g, "\\u003c")};
   const accessIcons = {
     private: '<rect x="4" y="9" width="12" height="8" rx="1.5"/><path d="M7 9V6.5a3 3 0 0 1 6 0V9"/>',
-    people: '<circle cx="8" cy="7" r="2.75"/><path d="M3 16.5c.6-2.6 2.6-4 5-4s4.4 1.4 5 4"/><path d="M13 4.6a2.75 2.75 0 0 1 0 4.8M15 12.8c1.1.6 1.8 1.9 2 3.7"/>',
-    context: '<circle cx="8" cy="7" r="2.75"/><path d="M3 16.5c.6-2.6 2.6-4 5-4s4.4 1.4 5 4"/><path d="M13 4.6a2.75 2.75 0 0 1 0 4.8M15 12.8c1.1.6 1.8 1.9 2 3.7"/>',
+    shared: '<circle cx="8" cy="7" r="2.75"/><path d="M3 16.5c.6-2.6 2.6-4 5-4s4.4 1.4 5 4"/><path d="M13 4.6a2.75 2.75 0 0 1 0 4.8M15 12.8c1.1.6 1.8 1.9 2 3.7"/>',
     org: '<rect x="4" y="3" width="12" height="14" rx="1"/><path d="M8 17v-3h4v3M8 6.5h.01M12 6.5h.01M8 10h.01M12 10h.01"/>',
     public: '<circle cx="10" cy="10" r="7"/><path d="M3 10h14M10 3c2 2 2.8 4.4 2.8 7S12 15 10 17c-2-2-2.8-4.4-2.8-7S8 5 10 3Z"/>',
   };
@@ -208,7 +150,7 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
     text.textContent = next.label;
     accessBtn.append(text);
   };
-  const shareUrl = portal + "/app-share?id=" + encodeURIComponent(deploymentId) + "&slug=" + encodeURIComponent(slug) + "&embed=1";
+  const shareUrl = portal + "/app-share?id=" + encodeURIComponent(deploymentId) + "&slug=" + encodeURIComponent(slug);
   const closeShare = () => {
     share.classList.remove("open");
     share.src = "about:blank";

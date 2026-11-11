@@ -1104,7 +1104,7 @@ export async function boot(): Promise<void> {
     session: wantedSession,
     item: wantedItem,
   } = parseDeepLink(UI_BASE, location.pathname, location.search);
-  if (wanted === "app-share" && params.get("embed") === "1") {
+  if (wanted === "app-share") {
     await bootAppShare(params);
     return;
   }

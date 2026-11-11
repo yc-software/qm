@@ -476,7 +476,7 @@ test("app shell: the version poll tells the top bar who can open the app", async
     const before = JSON.parse((await httpGet(f.port, "/__claw__/version", headers)).body).access;
     assert.deepEqual(
       { level: before.level, label: before.label, canEdit: before.canEdit },
-      { level: "context", label: "Shared", canEdit: true },
+      { level: "shared", label: "Shared", canEdit: true },
       "the fixture app is shared with a viewer and the channel it was built in",
     );
     await f.app.shareDeployment(f.d.id, "org", "read", { createdBy: "U1" });
@@ -489,20 +489,20 @@ test("app shell: the version poll tells the top bar who can open the app", async
 });
 
 test("app shell: access summary wording", async () => {
-  const { appShellAccess } = await import("../src/deploy/app-shell.ts");
+  const { appAccess } = await import("../src/deploy/app-access.ts");
   const base = { ownerScopeId: "personal:U1", public: false, grantees: [], viewer: "U1" };
-  assert.equal(appShellAccess(base).label, "Private");
-  assert.equal(appShellAccess(base).detail, "Only you can open");
-  assert.equal(appShellAccess({ ...base, public: true, grantees: [{ scope: "org" }] }).level, "public");
-  const people = appShellAccess({ ...base, grantees: [{ scope: "personal:a" }, { scope: "personal:b" }] });
+  assert.equal(appAccess(base).label, "Private");
+  assert.equal(appAccess(base).detail, "Only you can open");
+  assert.equal(appAccess({ ...base, public: true, grantees: [{ scope: "org" }] }).level, "public");
+  const people = appAccess({ ...base, grantees: [{ scope: "personal:a" }, { scope: "personal:b" }] });
   assert.equal(people.label, "2 people");
-  assert.equal(people.level, "people");
-  const manager = appShellAccess({ ...base, viewer: "a", grantees: [{ scope: "personal:a" }] });
+  assert.equal(people.level, "shared");
+  const manager = appAccess({ ...base, viewer: "a", grantees: [{ scope: "personal:a" }] });
   assert.equal(manager.canEdit, false, "only the owner edits permissions");
   assert.equal(manager.detail, "Shared with 1 person");
-  const channel = appShellAccess({ ...base, ownerScopeId: "channel:C1", viewer: "a" });
+  const channel = appAccess({ ...base, ownerScopeId: "channel:C1", viewer: "a" });
   assert.equal(channel.label, "Channel");
-  const mixed = appShellAccess({ ...base, grantees: [{ scope: "channel:C1" }, { scope: "personal:a" }] });
+  const mixed = appAccess({ ...base, grantees: [{ scope: "channel:C1" }, { scope: "personal:a" }] });
   assert.equal(mixed.label, "Shared");
   assert.equal(mixed.detail, "Shared with 1 channel and 1 person");
 });

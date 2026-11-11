@@ -25,7 +25,8 @@ import { tenantOf, type ApiCtx, type BaseCtx, type Route } from "./route.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
 import { verifyDeployGitAccess, viewerIdentityKey } from "../../deploy/access-token.ts";
 import { appAnnotationAsset } from "../../deploy/app-annotate.ts";
-import { APP_SHELL_PATH_PREFIX, appShellAccess, appShellHtml } from "../../deploy/app-shell.ts";
+import { appAccess } from "../../deploy/app-access.ts";
+import { APP_SHELL_PATH_PREFIX, appShellHtml } from "../../deploy/app-shell.ts";
 import type { AppViewAuthMode } from "../../deploy/page-views.ts";
 import { principalDestination } from "../../reach/reach.ts";
 import { FRAME_SESSION_COOKIE, portalSession, portalSessionFrom } from "../../deploy/viewer-session.ts";
@@ -962,7 +963,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
         sendJson(res, 200, {
           version: deployment.appliedVersion ?? deployment.currentVersion,
           ...(draft ? { live: draft.reloads } : {}),
-          access: appShellAccess({ ownerScopeId: deployment.ownerScopeId, public: isPublic, grantees, viewer: sub! }),
+          access: appAccess({ ownerScopeId: deployment.ownerScopeId, public: isPublic, grantees, viewer: sub! }),
         });
       } else if (
         annotationsEnabled &&
