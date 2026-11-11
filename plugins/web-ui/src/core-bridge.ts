@@ -814,20 +814,50 @@ export function servedReleaseChanged(): boolean {
   return Boolean(booted && servedRelease && servedRelease !== booted);
 }
 
-export async function webFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+const TRANSIENT_STATUSES = new Set([502, 503, 504]);
+const RETRY_DELAYS_MS = [500, 1500];
+const MAX_RETRY_AFTER_MS = 5000;
+
+function retryDelayMs(response: Response | null, attempt: number): number {
+  const header = response?.headers.get("retry-after");
+  const seconds = header ? Number(header) : NaN;
+  return Number.isFinite(seconds) && seconds >= 0
+    ? Math.min(seconds * 1000, MAX_RETRY_AFTER_MS)
+    : RETRY_DELAYS_MS[attempt]!;
+}
+
+async function fetchOnce(input: RequestInfo | URL, init: RequestInit | undefined, url: string, method: string) {
   const startMs = Date.now();
-  const request = input instanceof Request ? input : null;
-  const url = request?.url ?? String(input);
-  const method = init?.method ?? request?.method ?? "GET";
-  let response: Response;
   try {
-    response = await fetch(input, init);
+    const response = await fetch(input, init);
+    reportRequestTiming(url, method, startMs, response.status);
+    servedRelease = response.headers.get("x-qm-release") ?? servedRelease;
+    return response;
   } catch (error) {
     reportRequestTiming(url, method, startMs, null);
     throw error;
   }
-  reportRequestTiming(url, method, startMs, response.status);
-  servedRelease = response.headers.get("x-qm-release") ?? servedRelease;
+}
+
+export async function webFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const request = input instanceof Request ? input : null;
+  const url = request?.url ?? String(input);
+  const method = (init?.method ?? request?.method ?? "GET").toUpperCase();
+  const signal = init?.signal ?? request?.signal;
+  const idempotent = method === "GET" || method === "HEAD";
+  let response: Response;
+  for (let attempt = 0; ; attempt++) {
+    const canRetry = idempotent && attempt < RETRY_DELAYS_MS.length;
+    try {
+      response = await fetchOnce(input, init, url, method);
+    } catch (error) {
+      if (!canRetry || signal?.aborted || !(error instanceof TypeError)) throw error;
+      await sleep(retryDelayMs(null, attempt));
+      continue;
+    }
+    if (!canRetry || signal?.aborted || !TRANSIENT_STATUSES.has(response.status)) break;
+    await sleep(retryDelayMs(response, attempt));
+  }
   if (response.status !== 401) return response;
   stopBrowserErrors();
   stopAnalytics();
