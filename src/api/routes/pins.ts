@@ -18,9 +18,11 @@ export async function conversationRef(ctx: ApiCtx): Promise<string | null> {
     sendJson(res, 400, { error: "no_conversation", message: "this token isn't bound to a conversation" });
     return null;
   }
+  const topLevel = !isSubagentThreadRef(capability.threadRef);
+  if (topLevel && capability.botActor !== true) return capability.threadRef;
   const sessions = ctx.deps.sessions;
   const session = await sessions?.getByThread(capability.threadRef);
-  if (!isSubagentThreadRef(capability.threadRef)) {
+  if (topLevel) {
     if (!session || !isSidebarSession(session) || sessionVisibleTo(capability, session)) return capability.threadRef;
     sendJson(res, 403, { error: "forbidden", message: "this conversation is no longer accessible" });
     return null;
