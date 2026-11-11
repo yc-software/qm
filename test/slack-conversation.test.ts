@@ -76,7 +76,7 @@ test("buildContextWindow pages the scan onward when the surface had more, even w
   assert.equal(w.nextBefore, "1700000001.000100", "cursor walks past the scanned region");
 });
 
-test("buildContextWindow labels self messages, resolves mentions, threads, files, and keeps long text whole", () => {
+test("buildContextWindow labels self messages, resolves mentions, threads, files, and clips long text", () => {
   const nameById = new Map([["U1", "Alice"]]);
   const w = buildContextWindow(
     [
@@ -94,7 +94,8 @@ test("buildContextWindow labels self messages, resolves mentions, threads, files
   assert.deepEqual(w.selfTs, [self.ts]);
   assert.equal(self.threadTs, "1700000001.000100");
   assert.deepEqual(self.files, ["plan.pdf"]);
-  assert.equal(self.text, `ping @Alice ${"x".repeat(700)}`, "mentions resolve to names and long text stays whole");
+  assert.ok(self.text.startsWith("ping @Alice"), "mentions resolve to names");
+  assert.ok(self.text.length <= 601 && self.text.endsWith("…"), "long text is clipped");
 });
 
 test("buildContextWindow preserves reaction counts without inventing missing reaction data", () => {

@@ -16,6 +16,7 @@ export function buildContextWindow(
   return buildSurfaceContextWindow(scanned, {
     ...rest,
     renderText: (text) => resolveMentions(text, nameById),
+    clipChars: MAX_CONTEXT_MESSAGE_CHARS,
   });
 }
 
@@ -32,6 +33,7 @@ export interface RecentMessage {
   files?: string[];
 }
 
+const MAX_CONTEXT_MESSAGE_CHARS = 600;
 export const MAX_RECENT_MESSAGES = 20;
 const MAX_RECENT_MESSAGE_CHARS = 300;
 const MAX_TURN_MESSAGE_CHARS = 4000;

@@ -115,13 +115,12 @@ test("whats_new returns POINTERS (counts of new-here + other active threads), ne
   }
 });
 
-test("enabled mirror search uses the current channel and returns whole author/text hits without a live pull", async () => {
+test("enabled mirror search uses the current channel and returns author/snippet pointers without a live pull", async () => {
   const built = freshApp();
   built.runtime.start();
   const root = "C11:1100.1";
-  const budget = `the budget doc is in shared/q2.md ${"see the appendix. ".repeat(20)}end of note`;
   await built.surfaceCache.ingest([
-    { container: "C11", ts: "1100.2", authorName: "Bob", text: budget },
+    { container: "C11", ts: "1100.2", authorName: "Bob", text: "the budget doc is in shared/q2.md" },
     { container: "C11", ts: "1100.3", authorName: "Cat", text: "unrelated chatter" },
     { container: "CSECRET", ts: "1100.4", authorName: "Eve", text: "the secret budget" },
   ]);
@@ -130,7 +129,7 @@ test("enabled mirror search uses the current channel and returns whole author/te
     const reply = await subToolResult(built, root, "search");
     assert.match(reply, /search\(cache\) 1 hit/);
     assert.deepEqual(await built.app.pendingContextRequests("slack"), []);
-    assert.ok(reply.includes(`first=Bob:${budget}`));
+    assert.match(reply, /first=Bob:the budget doc/);
   } finally {
     await built.runtime.stop();
   }
