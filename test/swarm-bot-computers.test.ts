@@ -17,6 +17,7 @@ import { createDeployService } from "../src/deploy/deploy-service.ts";
 import type { Principal, TurnRequest } from "../src/types.ts";
 import type { ProcessSandbox } from "../src/sandbox/sandbox.ts";
 import { createPostgresProcessRegistry, type ProcessRegistry } from "../src/processes/process-registry.ts";
+import { createProcessReaper } from "../src/processes/process-reaper.ts";
 import { createMonitorStore, type MonitorStore } from "../src/monitors/monitor-store.ts";
 import { createMonitorPoller } from "../src/monitors/monitor-poller.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
@@ -391,15 +392,20 @@ test("a worker in a bot-started swarm keeps its swarm's board only while the bot
   assert.equal(await f.service.botMayUseComputer(board, workerTurn), false);
 });
 
-test("a worker turn queued in a bot-started swarm cannot use its own computer once a person sent work into the swarm", async () => {
+test("a worker turn queued in a bot-started swarm cannot use its own computer once a person sends work into the swarm as the turn opens it", async () => {
   const f = await botSwarm();
   const ran = recordRuns(f);
   const swarm = (await f.store.get(f.root.id))!;
   const worker = swarm.members.find((member) => member.id !== swarm.id)!;
   const queued = (await f.runs.list()).find((run) => run.sessionId === worker.threadRef && run.status === "pending")!;
-  const person = await f.rootTurn(alice.id, false);
-  await f.service.send(person.caller, { requestId: "person-send", audience: [worker.id], text: "alice's work" });
-  await person.done();
+  const provision = f.backend.provision;
+  f.backend.provision = async (...args) => {
+    f.backend.provision = provision;
+    const person = await f.rootTurn(alice.id, false);
+    await f.service.send(person.caller, { requestId: "person-send", audience: [worker.id], text: "alice's work" });
+    await person.done();
+    return provision(...args);
+  };
   const { execute } = await drive(f, queued, async (call) => ({
     execute: await call("execute", { command: "cat plan.md", purpose: "Reading the plan" }),
   }));
@@ -412,7 +418,6 @@ test("a bot's turn loses the swarm computer it already opened and is told to sto
   const computers = jobComputers(async () => {
     lookupFailures = 1;
     failed = [await personSend().then(() => "sent", errMessage), stopped.length];
-    await personSend();
   });
   const f = await botSwarm(computers.backend);
   const ran = recordRuns(f);
@@ -481,8 +486,14 @@ test("a bot's turn loses the swarm computer it already opened and is told to sto
   );
   assert.ok(String(observed.started).endsWith(refusedComputer), String(observed.started));
   assert.deepEqual(failed, ["process registry unavailable", 0]);
-  assert.deepEqual(observed.stops, ["abort", "abort"]);
+  assert.deepEqual(observed.stops, ["abort"]);
+  await createProcessReaper(processes, {
+    ...singleProcessDeps(),
+    intervalMs: 60_000,
+    afterSweep: service.stopLostJobs,
+  }).sweep();
   assert.deepEqual(stopped, [[swarm.board!.sandboxId, queued.id]]);
+  assert.equal((await processes.get(`c2-${f.root.id}`))?.status, "reaped");
   const launched = (await processes.listByScope(f.root.scopeId)).filter((job) => job.runId === queued.id);
   assert.deepEqual(
     launched.map((job) => job.status),

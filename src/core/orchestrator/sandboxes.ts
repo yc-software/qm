@@ -390,8 +390,9 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     });
   };
   const holdResource = async (handle: SandboxHandle): Promise<void> => {
-    if (handle.resourceId && deps.runs && input.runId)
-      await deps.sandboxResources?.hold(handle.resourceId, input.runId);
+    if (!handle.resourceId) return;
+    if (deps.runs && input.runId) await deps.sandboxResources?.hold(handle.resourceId, input.runId);
+    await assertDefaultUsable(handle.resourceId);
   };
   const finishProcess = (handle: SandboxHandle, processId: string): Promise<void> =>
     finishProcessCredentials(
