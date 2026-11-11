@@ -12,8 +12,7 @@ requests through the user's app connection via QM's /v1/composio/proxy. Pass
 Usage:
   gmail.py search 'newer_than:7d is:unread' [--limit 10]
   gmail.py read MESSAGE_ID [--full]
-  gmail.py thread THREAD_ID [--full]    # all messages oldest-first + lastFromMe;
-                                        # --full bodies omit quoted history
+  gmail.py thread THREAD_ID [--full]    # all messages oldest-first + lastFromMe
   gmail.py draft --to EMAIL --subject TEXT --body-file FILE
   gmail.py reply MESSAGE_ID --body-file FILE [--all]   # reply-draft anchored to the
                                                        # thread's latest sent message,
@@ -161,20 +160,12 @@ def walk_parts(payload: dict):
         yield from walk_parts(part)
 
 
-def unquoted(text: str) -> str:
-    lines = text.splitlines()
-    cut = next((i for i, ln in enumerate(lines) if ln.startswith(">")
-                or (ln.strip().startswith("On ") and ln.strip().endswith("wrote:"))), None)
-    return "\n".join(lines[:cut] if cut else lines).strip()
-
-
 def extract_body(payload: dict) -> str:
     for want in ("text/plain", "text/html"):
         texts = [p["body"]["data"] for p in walk_parts(payload)
                  if p.get("mimeType") == want and p.get("body", {}).get("data")]
         if texts:
-            body = "\n".join(b64url_decode(t) for t in texts)
-            return unquoted(body) if want == "text/plain" else body
+            return "\n".join(b64url_decode(t) for t in texts)
     return ""
 
 

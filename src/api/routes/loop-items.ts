@@ -1,4 +1,5 @@
 import { isValidCapabilityTimezone } from "../../auth/capability-token.ts";
+import { stripQuoted } from "../../connectors/gmail-api.ts";
 import { z } from "zod";
 import type { Cron } from "../../triggers/types.ts";
 import type { Loop, LoopItem, LoopSourcePayload } from "../../loops/types.ts";
@@ -506,7 +507,7 @@ export async function ensureSentChat(ctx: ApiCtx): Promise<void> {
   const payload = {
     title: text("subject", 300),
     from: text("from", 500),
-    snippet: text("text", 50000),
+    snippet: stripQuoted(text("text", 50000)),
     gmail: {
       threadId,
       accountType,

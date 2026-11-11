@@ -588,6 +588,8 @@ export async function gmailSent(ctx: ApiCtx): Promise<void> {
   }
 }
 
+const GMAIL_MESSAGE_LIMIT_AS_BASE64_JSON_BYTES = Math.ceil((35 * 1024 * 1024 * 4) / 3) + 1_000_000;
+
 async function gmailCompose(ctx: ApiCtx): Promise<void> {
   const b = isObj(ctx.body) ? ctx.body : {};
   if (typeof b.body !== "string")
@@ -598,7 +600,13 @@ async function gmailCompose(ctx: ApiCtx): Promise<void> {
 }
 
 export const connectorRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "POST", path: "/v1/connectors/gmail/compose", auth: "either", handle: gmailCompose },
+  {
+    method: "POST",
+    path: "/v1/connectors/gmail/compose",
+    auth: "either",
+    maxBodyBytes: GMAIL_MESSAGE_LIMIT_AS_BASE64_JSON_BYTES,
+    handle: gmailCompose,
+  },
   ...forInboxLoopsPeople([
     { method: "GET", path: "/v1/connectors/gmail/sent/:messageId", actor: "person", auth: "source", handle: gmailSent },
     { method: "GET", path: "/v1/connectors/gmail/sent", actor: "person", auth: "source", handle: gmailSent },

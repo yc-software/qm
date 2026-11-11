@@ -14,6 +14,7 @@ import {
   gmailHeader,
   gmailPartText,
   gmailThreadMessages,
+  stripQuoted,
 } from "../../connectors/gmail-api.ts";
 import { TransientTurnFailure } from "../../core/turn-error.ts";
 import { perTenant } from "../../tenants/cache.ts";
@@ -191,12 +192,6 @@ export function createSourceClients(deps: SourceClientDeps): SourceClients {
     },
   };
   return clients;
-}
-
-function stripQuoted(text: string): string {
-  const lines = text.split(/\r?\n/);
-  const cut = lines.findIndex((line) => /^On .+wrote:\s*$/.test(line.trim()) || line.startsWith(">"));
-  return (cut > 0 ? lines.slice(0, cut) : lines).join("\n").trim();
 }
 
 function countAttachments(part: Record<string, unknown>): number {

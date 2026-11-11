@@ -23,6 +23,8 @@ export function gmailApi(token: string, fetchImpl: typeof fetch = fetch) {
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       signal: AbortSignal.timeout(timeoutMs),
+    }).catch((cause: unknown) => {
+      throw new Error(`Gmail ${path.split("?")[0]} request failed`, { cause });
     });
     if (!response.ok)
       throw new GmailApiError(
@@ -31,7 +33,9 @@ export function gmailApi(token: string, fetchImpl: typeof fetch = fetch) {
         Number(response.headers.get("retry-after")),
         (await response.text().catch(() => "")).slice(0, 300),
       );
-    return (await response.json()) as T;
+    return (await response.json().catch((cause: unknown) => {
+      throw new Error(`Gmail ${path.split("?")[0]} returned unreadable JSON`, { cause });
+    })) as T;
   };
 }
 
@@ -60,4 +64,10 @@ export function gmailThreadMessages(thread: { messages?: unknown[] }): Record<st
   return (Array.isArray(thread.messages) ? thread.messages.filter(isObj) : [])
     .filter((m) => !(Array.isArray(m.labelIds) && m.labelIds.some((label) => HIDDEN_LABELS.has(label))))
     .sort((a, b) => Number(a.internalDate) - Number(b.internalDate));
+}
+
+export function stripQuoted(text: string): string {
+  const lines = text.split(/\r?\n/);
+  const cut = lines.findIndex((line) => /^On .+wrote:\s*$/.test(line.trim()) || line.startsWith(">"));
+  return (cut > 0 ? lines.slice(0, cut) : lines).join("\n").trim();
 }
