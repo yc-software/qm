@@ -345,9 +345,14 @@ export function applyThinkingBinding<T>(
 type PayloadStep = (payload: unknown) => unknown;
 
 function shortConversationCache(payload: unknown): unknown {
-  const last = (payload as { messages?: Array<{ content?: unknown }> } | undefined)?.messages?.at(-1)?.content;
-  for (const block of Array.isArray(last) ? (last as Array<{ cache_control?: object }>) : [])
-    if (block?.cache_control) block.cache_control = { type: "ephemeral" };
+  const messages = (payload as { messages?: Array<{ role?: string; content?: unknown }> } | undefined)?.messages;
+  const breakpoint = (Array.isArray(messages) ? messages : [])
+    .filter((message) => message?.role !== "system" && message?.role !== "developer")
+    .flatMap((message) =>
+      Array.isArray(message.content) ? (message.content as Array<{ cache_control?: object }>) : [],
+    )
+    .findLast((block) => block?.cache_control);
+  if (breakpoint) breakpoint.cache_control = { type: "ephemeral" };
   return payload;
 }
 
