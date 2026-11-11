@@ -1,7 +1,8 @@
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { transformSync } from "esbuild";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAgentTools } from "../src/agent/agent-tools.ts";
@@ -198,6 +199,58 @@ test("a file too long for one result is read in pieces without leaving the tool"
   assert.ok(first.length <= 1200, "the piece fits the inline result budget");
   const rest = await chat.call({ action: "read", path: "long.txt", from: shown + 1, to: shown + 2 });
   assert.equal(rest, `[long.txt lines ${shown + 1}-${shown + 2} of 400]\nline ${shown + 1}\nline ${shown + 2}`);
+});
+
+test("find shows exact text around each match in a built one-line stylesheet, enough to edit it in place", async () => {
+  const h = harness();
+  const css = transformSync(readFileSync("plugins/web-ui/src/shell.css", "utf8"), { loader: "css", minify: true }).code;
+  const path = "public/assets/main-D4tq75Xf.css";
+  assert.ok(css.indexOf("\n") > 100_000, "the stylesheet's first line is over 100 KB");
+  await h.publish("notes", { "index.html": INDEX, [path]: css });
+  const chat = h.chat("notes");
+
+  assert.match(await chat.call({ action: "read", path }), /more than one result can show; find returns/);
+  const found = await chat.call({ action: "find", path, text: ".dark{", around: 2000 });
+  const [title, file, heading, excerpt] = found.split("\n");
+  assert.deepEqual([title, file, heading], [`[".dark{" in ${path}: 1 found]`, `[${path}]`, "[match 1 from line 1]"]);
+  assert.equal(excerpt!.length, 2000 + ".dark{".length + 2000);
+  assert.ok(css.includes(excerpt!) && excerpt!.includes(".dark{--"), "the excerpt is exact saved text");
+
+  const variable = /\.dark\{(--[^;]+;)/.exec(excerpt!)![1]!;
+  const recolored = `${variable.split(":")[0]}: orange;`;
+  const edited = await chat.call({
+    action: "edit",
+    files: [{ path, edits: [{ oldText: `.dark{${variable}`, newText: `.dark{${recolored}` }] }],
+  });
+  assert.match(edited, /^Saved public\/assets\/main-D4tq75Xf\.css\./);
+  assert.deepEqual(h.writes[0]!.files, { [path]: css.replace(`.dark{${variable}`, `.dark{${recolored}`) });
+
+  const all = await chat.call({ action: "find", path, text: "@media", around: 200 });
+  const paged = /^\["@media" in .+: 62 found; too many to show at once, find on with from (\d+)\]/.exec(all)!;
+  assert.ok(paged && all.length <= 4096 * 4, all.slice(0, 200));
+  const rest = await chat.call({ action: "find", path, text: "@media", around: 200, from: Number(paged[1]) });
+  assert.ok(rest.split("\n")[2]!.startsWith(`[match ${paged[1]} from line 1]`));
+
+  const excerpts = async (around: number) => {
+    const out = (await chat.call({ action: "find", text: "--cta", around })).split("\n");
+    assert.match(out[0]!, /^\["--cta" in the app's files: \d+ found/, "every file is searched");
+    assert.deepEqual(out.slice(1, 3), [`[${path}]`, "[match 1 from line 1]"]);
+    assert.deepEqual([out[4], out[6]], ["[match 2 from line 1]", "[match 3 from line 1]"]);
+    return [out[3]!, out[5]!, out[7]!];
+  };
+  const second = await chat.call({ action: "find", text: "--cta", around: 0, from: 2, to: 2 });
+  assert.equal(second.split("\n").slice(1).join("\n"), `[${path}]\n[match 2 from line 1]\n--cta`);
+  const spaced = await excerpts(20);
+  assert.ok(css.includes(spaced.join("")), "an excerpt starts where the one before it ended");
+  const inside = await excerpts(40);
+  assert.ok(
+    inside.every((e) => e.startsWith("--cta") || e === inside[0]) && css.includes(inside[1]!),
+    "a match already shown still starts its own excerpt",
+  );
+  assert.equal(
+    await chat.call({ action: "find", path, text: "no-such-rule", around: 10 }),
+    `["no-such-rule" in ${path}: 0 found]`,
+  );
 });
 
 test("a replacement that does not match exactly once saves nothing, even beside one that does", async () => {

@@ -377,16 +377,19 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     id: string,
     saved: Pick<DeploymentSource, "commit" | "tree">,
     paths: string[] = [],
-  ): Promise<DeploymentSource> => ({
-    commit: saved.commit,
-    tree: saved.tree.map(({ path, sha, size }) => ({ path, sha, size })),
-    files: (
-      await deps.deployStore.filesIn(
-        id,
-        saved.tree.filter((f) => paths.includes(f.path)),
-      )
-    ).map((f) => ({ path: f.path, data: bytes(f.data) })),
-  });
+  ): Promise<DeploymentSource> => {
+    const wanted = new Set(paths);
+    return {
+      commit: saved.commit,
+      tree: saved.tree.map(({ path, sha, size }) => ({ path, sha, size })),
+      files: (
+        await deps.deployStore.filesIn(
+          id,
+          saved.tree.filter((f) => wanted.has(f.path)),
+        )
+      ).map((f) => ({ path: f.path, data: bytes(f.data) })),
+    };
+  };
 
   const liveEndpoint = async (d: Deployment): Promise<DeployEndpoint | null> => {
     if (!deps.provider.resolveEndpoint || d.endpoint == null) return d.endpoint;

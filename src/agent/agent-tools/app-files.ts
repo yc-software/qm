@@ -4,19 +4,20 @@ import { normalizeRelPath } from "../../deploy/deploy-fs.ts";
 import type { SourceSaved } from "../../deploy/deploy-service.ts";
 import { inlineChars, inlineTokensOf } from "../../sessions/tool-output.ts";
 import type { AppFiles } from "../../tools/app-files.ts";
-import { tryDecodeUtf8 } from "../../util/text.ts";
+import { decodeSourceText, headSlice, tailSlice } from "../../util/text.ts";
 import { errMessage } from "../../util/errors.ts";
 import { text, type ToolKit } from "./kit.ts";
 import { previousPublishFailure } from "./workspace.ts";
+import { worthReading } from "../../core/orchestrator/app-source.ts";
 
 const RANGE_NOTE_CHARS = 200;
 const NO_DIRECTORY = "/app-source";
 const REPLACEMENTS = createEditTool(NO_DIRECTORY).parameters.properties.edits;
 
 function textOf(file: { path: string; data: Uint8Array }): string {
-  const decoded = tryDecodeUtf8(file.data);
+  const decoded = decodeSourceText(file.data);
   if (decoded === null)
-    throw new Error(`${file.path} is not UTF-8 text (${file.data.byteLength} bytes), so it cannot be read or edited`);
+    throw new Error(`${file.path} is not text (${file.data.byteLength} bytes), so it cannot be read or edited`);
   return decoded;
 }
 
@@ -32,8 +33,22 @@ function describeSaved(r: SourceSaved): string {
   return `Saved ${paths.join(", ")}. ${shown}${previousPublishFailure(r.liveEdit)}`;
 }
 
+async function searchedTexts(files: AppFiles, wanted: string | undefined) {
+  const path = wanted === undefined ? undefined : normalizeRelPath(wanted);
+  const reader = (await files.sourceReader()) ?? files;
+  const { tree } = await reader.source();
+  const paths = tree.map((f) => f.path).filter((p) => (path ? p === path : worthReading(p)));
+  if (path && !paths.length) throw new Error(`no such file: ${path}; list shows the app's files`);
+  const { files: saved } = await reader.source(paths);
+  return saved.flatMap((file) => {
+    const content = path ? textOf(file) : decodeSourceText(file.data);
+    return content === null ? [] : [{ path: file.path, content }];
+  });
+}
+
 export function appFileTools(kit: ToolKit) {
   const { ref, recordCall, recordResult } = kit;
+  const resultBudget = async () => inlineChars(await inlineTokensOf(ref.current?.toolOutput)) - RANGE_NOTE_CHARS;
 
   async function run(
     callId: string,
@@ -103,11 +118,11 @@ export function appFileTools(kit: ToolKit) {
         const lines = textOf(file).split("\n");
         const first = Math.min(params.from ?? 1, lines.length);
         const wanted = lines.slice(first - 1, Math.max(params.to ?? lines.length, first));
-        const budget = inlineChars(await inlineTokensOf(ref.current?.toolOutput)) - RANGE_NOTE_CHARS;
+        const budget = await resultBudget();
         const cut = truncateHead(wanted.join("\n"), { maxBytes: budget, maxLines: wanted.length });
         if (cut.firstLineExceedsLimit)
           throw new Error(
-            `line ${first} of ${path} is ${formatSize(Buffer.byteLength(wanted[0]!))}, more than one result can show, and app_files cannot show part of a line; work on this file from the shell through the app's git remote`,
+            `line ${first} of ${path} is ${formatSize(Buffer.byteLength(wanted[0]!))}, more than one result can show; find returns the exact text around what you are looking for in it`,
           );
         const shown = cut.truncated ? cut.outputLines : wanted.length;
         const last = first + shown - 1;
@@ -117,6 +132,66 @@ export function appFileTools(kit: ToolKit) {
           body: { bytes: file.data.byteLength, ...(range ? { lines: [first, last, lines.length] } : {}) },
           result: `${range}${cut.content}`,
         };
+      }),
+  });
+
+  const find = defineTool({
+    name: "find",
+    label: "find",
+    description:
+      "Find exact text in the app's source files, however long their lines, and return each place it occurs with the exact text around it, to quote in an edit.",
+    parameters: Type.Object({
+      path: Type.Optional(Type.String({ description: "File to search; leave it out to search every file." })),
+      text: Type.String({ minLength: 1, description: "Text to look for, matched literally and case-sensitively." }),
+      from: Type.Optional(Type.Integer({ minimum: 1, description: "First match to show, counting from 1." })),
+      to: Type.Optional(Type.Integer({ minimum: 1, description: "Last match to show." })),
+      around: Type.Integer({
+        minimum: 0,
+        description: "How many characters of the file to show before and after each match.",
+      }),
+    }),
+    execute: (callId, params) =>
+      run(callId, { action: "find", path: params.path }, async (files) => {
+        const searched = await searchedTexts(files, params.path);
+        const sought = params.text;
+        const from = params.from ?? 1;
+        const budget = (await resultBudget()) - JSON.stringify(sought).length - (params.path ?? "").length;
+        const excerpts: string[] = [];
+        let used = 0;
+        let found = 0;
+        let next: number | undefined;
+        let previous: { path: string; end: number } | undefined;
+        for (const { path, content } of searched) {
+          let line = 1;
+          let counted = 0;
+          for (let at = content.indexOf(sought); at >= 0; at = content.indexOf(sought, at + sought.length)) {
+            found += 1;
+            if (found < from || found > (params.to ?? found) || next !== undefined) continue;
+            line += content.slice(counted, at).split("\n").length - 1;
+            counted = at;
+            const sameFile = previous?.path === path;
+            const start = Math.max(
+              at - tailSlice(content.slice(0, at), params.around).length,
+              sameFile ? Math.min(previous!.end, at) : 0,
+            );
+            const end = at + sought.length + headSlice(content.slice(at + sought.length), params.around).length;
+            const excerpt = `${sameFile ? "" : `[${path}]\n`}[match ${found} from line ${line}]\n${content.slice(start, end)}`;
+            if (used + excerpt.length + 1 > budget) {
+              if (!excerpts.length)
+                throw new Error(
+                  `the text around match ${found} in ${path} is more than one result can show; ask for fewer characters around it`,
+                );
+              next = found;
+              continue;
+            }
+            used += excerpt.length + 1;
+            excerpts.push(excerpt);
+            previous = { path, end };
+          }
+        }
+        const more = next ? `; too many to show at once, find on with from ${next}` : "";
+        const title = `[${JSON.stringify(sought)} in ${params.path ?? "the app's files"}: ${found} found${more}]`;
+        return { body: { matches: found }, result: [title, ...excerpts].join("\n") };
       }),
   });
 
@@ -186,5 +261,5 @@ export function appFileTools(kit: ToolKit) {
       }),
   });
 
-  return { list, read, edit, write, delete: remove };
+  return { list, read, find, edit, write, delete: remove };
 }
