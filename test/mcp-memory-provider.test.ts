@@ -10,7 +10,7 @@ import type { MemoryProviderOutcome } from "../src/memory/memory-service.ts";
 import { sleep } from "../src/util/async.ts";
 import { recallText } from "./support/recall-text.ts";
 import { structuredRecall } from "./support/structured-recall.ts";
-import { routedTo } from "./support/mcp-test-server.ts";
+import { routedTo, startMcpTestServer } from "./support/mcp-test-server.ts";
 
 function client(calls: Array<{ tool: string; args: Record<string, unknown> }>, text = "result"): McpClient {
   return {
@@ -162,7 +162,7 @@ test("MCP recall alternates gbrain's own recent facts with its query matches, so
   );
 });
 
-test("a brain forget reports each ref done, unknown or failed, and a retry reuses its receipt", async () => {
+test("a brain forget reports each ref done, unknown or failed, and a retry reuses its receipt", async (t) => {
   const sent: Array<Record<string, unknown>> = [];
   const states: Record<number, string> = { 1: "committed", 2: "committed", 3: "queued", 4: "conflict" };
   const brain: McpClient = {
@@ -188,9 +188,11 @@ test("a brain forget reports each ref done, unknown or failed, and a retry reuse
   const gone = `http://127.0.0.1:${(closed.address() as AddressInfo).port}`;
   closed.close();
   const down = createMcpClient({ url: `${gone}/mcp`, auth: { mode: "none" }, fetch: routedTo(gone) });
+  const gateway = await startMcpTestServer(t, { status: 502 });
+  const proxied = createMcpClient({ url: gateway.url, auth: { mode: "none" }, fetch: routedTo(gateway.url) });
   const memory = createRoutedMemoryService({
-    providers: { acme: forgetting(brain), down: forgetting(down) },
-    routes: ["acme", "down"].map((provider) => ({ provider, scopes: ["personal" as const], manage: false })),
+    providers: { acme: forgetting(brain), down: forgetting(down), proxied: forgetting(proxied) },
+    routes: ["acme", "down", "proxied"].map((provider) => ({ provider, scopes: ["personal" as const], manage: false })),
   });
   const forget = async (ids: string[]) =>
     (
@@ -217,6 +219,7 @@ test("a brain forget reports each ref done, unknown or failed, and a retry reuse
   assert.equal(sent.at(-1)?.request_id, sent[1]?.request_id);
   assert.notEqual(sent[0]?.request_id, sent[1]?.request_id);
   assert.deepEqual(await forget(["down:1"]), ["down:1 failed unreachable"]);
+  assert.deepEqual(await forget(["proxied:1"]), ["proxied:1 failed http_502"]);
 });
 
 test("a structured fact's line breaks become spaces in its text, date and kind, and a blank fact is skipped", async () => {

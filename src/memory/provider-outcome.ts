@@ -69,24 +69,10 @@ export function failedOutcome(error: unknown): Pick<MemoryProviderOutcome, "outc
   return { outcome: denied ? "denied" : "failed", ...(code ? { code } : {}) };
 }
 
-const UNREACHABLE_CODES: ReadonlySet<unknown> = new Set([
-  "ECONNREFUSED",
-  "ENOTFOUND",
-  "EAI_AGAIN",
-  "EHOSTUNREACH",
-  "ENETUNREACH",
-]);
-
-function unreachable(error: unknown): boolean {
-  for (let cause = error; cause instanceof Error; cause = cause.cause)
-    if (UNREACHABLE_CODES.has((cause as { code?: unknown }).code)) return true;
-  return false;
-}
-
 export function forgetFailure(error: unknown): Pick<MemoryProviderOutcome, "outcome" | "code"> {
-  if (unreachable(error)) return { outcome: "failed", code: "unreachable" };
   const failed = failedOutcome(error);
   if (failed.outcome === "denied" || (error instanceof McpCallError && error.code !== undefined)) return failed;
+  if (error instanceof McpCallError && error.unsent) return { outcome: "failed", code: failed.code ?? "unreachable" };
   const code = error instanceof MemoryWriteUnconfirmed ? error.code : failed.code;
   return { outcome: "unknown", ...(code ? { code } : {}) };
 }

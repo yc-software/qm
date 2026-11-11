@@ -23,10 +23,12 @@ const OAUTH_DENIALS: ReadonlySet<string> = new Set([
 export class McpCallError extends Error {
   readonly status: number | undefined;
   readonly code: string | undefined;
-  constructor(message: string, detail: { status?: number; code?: string; cause?: unknown }) {
+  readonly unsent: boolean;
+  constructor(message: string, detail: { status?: number; code?: string; unsent?: boolean; cause?: unknown }) {
     super(message, { cause: detail.cause });
     this.status = detail.status;
     this.code = detail.code;
+    this.unsent = detail.unsent ?? false;
   }
 }
 
@@ -158,14 +160,17 @@ export function createMcpClient(opts: {
       },
     });
     const client = new Client({ name: "qm", version: "1.0.0" });
+    let opened = false;
     try {
       await client.connect(transport, { signal: stop });
+      opened = true;
       return await work(client, stop);
     } catch (e) {
       const status = httpStatus(e);
       throw new McpCallError(`mcp ${op} failed${status ? ` (HTTP ${status})` : ""}`, {
         ...(status ? { status } : {}),
         ...(e instanceof OAuthError ? { code: e.errorCode } : {}),
+        ...(opened ? {} : { unsent: true }),
         cause: e,
       });
     } finally {
