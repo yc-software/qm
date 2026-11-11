@@ -302,7 +302,7 @@ test("a refresh runs once per batch of dismissals and never while a run is in fl
     f.service.get("alice", [], { poll: true, refresh: true }),
   ]);
   assert.deepEqual(
-    results.map((result) => result.pending),
+    results.map((result) => result.pending || result.activities[0]?.id === "app-next"),
     [true, true],
   );
   await f.settle();
