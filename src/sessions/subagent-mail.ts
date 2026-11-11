@@ -91,6 +91,7 @@ type ParentMailDeps = Pick<SubagentMailDeps, "mailbox" | "runs" | "maxAttempts" 
 interface ParentSource {
   actor: Principal;
   botActor?: boolean;
+  unprompted?: boolean;
   conversation: Pick<OrchestratorInput["conversation"], "audience">;
   runId?: string;
   delegatingRunId?: string;
@@ -191,6 +192,7 @@ async function parentTurn(
             : {}),
         },
         botActor: source.botActor,
+        unprompted: source.unprompted || currentContext!.unprompted,
       };
   const { openFingerprint: _openFingerprint, ...request }: OrchestratorInput & Pick<SpawnMeta, "openFingerprint"> = {
     ...meta,
@@ -288,6 +290,7 @@ async function mailParent(
     senderId: child.id,
     actor: turn.prepared.actor,
     ...(turn.prepared.botActor ? { botActor: true } : {}),
+    ...(turn.prepared.unprompted ? { unprompted: true } : {}),
     audience: turn.prepared.conversation.audience,
     createdAt: Date.now(),
   });
@@ -382,6 +385,7 @@ async function wakeParentForMail(
             const source = {
               actor: message.actor,
               ...(message.botActor ? { botActor: true } : {}),
+              ...(message.unprompted ? { unprompted: true } : {}),
               conversation: { audience: message.audience },
               ...(message.delegatingRunId ? { delegatingRunId: message.delegatingRunId } : {}),
               ...(peer ? { peerDepth: message.peerDepth ?? 1 } : {}),

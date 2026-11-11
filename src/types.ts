@@ -130,6 +130,7 @@ export interface SpawnMeta {
   readOnly?: boolean;
   memoryNotebookOnly?: boolean;
   botActor?: boolean;
+  unprompted?: boolean;
   model?: string;
   thinkingLevel?: string;
   fastMode?: boolean;
@@ -409,6 +410,7 @@ export interface TurnRequest {
   infrequentCron?: boolean;
   personaId?: string;
   botActor?: boolean;
+  unprompted?: boolean;
   conversationHeader?: string;
   priorTurns?: ConversationTurn[];
   overheard?: OverheardMessage[];

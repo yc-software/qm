@@ -8,7 +8,9 @@ import {
   SANDBOX_CAPABILITY_TTL_MS,
   SANDBOX_MODEL_AUD,
   mintCapabilityToken,
+  proactiveScopeWork,
   type CapabilityClaims,
+  type ScopeWorkClaims,
 } from "../../auth/capability-token.ts";
 import type { MemoryPolicy } from "../../memory/policy.ts";
 import type { resolveTurnContext } from "../../resolution/turn-context.ts";
@@ -81,11 +83,21 @@ export async function mintTurnCapabilities(turn: CapabilityTurn) {
     ...(input.botActor ? { botActor: true } : {}),
     ...(actAsActor ? { actAsActor: true } : {}),
   };
+  const markers: ScopeWorkClaims = {
+    scopeId,
+    ...(liveTurn ? { liveActor: true } : {}),
+    ...(turn.automatedTurn ? { triggered: true } : {}),
+    origin: turn.origin,
+  };
+  const scopeWork: ScopeWorkClaims = {
+    ...markers,
+    ...(input.unprompted || proactiveScopeWork({ actorId: actor.id, ...markers }) ? { unprompted: true } : {}),
+  };
   const tenant = ambientTenant();
   const { actorIsOrgAdmin, orgMemoryWritable, controlClaims } = await mintControlPlaneTokens(
     tenant,
     turn,
-    scopeAttestation,
+    { ...scopeAttestation, ...scopeWork },
     sandboxTokenExpiry,
   );
   const securityPolicy = resolution.securityPolicy;
@@ -108,6 +120,7 @@ export async function mintTurnCapabilities(turn: CapabilityTurn) {
     orgMemoryWritable,
     tenant,
     controlClaims,
+    scopeWork,
     sandboxTokenExpiry,
     scopeAttestation,
     egressTokenForPolicy,
@@ -188,10 +201,8 @@ async function mintControlPlaneTokens(
         : {}),
       ...(memoryClaim ? { memory: memoryClaim } : {}),
       ...(liveAuthorTurn ? { liveAuthor: true } : {}),
-      ...(automatedTurn ? { triggered: true } : {}),
       ...(input.runId ? { runId: input.runId } : {}),
       sessionId: session.id,
-      origin,
       runAttempt: input.attempt,
       runLeaseToken: input.runLeaseToken,
       threadRef: conversation.threadRef,

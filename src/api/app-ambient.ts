@@ -336,6 +336,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
           surface: batch.surface,
           ...(surfaceOrigin ? { surfaceOrigin } : {}),
           actor: { externalId: conversationActor(batch) },
+          unprompted: true,
           ...(batch.messages.some((m) => m.bot) ? { botActor: true } : {}),
           conversation,
           deliveryTarget: batch.container,

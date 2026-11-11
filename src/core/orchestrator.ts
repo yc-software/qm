@@ -1147,6 +1147,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         actorIsOrgAdmin,
         orgMemoryWritable,
         controlClaims,
+        scopeWork,
         sandboxTokenExpiry,
         scopeAttestation,
         egressTokenForPolicy,
@@ -1603,7 +1604,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           scopeId: scopeId as ScopeId,
           orgScopeId: resolution.orgScopeId,
           liveTurn: liveTurn && !automatedTurn,
-          request: { ...input, readOnly: strictReadOnly, memoryNotebookOnly: notebookOnly, cancel: turnAbort.signal },
+          request: {
+            ...input,
+            ...(scopeWork.unprompted ? { unprompted: true } : {}),
+            readOnly: strictReadOnly,
+            memoryNotebookOnly: notebookOnly,
+            cancel: turnAbort.signal,
+          },
           switchedRuntime: () => switchedRuntime,
         });
         const liveNote = async () =>
@@ -1669,12 +1676,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           },
           config: deps.config,
           ...(controlClaims ? { controlClaims } : {}),
-          turnAuthority: {
-            scopeId,
-            ...(automatedTurn ? { triggered: true } : {}),
-            ...(scopeAttestation.liveActor ? { liveActor: true } : {}),
-            origin,
-          },
+          scopeWork,
           ...(deps.control && controlClaims ? { control: deps.control } : {}),
           ...(deps.apiBaseUrl && connectorEnv.AGENT_API_TOKEN
             ? {

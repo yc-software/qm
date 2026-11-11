@@ -10,6 +10,7 @@ export interface SessionMessage {
   senderId: string;
   actor: OrchestratorInput["actor"];
   botActor?: boolean;
+  unprompted?: boolean;
   text: string;
   sourceEntrySeq?: number;
   audience: OrchestratorInput["conversation"]["audience"];

@@ -330,6 +330,7 @@ export function createTurnMethods(
           ? { personaId: req.personaId }
           : {}),
         ...(req.botActor ? { botActor: true } : {}),
+        ...(req.unprompted ? { unprompted: true } : {}),
         ...(req.surfaceTools ? { surfaceTools: true } : {}),
         ...(req.clientTools?.length ? { clientTools: req.clientTools } : {}),
         desktopClientId: desktopClientForTurn({ ...req, origin }),

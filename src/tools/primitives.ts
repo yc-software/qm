@@ -537,7 +537,7 @@ export interface ToolContextDeps {
   monitorBroker?: MonitorBroker;
   control?: ControlService;
   controlClaims?: CapabilityClaims;
-  turnAuthority?: ScopeWorkClaims;
+  scopeWork?: ScopeWorkClaims;
   webhookPublicUrl?: string;
   surface?: SurfaceToolDeps;
   attach?: AttachFiles;
@@ -557,7 +557,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
   const inWorkdir = (handle: SandboxHandle, command: string): string =>
     deps.workdir ? `cd ${shq(posixJoin(handle.rootDir, deps.workdir))} || exit 1\n${command}` : command;
   const { writableScopeId } = deps;
-  const managing = { botActor: deps.botActor, ...scopeWorkClaims(deps.turnAuthority ?? deps.controlClaims) };
+  const managing = { botActor: deps.botActor, ...scopeWorkClaims(deps.scopeWork) };
   const memory =
     deps.context?.memory ??
     (deps.memory

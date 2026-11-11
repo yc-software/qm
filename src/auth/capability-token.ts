@@ -41,7 +41,9 @@ interface BlobGrant {
   id?: string;
 }
 
-export type ScopeWorkClaims = Partial<Pick<CapabilityClaims, "scopeId" | "triggered" | "liveActor" | "origin">>;
+export type ScopeWorkClaims = Partial<
+  Pick<CapabilityClaims, "scopeId" | "triggered" | "liveActor" | "origin" | "unprompted">
+>;
 
 export type ManagingCaller = Pick<CapabilityClaims, "actorId" | "botActor"> & ScopeWorkClaims;
 
@@ -49,9 +51,8 @@ export function proactiveScopeWork(c: ManagingCaller): boolean {
   return (
     c.scopeId !== undefined &&
     actsAsScope(c.actorId, c.scopeId) &&
-    c.triggered === true &&
     c.liveActor !== true &&
-    c.origin === "conversation"
+    (c.unprompted === true || (c.triggered === true && c.origin === "conversation"))
   );
 }
 
@@ -62,6 +63,7 @@ export function scopeWorkClaims(c: ScopeWorkClaims | undefined): ScopeWorkClaims
     ...(c.triggered !== undefined ? { triggered: c.triggered } : {}),
     ...(c.liveActor !== undefined ? { liveActor: c.liveActor } : {}),
     ...(c.origin !== undefined ? { origin: c.origin } : {}),
+    ...(c.unprompted ? { unprompted: true } : {}),
   };
 }
 
@@ -113,6 +115,7 @@ export interface CapabilityClaims {
   runLeaseToken?: string;
   deployment?: string;
   botActor?: boolean;
+  unprompted?: boolean;
   liveAuthor?: boolean;
   actAsActor?: boolean;
   triggered?: boolean;
@@ -198,6 +201,7 @@ export async function verifyCapabilityToken(
   if (claims.memory !== undefined && !Array.isArray(claims.memory?.read)) return null;
   if (claims.liveActor !== undefined && typeof claims.liveActor !== "boolean") return null;
   if (claims.botActor !== undefined && typeof claims.botActor !== "boolean") return null;
+  if (claims.unprompted !== undefined && typeof claims.unprompted !== "boolean") return null;
   if (claims.liveAuthor !== undefined && typeof claims.liveAuthor !== "boolean") return null;
   if (claims.actAsActor !== undefined && typeof claims.actAsActor !== "boolean") return null;
   if (claims.blob !== undefined && claims.blob?.dir !== "read" && claims.blob?.dir !== "write") return null;

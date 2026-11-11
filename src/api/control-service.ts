@@ -782,6 +782,8 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     },
 
     async writeSoul(content, capability, expectedVersion) {
+      if (proactiveScopeWork(capability))
+        return { ok: false, code: "soul_update_denied", message: unpromptedRefusal("standing instructions") };
       try {
         const version = await app.updateSoul(capability.scopeId, content, capability.actorId, {
           allowSharedScope: capability.botActor !== true,

@@ -146,6 +146,9 @@ export function ownsSessionContext(
 export const isSidebarSession = (session: Session): boolean =>
   !session.parentSessionId && !isSubagentThreadRef(session.threadRef) && !session.threadRef.startsWith("swarm:");
 
+export const UNPROMPTED_REACH_REFUSAL =
+  "unprompted work can reach only the sessions it started; ask in the conversation so a person does it";
+
 export function storedContext(session: Session): SpawnMeta | undefined {
   return (
     session.spawnMeta && {
@@ -176,6 +179,7 @@ export function sessionContextOf(input: OrchestratorInput): SpawnMeta {
     ...(input.readOnly ? { readOnly: true } : {}),
     ...(input.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
     ...(input.botActor ? { botActor: true } : {}),
+    ...(input.unprompted ? { unprompted: true } : {}),
     ...(input.model ? { model: input.model } : {}),
     ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
     ...(input.fastMode !== undefined ? { fastMode: input.fastMode } : {}),
@@ -295,6 +299,7 @@ export interface SessionSyscallBinding {
     | "readOnly"
     | "memoryNotebookOnly"
     | "botActor"
+    | "unprompted"
     | "scopeVersion"
     | "sessionParticipantIds"
     | "surfaceOrigin"
@@ -438,6 +443,7 @@ function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayT
     ...(meta.readOnly ? { readOnly: true } : {}),
     ...(meta.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
     ...(meta.botActor ? { botActor: true } : {}),
+    ...(meta.unprompted ? { unprompted: true } : {}),
     ...(meta.model ? { model: meta.model } : {}),
     ...(meta.thinkingLevel ? { thinkingLevel: meta.thinkingLevel } : {}),
     ...(meta.fastMode !== undefined ? { fastMode: meta.fastMode } : {}),
@@ -917,6 +923,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 };
               if (!(await deps.sessions.getForParticipant(target.id, binding.request.actor.id)))
                 return { ok: false, message: "you are not a participant in that session." };
+              if (binding.request.unprompted && !target.spawnMeta?.unprompted)
+                return { ok: false, message: UNPROMPTED_REACH_REFUSAL };
               if (target.spawnMeta?.retired && target.parentSessionId === binding.session.id)
                 return {
                   ok: false,
@@ -949,6 +957,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   readOnly: privateMessage || caller.readOnly || meta.readOnly || target.spawnMeta?.readOnly,
                   memoryNotebookOnly: caller.memoryNotebookOnly || meta.memoryNotebookOnly,
                   botActor: caller.botActor,
+                  unprompted: caller.unprompted || meta.unprompted,
                 },
                 "",
                 "",
@@ -1007,6 +1016,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   senderId: binding.session.id,
                   actor: caller.actor,
                   ...(caller.botActor ? { botActor: true } : {}),
+                  ...(caller.unprompted ? { unprompted: true } : {}),
                   audience: caller.conversation.audience,
                   createdAt: Date.now(),
                 });

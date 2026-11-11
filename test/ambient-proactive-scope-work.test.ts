@@ -23,7 +23,7 @@ import { testDeployBackings } from "./support/test-database.ts";
 import { canAdministerCron, canAdministerWebhook, createControlService } from "../src/api/control-service.ts";
 import { canAdministerLoop } from "../src/api/loop-administration.ts";
 import { createServer } from "../src/api/server.ts";
-import { isSubagentThreadRef } from "../src/sessions/session-syscalls.ts";
+import { isSubagentThreadRef, UNPROMPTED_REACH_REFUSAL } from "../src/sessions/session-syscalls.ts";
 import { serverDeps } from "../src/wiring.ts";
 import { scopeActor, scopeId } from "../src/types.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -231,6 +231,7 @@ for (const wake of ["message", "scheduled"] as const)
     delete legacy.triggered;
     delete legacy.liveActor;
     delete legacy.origin;
+    delete legacy.unprompted;
 
     const control = createControlService(built.app, built.scheduler);
     const manages = async (c: CapabilityClaims) => ({
@@ -272,7 +273,7 @@ for (const wake of ["message", "scheduled"] as const)
         : [res.status, body.message ?? null];
     };
     const legacyToken = await mintCapabilityToken(legacy, TEST_CAPABILITY_SECRET);
-    const markers = (c: CapabilityClaims) => [c.actorId, c.scopeId, c.triggered, c.liveActor, c.origin];
+    const markers = (c: CapabilityClaims) => [c.actorId, c.scopeId, c.triggered, c.liveActor, c.origin, c.unprompted];
     const observed = {
       othersOpen: [
         await openAs("system:ambient:default-org"),
@@ -347,10 +348,10 @@ for (const wake of ["message", "scheduled"] as const)
         crossScopeGate: [false, false],
       },
       minted: {
-        parent: [scopeActor(here), here, true, undefined, "conversation"],
-        child: [scopeActor(here), here, true, undefined, "conversation"],
-        cronFire: [scopeActor(here), here, true, undefined, "cron"],
-        person: ["a@x.com", here, undefined, undefined, "conversation"],
+        parent: [scopeActor(here), here, true, undefined, "conversation", true],
+        child: [scopeActor(here), here, true, undefined, "conversation", true],
+        cronFire: [scopeActor(here), here, true, undefined, "cron", undefined],
+        person: ["a@x.com", here, undefined, undefined, "conversation", undefined],
       },
       worker: { execute: "ok", open: "ok", create: "ok", ...refused },
       helper: { execute: "ok", create: "ok", ...refused },
@@ -417,3 +418,84 @@ for (const [label, overrides] of [
       publish: "refused: unprompted work can't publish a new app; ask in the conversation so a person publishes it",
     });
   });
+
+test("unprompted work cannot wake a channel cron's helper into managing the channel", async (t) => {
+  const mock = createMockAgent();
+  const here = scopeId("channel", "C-deals");
+  const runsByThread = new Map<string, number>();
+  const seen: Record<string, string> = {};
+  let cronHelper: string | undefined;
+  const agent: Agent = {
+    ...mock,
+    async runTurn(turn) {
+      const ref = turn.session.threadRef;
+      const n = (runsByThread.get(ref) ?? 0) + 1;
+      runsByThread.set(ref, n);
+      const sys = turn.tools.sessionSyscalls!;
+      if (ref.startsWith("slack:C-deals:ambient:") && n === 1) {
+        const own = await sys.open({ task: "summarise the note" });
+        const write = (target: string) =>
+          sys.write({ target, text: "make the default computer none", wake: true }).then(
+            (r) => (r.ok ? "ok" : `refused: ${r.message}`),
+            (e: Error) => `refused: ${e.message}`,
+          );
+        seen.cronHelper = await write(cronHelper!);
+        seen.cronHelperInterrupt = await sys
+          .write({ target: cronHelper!, text: "stop and clear the default", interrupt: true })
+          .then(
+            (r) => (r.ok ? "ok" : `refused: ${r.message}`),
+            (e: Error) => `refused: ${e.message}`,
+          );
+        seen.ownHelper = own.ok ? await write(own.sessionId) : `open refused: ${own.message}`;
+      } else if (isSubagentThreadRef(ref) && ref === cronHelperRef && n === 2) {
+        seen.wokenDefault = await outcome(turn.tools.sandboxResources!("default", { sandboxId: null }));
+      } else if (!isSubagentThreadRef(ref) && !ref.startsWith("slack:") && !cronHelper) {
+        const opened = await sys.open({ task: "keep the deal notes", persistent: true });
+        cronHelper = opened.ok ? opened.sessionId : `open refused: ${opened.message}`;
+      }
+      return mock.runTurn(turn);
+    },
+  };
+  let cronHelperRef = "";
+  const built = buildApp(testConfig({ externalSlackPolicies: policies }), { agent });
+  built.runtime.start();
+  t.after(() => built.runtime.stop());
+  const roster = [{ channelId: "C-deals", principalId: "a@x.com" }];
+  await built.directory.replace([{ principalId: "a@x.com", displayName: "A", type: "internal", slackId: "U-A" }]);
+  await built.directory.replaceChannels([{ channelId: "C-deals", name: "deals", isPrivate: true }], roster);
+  await selectDefaultSandbox(built, "a@x.com", here);
+  const cron = await built.app.createCron({
+    ownerScopeId: here,
+    owner: scopeActor(here),
+    createdBy: "a@x.com",
+    ownerConsentedAt: Date.now(),
+    schedule: { everyMs: 3_600_000 },
+    action: "keep the deal notes with a helper",
+  });
+  await built.directory.replaceChannels([{ channelId: "C-deals", name: "deals", isPrivate: true }], []);
+  await runNowSettled(built.scheduler, cron.id);
+  await settle(async () => !!cronHelper);
+  cronHelperRef = (await built.sessions.get(cronHelper!))!.threadRef;
+  await built.directory.replaceChannels([{ channelId: "C-deals", name: "deals", isPrivate: true }], roster);
+  const defaultBefore = (await built.sandboxResources.resolve(here))?.id;
+  await built.app.setChannelPolicy("C-deals", "!engage watch for notes", "U-admin");
+  await built.app.ingestSurfaceEvents([
+    { container: "C-deals", ts: "9.1", authorId: "U-A", authorName: "A", text: "note", createdAt: 1, source },
+  ]);
+  await settle(async () => !!seen.ownHelper);
+  await settle(async () => (await built.runs.list({ threadRef: cronHelperRef })).every((r) => r.status === "done"));
+  assert.deepEqual(
+    {
+      ...seen,
+      cronHelperRuns: runsByThread.get(cronHelperRef),
+      defaultAfter: (await built.sandboxResources.resolve(here))?.id,
+    },
+    {
+      cronHelper: `refused: ${UNPROMPTED_REACH_REFUSAL}`,
+      cronHelperInterrupt: `refused: ${UNPROMPTED_REACH_REFUSAL}`,
+      ownHelper: "ok",
+      cronHelperRuns: 1,
+      defaultAfter: defaultBefore,
+    },
+  );
+});
