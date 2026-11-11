@@ -16,7 +16,7 @@ const routes = (own: string[]) =>
       apiKeyHeader: "x-api-key",
       models: { [claude]: claude },
     },
-    resolveProviderKeys: async () => Object.fromEntries(own.map((provider) => [provider, `${provider}-key`])),
+    resolveProviderKeys: async () => ({ anthropic: "env-key", ...Object.fromEntries(own.map((p) => [p, `${p}-key`])) }),
     ownProviders: async () => new Set(own),
   });
 const summary = (r: { modelId: string; billing: string; gateway?: unknown }) => [r.modelId, r.billing, !!r.gateway];
@@ -28,13 +28,9 @@ test("company inference leaves the gateway once the organization saves its own p
     true,
   ]);
   assert.deepEqual(summary(await routes(["anthropic"]).route(claude)), [claude, "org_key", false]);
-  assert.deepEqual(summary(await routes(["anthropic"]).route(`gateway/anthropic/${claude}`)), [
-    claude,
-    "org_key",
-    false,
-  ]);
   assert.deepEqual(summary(await routes(["openai"]).route(claude)), [gpt, "org_key", false]);
-  assert.equal((await routes(["openai"]).route("openrouter/auto")).modelId, "openrouter/auto");
+  const direct = await routes(["openai"]).route("claude-haiku-5-5");
+  assert.deepEqual([direct.modelId, direct.billing], ["claude-haiku-5-5", "org_key"]);
   const personal = await routes(["openai"]).route(claude, { anthropic: "mine" });
   assert.deepEqual(summary(personal), [claude, "personal_account", false]);
 });

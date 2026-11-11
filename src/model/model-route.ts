@@ -1,5 +1,10 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { isModelProvider, modelGatewayRequest, type ModelGatewayTransportConfig } from "./provider-endpoints.ts";
+import {
+  isModelProvider,
+  modelGatewayRequest,
+  modelGatewayRoute,
+  type ModelGatewayTransportConfig,
+} from "./provider-endpoints.ts";
 import { gatewayUpstream } from "./gateway-models.ts";
 import type { ProviderKeys } from "./model-runtime.ts";
 import {
@@ -108,9 +113,9 @@ export function createModelRoutes(opts: ModelRouteOptions = {}): ModelRoutes {
   const servedId = (id: string, personalKeys?: ProviderKeys) =>
     personalKeys ? personalModelId(id, personalKeys) : companyServedId(id);
   const ownModelId = async (id: string): Promise<string | undefined> => {
-    const upstream = gatewayUpstream(id);
-    const native = upstream?.modelId ?? (opts.modelGateway?.models[companyServedId(id)] ? id : undefined);
-    if (!native) return undefined;
+    const served = resolveModel(companyServedId(id));
+    if (!served || !modelGatewayRoute(opts.modelGateway, served)) return undefined;
+    const native = gatewayUpstream(id)?.modelId ?? id;
     const own = (await opts.ownProviders?.()) ?? new Set<string>();
     if (!own.size) return undefined;
     const provider = resolveModel(native)?.provider;
