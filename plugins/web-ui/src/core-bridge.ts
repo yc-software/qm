@@ -847,6 +847,7 @@ export async function webFetch(input: RequestInfo | URL, init?: RequestInit): Pr
       continue;
     }
     if (!canRetry || signal?.aborted || !TRANSIENT_STATUSES.has(response.status)) break;
+    void response.body?.cancel();
     await sleep(RETRY_DELAYS_MS[attempt]!);
   }
   if (response.status !== 401) return response;
