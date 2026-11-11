@@ -268,7 +268,7 @@ export function createSwarmService(deps: {
     );
     return owing.filter((job) => botsRun(lostSwarmOn.get(job.sandboxId!)!, ran.get(job.runId!) ?? null));
   };
-  const cutOffBot = async (swarm: Swarm, reason: string): Promise<void> => {
+  const cutOffBot = async (before: Swarm, swarm: Swarm, reason: string): Promise<void> => {
     if (!botLostSwarm(swarm)) return;
     const computers = new Set(swarm.members.flatMap((member) => (member.sandboxId ? [member.sandboxId] : [])));
     if (swarm.board) computers.add(swarm.board.sandboxId);
@@ -281,7 +281,8 @@ export function createSwarmService(deps: {
       ),
     );
     await Promise.all([...running].map((runId) => deps.signals?.send(runId, { kind: "abort", reason })));
-    void deps.sweepProcesses?.().catch(swallowAs("swarm: sweep the jobs of a bot that lost the swarm", null));
+    if (!botLostSwarm(before))
+      void deps.sweepProcesses?.().catch(swallowAs("swarm: sweep the jobs of a bot that lost the swarm", null));
   };
   const view = (member: SwarmMember): SwarmMember => ({
     ...member,
@@ -819,7 +820,7 @@ export function createSwarmService(deps: {
       const previous = swarm.messageRequests[key];
       if (previous) {
         if (previous.signature !== fingerprint) throw new Error("requestId reused with different content");
-        await cutOffBot(swarm, sentWork);
+        await cutOffBot(swarm, swarm, sentWork);
         return swarm.messages.find((message) => message.id === previous.messageId)!;
       }
       const checked = await Promise.all(
@@ -876,7 +877,7 @@ export function createSwarmService(deps: {
         });
         swarm.messageRequests[key] = { messageId: id, signature: fingerprint };
       });
-      await cutOffBot(updated, sentWork);
+      await cutOffBot(swarm, updated, sentWork);
       return updated.messages.find((message) => message.id === updated.messageRequests[key]!.messageId)!;
     },
     async read(caller, options) {
@@ -928,7 +929,7 @@ export function createSwarmService(deps: {
         : await store.update(swarm.id, (current) => {
             current.personUsedComputers = true;
           });
-      await cutOffBot(used, "because a person used the swarm's computers");
+      await cutOffBot(swarm, used, "because a person used the swarm's computers");
     },
     async claimOwedStops() {
       const { processes } = deps;

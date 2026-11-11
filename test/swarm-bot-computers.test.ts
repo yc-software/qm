@@ -457,11 +457,15 @@ test("a bot's turn loses the swarm computer it already opened and is told to sto
     claimOwed: () => service.claimOwedStops(),
   });
   let swept: Promise<unknown> = Promise.resolve();
+  let sweeps = 0;
   const service = createSwarmService({
     ...f.serviceOptions,
     signals,
     processes,
-    sweepProcesses: () => (swept = reaper.sweepNow()),
+    sweepProcesses: () => {
+      sweeps += 1;
+      return (swept = reaper.sweepNow());
+    },
   });
   await workerJob(f, processes, computers.output, "alice's build\n");
   const thread = `slack:C1:${f.root.id}`;
@@ -528,6 +532,7 @@ test("a bot's turn loses the swarm computer it already opened and is told to sto
   const other = await f.rootTurn("other-bot", true);
   await personSend();
   assert.deepEqual(await signals.pending(other.claim.id), []);
+  assert.equal(sweeps, 1);
 });
 
 function jobComputers(beforeStart?: () => Promise<unknown>) {
