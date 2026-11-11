@@ -30,6 +30,8 @@ import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
 import type { AclStore } from "../src/acl/acl-store.ts";
 import type { ScopeId } from "../src/types.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
+import { createTurnHandler } from "../src/slack/turn-handler.ts";
+import { createConversationSerializer } from "../src/slack/conversation-view.ts";
 import { runTrigger } from "../src/triggers/run-trigger.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
@@ -2707,6 +2709,32 @@ test("the situational conversationHeader rides in the <environment> block, not a
   assert.doesNotMatch(userText, /original idea that started this thread/);
   assert.equal(userText, "@agent is this possible?");
   assert.doesNotMatch(userText, /<environment>/);
+});
+
+test("Slack names people set reach the screen as data, never in the trusted conversation header", async () => {
+  const parts: Array<{ source: string; content: string }> = [];
+  const screener: SecurityScreener = {
+    provider: "spy",
+    classify: async ({ payload }) => {
+      parts.push(...(JSON.parse(payload) as typeof parts));
+      return { verdict: { decision: "auto" }, score: 0, threshold: 0.7 };
+    },
+  };
+  const { app } = freshApp({ securityPosture: "auto" }, screener);
+  const directory = { classifyUserCached: async () => ({ actor: { displayName: "Starter Name" } }) };
+  const ids = { botUserId: "UBOT", ownBotId: "BBOT" };
+  const raw = [{ ts: "1.000", thread_ts: "1.000", user: "U2", text: "kickoff" }];
+  const serializer = createConversationSerializer({ ids, directory, readHistory: async () => ({ raw }) } as never);
+  const callCore = (turn: Omit<TurnRequest, "surface">) => app.turn({ ...turn, surface: "slack" });
+  const deps = { flow: { callCore }, directory, mirror: {}, serializer, ids, threads: { mark() {} } };
+  const files = [{ id: "F1", name: "Upload Name.key", size: 2e9, url_private: "https://files.slack.com/F1" }];
+  const prefetched = { actor: internalActor, info: { name: "channel-name" }, audience: [internalActor] };
+  const inc = { kind: "channel", channel: "C1", userId: "U1", rawText: "recap?", threadTs: "1.000", ts: "2.000" };
+  await createTurnHandler(deps as never).handleIncoming({ ...inc, unprompted: true, files, prefetched } as never, {});
+  for (const name of ["channel-name", "Starter Name", "Upload Name.key"]) {
+    const holders = parts.filter((part) => part.content.includes(name)).map((part) => part.source);
+    assert.ok(holders.length && !holders.includes("conversation-header"), `${name} screened as ${holders}`);
+  }
 });
 
 test("a reply in a thread the agent STARTED chimes in, even as a bare statement (deploy-notification-reply bug)", async () => {

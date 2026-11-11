@@ -79,10 +79,9 @@ function arrangeForDisplay(messages: readonly RecentMessage[]): Array<{ message:
 
 export interface ConversationView {
   contextNote?: string;
-  channel: { name?: string; kind: "dm" | "channel" | "group"; isPrivate?: boolean };
+  channel: { kind: "dm" | "channel" | "group"; isPrivate?: boolean };
   messages: readonly RecentMessage[];
-  here: { kind: "thread"; youOpenedIt: boolean; starterName?: string; openerText?: string } | { kind: "top-level" };
-  omittedFiles: ReadonlyArray<{ name: string; reason: "too-big" | string }>;
+  here: { kind: "thread"; youOpenedIt: boolean; openerText?: string } | { kind: "top-level" };
   nameById?: ReadonlyMap<string, string>;
 }
 
@@ -154,18 +153,15 @@ export function renderConversationView(view: ConversationView): RenderedConversa
     })
     .filter((m): m is OverheardMessage => m !== undefined);
 
-  let where = `You are in ${view.channel.name ? `#${view.channel.name}` : "a channel"}${view.channel.isPrivate ? " (private)" : ""}.`;
+  let where = `You are in a channel${view.channel.isPrivate ? " (private)" : ""}.`;
   if (view.channel.kind === "dm") where = "This is a direct message.";
   else if (view.channel.kind === "group") where = "This is a group direct message.";
   let here: string;
   if (view.here.kind === "top-level") here = "You are replying to a top-level message (not in a thread).";
   else if (view.here.youOpenedIt) here = "You are replying in a thread you started.";
-  else here = `You are replying in a thread${view.here.starterName ? ` @${view.here.starterName} started` : ""}.`;
-  const omittedLine = view.omittedFiles.length
-    ? "Files too big to view this turn: " + view.omittedFiles.map((f) => f.name).join(", ") + "."
-    : "";
+  else here = "You are replying in a thread.";
 
-  const header = [omittedLine, where, here, view.contextNote].filter(Boolean).join(" ");
+  const header = [where, here, view.contextNote].filter(Boolean).join(" ");
 
   const detectContext = msgs
     .filter((m) => !m.isBot && !m.isSelf && !m.isTrigger)
