@@ -220,9 +220,8 @@ export function createTurnMethods(
         const after = await deps.runs.get(live.id);
         if (after && !isTerminal(after.status)) return { status: "queued", runId: live.id, steered: true };
         const own = (await replayOrphanedRunSignals(live.id)).find((d) => d.signal.dedupeKey === dedupeKey);
-        return own?.replayRunId
-          ? { status: "queued", runId: own.replayRunId }
-          : { status: "queued", runId: live.id, steered: true };
+        if (!own) return { status: "queued", runId: live.id, steered: true };
+        return own.replayRunId ? { status: "queued", runId: own.replayRunId } : null;
       }
 
       const approvedRequest = req.approval ? (await deps.approvals?.get(req.approval.requestId))?.request : undefined;

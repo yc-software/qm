@@ -3304,6 +3304,82 @@ for (const approved of [true, false]) {
   });
 }
 
+test("an approval whose replay fails after its run ended stays pending and is delivered once on retry", async () => {
+  const { app, signals, runs } = freshApp();
+  const args = { to: "a@example.com", body: "late" };
+  const raised = await app.turn(dm(`!declared-noted ${JSON.stringify(args)}`));
+  const { requestId } = raised.pendingApprovals![0]!;
+  const hold = "live-replay-lost";
+  const holding = app.turn(dm(`!hold ${hold}`));
+  let live = mockHeldTurns.get(hold);
+  for (let i = 0; !live && i < 200; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    live = mockHeldTurns.get(hold);
+  }
+  assert.ok(live?.runId);
+  const getRun = runs.get.bind(runs);
+  const send = signals.send.bind(signals);
+  const acknowledge = signals.acknowledge.bind(signals);
+  const turn = app.turn.bind(app);
+  let ended = false;
+  signals.send = async (runId, signal) => {
+    const sent = await send(runId, signal);
+    if (runId === live.runId) ended = true;
+    return sent;
+  };
+  runs.get = async (id) => {
+    const run = await getRun(id);
+    return ended && !released && run && id === live.runId ? { ...run, status: "failed" } : run;
+  };
+  let released = false;
+  let failAck = false;
+  signals.acknowledge = async (runId, id) => {
+    if (failAck) {
+      failAck = false;
+      throw new Error("acknowledge failed");
+    }
+    return acknowledge(runId, id);
+  };
+  const replayed: string[] = [];
+  let replays = 0;
+  app.turn = async (req, opts) => {
+    if (!(ended && req.approval)) return turn(req, opts);
+    if (replays++ === 0) throw new Error("replay start failed");
+    const result = await turn(req, opts);
+    replayed.push(result.runId!);
+    return result;
+  };
+  try {
+    await turn(
+      dm(`!declared-noted ${JSON.stringify(args)}`, {
+        async: true,
+        approval: { requestId, approved: true, scope: "once" as const },
+      }),
+    );
+    assert.equal(replays, 1, "the drained decision tried to replay and failed");
+    const left = await signals.pending(live.runId);
+    assert.ok(
+      left.some(({ signal }) => signal.request?.approval?.requestId === requestId),
+      "a decision whose replay failed is left pending",
+    );
+    failAck = true;
+    released = true;
+    mockHeldTurns.release(hold);
+    await holding;
+    for (let i = 0; failAck && i < 200; i++) await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(failAck, false, "the run's own completion replayed the decision");
+    await app.replayOrphanedRunSignals(live.runId);
+    await app.replayOrphanedRunSignals(live.runId);
+    assert.equal(replayed.length, 2, "the retry after a lost acknowledgement replays again");
+    assert.equal(replayed[0], replayed[1], "both replays land on one run");
+    assert.equal((await signals.pending(live.runId)).length, 0);
+  } finally {
+    ended = false;
+    mockHeldTurns.release(hold);
+    await holding;
+  }
+});
+
 test("a tool that declares approval runs once for the exact approved arguments", async () => {
   const { app, sessions } = freshApp();
   const call = '!declared {"to":"a@example.com","body":"hi"}';
