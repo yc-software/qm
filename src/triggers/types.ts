@@ -8,6 +8,7 @@ export interface TriggerBase {
   createdBy: string;
   ownerConsentedAt?: number;
   botActor?: boolean;
+  taskAuthor?: "automation";
   destination?: Destination;
   enabled: boolean;
   createdAt: number;
@@ -57,7 +58,6 @@ export interface Cron extends TriggerBase {
   message?: string;
   loopId?: string;
   createdAt: number;
-  unattendedGrants?: string[];
   sessionRef?: string;
   script?: CronScript;
 

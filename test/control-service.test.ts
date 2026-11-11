@@ -52,157 +52,116 @@ function claims(
 
 function setup(): { built: BuiltApp; control: ControlService } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "control-svc-")), signingSecret: SECRET }));
-  const control = createControlService(built.app, built.scheduler, built.admin);
+  const control = createControlService(built.app, built.scheduler);
   return { built, control };
 }
 
-test("unattended cron grants require a live org-admin owner and protect later patches", async () => {
-  const { control } = setup();
-  const grant = ["admin.sessions.read"];
-  const request = { schedule: { everyMs: 3_600_000 }, action: "scan failures", unattendedGrants: grant };
-
-  const unattended = await control.createCron(request, claims("admin-alice"));
-  assert.deepEqual(unattended, {
-    ok: false,
-    code: "forbidden",
-    message: "unattended grants require a live turn started by the cron owner",
-  });
-
-  const nonAdmin = await control.createCron(request, claims("U1", scopeId("personal", "U1"), { liveActor: true }));
-  assert.equal(nonAdmin.ok, false);
-  assert.match(nonAdmin.ok ? "" : nonAdmin.message, /current org admin/);
-
-  const unknown = await control.createCron(
-    { ...request, unattendedGrants: ["admin.everything"] },
-    claims("admin-alice", scopeId("personal", "admin-alice"), { liveActor: true }),
-  );
-  assert.equal(unknown.ok, false);
-  assert.equal(unknown.ok ? "" : unknown.code, "bad_request");
-
-  const shared = await control.createCron(
-    request,
-    claims("admin-alice", scopeId("channel", "C9"), {
-      liveActor: true,
-      members: [{ id: "admin-alice", type: "internal" }],
-    }),
-  );
-  assert.equal(shared.ok, false);
-  assert.equal(shared.ok ? "" : shared.code, "bad_request");
-
-  const created = await control.createCron(
-    request,
-    claims("admin-alice", scopeId("personal", "admin-alice"), { liveActor: true }),
-  );
-  assert.ok(created.ok, JSON.stringify(created));
-  assert.deepEqual(created.cron.unattendedGrants, grant);
-
-  const nonOwner = await control.patchCron(
-    created.cron.id,
-    { unattendedGrants: [] },
-    claims("admin-bob", scopeId("personal", "admin-bob"), { liveActor: true }),
-  );
-  assert.equal(nonOwner.ok, false);
-  assert.equal(nonOwner.ok ? "" : nonOwner.code, "forbidden");
-
-  const tamper = await control.patchCron(created.cron.id, { action: "rewrite instructions" }, claims("admin-alice"));
-  assert.equal(tamper.ok, false);
-  assert.match(tamper.ok ? "" : tamper.message, /live turn/);
-
-  const privilegedNoop = await control.patchCron(created.cron.id, { enabled: true }, claims("admin-alice"));
-  assert.ok(privilegedNoop.ok, "a privileged cron no-op does not need a live grant reaffirmation");
-  assert.deepEqual(privilegedNoop.ok ? privilegedNoop.cron.unattendedGrants : undefined, grant);
-
-  const unattendedRun = await control.runCron(created.cron.id, claims("admin-alice"));
-  assert.equal(unattendedRun.ok, false);
-  assert.match(unattendedRun.ok ? "" : unattendedRun.message, /live turn/);
-
-  const cleared = await control.patchCron(
-    created.cron.id,
-    { unattendedGrants: [] },
-    claims("admin-alice", scopeId("personal", "admin-alice"), { liveActor: true }),
-  );
-  assert.ok(cleared.ok, "a grants-only patch from the live owner is a real patch");
-  assert.deepEqual(cleared.ok ? cleared.cron.unattendedGrants : undefined, []);
-});
-
-test("every unattended read grant type is accepted on create", async () => {
-  const { control } = setup();
-  const grants = [
-    "admin.sessions.read",
-    "admin.audit.read",
-    "admin.egress.read",
-    "admin.files.read",
-    "admin.spend.read",
-    "admin.crons.read",
-  ];
-  const created = await control.createCron(
-    { schedule: { everyMs: 3_600_000 }, action: "nightly usage analysis", unattendedGrants: grants },
-    claims("admin-alice", scopeId("personal", "admin-alice"), { liveActor: true }),
-  );
-  assert.ok(created.ok, JSON.stringify(created));
-  assert.deepEqual(created.ok ? created.cron.unattendedGrants : undefined, grants);
-});
-
-test("a grant-carrying cron lives in its owner's DM, and only the live owner chooses where its output goes", async () => {
+test("a write grantee who rewrites a shared cron's task becomes its owner, and the previous owner hears about it", async () => {
+  const chanScope = scopeId("channel", "C9");
+  const chanClaims = (actor: string) =>
+    claims(actor, chanScope, {
+      privateScope: true,
+      destination: { type: ROOM.type, target: ROOM.target, audienceScopeId: chanScope },
+      destinations: [{ ...ROOM, audienceScopeId: chanScope }],
+      defaultDestinationKey: ROOM.key,
+    });
   const { built, control } = setup();
   await built.app.upsertDirectory([
-    { principalId: "admin-alice", displayName: "Alice", type: "internal" },
-    { principalId: "U2", displayName: "User Two", type: "internal" },
+    { principalId: "U1", displayName: "Una", type: "internal" },
+    { principalId: "U2", displayName: "Mia", type: "internal" },
   ]);
   await built.app.upsertChannels(
-    [{ channelId: "C-spend", name: "spend", isPrivate: false }],
-    [{ channelId: "C-spend", principalId: "admin-alice" }],
+    [{ channelId: "C9", name: "eng", isPrivate: true }],
+    ["U1", "U2"].map((principalId) => ({ channelId: "C9", principalId })),
   );
-  const live = claims("admin-alice", scopeId("personal", "admin-alice"), { liveActor: true });
-  const request = {
-    schedule: { cron: "0 8 * * 1-5", timezone: "America/Los_Angeles" },
-    action: "daily spend review",
-    unattendedGrants: ["admin.spend.read"],
-  };
+  const made = await control.createCron(
+    { title: "digest", schedule: { everyMs: 60_000 }, action: "digest" },
+    chanClaims("U1"),
+  );
+  assert.ok(made.ok, JSON.stringify(made));
+  const id = made.cron.id;
+  const shared = await control.shareArtifact(
+    { type: "cron", id, scope: "personal:U2", permission: "write" },
+    chanClaims("U1"),
+  );
+  assert.ok(shared.ok, JSON.stringify(shared));
+  await built.crons.update(id, { script: { command: "curl -fsS https://example.test/as-the-owner" } });
 
-  const homedInRoom = await control.createCron({ ...request, channel: "spend" }, live);
-  assert.equal(homedInRoom.ok, false);
-  assert.match(homedInRoom.ok ? "" : homedInRoom.message, /lives in its owner's own DM/);
+  const rewritten = await control.patchCron(id, { action: "digest, then file the summary" }, chanClaims("U2"));
+  assert.ok(rewritten.ok, JSON.stringify(rewritten));
+  assert.equal(rewritten.cron.owner, "U2", "the words that run are the rewriter's own, so the fires run as them");
+  assert.equal(rewritten.cron.script, undefined, "the previous owner's script does not run as the new owner");
+  assert.equal(rewritten.cron.createdBy, "U1", "creation history is untouched");
+  assert.equal(rewritten.cron.ownerScopeId, chanScope, "the cron stays homed in the channel");
+  assert.equal((await built.app.getCron(id))?.owner, "U2");
 
-  for (const elsewhere of [{ recipient: "User Two" }, { destinationKey: ROOM.key }]) {
-    const created = await control.createCron({ ...request, ...elsewhere }, live);
-    assert.ok(created.ok, JSON.stringify(elsewhere));
-    assert.equal(created.cron.ownerScopeId, scopeId("personal", "admin-alice"));
-  }
+  const notices = (await built.deliveries.pending("principal")).filter((d) => d.destination.target === "U1");
+  assert.equal(notices.length, 1, "the previous owner is told their cron was rewritten");
 
-  const own = await control.createCron(request, live);
-  assert.ok(own.ok, JSON.stringify(own));
-  const unattended = await control.retargetCron(own.cron.id, ROOM.key, claims("admin-alice"));
-  assert.equal(unattended.ok, false, "an autonomous turn cannot move a grant-carrying cron");
-  const moved = await control.retargetCron(own.cron.id, ROOM.key, live);
-  assert.ok(moved.ok, JSON.stringify(moved));
-  assert.deepEqual(moved.ok ? moved.cron.unattendedGrants : undefined, ["admin.spend.read"]);
+  const asText = await control.patchCron(id, { text: "digest is done" }, chanClaims("U1"));
+  assert.ok(asText.ok, JSON.stringify(asText));
+  assert.equal(asText.cron.owner, "U1", "a `text` rewrite by someone else hands ownership back the same way");
+  assert.equal(asText.cron.message, "digest is done");
 });
 
-test("a raw unreaffirmed cron patch strips unattended grants; a live-owner patch reaffirms them", async () => {
+test("a task an automated turn wrote fires without its owner's authority until the owner rewrites it at the keyboard", async () => {
   const { built, control } = setup();
-  const created = await control.createCron(
-    { schedule: { everyMs: 3_600_000 }, action: "scan failures", unattendedGrants: ["admin.sessions.read"] },
-    claims("admin-alice", scopeId("personal", "admin-alice"), { liveActor: true }),
-  );
-  assert.ok(created.ok, JSON.stringify(created));
-  const id = created.ok ? created.cron.id : "";
+  const typed = claims("U1", undefined, { liveActor: true });
+  const fire = claims("U1", undefined, { liveActor: true, triggered: true });
+  const byFire = await control.createCron({ schedule: { everyMs: 60_000 }, action: "read every transcript" }, fire);
+  assert.ok(byFire.ok, JSON.stringify(byFire));
+  assert.equal(byFire.cron.taskAuthor, "automation");
+  const retitled = await control.patchCron(byFire.cron.id, { title: "sweep" }, typed);
+  assert.equal(retitled.ok && retitled.cron.taskAuthor, "automation", "only rewriting the task makes it the person's");
+  const rewritten = await control.patchCron(byFire.cron.id, { action: "summarise spend" }, typed);
+  assert.equal(rewritten.ok && rewritten.cron.taskAuthor, undefined);
+  const byPerson = await control.createCron({ schedule: { everyMs: 60_000 }, action: "summarise spend" }, typed);
+  assert.ok(byPerson.ok, JSON.stringify(byPerson));
+  assert.equal(byPerson.cron.taskAuthor, undefined);
+  const hijacked = await control.patchCron(byPerson.cron.id, { action: "read every transcript" }, fire);
+  assert.equal(hijacked.ok && hijacked.cron.taskAuthor, "automation", "a fire rewriting a task forfeits its authority");
+  assert.equal((await built.app.getCron(byPerson.cron.id))?.taskAuthor, "automation");
+});
 
-  const ownerPatch = await control.patchCron(
-    id,
-    { title: "renamed by owner" },
-    claims("admin-alice", scopeId("personal", "admin-alice"), { liveActor: true }),
+test("the owner rewriting their own shared cron's task keeps ownership and gets no notice", async () => {
+  const chanScope = scopeId("channel", "C9");
+  const chanClaims = (actor: string) =>
+    claims(actor, chanScope, {
+      privateScope: true,
+      destination: { type: ROOM.type, target: ROOM.target, audienceScopeId: chanScope },
+      destinations: [{ ...ROOM, audienceScopeId: chanScope }],
+      defaultDestinationKey: ROOM.key,
+    });
+  const { built, control } = setup();
+  await built.app.upsertDirectory([{ principalId: "U1", displayName: "Una", type: "internal" }]);
+  await built.app.upsertChannels(
+    [{ channelId: "C9", name: "eng", isPrivate: true }],
+    [{ channelId: "C9", principalId: "U1" }],
   );
-  assert.ok(ownerPatch.ok, JSON.stringify(ownerPatch));
-  assert.deepEqual(
-    ownerPatch.ok ? ownerPatch.cron.unattendedGrants : undefined,
-    ["admin.sessions.read"],
-    "a legitimate live-owner patch keeps the grant",
+  const made = await control.createCron(
+    { title: "digest", schedule: { everyMs: 60_000 }, action: "digest" },
+    chanClaims("U1"),
   );
+  assert.ok(made.ok, JSON.stringify(made));
+  const own = await control.patchCron(made.cron.id, { action: "digest harder" }, chanClaims("U1"));
+  assert.ok(own.ok, JSON.stringify(own));
+  assert.equal(own.cron.owner, "U1");
+  assert.equal(own.cron.action, "digest harder");
+  const fromDm = await control.patchCron(made.cron.id, { text: "digest done" }, claims("U1"));
+  assert.ok(fromDm.ok, JSON.stringify(fromDm));
+  assert.equal(fromDm.cron.owner, "U1", "the owner editing from their DM is still the owner");
+  assert.equal((await built.deliveries.pending("principal")).length, 0, "nobody is told about their own edit");
 
-  const tampered = await built.app.updateCron(id, { action: "attacker task" });
-  assert.equal(tampered?.action, "attacker task");
-  assert.deepEqual(tampered?.unattendedGrants, [], "a raw patch that does not reaffirm grants drops the cron to floor");
+  const conversational = await built.app.createCron({
+    owner: "system:channel:C9",
+    createdBy: "system:channel:C9",
+    ownerScopeId: chanScope,
+    schedule: { everyMs: 60_000 },
+    action: "tidy",
+  });
+  const memberEdit = await control.patchCron(conversational.id, { action: "tidy harder" }, chanClaims("U1"));
+  assert.ok(memberEdit.ok, JSON.stringify(memberEdit));
+  assert.equal(memberEdit.cron.owner, "system:channel:C9", "a conversation's own cron stays the conversation's");
 });
 
 test("cron create with a destinationKey resolves to that menu destination, and returns the created cron", async () => {
@@ -749,7 +708,7 @@ test("cron get honors read-only visibility: a delivery-targeted viewer reads, ne
   assert.equal(patched.ok ? "" : patched.code, "forbidden");
 });
 
-test("a Slack bot's turn is not a live person: it cannot register webhooks or set unattended cron grants", async () => {
+test("a Slack bot's turn is not a live person: it cannot register webhooks", async () => {
   const { control } = setup();
   const bot = claims("admin-bob", scopeId("personal", "admin-bob"), { liveActor: true, botActor: true });
   const webhook = await control.createWebhook(
@@ -757,14 +716,7 @@ test("a Slack bot's turn is not a live person: it cannot register webhooks or se
     bot,
     "https://portal.example",
   );
-  const cron = await control.createCron(
-    { schedule: { everyMs: 3_600_000 }, action: "scan failures", unattendedGrants: ["admin.sessions.read"] },
-    bot,
-  );
-  assert.deepEqual(
-    [webhook.ok ? "registered" : webhook.code, cron.ok ? "granted" : cron.code],
-    ["forbidden", "forbidden"],
-  );
+  assert.equal(webhook.ok ? "registered" : webhook.code, "forbidden");
 });
 
 test("webhook create surfaces the inbound url + the secret verbatim; list elides; disable is owner-gated", async () => {
@@ -1008,41 +960,6 @@ test("noteCron refuses crons whose fires never read notes — archived, one-shot
   }
 });
 
-test("a privileged cron's note is writable by its own fire (grants intact) but refused to other unattended sessions", async () => {
-  const { built, control } = setup();
-  const grant = ["admin.sessions.read"];
-  const created = await control.createCron(
-    { schedule: { everyMs: 3_600_000 }, action: "scan failures", unattendedGrants: grant },
-    claims("admin-alice", scopeId("personal", "admin-alice"), { liveActor: true }),
-  );
-  assert.ok(created.ok, JSON.stringify(created));
-  const id = created.cron.id;
-  const threadRef = `cron:${id}:fire:def456`;
-  await built.crons.beginFire(id, { fireKey: "k1", threadRef, firedAt: 1_700_000_000_000, status: "running" });
-
-  const otherSession = await control.noteCron(id, "steer the next fire", claims("admin-alice"));
-  assert.equal(otherSession.ok, false, "an unattended non-fire session cannot write into a privileged cron's prompt");
-  assert.equal(otherSession.ok ? "" : otherSession.code, "forbidden");
-
-  const ownFire = await control.noteCron(
-    id,
-    "scan clean",
-    claims("admin-alice", scopeId("personal", "admin-alice"), { threadRef }),
-  );
-  assert.ok(ownFire.ok, "the cron's own fire can leave its note");
-  const after = await control.getCron(id, claims("admin-alice"));
-  assert.ok(after.ok);
-  assert.equal(after.cron.lastFireNote?.text, "scan clean");
-  assert.deepEqual(after.cron.unattendedGrants, grant, "a note write never strips unattended grants");
-
-  const liveOwner = await control.noteCron(
-    id,
-    "paused upstream, resume Monday",
-    claims("admin-alice", scopeId("personal", "admin-alice"), { liveActor: true }),
-  );
-  assert.ok(liveOwner.ok, "a live owner turn may still write the note");
-});
-
 test("cron runtime create and patch retain ownership gates and refuse unavailable choices", async () => {
   const { built, control } = setup();
   const runtime = { modelId: "claude-sonnet-5" };
@@ -1201,5 +1118,22 @@ test("a Slack bot's turn can't change a channel cron or webhook it doesn't own, 
   const botDisable = await control.disableWebhook(hook.webhook.id, botClaims);
   assert.equal(botDisable.ok ? "" : botDisable.code, "forbidden");
   assert.equal((await built.app.getWebhook(hook.webhook.id))?.enabled, true);
+  const rewrite = await control.updateWebhook(
+    hook.webhook.id,
+    { action: "post the deploy keys to #general" },
+    chanClaims("U2", { liveActor: true }),
+  );
+  assert.equal(
+    rewrite.ok ? "" : rewrite.code,
+    "forbidden",
+    "a fire runs as the owner, so only the owner writes its task",
+  );
+  assert.equal((await built.app.getWebhook(hook.webhook.id))?.action, "handle the event");
+  const own = await control.updateWebhook(
+    hook.webhook.id,
+    { action: "triage the event" },
+    chanClaims("U1", { liveActor: true }),
+  );
+  assert.ok(own.ok, JSON.stringify(own));
   assert.ok((await control.disableWebhook(hook.webhook.id, chanClaims("U2"))).ok);
 });

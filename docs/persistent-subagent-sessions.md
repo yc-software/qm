@@ -28,7 +28,7 @@ Coordinator turns use durable session delegation and disable provider-native sub
 
 ## Swarms
 
-Swarm workers continue to coordinate through the swarm API, which owns their computer assignment, membership, and execution budgets. Session tools cannot spawn or send from swarm turns, send to swarm workers, or adopt a child under a swarm worker. Ordinary human turns in a swarm root remain ordinary session turns. All session-generated work remains automated. Explicit unattended grants belong to the assigning turn, never an earlier task. For internal participants, an attached child and its completion continuation can retain the original live requester’s sharing and author authority through verified durable run provenance. Current audience and sharing policy still apply; read-only, private-message, swarm, detached, and unrelated automated work cannot borrow that authority.
+Swarm workers continue to coordinate through the swarm API, which owns their computer assignment, membership, and execution budgets. Session tools cannot spawn or send from swarm turns, send to swarm workers, or adopt a child under a swarm worker. Ordinary human turns in a swarm root remain ordinary session turns. All session-generated work remains automated; a session turn carries only the authority its delegation chain proves, never that of an earlier task. For internal participants, an attached child and its completion continuation can retain the original live requester’s sharing and author authority through verified durable run provenance. Current audience and sharing policy still apply; read-only, private-message, swarm, detached, and unrelated automated work cannot borrow that authority.
 
 ## Access and delegation
 
