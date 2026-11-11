@@ -144,6 +144,7 @@ export function appFileTools(kit: ToolKit) {
       path: Type.Optional(Type.String({ description: "File to search; leave it out to search every file." })),
       text: Type.String({ minLength: 1, description: "Text to look for, matched literally and case-sensitively." }),
       from: Type.Optional(Type.Integer({ minimum: 1, description: "First match to show, counting from 1." })),
+      to: Type.Optional(Type.Integer({ minimum: 1, description: "Last match to show." })),
       around: Type.Integer({
         minimum: 0,
         description: "How many characters of the file to show before and after each match.",
@@ -165,7 +166,7 @@ export function appFileTools(kit: ToolKit) {
           let counted = 0;
           for (let at = content.indexOf(sought); at >= 0; at = content.indexOf(sought, at + sought.length)) {
             found += 1;
-            if (found < from || next !== undefined) continue;
+            if (found < from || found > (params.to ?? found) || next !== undefined) continue;
             line += content.slice(counted, at).split("\n").length - 1;
             counted = at;
             const sameFile = previous?.path === path;

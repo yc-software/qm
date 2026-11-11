@@ -238,6 +238,8 @@ test("find shows exact text around each match in a built one-line stylesheet, en
     assert.deepEqual([out[4], out[6]], ["[match 2 from line 1]", "[match 3 from line 1]"]);
     return [out[3]!, out[5]!, out[7]!];
   };
+  const second = await chat.call({ action: "find", text: "--cta", around: 0, from: 2, to: 2 });
+  assert.equal(second.split("\n").slice(1).join("\n"), `[${path}]\n[match 2 from line 1]\n--cta`);
   const spaced = await excerpts(20);
   assert.ok(css.includes(spaced.join("")), "an excerpt starts where the one before it ended");
   const inside = await excerpts(40);
