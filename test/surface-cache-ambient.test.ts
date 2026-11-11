@@ -1261,33 +1261,32 @@ async function wakeBesideLiveWorker(policy: string, first: WakeEvent, second: Wa
     );
     return signals.length > 0 || Boolean(next);
   });
-  assert.deepEqual(signals, [], "the second wake left the live worker alone");
-  return { live, next };
+  return { live, next, signals };
 }
 
 test("a Slack bot's ambient wake does not steer into a live ambient worker a person's message started", async () => {
   const container = "C-bot-steer";
-  const { next } = await wakeBesideLiveWorker(
+  const { next, signals } = await wakeBesideLiveWorker(
     "!engage !post tag the team",
     { container, ts: "720.1", authorId: "U1", text: "events site is down", createdAt: 1 },
     [{ container, ts: "720.2", authorId: "U-deploybot", bot: true, text: "rollback finished", createdAt: 2 }],
   );
+  assert.deepEqual(signals, [], "the second wake left the live worker alone");
   assert.equal(next?.request.botActor, true, "the bot's wake runs as its own bot-marked worker");
 });
 
-test("a person's ask that degrades to proactive, beside a Slack bot's post, runs as its own worker without the bot marker", async () => {
+test("a person's ask that degrades to proactive beside a Slack bot's worker runs as its own worker, unless a bot posted with it", async () => {
   const container = "C-ask-after-bot";
-  const { live, next } = await wakeBesideLiveWorker(
-    "!engage-asked",
-    { container, ts: "730.1", authorId: "U-deploybot", bot: true, text: "rollback finished", createdAt: 1 },
-    [
-      { container, ts: "730.2", authorId: "U1", text: "can you set gpu-2 as the default computer?", createdAt: 2 },
-      { container, ts: "730.3", authorId: "U-deploybot", bot: true, text: "deploy queued", createdAt: 3 },
-      { container, ts: "730.4", authorId: "U2", text: "+1", createdAt: 4 },
-    ],
-  );
-  assert.equal(live.request.botActor, true, "the bot's post spawned a bot-marked worker");
-  assert.ok(next && !next.request.botActor, "the person's ask runs as its own worker without the bot marker");
+  const first = { container, ts: "730.1", authorId: "U-deploybot", bot: true, text: "rollback finished", createdAt: 1 };
+  const ask = { container, ts: "730.2", authorId: "U1", text: "make gpu-2 the default computer?", createdAt: 2 };
+  const plusOne = { container, ts: "730.4", authorId: "U2", text: "+1", createdAt: 4 };
+  const alone = await wakeBesideLiveWorker("!engage-asked", first, [ask, plusOne]);
+  assert.equal(alone.live.request.botActor, true, "the bot's post spawned a bot-marked worker");
+  assert.deepEqual(alone.signals, [], "the person's ask left the bot's worker alone");
+  assert.ok(alone.next && !alone.next.request.botActor, "the person's ask runs as its own unmarked worker");
+  const deploy = { container, ts: "730.3", authorId: "U-deploybot", bot: true, text: "deploy queued", createdAt: 3 };
+  const mixed = await wakeBesideLiveWorker("!engage-asked", first, [ask, deploy, plusOne]);
+  assert.equal(mixed.signals.map((s) => s.kind).join(), "steer", "a batch holding a bot's post stays bot work");
 });
 
 test("a bot post whose content lives only in attachment blocks reaches the ambient judge through the Slack mirror", async () => {

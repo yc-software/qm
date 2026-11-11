@@ -1121,6 +1121,7 @@ test("a person's Steer into a bot's hand-off stops the bot's turn and runs their
   const { run } = await automationWakeRun(built, "web:U1:bot", "openai", true);
   assert.ok(await built.runs.claimById(run.id, "worker", 30_000));
   const typed = (await built.app.turn(web("set Beta as the default", "web:U1:bot", "steer"))).runId!;
+  assert.equal((await built.app.signalRun(run.id, { kind: "steer", text: "x" })).reason, "not_steerable");
   const steer = { kind: "steer" as const, queuedRunId: typed, request: web("", "web:U1:bot") };
   assert.deepEqual(await built.app.signalRun(run.id, steer, "U1"), { accepted: false, reason: "queued_started" });
   const direct = { kind: "steer" as const, text: "and the notes", request: web("and the notes", "web:U1:bot") };

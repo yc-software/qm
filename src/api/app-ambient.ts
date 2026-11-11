@@ -27,6 +27,8 @@ import { withModelRequestContext } from "../model/request-context.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
 
+const canAsk = (m: CachedMessage) => Boolean(!m.deleted && !m.bot && !m.self && m.authorId && (m.text ?? "").trim());
+
 export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
   function shouldRouteToSpine(input: OrchestratorInput): boolean {
     const { conversation } = input;
@@ -238,9 +240,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     decision: AmbientDecision,
   ): Promise<{ message: CachedMessage; member: DirectoryMember } | undefined> {
     if (!decision.askedBy) return undefined;
-    const eligible = batch.messages.filter(
-      (m) => !m.deleted && !m.bot && !m.self && m.authorId && (m.text ?? "").trim(),
-    );
+    const eligible = batch.messages.filter(canAsk);
     const asking = eligible.find((m) => m.ts === decision.askedBy);
     const newest = eligible.reduce<CachedMessage | undefined>((max, m) => (!max || m.ts > max.ts ? m : max), undefined);
     if (!asking?.authorId || asking.authorId !== newest?.authorId) return undefined;
@@ -292,8 +292,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
   async function spawnAmbientWorker(batch: AmbientBatch, decision: AmbientDecision): Promise<string | undefined> {
     const latestTs = batch.messages.reduce((max, m) => (m.ts > max ? m.ts : max), "");
     const threadRef = `${batch.surface}:${batch.container}:ambient:${latestTs}`;
-    const askedByPerson = batch.messages.some((m) => m.ts === decision.askedBy && !m.bot);
-    const triggers = askedByPerson ? { ...batch, messages: batch.messages.filter((m) => !m.bot) } : batch;
+    const askedByPerson = batch.messages.some((m) => m.ts === decision.askedBy && canAsk(m));
     let solicited = await solicitedAsker(batch, decision);
     let audience: ActorAssertion[] = [];
     if (solicited) {
@@ -312,7 +311,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
       console.error(
         `[ambient] solicited wake degraded to proactive (asked_by=${decision.askedBy}, container=${batch.container})`,
       );
-    const shown = triggers.messages.filter((m) => !m.deleted && (m.text ?? "").trim()).slice(-4);
+    const shown = batch.messages.filter((m) => !m.deleted && (m.text ?? "").trim()).slice(-4);
     const req: TurnRequest = solicited
       ? {
           surface: batch.surface,
@@ -334,7 +333,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
           surface: batch.surface,
           ...(surfaceOrigin ? { surfaceOrigin } : {}),
           actor: { externalId: `system:ambient:${orgIdOf()}` },
-          ...(triggers.messages.some((m) => m.bot) ? { botActor: true } : {}),
+          ...(batch.messages.some((m) => m.bot) ? { botActor: true } : {}),
           conversation,
           deliveryTarget: batch.container,
           text: buildWakeEnvelope({
@@ -344,7 +343,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
             at: new Date(),
             why: decision.reason ?? "The recent messages here may warrant a reply.",
             orders: batch.orders,
-            recentMessages: recentWakeMessages(triggers),
+            recentMessages: recentWakeMessages(batch),
             instructions: `You don't need to have been @mentioned. Reply about the trigger messages. Messages in other threads are separate conversations: don't carry their facts into your reply unless they are about the same subject. Respond with the \`${batch.surface}\` tool's \`post\` action — set \`ts\` to the triggering message id to reply in its thread, or \`broadcast: true\` to post at the channel top level — or stay silent if nothing is needed. To include an image or file, name its workspace path in \`post\`'s \`files\` (it uploads with your message, in that thread). Use \`reach\` only to send to a DIFFERENT channel or person. Use the \`read_thread\` or \`search\` action if you need more context than shown.`,
           }),
           origin: {

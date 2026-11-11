@@ -493,8 +493,8 @@ test("sandbox advertises available management actions and retires migrate", asyn
     (t) => t.name === "sandbox",
   )!;
   assert.match(
-    textOut(await call(botSandbox, { action: "set_default", sandbox_id: null, purpose: "p" })),
-    /invalid sandbox/,
+    textOut(await call(botSandbox, { action: "set_default", sandbox_id: "sb-1", purpose: "p" })),
+    /unknown action `set_default` \(use one of status, restart, list, create, retire\)/,
   );
   assert.match(
     textOut(await call(disabled, { action: "create", backend: "e2b", purpose: "p" })),

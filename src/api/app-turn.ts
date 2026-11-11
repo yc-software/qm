@@ -785,12 +785,12 @@ export function createTurnMethods(
       }
       if (route.kind === "drop") return { accepted: false, reason: "text_required" };
       if (route.kind === "turn") {
-        if (route.reason === "bot-turn") {
+        const request =
+          signal.request ?? (viewer ? await viewerSteerRequest(run, viewer, signal.text ?? "") : undefined);
+        if (route.reason === "bot-turn" && (signal.queuedRunId || request)) {
           await stopRun(run, false, true);
           if (signal.queuedRunId) return { accepted: false, reason: "queued_started" };
         }
-        const request =
-          signal.request ?? (viewer ? await viewerSteerRequest(run, viewer, signal.text ?? "") : undefined);
         if (signal.queuedRunId || !request) return { accepted: false, reason: "not_steerable", why: route.reason };
         const own = await methods.turn({
           ...request,

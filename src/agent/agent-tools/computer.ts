@@ -211,7 +211,7 @@ export function computerTools(kit: ToolKit) {
       action: Type.String({ enum: sandboxActions }),
       sandbox_id: Type.Optional(
         Type.Union([Type.String({ minLength: 1 }), Type.Null()], {
-          description: "Sandbox ID; status/restart use the default if omitted. null only for set_default.",
+          description: `Sandbox ID; status/restart use the default if omitted.${sandboxActions.includes("set_default") ? " null only for set_default." : ""}`,
         }),
       ),
       backend: Type.Optional(Type.String({ description: "create: provider from list." })),
@@ -629,12 +629,15 @@ export function validateSandboxTool(
   if (!["execute", "background", "sandbox"].includes(tool.name)) return tool;
   const properties = (tool.parameters as { properties: Record<string, TSchema> }).properties;
   const schema = Type.Object(properties, { additionalProperties: false });
+  const declared = operationFields[tool.name];
+  const offered = (properties.action as { enum?: string[] } | undefined)?.enum;
+  const operations =
+    declared && Object.fromEntries(Object.entries(declared).filter(([name]) => offered?.includes(name) ?? true));
   return {
     ...tool,
     parameters: schema,
     async execute(callId, params, signal, onUpdate, ctx) {
       const action = isObj(params) ? String(params.action) : "";
-      const operations = operationFields[tool.name];
       const fields = operations && Object.hasOwn(operations, action) ? operations[action] : undefined;
       const allowed = fields ? new Set(["action", "purpose", ...fields]) : undefined;
       let required: string[];
@@ -667,7 +670,9 @@ export function validateSandboxTool(
         if (unknown.length) return `${tool.name} has no ${named(unknown)} field`;
         if (unused.length) return `${action} doesn't take ${named(unused)}; omit them and retry`;
         if (nullSandbox)
-          return "`sandbox_id: null` only clears the default with set_default; omit it or pass a sandbox ID";
+          return operations && Object.hasOwn(operations, "set_default")
+            ? "`sandbox_id: null` only clears the default with set_default; omit it or pass a sandbox ID"
+            : "omit `sandbox_id` or pass a sandbox ID";
         if (!Check(schema, params)) return "a field has the wrong type or value; check the tool schema";
         return undefined;
       })();
