@@ -1,5 +1,5 @@
 import type { WorkBlock } from "./core-bridge";
-import { activityItems } from "./items";
+import { activityItems } from "./items.ts";
 
 let embedderOrigin: string | null = null;
 

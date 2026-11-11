@@ -325,12 +325,14 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
     }
     if (!varied || canvas.width === 0 || canvas.height === 0) throw new Error("the capture came out as one flat color, so it would not show the page; nothing was returned");
     const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
-    const scheme = w.getComputedStyle(doc.documentElement).colorScheme || "";
-    const lum = (c) => { const m = String(c).match(/\\d+(\\.\\d+)?/g); return m ? (0.2126 * +m[0] + 0.7152 * +m[1] + 0.0722 * +m[2]) : 255; };
-    const dark = /dark/.test(scheme) && !/light/.test(scheme) ? true : lum(opaque(bg) ? bg : opaque(htmlBg) ? htmlBg : "rgb(255,255,255)") < 110;
+    let sum = 0;
+    let n = 0;
+    for (let i = 0; i < px.length; i += 4 * 37) { sum += 0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2]; n++; }
+    const dark = !!(w.matchMedia && w.matchMedia("(prefers-color-scheme: dark)").matches);
+    const brightness = Math.round(sum / Math.max(n, 1));
     return {
       ok: true, image: dataUrl.slice(dataUrl.indexOf(",") + 1), mimeType: "image/jpeg",
-      url: w.location.href, width, height, scrollY: Math.round(sy), dark,
+      url: w.location.href, width, height, scrollY: Math.round(sy), dark, brightness,
       version: base, consoleErrors: consoleErrors.slice(-20),
     };
   };

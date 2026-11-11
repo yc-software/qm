@@ -22,6 +22,7 @@ export type AppShot = {
   height?: number;
   scrollY?: number;
   dark?: boolean;
+  brightness?: number;
   version?: string | null;
   consoleErrors?: string[];
 };
@@ -46,7 +47,11 @@ export function shotResult(shot: AppShot): Result {
   const lines = [
     `Page: ${shot.url ?? "unknown"}`,
     `Viewport: ${shot.width}×${shot.height}${shot.scrollY ? `, scrolled ${shot.scrollY}px down` : ""}`,
-    `Color scheme: ${shot.dark ? "dark" : "light"}`,
+    `Color scheme: the browser prefers ${shot.dark ? "dark" : "light"}${
+      typeof shot.brightness === "number"
+        ? `; the page renders mostly ${shot.brightness < 110 ? "dark" : "light"} (average brightness ${shot.brightness}/255)`
+        : ""
+    }`,
     ...(shot.version ? [`App version shown: ${shot.version}`] : []),
     errors.length
       ? `Console errors since load (${errors.length}):\n${errors.join("\n")}`
