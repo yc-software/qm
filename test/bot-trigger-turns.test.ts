@@ -31,7 +31,6 @@ test("a cron a Slack bot's turn creates runs as the bot's work, with a bot turn'
   };
   const config = testConfig({ signingSecret: "bot-trigger-turns".repeat(2), apiBaseUrl: "http://core.test" });
   const built = buildApp(config, { agent });
-  await selectDefaultSandbox(built, "U1", scopeId("personal", "U1"));
   let token = "";
   const provision = built.sandbox.provision.bind(built.sandbox);
   built.sandbox.provision = (owner, opts) => {
@@ -42,6 +41,7 @@ test("a cron a Slack bot's turn creates runs as the bot's work, with a bot turn'
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => server.close());
   const cronBy = async (botActor: boolean) => {
+    await selectDefaultSandbox(built, "U1", scopeId("personal", "U1"));
     const conversation = { kind: "dm" as const, threadRef: `dm:U1:${botActor}` };
     await built.app.turn({ surface: "test", actor: { externalId: "U1" }, conversation, text: "mint", botActor });
     const headers = { "x-agent-capability": token, "content-type": "application/json" };

@@ -212,6 +212,14 @@ async function ownsCron(
   return !(await app.membershipControlsScope(cron.ownerScopeId)) || app.managesScope(actorId, cron.ownerScopeId);
 }
 
+function shareRefusal(caller: ManagingCaller, what: string): string {
+  if (proactiveScopeWork(caller))
+    return "unprompted work can't share this conversation's things; ask in the conversation so a person does it";
+  return what === "cron"
+    ? "only the cron's owner can share it"
+    : `only the ${what}'s owner (or a member of its shared home) can share or move it`;
+}
+
 export function notYours(what: string, caller: ManagingCaller): string {
   return proactiveScopeWork(caller)
     ? `unprompted work can't manage this conversation's ${what}s; ask in the conversation so a person does it`
@@ -840,11 +848,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         return {
           ok: false,
           code: "forbidden",
-          message: proactiveScopeWork(capability)
-            ? "unprompted work can't share this conversation's things; ask in the conversation so a person does it"
-            : cron
-              ? "only the cron's owner can share it"
-              : `only the ${req.type}'s owner (or a member of its shared home) can share or move it`,
+          message: shareRefusal(capability, cron ? "cron" : req.type),
         };
       }
       if (
