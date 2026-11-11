@@ -37,8 +37,7 @@ export function appAccess(opts: {
   const general = generalAccessOf(opts);
   if (general === "public") return { level: "public", label: "Public", detail: PUBLIC_ACCESS_NOTE, canEdit };
   if (general === "org") {
-    const org = orgDisplayName(opts.orgName);
-    return { level: "org", label: org, detail: orgAccessNote(org), canEdit };
+    return { level: "org", label: orgDisplayName(opts.orgName), detail: orgAccessNote(opts.orgName), canEdit };
   }
   const owner = parseScopeId(opts.ownerScopeId).kind === "personal" ? [] : [opts.ownerScopeId];
   const kinds = [...new Set([...owner, ...opts.grantees.map((g) => g.scope)])].flatMap(

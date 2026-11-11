@@ -168,7 +168,7 @@ export async function openDeploymentPermissions(
   const generalAccessNote = (): string => {
     const level = generalAccess();
     if (level === "public") return `${PUBLIC_ACCESS_NOTE}. No sign-in required`;
-    if (level === "org") return orgAccessNote(orgName());
+    if (level === "org") return orgAccessNote(appState.me?.companyName);
     return "Only people with access can open";
   };
   const emailCandidate = (): string | null => {

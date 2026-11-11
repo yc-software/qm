@@ -22,6 +22,7 @@ import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from
 import { audit, authorizeAdmin, exportTokenAccepted, isObj, orgScope } from "./shared.ts";
 import { personalScope, scopeId, type Permission } from "../../types.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
+import { generalAccessOf } from "../../../plugins/chassis/src/app-access.ts";
 import { tenantOf, type ApiCtx, type BaseCtx, type Route } from "./route.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
 import { verifyDeployGitAccess, viewerIdentityKey } from "../../deploy/access-token.ts";
@@ -957,11 +958,14 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     }
     if (isShellRequest) {
       if (pathname === "/__claw__/version" && deployment) {
-        const [draft, grantees, branding] = await Promise.all([
+        const [draft, grantees] = await Promise.all([
           app.deploymentLiveEdit(deployment.id).then((edit) => edit?.draft),
           app.deploymentGrantees(deployment.id),
-          resolveBranding(deps.config, orgScope(deps), deps.brandingDefault),
         ]);
+        const branding =
+          generalAccessOf({ public: isPublic, grantees }) === "org"
+            ? await resolveBranding(deps.config, orgScope(deps), deps.brandingDefault)
+            : undefined;
         sendJson(res, 200, {
           version: deployment.appliedVersion ?? deployment.currentVersion,
           ...(draft ? { live: draft.reloads } : {}),
@@ -970,7 +974,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
             public: isPublic,
             grantees,
             viewer: sub!,
-            orgName: branding.orgName,
+            orgName: branding?.orgName,
           }),
         });
       } else if (
