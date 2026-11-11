@@ -9,6 +9,17 @@ const CONSTRAINT_KEYS = [
   "users_primary_alias_key",
 ];
 
+const HOST_OBJECTS = [
+  "DROP TRIGGER IF EXISTS tenants_retire_hosts ON tenants",
+  "DROP TABLE IF EXISTS retired_tenant_hosts, tenant_hosts",
+  "DROP FUNCTION IF EXISTS qm_retire_tenant_hosts(), qm_host_tenant(text), qm_tenant_settings(), qm_sole_tenant()",
+];
+
+export const RETIRE_0116_HOSTS: PgMigrationDefinition = {
+  id: "0000-tenancy/retire-0116-hosts",
+  statements: [`SET LOCAL lock_timeout = '5s'`, ...HOST_OBJECTS],
+};
+
 export function retire0116Tenancy(boundTenant: string): PgMigrationDefinition {
   return {
     id: "0000-tenancy/base/retire-0116-keys",
@@ -101,9 +112,7 @@ BEGIN
     EXECUTE format('ALTER TABLE %I DROP COLUMN tenant_id', t.relname);
   END LOOP;
   ALTER TABLE tenants DISABLE ROW LEVEL SECURITY, NO FORCE ROW LEVEL SECURITY;
-  DROP TRIGGER IF EXISTS tenants_retire_hosts ON tenants;
-  DROP TABLE IF EXISTS retired_tenant_hosts, tenant_hosts;
-  DROP FUNCTION IF EXISTS qm_retire_tenant_hosts(), qm_host_tenant(text), qm_tenant_settings(), qm_sole_tenant();
+  ${HOST_OBJECTS.join(";\n  ")};
   ALTER TABLE tenants DROP COLUMN IF EXISTS settings;
   DROP INDEX IF EXISTS deployments_name_lookup;
   DROP TRIGGER IF EXISTS acl_grants_truncate ON acl_grants;

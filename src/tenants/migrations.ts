@@ -1,5 +1,5 @@
 import { definePgMigration, PG_MIGRATIONS_TABLE, type PgMigrationDefinition } from "../persistence/pg-pool.ts";
-import { REPAIR_0116_CONSTRAINTS, retire0116Tenancy } from "./retire-0116-tenancy.ts";
+import { REPAIR_0116_CONSTRAINTS, RETIRE_0116_HOSTS, retire0116Tenancy } from "./retire-0116-tenancy.ts";
 import {
   TENANT_APP_HANDLE_DNS_BOUND,
   TENANT_APP_HANDLES,
@@ -68,16 +68,6 @@ const BOOT_TENANT: PgMigrationDefinition = {
   ],
 };
 
-const RETIRE_0116_HOST_TRIGGER: PgMigrationDefinition = {
-  id: "0000-tenancy/retire-0116-host-trigger",
-  statements: [
-    `SET LOCAL lock_timeout = '5s'`,
-    `DROP TRIGGER IF EXISTS tenants_retire_hosts ON tenants`,
-    `DROP TABLE IF EXISTS retired_tenant_hosts`,
-    `DROP FUNCTION IF EXISTS qm_retire_tenant_hosts(), qm_host_tenant(text), qm_tenant_settings(), qm_sole_tenant()`,
-  ],
-};
-
 const DROP_TENANT_HOSTS: PgMigrationDefinition = {
   id: "0000-tenancy/tenant-hosts-drop",
   statements: [
@@ -109,7 +99,7 @@ export const TENANCY: readonly PgMigrationDefinition[] = [
   TENANT_ROW_SECURITY,
   BOOT_TENANT,
   TENANT_APP_HANDLES,
-  RETIRE_0116_HOST_TRIGGER,
+  RETIRE_0116_HOSTS,
   DROP_TENANT_HOSTS,
   TENANT_APP_HANDLE_DNS_BOUND,
   TENANT_APP_HOSTS_BY_HANDLE,
