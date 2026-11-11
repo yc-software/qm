@@ -132,7 +132,11 @@ export interface DeployService {
   gitRepoPath(idOrName: string): Promise<string | null>;
   pushGit<T>(id: string, runReceivePack: () => Promise<{ result: T; ok: boolean }>, actor?: string): Promise<T>;
   source(idOrName: string, paths?: string[], commit?: string): Promise<DeploymentSource | null>;
-  sourceReader(idOrName: string): Promise<AppSourceReader | null>;
+  sourceReader(
+    idOrName: string,
+    caller: Pick<CapabilityClaims, "actorId" | "botActor">,
+    actingScopeId?: ScopeId,
+  ): Promise<AppSourceReader | null>;
   editSource(
     idOrName: string,
     actor: string,
@@ -346,10 +350,12 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     return v;
   };
 
-  async function sourceReader(idOrName: string): Promise<AppSourceReader | null> {
-    const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
-    const head = d ? await liveEdits.savedHeadOf(d) : null;
-    if (!d || !head) return null;
+  const findDeployment = async (idOrName: string) =>
+    (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
+
+  async function sourceReaderOf(d: Deployment): Promise<AppSourceReader | null> {
+    const head = await liveEdits.savedHeadOf(d);
+    if (!head) return null;
     const trees = new Map<string, Promise<DeploymentSource["tree"]>>();
     return {
       commit: head.commit,
@@ -836,11 +842,15 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     },
 
     async source(idOrName, paths, commit) {
-      const reader = await sourceReader(idOrName);
+      const d = await findDeployment(idOrName);
+      const reader = d ? await sourceReaderOf(d) : null;
       return reader ? reader.source(paths, commit) : null;
     },
 
-    sourceReader,
+    async sourceReader(idOrName, caller, actingScopeId) {
+      const d = await findDeployment(idOrName);
+      return d && (await canManage(d, caller, actingScopeId)) ? sourceReaderOf(d) : null;
+    },
 
     async editSource(idOrName, actor, edit) {
       const found = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
@@ -987,7 +997,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     },
 
     async canManageDeployment(idOrName, caller, actingScopeId) {
-      const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
+      const d = await findDeployment(idOrName);
       if (!d) return false;
       return canManage(d, caller, actingScopeId);
     },

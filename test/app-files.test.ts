@@ -464,11 +464,11 @@ test("app source budgets file headings, fences and skipped paths along with cont
     "notes",
     Object.fromEntries(Array.from({ length: 1500 }, (_, i) => [`${"x".repeat(100)}-${i}.txt`, "a"])),
   );
-  let permissionReads = 0;
+  let deploymentReads = 0;
   let treeReads = 0;
-  const { canManageDeployment } = h.deploy;
+  const { getByName } = h.deployStore;
   const { commitTreeOf } = h.deployStore;
-  h.deploy.canManageDeployment = (...args) => (permissionReads++, canManageDeployment(...args));
+  h.deployStore.getByName = (...args) => (deploymentReads++, getByName(...args));
   h.deployStore.commitTreeOf = (...args) => (treeReads++, commitTreeOf(...args));
   const files = createAppFiles({
     deploy: h.deploy,
@@ -477,7 +477,7 @@ test("app source budgets file headings, fences and skipped paths along with cont
     actingScopeId: scopeId("personal", OWNER),
   });
   const shown = await appSourceShown(files, []);
-  assert.equal(permissionReads, 1);
+  assert.equal(deploymentReads, 1);
   assert.equal(treeReads, 1);
   assert.ok(shown.text.length <= 80_000, String(shown.text.length));
   assert.ok(shown.text.includes("```untrusted-data\na\n```"));
@@ -487,7 +487,7 @@ test("app source budgets file headings, fences and skipped paths along with cont
     { sessionId: "s", seq: 1, createdAt: 1 },
   );
   assert.equal((await appSourceShown(files, [prior])).text, "");
-  assert.equal(permissionReads, 2);
+  assert.equal(deploymentReads, 2);
   assert.equal(treeReads, 1);
   await files.save(async (read) => ({
     files: Array.from({ length: 1500 }, (_, i) => ({ path: `${"y".repeat(100)}-${i}.txt`, data: Buffer.from("b") })),

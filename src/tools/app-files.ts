@@ -36,7 +36,10 @@ export function createAppFiles(deps: {
   return {
     app,
     async sourceReader() {
-      return (await canManage()) ? ((await deploy.sourceReader(app)) ?? undefined) : undefined;
+      return (
+        (await deploy.sourceReader(app, { actorId: deps.actorId, botActor: deps.botActor }, deps.actingScopeId)) ??
+        undefined
+      );
     },
     async source(paths, commit) {
       await assertMayEdit();

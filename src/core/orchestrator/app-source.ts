@@ -25,12 +25,18 @@ interface AppSourceShown {
   anchorSeq?: number;
 }
 
+function dependencyRoot(path: string): string | undefined {
+  const dirs = path.split("/").slice(0, -1);
+  const dependency = dirs.findIndex((part) => DEPENDENCY_DIRS.has(part));
+  return dependency < 0 ? undefined : `${dirs.slice(0, dependency + 1).join("/")}/`;
+}
+
 function worthReading(path: string): boolean {
   const parts = path.split("/");
   const name = parts.at(-1)!;
   const type = mimeFromName(name);
   return (
-    !parts.slice(0, -1).some((part) => DEPENDENCY_DIRS.has(part)) &&
+    !dependencyRoot(path) &&
     !LOCKFILES.has(name) &&
     !name.endsWith(".lock") &&
     !name.endsWith(".lockb") &&
@@ -135,11 +141,7 @@ async function render(
   chunks.push(...changed.flatMap((file) => (texts.has(file.path) ? [texts.get(file.path)!] : [])));
   const notShown = Map.groupBy(
     changed.filter((file) => !texts.has(file.path)),
-    (file) => {
-      const parts = file.path.split("/");
-      const dependency = parts.findIndex((part) => DEPENDENCY_DIRS.has(part));
-      return dependency < 0 ? file.path : `${parts.slice(0, dependency + 1).join("/")}/`;
-    },
+    (file) => dependencyRoot(file.path) ?? file.path,
   );
   const names = [...notShown].map(([dir, inside]) => listed(dir, inside));
   room += reserve;
