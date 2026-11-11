@@ -101,19 +101,11 @@ export interface AgentToolsOptions {
   surfaceName?: string;
   surfacePrompt?: SurfaceToolPrompt;
   clientTools?: readonly ClientToolDeclaration[];
-  onlyTools?: readonly string[];
 }
 
 export type CoreToolOptions = Omit<
   AgentToolsOptions,
-  | "readOnly"
-  | "memoryNotebookOnly"
-  | "surfaceTools"
-  | "surfaceName"
-  | "surfacePrompt"
-  | "delegateWork"
-  | "clientTools"
-  | "onlyTools"
+  "readOnly" | "memoryNotebookOnly" | "surfaceTools" | "surfaceName" | "surfacePrompt" | "delegateWork" | "clientTools"
 >;
 
 export function coreToolOptions(config: Config): CoreToolOptions {
@@ -145,6 +137,8 @@ export function pauseStampAfterToolCall(
 ): (info: unknown, signal?: unknown) => Promise<{ terminate?: boolean } | undefined> {
   return async () => (endedOnPurpose(ref) ? { terminate: true } : undefined);
 }
+
+const APP_EDIT_TOOL_NAMES = new Set(["app_files", "apps", "execute", "skills", "files", "history"]);
 
 export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions): ToolDefinition[] {
   const controlTools = !!opts?.controlTools;
@@ -214,7 +208,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   tools.push(...inlineTools, ...connectorTools);
   const active = tools.filter(
     (t) =>
-      (opts?.onlyTools?.includes(t.name) ?? true) &&
+      (!ref.current?.appFiles || APP_EDIT_TOOL_NAMES.has(t.name)) &&
       (opts?.readOnly
         ? READ_ONLY_TOOL_NAMES.has(t.name) || inline.has(t.name) || connectorTools.includes(t)
         : !(opts?.memoryNotebookOnly && SCHEDULING_TOOL_NAMES.has(t.name))),
