@@ -506,5 +506,5 @@ test("app shell: access summary wording", async () => {
   assert.equal(channel.label, "Channel");
   const mixed = appShellAccess({ ...base, grantees: [{ scope: "channel:C1" }, { scope: "personal:a" }] });
   assert.equal(mixed.label, "Shared");
-  assert.equal(mixed.detail, "Shared with 1 person and 1 channel");
+  assert.equal(mixed.detail, "Shared with 1 channel and 1 person");
 });

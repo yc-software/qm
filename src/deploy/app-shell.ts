@@ -1,3 +1,4 @@
+import { parseScopeId, type ScopeKind } from "../types.ts";
 import { ANNOTATE_BUTTON, ANNOTATE_CSS, ANNOTATE_JS, ANNOTATE_MARKUP } from "./app-annotate.ts";
 
 export const APP_SHELL_PATH_PREFIX = "/__claw__/";
@@ -9,34 +10,13 @@ export type AppShellAccess = {
   canEdit: boolean;
 };
 
-const isOrgScope = (scope: string): boolean => scope === "org" || scope.startsWith("org:");
-
-const KIND_WORDS: Record<string, [string, string]> = {
+const NOUNS: Partial<Record<ScopeKind, [one: string, many: string]>> = {
   personal: ["person", "people"],
   channel: ["channel", "channels"],
   group: ["group chat", "group chats"],
   team: ["team", "teams"],
-  project: ["project", "projects"],
 };
-
-function countWords(scopes: readonly string[]): string[] {
-  const counts = new Map<string, number>();
-  for (const scope of scopes) {
-    const kind = scope.slice(0, scope.indexOf(":"));
-    const key = KIND_WORDS[kind] ? kind : "project";
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
-  return Object.keys(KIND_WORDS)
-    .filter((kind) => counts.has(kind))
-    .map((kind) => {
-      const n = counts.get(kind)!;
-      return `${n} ${KIND_WORDS[kind]![n === 1 ? 0 : 1]}`;
-    });
-}
-
-function listWords(words: readonly string[]): string {
-  return words.length < 2 ? (words[0] ?? "") : `${words.slice(0, -1).join(", ")} and ${words.at(-1)}`;
-}
+const OTHER_NOUN: [string, string] = ["project", "projects"];
 
 export function appShellAccess(opts: {
   ownerScopeId: string;
@@ -46,28 +26,35 @@ export function appShellAccess(opts: {
 }): AppShellAccess {
   const ownedByViewer = opts.ownerScopeId === `personal:${opts.viewer}`;
   const canEdit = ownedByViewer;
+  const kindOf = (scope: string) => parseScopeId(scope).kind;
   if (opts.public)
     return { level: "public", label: "Public", detail: "Anyone on the internet with the link can open", canEdit };
-  if (opts.grantees.some((g) => isOrgScope(g.scope)))
+  if (opts.grantees.some((g) => g.scope === "org" || kindOf(g.scope) === "org"))
     return { level: "org", label: "Organization", detail: "Anyone signed in to your organization can open", canEdit };
-  const personalOwner = opts.ownerScopeId.startsWith("personal:");
-  const reach = [...new Set([...(personalOwner ? [] : [opts.ownerScopeId]), ...opts.grantees.map((g) => g.scope)])];
-  if (!reach.length)
+  const owner = kindOf(opts.ownerScopeId) === "personal" ? [] : [opts.ownerScopeId];
+  const reach = new Set([...owner, ...opts.grantees.map((g) => g.scope)]);
+  if (!reach.size)
     return {
       level: "private",
       label: "Private",
       detail: ownedByViewer ? "Only you can open" : "Only the owner can open",
       canEdit,
     };
-  const words = countWords(reach);
-  const onlyPeople = reach.every((scope) => scope.startsWith("personal:"));
-  const single = words.length === 1 && !onlyPeople && words[0]!.startsWith("1 ");
-  let label = words.length === 1 ? words[0]! : "Shared";
-  if (single) label = words[0]!.slice(2).replace(/^\w/, (c) => c.toUpperCase());
+  const counts = new Map<[string, string], number>();
+  for (const scope of reach) {
+    const kind = kindOf(scope);
+    const noun = (kind && NOUNS[kind]) || OTHER_NOUN;
+    counts.set(noun, (counts.get(noun) ?? 0) + 1);
+  }
+  const words = [...counts].map(([[one, many], n]) => `${n} ${n === 1 ? one : many}`);
+  const onlyPeople = counts.size === 1 && counts.has(NOUNS.personal!);
+  const [[[one], n] = [[""], 0]] = counts;
+  let label = counts.size === 1 ? words[0]! : "Shared";
+  if (counts.size === 1 && n === 1 && !onlyPeople) label = one[0]!.toUpperCase() + one.slice(1);
   return {
     level: onlyPeople ? "people" : "context",
     label,
-    detail: `Shared with ${listWords(words)}`,
+    detail: `Shared with ${new Intl.ListFormat("en", { type: "conjunction" }).format(words)}`,
     canEdit,
   };
 }
