@@ -100,8 +100,8 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
   const useHandle = <T>(handle: SandboxHandle, action: () => Promise<T>): Promise<T> =>
     handle.resourceId ? resources.use(handle.resourceId, action) : action();
 
-  async function computerTarget(scopeId: string) {
-    const resource = await resources.resolve(scopeId);
+  async function computerTarget(scopeId: string, sandboxId?: string) {
+    const resource = sandboxId !== undefined ? await resources.get(sandboxId) : await resources.resolve(scopeId);
     if (!resource) throw new NoDefaultSandboxError();
     return {
       sandbox: backendFor(resource.backend),
@@ -306,8 +306,8 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
       : {}),
     ...(some((s) => typeof s.computerStatus === "function")
       ? {
-          computerStatus: async (scopeId: string) => {
-            const target = await computerTarget(scopeId);
+          computerStatus: async (scopeId: string, sandboxId?: string) => {
+            const target = await computerTarget(scopeId, sandboxId);
             const action = () => requireCap(target.sandbox, "computerStatus", scopeId).computerStatus(target.scopeId);
             return resources.use(target.resourceId, action);
           },
@@ -315,8 +315,8 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
       : {}),
     ...(some((s) => typeof s.restartComputer === "function")
       ? {
-          restartComputer: async (scopeId: string) => {
-            const target = await computerTarget(scopeId);
+          restartComputer: async (scopeId: string, _memoryGb?: number, sandboxId?: string) => {
+            const target = await computerTarget(scopeId, sandboxId);
             const action = () =>
               requireCap(target.sandbox, "restartComputer", scopeId).restartComputer(target.scopeId, target.memoryGb);
             return resources.use(target.resourceId, action, true);

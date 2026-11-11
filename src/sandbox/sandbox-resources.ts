@@ -159,7 +159,11 @@ export async function assertBotMayUseComputer(
   botMayUse: ((resource: SandboxResource) => Promise<boolean>) | undefined,
 ): Promise<void> {
   if (!botMayUse) return;
-  const resource = sandboxId ? await resources?.get(sandboxId) : await resources?.resolve(scopeId);
+  if (!sandboxId) {
+    await defaultComputer(resources, scopeId, botMayUse);
+    return;
+  }
+  const resource = await resources?.get(sandboxId);
   if (resource && !(await botMayUse(resource))) throw new BotComputerRefusedError();
 }
 
@@ -170,9 +174,8 @@ export async function defaultComputer(
 ): Promise<SandboxResource | undefined> {
   if (!resources) return;
   const resource = await resources.resolve(scopeId);
-  if (!botMayUse) return resource ?? undefined;
   if (!resource) throw new NoDefaultSandboxError();
-  if (!(await botMayUse(resource))) throw new BotComputerRefusedError();
+  if (botMayUse && !(await botMayUse(resource))) throw new BotComputerRefusedError();
   return resource;
 }
 

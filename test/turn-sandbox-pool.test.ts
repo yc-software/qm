@@ -65,7 +65,7 @@ function fixture(
     },
     get: async (id: string) => resource(id),
     notePersonUse: mock.fn(async (id: string) => resource(id)),
-    resolve: async () => undefined,
+    resolve: async () => resource(`box-${++n}`),
     hold: async (id: string) => {
       if (holdFailures.delete(id)) throw new Error(`hold failed: ${id}`);
     },
@@ -221,14 +221,14 @@ test("a computer whose setup fails mid-turn is still released, and the next call
   const f = fixture();
   f.failNext.push(new Error("provider down"));
   await assert.rejects(f.turn.provision(), /provider down/);
-  f.holdFailures.add("box-1");
-  await assert.rejects(f.turn.provision(), /hold failed: box-1/);
+  f.holdFailures.add("box-2");
+  await assert.rejects(f.turn.provision(), /hold failed: box-2/);
   const box = await f.turn.provision();
   f.holdFailures.add("job-box");
   await assert.rejects(f.turn.provisionResource("job-box"), /hold failed: job-box/);
   await f.turn.provisionResource("job-box");
   await f.turn.reclaimBox();
-  assert.deepEqual(f.teardowns.map(([id]) => id).sort(), ["box-1", box.id, "job-box"].sort());
+  assert.deepEqual(f.teardowns.map(([id]) => id).sort(), ["box-2", box.id, "job-box"].sort());
 });
 
 test("switching the default mid-turn releases the old box, even one still being created", async () => {

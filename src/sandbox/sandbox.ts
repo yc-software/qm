@@ -230,8 +230,8 @@ export interface Sandbox {
   signalProcess?(handle: SandboxHandle, processId: string, signal: string): Promise<void>;
   listProcesses?(handle: SandboxHandle): Promise<ProcessSession[]>;
   persistHomeSnapshot?(scopeId: string): Promise<void>;
-  computerStatus?(scopeId: string): Promise<ComputerStatus>;
-  restartComputer?(scopeId: string, memoryGb?: number): Promise<void>;
+  computerStatus?(scopeId: string, sandboxId?: string): Promise<ComputerStatus>;
+  restartComputer?(scopeId: string, memoryGb?: number, sandboxId?: string): Promise<void>;
   teardown(handle: SandboxHandle, opts?: TeardownOptions): Promise<void>;
   destroyScope?(scopeId: string): Promise<void>;
   reapDeepIdle?(idleMs: number, devIdleMs?: number): Promise<{ reaped: number }>;

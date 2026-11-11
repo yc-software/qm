@@ -811,7 +811,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         }
       : {}),
     async computerStatus(requested?: string): Promise<ComputerStatus> {
-      const sandboxId = requested ?? deps.boundSandboxId ?? (await deps.defaultComputer?.())?.id;
+      const sandboxId = requested ?? deps.boundSandboxId;
       const probe = async (status: ComputerStatus, provision: () => Promise<SandboxHandle>) => {
         if (!status.provisioned || status.lifecycleState === "paused") return status;
         try {
@@ -831,13 +831,16 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         const access = await accessSandbox(sandboxId);
         return probe(await resources.status(deps.createdBy, sandboxId), () => deps.provisionResource!(access));
       }
+      const fallback = (await deps.defaultComputer?.())?.id;
       if (!deps.sandbox.computerStatus) {
         throw new CapabilityUnsupportedError(deps.sandbox.profile.backend, "reporting computer status");
       }
-      return probe(await deps.sandbox.computerStatus(writableScopeId), deps.provision);
+      return probe(await deps.sandbox.computerStatus(writableScopeId, fallback), deps.provision);
     },
     async restartComputer(requested?: string, memoryGb?: number): Promise<void> {
-      const sandboxId = requested ?? deps.boundSandboxId ?? (await deps.defaultComputer?.())?.id;
+      const named = requested ?? deps.boundSandboxId;
+      const fallback = named === undefined ? (await deps.defaultComputer?.())?.id : undefined;
+      const sandboxId = named ?? (memoryGb === undefined ? undefined : fallback);
       if (sandboxId !== undefined) {
         const resources = deps.sandboxResources;
         if (!resources) throw new Error("sandbox inventory unavailable");
@@ -848,7 +851,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       if (!deps.sandbox.restartComputer) {
         throw new CapabilityUnsupportedError(deps.sandbox.profile.backend, "restarting the computer");
       }
-      await deps.sandbox.restartComputer(writableScopeId);
+      await deps.sandbox.restartComputer(writableScopeId, undefined, fallback);
     },
     async execute(
       command: string,
