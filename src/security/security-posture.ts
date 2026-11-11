@@ -205,32 +205,35 @@ function securityScreenParts(input: SecurityScreenInput): Array<{ source: string
   });
 }
 
-export function securityScreenPayload(input: SecurityScreenInput): SecurityScreenPayload | null {
-  const unique = securityScreenParts(input);
-  if (!unique.length) return null;
-  const serialized = JSON.stringify(unique);
+function boundedPayload(parts: Array<{ source: string; content: string }>): SecurityScreenPayload | null {
+  if (!parts.length) return null;
+  const serialized = JSON.stringify(parts);
   if (serialized.length <= MAX_SCREEN_CHARS) return { content: serialized, truncated: false };
   const marker = "\n...[security screen input truncated]...\n";
   const half = Math.floor((MAX_SCREEN_CHARS - marker.length) / 2);
   return { content: serialized.slice(0, half) + marker + serialized.slice(-half), truncated: true };
 }
 
+export function securityScreenPayload(input: SecurityScreenInput): SecurityScreenPayload | null {
+  return boundedPayload(securityScreenParts(input));
+}
+
 export function securityScreenPayloads(input: SecurityScreenInput): string[] {
-  const payloads: string[] = [];
+  const chunks: string[] = [];
+  const groups: Array<Array<{ source: string; content: string }>> = [];
   let group: Array<{ source: string; content: string }> = [];
   for (const part of securityScreenParts(input)) {
-    if (JSON.stringify([part]).length > MAX_SCREEN_CHARS) {
-      payloads.push(...securityScreenChunks(part.source, part.content));
-      continue;
+    if (boundedPayload([part])?.truncated) {
+      chunks.push(...securityScreenChunks(part.source, part.content));
+    } else if (boundedPayload([...group, part])?.truncated) {
+      groups.push(group);
+      group = [part];
+    } else {
+      group.push(part);
     }
-    if (JSON.stringify([...group, part]).length > MAX_SCREEN_CHARS) {
-      payloads.push(JSON.stringify(group));
-      group = [];
-    }
-    group.push(part);
   }
-  if (group.length) payloads.push(JSON.stringify(group));
-  return payloads;
+  groups.push(group);
+  return [...groups.flatMap((parts) => boundedPayload(parts)?.content ?? []), ...chunks];
 }
 
 const SCREEN_CHUNK_CHARS = 7_500;
