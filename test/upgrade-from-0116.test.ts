@@ -13,7 +13,6 @@ import { ownerUrl } from "./support/test-tenant.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 const root = fileURLToPath(new URL("..", import.meta.url));
-const FIXTURE = new URL("./fixtures/v0.1.16-seeded.sql.gz", import.meta.url);
 const RELEASE_TENANT = "5870d898-0d55-4acc-bfc6-7beb49f91455";
 const REPLACED_TABLES = new Set([
   "public.acl_grants_version",
@@ -24,6 +23,7 @@ const REPLACED_TABLES = new Set([
   "public.qm_tenant",
   "public.retired_tenant_hosts",
   "public.session_leases",
+  "public.tenants",
   "public.tenant_hosts",
 ]);
 
@@ -105,58 +105,69 @@ async function rowCounts(db: pg.Pool): Promise<Map<string, number>> {
   return new Map(rows.map(({ name, n }) => [name, n]));
 }
 
-test(
-  "a seeded v0.1.16 database upgrades to the fresh tenant-keyed schema and keeps its rows",
-  { skip: !databaseUrl, timeout: 900_000 },
-  async () => {
-    const admin = new pg.Pool({ connectionString: ownerUrl(databaseUrl!).toString(), max: 1 });
-    const dataDir = await mkdtemp(join(tmpdir(), "qm-upgrade-test-"));
-    try {
-      const fresh = await withDatabase(admin, async (url, db) => {
-        await migrate(url, dataDir);
-        return (await db.query<{ entry: string }>(SCHEMA_SNAPSHOT)).rows.map(({ entry }) => entry);
-      });
-      await withDatabase(admin, async (url, db) => {
-        await db.query(gunzipSync(await readFile(FIXTURE)).toString("utf8"));
-        await db.query("SELECT pg_catalog.set_config('search_path', '\"$user\", public', false)");
-        const before = await rowCounts(db);
-        const closed = await db.query<{ n: number }>(
-          "SELECT count(*)::int AS n FROM participants WHERE valid_to IS NOT NULL OR valid_to_seq IS NOT NULL",
-        );
-        before.set("public.participants", before.get("public.participants")! - closed.rows[0]!.n);
-        await migrate(url, dataDir);
-        await migrate(url, dataDir);
-        const upgraded = (await db.query<{ entry: string }>(SCHEMA_SNAPSHOT)).rows.map(({ entry }) => entry);
-        assert.deepEqual(
-          upgraded.filter((entry) => !fresh.includes(entry)),
-          fresh.filter((entry) => !upgraded.includes(entry)),
-        );
-        assert.deepEqual(upgraded, fresh);
-
-        const after = await rowCounts(db);
-        for (const [name, count] of before) {
-          if (REPLACED_TABLES.has(name)) continue;
-          assert.equal(after.get(name), count, `${name} kept its rows`);
-        }
-        assert.ok((before.get("public.sessions") ?? 0) > 0);
-        const { rows: tenants } = await db.query<{ id: string }>("SELECT id FROM tenants");
-        assert.deepEqual(tenants, [{ id: RELEASE_TENANT }]);
-        const { rows: tables } = await db.query<{ table_name: string }>(
-          `SELECT table_name FROM information_schema.columns
-            WHERE table_schema = 'public' AND column_name = 'tenant_id' AND table_name <> 'tenants'`,
-        );
-        assert.ok(tables.length > 100);
-        for (const { table_name } of tables) {
-          const { rows } = await db.query<{ n: number }>(
-            `SELECT count(*)::int AS n FROM ${table_name} WHERE tenant_id IS DISTINCT FROM $1`,
-            [RELEASE_TENANT],
+const load = async (db: pg.Pool, f: string) =>
+  db.query(
+    `${gunzipSync(await readFile(new URL(`./fixtures/${f}`, import.meta.url)))}SET search_path = "$user", public`,
+  );
+for (const [fixture, baseline] of [
+  ["v0.1.16-seeded.sql.gz"],
+  ["v0.1.15-after-failed-0.1.16.sql.gz", "v0.1.15-seeded.sql.gz"],
+  ["v0.1.15-after-failed-0.1.16-and-0.1.17.sql.gz", "v0.1.15-seeded.sql.gz"],
+] as const)
+  test(
+    `${fixture} upgrades to the schema ${baseline ?? "a fresh database"} upgrades to and keeps its rows`,
+    { skip: !databaseUrl, timeout: 900_000 },
+    async () => {
+      const admin = new pg.Pool({ connectionString: ownerUrl(databaseUrl!).toString(), max: 1 });
+      const dataDir = await mkdtemp(join(tmpdir(), "qm-upgrade-test-"));
+      try {
+        const fresh = await withDatabase(admin, async (url, db) => {
+          if (baseline) await load(db, baseline);
+          await migrate(url, dataDir);
+          return (await db.query<{ entry: string }>(SCHEMA_SNAPSHOT)).rows.map(({ entry }) => entry);
+        });
+        await withDatabase(admin, async (url, db) => {
+          await load(db, fixture);
+          const before = await rowCounts(db);
+          if (!baseline) {
+            const closed = await db.query<{ n: number }>(
+              "SELECT count(*)::int AS n FROM participants WHERE valid_to IS NOT NULL OR valid_to_seq IS NOT NULL",
+            );
+            before.set("public.participants", before.get("public.participants")! - closed.rows[0]!.n);
+          }
+          await migrate(url, dataDir);
+          await migrate(url, dataDir);
+          const upgraded = (await db.query<{ entry: string }>(SCHEMA_SNAPSHOT)).rows.map(({ entry }) => entry);
+          assert.deepEqual(
+            upgraded.filter((entry) => !fresh.includes(entry)),
+            fresh.filter((entry) => !upgraded.includes(entry)),
           );
-          assert.equal(rows[0]!.n, 0, `${table_name} rows stay with the release tenant`);
-        }
-      });
-    } finally {
-      await rm(dataDir, { recursive: true, force: true });
-      await admin.end();
-    }
-  },
-);
+          assert.deepEqual(upgraded, fresh);
+
+          const after = await rowCounts(db);
+          for (const [name, count] of before) {
+            if (REPLACED_TABLES.has(name) || !after.has(name)) continue;
+            assert.equal(after.get(name), count, `${name} kept its rows`);
+          }
+          assert.ok((before.get(baseline ? "public.channel_messages" : "public.sessions") ?? 0) > 0);
+          const { rows: tenants } = await db.query<{ id: string }>("SELECT id FROM tenants");
+          assert.deepEqual(tenants, [{ id: baseline ? tenants[0]?.id : RELEASE_TENANT }]);
+          const { rows: tables } = await db.query<{ table_name: string }>(
+            `SELECT table_name FROM information_schema.columns
+            WHERE table_schema = 'public' AND column_name = 'tenant_id' AND table_name <> 'tenants'`,
+          );
+          assert.ok(tables.length > 100);
+          for (const { table_name } of tables) {
+            const { rows } = await db.query<{ n: number }>(
+              `SELECT count(*)::int AS n FROM ${table_name} WHERE tenant_id IS DISTINCT FROM $1`,
+              [tenants[0]!.id],
+            );
+            assert.equal(rows[0]!.n, 0, `${table_name} rows stay with the release tenant`);
+          }
+        });
+      } finally {
+        await rm(dataDir, { recursive: true, force: true });
+        await admin.end();
+      }
+    },
+  );
