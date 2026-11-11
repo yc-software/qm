@@ -2,6 +2,7 @@ import {
   generalAccessOf,
   isOrgScope,
   orgAccessNote,
+  orgDisplayName,
   PUBLIC_ACCESS_NOTE,
   type GeneralAccess,
 } from "../../chassis/src/app-access.ts";
@@ -163,7 +164,7 @@ export async function openDeploymentPermissions(
       }
     }
   };
-  const orgName = (): string => appState.me?.companyName?.trim() || "Your organization";
+  const orgName = (): string => orgDisplayName(appState.me?.companyName);
   const generalAccessNote = (): string => {
     const level = generalAccess();
     if (level === "public") return `${PUBLIC_ACCESS_NOTE}. No sign-in required`;

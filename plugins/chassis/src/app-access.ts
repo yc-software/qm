@@ -10,3 +10,5 @@ export function generalAccessOf(opts: { public: boolean; grantees: ReadonlyArray
 export const PUBLIC_ACCESS_NOTE = "Anyone on the internet with the link can open";
 
 export const orgAccessNote = (orgName: string): string => `Anyone signed in to ${orgName} can open`;
+
+export const orgDisplayName = (name?: string | null): string => name?.trim() || "Your organization";

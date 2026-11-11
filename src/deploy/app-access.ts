@@ -1,4 +1,9 @@
-import { generalAccessOf, orgAccessNote, PUBLIC_ACCESS_NOTE } from "../../plugins/chassis/src/app-access.ts";
+import {
+  generalAccessOf,
+  orgAccessNote,
+  orgDisplayName,
+  PUBLIC_ACCESS_NOTE,
+} from "../../plugins/chassis/src/app-access.ts";
 import { parseScopeId, personalScope, type ScopeKind } from "../types.ts";
 
 export function canEditAppPermissions(ownerScopeId: string, principalId: string): boolean {
@@ -32,13 +37,8 @@ export function appAccess(opts: {
   const general = generalAccessOf(opts);
   if (general === "public") return { level: "public", label: "Public", detail: PUBLIC_ACCESS_NOTE, canEdit };
   if (general === "org") {
-    const org = opts.orgName?.trim();
-    return {
-      level: "org",
-      label: org || "Your organization",
-      detail: orgAccessNote(org || "your organization"),
-      canEdit,
-    };
+    const org = orgDisplayName(opts.orgName);
+    return { level: "org", label: org, detail: orgAccessNote(org), canEdit };
   }
   const owner = parseScopeId(opts.ownerScopeId).kind === "personal" ? [] : [opts.ownerScopeId];
   const kinds = [...new Set([...owner, ...opts.grantees.map((g) => g.scope)])].flatMap(
