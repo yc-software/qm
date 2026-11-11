@@ -1302,6 +1302,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await Promise.all(pendingScreenRequests.splice(0).map((rec) => recordScreenRequest(rec)));
           return true;
         });
+        const runtimeClaims: CapabilityClaims = controlClaims ?? {
+          ...scopeAttestation,
+          exp: Date.now() + CAPABILITY_TTL_MS,
+          ...(liveAuthorTurn ? { liveAuthor: true } : {}),
+          ...(automatedTurn ? { triggered: true } : {}),
+        };
+        const personTurn = personSentTurn(runtimeClaims);
         const contextWindow = deps.sessions.getContextWindow(session.id);
         const snapshot = context.memorySnapshot();
         const recallOutcomes: MemoryProviderOutcome[] = [];
@@ -1314,6 +1321,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             (outcome) => void recallOutcomes.push(outcome),
             isPersonAuthored(input.origin.kind) && !sessionTurn ? titleText : undefined,
             session.id,
+            { personTurn, history },
           );
         const importsOverheard = (!input.envelopeWrapped || humanInput) && !!input.overheard?.length;
         const earlyRecall =
@@ -1596,13 +1604,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         });
         const liveNote = async () =>
           (await turnSessionSyscalls?.liveSubagents?.().catch(swallowAs("live note", ""))) ?? "";
-        const runtimeClaims: CapabilityClaims = controlClaims ?? {
-          ...scopeAttestation,
-          exp: Date.now() + CAPABILITY_TTL_MS,
-          ...(liveAuthorTurn ? { liveAuthor: true } : {}),
-          ...(automatedTurn ? { triggered: true } : {}),
-        };
-        const personTurn = personSentTurn(runtimeClaims);
         const turnMcpTools = context.mcpTools(personTurn, mcpToolsReady);
         const editingApp = appEditSlug(conversation.threadRef, actor.id);
         const baseTools = createToolContext({

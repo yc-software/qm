@@ -641,7 +641,7 @@ for (const mode of ["off", "writable", "skip"] as const) {
   test(`Open respects memory ${mode}`, async () => {
     const { orchestrator, config, memory } = buildOrchestrator({
       sandbox: readSandbox(),
-      memoryPolicy: { recall: mode === "skip" ? "visible" : mode, capture: "off" },
+      memoryPolicy: { recall: mode === "skip" ? "visible" : mode, capture: "off", card: "on" },
       isCurrentSharedScopeMember: async () => true,
     });
     await config.setSharingPosture(scopeId("org", ORG), "open");

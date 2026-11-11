@@ -32,7 +32,7 @@ const ACTING_USER = "acting_user";
 const PENDING_STATES = new Set(["queued", "running", "recovering"]);
 const UNPUBLISHED_STATES = new Set(["conflict", "failed", "cancelled"]);
 
-function resultText(result: CallToolResult): string {
+export function resultText(result: CallToolResult): string {
   if (result.content.some((block) => block.type === "text")) return mcpResultText(result);
   return result.structuredContent == null ? "" : JSON.stringify(result.structuredContent);
 }
@@ -145,6 +145,7 @@ export function createMcpMemoryProvider(opts: {
       context?.actorId,
       scopeId,
       context?.audienceScopeId,
+      (context?.startedAt ?? Date.now()) + op.timeoutMs,
     ).catch((error: unknown) => {
       throw error instanceof OutsideAudience ? new MemoryRecallWithheld(scopeId) : error;
     });
@@ -219,14 +220,18 @@ export function createMcpMemoryProvider(opts: {
     ...(opts.attestActor
       ? {
           lookupTools: (scopeId, { actorId, audienceScopeId }) => lookupTools(scopeId, actorId, audienceScopeId),
-          lookup: async (scopeId, tool, args, by, context) =>
-            resultText(
-              await opts.read.client.callTool(
-                tool,
-                args,
-                attest(by?.actorId, scopeId, context?.audienceScopeId).headers,
-              ),
-            ),
+          lookup: (scopeId, tool, args, by, context) =>
+            context?.startedAt === undefined
+              ? opts.read.client.callTool(tool, args, attest(by?.actorId, scopeId, context?.audienceScopeId).headers)
+              : call(
+                  { ...opts.read, tool },
+                  args,
+                  undefined,
+                  by?.actorId,
+                  scopeId,
+                  context.audienceScopeId,
+                  context.startedAt + opts.read.timeoutMs,
+                ),
         }
       : {}),
 

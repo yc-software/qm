@@ -9,7 +9,9 @@ import type { Agent } from "../src/agent/agent.ts";
 import { createAgentTools } from "../src/agent/agent-tools.ts";
 import { turnToolRef } from "../src/agent/turn-open.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
+import { NonRetryableTurnError } from "../src/core/turn-error.ts";
 import { turnAuthority } from "../src/memory/memory-service.ts";
+import type { Config } from "../src/config.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { sleep } from "../src/util/async.ts";
 import type { AddressFetch } from "../src/util/network.ts";
@@ -22,7 +24,7 @@ import { createMockAgent } from "./support/mock-agent.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 
 type Row = Record<string, unknown>;
-type Step = { search: string } | { call: { server?: string; tool: string; args?: Row } } | "revoke";
+type Step = { search: string } | { call: { server?: string; tool: string; args?: Row } } | "revoke" | "crash";
 interface Call {
   tool: string;
   args: Row;
@@ -32,9 +34,15 @@ interface Call {
 const HOT_MEMORY = "Alice prefers morning meetings before 10am.";
 const LOOKUPS = contract.personal_tools.tools.filter(({ mutating }) => !mutating).map(({ name }) => name);
 const PRIYA = { slug: "people/priya-raman", source_id: "default", title: "Priya Raman", type: "person" };
+const PAGE = {
+  slug: "companies/widget-co",
+  source_id: "default",
+  display: "Widget Co",
+  confidence: 0.9,
+  rationale: "named",
+};
 
-function gbrainAnswer(tool: string, args: Row): CallToolResult {
-  const structured = { tool, args, results: [PRIYA] };
+function gbrainAnswer(structured: Row): CallToolResult {
   return {
     structuredContent: structured,
     content: [
@@ -48,6 +56,8 @@ function gbrainAnswer(tool: string, args: Row): CallToolResult {
 async function gbrain(t: { after(fn: () => Promise<void>): void }) {
   const calls: Call[] = [];
   const failures = new Map<string, CallToolResult | number>();
+  const pages: Row[] = [];
+  const people = [{ ...PRIYA }];
   const server = await startMcpTestServer(t, {
     tools: contractTools.map(({ name, description, mutating, input_schema }) => ({
       name,
@@ -59,30 +69,40 @@ async function gbrain(t: { after(fn: () => Promise<void>): void }) {
     call: async (tool, args, _authorization, actor) => {
       calls.push({ tool, args, ...(actor ? { actor } : {}) });
       if (tool === "memory_recall") return { content: [] };
-      const failure = failures.get(String(args.query));
+      const failure = failures.get(String(args.query ?? args.name));
       if (typeof failure === "number") await sleep(failure);
       else if (failure) return failure;
-      return gbrainAnswer(tool, args);
+      const prior = String(args.prior_context);
+      const volunteered = pages.filter(({ slug }) => !prior.includes(String(slug)));
+      const card = people.find(({ slug }) => slug === args.name);
+      if (tool === "volunteer_context")
+        return gbrainAnswer({ pages: volunteered, count: volunteered.length, window_turns: 1 });
+      if (tool === "whois")
+        return gbrainAnswer({ query: args.query, matches: people.filter(({ title }) => title === args.query) });
+      if (tool === "entity")
+        return gbrainAnswer({ protocol_version: 1, found: !!card, ...(card && { card: { entity: card } }) });
+      return gbrainAnswer({ tool, args, results: [PRIYA] });
     },
   });
-  return Object.assign(server, { calls, failures });
+  return Object.assign(server, { calls, failures, pages, people });
 }
 
 async function brainApp(t: { after(fn: () => Promise<void>): void }, config = testConfig()) {
-  const acme = await gbrain(t);
+  const [acme, beta] = await Promise.all([gbrain(t), gbrain(t)]);
   const script: Step[] = [];
-  const runs: Array<{ prompt: string; texts: string[] }> = [];
+  const runs: Array<{ prompt: string; environment?: string; texts: string[] }> = [];
   const mock = createMockAgent();
   const agent: Agent = {
     ...mock,
     async runTurn(input) {
       const tools = createAgentTools(turnToolRef(input), input.mcpTools?.length ? { mcpTools: input.mcpTools } : {});
-      const run = { prompt: input.systemPrompt, texts: [] as string[] };
+      const run = { prompt: input.systemPrompt, environment: input.environment, texts: [] as string[] };
       runs.push(run);
+      if (script[0] === "crash") throw new NonRetryableTurnError(String(script.shift()));
       if (!script.length) return mock.runTurn(input);
       await input.emit({ kind: "UserMessage", text: input.input, author: input.runtimeActorId ?? null, body: {} });
       for (const step of script.splice(0)) {
-        if (step === "revoke") {
+        if (typeof step === "string") {
           await admin("DELETE", "/v1/admin/memory-registry/bindings/acme");
           continue;
         }
@@ -99,7 +119,8 @@ async function brainApp(t: { after(fn: () => Promise<void>): void }, config = te
       return { reply: "done", modelCalls: 1 };
     },
   };
-  const memoryRegistryFetch: AddressFetch = routedTo(acme.url);
+  const memoryRegistryFetch: AddressFetch = (url, init) =>
+    routedTo(new URL(url).host === "brain.beta.example" ? beta.url : acme.url)(url, init);
   const built = buildApp(config, { memoryRegistryFetch, agent });
   const server = createInsecureTestServer(built.app, {
     admin: built.admin,
@@ -118,19 +139,23 @@ async function brainApp(t: { after(fn: () => Promise<void>): void }, config = te
     });
     assert.equal(res.status, 200, await res.text());
   };
-  await admin("PUT", "/v1/admin/memory-registry/brains/acme", {
-    preset: "gbrain-v1",
-    url: "https://brain.acme.example/mcp",
-    clientId: "qm",
-    clientSecret: "brain-secret",
-    label: "Acme brain",
-    timeoutMs: 400,
-  });
-  await admin("PUT", "/v1/admin/memory-registry/bindings/acme", {
-    brain: "acme",
-    scope: "personal",
-    capture: "explicit",
-  });
+  const bind = async (id: string, label: string, binding: Row = {}) => {
+    await admin("PUT", `/v1/admin/memory-registry/brains/${id}`, {
+      preset: "gbrain-v1",
+      url: `https://brain.${id}.example/mcp`,
+      clientId: "qm",
+      clientSecret: "brain-secret",
+      label,
+      timeoutMs: 400,
+    });
+    await admin("PUT", `/v1/admin/memory-registry/bindings/${id}`, {
+      brain: id,
+      scope: "personal",
+      capture: "explicit",
+      ...binding,
+    });
+  };
+  await bind("acme", "Acme brain");
   const turn = async (steps: Step[], request: Partial<TurnRequest> = {}) => {
     script.splice(0, script.length, ...steps);
     const before = runs.length;
@@ -144,13 +169,20 @@ async function brainApp(t: { after(fn: () => Promise<void>): void }, config = te
     });
     return runs.length > before ? runs.at(-1)! : undefined;
   };
-  return { built, acme, turn };
+  return { built, acme, beta, admin, bind, turn };
 }
 
 const lookups = (brain: { calls: Call[] }) => brain.calls.filter(({ tool }) => tool !== "memory_recall");
 const listings = (brain: { requests: Array<{ rpc?: string }> }) =>
   brain.requests.filter(({ rpc }) => rpc === "tools/list").length;
 const whois = { call: { server: "acme", tool: "whois", args: { query: "Priya Raman" } } };
+const VOLUNTEER = { tool: "volunteer_context", args: { window: "Prep me for Priya." }, actor: "U1" };
+const cards = (run?: { environment?: string }) =>
+  run?.environment?.match(/### Brain cards\n```untrusted-data\n([\s\S]*?)\n```/)?.[1]!.split("\n") ?? [];
+const MENTION = { text: "Lunch with <@U2>?" };
+const U2 = [{ principalId: "U2", displayName: "Priya Raman", type: "internal" as const }];
+const CARD = "Acme brain · acme:default:people/priya-raman — Priya Raman (person)";
+const asks = (brain: { calls: Call[] }, tool: string) => brain.calls.filter((call) => call.tool === tool);
 
 test("the person's own DM gets each brain's read-only tools through the connector bridge, called as them with the arguments as sent", async (t) => {
   const { acme, turn } = await brainApp(t);
@@ -171,6 +203,7 @@ test("the person's own DM gets each brain's read-only tools through the connecto
     },
   );
   assert.deepEqual(lookups(acme), [
+    VOLUNTEER,
     { tool: "get_page", args: { slug: PRIYA.slug, include_deleted: true }, actor: "U1" },
   ]);
   assert.match(run.texts[1]!, /"include_deleted":true[\s\S]*\[gbrain degraded: embed_unavailable\] partial/);
@@ -192,6 +225,7 @@ test("turns the person didn't send in their own DM never list, find or call the 
     },
     { conversation: { kind: "channel", threadRef: "C1", channelRef: "C1" } },
     { actor: { externalId: "system:ambient:default-org" } },
+    { botActor: true },
   ];
   for (const request of others) {
     const run = (await turn([{ search: "*" }, whois], request))!;
@@ -244,7 +278,7 @@ test("a lookup checks the person and the live binding when it runs, and sends no
   );
   const run = (await turn(["revoke", whois]))!;
   assert.match(run.texts[0]!, /^\[error\] no brain is connected to this conversation$/);
-  assert.deepEqual(lookups(acme), []);
+  assert.deepEqual(lookups(acme), [VOLUNTEER]);
 });
 
 test("a lookup outlasts recall's timeout, and a refusal or failure answers with what to do next and the brain's own words", async (t) => {
@@ -281,7 +315,81 @@ test("strict posture holds a brain lookup for approval, and dangerous runs it", 
   const { built, acme, turn } = await brainApp(t);
   await built.config.setSecurityPosture("personal:U1", "strict");
   assert.match((await turn([whois]))!.texts[0]!, /needs human approval/);
-  assert.deepEqual(lookups(acme), []);
+  assert.deepEqual(lookups(acme), [VOLUNTEER]);
   await built.config.setSecurityPosture("personal:U1", "dangerous");
   assert.match((await turn([whois]))!.texts[0]!, /"query":"Priya Raman"/);
+});
+
+test("a brain card needs its switch and the binding's recall, and a revoked binding gets no call", async (t) => {
+  const cases: Array<[Partial<Config>, Row | "revoke" | undefined, boolean, boolean]> = [
+    [{ memoryCard: "off" }, undefined, true, true],
+    [{}, { recall: false }, false, false],
+    [{}, "revoke", false, false],
+  ];
+  for (const [config, change, recalled, offered] of cases) {
+    const { acme, admin, bind, built, turn } = await brainApp(t, testConfig(config));
+    if (change === "revoke") await admin("DELETE", "/v1/admin/memory-registry/bindings/acme");
+    else if (change) await bind("acme", "Acme brain", change);
+    await built.directory.replace(U2);
+    acme.pages.push(PAGE);
+    const run = (await turn([], MENTION))!;
+    assert.deepEqual(lookups(acme), [], JSON.stringify(config));
+    assert.deepEqual([asks(acme, "memory_recall").length > 0, /\[acme\]/.test(run.prompt)], [recalled, offered]);
+  }
+});
+
+test("the card chain shares recall's deadline: hops that each fit the timeout but not together drop that brain's card", async (t) => {
+  const { acme, built, turn } = await brainApp(t);
+  await built.directory.replace(U2);
+  assert.deepEqual(cards(await turn([], MENTION)), [CARD]);
+  acme.failures.set("Priya Raman", 250);
+  acme.failures.set(PRIYA.slug, 250);
+  assert.deepEqual(cards(await turn([], MENTION)), []);
+  assert.deepEqual(
+    asks(acme, "entity").map(({ args }) => args),
+    [1, 2].map(() => ({ name: PRIYA.slug, source_id: "default" })),
+  );
+});
+
+test("a card shows once per retained context: again after an interrupted turn or compaction, or when its page changes", async (t) => {
+  const { acme, built, turn } = await brainApp(t);
+  await built.directory.replace(U2);
+  acme.pages.push(PAGE);
+  const ask = { ...MENTION, conversation: { kind: "dm" as const, threadRef: "dm:U1:cards" } };
+  const both = [CARD, "Acme brain · acme:default:companies/widget-co — Widget Co: named"];
+  assert.deepEqual(cards(await turn(["crash"], ask)), both);
+  assert.deepEqual(cards(await turn([], ask)), both);
+  assert.deepEqual(cards(await turn([], ask)), []);
+  const { id } = (await built.sessions.getByThread(ask.conversation.threadRef))!;
+  const throughSeq = (await built.sessions.getItems(id)).at(-1)!.seq;
+  await built.sessions.append({ sessionId: id }, { kind: "ContextCompaction", throughSeq, text: "recap" });
+  assert.deepEqual(cards(await turn([], ask)), both);
+  acme.people[0]!.type = "founder";
+  assert.deepEqual(cards(await turn([], ask)), [CARD.replace("person", "founder")]);
+  const refs = both.map((card) => card.split(" ")[3]).join("\n");
+  assert.deepEqual(
+    asks(acme, "volunteer_context").map(({ args }) => args.prior_context),
+    [undefined, undefined, refs, undefined, refs],
+  );
+});
+
+test("the same page in two brains gives two cards in one 1,200-character block, and each brain hears only its own refs", async (t) => {
+  const { acme, beta, bind, turn } = await brainApp(t);
+  await bind("beta", "Beta brain");
+  const long = (slug: string) => ({ ...PAGE, slug, rationale: "r".repeat(300) });
+  acme.pages.push(long("notes/a"), long("notes/b"));
+  beta.pages.push(long("notes/a"), long("notes/b"));
+  const conversation = { kind: "dm" as const, threadRef: "dm:U1:two" };
+  const run = await turn([], { conversation });
+  const block = run!.environment!.match(/## What you remember\n[\s\S]*?(### Brain cards\n[\s\S]*?\n```)$/m)![1]!;
+  assert.ok(block.length <= 1_200, `${block.length} characters`);
+  assert.deepEqual(
+    cards(run).map((card) => card.split(" — ")[0]),
+    ["Acme brain · acme:default:notes/a", "Acme brain · acme:default:notes/b", "Beta brain · beta:default:notes/a"],
+  );
+  await turn([], { conversation });
+  assert.deepEqual(
+    [acme, beta].map((brain) => asks(brain, "volunteer_context").at(-1)!.args.prior_context),
+    ["acme:default:notes/a\nacme:default:notes/b", "beta:default:notes/a"],
+  );
 });

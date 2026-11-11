@@ -9,6 +9,8 @@ interface Shown {
   scope: string;
   id?: string;
   provider?: string;
+  ref?: string;
+  kind?: "card";
   hash: string;
 }
 
@@ -17,19 +19,32 @@ interface RecallRecord {
   anchorSeq?: number;
 }
 
-const shownOf = ({ scope, id, text, source }: RecalledFact): Shown => ({
+const shownOf = ({ scope, id, text, source, ref, kind }: RecalledFact): Shown => ({
   scope,
   ...(id !== undefined ? { id } : {}),
   ...(source ? { provider: source.provider } : {}),
+  ...(ref ? { ref } : {}),
+  ...(kind ? { kind } : {}),
   hash: factHash(text).slice(0, 16),
 });
+
+const recordOf = (item: Item) => {
+  const record = item.body.memoryRecall as RecallRecord | undefined;
+  return record?.shown ? record : undefined;
+};
+
+export const deliveredCards = (history: readonly Item[]): string[] =>
+  (retainedSnapshot(history, recordOf).previous?.shown ?? []).flatMap(({ kind, ref }) =>
+    kind === "card" && ref ? [ref] : [],
+  );
 
 export const shownFacts = (facts: readonly MemoryFact[]) => new Map(facts.map((fact) => [fact.id, fact]));
 
 const stillHeld = (fact: MemoryFact | undefined, shown: Shown) =>
   !!fact && shownOf({ scope: "", id: fact.id, text: renderFacts([fact]) }).hash === shown.hash;
 
-const keyOf = ({ scope, id, provider, hash }: Shown) => JSON.stringify([scope, id ?? null, provider ?? null, hash]);
+const keyOf = ({ scope, id, provider, ref, hash }: Shown) =>
+  JSON.stringify([scope, id ?? null, provider ?? null, ref ?? null, hash]);
 
 const sourceOf = ({ scope, provider }: Shown) => JSON.stringify([scope, provider ?? null]);
 
@@ -40,10 +55,7 @@ export function memoryRecallDelta(
   labels: ReadonlyMap<string, string> = new Map(),
   outcomes: readonly MemoryProviderOutcome[] = [],
 ): { text: string; record: RecallRecord } {
-  const { previous, anchorSeq } = retainedSnapshot(history, (item) => {
-    const record = item.body.memoryRecall as RecallRecord | undefined;
-    return record?.shown ? record : undefined;
-  });
+  const { previous, anchorSeq } = retainedSnapshot(history, recordOf);
   const current = recalled.map(shownOf);
   const record: RecallRecord = { shown: current, ...(anchorSeq !== undefined ? { anchorSeq } : {}) };
   if (!previous) return { text: renderRecall(recalled, labels), record };
@@ -53,7 +65,7 @@ export function memoryRecallDelta(
   const withdrawn = new Map<string, number>();
   const answered = new Map<string, number>();
   for (const shown of current)
-    if (shown.id === undefined) answered.set(sourceOf(shown), (answered.get(sourceOf(shown)) ?? 0) + 1);
+    if (shown.id === undefined && !shown.kind) answered.set(sourceOf(shown), (answered.get(sourceOf(shown)) ?? 0) + 1);
   const kept = new Map<string, number>();
   let unauthorized = false;
   for (const [key, shown] of before) {
@@ -69,7 +81,9 @@ export function memoryRecallDelta(
       const room = outcome?.outcome === "ok" ? Math.max(1, answered.get(source) ?? 0) : Infinity;
       if (!outcome || ["denied", "disabled"].includes(outcome.outcome) || DENIED_CODES.has(outcome.code ?? ""))
         unauthorized = true;
-      else if ((kept.get(source) ?? 0) < room) {
+      else if (shown.kind) {
+        if (!current.some(({ ref }) => ref === shown.ref)) record.shown.push(shown);
+      } else if ((kept.get(source) ?? 0) < room) {
         record.shown.push(shown);
         kept.set(source, (kept.get(source) ?? 0) + 1);
       }

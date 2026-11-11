@@ -42,7 +42,7 @@ async function fixture() {
     isCurrentSharedScopeMember: async (actor, scope) => member && actor === "alice" && scope === "channel:eng",
     config,
     resolution,
-    memoryPolicy: { recall: "visible", capture: "writable" },
+    memoryPolicy: { recall: "visible", capture: "writable", card: "on" },
     useMemory: true,
     memory,
     files,

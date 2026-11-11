@@ -12,6 +12,7 @@ import {
 } from "../credentials/execute-files.ts";
 import type { MemoryCaptureMetadata } from "../memory/facts.ts";
 import { disclosedMemory } from "../memory/disclosure.ts";
+import { resultText } from "../memory/mcp-memory-provider.ts";
 import { MaskedExecutionError, executionSecretEnv, createExactSecretValueMasker } from "../security/secret-masking.ts";
 import { withAbort, withTimeout } from "../util/async.ts";
 import type { RuntimeRequest, RuntimeResult } from "../agent/runtime-types.ts";
@@ -1234,12 +1235,14 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     async lookupBrain(brain: string, tool: string, args: Record<string, unknown>): Promise<string> {
       if (!memory?.lookup || !deps.memoryScopeId || !deps.memoryAccess?.read.includes(deps.memoryScopeId))
         throw new Error("no brain is connected to this conversation");
-      return memory.lookup(
-        deps.memoryScopeId,
-        providerRef(brain, tool),
-        args,
-        turnAuthority(deps.createdBy, deps.memoryAccess, deps.personTurn),
-        deps.audienceScopeId ? { audienceScopeId: deps.audienceScopeId } : {},
+      return resultText(
+        await memory.lookup(
+          deps.memoryScopeId,
+          providerRef(brain, tool),
+          args,
+          turnAuthority(deps.createdBy, deps.memoryAccess, deps.personTurn),
+          deps.audienceScopeId ? { audienceScopeId: deps.audienceScopeId } : {},
+        ),
       );
     },
 
