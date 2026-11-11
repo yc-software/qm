@@ -61,8 +61,24 @@ export const unscreenedVerdict = (): SecurityScreenVerdict => ({
 
 export const oversizeVerdict = (): SecurityScreenVerdict => ({
   decision: "strict",
+  unscreened: true,
   reason: `too long for the security screen to read (over ${MAX_DOCUMENT_TEXT_CHARS} characters)`,
 });
+
+export function withholdOversize(
+  audit: InboundScreenTurn["audit"],
+  resource: string,
+  name: string,
+): SecurityScreenVerdict {
+  const verdict = oversizeVerdict();
+  audit({
+    action: SECURITY_FLAGGED,
+    resource,
+    status: "withheld",
+    detail: JSON.stringify({ cause: "strict-verdict", reason: verdict.reason, source: [name] }),
+  });
+  return verdict;
+}
 
 type ScreenStatus = "allow" | "block" | "would_block" | "error";
 type Screened = Pick<SecurityScreenClassification, "verdict"> & Partial<SecurityScreenClassification>;
@@ -652,8 +668,9 @@ export function createDocumentScreen(turn: {
   enforceScreen: boolean;
   classifyAs: ClassifyAs;
   turnAbort: AbortController;
+  audit: InboundScreenTurn["audit"];
 }) {
-  const { deps, session, securityPolicy, enforceScreen, classifyAs, turnAbort } = turn;
+  const { deps, session, securityPolicy, enforceScreen, classifyAs, turnAbort, audit } = turn;
   return async (
     documentInputs: Awaited<ReturnType<typeof loadDocumentInputs>>,
     requestText: string,
@@ -676,7 +693,7 @@ export function createDocumentScreen(turn: {
         }
         const verdict =
           enforceScreen && extracted.truncated
-            ? oversizeVerdict()
+            ? withholdOversize(audit, "inbound_document", document.name)
             : await screenChunks(
                 securityScreenChunks("tool_result:inbound_document", extracted.text),
                 classifyAs({
@@ -689,7 +706,9 @@ export function createDocumentScreen(turn: {
               );
         if (verdict.decision === "strict") {
           documentInputs.documents.splice(documentInputs.documents.indexOf(document), 1);
-          documentInputs.notices.push(`${document.name}: document withheld by the external-data security screen.`);
+          documentInputs.notices.push(
+            `${document.name}: document withheld by the external-data security screen${verdict.unscreened ? `, ${verdict.reason}` : ""}.`,
+          );
         } else if (verdict.unscreened) documentsUnscreened = true;
       }
     }

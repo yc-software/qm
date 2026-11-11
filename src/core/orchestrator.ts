@@ -203,7 +203,7 @@ import {
   createDocumentScreen,
   createSkillScreen,
   createToolResultScreen,
-  oversizeVerdict,
+  withholdOversize,
   screenInboundInput,
   type SecurityScreenContext,
   unscreenedVerdict,
@@ -1766,7 +1766,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   ? async ({ content, name, mimetype }) => {
                       const payload = JSON.stringify({ name, mimetype, content });
                       if (payload.length > MAX_DOCUMENT_TEXT_CHARS)
-                        return enforceScreen ? oversizeVerdict() : unscreenedVerdict();
+                        return enforceScreen ? withholdOversize(audit, "inbound_file", name) : unscreenedVerdict();
                       return screenChunks(
                         securityScreenChunks("tool_result:inbound_file", payload),
                         classifyAs({
@@ -1873,6 +1873,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           enforceScreen,
           classifyAs,
           turnAbort,
+          audit,
         });
         const documentRoom = {
           maxBytes: MAX_DOCUMENT_BYTES,

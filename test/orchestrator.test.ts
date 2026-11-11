@@ -3885,7 +3885,12 @@ test("Auto holds input too long to screen until a person allows it, and withhold
     }),
   );
   const main = (await built.sessions.listLlmRequests(attached.sessionId!)).findLast((rec) => rec.model === "mock");
-  assert.match(JSON.stringify(main?.promptEnvelope), /notes\.txt — withheld by the external-data security screen/);
+  assert.match(
+    JSON.stringify(main?.promptEnvelope),
+    /notes\.txt: too long for the security screen to read \(over \d+ characters\) — withheld by the external-data security screen/,
+  );
+  const withheld = (await built.auditLog.events(tenant)).find((event) => event.resource === "inbound_file");
+  assert.match(withheld?.detail ?? "", /"source":\["notes\.txt"\]/);
 });
 
 test("an Auto-downgraded turn is quarantined from later full-authority model history", async () => {

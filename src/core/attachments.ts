@@ -280,7 +280,7 @@ export async function materializeInbound(
     if (screenText && textContent !== null) {
       const verdict = await screenText({ content: textContent, name, mimetype });
       if (verdict?.decision === "strict") {
-        blocked.push(name);
+        blocked.push(verdict.unscreened ? `${name}: ${verdict.reason}` : name);
         continue;
       }
       if (!verdict || verdict.unscreened) unscreened.push(name);

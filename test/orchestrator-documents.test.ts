@@ -86,6 +86,8 @@ for (const [file, extension] of [
     const calls = (await built.sessions.listLlmRequests(result.sessionId!)).filter((record) => record.model === "mock");
     assert.doesNotMatch(JSON.stringify(calls.at(-1)?.promptEnvelope), /"documents":/);
     assert.match(JSON.stringify(calls.at(-1)?.promptEnvelope), /withheld by the external-data security screen/);
+    if (file === "long")
+      assert.match(JSON.stringify(calls.at(-1)?.promptEnvelope), /screen, too long for the security/);
     const followup = await built.app.turn({ ...request, text: "try reading it again" });
     const followupCalls = (await built.sessions.listLlmRequests(followup.sessionId!)).filter(
       (record) => record.model === "mock",
