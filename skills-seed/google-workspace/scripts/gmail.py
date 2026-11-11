@@ -12,7 +12,8 @@ requests through the user's app connection via QM's /v1/composio/proxy. Pass
 Usage:
   gmail.py search 'newer_than:7d is:unread' [--limit 10]
   gmail.py read MESSAGE_ID [--full]
-  gmail.py thread THREAD_ID [--full]    # all messages oldest-first + lastFromMe
+  gmail.py thread THREAD_ID [--full]    # all messages oldest-first + lastFromMe;
+                                        # --full bodies omit quoted history
   gmail.py draft --to EMAIL --subject TEXT --body-file FILE
   gmail.py reply MESSAGE_ID --body-file FILE [--all]   # reply-draft anchored to the
                                                        # thread's latest sent message,
@@ -110,14 +111,14 @@ def compose(body: str, original: dict | None = None) -> dict:
     if not (base and cap):
         sys.exit("composing mail needs the agent API (AGENT_API_URL / AGENT_API_TOKEN)")
     res = subprocess.run(
-        ["curl", "-sS", "--max-time", "60", "-X", "POST", "--data-binary", "@-",
+        ["curl", "-sS", "-X", "POST", "--data-binary", "@-",
          "-H", f"X-Agent-Capability: {cap}", "-H", "Content-Type: application/json",
          "-w", "\n%{http_code}", f"{base}/v1/connectors/gmail/compose"],
         input=json.dumps({"body": body, **({"original": original} if original else {})}),
         capture_output=True, text=True)
     text, _, status = res.stdout.rpartition("\n")
     if res.returncode != 0 or not status.startswith("2"):
-        sys.exit(f"compose failed ({status or res.stderr.strip()[:200]}): {text[:500]}")
+        sys.exit(f"compose failed (HTTP {status}, curl exit {res.returncode}: {res.stderr.strip()}): {text}")
     return json.loads(text)
 
 
@@ -160,12 +161,20 @@ def walk_parts(payload: dict):
         yield from walk_parts(part)
 
 
+def unquoted(text: str) -> str:
+    lines = text.splitlines()
+    cut = next((i for i, ln in enumerate(lines) if ln.startswith(">")
+                or (ln.strip().startswith("On ") and ln.strip().endswith("wrote:"))), None)
+    return "\n".join(lines[:cut] if cut else lines).strip()
+
+
 def extract_body(payload: dict) -> str:
     for want in ("text/plain", "text/html"):
         texts = [p["body"]["data"] for p in walk_parts(payload)
                  if p.get("mimeType") == want and p.get("body", {}).get("data")]
         if texts:
-            return "\n".join(b64url_decode(t) for t in texts)
+            body = "\n".join(b64url_decode(t) for t in texts)
+            return unquoted(body) if want == "text/plain" else body
     return ""
 
 

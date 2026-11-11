@@ -38,8 +38,9 @@ export function gmailApi(token: string, fetchImpl: typeof fetch = fetch) {
 export function gmailPartText(part: Record<string, unknown>, mimeType = "text/plain"): string | undefined {
   const texts: string[] = [];
   const visit = (node: Record<string, unknown>): void => {
+    if (node.filename) return;
     const data = isObj(node.body) ? node.body.data : undefined;
-    if (node.mimeType === mimeType && !node.filename && typeof data === "string")
+    if (node.mimeType === mimeType && typeof data === "string")
       texts.push(Buffer.from(data, "base64url").toString("utf8"));
     for (const nested of Array.isArray(node.parts) ? node.parts.filter(isObj) : []) visit(nested);
   };

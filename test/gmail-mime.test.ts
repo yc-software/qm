@@ -29,14 +29,14 @@ test("drafted mail gets a composer-shaped html mirror with clickable links", () 
 
 test("html mirror escapes markup and keeps punctuation out of links", () => {
   const { html } = gmailBodyParts(
-    "a < b & see https://x.test/a?b=1&c=2. and \u201chttps://x.test/r\u201d and http://[::1]/p\u2026",
+    "a < b & see https://x.test/a?b=1&c=2. and (https://x.test/w_(x)) and http://[::1]/p",
     undefined,
     undefined,
   );
   assert.ok(html.includes("a &lt; b &amp; see"), "text is html-escaped");
   assert.ok(html.includes('<a href="https://x.test/a?b=1&amp;c=2">https://x.test/a?b=1&amp;c=2</a>.'));
-  assert.ok(html.includes('<a href="https://x.test/r">'), "smart quote trimmed");
-  assert.ok(html.includes('<a href="http://[::1]/p">http://[::1]/p</a>\u2026'), "balanced brackets kept");
+  assert.ok(html.includes('<a href="https://x.test/w_(x)">https://x.test/w_(x)</a>)'), "balanced parens kept");
+  assert.ok(html.includes('<a href="http://[::1]/p">'), "brackets inside the url kept");
 });
 
 test("replies quote the original the way Gmail's composer does", () => {

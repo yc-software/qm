@@ -34,7 +34,7 @@ import {
 } from "lucide";
 import { embeddedComposer } from "./embedded-composer";
 import type { ComposerSubmission } from "./composer";
-import { api, ApiError, putUiState } from "./core-bridge";
+import { api, ApiError, browserTimezone, putUiState } from "./core-bridge";
 import { onInboxItemEvent, onInboxResync } from "./conversations";
 import { createInboxEventCoalescer } from "./inbox-coalesce";
 import { charForName } from "./emoji-picker";
@@ -1053,7 +1053,7 @@ export async function askAgent(
           body: JSON.stringify({
             message: text,
             ...options,
-            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+            ...(browserTimezone() ? { timezone: browserTimezone() } : {}),
             ...(current.draftAt !== undefined ? { expectedProposalAt: current.draftAt } : {}),
           }),
         },

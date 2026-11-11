@@ -343,7 +343,7 @@ export function sharedContextLabel(scopeId: string | null, name: string | null):
   return null;
 }
 
-function browserTimezone(): string {
+export function browserTimezone(): string {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone ?? "";
   } catch {

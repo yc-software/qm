@@ -121,10 +121,11 @@ async function repliedMessage(
     : await api<{ messages?: unknown[] }>(
         `threads/${encodeURIComponent(meta.threadId)}?format=metadata&metadataHeaders=Message-ID`,
       );
-  const messages = thread ? gmailThreadMessages(thread) : [];
+  const messages = Array.isArray(thread?.messages) ? thread.messages.filter(isObj) : [];
+  const visible = thread ? gmailThreadMessages(thread) : [];
   const answered = (rfcId: string) =>
     messages.find((m) => isObj(m.payload) && gmailHeader(m.payload, "Message-ID").trim() === rfcId.trim());
-  const id = meta.messageId ?? (meta.rfcMessageId ? answered(meta.rfcMessageId) : messages.at(-1))?.id;
+  const id = meta.messageId ?? (meta.rfcMessageId ? answered(meta.rfcMessageId) : visible.at(-1))?.id;
   return typeof id === "string" ? await api(`messages/${encodeURIComponent(id)}?format=full`) : undefined;
 }
 
