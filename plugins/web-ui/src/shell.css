@@ -4224,7 +4224,11 @@ qm-draft .draft-card-body {
   gap: 7px;
   min-width: 0;
 }
+.composer-right {
+  flex: none;
+}
 .composer-attach {
+  flex: none;
   transform: scale(0.81);
 }
 .runtime-upgrade {
@@ -5692,18 +5696,6 @@ a.connector-widget:focus-visible {
   }
   .composer-approval .approval-btn {
     width: 100%;
-  }
-  .composer-toolbar {
-    flex-wrap: wrap;
-  }
-  .composer-left,
-  .composer-right {
-    width: 100%;
-    justify-content: space-between;
-  }
-  .composer-right {
-    flex-wrap: wrap;
-    justify-content: flex-end;
   }
   .runtime-upgrade {
     align-items: flex-start;
@@ -7909,6 +7901,10 @@ h3.ambient-field-label {
   display: flex;
   align-items: center;
   margin-right: 4px;
+}
+
+.dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .dv-tabs-container {
+  cursor: pointer;
 }
 
 .dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .split-pane-title {
@@ -10796,13 +10792,7 @@ h3.ambient-field-label {
   }
   :where(html:not(.desktop-embed)) .composer-wrap .composer-toolbar {
     grid-column: 2;
-    flex-wrap: nowrap;
     gap: 6px;
-  }
-  :where(html:not(.desktop-embed)) .composer-wrap .composer-left,
-  :where(html:not(.desktop-embed)) .composer-wrap .composer-right {
-    width: auto;
-    flex-wrap: nowrap;
   }
   :where(html:not(.desktop-embed)) .composer-wrap .composer-right {
     margin-left: auto;
@@ -11752,12 +11742,6 @@ h3.ambient-field-label {
   background: white;
 }
 
-.menu-suffix {
-  flex: none;
-  white-space: nowrap;
-  color: var(--muted-foreground);
-}
-
 .effort-confetti {
   position: fixed;
   inset: auto;
@@ -12376,13 +12360,10 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
 }
 .split-canvas:not(.single-pane) .composer-wrap .composer-toolbar {
   grid-column: 2;
-  flex-wrap: nowrap;
   gap: 4px;
 }
 .split-canvas:not(.single-pane) .composer-wrap .composer-left,
 .split-canvas:not(.single-pane) .composer-wrap .composer-right {
-  width: auto;
-  flex-wrap: nowrap;
   gap: 4px;
 }
 .split-canvas:not(.single-pane) .composer-wrap .composer-toolbar .menu-button.loadout-button {
@@ -12414,6 +12395,7 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
     width: var(--composer-control-size, 34px);
     padding: 0;
     justify-content: center;
+    gap: 2px;
   }
 }
 
@@ -12834,12 +12816,6 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   align-items: center;
   gap: 3px;
   color: var(--ultrafast-accent);
-  font-size: 10px;
-  font-weight: 600;
-}
-.loadout-button.ultrafast-active {
-  background: color-mix(in srgb, var(--ultrafast-accent) 14%, var(--background));
-  border-color: color-mix(in srgb, var(--ultrafast-accent) 45%, var(--background));
 }
 .loadout-ultrafast .loadout-setting-label {
   display: inline-flex;
