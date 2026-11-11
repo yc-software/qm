@@ -355,13 +355,18 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     : undefined;
   const assertDefaultUsable = (sandboxId = boundSandboxId): Promise<void> =>
     assertBotMayUseComputer(deps.sandboxResources, resolution.writableScopeId, sandboxId, botMayUse);
-  const personUsed = new Set<string>();
+  const personUsed = new Map<string, Promise<void>>();
   const notePersonUse = async (handle: SandboxHandle): Promise<void> => {
     const sandboxId = handle.resourceId ?? boundSandboxId;
-    if (input.botActor || !deps.sandboxResources || !sandboxId || personUsed.has(sandboxId)) return;
-    const used = await deps.sandboxResources.notePersonUse(sandboxId);
-    await deps.swarms?.notePersonUse(used);
-    personUsed.add(sandboxId);
+    const resources = deps.sandboxResources;
+    if (input.botActor || !resources || !sandboxId) return;
+    let noted = personUsed.get(sandboxId);
+    if (!noted) {
+      noted = resources.notePersonUse(sandboxId).then((used) => deps.swarms?.notePersonUse(used));
+      personUsed.set(sandboxId, noted);
+      void noted.catch(() => personUsed.delete(sandboxId));
+    }
+    await noted;
   };
   const turnAccess = {
     env: connectorEnv,
@@ -407,7 +412,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           tracePhase("sandbox.provision", () => openScoped(turnPool, slot, eager)),
         );
     if (opening) await assertDefaultUsable(handle.resourceId ?? boundSandboxId);
-    await notePersonUse(handle);
+    if (!eager || isolation) await notePersonUse(handle);
     return handle;
   };
   const writableScopeId = resolution.writableScopeId;

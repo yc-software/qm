@@ -6,7 +6,7 @@ import type { ProvisionOptions, Sandbox, SandboxHandle, TeardownOptions } from "
 const OWN = "personal:alice";
 
 function fixture(
-  over: { holdKeepsWarm?: boolean | Error; live?: string[] | Error; teardownFails?: string[]; botActor?: true } = {},
+  over: { holdKeepsWarm?: boolean | Error; live?: string[] | Error; teardownFails?: string[]; ctx?: object } = {},
 ) {
   const provisions: Array<ProvisionOptions | undefined> = [];
   const teardowns: Array<[string, TeardownOptions]> = [];
@@ -95,7 +95,7 @@ function fixture(
       isCurrentSharedScopeMember: async () => true,
       errors: { record: (_t: unknown, event: { code: string; message: string }) => errors.push(event) },
     },
-    input: { origin: { kind: "user" }, runId: "run-1", botActor: over.botActor },
+    input: { origin: { kind: "user" }, runId: "run-1" },
     actor: { id: "alice", type: "internal" },
     session: { id: "s" },
     resolution: { writableScopeId: OWN, readOnlyScopeIds: ["org:global"], orgScopeId: "org:global" },
@@ -108,6 +108,7 @@ function fixture(
     egressTokenForPolicy: async () => undefined,
     openResourceAccess: true,
     visibleSkillsForTurn: async () => [],
+    ...over.ctx,
   } as unknown as TurnSandboxContext);
   const released = () => Object.fromEntries(teardowns);
   const clearedTurnFiles = () => removed.filter(([, dir]) => dir === "turn/s/t").map(([id]) => id);
@@ -146,6 +147,12 @@ test("an eagerly warmed default box the turn never used is released as unchanged
   const box = await f.turn.provision(true);
   await f.turn.reclaimBox();
   assert.deepEqual(f.released(), { [box.id]: { homeUnchanged: true } });
+  assert.equal(f.notePersonUse.mock.callCount(), 0);
+});
+
+test("a person's subagent counts its warm-up as use of its computer, written once", async () => {
+  const f = fixture({ ctx: { session: { id: "s", spawnMeta: { isolation: { mode: "shared", sandboxId: "p" } } } } });
+  await Promise.all([f.turn.provision(true), f.turn.provision(true)]);
   assert.equal(f.notePersonUse.mock.callCount(), 1);
 });
 
@@ -336,7 +343,7 @@ test("reopening a computer under a different egress policy releases it once", as
 });
 
 test("a Slack bot's turn cannot open a background job's computer it didn't make", async () => {
-  const f = fixture({ botActor: true });
+  const f = fixture({ ctx: { input: { origin: { kind: "user" }, runId: "run-1", botActor: true } } });
   await assert.rejects(f.turn.provisionJobSandbox("job-only-1"), /can use only a computer it made/);
   assert.equal(f.provisions.length, 0);
 });
