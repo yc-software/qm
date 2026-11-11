@@ -658,28 +658,33 @@ test("a worker's wake:false reply waits in the root's mailbox and reaches the ro
     exerciseTurn = async (turn) => {
       if (!turn.input.startsWith("Swarm ")) return;
       const run = (await built.runs.get(turn.runId!))!;
-      await built.app.swarms!.send(
-        {
-          kind: "agent",
-          claims: {
-            actorId: "U1",
-            scopeId: turn.session.scopeId,
-            runId: run.id,
-            sessionId: turn.session.id,
-            runAttempt: run.attempts,
-            runLeaseToken: run.leaseToken!,
-            threadRef: turn.session.threadRef,
-            exp: Date.now() + 60_000,
+      for (const [requestId, text] of [
+        ["ack", "brief read"],
+        ["risk", "!security-risk status"],
+        ["lane", "lane two is clear"],
+      ])
+        await built.app.swarms!.send(
+          {
+            kind: "agent",
+            claims: {
+              actorId: "U1",
+              scopeId: turn.session.scopeId,
+              runId: run.id,
+              sessionId: turn.session.id,
+              runAttempt: run.attempts,
+              runLeaseToken: run.leaseToken!,
+              threadRef: turn.session.threadRef,
+              exp: Date.now() + 60_000,
+            },
           },
-        },
-        {
-          requestId: "ack",
-          audience: [root.id],
-          replyTo: worker.request.swarm!.messageId,
-          wake: false,
-          text: "brief read",
-        },
-      );
+          {
+            requestId: requestId!,
+            audience: [root.id],
+            replyTo: worker.request.swarm!.messageId,
+            wake: false,
+            text: text!,
+          },
+        );
     };
     built.runtime.start();
     const workerDone = await built.runs.waitFor(worker.id, 15_000);
@@ -700,7 +705,7 @@ test("a worker's wake:false reply waits in the root's mailbox and reaches the ro
     const status = await human("Status now?");
     assert.equal(status.status, "ok", JSON.stringify(status));
     assert.equal((await human("Anything else?")).status, "ok");
-    assert.match(environments[0]!, /brief read/);
+    assert.match(environments[0]!, /brief read[\s\S]*lane two is clear/);
     assert.match(environments[1]!, /brief read/, "a turn that stopped before recording it keeps it");
     assert.doesNotMatch(environments[2]!, /brief read/);
   } finally {

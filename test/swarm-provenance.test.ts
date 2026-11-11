@@ -238,9 +238,6 @@ const mutations: Record<string, (input: OrchestratorInput) => void> = {
   "read-only": (i) => {
     i.readOnly = true;
   },
-  grants: (i) => {
-    i.unattendedGrants = ["forged"];
-  },
   model: (i) => {
     i.model = "forged-model";
   },

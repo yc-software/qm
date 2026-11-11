@@ -1,8 +1,5 @@
 import type { CapabilityClaims } from "../auth/capability-token.ts";
-import { livePersonCapability, personSentTurn } from "./artifact-share.ts";
-import { adminRoutes } from "./routes/admin.ts";
-import { unattendedGrantListing } from "./routes/admin/unattended-grants.ts";
-import { UNATTENDED_ADMIN_GRANTS } from "./control-service.ts";
+import { livePersonCapability, personAtKeyboard } from "./artifact-share.ts";
 
 interface AgentApiRoute {
   method: string;
@@ -514,7 +511,7 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    when: (v) => personSentTurn(v.claims),
+    when: (v) => personAtKeyboard(v.claims),
     routes: [
       {
         method: "GET|PUT|DELETE",
@@ -683,7 +680,7 @@ const FAMILIES: AgentApiFamily[] = [
   {
     when: (v) => v.isAdmin && livePersonCapability(v.claims),
     guidance:
-      "Admin plane: you act AS this org admin — live-authorized per call, audited under their name; confirm before any mutation (bodies/params in the admin skill). Enforced limits: content reads require a DM or effective Open sharing for the live admin (organization, personal, and conversation restrictions all apply); configuration mutations work anywhere; admin grant changes, impersonation, and identity links are portal-only. Open admin reads can expose private data to the conversation; retrieve and report only what the request needs.",
+      "Admin plane: you act AS this org admin — authorized per call under their own standing (a cron, webhook or loop fire carries its owner's authority just as a typed turn does), audited under their name; confirm before any mutation (bodies/params in the admin skill). Enforced limits: content reads require a DM or effective Open sharing for the admin (organization, personal, and conversation restrictions all apply); configuration mutations work anywhere; admin grant changes, impersonation, and identity links are portal-only. Open admin reads can expose private data to the conversation; retrieve and report only what the request needs.",
     routes: [
       { method: "GET", path: "/v1/admin/whoami", summary: "this user's admin status" },
       {
@@ -770,16 +767,6 @@ const FAMILIES: AgentApiFamily[] = [
   },
 ];
 
-const unattendedFamilies = (): AgentApiFamily[] =>
-  UNATTENDED_ADMIN_GRANTS.map((grant) => ({
-    when: (v) => !livePersonCapability(v.claims) && v.claims.grants?.includes(grant) === true,
-    guidance:
-      "This cron has a specific read-only admin grant. Use only these listed routes; flag any other admin action to a human.",
-    routes: unattendedGrantListing(adminRoutes).flatMap((entry) =>
-      entry.grant === grant ? [{ method: entry.method, path: entry.path, summary: entry.summary }] : [],
-    ),
-  }));
-
 const WHOAMI_FOR_ALL: AgentApiFamily = {
   when: (v) => !(v.isAdmin && livePersonCapability(v.claims)),
   routes: [
@@ -806,7 +793,7 @@ export function renderAgentApis(
     swarmsEnabled: features.swarmsEnabled,
     personasEnabled: features.personasEnabled,
   };
-  const visible = [...FAMILIES, ...unattendedFamilies(), WHOAMI_FOR_ALL].filter((f) => f.when?.(view) ?? true);
+  const visible = [...FAMILIES, WHOAMI_FOR_ALL].filter((f) => f.when?.(view) ?? true);
   return {
     actorId: claims.actorId,
     scopeId: claims.scopeId,

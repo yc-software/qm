@@ -1,8 +1,8 @@
 import { canAdministerLoop } from "../loop-administration.ts";
 import { LOOP_ICON_ERROR, validLoopIcon } from "../../loops/loop-store.ts";
 import { boundLoopCron } from "../../loops/authority.ts";
-import { unattendedGrantRefusal } from "../../cron/authority.ts";
-import { livePersonCapability } from "../artifact-share.ts";
+import { authoredNow, reauthored } from "../../cron/authority.ts";
+import { personAtKeyboard } from "../artifact-share.ts";
 import type { AdvisoryLock } from "../../persistence/advisory-lock.ts";
 import type { Loop, LoopState, LoopTriageConfig } from "../../loops/types.ts";
 import { scopeId, type ScopeId } from "../../types.ts";
@@ -22,7 +22,7 @@ import type { ScopedConfigStore } from "../../resolution/config-store.ts";
 import { errMessage, reportFailure, swallow } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import { isObj, resolveCapabilityDestination } from "./shared.ts";
-import { tenantOf, withActor, type ApiCtx, type Route } from "./route.ts";
+import { withActor, type ApiCtx, type Route } from "./route.ts";
 
 export interface LoopServiceDeps {
   lock?: AdvisoryLock;
@@ -68,8 +68,7 @@ export function actingPrincipal(ctx: ApiCtx): ActingPrincipal | null {
       actorId: ctx.capability.actorId,
       scopeId: ctx.capability.scopeId as ScopeId,
       capability: ctx.capability,
-      liveHuman:
-        ctx.actor?.p !== undefined || (ctx.capability.liveActor === true && livePersonCapability(ctx.capability)),
+      liveHuman: ctx.actor?.p !== undefined || (ctx.capability.liveActor === true && personAtKeyboard(ctx.capability)),
     };
   }
   if (ctx.actor?.p) return { actorId: ctx.actor.p, liveHuman: true };
@@ -108,21 +107,13 @@ export async function loadAdministrable(
 }
 
 export async function requireLoopAuthority(ctx: ApiCtx, deps: LoopServiceDeps, loop: Loop): Promise<boolean> {
-  let cron;
   try {
-    cron = await boundLoopCron(loop, deps.crons);
+    await boundLoopCron(loop, deps.crons);
   } catch (e) {
     sendJson(ctx.res, 409, { error: "authority_mismatch", message: errMessage(e) });
     return false;
   }
-  if (!cron?.unattendedGrants?.length) return true;
-  const principal = ctx.capability ?? (ctx.actor?.p ? { actorId: ctx.actor.p, liveActor: true } : undefined);
-  const refusal = principal
-    ? await unattendedGrantRefusal(ctx.app, ctx.deps.admin, tenantOf(ctx), cron, principal)
-    : { message: "a privileged loop requires a live turn started by its owner" };
-  if (!refusal) return true;
-  sendJson(ctx.res, 403, { error: "forbidden", message: refusal.message });
-  return false;
+  return true;
 }
 
 const GATES = new Set(["auto", "hold"]);
@@ -274,6 +265,7 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
     createdBy: acting.actorId,
     ownerScopeId,
     ...(ctx.capability?.botActor ? { botActor: true } : {}),
+    ...authoredNow(acting.liveHuman),
     name: b.name,
     ...(b.icon !== undefined ? { icon: b.icon as string | null } : {}),
     playbook: b.playbook,
@@ -435,6 +427,8 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
   )
     return;
   if (b.shipActions !== undefined) patch.shipActions = shipActions;
+  if (patch.playbookEdit || patch.successCondition || patch.successChecks || patch.shipActions)
+    Object.assign(patch, reauthored(acting.liveHuman, loop));
   const capsResult = capsFromBody(b.caps);
   if (capsResult.invalidField)
     return sendJson(ctx.res, 400, {

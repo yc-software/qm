@@ -22,7 +22,7 @@ export function livePersonCapability(
   return c?.botActor !== true && (c?.liveAuthor === true || c?.liveActor === true);
 }
 
-export function personSentTurn(
+export function personAtKeyboard(
   c: { liveActor?: boolean; liveAuthor?: boolean; botActor?: boolean; triggered?: boolean } | undefined,
 ): boolean {
   return livePersonCapability(c) && c?.triggered !== true;
