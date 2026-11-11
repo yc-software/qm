@@ -1,6 +1,7 @@
 import { durableMapTenancy } from "../persistence/durable-map.ts";
 import type { PgMigrationDefinition, PgPool } from "../persistence/pg-pool.ts";
 import { fold } from "../identity/user-tenancy.ts";
+import { servingTenant } from "./claim.ts";
 import { withTenant } from "./context.ts";
 
 const ACTIVE = `json->>'disabled' IS DISTINCT FROM 'true'`;
@@ -163,7 +164,7 @@ export const PARTNER_CHAT_TENANT: PgMigrationDefinition = {
     definer(
       "qm_tenant_for_partner_chat",
       "uuid",
-      `SELECT id FROM tenants WHERE settings->>'partnerChatAccount' = $1 AND id IN (SELECT qm_serving_tenants())`,
+      `SELECT id FROM tenants WHERE settings->>'partnerChatAccount' = $1${servingTenant("id")}`,
     ),
   ],
 };
