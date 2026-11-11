@@ -156,7 +156,7 @@ export const SLACK_BRIDGE_TENANT: PgMigrationDefinition = {
 };
 
 export const PARTNER_CHAT_TENANT: PgMigrationDefinition = {
-  id: "tenancy/lookups/0005-partner-chat",
+  id: "tenancy/lookups/0007-partner-chat",
   statements: [
     `SET LOCAL check_function_bodies = off`,
     definer(

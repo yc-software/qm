@@ -27,6 +27,7 @@ import { withTenant } from "../src/tenants/context.ts";
 import { TEST_TENANT } from "./support/test-tenant.ts";
 
 const SECRET = "partner-chat-test-secret-0123456789abcdef";
+const tenantFor = async () => TEST_TENANT;
 const PROVENANCE = { trigger: "cron", surface: "partner-chat", fireKey: "f", sourceScopeId: "s", sourceThreadRef: "t" };
 
 interface Received {
@@ -298,10 +299,7 @@ function outboundFor(url: string, deliveries = createDeliveryStore(), mirrored: 
   const send = partnerChatSender({
     url,
     secret: SECRET,
-    app: {
-      tenantFor: async () => TEST_TENANT,
-      ingestSurfaceEvents: async (events) => (mirrored.push(...events), { upserted: events.length }),
-    },
+    app: { tenantFor, ingestSurfaceEvents: async (events) => (mirrored.push(...events), { upserted: events.length }) },
   });
   return { deliveries, mirrored, settled: (until: () => Promise<boolean>) => relayUntil(deliveries, send, until) };
 }
@@ -853,7 +851,7 @@ test("a retryable failure holds back later posts to the same chat target only", 
   const send = partnerChatSender({
     url: "https://chat.example",
     secret: SECRET,
-    app: { tenantFor: async () => TEST_TENANT, ingestSurfaceEvents: async () => ({ upserted: 0 }) },
+    app: { tenantFor, ingestSurfaceEvents: async () => ({ upserted: 0 }) },
     fetch: async (_url, init) => {
       const body = JSON.parse(String(init?.body)) as { chat_id: string; body: string };
       sent.push(body.body);
