@@ -1,16 +1,9 @@
-import { fetchServerSentEvents } from "@tanstack/ai-client";
 import { errMessage } from "../../chassis/src/errors.ts";
+import { createClientToolExecutor, type ClientToolResult, type ClientToolRun } from "./client-tools.ts";
 import { askEmbedder, hasEmbedder } from "./embedder.ts";
-import { activityItems, type RunActivityEntry } from "./items.ts";
 
 export const APP_SCREENSHOT_TOOL = "ui__app_screenshot";
-const SHOT_TIMEOUT_MS = 40_000;
-
-type Result = {
-  content: string;
-  isError?: boolean;
-  images?: Array<{ data: string; mimeType: "image/png" | "image/jpeg" }>;
-};
+const APP_SCREENSHOT_TIMEOUT_MS = 45_000;
 
 export type AppShot = {
   ok: boolean;
@@ -22,100 +15,70 @@ export type AppShot = {
   height?: number;
   scrollY?: number;
   dark?: boolean;
-  brightness?: number;
   version?: string | null;
   consoleErrors?: string[];
+  consoleErrorCount?: number;
+  consoleWatchError?: string;
 };
 
+function appViewEmbedded(): boolean {
+  return hasEmbedder() && document.body.classList.contains("app-edit-embed");
+}
+
 export function appViewClientTools(): Array<Record<string, unknown>> {
-  if (!hasEmbedder() || !document.body.classList.contains("app-edit-embed")) return [];
+  if (!appViewEmbedded()) return [];
   return [
     {
       name: APP_SCREENSHOT_TOOL,
       description:
         "Take a screenshot of the app exactly as the person sees it right now in their own browser tab: their sign-in, data, theme and scroll position. Waits for the tab to load the newest saved version first. Returns the picture plus the page address, viewport size, light or dark mode, and console errors since the page loaded.",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
-      timeoutMs: 45_000,
+      timeoutMs: APP_SCREENSHOT_TIMEOUT_MS,
     },
   ];
 }
 
-export function shotResult(shot: AppShot): Result {
+function consoleLine(shot: AppShot): string {
+  if (shot.consoleWatchError) return `Console errors since load: unknown (${shot.consoleWatchError})`;
+  const errors = shot.consoleErrors ?? [];
+  const total = shot.consoleErrorCount ?? errors.length;
+  if (!total) return "Console errors since load: none";
+  const shown = total > errors.length ? `${total}, the first ${errors.length} shown` : String(total);
+  return `Console errors since load (${shown}):\n${errors.join("\n")}`;
+}
+
+export function shotResult(shot: AppShot): ClientToolResult {
   if (!shot.ok || !shot.image || !shot.mimeType)
     return { content: `Screenshot failed: ${shot.error ?? "the page returned no image."}`, isError: true };
-  const errors = shot.consoleErrors ?? [];
   const lines = [
     `Page: ${shot.url ?? "unknown"}`,
     `Viewport: ${shot.width}×${shot.height}${shot.scrollY ? `, scrolled ${shot.scrollY}px down` : ""}`,
-    `Color scheme: the browser prefers ${shot.dark ? "dark" : "light"}${
-      typeof shot.brightness === "number"
-        ? `; the page renders mostly ${shot.brightness < 110 ? "dark" : "light"} (average brightness ${shot.brightness}/255)`
-        : ""
-    }`,
+    `Color scheme: ${shot.dark ? "dark" : "light"}`,
     ...(shot.version ? [`App version shown: ${shot.version}`] : []),
-    errors.length
-      ? `Console errors since load (${errors.length}):\n${errors.join("\n")}`
-      : "Console errors since load: none",
+    consoleLine(shot),
   ];
   return { content: lines.join("\n"), images: [{ data: shot.image, mimeType: shot.mimeType }] };
 }
 
-async function takeAppShot(): Promise<Result> {
+async function takeAppShot(): Promise<ClientToolResult> {
   try {
-    return shotResult(await askEmbedder<AppShot>({ type: "qm:app-shot" }, "qm:app-shot-result", SHOT_TIMEOUT_MS));
+    return shotResult(
+      await askEmbedder<AppShot>({ type: "qm:app-shot" }, "qm:app-shot-result", APP_SCREENSHOT_TIMEOUT_MS),
+    );
   } catch (error) {
     return { content: `Screenshot failed: ${errMessage(error)}`, isError: true };
   }
 }
 
-type ViewRun = { status?: string; alive?: boolean; activity?: RunActivityEntry[] };
-
-export function createAppViewExecutor(
-  shoot: () => Promise<Result>,
-  send: (callId: string, result: Result) => Promise<unknown>,
-) {
-  const handled = new Set<string>();
-  return async (run: ViewRun): Promise<void> => {
-    if (run.status !== "running" || !run.alive) return;
-    const items = activityItems(run.activity ?? []);
-    const complete = new Set(items.filter((item) => item.kind === "ToolResult").map((item) => item.callId));
-    for (const item of items) {
-      const callId = item.callId;
-      if (
-        item.kind !== "ToolCall" ||
-        item.body.client !== true ||
-        item.tool !== APP_SCREENSHOT_TOOL ||
-        !callId ||
-        complete.has(callId) ||
-        handled.has(callId)
-      )
-        continue;
-      handled.add(callId);
-      await send(callId, await shoot());
-    }
-  };
-}
-
-export async function serveAppViewRun(
+export function appViewRunner(
   runId: string,
-  base: (path: string) => string,
   send: (path: string, init: RequestInit) => Promise<unknown>,
-): Promise<void> {
-  const controller = new AbortController();
-  const execute = createAppViewExecutor(takeAppShot, (callId, result) =>
+): ((run: ClientToolRun) => Promise<void>) | undefined {
+  if (!appViewEmbedded()) return undefined;
+  return createClientToolExecutor(APP_SCREENSHOT_TOOL, takeAppShot, (callId, result) =>
     send(`/api/runs/${encodeURIComponent(runId)}/signal`, {
       method: "POST",
       body: JSON.stringify({ kind: "client_result", callId, result }),
     }),
   );
-  const transport = fetchServerSentEvents(base(`/api/runs/${encodeURIComponent(runId)}/events`), {
-    credentials: "same-origin",
-  });
-  for await (const event of transport.joinRun(runId, controller.signal)) {
-    if (event.type !== "CUSTOM" || event.name !== "run") continue;
-    const run = event.value as ViewRun;
-    if (run.status === "done" || run.status === "failed" || run.status === "cancelled") break;
-    void execute(run);
-  }
-  controller.abort();
 }

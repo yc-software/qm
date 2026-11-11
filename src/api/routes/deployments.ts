@@ -963,7 +963,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
       } else if (pathname === "/__claw__/capture.js") {
         res.writeHead(200, {
           "content-type": "text/javascript; charset=utf-8",
-          "cache-control": "public, max-age=86400",
+          "cache-control": "private, max-age=86400",
           "x-content-type-options": "nosniff",
         });
         res.end(appCaptureScript());

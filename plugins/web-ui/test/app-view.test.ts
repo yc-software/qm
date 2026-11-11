@@ -1,16 +1,18 @@
 import { item } from "./item-fixture.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { APP_SCREENSHOT_TOOL, createAppViewExecutor, shotResult } from "../src/app-view.ts";
+import { APP_SCREENSHOT_TOOL, shotResult } from "../src/app-view.ts";
+import { createClientToolExecutor } from "../src/client-tools.ts";
 
 const call = (id: string, tool = APP_SCREENSHOT_TOOL) => ({
   item: item("ToolCall", { createdAt: Date.now(), tool, callId: id, body: { client: true, args: {} } }),
 });
 
-test("answers each screenshot call once and ignores other tools and finished calls", async () => {
+test("a client tool call is answered once and other tools and finished calls are left alone", async () => {
   let shots = 0;
   const sent: string[] = [];
-  const execute = createAppViewExecutor(
+  const execute = createClientToolExecutor(
+    APP_SCREENSHOT_TOOL,
     async () => {
       shots++;
       return { content: "ok" };
@@ -28,7 +30,7 @@ test("answers each screenshot call once and ignores other tools and finished cal
   assert.equal(shots, 1);
 });
 
-test("a failed or imageless capture becomes an error, never an empty picture", () => {
+test("a failed capture becomes an error, never an empty picture", () => {
   assert.deepEqual(shotResult({ ok: false, error: "the app tab is hidden" }), {
     content: "Screenshot failed: the app tab is hidden",
     isError: true,
@@ -45,11 +47,16 @@ test("a capture carries the picture and the facts a picture cannot show", () => 
     width: 800,
     height: 600,
     dark: true,
-    brightness: 40,
     consoleErrors: ["boom"],
+    consoleErrorCount: 3,
   });
   assert.deepEqual(result.images, [{ data: "aGk=", mimeType: "image/jpeg" }]);
   assert.match(result.content, /Viewport: 800×600/);
-  assert.match(result.content, /prefers dark; the page renders mostly dark/);
-  assert.match(result.content, /boom/);
+  assert.match(result.content, /Color scheme: dark/);
+  assert.match(result.content, /Console errors since load \(3, the first 1 shown\):\nboom/);
+});
+
+test("a page whose errors could not be watched is not reported as clean", () => {
+  const result = shotResult({ ok: true, image: "aGk=", mimeType: "image/jpeg", consoleWatchError: "blocked" });
+  assert.match(result.content, /Console errors since load: unknown \(blocked\)/);
 });

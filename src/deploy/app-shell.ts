@@ -4,10 +4,11 @@ import { ANNOTATE_BUTTON, ANNOTATE_CSS, ANNOTATE_JS, ANNOTATE_MARKUP } from "./a
 
 export const APP_SHELL_PATH_PREFIX = "/__claw__/";
 
+const require = createRequire(import.meta.url);
 let captureScript: string | undefined;
 
 export function appCaptureScript(): string {
-  captureScript ??= readFileSync(createRequire(import.meta.url).resolve("html-to-image/dist/html-to-image.js"), "utf8");
+  captureScript ??= readFileSync(require.resolve("html-to-image/dist/html-to-image.js"), "utf8");
   return captureScript;
 }
 
@@ -230,51 +231,57 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
     try { app.contentWindow.location.reload(); } catch { app.src = app.src; }
   };
   let polls = 0;
+  const checkVersion = async (force) => {
+    const mine = ++polls;
+    const r = await fetch("/__claw__/version", { cache: "no-store" });
+    if (!r.ok) throw new Error("the version check failed with HTTP " + r.status);
+    const d = await r.json();
+    if (mine !== polls || typeof d.version !== "number") return;
+    verEl.textContent = "v" + d.version;
+    const served = d.version + ":" + (d.live ?? "");
+    if (base === null) {
+      base = served;
+      upd.classList.remove("show");
+    } else if (served !== base) {
+      if (force || panel.classList.contains("open")) reloadApp(served);
+      else upd.classList.add("show");
+    }
+  };
   const poll = async () => {
     if (document.hidden || bare) return;
-    const mine = ++polls;
-    try {
-      const r = await fetch("/__claw__/version", { cache: "no-store" });
-      if (!r.ok) return;
-      const d = await r.json();
-      if (mine !== polls || typeof d.version !== "number") return;
-      verEl.textContent = "v" + d.version;
-      const served = d.version + ":" + (d.live ?? "");
-      if (base === null) {
-        base = served;
-        upd.classList.remove("show");
-      } else if (served !== base) {
-        if (panel.classList.contains("open")) reloadApp(served);
-        else upd.classList.add("show");
-      }
-    } catch {}
+    try { await checkVersion(false); } catch {}
   };
   void poll();
   setInterval(poll, 5000);
 
   let consoleErrors = [];
+  let consoleErrorCount = 0;
+  let consoleWatchError = null;
+  const noteError = (text) => {
+    consoleErrorCount++;
+    if (consoleErrors.length < 20) consoleErrors.push(text);
+  };
   const watchErrors = () => {
     consoleErrors = [];
+    consoleErrorCount = 0;
+    consoleWatchError = null;
     try {
       const w = app.contentWindow;
-      if (!w || w.__qmShotWatch) return;
+      if (w.__qmShotWatch) return;
       w.__qmShotWatch = true;
       const original = w.console.error.bind(w.console);
       w.console.error = (...args) => {
-        consoleErrors.push(args.map((a) => (a instanceof Error ? a.stack || a.message : String(a))).join(" ").slice(0, 500));
+        noteError(args.map((a) => (a instanceof Error ? a.stack || a.message : String(a))).join(" "));
         original(...args);
       };
-      w.addEventListener("error", (e) => consoleErrors.push(String(e.message || "error loading " + (e.target && (e.target.src || e.target.href) || "resource")).slice(0, 500)), true);
-      w.addEventListener("unhandledrejection", (e) => consoleErrors.push(("Unhandled rejection: " + String(e.reason && (e.reason.stack || e.reason.message) || e.reason)).slice(0, 500)));
-    } catch {}
+      w.addEventListener("error", (e) => noteError(String(e.message || "error loading " + (e.target && (e.target.src || e.target.href) || "resource"))), true);
+      w.addEventListener("unhandledrejection", (e) => noteError("Unhandled rejection: " + String(e.reason && (e.reason.stack || e.reason.message) || e.reason)));
+    } catch (error) {
+      consoleWatchError = "could not watch the page: " + String(error && error.message || error);
+    }
   };
   watchErrors();
   app.addEventListener("load", watchErrors);
-  const waitFor = (test, ms) => new Promise((resolve) => {
-    const end = Date.now() + ms;
-    const tick = () => (test() || Date.now() > end ? resolve(test()) : setTimeout(tick, 100));
-    tick();
-  });
   let captureLib = null;
   const loadCapture = () => captureLib || (captureLib = new Promise((resolve, reject) => {
     const s = document.createElement("script");
@@ -285,55 +292,36 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
   }));
   const shoot = async () => {
     if (document.hidden) throw new Error("the app tab is hidden, so the browser will not render it; ask the person to bring it to the front");
-    const r = await fetch("/__claw__/version", { cache: "no-store" });
-    if (r.ok) {
-      const d = await r.json();
-      const served = d.version + ":" + (d.live ?? "");
-      if (base !== null && served !== base && !reloading) reloadApp(served);
-    }
-    if (!(await waitFor(() => !reloading && app.contentDocument && app.contentDocument.readyState === "complete", 20000)))
-      throw new Error("the app did not finish reloading within 20s");
-    let doc;
-    try { doc = app.contentDocument; } catch {}
+    await checkVersion(true);
+    if (reloading) await new Promise((resolve) => app.addEventListener("load", resolve, { once: true }));
+    const doc = app.contentDocument;
     if (!doc || !doc.documentElement) throw new Error("the app page is not readable from its shell (it may have navigated to another site)");
     const w = app.contentWindow;
-    if (doc.fonts && doc.fonts.ready) await Promise.race([doc.fonts.ready, new Promise((r) => setTimeout(r, 3000))]);
+    if (doc.readyState !== "complete") await new Promise((resolve) => w.addEventListener("load", resolve, { once: true }));
+    if (doc.fonts) await doc.fonts.ready;
     await new Promise((r) => w.requestAnimationFrame(() => w.requestAnimationFrame(r)));
     const lib = await loadCapture();
     const width = app.clientWidth;
     const height = app.clientHeight;
+    if (!width || !height) throw new Error("the app frame has no size (" + width + "×" + height + ")");
     const sx = w.scrollX || 0;
     const sy = w.scrollY || 0;
     const bg = w.getComputedStyle(doc.body || doc.documentElement).backgroundColor;
     const htmlBg = w.getComputedStyle(doc.documentElement).backgroundColor;
     const opaque = (c) => c && c !== "transparent" && !/rgba\\([^)]*,\\s*0\\)$/.test(c);
-    const canvas = await Promise.race([
-      lib.toCanvas(doc.documentElement, {
-        width, height, pixelRatio: 1, cacheBust: false,
-        backgroundColor: opaque(htmlBg) ? htmlBg : opaque(bg) ? bg : "#ffffff",
-        style: { transform: "translate(" + -sx + "px," + -sy + "px)", transformOrigin: "0 0" },
-      }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("capture took longer than 15s")), 15000)),
-    ]);
-    const ctx = canvas.getContext("2d");
-    let px;
-    try { px = ctx.getImageData(0, 0, canvas.width, canvas.height).data; }
-    catch { throw new Error("the picture was blocked by a cross-origin image or font on the page"); }
-    let varied = false;
-    for (let i = 4; i < px.length; i += 4 * 97) {
-      if (px[i] !== px[0] || px[i + 1] !== px[1] || px[i + 2] !== px[2]) { varied = true; break; }
-    }
-    if (!varied || canvas.width === 0 || canvas.height === 0) throw new Error("the capture came out as one flat color, so it would not show the page; nothing was returned");
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
-    let sum = 0;
-    let n = 0;
-    for (let i = 0; i < px.length; i += 4 * 37) { sum += 0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2]; n++; }
-    const dark = !!(w.matchMedia && w.matchMedia("(prefers-color-scheme: dark)").matches);
-    const brightness = Math.round(sum / Math.max(n, 1));
+    const canvas = await lib.toCanvas(doc.documentElement, {
+      width, height, pixelRatio: 1, cacheBust: false,
+      backgroundColor: opaque(htmlBg) ? htmlBg : opaque(bg) ? bg : "#ffffff",
+      style: { transform: "translate(" + -sx + "px," + -sy + "px)", transformOrigin: "0 0" },
+    });
+    let dataUrl;
+    try { dataUrl = canvas.toDataURL("image/jpeg", 0.85); }
+    catch (error) { throw new Error("the browser refused to read the picture back (" + (error && error.name) + ": " + (error && error.message) + ")"); }
     return {
       ok: true, image: dataUrl.slice(dataUrl.indexOf(",") + 1), mimeType: "image/jpeg",
-      url: w.location.href, width, height, scrollY: Math.round(sy), dark, brightness,
-      version: base, consoleErrors: consoleErrors.slice(-20),
+      url: w.location.href, width, height, scrollY: Math.round(sy),
+      dark: !!(w.matchMedia && w.matchMedia("(prefers-color-scheme: dark)").matches),
+      version: base, consoleErrors, consoleErrorCount, consoleWatchError,
     };
   };
   const answerShot = async (id) => {

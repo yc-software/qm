@@ -1,5 +1,5 @@
 import { desktopTurnId, serveDesktopRun, webClientSurface } from "./desktop-computer.ts";
-import { appViewClientTools, serveAppViewRun } from "./app-view.ts";
+import { appViewClientTools, appViewRunner } from "./app-view.ts";
 import { CLIENT_SURFACE_HEADER } from "../../chassis/src/client-surface.ts";
 import { reportHandledError, reportRequestTiming, stopBrowserErrors } from "./browser-errors.ts";
 import { captureMessage, stopAnalytics } from "./product-analytics.ts";
@@ -972,10 +972,8 @@ export async function api<T = unknown>(path: string, init?: RequestInit): Promis
     throw new ApiError(msg, r.status, body);
   }
   if (path === "/api/turn" && typeof init?.body === "string") {
-    const request = JSON.parse(init.body) as { desktopClientId?: string; clientTools?: unknown[] };
+    const request = JSON.parse(init.body) as { desktopClientId?: string };
     const response = body as { runId?: string } | null;
-    if (request.clientTools?.length && response?.runId)
-      void serveAppViewRun(response.runId, withBase, api).catch((error) => reportHandledError("app-view", error));
     if (request.desktopClientId && response?.runId)
       void serveDesktopRun(response.runId, request.desktopClientId, withBase, api).catch((error) =>
         reportHandledError("desktop-computer", error),
@@ -1507,10 +1505,14 @@ async function followRun(
     }
     if (signal?.aborted) return abortStream(stream, partial);
     if (slot) slot.runId = runId;
-    const viaSse = await streamRunViaSse(stream, partial, runId, st, signal, notify);
+    const runTools = appViewRunner(runId, api);
+    const onRun = runTools
+      ? (run: RunPoll): void => void runTools(run).catch((error) => reportHandledError("app-view", error))
+      : undefined;
+    const viaSse = await streamRunViaSse(stream, partial, runId, st, signal, notify, onRun);
     if (viaSse === "done") return;
     if (signal?.aborted) return abortStream(stream, partial);
-    return await pollRun(stream, partial, runId, st, signal, notify);
+    return await pollRun(stream, partial, runId, st, signal, notify, onRun);
   } finally {
     if (slot?.runId === runId) slot.runId = null;
   }
@@ -1682,6 +1684,7 @@ export async function pollRun(
   st: Acc,
   signal?: AbortSignal,
   notify?: () => void,
+  onRun?: (run: RunPoll) => void,
 ): Promise<void> {
   const failIdle = (): void => {
     (partial as AssistantWork).interruptedRunId = runId;
@@ -1705,6 +1708,7 @@ export async function pollRun(
       await sleep(Math.min(POLL_MS * 2 ** Math.min(consecutiveFailures, 4), POLL_RETRY_MAX_MS));
       continue;
     }
+    onRun?.(run);
     if (applyRun(stream, partial, st, run, notify) === "terminal") return;
     if (run.stale === true) st.staleSince ??= now();
     else st.staleSince = undefined;
@@ -1782,6 +1786,7 @@ async function streamRunViaSse(
   st: Acc,
   signal?: AbortSignal,
   notify?: () => void,
+  onRun?: (run: RunPoll) => void,
 ): Promise<"done" | "fallback"> {
   if (typeof window === "undefined") return "fallback";
   const controller = new AbortController();
@@ -1820,6 +1825,7 @@ async function streamRunViaSse(
         }
       } else if (event.name === "run") {
         const run = event.value as RunPoll;
+        onRun?.(run);
         const terminal = run.status === "done" || run.status === "failed" || run.result != null;
         if (applyRun(stream, partial, st, { ...run, replyComplete: terminal }, notify) === "terminal") return "done";
         if (run.alive) st.lastProgressAt = now();

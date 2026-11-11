@@ -1,12 +1,9 @@
 import { fetchServerSentEvents } from "@tanstack/ai-client";
 import { errMessage } from "../../chassis/src/errors.ts";
-import { activityItems, type RunActivityEntry } from "./items.ts";
+import type { RunActivityEntry } from "./items.ts";
+import { createClientToolExecutor, type ClientToolResult } from "./client-tools.ts";
 
-type Result = {
-  content: string;
-  isError?: boolean;
-  images?: Array<{ data: string; mimeType: "image/png" | "image/jpeg" }>;
-};
+type Result = ClientToolResult;
 type Desk = {
   call(args: unknown, clientId?: string, deadline?: number): Promise<Result>;
   stop?(clientId: string): Promise<unknown>;
@@ -50,27 +47,14 @@ export function createDesktopExecutor(
   desk: Desk,
   send: (callId: string, result: Result) => Promise<unknown>,
 ) {
-  const handled = new Set<string>();
+  const execute = createClientToolExecutor(
+    "desktop",
+    async (args, createdAt) =>
+      !createdAt || Date.now() - createdAt > 55_000 ? null : executeComputer(desk, args, createdAt + 50_000),
+    send,
+  );
   return async (run: DesktopRun): Promise<void> => {
-    if (run.desktopClientId !== clientId || run.status !== "running" || !run.alive) return;
-    const items = activityItems(run.activity ?? []);
-    const complete = new Set(items.filter((item) => item.kind === "ToolResult").map((item) => item.callId));
-    for (const item of items) {
-      const callId = item.callId;
-      if (
-        item.kind !== "ToolCall" ||
-        item.body.client !== true ||
-        item.tool !== "desktop" ||
-        !callId ||
-        complete.has(callId) ||
-        handled.has(callId)
-      )
-        continue;
-      handled.add(callId);
-      if (!item.createdAt || Date.now() - item.createdAt > 55_000) continue;
-      const result = await executeComputer(desk, item.body.args, item.createdAt + 50_000);
-      await send(callId, result);
-    }
+    if (run.desktopClientId === clientId) await execute(run);
   };
 }
 

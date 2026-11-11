@@ -8,7 +8,6 @@
   },
   "workspaces": {
     ".": {
-      "ignoreDependencies": ["html-to-image"],
       "entry": [
         "deploy/render-runner/start.mjs",
         "src/migrate-main.ts",
