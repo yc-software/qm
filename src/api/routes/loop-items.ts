@@ -229,10 +229,18 @@ async function serveItemImage(ctx: ApiCtx): Promise<void> {
 async function getItem(ctx: ApiCtx): Promise<void> {
   const loaded = await loadItem(ctx);
   if (!loaded) return;
-  sendJson(ctx.res, 200, {
-    item: ledgerItemView((await loaded.deps.items.get(loaded.item.id)) ?? loaded.item, loaded.loop, !!ctx.capability),
-    outputs: (await loaded.deps.outputs.byItem(loaded.item.id)).filter((output) => output.loopId === loaded.loop.id),
-  });
+  sendJson(
+    ctx.res,
+    200,
+    await itemDetail(ctx, loaded.deps, loaded.loop, (await loaded.deps.items.get(loaded.item.id)) ?? loaded.item),
+  );
+}
+
+async function itemDetail(ctx: ApiCtx, deps: LoopServiceDeps, loop: Loop, item: LoopItem) {
+  return {
+    item: ledgerItemView(item, loop, !!ctx.capability),
+    outputs: (await deps.outputs.byItem(item.id)).filter((output) => output.loopId === loop.id),
+  };
 }
 
 function sameProposalData(item: LoopItem, data: LoopSourcePayload): boolean {
@@ -269,8 +277,7 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
     const data = proposalFrom(item, args.proposal ?? args);
     if (!data) return sendJson(ctx.res, 400, { error: "bad_request", message: "proposal is not valid for this item" });
     if (expectedAt !== undefined && item.proposal && item.proposal.at !== expectedAt) return draftChanged();
-    if (sameProposalData(item, data))
-      return sendJson(ctx.res, 200, { item: ledgerItemView(item, loop, !!ctx.capability) });
+    if (sameProposalData(item, data)) return sendJson(ctx.res, 200, await itemDetail(ctx, deps, loop, item));
     const next = await deps.items.setProposal(
       item.id,
       { data, by: proposalAuthor },
@@ -278,14 +285,14 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
     );
     if (!next && expectedAt !== undefined) return draftChanged();
     if (!next) return sendJson(ctx.res, 409, { error: "conflict", message: "this item is already actioned" });
-    return sendJson(ctx.res, 200, { item: ledgerItemView(next, loop, !!ctx.capability) });
+    return sendJson(ctx.res, 200, await itemDetail(ctx, deps, loop, next));
   }
 
   if (kind === "dismiss") {
     const next = await deps.items.recordAction(item.id, { kind, outcome: "dismissed" });
     if (!next) return sendJson(ctx.res, 409, { error: "conflict", message: "this item is already actioned" });
     if (args.group === true && !ctx.capability) await settleGroup(deps.items, next);
-    return sendJson(ctx.res, 200, { item: ledgerItemView(next, loop, !!ctx.capability) });
+    return sendJson(ctx.res, 200, await itemDetail(ctx, deps, loop, next));
   }
 
   if (kind === "prioritize" || kind === "ungroup") {
@@ -299,20 +306,20 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
         ? await deps.items.setTriage(item.id, { priority }, "human")
         : await removeFromGroup(deps.items, item);
     if (!next) return sendJson(ctx.res, 409, { error: "conflict", message: "this item is already actioned" });
-    return sendJson(ctx.res, 200, { item: ledgerItemView(next, loop, !!ctx.capability) });
+    return sendJson(ctx.res, 200, await itemDetail(ctx, deps, loop, next));
   }
 
   if (kind === "reply") {
     if (!ctx.actor?.p || item.sourcePayload?.sentChat !== true) return sendJson(ctx.res, 403, { error: "forbidden" });
     const next = await deps.items.reopen(item.id, { sentReply: true });
     if (!next) return sendJson(ctx.res, 409, { error: "conflict", message: "a reply is already being drafted" });
-    return sendJson(ctx.res, 200, { item: ledgerItemView(next, loop, !!ctx.capability) });
+    return sendJson(ctx.res, 200, await itemDetail(ctx, deps, loop, next));
   }
 
   if (kind === "reopen") {
     const next = await deps.items.reopen(item.id);
     if (!next) return sendJson(ctx.res, 409, { error: "conflict", message: "this item is not dismissed" });
-    return sendJson(ctx.res, 200, { item: ledgerItemView(next, loop, !!ctx.capability) });
+    return sendJson(ctx.res, 200, await itemDetail(ctx, deps, loop, next));
   }
 
   if (kind === "send" && item.status !== "ready") {
@@ -364,10 +371,9 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
         return sendJson(ctx.res, statusByReason[result.reason], { error: result.reason, message: result.message });
       }
       if (result.payloadPatch) item = (await deps.items.annotate(item.id, result.payloadPatch)) ?? item;
-      if (result.resolves === false)
-        return sendJson(ctx.res, 200, { item: ledgerItemView(item, loop, !!ctx.capability) });
+      if (result.resolves === false) return sendJson(ctx.res, 200, await itemDetail(ctx, deps, loop, item));
       const next = await deps.items.recordAction(item.id, { kind, outcome: "actioned", result: result.result });
-      return sendJson(ctx.res, 200, { item: ledgerItemView(next ?? item, loop, !!ctx.capability) });
+      return sendJson(ctx.res, 200, await itemDetail(ctx, deps, loop, next ?? item));
     } finally {
       await deps.items.releaseDecision(item.id, decisionToken);
     }
@@ -385,7 +391,7 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
     outcome: "actioned",
     ...(turn.reply ? { result: turn.reply } : {}),
   });
-  sendJson(ctx.res, 200, { item: ledgerItemView(next ?? item, loop, !!ctx.capability) });
+  sendJson(ctx.res, 200, await itemDetail(ctx, deps, loop, next ?? item));
 }
 
 const followUpOptionsSchema = z.object({
@@ -440,7 +446,7 @@ async function followUpOnItem(ctx: ApiCtx): Promise<void> {
       loaded.actorId,
       options,
     );
-    sendJson(ctx.res, 200, { item: ledgerItemView(next ?? item, loop, !!ctx.capability) });
+    sendJson(ctx.res, 200, await itemDetail(ctx, deps, loop, next ?? item));
   } catch (e) {
     sendJson(ctx.res, 502, { error: "followup_failed", message: errMessage(e) });
   }

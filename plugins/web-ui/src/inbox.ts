@@ -937,11 +937,11 @@ function actionPath(item: InboxItem, leaf: "action" | "followup"): string {
 
 async function refetchItem(item: InboxItem): Promise<void> {
   try {
-    const { item: fresh } = await api<{ item: LedgerItem }>(
+    const { item: fresh, outputs } = await api<{ item: LedgerItem; outputs: ReviewOutput[] }>(
       `/api/loops/${encodeURIComponent(item.loopId)}/items/${encodeURIComponent(item.id)}`,
     );
     updateSentChat(fresh);
-    replaceItem({ ...toInboxItem(fresh), detailLoaded: true });
+    replaceItem({ ...toInboxItem(fresh), outputs, detailLoaded: true });
     drawAll();
   } catch {
     void refreshInbox({ silent: true });
@@ -949,12 +949,12 @@ async function refetchItem(item: InboxItem): Promise<void> {
 }
 
 async function postAction(item: InboxItem, kind: string, args?: Record<string, unknown>): Promise<InboxItem> {
-  const { item: next } = await api<{ item: LedgerItem }>(actionPath(item, "action"), {
+  const { item: next, outputs } = await api<{ item: LedgerItem; outputs: ReviewOutput[] }>(actionPath(item, "action"), {
     method: "POST",
     body: JSON.stringify({ kind, ...(args ? { args } : {}) }),
   });
   updateSentChat(next);
-  return { ...toInboxItem(next), detailLoaded: true };
+  return { ...toInboxItem(next), outputs, detailLoaded: true };
 }
 
 const persistQueue = new Map<string, Promise<void>>();
@@ -1046,16 +1046,19 @@ export async function askAgent(
       if (!sameDraft(effectiveDraft(current), draft)) {
         throw new Error("The draft changed. Review it before continuing.");
       }
-      const { item: next } = await api<{ item: LedgerItem }>(actionPath(item, "followup"), {
-        method: "POST",
-        body: JSON.stringify({
-          message: text,
-          ...options,
-          ...(current.draftAt !== undefined ? { expectedProposalAt: current.draftAt } : {}),
-        }),
-      });
+      const { item: next, outputs } = await api<{ item: LedgerItem; outputs: ReviewOutput[] }>(
+        actionPath(item, "followup"),
+        {
+          method: "POST",
+          body: JSON.stringify({
+            message: text,
+            ...options,
+            ...(current.draftAt !== undefined ? { expectedProposalAt: current.draftAt } : {}),
+          }),
+        },
+      );
       updateSentChat(next);
-      replaceItem({ ...toInboxItem(next), outputs: item.outputs, detailLoaded: true });
+      replaceItem({ ...toInboxItem(next), outputs, detailLoaded: true });
     });
     return true;
   } catch (e) {
