@@ -312,7 +312,7 @@ export async function askBrain(
           }
         : problemOf(
             { provider: id, scope: access.call.audienceScopeId ?? "", ms: Date.now() - started, ...failed },
-            false,
+            "search",
           )!,
     );
     const summary = { brain: id, ...(failed.code ? { code: failed.code } : {}) };

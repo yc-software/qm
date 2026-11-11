@@ -380,7 +380,7 @@ test("memory search and add report provider problems instead of claiming nothing
   );
   const add = textOf(await call(tool, { action: "add", facts: [{ text: "prefers terse replies" }] }));
   assert.match(add, /^Remembered 1 fact\.$/m);
-  assert.match(add, /^\[memory_provider_timeout\] .*whether it stored the facts is unknown; QM did not retry\. Fix: /m);
+  assert.match(add, /^\[memory_provider_unknown\] .*whether it stored the facts is unknown; QM did not retry\. Fix: /m);
   assert.match(await notebook.read(personal), /prefers terse replies/);
 
   const strict = createRoutedMemoryService({
@@ -416,7 +416,7 @@ test("the `memory` tool quotes what it reads", async () => {
   );
 });
 
-test("the memory tool forgets a brain ref only in the person's own DM, one store per call, and an edit names the brain copies left", async () => {
+test("the memory tool forgets a brain ref only in the person's own DM, one store per call", async () => {
   const notebook = createPostgresMemoryService(testDatabaseUrl());
   const personal = scopeId("personal", "U1");
   await notebook.capture(personal, ["Alice drinks rooibos.", "Alice sits at desk 4B."], at);
@@ -427,16 +427,10 @@ test("the memory tool forgets a brain ref only in the person's own DM, one store
     },
     async callTool(tool, args) {
       calls.push({ tool, args });
-      if (tool === "memory_write")
-        throw new McpCallError("mcp tool memory_write error: fact_withdrawn: that claim was forgotten", {
-          code: "invalid_params",
-        });
       if (tool === "forget_fact") return { content: [], structuredContent: { ...args, state: "committed" } };
-      const facts = [
-        { id: "7", text: "Alice drinks rooibos." },
-        { id: "8", text: "Alice sits at desk 4B." },
-      ];
-      return { content: [], structuredContent: { facts } };
+      throw new McpCallError("mcp tool memory_write error: fact_withdrawn: that claim was forgotten", {
+        code: "invalid_params",
+      });
     },
   };
   const op = { client, timeoutMs: 1000 };
@@ -446,7 +440,13 @@ test("the memory tool forgets a brain ref only in the person's own DM, one store
       acme: createMcpMemoryProvider({
         read: { ...op, tool: "memory_recall" },
         write: { ...op, tool: "memory_write" },
-        forget: { ...op, tool: "forget_fact", idArg: "id", requestIdArg: "request_id" },
+        forget: {
+          ...op,
+          tool: "forget_fact",
+          receiptTool: "get_write_request",
+          idArg: "id",
+          requestIdArg: "request_id",
+        },
         attestActor: true,
       }),
     },
@@ -468,10 +468,6 @@ test("the memory tool forgets a brain ref only in the person's own DM, one store
   };
   const forgets = () => calls.filter(({ tool }) => tool === "forget_fact").map(({ args }) => args.id);
 
-  assert.equal(
-    await run({ action: "edit", facts: [{ id: "#2", text: "Alice sits at desk 5C." }] }),
-    "Updated 1 fact.\nThese brain copies still hold the old wording: acme:8. They keep it until you forget them with delete.",
-  );
   assert.match(await run({ action: "delete", ids: ["#1", "acme:7"] }), /^\[error\] Forget from one store per call/);
   for (const deps of [
     { audienceScopeId: scopeId("channel", "C1") },
@@ -483,11 +479,11 @@ test("the memory tool forgets a brain ref only in the person's own DM, one store
   assert.equal(await run({ action: "delete", ids: ["acme:7"] }), "Forgot acme:7 in memory provider acme.");
   assert.equal(await run({ action: "delete", ids: ["#1"] }), "Forgot 1 fact.");
   assert.deepEqual(await notebook.facts!(personal).then((facts) => facts.map(({ text }) => text)), [
-    "Alice sits at desk 5C.",
+    "Alice sits at desk 4B.",
   ]);
   assert.match(
     await run({ action: "add", facts: [{ text: "Alice drinks rooibos." }] }),
-    /^Remembered 1 fact\.\n\[memory_provider_denied\] Memory provider acme refused to save it again \(fact_withdrawn\)/,
+    /^Remembered 1 fact\.\n\[memory_provider_failed\] Memory provider acme failed \(invalid_params\), so it stored nothing\./,
   );
   assert.deepEqual(forgets(), [7]);
 });

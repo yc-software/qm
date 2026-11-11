@@ -1,12 +1,14 @@
+import { randomUUID } from "node:crypto";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { McpCallError, mcpEnvelope, mcpResultText, type McpClient } from "../mcp/mcp-client.ts";
-import { TimeoutError, withTimeout } from "../util/async.ts";
+import { sleep, TimeoutError, withTimeout } from "../util/async.ts";
 import { attestableAudience, attestedPerson, OutsideAudience } from "../directory/person.ts";
 import { MemoryRecallWithheld } from "./disclosure.ts";
 import type { MemoryRecallContext, MemoryService } from "./memory-service.ts";
 import type { MemoryCandidate } from "./facts.ts";
 import {
   DENIED_CODES,
+  failedOutcome,
   MAX_FACTS_PER_WRITE,
   MemoryWriteUnconfirmed,
   reportEnvelope,
@@ -22,6 +24,11 @@ export type McpMemoryOperation = Omit<McpMemoryOperationConfig, "auth"> & { clie
 export type McpMemoryForget = Omit<McpMemoryForgetConfig, "auth"> & { client: McpClient; timeoutMs: number };
 
 const UNPUBLISHED_STATES = new Set(["conflict", "failed", "cancelled"]);
+
+interface ForgetReceipt {
+  state?: unknown;
+  retry_after_ms?: unknown;
+}
 
 function resultText(result: CallToolResult): string {
   if (result.content.some((block) => block.type === "text")) return mcpResultText(result);
@@ -90,8 +97,9 @@ export function createMcpMemoryProvider(opts: {
   };
 
   const call = async (
-    op: Pick<McpMemoryOperation, "client" | "tool" | "timeoutMs" | "actorArg">,
+    op: Pick<McpMemoryOperation, "client" | "tool" | "timeoutMs">,
     args: Record<string, unknown>,
+    actorArg: string | undefined,
     actorId: string | undefined,
     scopeId: string,
     audienceScopeId: string | undefined,
@@ -99,7 +107,7 @@ export function createMcpMemoryProvider(opts: {
     signal?: AbortSignal,
   ) => {
     const { person, headers } = attest(actorId, scopeId, audienceScopeId);
-    if (person && (op === opts.read || op === opts.write)) args[op.actorArg ?? "acting_user"] = person;
+    if (person && actorArg) args[actorArg] = person;
     const ms = deadline - Date.now();
     if (ms <= 0) throw new TimeoutError(`memory provider timed out after ${op.timeoutMs}ms`);
     const stop = new AbortController();
@@ -119,7 +127,14 @@ export function createMcpMemoryProvider(opts: {
     if (op.scopeArg) args[op.scopeArg] = scopeId;
     const maxChars = context?.maxChars;
     if (maxChars && op.maxCharsArg) args[op.maxCharsArg] = maxChars;
-    const result = await call(op, args, context?.actorId, scopeId, context?.audienceScopeId).catch((error: unknown) => {
+    const result = await call(
+      op,
+      args,
+      op.actorArg ?? "acting_user",
+      context?.actorId,
+      scopeId,
+      context?.audienceScopeId,
+    ).catch((error: unknown) => {
       throw error instanceof OutsideAudience ? new MemoryRecallWithheld(scopeId) : error;
     });
     const { code } = mcpEnvelope(result);
@@ -175,13 +190,7 @@ export function createMcpMemoryProvider(opts: {
           args[op.idempotencyArg] = start ? `${context.idempotencyKey}:${start / size}` : context.idempotencyKey;
         if (op.scopeArg) args[op.scopeArg] = scopeId;
         const { code } = mcpEnvelope(
-          await call(op, args, actor, scopeId, context?.audienceScopeId, deadline).catch((error: unknown) => {
-            throw error instanceof McpCallError &&
-              error.code === "invalid_params" &&
-              /fact_withdrawn:/.test(error.message)
-              ? new McpCallError(error.message, { code: "fact_withdrawn", cause: error })
-              : error;
-          }),
+          await call(op, args, op.actorArg ?? "acting_user", actor, scopeId, context?.audienceScopeId, deadline),
         );
         if (code && DENIED_CODES.has(code))
           throw new McpCallError(`memory provider refused the write (${code})`, { code });
@@ -209,7 +218,16 @@ export function createMcpMemoryProvider(opts: {
               return listing.tools.map((tool) => tool.name);
             },
             call: (scopeId, tool, args, { actorId, audienceScopeId, signal }) =>
-              call({ ...opts.read, tool }, { ...args }, actorId, scopeId, audienceScopeId, undefined, signal),
+              call(
+                { ...opts.read, tool },
+                { ...args },
+                undefined,
+                actorId,
+                scopeId,
+                audienceScopeId,
+                undefined,
+                signal,
+              ),
           },
         }
       : {}),
@@ -224,14 +242,46 @@ export function createMcpMemoryProvider(opts: {
                 throw new McpCallError(`memory provider fact ids are whole numbers, not ${JSON.stringify(id)}`, {
                   code: "fact_not_found",
                 });
-              const args: Record<string, unknown> = { [op.idArg]: factId };
-              if (context?.idempotencyKey) args[op.requestIdArg] = requestKey(context.idempotencyKey, id);
-              const result = await call(op, args, by?.actorId, scopeId, context?.audienceScopeId);
-              const state = (result.structuredContent as { state?: unknown } | undefined)?.state;
-              if (state === "committed") continue;
-              if (typeof state === "string" && UNPUBLISHED_STATES.has(state))
-                throw new McpCallError(`memory provider ${op.tool} ended ${state}`, { code: state });
-              throw new MemoryWriteUnconfirmed(typeof state === "string" ? state : "no_state");
+              const deadline = Date.now() + op.timeoutMs;
+              const requestId = requestKey(context?.idempotencyKey ?? randomUUID(), id);
+              const send = async (tool: string, args: Record<string, unknown>): Promise<ForgetReceipt> =>
+                (
+                  await call(
+                    { ...op, tool },
+                    { ...args, [op.requestIdArg]: requestId },
+                    undefined,
+                    by?.actorId,
+                    scopeId,
+                    context?.audienceScopeId,
+                    deadline,
+                  )
+                ).structuredContent ?? {};
+              const receipt = (pending: string) =>
+                send(op.receiptTool, {}).catch((error: unknown) => {
+                  throw new MemoryWriteUnconfirmed(pending, error);
+                });
+              let reply: ForgetReceipt;
+              let polled = false;
+              try {
+                reply = await send(op.tool, { [op.idArg]: factId });
+              } catch (error) {
+                if (!(error instanceof McpCallError) || error.code !== undefined || error.unsent) throw error;
+                reply = await receipt(failedOutcome(error).code ?? "no_reply");
+                polled = true;
+              }
+              for (;;) {
+                const { state, retry_after_ms: wait } = reply;
+                if (state === "committed") break;
+                if (typeof state === "string" && UNPUBLISHED_STATES.has(state))
+                  throw new McpCallError(`memory provider ${op.tool} ended ${state}`, { code: state });
+                const pending = typeof state === "string" ? state : "no_state";
+                const delay = polled ? wait : 0;
+                if (typeof delay !== "number" || (polled && delay <= 0) || Date.now() + delay >= deadline)
+                  throw new MemoryWriteUnconfirmed(pending);
+                await sleep(delay);
+                reply = await receipt(pending);
+                polled = true;
+              }
             }
           },
         }

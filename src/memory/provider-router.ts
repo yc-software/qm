@@ -10,7 +10,7 @@ import {
   type MemoryService,
 } from "./memory-service.ts";
 import { MemoryForgetRefused, type MemoryCandidate } from "./facts.ts";
-import { failedOutcome, forgetFailure, strictFailure, withEnvelope } from "./provider-outcome.ts";
+import { changeFailure, failedOutcome, strictFailure, withEnvelope } from "./provider-outcome.ts";
 import { attestableAudience, OutsideAudience } from "../directory/person.ts";
 
 export type MemoryCapturePolicy = "off" | "explicit" | "automatic";
@@ -61,7 +61,7 @@ export function createRoutedMemoryService(opts: {
   async function attempt<T>(
     route: MemoryProviderRoute,
     scopeId: ScopeId,
-    operation: "recall" | "query" | "capture",
+    operation: "recall" | "query" | "capture" | "forget",
     context: Pick<MemoryRecallContext, "report"> | undefined,
     run: () => Promise<T>,
     settle: (value: T, envelope: McpEnvelope) => Pick<MemoryProviderOutcome, "outcome" | "added">,
@@ -82,7 +82,7 @@ export function createRoutedMemoryService(opts: {
         opts.onError?.(error, route.provider, operation);
         return { value: fallback };
       }
-      report(operation === "capture" && failed.outcome === "timed_out" ? { ...failed, outcome: "unknown" } : failed);
+      report(operation === "capture" || operation === "forget" ? changeFailure(error) : failed);
       if (!route.failOpen) return { value: fallback, error };
       opts.onError?.(error, route.provider, operation);
       return { value: fallback };
@@ -220,10 +220,11 @@ export function createRoutedMemoryService(opts: {
         await manager.delete(scopeId, ids, by, context);
         return;
       }
-      const provider = routesFor(scopeId).some((route) => route.provider === brain) ? opts.providers[brain] : undefined;
-      if (!provider?.delete || !provider.attestActor)
+      const route = routesFor(scopeId).find((candidate) => candidate.provider === brain);
+      const provider = route && opts.providers[brain];
+      if (!route || !provider?.delete || !provider.attestActor)
         throw new MemoryForgetRefused(
-          `Memory brain ${brain} can't forget facts for this conversation's notebook: it isn't serving it, or its preset has no forget. Nothing was changed. GET /v1/admin/memory-registry shows its preset and whether its binding is disabled; gbrain-v3 forgets by ref.`,
+          `Memory brain ${brain} can't forget facts here: no registry brain by that id serves this conversation's notebook. Nothing was changed. Brains set in MEMORY_PROVIDER_CONFIG can't forget; GET /v1/admin/memory-registry lists registry brains and their bindings.`,
         );
       if (
         !changesBrainAsPerson(by) ||
@@ -234,16 +235,16 @@ export function createRoutedMemoryService(opts: {
           `Only the person, in their own DM with QM, can forget a fact in memory brain ${brain}; admin, maintenance, self-service, bot and ambient changes reach the notebook only. Nothing was changed.`,
         );
       for (const ref of ids) {
-        const started = Date.now();
-        const report = (fields: Pick<MemoryProviderOutcome, "outcome" | "code">) =>
-          context?.report?.({ provider: brain, scope: scopeId, ref, ms: Date.now() - started, ...fields });
-        try {
-          await provider.delete(scopeId, [ref.slice(brain.length + 1)], by, context);
-          report({ outcome: "committed" });
-        } catch (error) {
-          report(forgetFailure(error));
-          opts.onError?.(error, brain, "forget");
-        }
+        const { error } = await attempt(
+          route,
+          scopeId,
+          "forget",
+          { report: (outcome) => context?.report?.({ ...outcome, ref }) },
+          () => provider.delete!(scopeId, [ref.slice(brain.length + 1)], by, context),
+          () => ({ outcome: "committed" }),
+          undefined,
+        );
+        if (error) opts.onError?.(error, brain, "forget");
       }
     },
 

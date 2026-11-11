@@ -16,6 +16,7 @@ export interface BackgroundExecBrokerDeps {
   onExit?: (handle: SandboxHandle, processId: string) => Promise<void>;
   scopeId: string;
   sessionRef?: string;
+  runId?: string;
   ttlMs?: number;
   ttlMaxMs?: number;
   pollMs?: number;
@@ -98,8 +99,8 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
   const termGraceMs = deps.termGraceMs ?? DEFAULT_TERM_GRACE_MS;
   const killGraceMs = deps.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
 
-  const exited = async (handle: SandboxHandle, processId: string) => {
-    await deps.registry.markStatus(processId, "exited");
+  const exited = async (handle: SandboxHandle, processId: string, status: ProcessStatus = "exited") => {
+    await deps.registry.markStatus(processId, status);
     await deps.onExit?.(handle, processId);
   };
   return {
@@ -181,6 +182,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
             purpose,
             ttlMs: ttl,
             ...(deps.sessionRef ? { sessionRef: deps.sessionRef } : {}),
+            ...(deps.runId ? { runId: deps.runId } : {}),
             ...(credentials?.files ? { credentialFiles: credentials.files } : {}),
           });
         };
@@ -191,6 +193,18 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
           ({ processId } = await deps.sandbox.startProcess(handle, command, startOptions));
           launched = true;
           await register(processId);
+        }
+        try {
+          await deps.assertComputerUsable?.(sandboxId);
+        } catch (error) {
+          const startedProcessId = processId;
+          return withCleanup(
+            () => Promise.reject(error),
+            async () => {
+              await deps.sandbox.signalProcess(handle, startedProcessId, "KILL");
+              await exited(handle, startedProcessId, "reaped");
+            },
+          );
         }
 
         const { output, cursor, status } = await pollProcess(deps.sandbox, handle, processId, {

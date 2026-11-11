@@ -18,7 +18,7 @@ export function recallTools(kit: ToolKit) {
       "read: this notebook with fact #ids (pass `scope` from a search result for another notebook). " +
       "add: short, self-contained facts (preferences, identifiers, ongoing projects, how they work); never secrets, one-off trivia, or anything already recorded elsewhere. " +
       "Save pointers, not data: growing lists and working state belong in a file written with the files tool, with one memory line naming it. Files are this conversation's own; a pointer read from another notebook is a hint of where state lives, not a path you can open. " +
-      "edit: replace notebook facts' text by id; the reply names brain copies still holding the old wording. delete: forget by `ids`, either notebook #ids or brain refs from search (like acme:4821), one store per call; a brain ref is forgotten only in the person's own DM. Fix changed facts instead of adding contradictions; delete stale ones.",
+      "edit: replace notebook facts' text by id; a brain copy that search shows as (also <ref>) keeps the old wording until you delete that ref. delete: forget by `ids`, either notebook #ids or brain refs from search (like acme:4821), one store per call; a brain ref is forgotten only in the person's own DM. Fix changed facts instead of adding contradictions; delete stale ones.",
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal("search"),
@@ -143,31 +143,11 @@ export function recallTools(kit: ToolKit) {
           case "edit": {
             if (!facts.length || facts.some((fact) => !fact.id || !fact.text))
               return fail("memory edit requires `facts` as a non-empty list of {id, text}.");
-            const edited = await tc.memoryEdit(facts);
-            if (edited === null) return unavailable();
-            const { copies, problems } = edited;
+            if ((await tc.memoryEdit(facts)) === null) return unavailable();
             return recordResult(
               callId,
-              {
-                tool: "memory",
-                action,
-                edited: facts.length,
-                ...(copies.length ? { copies } : {}),
-                ...(problems.length ? { problems } : {}),
-              },
-              text(
-                [
-                  `Updated ${facts.length} fact${facts.length === 1 ? "" : "s"}.`,
-                  ...(copies.length
-                    ? [
-                        `These brain copies still hold the old wording: ${copies.join(", ")}. They keep it until you forget them with delete.`,
-                      ]
-                    : []),
-                  ...(problems.length
-                    ? [`Couldn't check every brain for copies of the old wording:`, ...problems.map(problemLine)]
-                    : []),
-                ].join("\n"),
-              ),
+              { tool: "memory", action, edited: facts.length },
+              text(`Updated ${facts.length} fact${facts.length === 1 ? "" : "s"}.`),
             );
           }
           case "delete": {
