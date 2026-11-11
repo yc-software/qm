@@ -129,6 +129,7 @@ describe("conversation pins self-API", async () => {
     assert.ok(((await listing.json()) as { pins: { id: string }[] }).pins.some((p) => p.id === pin.id));
     assert.equal((await call("GET", "/v1/pins", undefined, await capFor("U2", nested.threadRef))).status, 403);
     assert.equal((await call("GET", "/v1/pins", undefined, await capFor("U1", nested.threadRef, true))).status, 403);
+    assert.equal((await call("GET", "/v1/pins", undefined, await capFor("U1", THREAD, true))).status, 403);
     assert.equal((await call("DELETE", `/v1/pins/${pin.id}`, undefined, token)).status, 200);
   });
 

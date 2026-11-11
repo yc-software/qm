@@ -1,4 +1,9 @@
-import { isSubagentThreadRef, sessionTreeRoot, sessionVisibleTo } from "../../sessions/session-syscalls.ts";
+import {
+  isSidebarSession,
+  isSubagentThreadRef,
+  sessionTreeRoot,
+  sessionVisibleTo,
+} from "../../sessions/session-syscalls.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
@@ -13,9 +18,13 @@ export async function conversationRef(ctx: ApiCtx): Promise<string | null> {
     sendJson(res, 400, { error: "no_conversation", message: "this token isn't bound to a conversation" });
     return null;
   }
-  if (!isSubagentThreadRef(capability.threadRef)) return capability.threadRef;
   const sessions = ctx.deps.sessions;
   const session = await sessions?.getByThread(capability.threadRef);
+  if (!isSubagentThreadRef(capability.threadRef)) {
+    if (!session || !isSidebarSession(session) || sessionVisibleTo(capability, session)) return capability.threadRef;
+    sendJson(res, 403, { error: "forbidden", message: "this conversation is no longer accessible" });
+    return null;
+  }
   const root = session && sessions ? await sessionTreeRoot(sessions, session) : null;
   if (
     !root ||
