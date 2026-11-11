@@ -740,9 +740,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const editingApp = appEditSlug(conversation.threadRef, actor.id);
       const appEdit = appEditTurnPolicy(editingApp !== null && modeName === "mode-conversation");
       const mcpToolsReady =
-        !external && !appEdit?.skipMcp && deps.mcp
-          ? deps.mcp.toolDefsFor(actor.id, audienceScopeId, actAsActor)
-          : undefined;
+        !external && !appEdit && deps.mcp ? deps.mcp.toolDefsFor(actor.id, audienceScopeId, actAsActor) : undefined;
       const useMemory = !external && input.skipMemory !== true;
       const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);
       resolution.writableScopeId = environmentId;
@@ -1314,7 +1312,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const loadedFacts = snapshot.then((view) => view.loaded);
         void loadedFacts.catch(() => undefined);
         const recallFor = async (history: Item[]) =>
-          appEdit?.skipRecall
+          appEdit
             ? []
             : context.recallMemory(
                 memoryRecallQuery(input.text, history),
@@ -1947,7 +1945,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           frame: modeFrame,
           body: freshBody,
         };
-        const promptSnapshot = appEdit?.skipSnapshot
+        const promptSnapshot = appEdit
           ? freshPrompt
           : await systemPromptSnapshot(deps.promptSnapshots, session.id, freshPrompt);
         const turnEnvironmentContents = [

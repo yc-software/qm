@@ -8,9 +8,6 @@ const APP_EDIT_TOOLS = ["app_files", "apps", "execute", "skills", "files", "hist
 export function appEditTurnPolicy(appEditChat: boolean) {
   if (!appEditChat) return null;
   return {
-    skipMcp: true,
-    skipRecall: true,
-    skipSnapshot: true,
     frameMd: APP_EDIT_FRAME_MD,
     onlyTools: APP_EDIT_TOOLS,
     body: (instructions: string, persona: string) =>
