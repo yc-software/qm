@@ -881,10 +881,10 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
           ],
         );
         await withPgTransaction(await pool(), async (db) => {
-          const jobs = await db.query(
-            "SELECT pending_rework_seq FROM finny_jobs WHERE id=$1 AND scope_id=$2 FOR UPDATE",
-            [input.jobId, input.scopeId],
-          );
+          const jobs = await db.query("SELECT pending_rework_seq FROM finny_jobs WHERE id=$1 AND scope_id=$2", [
+            input.jobId,
+            input.scopeId,
+          ]);
           if (!jobs.rows[0]) throw new Error("Finny runtime dispatch job is unavailable");
           const rows = await db.query("SELECT * FROM finny_runtime_dispatches WHERE idempotency_key=$1 FOR UPDATE", [
             input.idempotencyKey,

@@ -18,6 +18,7 @@ interface PgPoolingConfig {
   caCert?: string;
   queryMax?: number;
   sessionMax?: number;
+  idleInTransactionTimeoutMs?: number;
 }
 
 let poolingConfig: PgPoolingConfig = {};
@@ -134,6 +135,15 @@ function querySettings(timeoutMs: number | undefined): PgSetting[] {
   return [...tenantSettings(), ["statement_timeout", String(Math.round(timeoutMs))]];
 }
 
+function transactionSettings(): PgSetting[] {
+  const base = tenantSettings();
+  const idleTimeout = poolingConfig.idleInTransactionTimeoutMs ?? 60_000;
+  if (idleTimeout > 0) {
+    return [...base, ["idle_in_transaction_session_timeout", String(Math.round(idleTimeout))]];
+  }
+  return base;
+}
+
 function settingsQuery(settings: readonly PgSetting[]): { text: string; values: string[] } {
   const assignments = settings.map((_, i) => `set_config($${2 * i + 1}, $${2 * i + 2}, true)`);
   return { text: `SELECT ${assignments.join(", ")}`, values: settings.flat() };
@@ -196,7 +206,7 @@ async function rollbackOrReport(client: PoolClient, context: string): Promise<Er
 }
 
 async function beginTransaction(client: PoolClient): Promise<void> {
-  const settings = tenantSettings();
+  const settings = transactionSettings();
   await client.query("BEGIN");
   if (settings.length) await client.query(settingsQuery(settings));
 }
