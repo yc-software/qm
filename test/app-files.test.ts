@@ -360,8 +360,8 @@ test("an app edit chat is shown the app's small text files once, then only the f
   const h = harness();
   await h.publish("notes", SOURCE);
   const read: string[] = [];
-  const { filesOf } = h.deployStore;
-  h.deployStore.filesOf = (id, commit, paths) => (read.push(...(paths ?? [])), filesOf(id, commit, paths));
+  const { filesIn } = h.deployStore;
+  h.deployStore.filesIn = (id, entries) => (read.push(...entries.map((file) => file.path)), filesIn(id, entries));
   const turns: Array<{ source: string; replayed: unknown[] }> = [];
   const mock = createMockAgent();
   const config = testConfigStore("default-org");
@@ -474,4 +474,15 @@ test("app source budgets file headings, fences and skipped paths along with cont
   assert.ok(shown.text.length <= 80_000, String(shown.text.length));
   assert.ok(shown.text.includes("```untrusted-data\na\n```"));
   assert.ok(shown.text.includes("more that app_files list names"));
+  const prior = storedItem(
+    { kind: "UserMessage", text: "hi", body: { appSource: shown.record } },
+    { sessionId: "s", seq: 1, createdAt: 1 },
+  );
+  await files.save(async (read) => ({
+    files: Array.from({ length: 1500 }, (_, i) => ({ path: `${"y".repeat(100)}-${i}.txt`, data: Buffer.from("b") })),
+    deletedPaths: (await read([])).tree.map((file) => file.path),
+  }));
+  const delta = await appSourceShown(files, [prior]);
+  assert.ok(delta.text.length <= 80_000, String(delta.text.length));
+  assert.ok(delta.text.includes("Deleted:") && delta.text.includes("Changed but not shown"));
 });

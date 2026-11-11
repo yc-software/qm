@@ -140,10 +140,10 @@ async function render(files: AppFiles, history: readonly Item[]): Promise<{ text
     [skippedPrefix, names],
   ];
   const summaries = sections.filter(([, values]) => values.length);
-  for (const [index, [prefix, values]] of summaries.entries()) {
-    const line = boundedList(prefix, values, Math.floor(room / (summaries.length - index)));
-    chunks.push(line);
-    room -= line.length + 1;
+  const minimum = (prefix: string, values: readonly string[]) => prefix.length + more(values.length).length + 2;
+  const extra = room - summaries.reduce((size, [prefix, values]) => size + minimum(prefix, values), 0);
+  for (const [prefix, values] of summaries) {
+    chunks.push(boundedList(prefix, values, minimum(prefix, values) + Math.floor(extra / summaries.length)));
   }
   return { text: [...chunks, "</app-source>"].join("\n"), record };
 }
