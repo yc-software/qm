@@ -158,15 +158,19 @@ export async function buildModelRuntime(
       return getAuth(model, overrides);
     }) as typeof runtime.getAuth;
   }
+  const thenPayload =
+    (options: Pick<ModelsSimpleStreamOptions, "onPayload"> | undefined, model: Model<Api>, step: PayloadStep) =>
+    async (payload: unknown) => {
+      const transformed = options?.onPayload ? await options.onPayload(payload, model) : undefined;
+      return step(transformed === undefined ? payload : transformed);
+    };
   const retained = <T extends ModelsSimpleStreamOptions | undefined>(options: T): T =>
     cacheRetention
       ? ({
           ...options,
           cacheRetention,
-          onPayload: async (payload: unknown, model: Model<Api>) => {
-            const transformed = await options?.onPayload?.(payload, model);
-            return shortConversationCache(transformed === undefined ? payload : transformed);
-          },
+          onPayload: (payload: unknown, model: Model<Api>) =>
+            thenPayload(options, model, shortConversationCache)(payload),
         } as T)
       : options;
   const wireModelId = <T extends Pick<ModelsSimpleStreamOptions, "onPayload"> | undefined>(
@@ -176,14 +180,12 @@ export async function buildModelRuntime(
   ): T =>
     ({
       ...options,
-      onPayload: async (payload: unknown) => {
-        const transformed = options?.onPayload ? await options.onPayload(payload, model) : undefined;
-        const body = transformed === undefined ? payload : transformed;
+      onPayload: thenPayload(options, model, async (body) => {
         if (!body || typeof body !== "object" || Array.isArray(body)) {
           throw new Error("model request payload must be an object");
         }
         return { ...body, ...modelRequestOverrides(model.id), model: await target() };
-      },
+      }),
     }) as T;
   const route = <T extends ModelsSimpleStreamOptions | undefined>(
     model: Model<Api>,
@@ -211,10 +213,7 @@ export async function buildModelRuntime(
                 }),
             }
           : {}),
-        onPayload: async (payload: unknown) => {
-          const transformed = base?.onPayload ? await base.onPayload(payload, model) : undefined;
-          return applyThinkingBinding(transformed === undefined ? payload : transformed, candidate);
-        },
+        onPayload: thenPayload(base, model, (body) => applyThinkingBinding(body, candidate)),
       } as T;
       return {
         model: candidate,
@@ -342,6 +341,8 @@ export function applyThinkingBinding<T>(
   }
   return payload;
 }
+
+type PayloadStep = (payload: unknown) => unknown;
 
 function shortConversationCache(payload: unknown): unknown {
   const last = (payload as { messages?: Array<{ content?: unknown }> } | undefined)?.messages?.at(-1)?.content;
