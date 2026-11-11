@@ -20,9 +20,6 @@ Usage:
   gmail.py update-draft DRAFT_ID --body-file FILE      # keeps recipients/threading/quote
   gmail.py send-draft DRAFT_ID
 
-draft and reply take --send to send right away (for already-approved sends);
-never build MIME or call messages/send yourself.
-
 Body files are plain text. Lines that look hard-wrapped (long lines inside a
 paragraph) are rejoined into flowing prose; short lines (sign-offs, lists) keep
 their breaks. Blank lines separate paragraphs.
@@ -160,7 +157,6 @@ def build_raw(headers: dict[str, str], body: str, thread_id: str | None = None,
 
 
 def attribution(h: dict[str, str]) -> str:
-    # Gmail's own reply header: "On Tue, Nov 10, 2026 at 12:36 PM Name <a@b> wrote:".
     try:
         dt = parsedate_to_datetime(h.get("date", ""))
         when = f"{dt:%a, %b} {dt.day}, {dt.year} at {dt.hour % 12 or 12}:{dt:%M %p} "
@@ -170,8 +166,6 @@ def attribution(h: dict[str, str]) -> str:
 
 
 class HtmlQuote(HTMLParser):
-    # Splits an HTML part into the markup inside <body> (head, styles and scripts
-    # dropped) and its text, so a reply can nest it under Gmail's quote block.
     HIDDEN = {"head", "style", "script", "title"}
 
     def __init__(self, source: str):
@@ -205,9 +199,6 @@ class HtmlQuote(HTMLParser):
 
 
 def quote_of(msg: dict) -> tuple[str, str]:
-    # The quoted original, as Gmail's composer appends it to a reply: a "> " block in
-    # text/plain and a gmail_quote blockquote in text/html, which Gmail folds behind
-    # "..." and other clients show as the thread's history.
     payload = msg["payload"]
     attr = attribution(headers_of(payload))
     plain = part_text(payload, "text/plain")
@@ -230,7 +221,6 @@ def quote_of(msg: dict) -> tuple[str, str]:
 
 
 def quote_for(thread_id: str | None, in_reply_to: str) -> tuple[str, str] | None:
-    # Rebuild a reply draft's quote from the message it answers, so edits keep it.
     if not thread_id or not in_reply_to:
         return None
     thread = call("GET", f"threads/{thread_id}", query={"format": "full"})
@@ -295,11 +285,6 @@ def strip_addrs(addrs: str, exclude: str) -> str:
     return ", ".join(kept)
 
 
-def save_draft(message: dict, send: bool) -> dict:
-    draft = call("POST", "drafts", {"message": message})
-    return call("POST", "drafts/send", {"id": draft["id"]}) if send else draft
-
-
 def main() -> None:
     global ACCOUNT
     p = argparse.ArgumentParser()
@@ -318,12 +303,10 @@ def main() -> None:
     d.add_argument("--to", required=True)
     d.add_argument("--subject", required=True)
     d.add_argument("--body-file", required=True)
-    d.add_argument("--send", action="store_true", help="send now instead of leaving a draft")
     rp = sub.add_parser("reply")
     rp.add_argument("id")
     rp.add_argument("--body-file", required=True)
     rp.add_argument("--all", action="store_true", help="reply-all (keep every recipient)")
-    rp.add_argument("--send", action="store_true", help="send now instead of leaving a draft")
     u = sub.add_parser("update-draft")
     u.add_argument("draft_id")
     u.add_argument("--body-file", required=True)
@@ -377,7 +360,7 @@ def main() -> None:
                           "messages": msgs}))
     elif a.cmd == "draft":
         message = build_raw({"To": a.to, "Subject": a.subject}, read_body(a.body_file))
-        print(json.dumps(save_draft(message, a.send)))
+        print(json.dumps(call("POST", "drafts", {"message": message})))
     elif a.cmd == "reply":
         orig = call("GET", f"messages/{a.id}", query={"format": "full"})
 
@@ -401,7 +384,7 @@ def main() -> None:
         if a.all:
             headers["Cc"] = strip_addrs(f"{h.get('to', '')}, {h.get('cc', '')}", f"{me}, {headers['To']}")
         message = build_raw(headers, read_body(a.body_file), orig["threadId"], quote_of(orig))
-        print(json.dumps(save_draft(message, a.send)))
+        print(json.dumps(call("POST", "drafts", {"message": message})))
     elif a.cmd == "update-draft":
         d0 = call("GET", f"drafts/{a.draft_id}", query={"format": "full"})
         payload = d0["message"]["payload"]

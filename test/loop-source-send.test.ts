@@ -31,6 +31,37 @@ const gmailItem = item("gmail", {
 
 const slackItem = item("slack", { slack: { channelId: "C1", ts: "111.222" } });
 
+function gmailFetch(send: (init: RequestInit) => Response): typeof fetch {
+  const original = {
+    id: "m1",
+    payload: {
+      mimeType: "text/plain",
+      headers: [
+        { name: "From", value: "Ada <ada@example.com>" },
+        { name: "Date", value: "Tue, 10 Nov 2026 12:36:00 -0800" },
+      ],
+      body: { data: Buffer.from("Numbers attached.\n> older").toString("base64url") },
+    },
+  };
+  return (async (url: Parameters<typeof fetch>[0], init?: RequestInit) =>
+    String(url).includes("/threads/") ? Response.json({ messages: [original] }) : send(init!)) as typeof fetch;
+}
+
+function mimeTexts(mime: string): Record<string, string> {
+  const boundary = mime.match(/boundary="([^"]+)"/)![1]!;
+  const out: Record<string, string> = {};
+  for (const part of mime.split(`--${boundary}`)) {
+    const [head = "", body = ""] = part.split("\r\n\r\n");
+    const type = head.match(/Content-Type: (text\/\w+)/)?.[1];
+    const text = body.replace(/\r\n$/, "");
+    if (type)
+      out[type] = head.includes("base64")
+        ? Buffer.from(text.replaceAll("\r\n", ""), "base64").toString("utf8")
+        : text.replaceAll("\r\n", "\n");
+  }
+  return out;
+}
+
 function tokens(map: Record<string, string | null>): ConnectorTokenSource {
   return {
     connectorAccessToken: async (host, _principal, accountType) =>
@@ -66,8 +97,13 @@ test("gmail reply MIME threads correctly and survives a UTF-8 body", async () =>
   assert.match(mime, /^Subject: Re: Quarterly numbers\r$/m);
   assert.match(mime, /^In-Reply-To: <msg-1@mail>\r$/m);
   assert.match(mime, /^References: <msg-1@mail>\r$/m);
-  const body = mime.split("\r\n\r\n")[1]!;
-  assert.equal(Buffer.from(body.replaceAll("\r\n", ""), "base64").toString("utf8"), "Confirmed — see attached. ✅");
+  const texts = mimeTexts(mime);
+  assert.equal(texts["text/plain"], "Confirmed — see attached. ✅");
+  assert.equal(
+    texts["text/html"],
+    '<div dir="ltr">Confirmed — see attached. ✅</div>',
+    "html part keeps Gmail's width",
+  );
 });
 
 test("subjects keep an existing Re: and non-ASCII subjects get RFC 2047 encoding", async () => {
@@ -97,7 +133,7 @@ test("gmail send posts base64url raw with the thread id", async () => {
   const calls: Array<{ url: string; init: RequestInit }> = [];
   const fetchImpl = (async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
     calls.push({ url: String(url), init: init! });
-    return new Response(JSON.stringify({ id: "m2" }), { status: 200 });
+    return gmailFetch(() => Response.json({ id: "m2" }))(url, init);
   }) as typeof fetch;
   const result = await gmailAdapter.act(
     { owner: "josh", tokens: tokens({ "gmail.googleapis.com": "tok-g" }), fetchImpl },
@@ -106,13 +142,24 @@ test("gmail send posts base64url raw with the thread id", async () => {
     { body: "Confirmed." },
   );
   assert.deepEqual(result, { ok: true, result: "Confirmed." });
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0]!.url, "https://gmail.googleapis.com/gmail/v1/users/me/messages/send");
-  const headers = calls[0]!.init.headers as Record<string, string>;
+  assert.deepEqual(
+    calls.map((c) => c.url),
+    [
+      "https://gmail.googleapis.com/gmail/v1/users/me/threads/t1?format=full",
+      "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+    ],
+  );
+  const headers = calls[1]!.init.headers as Record<string, string>;
   assert.equal(headers.authorization, "Bearer tok-g");
-  const body = JSON.parse(String(calls[0]!.init.body)) as { raw: string; threadId: string };
+  const body = JSON.parse(String(calls[1]!.init.body)) as { raw: string; threadId: string };
   assert.equal(body.threadId, "t1");
   assert.doesNotMatch(body.raw, /[+/=]/);
+  const texts = mimeTexts(Buffer.from(body.raw, "base64url").toString("utf8"));
+  assert.equal(
+    texts["text/plain"],
+    "Confirmed.\n\nOn Tue, 10 Nov 2026 12:36:00 -0800 Ada <ada@example.com> wrote:\n\n> Numbers attached.\n>> older",
+  );
+  assert.ok(texts["text/html"]!.includes('<blockquote class="gmail_quote"'), "html quotes the thread like Gmail");
 });
 
 test("a Gmail send refusal reports the upstream status and response excerpt", async () => {
@@ -120,7 +167,7 @@ test("a Gmail send refusal reports the upstream status and response excerpt", as
     {
       owner: "josh",
       tokens: tokens({ "gmail.googleapis.com": "tok" }),
-      fetchImpl: async () => new Response("Recipient address rejected", { status: 400 }),
+      fetchImpl: gmailFetch(() => new Response("Recipient address rejected", { status: 400 })),
     },
     gmailItem,
     "send",
@@ -135,11 +182,11 @@ test("a Gmail send refusal reports the upstream status and response excerpt", as
 
 test("the held proposal is what goes out when the action carries no draft", async () => {
   let sent = "";
-  const fetchImpl = (async (_url: Parameters<typeof fetch>[0], init?: RequestInit) => {
-    const raw = (JSON.parse(String(init?.body)) as { raw: string }).raw;
+  const fetchImpl = gmailFetch((init) => {
+    const raw = (JSON.parse(String(init.body)) as { raw: string }).raw;
     sent = Buffer.from(raw, "base64url").toString("utf8");
     return new Response("{}", { status: 200 });
-  }) as typeof fetch;
+  });
   const held = item(
     "gmail",
     { gmail: { threadId: "t1", to: ["ada@example.com"], subject: "Quarterly numbers" } },
@@ -152,7 +199,7 @@ test("the held proposal is what goes out when the action carries no draft", asyn
     {},
   );
   assert.equal(result.ok, true);
-  assert.equal(sent.split("\r\n\r\n")[1], "the held draft\r\n");
+  assert.ok(mimeTexts(sent)["text/plain"]!.startsWith("the held draft\n\nOn "));
 });
 
 test("a missing connector reads as not_connected, not an exception", async () => {
@@ -426,10 +473,9 @@ test("Gmail sends only through the explicitly bound account", async () => {
               return connected ? "bound-token" : null;
             },
           },
-          fetchImpl: async (_url, init) => {
-            sends++;
+          fetchImpl: async (url, init) => {
             assert.equal((init!.headers as Record<string, string>).authorization, "Bearer bound-token");
-            return Response.json({});
+            return gmailFetch(() => (sends++, Response.json({})))(url, init);
           },
         },
         bound,

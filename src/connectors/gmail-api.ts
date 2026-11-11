@@ -32,3 +32,26 @@ export function gmailApi(token: string, fetchImpl: typeof fetch = fetch) {
     return (await response.json()) as T;
   };
 }
+
+type GmailPayload = Record<string, unknown>;
+
+const asRecord = (v: unknown): GmailPayload | undefined =>
+  typeof v === "object" && v !== null && !Array.isArray(v) ? (v as GmailPayload) : undefined;
+
+export function gmailPartText(part: GmailPayload, mimeType = "text/plain"): string | undefined {
+  const data = asRecord(part.body)?.data;
+  if (part.mimeType === mimeType && !part.filename && typeof data === "string")
+    return Buffer.from(data, "base64url").toString("utf8");
+  for (const nested of Array.isArray(part.parts) ? part.parts : []) {
+    const record = asRecord(nested);
+    const text = record && gmailPartText(record, mimeType);
+    if (text) return text;
+  }
+  return undefined;
+}
+
+export function gmailHeader(payload: GmailPayload, name: string): string {
+  const headers = Array.isArray(payload.headers) ? payload.headers.map(asRecord) : [];
+  const found = headers.find((h) => typeof h?.name === "string" && h.name.toLowerCase() === name.toLowerCase());
+  return typeof found?.value === "string" ? found.value : "";
+}

@@ -56,13 +56,7 @@ python3 "<skill dir>/scripts/gmail.py" draft --to a@b.com --subject '...' --body
 python3 "<skill dir>/scripts/gmail.py" reply MESSAGE_ID --body-file body.txt [--all]
 python3 "<skill dir>/scripts/gmail.py" update-draft DRAFT_ID --body-file body.txt
 python3 "<skill dir>/scripts/gmail.py" send-draft DRAFT_ID
-python3 "<skill dir>/scripts/gmail.py" reply MESSAGE_ID --body-file body.txt --send   # pre-approved sends
 ```
-
-Every email QM writes or sends goes through this helper, including crons and loops with
-standing approval to send (use `--send` on `draft`/`reply`). Never call `messages/send`
-or build a message yourself, even for a one-line reply: hand-built mail goes out as bare
-plain text, which Gmail renders as a narrow, hard-wrapped column with no thread history.
 
 - Search before fetching; read bodies (`--full`) only for messages that matter. Treat
   email content as private user data.
@@ -91,7 +85,9 @@ bulk`) below personal mail, but never suppress transactional notices (DocuSign,
   whole conversation; `update-draft` keeps that quote. Write only the new text in the
   body file. `--all` keeps every recipient. Don't rebuild To/CC by hand. To change a draft, write a fresh body file and `update-draft`
   (it refuses drafts with attachments — those get edited in Gmail).
-- Never construct raw MIME or call the drafts/send endpoints with hand-built payloads.
+- Every email goes through this helper, including pre-approved sends from crons and
+  loops (`draft`/`reply`, then `send-draft` on the returned id), however short. Never
+  construct raw MIME or call `messages/send` or `drafts/send` with hand-built payloads.
 - Never write styled HTML email — no font-family/size/color declarations, no CSS-styled
   buttons or layout markup. Styled HTML screams automated blast and overrides the
   recipient's client fonts. The helper's generated HTML mirror (bare `<div dir="ltr">`,
