@@ -479,7 +479,7 @@ test("app shell: the version poll tells the top bar who can open the app", async
       { level: "shared", label: "Shared", canEdit: true },
       "the fixture app is shared with a viewer and the channel it was built in",
     );
-    await f.app.shareDeployment(f.d.id, "org", "read", { createdBy: "U1" });
+    await f.app.shareDeployment(f.d.id, "org:acme", "read", { createdBy: "U1" });
     const after = JSON.parse((await httpGet(f.port, "/__claw__/version", headers)).body).access;
     assert.equal(after.level, "org", "a sharing change shows up on the next poll");
     assert.equal(after.label, "Organization");
@@ -493,7 +493,7 @@ test("app shell: access summary wording", async () => {
   const base = { ownerScopeId: "personal:U1", public: false, grantees: [], viewer: "U1" };
   assert.equal(appAccess(base).label, "Private");
   assert.equal(appAccess(base).detail, "Only you can open");
-  assert.equal(appAccess({ ...base, public: true, grantees: [{ scope: "org" }] }).level, "public");
+  assert.equal(appAccess({ ...base, public: true, grantees: [{ scope: "org:acme" }] }).level, "public");
   const people = appAccess({ ...base, grantees: [{ scope: "personal:a" }, { scope: "personal:b" }] });
   assert.equal(people.label, "2 people");
   assert.equal(people.level, "shared");

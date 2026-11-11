@@ -1,5 +1,4 @@
 import { externalAppSharingAllowed } from "../../feature-flags.ts";
-import { isOrgScope } from "../../../plugins/chassis/src/app-access.ts";
 import { canEditAppPermissions } from "../../deploy/app-access.ts";
 import { DeployAccessError, type DeployAccessErrorCode } from "../../deploy/deploy-service.ts";
 import { deploymentView, type App } from "../app.ts";
@@ -137,7 +136,7 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
         : undefined;
     const grantees =
       invite?.grantees ?? (await app.shareDeployment(params.id!, target.scope, permission, actor, notify));
-    const orgGrant = grantees.find((g) => isOrgScope(g.scope));
+    const orgGrant = grantees.find((g) => parseScopeId(g.scope).kind === "org");
     let reach = "owner-only";
     if (orgGrant) reach = `everyone in ${parseScopeId(orgGrant.scope).ref}`;
     else if (grantees.length) reach = `${grantees.length} grantee${grantees.length === 1 ? "" : "s"}`;

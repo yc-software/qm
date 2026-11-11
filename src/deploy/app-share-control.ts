@@ -1,24 +1,5 @@
-import { ACCESS_ICONS } from "../../plugins/chassis/src/app-access.ts";
-
-const svgChildren = (icon: (typeof ACCESS_ICONS)["org"]): string =>
-  icon
-    .map(
-      ([tag, attrs]) =>
-        `<${tag} ${Object.entries(attrs)
-          .map(([k, v]) => `${k}="${v}"`)
-          .join(" ")}/>`,
-    )
-    .join("");
-
-const SHELL_ICONS = {
-  private: svgChildren(ACCESS_ICONS.restricted),
-  shared: svgChildren(ACCESS_ICONS.shared),
-  org: svgChildren(ACCESS_ICONS.org),
-  public: svgChildren(ACCESS_ICONS.public),
-};
 export const SHARE_CSS = `
   header .access-btn[hidden] { display: none; }
-  header .access-btn svg { stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   header .access-btn[data-level="public"] { color: var(--brand-accent); }
   header .access-btn:disabled { cursor: default; }
   header .access-btn:disabled:hover { background: transparent; }
@@ -35,7 +16,12 @@ export const shareMarkup = (name: string): string =>
 export const SHARE_JS = String.raw`
   const accessBtn = document.getElementById("access");
   const share = document.getElementById("share");
-  const accessIcons = ${JSON.stringify(SHELL_ICONS).replace(/</g, "\\u003c")};
+  const accessIcons = {
+    private: '<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+    shared: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><path d="M16 3.128a4 4 0 0 1 0 7.744"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><circle cx="9" cy="7" r="4"/>',
+    org: '<path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z"/><path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/><path d="M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2"/><path d="M10 6h4"/><path d="M10 10h4"/><path d="M10 14h4"/><path d="M10 18h4"/>',
+    public: '<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>',
+  };
   let access = null;
   const showAccess = (next) => {
     if (!next || !accessIcons[next.level]) return;
@@ -56,10 +42,6 @@ export const SHARE_JS = String.raw`
     share.src = "about:blank";
     accessBtn.focus();
     void poll();
-  };
-  const shareMessage = (data) => {
-    if (data?.type === "qm:app-check") void poll();
-    if (data?.type === "qm:app-share-closed") closeShare();
   };
   accessBtn.addEventListener("click", () => {
     if (!access?.canEdit) return;

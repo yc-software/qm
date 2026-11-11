@@ -1,5 +1,6 @@
 import { generalAccessOf, orgAccessNote, PUBLIC_ACCESS_NOTE } from "../../plugins/chassis/src/app-access.ts";
 import { parseScopeId, personalScope, type ScopeKind } from "../types.ts";
+import { swallow } from "../util/errors.ts";
 
 export function canEditAppPermissions(ownerScopeId: string, principalId: string): boolean {
   return ownerScopeId === personalScope(principalId);
@@ -33,9 +34,11 @@ export function appAccess(opts: {
   if (general === "org")
     return { level: "org", label: "Organization", detail: orgAccessNote("your organization"), canEdit };
   const owner = opts.ownerScopeId.startsWith("personal:") ? [] : [opts.ownerScopeId];
-  const kinds = [...new Set([...owner, ...opts.grantees.map((g) => g.scope)])].flatMap(
-    (scope) => parseScopeId(scope).kind ?? [],
-  );
+  const kinds = [...new Set([...owner, ...opts.grantees.map((g) => g.scope)])].flatMap((scope) => {
+    const { kind } = parseScopeId(scope);
+    if (!kind) swallow("deploy: app access summary", new Error(`skipped unparseable scope ${scope}`));
+    return kind ?? [];
+  });
   if (!kinds.length)
     return {
       level: "private",

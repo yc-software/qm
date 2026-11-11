@@ -123,9 +123,12 @@ ${SHARE_JS}
   const themeColors = ["--background", "--foreground", "--secondary", "--muted-foreground", "--border", "--brand-accent"];
   window.addEventListener("message", (event) => {
     if (event.origin !== portalOrigin) return;
-    if (event.source === share.contentWindow) return void shareMessage(event.data);
-    if (event.source !== chat.contentWindow) return;
+    if (event.source !== chat.contentWindow && event.source !== share.contentWindow) return;
     if (event.data?.type === "qm:app-check") return void poll();
+    if (event.source === share.contentWindow) {
+      if (event.data?.type === "qm:app-share-closed") closeShare();
+      return;
+    }
     const theme = event.data;
     if (theme?.type !== "qm:theme" || typeof theme.dark !== "boolean" || !theme.colors) return;
     if (!themeColors.every((key) => typeof theme.colors[key] === "string" && CSS.supports("color", theme.colors[key]))) return;
