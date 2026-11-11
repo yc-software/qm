@@ -49,6 +49,10 @@ function fenced(text: string): string {
   return `${fence}untrusted-data\n${text}${text.endsWith("\n") ? "" : "\n"}${fence}`;
 }
 
+function fileBlock(path: string, text: string): string {
+  return `\n### ${flatText(path)}\n${fenced(text)}`;
+}
+
 function listed(dir: string, files: DeploymentSource["tree"]): string {
   const bytes = files.reduce((sum, file) => sum + file.size, 0);
   return files.length === 1
@@ -105,7 +109,7 @@ async function render(files: AppFiles, history: readonly Item[]): Promise<{ text
     .filter((file) => worthReading(file.path))
     .toSorted((a, b) => a.size - b.size)
     .filter((file) => {
-      const size = file.size + `\n\n### ${flatText(file.path)}\n`.length + "```untrusted-data\n\n```".length;
+      const size = file.size + fileBlock(file.path, "").length + 1;
       if (size > readingRoom) return false;
       readingRoom -= size;
       return true;
@@ -115,7 +119,7 @@ async function render(files: AppFiles, history: readonly Item[]): Promise<{ text
   for (const file of fits.length ? (await files.source(fits, commit)).files : []) {
     const text = tryDecodeUtf8(file.data);
     if (text === null || text.includes("\u0000")) continue;
-    const block = `\n### ${flatText(file.path)}\n${fenced(text)}`;
+    const block = fileBlock(file.path, text);
     if (block.length + 1 > room) continue;
     room -= block.length + 1;
     texts.set(file.path, block);
