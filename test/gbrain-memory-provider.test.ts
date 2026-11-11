@@ -16,7 +16,7 @@ import { startMcpTestServer } from "./support/mcp-test-server.ts";
 import { emptyMemoryRegistry } from "./support/memory-registry.ts";
 
 const contract = JSON.parse(
-  readFileSync(new URL("./fixtures/gbrain/qm-memory-provider-v1.json", import.meta.url), "utf8"),
+  readFileSync(new URL("./fixtures/gbrain/qm-memory-provider-v3.json", import.meta.url), "utf8"),
 ) as {
   tools: Array<{
     name: string;

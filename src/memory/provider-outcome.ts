@@ -14,6 +14,7 @@ export const DENIED_CODES: ReadonlySet<string> = new Set([
   "argument_mismatch",
   "scope_denied",
   "insufficient_scope",
+  "permission_denied",
 ]);
 export const MAX_FACTS_PER_WRITE = 20;
 const TROUBLESHOOTING = "docs/memory-providers.md#troubleshooting";
