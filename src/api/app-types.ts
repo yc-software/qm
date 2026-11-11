@@ -386,7 +386,11 @@ export interface App {
     query: string,
   ): Promise<{ hits: ResourceSearchHit[]; failed: string[]; limited: string[] }>;
   searchConversations: CoreSearch["search"];
-  searchSessions(principalId: string, query: string, limit?: number): Promise<SessionSearchHit[]>;
+  searchSessions(
+    viewer: Pick<CapabilityClaims, "actorId" | "botActor">,
+    query: string,
+    limit?: number,
+  ): Promise<SessionSearchHit[]>;
   search: CoreSearch["search"];
   sessionBackground(sessionId: string, viewer: string): Promise<SessionBackgroundView | null>;
   readSessionBackgroundOutput(

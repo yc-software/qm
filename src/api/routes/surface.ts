@@ -561,7 +561,7 @@ async function searchSessions(ctx: ApiCtx): Promise<void> {
   const query = url.searchParams.get("q") ?? "";
   const rawLimit = Number(url.searchParams.get("limit") ?? "");
   const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : undefined;
-  return sendJson(res, 200, { hits: await app.searchSessions(principalId, query, limit) });
+  return sendJson(res, 200, { hits: await app.searchSessions({ actorId: principalId }, query, limit) });
 }
 
 async function listContexts(ctx: ApiCtx): Promise<void> {

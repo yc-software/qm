@@ -129,7 +129,6 @@ export function createSessionMethods(
   const {
     sessionsForViewer,
     sessionForViewer,
-    visibleSessionRows,
     mayWriteSession,
     managedProjectMemberships,
     filesForViewer,
@@ -230,8 +229,13 @@ export function createSessionMethods(
     });
   };
 
-  const titleSearchHits = async (principalId: string, query: string, capped: number): Promise<SessionSearchHit[]> => {
-    const matches = await deps.sessions.searchSessionTitles(principalId, query, capped);
+  const titleSearchHits = async (
+    principalId: string,
+    query: string,
+    capped: number,
+    botActor: boolean | undefined,
+  ): Promise<SessionSearchHit[]> => {
+    const matches = await deps.sessions.searchSessionTitles(principalId, query, capped, botActor);
     if (!matches.length) return [];
     const allowed = await managedProjectMemberships(
       matches.map((s) => s.scopeId),
@@ -569,8 +573,7 @@ export function createSessionMethods(
     },
 
     async listSessions(viewer) {
-      const sessions = await sessionsForViewer(viewer.actorId);
-      return decorateSessions(viewer.actorId, await visibleSessionRows(viewer, sessions, (session) => session.id));
+      return decorateSessions(viewer.actorId, await sessionsForViewer(viewer));
     },
 
     async listSessionPage(principalId, query) {
@@ -657,11 +660,12 @@ export function createSessionMethods(
       return decorated ?? null;
     },
 
-    async searchSessions(principalId, query, limit = SEARCH_HIT_LIMIT): Promise<SessionSearchHit[]> {
+    async searchSessions(viewer, query, limit = SEARCH_HIT_LIMIT): Promise<SessionSearchHit[]> {
+      const principalId = viewer.actorId;
       const capped = Math.max(1, Math.min(Math.floor(limit), 100));
       const [hits, titleHits] = await Promise.all([
-        deps.sessions.searchEntries(principalId, query, capped),
-        titleSearchHits(principalId, query, capped),
+        deps.sessions.searchEntries(principalId, query, capped, viewer.botActor),
+        titleSearchHits(principalId, query, capped, viewer.botActor),
       ]);
       if (!hits.length) return titleHits;
       const allowed = await managedProjectMemberships(

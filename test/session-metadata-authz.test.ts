@@ -70,9 +70,9 @@ test("the single-session read applies the managed-project check the session list
     "the list agrees while membership stands",
   );
 
-  assert.ok((await built.app.searchSessions("member", "push")).some((hit) => hit.sessionId === sessionId));
+  assert.ok((await built.app.searchSessions({ actorId: "member" }, "push")).some((hit) => hit.sessionId === sessionId));
   assert.equal((await built.app.removeProjectMember(project.id, "owner", "member")).status, "ok");
-  assert.deepEqual(await built.app.searchSessions("member", "push"), []);
+  assert.deepEqual(await built.app.searchSessions({ actorId: "member" }, "push"), []);
   assert.equal(
     await built.sessions.getForParticipant(sessionId, "member"),
     null,

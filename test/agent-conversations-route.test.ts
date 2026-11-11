@@ -327,25 +327,33 @@ test("bot work in a person's name sees only conversations bot work ran in; the p
   await once(server, "listening");
   const web = async (thread: string, text: string, botActor?: true) =>
     (await built.app.turn({ ...dm("U1", text, thread), surface: "web", ...(botActor ? { botActor } : {}) })).sessionId!;
-  const diary = await web("web:U1:diary", "ALICE-DIARY private notes about the deploy");
+  await web("web:U1:bot", "plan the deploy");
+  const person = turnTools.get("web:U1:bot")!;
   const own = await web("web:U1:bot", "summarize the deploy", true);
+  const diary = await web("web:U1:diary", "ALICE-DIARY private notes about the deploy");
   await web("web:U1:person", "summarize the deploy");
-  const sees = async (thread: string) => {
-    const { selfApi, sessionSyscalls: tool } = turnTools.get(thread)!;
-    const ids = (value: unknown) => [own, diary].filter((id) => JSON.stringify(value).includes(id));
-    return {
-      list: ids((await selfApi!("GET", "/v1/conversations")).body),
-      read: (await selfApi!("GET", `/v1/conversations/${diary}`)).status === 200,
-      search: ids((await selfApi!("POST", "/v1/search", { query: "deploy" })).body),
-      toolList: ids(await tool!.list!()),
-      toolRead: (await tool!.read({ target: diary, peer: true })).ok,
-      toolSearch: ids(await tool!.search!({ query: "deploy" })),
-    };
+  const opened = await person.sessionSyscalls!.open({ task: "check the deploy" });
+  assert.ok(opened.ok);
+  const ids = (value: unknown) => [own, diary].filter((id) => JSON.stringify(value).includes(id));
+  const sees = async ({ selfApi, sessionSyscalls: tool }: ToolContext) => ({
+    list: ids((await selfApi!("GET", "/v1/conversations")).body),
+    read: (await selfApi!("GET", `/v1/conversations/${diary}`)).status === 200,
+    search: ids((await selfApi!("POST", "/v1/search", { query: "deploy" })).body),
+    toolList: ids(await tool!.list!()),
+    toolRead: (await tool!.read({ target: diary, peer: true })).ok,
+    children: JSON.stringify(await tool!.read({})).includes(opened.sessionId),
+    toolSearch: ids(await tool!.search!({ query: "deploy" })),
+  });
+  const seen = (shown: string[]) => {
+    const read = shown.includes(diary);
+    return { list: shown, read, search: shown, toolList: shown, toolRead: read, children: read, toolSearch: shown };
   };
-  const seen = (visible: string[]) => {
-    const read = visible.includes(diary);
-    return { list: visible, read, search: visible, toolList: visible, toolRead: read, toolSearch: visible };
-  };
-  assert.deepEqual(await sees("web:U1:bot"), seen([own]));
-  assert.deepEqual(await sees("web:U1:person"), seen([own, diary]));
+  const bot = turnTools.get("web:U1:bot")!;
+  assert.deepEqual(await sees(bot), seen([own]));
+  assert.deepEqual(await sees(person), seen([own, diary]));
+  const tool = bot.sessionSyscalls!;
+  assert.deepEqual(await tool.write({ target: diary, text: "hello" }), await tool.read({ target: diary }));
+  const limited = { query: "deploy", limit: 1 };
+  const found = [(await bot.selfApi!("POST", "/v1/search", limited)).body, await tool.search!(limited)];
+  assert.deepEqual(found.map(ids), [[own], [own]]);
 });

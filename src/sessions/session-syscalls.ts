@@ -685,16 +685,20 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
       async function resolveTarget(ref: string): Promise<Session | null> {
         const trimmed = ref.trim();
         if (!trimmed) return null;
+        const visible = (session: Session | null) =>
+          session && sessionVisibleTo(binding.request, session) ? session : null;
         const current = await deps.sessions.get(binding.session.id);
         if (trimmed.toLowerCase() === "parent")
-          return current?.parentSessionId ? deps.sessions.get(current.parentSessionId) : null;
+          return current?.parentSessionId ? visible(await deps.sessions.get(current.parentSessionId)) : null;
         const byId = await deps.sessions.get(trimmed);
-        if (byId) return byId;
+        if (byId) return visible(byId);
         const byThread = await deps.sessions.getByThread(trimmed);
-        if (byThread) return byThread;
+        if (byThread) return visible(byThread);
         const children = await deps.sessions.childrenOf(binding.session.id);
         const siblings = current?.parentSessionId ? await deps.sessions.childrenOf(current.parentSessionId) : [];
-        const named = [...children, ...siblings].filter((c) => c.title?.trim().toLowerCase() === trimmed.toLowerCase());
+        const named = [...children, ...siblings].filter(
+          (c) => c.title?.trim().toLowerCase() === trimmed.toLowerCase() && visible(c),
+        );
         return named.find((c) => !c.spawnMeta?.retired) ?? named[0] ?? null;
       }
 
@@ -972,8 +976,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   };
                 if (
                   caller.botActor &&
-                  (!target.spawnMeta?.botActor ||
-                    (await deps.runs.inFlightForThread(target.threadRef)).some((run) => !run.request.botActor))
+                  (await deps.runs.inFlightForThread(target.threadRef)).some((run) => !run.request.botActor)
                 )
                   return { ok: false, message: "a Slack bot's turn cannot interrupt a person's task" };
               }
@@ -1139,7 +1142,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
             return { ok: true, mode: "children", children: summaries };
           }
           const target = await resolveTarget(input.target);
-          if (!target || !sessionVisibleTo(binding.request, target))
+          if (!target)
             return {
               ok: false,
               message: `no session matches "${input.target}" — use a sessionId from open, read, or list.`,

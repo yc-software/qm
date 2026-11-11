@@ -13,10 +13,10 @@ export interface BackendSearchHit {
   score?: number;
   metadata?: Record<string, unknown>;
 }
-export interface SearchHit extends BackendSearchHit {
+interface SearchHit extends BackendSearchHit {
   backend: string;
 }
-interface SearchRequest {
+export interface SearchRequest {
   query: string;
   principals: readonly Principal[];
   limit: number;

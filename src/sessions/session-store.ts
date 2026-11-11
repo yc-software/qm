@@ -447,7 +447,7 @@ export interface SessionStore {
 
   addParticipant(sessionId: string, principalId: string, title?: string): Promise<void>;
   removeParticipant(sessionId: string, principalId: string): Promise<void>;
-  listByParticipant(principalId: string, opts?: { limit: number }): Promise<Session[]>;
+  listByParticipant(principalId: string, opts?: { limit?: number; botActor?: boolean }): Promise<Session[]>;
   participantScopes(principalId: string): Promise<ParticipantScope[]>;
   listParticipantPage(principalId: string, query: ParticipantPageQuery): Promise<ParticipantPage>;
   descendantsOf(rootIds: readonly string[]): Promise<SessionDescendant[]>;
@@ -467,9 +467,9 @@ export interface SessionStore {
 
   visibleItems(sessionId: string, principalId: string, opts?: GetItemsOptions): Promise<Item[]>;
 
-  searchEntries(principalId: string, query: string, limit?: number): Promise<EntrySearchHit[]>;
+  searchEntries(principalId: string, query: string, limit?: number, botActor?: boolean): Promise<EntrySearchHit[]>;
 
-  searchSessionTitles(principalId: string, query: string, limit?: number): Promise<Session[]>;
+  searchSessionTitles(principalId: string, query: string, limit?: number, botActor?: boolean): Promise<Session[]>;
 
   countSessions(): Promise<number>;
 

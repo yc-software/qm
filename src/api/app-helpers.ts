@@ -3,7 +3,7 @@ import { recordErrorInBinding, type ErrorEvent } from "../admin/error-log.ts";
 import { randomUUID } from "node:crypto";
 import { type Tenant, ambientTenant } from "../tenants/context.ts";
 import { executesOnApprove } from "../core/orchestrator/approvals.ts";
-import { isSubagentThreadRef, sessionVisibleTo } from "../sessions/session-syscalls.ts";
+import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type {
   PendingApproval,
   PendingApprovalRecord,
@@ -313,11 +313,11 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     return (await managedProjectMemberships([scope], principalId)).get(scope);
   }
 
-  async function sessionsForViewer(principalId: string): Promise<Session[]> {
-    const sessions = await deps.sessions.listByParticipant(principalId);
+  async function sessionsForViewer(viewer: Pick<CapabilityClaims, "actorId" | "botActor">): Promise<Session[]> {
+    const sessions = await deps.sessions.listByParticipant(viewer.actorId, { botActor: viewer.botActor });
     const allowed = await managedProjectMemberships(
       sessions.map((session) => session.scopeId),
-      principalId,
+      viewer.actorId,
     );
     return sessions.filter((session) => allowed.get(session.scopeId) !== false);
   }
@@ -335,19 +335,6 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     const session = await deps.sessions.getForParticipant(sessionId, principalId);
     if (!session) return null;
     return (await managedProjectMembership(session.scopeId, principalId)) === false ? null : session;
-  }
-
-  async function visibleSessionRows<T>(
-    viewer: Pick<CapabilityClaims, "botActor">,
-    rows: T[],
-    sessionIdOf: (row: T) => string,
-  ): Promise<T[]> {
-    if (viewer.botActor !== true) return rows;
-    const sessions = await deps.sessions.getMany({ ids: [...new Set(rows.map(sessionIdOf))], threadRefs: [] });
-    const visible = new Set(
-      sessions.filter((session) => sessionVisibleTo(viewer, session)).map((session) => session.id),
-    );
-    return rows.filter((row) => visible.has(sessionIdOf(row)));
   }
 
   async function contextsFor(principalId: string): Promise<ContextSummary[]> {
@@ -915,7 +902,6 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     managedProjectMemberships,
     sessionsForViewer,
     sessionForViewer,
-    visibleSessionRows,
     contextsFor,
     filesForViewer,
     currentResourceScopesForViewer,
