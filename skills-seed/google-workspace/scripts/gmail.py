@@ -40,6 +40,7 @@ import sys
 import urllib.parse
 from email.message import EmailMessage
 from email.policy import SMTP
+from html.parser import HTMLParser
 from email.utils import formataddr, getaddresses, parsedate_to_datetime
 
 API = "https://gmail.googleapis.com/gmail/v1/users/me"
@@ -168,7 +169,39 @@ def attribution(h: dict[str, str]) -> str:
     return f"On {when}{h.get('from', '')} wrote:"
 
 
-BODY_RE = re.compile(r"<body[^>]*>(.*)</body>", re.S | re.I)
+class HtmlQuote(HTMLParser):
+    # Splits an HTML part into the markup inside <body> (head, styles and scripts
+    # dropped) and its text, so a reply can nest it under Gmail's quote block.
+    HIDDEN = {"head", "style", "script", "title"}
+
+    def __init__(self, source: str):
+        super().__init__(convert_charrefs=True)
+        self.markup: list[str] = []
+        self.text: list[str] = []
+        self.hidden = 0
+        self.feed(source)
+        self.close()
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self.HIDDEN:
+            self.hidden += 1
+        elif not self.hidden and tag not in ("html", "body"):
+            self.markup.append(self.get_starttag_text() or "")
+            if tag == "br":
+                self.text.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in self.HIDDEN:
+            self.hidden = max(0, self.hidden - 1)
+        elif not self.hidden and tag not in ("html", "body", "br"):
+            self.markup.append(f"</{tag}>")
+            if tag in ("div", "p"):
+                self.text.append("\n")
+
+    def handle_data(self, data):
+        if not self.hidden:
+            self.markup.append(html.escape(data, quote=False))
+            self.text.append(data)
 
 
 def quote_of(msg: dict) -> tuple[str, str]:
@@ -179,14 +212,12 @@ def quote_of(msg: dict) -> tuple[str, str]:
     attr = attribution(headers_of(payload))
     plain = part_text(payload, "text/plain")
     rich = part_text(payload, "text/html")
-    if not plain and rich:
-        plain = re.sub(r"<[^>]+>", "", html.unescape(re.sub(r"<br\s*/?>|</(div|p)>", "\n", rich)))
-    plain = plain.replace("\r\n", "\n").strip("\n")
     if rich:
-        m = BODY_RE.search(rich)
-        rich = m.group(1) if m else rich
-    else:
-        rich = html_alternative(plain)
+        parsed = HtmlQuote(rich)
+        rich = "".join(parsed.markup)
+        plain = plain or "".join(parsed.text)
+    plain = plain.replace("\r\n", "\n").strip("\n")
+    rich = rich or html_alternative(plain)
     quoted_plain = attr + "\n\n" + "\n".join(">" + (" " + ln if ln and not ln.startswith(">") else ln)
                                               for ln in plain.split("\n"))
     quoted_html = (
@@ -206,6 +237,8 @@ def quote_for(thread_id: str | None, in_reply_to: str) -> tuple[str, str] | None
     for m in thread.get("messages", []):
         if headers_of(m["payload"]).get("message-id", "").strip() == in_reply_to.strip():
             return quote_of(m)
+    print(f"note: {in_reply_to} is not in thread {thread_id}; draft saved without a quote",
+          file=sys.stderr)
     return None
 
 
@@ -231,12 +264,7 @@ def part_text(payload: dict, want: str) -> str:
 
 
 def extract_body(payload: dict) -> str:
-    for want in ("text/plain", "text/html"):
-        texts = [p["body"]["data"] for p in walk_parts(payload)
-                 if p.get("mimeType") == want and p.get("body", {}).get("data")]
-        if texts:
-            return "\n".join(b64url_decode(t) for t in texts)
-    return ""
+    return part_text(payload, "text/plain") or part_text(payload, "text/html")
 
 
 def own_address() -> str:
