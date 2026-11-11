@@ -1,8 +1,8 @@
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import type { ScopeId } from "../types.ts";
 import type { ModelRoutes } from "./model-route.ts";
-import { defaultModelForProvider, resolveModel } from "./pi-models.ts";
-import { modelGatewayRequest, type ModelProvider } from "./provider-endpoints.ts";
+import { defaultModelForProvider } from "./pi-models.ts";
+import type { ModelProvider } from "./provider-endpoints.ts";
 
 export interface MovedDefault {
   setting: string;
@@ -25,17 +25,10 @@ export async function moveGatewayDefaultsToProvider(
     ...PURPOSES.map((purpose) => config.getPurposeRuntimeDurable(purpose)),
   ]);
   const baseId = base?.modelId ?? routes.baseModelId();
-  const ids = [...new Set([baseId, ...purposes.flatMap((selection) => (selection ? [selection.modelId] : []))])];
-  const gatewayIds = new Set(
-    (
-      await Promise.all(
-        ids.map(async (id) => {
-          const model = resolveModel(routes.servedId(id));
-          return model && modelGatewayRequest(await routes.companyGateway(model), model) ? [id] : [];
-        }),
-      )
-    ).flat(),
-  );
+  const gatewayIds = await routes.onCompanyGateway([
+    baseId,
+    ...purposes.flatMap((selection) => (selection ? [selection.modelId] : [])),
+  ]);
   const onGateway = (id: string) => gatewayIds.has(id);
   const moved: MovedDefault[] = [];
   if (onGateway(baseId)) {
