@@ -157,14 +157,12 @@ export function recallTools(kit: ToolKit) {
             if (forgot === null) return unavailable();
             const { forgotten, outcomes, problems } = forgot;
             const notebook = ids.length - outcomes.length;
+            const refs = (state: string) =>
+              outcomes.flatMap(({ outcome, ref }) => (outcome === state && ref ? [ref] : [])).join(", ");
             const lines = [
               ...(notebook ? [`Forgot ${notebook} fact${notebook === 1 ? "" : "s"}.`] : []),
-              ...outcomes.flatMap(({ outcome, provider, ref }) => {
-                if (outcome === "committed") return [`Forgot ${ref} in memory provider ${provider}.`];
-                if (outcome === "pending")
-                  return [`Memory provider ${provider} accepted forgetting ${ref} and finishes it later.`];
-                return [];
-              }),
+              ...(refs("committed") ? [`Forgot ${refs("committed")}.`] : []),
+              ...(refs("pending") ? [`Accepted forgetting ${refs("pending")}; the brain finishes it later.`] : []),
               ...problems.map(problemLine),
             ];
             return recordResult(

@@ -71,7 +71,8 @@ export function changeFailure(error: unknown): Pick<MemoryProviderOutcome, "outc
   if (error instanceof MemoryWriteUnconfirmed) return { outcome: "unknown", code: error.code };
   const failed = failedOutcome(error);
   if (failed.outcome === "timed_out") return { outcome: "unknown" };
-  if (!(error instanceof McpCallError) || failed.outcome !== "failed" || error.code !== undefined) return failed;
+  if (!(error instanceof McpCallError) || failed.outcome !== "failed" || error.code !== undefined || error.answered)
+    return failed;
   if (error.unsent) return { outcome: "failed", code: failed.code ?? "unreachable" };
   return { outcome: "unknown", ...(failed.code ? { code: failed.code } : {}) };
 }
@@ -103,28 +104,24 @@ function failedFix(provider: string, code: string | undefined, docs: string): st
   return `Check ${provider}'s logs, URL and tool names (${docs}).`;
 }
 
-export function problemOf(
-  outcome: MemoryProviderOutcome,
-  operation: ProviderOperation,
-): MemoryProviderProblem | undefined {
-  const { provider, ms, code, ref } = outcome;
+type ProblemGroup = MemoryProviderOutcome & { refs: string[] };
+
+export function problemOf(group: ProblemGroup, operation: ProviderOperation): MemoryProviderProblem | undefined {
+  const { provider, ms, code } = group;
+  const refs = group.refs.join(", ");
+  const it = group.refs.length > 1 ? "them" : "it";
   const reason = code ? ` (${code})` : "";
   const forget = operation === "forget";
   const docs = { search: TROUBLESHOOTING, write: TROUBLESHOOTING, forget: FORGET_DOCS, lookup: LOOKUP_DOCS }[operation];
-  const asked = {
-    search: "the request",
-    write: "the request",
-    forget: `to forget ${ref}`,
-    lookup: ref ?? "the lookup",
-  }[operation];
-  const attested = { search: undefined, write: undefined, forget: "forgetting", lookup: ref }[operation];
+  const asked = { search: "the request", write: "the request", forget: `to forget ${refs}`, lookup: refs }[operation];
+  const attested = { search: undefined, write: undefined, forget: "forgetting", lookup: refs }[operation];
   const effect = {
     search: "its results are missing",
     write: "it stored nothing",
-    forget: `${ref} is unchanged there`,
+    forget: "this call changed nothing there",
     lookup: "nothing was read",
   }[operation];
-  switch (outcome.outcome) {
+  switch (group.outcome) {
     case "denied":
       return {
         code: "memory_provider_denied",
@@ -146,14 +143,14 @@ export function problemOf(
       return {
         code: "memory_provider_unknown",
         provider,
-        detail: `Memory provider ${provider} didn't confirm ${forget ? `that it forgot ${ref}` : "the write"}${code ? reason : ` within ${ms}ms`}, so whether it ${forget ? "did" : "stored the facts"} is unknown; QM did not retry.`,
-        fix: `Check ${provider}'s logs before ${forget ? "deleting it" : "sending the facts"} again (${docs}).`,
+        detail: `Memory provider ${provider} didn't confirm ${forget ? `that it forgot ${refs}` : "the write"}${code ? reason : ` within ${ms}ms`}, so whether it ${forget ? "did" : "stored the facts"} is unknown; QM did not retry.`,
+        fix: `Check ${provider}'s logs before ${forget ? `deleting ${it}` : "sending the facts"} again (${docs}).`,
       };
     case "failed":
       return {
         code: "memory_provider_failed",
         provider,
-        detail: `Memory provider ${provider} failed${forget ? ` to forget ${ref}` : ""}${reason}, so ${effect}.`,
+        detail: `Memory provider ${provider} failed${forget ? ` to forget ${refs}` : ""}${reason}, so ${effect}.`,
         fix: failedFix(provider, code, docs),
       };
     case "disabled":
@@ -194,12 +191,19 @@ export async function withProviders<T>(
 ): Promise<MemoryProviderReport<T>> {
   const outcomes: MemoryProviderOutcome[] = [];
   const problems = () =>
-    outcomes.flatMap((outcome) => (outcome.provider === "default" ? [] : (problemOf(outcome, operation) ?? [])));
+    [
+      ...Map.groupBy(
+        outcomes.filter(({ provider }) => provider !== "default"),
+        ({ ref, provider, outcome, code }, index) => (ref ? JSON.stringify([provider, outcome, code]) : index),
+      ).values(),
+    ].flatMap((group) => problemOf({ ...group[0]!, refs: group.flatMap(({ ref }) => ref ?? []) }, operation) ?? []);
   try {
     const value = await run((outcome) => void outcomes.push(outcome));
     return { value, outcomes, problems: problems() };
   } catch (error) {
-    const notebookFailed = outcomes.some((outcome) => outcome.provider === "default" && problemOf(outcome, operation));
+    const notebookFailed = outcomes.some(
+      (outcome) => outcome.provider === "default" && problemOf({ ...outcome, refs: [] }, operation),
+    );
     if (notebookFailed || !problems().length || !strictFailures.has(error as object)) throw error;
     reportFailure(`memory: provider ${operation}`, error);
     return { outcomes, problems: problems() };

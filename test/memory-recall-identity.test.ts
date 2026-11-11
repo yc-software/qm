@@ -15,7 +15,10 @@ const AT = Date.parse("2026-10-01T12:00:00Z");
 
 function gbrain(answer: () => StructuredFact[]): MemoryService {
   const client = structuredRecall(() => answer().map((fact) => ({ date: "2026-10-30", kind: "fact", ...fact })));
-  return createMcpMemoryProvider({ read: { client, tool: "memory_recall", timeoutMs: 1000 } });
+  return createMcpMemoryProvider({
+    read: { client, tool: "memory_recall", timeoutMs: 1000 },
+    forget: { client, tool: "forget_fact", timeoutMs: 1000 },
+  });
 }
 
 function textProvider(lines: string[]): MemoryService {
@@ -55,6 +58,18 @@ test("a full first-provider batch leaves room for a relevant hit from the next p
   const hits = await searchAcrossScopes(memory, ["personal:a"], "launch", 20);
   assert.equal(hits.length, 20);
   assert.equal(hits[1]?.fact, "acme:4821 (2026-10-30; fact) The launch moved to Friday");
+});
+
+test("search shows a brain ref only for a provider QM can forget through", async () => {
+  const fact = { id: "21", text: "Prefers aisle seats", date: "2026-10-30", kind: "fact" };
+  const recipe = createMcpMemoryProvider({
+    read: { client: structuredRecall(() => [fact]), tool: "memory_recall", timeoutMs: 1000 },
+  });
+  const memory = routed(createPostgresMemoryService(testDatabaseUrl()), { acme: gbrain(() => [fact]), recipe });
+  assert.deepEqual(
+    (await searchAcrossScopes(memory, ["personal:a"], "aisle", 20)).map(({ fact }) => fact),
+    ["acme:21 (2026-10-30; fact) Prefers aisle seats"],
+  );
 });
 
 test("equal fact ids from two brains and the notebook stay separate copies, and only the notebook copy is withdrawn", async () => {

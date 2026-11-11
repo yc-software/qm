@@ -64,9 +64,11 @@ export function createRoutedMemoryService(opts: {
   const tagged = (route: MemoryProviderRoute, rows: MemoryCandidate[]): MemoryCandidate[] =>
     route.provider === "default"
       ? rows
-      : rows.map((row) => ({
+      : rows.map(({ ref, ...row }) => ({
           ...row,
-          ...(row.ref === undefined ? {} : { ref: providerRef(route.provider, row.ref) }),
+          ...(ref === undefined || !opts.providers[route.provider]?.delete
+            ? {}
+            : { ref: providerRef(route.provider, ref) }),
           source: { provider: route.provider, label: route.label ?? route.provider },
         }));
   const brainRoutes = (scopeId: ScopeId): MemoryProviderRoute[] =>
@@ -222,7 +224,13 @@ export function createRoutedMemoryService(opts: {
       } catch (error) {
         opts.onError?.(error, route.provider, "lookup");
         const problem = problemOf(
-          { provider: route.provider, scope: scopeId, ms: Date.now() - started, ref: ref.ref, ...failedOutcome(error) },
+          {
+            provider: route.provider,
+            scope: scopeId,
+            ms: Date.now() - started,
+            ...failedOutcome(error),
+            refs: [ref.ref],
+          },
           "lookup",
         )!;
         throw new Error(`${problemLine(problem)}\n${quotedData(errMessage(error))}`, { cause: error });
@@ -250,9 +258,13 @@ export function createRoutedMemoryService(opts: {
         if (!parsed) return [];
         const route = routesFor(scopeId).find((candidate) => candidate.provider === parsed.provider);
         const provider = route && opts.providers[parsed.provider];
-        if (!route || !provider?.delete)
+        if (!route || !provider)
           throw new MemoryForgetRefused(
-            `Memory provider ${parsed.provider} can't forget ${ref} here: it doesn't serve this conversation's notebook, or it has no forget operation. Nothing was changed.`,
+            `Memory provider ${parsed.provider} doesn't serve this conversation's memory here, so QM can't forget ${ref}. Nothing was changed.`,
+          );
+        if (!provider.delete)
+          throw new MemoryForgetRefused(
+            `Memory provider ${parsed.provider} has no forget operation; only registry brains forget by ref. Nothing was changed.`,
           );
         return [{ ref, brain: parsed.provider, factId: parsed.ref, route, provider }];
       });

@@ -150,18 +150,6 @@ test("MCP recall reads structured facts as rows with their fact id and raw claim
   );
 });
 
-test("MCP recall alternates gbrain's own recent facts with its query matches, so a budget keeps both", async () => {
-  const fact = (id: string, arm: string) => ({ id, text: `Fact ${id}`, arm });
-  const facts = [fact("1", "own"), fact("2", "own"), fact("3", "own"), fact("4", "ranked"), fact("5", "ranked")];
-  const memory = createMcpMemoryProvider({
-    read: { client: structuredRecall(() => facts), tool: "memory_recall", timeoutMs: 100 },
-  });
-  assert.deepEqual(
-    (await memory.recall("personal:U1", { query: "x" })).map((row) => row.ref),
-    ["1", "4", "2", "5", "3"],
-  );
-});
-
 test("a brain forget reports each ref done, pending, unknown or failed, and a retry reuses its request id", async (t) => {
   const sent: Array<Record<string, unknown>> = [];
   const states: Record<number, string> = { 1: "committed", 2: "committed", 3: "queued", 4: "conflict", 6: "applying" };
@@ -173,6 +161,7 @@ test("a brain forget reports each ref done, pending, unknown or failed, and a re
       sent.push(args);
       if (sent.length === 2) await sleep(300);
       if (args.id === 9) throw new McpCallError("mcp tools/call failed (HTTP 502)", { status: 502 });
+      if (args.id === 7) throw new McpCallError("Fact id 7 already expired.", { code: "fact_already_expired" });
       const state = states[args.id as number];
       if (!state) throw new McpCallError("mcp tool forget_fact error: not on your page", { code: "fact_not_found" });
       return { content: [{ type: "text", text: state }], structuredContent: { ...args, state } };
@@ -195,19 +184,24 @@ test("a brain forget reports each ref done, pending, unknown or failed, and a re
     providers: { acme: forgetting(brain), down: forgetting(down), proxied: forgetting(proxied) },
     routes: ["acme", "down", "proxied"].map((provider) => ({ provider, scopes: ["personal" as const], manage: false })),
   });
-  const forget = async (ids: string[]) =>
-    (
-      await forgetFacts(
-        memory,
-        "personal:U1",
-        ids,
-        { actorId: "U1", context: "conversation", personTurn: true },
-        { audienceScopeId: "personal:U1" },
-        "session:call",
-      )
-    ).outcomes.map(({ ref, outcome, code }) => `${ref} ${outcome}${code ? ` ${code}` : ""}`);
+  const forget = (ids: string[]) =>
+    forgetFacts(
+      memory,
+      "personal:U1",
+      ids,
+      { actorId: "U1", context: "conversation", personTurn: true },
+      { audienceScopeId: "personal:U1" },
+      "session:call",
+    );
+  const lines = ({ outcomes }: Awaited<ReturnType<typeof forget>>) =>
+    outcomes.map(({ ref, outcome, code }) => `${ref} ${outcome}${code ? ` ${code}` : ""}`);
 
-  assert.deepEqual(await forget(["acme:1", "acme:2", "acme:3", "acme:6", "acme:9", "acme:4", "acme:5", "acme:x"]), [
+  const first = await forget(["acme:1", "acme:2", "acme:3", "acme:6", "acme:9", "acme:4", "acme:5", "acme:x"]);
+  assert.equal(
+    first.problems.find(({ detail }) => detail.includes("fact_not_found"))?.detail,
+    "Memory provider acme failed to forget acme:5, acme:x (fact_not_found), so this call changed nothing there.",
+  );
+  assert.deepEqual(lines(first), [
     "acme:1 committed",
     "acme:2 unknown",
     "acme:3 pending queued",
@@ -217,12 +211,13 @@ test("a brain forget reports each ref done, pending, unknown or failed, and a re
     "acme:5 failed fact_not_found",
     "acme:x failed fact_not_found",
   ]);
-  assert.deepEqual(await forget(["acme:2"]), ["acme:2 committed"]);
+  assert.deepEqual(lines(await forget(["acme:2"])), ["acme:2 committed"]);
   assert.deepEqual(sent[0], { id: 1, request_id: sent[0]?.request_id });
   assert.equal(sent.at(-1)?.request_id, sent[1]?.request_id);
   assert.notEqual(sent[0]?.request_id, sent[1]?.request_id);
-  assert.deepEqual(await forget(["down:1"]), ["down:1 failed unreachable"]);
-  assert.deepEqual(await forget(["proxied:1"]), ["proxied:1 failed http_502"]);
+  assert.deepEqual(lines(await forget(["acme:7"])), ["acme:7 committed"]);
+  assert.deepEqual(lines(await forget(["down:1"])), ["down:1 failed unreachable"]);
+  assert.deepEqual(lines(await forget(["proxied:1"])), ["proxied:1 failed http_502"]);
 });
 
 test("a structured fact's line breaks become spaces in its text, date and kind, and a blank fact is skipped", async () => {

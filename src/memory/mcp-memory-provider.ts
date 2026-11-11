@@ -41,15 +41,6 @@ interface ProviderFact {
   text: string;
   date?: unknown;
   kind?: unknown;
-  arm?: unknown;
-}
-
-function alternateArms(facts: ProviderFact[]): ProviderFact[] {
-  const own = facts.filter((fact) => fact.arm === "own");
-  const ranked = facts.filter((fact) => fact.arm !== "own");
-  return Array.from({ length: Math.max(own.length, ranked.length) }, (_, i) => [own[i], ranked[i]])
-    .flat()
-    .filter((fact) => fact !== undefined);
 }
 
 function providerFacts(result: CallToolResult): ProviderFact[] | undefined {
@@ -70,9 +61,7 @@ function providerFacts(result: CallToolResult): ProviderFact[] | undefined {
         code: "malformed_fact",
       });
   });
-  return alternateArms(
-    (facts as ProviderFact[]).map((fact) => ({ ...fact, text: flatText(fact.text) })).filter((fact) => fact.text),
-  );
+  return (facts as ProviderFact[]).map((fact) => ({ ...fact, text: flatText(fact.text) })).filter((fact) => fact.text);
 }
 
 const stamped = (fact: ProviderFact) => {
@@ -254,7 +243,13 @@ export function createMcpMemoryProvider(opts: {
               const args: Record<string, unknown> = { id: factId };
               if (context?.idempotencyKey && op.idempotencyArg)
                 args[op.idempotencyArg] = requestKey(context.idempotencyKey, id);
-              const result = await call(op, args, undefined, by?.actorId, scopeId, context?.audienceScopeId);
+              const result = await call(op, args, undefined, by?.actorId, scopeId, context?.audienceScopeId).catch(
+                (error: unknown) => {
+                  if (error instanceof McpCallError && error.code === "fact_already_expired") return undefined;
+                  throw error;
+                },
+              );
+              if (!result) continue;
               const state = (result.structuredContent as { state?: unknown } | undefined)?.state;
               if (state === "committed") continue;
               if (typeof state === "string" && UNPUBLISHED_STATES.has(state))
