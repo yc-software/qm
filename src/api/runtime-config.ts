@@ -186,7 +186,6 @@ export async function runtimeConfigBody(
     purpose,
     requested,
   );
-  const config = ctx.deps.config!;
   const billing = (id: string) =>
     modelBilling(!!managedKeys.modelIds?.has(companyModelId(id, managedKeys)), !!authorizeChoice);
   const modelCatalog = Object.fromEntries(
@@ -208,7 +207,7 @@ export async function runtimeConfigBody(
       : {}),
     upgradeAvailable: Boolean(scopeOverride && scopeOverride.orgRevision !== orgDefault.revision),
     fastModeModelIds: fastModeModelIds(),
-    interactiveFastMode: await config.getInteractiveFastModeDurable(),
+    interactiveFastMode: await ctx.deps.config!.getInteractiveFastModeDurable(),
   };
 }
 
