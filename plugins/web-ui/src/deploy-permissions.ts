@@ -19,7 +19,12 @@ type GeneralAccess = "restricted" | "org" | "public";
 
 const isOrgGrant = (grant: Grant): boolean => grant.scope === "org" || grant.scope.startsWith("org:");
 
-export async function openDeploymentPermissions(id: string, title: string, owner: string): Promise<void> {
+export async function openDeploymentPermissions(
+  id: string,
+  title: string,
+  owner: string,
+  hooks: { onChange?: () => void; onClose?: () => void } = {},
+): Promise<void> {
   const opener = document.activeElement as HTMLElement | null;
   const dialog = document.createElement("dialog");
   dialog.className = "project-dialog deployment-permissions-dialog";
@@ -48,6 +53,7 @@ export async function openDeploymentPermissions(id: string, title: string, owner
     dialog.close();
     dialog.remove();
     if (opener?.isConnected) opener.focus();
+    hooks.onClose?.();
   };
   dialog.addEventListener("cancel", (event) => {
     event.preventDefault();
@@ -70,6 +76,7 @@ export async function openDeploymentPermissions(id: string, title: string, owner
       );
       publicAccess = response.public;
       grantees = response.grantees;
+      hooks.onChange?.();
       if (response.invitation?.emailProblem)
         error = `Access granted, but no invitation email was sent: ${response.invitation.emailProblem}`;
       selected = null;
@@ -96,6 +103,7 @@ export async function openDeploymentPermissions(id: string, title: string, owner
     });
     publicAccess = response.public;
     grantees = response.grantees;
+    hooks.onChange?.();
   };
   const changeGeneral = async (next: GeneralAccess) => {
     if (busy || next === generalAccess() || (next === "public" && !externalSharing)) return;

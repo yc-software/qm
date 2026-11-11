@@ -2,6 +2,76 @@ import { ANNOTATE_BUTTON, ANNOTATE_CSS, ANNOTATE_JS, ANNOTATE_MARKUP } from "./a
 
 export const APP_SHELL_PATH_PREFIX = "/__claw__/";
 
+export type AppShellAccess = {
+  level: "private" | "people" | "context" | "org" | "public";
+  label: string;
+  detail: string;
+  canEdit: boolean;
+};
+
+const isOrgScope = (scope: string): boolean => scope === "org" || scope.startsWith("org:");
+
+const KIND_WORDS: Record<string, [string, string]> = {
+  personal: ["person", "people"],
+  channel: ["channel", "channels"],
+  group: ["group chat", "group chats"],
+  team: ["team", "teams"],
+  project: ["project", "projects"],
+};
+
+function countWords(scopes: readonly string[]): string[] {
+  const counts = new Map<string, number>();
+  for (const scope of scopes) {
+    const kind = scope.slice(0, scope.indexOf(":"));
+    const key = KIND_WORDS[kind] ? kind : "project";
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return Object.keys(KIND_WORDS)
+    .filter((kind) => counts.has(kind))
+    .map((kind) => {
+      const n = counts.get(kind)!;
+      return `${n} ${KIND_WORDS[kind]![n === 1 ? 0 : 1]}`;
+    });
+}
+
+function listWords(words: readonly string[]): string {
+  return words.length < 2 ? (words[0] ?? "") : `${words.slice(0, -1).join(", ")} and ${words.at(-1)}`;
+}
+
+export function appShellAccess(opts: {
+  ownerScopeId: string;
+  public: boolean;
+  grantees: ReadonlyArray<{ scope: string }>;
+  viewer: string;
+}): AppShellAccess {
+  const ownedByViewer = opts.ownerScopeId === `personal:${opts.viewer}`;
+  const canEdit = ownedByViewer;
+  if (opts.public)
+    return { level: "public", label: "Public", detail: "Anyone on the internet with the link can open", canEdit };
+  if (opts.grantees.some((g) => isOrgScope(g.scope)))
+    return { level: "org", label: "Organization", detail: "Anyone signed in to your organization can open", canEdit };
+  const personalOwner = opts.ownerScopeId.startsWith("personal:");
+  const reach = [...new Set([...(personalOwner ? [] : [opts.ownerScopeId]), ...opts.grantees.map((g) => g.scope)])];
+  if (!reach.length)
+    return {
+      level: "private",
+      label: "Private",
+      detail: ownedByViewer ? "Only you can open" : "Only the owner can open",
+      canEdit,
+    };
+  const words = countWords(reach);
+  const onlyPeople = reach.every((scope) => scope.startsWith("personal:"));
+  const single = words.length === 1 && !onlyPeople && words[0]!.startsWith("1 ");
+  let label = words.length === 1 ? words[0]! : "Shared";
+  if (single) label = words[0]!.slice(2).replace(/^\w/, (c) => c.toUpperCase());
+  return {
+    level: onlyPeople ? "people" : "context",
+    label,
+    detail: `Shared with ${listWords(words)}`,
+    canEdit,
+  };
+}
+
 function escAttr(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 }
@@ -12,6 +82,8 @@ export function appShellHtml(opts: {
   portalUrl: string;
   path: string;
   annotationsEnabled?: boolean;
+  deploymentId?: string;
+  access?: AppShellAccess;
 }): string {
   const slug = escAttr(opts.slug);
   const path = escAttr(opts.path);
@@ -59,6 +131,16 @@ export function appShellHtml(opts: {
   header .upd { display: none; border-color: color-mix(in srgb, var(--brand-accent) 45%, var(--border));
     color: var(--brand-accent); font-weight: 600; }
   header .upd.show { display: inline-block; }
+  header .access-btn { display: inline-flex; align-items: center; gap: 5px; color: var(--muted-foreground); }
+  header .access-btn[hidden] { display: none; }
+  header .access-btn svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.75;
+    stroke-linecap: round; stroke-linejoin: round; }
+  header .access-btn[data-level="public"] { color: #b45309; }
+  header .access-btn:disabled { cursor: default; }
+  header .access-btn:disabled:hover { background: transparent; }
+  #share { display: none; position: fixed; inset: 0; width: 100%; height: 100%; border: 0; z-index: 2147483000;
+    background: transparent; color-scheme: normal; }
+  #share.open { display: block; }
   header .hide-btn { border: none; background: none; color: var(--muted-foreground); font-size: 15px; padding: 5px 7px; }
   header .hide-btn:hover { color: var(--foreground); background: none; }
   main { display: flex; flex: 1; min-height: 0; }
@@ -89,6 +171,7 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
   <span class="name" id="name">${name}</span>
   <span class="ver" id="ver"></span>
   <span class="grow"></span>
+  <button type="button" class="access-btn" id="access" hidden></button>
   <button type="button" class="upd" id="upd">Updated &#8635; Reload</button>
   ${opts.annotationsEnabled ? ANNOTATE_BUTTON : ""}
   <button type="button" class="chat-btn" id="chat-toggle" aria-expanded="false" aria-controls="panel"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 3h12a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H8l-5 3V4a1 1 0 0 1 1-1Z"/></svg><span>Chat</span></button>
@@ -97,6 +180,7 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
 <main>
   <iframe id="app" src="${path}" title="${slug}"></iframe>
   ${opts.annotationsEnabled ? ANNOTATE_MARKUP : ""}
+  <iframe id="share" title="Share ${name}" allowtransparency="true"></iframe>
   <aside id="panel"><div class="drag" id="drag" role="separator" tabindex="0" aria-label="Resize chat" aria-orientation="vertical"></div><iframe id="chat" title="Chat about ${slug}"></iframe></aside>
 </main>
 <script>
@@ -114,11 +198,57 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
   const hide = document.getElementById("hide");
   const drag = document.getElementById("drag");
   const openKey = "qmChat:" + slug;
+  const accessBtn = document.getElementById("access");
+  const share = document.getElementById("share");
+  const deploymentId = ${JSON.stringify(opts.deploymentId ?? opts.slug).replace(/</g, "\\u003c")};
+  const accessIcons = {
+    private: '<rect x="4" y="9" width="12" height="8" rx="1.5"/><path d="M7 9V6.5a3 3 0 0 1 6 0V9"/>',
+    people: '<circle cx="8" cy="7" r="2.75"/><path d="M3 16.5c.6-2.6 2.6-4 5-4s4.4 1.4 5 4"/><path d="M13 4.6a2.75 2.75 0 0 1 0 4.8M15 12.8c1.1.6 1.8 1.9 2 3.7"/>',
+    context: '<circle cx="8" cy="7" r="2.75"/><path d="M3 16.5c.6-2.6 2.6-4 5-4s4.4 1.4 5 4"/><path d="M13 4.6a2.75 2.75 0 0 1 0 4.8M15 12.8c1.1.6 1.8 1.9 2 3.7"/>',
+    org: '<rect x="4" y="3" width="12" height="14" rx="1"/><path d="M8 17v-3h4v3M8 6.5h.01M12 6.5h.01M8 10h.01M12 10h.01"/>',
+    public: '<circle cx="10" cy="10" r="7"/><path d="M3 10h14M10 3c2 2 2.8 4.4 2.8 7S12 15 10 17c-2-2-2.8-4.4-2.8-7S8 5 10 3Z"/>',
+  };
+  let access = ${JSON.stringify(opts.access ?? null).replace(/</g, "\\u003c")};
+  const showAccess = (next) => {
+    if (!next || !accessIcons[next.level]) return;
+    access = next;
+    accessBtn.hidden = false;
+    accessBtn.dataset.level = next.level;
+    accessBtn.disabled = !next.canEdit;
+    accessBtn.title = next.detail + (next.canEdit ? ". Click to change who can open it." : "");
+    accessBtn.setAttribute("aria-label", "Access: " + next.label + ". " + next.detail + (next.canEdit ? ". Change access" : ""));
+    accessBtn.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true">' + accessIcons[next.level] + "</svg>";
+    const text = document.createElement("span");
+    text.textContent = next.label;
+    accessBtn.append(text);
+  };
+  showAccess(access);
+  const shareUrl = portal + "/app-share?id=" + encodeURIComponent(deploymentId) + "&slug=" + encodeURIComponent(slug) + "&embed=1";
+  const closeShare = () => {
+    share.classList.remove("open");
+    share.src = "about:blank";
+    accessBtn.focus();
+    void poll();
+  };
+  accessBtn.addEventListener("click", () => {
+    if (!access?.canEdit) return;
+    share.src = shareUrl + "&name=" + encodeURIComponent(document.getElementById("name").textContent || "");
+    share.classList.add("open");
+  });
+  share.addEventListener("load", () => {
+    if (share.classList.contains("open")) share.contentWindow.postMessage({ type: "qm:theme-request" }, portalOrigin);
+  });
 
   const portalOrigin = new URL(portal).origin;
   const themeColors = ["--background", "--foreground", "--secondary", "--muted-foreground", "--border", "--brand-accent"];
   window.addEventListener("message", (event) => {
-    if (event.source !== chat.contentWindow || event.origin !== portalOrigin) return;
+    if (event.origin !== portalOrigin) return;
+    if (event.source === share.contentWindow) {
+      if (event.data?.type === "qm:app-check") void poll();
+      if (event.data?.type === "qm:app-share-closed") closeShare();
+      return;
+    }
+    if (event.source !== chat.contentWindow) return;
     if (event.data?.type === "qm:app-check") return void poll();
     const theme = event.data;
     if (theme?.type !== "qm:theme" || typeof theme.dark !== "boolean" || !theme.colors) return;
@@ -229,6 +359,7 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
       const d = await r.json();
       if (mine !== polls || typeof d.version !== "number") return;
       verEl.textContent = "v" + d.version;
+      if (d.access) showAccess(d.access);
       const served = d.version + ":" + (d.live ?? "");
       if (base === null) {
         base = served;

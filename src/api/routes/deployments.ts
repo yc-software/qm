@@ -25,7 +25,7 @@ import { tenantOf, type ApiCtx, type BaseCtx, type Route } from "./route.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
 import { verifyDeployGitAccess, viewerIdentityKey } from "../../deploy/access-token.ts";
 import { appAnnotationAsset } from "../../deploy/app-annotate.ts";
-import { APP_SHELL_PATH_PREFIX, appShellHtml } from "../../deploy/app-shell.ts";
+import { APP_SHELL_PATH_PREFIX, appShellAccess, appShellHtml } from "../../deploy/app-shell.ts";
 import type { AppViewAuthMode } from "../../deploy/page-views.ts";
 import { principalDestination } from "../../reach/reach.ts";
 import { FRAME_SESSION_COOKIE, portalSession, portalSessionFrom } from "../../deploy/viewer-session.ts";
@@ -953,12 +953,25 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
       cleanUrlRedirect();
       return true;
     }
+    const shellAccess = async () =>
+      deployment && sub
+        ? appShellAccess({
+            ownerScopeId: deployment.ownerScopeId,
+            public: isPublic,
+            grantees: await app.deploymentGrantees(deployment.id),
+            viewer: sub,
+          })
+        : undefined;
     if (isShellRequest) {
       if (pathname === "/__claw__/version" && deployment) {
-        const draft = (await app.deploymentLiveEdit(deployment.id))?.draft;
+        const [draft, access] = await Promise.all([
+          app.deploymentLiveEdit(deployment.id).then((edit) => edit?.draft),
+          shellAccess(),
+        ]);
         sendJson(res, 200, {
           version: deployment.appliedVersion ?? deployment.currentVersion,
           ...(draft ? { live: draft.reloads } : {}),
+          ...(access ? { access } : {}),
         });
       } else if (
         annotationsEnabled &&
@@ -983,6 +996,8 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
         name: deployment?.displayName ?? slug,
         portalUrl: loginUrl,
         path: safePathname + url.search,
+        ...(deployment ? { deploymentId: deployment.id } : {}),
+        access: await shellAccess(),
       }),
     );
     return true;

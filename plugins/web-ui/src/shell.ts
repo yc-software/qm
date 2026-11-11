@@ -1,3 +1,4 @@
+import { tellEmbedder } from "./embedder";
 import { loadMessageTranscript, messageLinkSeq } from "./message-link.ts";
 import { initializeBrowserErrors, stopBrowserErrors } from "./browser-errors";
 import { initializeAnalytics, capturePageview, stopAnalytics } from "./product-analytics";
@@ -1050,6 +1051,29 @@ async function openAppEditChat(slug: string): Promise<void> {
   renderList();
 }
 
+async function bootAppShare(params: URLSearchParams): Promise<void> {
+  document.documentElement.classList.add("app-share-embed");
+  const done = () => tellEmbedder({ type: "qm:app-share-closed" });
+  const id = params.get("id") ?? "";
+  const r = await webFetch(withBase("/me")).catch(() => null);
+  if (!r?.ok || !id) {
+    if (r?.status === 401) renderAuthGate(gateFor("portal"));
+    else done();
+    return;
+  }
+  appState.me = (await r.json()) as Me;
+  const { openDeploymentPermissions } = await import("./deploy-permissions");
+  await openDeploymentPermissions(
+    id,
+    params.get("name") || params.get("slug") || "App",
+    `personal:${appState.me.user}`,
+    {
+      onChange: () => tellEmbedder({ type: "qm:app-check" }),
+      onClose: done,
+    },
+  );
+}
+
 export async function bootSafely(): Promise<void> {
   try {
     await boot();
@@ -1081,6 +1105,10 @@ export async function boot(): Promise<void> {
     session: wantedSession,
     item: wantedItem,
   } = parseDeepLink(UI_BASE, location.pathname, location.search);
+  if (wanted === "app-share" && params.get("embed") === "1") {
+    await bootAppShare(params);
+    return;
+  }
   const appEditEmbed = wanted === "app-edit" && params.get("embed") === "1";
   document.body.classList.toggle("app-edit-embed", appEditEmbed);
   markDesktopEmbed(appEditEmbed);
