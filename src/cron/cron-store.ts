@@ -29,7 +29,6 @@ export interface CreateCronInput extends CreateTriggerInput {
   title?: string;
   action?: string;
   message?: string;
-  unattendedGrants?: string[];
   loopId?: string;
   sessionRef?: string;
   script?: CronScript;
@@ -44,7 +43,8 @@ export interface CronPatch {
   enabled?: boolean;
   archived?: boolean;
   destination?: Destination;
-  unattendedGrants?: string[];
+  owner?: string;
+  taskAuthor?: "automation" | null;
   sessionRef?: string | null;
   script?: CronScript | null;
 }
@@ -128,7 +128,6 @@ export function createCronStore(
         contentPart(input.action),
         contentPart(input.message),
         contentPart(input.destination),
-        contentPart(input.unattendedGrants),
         contentPart(title),
         ...(input.loopId !== undefined ? [contentPart(input.loopId)] : []),
         ...(input.runtime ? [contentPart(input.runtime)] : []),
@@ -142,7 +141,6 @@ export function createCronStore(
         ...(title ? { title } : {}),
         ...(input.action !== undefined ? { action: input.action } : {}),
         ...(input.message !== undefined ? { message: input.message } : {}),
-        ...(input.unattendedGrants ? { unattendedGrants: input.unattendedGrants } : {}),
         ...(input.loopId ? { loopId: input.loopId } : {}),
         ...(input.sessionRef ? { sessionRef: input.sessionRef } : {}),
         ...(input.runtime ? { runtime: input.runtime } : {}),
@@ -176,7 +174,8 @@ export function createCronStore(
       if (patch.archived !== undefined) fields.archived = patch.archived;
       if (patch.destination !== undefined) fields.destination = patch.destination;
       if (patch.archived === true) fields.enabled = false;
-      if (patch.unattendedGrants !== undefined) fields.unattendedGrants = patch.unattendedGrants;
+      if (patch.owner !== undefined) fields.owner = patch.owner;
+      if (patch.taskAuthor !== undefined) fields.taskAuthor = patch.taskAuthor ?? undefined;
       if (patch.sessionRef !== undefined) fields.sessionRef = patch.sessionRef ?? undefined;
       if (patch.script !== undefined) fields.script = patch.script ?? undefined;
       return backing.merge(id, fields);

@@ -2695,7 +2695,6 @@ export function buildApp(
   const loopFire: LoopFireService = createLoopFireService({
     admittedWork,
     crons,
-    samePerson: (a, b) => app.samePerson(a, b),
     triageEnabledFor: (owner) => featureFlags.enabled("loop_triage", scopeId("personal", owner)),
     lock: advisoryLock,
     loops: loopStore,
@@ -2810,7 +2809,7 @@ export function buildApp(
     ...(config.suggestedActivitiesContext ? { context: config.suggestedActivitiesContext } : {}),
   });
   cronChanged.notify = (id) => scheduler.notifyChanged(id);
-  orchestratorDeps.control = createControlService(app, scheduler, admin);
+  orchestratorDeps.control = createControlService(app, scheduler);
   orchestratorDeps.validateScheduledRuntime = (scope, choice, purpose) =>
     availableRuntimeError({ deps: runtimeDeps }, scope, choice, purpose);
   orchestratorDeps.runtime = createRuntimeService(runtimeDeps, app);

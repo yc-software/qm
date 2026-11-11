@@ -1,5 +1,5 @@
 import { canonicalPerson } from "../../directory/person.ts";
-import { personSentTurn } from "../artifact-share.ts";
+import { personAtKeyboard } from "../artifact-share.ts";
 import {
   deleteMemberBrain,
   memberBrainId,
@@ -32,7 +32,7 @@ async function member(ctx: ApiCtx) {
     sendJson(res, 404, { error: "not_found" });
     return null;
   }
-  if (!personSentTurn(capability)) {
+  if (!personAtKeyboard(capability)) {
     sendJson(res, 403, { error: "forbidden", message: NOT_LIVE });
     return null;
   }
