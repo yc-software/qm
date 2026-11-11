@@ -655,11 +655,8 @@ test("the personal-account picker preserves composer choices and saves context d
       button('[aria-label="Ultrafast"]').click();
       const ultrafastTrigger = button(".loadout-button");
       assert.equal(ultrafastTrigger.getAttribute("aria-label"), `Model: ${label}, High effort, Ultrafast`);
-      assert.deepEqual(
-        [...ultrafastTrigger.querySelectorAll("span")].map((part) => part.textContent?.trim()),
-        [label, "High", ""],
-        "the chip marks Ultrafast with an icon and no word",
-      );
+      assert.equal(ultrafastTrigger.textContent?.replace(/\s+/g, " ").trim(), `${label} High`);
+      assert.ok(ultrafastTrigger.querySelector(".loadout-ultrafast-badge svg"), "the chip marks Ultrafast with a bolt");
       ultrafastTrigger.dispatchEvent(new dom.window.MouseEvent("mouseenter"));
       assert.equal(document.querySelector(".qm-tooltip")?.textContent, "Ultrafast");
       ultrafastTrigger.dispatchEvent(new dom.window.MouseEvent("mouseleave"));
