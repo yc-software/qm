@@ -2,9 +2,9 @@ import type { UpgradeTarget } from "../../../plugins/chassis/src/websocket-relay
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { readCookie } from "../../../plugins/portal/src/session.ts";
 import { CAPABILITY_HEADER } from "../contract.ts";
-import { compilePath, findRoute } from "../../../plugins/chassis/src/router.ts";
+import { allowedMethods, compilePath, findRoute } from "../../../plugins/chassis/src/router.ts";
 
-export { compilePath, findRoute };
+export { allowedMethods, compilePath, findRoute };
 import type { App } from "../app.ts";
 import type { ServerDeps } from "../deps.ts";
 import type { SourceAuth } from "../../auth/source-auth.ts";
