@@ -24,7 +24,7 @@ interface AgentApiFamily {
 }
 
 const CONVERSATION_UPDATE =
-  "update one of the asking person's conversations — body {archived?, pinned?, title?, color?}; archive/unarchive, pin/unpin, rename (null title clears), or set the sidebar color (#rrggbb; null clears). These are per-person.";
+  "update one of the asking person's conversations — body {archived?, pinned?, title?, color?, unread?}; archive/unarchive, pin/unpin, rename (null title clears), set the sidebar color (#rrggbb; null clears), or mark read/unread. These are per-person.";
 
 const FAMILIES: AgentApiFamily[] = [
   {
