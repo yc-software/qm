@@ -1,6 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
-import { ArrowLeft, Plus, Search } from "lucide";
+import { ArrowLeft, Plus, Search, type IconNode } from "lucide";
 import { icon } from "./icons";
 import { scopeFilterControl } from "./contexts";
 
@@ -33,6 +33,28 @@ export function listGroupsTpl(groups: ListGroup[]): TemplateResult {
   </div>`;
 }
 
+export interface ListEmptyOpts {
+  icon: IconNode;
+  title: string;
+  body?: string;
+  action?: { label: string; onClick: () => void };
+}
+
+export function listEmptyTpl(o: ListEmptyOpts): TemplateResult {
+  return html`<div class="list-empty-state" role="status">
+    <span class="list-empty-state-icon" aria-hidden="true">${icon(o.icon, 22)}</span>
+    <div class="list-empty-state-title">${o.title}</div>
+    ${o.body ? html`<div class="list-empty-state-body">${o.body}</div>` : nothing}
+    ${
+      o.action
+        ? html`<button class="btn primary list-empty-state-action" type="button" @click=${o.action.onClick}>
+            ${o.action.label}
+          </button>`
+        : nothing
+    }
+  </div>`;
+}
+
 export interface ListPageOpts {
   title: string;
   subtitle?: string;
@@ -44,7 +66,8 @@ export interface ListPageOpts {
   filters?: TemplateResult;
   rows: TemplateResult[];
   groups?: Array<{ label: string; rows: TemplateResult[] }>;
-  empty: string | TemplateResult;
+  empty?: string | TemplateResult;
+  emptyState?: ListEmptyOpts;
 }
 
 function listBodyTpl(o: ListPageOpts): TemplateResult {
@@ -53,7 +76,9 @@ function listBodyTpl(o: ListPageOpts): TemplateResult {
     return html`${o.rows.length ? listRowsTpl(o.rows) : nothing}${listGroupsTpl(
       groups.map((group) => ({ label: group.label, body: listRowsTpl(group.rows) })),
     )}`;
-  return o.rows.length ? listRowsTpl(o.rows) : html`<div class="empty compact">${o.empty}</div>`;
+  if (o.rows.length) return listRowsTpl(o.rows);
+  if (o.emptyState) return listEmptyTpl(o.emptyState);
+  return html`<div class="empty compact">${o.empty}</div>`;
 }
 
 export function listPageTpl(o: ListPageOpts): TemplateResult {

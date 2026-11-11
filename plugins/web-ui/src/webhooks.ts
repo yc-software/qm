@@ -1,10 +1,10 @@
 import { html, nothing, render, type TemplateResult } from "lit";
-import { Check, ChevronDown, Plus } from "lucide";
+import { Check, ChevronDown, Plus, Webhook } from "lucide";
 import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { actionSnippet, closeFormMenus, copyText, relTime, setFormMenuValue, toggleFormMenu } from "./ui";
 import { icon } from "./icons";
-import { listBackLink, listPageTpl } from "./list-page";
+import { listBackLink, listPageTpl, type ListEmptyOpts } from "./list-page";
 import { ensureContexts, scopeChip } from "./contexts";
 import { appState } from "./shell";
 import { deepLinkPath, isPlainLeftClick, UI_BASE } from "./deep-link";
@@ -143,10 +143,26 @@ function drawWebhooksPage(): void {
     )
     .sort((a, b) => b.createdAt - a.createdAt)
     .map((w) => webhookPageRow(w));
-  let empty = "No webhooks yet.";
-  if (webhooksNotice) empty = webhooksNotice;
-  else if (webhooksLoading && webhookList.length === 0) empty = "Loading webhooks…";
-  else if (webhooksScope) empty = "No webhooks in this context.";
+  let empty: string | TemplateResult | undefined;
+  let emptyState: ListEmptyOpts | undefined = {
+    icon: Webhook,
+    title: "No webhooks yet",
+    body: "Endpoints that wake the agent will show up here.",
+    action: { label: "New webhook", onClick: showNewWebhook },
+  };
+  if (webhooksNotice) {
+    empty = webhooksNotice;
+    emptyState = undefined;
+  } else if (webhooksLoading && webhookList.length === 0) {
+    empty = "Loading webhooks…";
+    emptyState = undefined;
+  } else if (webhooksSearch.trim()) {
+    empty = "No webhooks match your search.";
+    emptyState = undefined;
+  } else if (webhooksScope) {
+    empty = "No webhooks in this context.";
+    emptyState = undefined;
+  }
   const noticeRow = webhooksNoticeSticky ? [html`<div class="action-notice">${webhooksNoticeSticky}</div>`] : [];
   webhooksNoticeSticky = "";
   render(
@@ -168,6 +184,7 @@ function drawWebhooksPage(): void {
       },
       rows: [...noticeRow, ...rows],
       empty,
+      emptyState,
     }),
     webhooksPageHost,
   );

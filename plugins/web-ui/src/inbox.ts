@@ -1899,7 +1899,7 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
     }
     ${
       inboxState.loaded && openItems.length === 0
-        ? html`<div class="empty compact inbox-zero">${emptyMessage}</div>`
+        ? html`<div class="empty compact inbox-zero">${icon(InboxGlyph, 20)}<span>${emptyMessage}</span></div>`
         : nothing
     }
     <div class="inbox-list">${groupedRowsTpl(surface, openItems)}</div>

@@ -205,13 +205,52 @@ function buildDock(): DockviewApi {
   host.appendChild(toastEl);
   const api = createDockview(dockEl, {
     theme: splitTheme,
-    disableTabsOverflowList: true,
     createComponent: () => new PaneContent(),
     createTabComponent: () => new PaneTab(),
     createRightHeaderActionComponent: () => new GroupActions(),
     createPrefixHeaderActionComponent: () => new StripDrop(),
     singleTabMode: "fullwidth",
     disableFloatingGroups: true,
+  });
+  const enhanceOverflowA11y = (): void => {
+    for (const el of dockEl.querySelectorAll<HTMLElement>(".dv-tabs-overflow-dropdown-default")) {
+      const count = el.querySelector("span")?.textContent?.trim() ?? "";
+      el.tabIndex = 0;
+      el.setAttribute("role", "button");
+      el.setAttribute("aria-haspopup", "menu");
+      el.setAttribute("aria-label", count ? `Show ${count} hidden tab${count === "1" ? "" : "s"}` : "Show hidden tabs");
+    }
+    for (const el of dockEl.querySelectorAll<HTMLElement>(".dv-tabs-overflow-container")) {
+      el.setAttribute("role", "menu");
+      el.setAttribute("aria-label", "Hidden tabs");
+    }
+    for (const el of dockEl.querySelectorAll<HTMLElement>(".dv-tabs-overflow-container > .dv-tab")) {
+      el.tabIndex = 0;
+      el.setAttribute("role", "menuitem");
+    }
+  };
+  let overflowA11yFrame = 0;
+  const overflowA11yObserver = new window.MutationObserver((records) => {
+    const relevant = records.some((record) => {
+      const el = record.target instanceof Element ? record.target : record.target.parentElement;
+      return !el?.closest(".dv-content-container");
+    });
+    if (!relevant || overflowA11yFrame) return;
+    overflowA11yFrame = requestAnimationFrame(() => {
+      overflowA11yFrame = 0;
+      enhanceOverflowA11y();
+    });
+  });
+  overflowA11yObserver.observe(dockEl, { childList: true, subtree: true });
+  dockEl.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const el = (e.target as Element | null)?.closest?.(
+      ".dv-tabs-overflow-dropdown-default, .dv-tabs-overflow-container > .dv-tab",
+    );
+    if (!(el instanceof HTMLElement)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    el.click();
   });
   const inner = dockEl.querySelector(":scope > .dv-dockview") as HTMLElement | null;
   let restoreScroll = () => {};
@@ -268,6 +307,15 @@ function buildDock(): DockviewApi {
   api.onDidMaximizedGroupChange(() => {
     for (const a of groupActions) a.draw();
     persistSoon();
+  });
+  dockEl.addEventListener("auxclick", (e) => {
+    if (e.button !== 1) return;
+    const tabEl = (e.target as Element | null)?.closest(".dv-tab");
+    const id = tabEl?.querySelector(".split-pane-title")?.getAttribute("data-panel-id");
+    const panel = id ? api.getPanel(id) : null;
+    if (!panel) return;
+    e.preventDefault();
+    closePanels([panel]);
   });
   dockEl.addEventListener("pointerdown", (e) => {
     if (!(e.target instanceof Element) || !e.target.closest(".dv-sash")) return;
@@ -1185,6 +1233,7 @@ class PaneTab implements ITabRenderer {
 
   init(p: TabPartInitParameters): void {
     this.panelId = p.api.id;
+    this.element.dataset.panelId = p.api.id;
     this.inStrip = p.tabLocation === "header";
     if (this.inStrip) paneTabs.add(this);
     this.draw();
@@ -1622,12 +1671,28 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && splitState.active && dockApi?.hasMaximizedGroup()) dockApi.exitMaximizedGroup();
 });
 
-window.addEventListener("qm:cycle-tab", (e) => {
-  const step = (e as CustomEvent<unknown>).detail;
+function cyclePaneTab(step: number): void {
   if (!dockApi || !canvasHost?.isConnected || (step !== 1 && step !== -1)) return;
   const group = dockApi.groups.find((g) => g.element.contains(document.activeElement)) ?? dockApi.activeGroup;
   const panels = group?.panels ?? [];
   const at = group?.activePanel ? panels.indexOf(group.activePanel) : -1;
   if (panels.length < 2 || at < 0) return;
   activatePanel(panels[(at + step + panels.length) % panels.length]);
+}
+
+window.addEventListener("qm:cycle-tab", (e) => {
+  cyclePaneTab((e as CustomEvent<unknown>).detail as number);
+});
+
+document.addEventListener("keydown", (e) => {
+  const isMac = /Mac|iP(hone|ad|od)/.test(navigator.platform);
+  const cycleMod = isMac ? e.metaKey : e.ctrlKey;
+  const otherMod = isMac ? e.ctrlKey : e.metaKey;
+  if (e.isComposing || !(cycleMod && !otherMod && !e.altKey && e.shiftKey)) return;
+  let step = 0;
+  if (e.code === "BracketRight") step = 1;
+  else if (e.code === "BracketLeft") step = -1;
+  if (!step) return;
+  e.preventDefault();
+  cyclePaneTab(step);
 });
