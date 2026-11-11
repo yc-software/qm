@@ -3,6 +3,7 @@ import { deflateRaw, inflateRaw } from "node:zlib";
 import { orgId as configOrgId } from "../config.ts";
 import { boundTenant, isTenantId } from "../tenants/context.ts";
 import type { CandidateDestination, Destination, EgressPolicy, Principal, ScopeId } from "../types.ts";
+import { isSystemActor } from "../types.ts";
 import type { SessionOrigin } from "../sessions/session-store.ts";
 import { mintSignedPayload, verifySignedPayload } from "./signed-token.ts";
 
@@ -41,10 +42,10 @@ interface BlobGrant {
 }
 
 export async function personOrOwningBot(
-  caller: Pick<CapabilityClaims, "botActor">,
+  caller: Pick<CapabilityClaims, "actorId" | "botActor">,
   owns: () => Promise<boolean>,
 ): Promise<boolean> {
-  return caller.botActor !== true || owns();
+  return caller.botActor !== true || (!isSystemActor(caller.actorId) && owns());
 }
 
 type BlobTransferClaims = CapabilityClaims & { aud: typeof BLOB_TRANSFER_AUD; blob: BlobGrant };
@@ -83,7 +84,6 @@ export interface CapabilityClaims {
   liveAuthor?: boolean;
   actAsActor?: boolean;
   triggered?: boolean;
-  grants?: string[];
   threadRef?: string;
   surface?: string;
   exp: number;
@@ -162,11 +162,6 @@ export async function verifyCapabilityToken(
   if (claims.destinations !== undefined && !Array.isArray(claims.destinations)) return null;
   if (claims.ownerConnections !== undefined && typeof claims.ownerConnections !== "boolean") return null;
   if (claims.credentials !== undefined && !Array.isArray(claims.credentials)) return null;
-  if (
-    claims.grants !== undefined &&
-    (!Array.isArray(claims.grants) || !claims.grants.every((g) => typeof g === "string"))
-  )
-    return null;
   if (claims.keychainMembers !== undefined && !Array.isArray(claims.keychainMembers)) return null;
   if (claims.memory !== undefined && !Array.isArray(claims.memory?.read)) return null;
   if (claims.liveActor !== undefined && typeof claims.liveActor !== "boolean") return null;

@@ -7,7 +7,7 @@ import {
   webuiModelEnabled,
   type RuntimeDeps,
 } from "../api/runtime-config.ts";
-import { livePersonCapability } from "../api/artifact-share.ts";
+import { personAtKeyboard } from "../api/artifact-share.ts";
 import { parseScopeId } from "../types.ts";
 
 export function createRuntimeService(deps: RuntimeDeps, app: Pick<App, "authorizesCapabilityScope">): RuntimeService {
@@ -49,8 +49,7 @@ export function createRuntimeService(deps: RuntimeDeps, app: Pick<App, "authoriz
       };
     const lifetime = request.lifetime ?? "task";
     const cronTask = cronFire && claims.triggered === true && !claims.botActor && lifetime === "task";
-    if (!cronTask && (!livePersonCapability(claims) || claims.triggered || claims.botActor))
-      return { ok: false, error: "live_actor_required" };
+    if (!cronTask && !personAtKeyboard(claims)) return { ok: false, error: "live_actor_required" };
     const candidates = snapshot.models;
     let modelId = request.model ?? active.modelId;
     if (!candidates.includes(modelId)) {

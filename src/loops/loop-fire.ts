@@ -1,11 +1,11 @@
 import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
 import { inboxPlaybook, inboxSource, loadInboxVoiceProfile } from "./inbox-loop.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
-import { cronTriggerAuthority } from "../cron/authority.ts";
+import { cronTriggerAuthority, ownerAuthored } from "../cron/authority.ts";
+import { samePerson } from "../directory/person.ts";
 import { MAX_SCREEN_CHARS } from "../security/security-posture.ts";
 import type { CronStore } from "../cron/cron-store.ts";
 import { boundLoopCron } from "./authority.ts";
-import { samePerson } from "../directory/person.ts";
 import type { TurnRequest, TurnResult } from "../types.ts";
 import type { Loop, LoopItem, LoopOutput } from "./types.ts";
 import { destinationVisible, runTrigger, type TriggerDeps, type TriggerOutcome } from "../triggers/run-trigger.ts";
@@ -55,7 +55,6 @@ export interface LoopFireDeps {
   lock?: import("../persistence/advisory-lock.ts").AdvisoryLock;
   loops: LoopStore;
   crons?: Pick<CronStore, "get">;
-  samePerson?: (a: string, b: string) => Promise<boolean>;
   triageEnabledFor?: (owner: string) => Promise<boolean>;
   items: LoopItemLedger;
   outputs: LoopOutputStore;
@@ -81,7 +80,9 @@ interface ItemTurnResult {
 
 type LoopFollowUpOptions = Pick<TurnRequest, "model" | "thinkingLevel" | "fastMode" | "attachments">;
 
-type StageOptions = LoopFollowUpOptions & Pick<TurnRequest, "readOnly">;
+type ItemTurnOptions = LoopFollowUpOptions & { unattended?: true };
+
+type StageOptions = ItemTurnOptions & Pick<TurnRequest, "readOnly">;
 
 export interface LoopFireService {
   fire(loopId: string, fireKey: string, cronId?: string, options?: { enumerate?: boolean }): Promise<LoopFireResult>;
@@ -90,7 +91,7 @@ export interface LoopFireService {
     item: LoopItem,
     message: string,
     actorId: string,
-    options?: LoopFollowUpOptions,
+    options?: ItemTurnOptions,
   ): Promise<LoopItem | null>;
   itemAction(
     loop: Loop,
@@ -98,6 +99,7 @@ export interface LoopFireService {
     kind: string,
     args: Record<string, unknown>,
     actorId: string,
+    options?: ItemTurnOptions,
   ): Promise<ItemTurnResult>;
   shipOutput(loopId: string, outputId: string, actorId: string, note?: string): Promise<LoopOutput | null>;
   previewTriage(loop: Loop, triage: Loop["triage"]): Promise<TriagePreview[]>;
@@ -551,22 +553,14 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     } catch (e) {
       return { authzFailed: true, ran: false, note: errMessage(e) };
     }
-    if (cron?.unattendedGrants?.length && (!cron.enabled || cron.archived)) {
-      return { authzFailed: true, ran: false, note: "loop cron is disabled or archived" };
-    }
-    if (
-      cron?.unattendedGrants?.length &&
-      actorId !== undefined &&
-      !(await (deps.samePerson ?? samePerson)(cron.owner, actorId))
-    ) {
-      return { authzFailed: true, ran: false, note: "only the owner may direct a privileged loop turn" };
-    }
     return runTrigger(deps.trigger, {
       ...cronTriggerAuthority(cron ?? loop),
       ...(typeof input === "string" ? { input } : input),
       fireKey,
       threadRef,
       surface: "loop",
+      ownerFire:
+        ownerAuthored(loop) && !options?.unattended && (actorId === undefined || samePerson(actorId, loop.owner)),
       ...(options?.model ? { model: options.model } : {}),
       ...(options?.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
       ...(typeof options?.fastMode === "boolean" ? { fastMode: options.fastMode } : {}),
@@ -976,7 +970,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     input: StageInput,
     fireKey: string,
     actorId: string,
-    options?: LoopFollowUpOptions,
+    options?: ItemTurnOptions,
   ): Promise<ItemTurnResult> {
     const outcome = await stageTurn(loop, fireKey, loopItemThreadRef(loop.id, item.id), input, actorId, options);
     const failure = stageFailure("item turn", outcome);
@@ -993,7 +987,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     item: LoopItem,
     message: string,
     actorId: string,
-    options?: LoopFollowUpOptions,
+    options?: ItemTurnOptions,
   ): Promise<LoopItem | null> {
     await deps.items.appendThread(item.id, [{ role: "human", text: message, actorId }]);
     const asked = { ...item, thread: (await deps.items.get(item.id))?.thread ?? item.thread };
@@ -1030,10 +1024,11 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     kind: string,
     args: Record<string, unknown>,
     actorId: string,
+    options?: ItemTurnOptions,
   ): Promise<ItemTurnResult> {
     const fireKey = `loop:${loop.id}:item:${item.id}:action:${kind}:${Date.now()}`;
     const prompt = itemActionPrompt(loop, item, kind, args, await loadInboxVoiceProfile(deps.files, loop));
-    return itemTurn(loop, item, prompt, fireKey, actorId);
+    return itemTurn(loop, item, prompt, fireKey, actorId, options);
   }
 
   return {

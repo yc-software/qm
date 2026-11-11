@@ -71,7 +71,7 @@ export function createSuggestedActivityService(deps: {
     const action = actionFor(profile.seeds ?? [], profile.dismissed);
     if (action === cron.action) return;
     if (cron.action !== profile.managedAction && !cron.action?.startsWith(managedPrefix)) return;
-    await deps.crons.update(cron.id, { action });
+    await deps.crons.update(cron.id, { action, taskAuthor: "automation" });
     await deps.store.merge(cron.owner, { managedAction: action });
   };
 

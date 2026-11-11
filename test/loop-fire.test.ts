@@ -57,7 +57,6 @@ function service(
     turnResult?: TurnResult;
     dynamicResult?: () => TurnResult | undefined;
     grants?: ReturnType<typeof createShipGrantStore>;
-    samePerson?: (a: string, b: string) => Promise<boolean>;
     triageEnabledFor?: (owner: string) => Promise<boolean>;
     directory?: DirectoryStore;
     resolveRecipient?: TriggerDeps["resolveRecipient"];
@@ -76,7 +75,6 @@ function service(
   const fire = createLoopFireService({
     admittedWork: overrides?.admittedWork,
     crons,
-    samePerson: overrides?.samePerson,
     triageEnabledFor: overrides?.triageEnabledFor ?? (async () => true),
     loops,
     items,
@@ -642,66 +640,45 @@ async function bindCron(
   return cron;
 }
 
-for (const unattendedGrants of [undefined, ["admin.sessions.read"]]) {
-  test(`bound scheduled and manual loop turns use current cron grants: ${unattendedGrants}`, async () => {
-    const s = service(HAPPY);
-    const loop = await makeLoop(s.loops);
-    const cron = await bindCron(s, loop, { unattendedGrants, destination: { type: "slack", target: "C-alerts" } });
-    const scheduler = createScheduler({
-      ...singleProcessDeps(),
-      crons: s.crons,
-      deliveries: s.deliveries.store as never,
-      idempotency: s.idempotency,
-      identity: fakeIdentity() as never,
-      run: async () => {
-        throw new Error("must delegate to loop");
-      },
-      fireLoop: (id, key, cronId) => s.fire.fire(id, key, cronId),
-    });
-    await scheduler.tick(cron.createdAt + 60_000);
-    assert.equal((await s.crons.listFires(cron.id)).runs[0]?.status, "ok");
-    assert.deepEqual(s.turns.map(stage), ["intake", "work", "judge"]);
-    await s.fire.fire(loop.id, "manual");
-    const output = (await s.outputs.awaitingReview(loop.id))[0]!;
-    await s.fire.shipOutput(loop.id, output.id, loop.owner);
-    for (const turn of s.turns) {
-      assert.deepEqual(turn.unattendedGrants, unattendedGrants);
-      assert.equal(turn.actor.externalId, loop.owner);
-      assert.equal(turn.origin?.kind, "automation");
-      assert.equal(automationOrigin(turn)?.destination, undefined);
-      assert.equal(turn.surfaceTools, undefined);
-      assert.equal(turn.readOnly, undefined);
-    }
-    assert.equal(s.deliveries.sent.length, 0);
-  });
-}
-
-test("bound loop stages reread grants after revocation", async () => {
-  const s = service(async (req) => {
-    if (stage(req) === "intake") await s.crons.update(cron.id, { unattendedGrants: [] });
-    return HAPPY(req);
-  });
+test("bound scheduled and manual loop turns run as the owner", async () => {
+  const s = service(HAPPY);
   const loop = await makeLoop(s.loops);
-  const cron = await bindCron(s, loop, { unattendedGrants: ["admin.sessions.read"] });
-  await s.fire.fire(loop.id, "revocation");
-  assert.deepEqual(
-    s.turns.map((t) => t.unattendedGrants),
-    [["admin.sessions.read"], [], []],
-  );
+  const cron = await bindCron(s, loop, { destination: { type: "slack", target: "C-alerts" } });
+  const scheduler = createScheduler({
+    ...singleProcessDeps(),
+    crons: s.crons,
+    deliveries: s.deliveries.store as never,
+    idempotency: s.idempotency,
+    identity: fakeIdentity() as never,
+    run: async () => {
+      throw new Error("must delegate to loop");
+    },
+    fireLoop: (id, key, cronId) => s.fire.fire(id, key, cronId),
+  });
+  await scheduler.tick(cron.createdAt + 60_000);
+  assert.equal((await s.crons.listFires(cron.id)).runs[0]?.status, "ok");
+  assert.deepEqual(s.turns.map(stage), ["intake", "work", "judge"]);
+  await s.fire.fire(loop.id, "manual");
   const output = (await s.outputs.awaitingReview(loop.id))[0]!;
   await s.fire.shipOutput(loop.id, output.id, loop.owner);
-  assert.deepEqual(s.turns.at(-1)?.unattendedGrants, []);
+  for (const turn of s.turns) {
+    assert.equal(turn.actor.externalId, loop.owner);
+    assert.equal(automationOrigin(turn)?.ownerFire, true);
+    assert.equal(automationOrigin(turn)?.destination, undefined);
+    assert.equal(turn.surfaceTools, undefined);
+    assert.equal(turn.readOnly, undefined);
+  }
+  assert.equal(s.deliveries.sent.length, 0);
 });
 
-test("a channel loop fires as its owner with their keychain and no unattended grants", async () => {
+test("a channel loop fires as its owner with their keychain", async () => {
   const s = service(HAPPY);
   const loop = await makeLoop(s.loops, { ownerScopeId: scopeId("channel", "C1") });
-  await bindCron(s, loop, { unattendedGrants: ["admin.sessions.read"] });
+  await bindCron(s, loop);
   const result = await s.fire.fire(loop.id, "shared");
   assert.equal(result.status, "ok");
   assert.equal(s.turns.length, 3);
   for (const turn of s.turns) {
-    assert.equal(turn.unattendedGrants, undefined);
     assert.equal(automationOrigin(turn)?.useOwnerKeychain, true);
     assert.equal(turn.actor.externalId, loop.owner);
     assert.equal(turn.conversation.kind, "channel");
@@ -730,34 +707,7 @@ test("bound loops reject missing crons, foreign scheduler bindings, and authorit
   assert.equal(s.turns.length, 0);
 });
 
-test("privileged item turns inherit grants only for the owner", async () => {
-  const s = service(HAPPY);
-  const created = await makeLoop(s.loops);
-  await bindCron(s, created, { unattendedGrants: ["admin.sessions.read"] });
-  await s.fire.fire(created.id, "setup");
-  const loop = (await s.loops.get(created.id))!;
-  const item = (await s.items.byLoop(loop.id))[0]!;
-  await s.fire.followUp(loop, item, "inspect", "josh");
-  assert.deepEqual(s.turns.at(-1)?.unattendedGrants, ["admin.sessions.read"]);
-  assert.equal((await s.fire.itemAction(loop, item, "inspect", {}, "josh")).ok, true);
-  const before = s.turns.length;
-  assert.equal((await s.fire.itemAction(loop, item, "inspect", {}, "mallory")).ok, false);
-  await assert.rejects(s.fire.followUp(loop, item, "inspect", "mallory"), /only the owner/);
-  assert.equal(s.turns.length, before);
-});
-
-for (const patch of [{ enabled: false }, { archived: true }]) {
-  test(`disabled or archived bound cron cannot authorize loop turns: ${JSON.stringify(patch)}`, async () => {
-    const s = service(HAPPY);
-    const loop = await makeLoop(s.loops);
-    const cron = await bindCron(s, loop, { unattendedGrants: ["admin.sessions.read"] });
-    await s.crons.update(cron.id, patch);
-    assert.equal((await s.fire.fire(loop.id, "disabled")).status, "failed");
-    assert.equal(s.turns.length, 0);
-  });
-}
-
-test("pausing an unprivileged cron does not block held-item follow-up", async () => {
+test("pausing a bound cron does not block held-item follow-up", async () => {
   const s = service(HAPPY);
   const created = await makeLoop(s.loops);
   const cron = await bindCron(s, created);
@@ -769,23 +719,19 @@ test("pausing an unprivileged cron does not block held-item follow-up", async ()
   const before = s.turns.length;
   await s.fire.followUp(loop, item, "inspect", loop.owner);
   assert.equal(s.turns.length, before + 1);
-  assert.equal(s.turns.at(-1)?.unattendedGrants, undefined);
-});
-
-test("privileged item turns recognize the owner's verified directory alias", async () => {
-  const s = service(HAPPY, { samePerson: async (a, b) => a === "josh" && b === "josh@example.test" });
-  const created = await makeLoop(s.loops);
-  await bindCron(s, created, { unattendedGrants: ["admin.sessions.read"] });
-  const loop = (await s.loops.get(created.id))!;
-  await s.fire.fire(loop.id, "alias-owner");
-  const item = (await s.items.byLoop(loop.id))[0]!;
-  const result = await s.fire.itemAction(loop, item, "custom", {}, "josh@example.test");
-  assert.equal(result.ok, true);
-  assert.deepEqual(s.turns.at(-1)?.unattendedGrants, ["admin.sessions.read"]);
-  const before = s.turns.length;
-  const refused = await s.fire.itemAction(loop, item, "custom", {}, "other@example.test");
-  assert.equal(refused.ok, false);
-  assert.equal(s.turns.length, before);
+  assert.equal(automationOrigin(s.turns.at(-1)!)?.ownerFire, true);
+  await s.fire.followUp(loop, item, "read every transcript", loop.owner, { unattended: true });
+  assert.equal(
+    automationOrigin(s.turns.at(-1)!)?.ownerFire,
+    undefined,
+    "words an automated turn sent carry no person's authority",
+  );
+  await s.fire.followUp(loop, item, "read every transcript", "another-admin");
+  assert.equal(
+    automationOrigin(s.turns.at(-1)!)?.ownerFire,
+    undefined,
+    "another administrator's words carry no owner authority",
+  );
 });
 
 test("an admitted loop drains all stages after ownership closes", async () => {
