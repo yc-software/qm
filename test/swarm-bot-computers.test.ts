@@ -70,11 +70,11 @@ function recordRuns(f: Fixture): Array<{ on: string; command: string }> {
   return ran;
 }
 
-function channelRequest(f: Fixture, actor: Principal, botActor: boolean): OrchestratorInput {
+function channelRequest(f: Fixture, actor: Principal, botActor: boolean, thread = f.root.threadRef): OrchestratorInput {
   return {
     surface: "slack",
     actor,
-    conversation: { kind: "channel", threadRef: f.root.threadRef, channelRef: "C1", audience: [actor] },
+    conversation: { kind: "channel", threadRef: thread, channelRef: "C1", audience: [actor] },
     origin: { kind: "human", messageTs: "1700000000.000100" },
     ...(botActor ? { botActor: true } : {}),
     text: "check on the swarm's computers",
@@ -408,7 +408,12 @@ test("a worker turn queued in a bot-started swarm cannot use its own computer on
 });
 
 test("a bot's turn loses the swarm computer it already opened and is told to stop, with its jobs there, once a person sends work into the swarm", async () => {
-  const computers = jobComputers();
+  let failed: unknown[] = [];
+  const computers = jobComputers(async () => {
+    lookupFailures = 1;
+    failed = [await personSend().then(() => "sent", errMessage), stopped.length];
+    await personSend();
+  });
   const f = await botSwarm(computers.backend);
   const ran = recordRuns(f);
   const swarm = (await f.store.get(f.root.id))!;
@@ -418,9 +423,9 @@ test("a bot's turn loses the swarm computer it already opened and is told to sto
   let lookupFailures = 0;
   const processes: ProcessRegistry = {
     ...registry,
-    async liveByScope(scopeId, now) {
+    async listLive(now) {
       if (lookupFailures-- > 0) throw new Error("process registry unavailable");
-      return registry.liveByScope(scopeId, now);
+      return registry.listLive(now);
     },
   };
   const signals = createPostgresRunSignalStore(testDatabaseUrl());
@@ -432,10 +437,20 @@ test("a bot's turn loses the swarm computer it already opened and is told to sto
     stopProcess: async (job) => void stopped.push([job.sandboxId, job.runId]),
   });
   await workerJob(f, processes, computers.output, "alice's build\n");
+  const thread = `slack:C1:${f.root.id}`;
   const { run: queued } = await f.runs.enqueue({
-    sessionId: f.root.threadRef,
-    request: channelRequest(f, releaseBot, true),
+    sessionId: thread,
+    request: channelRequest(f, releaseBot, true, thread),
     maxAttempts: 1,
+  });
+  await processes.register({
+    processId: `c2-${f.root.id}`,
+    scopeId: "channel:C2",
+    sandboxId: swarm.board!.sandboxId,
+    kind: "background",
+    command: "tail -f board.md",
+    ttlMs: 600_000,
+    runId: queued.id,
   });
   const personSend = () =>
     service.send(
@@ -447,13 +462,14 @@ test("a bot's turn loses the swarm computer it already opened and is told to sto
     queued,
     async (call) => {
       const before = await call("execute", { command: "cat board.md", purpose: "Reading the board" });
-      await call("execute", { command: "tail -f board.md", background: true, purpose: "Following the board" });
-      lookupFailures = 1;
-      const failed = [await personSend().then(() => "sent", errMessage), stopped.length];
-      await personSend();
+      const started = await call("execute", {
+        command: "tail -f board.md",
+        background: true,
+        purpose: "Following the board",
+      });
       const stops = (await signals.pending(queued.id)).map(({ signal }) => signal.kind);
       const after = await call("execute", { command: "cat board.md", purpose: "Reading the board again" });
-      return { before, after, failed, stops };
+      return { before, after, started, stops };
     },
     { processes },
   );
@@ -463,16 +479,29 @@ test("a bot's turn loses the swarm computer it already opened and is told to sto
     ran.map((entry) => entry.command),
     ["cat board.md"],
   );
-  assert.deepEqual(observed.failed, ["process registry unavailable", 0]);
+  assert.ok(String(observed.started).endsWith(refusedComputer), String(observed.started));
+  assert.deepEqual(failed, ["process registry unavailable", 0]);
   assert.deepEqual(observed.stops, ["abort", "abort"]);
   assert.deepEqual(stopped, [[swarm.board!.sandboxId, queued.id]]);
+  const launched = (await processes.listByScope(f.root.scopeId)).filter((job) => job.runId === queued.id);
+  assert.deepEqual(
+    launched.map((job) => job.status),
+    ["reaped"],
+  );
   await f.runs.complete(queued.id, (await f.runs.get(queued.id))!.leaseToken!, { status: "ok", reply: "done" });
+  const root = await f.rootTurn(releaseBot.id, true);
+  await personSend();
+  assert.deepEqual(
+    (await signals.pending(root.claim.id)).map(({ signal }) => signal.kind),
+    ["abort"],
+  );
+  await root.done();
   const other = await f.rootTurn("other-bot", true);
   await personSend();
   assert.deepEqual(await signals.pending(other.claim.id), []);
 });
 
-function jobComputers() {
+function jobComputers(beforeStart?: () => Promise<unknown>) {
   const output = new Map<string, string>();
   const reads: string[] = [];
   const backend: ProcessSandbox = {
@@ -498,6 +527,7 @@ function jobComputers() {
     async teardown() {},
     async destroyScope() {},
     async startProcess() {
+      await beforeStart?.();
       return { processId: "bg-1" };
     },
     async readProcess(_handle, processId, options) {
