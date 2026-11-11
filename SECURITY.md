@@ -183,11 +183,13 @@ these, not through them.
   to an intended recipient. The gateway removes the token from the address bar and
   places it in a one-day browser cookie, but copied links remain usable and app ACL
   changes do not revoke individual link holders.
-- **The spend export token is bearer authorization for org-wide spend.** When
+- **The spend export token is bearer authorization for org-wide spend and app lists.** When
   `SPEND_EXPORT_TOKEN` is set, anyone holding it can read every scope's daily model-call
   spend: per-person totals, channel and group names, the model mix, and each billed
-  cron's title, owner, scope, schedule and state. It reads no conversation content or
-  cron task and changes nothing, and each export is audited, but the token is
+  cron's title, owner, scope, schedule and state. It can also list, for any person it
+  names, the apps that person can open: name, title, address, creator and permission.
+  It reads no conversation content, cron task or app contents and changes nothing, and
+  each export is audited, but the token is
   not bound to a caller. Rotating it means replacing the secret in core and in every
   consumer; core accepts only the current value after it restarts with the new one.
 - **Everyone sees the spend of the spaces they can see.** The My spend tab in Settings shows each

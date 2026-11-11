@@ -148,8 +148,9 @@ export interface DeployStore {
   treeOf(id: string, version: number): Promise<DeployGitTreeFile[] | null>;
   commitTreeOf(id: string, commit: string): Promise<DeployGitTreeFile[]>;
   filesOf(id: string, commit: string, paths?: string[]): Promise<DeployGitInputFile[]>;
+  filesIn(id: string, entries: readonly DeployGitTreeFile[]): Promise<DeployGitInputFile[]>;
   bundleOf(id: string, commit: string): Promise<Uint8Array>;
-  commitDraft(id: string, files: DeployGitInputFile[], parent: string): Promise<string>;
+  commitDraft(id: string, files: DeployGitInputFile[], parent: string, deletedPaths?: string[]): Promise<string>;
   keepCommit(id: string, commit: string): Promise<void>;
   draftOf(id: string): Promise<DeploymentDraft | null>;
   putDraft(draft: DeploymentDraft): Promise<void>;
@@ -437,10 +438,19 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
     },
     commitTreeOf: (id, commit) => git.treeOf(id, commit),
     filesOf: (id, commit, paths) => git.filesOf(id, commit, paths),
+    filesIn: (id, entries) => git.filesIn(id, entries),
     bundleOf: (id, commit) => git.bundle(id, commit),
     keepCommit: (id, commit) => git.setRef(id, `refs/deploy-commits/${commit}`, commit),
-    commitDraft: (id, files, parent) =>
-      git.commit({ deploymentId: id, version: 0, files, parent, message: "live edit", ref: CURRENT_REF }),
+    commitDraft: (id, files, parent, deletedPaths) =>
+      git.commit({
+        deploymentId: id,
+        version: 0,
+        files,
+        ...(deletedPaths ? { deletedPaths } : {}),
+        parent,
+        message: "live edit",
+        ref: CURRENT_REF,
+      }),
     draftOf: (id) => backing.drafts.get(id),
     putDraft: (draft) => backing.drafts.put(draft.deploymentId, draft),
     deleteDraft: (id) => backing.drafts.delete(id),

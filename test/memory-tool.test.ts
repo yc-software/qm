@@ -427,7 +427,8 @@ test("the memory tool forgets notebook ids and brain refs in one call, a brain r
     },
     async callTool(tool, args) {
       calls.push({ tool, args });
-      if (tool === "forget_fact") return { content: [], structuredContent: { ...args, state: "committed" } };
+      if (tool === "forget_fact")
+        return { content: [], structuredContent: { ...args, state: args.id === 13 ? "conflict" : "committed" } };
       throw new McpCallError("mcp tool memory_write error: fact_withdrawn: that claim was forgotten", {
         code: "invalid_params",
       });
@@ -468,7 +469,9 @@ test("the memory tool forgets notebook ids and brain refs in one call, a brain r
       /^\[error\] Only the person, on a turn they sent in their own DM/,
     );
   assert.match(await run({ action: "delete", ids: ["default:1"] }), /^\[error\] Memory provider default doesn't serve/);
+  assert.match(await run({ action: "delete", ids: ["#9", "acme:7"] }), /^\[error\] No fact #9 /);
   assert.deepEqual(forgets(), []);
+  assert.match(await run({ action: "delete", ids: ["#1", "acme:13"] }), /^Kept 1 notebook fact until /);
   assert.equal(await run({ action: "delete", ids: ["#1", "acme:7"] }), "Forgot 1 fact.\nForgot acme:7.");
   assert.deepEqual(await notebook.facts!(personal).then((facts) => facts.map(({ text }) => text)), [
     "Alice sits at desk 4B.",
@@ -477,5 +480,5 @@ test("the memory tool forgets notebook ids and brain refs in one call, a brain r
     await run({ action: "add", facts: [{ text: "Alice drinks rooibos." }] }),
     /^Remembered 1 fact\.\n\[memory_provider_failed\] Memory provider acme failed \(invalid_params\), so it stored nothing\./,
   );
-  assert.deepEqual(forgets(), [7]);
+  assert.deepEqual(forgets(), [13, 7]);
 });

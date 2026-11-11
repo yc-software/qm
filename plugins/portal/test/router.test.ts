@@ -16,7 +16,7 @@ let deploymentLayerRequests = 0;
 const VALID_SOURCE_SIGNATURE = "v0=valid-source-signature";
 
 const upstream = createServer((req: IncomingMessage, res) => {
-  if (req.url === "/readyz" || req.url?.startsWith("/slack/events") || req.url?.startsWith("/v1/spend/export")) {
+  if (req.url === "/readyz" || req.url?.startsWith("/slack/events") || req.url?.includes("/export")) {
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
     return void req.on("end", () => {
@@ -874,6 +874,14 @@ test("core's readiness, Slack HTTP events and the spend export reach core throug
   const exported = (await spend.json()) as { url: string; headers: Record<string, string> };
   assert.equal(exported.url, "/v1/spend/export?from=2026-10-01&to=2026-11-01");
   assert.equal(exported.headers.authorization, "Bearer spend-token");
+  const apps = await fetch(`${base}/v1/deployments/export?principalId=alice%40example.com`, {
+    headers: { authorization: "Bearer spend-token", cookie: "portal_session=x" },
+  });
+  assert.equal(apps.status, 200);
+  const listed = (await apps.json()) as { url: string; headers: Record<string, string> };
+  assert.equal(listed.url, "/v1/deployments/export?principalId=alice%40example.com");
+  assert.equal(listed.headers.authorization, "Bearer spend-token");
+  assert.equal(listed.headers.cookie, undefined);
   assert.equal((await fetch(`${base}/slack/events`)).status === 200, false);
 });
 

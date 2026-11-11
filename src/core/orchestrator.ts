@@ -10,6 +10,7 @@ import { createAdminCall } from "../tools/admin.ts";
 import { createSelfApiCall } from "../tools/self-api.ts";
 import { scopeTeamsToTurn } from "../teams/teams.ts";
 import { externalSlackRequestAllowed, currentExternalSlackRun } from "../resolution/external-slack.ts";
+import { appEditSlug } from "../../plugins/chassis/src/app-edit.ts";
 import { desktopComputerTool } from "../../plugins/chassis/src/desktop-computer.ts";
 import { startDispatchTrace, tracePhase, type DispatchTrace } from "../../plugins/chassis/src/error-reporting.ts";
 import { externalTools } from "./orchestrator/external-tools.ts";
@@ -1604,6 +1605,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const turnMcpTools = Promise.all([mcpToolsReady, context.brainTools(personTurn)]).then(
           ([connectors, brains]) => (brains.length ? [...(connectors ?? []), ...brains] : connectors),
         );
+        const editingApp = appEditSlug(conversation.threadRef, actor.id);
         const baseTools = createToolContext({
           tenant,
           desktopClientId: desktopClientForTurn(input),
@@ -1629,6 +1631,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           grantedHandles: resolution.grantedHandles,
           context,
           deploy: deps.deploy,
+          ...(editingApp ? { editingApp } : {}),
           acl: deps.acl,
           files: deps.files,
           auditLog: deps.auditLog,

@@ -56,6 +56,7 @@ export interface MemoryCaptureContext extends MemoryCaptureMetadata, MemoryOutco
 export interface MemoryForgetContext extends MemoryOutcomeSink {
   audienceScopeId?: ScopeId;
   idempotencyKey?: string;
+  startedAt?: number;
 }
 
 export interface MemoryEdit {
@@ -178,7 +179,7 @@ function sameProvenance(a: MemoryProvenance, b: MemoryProvenance): boolean {
   );
 }
 
-function resolveIds(facts: readonly MemoryFact[], ids: readonly string[]): MemoryFact[] {
+export function resolveIds(facts: readonly MemoryFact[], ids: readonly string[]): MemoryFact[] {
   const byId = new Map(facts.map((fact) => [fact.id, fact]));
   const wanted = ids.map(parseFactId);
   const missing = [...new Set(wanted.filter((id) => !byId.has(id)))];

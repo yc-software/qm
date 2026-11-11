@@ -233,6 +233,7 @@ export function createMcpMemoryProvider(opts: {
       ? {
           async delete(scopeId, ids, by, context) {
             const op = opts.forget!;
+            const deadline = (context?.startedAt ?? Date.now()) + op.timeoutMs;
             for (const id of ids) {
               const factId = Number(id);
               if (!Number.isSafeInteger(factId) || factId < 0 || String(factId) !== id)
@@ -242,12 +243,18 @@ export function createMcpMemoryProvider(opts: {
               const args: Record<string, unknown> = { id: factId };
               if (context?.idempotencyKey && op.idempotencyArg)
                 args[op.idempotencyArg] = requestKey(context.idempotencyKey, id);
-              const result = await call(op, args, undefined, by?.actorId, scopeId, context?.audienceScopeId).catch(
-                (error: unknown) => {
-                  if (error instanceof McpCallError && error.code === "fact_already_expired") return undefined;
-                  throw error;
-                },
-              );
+              const result = await call(
+                op,
+                args,
+                undefined,
+                by?.actorId,
+                scopeId,
+                context?.audienceScopeId,
+                deadline,
+              ).catch((error: unknown) => {
+                if (error instanceof McpCallError && error.code === "fact_already_expired") return undefined;
+                throw error;
+              });
               if (!result) continue;
               const state = (result.structuredContent as { state?: unknown } | undefined)?.state;
               if (state === "committed") continue;

@@ -7,11 +7,13 @@ import {
   type MemoryProviderOutcome,
   type MemoryRecallContext,
   type MemoryService,
+  resolveIds,
 } from "./memory-service.ts";
 import { MemoryForgetRefused, type MemoryCandidate } from "./facts.ts";
 import {
   changeFailure,
   failedOutcome,
+  forgetFinished,
   problemLine,
   problemOf,
   strictFailure,
@@ -276,23 +278,28 @@ export function createRoutedMemoryService(opts: {
           "Only the person, on a turn they sent in their own DM with QM, can forget a brain fact; admin, maintenance, self-service, bot, automation and ambient changes reach the notebook only. Nothing was changed.",
         );
       const notebookIds = ids.filter((id) => !parseProviderRef(id));
-      if (notebookIds.length) {
-        const manager = managerFor(scopeId);
-        if (!manager?.delete) throw new Error(`memory for ${scopeId} is not directly editable`);
-        await manager.delete(scopeId, notebookIds, by, context);
-      }
+      const manager = notebookIds.length ? managerFor(scopeId) : undefined;
+      if (notebookIds.length && !manager?.delete) throw new Error(`memory for ${scopeId} is not directly editable`);
+      if (refs.length && manager?.facts) resolveIds(await manager.facts(scopeId), notebookIds);
+      const settled: MemoryProviderOutcome[] = [];
       for (const { ref, brain, factId, route, provider } of refs) {
         const { error } = await attempt(
           route,
           scopeId,
           "forget",
-          { report: (outcome) => context?.report?.({ ...outcome, ref }) },
+          {
+            report: (outcome) => {
+              settled.push(outcome);
+              context?.report?.({ ...outcome, ref });
+            },
+          },
           () => provider.delete!(scopeId, [factId], by, context),
           (_, envelope) => ({ outcome: envelope.status === "pending" ? "pending" : "committed" }),
           undefined,
         );
         if (error) opts.onError?.(error, brain, "forget");
       }
+      if (manager?.delete && forgetFinished(settled)) await manager.delete(scopeId, notebookIds, by, context);
     },
 
     async metadata() {
