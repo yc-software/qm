@@ -187,24 +187,13 @@ export async function withProviders<T>(
   run: (report: OutcomeReport) => Promise<T>,
 ): Promise<MemoryProviderReport<T>> {
   const outcomes: MemoryProviderOutcome[] = [];
-  const problems = () => {
-    const groups: ProblemGroup[] = [];
-    for (const { ref, ...outcome } of outcomes) {
-      if (outcome.provider === "default") continue;
-      const same = ref
-        ? groups.find(
-            (group) =>
-              group.refs.length &&
-              group.provider === outcome.provider &&
-              group.outcome === outcome.outcome &&
-              group.code === outcome.code,
-          )
-        : undefined;
-      if (same) same.refs.push(ref!);
-      else groups.push({ ...outcome, refs: ref ? [ref] : [] });
-    }
-    return groups.flatMap((group) => problemOf(group, operation) ?? []);
-  };
+  const problems = () =>
+    [
+      ...Map.groupBy(
+        outcomes.filter(({ provider }) => provider !== "default"),
+        ({ ref, provider, outcome, code }, index) => (ref ? JSON.stringify([provider, outcome, code]) : index),
+      ).values(),
+    ].flatMap((group) => problemOf({ ...group[0]!, refs: group.flatMap(({ ref }) => ref ?? []) }, operation) ?? []);
   try {
     const value = await run((outcome) => void outcomes.push(outcome));
     return { value, outcomes, problems: problems() };
