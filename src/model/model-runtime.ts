@@ -205,6 +205,7 @@ export async function buildModelRuntime(
           const transformed = options?.onPayload ? await options.onPayload(payload, model) : undefined;
           return shortConversationCache(
             applyThinkingBinding(transformed === undefined ? payload : transformed, candidate),
+            model.api,
           );
         },
       } as T;
@@ -221,6 +222,8 @@ export async function buildModelRuntime(
     }
     const routed = {
       ...retained(options),
+      onPayload: async (payload: unknown) =>
+        shortConversationCache((await options?.onPayload?.(payload, model)) ?? payload, model.api),
       apiKey: request.apiKey,
       transformHeaders: async (headers: ProviderHeaders) => ({
         ...(options?.transformHeaders ? await options.transformHeaders(headers) : headers),
@@ -335,12 +338,12 @@ export function applyThinkingBinding<T>(
   return payload;
 }
 
-function shortConversationCache<T>(payload: T): T {
+function shortConversationCache<T>(payload: T, api: Api): T {
   const messages = (payload as { messages?: unknown } | undefined)?.messages;
-  for (const message of Array.isArray(messages) ? (messages as Array<{ role?: string; content?: unknown }>) : [])
-    if (message?.role !== "system" && message?.role !== "developer" && Array.isArray(message?.content))
-      for (const block of message.content as Array<{ cache_control?: object }>)
-        if (block?.cache_control) block.cache_control = { type: "ephemeral" };
+  if (api !== "anthropic-messages" || !Array.isArray(messages)) return payload;
+  for (const message of messages as Array<{ content?: unknown }>)
+    for (const block of Array.isArray(message?.content) ? (message.content as Array<{ cache_control?: object }>) : [])
+      if (block?.cache_control) block.cache_control = { type: "ephemeral" };
   return payload;
 }
 
