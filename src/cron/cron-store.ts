@@ -17,6 +17,7 @@ import {
   ownedBy,
 } from "../triggers/trigger-store.ts";
 import { assertCronRuntime } from "./runtime.ts";
+import { swallowAs } from "../util/errors.ts";
 import { hashId } from "../util/crypto.ts";
 import { advanceNextFireAt, isCalendarSchedule, normalizeSchedule, recoverNextFireAt } from "./schedule.ts";
 import { claimThenBind, type ClaimedRow } from "../tenants/claim.ts";
@@ -94,8 +95,8 @@ export function cronIsActive(
   if (!cron.enabled || cron.archived) return false;
   try {
     return recoverNextFireAt(cron.schedule, cron.createdAt, cron.lastFiredAt, cron.nextFireAt) !== undefined;
-  } catch {
-    return true;
+  } catch (error) {
+    return swallowAs("cron: liveness of a malformed schedule", true)(error);
   }
 }
 
