@@ -18,7 +18,7 @@ export function recallTools(kit: ToolKit) {
       "read: this notebook with fact #ids (pass `scope` from a search result for another notebook). " +
       "add: short, self-contained facts (preferences, identifiers, ongoing projects, how they work); never secrets, one-off trivia, or anything already recorded elsewhere. " +
       "Save pointers, not data: growing lists and working state belong in a file written with the files tool, with one memory line naming it. Files are this conversation's own; a pointer read from another notebook is a hint of where state lives, not a path you can open. " +
-      "edit: replace notebook facts' text by id; a brain copy that search shows as (also <ref>) keeps the old wording until you delete that ref. delete: forget by `ids`, either notebook #ids or brain refs from search (like acme:4821), one store per call; a brain ref is forgotten only in the person's own DM. Fix changed facts instead of adding contradictions; delete stale ones.",
+      "edit: replace notebook facts' text by id; a brain copy that search shows as (also <ref>) keeps the old wording until you delete that ref. delete: forget by `ids`, notebook #ids and brain refs from search (like acme:4821); a brain ref is forgotten only on a turn the person sent in their own DM. Fix changed facts instead of adding contradictions; delete stale ones.",
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal("search"),
@@ -45,7 +45,7 @@ export function recallTools(kit: ToolKit) {
       ),
       ids: Type.Optional(
         Type.Array(Type.String(), {
-          description: "delete: notebook #ids, or refs from one brain such as acme:4821, to forget.",
+          description: "delete: notebook #ids and brain refs such as acme:4821, to forget.",
         }),
       ),
     }),
@@ -156,13 +156,17 @@ export function recallTools(kit: ToolKit) {
             const forgot = await tc.memoryDelete(ids, callId);
             if (forgot === null) return unavailable();
             const { forgotten, outcomes, problems } = forgot;
-            const done = outcomes.filter(({ outcome }) => outcome === "committed");
-            const lines = outcomes.length
-              ? [
-                  ...done.map(({ provider, ref }) => `Forgot ${ref} in memory provider ${provider}.`),
-                  ...problems.map(problemLine),
-                ]
-              : [`Forgot ${ids.length} fact${ids.length === 1 ? "" : "s"}.`];
+            const notebook = ids.length - outcomes.length;
+            const lines = [
+              ...(notebook ? [`Forgot ${notebook} fact${notebook === 1 ? "" : "s"}.`] : []),
+              ...outcomes.flatMap(({ outcome, provider, ref }) => {
+                if (outcome === "committed") return [`Forgot ${ref} in memory provider ${provider}.`];
+                if (outcome === "pending")
+                  return [`Memory provider ${provider} accepted forgetting ${ref} and finishes it later.`];
+                return [];
+              }),
+              ...problems.map(problemLine),
+            ];
             return recordResult(
               callId,
               {

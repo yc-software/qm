@@ -1,34 +1,29 @@
 import { randomUUID } from "node:crypto";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { McpCallError, mcpEnvelope, mcpResultText, type McpClient } from "../mcp/mcp-client.ts";
-import { sleep, TimeoutError, withTimeout } from "../util/async.ts";
-import { attestableAudience, attestedPerson, OutsideAudience } from "../directory/person.ts";
+import { TimeoutError, withTimeout } from "../util/async.ts";
+import { attestedPerson, OutsideAudience, ownPrivateConversation } from "../directory/person.ts";
 import { MemoryRecallWithheld } from "./disclosure.ts";
 import type { MemoryRecallContext, MemoryService } from "./memory-service.ts";
 import type { MemoryCandidate } from "./facts.ts";
 import {
   DENIED_CODES,
-  failedOutcome,
   MAX_FACTS_PER_WRITE,
   MemoryWriteUnconfirmed,
   reportEnvelope,
   requestKey,
 } from "./provider-outcome.ts";
-import type { McpMemoryForgetConfig, McpMemoryOperationConfig } from "./provider-config.ts";
+import type { McpMemoryOperationConfig } from "./provider-config.ts";
 import { RECALL_MESSAGE_CHARS } from "./semantic-recall.ts";
 import { flatText } from "../util/text.ts";
 
 const MAX_PROVENANCE_CHARS = 200;
 
 export type McpMemoryOperation = Omit<McpMemoryOperationConfig, "auth"> & { client: McpClient; timeoutMs: number };
-export type McpMemoryForget = Omit<McpMemoryForgetConfig, "auth"> & { client: McpClient; timeoutMs: number };
 
+const ACTING_USER = "acting_user";
+const PENDING_STATES = new Set(["queued", "running", "recovering"]);
 const UNPUBLISHED_STATES = new Set(["conflict", "failed", "cancelled"]);
-
-interface ForgetReceipt {
-  state?: unknown;
-  retry_after_ms?: unknown;
-}
 
 function resultText(result: CallToolResult): string {
   if (result.content.some((block) => block.type === "text")) return mcpResultText(result);
@@ -86,12 +81,12 @@ const stamped = (fact: ProviderFact) => {
 export function createMcpMemoryProvider(opts: {
   read: McpMemoryOperation;
   write?: McpMemoryOperation;
-  forget?: McpMemoryForget;
+  forget?: McpMemoryOperation;
   attestActor?: boolean;
 }): MemoryService {
   const attest = (actorId: string | undefined, scopeId: string, audienceScopeId: string | undefined) => {
     const person = opts.attestActor ? attestedPerson(actorId, "memory provider") : actorId;
-    if (opts.attestActor && !(attestableAudience(actorId, scopeId) && attestableAudience(actorId, audienceScopeId)))
+    if (opts.attestActor && !ownPrivateConversation(actorId, scopeId, audienceScopeId))
       throw new OutsideAudience("memory provider");
     return { person, headers: opts.attestActor && person ? { "x-qm-actor": person } : undefined };
   };
@@ -130,7 +125,7 @@ export function createMcpMemoryProvider(opts: {
     const result = await call(
       op,
       args,
-      op.actorArg ?? "acting_user",
+      op.actorArg ?? ACTING_USER,
       context?.actorId,
       scopeId,
       context?.audienceScopeId,
@@ -190,7 +185,7 @@ export function createMcpMemoryProvider(opts: {
           args[op.idempotencyArg] = start ? `${context.idempotencyKey}:${start / size}` : context.idempotencyKey;
         if (op.scopeArg) args[op.scopeArg] = scopeId;
         const { code } = mcpEnvelope(
-          await call(op, args, op.actorArg ?? "acting_user", actor, scopeId, context?.audienceScopeId, deadline),
+          await call(op, args, op.actorArg ?? ACTING_USER, actor, scopeId, context?.audienceScopeId, deadline),
         );
         if (code && DENIED_CODES.has(code))
           throw new McpCallError(`memory provider refused the write (${code})`, { code });
@@ -238,50 +233,22 @@ export function createMcpMemoryProvider(opts: {
             const op = opts.forget!;
             for (const id of ids) {
               const factId = Number(id);
-              if (!/^\d+$/.test(id) || !Number.isSafeInteger(factId))
+              if (!Number.isSafeInteger(factId) || factId < 0 || String(factId) !== id)
                 throw new McpCallError(`memory provider fact ids are whole numbers, not ${JSON.stringify(id)}`, {
                   code: "fact_not_found",
                 });
-              const deadline = Date.now() + op.timeoutMs;
-              const requestId = requestKey(context?.idempotencyKey ?? randomUUID(), id);
-              const send = async (tool: string, args: Record<string, unknown>): Promise<ForgetReceipt> =>
-                (
-                  await call(
-                    { ...op, tool },
-                    { ...args, [op.requestIdArg]: requestId },
-                    undefined,
-                    by?.actorId,
-                    scopeId,
-                    context?.audienceScopeId,
-                    deadline,
-                  )
-                ).structuredContent ?? {};
-              const receipt = (pending: string) =>
-                send(op.receiptTool, {}).catch((error: unknown) => {
-                  throw new MemoryWriteUnconfirmed(pending, error);
+              const args: Record<string, unknown> = { [op.idArg ?? "id"]: factId };
+              if (op.requestIdArg) args[op.requestIdArg] = requestKey(context?.idempotencyKey ?? randomUUID(), id);
+              const result = await call(op, args, undefined, by?.actorId, scopeId, context?.audienceScopeId);
+              const state = (result.structuredContent as { state?: unknown } | undefined)?.state;
+              if (state === "committed") continue;
+              if (typeof state === "string" && UNPUBLISHED_STATES.has(state))
+                throw new McpCallError(`memory provider ${op.tool} ended ${state}: ${resultText(result)}`, {
+                  code: state,
                 });
-              let reply: ForgetReceipt;
-              let polled = false;
-              try {
-                reply = await send(op.tool, { [op.idArg]: factId });
-              } catch (error) {
-                if (!(error instanceof McpCallError) || error.code !== undefined || error.unsent) throw error;
-                reply = await receipt(failedOutcome(error).code ?? "no_reply");
-                polled = true;
-              }
-              for (;;) {
-                const { state, retry_after_ms: wait } = reply;
-                if (state === "committed") break;
-                if (typeof state === "string" && UNPUBLISHED_STATES.has(state))
-                  throw new McpCallError(`memory provider ${op.tool} ended ${state}`, { code: state });
-                const pending = typeof state === "string" ? state : "no_state";
-                const delay = polled ? wait : 0;
-                if (typeof delay !== "number" || (polled && delay <= 0) || Date.now() + delay >= deadline)
-                  throw new MemoryWriteUnconfirmed(pending);
-                await sleep(delay);
-                reply = await receipt(pending);
-                polled = true;
-              }
+              if (typeof state !== "string" || !PENDING_STATES.has(state))
+                throw new MemoryWriteUnconfirmed(typeof state === "string" ? state : "no_state");
+              reportEnvelope({ status: "pending", code: state });
             }
           },
         }

@@ -784,7 +784,7 @@ test("a registry brain forgets by ref only while a binding serves it, so a revoc
       memory,
       ALICE_SCOPE,
       BRAIN_REF.ids,
-      { actorId: "U1", context: "conversation" },
+      { actorId: "U1", context: "conversation", personTurn: true },
       { audienceScopeId: ALICE_SCOPE },
       "session:call",
     );

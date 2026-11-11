@@ -5,7 +5,6 @@ import { createMcpMemoryProvider, type McpMemoryOperation } from "./mcp-memory-p
 import {
   MAX_PROVIDER_TIMEOUT_MS,
   type MemoryProviderConfig,
-  type McpMemoryForgetConfig,
   type McpMemoryOperationConfig,
 } from "./provider-config.ts";
 import type { MemoryService } from "./memory-service.ts";
@@ -15,12 +14,12 @@ import type { Item } from "../sessions/items.ts";
 
 const MAX_RESPONSE_BYTES = 1_000_000;
 
-function operation<T extends McpMemoryOperationConfig | McpMemoryForgetConfig>(
+function operation(
   url: string,
-  { auth, ...spec }: T,
+  { auth, ...spec }: McpMemoryOperationConfig,
   timeoutMs: number,
   fetchFn: AddressFetch,
-): Omit<T, "auth"> & Pick<McpMemoryOperation, "client" | "timeoutMs"> {
+): McpMemoryOperation {
   return {
     client: createMcpClient({
       url,

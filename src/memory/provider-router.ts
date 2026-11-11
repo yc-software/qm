@@ -11,7 +11,7 @@ import {
 } from "./memory-service.ts";
 import { MemoryForgetRefused, type MemoryCandidate } from "./facts.ts";
 import { changeFailure, failedOutcome, strictFailure, withEnvelope } from "./provider-outcome.ts";
-import { attestableAudience, OutsideAudience } from "../directory/person.ts";
+import { OutsideAudience, ownPrivateConversation } from "../directory/person.ts";
 
 export type MemoryCapturePolicy = "off" | "explicit" | "automatic";
 
@@ -208,40 +208,39 @@ export function createRoutedMemoryService(opts: {
     },
 
     async delete(scopeId, ids, by, context) {
-      const brains = new Set(ids.map((id) => (id.includes(":") ? id.slice(0, id.indexOf(":")) : undefined)));
-      if (brains.size > 1)
-        throw new MemoryForgetRefused(
-          "Forget from one store per call: pass either notebook #ids or refs from one brain (like acme:4821), not both. Nothing was changed.",
-        );
-      const [brain] = brains;
-      if (brain === undefined) {
-        const manager = managerFor(scopeId);
-        if (!manager?.delete) throw new Error(`memory for ${scopeId} is not directly editable`);
-        await manager.delete(scopeId, ids, by, context);
-        return;
-      }
-      const route = routesFor(scopeId).find((candidate) => candidate.provider === brain);
-      const provider = route && opts.providers[brain];
-      if (!route || !provider?.delete || !provider.attestActor)
-        throw new MemoryForgetRefused(
-          `Memory brain ${brain} can't forget facts here: no registry brain by that id serves this conversation's notebook. Nothing was changed. Brains set in MEMORY_PROVIDER_CONFIG can't forget; GET /v1/admin/memory-registry lists registry brains and their bindings.`,
-        );
+      const refs = ids
+        .filter((id) => id.includes(":"))
+        .map((ref) => {
+          const brain = ref.slice(0, ref.indexOf(":"));
+          const route = routesFor(scopeId).find((candidate) => candidate.provider === brain);
+          const provider = route && opts.providers[brain];
+          if (!route || !provider?.delete)
+            throw new MemoryForgetRefused(
+              `Memory provider ${brain} can't forget ${ref} here: it doesn't serve this conversation's notebook, or it has no forget operation. Nothing was changed.`,
+            );
+          return { ref, brain, route, provider };
+        });
       if (
-        !changesBrainAsPerson(by) ||
-        !attestableAudience(by!.actorId, scopeId) ||
-        !attestableAudience(by!.actorId, context?.audienceScopeId)
+        refs.length &&
+        (!changesBrainAsPerson(by) || !ownPrivateConversation(by!.actorId, scopeId, context?.audienceScopeId))
       )
         throw new MemoryForgetRefused(
-          `Only the person, in their own DM with QM, can forget a fact in memory brain ${brain}; admin, maintenance, self-service, bot and ambient changes reach the notebook only. Nothing was changed.`,
+          "Only the person, on a turn they sent in their own DM with QM, can forget a brain fact; admin, maintenance, self-service, bot, automation and ambient changes reach the notebook only. Nothing was changed.",
         );
-      for (const ref of ids) {
+      const notebookIds = ids.filter((id) => !id.includes(":"));
+      if (notebookIds.length) {
+        const manager = managerFor(scopeId);
+        if (!manager?.delete) throw new Error(`memory for ${scopeId} is not directly editable`);
+        await manager.delete(scopeId, notebookIds, by, context);
+      }
+      for (const { ref, brain, route, provider } of refs) {
         const { error } = await attempt(
           route,
           scopeId,
           "forget",
           { report: (outcome) => context?.report?.({ ...outcome, ref }) },
           () => provider.delete!(scopeId, [ref.slice(brain.length + 1)], by, context),
-          () => ({ outcome: "committed" }),
+          (_, envelope) => ({ outcome: envelope.status === "pending" ? "pending" : "committed" }),
           undefined,
         );
         if (error) opts.onError?.(error, brain, "forget");

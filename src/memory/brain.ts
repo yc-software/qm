@@ -1,5 +1,5 @@
 import { McpCallError } from "../mcp/mcp-client.ts";
-import { attestableAudience, samePerson } from "../directory/person.ts";
+import { ownPrivateConversation, samePerson } from "../directory/person.ts";
 import { isOverheard, isUserItem, type Item } from "../sessions/items.ts";
 import type { ScopeId } from "../types.ts";
 import { swallowAs } from "../util/errors.ts";
@@ -175,8 +175,7 @@ interface BrainTurn {
 }
 
 export async function boundBrains(memory: Pick<MemoryService, "brains">, turn: BrainTurn): Promise<BoundBrain[]> {
-  if (!attestableAudience(turn.actorId, turn.scopeId) || !attestableAudience(turn.actorId, turn.audienceScopeId))
-    return [];
+  if (!ownPrivateConversation(turn.actorId, turn.scopeId, turn.audienceScopeId)) return [];
   return (await memory.brains?.(turn.scopeId)) ?? [];
 }
 
