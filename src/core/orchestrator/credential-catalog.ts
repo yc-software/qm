@@ -71,9 +71,11 @@ export async function createCredentialCatalog(turn: CredentialCatalogTurn) {
     orgWideAudience,
   } = turn;
   const brokeredTools = external ? [] : (deps.brokeredTools ?? []);
+  const actorKeychain = input.botActor !== true;
   const openSpeakerKeychain =
     liveAuthorTurn && conversation.kind !== "dm" && sharingSources.includes(personalScope(actor.id));
   const openAutomationKeychain =
+    actorKeychain &&
     !external &&
     input.origin.kind === "automation" &&
     input.origin.useOwnerKeychain === true &&
@@ -86,7 +88,7 @@ export async function createCredentialCatalog(turn: CredentialCatalogTurn) {
       isCurrentSharedScopeMember: deps.isCurrentSharedScopeMember,
     }));
   const ownCredentialsAllowed =
-    input.botActor !== true && (scopeId === personalScope(actor.id) || openSpeakerKeychain || openAutomationKeychain);
+    (actorKeychain && scopeId === personalScope(actor.id)) || openSpeakerKeychain || openAutomationKeychain;
   const sharedScope =
     !external &&
     (scopeId !== personalScope(actor.id) ||

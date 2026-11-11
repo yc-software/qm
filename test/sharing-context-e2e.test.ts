@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import { failedTurnError } from "./support/failed-turn.ts";
+import { testTenant } from "./support/test-tenant.ts";
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import type { Config } from "../src/config.ts";
 import type { TurnRequest } from "../src/types.ts";
@@ -137,6 +138,10 @@ test("sharing e2e: personal files and memories follow the speaker, opt-out, and 
   for (const extra of [{ origin: { kind: "automation" } }, { botActor: true }] as const)
     assert.match(await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true, "U1", extra), /no file/);
   assert.doesNotMatch(await b.turn("!sysprompt", false, "U1", { botActor: true }), /OWN_MEMORY_U1/);
+  const own = `!execute ${JSON.stringify({ command: "true", sandboxId: (await b.sandboxResources.resolve("personal:U1"))!.id })}`;
+  assert.equal(await b.turn(own, true), "(exit 0)");
+  await b.turn(own, true, "U1", { botActor: true });
+  assert.ok((await b.errors.list(testTenant)).some((e) => /sandbox access is no longer authorized/.test(e.message)));
 });
 
 test("sharing e2e: a delegated turn shares its live parent's access under current sharing permission", async (t) => {

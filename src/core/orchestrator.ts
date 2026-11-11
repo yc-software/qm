@@ -524,6 +524,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         !external &&
         ((!sessionTurn && (humanTurn || authoredDetection)) || delegatedOrigin !== undefined) &&
         allInternal;
+      const livePersonTurn = liveAuthorTurn && input.botActor !== true;
       const messageTs = humanInput && input.origin.kind === "human" ? input.origin.messageTs : undefined;
       const entryTs =
         !sessionTurn && (input.origin.kind === "human" || input.origin.kind === "ambient")
@@ -779,7 +780,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         audience: conversation.audience,
         acl: deps.acl,
         origin: authorizationOrigin,
-        trustedLiveHuman: liveAuthorTurn && input.botActor !== true,
+        trustedLiveHuman: livePersonTurn,
         targetScope: scopeId,
         ...(audienceScopeId ? { audienceScopeId } : {}),
         config: deps.config,
@@ -1083,7 +1084,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         external,
         strictReadOnly,
         allInternal,
-        liveAuthorTurn,
+        liveAuthorTurn: livePersonTurn,
         scopeId,
         environmentId,
         sharingSources,
@@ -1160,7 +1161,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         strictReadOnly,
         allInternal,
         liveTurn,
-        liveAuthorTurn,
+        liveAuthorTurn: livePersonTurn,
         automatedTurn,
         actAsActor,
         useMemory,
@@ -1263,7 +1264,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         connectorEnv,
         egressTokenForTurn,
         egressTokenForPolicy,
-        openResourceAccess: !external && (liveAuthorTurn || openAutomationKeychain),
+        openResourceAccess: !external && (livePersonTurn || openAutomationKeychain),
         visibleSkillsForTurn,
       });
       if (input.shutdown?.aborted)
@@ -2069,7 +2070,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const runtimeClaims: CapabilityClaims = controlClaims ?? {
           ...scopeAttestation,
           exp: Date.now() + CAPABILITY_TTL_MS,
-          ...(liveAuthorTurn ? { liveAuthor: true } : {}),
+          ...(livePersonTurn ? { liveAuthor: true } : {}),
           ...(automatedTurn ? { triggered: true } : {}),
         };
         const restoredRuntime =
