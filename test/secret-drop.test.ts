@@ -649,13 +649,7 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
     assert.ok(!html.includes(t), "the token itself is never embedded in the page body");
   });
 
-  const asApp = async (id: string) => {
-    await built.users.record({ id, source: "turn", at: Date.now() });
-    await built.users.markApps([id]);
-  };
-
   it("a drop a Slack bot's turn mints resumes as the bot's work", async () => {
-    await asApp("B-RELEASE");
     const threadRef = "dm:release-bot";
     const minted = await post(
       "/v1/keychain/drops",
@@ -670,7 +664,6 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
   });
 
   it("a live bot attestation survives mint and private-scope redemption", async () => {
-    await asApp("B-LEGACY");
     await built.directory.replaceChannels(
       [{ channelId: "C1", name: "drops", isPrivate: true }],
       [{ channelId: "C1", principalId: "U_A" }],
@@ -705,7 +698,6 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
       return ((await res.json()) as { credential: { id: string } }).credential.id;
     };
     const personal = await dropInto(await capFor("U_A", room), "persondeploy", "U_A");
-    await asApp("B-DEPLOY");
     const asked = await dropInto(
       await capFor("B-DEPLOY", room, {
         botActor: true,
@@ -722,7 +714,8 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
     assert.ok((await offered(false)).includes(asked));
   });
 
-  it("bot work by an actor that isn't a known app can't mint a secret drop", async () => {
+  it("bot work in a person's name can't mint a secret drop", async () => {
+    await built.users.record({ id: "U_A", source: "turn", at: Date.now() });
     const cap = await capFor("U_A", scopeId("personal", "U_A"), { botActor: true, liveActor: true });
     const minted = await post("/v1/keychain/drops", { service: "deploy", purpose: "deploy" }, cap);
     assert.equal(minted.status, 403);
