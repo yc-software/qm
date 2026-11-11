@@ -243,9 +243,9 @@ export function createSwarmService(deps: {
   const update = (auth: Authority, mutate: (swarm: Swarm) => void) => store.update(auth.rootId, mutate, auth.fence);
   const defaults = resolveSwarmSettings(deps.defaults);
   const cutOffBot = async (swarm: Swarm, reason: string): Promise<void> => {
-    if (!swarm.template.botActor) return;
-    const lostSwarm = (run: Run | null): boolean =>
-      run?.request.botActor === true && !botMayDirect(swarm, run.request.actor.id);
+    const bot = swarm.template.actor.id;
+    if (!swarm.template.botActor || botMayDirect(swarm, bot)) return;
+    const lostSwarm = (run: Run | null): boolean => run?.request.botActor === true && run.request.actor.id === bot;
     const active = await runs.activeForThreads(swarm.members.map((member) => member.threadRef));
     await Promise.all(
       [...active.values()]

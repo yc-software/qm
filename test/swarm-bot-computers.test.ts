@@ -466,6 +466,10 @@ test("a bot's turn loses the swarm computer it already opened and is told to sto
   assert.deepEqual(observed.failed, ["process registry unavailable", 0]);
   assert.deepEqual(observed.stops, ["abort", "abort"]);
   assert.deepEqual(stopped, [[swarm.board!.sandboxId, queued.id]]);
+  await f.runs.complete(queued.id, (await f.runs.get(queued.id))!.leaseToken!, { status: "ok", reply: "done" });
+  const other = await f.rootTurn("other-bot", true);
+  await personSend();
+  assert.deepEqual(await signals.pending(other.claim.id), []);
 });
 
 function jobComputers() {
@@ -510,13 +514,7 @@ function jobComputers() {
   return { backend, output, reads };
 }
 
-async function workerJob(
-  f: Fixture,
-  processes: ProcessRegistry,
-  output: Map<string, string>,
-  text: string,
-  runId?: string,
-) {
+async function workerJob(f: Fixture, processes: ProcessRegistry, output: Map<string, string>, text: string, run = "") {
   const swarm = (await f.store.get(f.root.id))!;
   const worker = swarm.members.find((member) => member.id !== swarm.id)!;
   const job = await processes.register({
@@ -527,7 +525,7 @@ async function workerJob(
     command: "npm run build",
     purpose: "the build",
     ttlMs: 600_000,
-    ...(runId ? { runId } : {}),
+    ...(run ? { runId: run } : {}),
   });
   output.set(job.processId, text);
   return { job, worker };
