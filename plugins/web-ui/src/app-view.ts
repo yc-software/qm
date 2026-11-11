@@ -60,7 +60,7 @@ export function shotResult(shot: AppShot): Result {
   return { content: lines.join("\n"), images: [{ data: shot.image, mimeType: shot.mimeType }] };
 }
 
-export async function takeAppShot(): Promise<Result> {
+async function takeAppShot(): Promise<Result> {
   try {
     return shotResult(await askEmbedder<AppShot>({ type: "qm:app-shot" }, "qm:app-shot-result", SHOT_TIMEOUT_MS));
   } catch (error) {
