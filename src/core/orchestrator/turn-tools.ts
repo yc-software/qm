@@ -53,7 +53,6 @@ export function createTurnBrokers(turn: {
           scopeId: memoryScopeId,
           sessionRef: conversation.threadRef,
           ...(input.runId ? { runId: input.runId } : {}),
-          ...(input.botActor ? { botActor: actor.id } : {}),
           ttlMs: deps.backgroundJobTtlMs,
           ttlMaxMs: deps.backgroundJobTtlMaxMs,
           assertComputerUsable: assertDefaultUsable,

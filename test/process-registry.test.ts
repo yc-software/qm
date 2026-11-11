@@ -219,7 +219,7 @@ test("registry preserves purpose without replacing the command and accepts legac
   }
 });
 
-test("a running job that an older release started for a bot's turn, without recording the bot, is claimed as that bot's job", async () => {
+test("a running job whose run was a bot's turn is claimed as that bot's job, and a person's job is not", async () => {
   const url = testDatabaseUrl();
   const { runs } = createPostgresRunStore(url);
   const registry = createPostgresProcessRegistry(url);

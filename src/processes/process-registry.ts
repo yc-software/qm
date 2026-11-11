@@ -2,6 +2,7 @@ import type { ProcessCredentialFiles } from "../credentials/execute-files.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { tenantTables } from "../tenants/migrations.ts";
 import { claimFunction, claimRows, type ClaimedRow } from "../tenants/claim.ts";
+import type { Tenant } from "../tenants/context.ts";
 
 export type ProcessKind = "build" | "dev-server" | "background";
 
@@ -39,7 +40,6 @@ interface NewProcessRecord {
   ttlMs: number;
   sessionRef?: string;
   runId?: string;
-  botActor?: string;
   credentialFiles?: ProcessCredentialFiles;
 }
 
@@ -49,7 +49,7 @@ export interface ProcessRegistry {
   listByScope(scopeId: string): Promise<ProcessRecord[]>;
   liveByScope(scopeId: string, now?: number): Promise<ProcessRecord[]>;
   listLive(now?: number): Promise<ProcessRecord[]>;
-  getMany(processIds: readonly string[]): Promise<ProcessRecord[]>;
+  getMany(tenant: Tenant, processIds: readonly string[]): Promise<ProcessRecord[]>;
   markStatus(processId: string, status: ProcessStatus): Promise<boolean>;
   credentialFiles(processId: string): Promise<ProcessCredentialFiles | null>;
   setCredentialFiles(processId: string, files: ProcessCredentialFiles | null): Promise<void>;
@@ -73,7 +73,6 @@ function newRecord(rec: NewProcessRecord, now: number): ProcessRecord {
     status: "running",
     ...(rec.sessionRef ? { sessionRef: rec.sessionRef } : {}),
     ...(rec.runId ? { runId: rec.runId } : {}),
-    ...(rec.botActor ? { botActor: rec.botActor } : {}),
   };
 }
 
@@ -125,11 +124,11 @@ export function createPostgresProcessRegistry(connectionString: string): Process
       id: "processes/registry/0007-bot-actor",
       statements: [
         "ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS bot_actor TEXT",
-        `CREATE OR REPLACE FUNCTION fill_process_session_bot_actors() RETURNS void LANGUAGE plpgsql AS $$ BEGIN IF to_regclass('runs') IS NOT NULL THEN UPDATE process_sessions p SET bot_actor = r.request::jsonb -> 'actor' ->> 'id' FROM runs r WHERE r.tenant_id = p.tenant_id AND r.id = p.run_id AND p.status = 'running' AND p.bot_actor IS NULL AND r.request::jsonb ->> 'botActor' = 'true'; END IF; END $$`,
+        `CREATE OR REPLACE FUNCTION fill_process_session_bot_actors() RETURNS void LANGUAGE plpgsql AS $$ BEGIN IF to_regclass('runs') IS NOT NULL THEN UPDATE process_sessions p SET bot_actor = CASE WHEN r.request::jsonb ->> 'botActor' = 'true' THEN coalesce(r.request::jsonb -> 'actor' ->> 'id', '') ELSE '' END FROM runs r WHERE r.tenant_id = p.tenant_id AND r.id = p.run_id AND p.status = 'running' AND p.bot_actor IS NULL; END IF; END $$`,
         claimFunction(
           "claim_live_bot_process_sessions",
           "bigint",
-          "SELECT fill_process_session_bot_actors(); SELECT tenant_id, process_id FROM process_sessions WHERE status = 'running' AND expires_at > $1 AND bot_actor IS NOT NULL",
+          "SELECT fill_process_session_bot_actors(); SELECT tenant_id, process_id FROM process_sessions WHERE status = 'running' AND expires_at > $1 AND bot_actor <> ''",
         ),
       ],
     },
@@ -151,24 +150,25 @@ export function createPostgresProcessRegistry(connectionString: string): Process
   };
   pg.registerMigration(credentialFilesMigration);
   let ready: Promise<void> | undefined;
-  const q: typeof pg.q = async (...args) => {
-    ready ??= pg
+  const migrated = () =>
+    (ready ??= pg
       .migrate(migration)
       .then(() => pg.migrate(purposeMigration))
       .then(() => pg.migrate(credentialFilesMigration))
       .catch((error) => {
         ready = undefined;
         throw error;
-      });
-    await ready;
+      }));
+  const q: typeof pg.q = async (...args) => {
+    await migrated();
     return pg.q(...args);
   };
   return {
     async register(rec) {
       const row = newRecord(rec, Date.now());
       await q(
-        `INSERT INTO process_sessions(process_id, scope_id, kind, command, started_at, expires_at, status, session_ref, run_id, sandbox_id, purpose, credential_files, bot_actor)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+        `INSERT INTO process_sessions(process_id, scope_id, kind, command, started_at, expires_at, status, session_ref, run_id, sandbox_id, purpose, credential_files)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
         [
           row.processId,
           row.scopeId,
@@ -182,7 +182,6 @@ export function createPostgresProcessRegistry(connectionString: string): Process
           row.sandboxId,
           row.purpose ?? null,
           rec.credentialFiles ? JSON.stringify(rec.credentialFiles) : null,
-          row.botActor ?? null,
         ],
       );
       return row;
@@ -211,8 +210,12 @@ export function createPostgresProcessRegistry(connectionString: string): Process
       );
       return rows.map(pgRowToRecord);
     },
-    async getMany(processIds) {
-      return (await q("SELECT * FROM process_sessions WHERE process_id = ANY($1)", [processIds])).map(pgRowToRecord);
+    async getMany(tenant, processIds) {
+      await migrated();
+      const rows = await pg
+        .forTenant(tenant)
+        .q("SELECT * FROM process_sessions WHERE tenant_id = $1 AND process_id = ANY($2)", [tenant.id, processIds]);
+      return rows.map(pgRowToRecord);
     },
     async listLive(now = Date.now()) {
       const rows = await q("SELECT * FROM process_sessions WHERE status = 'running' AND expires_at > $1", [now]);

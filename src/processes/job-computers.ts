@@ -21,7 +21,7 @@ export function claimBarredBotJobs(deps: {
   resources: Pick<SandboxResources, "get" | "resolve">;
   swarms: Pick<SwarmService, "botMayUseComputer"> | undefined;
 }): Promise<ClaimedRow[]> {
-  return claimThenLoad(deps.processes.claimLiveBotJobs, async (ids) => {
+  return claimThenLoad(deps.processes.claimLiveBotJobs, async (ids, tenant) => {
     const reads = new Map<string, Promise<boolean>>();
     const once = (key: unknown[], read: () => Promise<boolean>): Promise<boolean> => {
       const id = JSON.stringify(key);
@@ -49,8 +49,8 @@ export function claimBarredBotJobs(deps: {
           },
         ),
       );
-    const jobs = (await deps.processes.getMany(ids)).filter((job): job is ProcessRecord & { botActor: string } =>
-      Boolean(job.botActor),
+    const jobs = (await deps.processes.getMany(tenant, ids)).filter(
+      (job): job is ProcessRecord & { botActor: string } => Boolean(job.botActor),
     );
     const stops = await Promise.all(jobs.map(async (job) => ((await barred(job)) ? [{ id: job.processId }] : [])));
     return stops.flat();

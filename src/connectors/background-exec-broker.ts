@@ -17,7 +17,6 @@ export interface BackgroundExecBrokerDeps {
   scopeId: string;
   sessionRef?: string;
   runId?: string;
-  botActor?: string;
   ttlMs?: number;
   ttlMaxMs?: number;
   pollMs?: number;
@@ -184,7 +183,6 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
             ttlMs: ttl,
             ...(deps.sessionRef ? { sessionRef: deps.sessionRef } : {}),
             ...(deps.runId ? { runId: deps.runId } : {}),
-            ...(deps.botActor ? { botActor: deps.botActor } : {}),
             ...(credentials?.files ? { credentialFiles: credentials.files } : {}),
           });
         };

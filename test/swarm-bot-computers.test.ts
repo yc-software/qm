@@ -50,14 +50,15 @@ const forumSpawn = { requestId: "forum", text: "work", forumSandboxId: "shared-n
 
 type Fixture = Awaited<ReturnType<typeof swarmFixture>>;
 
-function channelSwarm(backend?: ProcessSandbox) {
+async function channelSwarm(backend?: ProcessSandbox) {
   const url = testDatabaseUrl();
-  return swarmFixture({
+  const fixture = await swarmFixture({
     ...(backend ? { backend } : {}),
     channel: "C1",
     sessions: createPostgresSessionStore(url),
     runs: createPostgresRunStore(url).runs,
   });
+  return Object.assign(fixture, { url });
 }
 type ToolResult = { content: Array<{ text?: string }> };
 type Tool = { execute: (id: string, params: unknown) => Promise<ToolResult> };
@@ -304,7 +305,7 @@ test("outside a swarm, a Slack bot's background job on its own computer is stopp
   const f = await channelSwarm(computers.backend);
   if (f.caller.kind !== "agent") throw new Error("wrong caller");
   await f.runs.complete(f.caller.claims.runId!, f.caller.claims.runLeaseToken!, { status: "ok", reply: "idle" });
-  const processes = createPostgresProcessRegistry(testDatabaseUrl());
+  const processes = createPostgresProcessRegistry(f.url);
   const stopped: string[] = [];
   const reaper = createProcessReaper(processes, {
     ...singleProcessDeps(),
@@ -325,8 +326,8 @@ test("outside a swarm, a Slack bot's background job on its own computer is stopp
   };
   await turn(releaseBot, true);
   const [botJob] = (await processes.listLive()).filter((job) => job.sandboxId === bots.id);
-  assert.equal(botJob?.botActor, releaseBot.id);
   await reaper.sweepNow();
+  assert.equal((await processes.get(botJob!.processId))?.botActor, releaseBot.id);
   const personJob = await processes.register({
     processId: `alice-${bots.id}`,
     scopeId: f.root.scopeId,
@@ -364,7 +365,7 @@ test("a Slack bot that started a swarm cannot list or use its computers once a p
   const f = await botSwarm();
   const swarm = (await f.store.get(f.root.id))!;
   const worker = swarm.members.find((member) => member.id !== swarm.id)!;
-  const processes = createPostgresProcessRegistry(testDatabaseUrl());
+  const processes = createPostgresProcessRegistry(f.url);
   const stopped: unknown[] = [];
   const instances = [1, 2].map(() =>
     createProcessReaper(processes, {
@@ -383,7 +384,7 @@ test("a Slack bot that started a swarm cannot list or use its computers once a p
     sweepProcesses: () => (swept = Promise.all([swept, ...instances.map((reaper) => reaper.sweepNow())])),
   });
   const botRun = (await f.runs.list()).find((run) => run.sessionId === f.root.threadRef && run.request.botActor)!;
-  await workerJob(f, processes, new Map(), "", botRun.id, releaseBot.id);
+  await workerJob(f, processes, new Map(), "", botRun.id);
   const { run } = await f.runs.enqueue({
     sessionId: f.root.threadRef,
     request: channelRequest(f, alice, false),
@@ -506,7 +507,7 @@ test("a bot's turn loses the swarm computer it already opened and is told to sto
   const swarm = (await f.store.get(f.root.id))!;
   const worker = swarm.members.find((member) => member.id !== swarm.id)!;
   await f.sandboxes.setDefault(alice.id, f.root.scopeId, swarm.board!.sandboxId);
-  const registry = createPostgresProcessRegistry(testDatabaseUrl());
+  const registry = createPostgresProcessRegistry(f.url);
   let lookupFailures = 0;
   const processes: ProcessRegistry = {
     ...registry,
@@ -548,7 +549,6 @@ test("a bot's turn loses the swarm computer it already opened and is told to sto
     command: "tail -f board.md",
     ttlMs: 600_000,
     runId: queued.id,
-    botActor: releaseBot.id,
   });
   const personSend = () =>
     service.send(
@@ -645,14 +645,7 @@ function jobComputers(beforeStart?: () => Promise<unknown>) {
   return { backend, output, reads };
 }
 
-async function workerJob(
-  f: Fixture,
-  processes: ProcessRegistry,
-  output: Map<string, string>,
-  text: string,
-  run = "",
-  botActor = "",
-) {
+async function workerJob(f: Fixture, processes: ProcessRegistry, output: Map<string, string>, text: string, run = "") {
   const swarm = (await f.store.get(f.root.id))!;
   const worker = swarm.members.find((member) => member.id !== swarm.id)!;
   const job = await processes.register({
@@ -664,7 +657,6 @@ async function workerJob(
     purpose: "the build",
     ttlMs: 600_000,
     ...(run ? { runId: run } : {}),
-    ...(botActor ? { botActor } : {}),
   });
   output.set(job.processId, text);
   return { job, worker };
