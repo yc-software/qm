@@ -1,4 +1,4 @@
-import { NonRetryableTurnError } from "../core/turn-error.ts";
+import { HeldTurnError, NonRetryableTurnError } from "../core/turn-error.ts";
 import { assertSwarmRun, type SwarmRunFence } from "./swarm-fence.ts";
 import { createHash, randomUUID } from "node:crypto";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
@@ -1056,6 +1056,8 @@ export function createSwarmService(deps: {
         return { sandboxId: member.sandboxId, rootSessionId: swarm.id, member };
       }
       assertSwarmOpen(swarm);
+      if (controlState(swarm, member.id) === "paused")
+        throw new HeldTurnError("swarm worker paused", SWARM_LIMITS.pausedRecheckMs);
       const message = swarm.messages.find((item) => item.id === input.swarm!.messageId);
       const dedup = message ? await runs.getByDedupKey(`swarm:${message.id}:${member.id}`) : null;
       const expected = message && dedup ? dispatchRequest(swarm, message, member) : null;
