@@ -89,7 +89,7 @@ import type {
 } from "../api/control-service.ts";
 import type { ShareArtifactRequest, ShareArtifactResult } from "../api/artifact-share.ts";
 import type { Cron, Webhook } from "../triggers/types.ts";
-import { scopeWorkClaims, type CapabilityClaims } from "../auth/capability-token.ts";
+import { scopeWorkClaims, type CapabilityClaims, type ScopeWorkClaims } from "../auth/capability-token.ts";
 import type { VisibleCron } from "../api/app.ts";
 import { createPlaygroundArtifact, type PlaygroundArtifact } from "../playgrounds/playground.ts";
 
@@ -537,6 +537,7 @@ export interface ToolContextDeps {
   monitorBroker?: MonitorBroker;
   control?: ControlService;
   controlClaims?: CapabilityClaims;
+  turnAuthority?: ScopeWorkClaims;
   webhookPublicUrl?: string;
   surface?: SurfaceToolDeps;
   attach?: AttachFiles;
@@ -556,7 +557,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
   const inWorkdir = (handle: SandboxHandle, command: string): string =>
     deps.workdir ? `cd ${shq(posixJoin(handle.rootDir, deps.workdir))} || exit 1\n${command}` : command;
   const { writableScopeId } = deps;
-  const managing = { botActor: deps.botActor, ...scopeWorkClaims(deps.controlClaims) };
+  const managing = { botActor: deps.botActor, ...scopeWorkClaims(deps.turnAuthority ?? deps.controlClaims) };
   const memory =
     deps.context?.memory ??
     (deps.memory

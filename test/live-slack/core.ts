@@ -6,6 +6,12 @@ import type { Item } from "../../src/sessions/items.ts";
 
 const ADMIN_PRINCIPAL = process.env.LIVE_E2E_ADMIN_PRINCIPAL || "admin-alice";
 
+export interface AmbientPolicy {
+  orders: string;
+  bots?: Record<string, unknown>;
+  ambientEnabled: boolean | null;
+}
+
 export interface SessionSummary {
   id: string;
   type?: string;
@@ -83,15 +89,16 @@ export class CoreClient {
     }
   }
 
-  setAmbientPolicy(channelId: string, orders: string, ambientEnabled: boolean | null): Promise<unknown> {
-    return this.request("PUT", `/v1/admin/scopes/${encodeURIComponent(`channel:${channelId}`)}/ambient-policy`, {
-      orders,
-      ambientEnabled,
-    });
+  setAmbientPolicy(channelId: string, policy: AmbientPolicy): Promise<unknown> {
+    return this.request("PUT", `/v1/admin/scopes/${encodeURIComponent(`channel:${channelId}`)}/ambient-policy`, policy);
   }
 
-  scopeConfig(scopeId: string): Promise<{ ambientPolicy?: { orders: string; ambientEnabled: boolean | null } }> {
-    return this.request("GET", `/v1/admin/scopes/${encodeURIComponent(scopeId)}`);
+  async ambientPolicy(channelId: string): Promise<AmbientPolicy | undefined> {
+    const config = (await this.request("GET", `/v1/admin/scopes/${encodeURIComponent(`channel:${channelId}`)}`)) as {
+      ambientPolicy?: AmbientPolicy;
+    };
+    const p = config.ambientPolicy;
+    return p && { orders: p.orders, bots: p.bots, ambientEnabled: p.ambientEnabled };
   }
 
   listSandboxes(scopeId: string): Promise<{

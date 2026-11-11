@@ -6,7 +6,7 @@ import { personAtKeyboard } from "../artifact-share.ts";
 import type { AdvisoryLock } from "../../persistence/advisory-lock.ts";
 import type { Loop, LoopState, LoopTriageConfig } from "../../loops/types.ts";
 import { scopeId, type ScopeId } from "../../types.ts";
-import { proactiveScopeWork, type CapabilityClaims } from "../../auth/capability-token.ts";
+import { proactiveScopeWork, unpromptedRefusal, type CapabilityClaims } from "../../auth/capability-token.ts";
 import type { LoopStore, CreateLoopInput, LoopPatch } from "../../loops/loop-store.ts";
 import { DECISION_LEASE_MS, type LoopItemLedger } from "../../loops/item-ledger.ts";
 import type { LoopOutputStore } from "../../loops/output-store.ts";
@@ -104,7 +104,7 @@ export async function loadAdministrable(
       error: "forbidden",
       message:
         acting.capability && proactiveScopeWork(acting.capability)
-          ? "unprompted work can't manage this conversation's loops; ask in the conversation so a person does it"
+          ? unpromptedRefusal("loops")
           : "you may not administer this loop",
     });
     return null;
@@ -205,6 +205,8 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
   if (!deps) return sendJson(ctx.res, 404, { error: "not_found", message: "loops are not wired on this deployment" });
   const acting = actingPrincipal(ctx);
   if (!acting) return;
+  if (ctx.capability && proactiveScopeWork(ctx.capability))
+    return sendJson(ctx.res, 403, { error: "forbidden", message: unpromptedRefusal("loops") });
   const b = isObj(ctx.body) ? ctx.body : {};
   if (b.icon !== undefined && !validLoopIcon(b.icon))
     return sendJson(ctx.res, 400, {

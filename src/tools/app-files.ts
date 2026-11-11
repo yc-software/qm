@@ -6,7 +6,7 @@ import type {
   SourceSaved,
 } from "../deploy/deploy-service.ts";
 import type { ScopeId } from "../types.ts";
-import { scopeWorkClaims, type CapabilityClaims } from "../auth/capability-token.ts";
+import { scopeWorkClaims, type ScopeWorkClaims } from "../auth/capability-token.ts";
 
 export interface AppFiles {
   readonly app: string;
@@ -22,7 +22,7 @@ export function createAppFiles(
     actorId: string;
     botActor?: boolean;
     actingScopeId: ScopeId;
-  } & Partial<Pick<CapabilityClaims, "scopeId" | "triggered" | "liveActor" | "origin">>,
+  } & ScopeWorkClaims,
 ): AppFiles {
   const { deploy, app } = deps;
   const caller = { actorId: deps.actorId, botActor: deps.botActor, ...scopeWorkClaims(deps) };

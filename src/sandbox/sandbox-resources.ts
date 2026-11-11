@@ -294,7 +294,7 @@ export function createSandboxResources(opts: {
     async retire(actorId, id, caller) {
       await initialize();
       const record = await agentRecord(actorId, id);
-      if (proactiveScopeWork({ botActor: undefined, ...caller, actorId }))
+      if (proactiveScopeWork({ ...caller, actorId }))
         throw new SandboxAccessError("unprompted work can't retire this conversation's computers");
       await opts.lock.withLock(`sandbox-resource:${id}`, () =>
         opts.lock.withLock(`sandbox-default:${record.ownerScopeId}`, async () => {

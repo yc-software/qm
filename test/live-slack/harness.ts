@@ -378,6 +378,14 @@ export class Ctx {
     return new ChannelHandle(this, id, name);
   }
 
+  async fixtureChannel(id: string): Promise<ChannelHandle> {
+    const { isPrivate, members } = await this.env.bot.channelPrivacy(id);
+    if (!isPrivate) throw new Error(`fixture channel ${id} is not private; refusing to continue`);
+    for (const user of [this.env.botUserId, this.env.qaUserId])
+      if (!members.includes(user)) throw new Error(`fixture channel ${id} is missing member ${user}`);
+    return new ChannelHandle(this, id, id);
+  }
+
   actor(name: string): Actor {
     const a = this.env.actors.get(name.toLowerCase());
     if (!a) throw new Error(`actor "${name}" not available (declare it in the scenario's actors[] and set its token)`);

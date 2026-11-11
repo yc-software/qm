@@ -1669,6 +1669,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           },
           config: deps.config,
           ...(controlClaims ? { controlClaims } : {}),
+          turnAuthority: {
+            scopeId,
+            ...(automatedTurn ? { triggered: true } : {}),
+            ...(scopeAttestation.liveActor ? { liveActor: true } : {}),
+            origin,
+          },
           ...(deps.control && controlClaims ? { control: deps.control } : {}),
           ...(deps.apiBaseUrl && connectorEnv.AGENT_API_TOKEN
             ? {

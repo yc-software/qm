@@ -41,8 +41,9 @@ interface BlobGrant {
   id?: string;
 }
 
-export type ManagingCaller = Pick<CapabilityClaims, "actorId" | "botActor"> &
-  Partial<Pick<CapabilityClaims, "scopeId" | "triggered" | "liveActor" | "origin">>;
+export type ScopeWorkClaims = Partial<Pick<CapabilityClaims, "scopeId" | "triggered" | "liveActor" | "origin">>;
+
+export type ManagingCaller = Pick<CapabilityClaims, "actorId" | "botActor"> & ScopeWorkClaims;
 
 export function proactiveScopeWork(c: ManagingCaller): boolean {
   return (
@@ -54,9 +55,7 @@ export function proactiveScopeWork(c: ManagingCaller): boolean {
   );
 }
 
-export function scopeWorkClaims(
-  c: Partial<Pick<CapabilityClaims, "scopeId" | "triggered" | "liveActor" | "origin">> | undefined,
-): Partial<Pick<CapabilityClaims, "scopeId" | "triggered" | "liveActor" | "origin">> {
+export function scopeWorkClaims(c: ScopeWorkClaims | undefined): ScopeWorkClaims {
   if (!c) return {};
   return {
     ...(c.scopeId !== undefined ? { scopeId: c.scopeId } : {}),
@@ -64,6 +63,10 @@ export function scopeWorkClaims(
     ...(c.liveActor !== undefined ? { liveActor: c.liveActor } : {}),
     ...(c.origin !== undefined ? { origin: c.origin } : {}),
   };
+}
+
+export function unpromptedRefusal(what: string): string {
+  return `unprompted work can't manage this conversation's ${what}; ask in the conversation so a person does it`;
 }
 
 export async function personOrOwningBot(

@@ -16,8 +16,9 @@ import {
   personOrOwningBot,
   proactiveScopeWork,
   scopeWorkClaims,
-  type CapabilityClaims,
+  unpromptedRefusal,
   type ManagingCaller,
+  type ScopeWorkClaims,
 } from "../auth/capability-token.ts";
 import { CONNECTOR_HOSTS } from "../connectors/oauth.ts";
 import { recordAuditInBinding, type AuditEvent, type AuditLog } from "../audit/audit-log.ts";
@@ -92,9 +93,7 @@ export interface SourceSaved {
   liveEdit?: LiveEditSaved;
 }
 
-export interface DeployOrUpdateInput extends Partial<
-  Pick<CapabilityClaims, "scopeId" | "triggered" | "liveActor" | "origin">
-> {
+export interface DeployOrUpdateInput extends ScopeWorkClaims {
   ownerScopeId: ScopeId;
   createdBy: string;
   botActor?: boolean;
@@ -916,7 +915,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         if (!(await canManage(existing, caller, input.createdInScope)))
           throw new Error(
             proactiveScopeWork(caller)
-              ? "unprompted work can't change this conversation's apps; ask in the conversation so a person does it"
+              ? unpromptedRefusal("apps")
               : `not authorized to manage deployment: ${input.renameFrom}`,
           );
         const clash = await deps.deployStore.getByName(input.name);
@@ -954,7 +953,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         if (!(await canManage(existing, caller, input.createdInScope)))
           throw new Error(
             proactiveScopeWork(caller)
-              ? "unprompted work can't change this conversation's apps; ask in the conversation so a person does it"
+              ? unpromptedRefusal("apps")
               : `not authorized to manage deployment: ${input.name}`,
           );
         await this.rollbackDeployment(existing.id, input.rollbackTo, {
@@ -975,7 +974,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         if (!(await personOrOwningBot(caller, async () => samePerson(existing.createdBy, caller.actorId))))
           throw new Error(
             proactiveScopeWork(caller)
-              ? "unprompted work can't change this conversation's apps; ask in the conversation so a person does it"
+              ? unpromptedRefusal("apps")
               : `not authorized to manage deployment: ${input.name}`,
           );
         const entrypoint = requiredEntrypoint(input.entrypoint, existing);

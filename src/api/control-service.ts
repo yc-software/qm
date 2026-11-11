@@ -8,6 +8,7 @@ import type { CreateWebhookInput } from "../webhooks/webhook-store.ts";
 import {
   personOrOwningBot,
   proactiveScopeWork,
+  unpromptedRefusal,
   type CapabilityClaims,
   type ManagingCaller,
 } from "../auth/capability-token.ts";
@@ -213,17 +214,14 @@ async function ownsCron(
 }
 
 function shareRefusal(caller: ManagingCaller, what: string): string {
-  if (proactiveScopeWork(caller))
-    return "unprompted work can't share this conversation's things; ask in the conversation so a person does it";
+  if (proactiveScopeWork(caller)) return unpromptedRefusal("shares");
   return what === "cron"
     ? "only the cron's owner can share it"
     : `only the ${what}'s owner (or a member of its shared home) can share or move it`;
 }
 
 export function notYours(what: string, caller: ManagingCaller): string {
-  return proactiveScopeWork(caller)
-    ? `unprompted work can't manage this conversation's ${what}s; ask in the conversation so a person does it`
-    : `not your ${what}`;
+  return proactiveScopeWork(caller) ? unpromptedRefusal(`${what}s`) : `not your ${what}`;
 }
 
 export async function canAdministerCron(
@@ -378,6 +376,8 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     });
   return {
     async createCron(req, capability, trial): Promise<CronCreateResult> {
+      if (proactiveScopeWork(capability))
+        return { ok: false, code: "forbidden", message: unpromptedRefusal("schedules") };
       if (req.action === undefined && req.text === undefined) {
         return { ok: false, code: "bad_request", message: "task (what to do) or text (exact text to send) required" };
       }

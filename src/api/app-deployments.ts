@@ -56,7 +56,9 @@ export function createDeploymentMethods(
   const { effectiveDeploymentPermission, principalCanReadDeployment, principalGitPermission } = h;
   async function callerGitPermission(d: Deployment, caller: ManagingCaller): Promise<"read" | "write" | null> {
     const permission = await principalGitPermission(d, caller.actorId);
-    if (permission !== "write" || (caller.botActor !== true && !proactiveScopeWork(caller))) return permission;
+    if (permission !== "write") return permission;
+    if (proactiveScopeWork(caller)) return "read";
+    if (caller.botActor !== true) return permission;
     return (await deps.deploy.canManageDeployment(d.id, caller)) ? "write" : "read";
   }
   const invitationLock = deps.advisoryLock;

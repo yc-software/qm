@@ -9,7 +9,12 @@ import type { Agent } from "../src/agent/agent.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { mintCapabilityToken, verifyCapabilityToken, type CapabilityClaims } from "../src/auth/capability-token.ts";
+import {
+  mintCapabilityToken,
+  unpromptedRefusal,
+  verifyCapabilityToken,
+  type CapabilityClaims,
+} from "../src/auth/capability-token.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createCanReadScope, createCanWriteScope } from "../src/resolution/scope-membership.ts";
@@ -31,6 +36,8 @@ const policies = { partner: { companyDomains: ["acme.com"], companyTeamIds: ["TI
 const source = { account: "default", workspace: "TINTERNAL", assistant: "UBOT" };
 const notMember = (channel: string) =>
   `can't currently be confirmed as a member of channel:${channel}, so helpers can't run here; nothing was started or sent.`;
+const schedulesRefusal = unpromptedRefusal("schedules");
+const loopsRefusal = unpromptedRefusal("loops");
 const manageRefusal = (what: string) =>
   `unprompted work can't manage this conversation's ${what}s; ask in the conversation so a person does it`;
 const outcome = (p: Promise<unknown>): Promise<string> =>
@@ -251,11 +258,13 @@ for (const wake of ["message", "scheduled"] as const)
         )) === "ok",
       privateChannelGate: await built.app.authorizesCapabilityScope(c),
     });
-    const http = async (token: string, method: string, path: string) => {
+    const http = async (token: string, method: string, path: string, payload?: object) => {
       const res = await fetch(`${base}${path}`, {
         method,
         headers: { "x-agent-capability": token, "content-type": "application/json" },
-        ...(method === "GET" ? {} : { body: JSON.stringify(method === "PATCH" ? { title: "renamed" } : {}) }),
+        ...(method === "GET"
+          ? {}
+          : { body: JSON.stringify(payload ?? (method === "PATCH" ? { title: "renamed" } : {})) }),
       });
       const body = (await res.json().catch(() => ({}))) as { message?: string; crons?: Array<{ id: string }> };
       return method === "GET"
@@ -297,6 +306,11 @@ for (const wake of ["message", "scheduled"] as const)
         legacyListsCrons: await http(legacyToken, "GET", "/v1/crons"),
         parentPatchesCron: await http(tokenByThread.get(parentRef)!, "PATCH", `/v1/crons/${cron.id}`),
         childDisablesCron: await http(tokenByThread.get(childRef!)!, "POST", `/v1/crons/${cron.id}/disable`),
+        childCreatesCron: await http(tokenByThread.get(childRef!)!, "POST", "/v1/crons", {
+          schedule: { everyMs: 3_600_000 },
+          action: "post the deal notes",
+        }),
+        parentCreatesLoop: await http(tokenByThread.get(parentRef)!, "POST", "/v1/loops"),
         parentDisablesWebhook: await http(tokenByThread.get(parentRef)!, "POST", `/v1/webhooks/${webhook.id}/disable`),
       },
     };
@@ -352,6 +366,54 @@ for (const wake of ["message", "scheduled"] as const)
         parentPatchesCron: [403, manageRefusal("cron")],
         childDisablesCron: [403, manageRefusal("cron")],
         parentDisablesWebhook: [403, manageRefusal("webhook")],
+        childCreatesCron: [403, schedulesRefusal],
+        parentCreatesLoop: [403, loopsRefusal],
       },
+    });
+  });
+
+for (const [label, overrides] of [
+  ["no public API URL", { signingSecret: "test-ingress-signing-key-with-enough-length", apiBaseUrl: undefined }],
+  ["no token configuration", { signingSecret: undefined, apiBaseUrl: undefined }],
+] as const)
+  test(`unprompted work is refused management with ${label}`, async (t) => {
+    const mock = createMockAgent();
+    const acted: Record<string, string> = {};
+    const agent: Agent = {
+      ...mock,
+      async runTurn(turn) {
+        if (!turn.session.threadRef.startsWith("slack:C-deals:ambient:") || acted.create) return mock.runTurn(turn);
+        let id = "";
+        acted.create = await outcome(
+          turn.tools.sandboxResources!("create", { backend: "sprites", name: "lookup" }).then((r) => {
+            id = (r as { id: string }).id;
+          }),
+        );
+        acted.default = await outcome(turn.tools.sandboxResources!("default", { sandboxId: null }));
+        acted.retire = await outcome(turn.tools.sandboxResources!("retire", { sandboxId: id }));
+        await turn.tools.execute("mkdir -p site && echo 'require(\"http\")' > site/server.js");
+        acted.publish = await outcome(turn.tools.publish({ dir: "site", entrypoint: "node server.js", name: "notes" }));
+        return { reply: "done", modelCalls: 1 };
+      },
+    };
+    const built = buildApp(testConfig({ externalSlackPolicies: policies, ...overrides }), { agent });
+    built.runtime.start();
+    t.after(() => built.runtime.stop());
+    await built.directory.replace([{ principalId: "a@x.com", displayName: "A", type: "internal", slackId: "U-A" }]);
+    await built.directory.replaceChannels(
+      [{ channelId: "C-deals", name: "deals", isPrivate: true }],
+      [{ channelId: "C-deals", principalId: "a@x.com" }],
+    );
+    await selectDefaultSandbox(built, "a@x.com", scopeId("channel", "C-deals"));
+    await built.app.setChannelPolicy("C-deals", "!engage watch for memos", "U-admin");
+    await built.app.ingestSurfaceEvents([
+      { container: "C-deals", ts: "9.1", authorId: "U-A", authorName: "A", text: "memo?", createdAt: 1, source },
+    ]);
+    await settle(async () => !!acted.publish);
+    assert.deepEqual(acted, {
+      create: "ok",
+      default: "refused: unprompted work can't change this conversation's default computer",
+      retire: "refused: unprompted work can't retire this conversation's computers",
+      publish: "refused: unprompted work can't publish a new app; ask in the conversation so a person publishes it",
     });
   });
