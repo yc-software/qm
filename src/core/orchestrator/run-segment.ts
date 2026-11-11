@@ -29,6 +29,7 @@ export function segmentEnvironment(segment: {
   memoryHeading: string;
   inboundIssues: Parameters<typeof inboundIssuesNote>[0];
   documentInputs: { notices: readonly string[] };
+  appSource: string;
   continueTurn: boolean;
 }) {
   const {
@@ -50,6 +51,7 @@ export function segmentEnvironment(segment: {
     memoryHeading,
     inboundIssues,
     documentInputs,
+    appSource,
     continueTurn,
   } = segment;
   const recall = memoryRecallDelta(
@@ -83,7 +85,7 @@ export function segmentEnvironment(segment: {
       .filter(Boolean)
       .join("\n\n"),
   );
-  const environment = [turnEnvironment, ...documentInputs.notices].filter(Boolean).join("\n");
+  const environment = [turnEnvironment, ...documentInputs.notices, appSource].filter(Boolean).join("\n");
   const silentResume = continueTurn && !continuation && !snapshot.text && !guidance?.text && !recall.text;
   return { recall, snapshot, guidance, environment, silentResume };
 }
