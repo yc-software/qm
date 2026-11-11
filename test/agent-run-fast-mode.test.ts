@@ -473,7 +473,7 @@ test("a refusal fallback prices each step on its actual model and tier", async (
       [1, "claude-opus-5"],
     ],
   );
-  assertUsd(rows[0]!.usage!.costUsd, 0.03); // a stop_reason refusal is a billed 200 response
+  assertUsd(rows[0]!.usage!.costUsd, 0.03);
   assertUsd(rows[1]!.usage!.costUsd, 0.15);
 });
 
@@ -510,6 +510,25 @@ test("an Ultrafast turn OpenAI serves at another tier is priced at the base mode
     const { rows } = await runTurn(`astra-ultrafast-served-${served ?? "silent"}`, "gpt-6-astra-ultrafast", false, () =>
       responsesReply("done", ASTRA_WIRE_USAGE, served),
     );
+    assertUsd(rows[0]!.usage!.costUsd, cost);
+  }
+});
+
+test("a Claude turn is priced at the speed the provider served, whatever speed was requested", async () => {
+  for (const [requested, served, cost] of [
+    [true, "fast", 0.15],
+    [true, "standard", 0.075],
+    [true, undefined, 0.15],
+    [false, "fast", 0.15],
+    [false, "standard", 0.075],
+  ] as const) {
+    const { rows, payloads } = await runTurn(
+      `opus-served-${requested}-${served ?? "silent"}`,
+      "claude-opus-5",
+      requested,
+      () => anthropicReply("done", { ...ANTHROPIC_WIRE_USAGE, ...(served ? { speed: served } : {}) }),
+    );
+    assert.equal(payloads[0]!.speed, requested ? "fast" : undefined);
     assertUsd(rows[0]!.usage!.costUsd, cost);
   }
 });

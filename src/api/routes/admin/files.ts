@@ -22,7 +22,7 @@ export async function readAdminFile(ctx: ApiCtx): Promise<void> {
   if (!art) return sendJson(res, 404, { error: "not_found" });
   const actor = await authorizeAdmin(ctx, art.ownerScopeId);
   if (!actor) return;
-  audit(deps, { principalId: actor.id, action: "file.read", resource: art.path, scopeLabel: art.ownerScopeId });
+  audit(ctx, { principalId: actor.id, action: "file.read", resource: art.path, scopeLabel: art.ownerScopeId });
   const opened = await deps.files.open(id);
   if (!opened) return sendJson(res, 404, { error: "not_found" });
   const chunks: Buffer[] = [];
@@ -62,7 +62,7 @@ export async function downloadAdminFile(ctx: ApiCtx): Promise<void> {
   if (!actor) return;
   const mime = art.mimetype.split(";")[0]!.trim().toLowerCase();
   const inline = /^(image\/(png|jpeg|gif|webp|avif|bmp)|application\/pdf|text\/plain)$/.test(mime);
-  audit(deps, {
+  audit(ctx, {
     principalId: actor.id,
     action: inline ? "file.view" : "file.download",
     resource: art.path,
@@ -87,7 +87,7 @@ export async function listAdminFiles(ctx: ApiCtx): Promise<void> {
   if (!authz) return;
   const { actor, scope } = authz;
   const nameQuery = (url.searchParams.get("q") ?? "").trim();
-  audit(deps, { principalId: actor.id, action: "files.read", resource: "files", scopeLabel: scope });
+  audit(ctx, { principalId: actor.id, action: "files.read", resource: "files", scopeLabel: scope });
   if (!deps.files) return sendJson(res, 200, { scopeId: scope, files: [] });
   const orgWide = parseScopeId(scope).kind === "org";
   const scopes = orgWide ? [...(await discoverScopes(app, deps, tenantOf(ctx))).keys()] : [scope];
@@ -168,7 +168,7 @@ export async function uploadAdminFile(ctx: ApiCtx): Promise<void> {
       createdInScope: scope,
       maxBytes: MAX_ATTACHMENT_BYTES,
     });
-    audit(deps, { principalId: actor.id, action: "file.upload", resource: path, scopeLabel: scope });
+    audit(ctx, { principalId: actor.id, action: "file.upload", resource: path, scopeLabel: scope });
     return sendJson(res, 200, {
       file: {
         id: artifact.id,

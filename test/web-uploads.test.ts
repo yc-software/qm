@@ -14,7 +14,7 @@ import { stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { browserImpersonationCookie, browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 import { signedHeaders, withSourceAuthNonce } from "../plugins/chassis/src/core-client.ts";
-import { BlobTooLargeError } from "../src/persistence/blob-transfer.ts";
+import { BlobTooLargeError, type BlobInfo } from "../src/persistence/blob-transfer.ts";
 
 const SIGNING = "web-uploads-signing-secret-0123456789";
 
@@ -32,6 +32,7 @@ async function core(t: TestContext, overrides: (deps: Deps) => Partial<Deps> = (
 }
 
 const sha = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
+const tap = <T>(seen: PromiseWithResolvers<T>, put: Promise<T>) => (seen.resolve(put), put);
 
 const upload = (base: string, path: string, cookie: string, body: Buffer, contentType = "text/plain") =>
   fetch(`${base}${path}`, {
@@ -119,24 +120,25 @@ test("an admin upload streams into the scope's files and refuses non-admins, imp
 });
 
 test("an upload the browser abandons midway leaves no partial blob and the server keeps serving", async (t) => {
-  const { base, port, transferDir } = await core(t);
+  const staged = Promise.withResolvers<BlobInfo>();
+  const { base, port, transferDir } = await core(t, ({ blobTransfer }) => ({
+    blobTransfer: { ...blobTransfer!, put: (...args) => tap(staged, blobTransfer!.put(...args)) },
+  }));
   const bytes = Buffer.alloc(2 * 1024 * 1024, 1);
-  await new Promise<void>((resolve) => {
-    const req = request({
-      host: "127.0.0.1",
-      port,
-      method: "POST",
-      path: `/api/blobs?sha=${sha(bytes)}`,
-      headers: {
-        cookie: browserSessionCookie("alice"),
-        origin: browserSessionDeps.portalUrl,
-        "content-length": String(bytes.length),
-      },
-    });
-    req.on("error", () => resolve());
-    req.write(bytes.subarray(0, 512 * 1024), () => setTimeout(() => req.destroy(), 100));
+  const req = request({
+    host: "127.0.0.1",
+    port,
+    method: "POST",
+    path: `/api/blobs?sha=${sha(bytes)}`,
+    headers: {
+      cookie: browserSessionCookie("alice"),
+      origin: browserSessionDeps.portalUrl,
+      "content-length": String(bytes.length),
+    },
   });
-  await new Promise((resolve) => setTimeout(resolve, 300));
+  req.on("error", () => undefined);
+  req.write(bytes.subarray(0, 512 * 1024), () => setTimeout(() => req.destroy(), 100));
+  await assert.rejects(staged.promise);
   assert.deepEqual(await readdir(transferDir).catch(() => []), []);
   const small = Buffer.from("still here");
   const after = await upload(base, `/api/blobs?sha=${sha(small)}`, browserSessionCookie("alice"), small);
@@ -217,7 +219,7 @@ test("an upload past the size limit gets its 413 while the browser is still send
 test("an admin upload dropped while its grant check is still running settles and leaves nothing staged", async (t) => {
   let dropped!: () => void;
   const clientGone = new Promise<void>((resolve) => (dropped = resolve));
-  let settled: "ok" | "rejected" | null = null;
+  const staged = Promise.withResolvers<BlobInfo>();
   const { port, transferDir } = await core(t, (deps) => ({
     admin: Object.assign(Object.create(deps.admin!), {
       listGrants: async (tenant: Tenant) => {
@@ -225,16 +227,10 @@ test("an admin upload dropped while its grant check is still running settles and
         return deps.admin!.listGrants(tenant);
       },
     }),
-    blobTransfer: Object.assign(Object.create(deps.blobTransfer!), {
-      put: (...args: Parameters<NonNullable<Deps["blobTransfer"]>["put"]>) =>
-        deps.blobTransfer!.put(...args).then(
-          (info) => ((settled = "ok"), info),
-          (error: unknown) => {
-            settled = "rejected";
-            throw error;
-          },
-        ),
-    }),
+    blobTransfer: {
+      ...deps.blobTransfer!,
+      put: (...args) => tap(staged, deps.blobTransfer!.put(...args)),
+    },
   }));
   const bytes = Buffer.alloc(64 * 1024, 1);
   const req = request({
@@ -255,7 +251,6 @@ test("an admin upload dropped while its grant check is still running settles and
       setTimeout(dropped, 50);
     }, 50),
   );
-  for (let i = 0; i < 40 && settled === null; i++) await new Promise((resolve) => setTimeout(resolve, 50));
-  assert.equal(settled, "rejected");
+  await assert.rejects(staged.promise);
   assert.deepEqual(await readdir(transferDir).catch(() => []), []);
 });

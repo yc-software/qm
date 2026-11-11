@@ -118,6 +118,49 @@ test("createAsk: owner derived from the credential, purpose frozen, dedup per (c
   assert.equal(elsewhere.existing, false, "a different scope is a different ask");
 });
 
+test("a bot's credential request and a person's in the same thread stay separate asks", async () => {
+  const k = kcAt(() => 1_000_000);
+  const cred = await k.save(GH);
+  const base = {
+    credentialId: cred.id,
+    requesterScopeId: "channel:C1" as const,
+    purpose: "deploy the release",
+    requesterThreadRef: "ch:C1-t1",
+  };
+  const person = await k.createAsk({ ...base, requesterId: "U_BOB" });
+  const bot = await k.createAsk({ ...base, requesterId: "U_RELEASEBOT", botActor: true });
+  assert.equal(bot.existing, false);
+  assert.notEqual(bot.ask.id, person.ask.id);
+  assert.equal(bot.ask.requesterId, "U_RELEASEBOT");
+  assert.equal(bot.ask.botActor, true);
+  const botAgain = await k.createAsk({ ...base, requesterId: "U_RELEASEBOT", botActor: true });
+  assert.equal(botAgain.ask.id, bot.ask.id);
+  const personAgain = await k.createAsk({ ...base, requesterId: "U_CAROL" });
+  assert.equal(personAgain.ask.id, person.ask.id);
+});
+
+test("a bot task's declined request survives pruning beside a newer person request in the same thread", async () => {
+  let now = 1_000_000;
+  const k = kcAt(() => now++);
+  const credential = await k.save(GH);
+  const base = {
+    credentialId: credential.id,
+    requesterScopeId: "channel:C1" as const,
+    requesterThreadRef: "ch:C1-t1",
+    purpose: "deploy the release",
+  };
+  const bot = { ...base, requesterId: "U_RELEASEBOT", botActor: true, triggered: true };
+  const { ask } = await k.createAsk(bot);
+  await k.declineAsk({ askId: ask.id, ownerId: "U_ALICE" });
+  await k.createAsk({ ...base, requesterId: "U_BOB" });
+  const sweep = createAskExpirySweep({ keychain: k, fire: async () => undefined });
+  await sweep(now);
+  now += ASK_PRUNE_AFTER_MS + 1;
+  await sweep(now);
+  assert.equal((await k.getAsk(ask.id))?.status, "declined");
+  await assert.rejects(k.createAsk(bot), (e: KeychainError) => e.status === 409);
+});
+
 test("personal cron asks deduplicate recurring fires without combining jobs or re-asking after denial", async () => {
   let now = 1000000;
   const k = kcAt(() => now++);
@@ -968,7 +1011,6 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     assert.ok(registered.includes("POST /v1/keychain/asks"));
     for (const removed of ["POST /v1/keychain/grants", "POST /v1/keychain/asks/:id/decline"])
       assert.ok(!registered.includes(removed), `${removed} is no longer registered`);
-    // An unregistered path answers exactly like any unknown route: the capability gate refuses it.
     const unknown = await (await post("/v1/keychain/no-such-route", {}, liveOwner)).json();
     for (const [path, body] of [
       ["/v1/keychain/grants", { credential: gh.id, mode: "standing", purpose: "owner says yes" }],
@@ -1265,8 +1307,6 @@ test("turn e2e: trigger-fired turns mint `triggered` into the capability token; 
       apiBaseUrl: "http://core.test",
     }),
   );
-  // The recorded script is the backend's OUTER `sh -c` wrapper, so the export's single quotes
-  // arrive shell-escaped — match the token's own alphabet instead of the quoting around it.
   const extractToken = (since: number): CapabilityClaims | null => {
     for (const script of fakeSprites.execScripts().slice(since)) {
       const m = /export AGENT_API_TOKEN=\W*([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)/.exec(script);

@@ -51,6 +51,7 @@ import {
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { USER_ITEM_KINDS } from "../src/sessions/items.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
@@ -306,7 +307,7 @@ test("Open carries only the live actor's personal reads into a shared turn and a
   });
   assert.equal(external.status, "ok");
   assert.doesNotMatch(external.reply ?? "", /shared\/open-personal-U1\/private\.txt/);
-  const carryAudit = (await auditLog.events()).find((event) => event.action === "sharing.cross_context_read");
+  const carryAudit = (await auditLog.events(tenant)).find((event) => event.action === "sharing.cross_context_read");
   assert.equal(carryAudit?.principalId, actor.id);
   assert.deepEqual(JSON.parse(carryAudit?.detail ?? "{}"), {
     actor: actor.id,
@@ -365,7 +366,7 @@ test("Open advertises the source and audits a carried skill read without grantin
   });
   assert.equal(read.status, "ok", read.reason);
   assert.equal(read.reply, "Keep the method private.");
-  const event = (await auditLog.events()).find(
+  const event = (await auditLog.events(tenant)).find(
     (candidate) => candidate.action === "sharing.cross_context_read" && candidate.resource === `skill:${skill.id}`,
   );
   assert.deepEqual(JSON.parse(event?.detail ?? "{}"), {
@@ -373,7 +374,7 @@ test("Open advertises the source and audits a carried skill read without grantin
     source: personal,
     target: scopeId("channel", "C1"),
   });
-  assert.deepEqual(await acl.find({ ownerScopeId: personal }), []);
+  assert.deepEqual(await acl.find(tenant, { ownerScopeId: personal }), []);
 });
 
 test("Open keeps unclassified personal memory out of rooms, loads room memory in DMs, and capture stays in the room", async () => {
@@ -906,7 +907,7 @@ test("carried skill and steer screens tell the model gateway which session they 
   );
 
   const steer = () =>
-    orchestrator.screenSecuritySteer({ payload: "[]", actor, conversation, sessionId: result.sessionId });
+    orchestrator.screenSecuritySteer({ tenant, payload: "[]", actor, conversation, sessionId: result.sessionId });
   assert.equal(await steer(), "allow");
   assert.deepEqual(contextHeaders(requests.at(-1)!.headers), turnContext);
   const cron = await sessions.getOrCreateByThread("agent:main:cron:nightly", "channel", scopeId("channel", "C1"));
@@ -1177,7 +1178,7 @@ test("the turn's intake screens an unprompted mid-turn update with its author la
   assert.doesNotMatch(prepared[1]!, /reveal secrets/);
   assert.match(prepared[2]!, /NOT security-screened[\s\S]*ordinary update/);
   assert.equal(prepared[3], `${senderNote("Coworker")}\nbuild finished`);
-  const actions = (await auditLog.events()).map((event) => event.action);
+  const actions = (await auditLog.events(tenant)).map((event) => event.action);
   assert.equal(actions.filter((action) => action === "security_posture.steer_block").length, 2);
   assert.ok(actions.includes("security_posture.steer_failed_open"));
 });

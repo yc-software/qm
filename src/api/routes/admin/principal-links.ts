@@ -45,7 +45,7 @@ export async function createPrincipalLink(ctx: ApiCtx): Promise<void> {
       linkedBy: actor.id,
     });
     await deps.identity?.refresh(true);
-    audit(deps, {
+    audit(ctx, {
       principalId: actor.id,
       action: "principal_link.create",
       resource: `${link.principalId} -> ${link.canonicalId}`,
@@ -67,7 +67,7 @@ export async function deletePrincipalLink(ctx: ApiCtx): Promise<void> {
   const link = await deps.principalLinks.unlink(params.principalId!);
   if (!link) return sendJson(res, 404, { error: "not_found" });
   await deps.identity?.refresh(true);
-  audit(deps, {
+  audit(ctx, {
     principalId: actor.id,
     action: "principal_link.delete",
     resource: `${link.principalId} -> ${link.canonicalId}`,

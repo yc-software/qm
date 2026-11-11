@@ -190,9 +190,6 @@ function credentialCard(c: KeychainCredential): TemplateResult {
   `;
 }
 
-// Raw Slack IDs (C0…, G0…) mean nothing to people — always prefer a resolved
-// name, and fall back to a human description. The raw ID appears only as a
-// parenthetical of last resort, to disambiguate when no name is available.
 function scopeName(scope: string): string {
   const resolved = keychainScopeNames[scope];
   if (resolved) return resolved;

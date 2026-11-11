@@ -20,7 +20,7 @@
 
 **Scopes.** The original model was one OpenClaw per-person or per-channel. That means isolated compute, memory, files, crons, and apps. Breaking through that isolation requires an explicit and auditable _grant_.
 
-**Sandboxes.** In OpenClaw and similar systems – the agent’s computer is home, but also a prison. In QM, no sandbox is precious. Parallel computation is encouraged, and durable state should be written in either Postgres or object storage wherever possible to enable that. Management and provisioning of compute is generally left to the model. This allows it to use its intelligence in the deployment of resources as it deems necessary.
+**Sandboxes.** In OpenClaw and similar systems – the agent’s computer is home, but also a prison. In QM, no sandbox is precious. Parallel computation is encouraged, and durable state should be written in either Postgres or object storage wherever possible to enable that. Management and provisioning of compute is generally left to the model. This allows it to use its intelligence in the deployment of resources as it deems necessary. To make that call it needs to see load: every command on a sandbox resource reports one provider-independent load sample (IO pressure when the kernel exposes it, load average, memory, workdir disk), the latest is kept per sandbox in Postgres, and the turn environment carries a one-line summary of the default sandbox whenever it is shared or strained. The infrastructure never moves or refuses work because of load; the agent decides.
 
 **Credentials.** The most secure configuration is a secret that the agent never sees. Unfortunately, the world was not designed with agents in mind. Certain operations become awkward or impossible under this rule. So, in keeping with our capabilities-first north star – we allow escape hatches that trade off some level of security (for example, on-disk credentials that could in principle be lost to a prompt injected agent) to be used at the operators’ discretion.
 
@@ -34,7 +34,11 @@
 
 ## Wall of shame
 
-Patterns from this repo's history, with the PRs that introduced or removed them. Lenses marked _always reviewed_ get a reviewer on every PR; triage cannot mark them not relevant.
+Patterns from this repo's history, with the PRs that introduced or removed them. Lenses marked _always reviewed_ get a reviewer on every PR; triage cannot mark them not relevant. Lenses marked _checked by CI_ are computed from the diff and get no reviewer.
+
+**Findings decide the verdict.** A reviewer takes one lens. Read it and its examples, then the PR's whole diff and the code it touches. A finding is a problem under that lens that the PR introduces or makes worse, confirmed in the code: where it is in the PR, the evidence (for Duplication and Hand-rolling, the existing owner), and the smallest fix. Any finding means **request changes**; none means **accept**. That a problem is small, could wait for a later PR, or matches existing code is no reason to accept it; tolerating it is a maintainer's call, not the reviewer's. Notes are only for what you could not confirm; they decide nothing. Return the verdict, the findings and notes, a score out of 100 (higher is better; informational), and 1–2 sentences of assessment.
+
+A finding ends one of three ways: it is fixed and a fresh reviewer of the new diff does not raise it, a judge drops it, or a maintainer waives the lens. A judge is a fresh agent given only the finding as the reviewer wrote it, the PR's whole diff and the repository, and the PR description as it stood when the finding was raised. It drops a finding only when the finding is wrong about the code, is not an instance of the lens, predates the PR and is not made worse by it, or cannot be fixed without losing the behavior the PR is for. How the PR builds that behavior is not its purpose. Each finding is judged once; the ruling stands if the finding is raised again. A lens is accepted once none of its findings stands.
 
 ### Overengineering (always reviewed, 6 examples)
 
@@ -202,9 +206,9 @@ Growing the codebase to keep every path it ever took alive. The canonical case: 
 - **Session tape beside session entries** (2026-09-16): The tape was meant to replace `session_entries`, but caution kept both. `SESSION_TAPE_MODE` shadow/serve chose between them, exact-transcript annotations were added so the tape could reproduce every historical field, and a verifying, lease-aware operator backfill with dry runs and partial-scan statuses guarded the cutover. We got stuck here for weeks; one migration and a hard cutover would have left one system instead of two. _Status:_ both are gone. Code reads and writes only `items`; deployed databases have copied their older history into it and dropped `session_tape`, `session_entries` and the separate search table, and fresh databases start from one base schema.
 - **Legacy Inbox loop:** `src/loops/inbox-migration.ts` migrates each owner's legacy Inbox loop at runtime, with its own phase record in UI-state preferences, a pause-and-disable sequence, and a repair path for half-finished runs. _Status:_ deleted in [qm#2925](https://github.com/yc-software/qm/pull/2925).
 
-### Over-testing
+### Over-testing (checked by CI)
 
-Description and examples pending human input.
+A PR's net test lines (added minus removed) must not exceed the source lines it adds. Remove or reshape existing tests to stay within that. Test lines are lines in files under a `test`, `tests` or `*Tests` directory or with `.test.` in the name; every other file except lockfiles and Markdown is source.
 
 ### Prod-like QA (2 examples)
 
@@ -229,10 +233,3 @@ Tokens are the hot path. Anything sent to the model on every turn is paid for on
 - **Per-turn `<environment>` note:** Memory, scheduled-work snapshots, and time blocks ride along with every turn whether or not the request needs them. The whole memory notebook is sent at session start and after compaction, then as deltas; on a long-lived DM that is hundreds of bullets. The spec describes vector recall, but the whole notebook is sent. _Status:_ [qm#2698](https://github.com/yc-software/qm/pull/2698) moves scheduled work and the other inventories into the system block and leaves only the sender, time, per-message events and memory recall per turn; memory recall is still present on main.
 - **Redundant system prompt:** The same instructions appear more than once: scope guidance that copies the org block and adds to it is re-sent in full (only exact matches are skipped), and every credential is listed twice (as execute handles and again as keychains), on top of a full skills index and a shared-file listing. Caching softens the price, not the attention cost. _Status:_ [qm#2698](https://github.com/yc-software/qm/pull/2698) lists each credential once, one line per handle, and replaces the shared-file listing with a count; the duplicated scope guidance remains on main.
 - **Per-fact provenance in memory:** Each remembered fact carries its own date and scope tag, and the same fact recalled from two scopes is printed twice, so the boilerplate grows linearly with the notebook. Dedupe across scopes when rendering, save each fact once, and state provenance once per group. _Status:_ still present on main.
-
-### Honorable mentions
-
-These can be addressed by a single combined reviewer.
-
-- **Screenshots:** The repo is not to be cluttered with screenshots or images of any kind that aren't actually used in UI.
-- **Code comments:** Not allowed -- these historically have reinforced drift and reward-hacky agent decisions, providing air cover for future agents to do the same.

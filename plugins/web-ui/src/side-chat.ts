@@ -1,10 +1,11 @@
 import "./side-chat.css";
+import { cachedTranscript, storeTranscript } from "./transcript-cache";
 import { passageOccurrence, passageRange } from "./passage-range";
 import { html, nothing } from "lit";
 import { markdown } from "./message-markdown";
 import { isHidden } from "./items";
 import { ref } from "lit/directives/ref.js";
-import { ArrowUp, ArrowUpRight, Maximize2, Minimize2, MessageSquare, X } from "lucide";
+import { ArrowUp, ArrowUpRight, Maximize2, Minimize2, Minus, MessageSquare, X } from "lucide";
 import { tip } from "./tooltip";
 import { api, fetchTranscript, forkCutSeq, forkSession, type CoreSession } from "./core-bridge";
 import { createConversation, disposeConversation, ensureDeliveryStream } from "./conversations";
@@ -85,6 +86,31 @@ export function createSideChatController(ctx: ConvCtx) {
         }
         return lines.map((line, index) => ({ session, index, line }));
       });
+      let nextCardTop = 0;
+      const gap = Number.parseFloat(getComputedStyle(host).rowGap) || 0;
+      const cards = Array.from(
+        host.querySelectorAll<HTMLElement>(":scope > .side-chat-card, :scope > .side-chat-panel"),
+        (card) => {
+          const firstLine = shapes.find(({ session }) => session.id === card.dataset.sideChatId)?.line;
+          const draftRange =
+            !card.dataset.sideChatId && pendingAnchor && observedRows.get(host)
+              ? passageRange(observedRows.get(host)!, pendingAnchor.quote, pendingAnchor.occurrence)
+              : null;
+          return {
+            card,
+            top: firstLine?.top ?? draftRange?.getClientRects?.()[0]?.top ?? origin.top,
+            height: card.getBoundingClientRect().height,
+            marginBottom: Number.parseFloat(getComputedStyle(card).marginBottom) || 0,
+          };
+        },
+      );
+      for (const { card, top, height, marginBottom } of cards) {
+        const offset = Math.max(0, top - origin.top - nextCardTop);
+        const value = `${offset}px`;
+        if (card.style.getPropertyValue("--side-chat-offset") !== value)
+          card.style.setProperty("--side-chat-offset", value);
+        nextCardTop += offset + height + marginBottom + gap;
+      }
       const existing = new Map(
         Array.from(host.querySelectorAll<HTMLElement>(":scope > .side-chat-highlight")).map((element) => [
           element.dataset.key,
@@ -181,8 +207,10 @@ export function createSideChatController(ctx: ConvCtx) {
     const preview = { text: "Loading…" };
     previews.set(session.id, preview);
     try {
-      const { items } = await fetchTranscript(session.id, { tailTurns: 1 });
+      const page = await fetchTranscript(session.id, { tailTurns: 1 });
+      const { items } = page;
       if (sourceId !== id || previews.get(session.id) !== preview) return;
+      if (pendingQuote === null && !cachedTranscript(session.id)) storeTranscript(session.id, page);
       const replies = items.filter(
         (item) =>
           item.seq > (session.forkBoundarySeq ?? -1) &&
@@ -348,7 +376,21 @@ export function createSideChatController(ctx: ConvCtx) {
     includeExcerpt = true;
     maximized = false;
     const opening = epoch;
+    const draftInput = panelHost()
+      ?.closest(".side-chat-panel")
+      ?.querySelector<HTMLTextAreaElement>(".side-chat-draft textarea");
+    const draftSelection =
+      draftInput === document.activeElement && draftInput
+        ? ([draftInput.selectionStart, draftInput.selectionEnd, draftInput.selectionDirection] as const)
+        : null;
     redraw();
+    if (draftSelection) {
+      const input = panelHost()
+        ?.closest(".side-chat-panel")
+        ?.querySelector<HTMLTextAreaElement>(".side-chat-draft textarea");
+      input?.focus({ preventScroll: true });
+      input?.setSelectionRange(...draftSelection);
+    }
     await Promise.resolve();
     if (!panelHost() || opening !== epoch) return;
     redraw();
@@ -428,7 +470,6 @@ export function createSideChatController(ctx: ConvCtx) {
       if (sourceId !== id) return;
       if (opening !== epoch) return;
       ctx.composer.carryModelPick(ctx.chat.state.threadRef, result.session.threadRef);
-      window.getSelection()?.removeAllRanges();
       chats = [...chats.filter((chat) => chat.id !== result.session.id), result.session];
       await show(result.session, true);
     } catch (cause) {
@@ -504,8 +545,10 @@ export function createSideChatController(ctx: ConvCtx) {
       highlightResize?.disconnect();
     },
     hover(event: MouseEvent) {
-      const next = anchorsAt(event)[0]?.session.id;
-      (event.currentTarget as HTMLElement).style.cursor = next ? "pointer" : "";
+      const card = (event.target as Element).closest<HTMLElement>(".side-chat-card");
+      const passage = anchorsAt(event)[0]?.session.id;
+      const next = card?.dataset.sideChatId ?? passage;
+      (event.currentTarget as HTMLElement).style.cursor = passage ? "pointer" : "";
       if (next !== hovered) {
         hovered = next;
         paintHighlights();
@@ -523,9 +566,9 @@ export function createSideChatController(ctx: ConvCtx) {
       const pending = pendingQuote !== null && pendingAnchor?.index === index;
       if (!matches.length && !pending) return nothing;
       return html`<div
-        class="side-chat-markers ${matches.some((chat) => choices.has(chat.id)) ? "choosing" : ""}"
+        class="side-chat-markers ${matches.length > 1 ? "crowded" : ""} ${matches.length >= 3 ? "dense" : ""} ${matches.some((chat) => choices.has(chat.id)) ? "choosing" : ""}"
         ${ref((element) => {
-          if (!element || !matches.length) return;
+          if (!element) return;
           const host = element as HTMLElement;
           queueMicrotask(() => {
             if (!host.isConnected) return;
@@ -540,6 +583,21 @@ export function createSideChatController(ctx: ConvCtx) {
                   })
                 : [],
             );
+            const ranges = new Map(anchors.get(host)!.map(({ session, range }) => [session.id, range]));
+            const ordered = matches.toSorted((left, right) => {
+              const a = ranges.get(left.id);
+              const b = ranges.get(right.id);
+              return a && b
+                ? a.compareBoundaryPoints(host.ownerDocument.defaultView!.Range.START_TO_START, b)
+                : Number(!a) - Number(!b);
+            });
+            if (ordered.some((chat, position) => chat.id !== matches[position]!.id)) {
+              let position = 0;
+              const ids = new Set(matches.map((chat) => chat.id));
+              chats = chats.map((chat) => (ids.has(chat.id) ? ordered[position++]! : chat));
+              redraw();
+              return;
+            }
             highlightResize?.observe(host);
             if (row) {
               observedRows.set(host, row as HTMLElement);
@@ -551,7 +609,28 @@ export function createSideChatController(ctx: ConvCtx) {
       >
         ${matches.map(
           (chat) =>
-            html` <div class="side-chat-card">
+            html` <div
+              class="side-chat-card ${active?.id === chat.id ? "" : "collapsed"}"
+              @click=${(event: MouseEvent) => {
+                if (
+                  active?.id === chat.id ||
+                  (event.target as Element).closest("a, button") ||
+                  window.getSelection()?.toString()
+                )
+                  return;
+                returnFocus = (event.currentTarget as HTMLElement).querySelector("button");
+                void show(chat);
+              }}
+              data-side-chat-id=${chat.id}
+              @focusin=${() => {
+                hovered = chat.id;
+                paintHighlights();
+              }}
+              @focusout=${() => {
+                hovered = undefined;
+                paintHighlights();
+              }}
+            >
               <button
                 class="side-chat-marker ${choices.has(chat.id) ? "choice" : ""}"
                 type="button"
@@ -563,8 +642,12 @@ export function createSideChatController(ctx: ConvCtx) {
                   if (active?.id !== chat.id) void show(chat);
                 }}
               >
-                ${brandMark()}<span>${choices.has(chat.id) ? chat.title || "Side chat" : brandName()}</span>
+                ${brandMark()}<span class="side-chat-label"
+                  ><strong>${brandName()}</strong> · Re:
+                  “${choices.has(chat.id) ? chat.title || "Side chat" : chat.sideChat!.quote}”</span
+                >
                 ${chat.sideChat!.expanded ? icon(ArrowUpRight, 13) : nothing}
+                ${active?.id !== chat.id ? html`<b class="side-chat-more" aria-hidden="true">…</b>` : nothing}
               </button>
               ${
                 active?.id === chat.id
@@ -573,7 +656,6 @@ export function createSideChatController(ctx: ConvCtx) {
                       <div class="side-chat-preview">
                         ${markdown(previews.get(chat.id)?.text || "Start the conversation about this passage.")}
                       </div>
-                      <button class="side-chat-reply" @click=${() => void show(chat)}>Open conversation</button>
                     `
               }
             </div>`,
@@ -633,11 +715,11 @@ export function createSideChatController(ctx: ConvCtx) {
                 <button
                   class="icon-btn subtle compact"
                   type="button"
-                  aria-label="Close side chat"
+                  aria-label="Collapse conversation"
                   @click=${dismiss}
                   ${tip("Collapse conversation · Esc")}
                 >
-                  ${icon(X, 17)}
+                  ${icon(Minus, 17)}
                 </button>
               </header>
               ${

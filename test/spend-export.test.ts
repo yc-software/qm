@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
@@ -80,7 +81,7 @@ test("spend export: missing, wrong, admin-identity and source-signed requests ar
     }
     assert.equal(reads, 0);
     assert.deepEqual(
-      (await s.built.auditLog.events()).filter((e) => e.action === "spend.export"),
+      (await s.built.auditLog.events(testTenant)).filter((e) => e.action === "spend.export"),
       [],
     );
   } finally {
@@ -139,7 +140,7 @@ test("spend export: rows keep the ledger grain with canonical people, sources an
       [body.rows[3].input, body.rows[3].output, body.rows[3].cacheRead, body.rows[3].cacheWrite],
       [200, 40, 800, 80],
     );
-    const audited = (await s.built.auditLog.events()).filter((e) => e.action === "spend.export");
+    const audited = (await s.built.auditLog.events(testTenant)).filter((e) => e.action === "spend.export");
     assert.equal(audited.length, 1);
     assert.equal(audited[0]!.principalId, "spend-export");
     assert.equal(audited[0]!.detail, `${iso(today - DAY)}..${iso(today + DAY)} rows=5`);

@@ -74,8 +74,6 @@ test("spine ON: a mid-turn DM message STEERS the live run instead of forking a s
 
   const second = await built.app.turn(dm("@bot why did you choose this", channel));
   assert.equal(second.runId, liveRunId, "the second DM message attached to the LIVE run, not a new turn");
-  // The surface can only tell "I joined this run" from "I started it" by this flag; without it
-  // both handlers poll the shared run and each posts its reply (the duplicate-message bug).
   assert.equal(second.steered, true, "a joined run is flagged steered so the surface stands down");
 
   const signals = await built.signals.takePending(liveRunId);
@@ -628,8 +626,6 @@ test("reverse race: an addressed mention steers into the live ambient run, not a
     origin: { kind: "human", messageTs: askTs },
   });
   assert.equal(second.runId, ambient.runId, "the mention steered into the LIVE ambient run, not a second reply");
-  // NOT flagged steered: the ambient owner is unprompted and stays silent on a refusal/failure,
-  // so the addressed caller must keep waiting on the run — it's the only one that would report it.
   assert.equal(second.steered, undefined, "the ambient reverse-race join keeps the addressed caller waiting");
   const signals = await built.signals.takePending(ambient.runId!);
   assert.equal(signals.length, 1);
@@ -668,7 +664,6 @@ test("spine ON: the FIRST message (no live run) engages normally — no steer", 
   const first = await built.app.turn(mention("@bot hello", channel, root));
   assert.equal(first.status, "queued");
   assert.equal(first.steered, undefined, "an engaged run belongs to its caller — never flagged steered");
-  // A fresh engage sends no signal (there was no live run to steer).
   const signals = await built.signals.takePending(first.runId!);
   assert.equal(signals.length, 0);
 });
@@ -755,7 +750,6 @@ test("web's queue is durable and readable: core names the live run, then what wa
     "the queue comes back in send order, with the text — enough for any surface to render it",
   );
 
-  // A queued turn is withdrawable right up to the moment a worker takes it, and not after.
   assert.deepEqual(await built.app.withdrawRun(second.runId!), { withdrawn: true });
   assert.deepEqual(
     (await built.app.activeRunForThread(threadRef))?.queued,
@@ -805,8 +799,6 @@ test("a queued web turn runs on its own — the sender's client need never come 
   assert.equal(next?.id, queued.runId, "the queued turn is claimed by a worker, with no client involved");
   assert.equal(next?.request.text, "the queued one");
 });
-
-// ── Orphaned-signal replay: a steer that loses the pickup race is never dropped ────────────────
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 async function until<T>(get: () => Promise<T | undefined>, ms = 3_000): Promise<T> {

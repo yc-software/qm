@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { Destination } from "../types.ts";
 import type { Cron, CronFireLogEntry, CronFireNote, CronSchedule, CronScript } from "../triggers/types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
@@ -57,7 +58,7 @@ export const FIRE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 export interface CronStore {
   create(input: CreateCronInput): Promise<Cron>;
   get(id: string): Promise<Cron | null>;
-  list(): Promise<Cron[]>;
+  list(ids?: readonly string[]): Promise<Cron[]>;
   claimTenants(): Promise<ClaimedRow[]>;
   ownedBy(scopeId: string): Promise<Cron[]>;
   update(id: string, patch: CronPatch): Promise<Cron | null>;
@@ -73,11 +74,17 @@ export interface CronStore {
   firesByThreadRefs(threadRefs: readonly string[]): Promise<CronFireRecord[]>;
   latestFireForThread(id: string, threadRef: string): Promise<CronFireLogEntry | undefined>;
   setFireNote(id: string, note: CronFireNote): Promise<"applied" | "superseded" | "missing">;
-  markFired(id: string, at: number, scheduledAt?: number): Promise<void>;
+  markFired(fired: Pick<Cron, "id" | "schedule">, at: number, scheduledAt?: number): Promise<void>;
+  retireOneShot(fired: Pick<Cron, "id" | "schedule">): Promise<void>;
   markAttempted(id: string, at: number): Promise<void>;
   defer(id: string, until: number): Promise<void>;
   claimSlot(id: string, scheduledAt: number, at: number): Promise<boolean>;
-  unclaimSlot(id: string, scheduledAt: number, at: number, priorLastFiredAt: number | undefined): Promise<void>;
+  unclaimSlot(
+    fired: Pick<Cron, "id" | "schedule">,
+    scheduledAt: number,
+    at: number,
+    priorLastFiredAt: number | undefined,
+  ): Promise<void>;
   due(now: number): Promise<Array<Cron & { scheduledAt: number; tenantId: string }>>;
 }
 
@@ -143,7 +150,12 @@ export function createCronStore(
       }));
     },
     get: (id) => backing.get(id),
-    list: () => backing.all(),
+    list: async (ids) => {
+      if (!ids) return backing.all();
+      if (!ids.length) return [];
+      const wanted = new Set(ids);
+      return (await backing.select({ where: { field: "id", anyOfFold: ids } })).filter((cron) => wanted.has(cron.id));
+    },
     claimTenants: () => backing.claimTenants(),
     ownedBy: (scopeId) => ownedBy(backing, scopeId),
     async update(id, patch) {
@@ -204,15 +216,18 @@ export function createCronStore(
       if ((await backing.update(id, apply)) === null) return "missing";
       return applied ? "applied" : "superseded";
     },
-    async markFired(id, at, scheduledAt) {
-      const cron = await backing.get(id);
-      if (!cron) return;
-      const advanceFrom = isCalendarSchedule(cron.schedule) ? (scheduledAt ?? at) : at;
-      await backing.merge(id, {
-        lastFiredAt: at,
-        nextFireAt: advanceNextFireAt(cron.schedule, advanceFrom),
-        deferUntil: undefined,
+    async markFired(fired, at, scheduledAt) {
+      await backing.update(fired.id, (cron) => {
+        if (!isDeepStrictEqual(cron.schedule, fired.schedule)) return cron;
+        const advanceFrom = isCalendarSchedule(cron.schedule) ? (scheduledAt ?? at) : at;
+        const { deferUntil: _cleared, ...rest } = cron;
+        return { ...rest, lastFiredAt: at, nextFireAt: advanceNextFireAt(cron.schedule, advanceFrom) };
       });
+    },
+    async retireOneShot(fired) {
+      await backing.update(fired.id, (cron) =>
+        isDeepStrictEqual(cron.schedule, fired.schedule) ? { ...cron, enabled: false } : cron,
+      );
     },
     async claimSlot(id, scheduledAt, at) {
       let claimed = false;
@@ -230,9 +245,9 @@ export function createCronStore(
       await backing.update(id, transform);
       return claimed;
     },
-    async unclaimSlot(id, scheduledAt, at, priorLastFiredAt) {
+    async unclaimSlot(fired, scheduledAt, at, priorLastFiredAt) {
       const restore = (cron: Cron): Cron => {
-        if (cron.lastFiredAt !== at) return cron;
+        if (cron.lastFiredAt !== at || !isDeepStrictEqual(cron.schedule, fired.schedule)) return cron;
         const { lastFiredAt: _dropped, ...rest } = cron;
         return {
           ...rest,
@@ -240,7 +255,7 @@ export function createCronStore(
           nextFireAt: scheduledAt,
         };
       };
-      await backing.update(id, restore);
+      await backing.update(fired.id, restore);
     },
     async markAttempted(id, at) {
       await backing.merge(id, { lastAttemptAt: at });

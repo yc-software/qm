@@ -520,7 +520,9 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
               "litestream/aws binaries missing from the MicroVM image — roll AWS_DEPLOY_IMAGE (cli/templates/aws/microvm-agent) before setting AWS_DEPLOY_DATA_ROLE_ARN";
           }
           if (fresh) {
-            await store.delete(d.id).catch((e) => swallow("aws-deploy: litestream-fail clear pointer", e));
+            await store
+              .deleteIf(d.id, (cur) => cur.microvmId === id)
+              .catch((e) => swallow("aws-deploy: litestream-fail clear pointer", e));
             await api.terminate(id).catch((e) => swallow("aws-deploy: litestream-fail terminate", e));
           } else {
             const cur = await store.get(d.id);
@@ -572,7 +574,9 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       if (!desc || desc.state === "TERMINATED" || desc.state === "TERMINATING") {
         if (genCurrent()) {
           resolveCache.delete(keyOf(d.id));
-          await store.delete(d.id).catch((e) => swallow("aws-deploy: drop dead body pointer", e));
+          await store
+            .deleteIf(d.id, (cur) => cur.microvmId === stored.microvmId)
+            .catch((e) => swallow("aws-deploy: drop dead body pointer", e));
         }
         return null;
       }

@@ -7,6 +7,7 @@ import type { PublicServiceCredential } from "../src/credentials/keychain.ts";
 import { scopeId } from "../src/types.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const ORG = scopeId("org", "default-org");
 const cred = (slug: string, over: Partial<PublicServiceCredential> = {}): PublicServiceCredential => ({
@@ -24,7 +25,7 @@ const cred = (slug: string, over: Partial<PublicServiceCredential> = {}): Public
 test("a published app gets only enabled broker credentials that are switched on for apps AND granted org-wide", async () => {
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const grant = (slug: string, grantee: string) =>
-    acl.grant({
+    acl.grant(tenant, {
       ownerScopeId: ORG,
       ref: encodeRef(serviceCredRef(slug)),
       granteeScopeId: grantee,
@@ -38,6 +39,7 @@ test("a published app gets only enabled broker credentials that are switched on 
   await grant("no-secret", ORG);
   await grant("env-only", ORG);
   const slugs = await deploymentCredentialSlugs(
+    tenant,
     [
       cred("acme-data"),
       cred("finance-api"),

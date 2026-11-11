@@ -21,6 +21,7 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const SECRET = "deploy-createdin-secret".repeat(3);
 const CH = "CBUILT";
@@ -151,7 +152,7 @@ test("principalGitPermission: a member of the channel the app was created in get
 test("principalGitPermission: a member of a channel it was only SHARED into gets at most read", async () => {
   const { f, d } = await setup();
   try {
-    await f.acl.grant({
+    await f.acl.grant(tenant, {
       ownerScopeId: scopeId("personal", "U1"),
       ref: `deployment:${d.id}`,
       granteeScopeId: scopeId("channel", CH_OTHER),
@@ -203,7 +204,7 @@ test("an explicit public-channel write grant retains write permission", async ()
       entrypoint: "node server.js",
       files: [{ path: "server.js", data: "console.log('v1')" }],
     });
-    await f.acl.grant({
+    await f.acl.grant(tenant, {
       ownerScopeId: d.ownerScopeId,
       ref: `deployment:${d.id}`,
       granteeScopeId: publicScope,
@@ -235,7 +236,7 @@ test("canManage: a member acting in the creation channel's context may rename", 
 test("canManage: acting in a different (shared-into) channel does NOT confer manage", async () => {
   const { f, d } = await setup();
   try {
-    await f.acl.grant({
+    await f.acl.grant(tenant, {
       ownerScopeId: scopeId("personal", "U1"),
       ref: `deployment:${d.id}`,
       granteeScopeId: scopeId("channel", CH_OTHER),
@@ -260,7 +261,7 @@ test("canManage: acting in a different (shared-into) channel does NOT confer man
 test("canManage: a channel write grant follows a member into their DM", async () => {
   const { f, d } = await setup();
   try {
-    await f.acl.grant({
+    await f.acl.grant(tenant, {
       ownerScopeId: d.ownerScopeId,
       ref: `deployment:${d.id}`,
       granteeScopeId: scopeId("channel", CH_OTHER),
@@ -276,7 +277,7 @@ test("canManage: a channel write grant follows a member into their DM", async ()
 test("an org write grant gives active org members git write and manage authority", async () => {
   const { f, d } = await setup();
   try {
-    await f.acl.grant({
+    await f.acl.grant(tenant, {
       ownerScopeId: d.ownerScopeId,
       ref: `deployment:${d.id}`,
       granteeScopeId: scopeId("org", "default-org"),
@@ -311,7 +312,7 @@ test("removed channel members keep stale-session read reach but lose write and m
     assert.equal(await pushStatus(beforeRemovalUrl), 403, "a write URL minted before removal is revoked at push time");
     assert.equal(await f.deploy.canManageDeployment(d.id, { actorId: "U2" }, scopeId("personal", "U2")), false);
 
-    await f.acl.grant({
+    await f.acl.grant(tenant, {
       ownerScopeId: d.ownerScopeId,
       ref: `deployment:${d.id}`,
       granteeScopeId: scopeId("channel", CH),

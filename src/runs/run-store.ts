@@ -1,3 +1,4 @@
+import type { Tenant } from "../tenants/context.ts";
 import type { SubscribeOptions } from "../util/event-bus.ts";
 import type { RunSignal, RunSignalStore } from "./run-signal-store.ts";
 import type { TurnResult } from "../types.ts";
@@ -169,7 +170,7 @@ export interface RunStore {
 
   reapExpired(opts?: {
     maxAgeMs?: number;
-    onReap?: (event: ReapEvent) => void;
+    onReap?: (event: ReapEvent, tenant: Tenant) => void;
   }): Promise<{ requeued: number; parked: number }>;
 
   waitFor(runId: string, timeoutMs?: number): Promise<Run>;

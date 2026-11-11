@@ -329,6 +329,50 @@ test("reapDeepIdle leaves recently active scopes alone and keeps the checkpoint 
   assert.ok((await store.get(scope))?.nativeSnapshotId, "a gone box keeps its checkpoint reference");
 });
 
+test("a reaper holding a stale record never forgets the replacement another core recorded", async () => {
+  const store = testMap<StoredModalSandbox>();
+  await make({ store }).provision(scope);
+  await store.merge(scope, { nativeSnapshotId: undefined });
+  const live = (await store.get(scope))!;
+  const stale: DurableMap<StoredModalSandbox> = {
+    ...store,
+    entries: async () => [[scope, { ...live, sandboxId: "sb-retired" }]],
+  };
+  await make({ store: stale }).reapDeepIdle!(72 * 3600_000);
+  assert.equal((await store.get(scope))?.sandboxId, live.sandboxId);
+});
+
+async function replacedUnderCore(): Promise<{
+  store: DurableMap<StoredModalSandbox>;
+  errors: string[];
+  core: Sandbox;
+  h: Awaited<ReturnType<Sandbox["provision"]>>;
+}> {
+  const store = testMap<StoredModalSandbox>();
+  const errors: string[] = [];
+  const core = make({ store, onError: (e: { code: string }) => errors.push(e.code) });
+  const h = await core.provision(scope);
+  await core.writeFile(h, "where.txt", "A");
+  const other = make({ store });
+  const otherScope = scopeId("personal", "other");
+  const b = await other.provision(otherScope);
+  await other.writeFile(b, "where.txt", "B");
+  await store.merge(scope, { sandboxId: fake.current(b.id)!.sandboxId });
+  return { store, errors, core, h };
+}
+
+test("commands follow the sandbox the record names, not a live sandbox this core cached earlier", async () => {
+  const { core, h } = await replacedUnderCore();
+  assert.equal(await core.readFile(h, "where.txt"), "B");
+});
+
+test("teardown never checkpoints a cached sandbox the record no longer names", async () => {
+  const { store, errors, core, h } = await replacedUnderCore();
+  await core.teardown(h);
+  assert.deepEqual(errors, []);
+  assert.equal((await store.get(scope))?.recoveryError, undefined);
+});
+
 test("computerStatus probes the guest", async () => {
   await sandbox.provision(scope);
   assert.ok(sandbox.computerStatus);

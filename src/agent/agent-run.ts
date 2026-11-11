@@ -41,13 +41,7 @@ import type { ConversationTurn, StopScope } from "../types.ts";
 import type { Item } from "../sessions/items.ts";
 import type { LlmCallUsage } from "../sessions/session-store.ts";
 import { NonRetryableTurnError, ProviderTurnError } from "../core/turn-error.ts";
-import {
-  DESCRIPTIVE_TITLE_MODEL_ID,
-  DESCRIPTIVE_TITLE_PROMPT,
-  TITLE_GENERATION_PROMPT,
-  sanitizeTitle,
-  titleUserPrompt,
-} from "./session-title-prompt.ts";
+import { TITLE_GENERATION_PROMPT, TITLE_MODEL_ID, sanitizeTitle, titleUserPrompt } from "./session-title-prompt.ts";
 import { NEXT_PROMPT_MODEL_ID, NEXT_PROMPT_PROMPT } from "./next-prompt-prompt.ts";
 import { providerTurnError } from "../model/provider-error.ts";
 import { asError, reportFailure, swallow, swallowAs } from "../util/errors.ts";
@@ -860,7 +854,7 @@ export function createAgent(opts?: AgentOptions): Agent {
             userAborted,
             cancelled: !!turn.cancel?.aborted,
             surfaceTools: !!turn.surfaceTools,
-            pollFire: !!turn.pollFire,
+            replyOptional: !!turn.replyOptional,
             ref: entry.ref,
             session: entry.agentSession,
             turnWallClockMs,
@@ -1158,20 +1152,19 @@ export function createAgent(opts?: AgentOptions): Agent {
       return typeof emoji === "string" && candidates.includes(emoji) ? emoji : undefined;
     },
 
-    async generateTitle(transcript: string, titleOpts?: { descriptive?: boolean }): Promise<string | undefined> {
+    async generateTitle(transcript: string): Promise<string | undefined> {
       if (!transcript.trim()) return undefined;
-      const descriptive = titleOpts?.descriptive === true;
-      const route = await utilityRoute(descriptive ? DESCRIPTIVE_TITLE_MODEL_ID : opts?.titleModelId);
+      const route = (await utilityRoute(opts?.titleModelId ?? TITLE_MODEL_ID)) ?? (await utilityRoute());
       if (!route) return undefined;
       const out = await oneShot(
         "pi-title",
         route.model,
         route.keys,
-        descriptive ? DESCRIPTIVE_TITLE_PROMPT : TITLE_GENERATION_PROMPT,
-        titleUserPrompt(transcript, descriptive),
+        TITLE_GENERATION_PROMPT,
+        titleUserPrompt(transcript),
         { modelGateway: route.gateway, purpose: "title" },
       );
-      return sanitizeTitle(out, descriptive);
+      return sanitizeTitle(out);
     },
 
     async suggestNextPrompt(transcript: string): Promise<string | undefined> {

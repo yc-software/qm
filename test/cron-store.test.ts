@@ -55,7 +55,7 @@ test("a late calendar fire advances from the scheduled instant, not the tick ins
   const scheduledAt = Date.parse("2026-06-18T16:00:00.000Z");
   assert.equal(cron.nextFireAt, scheduledAt);
 
-  await store.markFired(cron.id, Date.parse("2026-06-19T01:00:00.000Z"), scheduledAt);
+  await store.markFired(cron, Date.parse("2026-06-19T01:00:00.000Z"), scheduledAt);
   const after = await store.get(cron.id);
   assert.equal(after?.lastFiredAt, Date.parse("2026-06-19T01:00:00.000Z"));
   assert.equal(after?.nextFireAt, Date.parse("2026-06-19T00:00:00.000Z"));
@@ -74,7 +74,7 @@ test("calendar crons preserve local wall-clock time across DST shifts", async (t
   const cron = await store.create({ ...base, schedule: { cron: "0 9 * * *", timezone: "America/Los_Angeles" } });
   const first = Date.parse("2026-03-07T17:00:00.000Z");
   assert.equal(cron.nextFireAt, first);
-  await store.markFired(cron.id, Date.parse("2026-03-07T17:05:00.000Z"), first);
+  await store.markFired(cron, Date.parse("2026-03-07T17:05:00.000Z"), first);
   assert.equal((await store.get(cron.id))?.nextFireAt, Date.parse("2026-03-08T16:00:00.000Z"));
 });
 
@@ -98,7 +98,7 @@ test("a recurring cron fires once per interval after the last fire", async () =>
   const store = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const cron = await store.create({ ...base, schedule: { everyMs: 60_000, firstFireAt: 1_000_000 } });
   assert.deepEqual(ids(await store.due(1_000_000)), [cron.id]);
-  await store.markFired(cron.id, 1_000_000);
+  await store.markFired(cron, 1_000_000);
   assert.equal((await store.get(cron.id))?.nextFireAt, 1_060_000);
   assert.deepEqual(ids(await store.due(1_059_999)), []);
   assert.deepEqual(ids(await store.due(1_060_000)), [cron.id]);
@@ -109,9 +109,23 @@ test("a one-shot cron (no everyMs) fires once at firstFireAt and never again", a
   const cron = await store.create({ ...base, schedule: { firstFireAt: 5_000_000 } });
   assert.deepEqual(ids(await store.due(4_999_999)), []);
   assert.deepEqual(ids(await store.due(5_000_000)), [cron.id]);
-  await store.markFired(cron.id, 5_000_000);
+  await store.markFired(cron, 5_000_000);
   assert.equal((await store.get(cron.id))?.nextFireAt, undefined);
   assert.deepEqual(ids(await store.due(9_999_999_999)), []);
+});
+
+test("a one-shot rescheduled during its own fire keeps the new schedule when the fire ends", async () => {
+  const store = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const cron = await store.create({ ...base, schedule: { firstFireAt: 5_000_000 } });
+  await store.update(cron.id, { schedule: { firstFireAt: 8_000_000 }, enabled: true });
+  await store.retireOneShot(cron);
+  await store.markFired(cron, 5_000_000, 5_000_000);
+  const after = (await store.get(cron.id))!;
+  assert.equal(after.enabled, true);
+  assert.equal(after.nextFireAt, 8_000_000);
+  assert.deepEqual(ids(await store.due(8_000_000)), [cron.id]);
+  await store.retireOneShot(after);
+  assert.equal((await store.get(cron.id))?.enabled, false);
 });
 
 test("old persisted interval rows without nextFireAt still recover their due cursor", async () => {
@@ -252,7 +266,7 @@ test("markFired does not clobber a concurrent setEnabled(false) (field-level upd
   };
   const store = createCronStore(slowReads, { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const cron = await store.create({ ...base, schedule: { everyMs: 1000 } });
-  await Promise.all([store.markFired(cron.id, 123), store.setEnabled(cron.id, false)]);
+  await Promise.all([store.markFired(cron, 123), store.setEnabled(cron.id, false)]);
   const after = await backing.get(cron.id);
   assert.equal(after?.enabled, false, "the disable must survive the concurrent fire stamp");
   assert.equal(after?.lastFiredAt, 123);
@@ -336,7 +350,7 @@ test("a duplicate create returns the existing record WITHOUT clobbering its live
   const store = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const input = { ...base, schedule: { everyMs: 60_000, firstFireAt: 1_000_000 } };
   const a = await store.create(input);
-  await store.markFired(a.id, 1_000_000);
+  await store.markFired(a, 1_000_000);
   const advanced = (await store.get(a.id))!;
   assert.equal(advanced.lastFiredAt, 1_000_000);
   const b = await store.create(input);
@@ -402,15 +416,15 @@ test("claimSlot: a one-shot claim consumes the slot for good", async () => {
 test("unclaimSlot: restores a failed claim so the slot retries, and only that exact claim", async () => {
   const store = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const cron = await store.create({ ...base, schedule: { everyMs: 60_000, firstFireAt: 1_000_000 } });
-  await store.markFired(cron.id, 940_000);
+  await store.markFired(cron, 940_000);
   const prior = (await store.get(cron.id))!.lastFiredAt;
   assert.equal(await store.claimSlot(cron.id, 1_000_000, 1_000_500), true);
-  await store.unclaimSlot(cron.id, 1_000_000, 1_000_500, prior);
+  await store.unclaimSlot(cron, 1_000_000, 1_000_500, prior);
   const restored = (await store.get(cron.id))!;
   assert.equal(restored.lastFiredAt, 940_000);
   assert.equal(restored.nextFireAt, 1_000_000, "the slot is claimable again");
   assert.equal(await store.claimSlot(cron.id, 1_000_000, 1_001_000), true);
-  await store.unclaimSlot(cron.id, 1_000_000, 999, prior);
+  await store.unclaimSlot(cron, 1_000_000, 999, prior);
   assert.equal((await store.get(cron.id))!.lastFiredAt, 1_001_000, "an unclaim for a different claim is a no-op");
 });
 
@@ -502,6 +516,10 @@ test("sweepStrandedFires closes only over-age running rows, as failed with a not
   assert.equal(log.find((e) => e.fireKey === "live")!.status, "running");
   assert.equal(log.find((e) => e.fireKey === "done")!.status, "ok");
   assert.equal(await store.sweepStrandedFires(12_000), 0, "a second sweep finds nothing");
+  await store.beginFire(cron.id, { fireKey: "old", threadRef: "t", firedAt: 1_000, status: "running" });
+  assert.equal((await store.listFires(cron.id)).runs.find((e) => e.fireKey === "old")!.status, "failed");
+  await store.recordFire(cron.id, { fireKey: "old", threadRef: "t", firedAt: 1_000, endedAt: 13_000, status: "ok" });
+  assert.equal((await store.listFires(cron.id)).runs.find((e) => e.fireKey === "old")!.status, "ok");
 });
 
 test("the default staleness bound tracks the run reaper's default max age", () => {
@@ -706,7 +724,7 @@ test("a deferred cron is not due until its deferral passes, and firing clears th
   assert.deepEqual(ids(await store.due(slot + 29_999)), [], "deferred crons are held back even when their slot is due");
   assert.deepEqual(ids(await store.due(slot + 30_000)), [cron.id]);
 
-  await store.markFired(cron.id, slot + 30_000, slot);
+  await store.markFired(cron, slot + 30_000, slot);
   assert.equal((await store.get(cron.id))?.deferUntil, undefined, "markFired clears the deferral");
 
   await store.defer(cron.id, slot + 90_000);

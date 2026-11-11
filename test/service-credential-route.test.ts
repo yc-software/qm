@@ -27,6 +27,7 @@ import type { AclStore } from "../src/acl/acl-store.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { settle } from "./support/settle.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const SECRET = "svc-cred-route-secret".repeat(3);
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
@@ -430,25 +431,25 @@ test("a partial ACL failure rolls a credential edit and its grants back to the v
   let failGrant = false;
   const srv = start((acl) => ({
     ...acl,
-    async replaceGrantsIfCurrent(ownerScopeId, ref, expected, replacement, changedBy, authoredBy) {
+    async replaceGrantsIfCurrent(tenant, ownerScopeId, ref, expected, replacement, changedBy, authoredBy) {
       if (failGrant) {
         failGrant = false;
         throw new Error("injected grant failure");
       }
-      return acl.replaceGrantsIfCurrent(ownerScopeId, ref, expected, replacement, changedBy, authoredBy);
+      return acl.replaceGrantsIfCurrent(tenant, ownerScopeId, ref, expected, replacement, changedBy, authoredBy);
     },
   }));
   try {
     await putCred(srv.base, { slug: "k", name: "K", secret: "s", host: "h.example" });
-    await srv.built.acl.revoke("org:default-org", "service-cred:k", "org:default-org", "seed");
-    await srv.built.acl.grant({
+    await srv.built.acl.revoke(tenant, "org:default-org", "service-cred:k", "org:default-org", "seed");
+    await srv.built.acl.grant(tenant, {
       ownerScopeId: "org:default-org",
       ref: "service-cred:k",
       granteeScopeId: "org:default-org",
       permission: "write",
       grantedBy: "original-governor",
     });
-    const grantsBefore = await srv.built.acl.grantsFor("org:default-org", "service-cred:k");
+    const grantsBefore = await srv.built.acl.grantsFor(tenant, "org:default-org", "service-cred:k");
     const before = (await getCfg(srv.base)).serviceCredentials[0]!;
     failGrant = true;
     const edit = await putCred(srv.base, {
@@ -463,7 +464,7 @@ test("a partial ACL failure rolls a credential edit and its grants back to the v
     const after = (await getCfg(srv.base)).serviceCredentials[0]!;
     assert.equal(after.name, "K");
     assert.deepEqual(after.grantees, ["org:default-org"]);
-    assert.deepEqual(await srv.built.acl.grantsFor("org:default-org", "service-cred:k"), grantsBefore);
+    assert.deepEqual(await srv.built.acl.grantsFor(tenant, "org:default-org", "service-cred:k"), grantsBefore);
     assert.equal((await srv.built.serviceCreds.getServiceCredentialSecret("org:default-org", "k"))?.secret, "s");
   } finally {
     await srv.close();
@@ -474,14 +475,14 @@ test("credential rollback preserves a concurrent credential update", async () =>
   let concurrentWrite: (() => Promise<void>) | null = null;
   const srv = start((acl) => ({
     ...acl,
-    async replaceGrantsIfCurrent(ownerScopeId, ref, expected, replacement, changedBy, authoredBy) {
+    async replaceGrantsIfCurrent(tenant, ownerScopeId, ref, expected, replacement, changedBy, authoredBy) {
       if (concurrentWrite) {
         const write = concurrentWrite;
         concurrentWrite = null;
         await write();
         throw new Error("failure after concurrent credential write");
       }
-      return acl.replaceGrantsIfCurrent(ownerScopeId, ref, expected, replacement, changedBy, authoredBy);
+      return acl.replaceGrantsIfCurrent(tenant, ownerScopeId, ref, expected, replacement, changedBy, authoredBy);
     },
   }));
   try {
@@ -525,14 +526,14 @@ test("failed credential creation does not delete a concurrent update of the new 
   let concurrentWrite: (() => Promise<void>) | null = null;
   const srv = start((acl) => ({
     ...acl,
-    async replaceGrantsIfCurrent(ownerScopeId, ref, expected, replacement, changedBy, authoredBy) {
+    async replaceGrantsIfCurrent(tenant, ownerScopeId, ref, expected, replacement, changedBy, authoredBy) {
       if (concurrentWrite) {
         const write = concurrentWrite;
         concurrentWrite = null;
         await write();
         throw new Error("failure after concurrent create update");
       }
-      return acl.replaceGrantsIfCurrent(ownerScopeId, ref, expected, replacement, changedBy, authoredBy);
+      return acl.replaceGrantsIfCurrent(tenant, ownerScopeId, ref, expected, replacement, changedBy, authoredBy);
     },
   }));
   try {
@@ -569,14 +570,14 @@ test("failed credential deletion does not overwrite a concurrent recreation", as
   let concurrentWrite: (() => Promise<void>) | null = null;
   const srv = start((acl) => ({
     ...acl,
-    async replaceGrantsIfCurrent(ownerScopeId, ref, expected, replacement, changedBy, authoredBy) {
+    async replaceGrantsIfCurrent(tenant, ownerScopeId, ref, expected, replacement, changedBy, authoredBy) {
       if (concurrentWrite) {
         const write = concurrentWrite;
         concurrentWrite = null;
         await write();
         throw new Error("failure after concurrent recreation");
       }
-      return acl.replaceGrantsIfCurrent(ownerScopeId, ref, expected, replacement, changedBy, authoredBy);
+      return acl.replaceGrantsIfCurrent(tenant, ownerScopeId, ref, expected, replacement, changedBy, authoredBy);
     },
   }));
   try {
@@ -610,10 +611,10 @@ test("credential rollback preserves a concurrent grant tuple instead of replacin
   let injectConcurrentGrant = false;
   const srv = start((acl) => ({
     ...acl,
-    async replaceGrantsIfCurrent(ownerScopeId, ref, expected, replacement, changedBy, authoredBy) {
+    async replaceGrantsIfCurrent(tenant, ownerScopeId, ref, expected, replacement, changedBy, authoredBy) {
       if (injectConcurrentGrant) {
         injectConcurrentGrant = false;
-        await acl.grant({
+        await acl.grant(tenant, {
           ownerScopeId,
           ref,
           granteeScopeId: "team:concurrent",
@@ -621,7 +622,7 @@ test("credential rollback preserves a concurrent grant tuple instead of replacin
           grantedBy: "concurrent-governor",
         });
       }
-      return acl.replaceGrantsIfCurrent(ownerScopeId, ref, expected, replacement, changedBy, authoredBy);
+      return acl.replaceGrantsIfCurrent(tenant, ownerScopeId, ref, expected, replacement, changedBy, authoredBy);
     },
   }));
   try {
@@ -638,7 +639,7 @@ test("credential rollback preserves a concurrent grant tuple instead of replacin
     assert.equal(edit.status, 500);
     assert.match(await edit.text(), /rollback could not be verified/);
     assert.deepEqual(
-      (await srv.built.acl.grantsFor("org:default-org", "service-cred:k")).find(
+      (await srv.built.acl.grantsFor(tenant, "org:default-org", "service-cred:k")).find(
         (grant) => grant.granteeScopeId === "team:concurrent",
       ),
       {
@@ -658,12 +659,12 @@ test("an ACL failure after conditional delete recreates and verifies the credent
   let failRevoke = false;
   const srv = start((acl) => ({
     ...acl,
-    async replaceGrantsIfCurrent(ownerScopeId, ref, expected, replacement, changedBy, authoredBy) {
+    async replaceGrantsIfCurrent(tenant, ownerScopeId, ref, expected, replacement, changedBy, authoredBy) {
       if (failRevoke) {
         failRevoke = false;
         throw new Error("injected revoke failure");
       }
-      return acl.replaceGrantsIfCurrent(ownerScopeId, ref, expected, replacement, changedBy, authoredBy);
+      return acl.replaceGrantsIfCurrent(tenant, ownerScopeId, ref, expected, replacement, changedBy, authoredBy);
     },
   }));
   try {
@@ -733,7 +734,7 @@ test("re-sharing reconciles the ACL allow-list (org-wide → specific people →
     const sharedVersion = (await getCfg(srv.base)).serviceCredentials[0]!.updatedAt;
     assert.equal((await putCred(srv.base, { slug: "k", delete: true, expectedUpdatedAt: sharedVersion })).status, 200);
     assert.equal((await getCfg(srv.base)).serviceCredentials.length, 0);
-    const grants = await srv.built.acl.grantsFor("org:default-org", "service-cred:k");
+    const grants = await srv.built.acl.grantsFor(tenant, "org:default-org", "service-cred:k");
     assert.equal(grants.length, 0);
   } finally {
     await srv.close();
@@ -852,7 +853,7 @@ test("broker route: a credential-broker token uses the secret by proxy; usage is
     assert.equal(json.body, '{"data":[]}');
     assert.equal(calls[0]!.headers["Authorization"], "Bearer super-secret-bearer");
     assert.doesNotMatch(JSON.stringify(json), /super-secret-bearer/);
-    assert.equal((await srv.built.credentialUsage.list({ slug: "x-firehose" })).length, 1);
+    assert.equal((await srv.built.credentialUsage.list(tenant, { slug: "x-firehose" })).length, 1);
   } finally {
     await srv.close();
   }
@@ -961,7 +962,10 @@ test("git http broker streams smart-http GET and POST through an entitled servic
     assert.equal(calls[1]!.headers.Authorization, "Basic dXNlcjp0b2tlbg==");
     assert.equal(calls[1]!.headers["content-type"], "application/x-git-receive-pack-request");
     assert.equal(calls[1]!.body, "PACKDATA");
-    assert.equal((await srv.built.credentialUsage.list({ slug: "gitlab" })).filter((r) => r.status === "ok").length, 2);
+    assert.equal(
+      (await srv.built.credentialUsage.list(tenant, { slug: "gitlab" })).filter((r) => r.status === "ok").length,
+      2,
+    );
   } finally {
     await srv.close();
   }
@@ -1052,7 +1056,7 @@ test("orchestrator vends a capability for only the requested org credential", as
     secret: "s",
     host: "api.x.com",
   });
-  await built.acl.grant({
+  await built.acl.grant(tenant, {
     ownerScopeId: "org:default-org",
     ref: "service-cred:x-firehose",
     granteeScopeId: "org:default-org",
@@ -1066,7 +1070,7 @@ test("orchestrator vends a capability for only the requested org credential", as
     secret: "synthetic-unused",
     host: "other.example.com",
   });
-  await built.acl.grant({
+  await built.acl.grant(tenant, {
     ownerScopeId: "org:default-org",
     ref: "service-cred:unselected",
     granteeScopeId: "org:default-org",
@@ -1117,7 +1121,7 @@ test("orchestrator does NOT stamp a credential granted only to someone else", as
     secret: "s",
     host: "api.x.com",
   });
-  await built.acl.grant({
+  await built.acl.grant(tenant, {
     ownerScopeId: "org:default-org",
     ref: "service-cred:x-firehose",
     granteeScopeId: "personal:U2",
@@ -1143,7 +1147,7 @@ test("a channel grantee stamps the credential in that channel's conversations an
     secret: "s",
     host: "api.x.com",
   });
-  await built.acl.grant({
+  await built.acl.grant(tenant, {
     ownerScopeId: "org:default-org",
     ref: "service-cred:x-firehose",
     granteeScopeId: "channel:C1",
@@ -1217,7 +1221,7 @@ test("the system prompt advertises an entitled credential (host/methods/paths) s
     allowedMethods: ["GET"],
     allowedPathPrefixes: ["/2/tweets/search/"],
   });
-  await built.acl.grant({
+  await built.acl.grant(tenant, {
     ownerScopeId: "org:default-org",
     ref: "service-cred:x-firehose",
     granteeScopeId: "org:default-org",
@@ -1240,7 +1244,7 @@ test("the system prompt does NOT advertise a credential the session isn't entitl
     secret: "s",
     host: "api.x.com",
   });
-  await built.acl.grant({
+  await built.acl.grant(tenant, {
     ownerScopeId: "org:default-org",
     ref: "service-cred:x-firehose",
     granteeScopeId: "personal:U2",
@@ -1334,21 +1338,21 @@ test("usage summaries authorize before reads and include only the requested scop
   const srv = start();
   t.after(srv.close);
   await putCred(srv.base, { slug: "summary", name: "Summary", host: "api.example.com", secret: "private" });
-  srv.built.credentialUsage.record({
+  srv.built.credentialUsage.record(tenant, {
     slug: "summary",
     host: "api.example.com",
     status: "ok",
     scopeLabel: "personal:U1",
     principalId: "U1",
   });
-  srv.built.credentialUsage.record({
+  srv.built.credentialUsage.record(tenant, {
     slug: "unlisted",
     host: "api.example.com",
     status: "ok",
     scopeLabel: "personal:U2",
     principalId: "U2",
   });
-  await settle(async () => (await srv.built.credentialUsage.list()).length >= 2);
+  await settle(async () => (await srv.built.credentialUsage.list(tenant)).length >= 2);
   const read = t.mock.method(srv.built.serviceCreds, "listServiceCredentials");
   const summarize = t.mock.method(srv.built.credentialUsage, "summary");
   const path = `${srv.base}/v1/admin/scopes/org:default-org/credential-usage`;
@@ -1364,7 +1368,7 @@ test("usage summaries authorize before reads and include only the requested scop
   assert.equal(body.summaries[0]!.slug, "summary");
   assert.equal(body.summaries[0]!.usageCount, 1);
   assert.deepEqual(body.summaries[0]!.recentUsagePrincipals, ["U1"]);
-  assert.deepEqual(summarize.mock.calls[0]!.arguments, [["summary"]]);
+  assert.deepEqual(summarize.mock.calls[0]!.arguments, [tenant, ["summary"]]);
   assert.doesNotMatch(JSON.stringify(body), /private|unlisted|U2/);
 });
 
@@ -1379,7 +1383,7 @@ test("credential inventory and policy reordering leave the system prompt byte-id
       allowedMethods: ["POST", "GET"],
       allowedPathPrefixes: ["/z", "/a"],
     });
-    await built.acl.grant({
+    await built.acl.grant(tenant, {
       ownerScopeId: "org:default-org",
       ref: `service-cred:${slug}`,
       granteeScopeId: "org:default-org",

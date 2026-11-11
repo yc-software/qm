@@ -1,3 +1,4 @@
+import type { LoadSample } from "./sandbox/load-probe.ts";
 import type { PromptSnapshot } from "./core/orchestrator/prompt-snapshot.ts";
 import { onTenantLoad, perTenant } from "./tenants/cache.ts";
 import { loadTenantSettings, TENANT_SETTINGS_REFRESH_MS } from "./tenants/settings.ts";
@@ -352,6 +353,7 @@ import { createDrainController, type BackgroundServices, type DrainController } 
 import { createReaper, REAPER_LEASE_KEY, type Reaper } from "./runs/reaper.ts";
 import { createSweeper as createUntrackedSweeper, type Sweeper } from "./util/sweeper.ts";
 import { createPostgresProcessRegistry, type ProcessRegistry } from "./processes/process-registry.ts";
+import { createSessionWork } from "./sessions/session-work.ts";
 import { createProcessReaper, createReaperKillHook, type ProcessReaper } from "./processes/process-reaper.ts";
 import { createJobComputerSweep } from "./processes/job-computers.ts";
 import { createMonitorStore, type MonitorStore } from "./monitors/monitor-store.ts";
@@ -393,7 +395,7 @@ import { createProjectStore, type Project, type ProjectStore } from "./projects/
 import { createPersonaHandover } from "./personas/persona-handover.ts";
 import { createPersonaService } from "./personas/persona-service.ts";
 import { createPostgresPersonaStore } from "./personas/persona-store.ts";
-import { withErrorReporting, type ErrorLog } from "./admin/error-log.ts";
+import { recordErrorInBinding, withErrorReporting, type ErrorEvent, type ErrorLog } from "./admin/error-log.ts";
 import { createPostgresReplayDedupe, type ReplayDedupe } from "./auth/replay-dedupe.ts";
 import {
   emptyDeploymentLayer,
@@ -719,7 +721,7 @@ export function buildApp(
     scopeId: orgScope,
     advisoryLock,
     auditPersisted: (record) =>
-      auditLog.recordOnce!(`deployment-layer:${orgScope}:${record.version}`, {
+      auditLog.recordOnce!(ambientTenant(), `deployment-layer:${orgScope}:${record.version}`, {
         at: record.updatedAt,
         principalId: record.updatedBy,
         action: "deployment_layer.updated",
@@ -858,11 +860,13 @@ export function buildApp(
   );
   const mcpServers = createMcpServerStore(artifactMap<McpServer>("mcp_servers"));
   const errors = withErrorReporting(createPostgresErrorLog(databaseUrl));
+  const recordAmbientError = (event: Omit<ErrorEvent, "ts">, error?: unknown): void =>
+    recordErrorInBinding(errors, event, error);
   const sandboxOnError = (
     e: { category: string; code: string; message: string; scopeLabel?: string },
     error?: unknown,
   ) =>
-    errors.record(
+    recordAmbientError(
       {
         category: e.category,
         code: e.code,
@@ -1191,6 +1195,7 @@ export function buildApp(
   const sandboxDefaults = artifactMap<SandboxDefault>("sandbox_defaults");
   const sandboxResources = createSandboxResources({
     records: sandboxRecords,
+    loads: artifactMap<LoadSample>("sandbox_loads"),
     defaults: sandboxDefaults,
     upgrade: async () => {
       const choice = await tenantSandboxChoice({
@@ -1217,13 +1222,11 @@ export function buildApp(
             awsBodies.entries(),
             superserveBodies.entries(),
           ]);
-          const bind = (backend: SandboxBackendName, rows: Array<[string, { sandboxId: string }]>) =>
-            rows.map(([scopeId, body]) => ({ scopeId, backend, machineId: body.sandboxId }));
           return [
-            ...bind("e2b", e2b),
-            ...bind("modal", modal),
-            ...aws.map(([scopeId, body]) => ({ scopeId, backend: "aws" as const, machineId: body.microvmId })),
-            ...bind("superserve", superserve),
+            ...e2b.map(([scopeId]) => ({ scopeId, backend: "e2b" as const })),
+            ...modal.map(([scopeId]) => ({ scopeId, backend: "modal" as const })),
+            ...aws.map(([scopeId]) => ({ scopeId, backend: "aws" as const })),
+            ...superserve.map(([scopeId]) => ({ scopeId, backend: "superserve" as const })),
           ];
         },
       });
@@ -1521,7 +1524,7 @@ export function buildApp(
     decisions,
     overrides.decisionBackend ??
       createDecisionBackend({
-        providers: async (ids) => (await decisions?.providers(ids)) ?? [],
+        providers: async (tenant, ids) => (await decisions?.providers(tenant, ids)) ?? [],
         ...(modelRoutes.gateway ? { gateway: modelRoutes.gateway } : {}),
         credential: async (slug) => {
           const rec = keychain
@@ -1559,6 +1562,7 @@ export function buildApp(
     async (input, routedBy) => {
       const decision = await tracePhase("turn.decision", () =>
         decide("turn_start", turnStartState(input), {
+          tenant: ambientTenant(),
           ...(input.runtimeActorId ? { actorId: input.runtimeActorId } : {}),
           scopeLabel: input.scopeLabel,
           sessionId: input.session.id,
@@ -1656,9 +1660,7 @@ export function buildApp(
           ...(processes && supportsProcessSessions(sandbox)
             ? { processes, stopProcess: createReaperKillHook(sandbox, { onExit: finishCredentials }) }
             : {}),
-          enabled: (actorId) => featureFlags.enabled("swarms", scopeId("personal", actorId)),
           authorize: async (claims) => {
-            if (!(await featureFlags.enabled("swarms", scopeId("personal", claims.actorId)))) return false;
             await identity.refresh();
             return (
               identity.isInternal(identity.classify(claims.actorId)) &&
@@ -1830,8 +1832,10 @@ export function buildApp(
     beforeSeed: (grants) =>
       Promise.all(grants.map((g) => users.record({ id: g.principalId, source: "admin", at: Date.now() }))),
   });
+  const directory = createPostgresDirectoryStore(databaseUrl);
   const admin = createAdminService(adminGrantStore, {
     trustedOidcAdminIssuer: config.trustedOidcAdminIssuer,
+    memberTenants: async (principal) => ((await directory.tenantsForPrincipal?.(principal)) ?? []).map(({ id }) => id),
     users,
   });
   const { strategy: memoryStrategy, memory } = createMemoryStrategy(config.memoryStrategy, {
@@ -1840,9 +1844,8 @@ export function buildApp(
     captureQuietMs: config.memoryCaptureQuietMs,
     ...(config.memoryCaptureMaxTurns !== undefined ? { captureMaxTurns: config.memoryCaptureMaxTurns } : {}),
     onCaptureError: (e, scope) =>
-      errors.record({ category: "memory", code: "capture_failed", message: errMessage(e), scopeLabel: scope }, e),
+      recordAmbientError({ category: "memory", code: "capture_failed", message: errMessage(e), scopeLabel: scope }, e),
   });
-  const directory = createPostgresDirectoryStore(databaseUrl);
   const vouchedInternalEmail = async (email: string): Promise<boolean> => {
     await identity.refresh();
     return (
@@ -1922,6 +1925,7 @@ export function buildApp(
           deploymentEnv: async (deployment: Deployment): Promise<Record<string, string>> => {
             const orgScope = scopeId("org", config.orgId);
             const credentials = await deploymentCredentialSlugs(
+              ambientTenant(),
               await serviceCreds.listServiceCredentials(orgScope),
               orgScope,
               acl,
@@ -2009,6 +2013,13 @@ export function buildApp(
     statements: [
       "CREATE TABLE IF NOT EXISTS crons (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
       "UPDATE crons SET json = json - 'fireLog' WHERE json ? 'fireLog'",
+    ],
+  });
+  pgArtifactMap.pool.registerMigration({
+    id: "durable-map/sandbox_resources/0001-drop-machine-id",
+    statements: [
+      "CREATE TABLE IF NOT EXISTS sandbox_resources (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
+      "UPDATE sandbox_resources SET json = json - 'machineId' WHERE json ? 'machineId'",
     ],
   });
   pgArtifactMap.pool.registerMigration({
@@ -2475,7 +2486,10 @@ export function buildApp(
     surfaceCache,
     taskAcknowledgements: artifactMap<TaskAckState>("slack_task_acknowledgements"),
     sessionStatus: artifactMap<SlackSessionStatusState>("slack_session_status"),
-    statusActivity: { processes, monitors, sessions, publicWebUrl: config.publicWebUrl },
+    statusActivity: {
+      work: createSessionWork({ runs, sessions, ...(processes ? { processes } : {}), monitors, deliveries }),
+      publicWebUrl: config.publicWebUrl,
+    },
     featureFlags,
     inboxEvent: (event) => inboxRealtime.onConversationEvent(event),
     app,
@@ -2874,7 +2888,7 @@ export function buildApp(
                 processes: processes!,
                 finish: finishCredentials,
                 onError: (error, scopeId) =>
-                  errors.record(
+                  recordAmbientError(
                     {
                       category: "process_session",
                       code: "job_computer_retire_failed",

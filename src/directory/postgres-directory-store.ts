@@ -179,6 +179,27 @@ export function createPostgresDirectoryStore(connectionString: string): Director
   const orgId = configOrgId();
   const { q, pool } = createPgPool(connectionString, DIRECTORY_MIGRATIONS);
 
+  async function getMany(principalIds: readonly string[]): Promise<Map<string, DirectoryMember>> {
+    if (!principalIds.length) return new Map();
+    const emails = principalIds.map(foldPrincipalId).filter((id) => id.includes("@"));
+    const rows = (
+      await q(
+        `SELECT ${MEMBER_COLS} FROM directory_members WHERE org_id = $1
+        AND (principal_id = ANY($2::text[]) OR lower(principal_id) = ANY($3::text[]))`,
+        [orgId, principalIds, emails],
+      )
+    ).map(memberRow);
+    return new Map(
+      principalIds.flatMap((id) => {
+        const key = foldPrincipalId(id);
+        const row =
+          rows.find((member) => member.principalId === id) ??
+          (key.includes("@") ? rows.find((member) => member.principalId.toLowerCase() === key) : undefined);
+        return row ? [[id, row]] : [];
+      }),
+    );
+  }
+
   async function pick<T>(
     query: string,
     table: string,
@@ -248,7 +269,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
         withTenant(String(id), async () => {
           const [tenant] = await q(
             `SELECT settings->>'brandName' AS brand, qm_tenant_handle(settings) AS handle,
-                    settings->>'serving' IS DISTINCT FROM 'false' OR qm_boot_tenant() IS NOT NULL AS serving
+                    id IN (SELECT qm_serving_tenants()) AS serving
                FROM tenants WHERE id = $1`,
             [id],
           );
@@ -461,15 +482,9 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       return rows.map(channelRow);
     },
 
+    getMany,
     async get(principalId) {
-      const key = foldPrincipalId(principalId);
-      const rows = await q(
-        `SELECT ${MEMBER_COLS} FROM directory_members
-         WHERE org_id = $1 AND (principal_id = $2 OR ($3 AND lower(principal_id) = $4))
-         ORDER BY (principal_id = $2) DESC LIMIT 1`,
-        [orgId, principalId, key.includes("@"), key],
-      );
-      return rows.length ? memberRow(rows[0]!) : null;
+      return (await getMany([principalId])).get(principalId) ?? null;
     },
 
     async getBySlackId(slackId) {

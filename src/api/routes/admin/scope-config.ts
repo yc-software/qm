@@ -65,7 +65,7 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
     let ruleSource: "organization" | "scope" | null = null;
     if (effectiveRuleIndex >= 0) ruleSource = effectiveRuleIndex < orgRuleCount ? "organization" : "scope";
     const ruleIndex = effectiveRuleIndex < 0 ? null : effectiveRuleIndex - (ruleSource === "scope" ? orgRuleCount : 0);
-    audit(deps, {
+    audit(ctx, {
       principalId: actor.id,
       action: "command-policy.simulate",
       resource: "command-policy",
@@ -95,7 +95,7 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
       await deps.config!.refreshScope(targetScope);
       throw err;
     }
-    audit(deps, { principalId: actor.id, action: `${resource}.update`, resource, scopeLabel: targetScope });
+    audit(ctx, { principalId: actor.id, action: `${resource}.update`, resource, scopeLabel: targetScope });
     return sendJson(res, 200, { ok: true, scopeId: targetScope, resource });
   });
 }
@@ -106,7 +106,7 @@ export async function getAdminResources(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
   await deps.refreshModels?.();
-  audit(deps, { principalId: actor.id, action: "resources.read", resource: "resources", scopeLabel: scope });
+  audit(ctx, { principalId: actor.id, action: "resources.read", resource: "resources", scopeLabel: scope });
   return sendJson(res, 200, { resources: adminResourceManifest() });
 }
 
@@ -122,7 +122,7 @@ export async function whoami(ctx: ApiCtx): Promise<void> {
   const actor = adminActorFrom(ctx);
   const status = actor ? await adminPermissions(deps, tenantOf(ctx), actor) : null;
   if (!actor || !status) return sendJson(res, 200, { isAdmin: false, permissions: [] });
-  audit(deps, {
+  audit(ctx, {
     principalId: actor.id,
     action: "admin.whoami",
     resource: "whoami",
@@ -136,7 +136,7 @@ export async function listAdminScopes(ctx: ApiCtx): Promise<void> {
   const scope = orgScope(deps);
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
-  audit(deps, { principalId: actor.id, action: "scopes.read", resource: "scopes", scopeLabel: scope });
+  audit(ctx, { principalId: actor.id, action: "scopes.read", resource: "scopes", scopeLabel: scope });
   const [crons, deployments, skills, environmentRows] = await Promise.all([
     app.listCrons(),
     app.listDeployments(),
@@ -269,10 +269,10 @@ const SETTINGS_RESOURCES = {
 
 type SettingsView = keyof typeof SETTINGS_RESOURCES;
 
-async function scopeServiceCredentials(deps: ApiCtx["deps"], targetScope: string) {
+async function scopeServiceCredentials(deps: ApiCtx["deps"], tenant: Tenant, targetScope: string) {
   const [credentials, grants] = await Promise.all([
     deps.serviceCreds?.listServiceCredentials(targetScope) ?? [],
-    deps.acl?.find({ ownerScopeId: targetScope, kind: "service-cred" }) ?? [],
+    deps.acl?.find(tenant, { ownerScopeId: targetScope, kind: "service-cred" }) ?? [],
   ]);
   const grantees = new Map<string, string[]>();
   for (const grant of grants) {
@@ -292,7 +292,10 @@ export async function getCredentialUsageSummary(ctx: ApiCtx): Promise<void> {
   if (!(await authorizeAdmin(ctx, targetScope))) return;
   const credentials = (await ctx.deps.serviceCreds?.listServiceCredentials(targetScope)) ?? [];
   if (!ctx.deps.credentialUsage) return sendJson(ctx.res, 503, { error: "usage_unavailable" });
-  const summaries = await ctx.deps.credentialUsage.summary(credentials.map((credential) => credential.slug));
+  const summaries = await ctx.deps.credentialUsage.summary(
+    tenantOf(ctx),
+    credentials.map((credential) => credential.slug),
+  );
   return sendJson(ctx.res, 200, { summaries });
 }
 
@@ -412,7 +415,7 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
     needsConfig ? read("config", () => deps.config!.refreshScope(targetScope)) : undefined,
     needsModels ? read("modelRegistry", () => deps.refreshModels?.()) : undefined,
   ]);
-  audit(deps, { principalId: actor.id, action: "config.read", resource: "config", scopeLabel: targetScope });
+  audit(ctx, { principalId: actor.id, action: "config.read", resource: "config", scopeLabel: targetScope });
   const selectedKeys: readonly string[] | undefined = view === null ? undefined : SETTINGS_RESOURCES[view];
   const resources = ADMIN_RESOURCES.filter(
     (r) => r.readKey && r.get && (!selectedKeys || selectedKeys.includes(r.readKey)),
@@ -427,10 +430,14 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
     egress,
   ] = await Promise.all([
     Promise.all(
-      resources.map(async (r) => [r.readKey!, await read(r.readKey!, () => r.get!(deps, targetScope))] as const),
+      resources.map(
+        async (r) => [r.readKey!, await read(r.readKey!, () => r.get!(deps, targetScope, tenantOf(ctx)))] as const,
+      ),
     ),
     view === "connectors" ? {} : read("environment", () => scopeEnvironmentMetadata(deps, targetScope)),
-    includes("credentials") ? read("credentials", () => scopeServiceCredentials(deps, targetScope)) : undefined,
+    includes("credentials")
+      ? read("credentials", () => scopeServiceCredentials(deps, tenantOf(ctx), targetScope))
+      : undefined,
     includes("credentials") && parseScopeId(targetScope).kind === "org"
       ? read("people", () => deps.directory?.list())
       : undefined,
@@ -481,7 +488,7 @@ export async function retention(ctx: ApiCtx): Promise<void> {
   }
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
-  audit(deps, { principalId: actor.id, action: "retention.read", resource: "retention", scopeLabel: scope });
+  audit(ctx, { principalId: actor.id, action: "retention.read", resource: "retention", scopeLabel: scope });
   const sessionCount = (await deps.sessions?.countSessions()) ?? 0;
   const activity = (await deps.admin?.users.activity()) ?? [];
   const report = computeRetention({ sessionCount, activity, nowMs: Date.now() });

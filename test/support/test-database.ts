@@ -81,6 +81,12 @@ export function testMap<T>(indexedFields?: readonly Extract<keyof T, string>[]):
   return sharedDatabase().maps.map<T>(`t_${randomBytes(8).toString("hex")}`, indexedFields);
 }
 
+export async function readyTestMap<T>(): Promise<DurableMap<T>> {
+  const map = testMap<T>();
+  await map.get("");
+  return map;
+}
+
 export function testPgPool(): PgPool {
   return createPgPool(sharedDatabase().url);
 }

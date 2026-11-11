@@ -5,7 +5,7 @@ import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment } fr
 import { DELIVERY_MAX_AGE_MS, logDeliveryExpiry, type DeliveryStore } from "./delivery-store.ts";
 import { pgTextSafe } from "../util/text.ts";
 import { tenantTables } from "../tenants/migrations.ts";
-import { claimFunction, claimRows, claimThenLoad } from "../tenants/claim.ts";
+import { claimFunction, claimRows, claimThenLoad, servingTenant } from "../tenants/claim.ts";
 
 const NOW_MS_SQL = "(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT";
 const CLAIMABLE = `delivered_at IS NULL AND expired_at IS NULL AND NOT shadow
@@ -30,6 +30,34 @@ function rowToDelivery(r: Record<string, unknown>): Delivery {
     ...(r.slack_api_ms != null ? { slackApiMs: Number(r.slack_api_ms) } : {}),
   };
 }
+
+const claimDeliveries = (gate: (column: string) => string) =>
+  claimFunction(
+    "claim_deliveries",
+    "text, bigint",
+    `SELECT pg_advisory_xact_lock(hashtext('deliveries:claim:' || $1));
+          UPDATE deliveries SET claim_expires_at = ${NOW_MS_SQL} + $2
+            WHERE (tenant_id, id) IN (
+              SELECT tenant_id, id FROM deliveries d
+               WHERE ${CLAIMABLE} AND destination->>'type' = $1${gate("d.tenant_id")}
+                 AND NOT EXISTS (
+                   SELECT 1 FROM deliveries o
+                    WHERE o.tenant_id = d.tenant_id AND o.destination->>'type' = $1
+                      AND o.destination->>'target' = d.destination->>'target'
+                      AND o.delivered_at IS NULL AND o.expired_at IS NULL AND NOT o.shadow
+                      AND (o.claim_expires_at > ${NOW_MS_SQL} OR (o.created_at, o.id) < (d.created_at, d.id)))
+               ORDER BY created_at
+               FOR UPDATE SKIP LOCKED)
+            RETURNING tenant_id, id::text`,
+  );
+
+const undeliveredTenants = (gate: (column: string) => string) =>
+  claimFunction(
+    "undelivered_delivery_tenants",
+    "text",
+    `SELECT DISTINCT tenant_id, $1 FROM deliveries
+            WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow AND destination->>'type' = $1${gate("tenant_id")}`,
+  );
 
 export function createPostgresDeliveryStore(connectionString: string, opts?: { maxAgeMs?: number }): DeliveryStore {
   const maxAgeMs = opts?.maxAgeMs ?? DELIVERY_MAX_AGE_MS;
@@ -106,24 +134,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
             WHERE (tenant_id, id) IN (SELECT tenant_id, id FROM deliveries WHERE ${OVERAGED} FOR UPDATE SKIP LOCKED)
             RETURNING tenant_id, id::text`,
         ),
-        claimFunction(
-          "claim_deliveries",
-          "text, bigint",
-          `SELECT pg_advisory_xact_lock(hashtext('deliveries:claim:' || $1));
-          UPDATE deliveries SET claim_expires_at = ${NOW_MS_SQL} + $2
-            WHERE (tenant_id, id) IN (
-              SELECT tenant_id, id FROM deliveries d
-               WHERE ${CLAIMABLE} AND destination->>'type' = $1
-                 AND NOT EXISTS (
-                   SELECT 1 FROM deliveries o
-                    WHERE o.tenant_id = d.tenant_id AND o.destination->>'type' = $1
-                      AND o.destination->>'target' = d.destination->>'target'
-                      AND o.delivered_at IS NULL AND o.expired_at IS NULL AND NOT o.shadow
-                      AND (o.claim_expires_at > ${NOW_MS_SQL} OR (o.created_at, o.id) < (d.created_at, d.id)))
-               ORDER BY created_at
-               FOR UPDATE SKIP LOCKED)
-            RETURNING tenant_id, id::text`,
-        ),
+        claimDeliveries(() => ""),
       ],
     },
     {
@@ -152,15 +163,11 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
     },
     {
       id: "delivery/store/0012-undelivered-tenants",
-      statements: [
-        "DROP FUNCTION IF EXISTS undelivered_deliveries(text)",
-        claimFunction(
-          "undelivered_delivery_tenants",
-          "text",
-          `SELECT DISTINCT tenant_id, $1 FROM deliveries
-            WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow AND destination->>'type' = $1`,
-        ),
-      ],
+      statements: ["DROP FUNCTION IF EXISTS undelivered_deliveries(text)", undeliveredTenants(() => "")],
+    },
+    {
+      id: "delivery/store/0013-serving-claims",
+      statements: [claimDeliveries(servingTenant), undeliveredTenants(servingTenant)],
     },
   ]);
   const { q, query } = pg;
@@ -222,12 +229,13 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       if (!existing[0]) throw new Error(`delivery enqueue lost a race for key ${input.idempotencyKey}`);
       return rowToDelivery(existing[0]);
     },
-    async pending(type) {
+    async pending(type, sourceThreadRef) {
       const rows = await q(
         `SELECT * FROM deliveries
           WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow AND destination->>'type' = $1
+            AND ($2::text IS NULL OR provenance->>'sourceThreadRef' = $2)
           ORDER BY created_at`,
-        [type],
+        [type, sourceThreadRef ?? null],
       );
       return rows.map(rowToDelivery);
     },
@@ -265,6 +273,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         `UPDATE deliveries
             SET delivered_at = $2,
                 expired_at = NULL,
+                failed_reason = NULL,
                 deliver_latency_ms = GREATEST(0, $2 - created_at),
                 slack_api_ms = COALESCE($3, slack_api_ms)
           WHERE id = $1 AND delivered_at IS NULL`,
@@ -287,7 +296,8 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
          VALUES ($1, $2, '{"type":"ack-tombstone","target":""}', '', $3, $3)
          ON CONFLICT (tenant_id, idempotency_key)
          DO UPDATE SET delivered_at = COALESCE(deliveries.delivered_at, EXCLUDED.delivered_at),
-                       expired_at = CASE WHEN deliveries.delivered_at IS NULL THEN NULL ELSE deliveries.expired_at END`,
+                       expired_at = CASE WHEN deliveries.delivered_at IS NULL THEN NULL ELSE deliveries.expired_at END,
+                       failed_reason = CASE WHEN deliveries.delivered_at IS NULL THEN NULL ELSE deliveries.failed_reason END`,
         [randomUUID(), idempotencyKey, at],
       );
     },
@@ -311,6 +321,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         `UPDATE deliveries
             SET recipient_thread_ref = $2,
                 expired_at = CASE WHEN delivered_at IS NULL THEN NULL ELSE expired_at END,
+                failed_reason = CASE WHEN delivered_at IS NULL THEN NULL ELSE failed_reason END,
                 delivered_at = COALESCE(delivered_at, $3)
           WHERE id = $1 AND destination->>'type' = 'principal'`,
         [id, recipientThreadRef, at],

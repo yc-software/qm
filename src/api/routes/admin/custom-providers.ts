@@ -39,7 +39,7 @@ export async function getCustomProviders(ctx: ApiCtx): Promise<void> {
   const authorized = await actor(ctx);
   if (!authorized) return;
   if (!ctx.deps.customProviders) return sendJson(ctx.res, 404, { error: "not_found" });
-  audit(ctx.deps, {
+  audit(ctx, {
     principalId: authorized.id,
     action: "custom-providers.read",
     resource: "custom-providers",
@@ -93,7 +93,7 @@ export async function putCustomProvider(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 400, { error: "bad_request", message: errMessage(e) });
   }
   await ctx.deps.refreshCustomProviders?.();
-  audit(ctx.deps, {
+  audit(ctx, {
     principalId: authorized.id,
     action: "custom-providers.update",
     resource: id,
@@ -112,7 +112,7 @@ export async function deleteCustomProvider(ctx: ApiCtx): Promise<void> {
   const removed = await ctx.deps.customProviders.delete(id, authorized.id);
   if (!removed) return sendJson(ctx.res, 404, { error: "not_found" });
   await ctx.deps.refreshCustomProviders?.();
-  audit(ctx.deps, {
+  audit(ctx, {
     principalId: authorized.id,
     action: "custom-providers.delete",
     resource: id,

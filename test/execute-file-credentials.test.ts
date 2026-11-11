@@ -1,3 +1,4 @@
+import { testTenant } from "./support/test-tenant.ts";
 import { finishProcessCredentials, prepareExecutionFiles } from "../src/credentials/execute-files.ts";
 import { createBackgroundBroker } from "../src/connectors/background-exec-broker.ts";
 import assert from "node:assert/strict";
@@ -76,6 +77,7 @@ async function fixture(t: TestContext) {
   let resolutions = 0;
   const context = (extra: Partial<ToolContextDeps> = {}, scratchOnly = false) =>
     createToolContext({
+      tenant: testTenant,
       sandbox,
       provision: async () => handle,
       provisionScratch: async () => ({ ...handle, id: "scratch" }),

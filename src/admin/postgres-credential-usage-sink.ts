@@ -49,25 +49,25 @@ export function createPostgresCredentialUsageSink(connectionString: string): Cre
   });
   return {
     ...sink,
-    async admitDailyCall(slug, cap) {
-      const rows = await sink.q(
-        `INSERT INTO credential_daily_calls(slug, day, sent) VALUES ($1, $2, 1)
+    async admitDailyCall(tenant, slug, cap) {
+      const rows = await sink.forTenant(tenant).q(
+        `INSERT INTO credential_daily_calls(tenant_id, slug, day, sent) VALUES ($1, $2, $3, 1)
          ON CONFLICT (tenant_id, slug, day) DO UPDATE SET sent = credential_daily_calls.sent + 1
-         WHERE credential_daily_calls.sent < $3
+         WHERE credential_daily_calls.sent < $4
          RETURNING sent`,
-        [slug, utcDayStart(Date.now()), cap],
+        [tenant.id, slug, utcDayStart(Date.now()), cap],
       );
       return rows.length > 0;
     },
-    async summary(slugs) {
+    async summary(tenant, slugs) {
       if (!slugs.length) return [];
-      const rows = await sink.q(
+      const rows = await sink.forTenant(tenant).q(
         `SELECT requested.slug, summary.*
          FROM unnest($1::text[]) AS requested(slug)
          CROSS JOIN LATERAL (
            WITH recent AS (
              SELECT id, ts, status, principal_id FROM credential_usage
-             WHERE slug = requested.slug ORDER BY ts DESC, id DESC LIMIT $2
+             WHERE tenant_id = $3 AND slug = requested.slug ORDER BY ts DESC, id DESC LIMIT $2
            )
            SELECT count(*) FILTER (WHERE status = 'ok') AS usage_count,
              count(*) = $2 AS usage_truncated,
@@ -79,7 +79,7 @@ export function createPostgresCredentialUsageSink(connectionString: string): Cre
              ) AS latest ORDER BY ts DESC, id DESC LIMIT 12) AS principals
            FROM recent
          ) AS summary`,
-        [[...new Set(slugs)], CREDENTIAL_USAGE_WINDOW],
+        [[...new Set(slugs)], CREDENTIAL_USAGE_WINDOW, tenant.id],
       );
       return rows.map((row) => ({
         slug: String(row.slug),

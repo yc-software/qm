@@ -1,7 +1,7 @@
 import { parseScopeId, type Principal } from "../../types.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
-import type { ApiCtx, Route } from "./route.ts";
+import { tenantOf, type ApiCtx, type Route } from "./route.ts";
 function conversationPrincipals(ctx: ApiCtx): Principal[] | null {
   const capability = ctx.capability!;
   const { kind } = parseScopeId(capability.scopeId);
@@ -24,7 +24,7 @@ async function search(ctx: ApiCtx): Promise<void> {
       message: "search requires the complete principal set for a shared conversation",
     });
   const result = await ctx.app.search(query, principals, typeof body.limit === "number" ? body.limit : undefined);
-  ctx.deps.auditLog?.record({
+  ctx.deps.auditLog?.record(tenantOf(ctx), {
     at: Date.now(),
     principalId: ctx.capability.actorId,
     action: "search.query",

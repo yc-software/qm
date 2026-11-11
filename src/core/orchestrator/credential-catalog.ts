@@ -22,8 +22,10 @@ import type { IsCurrentSharedScopeMember } from "../../resolution/scope-membersh
 import type { CommandCredential } from "../../tools/primitives.ts";
 import { personalScope, type ScopeId } from "../../types.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
+import type { Tenant } from "../../tenants/context.ts";
 
 export interface CredentialCatalogTurn {
+  tenant: Tenant;
   deps: OrchestratorDeps;
   input: OrchestratorInput;
   actor: OrchestratorInput["actor"];
@@ -384,7 +386,7 @@ export async function registerServiceCredentials(
 }
 
 export function registerBrokeredTools(catalog: CredentialCatalog): void {
-  const { deps, actor, scopeId, strictReadOnly, brokeredTools, addCredentialToCatalog } = catalog;
+  const { tenant, deps, actor, scopeId, strictReadOnly, brokeredTools, addCredentialToCatalog } = catalog;
   if (!strictReadOnly && actor.type === "internal") {
     for (const tool of brokeredTools) {
       const broker = deps.layerBrokerFor?.(tool);
@@ -397,7 +399,7 @@ export function registerBrokeredTools(catalog: CredentialCatalog): void {
             try {
               aws = await broker.credsForActor(actor.id);
             } catch {
-              deps.credentialUsage?.record({
+              deps.credentialUsage?.record(tenant, {
                 slug: tool.service,
                 host: "sts.amazonaws.com",
                 status: "unavailable",
@@ -406,7 +408,7 @@ export function registerBrokeredTools(catalog: CredentialCatalog): void {
               });
               throw new Error(`Could not vend credentials for ${tool.service}`);
             }
-            deps.credentialUsage?.record({
+            deps.credentialUsage?.record(tenant, {
               slug: tool.service,
               host: "sts.amazonaws.com",
               status: "vended",
@@ -435,6 +437,7 @@ export function registerBrokeredTools(catalog: CredentialCatalog): void {
 }
 
 export async function loadServiceCredentialGrants(turn: {
+  tenant: Tenant;
   deps: OrchestratorDeps;
   conversation: OrchestratorInput["conversation"];
   scopeId: ScopeId;
@@ -442,13 +445,14 @@ export async function loadServiceCredentialGrants(turn: {
   strictReadOnly: boolean;
   serviceAllowed: (slug: string) => boolean;
 }) {
-  const { deps, conversation, scopeId, resolution, strictReadOnly, serviceAllowed } = turn;
+  const { tenant, deps, conversation, scopeId, resolution, strictReadOnly, serviceAllowed } = turn;
   const orgServiceCreds =
     !strictReadOnly && deps.serviceCreds ? await deps.serviceCreds.listServiceCredentials(resolution.orgScopeId) : [];
   const aclGrantedServiceCredSlugs = async (): Promise<Set<string>> =>
     new Set(
       (
         await deps.acl.grantsOfKind(
+          tenant,
           "service-cred",
           conversation.audience,
           scopeId,

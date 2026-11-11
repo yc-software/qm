@@ -191,14 +191,14 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
         },
         judgeBatch,
       ).catch((e: unknown) => {
-        deps.errors?.record(
+        h.recordError(
           { category: "ambient", code: "judge_failed", message: errMessage(e), scopeLabel: containerScope },
           e,
         );
         return { act: false } as AmbientDecision;
       });
       if (decision.startError)
-        deps.errors?.record({
+        h.recordError({
           category: "ambient",
           code: "worker_start_failed",
           message: decision.startError,
@@ -332,6 +332,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
           surface: batch.surface,
           ...(surfaceOrigin ? { surfaceOrigin } : {}),
           actor: { externalId: `system:ambient:${orgIdOf()}` },
+          ...(batch.messages.some((m) => m.bot) ? { botActor: true } : {}),
           conversation,
           deliveryTarget: batch.container,
           text: buildWakeEnvelope({
@@ -381,6 +382,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
         hasFiles: false,
         actorId: req.actor.externalId,
         modelAccount: "company",
+        ...(req.botActor ? { bot: true } : {}),
         ...(req.idempotencyKey ? { dedupKey: req.idempotencyKey } : {}),
         routed: false,
       },

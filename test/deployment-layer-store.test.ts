@@ -1,4 +1,5 @@
 import test from "node:test";
+import { testTenant } from "./support/test-tenant.ts";
 import assert from "node:assert/strict";
 import {
   createDeploymentLayerStore,
@@ -968,7 +969,7 @@ test("a later hydrate reconciles a persisted layer audit exactly once", async ()
   }).put({ contract: 1, tools: [tool("persisted before crash")], skills: [] }, "source-cli");
   const audit = createPostgresAuditLog(testDatabaseUrl());
   const auditPersisted = (stored: StoredDeploymentLayer) =>
-    audit.recordOnce!(`deployment-layer:${org}:${stored.version}`, {
+    audit.recordOnce!(testTenant, `deployment-layer:${org}:${stored.version}`, {
       at: stored.updatedAt,
       principalId: stored.updatedBy,
       action: "deployment_layer.updated",
@@ -986,7 +987,7 @@ test("a later hydrate reconciles a persisted layer audit exactly once", async ()
   await recovered.hydrate();
   await recovered.hydrate();
 
-  const events = await audit.events();
+  const events = await audit.events(testTenant);
   assert.equal(events.length, 1);
   assert.equal(events[0]?.resource, record.contentHash);
   assert.equal(events[0]?.principalId, "source-cli");

@@ -26,7 +26,13 @@ import {
 import { killableScript, killScript } from "./exec-kill.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import { sandboxScopeName } from "./exec-sandbox-base.ts";
-import { ModalNameConflictError, ModalSandboxGoneError, type ModalClient, type ModalSession } from "./modal-client.ts";
+import {
+  DEFAULT_MEMORY_MB,
+  ModalNameConflictError,
+  ModalSandboxGoneError,
+  type ModalClient,
+  type ModalSession,
+} from "./modal-client.ts";
 import {
   attemptSnapshot,
   createHomeSnapshotOps,
@@ -130,6 +136,10 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
   const sizeByScope = new TenantKeyedMap<number>();
   const scratchKeyByName = new TenantKeyedMap<string>();
   const activeScratch = new TenantKeyedMap<number>();
+  const cachedFor = (name: string, sandboxId: string | undefined): ModalSession | undefined => {
+    const session = sessionByName.get(name);
+    return session && session.sandboxId === sandboxId ? session : undefined;
+  };
 
   const reportError = (category: string, code: string, message: string, scopeLabel?: string): void => {
     opts.onError?.({ category, code, message, ...(scopeLabel ? { scopeLabel } : {}) });
@@ -300,7 +310,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
         Date.now() - stored.createdAtMs > rotateAfterMs &&
         Date.now() >= (rotationHoldUntil.get(scope) ?? 0);
 
-      const cached = sessionByName.get(name);
+      const cached = cachedFor(name, stored?.sandboxId);
       if (cached && !stale) return { session: cached, coldStart: false };
 
       if (stored && !stale) {
@@ -400,7 +410,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
         ? { session: sessionByName.get(name) ?? (await reviveScratch()) }
         : {
             session:
-              sessionByName.get(name) ??
+              cachedFor(name, (await store.get(scopeByName.get(name) ?? "default"))?.sandboxId) ??
               (await ensureSession(scopeByName.get(name) ?? "default", name, undefined, false)).session,
           };
     try {
@@ -478,6 +488,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
       get notInstalled() {
         return visibleNotInstalled(["gh", "aws", "gcloud", "kubectl", "flyctl", "glab"], opts.extraTools ?? []);
       },
+      memoryMb: DEFAULT_MEMORY_MB,
       homeDir: HOME_DIR,
       workdir: workspaceDir,
     },
@@ -632,7 +643,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
     scopeByName.set(name, scope);
     let session: ModalSession | undefined;
     try {
-      session = sessionByName.get(name) ?? (await client.fromId(rec.sandboxId));
+      session = cachedFor(name, rec.sandboxId) ?? (await client.fromId(rec.sandboxId));
     } catch (e) {
       if (!(e instanceof ModalSandboxGoneError)) {
         reportError("sandbox_reap", "deep_idle_probe_failed", errMessage(e), scope);
@@ -642,7 +653,9 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
     if (!session) {
       sessionByName.delete(name);
       if (!rec.nativeSnapshotId)
-        await store.delete(scope).catch(swallowAs("modal-sandbox: forget retired sandbox", undefined));
+        await store
+          .deleteIf(scope, (current) => current.sandboxId === rec.sandboxId && !current.nativeSnapshotId)
+          .catch(swallowAs("modal-sandbox: forget retired sandbox", undefined));
       else if (checkpointRenewalDue(rec, now)) await renewCheckpoint(scope, name, rec);
       return 0;
     }
@@ -660,7 +673,9 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
         if (e instanceof ModalSandboxGoneError) {
           sessionByName.delete(name);
           if (!rec.nativeSnapshotId)
-            await store.delete(scope).catch(swallowAs("modal-sandbox: forget retired sandbox", undefined));
+            await store
+              .deleteIf(scope, (current) => current.sandboxId === rec.sandboxId && !current.nativeSnapshotId)
+              .catch(swallowAs("modal-sandbox: forget retired sandbox", undefined));
         } else {
           reportError("sandbox_reap", "deep_idle_probe_failed", errMessage(e), scope);
         }
@@ -882,10 +897,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
         };
       try {
         scopeByName.set(name, scopeId);
-        let session = sessionByName.get(name);
-        if (!session) {
-          session = await client.fromId(stored.sandboxId);
-        }
+        const session = cachedFor(name, stored.sandboxId) ?? (await client.fromId(stored.sandboxId));
         const r = await session.runCommand("echo responsive", { timeoutMs: 30_000 });
         return {
           machine,
@@ -927,10 +939,10 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
       if (tdOpts?.destroy && !scopeByName.has(handle.id)) return;
       const scope = scopeByName.get(handle.id) ?? "default";
       return provisionQueue(scope, async () => {
-        const session = sessionByName.get(handle.id);
         if (tdOpts?.destroy) return destroyStoredScope(scope);
-        if (!session) return;
         const stored = await store.get(scope);
+        const session = cachedFor(handle.id, stored?.sandboxId);
+        if (!session) return;
         if (!tdOpts?.homeUnchanged) await store.merge(scope, { homeDirty: true });
         if (snapshotDue(stored, tdOpts, snapshotIntervalMs))
           await attemptSnapshot(

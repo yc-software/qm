@@ -15,7 +15,7 @@ export function emptyEndingNote(opts: {
   userAborted: boolean;
   cancelled: boolean;
   surfaceTools: boolean;
-  pollFire: boolean;
+  replyOptional: boolean;
   ref: {
     runtimeHandoff?: unknown;
     silentRequested?: boolean;
@@ -30,7 +30,7 @@ export function emptyEndingNote(opts: {
 }): string | null {
   if (opts.wallClock !== "ok" || opts.userAborted || opts.cancelled || opts.surfaceTools) return null;
   if (endedOnPurpose(opts.ref) || opts.ref.pendingApprovals?.length) return null;
-  if (opts.pollFire) return null;
+  if (opts.replyOptional) return null;
   const calls = opts.ref.modelCalls ?? 0;
   if (calls === 0) return null;
   if (piFailedAssistant(opts.session)) return null;

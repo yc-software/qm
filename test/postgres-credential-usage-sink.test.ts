@@ -1,4 +1,5 @@
 import { test, before } from "node:test";
+import { testTenant } from "./support/test-tenant.ts";
 import assert from "node:assert/strict";
 import { createPostgresCredentialUsageSink } from "../src/admin/postgres-credential-usage-sink.ts";
 import { scopeId } from "../src/types.ts";
@@ -27,7 +28,7 @@ test(
 
     const now = Date.now();
     const clock = t.mock.method(Date, "now", () => now);
-    sink.record({
+    sink.record(testTenant, {
       slug: "x-firehose",
       host: "api.x.com",
       status: "ok",
@@ -36,11 +37,11 @@ test(
       principalId: "U1",
     });
     clock.mock.mockImplementation(() => now + 1);
-    sink.record({ slug: "serp", host: "serpapi.com", status: "denied", scopeLabel: s2, principalId: "U2" });
+    sink.record(testTenant, { slug: "serp", host: "serpapi.com", status: "denied", scopeLabel: s2, principalId: "U2" });
     clock.mock.restore();
-    await settle(async () => (await sink.list({ limit: 100 })).length === 2);
+    await settle(async () => (await sink.list(testTenant, { limit: 100 })).length === 2);
 
-    const all = await sink.list({ limit: 100 });
+    const all = await sink.list(testTenant, { limit: 100 });
     assert.equal(all.length, 2, "both brokered calls persisted");
     assert.equal(all[0]!.ts, now + 1);
     assert.equal(all[1]!.ts, now);
@@ -48,25 +49,25 @@ test(
     assert.equal(all[0]!.status, "denied");
     assert.equal(all[0]!.upstreamStatus, undefined, "an absent upstream status stays absent (not 0)");
 
-    const onlyS1 = await sink.list({ scopeId: s1, limit: 100 });
+    const onlyS1 = await sink.list(testTenant, { scopeId: s1, limit: 100 });
     assert.equal(onlyS1.length, 1, "scope filter narrows to one");
     assert.equal(onlyS1[0]!.host, "api.x.com");
     assert.equal(onlyS1[0]!.slug, "x-firehose");
     assert.equal(onlyS1[0]!.upstreamStatus, 200, "captured upstream status round-trips");
     assert.equal(onlyS1[0]!.principalId, "U1");
 
-    const onlySlug = await sink.list({ slug: "serp", limit: 100 });
+    const onlySlug = await sink.list(testTenant, { slug: "serp", limit: 100 });
     assert.equal(onlySlug.length, 1, "slug filter narrows to one");
     assert.equal(onlySlug[0]!.scopeLabel, s2);
 
-    const future = await sink.list({ since: Date.now() + 60_000, limit: 100 });
+    const future = await sink.list(testTenant, { since: Date.now() + 60_000, limit: 100 });
     assert.equal(future.length, 0, "nothing at/after a future cutoff");
   },
 );
 
 test("pg credential-usage sink: survives a fresh sink over the same table (durability)", { skip }, async () => {
   const reopened = createPostgresCredentialUsageSink(URL!);
-  const rows = await reopened.list({ limit: 100 });
+  const rows = await reopened.list(testTenant, { limit: 100 });
   assert.ok(rows.length >= 2, "calls written by a prior sink instance are still readable");
 });
 
@@ -133,7 +134,7 @@ test("pg credential summaries aggregate a bounded window without transferring ra
     status: (i + 1) % 3 === 0 ? "denied" : "ok",
     principalId: "person-" + ((i + 1) % 20),
   }));
-  assert.deepEqual(await sink.summary(["summary-window", "summary-absent", "summary-window"]), [
+  assert.deepEqual(await sink.summary(testTenant, ["summary-window", "summary-absent", "summary-window"]), [
     windowSummary("summary-window", windowEvents, CREDENTIAL_USAGE_WINDOW),
     windowSummary("summary-absent", [], CREDENTIAL_USAGE_WINDOW),
   ]);
@@ -145,11 +146,11 @@ test("pg credential summaries aggregate a bounded window without transferring ra
     status: "ok",
     principalId: "person-" + (i + 1),
   }));
-  assert.deepEqual(await sink.summary(["summary-ties"]), [
+  assert.deepEqual(await sink.summary(testTenant, ["summary-ties"]), [
     windowSummary("summary-ties", tiedEvents, CREDENTIAL_USAGE_WINDOW),
   ]);
-  assert.deepEqual(await sink.summary([]), []);
-  assert.equal((await sink.summary(["serp"]))[0]!.usageCount, 0);
+  assert.deepEqual(await sink.summary(testTenant, []), []);
+  assert.equal((await sink.summary(testTenant, ["serp"]))[0]!.usageCount, 0);
 });
 
 test("pg credential summaries do not wait for pending telemetry writes", { skip }, async (t) => {
@@ -157,16 +158,16 @@ test("pg credential summaries do not wait for pending telemetry writes", { skip 
   const pool = new pg.Pool({ connectionString: URL });
   const locker = await pool.connect();
   const sink = createPostgresCredentialUsageSink(URL!);
-  await sink.summary(["summary-blocked"]);
+  await sink.summary(testTenant, ["summary-blocked"]);
   await locker.query("BEGIN");
   await locker.query("LOCK TABLE credential_usage IN SHARE MODE");
   t.after(async () => {
     await locker.query("ROLLBACK");
     locker.release();
-    await sink.list({ slug: "summary-blocked" });
+    await sink.list(testTenant, { slug: "summary-blocked" });
     await pool.end();
   });
-  sink.record({
+  sink.record(testTenant, {
     slug: "summary-blocked",
     host: "example.com",
     status: "ok",
@@ -174,7 +175,7 @@ test("pg credential summaries do not wait for pending telemetry writes", { skip 
     principalId: "summary",
   });
   const result = await Promise.race([
-    sink.summary(["summary-blocked"]),
+    sink.summary(testTenant, ["summary-blocked"]),
     new Promise<never>((_, reject) => {
       const timer = setTimeout(() => reject(new Error("summary waited for blocked write")), 2000);
       timer.unref();
@@ -186,9 +187,9 @@ test("pg credential summaries do not wait for pending telemetry writes", { skip 
 test("pg credential-usage sink: every process shares one daily cap per credential", { skip }, async () => {
   const processes = [createPostgresCredentialUsageSink(URL!), createPostgresCredentialUsageSink(URL!)];
   const admitted = await Promise.all(
-    Array.from({ length: 10 }, (_, i) => processes[i % 2]!.admitDailyCall("capped", 3)),
+    Array.from({ length: 10 }, (_, i) => processes[i % 2]!.admitDailyCall(testTenant, "capped", 3)),
   );
   assert.equal(admitted.filter(Boolean).length, 3);
-  assert.equal(await createPostgresCredentialUsageSink(URL!).admitDailyCall("capped", 3), false);
-  assert.equal(await processes[0]!.admitDailyCall("capped", 4), true);
+  assert.equal(await createPostgresCredentialUsageSink(URL!).admitDailyCall(testTenant, "capped", 3), false);
+  assert.equal(await processes[0]!.admitDailyCall(testTenant, "capped", 4), true);
 });

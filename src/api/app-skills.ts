@@ -14,6 +14,7 @@ import { parseRef } from "../acl/resource-ref.ts";
 import { entitledScopes } from "../resolution/context-filter.ts";
 import type { Principal } from "../types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
+import { ambientTenant } from "../tenants/context.ts";
 
 export async function skillVisibilityContext(
   deps: AppDeps,
@@ -41,7 +42,14 @@ export async function skillVisibilityContext(
   ];
   const granted = (
     await deps.acl
-      .sharedOfKindForAudience("skill", [actor], scopeId("personal", principalId), scopeId("org", orgIdOf()), entitled)
+      .sharedOfKindForAudience(
+        ambientTenant(),
+        "skill",
+        [actor],
+        scopeId("personal", principalId),
+        scopeId("org", orgIdOf()),
+        entitled,
+      )
       .catch(() => [])
   ).map((g) => ({ id: parseRef(g.ref).id, ownerScopeId: g.ownerScopeId }));
   return { ordered, granted };
@@ -270,15 +278,18 @@ export function createSkillMethods(
       const skill = await deps.skills.get(id);
       if (!skill || !(await canManageSkill(skill, principalId))) return null;
       if (triggerBlocksSharedSkill(skill.scopeId, opts?.liveActor === true)) return "trigger_blocked";
-      if (skill.status === "archived") return null;
-      const manifest = {
-        ...skill.manifest,
-        description: patch.description ?? skill.manifest.description,
-        body: patch.body ?? skill.manifest.body,
-      };
-      const updated = await deps.skills.update(id, manifest);
-      const live = await republishIfShared(updated, principalId);
-      deps.auditLog.record({
+      const live = await deps.skills.withNameLock(skill.scopeId, skill.manifest.name, async () => {
+        const current = await deps.skills.get(id);
+        if (!current || current.status === "archived") return null;
+        const updated = await deps.skills.update(id, {
+          ...current.manifest,
+          description: patch.description ?? current.manifest.description,
+          body: patch.body ?? current.manifest.body,
+        });
+        return republishIfShared(updated, principalId);
+      });
+      if (!live) return null;
+      h.recordAudit({
         at: Date.now(),
         principalId,
         action: "skill_update",
@@ -298,7 +309,7 @@ export function createSkillMethods(
           return "exists" as const;
         await deps.skills.review(id, principalId, current.manifest.requiredCapabilities);
         const restored = await deps.skills.publish(id);
-        deps.auditLog.record({
+        h.recordAudit({
           at: Date.now(),
           principalId,
           action: "skill_restore",
@@ -421,7 +432,7 @@ export function createSkillMethods(
         const skill = await deps.skills.create({ scopeId: homeScope, manifest, createdBy: input.principalId });
         await deps.skills.review(skill.id, "system:skill-authoring", manifest.requiredCapabilities);
         const published = await deps.skills.publish(skill.id);
-        deps.auditLog.record({
+        h.recordAudit({
           at: Date.now(),
           principalId: input.principalId,
           action: "skill_create",
@@ -437,7 +448,7 @@ export function createSkillMethods(
       if (!(await canManageSkill(skill, principalId))) return "forbidden";
       if (triggerBlocksSharedSkill(skill.scopeId, liveActor === true)) return "trigger_blocked";
       await deps.skills.archive(id);
-      deps.auditLog.record({
+      h.recordAudit({
         at: Date.now(),
         principalId,
         action: "skill_archive",

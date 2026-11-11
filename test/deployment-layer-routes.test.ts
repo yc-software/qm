@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -179,7 +180,7 @@ test("GET distinguishes a poisoned stored revision from the prior durable revisi
     assert.equal(failedBody.ok, true);
     assert.equal(failedBody.status, "degraded");
     assert.match(failedBody.message, /poisoned skill store/);
-    const audits = await srv.auditLog.events();
+    const audits = await srv.auditLog.events(testTenant);
     assert.equal(
       audits.filter((event) => event.action === "deployment_layer.updated").length,
       2,
@@ -336,7 +337,7 @@ test("a skill collision racing after validation is accepted degraded and audited
     assert.equal(body.status, "degraded");
     assert.match(body.message, /persisted but skills acme collide/);
 
-    const events = await srv.auditLog.events();
+    const events = await srv.auditLog.events(testTenant);
     assert.ok(
       events.some((event) => event.action === "deployment_layer.updated" && event.resource === body.contentHash),
     );

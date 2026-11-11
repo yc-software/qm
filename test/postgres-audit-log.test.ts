@@ -1,4 +1,5 @@
 import { test, before } from "node:test";
+import { testTenant } from "./support/test-tenant.ts";
 import assert from "node:assert/strict";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import type { AuditEvent } from "../src/audit/audit-log.ts";
@@ -28,38 +29,38 @@ test("pg audit log: tail returns newest `limit`, scoped, and reads-its-writes", 
   const log = createPostgresAuditLog(URL!);
   const s1 = scopeId("personal", "U1");
   const s2 = scopeId("channel", "C1");
-  for (let i = 1; i <= 5; i++) log.record(ev(i, `a${i}`, i % 2 === 0 ? s2 : s1));
+  for (let i = 1; i <= 5; i++) log.record(testTenant, ev(i, `a${i}`, i % 2 === 0 ? s2 : s1));
 
-  const tail = await log.tail({ limit: 2 });
+  const tail = await log.tail(testTenant, { limit: 2 });
   assert.deepEqual(
     tail.map((e) => e.action),
     ["a5", "a4"],
     "newest-first, limited",
   );
 
-  const scoped = await log.tail({ limit: 10, scopeLabel: s1 });
+  const scoped = await log.tail(testTenant, { limit: 10, scopeLabel: s1 });
   assert.deepEqual(
     scoped.map((e) => e.action),
     ["a5", "a3", "a1"],
     "scope filter",
   );
 
-  const byActions = await log.tail({ limit: 10, action: ["a1", "a4"] });
+  const byActions = await log.tail(testTenant, { limit: 10, action: ["a1", "a4"] });
   assert.deepEqual(
     byActions.map((e) => e.action),
     ["a4", "a1"],
     "action list filter",
   );
 
-  const all = await log.events();
+  const all = await log.events(testTenant);
   assert.deepEqual(
     all.map((e) => e.action),
     ["a1", "a2", "a3", "a4", "a5"],
     "events() oldest-first",
   );
 
-  log.record(ev(6, "a6", s1));
-  assert.equal((await log.tail({ limit: 1 }))[0]!.action, "a6", "read-your-write");
+  log.record(testTenant, ev(6, "a6", s1));
+  assert.equal((await log.tail(testTenant, { limit: 1 }))[0]!.action, "a6", "read-your-write");
 });
 
 test("pg audit log: migrates rows once from the legacy audit_events JSONB map", { skip }, async () => {
@@ -73,7 +74,7 @@ test("pg audit log: migrates rows once from the legacy audit_events JSONB map", 
   await p.end();
 
   const log = createPostgresAuditLog(URL!);
-  const migrated = await log.events();
+  const migrated = await log.events(testTenant);
   assert.deepEqual(
     migrated.map((e) => e.action),
     ["old-a", "old-b", "old-c"],
@@ -81,16 +82,16 @@ test("pg audit log: migrates rows once from the legacy audit_events JSONB map", 
   );
 
   const log2 = createPostgresAuditLog(URL!);
-  assert.equal((await log2.events()).length, 3, "no duplicate copy on a second boot");
+  assert.equal((await log2.events(testTenant)).length, 3, "no duplicate copy on a second boot");
 });
 
 test("pg audit log: recordOnce is durable and idempotent across instances", { skip }, async () => {
   await reset(true);
   const first = createPostgresAuditLog(URL!);
   const second = createPostgresAuditLog(URL!);
-  await first.recordOnce!("deployment-layer:org:default-org:1", ev(1, "layer-updated"));
-  await second.recordOnce!("deployment-layer:org:default-org:1", ev(2, "duplicate"));
-  const events = await first.events();
+  await first.recordOnce!(testTenant, "deployment-layer:org:default-org:1", ev(1, "layer-updated"));
+  await second.recordOnce!(testTenant, "deployment-layer:org:default-org:1", ev(2, "duplicate"));
+  const events = await first.events(testTenant);
   assert.equal(events.length, 1);
   assert.equal(events[0]?.action, "layer-updated");
 });
@@ -99,17 +100,17 @@ test("pg audit log: resource filter treats % and _ as literal characters", { ski
   await reset(true);
   const log = createPostgresAuditLog(URL!);
   const s1 = scopeId("personal", "U1");
-  log.record({ ...ev(1, "file.read", s1), resource: "my_report.pdf" });
-  log.record({ ...ev(2, "file.read", s1), resource: "myXreport.pdf" });
-  log.record({ ...ev(3, "file.read", s1), resource: "100% done" });
-  log.record({ ...ev(4, "file.read", s1), resource: "100 done" });
+  log.record(testTenant, { ...ev(1, "file.read", s1), resource: "my_report.pdf" });
+  log.record(testTenant, { ...ev(2, "file.read", s1), resource: "myXreport.pdf" });
+  log.record(testTenant, { ...ev(3, "file.read", s1), resource: "100% done" });
+  log.record(testTenant, { ...ev(4, "file.read", s1), resource: "100 done" });
 
-  const underscore = await log.tail({ limit: 10, resourceContains: "my_report" });
+  const underscore = await log.tail(testTenant, { limit: 10, resourceContains: "my_report" });
   assert.deepEqual(
     underscore.map((e) => e.resource),
     ["my_report.pdf"],
   );
-  const percent = await log.tail({ limit: 10, resourceContains: "100%" });
+  const percent = await log.tail(testTenant, { limit: 10, resourceContains: "100%" });
   assert.deepEqual(
     percent.map((e) => e.resource),
     ["100% done"],

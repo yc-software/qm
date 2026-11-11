@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -484,7 +485,7 @@ test("org-admin routes: admins only, secrets write-only, env providers read-only
   const unreadable = await api.call("GET", "/v1/admin/memory-registry", "admin-alice@default-org");
   assert.equal(unreadable.status, 409);
   assert.equal(JSON.parse(unreadable.text).error, "conflict");
-  const rows = JSON.stringify(await built.auditLog.events());
+  const rows = JSON.stringify(await built.auditLog.events(testTenant));
   assert.match(rows, /memory-registry\.brain\.update/);
   assert.match(rows, /memory-registry\.binding\.delete/);
   assert.match(rows, /memory-registry\.member-brains\.update/);

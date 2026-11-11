@@ -16,6 +16,7 @@ import {
   type PersonaStore,
   type PersonaVersionPage,
 } from "./persona-store.ts";
+import { ambientTenant } from "../tenants/context.ts";
 
 const personaScope = (id: string): ScopeId => scopeId("persona", id);
 
@@ -41,6 +42,7 @@ export interface PersonaForTurn {
 
 export interface PersonaService {
   enabledFor(principalId: string): Promise<boolean>;
+  roles(principalId: string): Promise<Map<string, PersonaRole>>;
   role(principalId: string, personaId: string, contextScope?: ScopeId): Promise<PersonaRole | null>;
   list(principalId: string): Promise<PersonaResult<PersonaView[]>>;
   detail(principalId: string, id: string): Promise<PersonaResult<PersonaDetail>>;
@@ -101,7 +103,7 @@ export function createPersonaService(deps: {
   const enabledFor = (principalId: string) => deps.flags.enabled("personas", scopeId("personal", principalId));
 
   async function granteeScopes(principalId: string, contextScope?: ScopeId): Promise<ScopeId[]> {
-    const teams = (await deps.teams?.forTurn("", [principalId])) ?? [];
+    const teams = (await deps.teams?.forTurn(ambientTenant(), "", [principalId])) ?? [];
     return [
       ...personIds(principalId).map((id) => scopeId("personal", id)),
       deps.orgScope,
@@ -140,6 +142,7 @@ export function createPersonaService(deps: {
   return {
     enabledFor,
     role,
+    roles: async (principalId) => store.roles(await granteeScopes(principalId)),
     async list(principalId) {
       if (!(await enabledFor(principalId))) return { status: "disabled" };
       return { status: "ok", value: await store.listFor(await granteeScopes(principalId)) };

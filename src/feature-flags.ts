@@ -15,12 +15,7 @@ export const FEATURES = {
   inbox_loops: { label: "Inbox Loops" },
   slack_loading_indicator: {
     label: "Slack loading indicator (experimental)",
-    hint: "Shows an activity card in Slack threads, including background work and monitors. After five minutes, the card links to the web conversation. Everyone in a shared thread can see it. Top-level DMs stay unchanged. Turning this off leaves existing cards.",
-  },
-  descriptive_session_titles: {
-    label: "Descriptive session titles",
-    personalOnly: true,
-    hint: "Titles the selected people's new conversations with a short summary of what they asked, anchored on a name or distinctive word, written by a stronger model. Regenerating a title uses it too.",
+    hint: "Shows a live activity card in Slack threads: the current step, background work, monitors and subagents, with a link to the web conversation. The card disappears once the reply has landed. Everyone in a shared thread can see it. Top-level DMs stay unchanged. Turning this off removes open cards.",
   },
   next_prompt_suggestions: {
     label: "Next-message suggestions (experimental)",
@@ -29,7 +24,6 @@ export const FEATURES = {
   },
   external_app_sharing: { label: "External app sharing (public links, outside emails)" },
   loop_triage: { label: "Loop triage (prioritize and consolidate)" },
-  swarms: { label: "Swarms", personalOnly: true },
   team_scopes: { label: "Team scopes" },
   ui_canvas: {
     label: "UI canvas and UI state (agent code runs in the page)",

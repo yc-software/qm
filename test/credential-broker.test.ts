@@ -1,3 +1,4 @@
+import { testTenant } from "./support/test-tenant.ts";
 import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import { brokerCredentialCall, type BrokerFetch } from "../src/api/credential-broker.ts";
@@ -48,6 +49,7 @@ function captureFetch(): {
 }
 
 const base = (over: Partial<Parameters<typeof brokerCredentialCall>[0]> = {}) => ({
+  tenant: testTenant,
   claims: claims(["x-firehose"]),
   body: { credential: "x-firehose", method: "GET", url: "https://api.x.com/2/tweets/search/recent?query=ai" },
   orgScopeId: "org:default-org",
@@ -65,7 +67,7 @@ test("happy path: injects the secret as Bearer, never exposes it in the result",
   assert.doesNotMatch(JSON.stringify(r.json), new RegExp(SECRET));
   assert.equal(cap.calls.length, 1);
   assert.equal(cap.calls[0]!.headers["Authorization"], `Bearer ${SECRET}`);
-  const used = await usage.list({ slug: "x-firehose" });
+  const used = await usage.list(testTenant, { slug: "x-firehose" });
   assert.equal(used.length, 1);
   assert.equal(used[0]!.host, "api.x.com");
   assert.equal(used[0]!.status, "ok");
@@ -224,13 +226,13 @@ test("WHAT path allowlist: an out-of-allowlist path is refused", async () => {
 test("WHAT path allowlist: percent-encoded parent traversal never escapes the prefix", async () => {
   const mk = () => reader({ slug: "x-firehose", allowedPathPrefixes: ["/2/tweets/search"] });
   const evil = [
-    "https://api.x.com/2/tweets/search/../secrets", // literal
-    "https://api.x.com/2/tweets/search/..%2fsecrets", // encoded slash
-    "https://api.x.com/2/tweets/search/%2e%2e/secrets", // encoded dots (URL-normalized out of prefix)
-    "https://api.x.com/2/tweets/search/%2e%2e%2fsecrets", // fully encoded
-    "https://api.x.com/2/tweets/search/%252e%252e%252fsecrets", // double-encoded
-    "https://api.x.com/2/tweets/search/..%5csecrets", // encoded backslash
-    "https://api.x.com/2/tweets/search/%zz", // undecodable
+    "https://api.x.com/2/tweets/search/../secrets",
+    "https://api.x.com/2/tweets/search/..%2fsecrets",
+    "https://api.x.com/2/tweets/search/%2e%2e/secrets",
+    "https://api.x.com/2/tweets/search/%2e%2e%2fsecrets",
+    "https://api.x.com/2/tweets/search/%252e%252e%252fsecrets",
+    "https://api.x.com/2/tweets/search/..%5csecrets",
+    "https://api.x.com/2/tweets/search/%zz",
   ];
   for (const url of evil) {
     const cap = captureFetch();
@@ -241,7 +243,6 @@ test("WHAT path allowlist: percent-encoded parent traversal never escapes the pr
     assert.match(JSON.stringify(r.json), /path_not_allowed/, url);
     assert.equal(cap.calls.length, 0, `no upstream fetch for ${url}`);
   }
-  // benign lookalikes still pass: dots inside a segment are not dot segments
   const cap = captureFetch();
   const ok = await brokerCredentialCall(
     base({
@@ -312,7 +313,7 @@ test("an upstream fetch error is reported generically (never leaks the URL/heade
   assert.equal(r.status, 502);
   assert.match(JSON.stringify(r.json), /upstream_unreachable/);
   assert.doesNotMatch(JSON.stringify(r.json), new RegExp(SECRET));
-  assert.equal((await usage.list({ slug: "x-firehose" }))[0]!.status, "error");
+  assert.equal((await usage.list(testTenant, { slug: "x-firehose" }))[0]!.status, "error");
 });
 
 test("a missing slug or url is a 400 bad_request", async () => {
@@ -395,6 +396,7 @@ test("actor-attested credentials require exact host while legacy subdomain match
   for (const actor of [false, true]) {
     const cap = captureFetch();
     const result = await brokerCredentialCall({
+      tenant: testTenant,
       claims: claims(["relay"]),
       body: { credential: "relay", url: "https://child.example.test/read" },
       orgScopeId: "org:default-org",
@@ -406,6 +408,7 @@ test("actor-attested credentials require exact host while legacy subdomain match
   }
   const cap = captureFetch();
   const result = await brokerCredentialCall({
+    tenant: testTenant,
     claims: claims(["relay"]),
     body: { credential: "relay", url: "https://example.test/read" },
     orgScopeId: "org:default-org",
@@ -419,6 +422,7 @@ test("actor-attested credentials require exact host while legacy subdomain match
 test("actor attestation rejects alternate ports before sending credentials", async () => {
   const cap = captureFetch();
   const result = await brokerCredentialCall({
+    tenant: testTenant,
     claims: claims(["relay"]),
     body: { credential: "relay", url: "https://example.test:8443/read" },
     orgScopeId: "org:default-org",

@@ -112,6 +112,7 @@ export async function credential(ctx: ApiCtx): Promise<{ key: string; principal:
   }
   const grants =
     (await ctx.deps.acl?.grantsOfKind(
+      tenantOf(ctx),
       "service-cred",
       audience,
       ctx.capability?.scopeId ?? personal,
@@ -353,7 +354,7 @@ async function disconnect(ctx: ApiCtx): Promise<void> {
     const { toolkit } = owned;
     if (!(await activeRun(ctx))) return;
     await request(ctx, access.key, `/connected_accounts/${encodeURIComponent(accountId)}`, undefined, 20_000, "DELETE");
-    audit(ctx.deps, {
+    audit(ctx, {
       principalId: access.principal,
       action: "composio.disconnected",
       resource: `${toolkit}/${accountId}`,
@@ -446,7 +447,7 @@ async function execute(ctx: ApiCtx): Promise<void> {
     if (!(await activeRun(ctx))) return;
     if (!composioUserIds(access.principal).includes(String(account.user_id)))
       return sendJson(ctx.res, 403, { error: "connection_not_authorized" });
-    audit(ctx.deps, {
+    audit(ctx, {
       principalId: access.principal,
       action: "composio.execute.started",
       resource,
@@ -464,7 +465,7 @@ async function execute(ctx: ApiCtx): Promise<void> {
       },
       EXECUTE_TIMEOUT_MS,
     );
-    audit(ctx.deps, {
+    audit(ctx, {
       principalId: access.principal,
       action: "composio.execute.completed",
       resource,
@@ -476,7 +477,7 @@ async function execute(ctx: ApiCtx): Promise<void> {
       error: result.error ?? null,
     });
   } catch (error) {
-    audit(ctx.deps, {
+    audit(ctx, {
       principalId: access.principal,
       action: "composio.execute.failed",
       resource,
@@ -710,7 +711,7 @@ async function completeSlack(ctx: ApiCtx): Promise<void> {
         linkedBy: access.principal,
       });
       await deps.identity?.refresh(true);
-      audit(deps, {
+      audit(ctx, {
         principalId: access.principal,
         action: "principal_link.create",
         resource: `${member.principalId} -> ${access.principal}`,

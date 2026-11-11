@@ -1,4 +1,4 @@
-import { NonRetryableTurnError } from "../core/turn-error.ts";
+import { HeldTurnError, NonRetryableTurnError } from "../core/turn-error.ts";
 import { assertSwarmRun, type SwarmRunFence } from "./swarm-fence.ts";
 import { createHash, randomUUID } from "node:crypto";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
@@ -89,11 +89,11 @@ export interface SwarmService {
   send(caller: SwarmCaller, input: MessageInput): Promise<SwarmMessage>;
   read(caller: SwarmCaller, options: { after?: number; replyTo?: string; waitMs?: number }): Promise<SwarmMessage[]>;
   control(caller: SwarmCaller, input: { memberId: string; state: SwarmControlState }): Promise<SwarmMember>;
-  enabledFor(actorId: string): Promise<boolean>;
   botMayUseComputer(
     computer: Pick<SandboxResource, "swarmId">,
     turn: { actorId: string; threadRef: string; sessionId: string },
   ): Promise<boolean>;
+  authorizes(claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "members">): Promise<boolean>;
   notePersonUse(computer: Pick<SandboxResource, "swarmId">): Promise<void>;
   binding(input: OrchestratorInput): Promise<{ sandboxId?: string; rootSessionId: string; member: SwarmMember } | null>;
   queuedMessages(
@@ -158,23 +158,16 @@ function rosterMatches(current: readonly string[], expected: readonly string[]):
   return actual.size === frozen.size && [...actual].every((id) => frozen.has(id));
 }
 
-function botMayDirect(swarm: Swarm, memberId: string, actorId: string): boolean {
-  if (swarm.template.botActor !== true) return false;
-  if (!swarm.personUsedComputers && swarm.messages.every((message) => message.actorId === actorId)) return true;
-  let lineage = memberById(swarm, memberId);
-  while (lineage?.parentId && lineage.parentId !== swarm.id) lineage = memberById(swarm, lineage.parentId);
-  const head = lineage?.parentId ? lineage : undefined;
-  const spawn = head && swarm.messages.find((message) => message.audience.includes(head.id));
-  return spawn !== undefined && spawn.actorId !== actorId;
-}
-
-function botMayWorkIn(swarm: Swarm, threadRef: string, actorId: string): boolean {
-  const { rootId, memberId } = threadIdentity(threadRef, "");
-  return botMayDirect(swarm, rootId === swarm.id ? memberId : swarm.id, actorId);
+function botMayDirect(swarm: Swarm, actorId: string): boolean {
+  return (
+    swarm.template.botActor === true &&
+    !swarm.personUsedComputers &&
+    swarm.messages.every((message) => message.actorId === actorId)
+  );
 }
 
 function assertCallerMayDirect(caller: SwarmCaller, auth: Authority, swarm: Swarm): void {
-  if (caller.kind === "agent" && caller.claims.botActor && !botMayDirect(swarm, auth.memberId, auth.actorId))
+  if (caller.kind === "agent" && caller.claims.botActor && !botMayDirect(swarm, auth.actorId))
     throw new Error("a Slack bot's turn cannot direct a person's swarm");
 }
 
@@ -241,20 +234,18 @@ export function createSwarmService(deps: {
   sandboxes: SandboxResources;
   lock: AdvisoryLock;
   authorize(claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "members">): Promise<boolean>;
-  enabled?(actorId: string): Promise<boolean>;
   signals?: Pick<RunSignalStore, "send">;
   defaults?: SwarmSettings;
   processes?: Pick<ProcessRegistry, "listLive" | "markStatus">;
   stopProcess?: (job: ProcessRecord) => Promise<void>;
 }): SwarmService {
-  const enabledFor = deps.enabled ?? (async () => true);
   const { store, sessions, runs } = deps;
   const update = (auth: Authority, mutate: (swarm: Swarm) => void) => store.update(auth.rootId, mutate, auth.fence);
   const defaults = resolveSwarmSettings(deps.defaults);
   const cutOffBot = async (swarm: Swarm, reason: string): Promise<void> => {
-    if (!swarm.template.botActor) return;
-    const lostSwarm = (run: Run | null): boolean =>
-      run?.request.botActor === true && !botMayWorkIn(swarm, run.request.conversation.threadRef, run.request.actor.id);
+    const bot = swarm.template.actor.id;
+    if (!swarm.template.botActor || botMayDirect(swarm, bot)) return;
+    const lostSwarm = (run: Run | null): boolean => run?.request.botActor === true && run.request.actor.id === bot;
     const computers = new Set(swarm.members.flatMap((member) => (member.sandboxId ? [member.sandboxId] : [])));
     if (swarm.board) computers.add(swarm.board.sandboxId);
     const holders = await Promise.all(
@@ -459,7 +450,7 @@ export function createSwarmService(deps: {
         const control = controlState(swarm, recipient.id);
         const failed = recipient.state === "failed" || control === "stopped" || swarmExpired(swarm);
         if (!failed && control === "paused") continue;
-        if (failed || (swarm.template.botActor && !botMayDirect(swarm, recipient.id, swarm.template.actor.id))) {
+        if (failed || (swarm.template.botActor && !botMayDirect(swarm, swarm.template.actor.id))) {
           await step(() =>
             store.update(swarm.id, (current) => {
               const notifications = current.messages.find((item) => item.id === message.id)!.notifications;
@@ -479,14 +470,19 @@ export function createSwarmService(deps: {
             maxAttempts: 2,
           }),
         );
+        let held = false;
         await step(() =>
           store.update(swarm.id, (current) => {
-            current.messages.find((item) => item.id === message.id)!.notifications[recipientId] = {
-              state: "queued",
-              runId: run.id,
-            };
+            const notifications = current.messages.find((item) => item.id === message.id)!.notifications;
+            held = controlState(current, recipientId) !== "active";
+            if (notifications[recipientId]?.state !== "pending") return;
+            notifications[recipientId] = { state: held ? "pending" : "queued", runId: run.id };
           }),
         );
+        if (held)
+          await step(() =>
+            runs.withdraw(run.id, { unstartedOnly: true }).catch(swallowAs("swarm: withdraw a paused run", false)),
+          );
       }
     }
   }
@@ -512,7 +508,7 @@ export function createSwarmService(deps: {
       };
       try {
         let swarm = await step(() => store.get(rootId));
-        if (!swarm || !(await step(() => enabledFor(swarm!.ownerId)))) return;
+        if (!swarm) return;
         if (phase === "delivery") {
           await deliver(swarm, step);
           return;
@@ -694,7 +690,6 @@ export function createSwarmService(deps: {
       const previous = existing?.spawnRequests[key];
       if (previous) {
         if (previous.signature !== fingerprint) throw new Error("requestId reused with different content");
-        await cutOffBot(existing!, sentWork);
         return existing!.members.filter((member) => previous.memberIds.includes(member.id)).map(view);
       }
       if (existing && input.backend !== undefined) throw new Error("backend is only allowed on initial swarm creation");
@@ -714,6 +709,10 @@ export function createSwarmService(deps: {
       if (!existing && count > (settings.notifications ?? Infinity))
         throw new Error("swarm notification budget exhausted");
       if (input.forumSandboxId) {
+        if (existing?.template.botActor || (caller.kind === "agent" && caller.claims.botActor))
+          throw new Error(
+            "a swarm a Slack bot starts cannot take forumSandboxId; spawn without it and the swarm uses its own board computer",
+          );
         const forum = await deps.sandboxes.access(auth.actorId, input.forumSandboxId);
         const session = await sessions.get(auth.sessionId);
         if (forum.ownerScopeId !== session?.scopeId) throw new Error("forum scope mismatch");
@@ -737,6 +736,8 @@ export function createSwarmService(deps: {
           if (next.lifetimeMs !== undefined) swarm.expiresAt = swarm.createdAt + next.lifetimeMs;
         }
         assertCallerMayDirect(caller, auth, swarm);
+        if (swarm.template.botActor && !(caller.kind === "agent" && caller.claims.botActor))
+          throw new Error("a person's turn cannot add workers to a swarm a Slack bot started");
         assertSwarmOpen(swarm);
         const parent = swarm.members.find((member) => member.id === auth.memberId)!;
         if (parent.depth >= swarm.settings.depth) throw new Error("swarm depth budget exhausted");
@@ -793,7 +794,6 @@ export function createSwarmService(deps: {
       }
       if (updated.spawnRequests[key]!.signature !== fingerprint)
         throw new Error("requestId reused with different content");
-      await cutOffBot(updated, sentWork);
       const ids = updated.spawnRequests[key]!.memberIds;
       return updated.members.filter((member) => ids.includes(member.id)).map(view);
     },
@@ -907,11 +907,12 @@ export function createSwarmService(deps: {
         ({ auth, swarm } = await load(caller));
       }
     },
-    enabledFor,
+    authorizes: (claims) => deps.authorize(claims),
     async botMayUseComputer(computer, turn) {
       if (!computer.swarmId) return true;
       const swarm = await store.get(computer.swarmId);
-      return swarm !== null && botMayWorkIn(swarm, turn.threadRef, turn.actorId);
+      if (!swarm) return false;
+      return botMayDirect(swarm, turn.actorId);
     },
     async notePersonUse(computer) {
       const swarm = computer.swarmId ? await store.get(computer.swarmId) : null;
@@ -935,30 +936,27 @@ export function createSwarmService(deps: {
           ancestor = swarm.members.find((member) => member.id === ancestor)?.parentId;
         if (!ancestor) throw new Error("agents may only control themselves or their descendants");
       }
+      const withdrawing: string[] = [];
       const updated = await update(auth, (current) => {
         assertCallerMayDirect(caller, auth, current);
         const member = current.members.find((peer) => peer.id === target.id)!;
         if (member.control === "stopped") throw new Error("stopped workers cannot be resumed");
         if (input.state === "active") delete member.control;
         else member.control = input.state;
+        withdrawing.length = 0;
+        if (input.state !== "paused") return;
+        for (const message of current.messages)
+          for (const [id, notification] of Object.entries(message.notifications))
+            if (notification.state === "queued" && notification.runId && controlState(current, id) === "paused") {
+              message.notifications[id] = { state: "pending", runId: notification.runId };
+              withdrawing.push(notification.runId);
+            }
       });
-      if (input.state === "paused") {
-        let withdrawing: string[] = [];
-        await store.update(updated.id, (current) => {
-          withdrawing = [];
-          for (const message of current.messages)
-            for (const [id, notification] of Object.entries(message.notifications))
-              if (notification.state === "queued" && notification.runId && controlState(current, id) === "paused") {
-                message.notifications[id] = { state: "pending", runId: notification.runId };
-                withdrawing.push(notification.runId);
-              }
-        });
-        await Promise.all(
-          withdrawing.map((runId) =>
-            runs.withdraw(runId, { unstartedOnly: true }).catch(swallowAs("swarm: withdraw a paused run", false)),
-          ),
-        );
-      }
+      await Promise.all(
+        withdrawing.map((runId) =>
+          runs.withdraw(runId, { unstartedOnly: true }).catch(swallowAs("swarm: withdraw a paused run", false)),
+        ),
+      );
       if (input.state === "stopped") {
         const stopped = new Set(
           updated.members.filter((m) => controlState(updated, m.id) === "stopped").map((m) => m.id),
@@ -989,7 +987,7 @@ export function createSwarmService(deps: {
       const target = input.swarm ?? (session && turnTarget(session));
       if (!target) return [];
       const swarm = await store.get(target.swarmId);
-      if (!swarm || (input.botActor && !botMayDirect(swarm, target.recipientId, input.actor.id))) return [];
+      if (!swarm || (input.botActor && !botMayDirect(swarm, input.actor.id))) return [];
       const mine = swarm.messages.filter((message) => {
         const state = message.notifications[target.recipientId]?.state;
         return state === "mailbox" || (state === "queued" && !options.mailboxOnly);
@@ -1102,6 +1100,8 @@ export function createSwarmService(deps: {
         return { sandboxId: member.sandboxId, rootSessionId: swarm.id, member };
       }
       assertSwarmOpen(swarm);
+      if (controlState(swarm, member.id) === "paused")
+        throw new HeldTurnError("swarm worker paused", SWARM_LIMITS.pausedRecheckMs);
       const message = swarm.messages.find((item) => item.id === input.swarm!.messageId);
       const dedup = message ? await runs.getByDedupKey(`swarm:${message.id}:${member.id}`) : null;
       const expected = message && dedup ? dispatchRequest(swarm, message, member) : null;

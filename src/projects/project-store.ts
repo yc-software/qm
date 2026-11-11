@@ -37,7 +37,7 @@ type ProjectMutationEffect = (result: Extract<ProjectMutation, { status: "ok" }>
 export interface ProjectStore {
   create(input: { name: string; ownerId: string }): Promise<Project>;
   get(id: string): Promise<Project | null>;
-  listForMember(principalId: string): Promise<Project[]>;
+  listForMember(principalId: string, ids?: readonly string[]): Promise<Project[]>;
   addMember(id: string, actorId: string, memberId: string, effect?: ProjectMutationEffect): Promise<ProjectMutation>;
   removeMember(id: string, actorId: string, memberId: string, effect?: ProjectMutationEffect): Promise<ProjectMutation>;
   rename(id: string, ownerId: string, name: string, effect?: ProjectMutationEffect): Promise<ProjectMutation>;
@@ -63,6 +63,7 @@ export interface ProjectStore {
   slackChannel(groupRef: string): Promise<ProjectSlackChannel | undefined>;
   recognizes(groupRef: string): boolean;
   membership(groupRef: string, principalId: string): Promise<boolean | undefined>;
+  membersMany(groupRefs: readonly string[]): Promise<Map<string, string[]>>;
   members(groupRef: string): Promise<string[] | undefined>;
   version(groupRef: string): Promise<string | undefined>;
   withVersion<T>(groupRef: string, version: string | undefined, fn: () => Promise<T>): Promise<T | undefined>;
@@ -88,13 +89,10 @@ export function isProjectGroupRef(ref: string): boolean {
   return ref.startsWith(PROJECT_GROUP_PREFIX);
 }
 
-/** A project's sidebar icon: one Unicode emoji, or a workspace custom emoji by name. */
 export type ProjectIcon = { kind: "emoji"; value: string } | { kind: "custom"; name: string };
 
-/** Exactly one emoji from Unicode's recommended (RGI) emoji set. */
 const ONE_EMOJI = /^\p{RGI_Emoji}$/v;
 
-/** Shape check only; whether a custom name exists in the workspace catalog is checked by the caller. */
 export function validProjectIcon(value: unknown): value is ProjectIcon | null {
   if (value === null) return true;
   if (typeof value !== "object" || !value) return false;
@@ -150,6 +148,10 @@ export function createProjectStore(
 
   function effectiveMemberIds(project: Project): string[] {
     return [...new Set([...project.memberIds, ...(project.channelMemberIds ?? [])])];
+  }
+
+  function activeMemberIds(project: Project): string[] {
+    return isActiveMember(project.ownerId) ? effectiveMemberIds(project).filter(isActiveMember) : [];
   }
 
   async function mutate(
@@ -218,10 +220,14 @@ export function createProjectStore(
       const project = await backing.get(id);
       return project ? visible(project) : null;
     },
-    async listForMember(principalId) {
-      return (await backing.all())
+    async listForMember(principalId, ids) {
+      if (ids?.length === 0) return [];
+      const projects = ids ? await backing.select({ where: { field: "id", anyOfFold: ids } }) : await backing.all();
+      const requested = ids && new Set(ids);
+      return projects
         .filter(
           (project) =>
+            (!requested || requested.has(project.id)) &&
             project.orgId === configOrgId() &&
             isActiveMember(project.ownerId) &&
             isActiveMember(principalId) &&
@@ -370,12 +376,21 @@ export function createProjectStore(
             effectiveMemberIds(project).includes(principalId)
         : undefined;
     },
+    async membersMany(groupRefs) {
+      const ids = groupRefs.flatMap((ref) => projectIdFromGroupRef(ref) ?? []);
+      if (!ids.length) return new Map();
+      const wanted = new Set(ids);
+      const projects = await backing.select({ where: { field: "id", anyOfFold: ids } });
+      return new Map(
+        projects
+          .filter((p) => wanted.has(p.id) && p.orgId === configOrgId())
+          .map((p) => [projectGroupRef(p.id), activeMemberIds(p)]),
+      );
+    },
     async members(groupRef) {
       const project = await projectForGroup(groupRef);
       if (!project) return undefined;
-      return isActiveMember(project.ownerId)
-        ? effectiveMemberIds(project).filter((principalId) => isActiveMember(principalId))
-        : [];
+      return activeMemberIds(project);
     },
     async version(groupRef) {
       const project = await projectForGroup(groupRef);

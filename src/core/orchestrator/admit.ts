@@ -6,6 +6,7 @@ import { isSubagentThreadRef } from "../../sessions/session-syscalls.ts";
 import { scopeId as toScopeId, type ScopeId, type Session, type TurnResult } from "../../types.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
+import type { Tenant } from "../../tenants/context.ts";
 
 export class ProjectRosterChanged extends Error {}
 
@@ -88,6 +89,7 @@ export const rosterChanged = (sessionId?: string): TurnResult => ({
 });
 
 export async function admitAudienceAndBudget(
+  tenant: Tenant,
   deps: OrchestratorDeps,
   conversation: Conversation,
   actor: Actor,
@@ -109,7 +111,7 @@ export async function admitAudienceAndBudget(
   }
 
   if (deps.budget) {
-    const b = await deps.budget.check(actor.id);
+    const b = await deps.budget.check(tenant, actor.id);
     if (!b.allowed) {
       return {
         status: "refused",
@@ -121,6 +123,7 @@ export async function admitAudienceAndBudget(
 }
 
 export async function checkSpendLimit(
+  tenant: Tenant,
   spendLimits: ReturnType<typeof createSpendLimits> | undefined,
   deps: OrchestratorDeps,
   scopeId: ScopeId,
@@ -129,6 +132,7 @@ export async function checkSpendLimit(
   const spendLimit = spendLimits
     ? await spendLimits.status(scopeId).catch((e: unknown) => {
         deps.errors.record(
+          tenant,
           { category: "turn", code: "spend_limit_check", message: errMessage(e), scopeLabel: scopeId },
           e,
         );

@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -105,7 +106,7 @@ test("the admin scope directory lists every known scope with labels and counts (
       "org_admin-only",
     );
     assert.ok(
-      (await s.built.auditLog.events()).some((e) => e.action === "scopes.read"),
+      (await s.built.auditLog.events(testTenant)).some((e) => e.action === "scopes.read"),
       "the directory read is audited",
     );
   } finally {
