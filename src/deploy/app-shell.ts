@@ -133,7 +133,7 @@ export function appShellHtml(opts: {
   header .upd.show { display: inline-block; }
   header .access-btn { display: inline-flex; align-items: center; gap: 5px; color: var(--muted-foreground); }
   header .access-btn[hidden] { display: none; }
-  header .access-btn svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.75;
+  header .access-btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5;
     stroke-linecap: round; stroke-linejoin: round; }
   header .access-btn[data-level="public"] { color: #b45309; }
   header .access-btn:disabled { cursor: default; }
