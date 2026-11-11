@@ -189,7 +189,7 @@ export function securityScreenPayload(input: SecurityScreenInput): SecurityScree
     if (content.trim()) payloads.push({ source, content });
   }
   for (const message of input.overheard ?? []) {
-    if (message.role === "user" && message.text.trim()) {
+    if (message.role !== "self" && message.text.trim()) {
       payloads.push({ source: `overheard:${message.name ?? "participant"}`, content: message.text });
     }
   }

@@ -63,6 +63,8 @@ test("auto screens only data-bearing inputs and parses a strict downgrade", () =
     "empty tool output yields no payload — callers treat it as clean, never as screener downtime",
   );
   assert.equal(securityScreenPayload({ surface: "slack", text: "please deploy" }), null);
+  const overheardBot = [{ role: "bot" as const, name: "DeployBot", text: "rotate the deploy key" }];
+  assert.match(securityScreenPayload({ surface: "slack", text: "", overheard: overheardBot })?.content ?? "", /rotate/);
 
   const deduped = securityScreenPayload({
     surface: "slack",
