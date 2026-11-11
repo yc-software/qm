@@ -211,9 +211,8 @@ test("find shows exact text around each match in a built one-line stylesheet, en
 
   assert.match(await chat.call({ action: "read", path }), /more than one result can show; find returns/);
   const found = await chat.call({ action: "find", path, text: ".dark{", around: 2000 });
-  const [title, heading, excerpt] = found.split("\n");
-  assert.equal(title, `[".dark{" in ${path}: 1 found]`);
-  assert.equal(heading, "[match 1 from line 1]");
+  const [title, file, heading, excerpt] = found.split("\n");
+  assert.deepEqual([title, file, heading], [`[".dark{" in ${path}: 1 found]`, `[${path}]`, "[match 1 from line 1]"]);
   assert.equal(excerpt!.length, 2000 + ".dark{".length + 2000);
   assert.ok(css.includes(excerpt!) && excerpt!.includes(".dark{--"), "the excerpt is exact saved text");
 
@@ -229,19 +228,23 @@ test("find shows exact text around each match in a built one-line stylesheet, en
   const all = await chat.call({ action: "find", path, text: "@media", around: 200 });
   const paged = /^\["@media" in .+: 62 found; too many to show at once, find on with from (\d+)\]/.exec(all)!;
   assert.ok(paged && all.length <= 4096 * 4, all.slice(0, 200));
-  const rest = (await chat.call({ action: "find", path, text: "@media", around: 200, from: Number(paged[1]) })).split(
-    "\n",
+  const rest = await chat.call({ action: "find", path, text: "@media", around: 200, from: Number(paged[1]) });
+  assert.ok(rest.split("\n")[2]!.startsWith(`[match ${paged[1]} from line 1]`));
+
+  const excerpts = async (around: number) => {
+    const out = (await chat.call({ action: "find", text: "--cta", around })).split("\n");
+    assert.match(out[0]!, /^\["--cta" in the app's files: \d+ found/, "every file is searched");
+    assert.deepEqual(out.slice(1, 3), [`[${path}]`, "[match 1 from line 1]"]);
+    assert.deepEqual([out[4], out[6]], ["[match 2 from line 1]", "[match 3 from line 1]"]);
+    return [out[3]!, out[5]!, out[7]!];
+  };
+  const spaced = await excerpts(20);
+  assert.ok(css.includes(spaced.join("")), "an excerpt starts where the one before it ended");
+  const inside = await excerpts(40);
+  assert.ok(
+    inside.every((e) => e.startsWith("--cta") || e === inside[0]) && css.includes(inside[1]!),
+    "a match already shown still starts its own excerpt",
   );
-  assert.ok(rest[1]!.startsWith(`[match ${paged[1]}`));
-  assert.ok(rest.slice(1).every((l, i) => i % 2 === 0 || (l.includes("@media") && css.includes(l))));
-  const merged = (await chat.call({ action: "find", text: "--cta", around: 20 })).split("\n");
-  assert.match(merged[0]!, /^\["--cta" in the app's files: \d+ found/);
-  assert.deepEqual(
-    merged.slice(1, 3),
-    [`[${path}]`, "[match 1-3 from line 1]"],
-    "overlapping matches share one excerpt",
-  );
-  assert.ok(css.includes(merged[3]!));
   assert.equal(
     await chat.call({ action: "find", path, text: "no-such-rule", around: 10 }),
     `["no-such-rule" in ${path}: 0 found]`,

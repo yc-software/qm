@@ -31,7 +31,7 @@ function dependencyRoot(path: string): string | undefined {
   return dependency < 0 ? undefined : `${dirs.slice(0, dependency + 1).join("/")}/`;
 }
 
-function worthReading(path: string): boolean {
+export function worthReading(path: string): boolean {
   const parts = path.split("/");
   const name = parts.at(-1)!;
   const type = mimeFromName(name);

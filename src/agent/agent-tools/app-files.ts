@@ -8,6 +8,7 @@ import { decodeSourceText, headSlice, tailSlice } from "../../util/text.ts";
 import { errMessage } from "../../util/errors.ts";
 import { text, type ToolKit } from "./kit.ts";
 import { previousPublishFailure } from "./workspace.ts";
+import { worthReading } from "../../core/orchestrator/app-source.ts";
 
 const RANGE_NOTE_CHARS = 200;
 const NO_DIRECTORY = "/app-source";
@@ -32,39 +33,15 @@ function describeSaved(r: SourceSaved): string {
   return `Saved ${paths.join(", ")}. ${shown}${previousPublishFailure(r.liveEdit)}`;
 }
 
-async function savedText(files: AppFiles, wanted: string) {
-  const path = normalizeRelPath(wanted);
-  const file = (await files.source([path])).files[0];
-  if (!file) throw new Error(`no such file: ${path}; list shows the app's files`);
-  return { path, file, content: textOf(file) };
-}
-
-interface Excerpt {
-  path: string;
-  opensFile: boolean;
-  content: string;
-  start: number;
-  end: number;
-  line: number;
-  first: number;
-  last: number;
-}
-
-function excerptHeading(w: Excerpt): string {
-  const file = w.opensFile ? `[${w.path}]\n` : "";
-  return `${file}[match ${w.first}${w.last > w.first ? `-${w.last}` : ""} from line ${w.line}]`;
-}
-
-function shownSize(w: Excerpt): number {
-  return excerptHeading(w).length + w.end - w.start + 2;
-}
-
-async function everyText(files: AppFiles) {
+async function searchedTexts(files: AppFiles, wanted: string | undefined) {
+  const path = wanted === undefined ? undefined : normalizeRelPath(wanted);
   const reader = (await files.sourceReader()) ?? files;
   const { tree } = await reader.source();
-  const { files: saved } = await reader.source(tree.map((f) => f.path));
+  const paths = tree.map((f) => f.path).filter((p) => (path ? p === path : worthReading(p)));
+  if (path && !paths.length) throw new Error(`no such file: ${path}; list shows the app's files`);
+  const { files: saved } = await reader.source(paths);
   return saved.flatMap((file) => {
-    const content = decodeSourceText(file.data);
+    const content = path ? textOf(file) : decodeSourceText(file.data);
     return content === null ? [] : [{ path: file.path, content }];
   });
 }
@@ -135,8 +112,10 @@ export function appFileTools(kit: ToolKit) {
     }),
     execute: (callId, params) =>
       run(callId, { action: "read", path: params.path }, async (files) => {
-        const { path, file, content } = await savedText(files, params.path);
-        const lines = content.split("\n");
+        const path = normalizeRelPath(params.path);
+        const file = (await files.source([path])).files[0];
+        if (!file) throw new Error(`no such file: ${path}; list shows the app's files`);
+        const lines = textOf(file).split("\n");
         const first = Math.min(params.from ?? 1, lines.length);
         const wanted = lines.slice(first - 1, Math.max(params.to ?? lines.length, first));
         const budget = await resultBudget();
@@ -172,14 +151,15 @@ export function appFileTools(kit: ToolKit) {
     }),
     execute: (callId, params) =>
       run(callId, { action: "find", path: params.path }, async (files) => {
-        const searched = params.path ? [await savedText(files, params.path)] : await everyText(files);
+        const searched = await searchedTexts(files, params.path);
         const sought = params.text;
         const from = params.from ?? 1;
         const budget = (await resultBudget()) - JSON.stringify(sought).length - (params.path ?? "").length;
-        const windows: Excerpt[] = [];
+        const excerpts: string[] = [];
         let used = 0;
         let found = 0;
         let next: number | undefined;
+        let previous: { path: string; end: number } | undefined;
         for (const { path, content } of searched) {
           let line = 1;
           let counted = 0;
@@ -188,32 +168,29 @@ export function appFileTools(kit: ToolKit) {
             if (found < from || next !== undefined) continue;
             line += content.slice(counted, at).split("\n").length - 1;
             counted = at;
-            const start = at - tailSlice(content.slice(0, at), params.around).length;
+            const sameFile = previous?.path === path;
+            const start = Math.max(
+              at - tailSlice(content.slice(0, at), params.around).length,
+              sameFile ? Math.min(previous!.end, at) : 0,
+            );
             const end = at + sought.length + headSlice(content.slice(at + sought.length), params.around).length;
-            const previous = windows.at(-1);
-            const joined =
-              previous?.path === path && start <= previous.end ? { ...previous, end, last: found } : undefined;
-            const opensFile = !params.path && previous?.path !== path;
-            const excerpt = joined ?? { path, opensFile, content, start, end, line, first: found, last: found };
-            const grown = used - (joined ? shownSize(previous!) : 0) + shownSize(excerpt);
-            if (grown > budget) {
-              if (!windows.length)
+            const excerpt = `${sameFile ? "" : `[${path}]\n`}[match ${found} from line ${line}]\n${content.slice(start, end)}`;
+            if (used + excerpt.length + 1 > budget) {
+              if (!excerpts.length)
                 throw new Error(
                   `the text around match ${found} in ${path} is more than one result can show; ask for fewer characters around it`,
                 );
               next = found;
               continue;
             }
-            used = grown;
-            if (joined) windows[windows.length - 1] = joined;
-            else windows.push(excerpt);
+            used += excerpt.length + 1;
+            excerpts.push(excerpt);
+            previous = { path, end };
           }
         }
         const more = next ? `; too many to show at once, find on with from ${next}` : "";
-        const where = params.path ? searched[0]!.path : "the app's files";
-        const title = `[${JSON.stringify(sought)} in ${where}: ${found} found${more}]`;
-        const shown = windows.map((w) => `${excerptHeading(w)}\n${w.content.slice(w.start, w.end)}`);
-        return { body: { matches: found }, result: [title, ...shown].join("\n") };
+        const title = `[${JSON.stringify(sought)} in ${params.path ?? "the app's files"}: ${found} found${more}]`;
+        return { body: { matches: found }, result: [title, ...excerpts].join("\n") };
       }),
   });
 
