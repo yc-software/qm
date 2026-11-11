@@ -5,7 +5,6 @@ import { boundTenant, isTenantId } from "../tenants/context.ts";
 import type { CandidateDestination, Destination, EgressPolicy, Principal, ScopeId } from "../types.ts";
 import { isSystemActor } from "../types.ts";
 import type { SessionOrigin } from "../sessions/session-store.ts";
-import type { TriggerBase } from "../triggers/types.ts";
 import { mintSignedPayload, verifySignedPayload } from "./signed-token.ts";
 
 export const CAPABILITY_TTL_MS = 60 * 60_000;
@@ -45,10 +44,10 @@ interface BlobGrant {
 export async function personOrOwningBot(
   caller: Pick<CapabilityClaims, "actorId" | "botActor">,
   owns: () => Promise<boolean>,
-  trigger?: Pick<TriggerBase, "botActor"> | null,
+  record?: { botActor?: boolean } | null,
 ): Promise<boolean> {
   return (
-    caller.botActor !== true || (!isSystemActor(caller.actorId) && (!trigger || trigger.botActor === true) && owns())
+    caller.botActor !== true || (!isSystemActor(caller.actorId) && (!record || record.botActor === true) && owns())
   );
 }
 

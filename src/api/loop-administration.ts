@@ -5,10 +5,11 @@ import { canonicalPerson, samePersonInDirectory } from "../directory/person.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
 import { createMembershipControlsScope, createCanManageScope } from "../resolution/scope-membership.ts";
 import { swallowAs } from "../util/errors.ts";
+import type { TriggerBase } from "../triggers/types.ts";
 
 export async function canAdministerLoop(
   app: Pick<App, "membershipControlsScope" | "managesScope" | "samePerson">,
-  loop: { owner: string; ownerScopeId: ScopeId; botActor?: boolean },
+  loop: Pick<TriggerBase, "owner" | "ownerScopeId" | "botActor">,
   actor: Pick<CapabilityClaims, "actorId" | "botActor">,
 ): Promise<boolean> {
   const { actorId } = actor;
@@ -21,7 +22,7 @@ export async function canAdministerLoop(
 export async function loopAdministration(
   deps: AppDeps,
   actor: Pick<CapabilityClaims, "actorId" | "botActor">,
-  loops: readonly { owner: string; ownerScopeId: ScopeId; botActor?: boolean }[],
+  loops: readonly Pick<TriggerBase, "owner" | "ownerScopeId" | "botActor">[],
 ) {
   if (!loops.length) return [];
   const { actorId } = actor;
