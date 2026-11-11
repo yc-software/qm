@@ -59,13 +59,6 @@ export function createSessionMailbox(backing: DurableMap<SessionMessage>) {
         if (row?.recipientId === recipientId) await backing.merge(id, { consumed: true, wake: undefined });
       }
     },
-    async release(recipientId: string, messages: ReadonlyArray<Pick<SessionMessage, "id" | "wake">>): Promise<void> {
-      for (const message of messages) {
-        const row = await backing.get(message.id);
-        if (row?.recipientId === recipientId)
-          await backing.merge(message.id, { consumed: false, ...(message.wake ? { wake: true as const } : {}) });
-      }
-    },
   };
 }
 

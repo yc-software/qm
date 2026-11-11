@@ -69,13 +69,8 @@ import {
   REPLY_CHECK_LIMITS,
   replyCheckPrompt,
 } from "./agent.ts";
-import {
-  coreToolOptions,
-  createAgentTools,
-  endedOnPurpose,
-  pauseStampAfterToolCall,
-  type ToolContextRef,
-} from "./agent-tools.ts";
+import { coreToolOptions, createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "./agent-tools.ts";
+import { endedOnPurpose } from "./agent-tools/record.ts";
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
 import {
   reconstructMessagesFromHistory,
@@ -562,9 +557,13 @@ export function createAgent(opts?: AgentOptions): Agent {
             }
           });
         };
-        const steps = createStepRecorder(turn, persist);
+        const steps = createStepRecorder(turn, persist, async () => {
+          await thinkTail;
+          if (persistError) throw persistError;
+        });
         activeSteps = steps;
         entry.ref.emit = steps.emit;
+        entry.ref.resultHold = steps;
         const onMessageEnd = async (message: unknown): Promise<void> => {
           const role = (message as { role?: string }).role;
           if (role === "assistant") steps.assistant(message as AssistantMessage);
@@ -953,6 +952,7 @@ export function createAgent(opts?: AgentOptions): Agent {
           steps.settleResults();
           activeSteps = undefined;
           entry.ref.emit = turn.emit;
+          entry.ref.resultHold = undefined;
           await thinkTail;
           await recordCapturedRequests({ entry, turn, callUsage, userEntry, effectiveModel });
           entry.ref.onModelRequest = undefined;

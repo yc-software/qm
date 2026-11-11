@@ -313,7 +313,6 @@ export interface SessionSyscallBinding {
 export interface SessionSyscalls {
   receive?(timeoutMs?: number, signal?: AbortSignal): Promise<SessionMessage[]>;
   acknowledge?(ids: string[]): Promise<void>;
-  release?(messages: SessionMessage[]): Promise<void>;
   open(input: SessionOpenInput): Promise<SessionOpenResult>;
   write(input: SessionWriteInput): Promise<SessionWriteResult>;
   read(input: SessionReadInput): Promise<SessionReadResult>;
@@ -794,9 +793,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         },
         async acknowledge(ids) {
           await deps.mailbox?.acknowledge(binding.session.id, ids);
-        },
-        async release(messages) {
-          await deps.mailbox?.release(binding.session.id, messages);
         },
         async open(input) {
           if (binding.session.sideChat && !binding.session.sideChat.expanded)

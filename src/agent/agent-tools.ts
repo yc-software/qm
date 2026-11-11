@@ -9,6 +9,7 @@ import { type Phase } from "../../plugins/chassis/src/error-reporting.ts";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import { type GoalGovernor, type GoalInbox, type GoalRecord } from "./goal.ts";
 import { type ToolResultScreen, type ToolResultScreenInput } from "../security/security-posture.ts";
+import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { createToolKit } from "./agent-tools/kit.ts";
 import { endedOnPurpose } from "./agent-tools/record.ts";
 import type { SessionMessage } from "../sessions/session-mailbox.ts";
@@ -83,7 +84,15 @@ export interface ToolContextRef {
   toolApprovalGate?: (tool: string, callKey?: string) => boolean;
   approvedToolCalls?: Map<string, string>;
   stoppedCalls?: Set<string>;
-  mailShown?: Map<string, SessionMessage[]>;
+  mailShown?: Map<string, { messages: SessionMessage[]; texts: string[] }>;
+  resultHold?: ResultHold;
+}
+
+type ResultContent = Array<TextContent | ImageContent>;
+
+export interface ResultHold {
+  holdResult(callId: string, mail: readonly string[]): void;
+  settleResult(callId: string, content: ResultContent, withheld: readonly string[]): Promise<unknown> | undefined;
 }
 
 export interface AgentToolsOptions {
@@ -126,22 +135,41 @@ export function coreToolOptions(config: Config): CoreToolOptions {
 const READ_ONLY_TOOL_NAMES = new Set(["memory", "history", "finish_silently", "runtime", "sessions", "subagents"]);
 const SCHEDULING_TOOL_NAMES = new Set(["cron", "webhook", "goal"]);
 
-export { endedOnPurpose };
-
 export function pauseStampAfterToolCall(
   ref: Pick<ToolContextRef, "pausedOnApproval" | "silentRequested" | "runtimeHandoff" | "swarmHeld" | "mailShown"> &
-    Partial<Pick<ToolContextRef, "current">>,
-): (info: unknown, signal?: unknown) => Promise<{ terminate?: boolean } | undefined> {
+    Partial<Pick<ToolContextRef, "current" | "resultHold">>,
+): (info: unknown, signal?: unknown) => Promise<{ terminate?: boolean; content?: ResultContent } | undefined> {
   return async (info) => {
-    const call = info as { toolCall?: { id?: string }; result?: { terminate?: boolean } } | undefined;
+    const call = info as
+      { toolCall?: { id?: string }; result?: { terminate?: boolean; content?: ResultContent } } | undefined;
     const callId = call?.toolCall?.id;
     const shown = callId ? ref.mailShown?.get(callId) : undefined;
-    if (callId) ref.mailShown?.delete(callId);
-    if (!endedOnPurpose(ref)) return undefined;
-    if (shown?.length && call?.result?.terminate !== true)
-      await ref.current?.sessionSyscalls?.release?.(shown).catch(() => undefined);
-    return { terminate: true };
+    const ended = endedOnPurpose(ref);
+    if (!shown || !callId) return ended ? { terminate: true } : undefined;
+    const content = call?.result?.content ?? [];
+    if (!ended && call?.result?.terminate !== true) {
+      const persisted = await Promise.resolve(ref.resultHold?.settleResult(callId, content, [])).then(
+        () => true,
+        () => false,
+      );
+      if (persisted) await acknowledgeShownMail(ref, callId);
+      return undefined;
+    }
+    ref.mailShown?.delete(callId);
+    const kept = content.filter((block) => block.type !== "text" || !shown.texts.includes(block.text));
+    await Promise.resolve(ref.resultHold?.settleResult(callId, kept, shown.texts)).catch(() => undefined);
+    return { terminate: true, content: kept };
   };
+}
+
+export async function acknowledgeShownMail(
+  ref: Pick<ToolContextRef, "mailShown"> & Partial<Pick<ToolContextRef, "current">>,
+  callId: string,
+): Promise<void> {
+  const shown = ref.mailShown?.get(callId);
+  if (!shown) return;
+  await ref.current?.sessionSyscalls?.acknowledge?.(shown.messages.map((message) => message.id)).catch(() => undefined);
+  ref.mailShown?.delete(callId);
 }
 
 const APP_EDIT_TOOL_NAMES = new Set(["app_files", "apps", "execute", "skills", "files", "history"]);

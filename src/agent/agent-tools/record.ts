@@ -117,7 +117,10 @@ export function createRecorder(ref: ToolContextRef) {
   let goalInboxCheckedAt = 0;
   const deliverMessages = async (ret: { content: Array<{ type: string; text?: string }>; terminate?: boolean }) => {
     const delivered: SessionMessage[] = [];
-    const mailbox = await ref.current?.sessionSyscalls?.receive?.().catch(() => []);
+    const claimed = new Set([...(ref.mailShown?.values() ?? [])].flatMap((shown) => shown.messages.map((m) => m.id)));
+    const mailbox = (await ref.current?.sessionSyscalls?.receive?.().catch(() => []))?.filter(
+      (message) => !claimed.has(message.id),
+    );
     const clean: Array<{ message: SessionMessage; text: string }> = [];
     const notices: string[] = [];
     let held = false;
@@ -160,14 +163,16 @@ export function createRecorder(ref: ToolContextRef) {
     if (held) {
       ref.pausedOnApproval = true;
       ret.terminate = true;
-      return { text: appended, delivered };
+      return { text: appended, delivered, texts: [] as string[] };
     }
+    const texts: string[] = [];
     for (const { message, text } of clean) {
       ret.content.push({ type: "text", text });
       appended += `\n\n${text}`;
       delivered.push(message);
+      texts.push(text);
     }
-    return { text: appended, delivered };
+    return { text: appended, delivered, texts };
   };
 
   const recordResult = async <T extends { content: Array<{ type: string; text?: string }>; details?: unknown }>(
@@ -283,7 +288,9 @@ export function createRecorder(ref: ToolContextRef) {
       }
       if (stopped()) return ret;
       const ending = (ret as { terminate?: boolean }).terminate === true || endedOnPurpose(ref);
-      const mail = ending ? { text: "", delivered: [] as SessionMessage[] } : await deliverMessages(ret);
+      const mail = ending
+        ? { text: "", delivered: [] as SessionMessage[], texts: [] as string[] }
+        : await deliverMessages(ret);
       result += mail.text;
       const goal = ref.goal;
       const goalInbox =
@@ -315,8 +322,8 @@ export function createRecorder(ref: ToolContextRef) {
         ...(output ? { output } : {}),
       });
       if (mail.delivered.length) {
-        await ref.current?.sessionSyscalls?.acknowledge?.(mail.delivered.map((m) => m.id)).catch(() => undefined);
-        (ref.mailShown ??= new Map()).set(callId, mail.delivered);
+        (ref.mailShown ??= new Map()).set(callId, { messages: mail.delivered, texts: mail.texts });
+        ref.resultHold?.holdResult(callId, mail.texts);
       }
       return ret;
     });

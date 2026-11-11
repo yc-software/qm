@@ -170,7 +170,7 @@ test("a helper result that lands after the parent ended silently yields one foll
   await oneFollowUpCarriesTheAnswer(r, helper.run, ended);
 });
 
-test("mail shown in a sibling result that a later finish_silently turns terminal goes back to unread", async () => {
+test("mail in a sibling result that a later finish_silently turns terminal is never acknowledged", async () => {
   const r = await rig();
   const parent = await parentTurn(r);
   await parent.step("subagents", "c1", { action: "open", task: "check the harbor ledger" });
@@ -178,11 +178,13 @@ test("mail shown in a sibling result that a later finish_silently turns terminal
   await sweep(r, helper.run);
   const sibling = await parent.exec("files", "c2", { action: "read", path: "a.txt" });
   assert.match(sibling.text, new RegExp(ANSWER));
-  assert.deepEqual(await r.mailbox.pending(r.room.id), []);
+  assert.equal((await r.mailbox.pending(r.room.id)).length, 1, "mail stays unread until its result is settled");
+  const other = await parent.exec("files", "c4", { action: "read", path: "b.txt" });
+  assert.doesNotMatch(other.text, new RegExp(ANSWER), "a parallel sibling does not carry the same mail");
   const silent = await parent.step("finish_silently", "c3", {});
   assert.equal(silent.terminate, true);
   assert.equal(await parent.settle("c2", sibling.result), true, "the sibling result is stamped terminal");
-  assert.equal((await r.mailbox.pending(r.room.id)).length, 1, "its mail is released for the follow-up");
+  assert.equal((await r.mailbox.pending(r.room.id)).length, 1, "its mail stays unread for the follow-up");
   const ended = await parent.finish({ status: "silent" });
   await oneFollowUpCarriesTheAnswer(r, helper.run, ended);
 });
