@@ -49,6 +49,7 @@ export interface ProcessRegistry {
   listByScope(scopeId: string): Promise<ProcessRecord[]>;
   liveByScope(scopeId: string, now?: number): Promise<ProcessRecord[]>;
   listLive(now?: number): Promise<ProcessRecord[]>;
+  getMany(processIds: readonly string[]): Promise<ProcessRecord[]>;
   markStatus(processId: string, status: ProcessStatus): Promise<boolean>;
   credentialFiles(processId: string): Promise<ProcessCredentialFiles | null>;
   setCredentialFiles(processId: string, files: ProcessCredentialFiles | null): Promise<void>;
@@ -124,11 +125,11 @@ export function createPostgresProcessRegistry(connectionString: string): Process
       id: "processes/registry/0007-bot-actor",
       statements: [
         "ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS bot_actor TEXT",
-        `DO $$ BEGIN IF to_regclass('runs') IS NOT NULL THEN UPDATE process_sessions p SET bot_actor = r.request::jsonb -> 'actor' ->> 'id' FROM runs r WHERE r.tenant_id = p.tenant_id AND r.id = p.run_id AND p.status = 'running' AND p.bot_actor IS NULL AND r.request::jsonb ->> 'botActor' = 'true'; END IF; END $$`,
+        `CREATE OR REPLACE FUNCTION fill_process_session_bot_actors() RETURNS void LANGUAGE plpgsql AS $$ BEGIN IF to_regclass('runs') IS NOT NULL THEN UPDATE process_sessions p SET bot_actor = r.request::jsonb -> 'actor' ->> 'id' FROM runs r WHERE r.tenant_id = p.tenant_id AND r.id = p.run_id AND p.status = 'running' AND p.bot_actor IS NULL AND r.request::jsonb ->> 'botActor' = 'true'; END IF; END $$`,
         claimFunction(
           "claim_live_bot_process_sessions",
           "bigint",
-          "SELECT tenant_id, process_id FROM process_sessions WHERE status = 'running' AND expires_at > $1 AND bot_actor IS NOT NULL",
+          "SELECT fill_process_session_bot_actors(); SELECT tenant_id, process_id FROM process_sessions WHERE status = 'running' AND expires_at > $1 AND bot_actor IS NOT NULL",
         ),
       ],
     },
@@ -209,6 +210,9 @@ export function createPostgresProcessRegistry(connectionString: string): Process
         [scopeId, now],
       );
       return rows.map(pgRowToRecord);
+    },
+    async getMany(processIds) {
+      return (await q("SELECT * FROM process_sessions WHERE process_id = ANY($1)", [processIds])).map(pgRowToRecord);
     },
     async listLive(now = Date.now()) {
       const rows = await q("SELECT * FROM process_sessions WHERE status = 'running' AND expires_at > $1", [now]);
