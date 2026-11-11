@@ -34,8 +34,8 @@ type FetchOutcome =
   | { kind: "skipped"; reason: "source_gone"; message: string };
 
 export class SourceRateLimited extends TransientTurnFailure {
-  constructor(source: string) {
-    super(`${source} rate limited; the next sync will retry`);
+  constructor(source: string, seconds: number) {
+    super(`${source} rate limited (retry after ${seconds}s); the next sync will retry`);
   }
 }
 
@@ -108,17 +108,23 @@ export function createSourceClients(deps: SourceClientDeps): SourceClients {
   const addresses = perTenant(() => new LRUCache<string, string>({ max: 500, ttl: IDENTITY_TTL }));
   const channels = perTenant(() => new LRUCache<string, SlackChannel>({ max: 5000, ttl: DAY_TTL }));
   const users = perTenant(() => new LRUCache<string, Participant>({ max: 5000, ttl: DAY_TTL }));
-  const limited = perTenant(() => new LRUCache<string, boolean>({ max: 100 }));
+  const limited = perTenant(() => new LRUCache<string, number>({ max: 100 }));
 
   function limitFor(owner: string, source: string, seconds: number): never {
-    limited().set(`${owner}:${source}`, true, { ttl: Math.max(60, seconds) * 1000 });
-    throw new SourceRateLimited(source);
+    const wait = Math.max(60, seconds);
+    limited().set(`${owner}:${source}`, Date.now() + wait * 1000, { ttl: wait * 1000 });
+    throw new SourceRateLimited(source, wait);
+  }
+
+  function ensureOpen(owner: string, source: string): void {
+    const until = limited().get(`${owner}:${source}`);
+    if (until !== undefined) throw new SourceRateLimited(source, Math.max(1, Math.ceil((until - Date.now()) / 1000)));
   }
 
   const clients: SourceClients = {
     slackToken: (owner) => tokenFor(deps.tokens, "slack.com", owner),
     async slackCall(owner, token, method, params) {
-      if (limited().has(`${owner}:Slack`)) throw new SourceRateLimited("Slack");
+      ensureOpen(owner, "Slack");
       try {
         const body: unknown = await slackClient(token).apiCall(method, params);
         return isObj(body) ? body : {};
@@ -166,7 +172,7 @@ export function createSourceClients(deps: SourceClientDeps): SourceClients {
     gmailToken: (owner, item) =>
       item ? gmailToken(deps.tokens, owner, item) : tokenFor(deps.tokens, "gmail.googleapis.com", owner),
     async gmailRead(owner, token, path) {
-      if (limited().has(`${owner}:Gmail`)) throw new SourceRateLimited("Gmail");
+      ensureOpen(owner, "Gmail");
       try {
         return await gmailApi(token, fetchImpl)(path, { timeoutMs: SOURCE_TIMEOUT_MS });
       } catch (error) {
