@@ -146,7 +146,7 @@ export function createMcpClient(opts: {
 }): McpClient {
   const trimmed = trimTrailingSlashes(opts.url);
   const endpoint = new URL(new URL(trimmed).pathname === "/" ? `${trimmed}/mcp` : trimmed);
-  const { auth } = opts;
+  const { auth, maxResponseBytes } = opts;
   const fetchFn = opts.fetch ?? publicFetch;
   const authProvider =
     auth.mode === "client-credentials"
@@ -166,7 +166,6 @@ export function createMcpClient(opts: {
     const headers = { ...extraHeaders, ...(auth.mode === "bearer" ? { authorization: `Bearer ${auth.token}` } : {}) };
     const overflow = new AbortController();
     const stop = signal ? AbortSignal.any([signal, overflow.signal]) : overflow.signal;
-    const { maxResponseBytes } = opts;
     let detached = false;
     const transport = new StreamableHTTPClientTransport(endpoint, {
       ...(authProvider ? { authProvider } : {}),
@@ -231,15 +230,21 @@ export function createMcpClient(opts: {
         async (client) => {
           const tools: McpRemoteTool[] = [];
           let cursor: string | undefined;
+          let bytes = 0;
           do {
             const page = await client.listTools(cursor === undefined ? undefined : { cursor });
-            for (const t of page.tools)
-              tools.push({
+            for (const t of page.tools) {
+              const tool = {
                 name: t.name,
                 description: t.description ?? "",
                 inputSchema: t.inputSchema,
                 ...(t.annotations ? { annotations: t.annotations } : {}),
-              });
+              };
+              bytes += Buffer.byteLength(JSON.stringify(tool));
+              tools.push(tool);
+            }
+            if (maxResponseBytes !== undefined && bytes > maxResponseBytes)
+              throw new Error(`${endpoint.origin} listed tools larger than ${maxResponseBytes} bytes in all`);
             cursor = page.nextCursor;
           } while (cursor && tools.length < (opts?.maxTools ?? MAX_TOOLS));
           const about = (client.getServerVersion()?.description || client.getInstructions() || "").trim();

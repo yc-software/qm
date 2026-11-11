@@ -70,6 +70,21 @@ test("mcp client caps a server's tool list", async (t) => {
   assert.equal(mcp.requests.filter((r) => r.rpc === "tools/list").length, 2);
 });
 
+test("a capped mcp client refuses a tool list larger than its cap in all, though each page fits", async (t) => {
+  const description = "d".repeat(400_000);
+  const tools = ["a", "b", "c"].map((name) => ({ name, description, inputSchema: { type: "object" as const } }));
+  const mcp = await startMcpTestServer(t, { tools, pageSize: 1 });
+  const client = createMcpClient({
+    fetch: loopbackFetch,
+    url: mcp.url,
+    auth: { mode: "none" },
+    maxResponseBytes: 1_000_000,
+  });
+  await assert.rejects(client.listTools(), (error: Error) =>
+    /larger than 1000000 bytes in all/.test(String(error.cause)),
+  );
+});
+
 test("mcp client surfaces tool errors and protocol errors", async (t) => {
   const mcp = await startMcpTestServer(t, {
     call: (name) => ({ isError: true, content: [{ type: "text", text: `${name} exploded` }] }),

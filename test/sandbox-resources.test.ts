@@ -538,6 +538,15 @@ test("boot activation freezes legacy scope adoption before a new session arrives
   assert.deepEqual(provisioned, []);
 });
 
+test("a turn running as a Slack bot's work retires only the computers its actor created", async () => {
+  const { resources } = fixture();
+  const record = await resources.create("alice", "channel:team", "local");
+  const ambient = await resources.create("system:ambient:acme", "personal:system:ambient:acme", "local");
+  await assert.rejects(resources.retire("admin", record.id, true), /retire only a computer it created/);
+  await assert.rejects(resources.retire("system:ambient:acme", ambient.id, true), /retire only a computer it created/);
+  await resources.retire("alice", record.id, true);
+});
+
 test("retirement deletes an inferred missing computer without provisioning, status or restore", async () => {
   const { resources, backend, provisioned } = fixture();
   await resources.initialize();

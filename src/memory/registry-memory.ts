@@ -8,7 +8,7 @@ import type { MemoryService } from "./memory-service.ts";
 import type { MemoryProviderConfig } from "./provider-config.ts";
 import { createMemoryProviders, logMemoryProviderError } from "./provider-factory.ts";
 import { MemoryProviderDisabled } from "./provider-outcome.ts";
-import { createRoutedMemoryService, type MemoryProviderRoute } from "./provider-router.ts";
+import { brainRefused, createRoutedMemoryService, type MemoryProviderRoute } from "./provider-router.ts";
 import {
   readRegistry,
   resolveMemoryRegistry,
@@ -128,7 +128,7 @@ export function createRegistryMemoryService(opts: {
       brains: async (scopeId, reader) => (await (await serve()).service.brains?.(scopeId, reader)) ?? [],
       async lookup(scopeId, tool, args, by, context) {
         const { service } = await serve();
-        if (!service.lookup) throw new Error("no brain is connected to this conversation");
+        if (!service.lookup) throw brainRefused("No brain is connected to this conversation.");
         return service.lookup(scopeId, tool, args, by, context);
       },
       facts: async (scopeId) => (await (await serve()).service.facts?.(scopeId)) ?? [],

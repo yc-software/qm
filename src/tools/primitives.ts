@@ -12,7 +12,7 @@ import {
 } from "../credentials/execute-files.ts";
 import type { MemoryCaptureMetadata } from "../memory/facts.ts";
 import { disclosedMemory } from "../memory/disclosure.ts";
-import { resultText } from "../memory/mcp-memory-provider.ts";
+import { lookupText } from "../memory/mcp-memory-provider.ts";
 import { MaskedExecutionError, executionSecretEnv, createExactSecretValueMasker } from "../security/secret-masking.ts";
 import { withAbort, withTimeout } from "../util/async.ts";
 import type { RuntimeRequest, RuntimeResult } from "../agent/runtime-types.ts";
@@ -68,7 +68,7 @@ import { quotedData, trimTrailingSlashes, tryDecodeUtf8 } from "../util/text.ts"
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { MEMORY_FILE, turnAuthority, type MemoryEdit, type MemoryService } from "../memory/memory-service.ts";
-import { providerRef } from "../memory/provider-router.ts";
+import { brainRefused, providerRef } from "../memory/provider-router.ts";
 import {
   forgetFacts,
   withProviders,
@@ -791,7 +791,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
             if (action === "retire") {
               if (!input?.sandboxId) throw new Error("retire requires sandbox_id");
               const { resource } = await accessSandbox(input.sandboxId);
-              await resources.retire(deps.createdBy, resource.id);
+              await resources.retire(deps.createdBy, resource.id, deps.botActor);
               return { retired: resource.id };
             }
             if (action === "default") {
@@ -1141,7 +1141,10 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     },
 
     async setDeploymentPublic(id: string, isPublic: boolean) {
-      const d = await deps.deploy.setDeploymentPublic(id, isPublic, { createdBy: deps.createdBy });
+      const d = await deps.deploy.setDeploymentPublic(id, isPublic, {
+        createdBy: deps.createdBy,
+        botActor: deps.botActor,
+      });
       return { id: d.id, ...(d.name ? { name: d.name } : {}), public: d.public === true };
     },
 
@@ -1234,8 +1237,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
 
     async lookupBrain(brain: string, tool: string, args: Record<string, unknown>): Promise<string> {
       if (!memory?.lookup || !deps.memoryScopeId || !deps.memoryAccess?.read.includes(deps.memoryScopeId))
-        throw new Error("no brain is connected to this conversation");
-      return resultText(
+        throw brainRefused("No brain is connected to this conversation.");
+      return lookupText(
         await memory.lookup(
           deps.memoryScopeId,
           providerRef(brain, tool),

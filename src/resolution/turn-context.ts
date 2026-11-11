@@ -71,18 +71,21 @@ export function withBrainTools(
     return false;
   });
   if (!listed.length) return connectors;
+  const seen = new Set(connectors?.map(({ name }) => name));
   return [
     ...(connectors ?? []),
-    ...listed.flatMap((brain, index) =>
-      brain.tools.map((tool) => ({
-        ...connectorTool(
-          { id: brain.id, name: recallLabel(brain.label), readOnly: true },
-          index === 0 ? BRAIN_ABOUT : undefined,
-          tool,
-        ),
-        brain: true as const,
-      })),
-    ),
+    ...listed
+      .flatMap((brain, index) =>
+        brain.tools.map((tool) => ({
+          ...connectorTool(
+            { id: brain.id, name: recallLabel(brain.label), readOnly: true },
+            index === 0 ? BRAIN_ABOUT : undefined,
+            tool,
+          ),
+          brain: true as const,
+        })),
+      )
+      .filter((tool) => (seen.has(tool.name) ? false : (seen.add(tool.name), true))),
   ];
 }
 

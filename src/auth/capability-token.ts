@@ -3,6 +3,7 @@ import { deflateRaw, inflateRaw } from "node:zlib";
 import { orgId as configOrgId } from "../config.ts";
 import { boundTenant, isTenantId } from "../tenants/context.ts";
 import type { CandidateDestination, Destination, EgressPolicy, Principal, ScopeId } from "../types.ts";
+import { isSystemActor } from "../types.ts";
 import type { SessionOrigin } from "../sessions/session-store.ts";
 import { mintSignedPayload, verifySignedPayload } from "./signed-token.ts";
 
@@ -41,10 +42,10 @@ interface BlobGrant {
 }
 
 export async function personOrOwningBot(
-  caller: Pick<CapabilityClaims, "botActor">,
+  caller: Pick<CapabilityClaims, "actorId" | "botActor">,
   owns: () => Promise<boolean>,
 ): Promise<boolean> {
-  return caller.botActor !== true || owns();
+  return caller.botActor !== true || (!isSystemActor(caller.actorId) && owns());
 }
 
 type BlobTransferClaims = CapabilityClaims & { aud: typeof BLOB_TRANSFER_AUD; blob: BlobGrant };

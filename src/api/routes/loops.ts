@@ -100,7 +100,7 @@ export async function loadAdministrable(
     sendJson(ctx.res, 404, { error: "not_found", message: "no such loop" });
     return null;
   }
-  if (!(await canAdministerLoop(ctx.app, loop, acting.actorId))) {
+  if (!(await canAdministerLoop(ctx.app, loop, acting.capability ?? acting))) {
     sendJson(ctx.res, 403, { error: "forbidden", message: "you may not administer this loop" });
     return null;
   }
@@ -326,7 +326,7 @@ async function listLoops(ctx: ApiCtx): Promise<void> {
   const acting = actingPrincipal(ctx);
   if (!acting) return;
   const all = await deps.store.list();
-  const permissions = await ctx.app.loopAdministration(acting.actorId, all);
+  const permissions = await ctx.app.loopAdministration(acting.capability ?? acting, all);
   const visible = all.filter((_loop, i) => permissions[i]);
   return sendJson(ctx.res, 200, { loops: visible });
 }

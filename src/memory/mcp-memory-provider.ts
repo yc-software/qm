@@ -32,9 +32,16 @@ const ACTING_USER = "acting_user";
 const PENDING_STATES = new Set(["queued", "running", "recovering"]);
 const UNPUBLISHED_STATES = new Set(["conflict", "failed", "cancelled"]);
 
-export function resultText(result: CallToolResult): string {
+function resultText(result: CallToolResult): string {
   if (result.content.some((block) => block.type === "text")) return mcpResultText(result);
   return result.structuredContent == null ? "" : JSON.stringify(result.structuredContent);
+}
+
+export function lookupText(result: CallToolResult): string {
+  const warnings: unknown[] = Array.isArray(result._meta?.warnings) ? result._meta.warnings : [];
+  return [resultText(result), ...warnings.map((warning) => `warning: ${JSON.stringify(warning)}`)]
+    .filter(Boolean)
+    .join("\n");
 }
 
 interface ProviderFact {
@@ -219,16 +226,26 @@ export function createMcpMemoryProvider(opts: {
     ...(opts.attestActor
       ? {
           lookupTools: (scopeId, { actorId, audienceScopeId }) => lookupTools(scopeId, actorId, audienceScopeId),
-          lookup: (scopeId, tool, args, by, context) =>
-            call(
+          lookup: async (scopeId, tool, args, by, context) => {
+            const actorArg = opts.read.actorArg ?? ACTING_USER;
+            const written = Object.hasOwn(args, actorArg);
+            const result = await call(
               { ...opts.read, tool },
-              args,
-              undefined,
+              written ? { ...args, [actorArg]: undefined } : { ...args },
+              written ? actorArg : undefined,
               by?.actorId,
               scopeId,
               context?.audienceScopeId,
               context?.startedAt === undefined ? undefined : context.startedAt + opts.read.timeoutMs,
-            ),
+            );
+            const { code } = mcpEnvelope(result);
+            if (code && DENIED_CODES.has(code))
+              throw new McpCallError(`memory provider refused ${tool} (${code}): ${resultText(result)}`, {
+                code,
+                answered: true,
+              });
+            return result;
+          },
         }
       : {}),
 
