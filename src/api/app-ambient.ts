@@ -419,6 +419,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
           ts: input.origin.kind === "human" ? (input.origin.messageTs ?? "") : "",
           ...(input.actor.displayName ? { authorName: input.actor.displayName } : {}),
           authorId: input.actor.id,
+          ...(input.botActor ? { bot: true } : {}),
           text: input.text,
         },
       ],
