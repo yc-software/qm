@@ -1600,26 +1600,30 @@ async function visibleDeploymentsExport(ctx: BaseCtx): Promise<void> {
   const requested = url.searchParams.get("principalId")?.trim();
   if (!requested) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
   const principalId = canonicalPerson(requested);
-  const [visible, all, viewed] = await Promise.all([
+  const [visible, all] = await Promise.all([
     app.listDeploymentsForViewer({ actorId: principalId }),
     app.listDeployments(),
-    deps.appPageViews?.lastViews(tenantOf(ctx), principalId) ?? new Map<string, number>(),
   ]);
   const byId = new Map(all.map((d) => [d.id, d]));
-  const deployments = visible
-    .filter((d) => d.status !== "archived")
-    .map((d) => ({
-      id: d.id,
-      ...(d.name ? { name: d.name } : {}),
-      ...(d.displayName ? { displayName: d.displayName } : {}),
-      url: appUrlOf(byId.get(d.id) ?? d, { sharedWebUrl: deps.portalUrl, appsDomain: deps.deployAppsDomain }) ?? null,
-      createdBy: d.createdBy,
-      owned: d.ownerScopeId === personalScope(principalId),
-      permission: d.permission,
-      ...(d.updatedAt !== undefined ? { updatedAt: d.updatedAt } : {}),
-      ...(d.lastAccessAt !== undefined ? { lastAccessAt: d.lastAccessAt } : {}),
-      ...(viewed.has(d.id) ? { viewedAt: viewed.get(d.id) } : {}),
-    }));
+  const live = visible.filter((d) => d.status !== "archived");
+  const viewed =
+    (await deps.appPageViews?.lastViews(
+      tenantOf(ctx),
+      principalId,
+      live.map((d) => d.id),
+    )) ?? new Map<string, number>();
+  const deployments = live.map((d) => ({
+    id: d.id,
+    ...(d.name ? { name: d.name } : {}),
+    ...(d.displayName ? { displayName: d.displayName } : {}),
+    url: appUrlOf(byId.get(d.id) ?? d, { sharedWebUrl: deps.portalUrl, appsDomain: deps.deployAppsDomain }) ?? null,
+    createdBy: d.createdBy,
+    owned: d.ownerScopeId === personalScope(principalId),
+    permission: d.permission,
+    ...(d.updatedAt !== undefined ? { updatedAt: d.updatedAt } : {}),
+    ...(d.lastAccessAt !== undefined ? { lastAccessAt: d.lastAccessAt } : {}),
+    ...(viewed.has(d.id) ? { viewedAt: viewed.get(d.id) } : {}),
+  }));
   audit(ctx, {
     principalId: VISIBLE_DEPLOYMENTS_PRINCIPAL,
     action: "deployment.export",

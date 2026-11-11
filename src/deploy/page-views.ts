@@ -101,7 +101,7 @@ export interface AppPageView {
 
 export interface AppPageViewLog {
   record(view: AppPageView): Promise<void>;
-  lastViews(tenant: Tenant, viewer: string): Promise<Map<string, number>>;
+  lastViews(tenant: Tenant, viewer: string, deploymentIds: string[]): Promise<Map<string, number>>;
 }
 
 const MAX_PATH = 2048;
@@ -148,13 +148,13 @@ export function createPostgresAppPageViewLog(connectionString: string): AppPageV
         inFlight--;
       }
     },
-    async lastViews(tenant, viewer) {
-      const rows = await pg
-        .forTenant(tenant)
-        .q(
-          "SELECT deployment_id, max(at) AS at FROM app_page_views WHERE tenant_id = $1 AND viewer = $2 GROUP BY deployment_id",
-          [tenant.id, viewer],
-        );
+    async lastViews(tenant, viewer, deploymentIds) {
+      const rows = await pg.forTenant(tenant).q(
+        `SELECT d.id AS deployment_id, v.at FROM unnest($3::text[]) AS d(id)
+           CROSS JOIN LATERAL (SELECT at FROM app_page_views
+             WHERE tenant_id = $1 AND viewer = $2 AND deployment_id = d.id ORDER BY at DESC LIMIT 1) v`,
+        [tenant.id, viewer, deploymentIds],
+      );
       return new Map(rows.map((r) => [String(r.deployment_id), Number(r.at)]));
     },
   };

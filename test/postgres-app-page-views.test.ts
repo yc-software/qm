@@ -64,8 +64,11 @@ test("pg page-view log stores one row per view with clipped request fields", { s
     );
     await log.record({ ...view(), viewer: "alice@example.com", at: 1_700_000_000_003 });
     await log.record({ ...view(), viewer: "bob@example.com", at: 1_700_000_000_009 });
-    assert.deepEqual(await log.lastViews(testTenant, "alice@example.com"), new Map([["dep-1", 1_700_000_000_003]]));
-    assert.deepEqual(await log.lastViews(testTenant, "carol@example.com"), new Map());
+    assert.deepEqual(
+      await log.lastViews(testTenant, "alice@example.com", ["dep-1", "dep-2"]),
+      new Map([["dep-1", 1_700_000_000_003]]),
+    );
+    assert.deepEqual(await log.lastViews(testTenant, "carol@example.com", ["dep-1"]), new Map());
     assert.equal(rows[1].viewer, null);
     assert.equal(rows[1].auth_mode, "public");
     assert.equal(rows[1].path.length, 2048);
