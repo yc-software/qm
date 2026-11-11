@@ -23,6 +23,7 @@ const REPLACED_TABLES = new Set([
   "public.qm_tenant",
   "public.retired_tenant_hosts",
   "public.session_leases",
+  "public.tenants",
   "public.tenant_hosts",
 ]);
 
@@ -104,55 +105,31 @@ async function rowCounts(db: pg.Pool): Promise<Map<string, number>> {
   return new Map(rows.map(({ name, n }) => [name, n]));
 }
 
-const CASES = [
-  {
-    name: "a seeded v0.1.16 database",
-    fixture: "v0.1.16-seeded.sql.gz",
-    tenant: RELEASE_TENANT,
-    populated: "public.sessions",
-  },
-  {
-    name: "a v0.1.15 database left by a failed v0.1.16 upgrade",
-    fixture: "v0.1.15-after-failed-0.1.16.sql.gz",
-    baseline: "v0.1.15-seeded.sql.gz",
-    populated: "public.channel_messages",
-  },
-  {
-    name: "a v0.1.15 database left by failed v0.1.16 and v0.1.17 upgrades",
-    fixture: "v0.1.15-after-failed-0.1.16-and-0.1.17.sql.gz",
-    baseline: "v0.1.15-seeded.sql.gz",
-    populated: "public.channel_messages",
-  },
-] as const satisfies readonly {
-  name: string;
-  fixture: string;
-  baseline?: string;
-  tenant?: string;
-  populated: string;
-}[];
-
-async function loadFixture(db: pg.Pool, fixture: string): Promise<void> {
-  await db.query(gunzipSync(await readFile(new URL(`./fixtures/${fixture}`, import.meta.url))).toString("utf8"));
-  await db.query("SELECT pg_catalog.set_config('search_path', '\"$user\", public', false)");
-}
-
-for (const upgrade of CASES)
+const load = async (db: pg.Pool, f: string) =>
+  db.query(
+    `${gunzipSync(await readFile(new URL(`./fixtures/${f}`, import.meta.url)))}SET search_path = "$user", public`,
+  );
+for (const [fixture, baseline] of [
+  ["v0.1.16-seeded.sql.gz"],
+  ["v0.1.15-after-failed-0.1.16.sql.gz", "v0.1.15-seeded.sql.gz"],
+  ["v0.1.15-after-failed-0.1.16-and-0.1.17.sql.gz", "v0.1.15-seeded.sql.gz"],
+] as const)
   test(
-    `${upgrade.name} upgrades to the fresh tenant-keyed schema and keeps its rows`,
+    `${fixture} upgrades to the schema ${baseline ?? "a fresh database"} upgrades to and keeps its rows`,
     { skip: !databaseUrl, timeout: 900_000 },
     async () => {
       const admin = new pg.Pool({ connectionString: ownerUrl(databaseUrl!).toString(), max: 1 });
       const dataDir = await mkdtemp(join(tmpdir(), "qm-upgrade-test-"));
       try {
         const fresh = await withDatabase(admin, async (url, db) => {
-          if ("baseline" in upgrade) await loadFixture(db, upgrade.baseline);
+          if (baseline) await load(db, baseline);
           await migrate(url, dataDir);
           return (await db.query<{ entry: string }>(SCHEMA_SNAPSHOT)).rows.map(({ entry }) => entry);
         });
         await withDatabase(admin, async (url, db) => {
-          await loadFixture(db, upgrade.fixture);
+          await load(db, fixture);
           const before = await rowCounts(db);
-          if (before.has("public.participants")) {
+          if (!baseline) {
             const closed = await db.query<{ n: number }>(
               "SELECT count(*)::int AS n FROM participants WHERE valid_to IS NOT NULL OR valid_to_seq IS NOT NULL",
             );
@@ -169,19 +146,12 @@ for (const upgrade of CASES)
 
           const after = await rowCounts(db);
           for (const [name, count] of before) {
-            if (
-              REPLACED_TABLES.has(name) ||
-              name === "public.tenants" ||
-              !fresh.some((e) => e.startsWith(`rel ${name} r `))
-            )
-              continue;
+            if (REPLACED_TABLES.has(name) || !after.has(name)) continue;
             assert.equal(after.get(name), count, `${name} kept its rows`);
           }
-          assert.ok((before.get(upgrade.populated) ?? 0) > 0);
+          assert.ok((before.get(baseline ? "public.channel_messages" : "public.sessions") ?? 0) > 0);
           const { rows: tenants } = await db.query<{ id: string }>("SELECT id FROM tenants");
-          assert.equal(tenants.length, 1);
-          const tenant = tenants[0]!.id;
-          if ("tenant" in upgrade) assert.equal(tenant, upgrade.tenant);
+          assert.deepEqual(tenants, [{ id: baseline ? tenants[0]?.id : RELEASE_TENANT }]);
           const { rows: tables } = await db.query<{ table_name: string }>(
             `SELECT table_name FROM information_schema.columns
             WHERE table_schema = 'public' AND column_name = 'tenant_id' AND table_name <> 'tenants'`,
@@ -190,7 +160,7 @@ for (const upgrade of CASES)
           for (const { table_name } of tables) {
             const { rows } = await db.query<{ n: number }>(
               `SELECT count(*)::int AS n FROM ${table_name} WHERE tenant_id IS DISTINCT FROM $1`,
-              [tenant],
+              [tenants[0]!.id],
             );
             assert.equal(rows[0]!.n, 0, `${table_name} rows stay with the release tenant`);
           }
