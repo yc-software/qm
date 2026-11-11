@@ -148,7 +148,7 @@ export interface DeployStore {
   treeOf(id: string, version: number): Promise<DeployGitTreeFile[] | null>;
   commitTreeOf(id: string, commit: string): Promise<DeployGitTreeFile[]>;
   filesOf(id: string, commit: string, paths?: string[]): Promise<DeployGitInputFile[]>;
-  filesIn(id: string, entries: readonly DeployGitTreeFile[]): Promise<DeployGitInputFile[]>;
+  filesIn(id: string, entries: readonly Pick<DeployGitTreeFile, "path" | "sha">[]): Promise<DeployGitInputFile[]>;
   bundleOf(id: string, commit: string): Promise<Uint8Array>;
   commitDraft(id: string, files: DeployGitInputFile[], parent: string, deletedPaths?: string[]): Promise<string>;
   keepCommit(id: string, commit: string): Promise<void>;
