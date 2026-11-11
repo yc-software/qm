@@ -180,8 +180,8 @@ export async function resolveTurnContext(input: ContextInput) {
       sessionId?: string,
       card?: { personTurn: boolean; history: readonly Item[] },
     ) => {
-      const startedAt = Date.now();
       const cards = async (): Promise<RecalledFact[]> => {
+        const startedAt = Date.now();
         const by = card && personAuthority(card.personTurn);
         if (!by || !card || !text || memoryPolicy.card === "off") return [];
         return brainCards({
@@ -207,7 +207,6 @@ export async function resolveTurnContext(input: ContextInput) {
                 ...(text ? { input: text } : {}),
                 ...reader,
                 maxChars: RECALL_MAX_CHARS,
-                startedAt,
                 ...(disclosedFacts ? { disclosedFacts } : {}),
                 ...(report ? { report } : {}),
                 ...(sessionId ? { sessionId } : {}),

@@ -115,18 +115,17 @@ export function createMcpMemoryProvider(opts: {
     actorId: string | undefined,
     scopeId: string,
     audienceScopeId: string | undefined,
-    deadline = Date.now() + op.timeoutMs,
+    deadline: number | undefined,
   ) => {
     const { person, headers } = attest(actorId, scopeId, audienceScopeId);
     if (person && actorArg) args[actorArg] = person;
-    const ms = deadline - Date.now();
-    if (ms <= 0) throw new TimeoutError(`memory provider timed out after ${op.timeoutMs}ms`);
     const stop = new AbortController();
-    const result = await withTimeout(
-      () => op.client.callTool(op.tool, args, headers, stop.signal),
-      ms,
-      "memory provider",
-    ).finally(() => stop.abort());
+    const send = () => op.client.callTool(op.tool, args, headers, stop.signal);
+    const ms = deadline === undefined ? undefined : deadline - Date.now();
+    if (ms !== undefined && ms <= 0) throw new TimeoutError(`memory provider timed out after ${op.timeoutMs}ms`);
+    const result = await (ms === undefined ? send() : withTimeout(send, ms, "memory provider")).finally(() =>
+      stop.abort(),
+    );
     reportEnvelope(mcpEnvelope(result));
     return result;
   };
@@ -145,7 +144,7 @@ export function createMcpMemoryProvider(opts: {
       context?.actorId,
       scopeId,
       context?.audienceScopeId,
-      (context?.startedAt ?? Date.now()) + op.timeoutMs,
+      Date.now() + op.timeoutMs,
     ).catch((error: unknown) => {
       throw error instanceof OutsideAudience ? new MemoryRecallWithheld(scopeId) : error;
     });
@@ -221,17 +220,15 @@ export function createMcpMemoryProvider(opts: {
       ? {
           lookupTools: (scopeId, { actorId, audienceScopeId }) => lookupTools(scopeId, actorId, audienceScopeId),
           lookup: (scopeId, tool, args, by, context) =>
-            context?.startedAt === undefined
-              ? opts.read.client.callTool(tool, args, attest(by?.actorId, scopeId, context?.audienceScopeId).headers)
-              : call(
-                  { ...opts.read, tool },
-                  args,
-                  undefined,
-                  by?.actorId,
-                  scopeId,
-                  context.audienceScopeId,
-                  context.startedAt + opts.read.timeoutMs,
-                ),
+            call(
+              { ...opts.read, tool },
+              args,
+              undefined,
+              by?.actorId,
+              scopeId,
+              context?.audienceScopeId,
+              context?.startedAt === undefined ? undefined : context.startedAt + opts.read.timeoutMs,
+            ),
         }
       : {}),
 

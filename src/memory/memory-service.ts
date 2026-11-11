@@ -44,7 +44,6 @@ export interface MemoryRecallContext extends MemoryOutcomeSink {
   audienceScopeId?: ScopeId;
   sessionId?: string;
   maxChars?: number;
-  startedAt?: number;
 }
 
 export interface MemoryCaptureContext extends MemoryCaptureMetadata, MemoryOutcomeSink {

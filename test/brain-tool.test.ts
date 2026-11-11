@@ -69,18 +69,15 @@ async function gbrain(t: { after(fn: () => Promise<void>): void }) {
     call: async (tool, args, _authorization, actor) => {
       calls.push({ tool, args, ...(actor ? { actor } : {}) });
       if (tool === "memory_recall") return { content: [] };
-      const failure = failures.get(String(args.query ?? args.name));
+      const failure = failures.get(String(args.query));
       if (typeof failure === "number") await sleep(failure);
       else if (failure) return failure;
       const prior = String(args.prior_context);
       const volunteered = pages.filter(({ slug }) => !prior.includes(String(slug)));
-      const card = people.find(({ slug }) => slug === args.name);
       if (tool === "volunteer_context")
         return gbrainAnswer({ pages: volunteered, count: volunteered.length, window_turns: 1 });
       if (tool === "whois")
         return gbrainAnswer({ query: args.query, matches: people.filter(({ title }) => title === args.query) });
-      if (tool === "entity")
-        return gbrainAnswer({ protocol_version: 1, found: !!card, ...(card && { card: { entity: card } }) });
       return gbrainAnswer({ tool, args, results: [PRIYA] });
     },
   });
@@ -338,16 +335,17 @@ test("a brain card needs its switch and the binding's recall, and a revoked bind
   }
 });
 
-test("the card chain shares recall's deadline: hops that each fit the timeout but not together drop that brain's card", async (t) => {
+test("a mention's card comes from one whois match and keeps recall's deadline, unlike the agent's own lookups", async (t) => {
   const { acme, built, turn } = await brainApp(t);
   await built.directory.replace(U2);
   assert.deepEqual(cards(await turn([], MENTION)), [CARD]);
-  acme.failures.set("Priya Raman", 250);
-  acme.failures.set(PRIYA.slug, 250);
+  acme.failures.set("Priya Raman", 450);
   assert.deepEqual(cards(await turn([], MENTION)), []);
   assert.deepEqual(
-    asks(acme, "entity").map(({ args }) => args),
-    [1, 2].map(() => ({ name: PRIYA.slug, source_id: "default" })),
+    lookups(acme)
+      .map(({ tool, args }) => `${tool} ${args.query ?? ""}`.trim())
+      .toSorted(),
+    ["volunteer_context", "volunteer_context", "whois Priya Raman", "whois Priya Raman"],
   );
 });
 

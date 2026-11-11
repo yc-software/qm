@@ -2,8 +2,9 @@ import type { DirectoryStore } from "../directory/directory-store.ts";
 import { mentionedUserIds } from "../slack/mrkdwn.ts";
 import type { ScopeId } from "../types.ts";
 import { swallowAs } from "../util/errors.ts";
+import { isObj } from "../util/objects.ts";
 import { flatText } from "../util/text.ts";
-import { renderRecall, type RecalledFact } from "./cross-scope.ts";
+import { renderCards, type RecalledFact } from "./cross-scope.ts";
 import type { BoundBrain, MemoryAuthority, MemoryService } from "./memory-service.ts";
 import { providerRef } from "./provider-router.ts";
 
@@ -12,8 +13,7 @@ const MAX_MENTIONS = 3;
 
 type Row = Record<string, unknown>;
 
-const rows = (value: unknown): Row[] =>
-  Array.isArray(value) ? value.filter((row): row is Row => !!row && typeof row === "object") : [];
+const rows = (value: unknown): Row[] => (Array.isArray(value) ? value.filter(isObj) : []);
 
 const words = (...parts: unknown[]) =>
   parts.flatMap((part) => (typeof part === "string" && flatText(part) ? [flatText(part)] : []));
@@ -23,7 +23,7 @@ export async function brainCards(input: {
   brains: readonly BoundBrain[];
   scopeId: ScopeId;
   message: string;
-  delivered: readonly string[];
+  delivered: readonly { provider: string; ref: string }[];
   directory?: Pick<DirectoryStore, "getBySlackId">;
   by: MemoryAuthority;
   context: { audienceScopeId?: ScopeId; startedAt: number };
@@ -39,22 +39,20 @@ export async function brainCards(input: {
     const listed = new Set(brain.tools.map(({ name }) => name));
     const ask = async (tool: string, args: Row) =>
       ((await memory.lookup!(scopeId, providerRef(brain.id, tool), args, by, context)).structuredContent ?? {}) as Row;
-    const card = (page: Row | undefined, ...summary: string[]): RecalledFact[] => {
-      if (typeof page?.source_id !== "string" || typeof page.slug !== "string") return [];
-      const ref = `${brain.id}:${page.source_id}:${page.slug}`;
+    const card = (page: Row, ...summary: string[]): RecalledFact[] => {
+      if (typeof page.source_id !== "string" || typeof page.slug !== "string") return [];
+      const ref = providerRef(brain.id, `${page.source_id}:${page.slug}`);
       const text = flatText(`${brain.label} · ${ref} — ${summary.join(" ")}`);
-      return [{ scope: scopeId, source: { provider: brain.id, label: brain.label }, ref, kind: "card", text }];
+      return [{ scope: scopeId, card: { provider: brain.id, ref }, text }];
     };
-    const prior = input.delivered.filter((ref) => ref.startsWith(`${brain.id}:`));
-    const entities = !(listed.has("whois") && listed.has("entity"))
+    const prior = input.delivered.filter(({ provider }) => provider === brain.id).map(({ ref }) => ref);
+    const people = !listed.has("whois")
       ? []
       : names.map(async (name) => {
           const { matches, ambiguous } = await ask("whois", { query: name });
           const [match, ...others] = rows(matches);
           if (ambiguous === true || !match || others.length) return [];
-          const { card: found } = await ask("entity", { name: match.slug, source_id: match.source_id });
-          const { entity } = (found ?? {}) as { entity?: Row };
-          return card(entity, ...words(entity?.title), ...words(entity?.type).map((type) => `(${type})`));
+          return card(match, ...words(match.title), ...words(match.type).map((type) => `(${type})`));
         });
     const volunteered = !listed.has("volunteer_context")
       ? []
@@ -64,14 +62,14 @@ export async function brainCards(input: {
         }).then(({ pages }) =>
           rows(pages).flatMap((page) => card(page, words(page.display, page.rationale).join(": "))),
         );
-    return (await Promise.all([...entities, volunteered])).flat();
+    return (await Promise.all([...people, volunteered])).flat();
   };
   const fitted: RecalledFact[] = [];
   const cards = await Promise.all(input.brains.map((brain) => cardsOf(brain).catch((): RecalledFact[] => [])));
   for (const card of cards.flat())
     if (
-      !fitted.some(({ ref }) => ref === card.ref) &&
-      renderRecall([...fitted, card], new Map()).length <= BRAIN_CARD_MAX_CHARS
+      !fitted.some((shown) => shown.card?.ref === card.card?.ref) &&
+      renderCards([...fitted, card]).length <= BRAIN_CARD_MAX_CHARS
     )
       fitted.push(card);
   return fitted;

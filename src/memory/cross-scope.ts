@@ -9,15 +9,14 @@ export interface RecalledFact {
   id?: string;
   text: string;
   source?: MemorySource;
-  ref?: string;
-  kind?: "card";
+  card?: { provider: string; ref: string };
 }
 
 type ScopedRow = MemoryCandidate & { scope: ScopeId };
 
-type Block = Pick<RecalledFact, "scope" | "source" | "kind">;
+type Block = Pick<RecalledFact, "scope" | "source">;
 
-const blockKey = ({ scope, source, kind }: Block) => JSON.stringify(kind ? [kind] : [scope, source?.provider ?? null]);
+const blockKey = ({ scope, source }: Block) => JSON.stringify([scope, source?.provider ?? null]);
 
 const claimOf = (row: ScopedRow) => normalizeClaim(row.claim ?? row.text);
 
@@ -33,10 +32,8 @@ function copiesInTurn(rows: readonly ScopedRow[]): ScopedRow[][] {
 
 export const recallLabel = (text: string) => untrustedText(text).replace(/\s+/g, " ");
 
-const heading = ({ scope, source, kind }: Block, labels: ReadonlyMap<string, string>) =>
-  kind
-    ? "### Brain cards"
-    : `### ${recallLabel(labels.get(scope) ?? scope)}${source ? ` · ${recallLabel(source.label)}` : ""}`;
+const heading = ({ scope, source }: Block, labels: ReadonlyMap<string, string>) =>
+  `### ${recallLabel(labels.get(scope) ?? scope)}${source ? ` · ${recallLabel(source.label)}` : ""}`;
 
 const BLOCK_FRAME = quotedData("").length;
 
@@ -93,6 +90,9 @@ export function renderRecall(facts: readonly RecalledFact[], labels: ReadonlyMap
     .map(({ block, rows }) => `${heading(block, labels)}\n${quotedData(rows.join("\n"))}`)
     .join("\n\n");
 }
+
+export const renderCards = (cards: readonly RecalledFact[]): string =>
+  cards.length ? `### Brain cards\n${quotedData(cards.map(({ text }) => text).join("\n"))}` : "";
 
 export async function searchAcrossScopes(
   memory: MemoryService,
