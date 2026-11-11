@@ -14,14 +14,13 @@ export type AppShot = {
   ok: boolean;
   error?: string;
   image?: string;
-  mimeType?: "image/png" | "image/jpeg";
+  mimeType?: NonNullable<ClientToolResult["images"]>[number]["mimeType"];
   url?: string;
   width?: number;
   height?: number;
   scrollY?: number;
   dark?: boolean;
   version?: string | null;
-  notDrawn?: string[];
 };
 
 function appViewEmbedded(): boolean {
@@ -34,7 +33,7 @@ export function appViewClientTools(): Array<Record<string, unknown>> {
     {
       name: APP_SCREENSHOT_TOOL,
       description:
-        "Take a screenshot of the app exactly as the person sees it right now in their own browser tab: their sign-in, data, theme and scroll position. Use it after changing how the app looks, to check the result before saying it is done. Waits for the tab to load the newest saved version first. The picture shows only the color scheme the person is using now, light or dark; it cannot show the other one. Returns the picture plus the page address, viewport size, and that color scheme.",
+        "Take a screenshot of the app exactly as the person sees it right now in their own browser tab: their sign-in, data, theme and scroll position. Use it after changing how the app looks, to check the result before saying it is done. Waits for the tab to load the newest saved version first. The picture shows only the color scheme the person is using now, light or dark; it cannot show the other one. An image the capture could not load is drawn as a magenta box with black stripes and a font it could not load as a plain fallback font; the person's tab shows the real ones, so these are not bugs in the app. Returns the picture plus the page address, viewport size, and that color scheme.",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
       timeoutMs: CLIENT_TOOL_MAX_TIMEOUT_MS,
     },
@@ -49,17 +48,22 @@ export function shotResult(shot: AppShot): ClientToolResult {
     `Viewport: ${shot.width}×${shot.height}${shot.scrollY ? `, scrolled ${shot.scrollY}px down` : ""}`,
     `Color scheme: ${shot.dark ? "dark" : "light"}`,
     ...(shot.version ? [`App version shown: ${shot.version}`] : []),
-    ...(shot.notDrawn?.length
-      ? [`Not drawn in the picture (shown as gray boxes or fallback fonts):\n${shot.notDrawn.join("\n")}`]
-      : []),
   ];
   return { content: lines.join("\n"), images: [{ data: shot.image, mimeType: shot.mimeType }] };
 }
 
-async function takeAppShot(): Promise<ClientToolResult> {
+const SHELL_DEADLINE_MARGIN_MS = 10_000;
+const CHAT_DEADLINE_MARGIN_MS = 5_000;
+
+async function takeAppShot(_args: unknown, createdAt = Date.now()): Promise<ClientToolResult> {
+  const serverDeadline = createdAt + CLIENT_TOOL_MAX_TIMEOUT_MS;
   try {
     return shotResult(
-      await askEmbedder<AppShot>({ type: "qm:app-shot" }, "qm:app-shot-result", CLIENT_TOOL_MAX_TIMEOUT_MS),
+      await askEmbedder<AppShot>(
+        { type: "qm:app-shot", deadline: serverDeadline - SHELL_DEADLINE_MARGIN_MS },
+        "qm:app-shot-result",
+        Math.max(0, serverDeadline - CHAT_DEADLINE_MARGIN_MS - Date.now()),
+      ),
     );
   } catch (error) {
     return { content: `Screenshot failed: ${errMessage(error)}`, isError: true };

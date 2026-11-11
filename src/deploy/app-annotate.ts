@@ -1,9 +1,3 @@
-import { readFileSync } from "node:fs";
-
-export function appAnnotationAsset(name: "js" | "css"): string {
-  return readFileSync(new URL(`./vendor/devbar.${name}`, import.meta.url), "utf8");
-}
-
 export const ANNOTATE_CSS = `
   header .ann-btn { display: inline-flex; align-items: center; gap: 6px; color: var(--muted-foreground); }
   header .ann-btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; }

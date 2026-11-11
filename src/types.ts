@@ -370,12 +370,7 @@ export interface ClientToolDeclaration {
   timeoutMs?: number;
 }
 
-export interface ClientToolResult {
-  images?: Array<{ data: string; mimeType: "image/png" | "image/jpeg" }>;
-  content: string;
-  structured?: unknown;
-  isError?: boolean;
-}
+export type { ClientToolResult } from "../plugins/chassis/src/client-tools.ts";
 
 export interface TurnRequest {
   desktopClientId?: string;

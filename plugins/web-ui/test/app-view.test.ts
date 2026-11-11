@@ -47,13 +47,8 @@ test("a capture carries the picture and the facts a picture cannot show", () => 
     width: 800,
     height: 600,
     dark: true,
-    notDrawn: ["Failed to fetch resource: https://elsewhere.example/logo.png"],
   });
   assert.deepEqual(result.images, [{ data: "aGk=", mimeType: "image/jpeg" }]);
   assert.match(result.content, /Viewport: 800×600/);
   assert.match(result.content, /Color scheme: dark/);
-  assert.match(
-    result.content,
-    /Not drawn in the picture.*:\nFailed to fetch resource: https:\/\/elsewhere\.example\/logo\.png/,
-  );
 });

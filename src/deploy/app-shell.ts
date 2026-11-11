@@ -5,11 +5,23 @@ import { ANNOTATE_BUTTON, ANNOTATE_CSS, ANNOTATE_JS, ANNOTATE_MARKUP } from "./a
 export const APP_SHELL_PATH_PREFIX = "/__claw__/";
 
 const require = createRequire(import.meta.url);
-let captureScript: string | undefined;
 
-export function appCaptureScript(): string {
-  captureScript ??= readFileSync(require.resolve("html-to-image/dist/html-to-image.js"), "utf8");
-  return captureScript;
+const SHELL_ASSETS = {
+  "/__claw__/capture.js": { file: () => require.resolve("html-to-image/dist/html-to-image.js"), annotation: false },
+  "/__claw__/annotate.js": { file: () => new URL("./vendor/devbar.js", import.meta.url), annotation: true },
+  "/__claw__/annotate.css": { file: () => new URL("./vendor/devbar.css", import.meta.url), annotation: true },
+} as const;
+
+export function appShellAsset(
+  pathname: string,
+  annotationsEnabled: boolean,
+): { contentType: string; body: string } | null {
+  const asset = SHELL_ASSETS[pathname as keyof typeof SHELL_ASSETS];
+  if (!asset || (asset.annotation && !annotationsEnabled)) return null;
+  return {
+    contentType: pathname.endsWith(".css") ? "text/css; charset=utf-8" : "text/javascript; charset=utf-8",
+    body: readFileSync(asset.file(), "utf8"),
+  };
 }
 
 function escAttr(value: string): string {
@@ -130,7 +142,7 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
   window.addEventListener("message", (event) => {
     if (event.source !== chat.contentWindow || event.origin !== portalOrigin) return;
     if (event.data?.type === "qm:app-check") return void poll();
-    if (event.data?.type === "qm:app-shot" && typeof event.data.id === "string") return void answerShot(event.data.id);
+    if (event.data?.type === "qm:app-shot" && typeof event.data.id === "string" && typeof event.data.deadline === "number") return void answerShot(event.data.id, event.data.deadline);
     const theme = event.data;
     if (theme?.type !== "qm:theme" || typeof theme.dark !== "boolean" || !theme.colors) return;
     if (!themeColors.every((key) => typeof theme.colors[key] === "string" && CSS.supports("color", theme.colors[key]))) return;
@@ -256,12 +268,10 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
 
   let captureLib = null;
   let captureScript = null;
-  let notDrawn = [];
   app.addEventListener("load", () => {
     if (captureScript) captureScript.remove();
     captureScript = null;
     captureLib = null;
-    notDrawn = [];
   });
   const loadCapture = () => captureLib || (captureLib = new Promise((resolve, reject) => {
     const s = document.createElement("script");
@@ -271,25 +281,29 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
     captureScript = s;
     document.head.appendChild(s);
   }));
-  const placeholder = "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="#c8c8c8"/></svg>');
+  const placeholder = "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" preserveAspectRatio="none"><rect width="40" height="40" fill="#ff00ff"/><path d="M-10 10 10-10M-10 30 30-10M-10 50 50-10M10 50 50 10M30 50 50 30" stroke="#000" stroke-width="5"/></svg>');
   const describe = (error) => {
-    if (error instanceof Event) {
-      const t = error.target;
-      const where = t && (t.currentSrc || t.src || t.href || t.tagName);
-      return "a " + error.type + " event" + (where ? " from " + String(where).slice(0, 300) : "");
-    }
-    return String(error && error.message || error);
+    if (!(error instanceof Event)) return String(error && error.message || error);
+    const t = error.target;
+    const where = String(t && (t.currentSrc || t.src || t.href || t.tagName) || "");
+    return "a " + error.type + " event" + (!where ? "" : where.startsWith("data:") ? " from a " + where.length + "-character data: URL the capture built" : " from " + where);
   };
+  let stage = "";
   const shoot = async () => {
     if (document.hidden) throw new Error("the app tab is hidden, so the browser will not render it; ask the person to bring it to the front");
+    stage = "checking for a newer app version";
     await checkVersion(true);
+    stage = "waiting for the app to reload";
     if (reloading) await new Promise((resolve) => app.addEventListener("load", resolve, { once: true }));
     const doc = app.contentDocument;
     if (!doc || !doc.documentElement) throw new Error("the app page is not readable from its shell (it may have navigated to another site)");
     const w = app.contentWindow;
+    stage = "waiting for the page to finish loading";
     if (doc.readyState !== "complete") await new Promise((resolve) => w.addEventListener("load", resolve, { once: true }));
+    stage = "waiting for fonts";
     if (doc.fonts) await doc.fonts.ready;
     await new Promise((r) => w.requestAnimationFrame(() => w.requestAnimationFrame(r)));
+    stage = "loading the capture library";
     const lib = await loadCapture();
     const width = app.clientWidth;
     const height = app.clientHeight;
@@ -299,43 +313,30 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
     const bg = w.getComputedStyle(doc.body || doc.documentElement).backgroundColor;
     const htmlBg = w.getComputedStyle(doc.documentElement).backgroundColor;
     const opaque = (c) => c && c !== "transparent" && !/rgba\\([^)]*,\\s*0\\)$/.test(c);
-    const notes = [];
-    const { fetch: realFetch } = window;
-    window.fetch = (input, init) => realFetch(input, init).catch((error) => {
-      notes.push("could not fetch " + String(input && input.url || input).slice(0, 300) + " (" + describe(error) + ")");
-      throw error;
+    stage = "drawing the picture";
+    const dataUrl = await lib.toJpeg(doc.documentElement, {
+      width, height, pixelRatio: 1, quality: 0.85, cacheBust: false,
+      imagePlaceholder: placeholder, onImageErrorHandler: () => {},
+      backgroundColor: opaque(htmlBg) ? htmlBg : opaque(bg) ? bg : "#ffffff",
+      style: { transform: "translate(" + -sx + "px," + -sy + "px)", transformOrigin: "0 0" },
     });
-    const { warn, error: logError } = console;
-    console.warn = (...args) => { notes.push(args.map(describe).join(" ")); warn(...args); };
-    console.error = (...args) => { notes.push(args.map(describe).join(" ")); logError(...args); };
-    let canvas;
-    try {
-      canvas = await lib.toCanvas(doc.documentElement, {
-        width, height, pixelRatio: 1, cacheBust: false, imagePlaceholder: placeholder,
-        backgroundColor: opaque(htmlBg) ? htmlBg : opaque(bg) ? bg : "#ffffff",
-        style: { transform: "translate(" + -sx + "px," + -sy + "px)", transformOrigin: "0 0" },
-      });
-    } finally {
-      window.fetch = realFetch;
-      console.warn = warn;
-      console.error = logError;
-    }
-    for (const note of notes) if (!notDrawn.includes(note)) notDrawn.push(note);
-    let dataUrl;
-    try { dataUrl = canvas.toDataURL("image/jpeg", 0.85); }
-    catch (error) { throw new Error("the browser refused to read the picture back (" + (error && error.name) + ": " + (error && error.message) + ")"); }
     return {
       ok: true, image: dataUrl.slice(dataUrl.indexOf(",") + 1), mimeType: "image/jpeg",
       url: w.location.href, width, height, scrollY: Math.round(sy),
       dark: !!(w.matchMedia && w.matchMedia("(prefers-color-scheme: dark)").matches),
-      version: base, notDrawn,
+      version: base,
     };
   };
-  const answerShot = async (id) => {
-    let reply;
-    try { reply = await shoot(); }
-    catch (error) { reply = { ok: false, error: describe(error) }; }
-    chat.contentWindow.postMessage({ type: "qm:app-shot-result", id, ...reply }, portalOrigin);
+  const answerShot = async (id, deadline) => {
+    let answered = false;
+    const answer = (reply) => {
+      if (answered) return;
+      answered = true;
+      chat.contentWindow.postMessage({ type: "qm:app-shot-result", id, ...reply }, portalOrigin);
+    };
+    setTimeout(() => answer({ ok: false, error: "the capture did not finish in time; it was stuck " + stage }), deadline - Date.now());
+    try { answer(await shoot()); }
+    catch (error) { answer({ ok: false, error: describe(error) }); }
   };
 ${opts.annotationsEnabled ? ANNOTATE_JS : ""}
   upd.addEventListener("click", () => {

@@ -1,10 +1,8 @@
 import { activityItems, type RunActivityEntry } from "./items.ts";
 
-export type ClientToolResult = {
-  content: string;
-  isError?: boolean;
-  images?: Array<{ data: string; mimeType: "image/png" | "image/jpeg" }>;
-};
+import type { ClientToolResult } from "../../chassis/src/client-tools.ts";
+
+export type { ClientToolResult };
 
 export type ClientToolRun = { status?: string; alive?: boolean; activity?: RunActivityEntry[] };
 
