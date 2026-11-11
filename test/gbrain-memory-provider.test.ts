@@ -8,11 +8,12 @@ import type { MemoryProviderOutcome, MemoryService } from "../src/memory/memory-
 import { parseMemoryProviderConfig } from "../src/memory/provider-config.ts";
 import { createRegistryMemoryService } from "../src/memory/registry-memory.ts";
 import { forgetFacts, withProviders, writeFacts } from "../src/memory/provider-outcome.ts";
+import { EMPTY_MEMORY_REGISTRY, putBinding, putBrain, type MemoryRegistry } from "../src/memory/registry.ts";
 import { createPerTurnStrategy } from "../src/memory/strategies/per-turn.ts";
 import { recallAcrossScopes } from "../src/memory/cross-scope.ts";
 import { memoryRecallQuery } from "../src/memory/semantic-recall.ts";
 import { type NewItem, storedItem } from "../src/sessions/items.ts";
-import { startMcpTestServer } from "./support/mcp-test-server.ts";
+import { routedTo, startMcpTestServer } from "./support/mcp-test-server.ts";
 import { emptyMemoryRegistry } from "./support/memory-registry.ts";
 
 interface ContractTool {
@@ -64,6 +65,7 @@ async function gbrain(
   t: { after(fn: () => Promise<void>): void },
   answer: (name: string, args: Record<string, unknown>) => CallToolResult,
   routes = recipe.routes,
+  record: MemoryRegistry | null = null,
 ) {
   installPrincipalLinks({
     canonical: (key) => (key === "jordan@acme.example" || key === "U0JORDAN" ? "U0JORDAN" : undefined),
@@ -105,7 +107,8 @@ async function gbrain(
     },
   };
   const memory = createRegistryMemoryService({
-    registry: emptyMemoryRegistry,
+    registry: { ...emptyMemoryRegistry, current: async () => ({ version: "1", record }) },
+    registryFetch: routedTo(server.url),
     defaultMemory: notebook,
     overlay: parseMemoryProviderConfig(
       JSON.stringify({ ...recipe, routes, providers: [{ ...recipe.providers[0], url: server.url }] }),
@@ -312,22 +315,35 @@ test("gbrain's answers and refusals become the outcomes the contract classes the
     assert.equal(await write(refusal(code)), expected(code, cls), code);
 });
 
-test("the documented gbrain recipe forgets a member's fact with the contract's forget_fact, and an unfinished one is pending", async (t) => {
-  const { calls, memory } = await gbrain(t, (_name, args) => ({
-    content: [],
-    structuredContent: { id: args.id, request_id: args.request_id, state: args.id === 41 ? "committed" : "running" },
-  }));
+test("a registry gbrain brain forgets a member's fact with the contract's forget_fact, and an unfinished one is pending", async (t) => {
+  const change = { actor: "admin", now: 1, overlayIds: new Set<string>(), key: emptyMemoryRegistry.key };
+  const brain = { preset: "gbrain-v1", url: "https://brain.acme.example/mcp", clientId: "rw", clientSecret: "y" };
+  const record = putBinding(
+    putBrain(EMPTY_MEMORY_REGISTRY, "jordan-brain", { ...brain, label: "Jordan's brain" }, change),
+    "jordan",
+    { brain: "jordan-brain", scope: JORDAN, capture: "explicit" },
+    change,
+  );
+  const { calls, memory } = await gbrain(
+    t,
+    (_name, args) => ({
+      content: [],
+      structuredContent: { id: args.id, request_id: args.request_id, state: args.id === 41 ? "committed" : "running" },
+    }),
+    [],
+    record,
+  );
   const forgot = await forgetFacts(
     memory,
     JORDAN,
-    ["gbrain:41", "gbrain:42"],
+    ["jordan-brain:41", "jordan-brain:42"],
     { actorId: "U0JORDAN", context: "conversation", personTurn: true },
     { audienceScopeId: JORDAN },
     "session:call",
   );
   assert.deepEqual(
     forgot.outcomes.map(({ ref, outcome, code }) => `${ref} ${outcome}${code ? ` ${code}` : ""}`),
-    ["gbrain:41 committed", "gbrain:42 pending running"],
+    ["jordan-brain:41 committed", "jordan-brain:42 pending running"],
   );
   assert.deepEqual(
     calls.map(({ name }) => name),

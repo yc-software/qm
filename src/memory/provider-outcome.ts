@@ -50,8 +50,8 @@ export class MemoryProviderDisabled extends Error {
 
 export class MemoryWriteUnconfirmed extends Error {
   readonly code: string;
-  constructor(code: string) {
-    super(`memory provider didn't confirm the write (${code})`);
+  constructor(code: string, reply?: string) {
+    super(`memory provider didn't confirm the write (${code})${reply ? `: ${reply}` : ""}`);
     this.code = code;
   }
 }

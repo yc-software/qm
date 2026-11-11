@@ -1,5 +1,5 @@
 import type { CapabilityClaims } from "../auth/capability-token.ts";
-import { livePersonCapability } from "./artifact-share.ts";
+import { livePersonCapability, personSentTurn } from "./artifact-share.ts";
 import { adminRoutes } from "./routes/admin.ts";
 import { unattendedGrantListing } from "./routes/admin/unattended-grants.ts";
 import { UNATTENDED_ADMIN_GRANTS } from "./control-service.ts";
@@ -513,7 +513,7 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    when: (v) => livePersonCapability(v.claims) && !v.claims.triggered,
+    when: (v) => personSentTurn(v.claims),
     routes: [
       {
         method: "GET|PUT|DELETE",

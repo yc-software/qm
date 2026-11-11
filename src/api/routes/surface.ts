@@ -53,6 +53,7 @@ import {
   ARTIFACT_TYPES,
   isArtifactType,
   livePersonCapability,
+  personSentTurn,
   splitToScope,
   SHARED_SKILL_TRIGGER_REFUSAL,
 } from "../artifact-share.ts";
@@ -865,7 +866,7 @@ const deleteFacts = writeMemory(async ({ res, deps, tenant, body }, memory, capa
     memory,
     write,
     ids,
-    turnAuthority(capability.actorId, capability.memory, livePersonCapability(capability) && !capability.triggered),
+    turnAuthority(capability.actorId, capability.memory, personSentTurn(capability)),
     capability.audienceScopeId ? { audienceScopeId: capability.audienceScopeId } : {},
     capability.sessionId && capability.runId && `${capability.sessionId}:${capability.runId}`,
   );

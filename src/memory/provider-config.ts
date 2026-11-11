@@ -29,8 +29,6 @@ export interface McpMemoryOperationConfig {
   capturedAtArg?: string;
   sourceArg?: string;
   idempotencyArg?: string;
-  idArg?: string;
-  requestIdArg?: string;
 }
 
 interface McpMemoryProviderConfig {
@@ -131,8 +129,6 @@ function operation(value: unknown, at: string, env: NodeJS.ProcessEnv): McpMemor
     "capturedAtArg",
     "sourceArg",
     "idempotencyArg",
-    "idArg",
-    "requestIdArg",
   ] as const) {
     if (raw[key] === undefined) continue;
     const name = string(raw[key], `${at}.${key}`);
@@ -173,10 +169,6 @@ export function parseMemoryProviderConfig(
       throw new Error(`memory provider ${id}.attestActor must be true or false on an mcp provider`);
     if (raw.type === "memorable") return parseMemorableProvider(raw, id, env);
     if (raw.type !== "mcp") throw new Error(`memory provider ${id} has unsupported type; use "mcp" or "memorable"`);
-    if (raw.forget && raw.attestActor !== true)
-      throw new Error(
-        `memory provider ${id}.forget requires attestActor: true, because QM forgets a fact only as the member it belongs to`,
-      );
     const timeoutMs = timeout(raw.timeoutMs, `memory provider ${id}.timeoutMs`, 3_000, MAX_PROVIDER_TIMEOUT_MS);
     return {
       id,
@@ -186,7 +178,6 @@ export function parseMemoryProviderConfig(
       attestActor: raw.attestActor === true,
       read: operation(raw.read, `memory provider ${id}.read`, env),
       ...(raw.write ? { write: operation(raw.write, `memory provider ${id}.write`, env) } : {}),
-      ...(raw.forget ? { forget: operation(raw.forget, `memory provider ${id}.forget`, env) } : {}),
     } satisfies McpMemoryProviderConfig;
   });
   const ids = new Set(["default", ...providers.map(({ id }) => id)]);

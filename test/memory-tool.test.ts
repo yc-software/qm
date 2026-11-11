@@ -440,12 +440,7 @@ test("the memory tool forgets notebook ids and brain refs in one call, a brain r
       acme: createMcpMemoryProvider({
         read: { ...op, tool: "memory_recall" },
         write: { ...op, tool: "memory_write" },
-        forget: {
-          ...op,
-          tool: "forget_fact",
-          idArg: "id",
-          requestIdArg: "request_id",
-        },
+        forget: { ...op, tool: "forget_fact", idempotencyArg: "request_id" },
         attestActor: true,
       }),
     },
@@ -458,7 +453,7 @@ test("the memory tool forgets notebook ids and brain refs in one call, a brain r
     const current = ctxFor({
       scope: personal,
       memory: memory as ReturnType<typeof createPostgresMemoryService>,
-      deps: { sessionId: "s1", audienceScopeId: personal, humanTurn: true, ...deps },
+      deps: { sessionId: "s1", audienceScopeId: personal, personTurn: true, ...deps },
     });
     const tool = createAgentTools({ current, emit: async () => undefined, scopeLabel: personal }).find(
       (t) => t.name === "memory",
@@ -467,7 +462,7 @@ test("the memory tool forgets notebook ids and brain refs in one call, a brain r
   };
   const forgets = () => calls.filter(({ tool }) => tool === "forget_fact").map(({ args }) => args.id);
 
-  for (const deps of [{ audienceScopeId: scopeId("channel", "C1") }, { humanTurn: false }])
+  for (const deps of [{ audienceScopeId: scopeId("channel", "C1") }, { personTurn: false }])
     assert.match(
       await run({ action: "delete", ids: ["#1", "acme:7"] }, deps),
       /^\[error\] Only the person, on a turn they sent in their own DM/,
