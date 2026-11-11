@@ -203,22 +203,6 @@ export function validateRuntimeChoice(choice: RuntimeChoice): string | null {
   return null;
 }
 
-export async function webuiModelEnabled(
-  ctx: { deps: RuntimeDeps },
-  modelId: string,
-  purpose?: TurnRuntimePurpose,
-): Promise<boolean> {
-  modelId = codexProviderModelId(modelId);
-  const config = ctx.deps.config!;
-  const picker = await config.getWebuiModelsDurable(orgScope());
-  if (picker == null || picker.includes(modelId)) return true;
-  if (picker.length === 0) return false;
-  const org = orgScope();
-  const orgModel = (await config.getBaseModelOwnDurable(org)) ?? runtimeFallback(ctx).modelId;
-  const purposeModel = purpose ? (await config.getPurposeRuntimeDurable(purpose))?.modelId : undefined;
-  return modelId === orgModel || modelId === purposeModel;
-}
-
 export async function availableRuntimeError(
   ctx: { deps: RuntimeDeps },
   scope: ScopeId,
@@ -229,7 +213,7 @@ export async function availableRuntimeError(
   let reason: string;
   try {
     const choices = await runtimeConfigBody(ctx, scope, undefined, purpose, choice);
-    if (choices.models.includes(choice.modelId) && (await webuiModelEnabled(ctx, choice.modelId, purpose)))
+    if (choices.models.includes(choice.modelId))
       return validateRuntimeChoice({
         ...choice,
         effortLevel:
@@ -243,9 +227,7 @@ export async function availableRuntimeError(
   const head = `${choice.modelId} can't run here (${reason}). Pick from this list rather than guessing another model: the default`;
   try {
     const { effective, models } = await runtimeConfigBody(ctx, scope, undefined, purpose);
-    const usable: string[] = [];
-    for (const modelId of models) if (await webuiModelEnabled(ctx, modelId, purpose)) usable.push(modelId);
-    return `${head}, ${effective.modelId}${usable.length ? `, or one of: ${usable.join(", ")}` : ""}.`;
+    return `${head}, ${effective.modelId}${models.length ? `, or one of: ${models.join(", ")}` : ""}.`;
   } catch (listError) {
     return `${head} (listing usable models failed: ${errMessage(listError)}).`;
   }
