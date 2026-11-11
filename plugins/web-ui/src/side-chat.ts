@@ -3,6 +3,7 @@ import { cachedTranscript, storeTranscript } from "./transcript-cache";
 import { passageOccurrence, passageRange } from "./passage-range";
 import { html, nothing } from "lit";
 import { markdown } from "./message-markdown";
+import { retractedReason } from "./items";
 import { messageWorkTimeline } from "./timeline";
 import { ref } from "lit/directives/ref.js";
 import { ArrowUp, ArrowUpRight, Maximize2, Minimize2, Minus, MessageSquare, X } from "lucide";
@@ -13,6 +14,7 @@ import {
   forkCutSeq,
   forkSession,
   itemsToMessages,
+  messageText,
   type AssistantWork,
   type CoreSession,
 } from "./core-bridge";
@@ -219,18 +221,18 @@ export function createSideChatController(ctx: ConvCtx) {
       const { items } = page;
       if (sourceId !== id || previews.get(session.id) !== preview) return;
       if (pendingQuote === null && !cachedTranscript(session.id)) storeTranscript(session.id, page);
-      const replies = itemsToMessages(items.filter((item) => item.seq > (session.forkBoundarySeq ?? -1)))
-        .filter((message): message is AssistantWork => message.role === "assistant")
-        .flatMap((message) => {
-          const text = message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
-          const narration = message.work
-            ? messageWorkTimeline(message.work, text).flatMap((part) =>
-                part.kind === "text" ? [part.item.text ?? ""] : [],
-              )
-            : [];
-          return text ? [text] : narration.filter(Boolean);
-        });
-      preview.text = replies.join("\n\n") || ((page.session ?? session).working ? "Working…" : "No reply yet.");
+      const messages = itemsToMessages(items.filter((item) => item.seq > (session.forkBoundarySeq ?? -1))).filter(
+        (message): message is AssistantWork => message.role === "assistant",
+      );
+      const replies = messages.map(messageText).filter(Boolean);
+      const work = messages.at(-1)?.work;
+      if (!replies.length && work)
+        replies.push(
+          ...messageWorkTimeline(work, "").flatMap((part) =>
+            part.kind === "text" && !retractedReason(part.item) ? [part.item.text!] : [],
+          ),
+        );
+      preview.text = replies.join("\n\n") || "No reply yet.";
     } catch (cause) {
       reportHandledError("web:side_chat_preview", cause);
       if (sourceId !== id || previews.get(session.id) !== preview) return;

@@ -36,9 +36,10 @@ test("side-chat previews show pending work and open loaded replies immediately",
     release = resolve;
   });
   let refreshing = false;
-  let working = false;
+  let pendingReply = false;
   let narration = "";
   let finalized = false;
+  let retracted = false;
   const h = await harness({
     path: "/s/source",
     session: source,
@@ -48,11 +49,16 @@ test("side-chat previews show pending work and open loaded replies immediately",
       if (!path.startsWith("/api/sessions/side?")) return undefined;
       const response = () =>
         Response.json({
-          session: { ...side, working },
-          items: working
+          session: side,
+          items: pendingReply
             ? [
                 ...items,
-                item("AgentMessage", { seq: 1, variant: "narration", text: narration }),
+                item("AgentMessage", {
+                  seq: 1,
+                  variant: "narration",
+                  text: narration,
+                  body: retracted ? { retracted: "Correction" } : {},
+                }),
                 ...(finalized ? [item("AgentMessage", { seq: 2, text: "Both halves are tested." })] : []),
               ]
             : [...items, item("AgentMessage", { seq: 1, createdAt: Date.now(), text: "The queue survives restarts." })],
@@ -75,14 +81,17 @@ test("side-chat previews show pending work and open loaded replies immediately",
       () => document.querySelector(".side-chat-conversation")?.textContent?.includes("survives restarts") === true,
     );
     assert.equal(document.querySelector(".side-chat-marker")?.getAttribute("aria-expanded"), "true");
-    working = true;
+    pendingReply = true;
     document
       .querySelector(".side-chat-panel")!
       .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    await until(() => document.querySelector(".side-chat-preview")?.textContent?.trim() === "Working…");
+    await until(() => document.querySelector(".side-chat-preview")?.textContent?.trim() === "No reply yet.");
     narration = "On it: I will build both halves and test them.";
     h.visibleConversation().onDelivery(side.threadRef);
     await until(() => document.querySelector(".side-chat-preview")?.textContent?.trim() === narration);
+    retracted = true;
+    h.visibleConversation().onDelivery(side.threadRef);
+    await until(() => document.querySelector(".side-chat-preview")?.textContent?.trim() === "No reply yet.");
     finalized = true;
     h.visibleConversation().onDelivery(side.threadRef);
     await until(() => document.querySelector(".side-chat-preview")?.textContent?.trim() === "Both halves are tested.");
