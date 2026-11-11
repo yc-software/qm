@@ -5,7 +5,12 @@ import type { Cron, CronFireLogEntry, CronSchedule, CronScript, Webhook } from "
 import { cronScriptFrom, type CronScriptTrial } from "../cron/script.ts";
 import type { CreateCronInput, CronPatch } from "../cron/cron-store.ts";
 import type { CreateWebhookInput } from "../webhooks/webhook-store.ts";
-import { personOrOwningBot, type CapabilityClaims, type ManagingCaller } from "../auth/capability-token.ts";
+import {
+  personOrOwningBot,
+  proactiveScopeWork,
+  type CapabilityClaims,
+  type ManagingCaller,
+} from "../auth/capability-token.ts";
 import {
   cronFireReadsNotes,
   describeRunNowRefusal,
@@ -205,6 +210,12 @@ async function ownsCron(
   if (actsAsScope(cron.owner, cron.ownerScopeId)) return app.isCurrentSharedScopeMember(actorId, cron.ownerScopeId);
   if (!(await (isActor ? isActor(cron.owner) : app.samePerson(cron.owner, actorId)))) return false;
   return !(await app.membershipControlsScope(cron.ownerScopeId)) || app.managesScope(actorId, cron.ownerScopeId);
+}
+
+export function notYours(what: string, caller: ManagingCaller): string {
+  return proactiveScopeWork(caller)
+    ? `unprompted work can't manage this conversation's ${what}s; ask in the conversation so a person does it`
+    : `not your ${what}`;
 }
 
 export async function canAdministerCron(
@@ -520,14 +531,14 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       if (await canAdministerCron(app, cron, capability)) return { ok: true, cron };
       const { visible } = await app.listCronsForViewer(capability.actorId);
       if (visible.some((c) => c.id === id)) return { ok: true, cron };
-      return { ok: false, code: "forbidden", message: "not your cron" };
+      return { ok: false, code: "forbidden", message: notYours("cron", capability) };
     },
 
     async getCronRuns(id, req, capability) {
       const cron = await app.getCron(id);
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, cron, capability)))
-        return { ok: false, code: "forbidden", message: "not your cron" };
+        return { ok: false, code: "forbidden", message: notYours("cron", capability) };
       if (req.limit !== undefined && (!Number.isSafeInteger(req.limit) || req.limit < 1)) {
         return { ok: false, code: "bad_request", message: "limit must be a positive integer" };
       }
@@ -539,7 +550,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       const before = await app.getCron(id);
       if (!before) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, before, capability)))
-        return { ok: false, code: "forbidden", message: "not your cron" };
+        return { ok: false, code: "forbidden", message: notYours("cron", capability) };
       const patch = patchFromCronPatchRequest(before, req, capability);
       if ("ok" in patch) return patch;
       if (req.script !== undefined && !(await ownsCron(app, before, capability.actorId)))
@@ -601,7 +612,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       const cron = await app.getCron(id);
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, cron, capability)))
-        return { ok: false, code: "forbidden", message: "not your cron" };
+        return { ok: false, code: "forbidden", message: notYours("cron", capability) };
       if (cron.archived) {
         return {
           ok: false,
@@ -632,7 +643,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       const cron = await app.getCron(id);
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, cron, capability)))
-        return { ok: false, code: "forbidden", message: "not your cron" };
+        return { ok: false, code: "forbidden", message: notYours("cron", capability) };
       await app.deleteCron(id);
       await notifyEdit(cron, capability, ["deleted"]);
       return { ok: true };
@@ -642,7 +653,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       const cron = await app.getCron(id);
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, cron, capability)))
-        return { ok: false, code: "forbidden", message: "not your cron" };
+        return { ok: false, code: "forbidden", message: notYours("cron", capability) };
       if (cron.enabled === enabled) return { ok: true, cron };
       await app.setCronEnabled(id, enabled);
       await notifyEdit(cron, capability, [`enabled=${enabled}`]);
@@ -654,7 +665,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       const cron = await app.getCron(id);
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, cron, capability)))
-        return { ok: false, code: "forbidden", message: "not your cron" };
+        return { ok: false, code: "forbidden", message: notYours("cron", capability) };
       if (!scheduler)
         return {
           ok: false,
@@ -679,7 +690,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       const cron = await app.getCron(id);
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, cron, capability)))
-        return { ok: false, code: "forbidden", message: "not your cron" };
+        return { ok: false, code: "forbidden", message: notYours("cron", capability) };
       const resolved = resolveCapabilityDestination(capability, destinationKey);
       if (!resolved.ok) {
         return {
@@ -746,7 +757,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       const webhook = await app.getWebhook(id);
       if (!webhook) return { ok: false, code: "not_found", message: `no webhook ${id}` };
       if (!(await canAdministerWebhook(app, webhook, capability)))
-        return { ok: false, code: "forbidden", message: "not your webhook" };
+        return { ok: false, code: "forbidden", message: notYours("webhook", capability) };
       await app.setWebhookEnabled(id, false);
       return { ok: true };
     },
@@ -829,9 +840,11 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         return {
           ok: false,
           code: "forbidden",
-          message: cron
-            ? "only the cron's owner can share it"
-            : `only the ${req.type}'s owner (or a member of its shared home) can share or move it`,
+          message: proactiveScopeWork(capability)
+            ? "unprompted work can't share this conversation's things; ask in the conversation so a person does it"
+            : cron
+              ? "only the cron's owner can share it"
+              : `only the ${req.type}'s owner (or a member of its shared home) can share or move it`,
         };
       }
       if (

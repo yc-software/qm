@@ -3,6 +3,7 @@ import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
+import { withTenant } from "../src/tenants/context.ts";
 import type { AddressInfo } from "node:net";
 import type { Agent } from "../src/agent/agent.ts";
 import { mkdtempSync } from "node:fs";
@@ -28,6 +29,10 @@ import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 
 const policies = { partner: { companyDomains: ["acme.com"], companyTeamIds: ["TINTERNAL"], serviceCredentials: [] } };
 const source = { account: "default", workspace: "TINTERNAL", assistant: "UBOT" };
+const notMember = (channel: string) =>
+  `can't currently be confirmed as a member of channel:${channel}, so helpers can't run here; nothing was started or sent.`;
+const manageRefusal = (what: string) =>
+  `unprompted work can't manage this conversation's ${what}s; ask in the conversation so a person does it`;
 const outcome = (p: Promise<unknown>): Promise<string> =>
   p.then(
     () => "ok",
@@ -183,9 +188,15 @@ for (const wake of ["message", "scheduled"] as const)
         })
         .open({ task: "look up the memo; read only" })
         .then(
-          (r) => r.ok,
-          () => false,
+          (r) => (r.ok ? "ok" : (r.message ?? "refused")),
+          (e: Error) => e.message,
         );
+    const [childRun] = await built.runs.list({ threadRef: childRef! });
+    let parentWake: Awaited<ReturnType<typeof built.runs.list>>[number] | undefined;
+    await settle(async () => {
+      parentWake = (await built.runs.list({ threadRef: parentRef })).find((r) => r.id !== run.id);
+      return parentWake?.status === "done";
+    });
     const parent = claimsByThread.get(parentRef)!;
     const child = claimsByThread.get(childRef!)!;
 
@@ -260,7 +271,18 @@ for (const wake of ["message", "scheduled"] as const)
         await openAs(scopeActor(scopeId("group", "C-deals"))),
         await openAs("b@x.com"),
         await openAs(scopeActor(here), elsewhere),
+        await withTenant(randomUUID(), () => openAs(scopeActor(here))),
       ],
+      delegation: {
+        children: (await built.sessions.childrenOf(session.id)).length,
+        childDone: (await built.runs.waitFor(childRun!.id, 30_000)).status,
+        parentWakeDone: parentWake?.status,
+        origins: [run, childRun!, parentWake!].map((r) => r.request.surfaceOrigin),
+        crossScopeGate: [
+          await built.app.authorizesCapabilityScope({ ...parent, scopeId: scopeId("channel", "C-other") }),
+          await built.app.authorizesCapabilityScope({ ...parent, actorId: scopeActor(scopeId("channel", "C-other")) }),
+        ],
+      },
       minted: { parent: markers(parent), child: markers(child), cronFire: markers(cronFire), person: markers(person) },
       worker: acted.get(parentRef),
       helper: acted.get(childRef!),
@@ -296,7 +318,20 @@ for (const wake of ["message", "scheduled"] as const)
       publish: "refused: unprompted work can't publish a new app; ask in the conversation so a person publishes it",
     };
     assert.deepEqual(observed, {
-      othersOpen: [false, false, false, false, false],
+      othersOpen: [
+        ...["system:ambient:default-org", "system:channel:C-other", "system:group:C-deals", "b@x.com"].map(
+          (id) => `${id} ${notMember("C-deals")}`,
+        ),
+        `system:channel:C-deals ${notMember("C-other")}`,
+        "this delegated task was stopped",
+      ],
+      delegation: {
+        children: 1,
+        childDone: "done",
+        parentWakeDone: "done",
+        origins: Array(3).fill({ ...run.request.surfaceOrigin, audience: "internal" }),
+        crossScopeGate: [false, false],
+      },
       minted: {
         parent: [scopeActor(here), here, true, undefined, "conversation"],
         child: [scopeActor(here), here, true, undefined, "conversation"],
@@ -314,9 +349,9 @@ for (const wake of ["message", "scheduled"] as const)
         parentListsCrons: [200, false],
         childListsCrons: [200, false],
         legacyListsCrons: [403, null],
-        parentPatchesCron: [403, "not your cron"],
-        childDisablesCron: [403, "not your cron"],
-        parentDisablesWebhook: [403, "not your webhook"],
+        parentPatchesCron: [403, manageRefusal("cron")],
+        childDisablesCron: [403, manageRefusal("cron")],
+        parentDisablesWebhook: [403, manageRefusal("webhook")],
       },
     });
   });

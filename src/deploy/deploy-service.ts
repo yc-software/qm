@@ -15,6 +15,7 @@ import { samePerson } from "../directory/person.ts";
 import {
   personOrOwningBot,
   proactiveScopeWork,
+  scopeWorkClaims,
   type CapabilityClaims,
   type ManagingCaller,
 } from "../auth/capability-token.ts";
@@ -903,14 +904,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
 
     async deployOrUpdate(input) {
       const { ownerScopeId, createdBy } = input;
-      const caller: ManagingCaller = {
-        actorId: createdBy,
-        botActor: input.botActor,
-        scopeId: input.scopeId,
-        triggered: input.triggered,
-        liveActor: input.liveActor,
-        origin: input.origin,
-      };
+      const caller: ManagingCaller = { actorId: createdBy, botActor: input.botActor, ...scopeWorkClaims(input) };
       if (input.embedAncestors !== undefined && !parseEmbedAncestors(input.embedAncestors))
         throw new Error(`embedAncestors must be an ${EMBED_ANCESTORS_HINT}`);
 
@@ -920,7 +914,11 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         const existing = await deps.deployStore.getByName(input.renameFrom);
         if (!existing) throw new Error(`no deployment named: ${input.renameFrom}`);
         if (!(await canManage(existing, caller, input.createdInScope)))
-          throw new Error(`not authorized to manage deployment: ${input.renameFrom}`);
+          throw new Error(
+            proactiveScopeWork(caller)
+              ? "unprompted work can't change this conversation's apps; ask in the conversation so a person does it"
+              : `not authorized to manage deployment: ${input.renameFrom}`,
+          );
         const clash = await deps.deployStore.getByName(input.name);
         if (clash && clash.id !== existing.id) throw new Error(`deployment name taken: ${input.name}`);
         await deps.deployStore.setName(existing.id, input.name);
@@ -954,7 +952,11 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         const existing = await deps.deployStore.getByName(input.name);
         if (!existing) throw new Error(`no deployment named: ${input.name}`);
         if (!(await canManage(existing, caller, input.createdInScope)))
-          throw new Error(`not authorized to manage deployment: ${input.name}`);
+          throw new Error(
+            proactiveScopeWork(caller)
+              ? "unprompted work can't change this conversation's apps; ask in the conversation so a person does it"
+              : `not authorized to manage deployment: ${input.name}`,
+          );
         await this.rollbackDeployment(existing.id, input.rollbackTo, {
           actor: createdBy,
           ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
@@ -971,7 +973,11 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           throw new Error(`deployment name taken: ${input.name}`);
         }
         if (!(await personOrOwningBot(caller, async () => samePerson(existing.createdBy, caller.actorId))))
-          throw new Error(`not authorized to manage deployment: ${input.name}`);
+          throw new Error(
+            proactiveScopeWork(caller)
+              ? "unprompted work can't change this conversation's apps; ask in the conversation so a person does it"
+              : `not authorized to manage deployment: ${input.name}`,
+          );
         const entrypoint = requiredEntrypoint(input.entrypoint, existing);
         const { liveEdit } = await this.redeploy(existing.id, {
           actor: createdBy,

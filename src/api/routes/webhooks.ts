@@ -3,7 +3,7 @@ import type { Webhook } from "../../triggers/types.ts";
 import { WEBHOOK_SCHEMES } from "../../webhooks/verifiers.ts";
 import type { CreateWebhookInput } from "../../webhooks/webhook-store.ts";
 import { errMessage } from "../../util/errors.ts";
-import { canAdministerWebhook, editWebhookTask } from "../control-service.ts";
+import { canAdministerWebhook, editWebhookTask, notYours } from "../control-service.ts";
 import { PayloadTooLargeError, readRawBody, sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
@@ -181,7 +181,7 @@ async function setWebhookEnabled(ctx: ApiCtx, enabled: boolean): Promise<void> {
   if (!(await canAdministerWebhook(app, webhook, capability ?? { actorId: principalId }))) {
     return sendJson(res, capability ? 403 : 404, {
       error: capability ? "forbidden" : "not_found",
-      ...(capability ? { message: "not your webhook" } : {}),
+      ...(capability ? { message: notYours("webhook", capability) } : {}),
     });
   }
   await app.setWebhookEnabled(id, enabled);

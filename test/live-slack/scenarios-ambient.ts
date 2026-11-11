@@ -56,7 +56,9 @@ export const ambientScenarios: Scenario[] = [
         const ours = errors.filter((e) => e.sessionId === parent.id || e.sessionId === child.id);
         assert.deepEqual(ours, [], "no refusal or error recorded for the worker or its helper");
       } finally {
-        await core.setAmbientPolicy(channel.id, "", null).catch(() => {});
+        await core
+          .setAmbientPolicy(channel.id, "", null)
+          .catch((err: Error) => console.error(`ambient policy reset failed for ${channel.id}: ${err.message}`));
       }
     },
   },
