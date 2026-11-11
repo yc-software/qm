@@ -1,14 +1,11 @@
+import { desktopComputerTool } from "../../chassis/src/desktop-computer.ts";
 import { fetchServerSentEvents } from "@tanstack/ai-client";
 import { errMessage } from "../../chassis/src/errors.ts";
-import { activityItems, type RunActivityEntry } from "./items.ts";
+import type { RunActivityEntry } from "./items.ts";
+import { createClientToolExecutor, postClientResult, type ClientToolResult } from "./client-tools.ts";
 
-type Result = {
-  content: string;
-  isError?: boolean;
-  images?: Array<{ data: string; mimeType: "image/png" | "image/jpeg" }>;
-};
 type Desk = {
-  call(args: unknown, clientId?: string, deadline?: number): Promise<Result>;
+  call(args: unknown, clientId?: string, deadline?: number): Promise<ClientToolResult>;
   stop?(clientId: string): Promise<unknown>;
 };
 export type DesktopRun = {
@@ -37,7 +34,7 @@ export function desktopTurnId(): string | undefined {
   return desktop() ? crypto.randomUUID() : undefined;
 }
 
-async function executeComputer(desk: Desk, raw: unknown, deadline?: number): Promise<Result> {
+async function executeComputer(desk: Desk, raw: unknown, deadline?: number): Promise<ClientToolResult> {
   try {
     return await desk.call(raw, undefined, deadline);
   } catch (error) {
@@ -45,32 +42,21 @@ async function executeComputer(desk: Desk, raw: unknown, deadline?: number): Pro
   }
 }
 
+const WORK_MARGIN_MS = 5_000;
+
 export function createDesktopExecutor(
   clientId: string,
   desk: Desk,
-  send: (callId: string, result: Result) => Promise<unknown>,
+  send: (callId: string, result: ClientToolResult) => Promise<unknown>,
 ) {
-  const handled = new Set<string>();
+  const execute = createClientToolExecutor(
+    desktopComputerTool.name,
+    desktopComputerTool.timeoutMs,
+    (args, answerBy) => executeComputer(desk, args, answerBy - WORK_MARGIN_MS),
+    send,
+  );
   return async (run: DesktopRun): Promise<void> => {
-    if (run.desktopClientId !== clientId || run.status !== "running" || !run.alive) return;
-    const items = activityItems(run.activity ?? []);
-    const complete = new Set(items.filter((item) => item.kind === "ToolResult").map((item) => item.callId));
-    for (const item of items) {
-      const callId = item.callId;
-      if (
-        item.kind !== "ToolCall" ||
-        item.body.client !== true ||
-        item.tool !== "desktop" ||
-        !callId ||
-        complete.has(callId) ||
-        handled.has(callId)
-      )
-        continue;
-      handled.add(callId);
-      if (!item.createdAt || Date.now() - item.createdAt > 55_000) continue;
-      const result = await executeComputer(desk, item.body.args, item.createdAt + 50_000);
-      await send(callId, result);
-    }
+    if (run.desktopClientId === clientId) await execute(run);
   };
 }
 
@@ -92,11 +78,10 @@ export async function serveDesktopRun(
     call: (args, _client, deadline) => desk.call(args, clientId, deadline),
   };
   let failure: unknown;
-  const execute = createDesktopExecutor(clientId, scopedDesk, (callId, result) =>
-    send(`/api/runs/${encodeURIComponent(runId)}/signal`, {
-      method: "POST",
-      body: JSON.stringify({ kind: "client_result", desktopClientId: clientId, callId, result }),
-    }),
+  const execute = createDesktopExecutor(
+    clientId,
+    scopedDesk,
+    postClientResult(send, runId, { desktopClientId: clientId }),
   );
   try {
     let connected = false;

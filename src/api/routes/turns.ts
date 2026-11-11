@@ -1,3 +1,4 @@
+import { CLIENT_TOOL_MAX_TIMEOUT_MS } from "../../../plugins/chassis/src/client-tools.ts";
 import { fromJSONSchema, z, ZodObject } from "zod";
 import type { ClientToolDeclaration, SurfaceBriefing, TurnOrigin, TurnRequest } from "../../types.ts";
 import { promptText } from "../../util/text.ts";
@@ -61,7 +62,7 @@ const clientToolsSchema = z
         .max(2_000)
         .refine((description) => description.trim() !== "", { message: "must not be blank" }),
       inputSchema: clientToolInputSchema,
-      timeoutMs: z.int().min(1_000).max(60_000).optional(),
+      timeoutMs: z.int().min(1_000).max(CLIENT_TOOL_MAX_TIMEOUT_MS).optional(),
     }),
   )
   .max(32)

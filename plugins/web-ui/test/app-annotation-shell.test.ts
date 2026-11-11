@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { JSDOM } from "jsdom";
-import { ANNOTATE_BUTTON, ANNOTATE_JS, ANNOTATE_MARKUP, appAnnotationAsset } from "../../../src/deploy/app-annotate.ts";
+import { ANNOTATE_BUTTON, ANNOTATE_JS, ANNOTATE_MARKUP } from "../../../src/deploy/app-annotate.ts";
+import { appShellAsset } from "../../../src/deploy/app-shell.ts";
 const tick = () => new Promise((resolve) => setTimeout(resolve, 20));
 function fixture(t: TestContext) {
   const dom = new JSDOM(
@@ -166,7 +167,7 @@ test("bundled Devbar mounts original controls without Copy, Export or Agent", as
       disconnect() {}
     },
   });
-  w.eval(appAnnotationAsset("js"));
+  w.eval(appShellAsset("/__claw__/annotate.js", true)!.body);
   const toggle = (on: boolean, chatOpen = false) =>
     w.dispatchEvent(
       new w.MessageEvent("message", {

@@ -1,6 +1,28 @@
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { ANNOTATE_BUTTON, ANNOTATE_CSS, ANNOTATE_JS, ANNOTATE_MARKUP } from "./app-annotate.ts";
 
 export const APP_SHELL_PATH_PREFIX = "/__claw__/";
+
+const require = createRequire(import.meta.url);
+
+const SHELL_ASSETS = {
+  "/__claw__/capture.js": { file: () => require.resolve("html-to-image/dist/html-to-image.js"), annotation: false },
+  "/__claw__/annotate.js": { file: () => new URL("./vendor/devbar.js", import.meta.url), annotation: true },
+  "/__claw__/annotate.css": { file: () => new URL("./vendor/devbar.css", import.meta.url), annotation: true },
+} as const;
+
+export function appShellAsset(
+  pathname: string,
+  annotationsEnabled: boolean,
+): { contentType: string; body: string } | null {
+  const asset = SHELL_ASSETS[pathname as keyof typeof SHELL_ASSETS];
+  if (!asset || (asset.annotation && !annotationsEnabled)) return null;
+  return {
+    contentType: pathname.endsWith(".css") ? "text/css; charset=utf-8" : "text/javascript; charset=utf-8",
+    body: readFileSync(asset.file(), "utf8"),
+  };
+}
 
 function escAttr(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
@@ -120,6 +142,7 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
   window.addEventListener("message", (event) => {
     if (event.source !== chat.contentWindow || event.origin !== portalOrigin) return;
     if (event.data?.type === "qm:app-check") return void poll();
+    if (event.data?.type === "qm:app-shot" && typeof event.data.id === "string") return void answerShot(event.data.id);
     const theme = event.data;
     if (theme?.type !== "qm:theme" || typeof theme.dark !== "boolean" || !theme.colors) return;
     if (!themeColors.every((key) => typeof theme.colors[key] === "string" && CSS.supports("color", theme.colors[key]))) return;
@@ -220,33 +243,103 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
     try { app.contentWindow.location.reload(); } catch { app.src = app.src; }
   };
   let polls = 0;
+  const checkVersion = async (force) => {
+    const mine = ++polls;
+    const r = await fetch("/__claw__/version", { cache: "no-store" });
+    if (!r.ok) throw new Error("the version check failed with HTTP " + r.status);
+    const d = await r.json();
+    if ((!force && mine !== polls) || typeof d.version !== "number") return;
+    verEl.textContent = "v" + d.version;
+    const served = d.version + ":" + (d.live ?? "");
+    if (base === null) {
+      base = served;
+      upd.classList.remove("show");
+    } else if (served !== base) {
+      if (force || panel.classList.contains("open")) reloadApp(served);
+      else upd.classList.add("show");
+    }
+  };
   const poll = async () => {
     if (document.hidden || bare) return;
-    const mine = ++polls;
-    try {
-      const r = await fetch("/__claw__/version", { cache: "no-store" });
-      if (!r.ok) return;
-      const d = await r.json();
-      if (mine !== polls || typeof d.version !== "number") return;
-      verEl.textContent = "v" + d.version;
-      const served = d.version + ":" + (d.live ?? "");
-      if (base === null) {
-        base = served;
-        upd.classList.remove("show");
-      } else if (served !== base) {
-        if (panel.classList.contains("open")) reloadApp(served);
-        else upd.classList.add("show");
-      }
-    } catch {}
+    try { await checkVersion(false); } catch {}
   };
   void poll();
   setInterval(poll, 5000);
+
+  let captureLib = null;
+  let captureScript = null;
+  app.addEventListener("load", () => {
+    if (captureScript) captureScript.remove();
+    captureScript = null;
+    captureLib = null;
+  });
+  const loadCapture = () => captureLib || (captureLib = new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = "/__claw__/capture.js";
+    s.onload = () => (window.htmlToImage ? resolve(window.htmlToImage) : reject(new Error("capture library missing")));
+    s.onerror = () => { captureLib = null; reject(new Error("could not load the capture library")); };
+    captureScript = s;
+    document.head.appendChild(s);
+  }));
+  const placeholder = "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" preserveAspectRatio="none"><rect width="40" height="40" fill="#ff00ff"/><path d="M-10 10 10-10M-10 30 30-10M-10 50 50-10M10 50 50 10M30 50 50 30" stroke="#000" stroke-width="5"/></svg>');
+  const describe = (error) => {
+    if (!(error instanceof Event)) return String(error && error.message || error);
+    const t = error.target;
+    const where = String(t && (t.currentSrc || t.src || t.href || t.tagName) || "");
+    return "a " + error.type + " event" + (!where ? "" : where.startsWith("data:") ? " from a " + where.length + "-character data: URL the capture built" : " from " + where);
+  };
+  const shoot = async () => {
+    if (document.hidden) throw new Error("the app tab is hidden, so the browser will not render it; ask the person to bring it to the front");
+    await checkVersion(true);
+    if (reloading) await new Promise((resolve) => app.addEventListener("load", resolve, { once: true }));
+    const doc = app.contentDocument;
+    if (!doc || !doc.documentElement) throw new Error("the app page is not readable from its shell (it may have navigated to another site)");
+    const w = app.contentWindow;
+    if (doc.readyState !== "complete") await new Promise((resolve) => w.addEventListener("load", resolve, { once: true }));
+    if (doc.fonts) await doc.fonts.ready;
+    await new Promise((r) => w.requestAnimationFrame(() => w.requestAnimationFrame(r)));
+    const brokenImages = (await Promise.all([...doc.images].filter((i) => i.complete && i.currentSrc).map((i) => i.decode().then(() => null, () => i.currentSrc)))).filter(Boolean);
+    const lib = await loadCapture();
+    const width = app.clientWidth;
+    const height = app.clientHeight;
+    if (!width || !height) throw new Error("the app frame has no size (" + width + "×" + height + ")");
+    const sx = w.scrollX || 0;
+    const sy = w.scrollY || 0;
+    const probe = doc.createElement("div");
+    probe.style.background = "Canvas";
+    doc.documentElement.appendChild(probe);
+    const canvasColor = w.getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    const dataUrl = await lib.toJpeg(doc.documentElement, {
+      width, height, pixelRatio: 1, quality: 0.85, cacheBust: false,
+      imagePlaceholder: placeholder,
+      onImageErrorHandler: (event) => new Promise((resolve) => {
+        const img = event.target;
+        img.onerror = () => resolve();
+        img.addEventListener("load", () => resolve(), { once: true });
+        if (img instanceof SVGImageElement) img.href.baseVal = placeholder;
+        else { img.srcset = ""; img.src = placeholder; }
+      }),
+      backgroundColor: canvasColor,
+      style: { transform: "translate(" + -sx + "px," + -sy + "px)", transformOrigin: "0 0" },
+    });
+    return {
+      ok: true, image: dataUrl.slice(dataUrl.indexOf(",") + 1), mimeType: "image/jpeg",
+      url: w.location.href, width, height, scrollY: Math.round(sy),
+      dark: !!(w.matchMedia && w.matchMedia("(prefers-color-scheme: dark)").matches),
+      version: base, brokenImages,
+    };
+  };
+  const answerShot = async (id) => {
+    let reply;
+    try { reply = await shoot(); }
+    catch (error) { reply = { ok: false, error: describe(error) }; }
+    chat.contentWindow.postMessage({ type: "qm:app-shot-result", id, ...reply }, portalOrigin);
+  };
+
 ${opts.annotationsEnabled ? ANNOTATE_JS : ""}
   upd.addEventListener("click", () => {
-    void fetch("/__claw__/version", { cache: "no-store" })
-      .then((r) => r.json())
-      .then((d) => reloadApp(typeof d.version === "number" ? d.version + ":" + (d.live ?? "") : base))
-      .catch(() => reloadApp(base));
+    void checkVersion(true).catch(() => reloadApp(base));
   });
 })();
 </script>
