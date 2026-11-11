@@ -49,7 +49,6 @@ export function buildContextWindow(
     match?: string;
     scanHasMore?: boolean;
     renderText?: (text: string) => string;
-    clipChars?: number;
   },
 ): { messages: ContextWireMessage[]; hasMore: boolean; nextBefore?: string; selfTs?: string[] } {
   const asc = [...scanned].sort(compareTs);
@@ -65,7 +64,7 @@ export function buildContextWindow(
       ts: m.ts,
       ...(time ? { time } : {}),
       author: m.isSelf ? "you" : m.name || "someone",
-      text: opts.clipChars === undefined ? text : clipText(text, opts.clipChars),
+      text,
       ...(m.parentTs ? { threadTs: m.parentTs } : {}),
       ...(m.files?.length ? { files: m.files } : {}),
       ...(m.reactions ? { reactions: m.reactions } : {}),

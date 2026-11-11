@@ -453,7 +453,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
             ...(m.ts ? { ref: m.ts } : {}),
             ...(m.author ? { author: m.author } : {}),
             ...(m.time ? { when: m.time } : {}),
-            snippet: String(m.text).slice(0, 200),
+            snippet: String(m.text),
           }));
       if (opts?.source === "slack") {
         if (!deps.surfaceContext?.searchLive)
@@ -503,7 +503,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
             ref: hit.ts,
             ...(hit.authorName ? { author: hit.authorName } : {}),
             when: isoFromTs(hit.ts),
-            snippet: hit.text.slice(0, 200),
+            snippet: hit.text,
           })),
           source: "cache",
           message: `Search covers stored ${mirroredHome.label} events only; older or missed messages may be absent.`,
