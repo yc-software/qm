@@ -490,7 +490,8 @@ test("a bot's turn loses the swarm computer it already opened and is told to sto
   await createProcessReaper(processes, {
     ...singleProcessDeps(),
     intervalMs: 60_000,
-    afterSweep: service.stopLostJobs,
+    kill: async (job) => void stopped.push([job.sandboxId, job.runId]),
+    claimOwed: service.claimOwedStops,
   }).sweep();
   assert.deepEqual(stopped, [[swarm.board!.sandboxId, queued.id]]);
   assert.equal((await processes.get(`c2-${f.root.id}`))?.status, "reaped");

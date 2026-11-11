@@ -2875,35 +2875,29 @@ export function buildApp(
   });
   const preemption = createRunPreemption({ runs, worker, canClaim: canClaimRuns });
   const preemptionSweeper = createSweeper(() => preemption.sweep(), 1_000, { label: "run-preemption" });
-  const sweepJobComputers =
-    processes && supportsProcessSessions(sandbox)
-      ? createJobComputerSweep({
-          resources: sandboxResources,
-          sandbox,
-          processes,
-          finish: finishCredentials,
-          onError: (error, scopeId) =>
-            recordAmbientError(
-              {
-                category: "process_session",
-                code: "job_computer_retire_failed",
-                message: errMessage(error),
-                scopeLabel: scopeId,
-              },
-              error,
-            ),
-        })
-      : undefined;
   const processReaper: ProcessReaper | null = processes
     ? createProcessReaper(processes, {
         intervalMs: config.processReaperIntervalMs,
         ...(supportsProcessSessions(sandbox)
           ? {
               kill: createReaperKillHook(sandbox, { onExit: finishCredentials }),
-              afterSweep: async () => {
-                await sweepJobComputers?.();
-                await swarms?.stopLostJobs();
-              },
+              claimOwed: swarms?.claimOwedStops,
+              afterSweep: createJobComputerSweep({
+                resources: sandboxResources,
+                sandbox,
+                processes: processes!,
+                finish: finishCredentials,
+                onError: (error, scopeId) =>
+                  recordAmbientError(
+                    {
+                      category: "process_session",
+                      code: "job_computer_retire_failed",
+                      message: errMessage(error),
+                      scopeLabel: scopeId,
+                    },
+                    error,
+                  ),
+              }),
             }
           : {}),
         leaderLease,

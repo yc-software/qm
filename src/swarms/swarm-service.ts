@@ -32,7 +32,7 @@ import {
   type PendingSwarm,
 } from "./swarm-store.ts";
 import { withTenant } from "../tenants/context.ts";
-import { claimThenBind } from "../tenants/claim.ts";
+import { claimThenBind, type ClaimedRow } from "../tenants/claim.ts";
 
 export type SwarmCaller =
   { kind: "agent"; claims: CapabilityClaims } | { kind: "human"; actorId: string; sessionId: string; runId?: string };
@@ -96,7 +96,7 @@ export interface SwarmService {
   ): Promise<boolean>;
   authorizes(claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "members">): Promise<boolean>;
   notePersonUse(computer: Pick<SandboxResource, "swarmId">): Promise<void>;
-  stopLostJobs(): Promise<void>;
+  claimOwedStops(): Promise<ClaimedRow[]>;
   binding(input: OrchestratorInput): Promise<{ sandboxId?: string; rootSessionId: string; member: SwarmMember } | null>;
   queuedMessages(
     input: OrchestratorInput,
@@ -256,21 +256,17 @@ export function createSwarmService(deps: {
       if (error instanceof SandboxAccessError) return null;
       throw error;
     });
-  const stopJobs = async (swarmOn: (computerId: string) => Promise<Swarm | null>): Promise<Array<Promise<unknown>>> => {
-    const { processes, stopProcess } = deps;
-    if (!processes || !stopProcess) return [];
-    const stops: Array<Promise<unknown>> = [];
-    for (const job of await processes.listLive()) {
-      if (!job.sandboxId || !job.runId) continue;
-      const swarm = await swarmOn(job.sandboxId);
-      if (!swarm || !botLostSwarm(swarm) || !botsRun(swarm, await runs.get(job.runId))) continue;
-      stops.push(
-        stopProcess(job)
-          .then(() => processes.markStatus(job.processId, "reaped"))
-          .catch(swallowAs(`swarm: stop job ${job.processId} of a bot that lost the swarm`, false)),
-      );
-    }
-    return stops;
+  const readEach = async <T>(ids: Array<string | undefined>, read: (id: string) => Promise<T>) => {
+    const unique = [...new Set(ids)].filter((id): id is string => id !== undefined);
+    return new Map(await Promise.all(unique.map(async (id) => [id, await read(id)] as const)));
+  };
+  const lostJobs = async (jobs: ProcessRecord[], lostSwarmOn: Map<string, Swarm>): Promise<ProcessRecord[]> => {
+    const owing = jobs.filter((job) => job.sandboxId && job.runId && lostSwarmOn.has(job.sandboxId));
+    const ran = await readEach(
+      owing.map((job) => job.runId),
+      (id) => runs.get(id),
+    );
+    return owing.filter((job) => botsRun(lostSwarmOn.get(job.sandboxId!)!, ran.get(job.runId!) ?? null));
   };
   const cutOffBot = async (swarm: Swarm, reason: string): Promise<void> => {
     if (!botLostSwarm(swarm)) return;
@@ -285,7 +281,13 @@ export function createSwarmService(deps: {
       ),
     );
     await Promise.all([...running].map((runId) => deps.signals?.send(runId, { kind: "abort", reason })));
-    await stopJobs(async (id) => (computers.has(id) ? swarm : null));
+    const { processes, stopProcess } = deps;
+    if (!processes || !stopProcess) return;
+    const lost = await lostJobs(await processes.listLive(), new Map([...computers].map((id) => [id, swarm])));
+    for (const job of lost)
+      void stopProcess(job)
+        .then(() => processes.markStatus(job.processId, "reaped"))
+        .catch(swallowAs(`swarm: stop job ${job.processId} of a bot that lost the swarm`, false));
   };
   const view = (member: SwarmMember): SwarmMember => ({
     ...member,
@@ -934,14 +936,28 @@ export function createSwarmService(deps: {
           });
       await cutOffBot(used, "because a person used the swarm's computers");
     },
-    async stopLostJobs() {
-      await claimThenBind(store.claimTenants, async () => {
-        const stops = await stopJobs(async (id) => {
-          const swarmId = (await findComputer(id))?.swarmId;
-          return swarmId ? store.get(swarmId) : null;
-        });
-        await Promise.all(stops);
+    async claimOwedStops() {
+      const { processes } = deps;
+      if (!processes) return [];
+      const owed = await claimThenBind(store.claimTenants, async (_id, tenant) => {
+        const jobs = (await processes.listLive()).filter((job) => job.runId);
+        const computers = await readEach(
+          jobs.map((job) => job.sandboxId),
+          findComputer,
+        );
+        const swarms = await readEach(
+          [...computers.values()].map((computer) => computer?.swarmId),
+          (id) => store.get(id),
+        );
+        const lostSwarmOn = new Map(
+          [...computers].flatMap(([id, computer]) => {
+            const swarm = computer?.swarmId ? swarms.get(computer.swarmId) : null;
+            return swarm && botLostSwarm(swarm) ? [[id, swarm] as const] : [];
+          }),
+        );
+        return (await lostJobs(jobs, lostSwarmOn)).map((job) => ({ tenantId: tenant.id, id: job.processId }));
       });
+      return owed.flat();
     },
     async control(caller, input) {
       const { auth, swarm } = await load(caller);
