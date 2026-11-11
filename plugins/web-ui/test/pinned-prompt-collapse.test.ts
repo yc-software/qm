@@ -329,9 +329,11 @@ test("the collapse is measured from the row's resting place, so it survives bein
   }
 });
 
-test("rest heights are re-measured for pane and content changes, condensed or not", () => {
+test("rest heights are re-measured for pane and content changes, condensed or not, from the unpinned row", () => {
   const f = fixture();
   try {
+    f.row.getBoundingClientRect = () =>
+      ({ top: 0, height: f.content.clientHeight + (f.row.classList.contains("stuck") ? 0 : 24) }) as DOMRect;
     f.scroll(500);
     assert.equal(f.row.classList.contains("pin-condensed"), true);
     f.grow(40);
@@ -456,22 +458,6 @@ test("border-box prompts reserve the entire row including the metadata lane", ()
     assert.equal(f.row.style.getPropertyValue("--pin-rest-height"), "163.5px");
     f.scroll(50);
     assert.equal(f.row.style.getPropertyValue("--pin-rest-height"), "163.5px");
-  } finally {
-    f.close();
-  }
-});
-
-test("rest heights come from the unpinned row, so a pinned attachment's fold cannot shrink the reserved slot", () => {
-  const f = fixture();
-  try {
-    f.row.getBoundingClientRect = () =>
-      ({ top: 0, height: f.content.clientHeight + 24 + (f.row.classList.contains("stuck") ? 0 : 52) }) as DOMRect;
-    f.resize(300);
-    f.scroll(500);
-    assert.equal(f.row.classList.contains("stuck"), true);
-    f.resize(320);
-    assert.equal(f.row.style.getPropertyValue("--pin-rest-height"), "215.5px");
-    assert.equal(f.row.classList.contains("stuck"), true);
   } finally {
     f.close();
   }
