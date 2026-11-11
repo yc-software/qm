@@ -70,7 +70,7 @@ export interface SeededMessage {
 
 export interface OverheardEntryPayload {
   overheard: true;
-  sourceRole?: "agent";
+  sourceRole?: "agent" | "bot";
   ts: string;
   changeTime?: string;
   name?: string;
@@ -124,7 +124,7 @@ export function selectOverheardToImport(
     seen.add(m.ts!);
     out.push({
       overheard: true,
-      ...(m.role === "self" ? { sourceRole: "agent" as const } : {}),
+      ...(m.role === "user" ? {} : { sourceRole: m.role === "self" ? ("agent" as const) : ("bot" as const) }),
       ts: m.ts,
       ...(m.name ? { name: m.name } : {}),
       text,
@@ -486,7 +486,7 @@ export function seedPriorTurns(
     const tag =
       t.role === "assistant"
         ? messageTag({ from: "agent", ...(t.name ? { via: t.name } : {}) }, text)
-        : messageTag({ from: "human", ...(t.name ? { author: t.name } : {}) }, text);
+        : messageTag({ from: t.role === "bot" ? "bot" : "human", ...(t.name ? { author: t.name } : {}) }, text);
     reconciled.push({ role: "user", text: tag });
   }
   const merged: SeededMessage[] = [];
