@@ -1,6 +1,6 @@
 import { retainedSnapshot } from "../../agent/context-snapshot.ts";
-import type { DeploymentSource, SourceSaved } from "../../deploy/deploy-service.ts";
-import { isUserItem, type Item } from "../../sessions/items.ts";
+import type { DeploymentSource } from "../../deploy/deploy-service.ts";
+import { type Item } from "../../sessions/items.ts";
 import { inlineChars } from "../../sessions/tool-output.ts";
 import type { AppFiles } from "../../tools/app-files.ts";
 import { swallowAs } from "../../util/errors.ts";
@@ -23,11 +23,6 @@ interface AppSourceShown {
   app: string;
   commit: string;
   anchorSeq?: number;
-}
-
-function ancestors(path: string): string[] {
-  const parts = path.split("/").slice(0, -1);
-  return parts.map((_, depth) => `${parts.slice(0, depth + 1).join("/")}/`);
 }
 
 function worthReading(path: string): boolean {
@@ -60,13 +55,18 @@ function listed(dir: string, files: DeploymentSource["tree"]): string {
     : `${flatText(dir)} (${files.length} files, ${bytes} bytes)`;
 }
 
-function savedHere(history: readonly Item[]): Array<readonly [string, string]> {
-  const shownAt = history.findLast((item) => isUserItem(item) && item.body.appSource)?.seq ?? 0;
-  return history.flatMap((item) =>
-    item.seq > shownAt && item.kind === "ToolResult" && item.tool === "app_files"
-      ? ((item.body.saved ?? []) as SourceSaved["saved"]).map((file) => [file.path, file.sha] as const)
-      : [],
-  );
+function boundedList(prefix: string, values: readonly string[], budget: number): string {
+  const more = (count: number) => `${count} more that app_files list names`;
+  const tail = more(values.length);
+  const shown: string[] = [];
+  let used = prefix.length + tail.length + 3;
+  for (const value of values) {
+    if (used + value.length + 2 > budget) break;
+    shown.push(value);
+    used += value.length + 2;
+  }
+  if (shown.length < values.length) shown.push(more(values.length - shown.length));
+  return `${prefix}${shown.join(", ")}.`;
 }
 
 async function render(files: AppFiles, history: readonly Item[]): Promise<{ text: string; record: AppSourceShown }> {
@@ -82,7 +82,7 @@ async function render(files: AppFiles, history: readonly Item[]): Promise<{ text
         .then((earlier) => earlier.tree, swallowAs("orchestrator: app source shown earlier", undefined))
     : undefined;
   const record = { app: files.app, commit, ...(before ? { anchorSeq } : {}) };
-  const seen = new Map(before ? [...before.map((file) => [file.path, file.sha] as const), ...savedHere(history)] : []);
+  const seen = new Map(before?.map((file) => [file.path, file.sha] as const));
   const changed = tree.filter((file) => seen.get(file.path) !== file.sha);
   const kept = new Set(tree.map((file) => file.path));
   const deleted = [...seen.keys()].filter((path) => !kept.has(path));
@@ -90,7 +90,7 @@ async function render(files: AppFiles, history: readonly Item[]): Promise<{ text
 
   const app = JSON.stringify(files.app);
   const intro = before
-    ? `The app ${app} changed since its source was last shown here. Each file below replaces the copy shown earlier; files not listed are as this chat last saw or saved them.`
+    ? `The app ${app} changed since its source was last shown here. Each file below replaces the copy shown earlier; every other file is unchanged.`
     : `The source of the app ${app} as last saved.`;
   const chunks = [
     "<app-source>",
@@ -125,31 +125,23 @@ async function render(files: AppFiles, history: readonly Item[]): Promise<{ text
     texts.set(file.path, block);
   }
   chunks.push(...changed.flatMap((file) => (texts.has(file.path) ? [texts.get(file.path)!] : [])));
-  const open = new Set([...texts.keys()].flatMap(ancestors));
   const notShown = Map.groupBy(
     changed.filter((file) => !texts.has(file.path)),
-    (file) => ancestors(file.path).find((dir) => !open.has(dir)) ?? file.path,
+    (file) => {
+      const parts = file.path.split("/");
+      const dependency = parts.findIndex((part) => DEPENDENCY_DIRS.has(part));
+      return dependency < 0 ? file.path : `${parts.slice(0, dependency + 1).join("/")}/`;
+    },
   );
   const names = [...notShown].map(([dir, inside]) => listed(dir, inside));
   room += reserve;
-  for (const [prefix, values] of [
+  const sections: Array<[string, string[]]> = [
     [deletedPrefix, deleted.map(flatText)],
     [skippedPrefix, names],
-  ] as const) {
-    if (!values.length) continue;
-    const later = prefix === deletedPrefix && names.length ? skippedPrefix.length + more(names.length).length + 2 : 0;
-    let count = 0;
-    let length = prefix.length + 2;
-    while (count < values.length) {
-      const next = length + values[count]!.length + (count ? 2 : 0);
-      const rest = count + 1 < values.length ? more(values.length - count - 1).length + 2 : 0;
-      if (next + rest + later > room) break;
-      length = next;
-      count++;
-    }
-    const shown = values.slice(0, count);
-    if (count < values.length) shown.push(more(values.length - count));
-    const line = `${prefix}${shown.join(", ")}.`;
+  ];
+  const summaries = sections.filter(([, values]) => values.length);
+  for (const [index, [prefix, values]] of summaries.entries()) {
+    const line = boundedList(prefix, values, Math.floor(room / (summaries.length - index)));
     chunks.push(line);
     room -= line.length + 1;
   }
@@ -160,6 +152,6 @@ export async function appSourceShown(
   files: AppFiles | undefined,
   history: readonly Item[],
 ): Promise<{ text: string; record?: AppSourceShown }> {
-  if (!files) return { text: "" };
+  if (!files || !(await files.canManage())) return { text: "" };
   return render(files, history).catch(swallowAs("orchestrator: app source", { text: "" }));
 }

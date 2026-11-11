@@ -432,7 +432,7 @@ test("an app edit chat is shown the app's small text files once, then only the f
   assert.equal((await ask("U2")).source, "", "someone who cannot manage the app is shown none of it");
 });
 
-test("a later turn skips what this chat saved, and resends everything once the first showing left the context", async () => {
+test("a later turn includes changed files, and resends everything once the first showing left the context", async () => {
   const h = harness();
   await h.publish("notes");
   const files = createAppFiles({
@@ -449,17 +449,8 @@ test("a later turn skips what this chat saved, and resends everything once the f
   const first = shown({ commit: (await files.source()).commit });
   const chat = h.chat("notes");
   await chat.call({ action: "write", path: "styles.css", data: RED });
-  const result = storedItem(
-    { kind: "ToolResult", tool: "app_files", callId: "c", body: chat.results[0]! },
-    { sessionId: "s", seq: 11, createdAt: 11 },
-  );
   const { commit } = await files.source();
-
   assert.ok((await appSourceShown(files, [first])).text.includes(`### styles.css\n\`\`\`untrusted-data\n${RED}`));
-  assert.deepEqual(await appSourceShown(files, [first, result]), {
-    text: "",
-    record: { app: "notes", commit, anchorSeq: 9 },
-  });
   for (const earlier of [{ commit, anchorSeq: 2 }, { commit: "0".repeat(40) }]) {
     const again = await appSourceShown(files, [shown(earlier)]);
     assert.ok(again.text.includes("### index.html") && again.text.includes("### styles.css"), again.text);

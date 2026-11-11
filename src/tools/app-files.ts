@@ -3,6 +3,7 @@ import type { ScopeId } from "../types.ts";
 
 export interface AppFiles {
   readonly app: string;
+  canManage(): Promise<boolean>;
   source(paths?: string[], commit?: string): Promise<DeploymentSource>;
   save(edit: (read: (paths: string[]) => Promise<DeploymentSource>) => Promise<SourceEdit>): Promise<SourceSaved>;
 }
@@ -15,13 +16,15 @@ export function createAppFiles(deps: {
   actingScopeId: ScopeId;
 }): AppFiles {
   const { deploy, app } = deps;
+  const canManage = () =>
+    deploy.canManageDeployment(app, { actorId: deps.actorId, botActor: deps.botActor }, deps.actingScopeId);
   const assertMayEdit = async (): Promise<void> => {
-    const caller = { actorId: deps.actorId, botActor: deps.botActor };
-    if (!(await deploy.canManageDeployment(app, caller, deps.actingScopeId)))
+    if (!(await canManage()))
       throw new Error(`you need write access to the app ${JSON.stringify(app)} to read or change its files`);
   };
   return {
     app,
+    canManage,
     async source(paths, commit) {
       await assertMayEdit();
       const source = await deploy.source(app, paths, commit);
