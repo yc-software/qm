@@ -1,4 +1,4 @@
-import type { OverheardMessage, ScopeId, TurnOrigin } from "../types.ts";
+import type { ScopeId, TurnOrigin } from "../types.ts";
 
 export const SECURITY_POSTURES = ["dangerous", "auto", "strict"] as const;
 export type SecurityPosture = (typeof SECURITY_POSTURES)[number];
@@ -162,7 +162,6 @@ interface SecurityScreenInput {
   origin?: TurnOrigin;
   verifiedSwarm?: boolean;
   verifiedSessionMessage?: boolean;
-  overheard?: Array<Pick<OverheardMessage, "role" | "name" | "text">>;
   externalPromptData?: Array<{ source: string; content: string }>;
 }
 
@@ -187,11 +186,6 @@ export function securityScreenPayload(input: SecurityScreenInput): SecurityScree
     if (input.verifiedSessionMessage) source = "session-delegation";
     if (input.verifiedSwarm) source = "swarm-delegation";
     if (content.trim()) payloads.push({ source, content });
-  }
-  for (const message of input.overheard ?? []) {
-    if (message.role !== "self" && message.text.trim()) {
-      payloads.push({ source: `overheard:${message.name ?? "participant"}`, content: message.text });
-    }
   }
   for (const datum of input.externalPromptData ?? []) {
     if (datum.content.trim()) payloads.push(datum);
