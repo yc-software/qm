@@ -158,8 +158,17 @@ export async function buildModelRuntime(
       return getAuth(model, overrides);
     }) as typeof runtime.getAuth;
   }
-  const retained = <T extends object | undefined>(options: T): T =>
-    cacheRetention ? ({ ...options, cacheRetention } as T) : options;
+  const retained = <T extends ModelsSimpleStreamOptions | undefined>(options: T): T =>
+    cacheRetention
+      ? ({
+          ...options,
+          cacheRetention,
+          onPayload: async (payload: unknown, model: Model<Api>) => {
+            const transformed = await options?.onPayload?.(payload, model);
+            return shortConversationCache(transformed === undefined ? payload : transformed);
+          },
+        } as T)
+      : options;
   const wireModelId = <T extends Pick<ModelsSimpleStreamOptions, "onPayload"> | undefined>(
     options: T,
     model: Model<Api>,
@@ -189,8 +198,9 @@ export async function buildModelRuntime(
           : (modelRequestOverrides(model.id)?.model ?? custom?.upstreamId ?? model.id);
       const unregistered = !custom && hasCustomModelPrefix(model.id);
       const candidate = withRequestHeaders(model, true, false, apiKeys[String(model.provider)]);
+      const base = retained(options);
       const passthrough = {
-        ...retained(options),
+        ...base,
         ...(hasCustomModelPrefix(model.id)
           ? {
               fetch: (input: string | URL, init?: RequestInit) =>
@@ -202,11 +212,8 @@ export async function buildModelRuntime(
             }
           : {}),
         onPayload: async (payload: unknown) => {
-          const transformed = options?.onPayload ? await options.onPayload(payload, model) : undefined;
-          return shortConversationCache(
-            applyThinkingBinding(transformed === undefined ? payload : transformed, candidate),
-            model.api,
-          );
+          const transformed = base?.onPayload ? await base.onPayload(payload, model) : undefined;
+          return applyThinkingBinding(transformed === undefined ? payload : transformed, candidate);
         },
       } as T;
       return {
@@ -222,8 +229,6 @@ export async function buildModelRuntime(
     }
     const routed = {
       ...retained(options),
-      onPayload: async (payload: unknown) =>
-        shortConversationCache((await options?.onPayload?.(payload, model)) ?? payload, model.api),
       apiKey: request.apiKey,
       transformHeaders: async (headers: ProviderHeaders) => ({
         ...(options?.transformHeaders ? await options.transformHeaders(headers) : headers),
@@ -338,9 +343,8 @@ export function applyThinkingBinding<T>(
   return payload;
 }
 
-function shortConversationCache<T>(payload: T, api: Api): T {
-  const messages = (payload as { messages?: Array<{ content?: unknown }> } | undefined)?.messages;
-  const last = api === "anthropic-messages" && Array.isArray(messages) ? messages.at(-1)?.content : undefined;
+function shortConversationCache(payload: unknown): unknown {
+  const last = (payload as { messages?: Array<{ content?: unknown }> } | undefined)?.messages?.at(-1)?.content;
   for (const block of Array.isArray(last) ? (last as Array<{ cache_control?: object }>) : [])
     if (block?.cache_control) block.cache_control = { type: "ephemeral" };
   return payload;
