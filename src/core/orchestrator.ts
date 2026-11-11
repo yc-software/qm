@@ -1602,6 +1602,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         });
         const liveNote = async () =>
           (await turnSessionSyscalls?.liveSubagents?.().catch(swallowAs("live note", ""))) ?? "";
+        const editingApp = appEditSlug(conversation.threadRef, actor.id);
         const baseTools = createToolContext({
           tenant,
           desktopClientId: desktopClientForTurn(input),

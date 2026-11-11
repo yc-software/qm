@@ -3,11 +3,21 @@ import { cachedTranscript, storeTranscript } from "./transcript-cache";
 import { passageOccurrence, passageRange } from "./passage-range";
 import { html, nothing } from "lit";
 import { markdown } from "./message-markdown";
-import { isHidden } from "./items";
+import { retractedReason } from "./items";
+import { messageWorkTimeline } from "./timeline";
 import { ref } from "lit/directives/ref.js";
 import { ArrowUp, ArrowUpRight, Maximize2, Minimize2, Minus, MessageSquare, X } from "lucide";
 import { tip } from "./tooltip";
-import { api, fetchTranscript, forkCutSeq, forkSession, type CoreSession } from "./core-bridge";
+import {
+  api,
+  fetchTranscript,
+  forkCutSeq,
+  forkSession,
+  itemsToMessages,
+  messageText,
+  type AssistantWork,
+  type CoreSession,
+} from "./core-bridge";
 import { createConversation, disposeConversation, ensureDeliveryStream } from "./conversations";
 import { openSession, openSessionInto, refreshSessions } from "./sessions";
 import type { Conversation, ConvCtx } from "./conv-types";
@@ -211,14 +221,18 @@ export function createSideChatController(ctx: ConvCtx) {
       const { items } = page;
       if (sourceId !== id || previews.get(session.id) !== preview) return;
       if (pendingQuote === null && !cachedTranscript(session.id)) storeTranscript(session.id, page);
-      const replies = items.filter(
-        (item) =>
-          item.seq > (session.forkBoundarySeq ?? -1) &&
-          item.kind === "AgentMessage" &&
-          item.variant === null &&
-          !isHidden(item),
+      const messages = itemsToMessages(items.filter((item) => item.seq > (session.forkBoundarySeq ?? -1))).filter(
+        (message): message is AssistantWork => message.role === "assistant",
       );
-      preview.text = replies.map((item) => item.text ?? "").join("\n\n");
+      const replies = messages.map(messageText).filter(Boolean);
+      const work = messages.at(-1)?.work;
+      if (!replies.length && work)
+        replies.push(
+          ...messageWorkTimeline(work, "").flatMap((part) =>
+            part.kind === "text" && !retractedReason(part.item) ? [part.item.text!] : [],
+          ),
+        );
+      preview.text = replies.join("\n\n") || "No reply yet.";
     } catch (cause) {
       reportHandledError("web:side_chat_preview", cause);
       if (sourceId !== id || previews.get(session.id) !== preview) return;
@@ -652,11 +666,7 @@ export function createSideChatController(ctx: ConvCtx) {
               ${
                 active?.id === chat.id
                   ? this.card()
-                  : html`
-                      <div class="side-chat-preview">
-                        ${markdown(previews.get(chat.id)?.text || "Start the conversation about this passage.")}
-                      </div>
-                    `
+                  : html` <div class="side-chat-preview">${markdown(previews.get(chat.id)?.text || "Loading…")}</div> `
               }
             </div>`,
         )}
