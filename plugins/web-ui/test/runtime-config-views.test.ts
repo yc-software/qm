@@ -95,7 +95,7 @@ test("runtime defaults are shared while pane choices and editor drafts remain lo
     }
     await loadContextModel("personal:owner", () => {});
     assert.equal(gets, 1, "boot data hydrates both personal panes and settings without another fetch");
-    panes[1]!.composer.state.effortLevel = "auto"; // Explicitly equal to the old default is still a choice.
+    panes[1]!.composer.state.effortLevel = "auto";
     panes[1]!.composer.state.fastMode = false;
     panes[1]!.composer.state.draft = "keep my message";
     contextModelState.pending = "pending-model";
@@ -135,7 +135,6 @@ test("runtime defaults are shared while pane choices and editor drafts remain lo
     const html = sibling.host.innerHTML;
     await saveRuntimeConfig("channel:other", { keep: true });
     assert.equal(sibling.host.innerHTML, html, "disposed pane does not redraw");
-    // A server refresh uses the same publishing path as a local save.
     configs.set(
       "personal:owner",
       runtimeConfig("personal:owner", { effective: { modelId: "model", effortLevel: "low" } }),

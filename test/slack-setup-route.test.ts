@@ -6,10 +6,7 @@ import type { ApiCtx } from "../src/api/routes/route.ts";
 import { createSlackInstallationStore } from "../src/surfaces/slack-installation.ts";
 import { createManagedSlack } from "../src/surfaces/slack-managed.ts";
 import { testMap } from "./support/test-database.ts";
-import { withTenant } from "../src/tenants/context.ts";
-import { TEST_TENANT } from "./support/test-tenant.ts";
-
-const tenant = withTenant(TEST_TENANT, (t) => t);
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 type SlackSetupStatus = {
   configured: boolean;

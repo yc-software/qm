@@ -4,7 +4,6 @@ export interface EmojiRow {
   n: string;
   c: string;
   a: string[];
-  /** emoji-datasource category, e.g. "Smileys & Emotion". */
   g: string;
 }
 

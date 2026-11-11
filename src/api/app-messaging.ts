@@ -133,9 +133,6 @@ export function createMessagingMethods(
   const contextRequests = deps.contextRequests;
   const contextRequestListeners = tenantListeners<[SurfaceContextRequest]>("context request");
   const contextRequestTokens = new Map<string, string>();
-  // Principals identity knows about that the Slack directory never sees: the email
-  // allow-list, invited external users, and anyone who has signed in. On a Slack-less
-  // deployment these are the only members there are.
   const identityMembers = async (): Promise<DirectoryMember[]> => {
     const [externals, participants] = await Promise.all([
       deps.identity.listExternalMembers(),

@@ -1,3 +1,4 @@
+import { type Tenant, ambientTenant } from "../tenants/context.ts";
 import { executesOnApprove } from "../core/orchestrator/approvals.ts";
 import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type {
@@ -377,12 +378,13 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   }
 
   async function filesForViewer(
+    tenant: Tenant,
     principalId: string,
     opts?: ListOwnedOptions,
     inScope?: ScopeId,
   ): Promise<FileListPage> {
     const myScopes = await currentResourceScopesForViewer(principalId);
-    const handles = await deps.acl.handlesFor(myScopes);
+    const handles = await deps.acl.handlesFor(tenant, myScopes);
     const page = await deps.files.listDocuments(
       myScopes,
       handles.map((h) => ({ ownerScopeId: h.ownerScopeId, id: h.fileId })),
@@ -570,7 +572,9 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     principalId: string,
   ): Promise<Permission | null> {
     let best: Permission | null = null;
-    const grants = (await deps.acl?.grantsFor(ownerScopeId, ref).catch(reportFailureAs("artifact grants", []))) ?? [];
+    const grants =
+      (await deps.acl?.grantsFor(ambientTenant(), ownerScopeId, ref).catch(reportFailureAs("artifact grants", []))) ??
+      [];
     for (const g of grants) {
       if (g.permission !== "read" && g.permission !== "write") continue;
       if (
@@ -610,7 +614,8 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     if (isManageableCreationScope(d.createdInScope) && (await principalCanWriteScope(principalId, d.createdInScope!)))
       return "write";
     let canRead = kind === "org" && (await principalCanAccessCurrentScope(principalId, d.ownerScopeId));
-    const grants = (await deps.acl?.grantsFor(d.ownerScopeId, encodeRef(deployRef(d.id))).catch(() => [])) ?? [];
+    const grants =
+      (await deps.acl?.grantsFor(ambientTenant(), d.ownerScopeId, encodeRef(deployRef(d.id))).catch(() => [])) ?? [];
     for (const g of grants) {
       if (g.permission !== "read" && g.permission !== "write") continue;
       if (!(await principalCanAccessCurrentScope(principalId, g.granteeScopeId))) continue;

@@ -860,7 +860,7 @@ export function createAgent(opts?: AgentOptions): Agent {
             userAborted,
             cancelled: !!turn.cancel?.aborted,
             surfaceTools: !!turn.surfaceTools,
-            pollFire: !!turn.pollFire,
+            replyOptional: !!turn.replyOptional,
             ref: entry.ref,
             session: entry.agentSession,
             turnWallClockMs,

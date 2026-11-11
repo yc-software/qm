@@ -102,6 +102,7 @@ describeTwoTenants("per-tenant sandbox backend", (db) => {
     };
     const resources = createSandboxResources({
       records: db.maps.map<SandboxResource>("sandbox_resources"),
+      loads: db.maps.map("sandbox_loads"),
       defaults: db.maps.map<SandboxDefault>("sandbox_defaults"),
       backends,
       defaultBackend: "sprites",

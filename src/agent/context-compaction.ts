@@ -38,8 +38,10 @@ export function unrecordedToolResult(stop: RunStop | undefined): string {
     : INTERRUPTED_TOOL_RESULT;
 }
 
-export const CONTEXT_SUMMARY_HEADER =
-  "[Earlier conversation summary — an index of turns compacted out of your context. Conversation turns and tool calls can be reopened with the history tool (seq parameter; a very long entry returns as head and tail), or searched (query). Tool results are excluded.]";
+export function contextSummaryHeader(throughSeq: number, writtenAt: number): string {
+  const stamp = entryStamp(writtenAt);
+  return `[Earlier conversation summary, covering entries through seq ${throughSeq}${stamp ? ` (written${stamp})` : ""}: an index of turns compacted out of your context. Entries after it appear verbatim and are newer; where they disagree, such as a task listed here as open but answered later, the later entries win. Conversation turns and tool calls can be reopened with the history tool (seq parameter; a very long entry returns as head and tail), or searched (query). Tool results are excluded.]`;
+}
 
 const isNarration = (item: Item): boolean => item.kind === "AgentMessage" && item.variant === "narration";
 

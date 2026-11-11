@@ -9,6 +9,7 @@ import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const ORG = "default-org";
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe, 0x7f]);
@@ -81,13 +82,13 @@ test("owner sees their own file in owned[] and can open its bytes", async () => 
     direction: "out",
   });
 
-  const page = await app.listFilesForViewer("U1");
+  const page = await app.listFilesForViewer(tenant, "U1");
   assert.equal(page.owned.length, 1);
   assert.equal(page.owned[0]!.name, "flag.png");
   assert.equal(page.owned[0]!.openable, true);
   assert.equal(page.shared.length, 0);
 
-  const opened = await app.openFileForViewer(id, "U1");
+  const opened = await app.openFileForViewer(tenant, id, "U1");
   assert.ok(opened);
   assert.deepEqual(await drain(opened!.stream), PNG);
 });
@@ -110,7 +111,7 @@ test("a grantee sees a shared file in shared[] and can open it; the owner doesn'
     data: Buffer.from("v1"),
     direction: "out",
   });
-  await acl.grant({
+  await acl.grant(tenant, {
     ownerScopeId: owner,
     ref: id,
     granteeScopeId: scopeId("personal", "U2"),
@@ -118,13 +119,13 @@ test("a grantee sees a shared file in shared[] and can open it; the owner doesn'
     grantedBy: "U1",
   });
 
-  const u2 = await app.listFilesForViewer("U2");
+  const u2 = await app.listFilesForViewer(tenant, "U2");
   assert.equal(u2.owned.length, 0, "U2 doesn't own it");
   assert.equal(u2.shared.length, 1, "U2 sees it as shared");
   assert.equal(u2.shared[0]!.id, id);
   assert.equal(u2.shared[0]!.ownerScopeId, owner, "shared rows retain their provenance for an accurate UI label");
 
-  const opened = await app.openFileForViewer(id, "U2");
+  const opened = await app.openFileForViewer(tenant, id, "U2");
   assert.ok(opened, "the grant authorizes the bytes");
   assert.deepEqual(await drain(opened!.stream), Buffer.from("v1"));
 });
@@ -147,10 +148,14 @@ test("a stranger sees nothing and cannot open the file (404 = null)", async () =
     direction: "out",
   });
 
-  const page = await app.listFilesForViewer("U3");
+  const page = await app.listFilesForViewer(tenant, "U3");
   assert.equal(page.owned.length, 0);
   assert.equal(page.shared.length, 0);
-  assert.equal(await app.openFileForViewer(id, "U3"), null, "not-authorized is indistinguishable from not-found");
+  assert.equal(
+    await app.openFileForViewer(tenant, id, "U3"),
+    null,
+    "not-authorized is indistinguishable from not-found",
+  );
 });
 
 test("an org grant surfaces the file to any org member", async () => {
@@ -171,7 +176,7 @@ test("an org grant surfaces the file to any org member", async () => {
     data: PNG,
     direction: "out",
   });
-  await acl.grant({
+  await acl.grant(tenant, {
     ownerScopeId: owner,
     ref: id,
     granteeScopeId: scopeId("org", ORG),
@@ -179,9 +184,9 @@ test("an org grant surfaces the file to any org member", async () => {
     grantedBy: "U1",
   });
 
-  const page = await app.listFilesForViewer("U9");
+  const page = await app.listFilesForViewer(tenant, "U9");
   assert.equal(page.shared.length, 1, "any org member sees an org-granted file");
-  assert.ok(await app.openFileForViewer(id, "U9"));
+  assert.ok(await app.openFileForViewer(tenant, id, "U9"));
 });
 
 test("openFileForViewer returns null when the bytes are gone (a backfilled history row)", async () => {
@@ -212,7 +217,11 @@ test("openFileForViewer returns null when the bytes are gone (a backfilled histo
     createAclStore(createPostgresGrantStore(testDatabaseUrl()), { resolveFiles: (refs) => files.resolveByIds(refs) }),
   );
 
-  assert.equal(await app.openFileForViewer(id, "U1"), null, "owner is authorized but the bytes are unavailable → 404");
+  assert.equal(
+    await app.openFileForViewer(tenant, id, "U1"),
+    null,
+    "owner is authorized but the bytes are unavailable → 404",
+  );
 });
 
 test("uploadFileForViewer stores a personal inbound file", async () => {
@@ -222,7 +231,7 @@ test("uploadFileForViewer stores a personal inbound file", async () => {
     createAclStore(createPostgresGrantStore(testDatabaseUrl()), { resolveFiles: (refs) => files.resolveByIds(refs) }),
   );
 
-  const file = await app.uploadFileForViewer("U1", {
+  const file = await app.uploadFileForViewer(tenant, "U1", {
     name: "../notes.txt",
     mimetype: "text/plain",
     data: chunks(Buffer.from("hello")),
@@ -232,12 +241,12 @@ test("uploadFileForViewer stores a personal inbound file", async () => {
   assert.equal(file!.direction, "in");
   assert.equal(file!.createdInScope, scopeId("personal", "U1"));
 
-  const page = await app.listFilesForViewer("U1");
+  const page = await app.listFilesForViewer(tenant, "U1");
   assert.deepEqual(
     page.owned.map((f) => f.id),
     [file!.id],
   );
-  assert.deepEqual(await drain((await app.openFileForViewer(file!.id, "U1"))!.stream), Buffer.from("hello"));
+  assert.deepEqual(await drain((await app.openFileForViewer(tenant, file!.id, "U1"))!.stream), Buffer.from("hello"));
 });
 
 test("uploadFileForViewer to a shared context is visible to another context member", async () => {
@@ -247,7 +256,7 @@ test("uploadFileForViewer to a shared context is visible to another context memb
   });
   const app = makeUploadApp(files, acl);
 
-  const file = await app.uploadFileForViewer("U1", {
+  const file = await app.uploadFileForViewer(tenant, "U1", {
     scopeId: channel,
     name: "brief.pdf",
     mimetype: "application/pdf",
@@ -255,18 +264,18 @@ test("uploadFileForViewer to a shared context is visible to another context memb
   });
   assert.ok(file);
   assert.equal(file!.createdInScope, channel);
-  const grants = await acl.grantsFor(scopeId("personal", "U1"), file!.id);
+  const grants = await acl.grantsFor(tenant, scopeId("personal", "U1"), file!.id);
   assert.equal(
     grants.some((g) => g.granteeScopeId === channel),
     true,
   );
 
-  const context = await app.listScopeResources("U2", channel);
+  const context = await app.listScopeResources(tenant, "U2", channel);
   assert.deepEqual(
     context?.files.map((f) => f.name),
     ["brief.pdf"],
   );
-  assert.deepEqual(await drain((await app.openFileForViewer(file!.id, "U2"))!.stream), PNG);
+  assert.deepEqual(await drain((await app.openFileForViewer(tenant, file!.id, "U2"))!.stream), PNG);
 });
 
 test("scoped file listing pages within the requested context", async () => {
@@ -275,19 +284,19 @@ test("scoped file listing pages within the requested context", async () => {
     files,
     createAclStore(createPostgresGrantStore(testDatabaseUrl()), { resolveFiles: (refs) => files.resolveByIds(refs) }),
   );
-  await app.uploadFileForViewer("U1", {
+  await app.uploadFileForViewer(tenant, "U1", {
     name: "personal.txt",
     mimetype: "text/plain",
     data: chunks(Buffer.from("personal")),
   });
-  const shared = await app.uploadFileForViewer("U1", {
+  const shared = await app.uploadFileForViewer(tenant, "U1", {
     scopeId: channel,
     name: "channel.txt",
     mimetype: "text/plain",
     data: chunks(Buffer.from("channel")),
   });
 
-  const page = await app.listFilesForViewer("U1", { limit: 1 }, channel);
+  const page = await app.listFilesForViewer(tenant, "U1", { limit: 1 }, channel);
   assert.deepEqual(
     page.owned.map((file) => file.id),
     [shared!.id],
@@ -323,7 +332,13 @@ test("project files collapse across contributors and turns before paging owned a
         createdInScope: channel,
         createdAt: turn * 100,
       });
-      await acl.grant({ ownerScopeId, ref: id, granteeScopeId: channel, permission: "read", grantedBy: author });
+      await acl.grant(tenant, {
+        ownerScopeId,
+        ref: id,
+        granteeScopeId: channel,
+        permission: "read",
+        grantedBy: author,
+      });
       ledger.push(id);
     }
   }
@@ -331,7 +346,7 @@ test("project files collapse across contributors and turns before paging owned a
     const pages = [];
     let cursor: string | undefined;
     do {
-      const page = await app.listFilesForViewer(viewer, { limit: 2, ...(cursor ? { cursor } : {}) }, channel);
+      const page = await app.listFilesForViewer(tenant, viewer, { limit: 2, ...(cursor ? { cursor } : {}) }, channel);
       assert.ok(page.owned.length + page.shared.length <= 2, "the page limit applies to the combined document list");
       pages.push(page);
       cursor = page.nextCursor;
@@ -342,10 +357,10 @@ test("project files collapse across contributors and turns before paging owned a
     assert.equal(all.length, 4);
     assert.equal(new Set(all.map((f) => f.name)).size, 4);
     assert.equal(owned.length, viewer === "U1" ? 2 : 4, "owned copies remain owned in the grouped listing");
-    for (const file of all) assert.ok(await app.openFileForViewer(file.id, viewer));
+    for (const file of all) assert.ok(await app.openFileForViewer(tenant, file.id, viewer));
   }
   for (const id of ledger) assert.ok(await files.get(id), "deduplication does not delete the artifact ledger");
-  const stranger = await app.listFilesForViewer("U3", undefined, channel);
+  const stranger = await app.listFilesForViewer(tenant, "U3", undefined, channel);
   assert.deepEqual([...stranger.owned, ...stranger.shared], []);
 });
 
@@ -373,10 +388,16 @@ for (const authors of [["U1"], ["U2"], ["U1", "U2"]]) {
           createdInScope: channel,
           createdAt: n * 2 + index,
         });
-        await acl.grant({ ownerScopeId, ref: id, granteeScopeId: channel, permission: "read", grantedBy: author });
+        await acl.grant(tenant, {
+          ownerScopeId,
+          ref: id,
+          granteeScopeId: channel,
+          permission: "read",
+          grantedBy: author,
+        });
       }
     }
-    const resources = await app.listScopeResources("U1", channel);
+    const resources = await app.listScopeResources(tenant, "U1", channel);
     assert.equal(resources?.files.length, 55 * authors.length);
     assert.equal(new Set(resources?.files.map((file) => file.id)).size, 55 * authors.length);
     for (const author of authors)
@@ -408,20 +429,23 @@ test("file grants name one Files record, not its path or another generation", as
     grantedBy: "U1",
   };
   for (const ref of [input.path, "artifacts/original/report.txt", "nonexistent"])
-    await assert.rejects(app.grant({ ...grant, ref }), /put the file in Files first using POST \/v1\/files\/uploads/);
-  assert.deepEqual(await acl.find({ ownerScopeId }), []);
-  await app.grant({ ...grant, ref: original.id });
+    await assert.rejects(
+      app.grant(tenant, { ...grant, ref }),
+      /put the file in Files first using POST \/v1\/files\/uploads/,
+    );
+  assert.deepEqual(await acl.find(tenant, { ownerScopeId }), []);
+  await app.grant(tenant, { ...grant, ref: original.id });
   const metadata = await app.getArtifactHome("file", original.id);
   assert.equal(metadata?.grantRef, original.id);
   assert.deepEqual(
-    (await app.listFilesForViewer("U2")).shared.map((file) => file.id),
+    (await app.listFilesForViewer(tenant, "U2")).shared.map((file) => file.id),
     [original.id],
   );
-  const opened = await app.openFileForViewer(original.id, "U2");
+  const opened = await app.openFileForViewer(tenant, original.id, "U2");
   assert.ok(opened);
   assert.equal((await drain(opened.stream)).toString(), "old");
-  assert.equal(await app.openFileForViewer(replacement.id, "U2"), null);
+  assert.equal(await app.openFileForViewer(tenant, replacement.id, "U2"), null);
   await files.delete(original.id);
-  assert.deepEqual((await app.listFilesForViewer("U2")).shared, []);
-  assert.equal(await app.openFileForViewer(replacement.id, "U2"), null);
+  assert.deepEqual((await app.listFilesForViewer(tenant, "U2")).shared, []);
+  assert.equal(await app.openFileForViewer(tenant, replacement.id, "U2"), null);
 });
