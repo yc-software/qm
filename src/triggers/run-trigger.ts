@@ -33,7 +33,6 @@ export interface TriggerDeps {
   };
   sessions?: { participantScopes(principalId: string): Promise<readonly { scopeId: ScopeId }[]> };
   resolveRecipient?: (query: string) => Promise<RecipientResolution>;
-  declineApproval?: (requestId: string, failure: string) => Promise<unknown>;
 }
 
 export interface TriggerSpec extends Pick<
@@ -339,12 +338,8 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     if (res.status === "silent") return;
     if (res.status === "pending_approval") {
       if (runDelivers) return;
-      const held = res.pendingApprovals ?? [];
-      const reasons = held.map((approval) => approval.reason).join("; ");
-      note = `needed an approval no person was there to give, so it was declined${reasons ? `: ${reasons}` : ""}`;
-      await Promise.all(
-        held.map((approval) => deps.declineApproval?.(approval.requestId, "no person was present when it ran")),
-      );
+      const reasons = (res.pendingApprovals ?? []).map((approval) => approval.reason).join("; ");
+      note = `needed an approval with no person there to give it, so it failed closed${reasons ? `: ${reasons}` : ""}`;
       console.warn(`[trigger] ${spec.surface} ${spec.fireKey} ${note}`);
       return;
     }

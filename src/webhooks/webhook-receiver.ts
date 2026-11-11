@@ -79,7 +79,6 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
     ...(deps.directory ? { directory: deps.directory } : {}),
     ...(deps.currentScopeMembers ? { currentScopeMembers: deps.currentScopeMembers } : {}),
     ...(deps.resolveRecipient ? { resolveRecipient: deps.resolveRecipient } : {}),
-    ...(deps.declineApproval ? { declineApproval: deps.declineApproval } : {}),
   };
 
   return {

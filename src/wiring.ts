@@ -327,7 +327,6 @@ import type { Agent, RuntimeChoice, SessionRoute } from "./agent/agent.ts";
 import { createSecurityScreenProxy, type SecurityScreener } from "./security/security-screener.ts";
 import { createMemoryStrategy } from "./memory/strategy.ts";
 import { createOrchestrator, egressClaimAllowingControlPlane, type OrchestratorDeps } from "./core/orchestrator.ts";
-import { declineUnreachableApproval } from "./core/approval-requester.ts";
 import {
   mintCapabilityToken,
   CAPABILITY_TTL_MS,
@@ -2655,8 +2654,6 @@ export function buildApp(
   orchestratorDeps.channelPolicy = channelPolicy;
   orchestratorDeps.surfaceCache = surfaceCache;
   const resolveRecipient = (query: string) => app.resolveRecipient(query);
-  const declineApproval = (requestId: string, failure: string) =>
-    declineUnreachableApproval({ approvals, sessions }, requestId, failure);
   const runTriggered = async (req: TurnRequest): Promise<TurnResult> => {
     const session = req.surfaceOrigin ? undefined : await sessions.getByThread(req.conversation.threadRef);
     const bound = session?.surface === "slack" ? session.surfaceBinding : undefined;
@@ -2673,7 +2670,6 @@ export function buildApp(
             idempotency,
             identity,
             run: runTriggered,
-            declineApproval,
             directory,
             currentScopeMembers,
             sessions,
@@ -2688,10 +2684,7 @@ export function buildApp(
     : undefined;
   const dropResolution = keychain
     ? (drop: DropResolution) =>
-        fireDropResolution(
-          { deliveries, idempotency, identity, run: runTriggered, declineApproval, directory, resolveRecipient },
-          drop,
-        )
+        fireDropResolution({ deliveries, idempotency, identity, run: runTriggered, directory, resolveRecipient }, drop)
     : undefined;
   const inboxClients =
     keychain &&
@@ -2736,7 +2729,6 @@ export function buildApp(
       idempotency,
       identity,
       run: runTriggered,
-      declineApproval,
       directory,
       currentScopeMembers,
       sessions,
@@ -2790,7 +2782,6 @@ export function buildApp(
     idempotency,
     identity,
     run: runTriggered,
-    declineApproval,
     leaderLease,
     directory,
     currentScopeMembers,
@@ -2833,7 +2824,6 @@ export function buildApp(
           idempotency,
           identity,
           run: runTriggered,
-          declineApproval,
           directory,
           currentScopeMembers,
           sessions,
@@ -2857,7 +2847,6 @@ export function buildApp(
     idempotency,
     identity,
     run: runTriggered,
-    declineApproval,
     directory,
     currentScopeMembers,
     resolveRecipient,
