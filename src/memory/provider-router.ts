@@ -42,6 +42,8 @@ function matches(route: MemoryProviderRoute, scopeId: ScopeId): boolean {
 
 export const providerRef = (provider: string, ref: string) => `${provider}:${ref}`;
 
+export const brainRefused = (reason: string) => new Error(`[brain_refused] ${reason} Nothing was sent.`);
+
 function parseProviderRef(value: string): { provider: string; ref: string } | undefined {
   const at = value.indexOf(":");
   return at < 0 ? undefined : { provider: value.slice(0, at), ref: value.slice(at + 1) };
@@ -211,15 +213,12 @@ export function createRoutedMemoryService(opts: {
 
     async lookup(scopeId, tool, args, by, context) {
       if (!brainActsAsPerson(by, scopeId, context?.audienceScopeId))
-        throw new Error(
-          "[brain_refused] Only the person, on a turn they sent in their own DM with QM, can look things up in their brain. Nothing was sent.",
+        throw brainRefused(
+          "Only the person, on a turn they sent in their own DM with QM, can look things up in their brain.",
         );
       const ref = parseProviderRef(tool);
       const route = ref && brainRoutes(scopeId).find((candidate) => candidate.provider === ref.provider);
-      if (!ref || !route)
-        throw new Error(
-          `[brain_refused] ${tool} isn't a tool of a brain connected to this conversation. Nothing was sent.`,
-        );
+      if (!ref || !route) throw brainRefused(`${tool} isn't a tool of a brain connected to this conversation.`);
       const started = Date.now();
       try {
         return await opts.providers[route.provider]!.lookup!(scopeId, ref.ref, args, by, context);

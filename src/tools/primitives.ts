@@ -67,7 +67,7 @@ import { quotedData, trimTrailingSlashes, tryDecodeUtf8 } from "../util/text.ts"
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { MEMORY_FILE, turnAuthority, type MemoryEdit, type MemoryService } from "../memory/memory-service.ts";
-import { providerRef } from "../memory/provider-router.ts";
+import { brainRefused, providerRef } from "../memory/provider-router.ts";
 import {
   forgetFacts,
   withProviders,
@@ -1233,7 +1233,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
 
     async lookupBrain(brain: string, tool: string, args: Record<string, unknown>): Promise<string> {
       if (!memory?.lookup || !deps.memoryScopeId || !deps.memoryAccess?.read.includes(deps.memoryScopeId))
-        throw new Error("no brain is connected to this conversation");
+        throw brainRefused("No brain is connected to this conversation.");
       return memory.lookup(
         deps.memoryScopeId,
         providerRef(brain, tool),

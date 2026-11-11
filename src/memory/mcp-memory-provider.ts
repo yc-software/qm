@@ -219,14 +219,22 @@ export function createMcpMemoryProvider(opts: {
     ...(opts.attestActor
       ? {
           lookupTools: (scopeId, { actorId, audienceScopeId }) => lookupTools(scopeId, actorId, audienceScopeId),
-          lookup: async (scopeId, tool, args, by, context) =>
-            resultText(
-              await opts.read.client.callTool(
-                tool,
-                args,
-                attest(by?.actorId, scopeId, context?.audienceScopeId).headers,
-              ),
-            ),
+          lookup: async (scopeId, tool, args, by, context) => {
+            const { person, headers } = attest(by?.actorId, scopeId, context?.audienceScopeId);
+            const actorArg = opts.read.actorArg ?? ACTING_USER;
+            const sent = Object.hasOwn(args, actorArg) ? { ...args, [actorArg]: person } : args;
+            const result = await opts.read.client.callTool(tool, sent, headers);
+            const { code } = mcpEnvelope(result);
+            if (code && DENIED_CODES.has(code))
+              throw new McpCallError(`memory provider refused ${tool} (${code}): ${resultText(result)}`, {
+                code,
+                answered: true,
+              });
+            const warnings: unknown[] = Array.isArray(result._meta?.warnings) ? result._meta.warnings : [];
+            return [resultText(result), ...warnings.map((warning) => `warning: ${JSON.stringify(warning)}`)]
+              .filter(Boolean)
+              .join("\n");
+          },
         }
       : {}),
 

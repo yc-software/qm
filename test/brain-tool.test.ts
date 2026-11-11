@@ -152,11 +152,13 @@ const listings = (brain: { requests: Array<{ rpc?: string }> }) =>
   brain.requests.filter(({ rpc }) => rpc === "tools/list").length;
 const whois = { call: { server: "acme", tool: "whois", args: { query: "Priya Raman" } } };
 
-test("the person's own DM gets each brain's read-only tools through the connector bridge, called as them with the arguments as sent", async (t) => {
+test("the person's own DM gets each brain's read-only tools through the connector bridge, called as them with the arguments as sent and acting_user pinned to them", async (t) => {
   const { acme, turn } = await brainApp(t);
   const run = (await turn([
     { search: "whois" },
-    { call: { server: "acme", tool: "get_page", args: { slug: PRIYA.slug, include_deleted: true } } },
+    {
+      call: { server: "acme", tool: "get_page", args: { slug: PRIYA.slug, include_deleted: true, acting_user: "U2" } },
+    },
   ]))!;
   const listed = [...run.prompt.matchAll(/^ {2}- (\w+)/gm)].map(([, name]) => name);
   assert.deepEqual(listed.toSorted(), LOOKUPS.toSorted());
@@ -171,7 +173,7 @@ test("the person's own DM gets each brain's read-only tools through the connecto
     },
   );
   assert.deepEqual(lookups(acme), [
-    { tool: "get_page", args: { slug: PRIYA.slug, include_deleted: true }, actor: "U1" },
+    { tool: "get_page", args: { slug: PRIYA.slug, include_deleted: true, acting_user: "U1" }, actor: "U1" },
   ]);
   assert.match(run.texts[1]!, /"include_deleted":true[\s\S]*\[gbrain degraded: embed_unavailable\] partial/);
   assert.doesNotMatch(run.texts[1]!, /morning meetings/);
@@ -210,7 +212,7 @@ test("with recall off, the person's own DM offers no brain tools and never asks 
   assert.equal(listings(acme), 0);
 });
 
-test("a brain sharing a connector's id stays hidden, only the first brain carries the guidance, and optional intent is dropped", () => {
+test("a brain sharing a connector's id stays hidden, a tool whose cleaned name repeats is dropped, only the first brain carries the guidance, and optional intent is dropped", () => {
   const whoisTool = {
     name: "whois",
     description: "Who someone is",
@@ -220,7 +222,11 @@ test("a brain sharing a connector's id stays hidden, only the first brain carrie
     ...whoisTool,
     name: "search",
   });
-  const brains = ["acme", "team", "mine"].map((id) => ({ id, label: id, tools: [whoisTool] }));
+  const brains = ["acme", "team", "mine"].map((id) => ({
+    id,
+    label: id,
+    tools: [whoisTool, { ...whoisTool, name: "who.is" }, { ...whoisTool, name: "who_is" }],
+  }));
   const listed = withBrainTools([connector], brains)!.map(({ name, serverAbout, inputSchema, brain }) => ({
     name,
     guided: Boolean(serverAbout),
@@ -230,7 +236,9 @@ test("a brain sharing a connector's id stays hidden, only the first brain carrie
   assert.deepEqual(listed, [
     { name: "acme_search", guided: false, params: ["query"], brain: false },
     { name: "team_whois", guided: true, params: ["query"], brain: true },
+    { name: "team_who_is", guided: true, params: ["query"], brain: true },
     { name: "mine_whois", guided: false, params: ["query"], brain: true },
+    { name: "mine_who_is", guided: false, params: ["query"], brain: true },
   ]);
 });
 
@@ -243,7 +251,10 @@ test("a lookup checks the person and the live binding when it runs, and sends no
     /^Error: \[brain_refused\] Only the person/,
   );
   const run = (await turn(["revoke", whois]))!;
-  assert.match(run.texts[0]!, /^\[error\] no brain is connected to this conversation$/);
+  assert.match(
+    run.texts[0]!,
+    /^\[error\] \[brain_refused\] No brain is connected to this conversation\. Nothing was sent\.$/,
+  );
   assert.deepEqual(lookups(acme), []);
 });
 
@@ -258,8 +269,18 @@ test("a lookup outlasts recall's timeout, and a refusal or failure answers with 
   acme.failures.set("Unlisted", refusal("actor_not_attested"));
   acme.failures.set("Broken", { isError: true, content: [{ type: "text", text: "search index is rebuilding" }] });
   acme.failures.set("Malformed", refusal("invalid_params"));
+  acme.failures.set("Withheld", {
+    ...refusal("scope_denied"),
+    isError: false,
+    structuredContent: { code: "scope_denied" },
+  });
+  acme.failures.set("Warned", {
+    content: [{ type: "text", text: "nothing found" }],
+    _meta: { warnings: [{ code: "unknown_param", param: "colour" }], brain_hot_memory: HOT_MEMORY },
+  });
   const ask = (query: string) => ({ call: { server: "acme", tool: "query", args: { query } } });
-  const { texts } = (await turn([ask("slow"), ask("Nobody"), ask("Unlisted"), ask("Broken"), ask("Malformed")]))!;
+  const asked = ["slow", "Nobody", "Unlisted", "Broken", "Malformed", "Withheld", "Warned"];
+  const { texts } = (await turn(asked.map(ask)))!;
   assert.match(texts[0]!, /"query":"slow"/);
   assert.match(
     texts[1]!,
@@ -274,7 +295,9 @@ test("a lookup outlasts recall's timeout, and a refusal or failure answers with 
     texts[4]!,
     /Fix: Read acme's answer below: if it names the arguments, correct the call \(tool_search shows query's parameters\)[\s\S]*refused with invalid_params/,
   );
-  for (const text of texts.slice(1)) assert.equal(text.match(/refused with|rebuilding/g)?.length, 1, text);
+  assert.match(texts[5]!, /^\[error\] \[memory_provider_denied\] Memory provider acme refused query \(scope_denied\)/);
+  assert.equal(texts[6], 'nothing found\nwarning: {"code":"unknown_param","param":"colour"}');
+  for (const text of texts.slice(1, 6)) assert.equal(text.match(/refused with|rebuilding/g)?.length, 1, text);
 });
 
 test("strict posture holds a brain lookup for approval, and dangerous runs it", async (t) => {
