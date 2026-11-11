@@ -269,10 +269,9 @@ test("a very long source label does not multiply an over-limit part's payloads",
   const count = (source: string, content: string) =>
     securityScreenPayloads({ surface: "slack", text: "", externalPromptData: [{ source, content }] }).length;
   assert.equal(count("a".repeat(16_001), "notes"), 1);
-  assert.equal(
-    count("a".repeat(8_480), 'said "go"\n'.repeat(3_000)),
-    count("attachment:notes.md", 'said "go"\n'.repeat(3_000)),
-  );
+  for (const content of ['"'.repeat(30_000), "\u0001".repeat(12_000)])
+    for (const length of [212, 990, 8_480])
+      assert.equal(count("a".repeat(length), content), count("attachment:notes.md", content));
 });
 
 test("the default rubric treats documentation and code as ordinary content", () => {

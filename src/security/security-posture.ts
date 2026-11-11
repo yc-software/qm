@@ -252,16 +252,22 @@ function boundedChunk(surface: string, slice: string, out: string[]): void {
   boundedChunk(surface, slice.slice(mid - overlap), out);
 }
 
-export function securityScreenChunks(surface: string, data: string): string[] {
-  let label = surface;
-  while (JSON.stringify(label).length > MAX_SCREEN_CHARS - 2 * SCREEN_CHUNK_CHARS)
-    label = label.slice(0, label.length >> 1);
+function chunksUnder(label: string, data: string): string[] {
   const chunks: string[] = [];
   const step = SCREEN_CHUNK_CHARS - SCREEN_CHUNK_OVERLAP;
   for (let start = 0; start === 0 || start + SCREEN_CHUNK_OVERLAP < data.length; start += step) {
     boundedChunk(label, data.slice(start, start + SCREEN_CHUNK_CHARS), chunks);
   }
   return chunks;
+}
+
+const CHUNK_LABEL_ROOM =
+  MAX_SCREEN_CHARS - Math.max(...chunksUnder("x", "\u0000".repeat(SCREEN_CHUNK_CHARS)).map((chunk) => chunk.length));
+
+export function securityScreenChunks(surface: string, data: string): string[] {
+  let label = surface;
+  while (JSON.stringify(label).length > CHUNK_LABEL_ROOM) label = label.slice(0, label.length >> 1);
+  return chunksUnder(label, data);
 }
 
 export function toolLabelOf(tool: string): string {
