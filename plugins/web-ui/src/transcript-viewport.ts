@@ -279,7 +279,8 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
   function measureRest(promptStyle: CSSStyleDeclaration): void {
     if (!prompt || !content) return;
     remeasure = false;
-    prompt.classList.remove("pin-condensed");
+    const stuck = prompt.classList.contains("stuck");
+    prompt.classList.remove("pin-condensed", "stuck");
     prompt.style.removeProperty("--pin-content-max");
     prompt.style.setProperty("--pin-rest-height", "0px");
     contentMax = "";
@@ -291,6 +292,7 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
         ? 0
         : (parseFloat(promptStyle.paddingTop) || 0) + (parseFloat(promptStyle.paddingBottom) || 0));
     prompt.style.setProperty("--pin-rest-height", `${Math.max(0, inner)}px`);
+    prompt.classList.toggle("stuck", stuck);
     const contentStyle = getComputedStyle(content);
     const lineHeight = parseFloat(contentStyle.lineHeight) || (parseFloat(contentStyle.fontSize) || 0) * 1.5;
     condensedContent = CONDENSED_LINES * lineHeight;
