@@ -106,7 +106,7 @@ function storedChoice(stored: RuntimeChoice): RuntimeChoice {
   };
 }
 
-async function runtimeModels(
+export async function runtimeConfigBody(
   ctx: { deps: RuntimeDeps },
   scope: ScopeId,
   authorizeChoice?: (choice: RuntimeChoice) => Promise<string | null>,
@@ -169,23 +169,6 @@ async function runtimeModels(
     );
     models = models.filter((_, index) => !allowed[index]);
   }
-  return { models, managedKeys, orgDefault, scopeOverride, effective };
-}
-
-export async function runtimeConfigBody(
-  ctx: { deps: RuntimeDeps },
-  scope: ScopeId,
-  authorizeChoice?: (choice: RuntimeChoice) => Promise<string | null>,
-  purpose?: TurnRuntimePurpose,
-  requested?: Partial<RuntimeChoice>,
-) {
-  const { models, managedKeys, orgDefault, scopeOverride, effective } = await runtimeModels(
-    ctx,
-    scope,
-    authorizeChoice,
-    purpose,
-    requested,
-  );
   const billing = (id: string) =>
     modelBilling(!!managedKeys.modelIds?.has(companyModelId(id, managedKeys)), !!authorizeChoice);
   const modelCatalog = Object.fromEntries(
@@ -207,7 +190,7 @@ export async function runtimeConfigBody(
       : {}),
     upgradeAvailable: Boolean(scopeOverride && scopeOverride.orgRevision !== orgDefault.revision),
     fastModeModelIds: fastModeModelIds(),
-    interactiveFastMode: await ctx.deps.config!.getInteractiveFastModeDurable(),
+    interactiveFastMode: await config.getInteractiveFastModeDurable(),
   };
 }
 
@@ -331,21 +314,19 @@ export async function turnModelRefusal(
     return validateWebTurnModelOptions(req, available.models);
   }
   const fallback = deps.runtimeFallback ?? { modelId: defaultModel() };
-  const picker = runtimeModels({ deps }, scope);
+  const providers = deps.modelCredentials
+    ? await deps.modelCredentials.availability()
+    : (deps.providerKeys ?? deps.modelProviders);
   const hydrate = async () =>
-    deps.modelCredentials && (await picker).managedKeys.openrouter
-      ? selectableModelCatalog(deps.modelCredentialFetch)
-      : undefined;
+    deps.modelCredentials && providers?.openrouter ? selectableModelCatalog(deps.modelCredentialFetch) : undefined;
+  const modelCredentials = deps.modelCredentials && { ...deps.modelCredentials, availability: async () => providers! };
   let runtime: RuntimeChoice;
   let pickerModels: string[];
-  let providers: ModelProviderAvailability | undefined;
   try {
-    let managedKeys: ModelProviderAvailability;
-    [runtime, { models: pickerModels, managedKeys }] = await Promise.all([
+    [runtime, { models: pickerModels }] = await Promise.all([
       resolveRuntimeChoice(deps.config, org, scope, fallback, requested, hydrate, purpose),
-      picker,
+      runtimeConfigBody({ deps: { ...deps, modelCredentials } }, scope),
     ]);
-    providers = deps.modelCredentials ? managedKeys : (deps.providerKeys ?? deps.modelProviders);
   } catch (error) {
     swallow("turn: runtime resolution", error);
     return `I couldn't set up that runtime choice — ${GENERIC_FAILURE_CLAUSE}`;
