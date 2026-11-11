@@ -1,6 +1,6 @@
 import { retainedSnapshot } from "../agent/context-snapshot.ts";
 import type { Item } from "../sessions/items.ts";
-import { recallLabel, renderCards, renderRecall, type RecalledFact } from "./cross-scope.ts";
+import { recallLabel, renderCards, renderRecall, type BrainCard, type RecalledFact } from "./cross-scope.ts";
 import { factHash, renderFacts, type MemoryFact } from "./facts.ts";
 import type { MemoryProviderOutcome } from "./memory-service.ts";
 import { DENIED_CODES } from "./provider-outcome.ts";
@@ -25,15 +25,16 @@ interface RecallRecord {
   anchorSeq?: number;
 }
 
+const recordHash = (text: string) => factHash(text).slice(0, 16);
+
 const shownOf = ({ scope, id, text, source }: RecalledFact): Shown => ({
   scope,
   ...(id !== undefined ? { id } : {}),
   ...(source ? { provider: source.provider } : {}),
-  hash: factHash(text).slice(0, 16),
+  hash: recordHash(text),
 });
 
-const cardOf = ({ scope, card, text }: RecalledFact): Card[] =>
-  card ? [{ scope, ...card, hash: factHash(text).slice(0, 16) }] : [];
+const cardOf = ({ scope, provider, ref, text }: BrainCard): Card => ({ scope, provider, ref, hash: recordHash(text) });
 
 const recordOf = (item: Item) => {
   const record = item.body.memoryRecall as RecallRecord | undefined;
@@ -46,7 +47,7 @@ export const deliveredCards = (history: readonly Item[]): Card[] =>
 export const shownFacts = (facts: readonly MemoryFact[]) => new Map(facts.map((fact) => [fact.id, fact]));
 
 const stillHeld = (fact: MemoryFact | undefined, shown: Shown) =>
-  !!fact && shownOf({ scope: "", id: fact.id, text: renderFacts([fact]) }).hash === shown.hash;
+  !!fact && recordHash(renderFacts([fact])) === shown.hash;
 
 const keyOf = ({ scope, id, provider, hash }: Shown) => JSON.stringify([scope, id ?? null, provider ?? null, hash]);
 
@@ -60,15 +61,14 @@ export function memoryRecallDelta(
   held: ReadonlyMap<string, ReadonlyMap<string, MemoryFact>>,
   labels: ReadonlyMap<string, string> = new Map(),
   outcomes: readonly MemoryProviderOutcome[] = [],
+  brainCards: readonly BrainCard[] = [],
 ): { text: string; record: RecallRecord } {
   const { previous, anchorSeq } = retainedSnapshot(history, recordOf);
-  const facts = recalled.filter(({ card }) => !card);
-  const cardFacts = recalled.filter(({ card }) => card);
-  const current = facts.map(shownOf);
-  const cards = cardFacts.flatMap(cardOf);
+  const current = recalled.map(shownOf);
+  const cards = brainCards.map(cardOf);
   const record: RecallRecord = { shown: current, ...(anchorSeq !== undefined ? { anchorSeq } : {}) };
   const shownCards = new Set(previous?.cards?.map(cardKey));
-  const newCards = renderCards(cardFacts.filter((_, index) => !shownCards.has(cardKey(cards[index]!))));
+  const newCards = renderCards(brainCards.filter((_, index) => !shownCards.has(cardKey(cards[index]!))));
   const withCards = (text: string) => [text, newCards].filter(Boolean).join("\n\n");
   const outcomeOf = (shown: Pick<Shown, "scope" | "provider">) =>
     outcomes.find(({ provider, scope }) => provider === shown.provider && scope === shown.scope);
@@ -81,12 +81,12 @@ export function memoryRecallDelta(
     else cards.push(card);
   }
   if (cards.length) record.cards = cards;
-  if (!previous) return { text: withCards(renderRecall(facts, labels)), record };
+  if (!previous) return { text: withCards(renderRecall(recalled, labels)), record };
   const before = new Map(previous.shown.map((shown) => [keyOf(shown), shown]));
   const now = new Set(current.map(keyOf));
   const added = withCards(
     renderRecall(
-      facts.filter((_, index) => !before.has(keyOf(current[index]!))),
+      recalled.filter((_, index) => !before.has(keyOf(current[index]!))),
       labels,
     ),
   );

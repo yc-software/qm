@@ -151,7 +151,7 @@ export function createMcpMemoryProvider(opts: {
       context?.actorId,
       scopeId,
       context?.audienceScopeId,
-      Date.now() + op.timeoutMs,
+      (context?.startedAt ?? Date.now()) + op.timeoutMs,
     ).catch((error: unknown) => {
       throw error instanceof OutsideAudience ? new MemoryRecallWithheld(scopeId) : error;
     });

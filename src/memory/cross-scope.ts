@@ -9,7 +9,13 @@ export interface RecalledFact {
   id?: string;
   text: string;
   source?: MemorySource;
-  card?: { provider: string; ref: string };
+}
+
+export interface BrainCard {
+  scope: ScopeId;
+  provider: string;
+  ref: string;
+  text: string;
 }
 
 type ScopedRow = MemoryCandidate & { scope: ScopeId };
@@ -91,7 +97,7 @@ export function renderRecall(facts: readonly RecalledFact[], labels: ReadonlyMap
     .join("\n\n");
 }
 
-export const renderCards = (cards: readonly RecalledFact[]): string =>
+export const renderCards = (cards: readonly BrainCard[]): string =>
   cards.length ? `### Brain cards\n${quotedData(cards.map(({ text }) => text).join("\n"))}` : "";
 
 export async function searchAcrossScopes(

@@ -143,7 +143,7 @@ async function brainApp(t: { after(fn: () => Promise<void>): void }, config = te
       clientId: "qm",
       clientSecret: "brain-secret",
       label,
-      timeoutMs: 400,
+      timeoutMs: 1_000,
     });
     await admin("PUT", `/v1/admin/memory-registry/bindings/${id}`, {
       brain: id,
@@ -178,7 +178,8 @@ const cards = (run?: { environment?: string }) =>
   run?.environment?.match(/### Brain cards\n```untrusted-data\n([\s\S]*?)\n```/)?.[1]!.split("\n") ?? [];
 const MENTION = { text: "Lunch with <@U2>?" };
 const U2 = [{ principalId: "U2", displayName: "Priya Raman", type: "internal" as const }];
-const CARD = "Acme brain · acme:default:people/priya-raman — Priya Raman (person)";
+const CARD = "acme:default:people/priya-raman — Priya Raman (person)";
+const WIDGET = "acme:default:companies/widget-co — Widget Co";
 const asks = (brain: { calls: Call[] }, tool: string) => brain.calls.filter((call) => call.tool === tool);
 
 test("the person's own DM gets each brain's read-only tools through the connector bridge, called as them with the arguments as sent and acting_user pinned to them", async (t) => {
@@ -296,7 +297,7 @@ test("a lookup outlasts recall's timeout, and a refusal or failure answers with 
     isError: true,
     content: [{ type: "text" as const, text: JSON.stringify({ code, message: `refused with ${code}` }) }],
   });
-  acme.failures.set("slow", 600);
+  acme.failures.set("slow", 1_100);
   acme.failures.set("Nobody", refusal("actor_unlinked"));
   acme.failures.set("Unlisted", refusal("actor_not_attested"));
   acme.failures.set("Broken", { isError: true, content: [{ type: "text", text: "search index is rebuilding" }] });
@@ -359,12 +360,13 @@ test("a brain card needs its switch and the binding's recall, and a revoked bind
   }
 });
 
-test("a mention's card comes from one whois match and keeps recall's deadline, unlike the agent's own lookups", async (t) => {
+test("a mention's card comes from one whois match and keeps recall's deadline, unlike the agent's own lookups, and a late whois leaves the brain's other cards", async (t) => {
   const { acme, built, turn } = await brainApp(t);
   await built.directory.replace(U2);
   assert.deepEqual(cards(await turn([], MENTION)), [CARD]);
-  acme.failures.set("Priya Raman", 450);
-  assert.deepEqual(cards(await turn([], MENTION)), []);
+  acme.failures.set("Priya Raman", 1_100);
+  acme.pages.push(PAGE);
+  assert.deepEqual(cards(await turn([], MENTION)), [WIDGET]);
   assert.deepEqual(
     lookups(acme)
       .map(({ tool, args }) => `${tool} ${args.query ?? ""}`.trim())
@@ -373,12 +375,12 @@ test("a mention's card comes from one whois match and keeps recall's deadline, u
   );
 });
 
-test("a card shows once per retained context: again after an interrupted turn or compaction, or when its page changes", async (t) => {
+test("a card shows once per retained context, whichever tool finds its page again, and again after an interrupted turn or compaction", async (t) => {
   const { acme, built, turn } = await brainApp(t);
   await built.directory.replace(U2);
   acme.pages.push(PAGE);
   const ask = { ...MENTION, conversation: { kind: "dm" as const, threadRef: "dm:U1:cards" } };
-  const both = [CARD, "Acme brain · acme:default:companies/widget-co — Widget Co: named"];
+  const both = [CARD, WIDGET];
   assert.deepEqual(cards(await turn(["crash"], ask)), both);
   assert.deepEqual(cards(await turn([], ask)), both);
   assert.deepEqual(cards(await turn([], ask)), []);
@@ -386,19 +388,21 @@ test("a card shows once per retained context: again after an interrupted turn or
   const throughSeq = (await built.sessions.getItems(id)).at(-1)!.seq;
   await built.sessions.append({ sessionId: id }, { kind: "ContextCompaction", throughSeq, text: "recap" });
   assert.deepEqual(cards(await turn([], ask)), both);
-  acme.people[0]!.type = "founder";
-  assert.deepEqual(cards(await turn([], ask)), [CARD.replace("person", "founder")]);
-  const refs = both.map((card) => card.split(" ")[3]).join("\n");
+  const refs = both.map((card) => card.split(" ")[0]).join("\n");
+  acme.pages.unshift({ ...PRIYA, display: "Priya Raman" });
+  const later = { conversation: { kind: "dm" as const, threadRef: "dm:U1:later" } };
+  assert.deepEqual(cards(await turn([], later)), ["acme:default:people/priya-raman — Priya Raman", WIDGET]);
+  assert.deepEqual(cards(await turn([], { ...later, ...MENTION })), []);
   assert.deepEqual(
     asks(acme, "volunteer_context").map(({ args }) => args.prior_context),
-    [undefined, undefined, refs, undefined, refs],
+    [undefined, undefined, refs, undefined, undefined, refs],
   );
 });
 
 test("the same page in two brains gives two cards in one 1,200-character block, and each brain hears only its own refs", async (t) => {
   const { acme, beta, bind, turn } = await brainApp(t);
   await bind("beta", "Beta brain");
-  const long = (slug: string) => ({ ...PAGE, slug, rationale: "r".repeat(300) });
+  const long = (slug: string) => ({ ...PAGE, slug, display: "d".repeat(300) });
   acme.pages.push(long("notes/a"), long("notes/b"));
   beta.pages.push(long("notes/a"), long("notes/b"));
   const conversation = { kind: "dm" as const, threadRef: "dm:U1:two" };
@@ -407,7 +411,7 @@ test("the same page in two brains gives two cards in one 1,200-character block, 
   assert.ok(block.length <= 1_200, `${block.length} characters`);
   assert.deepEqual(
     cards(run).map((card) => card.split(" — ")[0]),
-    ["Acme brain · acme:default:notes/a", "Acme brain · acme:default:notes/b", "Beta brain · beta:default:notes/a"],
+    ["acme:default:notes/a", "acme:default:notes/b", "beta:default:notes/a"],
   );
   await turn([], { conversation });
   assert.deepEqual(

@@ -1323,7 +1323,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         void loadedFacts.catch(() => undefined);
         const recallFor = async (history: Item[]) =>
           appEdit
-            ? []
+            ? { recalled: [], cards: [] }
             : context.recallMemory(
                 memoryRecallQuery(input.text, history),
                 loadedFacts,
@@ -1825,7 +1825,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const rawEntries = (await turnWindow()).items;
         const priorTurns = input.priorTurns;
         let visibleHistory = filterHistory(forModelContext(rawEntries));
-        const recalled = await (earlyRecall ?? recallFor(visibleHistory));
+        const { recalled, cards } = await (earlyRecall ?? recallFor(visibleHistory));
         const partial = isRetry ? (recordedTurn ?? findTrailingPartialTurn(visibleHistory, input.runId)) : null;
         const reconciled = partial ? reconcile(visibleHistory, partial, input.resumeCause) : null;
         if (reconciled?.settleItems.length) {
@@ -2146,6 +2146,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const appSource = await appSourceShown(baseTools.appFiles, continuation?.history ?? history);
           const { recall, snapshot, guidance, environment, silentResume } = segmentEnvironment({
             recalled,
+            cards,
             continuation,
             history,
             memoryView,

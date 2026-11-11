@@ -7,7 +7,7 @@ import {
   recallAcrossScopes,
   recallLabel,
   searchNotebooks,
-  type RecalledFact,
+  type BrainCard,
 } from "../memory/cross-scope.ts";
 import { deliveredCards, shownFacts } from "../memory/recall-delta.ts";
 import { brainCards } from "../memory/brain-card.ts";
@@ -183,8 +183,8 @@ export async function resolveTurnContext(input: ContextInput) {
       sessionId?: string,
       card?: { personTurn: boolean; history: readonly Item[] },
     ) => {
-      const cards = async (): Promise<RecalledFact[]> => {
-        const startedAt = Date.now();
+      const startedAt = Date.now();
+      const cards = async (): Promise<BrainCard[]> => {
         const by = card && personAuthority(card.personTurn);
         if (!by || !card || !text || memoryPolicy.card === "off") return [];
         return brainCards({
@@ -213,14 +213,15 @@ export async function resolveTurnContext(input: ContextInput) {
                 ...(disclosedFacts ? { disclosedFacts } : {}),
                 ...(report ? { report } : {}),
                 ...(sessionId ? { sessionId } : {}),
+                startedAt,
               },
               memoryLabels,
             ),
             cards(),
           ]);
-          return [...recalled, ...carded];
+          return { recalled, cards: carded };
         },
-        { counts: (recalled) => ({ "qm.recalled": recalled.length }) },
+        { counts: ({ recalled }) => ({ "qm.recalled": recalled.length }) },
       );
     },
     searchMemory: async (
