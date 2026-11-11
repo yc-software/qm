@@ -7,6 +7,7 @@ import type { SandboxHandle } from "../../sandbox/sandbox.ts";
 import {
   accessConversationSandbox,
   assertBotMayUseComputer,
+  botMayUseComputers,
   SandboxAccessError,
   type SandboxResource,
 } from "../../sandbox/sandbox-resources.ts";
@@ -178,15 +179,13 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
             ),
         }
       : undefined;
-    const botMayUse =
-      capability.botActor && app.swarms
-        ? (computer: SandboxResource) =>
-            app.swarms!.botMayUseComputer(computer, {
-              actorId: capability.actorId,
-              threadRef: capability.threadRef ?? "",
-              sessionId: capability.sessionId ?? "",
-            })
-        : undefined;
+    const botMayUse = capability.botActor
+      ? botMayUseComputers(app.swarms, {
+          actorId: capability.actorId,
+          threadRef: capability.threadRef ?? "",
+          sessionId: capability.sessionId ?? "",
+        })
+      : undefined;
     let resource: SandboxResource | undefined;
     if (requestedSandboxId) {
       try {

@@ -1516,10 +1516,10 @@ test("a turn's credential token says whether it may act as its actor in a shared
     assert.equal((await app.turn(request)).status, "ok");
     return (await verifyCapabilityToken(executed!.AGENT_CREDENTIAL_TOKEN!, TEST_CAPABILITY_SECRET))!.actAsActor;
   };
+  assert.equal(await actAsActor(channel(ask, { botActor: true })), undefined);
   assert.equal(await actAsActor(channel(ask)), true);
   assert.equal(await actAsActor(channel(ask, { origin: { kind: "ambient", live: true } })), true);
   assert.equal(await actAsActor(channel(ask, { origin: { kind: "automation" } })), true);
-  assert.equal(await actAsActor(channel(ask, { botActor: true })), undefined);
 });
 
 for (const hours of [undefined, "72", "0", "none"]) {

@@ -8,10 +8,10 @@ import {
 } from "../../sandbox/sandbox.ts";
 import {
   assertBotMayUseComputer,
+  botMayUseComputers,
   createTurnSandboxAccess,
   preferredBackend,
   type SandboxAccessPlan,
-  type SandboxResource,
 } from "../../sandbox/sandbox-resources.ts";
 import { ensureChildSandbox, prepareChildWorkdir } from "../../sessions/child-isolation.ts";
 import { reconcileProcesses } from "../../processes/reconcile.ts";
@@ -350,18 +350,16 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
 
   const isolation = session.spawnMeta?.isolation;
   const boundSandboxId = swarmSandboxId ?? isolation?.sandboxId;
-  const swarms = input.botActor ? deps.swarms : undefined;
-  const botMayUse =
-    swarms &&
-    ((resource: SandboxResource) =>
-      swarms.botMayUseComputer(resource, { actorId: actor.id, threadRef: session.threadRef, sessionId: session.id }));
+  const botMayUse = input.botActor
+    ? botMayUseComputers(deps.swarms, { actorId: actor.id, threadRef: session.threadRef, sessionId: session.id })
+    : undefined;
   const assertDefaultUsable = (sandboxId = boundSandboxId): Promise<void> =>
     assertBotMayUseComputer(deps.sandboxResources, resolution.writableScopeId, sandboxId, botMayUse);
   const personUsed = new Set<string>();
   const notePersonUse = async (handle: SandboxHandle): Promise<void> => {
     const sandboxId = handle.resourceId ?? boundSandboxId;
-    if (input.botActor || !deps.swarms || !deps.sandboxResources || !sandboxId || personUsed.has(sandboxId)) return;
-    await deps.swarms.notePersonUse(await deps.sandboxResources.get(sandboxId));
+    if (input.botActor || !deps.sandboxResources || !sandboxId || personUsed.has(sandboxId)) return;
+    await deps.swarms?.notePersonUse(await deps.sandboxResources.notePersonUse(sandboxId));
     personUsed.add(sandboxId);
   };
   const turnAccess = {

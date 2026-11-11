@@ -24,6 +24,7 @@ import type { Sandbox, AgentComputerSpec, ProvisionOptions, ComputerStatus, Egre
 import { JOB_COMPUTER_SCOPE_PREFIX } from "./home-snapshot.ts";
 import { claimThenBind } from "../tenants/claim.ts";
 import type { LoadSample } from "./load-probe.ts";
+import type { SwarmService } from "../swarms/swarm-service.ts";
 
 export interface SandboxResource {
   id: string;
@@ -43,6 +44,7 @@ export interface SandboxResource {
   jobOnly?: boolean;
   memoryGb?: number;
   swarmId?: string;
+  personUsed?: true;
 }
 
 export interface SandboxAccessPlan {
@@ -93,7 +95,8 @@ export interface SandboxResources {
   access(actorId: string, id: string): Promise<SandboxResource>;
   status(actorId: string, id: string): Promise<ComputerStatus>;
   restart(actorId: string, id: string, memoryGb?: number): Promise<void>;
-  retire(actorId: string, id: string, botActor?: boolean): Promise<void>;
+  retire(actorId: string, id: string): Promise<void>;
+  notePersonUse(id: string): Promise<SandboxResource>;
   use<T>(id: string, action: () => Promise<T>, exclusive?: boolean): Promise<T>;
   hold(id: string, runId: string): Promise<void>;
   recordLoad(id: string, sample: LoadSample): Promise<void>;
@@ -107,13 +110,26 @@ export interface SandboxResources {
 
 export class SandboxAccessError extends Error {}
 
-const BOT_SWARM_COMPUTER_REFUSAL = "a Slack bot's turn cannot use the computers of a person's swarm";
+const BOT_COMPUTER_REFUSAL = "a Slack bot's turn can use only a computer it made that no person has used";
 
 const JOB_ONLY_REFUSAL =
   "this computer belongs to a background job that uses private credentials; only that job's own controls can reach it";
 
 export async function preferredBackend(resources: SandboxResources, scopeId: ScopeId): Promise<SandboxBackendName> {
   return (await resources.resolve(scopeId))?.backend ?? (await resources.defaultBackend());
+}
+
+export function botMayUseComputers(
+  swarms: Pick<SwarmService, "botMayUseComputer"> | undefined,
+  turn: { actorId: string; threadRef: string; sessionId: string },
+): (computer: SandboxResource) => Promise<boolean> {
+  return async (computer) =>
+    computer.swarmId
+      ? !!swarms && (await swarms.botMayUseComputer(computer, turn))
+      : personOrOwningBot(
+          { actorId: turn.actorId, botActor: true },
+          async () => !computer.personUsed && samePerson(computer.createdBy, turn.actorId),
+        );
 }
 
 export async function accessConversationSandbox(
@@ -127,7 +143,7 @@ export async function accessConversationSandbox(
   const resource = await resources?.access(actorId, id);
   if (!resource || resource.state === "retired" || !(await canUseScope(resource.ownerScopeId)))
     throw new SandboxAccessError("sandbox access is no longer authorized in this conversation");
-  if (botMayUse && !(await botMayUse(resource))) throw new SandboxAccessError(BOT_SWARM_COMPUTER_REFUSAL);
+  if (botMayUse && !(await botMayUse(resource))) throw new SandboxAccessError(BOT_COMPUTER_REFUSAL);
   return resource;
 }
 
@@ -139,7 +155,7 @@ export async function assertBotMayUseComputer(
 ): Promise<void> {
   if (!botMayUse) return;
   const resource = sandboxId ? await resources?.get(sandboxId) : await resources?.resolve(scopeId);
-  if (resource && !(await botMayUse(resource))) throw new SandboxAccessError(BOT_SWARM_COMPUTER_REFUSAL);
+  if (resource && !(await botMayUse(resource))) throw new SandboxAccessError(BOT_COMPUTER_REFUSAL);
 }
 
 export function createSandboxResources(opts: {
@@ -266,11 +282,9 @@ export function createSandboxResources(opts: {
         }));
       return live.includes(true);
     },
-    async retire(actorId, id, botActor) {
+    async retire(actorId, id) {
       await initialize();
       const record = await agentRecord(actorId, id);
-      if (!(await personOrOwningBot({ actorId, botActor }, async () => samePerson(record.createdBy, actorId))))
-        throw new SandboxAccessError("a Slack bot's turn can retire only a computer it created");
       await opts.lock.withLock(`sandbox-resource:${id}`, () =>
         opts.lock.withLock(`sandbox-default:${record.ownerScopeId}`, async () => {
           const current = await get(id);
@@ -282,6 +296,11 @@ export function createSandboxResources(opts: {
           await destroy(current);
         }),
       );
+    },
+    async notePersonUse(id) {
+      const record = await get(id);
+      if (record.personUsed) return record;
+      return (await opts.records.update(id, (current) => ({ ...current, personUsed: true }))) ?? record;
     },
     async eachJobComputer(work) {
       await claimThenBind(opts.records.claimTenants, async () => {
