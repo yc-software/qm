@@ -125,6 +125,7 @@ export function createRegistryMemoryService(opts: {
         );
       },
       read: async (scopeId) => (await serve()).service.read(scopeId),
+      brains: async (scopeId) => (await (await serve()).service.brains?.(scopeId)) ?? [],
       facts: async (scopeId) => (await (await serve()).service.facts?.(scopeId)) ?? [],
       async edit(scopeId, edits, by, context) {
         const { service } = await serve();

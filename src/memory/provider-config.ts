@@ -47,6 +47,7 @@ interface McpMemoryProviderConfig {
   forget?: McpMemoryForgetConfig;
   timeoutMs: number;
   attestActor: boolean;
+  ops?: readonly string[];
 }
 
 type AnyMemoryProviderConfig = McpMemoryProviderConfig | MemorableMemoryProviderConfig;

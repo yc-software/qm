@@ -16,6 +16,7 @@ import { externalTools } from "./orchestrator/external-tools.ts";
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import type { MemoryProviderOutcome } from "../memory/memory-service.ts";
 import { memoryRecallQuery } from "../memory/semantic-recall.ts";
+import { turnBrains } from "../memory/brain.ts";
 import {
   requiresDelegation,
   delegatedAuthorizationOrigin,
@@ -786,6 +787,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         projects: deps.projects,
       });
       const { sharingSources, memoryScopeId, baseRecallScopes, memoryAccess } = context;
+      const brains =
+        memoryPolicy.brainTool !== false && useMemory && !notebookOnly && !external && !input.botActor && !ambientTurn
+          ? await turnBrains(context.memory, {
+              actorId: actor.id,
+              scopeId: memoryScopeId,
+              ...(audienceScopeId ? { audienceScopeId } : {}),
+            }).catch(swallowAs("orchestrator: brain bindings", []))
+          : [];
       resolution.grantedHandles = context.listFiles();
       const isWeb = input.surface === "web";
       const surfaceTool = input.surface ?? "slack";
@@ -839,6 +848,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         web: isWeb,
         surfaceLinks: surfaceHints?.linkSyntax ?? "",
         sessions: isWeb && surfaceName === "web" && Boolean(sessionSyscalls) && !input.swarm,
+        brain: brains.length > 0,
       });
       let personaBlock = persona ? personaPrompt(persona) : "";
       if (typeof personaTurn === "string") personaBlock = `## Persona\n${personaTurn}`;
@@ -880,12 +890,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       });
 
       await deps.skillsReady?.();
-      const configuredProviders =
-        !external && deps.resolveConnectorClient
+      const configuredProviders = [
+        ...(!external && deps.resolveConnectorClient
           ? await configuredConnectorProviders(deps.resolveConnectorClient).catch(
               swallowAs("orchestrator: configured connector providers", []),
             )
-          : [];
+          : []),
+        ...(brains.length ? ["brain"] : []),
+      ];
       const {
         aclGrantedServiceCredSlugs,
         orgWideAudience,
@@ -1673,6 +1685,22 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(turnSessionSyscalls ? { sessionSyscalls: turnSessionSyscalls } : {}),
           ...(strictReadOnly ? {} : { attach: attachStaging.attach }),
           memory: context.memory,
+          ...(brains.length
+            ? {
+                brain: {
+                  brains,
+                  live: () =>
+                    turnBrains(context.memory, {
+                      actorId: actor.id,
+                      scopeId: memoryScopeId,
+                      ...(audienceScopeId ? { audienceScopeId } : {}),
+                    }),
+                  retained: async () =>
+                    filterHistory(forModelContext((await deps.sessions.getContextWindow(session.id)).items)),
+                  call: { actorId: actor.id, ...(audienceScopeId ? { audienceScopeId } : {}) },
+                },
+              }
+            : {}),
           memoryCaptureMetadata: () => ({ sessionId: session.id, inheritedFacts: captureDependencies() }),
           memoryScopeId,
           ...(memoryAccess ? { memoryAccess } : {}),

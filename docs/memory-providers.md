@@ -343,6 +343,38 @@ gbrain auth rescope --client <client id> --attest-actor qm --attest-ops forget_f
 
 **Rolling out and back.** Builds older than this one don't know `gbrain-v3`. They read a registry record that names it as a shape they don't know and keep serving the last record they loaded, and one that starts fresh serves no registry brain. So move a brain to `gbrain-v3` (`PUT /v1/admin/memory-registry/brains/:id` with `"preset": "gbrain-v3"`) only after every instance runs this build or a later one. To roll back, move every brain back to `gbrain-v1` first, then roll back the build. An older build never forgets a brain fact by mistake: it reads a ref as a notebook id that no notebook holds, and refuses it with nothing changed.
 
+### The brain tool
+
+A brain with the `gbrain-v3` preset also gives the member a `brain` tool in their own DM, so the agent can look up the people, companies and meetings in it instead of waiting for recall to surface them. Each action calls one gbrain operation as the member (`x-qm-actor`), and the operation reads only what that member may read:
+
+| Action     | gbrain operation | Sends                                                      |
+| ---------- | ---------------- | ---------------------------------------------------------- |
+| `search`   | `query`          | `query`                                                    |
+| `page`     | `get_page`       | `slug`, `source_id` from a ref                             |
+| `timeline` | `get_timeline`   | `slug`, `source_id`, and optionally `after`                |
+| `links`    | `get_backlinks`  | `slug`, `source_id`                                        |
+| `experts`  | `find_experts`   | `topic`                                                    |
+| `whois`    | `whois`          | `query`                                                    |
+| `entity`   | `entity`         | `name`, or a ref's `slug` as `name` with its `source_id`   |
+| `brief`    | `context_pack`   | `counterparty` (a name or a ref's slug), `intent: meeting` |
+
+On the brain host, let QM's client run these operations as the member, alongside forgetting, and read named sources as the member rather than as the source:
+
+```bash
+gbrain auth rescope --client <QM client id> --attest-actor qm \
+  --attest-ops forget_fact,get_write_request,memory_recall,memory_write,query,get_page,get_timeline,get_backlinks,find_experts,whois,entity,context_pack
+gbrain auth rescope --client <QM client id> --attest-read person
+```
+
+An operation left out of `--attest-ops` answers `actor_not_attested`, and the tool says so instead of guessing.
+
+- **Where it appears.** Only on a turn the member sent in their own DM, with memory on. Group DMs, channels, a bot's turn, ambient wakes, notebook-only turns (the nightly tidy and its subagents) and `gbrain-v1` brains get no tool, and the system prompt doesn't mention it. `MEMORY_BRAIN_TOOL=off` removes it everywhere; recall and writes don't change.
+- **Checked on every call.** QM decides the brains and actions once per turn, then checks each call against the live registry, so a binding deleted mid-turn refuses the next call before it reaches the brain. A call naming a brain, action or ref the turn wasn't given is refused the same way.
+- **Refs.** Every record in a result carries a ref, `<brain>:<source>:<slug>`, and `page`, `timeline`, `links` and a ref-based `entity` or `brief` take only a ref a brain result in the conversation gave. A brain therefore never receives a slug the model made up. A saved fact in `search` results carries `<brain>:<fact id>` instead, the ref `memory` delete takes to [forget it](#forgetting-a-brain-fact).
+- **Nothing leaves through a lookup.** `query` and `after` are at most 200 characters. A lookup that repeats 24 or more characters of text that reached the conversation from anywhere but the member's own messages or that brain's own results (another brain, another tool, a channel message, recalled memory) is refused, so one brain's data never reaches another brain.
+- **What the agent sees.** A heading `### brain · <label>`, then the action's fields in a quoted data block, with gbrain's notices (such as a degraded search) beside them. Bookkeeping fields and `_meta`, which carries the member's hot memory, are never shown. When `whois` or `entity` reports several matches, the agent asks which one the member means.
+- **Failures.** A timeout (the brain's `timeoutMs`), a refusal or an unlinked member answers with the same problem codes as recall, each with its fix; any other gbrain error comes back quoted so the agent can correct the call.
+
 ### A member's own brain
 
 A member who runs their own gbrain connects it as their personal memory from chat: the agent calls `PUT /v1/memory/brain` as them, on a turn they sent. QM registers it as a brain they own (`owner`, their canonical principal id), under an id derived from that id, with the `gbrain-v1` preset, and binds it to their own personal scope only, with `explicit` capture. Nobody can bind it to another scope, and the body can't name another owner. On their gbrain they need a confidential client-credentials client that may attest an actor, and a link from their gbrain member to the `principalId` that `GET /v1/memory/brain` returns.

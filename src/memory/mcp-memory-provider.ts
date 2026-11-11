@@ -81,6 +81,7 @@ export function createMcpMemoryProvider(opts: {
   write?: McpMemoryOperation;
   forget?: McpMemoryForget;
   attestActor?: boolean;
+  ops?: readonly string[];
 }): MemoryService {
   const call = async (
     op: Pick<McpMemoryOperation, "client" | "tool" | "timeoutMs" | "actorArg">,
@@ -89,17 +90,18 @@ export function createMcpMemoryProvider(opts: {
     scopeId: string,
     audienceScopeId: string | undefined,
     deadline = Date.now() + op.timeoutMs,
+    signal?: AbortSignal,
   ) => {
     const person = opts.attestActor ? attestedPerson(actorId, "memory provider") : actorId;
     if (opts.attestActor && !(attestableAudience(actorId, scopeId) && attestableAudience(actorId, audienceScopeId)))
       throw new OutsideAudience("memory provider");
-    if (person && op !== opts.forget) args[op.actorArg ?? "acting_user"] = person;
+    if (person && (op === opts.read || op === opts.write)) args[op.actorArg ?? "acting_user"] = person;
     const headers = opts.attestActor && person ? { "x-qm-actor": person } : undefined;
     const ms = deadline - Date.now();
     if (ms <= 0) throw new TimeoutError(`memory provider timed out after ${op.timeoutMs}ms`);
     const stop = new AbortController();
     const result = await withTimeout(
-      () => op.client.callTool(op.tool, args, headers, stop.signal),
+      () => op.client.callTool(op.tool, args, headers, signal ? AbortSignal.any([stop.signal, signal]) : stop.signal),
       ms,
       "memory provider",
     ).finally(() => stop.abort());
@@ -190,6 +192,16 @@ export function createMcpMemoryProvider(opts: {
     },
 
     read: async (scopeId) => resultText(await read(scopeId, "")),
+
+    ...(opts.ops && opts.attestActor
+      ? {
+          operations: {
+            ops: opts.ops,
+            call: (scopeId, tool, args, { actorId, audienceScopeId, signal }) =>
+              call({ ...opts.read, tool }, { ...args }, actorId, scopeId, audienceScopeId, undefined, signal),
+          },
+        }
+      : {}),
 
     ...(opts.forget
       ? {

@@ -135,7 +135,7 @@ function forgetProblem(outcome: MemoryProviderOutcome): MemoryProviderProblem | 
   }
 }
 
-function problemOf(outcome: MemoryProviderOutcome, write: boolean): MemoryProviderProblem | undefined {
+export function problemOf(outcome: MemoryProviderOutcome, write: boolean): MemoryProviderProblem | undefined {
   const { provider, ms, code } = outcome;
   const reason = code ? ` (${code})` : "";
   if (write && code === "fact_withdrawn")

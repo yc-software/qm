@@ -6,6 +6,7 @@ export type MemoryCaptureMode = "off" | "writable";
 export interface MemoryPolicy {
   recall: MemoryRecallMode;
   capture: MemoryCaptureMode;
+  brainTool?: boolean;
 }
 
 export const DEFAULT_MEMORY_POLICY: MemoryPolicy = { recall: "visible", capture: "writable" };

@@ -4,6 +4,7 @@ import type { McpEnvelope } from "../mcp/mcp-client.ts";
 import {
   changesBrainAsPerson,
   changesNotebookOnly,
+  type BrainCall,
   type MemoryProviderOutcome,
   type MemoryRecallContext,
   type MemoryService,
@@ -170,6 +171,25 @@ export function createRoutedMemoryService(opts: {
         ),
       );
       return routes.flatMap((route, index) => tagged(route, batches[index]!));
+    },
+
+    async brains(scopeId) {
+      const routes = routesFor(scopeId).filter(
+        (route, index, all) => all.findIndex((other) => other.provider === route.provider) === index,
+      );
+      return routes.flatMap(({ provider, label }) => {
+        const operations = opts.providers[provider]?.operations;
+        if (!operations) return [];
+        return [
+          {
+            id: provider,
+            label: label ?? provider,
+            ops: operations.ops,
+            call: (op: string, args: Record<string, unknown>, context: BrainCall) =>
+              operations.call(scopeId, op, args, context),
+          },
+        ];
+      });
     },
 
     async read(scopeId) {

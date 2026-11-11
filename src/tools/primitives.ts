@@ -11,6 +11,7 @@ import {
   type ExecutionFileCredential,
 } from "../credentials/execute-files.ts";
 import type { MemoryCaptureMetadata } from "../memory/facts.ts";
+import type { BrainAccess } from "../memory/brain.ts";
 import { disclosedMemory } from "../memory/disclosure.ts";
 import { MaskedExecutionError, executionSecretEnv, createExactSecretValueMasker } from "../security/secret-masking.ts";
 import { withAbort, withTimeout } from "../util/async.ts";
@@ -210,6 +211,7 @@ export interface ToolContext extends SurfaceToolDeps {
   attach: AttachFiles;
   sessionSyscalls?: SessionSyscalls;
   humanTurn?: boolean;
+  brain?: BrainAccess;
   toolOutput?: Pick<ToolOutputStore, "inlineTokens" | "save">;
   execute(
     command: string,
@@ -518,6 +520,7 @@ export interface ToolContextDeps {
   memoryScopeId?: ScopeId;
   memoryCaptureMetadata?: () => MemoryCaptureMetadata;
   memoryAccess?: { write?: ScopeId; read: ScopeId[]; notebookOnly?: true };
+  brain?: BrainAccess;
   mcp?: McpToolService;
   audienceScopeId?: ScopeId;
   actAsActor?: boolean;
@@ -749,6 +752,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
   return {
     ...(deps.admin ? { admin: deps.admin } : {}),
     ...(deps.selfApi ? { selfApi: deps.selfApi } : {}),
+    ...(deps.brain ? { brain: deps.brain } : {}),
     ...(deps.toolOutput ? { toolOutput: deps.toolOutput } : {}),
     ...(deps.sandboxResources && deps.accessSandboxResource
       ? {

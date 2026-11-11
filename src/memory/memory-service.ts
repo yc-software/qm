@@ -1,3 +1,4 @@
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { isSystemActor, type ScopeId } from "../types.ts";
 import type { MemoryDisclosure } from "./disclosure.ts";
 import {
@@ -87,8 +88,28 @@ export function turnAuthority(
   };
 }
 
+export interface BrainCall {
+  actorId: string;
+  audienceScopeId?: ScopeId;
+  signal?: AbortSignal;
+}
+
+interface BrainOperations {
+  ops: readonly string[];
+  call(scopeId: ScopeId, op: string, args: Record<string, unknown>, context: BrainCall): Promise<CallToolResult>;
+}
+
+export interface BoundBrain {
+  id: string;
+  label: string;
+  ops: readonly string[];
+  call(op: string, args: Record<string, unknown>, context: BrainCall): Promise<CallToolResult>;
+}
+
 export interface MemoryService {
   attestActor?: boolean;
+  operations?: BrainOperations;
+  brains?(scopeId: ScopeId): Promise<BoundBrain[]>;
   withDisclosure?(access: MemoryDisclosure): MemoryService;
   recall(scopeId: ScopeId, context?: MemoryRecallContext): Promise<MemoryCandidate[]>;
   capture(

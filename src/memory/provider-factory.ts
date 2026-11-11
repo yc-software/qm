@@ -63,6 +63,7 @@ export function createMemoryProviders(
         ? { forget: operation(provider.url, provider.forget, MAX_PROVIDER_TIMEOUT_MS, fetchFn) }
         : {}),
       attestActor: provider.attestActor,
+      ...(provider.ops ? { ops: provider.ops } : {}),
     });
   }
   return providers;
