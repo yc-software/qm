@@ -156,3 +156,22 @@ test("app-connection calls reuse the account the proxy resolved on the first cal
     ["ca_resolved1", "ca_resolved1"],
   );
 });
+
+test("replies quote the original like Gmail's composer, in both parts", { skip: !havePython }, () => {
+  const driver = `
+import base64, importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("gmail", sys.argv[1])
+gmail = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gmail)
+enc = lambda t: base64.urlsafe_b64encode(t.encode()).decode()
+orig = {"payload": {"headers": [{"name": "From", "value": "Ann <ann@x.test>"},
+                                {"name": "Date", "value": "Tue, 10 Nov 2026 12:36:00 -0800"}],
+                    "parts": [{"mimeType": "text/plain", "body": {"data": enc("Hi\\n\\n> older")}},
+                              {"mimeType": "text/html", "body": {"data": enc("<html><body><div>Hi</div></body></html>")}}]}}
+print(json.dumps(gmail.quote_of(orig)))
+`;
+  const [plain, html] = JSON.parse(execFileSync("python3", ["-c", driver, SCRIPT], { encoding: "utf8" }));
+  assert.equal(plain, "On Tue, Nov 10, 2026 at 12:36 PM Ann <ann@x.test> wrote:\n\n> Hi\n>\n>> older");
+  assert.ok(html.includes('<blockquote class="gmail_quote"'), "html uses Gmail's quote block");
+  assert.ok(html.includes("<div>Hi</div></blockquote>"), "original html is quoted without its body wrapper");
+});

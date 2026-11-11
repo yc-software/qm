@@ -15,9 +15,13 @@ Usage:
   gmail.py thread THREAD_ID [--full]    # all messages oldest-first + lastFromMe
   gmail.py draft --to EMAIL --subject TEXT --body-file FILE
   gmail.py reply MESSAGE_ID --body-file FILE [--all]   # reply-draft anchored to the
-                                                       # thread's latest sent message
-  gmail.py update-draft DRAFT_ID --body-file FILE      # keeps recipients/threading
+                                                       # thread's latest sent message,
+                                                       # quoting it like Gmail does
+  gmail.py update-draft DRAFT_ID --body-file FILE      # keeps recipients/threading/quote
   gmail.py send-draft DRAFT_ID
+
+draft and reply take --send to send right away (for already-approved sends);
+never build MIME or call messages/send yourself.
 
 Body files are plain text. Lines that look hard-wrapped (long lines inside a
 paragraph) are rejoined into flowing prose; short lines (sign-offs, lists) keep
@@ -36,7 +40,7 @@ import sys
 import urllib.parse
 from email.message import EmailMessage
 from email.policy import SMTP
-from email.utils import formataddr, getaddresses
+from email.utils import formataddr, getaddresses, parsedate_to_datetime
 
 API = "https://gmail.googleapis.com/gmail/v1/users/me"
 
@@ -139,15 +143,70 @@ def html_alternative(body: str) -> str:
     return '<div dir="ltr">' + "<br><br>".join(paragraphs) + "</div>"
 
 
-def build_raw(headers: dict[str, str], body: str, thread_id: str | None = None) -> dict:
+def build_raw(headers: dict[str, str], body: str, thread_id: str | None = None,
+              quote: tuple[str, str] | None = None) -> dict:
     msg = EmailMessage(policy=SMTP)
     for k, v in headers.items():
         if v:
             msg[k] = v
-    msg.set_content(body, cte="quoted-printable")
-    msg.add_alternative(html_alternative(body), subtype="html", cte="quoted-printable")
+    plain, rich = body, html_alternative(body)
+    if quote:
+        plain, rich = plain + "\n\n" + quote[0], rich + quote[1]
+    msg.set_content(plain, cte="quoted-printable")
+    msg.add_alternative(rich, subtype="html", cte="quoted-printable")
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
     return {"raw": raw, **({"threadId": thread_id} if thread_id else {})}
+
+
+def attribution(h: dict[str, str]) -> str:
+    # Gmail's own reply header: "On Tue, Nov 10, 2026 at 12:36 PM Name <a@b> wrote:".
+    try:
+        dt = parsedate_to_datetime(h.get("date", ""))
+        when = f"{dt:%a, %b} {dt.day}, {dt.year} at {dt.hour % 12 or 12}:{dt:%M %p} "
+    except (TypeError, ValueError):
+        when = ""
+    return f"On {when}{h.get('from', '')} wrote:"
+
+
+BODY_RE = re.compile(r"<body[^>]*>(.*)</body>", re.S | re.I)
+
+
+def quote_of(msg: dict) -> tuple[str, str]:
+    # The quoted original, as Gmail's composer appends it to a reply: a "> " block in
+    # text/plain and a gmail_quote blockquote in text/html, which Gmail folds behind
+    # "..." and other clients show as the thread's history.
+    payload = msg["payload"]
+    attr = attribution(headers_of(payload))
+    plain = part_text(payload, "text/plain")
+    rich = part_text(payload, "text/html")
+    if not plain and rich:
+        plain = re.sub(r"<[^>]+>", "", html.unescape(re.sub(r"<br\s*/?>|</(div|p)>", "\n", rich)))
+    plain = plain.replace("\r\n", "\n").strip("\n")
+    if rich:
+        m = BODY_RE.search(rich)
+        rich = m.group(1) if m else rich
+    else:
+        rich = html_alternative(plain)
+    quoted_plain = attr + "\n\n" + "\n".join(">" + (" " + ln if ln and not ln.startswith(">") else ln)
+                                              for ln in plain.split("\n"))
+    quoted_html = (
+        '<br><div class="gmail_quote gmail_quote_container">'
+        f'<div dir="ltr" class="gmail_attr">{linkify_escaped(attr)}<br></div>'
+        '<blockquote class="gmail_quote" style="margin:0px 0px 0px 0.8ex;'
+        f'border-left:1px solid rgb(204,204,204);padding-left:1ex">{rich}</blockquote></div>'
+    )
+    return quoted_plain, quoted_html
+
+
+def quote_for(thread_id: str | None, in_reply_to: str) -> tuple[str, str] | None:
+    # Rebuild a reply draft's quote from the message it answers, so edits keep it.
+    if not thread_id or not in_reply_to:
+        return None
+    thread = call("GET", f"threads/{thread_id}", query={"format": "full"})
+    for m in thread.get("messages", []):
+        if headers_of(m["payload"]).get("message-id", "").strip() == in_reply_to.strip():
+            return quote_of(m)
+    return None
 
 
 def headers_of(payload: dict) -> dict[str, str]:
@@ -162,6 +221,13 @@ def walk_parts(payload: dict):
     yield payload
     for part in payload.get("parts", []):
         yield from walk_parts(part)
+
+
+def part_text(payload: dict, want: str) -> str:
+    texts = [p["body"]["data"] for p in walk_parts(payload)
+             if p.get("mimeType") == want and p.get("body", {}).get("data")
+             and not p.get("filename")]
+    return "\n".join(b64url_decode(t) for t in texts)
 
 
 def extract_body(payload: dict) -> str:
@@ -201,6 +267,11 @@ def strip_addrs(addrs: str, exclude: str) -> str:
     return ", ".join(kept)
 
 
+def save_draft(message: dict, send: bool) -> dict:
+    draft = call("POST", "drafts", {"message": message})
+    return call("POST", "drafts/send", {"id": draft["id"]}) if send else draft
+
+
 def main() -> None:
     global ACCOUNT
     p = argparse.ArgumentParser()
@@ -219,10 +290,12 @@ def main() -> None:
     d.add_argument("--to", required=True)
     d.add_argument("--subject", required=True)
     d.add_argument("--body-file", required=True)
+    d.add_argument("--send", action="store_true", help="send now instead of leaving a draft")
     rp = sub.add_parser("reply")
     rp.add_argument("id")
     rp.add_argument("--body-file", required=True)
     rp.add_argument("--all", action="store_true", help="reply-all (keep every recipient)")
+    rp.add_argument("--send", action="store_true", help="send now instead of leaving a draft")
     u = sub.add_parser("update-draft")
     u.add_argument("draft_id")
     u.add_argument("--body-file", required=True)
@@ -276,13 +349,13 @@ def main() -> None:
                           "messages": msgs}))
     elif a.cmd == "draft":
         message = build_raw({"To": a.to, "Subject": a.subject}, read_body(a.body_file))
-        print(json.dumps(call("POST", "drafts", {"message": message})))
+        print(json.dumps(save_draft(message, a.send)))
     elif a.cmd == "reply":
-        orig = call("GET", f"messages/{a.id}", query={"format": "metadata"})
+        orig = call("GET", f"messages/{a.id}", query={"format": "full"})
 
 
         latest = sent_messages(call("GET", f"threads/{orig['threadId']}",
-                                    query={"format": "metadata"}))
+                                    query={"format": "full"}))
         orig = latest[-1] if latest else orig
         h = headers_of(orig["payload"])
         subject = h.get("subject", "")
@@ -299,8 +372,8 @@ def main() -> None:
         }
         if a.all:
             headers["Cc"] = strip_addrs(f"{h.get('to', '')}, {h.get('cc', '')}", f"{me}, {headers['To']}")
-        message = build_raw(headers, read_body(a.body_file), orig["threadId"])
-        print(json.dumps(call("POST", "drafts", {"message": message})))
+        message = build_raw(headers, read_body(a.body_file), orig["threadId"], quote_of(orig))
+        print(json.dumps(save_draft(message, a.send)))
     elif a.cmd == "update-draft":
         d0 = call("GET", f"drafts/{a.draft_id}", query={"format": "full"})
         payload = d0["message"]["payload"]
@@ -309,7 +382,8 @@ def main() -> None:
         h = headers_of(payload)
         headers = {k.title(): h.get(k, "") for k in
                    ("from", "to", "cc", "bcc", "subject", "in-reply-to", "references")}
-        message = build_raw(headers, read_body(a.body_file), d0["message"].get("threadId"))
+        quote = quote_for(d0["message"].get("threadId"), headers["In-Reply-To"])
+        message = build_raw(headers, read_body(a.body_file), d0["message"].get("threadId"), quote)
         print(json.dumps(call("PUT", f"drafts/{a.draft_id}", {"message": message})))
     elif a.cmd == "send-draft":
         print(json.dumps(call("POST", "drafts/send", {"id": a.draft_id})))
