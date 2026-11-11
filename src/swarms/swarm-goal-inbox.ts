@@ -65,18 +65,15 @@ export async function openSwarmMailbox(deps: {
     .queuedMessages(deps.input, { mailboxOnly: true })
     .catch(reportFailureAs("swarm: read the mailbox", []));
   const shown: string[] = [];
-  const delivered: string[] = [];
-  for (const message of messages) {
-    const text = await deps.screen(swarmMessageText(message));
-    if (text !== null) delivered.push(message.id);
+  for (const message of messages)
     shown.push(
-      text ?? `[Swarm message ${message.id} from agent ${message.senderId} was withheld by the security screen.]`,
+      (await deps.screen(swarmMessageText(message))) ??
+        `[Swarm message ${message.id} from agent ${message.senderId} was withheld by the security screen.]`,
     );
-  }
   return {
     text: shown.length ? `Swarm messages left in your mailbox since your last turn:\n\n${shown.join("\n\n")}` : "",
     async settle() {
-      const ids = delivered.splice(0);
+      const ids = messages.splice(0).map((message) => message.id);
       if (ids.length) await deps.swarms.handOver(deps.input, ids).catch(reportFailureAs("swarm: mailbox handoff", []));
     },
   };
