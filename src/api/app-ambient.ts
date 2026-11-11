@@ -310,7 +310,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
       console.error(
         `[ambient] solicited wake degraded to proactive (asked_by=${decision.askedBy}, container=${batch.container})`,
       );
-    const shown = recentWakeMessages(batch).filter((m) => !m.deleted && (m.text ?? "").trim());
+    const shown = recentWakeMessages(batch);
     const req: TurnRequest = solicited
       ? {
           surface: batch.surface,
