@@ -190,7 +190,7 @@ export function createSecurityClassifier(deps: OrchestratorDeps): SecurityClassi
 
     if (observe) {
       const deadline = Date.now() + timeoutMs;
-      void observeQueue(context.thread, () => attempt(deadline - Date.now()))
+      void observeQueue(context.thread, () => attempt(Date.now() < deadline ? timeoutMs : 0))
         .then((result) => settle(result, 1))
         .catch(swallowAs("orchestrator: observed security screen", undefined));
       return { decision: "auto" };
