@@ -6,7 +6,6 @@ import { createModelRoutes } from "../src/model/model-route.ts";
 import { getRequiredModel, modelRequestOverrides } from "../src/model/pi-models.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 
-// Exercise the real AgentSession and SDK serializer, not just the effort setter.
 for (const [modelId, upper, allowed, off, minimal] of [
   ["gpt-5.4", "xhigh", ["none", "low", "medium", "high", "xhigh"], "none", "low"],
   ["gpt-5", "high", ["minimal", "low", "medium", "high"], "minimal", "minimal"],
@@ -130,7 +129,6 @@ for (const [modelId, upper, allowed, off, minimal] of [
       }),
     });
     t.after(() => agent.close?.());
-    // Repeat turns in the same conversation with different effort selections.
     for (const [effortLevel, expected] of [
       ["ultracode", upper],
       ["max", upper],

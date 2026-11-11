@@ -23,6 +23,7 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const execFileP = promisify(execFile);
 const SECRET = "deploy-git-rw-secret".repeat(3);
@@ -217,7 +218,7 @@ test("git-url endpoint: write for the owner, read for a read-grantee, 403 for no
       entrypoint: "x",
       files: [{ path: "server.js", data: "1" }],
     });
-    await f.acl.grant({
+    await f.acl.grant(tenant, {
       ownerScopeId: scopeId("personal", "U1"),
       ref: `deployment:${d.id}`,
       granteeScopeId: scopeId("personal", "U2"),
@@ -250,7 +251,7 @@ test("git-url endpoint: write for the owner, read for a read-grantee, 403 for no
     const stranger = await ask("U3");
     assert.equal(stranger.status, 403);
 
-    await f.acl.grant({
+    await f.acl.grant(tenant, {
       ownerScopeId: scopeId("personal", "U1"),
       ref: `deployment:${d.id}`,
       granteeScopeId: scopeId("personal", "U3"),
@@ -325,7 +326,7 @@ test("git-url endpoint: an org-owned deployment is read for a plain member, writ
     assert.equal(member.status, 200);
     assert.equal(((await member.json()) as { permission: string }).permission, "read");
 
-    await f.acl.grant({
+    await f.acl.grant(tenant, {
       ownerScopeId: scopeId("org", "default-org"),
       ref: `deployment:${d.id}`,
       granteeScopeId: scopeId("personal", "U2"),

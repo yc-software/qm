@@ -1,15 +1,24 @@
 import { swallow } from "../util/errors.ts";
-import { boundTenant, currentTenant } from "./context.ts";
+import { boundTenant, currentTenant, type Tenant } from "./context.ts";
 
-export function perTenant<V>(create: () => V): () => V {
+function byTenantId<V>(create: () => V): (id: string) => V {
   const values = new Map<string, V>();
-  return () => {
-    const id = currentTenant();
+  return (id) => {
     if (values.has(id)) return values.get(id) as V;
     const value = create();
     values.set(id, value);
     return value;
   };
+}
+
+export function perTenant<V>(create: () => V): () => V {
+  const of = byTenantId(create);
+  return () => of(currentTenant());
+}
+
+export function tenantKeyed<V>(create: () => V): (tenant: Tenant) => V {
+  const of = byTenantId(create);
+  return (tenant) => of(tenant.id);
 }
 
 export interface TenantListeners<A extends unknown[]> {

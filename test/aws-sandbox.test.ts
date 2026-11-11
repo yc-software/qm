@@ -10,6 +10,7 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { testMap } from "./support/test-database.ts";
 import type { StoredMicrovm } from "../src/sandbox/aws-sandbox.ts";
 import { createSandboxResources, type SandboxDefault, type SandboxResource } from "../src/sandbox/sandbox-resources.ts";
+import type { LoadSample } from "../src/sandbox/load-probe.ts";
 import { createSandboxRouter } from "../src/sandbox/sandbox-routing.ts";
 import { createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
@@ -350,57 +351,42 @@ test("failed overlapping preparation releases only its own sandbox lease", async
   assert.equal(fake.bodies.get(first.id)?.state, "SUSPENDED");
 });
 
-function twoCores(fake: FakeMicrovm, opts: Record<string, unknown> = {}) {
+async function heldBody(fake: FakeMicrovm, opts: Record<string, unknown> = {}) {
   const store = testMap<StoredMicrovm>();
   const records = testMap<SandboxResource>();
   const defaults = testMap<SandboxDefault>();
-  const live = new Set<string>();
+  const live = new Set(["run-a"]);
   const core = () => {
     const aws = makeSandbox(fake, { store, ...opts });
-    const resources = createSandboxResources({
-      records,
-      defaults,
-      backends: { aws },
-      defaultBackend: "aws",
-      lock: createNoopAdvisoryLock(),
-      canUseScope: async () => true,
-      isRunLive: async (runId) => live.has(runId),
-    });
-    return { resources, router: createSandboxRouter({ backends: { aws }, defaultBackend: "aws", resources }) };
+    const backends = { aws };
+    const isRunLive = async (runId: string) => live.has(runId);
+    const lock = createNoopAdvisoryLock();
+    const shared = { records, defaults, loads: testMap<LoadSample>(), backends, defaultBackend: "aws" as const, lock };
+    const resources = createSandboxResources({ ...shared, canUseScope: async () => true, isRunLive });
+    return { resources, router: createSandboxRouter({ backends, defaultBackend: "aws", resources }) };
   };
-  return { store, live, a: core(), b: core() };
+  const [a, b] = [core(), core()];
+  const record = await a.resources.create("alice", "personal:alice", "aws");
+  const handle = await a.router.provision("personal:alice", { sandboxId: record.id });
+  await a.resources.hold(record.id, "run-a");
+  await store.merge(record.backingScopeId, { lastActivityMs: 1 });
+  const provisionB = () => b.router.provision("personal:alice", { sandboxId: record.id });
+  return { b, live, record, handle, provisionB };
 }
 
-async function heldBody(fake: FakeMicrovm, opts: Record<string, unknown> = {}) {
-  const cores = twoCores(fake, opts);
-  const record = await cores.a.resources.create("alice", "personal:alice", "aws");
-  const handle = await cores.a.router.provision("personal:alice", { sandboxId: record.id });
-  cores.live.add("run-a");
-  await cores.a.resources.hold(record.id, "run-a");
-  await cores.store.merge(record.backingScopeId, { lastActivityMs: 1 });
-  return { ...cores, record, handle };
-}
-
-test("a body held by a live run in another core is not deep-idle reaped, however long the hold", async () => {
+test("a body held by a live run in another core is neither reaped nor rotated", async () => {
   const fake = installFakeMicrovm();
-  const { b, handle } = await heldBody(fake);
-  assert.equal((await b.router.reapDeepIdle!(60_000)).reaped, 0);
-  assert.equal(fake.bodies.get(handle.id)!.state, "RUNNING");
-});
-
-test("rotation leaves a stale body alone while a live run in another core holds it", async () => {
-  const fake = installFakeMicrovm();
-  const { b, record, handle } = await heldBody(fake, { rotateAfterSeconds: 0 });
+  const { b, handle, provisionB } = await heldBody(fake, { rotateAfterSeconds: 0 });
   const launches = fake.runCount;
-  const second = await b.router.provision("personal:alice", { sandboxId: record.id });
-  assert.equal(second.id, handle.id);
+  assert.equal((await b.router.reapDeepIdle!(60_000)).reaped, 0);
+  assert.equal((await provisionB()).id, handle.id);
   assert.equal(fake.runCount, launches);
 });
 
 test("a keep-warm release leaves the body to the other core's live holder", async () => {
   const fake = installFakeMicrovm();
-  const { b, live, record } = await heldBody(fake);
-  const other = await b.router.provision("personal:alice", { sandboxId: record.id });
+  const { b, live, record, provisionB } = await heldBody(fake);
+  const other = await provisionB();
   live.add("run-b");
   await b.resources.hold(record.id, "run-b");
   await b.router.teardown(other, { keepWarm: await b.resources.release(record.id, "run-b") });
@@ -409,8 +395,7 @@ test("a keep-warm release leaves the body to the other core's live holder", asyn
 });
 
 test("a holder whose run died stops pinning the body: the reaper prunes it and reaps", async () => {
-  const fake = installFakeMicrovm();
-  const { b, live, record } = await heldBody(fake);
+  const { b, live, record } = await heldBody(installFakeMicrovm());
   live.delete("run-a");
   assert.equal((await b.router.reapDeepIdle!(60_000)).reaped, 1);
   assert.deepEqual((await b.resources.get(record.id)).holders, []);

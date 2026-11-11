@@ -32,7 +32,6 @@ import type { LayerInstallFile } from "../deployment/load-layer.ts";
 import type {
   AgentComputerProfile,
   ComputerStatus,
-  ExecPressure,
   ExecResult,
   Sandbox,
   SandboxHandle,
@@ -52,20 +51,6 @@ const KEEPALIVE_EXPIRE = "5m";
 const KEEPALIVE_RENEW_SEC = 60;
 const SPRITE_CPUS = 8;
 const SPRITE_DISK_GB = 100;
-const PRESSURE_RECORD_FULL60 = 75;
-const PRESSURE_CLEAR_FULL60 = 40;
-
-function parsePressure(ioFull10Raw: string, ioFull60Raw: string, load1Raw: string): ExecPressure | undefined {
-  const ioFull10 = Number.parseFloat(ioFull10Raw);
-  const ioFull60 = Number.parseFloat(ioFull60Raw);
-  const load1 = Number.parseFloat(load1Raw);
-  if (!Number.isFinite(ioFull60) || ioFull60 < 0) return undefined;
-  return {
-    ioFull10: Number.isFinite(ioFull10) && ioFull10 >= 0 ? ioFull10 : ioFull60,
-    ioFull60,
-    load1: Number.isFinite(load1) && load1 >= 0 ? load1 : 0,
-  };
-}
 
 function withoutSdkUrl(message: string): string {
   const url = message.lastIndexOf(" (url: ");
@@ -178,7 +163,6 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
   const sizeByName = new Map<string, number>();
   const appliedSize = new Map<string, number>();
   const egressPolicyByName = new Map<string, string>();
-  const pressureEpisodes = new Set<string>();
 
   const reportError = (category: string, code: string, message: string, scopeLabel?: string): void => {
     try {
@@ -240,13 +224,11 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
     const uid = randomUUID();
     const out = `/tmp/.exec-${uid}.out`;
     const err = `/tmp/.exec-${uid}.err`;
-    const psi = `$(awk -F'[= ]+' '/^full/{print $3, $5; f=1} END{if(!f)print "-1 -1"}' /proc/pressure/io 2>/dev/null || echo '-1 -1')`;
-    const load = `$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo -1)`;
     const body = `/tmp/.exec-${uid}.sh`;
     const eof = `__QM_EOF_${uid}__`;
     const wrapped =
       `cat > ${body} <<'${eof}'\n${script}\n${eof}\n` +
-      `timeout ${timeoutSec} sh ${body} > ${out} 2> ${err}; __rc=$?; printf '%s %s %s %s %s\\n' "$__rc" "$(wc -c < ${out})" "$(wc -c < ${err})" "${psi}" "${load}"; cat ${out} ${err}; rm -f ${out} ${err} ${body}`;
+      `timeout ${timeoutSec} sh ${body} > ${out} 2> ${err}; __rc=$?; printf '%s %s %s\\n' "$__rc" "$(wc -c < ${out})" "$(wc -c < ${err})"; cat ${out} ${err}; rm -f ${out} ${err} ${body}`;
     const r = await spawnExec(
       name,
       ["sh", "-c", SCRIPT_RUNNER],
@@ -259,8 +241,6 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
       const detail = r.stderr.toString("utf8").trim() || r.stdout.toString("utf8").slice(0, 120);
       throw new Error(`sprites exec ${name}: bad envelope (rc=${r.rc}): ${detail}`);
     }
-    const pressure = header.length === 6 ? parsePressure(header[3]!, header[4]!, header[5]!) : undefined;
-    if (pressure) notePressure(name, pressure);
     const code = Number.parseInt(header[0]!, 10);
     const outLen = Number.parseInt(header[1]!, 10);
     const errLen = Number.parseInt(header[2]!, 10);
@@ -277,22 +257,7 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
       stderr: errBuf.toString("utf8"),
       code,
       timedOut: code === 124,
-      ...(pressure ? { pressure } : {}),
     };
-  }
-
-  function notePressure(name: string, pressure: ExecPressure): void {
-    if (pressure.ioFull60 >= PRESSURE_RECORD_FULL60 && !pressureEpisodes.has(name)) {
-      pressureEpisodes.add(name);
-      reportError(
-        "agent_computer",
-        "io_pressure_high",
-        `sprite ${name}: io pressure full avg60=${pressure.ioFull60}% (load ${pressure.load1}) — disk-bound work is stalling`,
-        base.scopeFor(name),
-      );
-    } else if (pressure.ioFull60 < PRESSURE_CLEAR_FULL60) {
-      pressureEpisodes.delete(name);
-    }
   }
 
   async function writeAbsBytes(name: string, absPath: string, data: Uint8Array): Promise<void> {
@@ -448,7 +413,6 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
   const forget = (name: string): void => {
     ensured.delete(name);
     appliedSize.delete(name);
-    pressureEpisodes.delete(name);
     egressPolicyByName.delete(name);
   };
 
@@ -654,12 +618,10 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
         ...(latest.status === "rejected" ? { error: `checkpoint list failed: ${errMessage(latest.reason)}` } : {}),
       };
       let guestResponsive = false;
-      let pressure: ExecPressure | undefined;
       let probeError: string | undefined;
       try {
         const probe = await execRaw(name, "true", GUEST_PROBE_TIMEOUT_SEC);
         guestResponsive = probe.code === 0;
-        pressure = probe.pressure;
       } catch (e) {
         probeError = errMessage(e);
       }
@@ -668,7 +630,6 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
         provisioned: checked.status === "fulfilled",
         guestResponsive,
         recovery,
-        ...(pressure ? { pressure } : {}),
         ...(probeError ? { probeError } : {}),
       };
     },

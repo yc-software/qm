@@ -14,7 +14,6 @@ import {
 } from "./model-options.ts";
 import { modelSupportsFastMode } from "./pi-models.ts";
 import {
-  LOADOUT_CAP,
   isUltrafastModel,
   ultrafastChoice,
   effortLevelsForModel,
@@ -55,6 +54,7 @@ interface ModelPickerBindings<T> {
     entries(selected: ModelOption): LoadoutEntry[];
     save(entries: LoadoutEntry[]): void;
     add(option: ModelOption, target: T): void;
+    removesSelected?: boolean;
   };
   catalog?: ModelCatalog;
   activeEntry(selected: ModelOption): LoadoutEntry;
@@ -110,17 +110,22 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
     focusSpeedControl("Fast");
   }
 
-  function removeLoadoutEntry(value: string, selected: ModelOption): void {
-    if (value === activeLoadoutEntry(selected).value) return;
+  function removeLoadoutEntry(value: string, selected: ModelOption, agent: T): void {
     const entries = seededLoadout(selected);
     const index = entries.findIndex((entry) => entry.value === value);
     const next = entries.filter((entry) => entry.value !== value);
+    const neighbor = Math.max(0, Math.min(index, next.length - 1));
+    if (value === activeLoadoutEntry(selected).value) {
+      const successor = next[neighbor];
+      if (!successor || !presets?.removesSelected) return;
+      applyLoadout(successor, agent);
+    }
     presets?.save(next);
     bindings.redraw();
     placeLoadout();
     requestAnimationFrame(() => {
       const rows = bindings.host()?.querySelectorAll<HTMLButtonElement>(".loadout-pick");
-      rows?.[Math.max(0, Math.min(index, next.length - 1))]?.focus();
+      rows?.[neighbor]?.focus();
     });
   }
 
@@ -139,7 +144,12 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
     >`;
   }
 
-  function loadoutRow(entry: LoadoutEntry, selected: ModelOption, agent: T): TemplateResult | typeof nothing {
+  function loadoutRow(
+    entry: LoadoutEntry,
+    selected: ModelOption,
+    agent: T,
+    onlyPreset: boolean,
+  ): TemplateResult | typeof nothing {
     const option = catalog.options().find((option) => option.value === entry.value);
     if (!option) return nothing;
     const active = entry.value === activeLoadoutEntry(selected).value;
@@ -209,13 +219,13 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
       }
       ${isDefault && !canMakeDefault ? html`<span class="loadout-default-star" role="img" aria-label="My default" ${tip("My default")}>${icon(Star, 14)}</span>` : nothing}
       ${
-        !active && presets
+        presets && (!active || (presets.removesSelected && !onlyPreset))
           ? html`<button
               class="loadout-remove"
               type="button"
               aria-label=${`Remove ${modelLabel(option)} from presets`}
               ${tip("Remove from presets")}
-              @click=${() => removeLoadoutEntry(entry.value, selected)}
+              @click=${() => removeLoadoutEntry(entry.value, selected, agent)}
             >
               ${icon(X, 14)}
             </button>`
@@ -490,13 +500,12 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
             >
               <div class="loadout-panel">
                 ${presets ? html`<div class="loadout-head">Presets</div>` : nothing}
-                <div class="loadout-list">${entries.map((entry) => loadoutRow(entry, selected, agent))}</div>
+                <div class="loadout-list">
+                  ${entries.map((entry) => loadoutRow(entry, selected, agent, entries.length === 1))}
+                </div>
                 ${
                   presets
-                    ? html`<div
-                        class="loadout-submenu-anchor"
-                        ${tip(entries.length >= LOADOUT_CAP ? "Remove a preset to add another." : "")}
-                      >
+                    ? html`<div class="loadout-submenu-anchor">
                         <button
                           class="loadout-add ${loadoutSection === "add" ? "open" : ""}"
                           type="button"
@@ -504,9 +513,8 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
                           data-loadout-section="add"
                           aria-haspopup="menu"
                           aria-expanded=${loadoutSection === "add" ? "true" : "false"}
-                          ?disabled=${entries.length >= LOADOUT_CAP}
                           @mouseenter=${() => {
-                            if (isPhone() || entries.length >= LOADOUT_CAP) return;
+                            if (isPhone()) return;
                             loadoutSectionHovered = true;
                             openLoadoutSection("add");
                           }}

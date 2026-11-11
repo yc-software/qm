@@ -265,6 +265,7 @@ function turnRig() {
   const records = testMap<SandboxResource>();
   const resources = createSandboxResources({
     records,
+    loads: testMap(),
     defaults: testMap<SandboxDefault>(),
     backends: { local: disk.backend },
     defaultBackend: "local",

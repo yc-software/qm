@@ -34,6 +34,7 @@ import { uuidSchema } from "../util/ids.ts";
 import { claimThenBind } from "../tenants/claim.ts";
 import { assertAppLabelFits } from "../tenants/settings.ts";
 import { createLiveEdits, type LiveEditSaved } from "./live-edits.ts";
+import { ambientTenant, type Tenant } from "../tenants/context.ts";
 
 export interface DeployFile {
   path: string;
@@ -104,7 +105,6 @@ export interface DeployService {
   publishDueLiveEdits(): Promise<number>;
   liveEditOf(idOrName: string): Promise<{ draft: DeploymentDraft | null } | null>;
   reachDeployment(idOrName: string, principalId: string, opts?: ReachOptions): Promise<Reach>;
-  /** Recent app output (entrypoint stdout+stderr) for a deployment, newest last; null when the provider keeps none. */
   deploymentLogs(idOrName: string, opts: { tailLines: number }): Promise<string | null>;
   gitRepoPath(idOrName: string): Promise<string | null>;
   pushGit<T>(id: string, runReceivePack: () => Promise<{ result: T; ok: boolean }>, actor?: string): Promise<T>;
@@ -334,7 +334,8 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     });
 
   const deploymentRef = (id: string): string => encodeRef(deployRef(id));
-  const grantsOn = (d: Deployment): Promise<Grant[]> => deps.acl.grantsFor(d.ownerScopeId, deploymentRef(d.id));
+  const grantsOn = (tenant: Tenant, d: Deployment): Promise<Grant[]> =>
+    deps.acl.grantsFor(tenant, d.ownerScopeId, deploymentRef(d.id));
 
   async function reachAllowed(d: Deployment, principalId: string): Promise<boolean> {
     if (!principalId) return false;
@@ -344,7 +345,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       return kind === "org" || (kind === "personal" && samePerson(ref, principalId));
     };
     if (await reaches(d.ownerScopeId)) return true;
-    for (const g of await grantsOn(d)) {
+    for (const g of await grantsOn(ambientTenant(), d)) {
       if ((g.permission === "read" || g.permission === "write") && (await reaches(g.granteeScopeId))) return true;
     }
     return false;
@@ -374,7 +375,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
   ): Promise<boolean> {
     if (!(await personOrOwningBot(caller, async () => samePerson(d.createdBy, caller.actorId)))) return false;
     if (await managesHome(d, caller.actorId, actingScopeId)) return true;
-    for (const grant of await grantsOn(d)) {
+    for (const grant of await grantsOn(ambientTenant(), d)) {
       if (grant.permission !== "write") continue;
       if (await canWriteScope(caller.actorId, grant.granteeScopeId, actingScopeId)) return true;
     }
@@ -398,7 +399,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       const homeDir = input.homeFiles?.length ? await snapshotFiles(deps.deployDir, input.homeFiles) : undefined;
       const env = input.stampEnv ? { ...input.env, ...input.stampEnv } : input.env;
       if (input.createdInScope && parseScopeId(input.createdInScope).kind === "channel") {
-        await deps.acl.grant({
+        await deps.acl.grant(ambientTenant(), {
           ownerScopeId: input.ownerScopeId,
           ref: deploymentRef(id),
           granteeScopeId: input.createdInScope,
@@ -886,7 +887,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     async deploymentGrantees(idOrName) {
       const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
       if (!d) return [];
-      return (await grantsOn(d)).map((g) => ({ scope: g.granteeScopeId, permission: g.permission }));
+      return (await grantsOn(ambientTenant(), d)).map((g) => ({ scope: g.granteeScopeId, permission: g.permission }));
     },
 
     async shareDeployment(idOrName, grantee, permission, actor, opts) {
@@ -898,7 +899,8 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       grantee = await deploymentShareScope(grantee, permission, deps.canManageEmail);
       await assertShareAllowed(d.ownerScopeId, grantee, permission);
       const ref = deploymentRef(d.id);
-      await deps.acl.revoke(d.ownerScopeId, ref, grantee, actor.createdBy);
+      const tenant = ambientTenant();
+      await deps.acl.revoke(tenant, d.ownerScopeId, ref, grantee, actor.createdBy);
       if (permission === null) {
         deps.auditLog.record({
           at: Date.now(),
@@ -908,7 +910,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           scopeLabel: grantee,
         });
       } else {
-        await deps.acl.grant({
+        await deps.acl.grant(tenant, {
           ownerScopeId: d.ownerScopeId,
           ref,
           granteeScopeId: grantee,
@@ -924,7 +926,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         });
       }
       if (opts?.notify !== false) await notifyDeploymentShared(deps, d, grantee, permission, actor.createdBy);
-      return (await grantsOn(d)).map((g) => ({ scope: g.granteeScopeId, permission: g.permission }));
+      return (await grantsOn(tenant, d)).map((g) => ({ scope: g.granteeScopeId, permission: g.permission }));
     },
 
     async transferDeploymentOwner(idOrName, toScope, actor) {
@@ -936,19 +938,21 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       if (d.ownerScopeId === toScope) return d;
       const ref = deploymentRef(d.id);
       const fromScope = d.ownerScopeId;
-      const prior = await grantsOn(d);
+      const tenant = ambientTenant();
+      const prior = await grantsOn(tenant, d);
       const newOwnerId = parseScopeId(toScope).kind === "personal" ? parseScopeId(toScope).ref! : actor.callerId;
       const oldOwnerId = parseScopeId(fromScope).kind === "personal" ? parseScopeId(fromScope).ref! : actor.callerId;
       for (const g of prior) {
         if (g.granteeScopeId === toScope) continue;
-        await deps.acl.grant({ ...g, ownerScopeId: toScope, grantedBy: newOwnerId }, d.createdBy);
+        await deps.acl.grant(tenant, { ...g, ownerScopeId: toScope, grantedBy: newOwnerId }, d.createdBy);
       }
       await deps.acl.grant(
+        tenant,
         { ownerScopeId: toScope, ref, granteeScopeId: fromScope, permission: "write", grantedBy: newOwnerId },
         d.createdBy,
       );
       await deps.deployStore.setOwnerScope(d.id, toScope);
-      for (const g of prior) await deps.acl.revoke(fromScope, ref, g.granteeScopeId, oldOwnerId, d.createdBy);
+      for (const g of prior) await deps.acl.revoke(tenant, fromScope, ref, g.granteeScopeId, oldOwnerId, d.createdBy);
       deps.auditLog.record({
         at: Date.now(),
         principalId: actor.callerId,

@@ -43,6 +43,7 @@ import { principalDestination } from "../src/reach/reach.ts";
 import { installPrincipalLinks } from "../src/directory/person.ts";
 import { parseMemoryProviderConfig } from "../src/memory/provider-config.ts";
 import { startMcpTestServer } from "./support/mcp-test-server.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const automationOrigin = (request?: { origin?: TurnOrigin }) =>
   request?.origin?.kind === "automation" ? request.origin : undefined;
@@ -133,7 +134,7 @@ function channel(text: string, extra: Partial<TurnRequest> = {}): TurnRequest {
 }
 
 async function grantCred(acl: AclStore, org: ScopeId, slug: string, grantee: ScopeId = org): Promise<void> {
-  await acl.grant({
+  await acl.grant(tenant, {
     ownerScopeId: org,
     ref: encodeRef(serviceCredRef(slug)),
     granteeScopeId: grantee,
@@ -1006,7 +1007,7 @@ test("Composio backend access is announced without delivering the project key", 
   assert.match(brokerDelivery, /Composio is configured in the backend/);
   assert.doesNotMatch(brokerDelivery, /`composio`|Shared org credentials available to you/);
   serviceCreds.listServiceCredentials = listServiceCredentials;
-  await acl.revoke(org, encodeRef(serviceCredRef("composio")), org, "admin@default-org");
+  await acl.revoke(tenant, org, encodeRef(serviceCredRef("composio")), org, "admin@default-org");
   assert.doesNotMatch(await prompt("revoked"), /COMPOSIO_API_KEY/);
   await grantCred(acl, org, "composio");
   await serviceCreds.setServiceCredential(org, {
@@ -2216,7 +2217,7 @@ test("a file posted in a GROUP conversation is granted read to the conversation 
     }),
   );
   assert.notEqual(t.status, "error");
-  const handles = await acl.handlesFor([scopeId("group", "G9")]);
+  const handles = await acl.handlesFor(tenant, [scopeId("group", "G9")]);
   const fileHandle = handles.find((h) => h.handlePath === "shared/flag.png");
   assert.ok(fileHandle, "the posted file is granted to the conversation scope");
   assert.equal(fileHandle!.ownerScopeId, scopeId("personal", "U1"));
@@ -2247,7 +2248,7 @@ test("a file posted in a GROUP conversation is granted read to the conversation 
     }),
   );
   assert.notEqual(t.status, "error");
-  const handles = await acl.handlesFor([scopeId("group", "G9")]);
+  const handles = await acl.handlesFor(tenant, [scopeId("group", "G9")]);
   const fileHandle = handles.find((h) => h.handlePath === "shared/flag.png");
   assert.ok(fileHandle, "the posted file is granted to the conversation scope");
   assert.equal(fileHandle!.ownerScopeId, scopeId("personal", "U1"));
@@ -2267,7 +2268,7 @@ test("a file shared with the session is counted, not named, in the system prompt
     data: Buffer.from("amount\n10"),
     direction: "out",
   });
-  await acl.grant({
+  await acl.grant(tenant, {
     ownerScopeId: scopeId("personal", "U2"),
     ref: "budget-file",
     granteeScopeId: scopeId("personal", "U1"),
@@ -2405,6 +2406,39 @@ test("finish_silently is a no-op off a poll fire — the agent's reply still del
   const interactive = await app.turn(dm("!finish-silent"));
   assert.notEqual(interactive.status, "silent", "a person is waiting, so the turn is never silenced");
   assert.match(interactive.reply ?? "", /ending silently/);
+});
+
+test("a subagent's wake of its web parent may finish silently; a sidebar session's turn may not", async () => {
+  const built = freshApp();
+  built.runtime.start();
+  try {
+    const threadRef = "dm:U1:child-wake";
+    const opened = await built.app.turn({ ...dm("hello"), conversation: { kind: "dm", threadRef } });
+    assert.equal(opened.status, "ok");
+    const [source] = await built.runs.list({ threadRef });
+    const parent = (await built.sessions.getByThread(threadRef))!;
+    const session = async (ref: string) =>
+      built.sessions.getOrCreateByThread(ref, "dm", parent.scopeId, undefined, "web");
+    const child = await session("agent:main:subagent:child-wake");
+    await built.sessions.setParentSession(child.id, parent.id);
+    const sidebar = await session("dm:U1:child-wake:sidebar");
+    await built.sessions.setParentSession(sidebar.id, parent.id);
+    const turnFrom = async (sessionSenderId: string) => {
+      const { run } = await built.runs.enqueue({
+        sessionId: threadRef,
+        request: { ...source!.request, sessionSenderId, text: "!finish-silent", envelopeWrapped: true },
+      });
+      return (await built.runs.waitFor(run.id, 20_000)).result;
+    };
+    const wake = await turnFrom(child.id);
+    assert.equal(wake?.status, "silent", "nothing new, so the wake ends without a reply");
+    assert.equal(wake?.reply, undefined);
+    const other = await turnFrom(sidebar.id);
+    assert.equal(other?.status, "ok");
+    assert.match(other?.reply ?? "", /ending silently/);
+  } finally {
+    await built.runtime.stop();
+  }
 });
 
 test("finish_silently on a poll fire wins over a coexisting collected approval", async () => {
@@ -3491,13 +3525,10 @@ test("Concurrent flagged inputs get distinct approval requests that release inde
   assert.equal(blockedA.status, "pending_approval");
   const idA = blockedA.pendingApprovals![0]!.requestId;
 
-  // While A's card is pending, a fresh inbound bounces off the blocking gate and re-presents the existing card.
   const bounced = await built.app.turn(requestB);
   assert.equal(bounced.status, "pending_approval");
   assert.equal(bounced.pendingApprovals![0]!.requestId, idA, "the gate re-presents A's card, records nothing for B");
 
-  // The two-click exploit: an approval on A's card whose turn carries B's content must NOT release B.
-  // The content mismatch forces a re-screen; B's flag must land under its OWN id, leaving A's record untouched.
   const crossed = await built.app.turn({
     ...requestB,
     approval: { requestId: idA, approved: true },
@@ -3506,8 +3537,6 @@ test("Concurrent flagged inputs get distinct approval requests that release inde
   const idB = crossed.pendingApprovals![0]!.requestId;
   assert.notEqual(idB, idA, "B's flag gets its own request id instead of overwriting A's record");
 
-  // Second click on A's card with B's content: with colliding ids this used to hit B's overwritten record,
-  // match content, skip the screen, and release B. It must stay blocked forever now.
   const crossedAgain = await built.app.turn({
     ...requestB,
     approval: { requestId: idA, approved: true },
@@ -3519,7 +3548,6 @@ test("Concurrent flagged inputs get distinct approval requests that release inde
     "neither flagged input reached the main agent",
   );
 
-  // A's own approval releases exactly A.
   const approvedA = await built.app.turn({
     ...requestA,
     approval: { requestId: idA, approved: true },
@@ -3527,7 +3555,6 @@ test("Concurrent flagged inputs get distinct approval requests that release inde
   assert.equal(approvedA.status, "ok");
   assert.match(approvedA.reply ?? "", /first-flagged/);
 
-  // B still releases independently, under its own id.
   const approvedB = await built.app.turn({
     ...requestB,
     approval: { requestId: idB, approved: true },

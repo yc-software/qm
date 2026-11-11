@@ -1,9 +1,3 @@
-// Admin CRUD for registered MCP servers.
-//
-// Registration is deliberately admin-only: a registered server is an outbound
-// HTTP destination every scope's agents can call, so it is governed like a
-// model-provider credential, not like a personal connector.
-
 import {
   isValidMcpServerId,
   type McpApprovalPolicy,

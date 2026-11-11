@@ -1100,8 +1100,6 @@ test("an inline steer takes the sticky prompt marker from the original request",
 });
 
 test("a steer rendered inside the running turn is the latest prompt and anchors to the block above it", () => {
-  // Two consecutive steers inside one assistant turn. Each sits behind a boxless wrapper whose own
-  // rect is empty, so anchoring must look past the wrapper to the previous steer's row.
   const dom = new JSDOM(
     '<section><div class="message-stack"><article class="user-row" data-index="0"></article>' +
       '<article class="assistant-row" data-index="1"><div class="assistant-body"><details class="work"></details>' +
@@ -1137,9 +1135,6 @@ test("a steer rendered inside the running turn is the latest prompt and anchors 
     s.scrollTop = 150;
     s.dispatchEvent(new dom.window.Event("scroll"));
     assert.equal(steer!.classList.contains("stuck"), true);
-    // The steer rested 16px below the earlier steer, which has since scrolled 10px past the sticky
-    // edge: 14px of travel, so 14px of the 40px content has folded away. Anchoring to the boxless
-    // wrapper (an empty rect that never scrolls) would have folded nothing.
     assert.equal(steer!.style.getPropertyValue("--pin-content-max"), "26px");
     assert.equal(steer!.classList.contains("pin-condensed"), false);
   } finally {

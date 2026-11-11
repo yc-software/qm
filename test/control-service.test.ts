@@ -14,6 +14,7 @@ import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability
 import { testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";
 import { failedTurnError } from "./support/failed-turn.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const SECRET = "control-service-test";
 
@@ -573,7 +574,7 @@ test("a channel cron belongs to its creator: members see it, only the owner or a
     action: "tidy",
   });
   assert.ok((await control.patchCron(conversational.id, { title: "renamed" }, chanClaims("U2"))).ok);
-  await built.app.grant({
+  await built.app.grant(tenant, {
     ownerScopeId: chanScope,
     ref: `cron:${conversational.id}`,
     granteeScopeId: scopeId("personal", "U9"),
@@ -601,7 +602,7 @@ test("a channel cron belongs to its creator: members see it, only the owner or a
     "bad_request",
     "a personal cron runs with the whole keychain",
   );
-  await built.app.grant({
+  await built.app.grant(tenant, {
     ownerScopeId: personal.cron.ownerScopeId,
     ref: `cron:${personal.cron.id}`,
     granteeScopeId: scopeId("personal", "U2"),
@@ -778,7 +779,6 @@ test("webhook create surfaces the inbound url + the secret verbatim; list elides
     "https://portal.example",
   );
   assert.ok(r.ok, JSON.stringify(r));
-  // The url is absolute (publicly reachable) and the secret is returned verbatim ONCE.
   assert.equal(r.url, `https://portal.example/v1/webhooks/incoming/${r.webhook.id}`);
   assert.equal(r.secret, "shh-secret");
   assert.equal(r.webhook.owner, "U1");
@@ -787,7 +787,6 @@ test("webhook create surfaces the inbound url + the secret verbatim; list elides
   assert.ok(Array.isArray(listed));
   assert.equal(listed.length, 1);
 
-  // a different owner can't disable it
   const otherDisable = await control.disableWebhook(r.webhook.id, claims("U9"));
   assert.equal(otherDisable.ok, false);
   assert.equal(otherDisable.ok ? "" : otherDisable.code, "forbidden");

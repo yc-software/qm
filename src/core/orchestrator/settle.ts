@@ -106,7 +106,7 @@ export async function selectTurnResult(turn: {
   reply: string;
   turnCompleted: boolean;
   cancelStopped: boolean;
-  isPollFire: boolean;
+  replyOptional: boolean;
   stagedAttachments: NonNullable<TurnResult["attachments"]>;
   quarantineReleaseApprovals: QuarantineReleaseApproval[];
   surfaceToolDeps: ReturnType<typeof createSurfaceToolDeps>;
@@ -130,7 +130,7 @@ export async function selectTurnResult(turn: {
     reply,
     turnCompleted,
     cancelStopped,
-    isPollFire,
+    replyOptional,
     stagedAttachments,
     quarantineReleaseApprovals,
     surfaceToolDeps,
@@ -156,7 +156,7 @@ export async function selectTurnResult(turn: {
     });
   if (cancelStopped && !result.pendingApprovals?.length) {
     finalResult = heldReply(true, false)!;
-  } else if (isPollFire && result.silent && !stagedAttachments.length && result.pausedOnApproval !== true) {
+  } else if (replyOptional && result.silent && !stagedAttachments.length && result.pausedOnApproval !== true) {
     finalResult = { status: "silent", sessionId: session.id };
   } else if (result.pendingApprovals?.length || quarantineReleaseApprovals.length) {
     const issued: Array<[string, Omit<PendingApprovalRecord, "createdAt" | "request">]> = [];
@@ -211,7 +211,7 @@ export async function selectTurnResult(turn: {
           ...(sourceAssistantEntrySeq !== undefined ? { sourceAssistantEntrySeq } : {}),
         }
       : { status: "pending_approval", sessionId: session.id, pendingApprovals: approvals };
-  } else if (isPollFire && !stagedAttachments.length && !reply.trim()) {
+  } else if (replyOptional && !stagedAttachments.length && !reply.trim()) {
     finalResult = { status: "silent", sessionId: session.id };
   } else if (input.surfaceTools && surfaceToolDeps && !strictReadOnly) {
     finalResult = heldReply(false, true)!;

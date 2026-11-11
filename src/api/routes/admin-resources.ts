@@ -4,7 +4,7 @@ import { decisionsResource } from "./decisions-resource.ts";
 import { parseAckEmoji } from "../../slack/config.ts";
 import { orgId as configOrgId } from "../../config.ts";
 import type { ServerDeps } from "../deps.ts";
-import type { ApiCtx } from "./route.ts";
+import { tenantOf, type ApiCtx } from "./route.ts";
 import { parseCommandPolicy } from "../../policy/command-policy.ts";
 import { parseScopeId, scopeId, type CommandPolicy, type Grant, type ScopeId } from "../../types.ts";
 import {
@@ -45,6 +45,7 @@ import { parseEgressPolicy } from "../../resolution/egress-policy.ts";
 import { FEATURE_NAMES, FEATURES, type FeatureName } from "../../feature-flags.ts";
 import { parseSharingPosture, SHARING_POSTURES, type SharingPosture } from "../../resolution/sharing-posture.ts";
 import { appHandleResource } from "./admin/app-handle.ts";
+import type { Tenant } from "../../tenants/context.ts";
 
 type Actor = { id: string };
 
@@ -56,7 +57,7 @@ export interface AdminResource {
   id: string;
   kind: AdminResourceKind;
   readKey?: string;
-  get?: (deps: ServerDeps, scope: string) => unknown | Promise<unknown>;
+  get?: (deps: ServerDeps, scope: string, tenant: Tenant) => unknown | Promise<unknown>;
   apply: (ctx: ApiCtx, actor: Actor, scope: string) => Promise<ApplyResult>;
   target?: "org" | "any";
   secret?: boolean;
@@ -322,12 +323,12 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     readKey: "teams",
     label:
       "Teams. Each team is a team:<id> scope shared by its members. Send { id, name?, isolatedInOpen?, addMembers?, addAdmins?, drop?, addRooms?, dropRooms? } or { id, remove: true }. Rooms are channel or group scopes where the team stays available; isolatedInOpen keeps it isolated when the org posture is Open.",
-    get: (deps) => deps.teams?.list(),
+    get: (deps, _scope, tenant) => deps.teams?.list(tenant),
     apply: async (ctx, actor, scope) => {
       if (!ctx.deps.teams) return { error: "not available on this deployment", status: 404 };
       const change = parseTeamChange(ctx.body);
       if ("error" in change) return change;
-      await ctx.deps.teams.apply(change, actor.id);
+      await ctx.deps.teams.apply(tenantOf(ctx), change, actor.id);
       audit(ctx.deps, {
         principalId: actor.id,
         action: change.remove ? "team.remove" : "team.update",
@@ -712,6 +713,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     secret: true,
     apply: async (ctx, actor, scope) => {
       const { deps } = ctx;
+      const tenant = tenantOf(ctx);
       if (!deps.acl) return { error: "ACL store not wired", code: "not_found", status: 404 };
       if (!deps.serviceCreds) return { error: "credential store not wired", code: "not_found", status: 404 };
       const bad = orgOnly(scope, "service credentials are org-scoped");
@@ -755,7 +757,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         };
       }
       if (!existing && typeof b.expectedUpdatedAt === "number") return conflict();
-      const grantsBefore = await deps.acl.grantsFor(scope, ref);
+      const grantsBefore = await deps.acl.grantsFor(tenant, scope, ref);
       const secretBefore = existing ? await deps.serviceCreds.getServiceCredentialSecret(scope, slug) : null;
       const desiredGrants = (desired: string[]): Grant[] => {
         const desiredSet = new Set(desired);
@@ -845,14 +847,14 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
           }
           if (!credentialRestored) return false;
           const grantsRestored =
-            (await deps.acl!.replaceGrantsIfCurrent(scope, ref, grantsWritten, grantsBefore, actor.id)) ||
-            grantShape(await deps.acl!.grantsFor(scope, ref)) === grantShape(grantsBefore);
+            (await deps.acl!.replaceGrantsIfCurrent(tenant, scope, ref, grantsWritten, grantsBefore, actor.id)) ||
+            grantShape(await deps.acl!.grantsFor(tenant, scope, ref)) === grantShape(grantsBefore);
           if (!grantsRestored) return false;
           const restored = (await deps.serviceCreds!.listServiceCredentials(scope)).find(
             (credential) => credential.slug === slug,
           );
           const restoredSecret = restored ? await deps.serviceCreds!.getServiceCredentialSecret(scope, slug) : null;
-          const restoredGrants = await deps.acl!.grantsFor(scope, ref);
+          const restoredGrants = await deps.acl!.grantsFor(tenant, scope, ref);
           return (
             publicShape(restored) === publicShape(existing) &&
             (restoredSecret?.secret ?? null) === (secretBefore?.secret ?? null) &&
@@ -891,7 +893,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         const replacement: Grant[] = [];
         grantsWritten = replacement;
         try {
-          if (!(await deps.acl.replaceGrantsIfCurrent(scope, ref, grantsBefore, replacement, actor.id)))
+          if (!(await deps.acl.replaceGrantsIfCurrent(tenant, scope, ref, grantsBefore, replacement, actor.id)))
             return mutationFailed("delete");
           auditGrantChanges(grantChanges(replacement));
           return { ok: true };
@@ -997,7 +999,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       );
       grantsWritten = replacement;
       try {
-        if (!(await deps.acl.replaceGrantsIfCurrent(scope, ref, grantsBefore, replacement, actor.id)))
+        if (!(await deps.acl.replaceGrantsIfCurrent(tenant, scope, ref, grantsBefore, replacement, actor.id)))
           return mutationFailed(existing ? "update" : "create");
         auditGrantChanges(grantChanges(replacement));
         return { ok: true };

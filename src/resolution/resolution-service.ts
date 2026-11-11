@@ -6,10 +6,11 @@ import type { AclStore } from "../acl/acl-store.ts";
 import { audienceEgressFloor, audienceDeniedFloor } from "./audience-floor.ts";
 import { entitledScopes } from "./context-filter.ts";
 import { resolveSecurityPolicy, type SecurityScreenMode } from "../security/security-posture.ts";
+import type { Tenant } from "../tenants/context.ts";
 
 export interface ResolutionService {
   scopeFor(conversation: Conversation, actor: Principal): ScopeId;
-  resolve(conversation: Conversation, actor: Principal, external?: boolean): Promise<Resolution>;
+  resolve(tenant: Tenant, conversation: Conversation, actor: Principal, external?: boolean): Promise<Resolution>;
 }
 
 export function conversationScope(
@@ -47,7 +48,7 @@ export function createResolutionService(
 
   return {
     scopeFor,
-    async resolve(conversation, actor, external = false): Promise<Resolution> {
+    async resolve(tenant, conversation, actor, external = false): Promise<Resolution> {
       const scope = scopeFor(conversation, actor);
       const isDm = conversation.kind === "dm";
       const liveConfigScopes = new Set<ScopeId>([orgScope, scope, scopeId("personal", actor.id)]);
@@ -81,7 +82,7 @@ export function createResolutionService(
 
       const grantedHandles = external
         ? []
-        : await acl.handlesForAudience(conversation.audience, scope, orgScope, entitledScopes);
+        : await acl.handlesForAudience(tenant, conversation.audience, scope, orgScope, entitledScopes);
 
       return {
         writableScopeId: scope,

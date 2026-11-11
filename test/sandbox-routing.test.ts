@@ -15,6 +15,7 @@ import type {
   ProvisionOptions,
 } from "../src/sandbox/sandbox.ts";
 import type { ScopeId } from "../src/types.ts";
+import { probedCommand } from "./support/probed-command.ts";
 
 type Fake = Sandbox & { calls: string[]; provisioned: Array<{ owner: string; opts?: ProvisionOptions }> };
 
@@ -32,7 +33,7 @@ function fakeBackend(name: string): Fake {
       return { id: `${name}-box`, rootDir: `/${name}/workspace` };
     },
     async run(_h, command): Promise<ExecResult> {
-      calls.push(`run:${command}`);
+      calls.push(`run:${probedCommand(command)}`);
       return { stdout: name, stderr: "", code: 0, timedOut: false };
     },
     async teardown() {

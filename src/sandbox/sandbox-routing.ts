@@ -1,4 +1,5 @@
-import type { SandboxResources } from "./sandbox-resources.ts";
+import type { SandboxResource, SandboxResources } from "./sandbox-resources.ts";
+import { takeLoadSample, withLoadProbe, type LoadSample } from "./load-probe.ts";
 import { bootTenant, tenancyBooted } from "../tenants/boot.ts";
 import { boundTenant } from "../tenants/context.ts";
 import type { ScopeId } from "../types.ts";
@@ -10,6 +11,7 @@ import {
   supportsBlobStaging,
   supportsProcessSessions,
   type AgentComputerProfile,
+  type AgentComputerSpec,
   type ExecOptions,
   type ExecResult,
   type ProvisionOptions,
@@ -18,6 +20,21 @@ import {
   type StageOptions,
   type TeardownOptions,
 } from "./sandbox.ts";
+
+const PRESSURE_RECORD_FULL60 = 75;
+const PRESSURE_CLEAR_FULL60 = 40;
+const LOAD_WRITE_INTERVAL_MS = 10_000;
+
+const createdSize = (
+  sample: LoadSample,
+  record: Pick<SandboxResource, "memoryGb" | "spec">,
+  live: AgentComputerSpec | undefined,
+): LoadSample => ({
+  ...sample,
+  memTotalMb:
+    (record.memoryGb ? record.memoryGb * 1024 : (record.spec?.memoryMb ?? live?.memoryMb)) || sample.memTotalMb,
+  diskTotalGb: record.spec?.diskGb || live?.diskGb || sample.diskTotalGb,
+});
 
 export type SandboxBackendName =
   | "sprites"
@@ -94,6 +111,23 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
     };
   }
 
+  const pressureEpisodes = new Set<string>();
+  const loadWrites = new Map<string, number>();
+  const notePressure = (resourceId: string, handle: SandboxHandle, sample: LoadSample): void => {
+    const io = sample.ioFull60;
+    if (io !== null && io >= PRESSURE_RECORD_FULL60 && !pressureEpisodes.has(resourceId)) {
+      pressureEpisodes.add(resourceId);
+      opts.onError?.({
+        category: "agent_computer",
+        code: "io_pressure_high",
+        message: `sandbox ${resourceId} (${handle.backend ?? defaultBackend}): io pressure full avg60=${io}% (load ${sample.load1}) — disk-bound work is stalling`,
+        ...(handle.scopeId ? { scopeLabel: handle.scopeId } : {}),
+      });
+    } else if (io === null || io < PRESSURE_CLEAR_FULL60) {
+      pressureEpisodes.delete(resourceId);
+    }
+  };
+
   const reportedGaps = new Set<string>();
   const requireCap = <K extends keyof Sandbox>(
     s: Sandbox,
@@ -157,9 +191,25 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
       return { ...handle, backend: resource.backend, scopeId: resource.ownerScopeId, resourceId: resource.id };
     },
 
-    run(handle, command, execOpts?: ExecOptions): Promise<ExecResult> {
-      const run = () => forHandle(handle).run(handle, command, execOpts);
-      return useHandle(handle, run);
+    async run(handle, command, execOpts?: ExecOptions): Promise<ExecResult> {
+      const resourceId = handle.resourceId;
+      if (!resourceId) return forHandle(handle).run(handle, command, execOpts);
+      const result = await resources.use(resourceId, () =>
+        forHandle(handle).run(handle, withLoadProbe(command), execOpts),
+      );
+      const { stdout, sample } = takeLoadSample(result.stdout, Date.now());
+      if (!sample) return { ...result, stdout };
+      notePressure(resourceId, handle, sample);
+      if (sample.sampledAt - (loadWrites.get(resourceId) ?? 0) >= LOAD_WRITE_INTERVAL_MS) {
+        loadWrites.set(resourceId, sample.sampledAt);
+        await resources
+          .get(resourceId)
+          .then((record) =>
+            resources.recordLoad(resourceId, createdSize(sample, record, forHandle(handle).profile.spec)),
+          )
+          .catch(swallowAs("sandbox router: record load sample", undefined));
+      }
+      return { ...result, stdout, load: sample };
     },
     readFile(handle, relPath) {
       return useHandle(handle, () => forHandle(handle).readFile(handle, relPath));
@@ -188,6 +238,10 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
     teardown(handle, tdOpts?: TeardownOptions): Promise<void> {
       const resourceId = handle.resourceId;
       if (!resourceId) return forHandle(handle).teardown(handle, tdOpts);
+      if (tdOpts?.destroy) {
+        pressureEpisodes.delete(resourceId);
+        loadWrites.delete(resourceId);
+      }
       const parks = !tdOpts?.destroy && !tdOpts?.keepWarm && !!forHandle(handle).profile.parksOnTeardown;
       return resources.use(
         resourceId,

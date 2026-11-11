@@ -520,18 +520,18 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (stopped || observed !== epoch) return;
       if (!(await deps.crons.claimSlot(job.cronId, slot, t))) return;
       if (stopped || observed !== epoch) {
-        await deps.crons.unclaimSlot(job.cronId, slot, t, cron.lastFiredAt);
+        await deps.crons.unclaimSlot(cron, slot, t, cron.lastFiredAt);
         return;
       }
       try {
         const { authzFailed } = await fire(cron, t, `cron:${cron.id}:${slot}`, slot);
         if (authzFailed) {
-          await deps.crons.unclaimSlot(job.cronId, slot, t, cron.lastFiredAt);
+          await deps.crons.unclaimSlot(cron, slot, t, cron.lastFiredAt);
           return;
         }
       } catch (e) {
         reportFailure("scheduler: fire", e);
-        await deps.crons.unclaimSlot(job.cronId, slot, t, cron.lastFiredAt);
+        await deps.crons.unclaimSlot(cron, slot, t, cron.lastFiredAt);
         return;
       }
       await enqueueNext(job.cronId);

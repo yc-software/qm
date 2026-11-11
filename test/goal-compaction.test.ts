@@ -8,6 +8,7 @@ import type { ScopeId } from "../src/types.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresErrorLog } from "../src/admin/postgres-error-log.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const scope = "personal:goal@example.com" as ScopeId;
 
@@ -31,6 +32,7 @@ test("compaction leaves the session goal on its row and writes no goal entries",
   } as unknown as OrchestratorDeps);
   for (let round = 0; round < 2; round++) {
     const rebuilt = await compaction.compactContextIfNeeded({
+      tenant,
       session,
       writer,
       visibleHistory: forModelContext((await sessions.getContextWindow(session.id)).items),
@@ -69,11 +71,7 @@ test("background compaction cannot revive an older goal over one closed while it
       },
     },
   } as unknown as OrchestratorDeps);
-  compaction.scheduleBackgroundCompaction({
-    sessionId: session.id,
-    scopeId: scope,
-    actorId: "test",
-  });
+  compaction.scheduleBackgroundCompaction({ tenant, sessionId: session.id, scopeId: scope, actorId: "test" });
   await started.promise;
   const closed = { ...goal, status: "complete" as const, updatedAt: goal.updatedAt + 1 };
   await sessions.setGoal({ sessionId: session.id }, closed);

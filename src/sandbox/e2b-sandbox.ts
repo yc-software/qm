@@ -543,17 +543,6 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
           recovery,
           provisioned: true,
           guestResponsive: r.exitCode === 0 && /responsive/.test(r.stdout),
-          ...(metrics
-            ? {
-                resources: {
-                  cpuUsedPct: metrics.cpuUsedPct,
-                  memUsedMb: Math.round(metrics.memUsedBytes / 2 ** 20),
-                  memTotalMb: Math.round(metrics.memTotalBytes / 2 ** 20),
-                  diskUsedGb: Math.round((metrics.diskUsedBytes / 2 ** 30) * 10) / 10,
-                  diskTotalGb: Math.round((metrics.diskTotalBytes / 2 ** 30) * 10) / 10,
-                },
-              }
-            : {}),
         };
       } catch (e) {
         return {

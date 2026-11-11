@@ -112,6 +112,7 @@ export async function credential(ctx: ApiCtx): Promise<{ key: string; principal:
   }
   const grants =
     (await ctx.deps.acl?.grantsOfKind(
+      tenantOf(ctx),
       "service-cred",
       audience,
       ctx.capability?.scopeId ?? personal,
