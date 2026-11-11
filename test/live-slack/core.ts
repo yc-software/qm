@@ -83,6 +83,17 @@ export class CoreClient {
     }
   }
 
+  setAmbientPolicy(channelId: string, orders: string, ambientEnabled: boolean | null): Promise<unknown> {
+    return this.request("PUT", `/v1/admin/scopes/${encodeURIComponent(`channel:${channelId}`)}/ambient-policy`, {
+      orders,
+      ambientEnabled,
+    });
+  }
+
+  scopeConfig(scopeId: string): Promise<{ ambientPolicy?: { orders: string; ambientEnabled: boolean | null } }> {
+    return this.request("GET", `/v1/admin/scopes/${encodeURIComponent(scopeId)}`);
+  }
+
   listSandboxes(scopeId: string): Promise<{
     providers: Array<{ name: string; actions: string[] }>;
     sandboxes: Array<{ id: string; name: string; backend: string; state: string }>;
