@@ -442,7 +442,10 @@ test("a later turn skips what this chat saved, and resends everything once the f
     actingScopeId: scopeId("personal", OWNER),
   });
   const shown = (appSource: Record<string, unknown>) =>
-    storedItem({ kind: "UserMessage", text: "hi", body: { appSource } }, { sessionId: "s", seq: 9, createdAt: 9 });
+    storedItem(
+      { kind: "UserMessage", text: "hi", body: { appSource: { app: "notes", ...appSource } } },
+      { sessionId: "s", seq: 9, createdAt: 9 },
+    );
   const first = shown({ commit: (await files.source()).commit });
   const chat = h.chat("notes");
   await chat.call({ action: "write", path: "styles.css", data: RED });
@@ -453,11 +456,14 @@ test("a later turn skips what this chat saved, and resends everything once the f
   const { commit } = await files.source();
 
   assert.ok((await appSourceShown(files, [first])).text.includes(`### styles.css\n\`\`\`untrusted-data\n${RED}`));
-  assert.deepEqual(await appSourceShown(files, [first, result]), { text: "", record: { commit, anchorSeq: 9 } });
+  assert.deepEqual(await appSourceShown(files, [first, result]), {
+    text: "",
+    record: { app: "notes", commit, anchorSeq: 9 },
+  });
   for (const earlier of [{ commit, anchorSeq: 2 }, { commit: "0".repeat(40) }]) {
     const again = await appSourceShown(files, [shown(earlier)]);
     assert.ok(again.text.includes("### index.html") && again.text.includes("### styles.css"), again.text);
-    assert.deepEqual(again.record, { commit });
+    assert.deepEqual(again.record, { app: "notes", commit });
   }
 });
 

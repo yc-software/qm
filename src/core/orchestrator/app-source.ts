@@ -20,6 +20,7 @@ const DEPENDENCY_DIRS = new Set([
 const LOCKFILES = new Set(["package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "go.sum"]);
 
 interface AppSourceShown {
+  app: string;
   commit: string;
   anchorSeq?: number;
 }
@@ -67,16 +68,16 @@ function savedHere(history: readonly Item[]): Array<readonly [string, string]> {
 async function render(files: AppFiles, history: readonly Item[]): Promise<{ text: string; record: AppSourceShown }> {
   const { previous, anchorSeq } = retainedSnapshot(history, (item) => {
     const shown = item.body.appSource as Partial<AppSourceShown> | undefined;
-    return typeof shown?.commit === "string" ? (shown as AppSourceShown) : undefined;
+    return shown?.app === files.app && typeof shown.commit === "string" ? (shown as AppSourceShown) : undefined;
   });
   const { commit, tree } = await files.source();
-  if (previous?.commit === commit) return { text: "", record: { commit, anchorSeq } };
+  if (previous?.commit === commit) return { text: "", record: { app: files.app, commit, anchorSeq } };
   const before = previous
     ? await files
         .source([], previous.commit)
         .then((earlier) => earlier.tree, swallowAs("orchestrator: app source shown earlier", undefined))
     : undefined;
-  const record = { commit, ...(before ? { anchorSeq } : {}) };
+  const record = { app: files.app, commit, ...(before ? { anchorSeq } : {}) };
   const seen = new Map(before ? [...before.map((file) => [file.path, file.sha] as const), ...savedHere(history)] : []);
   const changed = tree.filter((file) => seen.get(file.path) !== file.sha);
   const kept = new Set(tree.map((file) => file.path));
