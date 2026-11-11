@@ -20,7 +20,7 @@ import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.
 import { frameAncestorsDirective, sendJson, UNTRUSTED_CONTENT_SANDBOX_CSP, verifyOrReject } from "../http.ts";
 import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
 import { audit, authorizeAdmin, exportTokenAccepted, isObj, orgScope } from "./shared.ts";
-import { scopeId, type Permission } from "../../types.ts";
+import { personalScope, scopeId, type Permission } from "../../types.ts";
 import { tenantOf, type ApiCtx, type BaseCtx, type Route } from "./route.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
 import { verifyDeployGitAccess, viewerIdentityKey } from "../../deploy/access-token.ts";
@@ -1605,18 +1605,25 @@ async function visibleDeploymentsExport(ctx: BaseCtx): Promise<void> {
     app.listDeployments(),
   ]);
   const byId = new Map(all.map((d) => [d.id, d]));
-  const deployments = visible
-    .filter((d) => d.status !== "archived")
-    .map((d) => ({
-      id: d.id,
-      ...(d.name ? { name: d.name } : {}),
-      ...(d.displayName ? { displayName: d.displayName } : {}),
-      url: appUrlOf(byId.get(d.id) ?? d, { sharedWebUrl: deps.portalUrl, appsDomain: deps.deployAppsDomain }) ?? null,
-      createdBy: d.createdBy,
-      permission: d.permission,
-      ...(d.updatedAt !== undefined ? { updatedAt: d.updatedAt } : {}),
-      ...(d.lastAccessAt !== undefined ? { lastAccessAt: d.lastAccessAt } : {}),
-    }));
+  const live = visible.filter((d) => d.status !== "archived");
+  const viewed =
+    (await deps.appPageViews?.lastViews(
+      tenantOf(ctx),
+      principalId,
+      live.map((d) => d.id),
+    )) ?? new Map<string, number>();
+  const deployments = live.map((d) => ({
+    id: d.id,
+    ...(d.name ? { name: d.name } : {}),
+    ...(d.displayName ? { displayName: d.displayName } : {}),
+    url: appUrlOf(byId.get(d.id) ?? d, { sharedWebUrl: deps.portalUrl, appsDomain: deps.deployAppsDomain }) ?? null,
+    createdBy: d.createdBy,
+    owned: d.ownerScopeId === personalScope(principalId),
+    permission: d.permission,
+    ...(d.updatedAt !== undefined ? { updatedAt: d.updatedAt } : {}),
+    ...(d.lastAccessAt !== undefined ? { lastAccessAt: d.lastAccessAt } : {}),
+    ...(viewed.has(d.id) ? { viewedAt: viewed.get(d.id) } : {}),
+  }));
   audit(ctx, {
     principalId: VISIBLE_DEPLOYMENTS_PRINCIPAL,
     action: "deployment.export",

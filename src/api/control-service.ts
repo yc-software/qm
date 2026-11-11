@@ -217,7 +217,7 @@ export async function canAdministerCron(
   isActor?: (id: string) => Promise<boolean>,
 ): Promise<boolean> {
   const owns = () => (isActor ? isActor(cron.owner) : app.samePerson(cron.owner, actor.actorId));
-  if (!(await personOrOwningBot(actor, owns))) return false;
+  if (!(await personOrOwningBot(actor, owns, cron))) return false;
   if (await ownsCron(app, cron, actor.actorId, isActor)) return true;
   if (actsAsScope(cron.owner, cron.ownerScopeId) || cron.ownerScopeId.startsWith("personal:")) return false;
   if (await ownsCron(app, { ...cron, owner: cron.createdBy }, actor.actorId, isActor)) return true;
@@ -257,12 +257,12 @@ export async function editWebhookTask(
 
 export async function canAdministerWebhook(
   app: Pick<App, "membershipControlsScope" | "managesScope" | "samePerson">,
-  webhook: Pick<Webhook, "ownerScopeId" | "owner">,
+  webhook: Pick<Webhook, "ownerScopeId" | "owner" | "botActor">,
   actor: Pick<CapabilityClaims, "actorId" | "botActor">,
   isActor?: (id: string) => Promise<boolean>,
 ): Promise<boolean> {
   const owns = () => (isActor ? isActor(webhook.owner) : app.samePerson(webhook.owner, actor.actorId));
-  if (!(await personOrOwningBot(actor, owns))) return false;
+  if (!(await personOrOwningBot(actor, owns, webhook))) return false;
   if (await app.membershipControlsScope(webhook.ownerScopeId))
     return app.managesScope(actor.actorId, webhook.ownerScopeId);
   return owns();
@@ -820,7 +820,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       if (
         !orgSkillCede &&
         !(
-          (await personOrOwningBot(capability, () => app.samePerson(home.createdBy, capability.actorId))) &&
+          (await personOrOwningBot(capability, () => app.samePerson(home.createdBy, capability.actorId), cron)) &&
           (cron
             ? await ownsCron(app, cron, capability.actorId)
             : await app.canManageArtifactHome(home.ownerScopeId, home.createdBy, capability.actorId))
