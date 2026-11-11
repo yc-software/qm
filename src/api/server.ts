@@ -257,6 +257,7 @@ async function gate(
   ) {
     return null;
   }
+  if (!route) return { body: {}, capability, actor: null };
   let body: unknown = {};
   if (raw) {
     try {

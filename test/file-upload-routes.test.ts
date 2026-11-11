@@ -188,7 +188,11 @@ test("a quota refusal tells the caller which of its uploads hold the quota", asy
 
 test("a token on the wrong method or an unknown path learns the right call instead of a capability refusal", async () => {
   const cap = await token("U1");
-  const wrongMethod = await call(`/v1/files/uploads/${upload.id}/parts/1`, cap, "PUT");
+  const wrongMethod = await fetch(`${base}/v1/files/uploads/${upload.id}/parts/1`, {
+    method: "PUT",
+    headers: { "x-agent-capability": cap },
+    body: new Uint8Array([0xff, 0x00, 0x7b]),
+  });
   assert.equal(wrongMethod.status, 405);
   assert.equal(wrongMethod.headers.get("allow"), "POST");
   assert.match(((await wrongMethod.json()) as { message: string }).message, /takes POST, not PUT; GET \/v1\/apis/);
