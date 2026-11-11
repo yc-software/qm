@@ -4,7 +4,6 @@ import type { App } from "../src/api/app-types.ts";
 import { createPartnerChatInbound } from "../src/surfaces/partner-chat/inbound.ts";
 import { partnerChatSender } from "../src/surfaces/partner-chat/outbound.ts";
 import { signPartnerChat } from "../src/surfaces/partner-chat/protocol.ts";
-import { bindBootTenant } from "../src/tenants/boot.ts";
 import { boundTenant, withTenant } from "../src/tenants/context.ts";
 import { tenantLookup } from "../src/tenants/lookup.ts";
 import { describeTwoTenants } from "./support/two-tenants.ts";
@@ -25,11 +24,8 @@ describeTwoTenants("partner chat on a shared host", (db) => {
   const send = partnerChatSender({ url: "https://chat.example", secret, app, fetch: async () => Response.json({}) });
 
   async function deliver(account: string): Promise<number> {
-    const members = [
-      { id: "5", email: "ada@x.test" },
-      { id: "9", bot: true },
-    ];
-    const chat = { id: "88", kind: "group", members };
+    const ada = { id: "5", email: "ada@x.test" };
+    const chat = { id: "88", kind: "group", members: [ada, { id: "9", bot: true }] };
     const message = { id: "1001", user: { id: "5" }, body: "hello there", created_at: "2026-11-02T20:00:00Z" };
     const raw = JSON.stringify({ event_id: "ev-1", type: "message.created", account, chat, message });
     const ts = String(Math.floor(Date.now() / 1000));
@@ -41,10 +37,11 @@ describeTwoTenants("partner chat on a shared host", (db) => {
     return withTenant(db.tenants[0], (tenant) => send(delivery as Parameters<typeof send>[0], tenant));
   }
 
-  it("handles an event in the serving workspace bound to its account and posts only for the sender's own", async () => {
-    await bindBootTenant(async () => undefined);
-    for (const [i, tenant] of db.tenants.entries())
-      await db.owner.q("UPDATE tenants SET settings = $2 WHERE id = $1", [tenant, { partnerChatAccount: `700${i}` }]);
+  it("binds an account to one workspace, handles its events there and posts only for the sender's own", async () => {
+    const bind = (tenant: string, account: string) =>
+      db.owner.q("UPDATE tenants SET settings = $2 WHERE id = $1", [tenant, { partnerChatAccount: account }]);
+    for (const [i, tenant] of db.tenants.entries()) await bind(tenant, `700${i}`);
+    await assert.rejects(bind(db.tenants[1], "7000"), /tenants_partner_chat_account/);
     assert.deepEqual([await deliver("7000"), await deliver("7001"), await deliver("9999")], [200, 200, 404]);
     assert.deepEqual(handledIn, [...db.tenants]);
     assert.equal(await post("7000"), undefined);

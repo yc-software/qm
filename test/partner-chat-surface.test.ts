@@ -9,6 +9,7 @@ import { createHmac } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
 import type { IngestEvent } from "../src/surface-cache/types.ts";
 import { partnerChatPrincipal, createPartnerChatSurface } from "../src/surfaces/partner-chat/adapter.ts";
 import { PARTNER_CHAT_CLAIM_MS, partnerChatSender } from "../src/surfaces/partner-chat/outbound.ts";
@@ -24,7 +25,7 @@ import { createPartnerChatNotices, partnerChatRunNotice } from "../src/surfaces/
 import { runResultDelivery, wireRunResultDeliveries } from "../src/delivery/run-result-delivery.ts";
 import type { Run } from "../src/runs/run-store.ts";
 import { withTenant } from "../src/tenants/context.ts";
-import { TEST_TENANT } from "./support/test-tenant.ts";
+import { ownerUrl, TEST_TENANT } from "./support/test-tenant.ts";
 
 const SECRET = "partner-chat-test-secret-0123456789abcdef";
 const tenantFor = async () => TEST_TENANT;
@@ -114,13 +115,15 @@ function signed(payload: unknown, at = Math.floor(Date.now() / 1000)) {
 
 async function partnerChatApp() {
   const partnerChat = await fakePartnerChat();
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "partner-chat-surface-")),
-      partnerChat: { url: partnerChat.url, secret: SECRET },
-      emailAuthDomain: "example.com",
-    }),
-  );
+  const config = testConfig({
+    dataDir: mkdtempSync(join(tmpdir(), "partner-chat-surface-")),
+    partnerChat: { url: partnerChat.url, secret: SECRET },
+    emailAuthDomain: "example.com",
+  });
+  const owner = createPgPool(ownerUrl(config.databaseUrl!).toString());
+  await owner.q(`UPDATE tenants SET settings = '{"partnerChatAccount":"7001"}' WHERE id = $1`, [TEST_TENANT]);
+  await owner.close();
+  const built = buildApp(config);
   built.runtime.start();
   const deliver = (payload: unknown, at?: number) => built.partnerChatEvents!(...signed(payload, at));
   const close = async () => {

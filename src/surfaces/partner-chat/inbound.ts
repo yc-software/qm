@@ -5,7 +5,7 @@ import type { SurfaceCache } from "../../surface-cache/surface-cache.ts";
 import { inTenant } from "../../tenants/claim.ts";
 import { errMessage, reportFailureAs } from "../../util/errors.ts";
 import { buildContextWindow } from "../context-window.ts";
-import { partnerChatPrincipal, partnerChatTenant } from "./adapter.ts";
+import { partnerChatPrincipal } from "./adapter.ts";
 import {
   findMessage,
   partnerChatRef,
@@ -63,7 +63,7 @@ export function createPartnerChatInbound(deps: {
         body: { error: "bad_request", issues: result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`) },
       };
     const event = result.data;
-    const tenant = await partnerChatTenant(deps.app, event.account);
+    const tenant = await deps.app.tenantFor("partner_chat", event.account);
     if (!tenant) {
       console.log(`[partner-chat] ignoring an event for account ${event.account}: no serving workspace is bound to it`);
       return { status: 404, body: { error: "unknown_account" } };

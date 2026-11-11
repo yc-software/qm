@@ -159,11 +159,11 @@ export const PARTNER_CHAT_TENANT: PgMigrationDefinition = {
   id: "tenancy/lookups/0007-partner-chat",
   statements: [
     `SET LOCAL check_function_bodies = off`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS tenants_partner_chat_account ON tenants ((settings->>'partnerChatAccount'))`,
     definer(
       "qm_tenant_for_partner_chat",
       "uuid",
-      `SELECT (array_agg(id))[1] FROM tenants
-        WHERE settings->>'partnerChatAccount' = $1 AND id IN (SELECT qm_serving_tenants()) HAVING count(*) = 1`,
+      `SELECT id FROM tenants WHERE settings->>'partnerChatAccount' = $1 AND id IN (SELECT qm_serving_tenants())`,
     ),
   ],
 };

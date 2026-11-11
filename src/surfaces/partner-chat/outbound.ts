@@ -2,7 +2,6 @@ import type { App } from "../../api/app-types.ts";
 import { refusedStatus, type Send } from "../../delivery/relay.ts";
 import type { Tenant } from "../../tenants/context.ts";
 import type { Delivery } from "../../types.ts";
-import { partnerChatTenant } from "./adapter.ts";
 import {
   partnerChatMessageId,
   partnerChatRef,
@@ -54,8 +53,8 @@ export function partnerChatSender(deps: {
     const ref = parsePartnerChatRef(d.destination.target);
     const body = d.text.trim();
     if (!ref) throw new UnsupportedDelivery(`partner-chat: unroutable target ${d.destination.target}`);
-    if ((await partnerChatTenant(deps.app, ref.account)) !== tenant.id)
-      throw new UnsupportedDelivery(`partner-chat: account ${ref.account} belongs to another workspace`);
+    if ((await deps.app.tenantFor("partner_chat", ref.account)) !== tenant.id)
+      throw new UnsupportedDelivery(`partner-chat: account ${ref.account} is not bound to this workspace`);
     const { react, delete: del, pin, edit, editRef } = d.destination;
     if (react || del || pin || edit || editRef || !body)
       throw new UnsupportedDelivery("partner-chat: only non-empty text posts are supported");
