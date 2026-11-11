@@ -18,6 +18,19 @@ interface Change {
 
 type Step = Change & { run: () => Promise<unknown> };
 
+const signInStep = ({ identity }: ApiCtx["deps"], principalId: string, actorId: string): Step[] =>
+  identity && identity.deactivationSource(principalId) !== "manual"
+    ? [
+        {
+          kind: "principal",
+          id: principalId,
+          label: "sign-in",
+          action: "deactivate",
+          run: () => identity.deactivate(principalId, "manual", actorId),
+        },
+      ]
+    : [];
+
 async function plan(ctx: ApiCtx, actorId: string, principalId: string): Promise<Step[]> {
   const { app, deps } = ctx;
   const isThem = deps.directory
@@ -32,8 +45,6 @@ async function plan(ctx: ApiCtx, actorId: string, principalId: string): Promise<
   const step = (kind: string, id: string, label: string | undefined, action: string, run: () => Promise<unknown>) =>
     steps.push({ kind, id, label: label || id, action, run });
 
-  if (deps.identity && deps.identity.deactivationSource(principalId) !== "manual")
-    step("principal", principalId, "sign-in", "deactivate", () => deps.identity!.deactivate(principalId));
   for (const c of await app.listCrons())
     if (!c.loopId && !c.archived && (await owns(c.owner, c.ownerScopeId)))
       step("cron", c.id, c.title ?? "", "disable_and_archive", () =>
@@ -91,29 +102,38 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
   const { principalId } = await resolveAdminUser(deps, params.principalId!);
   if (samePerson(principalId, actor.id))
     return sendJson(res, 400, { error: "bad_request", message: "you cannot offboard yourself" });
+  const signIn = signInStep(deps, principalId, actor.id);
   const steps = await plan(ctx, actor.id, principalId);
-  const user = input.apply === true ? await deps.admin!.users.markOffboarded(principalId, actor.id) : undefined;
+  if (input.apply !== true)
+    return sendJson(res, 200, {
+      principalId,
+      applied: false,
+      changes: [...signIn, ...steps].map(({ run: _, ...change }) => change),
+    });
   const changes: Change[] = [];
-  for (const { run, ...change } of steps) {
-    if (input.apply === true) {
-      try {
-        await run();
-        change.result = "done";
-      } catch (e) {
-        Object.assign(change, { result: "failed", error: errMessage(e) });
-      }
-      audit(deps, {
-        principalId: actor.id,
-        action: `user.offboard.${change.kind}.${change.action}`,
-        resource: change.id,
-        scopeLabel: orgScope(deps),
-        status: change.result,
-        detail: [principalId, change.error].filter(Boolean).join(": "),
-      });
+  const execute = async ({ run, ...change }: Step): Promise<Change> => {
+    try {
+      await run();
+      change.result = "done";
+    } catch (e) {
+      Object.assign(change, { result: "failed", error: errMessage(e) });
     }
+    audit(deps, {
+      principalId: actor.id,
+      action: `user.offboard.${change.kind}.${change.action}`,
+      resource: change.id,
+      scopeLabel: orgScope(deps),
+      status: change.result,
+      detail: [principalId, change.error].filter(Boolean).join(": "),
+    });
     changes.push(change);
-  }
-  return sendJson(res, 200, { principalId, applied: input.apply === true, changes, ...(user ? { user } : {}) });
+    return change;
+  };
+  for (const step of signIn)
+    if ((await execute(step)).result === "failed")
+      return sendJson(res, 502, { error: "deactivate_failed", principalId, applied: false, changes });
+  for (const step of steps) await execute(step);
+  return sendJson(res, 200, { principalId, applied: true, changes, user: await deps.admin!.users.get(principalId) });
 }
 
 export async function reactivateUser(ctx: ApiCtx): Promise<void> {
@@ -122,8 +142,8 @@ export async function reactivateUser(ctx: ApiCtx): Promise<void> {
   if (!actor) return;
   if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
   const { principalId } = await resolveAdminUser(deps, params.principalId!);
-  const user = await deps.admin!.users.markReactivated(principalId);
   await deps.identity.reactivate(principalId);
+  const user = await deps.admin!.users.get(principalId);
   audit(deps, {
     principalId: actor.id,
     action: "principal.reactivate",

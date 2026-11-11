@@ -284,3 +284,31 @@ test("a persona and its access list belong to the tenant that made them", async 
     await close();
   }
 });
+
+test("hand deactivations move onto the roster as offboarding, per tenant", async () => {
+  const { owner, close } = await fixture();
+  try {
+    const [a, b] = [randomUUID(), randomUUID()];
+    await owner.q(`INSERT INTO tenants(id) VALUES ($1), ($2)`, [a, b]);
+    await owner.q(`DELETE FROM qm_schema_migrations WHERE id = 'users/v2/0009-manual-deactivations'`);
+    await owner.q(
+      `INSERT INTO deactivated_principals(tenant_id, id, json) VALUES
+        ($1, 'gone@a.test', '{"principalId":"Gone@A.test","source":"manual","at":1700000000000}'),
+        ($2, 'U2', '{"principalId":"U2","source":"directory-sync","at":1}')`,
+      [a, b],
+    );
+    await upgrade(owner);
+    assert.deepEqual(
+      await owner.q(
+        `SELECT tenant_id::text, primary_alias, offboarded_at IS NOT NULL AS off FROM users WHERE offboarded_at IS NOT NULL OR tenant_id = $1`,
+        [b],
+      ),
+      [{ tenant_id: a, primary_alias: "gone@a.test", off: true }],
+    );
+    assert.deepEqual(await owner.q(`SELECT tenant_id::text, id FROM deactivated_principals`), [
+      { tenant_id: b, id: "U2" },
+    ]);
+  } finally {
+    await close();
+  }
+});

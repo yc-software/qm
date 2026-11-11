@@ -87,6 +87,7 @@ import { enabledSandboxBackends, superserveGenerationKey } from "./sandbox/sandb
 import {
   actorAssertionActive,
   createIdentityService,
+  deactivationStore,
   type DeactivationRecord,
   type IdentityService,
 } from "./identity/identity-service.ts";
@@ -678,11 +679,14 @@ export function buildApp(
   const users = createPostgresUserStore(databaseUrl);
   const principalLinks = createPrincipalLinkService(users, advisoryLock);
   installPrincipalLinks(principalLinks);
-  const identity = createIdentityService(artifactMap<DeactivationRecord>("deactivated_principals"), {
-    directorySyncProtected: config.emailAuthPrincipals,
-    externalMembers: artifactMap<ExternalMember>("external_members"),
-    principalLinks,
-  });
+  const identity = createIdentityService(
+    deactivationStore(users, artifactMap<DeactivationRecord>("deactivated_principals")),
+    {
+      directorySyncProtected: config.emailAuthPrincipals,
+      externalMembers: artifactMap<ExternalMember>("external_members"),
+      principalLinks,
+    },
+  );
   const leaderLease: LeaderLease = createPostgresLeaderLease(pgArtifactMap.pool);
   const configStore = createConfigStore(config.orgId, {
     ...configStoreMaps(artifactMap),

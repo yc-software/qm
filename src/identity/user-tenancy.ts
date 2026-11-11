@@ -167,6 +167,24 @@ const GRANTS_AND_INVITES = `
     ${seenAs("SELECT t, alias, at FROM invited", "invite", true)}
   END IF;`;
 
+export const MANUAL_DEACTIVATIONS: PgMigrationDefinition = {
+  id: "users/v2/0009-manual-deactivations",
+  statements: [
+    `DO $$
+     BEGIN
+       IF to_regclass('deactivated_principals') IS NULL THEN RETURN; END IF;
+       CREATE TEMP TABLE manual ON COMMIT DROP AS
+         SELECT tenant_id AS t, id AS alias, ${ts("(json->>'at')::bigint")} AS at
+           FROM deactivated_principals WHERE json->>'source' = 'manual';
+       ${ensureUsers("SELECT t, alias FROM manual")}
+       UPDATE users u SET offboarded_at = s.at
+         FROM (SELECT t, ${userOf("t", "alias")} AS id, MIN(at) AS at FROM manual GROUP BY 1, 2) s
+        WHERE u.tenant_id = s.t AND u.id = s.id AND u.offboarded_at IS NULL;
+       DELETE FROM deactivated_principals WHERE json->>'source' = 'manual';
+     END $$`,
+  ],
+};
+
 const USERS_TENANT_KEYS = tenantTables(
   "users/v2/0004-tenants",
   [
