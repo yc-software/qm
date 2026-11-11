@@ -1598,8 +1598,13 @@ test("an owner's cron fire carries the owner's authority: liveActor, no org-note
     ...extra,
   });
 
-  assert.equal((await app.turn(fire())).status, "ok");
+  assert.equal((await app.turn(fire({ botActor: true }))).status, "ok");
   let claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
+  assert.equal(claims!.liveActor, undefined, "a bot actor's automation turn carries no authority");
+
+  captured = undefined;
+  assert.equal((await app.turn(fire())).status, "ok");
+  claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
   assert.equal(claims!.liveActor, true, "an owner's fire attests the owner's authority");
   assert.equal(claims!.triggered, true, "but it still records that nobody is at the keyboard");
   assert.equal(claims!.memory?.orgWrite, undefined, "org-notebook write stays off for automated turns");
@@ -1608,11 +1613,6 @@ test("an owner's cron fire carries the owner's authority: liveActor, no org-note
     fire({ text: "!sysprompt", conversation: { kind: "dm", threadRef: "dm:admin-alice:owner-fire-2" } }),
   );
   assert.match(prompt.reply ?? "", /## Acting for an org admin/, "an admin owner's fire gets the admin plane");
-
-  captured = undefined;
-  assert.equal((await app.turn(fire({ botActor: true }))).status, "ok");
-  claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
-  assert.equal(claims!.liveActor, undefined, "a bot actor's automation turn carries no authority");
 
   captured = undefined;
   const unmarked = await app.turn(
