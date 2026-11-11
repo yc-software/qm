@@ -8,8 +8,6 @@ import {
   isPrivateHost,
   MEMORY_PROVIDER_ID,
   parseMemoryProviderConfig,
-  type McpMemoryForgetConfig,
-  type McpMemoryOperationConfig,
   type MemoryProviderConfig,
 } from "./provider-config.ts";
 import type { MemoryCapturePolicy, MemoryProviderRoute } from "./provider-router.ts";
@@ -17,21 +15,13 @@ import type { MemoryCapturePolicy, MemoryProviderRoute } from "./provider-router
 export const MEMORY_REGISTRY_TABLE = "memory_registry";
 const RECORD_ID = "org";
 
-interface BrainPreset {
-  read: Omit<McpMemoryOperationConfig, "auth">;
-  write: Omit<McpMemoryOperationConfig, "auth">;
-  forget?: Omit<McpMemoryForgetConfig, "auth">;
-}
-
-const GBRAIN_MEMORY: BrainPreset = {
-  read: { tool: "memory_recall", queryArg: "query", maxCharsArg: "max_chars" },
-  write: { tool: "memory_write", factsArg: "facts", idempotencyArg: "idempotency_key" },
-};
-
-const BRAIN_PRESETS: Record<string, BrainPreset> = {
-  "gbrain-v1": GBRAIN_MEMORY,
-  "gbrain-v3": { ...GBRAIN_MEMORY, forget: { tool: "forget_fact", idArg: "id", requestIdArg: "request_id" } },
-};
+const BRAIN_PRESETS = {
+  "gbrain-v1": {
+    read: { tool: "memory_recall", queryArg: "query", maxCharsArg: "max_chars" },
+    write: { tool: "memory_write", factsArg: "facts", idempotencyArg: "idempotency_key" },
+    forget: { tool: "forget_fact", idArg: "id", requestIdArg: "request_id" },
+  },
+} as const;
 
 export interface RegistryBrain {
   id: string;
@@ -91,7 +81,9 @@ const invalid = (message: string) => new MemoryRegistryError(400, message);
 const conflict = (message: string) => new MemoryRegistryError(409, message);
 
 function presetOf(brain: Pick<RegistryBrain, "preset">) {
-  return Object.hasOwn(BRAIN_PRESETS, brain.preset) ? BRAIN_PRESETS[brain.preset] : undefined;
+  return Object.hasOwn(BRAIN_PRESETS, brain.preset)
+    ? BRAIN_PRESETS[brain.preset as keyof typeof BRAIN_PRESETS]
+    : undefined;
 }
 
 function isPersonalScope(scope: string): boolean {
@@ -126,12 +118,10 @@ function brainConfig(brain: RegistryBrain, bindings: readonly RegistryBinding[],
     }),
     { QM_BRAIN_CLIENT_ID: brain.auth.clientId, QM_BRAIN_CLIENT_SECRET: clientSecret },
   )!;
-  const { forget } = preset;
-  if (!forget) return config;
   return {
     ...config,
     providers: config.providers.map((provider) =>
-      provider.type === "mcp" ? { ...provider, forget: { ...forget, auth: provider.read.auth } } : provider,
+      provider.type === "mcp" ? { ...provider, forget: { ...preset.forget, auth: provider.read.auth } } : provider,
     ),
   };
 }
