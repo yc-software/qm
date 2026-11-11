@@ -24,6 +24,7 @@ import { createMonitorPoller } from "../src/monitors/monitor-poller.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createSwarmService, type SwarmCaller } from "../src/swarms/swarm-service.ts";
+import { claimBarredBotJobs } from "../src/sandbox/sandbox-resources.ts";
 import { orchestratorTestDeps } from "./support/orchestrator-deps.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
@@ -49,10 +50,11 @@ const forumSpawn = { requestId: "forum", text: "work", forumSandboxId: "shared-n
 
 type Fixture = Awaited<ReturnType<typeof swarmFixture>>;
 
-function channelSwarm(backend?: ProcessSandbox) {
+function channelSwarm(backend?: ProcessSandbox, afterFirstPersonUse?: () => void) {
   const url = testDatabaseUrl();
   return swarmFixture({
     ...(backend ? { backend } : {}),
+    ...(afterFirstPersonUse ? { afterFirstPersonUse } : {}),
     channel: "C1",
     sessions: createPostgresSessionStore(url),
     runs: createPostgresRunStore(url).runs,
@@ -298,6 +300,50 @@ test("outside a swarm, a Slack bot's turn can use a computer it made only until 
   assert.notEqual((await f.records.get(bots.id))!.state, "retired");
 });
 
+test("outside a swarm, a Slack bot's background job on its own computer is stopped once a person's turn uses that computer, and the person's job there keeps running", async () => {
+  const computers = jobComputers();
+  let swept: Promise<unknown> = Promise.resolve();
+  const f = await channelSwarm(computers.backend, () => void (swept = reaper.sweepNow()));
+  if (f.caller.kind !== "agent") throw new Error("wrong caller");
+  await f.runs.complete(f.caller.claims.runId!, f.caller.claims.runLeaseToken!, { status: "ok", reply: "idle" });
+  const processes = createPostgresProcessRegistry(testDatabaseUrl());
+  const stopped: string[] = [];
+  const reaper = createProcessReaper(processes, {
+    ...singleProcessDeps(),
+    intervalMs: 60_000,
+    kill: async (job) => void stopped.push(job.processId),
+    claimOwed: () => claimBarredBotJobs({ processes, resources: f.sandboxes, swarms: f.service }),
+  });
+  const bots = await f.sandboxes.create(releaseBot.id, f.root.scopeId, "modal");
+  const turn = async (actor: Principal, background: boolean) => {
+    const { run } = await f.runs.enqueue({
+      sessionId: f.root.threadRef,
+      request: channelRequest(f, actor, actor === releaseBot),
+      maxAttempts: 1,
+    });
+    const params = { command: "tail -f log", sandbox_id: bots.id, background, purpose: "Following the log" };
+    await drive(f, run, async (call) => ({ out: await call("execute", params) }), { processes });
+    await f.runs.complete(run.id, (await f.runs.get(run.id))!.leaseToken!, { status: "ok", reply: "done" });
+  };
+  await turn(releaseBot, true);
+  const [botJob] = (await processes.listLive()).filter((job) => job.sandboxId === bots.id);
+  assert.equal(botJob?.botActor, releaseBot.id);
+  await reaper.sweepNow();
+  const personJob = await processes.register({
+    processId: `alice-${bots.id}`,
+    scopeId: f.root.scopeId,
+    sandboxId: bots.id,
+    kind: "background",
+    command: "npm test",
+    ttlMs: 600_000,
+  });
+  await turn(alice, false);
+  await swept;
+  assert.deepEqual(stopped, [botJob!.processId]);
+  assert.equal((await processes.get(botJob!.processId))?.status, "reaped");
+  assert.equal((await processes.get(personJob.processId))?.status, "running");
+});
+
 test("a Slack bot's channel turn that may not direct a person's swarm cannot list or use the swarm's computers", async (t) => {
   const observed = await channelTurn(await personSwarm(), releaseBot, true);
   t.diagnostic(`observed: ${JSON.stringify(observed)}`);
@@ -330,17 +376,16 @@ test("a Slack bot that started a swarm cannot list or use its computers once a p
         stopped.push([job.sandboxId, job.runId]);
         await sleep(100);
       },
-      claimOwed: () => service.claimOwedStops(),
+      claimOwed: () => claimBarredBotJobs({ processes, resources: f.sandboxes, swarms: service }),
     }),
   );
   let swept: Promise<unknown> = Promise.resolve();
   const service = createSwarmService({
     ...f.serviceOptions,
-    processes,
     sweepProcesses: () => (swept = Promise.all([swept, ...instances.map((reaper) => reaper.sweepNow())])),
   });
   const botRun = (await f.runs.list()).find((run) => run.sessionId === f.root.threadRef && run.request.botActor)!;
-  await workerJob(f, processes, new Map(), "", botRun.id);
+  await workerJob(f, processes, new Map(), "", botRun.id, releaseBot.id);
   const { run } = await f.runs.enqueue({
     sessionId: f.root.threadRef,
     request: channelRequest(f, alice, false),
@@ -467,9 +512,9 @@ test("a bot's turn loses the swarm computer it already opened and is told to sto
   let lookupFailures = 0;
   const processes: ProcessRegistry = {
     ...registry,
-    async listLive(now) {
+    async claimLiveBotJobs(now) {
       if (lookupFailures-- > 0) throw new Error("process registry unavailable");
-      return registry.listLive(now);
+      return registry.claimLiveBotJobs(now);
     },
   };
   const signals = createPostgresRunSignalStore(testDatabaseUrl());
@@ -478,14 +523,13 @@ test("a bot's turn loses the swarm computer it already opened and is told to sto
     ...singleProcessDeps(),
     intervalMs: 60_000,
     kill: async (job) => void stopped.push([job.sandboxId, job.runId]),
-    claimOwed: () => service.claimOwedStops(),
+    claimOwed: () => claimBarredBotJobs({ processes, resources: f.sandboxes, swarms: service }),
   });
   let swept: Promise<unknown> = Promise.resolve();
   let sweeps = 0;
   const service = createSwarmService({
     ...f.serviceOptions,
     signals,
-    processes,
     sweepProcesses: () => {
       sweeps += 1;
       return (swept = reaper.sweepNow());
@@ -506,6 +550,7 @@ test("a bot's turn loses the swarm computer it already opened and is told to sto
     command: "tail -f board.md",
     ttlMs: 600_000,
     runId: queued.id,
+    botActor: releaseBot.id,
   });
   const personSend = () =>
     service.send(
@@ -586,7 +631,7 @@ function jobComputers(beforeStart?: () => Promise<unknown>) {
     async destroyScope() {},
     async startProcess() {
       await beforeStart?.();
-      return { processId: "bg-1" };
+      return { processId: `bg-${crypto.randomUUID()}` };
     },
     async readProcess(_handle, processId, options) {
       reads.push(processId);
@@ -602,7 +647,14 @@ function jobComputers(beforeStart?: () => Promise<unknown>) {
   return { backend, output, reads };
 }
 
-async function workerJob(f: Fixture, processes: ProcessRegistry, output: Map<string, string>, text: string, run = "") {
+async function workerJob(
+  f: Fixture,
+  processes: ProcessRegistry,
+  output: Map<string, string>,
+  text: string,
+  run = "",
+  botActor = "",
+) {
   const swarm = (await f.store.get(f.root.id))!;
   const worker = swarm.members.find((member) => member.id !== swarm.id)!;
   const job = await processes.register({
@@ -614,6 +666,7 @@ async function workerJob(f: Fixture, processes: ProcessRegistry, output: Map<str
     purpose: "the build",
     ttlMs: 600_000,
     ...(run ? { runId: run } : {}),
+    ...(botActor ? { botActor } : {}),
   });
   output.set(job.processId, text);
   return { job, worker };

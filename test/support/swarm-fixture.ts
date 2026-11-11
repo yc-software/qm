@@ -26,6 +26,7 @@ export async function swarmFixture(
     spawnMeta?: Pick<SpawnMeta, "memoryNotebookOnly">;
     claims?: Pick<CapabilityClaims, "memory">;
     channel?: string;
+    afterFirstPersonUse?: () => void;
   } = {},
 ) {
   const sessions = options.sessions ?? createPostgresSessionStore(testDatabaseUrl());
@@ -73,6 +74,7 @@ export async function swarmFixture(
     backends: { modal: backend },
     defaultBackend: "modal",
     lock,
+    ...(options.afterFirstPersonUse ? { afterFirstPersonUse: options.afterFirstPersonUse } : {}),
     canUseScope: async (actorId, scopeId) =>
       scopeId === `personal:${actorId}` || (options.channel !== undefined && scopeId === `channel:${options.channel}`),
   });

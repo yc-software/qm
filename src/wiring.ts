@@ -62,6 +62,7 @@ import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/br
 import { createDirectFileUploads, type DirectFileUploads } from "./files/direct-file-upload.ts";
 import { createPostgresFileUploadStore, FILE_UPLOAD_MIGRATIONS } from "./files/file-upload-store.ts";
 import {
+  claimBarredBotJobs,
   createSandboxResources,
   type SandboxResource,
   type SandboxDefault,
@@ -1238,6 +1239,8 @@ export function buildApp(
       if ((await processes?.liveByScope(record.ownerScopeId))?.some((process) => process.sandboxId === record.id))
         throw new Error("stop this sandbox's background jobs before retiring it");
     },
+    afterFirstPersonUse: () =>
+      void processReaper?.sweepNow().catch(swallowAs("sandbox: stop a bot's jobs on a computer a person used", null)),
     provisionOptions: async (scopeId) => {
       const secret = config.capabilitySecret ?? config.signingSecret;
       if (!secret) return {};
@@ -1657,7 +1660,7 @@ export function buildApp(
           sandboxes: sandboxResources,
           lock: advisoryLock,
           signals: runSignals,
-          ...(processes ? { processes, sweepProcesses: () => processReaper!.sweepNow() } : {}),
+          ...(processes ? { sweepProcesses: () => processReaper!.sweepNow() } : {}),
           authorize: async (claims) => {
             await identity.refresh();
             return (
@@ -2879,7 +2882,7 @@ export function buildApp(
         ...(supportsProcessSessions(sandbox)
           ? {
               kill: createReaperKillHook(sandbox, { onExit: finishCredentials }),
-              claimOwed: swarms?.claimOwedStops,
+              claimOwed: () => claimBarredBotJobs({ processes: processes!, resources: sandboxResources, swarms }),
               afterSweep: createJobComputerSweep({
                 resources: sandboxResources,
                 sandbox,

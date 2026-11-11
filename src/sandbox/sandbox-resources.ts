@@ -22,9 +22,10 @@ import { isOpenScopeMember } from "../resolution/sharing-access.ts";
 import type { SandboxBackendName } from "./sandbox-routing.ts";
 import type { Sandbox, AgentComputerSpec, ProvisionOptions, ComputerStatus, EgressEnforcement } from "./sandbox.ts";
 import { JOB_COMPUTER_SCOPE_PREFIX } from "./home-snapshot.ts";
-import { claimThenBind } from "../tenants/claim.ts";
+import { claimThenBind, type ClaimedRow } from "../tenants/claim.ts";
 import type { LoadSample } from "./load-probe.ts";
 import type { SwarmService } from "../swarms/swarm-service.ts";
+import type { ProcessRegistry } from "../processes/process-registry.ts";
 
 export interface SandboxResource {
   id: string;
@@ -162,6 +163,31 @@ export async function assertBotMayUseComputer(
   if (resource && !(await botMayUse(resource))) throw new BotComputerRefusedError();
 }
 
+export async function claimBarredBotJobs(deps: {
+  processes: Pick<ProcessRegistry, "claimLiveBotJobs" | "get">;
+  resources: Pick<SandboxResources, "get">;
+  swarms: Pick<SwarmService, "botMayUseComputer"> | undefined;
+}): Promise<ClaimedRow[]> {
+  const barred = await claimThenBind(
+    () => deps.processes.claimLiveBotJobs(),
+    async (id, tenant): Promise<ClaimedRow[]> => {
+      const job = await deps.processes.get(id);
+      if (!job?.botActor || !job.sandboxId) return [];
+      const computer = await deps.resources.get(job.sandboxId).catch((error: unknown) => {
+        if (error instanceof SandboxAccessError) return null;
+        throw error;
+      });
+      const botMayUse = botMayUseComputers(deps.swarms, {
+        actorId: job.botActor,
+        threadRef: job.sessionRef ?? "",
+        sessionId: "",
+      });
+      return computer && (await botMayUse(computer)) ? [] : [{ tenantId: tenant.id, id }];
+    },
+  );
+  return barred.flat();
+}
+
 export function createSandboxResources(opts: {
   upgrade?: () => Promise<void>;
   records: DurableMap<SandboxResource>;
@@ -172,6 +198,7 @@ export function createSandboxResources(opts: {
   provisionOptions?: (scopeId: string) => Promise<ProvisionOptions>;
   beforeDefaultChange?: (scopeId: string) => Promise<void>;
   beforeRetire?: (record: SandboxResource) => Promise<void>;
+  afterFirstPersonUse?: () => void;
   lock: AdvisoryLock;
   canUseScope(actorId: string, scopeId: ScopeId): Promise<boolean>;
 }): SandboxResources {
@@ -304,7 +331,9 @@ export function createSandboxResources(opts: {
     async notePersonUse(id) {
       const record = await get(id);
       if (record.personUsed) return record;
-      return (await opts.records.update(id, (current) => ({ ...current, personUsed: true }))) ?? record;
+      const used = (await opts.records.update(id, (current) => ({ ...current, personUsed: true }))) ?? record;
+      opts.afterFirstPersonUse?.();
+      return used;
     },
     async eachJobComputer(work) {
       await claimThenBind(opts.records.claimTenants, async () => {

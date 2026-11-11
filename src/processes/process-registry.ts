@@ -25,6 +25,7 @@ export interface ProcessRecord {
   status: ProcessStatus;
   sessionRef?: string;
   runId?: string;
+  botActor?: string;
   credentialsPending?: boolean;
 }
 
@@ -38,6 +39,7 @@ interface NewProcessRecord {
   ttlMs: number;
   sessionRef?: string;
   runId?: string;
+  botActor?: string;
   credentialFiles?: ProcessCredentialFiles;
 }
 
@@ -51,6 +53,7 @@ export interface ProcessRegistry {
   credentialFiles(processId: string): Promise<ProcessCredentialFiles | null>;
   setCredentialFiles(processId: string, files: ProcessCredentialFiles | null): Promise<void>;
   claimExpired(now?: number): Promise<ClaimedRow[]>;
+  claimLiveBotJobs(now?: number): Promise<ClaimedRow[]>;
   delete(processId: string): Promise<void>;
   close?(): void;
 }
@@ -69,6 +72,7 @@ function newRecord(rec: NewProcessRecord, now: number): ProcessRecord {
     status: "running",
     ...(rec.sessionRef ? { sessionRef: rec.sessionRef } : {}),
     ...(rec.runId ? { runId: rec.runId } : {}),
+    ...(rec.botActor ? { botActor: rec.botActor } : {}),
   };
 }
 
@@ -85,6 +89,7 @@ function pgRowToRecord(r: Record<string, unknown>): ProcessRecord {
     status: r.status as ProcessStatus,
     ...(r.session_ref ? { sessionRef: r.session_ref as string } : {}),
     ...(r.run_id ? { runId: r.run_id as string } : {}),
+    ...(r.bot_actor ? { botActor: r.bot_actor as string } : {}),
     ...(r.credential_files != null ? { credentialsPending: true } : {}),
   };
 }
@@ -112,6 +117,17 @@ export function createPostgresProcessRegistry(connectionString: string): Process
           "claim_expired_process_sessions",
           "bigint",
           "SELECT tenant_id, process_id FROM process_sessions WHERE status = 'running' AND expires_at <= $1",
+        ),
+      ],
+    },
+    {
+      id: "processes/registry/0007-bot-actor",
+      statements: [
+        "ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS bot_actor TEXT",
+        claimFunction(
+          "claim_live_bot_process_sessions",
+          "bigint",
+          "SELECT tenant_id, process_id FROM process_sessions WHERE status = 'running' AND expires_at > $1 AND bot_actor IS NOT NULL",
         ),
       ],
     },
@@ -149,8 +165,8 @@ export function createPostgresProcessRegistry(connectionString: string): Process
     async register(rec) {
       const row = newRecord(rec, Date.now());
       await q(
-        `INSERT INTO process_sessions(process_id, scope_id, kind, command, started_at, expires_at, status, session_ref, run_id, sandbox_id, purpose, credential_files)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+        `INSERT INTO process_sessions(process_id, scope_id, kind, command, started_at, expires_at, status, session_ref, run_id, sandbox_id, purpose, credential_files, bot_actor)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
         [
           row.processId,
           row.scopeId,
@@ -164,6 +180,7 @@ export function createPostgresProcessRegistry(connectionString: string): Process
           row.sandboxId,
           row.purpose ?? null,
           rec.credentialFiles ? JSON.stringify(rec.credentialFiles) : null,
+          row.botActor ?? null,
         ],
       );
       return row;
@@ -205,6 +222,9 @@ export function createPostgresProcessRegistry(connectionString: string): Process
     },
     async claimExpired(now = Date.now()) {
       return claimRows({ q }, "claim_expired_process_sessions", [now]);
+    },
+    async claimLiveBotJobs(now = Date.now()) {
+      return claimRows({ q }, "claim_live_bot_process_sessions", [now]);
     },
     async delete(processId) {
       await q("DELETE FROM process_sessions WHERE process_id = $1", [processId]);
