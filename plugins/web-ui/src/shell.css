@@ -7911,6 +7911,12 @@ h3.ambient-field-label {
   margin-right: 4px;
 }
 
+/* The gaps between tabs, and the rounded corners beside them, would otherwise show the arrow and
+   flicker the cursor as it sweeps along the strip. The row is exactly tab-height. */
+.dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .dv-tabs-container {
+  cursor: pointer;
+}
+
 .dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .split-pane-title {
   cursor: pointer;
   line-height: 18px;
