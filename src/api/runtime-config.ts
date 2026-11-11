@@ -106,7 +106,7 @@ function storedChoice(stored: RuntimeChoice): RuntimeChoice {
   };
 }
 
-export async function runtimeConfigBody(
+async function runtimeModels(
   ctx: { deps: RuntimeDeps },
   scope: ScopeId,
   authorizeChoice?: (choice: RuntimeChoice) => Promise<string | null>,
@@ -169,6 +169,24 @@ export async function runtimeConfigBody(
     );
     models = models.filter((_, index) => !allowed[index]);
   }
+  return { models, managedKeys, orgDefault, scopeOverride, effective };
+}
+
+export async function runtimeConfigBody(
+  ctx: { deps: RuntimeDeps },
+  scope: ScopeId,
+  authorizeChoice?: (choice: RuntimeChoice) => Promise<string | null>,
+  purpose?: TurnRuntimePurpose,
+  requested?: Partial<RuntimeChoice>,
+) {
+  const { models, managedKeys, orgDefault, scopeOverride, effective } = await runtimeModels(
+    ctx,
+    scope,
+    authorizeChoice,
+    purpose,
+    requested,
+  );
+  const config = ctx.deps.config!;
   const billing = (id: string) =>
     modelBilling(!!managedKeys.modelIds?.has(companyModelId(id, managedKeys)), !!authorizeChoice);
   const modelCatalog = Object.fromEntries(
@@ -322,8 +340,10 @@ export async function turnModelRefusal(
   let runtime: RuntimeChoice;
   let pickerModels: string[];
   try {
-    runtime = await resolveRuntimeChoice(deps.config, org, scope, fallback, requested, hydrate, purpose);
-    pickerModels = (await runtimeConfigBody({ deps }, scope)).models;
+    [runtime, { models: pickerModels }] = await Promise.all([
+      resolveRuntimeChoice(deps.config, org, scope, fallback, requested, hydrate, purpose),
+      runtimeModels({ deps }, scope),
+    ]);
   } catch (error) {
     swallow("turn: runtime resolution", error);
     return `I couldn't set up that runtime choice — ${GENERIC_FAILURE_CLAUSE}`;
