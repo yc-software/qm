@@ -1,3 +1,5 @@
+import { isObj } from "../util/objects.ts";
+
 export class GmailApiError extends Error {
   readonly status: number;
   readonly retryAfterSeconds: number;
@@ -33,25 +35,25 @@ export function gmailApi(token: string, fetchImpl: typeof fetch = fetch) {
   };
 }
 
-type GmailPayload = Record<string, unknown>;
-
-const asRecord = (v: unknown): GmailPayload | undefined =>
-  typeof v === "object" && v !== null && !Array.isArray(v) ? (v as GmailPayload) : undefined;
-
-export function gmailPartText(part: GmailPayload, mimeType = "text/plain"): string | undefined {
-  const data = asRecord(part.body)?.data;
+export function gmailPartText(part: Record<string, unknown>, mimeType = "text/plain"): string | undefined {
+  const data = isObj(part.body) ? part.body.data : undefined;
   if (part.mimeType === mimeType && !part.filename && typeof data === "string")
     return Buffer.from(data, "base64url").toString("utf8");
-  for (const nested of Array.isArray(part.parts) ? part.parts : []) {
-    const record = asRecord(nested);
-    const text = record && gmailPartText(record, mimeType);
+  for (const nested of Array.isArray(part.parts) ? part.parts.filter(isObj) : []) {
+    const text = gmailPartText(nested, mimeType);
     if (text) return text;
   }
   return undefined;
 }
 
-export function gmailHeader(payload: GmailPayload, name: string): string {
-  const headers = Array.isArray(payload.headers) ? payload.headers.map(asRecord) : [];
-  const found = headers.find((h) => typeof h?.name === "string" && h.name.toLowerCase() === name.toLowerCase());
+export function gmailHeader(payload: Record<string, unknown>, name: string): string {
+  const headers = Array.isArray(payload.headers) ? payload.headers.filter(isObj) : [];
+  const found = headers.find((h) => typeof h.name === "string" && h.name.toLowerCase() === name.toLowerCase());
   return typeof found?.value === "string" ? found.value : "";
+}
+
+export function gmailThreadMessages(thread: { messages?: unknown[] }): Record<string, unknown>[] {
+  return (Array.isArray(thread.messages) ? thread.messages.filter(isObj) : [])
+    .filter((m) => !(Array.isArray(m.labelIds) && m.labelIds.includes("DRAFT")))
+    .sort((a, b) => Number(a.internalDate) - Number(b.internalDate));
 }

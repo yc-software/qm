@@ -1,7 +1,13 @@
 import MailComposer from "nodemailer/lib/mail-composer";
 import type { LoopItem, LoopSourcePayload } from "../types.ts";
 import { isAccountType } from "../../connectors/oauth.ts";
-import { GmailApiError, gmailApi, gmailHeader, gmailPartText } from "../../connectors/gmail-api.ts";
+import {
+  GmailApiError,
+  gmailApi,
+  gmailHeader,
+  gmailPartText,
+  gmailThreadMessages,
+} from "../../connectors/gmail-api.ts";
 import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
 import { errMessage } from "../../util/errors.ts";
 import {
@@ -99,32 +105,33 @@ const quoteLine = (line: string): string => {
   return line ? `> ${line}` : ">";
 };
 
-export function gmailQuote(message: Record<string, unknown>): GmailQuote {
+export function gmailQuote(message: Record<string, unknown>): GmailQuote | undefined {
   const payload = isObj(message.payload) ? message.payload : {};
+  const plain = gmailPartText(payload)?.replaceAll("\r\n", "\n").trim();
+  if (!plain) return undefined;
   const attribution = `On ${gmailHeader(payload, "Date")} ${gmailHeader(payload, "From")} wrote:`;
-  const plain = (gmailPartText(payload) ?? (typeof message.snippet === "string" ? message.snippet : ""))
-    .replaceAll("\r\n", "\n")
-    .trim();
-  const rich = gmailPartText(payload, "text/html");
-  const quoted = rich && !rich.toLowerCase().includes("<body") ? rich : htmlMirror(plain);
   return {
     text: `${attribution}\n\n${plain.split("\n").map(quoteLine).join("\n")}`,
     html:
       `<br><div class="gmail_quote gmail_quote_container"><div dir="ltr" class="gmail_attr">${escapeHtml(attribution)}<br></div>` +
-      `<blockquote class="gmail_quote" style="margin:0px 0px 0px 0.8ex;border-left:1px solid rgb(204,204,204);padding-left:1ex">${quoted}</blockquote></div>`,
+      `<blockquote class="gmail_quote" style="margin:0px 0px 0px 0.8ex;border-left:1px solid rgb(204,204,204);padding-left:1ex">${htmlMirror(plain)}</blockquote></div>`,
   };
+}
+
+function replyRecipients(meta: GmailMeta, draft: ReplyDraft): string[] {
+  return draft.to ?? meta.to ?? [];
 }
 
 export async function buildGmailReplyMime(
   item: LoopItem,
   draft: ReplyDraft,
-  quote?: GmailQuote,
+  quote: GmailQuote | undefined,
 ): Promise<Buffer | null> {
   const meta = metaOf(item);
   if (!meta) return null;
   const parsed = parseReplyDraft(draft);
   if (!parsed) return null;
-  const to = parsed.to ?? meta.to ?? [];
+  const to = replyRecipients(meta, parsed);
   if (to.length === 0) return null;
   const rfcId = meta.rfcMessageId;
   return new MailComposer({
@@ -140,15 +147,13 @@ export async function buildGmailReplyMime(
     .build();
 }
 
-async function repliedMessage(api: ReturnType<typeof gmailApi>, meta: GmailMeta): Promise<Record<string, unknown>> {
+async function repliedMessage(
+  api: ReturnType<typeof gmailApi>,
+  meta: GmailMeta,
+): Promise<Record<string, unknown> | undefined> {
+  if (meta.messageId) return await api(`messages/${encodeURIComponent(meta.messageId)}?format=full`);
   const thread = await api<{ messages?: unknown[] }>(`threads/${encodeURIComponent(meta.threadId)}?format=full`);
-  const messages = (thread.messages ?? [])
-    .filter(isObj)
-    .filter((m) => !(Array.isArray(m.labelIds) && m.labelIds.includes("DRAFT")));
-  const own = messages.find((m) => m.id === meta.messageId);
-  const latest = own ?? messages.at(-1);
-  if (!latest) throw new GmailApiError(`threads/${meta.threadId}`, 404, 0, "thread has no messages");
-  return latest;
+  return gmailThreadMessages(thread).at(-1);
 }
 
 async function sendGmail(deps: SourceActionDeps, item: LoopItem, draft: ReplyDraft): Promise<SourceActionResult> {
@@ -157,22 +162,13 @@ async function sendGmail(deps: SourceActionDeps, item: LoopItem, draft: ReplyDra
   if (!meta) return { ok: false, reason: "bad_item", message: "invalid Gmail metadata" };
   const token = await gmailToken(deps.tokens, deps.owner, item);
   if (!token) return { ok: false, reason: "not_connected", message: "Google is not connected for this account" };
-  if (!(await buildGmailReplyMime(item, draft)))
+  if (replyRecipients(meta, draft).length === 0)
     return { ok: false, reason: "bad_item", message: "no recipient — add a To: address to the draft" };
   const api = gmailApi(token, fetchImpl);
-  let quote: GmailQuote;
   try {
-    quote = gmailQuote(await repliedMessage(api, meta));
-  } catch (error) {
-    if (!(error instanceof GmailApiError)) throw error;
-    return {
-      ok: false,
-      reason: "upstream",
-      message: `Gmail refused reading the thread to quote it (${error.status}): ${error.detail}`,
-    };
-  }
-  const mime = (await buildGmailReplyMime(item, draft, quote))!;
-  try {
+    const original = await repliedMessage(api, meta);
+    const mime = await buildGmailReplyMime(item, draft, original && gmailQuote(original));
+    if (!mime) return { ok: false, reason: "bad_item", message: "no recipient — add a To: address to the draft" };
     await api("messages/send", {
       timeoutMs: 30_000,
       body: { raw: mime.toString("base64url"), threadId: meta.threadId },

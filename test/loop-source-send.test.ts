@@ -92,7 +92,7 @@ function slackSpy(fail?: string): { calls: SlackCall[]; factory: (token: string)
 }
 
 test("gmail reply MIME threads correctly and survives a UTF-8 body", async () => {
-  const mime = (await buildGmailReplyMime(gmailItem, { body: "Confirmed — see attached. ✅" }))!.toString();
+  const mime = (await buildGmailReplyMime(gmailItem, { body: "Confirmed — see attached. ✅" }, undefined))!.toString();
   assert.match(mime, /^To: ada@example\.com\r$/m);
   assert.match(mime, /^Subject: Re: Quarterly numbers\r$/m);
   assert.match(mime, /^In-Reply-To: <msg-1@mail>\r$/m);
@@ -115,6 +115,7 @@ test("subjects keep an existing Re: and non-ASCII subjects get RFC 2047 encoding
   const mime = (await buildGmailReplyMime(
     item("gmail", { gmail: { threadId: "t", subject: "café plans", to: ["a@b.c"] } }),
     { body: "x" },
+    undefined,
   ))!.toString();
   assert.match(mime, /^Subject: =\?UTF-8\?[BQ]\?[\x21-\x7e]+\?=\r$/m);
 });
@@ -491,9 +492,9 @@ test("Gmail sends only through the explicitly bound account", async () => {
 
 test("Gmail drafts preserve recipient lists and reject invalid recipients without falling back", async () => {
   const addresses = Array.from({ length: 15 }, (_, i) => `person${i}@example.com`);
-  const mime = (await buildGmailReplyMime(gmailItem, { body: "Hi", to: addresses, cc: [] }))!.toString();
+  const mime = (await buildGmailReplyMime(gmailItem, { body: "Hi", to: addresses, cc: [] }, undefined))!.toString();
   assert.ok(mime.replaceAll("\r\n ", " ").startsWith(`To: ${addresses.join(", ")}\r\n`));
-  assert.equal(await buildGmailReplyMime(gmailItem, { body: "Hi", to: [] }), null);
+  assert.equal(await buildGmailReplyMime(gmailItem, { body: "Hi", to: [] }, undefined), null);
   const held = { ...gmailItem, proposal: { data: { body: "Previously saved" }, by: "human" as const, at: 1 } };
   for (const to of [["x".repeat(8001)], Array(101).fill("a@example.com"), ["a@example.com\nBcc: b@example.com"]]) {
     assert.equal(gmailAdapter.parseProposal({ body: "Hi", to }), null);

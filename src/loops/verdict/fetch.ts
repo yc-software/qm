@@ -8,7 +8,13 @@ import { slackConversationOf } from "../sources/slack.ts";
 import { normalizeSlackApiUrl } from "../../slack/config.ts";
 import { slackMessageContent } from "../../slack/message-content.ts";
 import { slackWebClient } from "../../slack/web-client.ts";
-import { GmailApiError, gmailApi, gmailHeader, gmailPartText } from "../../connectors/gmail-api.ts";
+import {
+  GmailApiError,
+  gmailApi,
+  gmailHeader,
+  gmailPartText,
+  gmailThreadMessages,
+} from "../../connectors/gmail-api.ts";
 import { TransientTurnFailure } from "../../core/turn-error.ts";
 import { perTenant } from "../../tenants/cache.ts";
 import {
@@ -332,9 +338,7 @@ export function createConversationFetcher(clients: SourceClients): ConversationF
       token,
       `threads/${encodeURIComponent(threadId)}?format=full`,
     );
-    const raw = (Array.isArray(thread.messages) ? thread.messages.filter(isObj) : [])
-      .filter((m) => !(Array.isArray(m.labelIds) && m.labelIds.includes("DRAFT")))
-      .sort((a, b) => Number(a.internalDate) - Number(b.internalDate));
+    const raw = gmailThreadMessages(thread);
     let subject = "";
     const isOwner = (box: { address: string }) => address !== undefined && box.address.toLowerCase() === address;
     const messages = raw.map((m): TranscriptMessage => {
