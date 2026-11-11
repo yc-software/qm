@@ -39,21 +39,22 @@ test("the bot marker backfill marks what a Slack app user made and nothing a per
   }
 });
 
-test("a deploy marks crons still running a bot-prompted ambient wake's text and lists the rest for review", async () => {
+test("a deploy marks crons still running what a bot-marked turn wrote and lists the rest for review", async () => {
   const url = testDatabaseUrl();
   const built = buildApp(testConfig({ databaseUrl: url }));
   await migrateRegisteredPgSchemas(url);
   const control = createControlService(built.app, built.scheduler);
   const [ambient, scope] = ["system:ambient:default-org", "channel:C1"];
-  const wake = { surface: "slack", actor: { externalId: ambient }, origin: { kind: "automation" } } as const;
+  const wake = { surface: "slack", origin: { kind: "automation" }, text: "wake", async: true } as const;
   const edit = async (id: string, label: string, bot?: "admitted" | "refused", args: object = { task: label }) => {
+    const { owner } = (await built.app.getCron(id))!;
     const threadRef = `slack:C1:ambient:${label}`;
     const conversation = { kind: "channel" as const, threadRef };
-    const { runId } = await built.app.turn({ ...wake, conversation, text: "wake", botActor: !!bot, async: true });
+    const { runId } = await built.app.turn({ ...wake, actor: { externalId: owner }, conversation, botActor: !!bot });
     const items: never[] = [];
     const steps = createStepRecorder({ emit: async (item: never) => void items.push(item) } as never, (w) => void w());
-    const claims = { actorId: ambient, scopeId: scope, exp: Date.now() + 60_000, botActor: bot === "refused" };
-    const current = { cronPatch: (cronId: string, req: never) => control.patchCron(cronId, req, claims) };
+    const claims = { actorId: owner, scopeId: scope, exp: Date.now() + 60_000, botActor: bot === "refused" };
+    const current = { cronPatch: (c: string, req: never) => control.patchCron(c, req, claims, async () => undefined) };
     const tools = createAgentTools({ current, emit: steps.emit, scopeLabel: scope } as never, { controlTools: true });
     const cron = recordingTools(tools, () => steps).find((t) => t.name === "cron")!;
     const call = { type: "toolCall", id: threadRef, name: "cron", arguments: { action: "patch", id, ...args } };
@@ -64,15 +65,15 @@ test("a deploy marks crons still running a bot-prompted ambient wake's text and 
     return { runId, threadRef };
   };
   const schedule = { cron: "0 9 * * *", timezone: "UTC" };
-  const make = (action: string, botActor = false) =>
-    built.app.createCron({ ownerScopeId: scope, owner: ambient, createdBy: ambient, botActor, schedule, action });
-  const crons = await Promise.all([make("a"), make("b"), make("c"), make("d", true), make("e")]);
-  const [marked, rewritten, person, already, refused] = crons;
+  const make = (action: string, botActor = false, owner = ambient) =>
+    built.app.createCron({ ownerScopeId: scope, owner, createdBy: owner, botActor, schedule, action });
+  const crons = await Promise.all([make("a", false, "U1"), make("b"), make("c"), make("d", true), make("e")]);
+  const [marked, scripted, rewritten, already, refused] = crons;
   const from = await edit(marked.id, "bot-a", "admitted");
   await edit(marked.id, "bot-a-schedule", "admitted", { schedule: { ...schedule, cron: "0 10 * * *" } });
   const review = await edit(rewritten.id, "bot-b", "admitted", { task: "bot-b\0" });
   await edit(rewritten.id, "person-b");
-  await edit(person.id, "person-c");
+  const fromScript = await edit(scripted.id, "sh", "admitted", { script: { command: "true", credentials: ["gh"] } });
   await edit(already.id, "bot-d", "admitted");
   await edit(refused.id, "bot-e", "refused");
   const before = await Promise.all(crons.map((c) => built.app.getCron(c.id)));
@@ -80,12 +81,13 @@ test("a deploy marks crons still running a bot-prompted ambient wake's text and 
   await pg.q("DELETE FROM qm_schema_migrations WHERE id = $1", [id]);
   await migrateRegisteredPgSchemas(url);
   const after = await Promise.all(crons.map((c) => built.app.getCron(c.id)));
-  assert.deepEqual(after, [{ ...before[0], botActor: true }, ...before.slice(1)]);
+  assert.deepEqual(after, [{ ...before[0], botActor: true }, { ...before[1], botActor: true }, ...before.slice(2)]);
   const audit = await pg.q(`SELECT action, resource, scope_label, detail::jsonb FROM audit_log
-    WHERE principal_id = 'system:migration' ORDER BY action`);
+    WHERE principal_id = 'system:migration' ORDER BY action, detail::jsonb ->> 'threadRef'`);
   await pg.close();
   assert.deepEqual(audit.map(Object.values), [
     ["cron_bot_marker_review", rewritten.id, scope, review],
     ["cron_update", marked.id, scope, { botActor: true, ...from }],
+    ["cron_update", scripted.id, scope, { botActor: true, ...fromScript }],
   ]);
 });
