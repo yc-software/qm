@@ -3,7 +3,7 @@ import { ClientCredentialsProvider } from "@modelcontextprotocol/sdk/client/auth
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { OAuthError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { ErrorCode, McpError, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { LRUCache } from "lru-cache";
 import { boundedResponse } from "../util/bytes.ts";
 import { swallowAs } from "../util/errors.ts";
@@ -52,13 +52,16 @@ export interface McpEnvelope {
   status?: string;
 }
 
+export const providerCode = (value: unknown): string | undefined =>
+  typeof value === "string" && /^[\w.:-]{1,64}$/.test(value) ? value : undefined;
+
 function envelopeOf(value: unknown): McpEnvelope {
   if (!value || typeof value !== "object") return {};
   const { code, status, error } = value as { code?: unknown; status?: unknown; error?: { code?: unknown } };
   const nested = error && typeof error === "object" ? error.code : undefined;
-  const found = typeof code === "string" ? code : nested;
+  const found = providerCode(typeof code === "string" ? code : nested);
   return {
-    ...(typeof found === "string" && /^[\w.:-]{1,64}$/.test(found) ? { code: found } : {}),
+    ...(found ? { code: found } : {}),
     ...(typeof status === "string" ? { status } : {}),
   };
 }
@@ -199,7 +202,14 @@ export function createMcpClient(opts: {
       throw new McpCallError(`mcp ${op} failed${status ? ` (HTTP ${status})` : ""}`, {
         ...(status ? { status } : {}),
         ...(e instanceof OAuthError ? { code: e.errorCode } : {}),
-        ...(opened ? {} : { unsent: true }),
+        ...(opened
+          ? {
+              answered:
+                e instanceof McpError
+                  ? e.code !== ErrorCode.RequestTimeout && e.code !== ErrorCode.ConnectionClosed
+                  : (status ?? 500) < 500,
+            }
+          : { unsent: true }),
         cause: e,
       });
     } finally {

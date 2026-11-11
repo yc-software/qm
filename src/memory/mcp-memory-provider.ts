@@ -3,6 +3,7 @@ import {
   McpCallError,
   mcpEnvelope,
   mcpResultText,
+  providerCode,
   toolListings,
   type McpClient,
   type ToolListings,
@@ -257,7 +258,7 @@ export function createMcpMemoryProvider(opts: {
                   code: state,
                 });
               if (typeof state !== "string" || !PENDING_STATES.has(state))
-                throw new MemoryWriteUnconfirmed(typeof state === "string" ? state : "no_state", resultText(result));
+                throw new MemoryWriteUnconfirmed(providerCode(state) ?? "no_state", resultText(result));
               reportEnvelope({ status: "pending", code: state });
             }
           },

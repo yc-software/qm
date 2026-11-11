@@ -467,6 +467,7 @@ test("the memory tool forgets notebook ids and brain refs in one call, a brain r
       await run({ action: "delete", ids: ["#1", "acme:7"] }, deps),
       /^\[error\] Only the person, on a turn they sent in their own DM/,
     );
+  assert.match(await run({ action: "delete", ids: ["default:1"] }), /^\[error\] Memory provider default doesn't serve/);
   assert.deepEqual(forgets(), []);
   assert.equal(await run({ action: "delete", ids: ["#1", "acme:7"] }), "Forgot 1 fact.\nForgot acme:7.");
   assert.deepEqual(await notebook.facts!(personal).then((facts) => facts.map(({ text }) => text)), [

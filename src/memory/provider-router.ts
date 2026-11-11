@@ -256,7 +256,10 @@ export function createRoutedMemoryService(opts: {
       const refs = ids.flatMap((ref) => {
         const parsed = parseProviderRef(ref);
         if (!parsed) return [];
-        const route = routesFor(scopeId).find((candidate) => candidate.provider === parsed.provider);
+        const route =
+          parsed.provider === "default"
+            ? undefined
+            : routesFor(scopeId).find((candidate) => candidate.provider === parsed.provider);
         const provider = route && opts.providers[parsed.provider];
         if (!route || !provider)
           throw new MemoryForgetRefused(
