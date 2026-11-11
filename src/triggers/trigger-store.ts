@@ -99,10 +99,8 @@ ${[
   ],
 };
 
-const MARK_BOT_EDITED_CRONS = "triggers/0001-mark-bot-edited-crons";
-
 export const MARK_BOT_EDITED_CRONS_MIGRATION = {
-  id: MARK_BOT_EDITED_CRONS,
+  id: "triggers/0001-mark-bot-edited-crons",
   statements: [
     `DO $$
     BEGIN
@@ -112,8 +110,8 @@ export const MARK_BOT_EDITED_CRONS_MIGRATION = {
       END IF;
       WITH bot_patches AS (
         SELECT c.tenant_id, c.body ->> 'id' AS cron_id, c.created_at, r.id AS run_id, r.session_id AS thread_ref,
-               r.request::jsonb -> 'actor' ->> 'id' AS actor_id,
-               COALESCE((c.body -> 'wire' ->> 'argumentsJson')::jsonb, c.body - 'wire') AS args
+               COALESCE(CASE WHEN pg_input_is_valid(c.body -> 'wire' ->> 'argumentsJson', 'jsonb')
+                             THEN (c.body -> 'wire' ->> 'argumentsJson')::jsonb END, c.body - 'wire') AS args
           FROM items c
           JOIN items res ON res.tenant_id = c.tenant_id AND res.session_id = c.session_id AND res.kind = 'ToolResult'
                         AND md5(res.call_id) = md5(c.call_id) AND res.call_id = c.call_id
@@ -123,11 +121,11 @@ export const MARK_BOT_EDITED_CRONS_MIGRATION = {
            AND r.request::jsonb -> 'actor' ->> 'id' LIKE 'system:ambient:%'
       ), found AS (
         SELECT DISTINCT ON (k.tenant_id, k.id) k.tenant_id, k.id, k.json ->> 'ownerScopeId' AS scope, p.run_id,
-               p.thread_ref, p.actor_id,
+               p.thread_ref,
                COALESCE(k.json ->> 'action' = p.args ->> 'task' OR k.json ->> 'message' = p.args ->> 'text', false) AS bot_text
           FROM bot_patches p JOIN crons k ON k.tenant_id = p.tenant_id AND k.id = p.cron_id
          WHERE k.json ->> 'botActor' IS DISTINCT FROM 'true'
-         ORDER BY k.tenant_id, k.id, p.created_at DESC
+         ORDER BY k.tenant_id, k.id, bot_text DESC, p.created_at DESC
       ), marked AS (
         UPDATE crons k SET json = k.json || '{"botActor": true}'::jsonb
           FROM found f WHERE f.bot_text AND k.tenant_id = f.tenant_id AND k.id = f.id
@@ -135,18 +133,12 @@ export const MARK_BOT_EDITED_CRONS_MIGRATION = {
       ), versions AS (
         UPDATE durable_map_versions SET v = v + 1 WHERE tbl = 'crons' AND tenant_id IN (SELECT tenant_id FROM marked)
       )
-      INSERT INTO audit_log (tenant_id, at, principal_id, action, resource, scope_label, detail, idempotency_key)
-      SELECT tenant_id, ${msOf("now()")}, 'system:migration', 'cron_update', id, scope,
-             jsonb_build_object('botActor', true, 'runId', run_id, 'threadRef', thread_ref)::text, NULL
-        FROM found WHERE bot_text
-      UNION ALL
-      SELECT tenant_id, ${msOf("now()")}, 'system:migration', 'cron_bot_marker_backfill',
-             '${MARK_BOT_EDITED_CRONS}', replace(min(actor_id), 'system:ambient:', 'org:'),
-             jsonb_build_object('marked', count(*) FILTER (WHERE bot_text), 'review', count(*) FILTER (WHERE NOT bot_text),
-               'reviewCronIds', COALESCE(jsonb_agg(id ORDER BY id) FILTER (WHERE NOT bot_text), '[]'))::text,
-             '${MARK_BOT_EDITED_CRONS}'
-        FROM found GROUP BY tenant_id
-      ON CONFLICT (tenant_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING;
+      INSERT INTO audit_log (tenant_id, at, principal_id, action, resource, scope_label, detail)
+      SELECT tenant_id, ${msOf("now()")}, 'system:migration',
+             CASE WHEN bot_text THEN 'cron_update' ELSE 'cron_bot_marker_review' END, id, scope,
+             (jsonb_build_object('runId', run_id, 'threadRef', thread_ref)
+               || CASE WHEN bot_text THEN '{"botActor": true}'::jsonb ELSE '{}' END)::text
+        FROM found;
     END $$`,
   ],
 };

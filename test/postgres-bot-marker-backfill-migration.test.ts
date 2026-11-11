@@ -17,12 +17,7 @@ test("the bot marker backfill marks what a Slack app user made and nothing a per
   for (const id of ["release-bot", "U1"]) await users.record({ id, source: "turn", at: Date.now() });
   await users.markApps(["release-bot"]);
   const maps = createPostgresMapFactory(url);
-  const creators = {
-    crons: "createdBy",
-    loops: "createdBy",
-    monitors: "createdBy",
-    keychain_asks: "requesterId",
-  };
+  const creators = { crons: "createdBy", loops: "createdBy", monitors: "createdBy", keychain_asks: "requesterId" };
   for (const [table, creator] of Object.entries(creators)) {
     const map = maps.map<Record<string, unknown>>(table);
     await map.put("by-bot", { id: "by-bot", [creator]: "release-bot" });
@@ -51,8 +46,8 @@ test("a deploy marks crons still running a bot-prompted ambient wake's text and 
   const control = createControlService(built.app, built.scheduler);
   const [ambient, scope] = ["system:ambient:default-org", "channel:C1"];
   const wake = { surface: "slack", actor: { externalId: ambient }, origin: { kind: "automation" } } as const;
-  const edit = async (id: string, task: string, bot?: "admitted" | "refused") => {
-    const threadRef = `slack:C1:ambient:${task}`;
+  const edit = async (id: string, label: string, bot?: "admitted" | "refused", args: object = { task: label }) => {
+    const threadRef = `slack:C1:ambient:${label}`;
     const conversation = { kind: "channel" as const, threadRef };
     const { runId } = await built.app.turn({ ...wake, conversation, text: "wake", botActor: !!bot, async: true });
     const items: never[] = [];
@@ -61,7 +56,7 @@ test("a deploy marks crons still running a bot-prompted ambient wake's text and 
     const current = { cronPatch: (cronId: string, req: never) => control.patchCron(cronId, req, claims) };
     const tools = createAgentTools({ current, emit: steps.emit, scopeLabel: scope } as never, { controlTools: true });
     const cron = recordingTools(tools, () => steps).find((t) => t.name === "cron")!;
-    const call = { type: "toolCall" as const, id: threadRef, name: "cron", arguments: { action: "patch", id, task } };
+    const call = { type: "toolCall", id: threadRef, name: "cron", arguments: { action: "patch", id, ...args } };
     steps.assistant({ role: "assistant", content: [call], stopReason: "toolUse" } as never);
     await cron.execute(call.id, call.arguments, undefined, undefined, undefined as never);
     const session = await built.sessions.getOrCreateByThread(threadRef, "channel", scope, "c", "slack");
@@ -74,7 +69,8 @@ test("a deploy marks crons still running a bot-prompted ambient wake's text and 
   const crons = await Promise.all([make("a"), make("b"), make("c"), make("d", true), make("e")]);
   const [marked, rewritten, person, already, refused] = crons;
   const from = await edit(marked.id, "bot-a", "admitted");
-  await edit(rewritten.id, "bot-b", "admitted");
+  await edit(marked.id, "bot-a-schedule", "admitted", { schedule: { ...schedule, cron: "0 10 * * *" } });
+  const review = await edit(rewritten.id, "bot-b", "admitted", { task: "bot-b\0" });
   await edit(rewritten.id, "person-b");
   await edit(person.id, "person-c");
   await edit(already.id, "bot-d", "admitted");
@@ -85,12 +81,11 @@ test("a deploy marks crons still running a bot-prompted ambient wake's text and 
   await migrateRegisteredPgSchemas(url);
   const after = await Promise.all(crons.map((c) => built.app.getCron(c.id)));
   assert.deepEqual(after, [{ ...before[0], botActor: true }, ...before.slice(1)]);
-  const audit = await pg.q(
-    "SELECT action, resource, scope_label, detail::jsonb FROM audit_log WHERE principal_id = 'system:migration' ORDER BY id",
-  );
+  const audit = await pg.q(`SELECT action, resource, scope_label, detail::jsonb FROM audit_log
+    WHERE principal_id = 'system:migration' ORDER BY action`);
   await pg.close();
   assert.deepEqual(audit.map(Object.values), [
+    ["cron_bot_marker_review", rewritten.id, scope, review],
     ["cron_update", marked.id, scope, { botActor: true, ...from }],
-    ["cron_bot_marker_backfill", id, "org:default-org", { marked: 1, review: 1, reviewCronIds: [rewritten.id] }],
   ]);
 });
