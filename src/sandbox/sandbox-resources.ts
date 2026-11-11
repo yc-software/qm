@@ -1,6 +1,8 @@
 import { tenantSandboxChoice } from "./tenant-sandbox-shape.ts";
 import { perTenant } from "../tenants/cache.ts";
 import { withLiveTurnMembership } from "../resolution/scope-membership.ts";
+import { personOrOwningBot } from "../auth/capability-token.ts";
+import { samePerson } from "../directory/person.ts";
 import { randomUUID } from "node:crypto";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
@@ -91,7 +93,7 @@ export interface SandboxResources {
   access(actorId: string, id: string): Promise<SandboxResource>;
   status(actorId: string, id: string): Promise<ComputerStatus>;
   restart(actorId: string, id: string, memoryGb?: number): Promise<void>;
-  retire(actorId: string, id: string): Promise<void>;
+  retire(actorId: string, id: string, botActor?: boolean): Promise<void>;
   use<T>(id: string, action: () => Promise<T>, exclusive?: boolean): Promise<T>;
   hold(id: string, runId: string): Promise<void>;
   recordLoad(id: string, sample: LoadSample): Promise<void>;
@@ -264,9 +266,11 @@ export function createSandboxResources(opts: {
         }));
       return live.includes(true);
     },
-    async retire(actorId, id) {
+    async retire(actorId, id, botActor) {
       await initialize();
       const record = await agentRecord(actorId, id);
+      if (!(await personOrOwningBot({ botActor }, async () => samePerson(record.createdBy, actorId))))
+        throw new SandboxAccessError("a Slack bot's turn can retire only a computer it created");
       await opts.lock.withLock(`sandbox-resource:${id}`, () =>
         opts.lock.withLock(`sandbox-default:${record.ownerScopeId}`, async () => {
           const current = await get(id);
