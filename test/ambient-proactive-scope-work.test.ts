@@ -23,7 +23,7 @@ import { testDeployBackings } from "./support/test-database.ts";
 import { canAdministerCron, canAdministerWebhook, createControlService } from "../src/api/control-service.ts";
 import { canAdministerLoop } from "../src/api/loop-administration.ts";
 import { createServer } from "../src/api/server.ts";
-import { isSubagentThreadRef, UNPROMPTED_REACH_REFUSAL } from "../src/sessions/session-syscalls.ts";
+import { isSubagentThreadRef } from "../src/sessions/session-syscalls.ts";
 import { serverDeps } from "../src/wiring.ts";
 import { scopeActor, scopeId } from "../src/types.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -36,6 +36,8 @@ const policies = { partner: { companyDomains: ["acme.com"], companyTeamIds: ["TI
 const source = { account: "default", workspace: "TINTERNAL", assistant: "UBOT" };
 const notMember = (channel: string) =>
   `can't currently be confirmed as a member of channel:${channel}, so helpers can't run here; nothing was started or sent.`;
+const reachRefusal =
+  "unprompted work can reach only the sessions it started; ask in the conversation so a person does it";
 const schedulesRefusal = unpromptedRefusal("schedules");
 const loopsRefusal = unpromptedRefusal("loops");
 const manageRefusal = (what: string) =>
@@ -406,11 +408,13 @@ for (const [label, overrides] of [
       [{ channelId: "C-deals", principalId: "a@x.com" }],
     );
     await selectDefaultSandbox(built, "a@x.com", scopeId("channel", "C-deals"));
+    const defaultBefore = (await built.sandboxResources.resolve(scopeId("channel", "C-deals")))?.id;
     await built.app.setChannelPolicy("C-deals", "!engage watch for memos", "U-admin");
     await built.app.ingestSurfaceEvents([
       { container: "C-deals", ts: "9.1", authorId: "U-A", authorName: "A", text: "memo?", createdAt: 1, source },
     ]);
     await settle(async () => !!acted.publish);
+    assert.equal((await built.sandboxResources.resolve(scopeId("channel", "C-deals")))?.id, defaultBefore);
     assert.deepEqual(acted, {
       create: "ok",
       default: "refused: unprompted work can't change this conversation's default computer",
@@ -491,8 +495,8 @@ test("unprompted work cannot wake a channel cron's helper into managing the chan
       defaultAfter: (await built.sandboxResources.resolve(here))?.id,
     },
     {
-      cronHelper: `refused: ${UNPROMPTED_REACH_REFUSAL}`,
-      cronHelperInterrupt: `refused: ${UNPROMPTED_REACH_REFUSAL}`,
+      cronHelper: `refused: ${reachRefusal}`,
+      cronHelperInterrupt: `refused: ${reachRefusal}`,
       ownHelper: "ok",
       cronHelperRuns: 1,
       defaultAfter: defaultBefore,
