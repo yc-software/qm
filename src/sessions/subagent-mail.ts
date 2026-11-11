@@ -190,10 +190,10 @@ async function parentTurn(
             ? { destination: currentContext!.origin.destination }
             : {}),
         },
-        botActor: source.botActor,
       };
   const { openFingerprint: _openFingerprint, ...request }: OrchestratorInput & Pick<SpawnMeta, "openFingerprint"> = {
     ...meta,
+    ...(meta.botActor || source.botActor || child.spawnMeta?.botActor ? { botActor: true } : {}),
     sessionSenderId: child.id,
     conversation: {
       ...meta.conversation,
