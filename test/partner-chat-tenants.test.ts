@@ -38,7 +38,7 @@ describeTwoTenants("partner chat on a shared host", (db) => {
 
   function post(account: string) {
     const delivery = { destination: { type: "partner-chat", target: `partner-chat:${account}:group:88` }, text: "hi" };
-    return withTenant(db.tenants[0], () => send(delivery as Parameters<typeof send>[0]));
+    return withTenant(db.tenants[0], (tenant) => send(delivery as Parameters<typeof send>[0], tenant));
   }
 
   it("handles an event in the serving workspace bound to its account and posts only for the sender's own", async () => {

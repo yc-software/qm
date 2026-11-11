@@ -1,6 +1,6 @@
 import type { App } from "../../api/app-types.ts";
 import { refusedStatus, type Send } from "../../delivery/relay.ts";
-import { boundTenant } from "../../tenants/context.ts";
+import type { Tenant } from "../../tenants/context.ts";
 import type { Delivery } from "../../types.ts";
 import { partnerChatTenant } from "./adapter.ts";
 import {
@@ -50,11 +50,11 @@ export function partnerChatSender(deps: {
   const send = deps.fetch ?? fetch;
   const now = deps.now ?? Date.now;
 
-  async function deliver(d: Delivery): Promise<void> {
+  async function deliver(d: Delivery, tenant: Tenant): Promise<void> {
     const ref = parsePartnerChatRef(d.destination.target);
     const body = d.text.trim();
     if (!ref) throw new UnsupportedDelivery(`partner-chat: unroutable target ${d.destination.target}`);
-    if ((await partnerChatTenant(deps.app, ref.account)) !== boundTenant())
+    if ((await partnerChatTenant(deps.app, ref.account)) !== tenant.id)
       throw new UnsupportedDelivery(`partner-chat: account ${ref.account} belongs to another workspace`);
     const { react, delete: del, pin, edit, editRef } = d.destination;
     if (react || del || pin || edit || editRef || !body)
@@ -114,9 +114,9 @@ export function partnerChatSender(deps: {
     );
   }
 
-  return async (d) => {
+  return async (d, tenant) => {
     try {
-      await deliver(d);
+      await deliver(d, tenant);
     } catch (e) {
       if (e instanceof UnsupportedDelivery) return { refused: e.message };
       if (e instanceof PartnerChatHttpError && refusedStatus(e.status)) return { refused: e.message };
