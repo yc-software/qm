@@ -174,7 +174,7 @@ export interface SecurityScreenPayload {
   truncated: boolean;
 }
 
-export function securityScreenPayload(input: SecurityScreenInput): SecurityScreenPayload | null {
+function securityScreenParts(input: SecurityScreenInput): Array<{ source: string; content: string }> {
   const payloads: Array<{ source: string; content: string }> = [];
   const origin = input.origin;
   if (
@@ -197,18 +197,28 @@ export function securityScreenPayload(input: SecurityScreenInput): SecurityScree
     if (datum.content.trim()) payloads.push(datum);
   }
   const seen = new Set<string>();
-  const unique = payloads.filter((p) => {
+  return payloads.filter((p) => {
     const key = p.content.trim();
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
+}
+
+export function securityScreenPayload(input: SecurityScreenInput): SecurityScreenPayload | null {
+  const unique = securityScreenParts(input);
   if (!unique.length) return null;
   const serialized = JSON.stringify(unique);
   if (serialized.length <= MAX_SCREEN_CHARS) return { content: serialized, truncated: false };
   const marker = "\n...[security screen input truncated]...\n";
   const half = Math.floor((MAX_SCREEN_CHARS - marker.length) / 2);
   return { content: serialized.slice(0, half) + marker + serialized.slice(-half), truncated: true };
+}
+
+export function securityScreenPayloads(input: SecurityScreenInput): string[] {
+  const payload = securityScreenPayload(input);
+  if (!payload?.truncated) return payload ? [payload.content] : [];
+  return securityScreenParts(input).flatMap((part) => securityScreenChunks(part.source, part.content));
 }
 
 const SCREEN_CHUNK_CHARS = 7_500;
