@@ -167,6 +167,7 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
           seed: `reach:${randomUUID()}`,
           onError: (e) =>
             deps.errors?.record(
+              tenantOf(ctx),
               {
                 category: "file_store",
                 code: "register_failed",

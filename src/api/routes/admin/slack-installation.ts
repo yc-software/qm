@@ -31,7 +31,7 @@ export async function getSlackInstallation(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
   if (!ctx.deps.slackInstallation) return sendJson(ctx.res, 404, { error: "not_configured" });
-  audit(ctx.deps, {
+  audit(ctx, {
     principalId: actor.id,
     action: "slack-installation.read",
     resource: "slack-installation",
@@ -102,7 +102,7 @@ export async function putSlackInstallation(ctx: ApiCtx): Promise<void> {
       ctx.deps.slackInstallationSocketAppId,
     );
     const status = await ctx.deps.slackInstallation.set({ botToken, appToken, ...workspace, updatedBy: actor.id });
-    audit(ctx.deps, {
+    audit(ctx, {
       principalId: actor.id,
       action: "slack-installation.update",
       resource: "slack-installation",
@@ -120,7 +120,7 @@ export async function deleteSlackInstallation(ctx: ApiCtx): Promise<void> {
   if (!actor) return;
   if (!ctx.deps.slackInstallation) return sendJson(ctx.res, 404, { error: "not_configured" });
   await ctx.deps.slackInstallation.delete(actor.id);
-  audit(ctx.deps, {
+  audit(ctx, {
     principalId: actor.id,
     action: "slack-installation.delete",
     resource: "slack-installation",

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { testTenant } from "./support/test-tenant.ts";
 import { after, before, it } from "node:test";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createPostgresRunStore, type PostgresRuntime } from "../src/runs/postgres-run-store.ts";
@@ -102,7 +103,7 @@ describeTwoTenants("runs claim then bind, as the app login", (db) => {
             ...opts,
             onReap: (event) => {
               reaped.push([event.runId, boundTenant()]);
-              opts?.onReap?.(event);
+              opts?.onReap?.(event, testTenant);
             },
           }),
       },

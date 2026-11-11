@@ -21,7 +21,7 @@ import { frameAncestorsDirective, sendJson, UNTRUSTED_CONTENT_SANDBOX_CSP, verif
 import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
 import { audit, authorizeAdmin, isObj, orgScope } from "./shared.ts";
 import { scopeId, type Permission } from "../../types.ts";
-import type { ApiCtx, BaseCtx, Route } from "./route.ts";
+import { tenantOf, type ApiCtx, type BaseCtx, type Route } from "./route.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
 import { verifyDeployGitAccess, viewerIdentityKey } from "../../deploy/access-token.ts";
 import { appAnnotationAsset } from "../../deploy/app-annotate.ts";
@@ -160,7 +160,7 @@ async function proxyAdminDeployment(ctx: BaseCtx): Promise<void> {
   );
   if (!actor) return;
   if (!deployment) return sendJson(res, 404, { error: "not_found" });
-  audit(deps, {
+  audit(ctx, {
     principalId: actor.id,
     action: "deployment.visit",
     resource: deployment.id,
@@ -1005,8 +1005,9 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
       status: "denied",
     };
     const hour = Math.floor(ev.at / 3_600_000);
-    if (deps.auditLog?.recordOnce) await deps.auditLog.recordOnce(`reach_denied|${viewer}|${slug}|${hour}`, ev);
-    else deps.auditLog?.record(ev);
+    if (deps.auditLog?.recordOnce)
+      await deps.auditLog.recordOnce(tenantOf(ctx), `reach_denied|${viewer}|${slug}|${hour}`, ev);
+    else deps.auditLog?.record(tenantOf(ctx), ev);
   }
   if (reach.status === "denied" && ctx.method === "POST" && pathname === REQUEST_ACCESS_PATH) {
     const d = await app.getDeployment(slug).catch(swallowAs("deployments: load deployment", null));

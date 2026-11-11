@@ -37,7 +37,7 @@ export async function getMcpServers(ctx: ApiCtx): Promise<void> {
   const authorized = await actor(ctx);
   if (!authorized) return;
   if (!ctx.deps.mcpServers) return sendJson(ctx.res, 404, { error: "not_found" });
-  audit(ctx.deps, {
+  audit(ctx, {
     principalId: authorized.id,
     action: "mcp-servers.read",
     resource: "mcp-servers",
@@ -253,7 +253,7 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
     }
   }
   await ctx.deps.mcpServers.put(server);
-  audit(ctx.deps, {
+  audit(ctx, {
     principalId: authorized.id,
     action: "mcp-servers.update",
     resource: id,
@@ -269,7 +269,7 @@ export async function deleteMcpServer(ctx: ApiCtx): Promise<void> {
   const id = ctx.params.id ?? "";
   if (!(await ctx.deps.mcpServers.get(id))) return sendJson(ctx.res, 404, { error: "not_found" });
   await ctx.deps.mcpServers.delete(id);
-  audit(ctx.deps, {
+  audit(ctx, {
     principalId: authorized.id,
     action: "mcp-servers.delete",
     resource: id,

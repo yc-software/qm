@@ -1,3 +1,4 @@
+import { testTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createToolContext } from "../src/tools/primitives.ts";
@@ -38,6 +39,7 @@ function agent(opts: { memoryStart?: string; recall?: boolean } = {}) {
   } as unknown as Sandbox;
 
   const ctx = createToolContext({
+    tenant: testTenant,
     sandbox,
     provision: async () => ({ id: "h", rootDir: "/workspace" }) as SandboxHandle,
     writableScopeId: personal,

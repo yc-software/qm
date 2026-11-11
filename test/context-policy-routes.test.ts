@@ -4,6 +4,7 @@ import { getContextPolicy, setContextPolicy } from "../src/api/routes/context-po
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import { createPostgresChannelPolicyStore } from "../src/surface-cache/channel-policy-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 function fakeRes() {
   const out = { status: 0, body: undefined as unknown };
@@ -38,6 +39,7 @@ function makeCtx(over: {
   const audits: unknown[] = [];
   const ctx = {
     res,
+    tenant: testTenant,
     url: new URL(over.url ?? "http://x/"),
     body: over.body,
     params: { scope: over.scope ?? decodeURIComponent(new URL(over.url ?? "http://x/").pathname.split("/")[3] ?? "") },
@@ -46,7 +48,7 @@ function makeCtx(over: {
     },
     deps: {
       channelPolicy: store,
-      auditLog: { record: (e: unknown) => audits.push(e) },
+      auditLog: { record: (_t: unknown, e: unknown) => audits.push(e) },
     },
   } as unknown as ApiCtx;
   return { ctx, out, store };

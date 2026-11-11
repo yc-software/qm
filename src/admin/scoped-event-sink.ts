@@ -2,6 +2,7 @@ import type { ScopeId } from "../types.ts";
 import { createPgPool, type PgMigrationDefinition, type PgPool } from "../persistence/pg-pool.ts";
 import { reportFailureAs } from "../util/errors.ts";
 import { tenantTables } from "../tenants/migrations.ts";
+import type { Tenant } from "../tenants/context.ts";
 
 export interface ScopedEvent {
   scopeLabel: ScopeId;
@@ -112,11 +113,11 @@ export interface PostgresEventSinkConfig<E> {
 }
 
 export interface PostgresEventSink<E> {
-  q: PgPool["q"];
-  record(input: Omit<E, "ts">): void;
+  forTenant: PgPool["forTenant"];
+  record(t: Tenant, input: Omit<E, "ts">): void;
   flush(): Promise<void>;
-  list(opts?: object): Promise<E[]>;
-  count(opts?: object): Promise<number>;
+  list(t: Tenant, opts?: object): Promise<E[]>;
+  count(t: Tenant, opts?: object): Promise<number>;
 }
 
 function standardIndexes(table: string): string[] {
@@ -151,7 +152,7 @@ export function createPostgresEventSink<E>(cfg: PostgresEventSinkConfig<E>): Pos
       );
     }
   }
-  const { q } = createPgPool(cfg.connectionString, [
+  const pg = createPgPool(cfg.connectionString, [
     {
       id: scopedEventMigrationId(cfg.table, 1),
       statements: [createTable, ...(cfg.extraSchemaStatements ?? standardIndexes(cfg.table))],
@@ -162,7 +163,7 @@ export function createPostgresEventSink<E>(cfg: PostgresEventSinkConfig<E>): Pos
   ]);
 
   const dbCols = cfg.columns.map(([db]) => db).join(", ");
-  const insertSql = `INSERT INTO ${cfg.table}(${dbCols}) VALUES (${cfg.columns.map((_, i) => `$${i + 1}`).join(",")})`;
+  const insertSql = `INSERT INTO ${cfg.table}(${dbCols}, tenant_id) VALUES (${[...cfg.columns, null].map((_, i) => `$${i + 1}`).join(",")})`;
   const pendingWrites = new Set<Promise<unknown>>();
   const settleWrites = (): Promise<unknown[]> => Promise.all(pendingWrites);
 
@@ -174,9 +175,9 @@ export function createPostgresEventSink<E>(cfg: PostgresEventSinkConfig<E>): Pos
     return out as E;
   };
 
-  function buildWhere(opts: Record<string, unknown>): { where: string; params: unknown[] } {
-    const conds: string[] = [];
-    const params: unknown[] = [];
+  function buildWhere(tenant: Tenant, opts: Record<string, unknown>): { where: string; params: unknown[] } {
+    const conds: string[] = ["tenant_id = $1"];
+    const params: unknown[] = [tenant.id];
     for (const [opt, db] of Object.entries(cfg.equalityFilters)) {
       if (opts[opt] === undefined) continue;
       params.push(opts[opt]);
@@ -186,15 +187,17 @@ export function createPostgresEventSink<E>(cfg: PostgresEventSinkConfig<E>): Pos
       params.push(opts.since);
       conds.push(`ts >= $${params.length}`);
     }
-    return { where: conds.length ? `WHERE ${conds.join(" AND ")}` : "", params };
+    return { where: `WHERE ${conds.join(" AND ")}`, params };
   }
 
   return {
-    q,
-    record(input) {
+    forTenant: pg.forTenant,
+    record(tenant, input) {
       const s = input as Record<string, unknown>;
-      const values = cfg.columns.map(([, js]) => (js === "ts" ? Date.now() : (s[js] ?? null)));
-      const write = q(insertSql, values)
+      const values = [...cfg.columns.map(([, js]) => (js === "ts" ? Date.now() : (s[js] ?? null))), tenant.id];
+      const write = pg
+        .forTenant(tenant)
+        .q(insertSql, values)
         .catch(reportFailureAs(cfg.persistErrorMessage, undefined))
         .finally(() => pendingWrites.delete(write));
       pendingWrites.add(write);
@@ -202,22 +205,24 @@ export function createPostgresEventSink<E>(cfg: PostgresEventSinkConfig<E>): Pos
     async flush() {
       await settleWrites();
     },
-    async list(input = {}) {
+    async list(tenant, input = {}) {
       await settleWrites();
       const opts = input as Record<string, unknown>;
-      const { where, params } = buildWhere(opts);
+      const { where, params } = buildWhere(tenant, opts);
       params.push(opts.limit ?? cfg.defaultLimit);
       params.push(opts.offset ?? 0);
-      const rows = await q(
-        `SELECT ${dbCols} FROM ${cfg.table} ${where} ORDER BY ts DESC, id DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
-        params,
-      );
+      const rows = await pg
+        .forTenant(tenant)
+        .q(
+          `SELECT ${dbCols} FROM ${cfg.table} ${where} ORDER BY ts DESC, id DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
+          params,
+        );
       return rows.map(toEvent);
     },
-    async count(input = {}) {
+    async count(tenant, input = {}) {
       await settleWrites();
-      const { where, params } = buildWhere(input as Record<string, unknown>);
-      const rows = await q(`SELECT COUNT(*)::bigint AS total FROM ${cfg.table} ${where}`, params);
+      const { where, params } = buildWhere(tenant, input as Record<string, unknown>);
+      const rows = await pg.forTenant(tenant).q(`SELECT COUNT(*)::bigint AS total FROM ${cfg.table} ${where}`, params);
       return Number(rows[0]?.total ?? 0);
     },
   };

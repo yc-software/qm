@@ -260,7 +260,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         bots: parsed.bots,
         ambientEnabled: b.ambientEnabled as boolean | null | undefined,
       });
-      audit(ctx.deps, { principalId: actor.id, action: "surface.policy.set", resource: ref, scopeLabel: scope });
+      audit(ctx, { principalId: actor.id, action: "surface.policy.set", resource: ref, scopeLabel: scope });
       return { ok: true };
     },
   },
@@ -307,7 +307,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         body.on === true,
         actor.id,
       );
-      audit(ctx.deps, {
+      audit(ctx, {
         principalId: actor.id,
         action: "feature-flag.update",
         resource: `${body.featureName}:${body.scopeId}:${before}->${body.on === true}`,
@@ -329,7 +329,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       const change = parseTeamChange(ctx.body);
       if ("error" in change) return change;
       await ctx.deps.teams.apply(tenantOf(ctx), change, actor.id);
-      audit(ctx.deps, {
+      audit(ctx, {
         principalId: actor.id,
         action: change.remove ? "team.remove" : "team.update",
         resource: `team:${change.id}`,
@@ -876,7 +876,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       };
       const auditGrantChanges = (changes: Array<{ action: "share" | "unshare"; grantee: string }>) => {
         for (const change of changes)
-          audit(deps, {
+          audit(ctx, {
             principalId: actor.id,
             action: `service_credential.${change.action}`,
             resource: ref,

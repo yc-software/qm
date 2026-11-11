@@ -17,7 +17,7 @@ async function completeAuth(ctx: ApiCtx): Promise<void> {
   const access = await credential(ctx);
   if (!access) return;
   const connectFailed = () =>
-    audit(ctx.deps, {
+    audit(ctx, {
       principalId: access.principal,
       action: "composio.connect_failed",
       resource: "unknown",
@@ -51,7 +51,7 @@ async function completeAuth(ctx: ApiCtx): Promise<void> {
   const key = `${userId}:${accountId}`;
   const saved = await ctx.deps.composioReturns?.get(key);
   await ctx.deps.composioReturns?.delete(key);
-  audit(ctx.deps, {
+  audit(ctx, {
     principalId: access.principal,
     action: "composio.connected",
     resource: saved?.toolkit ?? "unknown",

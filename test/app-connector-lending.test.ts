@@ -33,8 +33,8 @@ const tokenOf = (host: string) => `publisher-token-for-${host}`;
 async function agent(t: { after: (fn: () => Promise<void>) => void }) {
   const audits: AuditEvent[] = [];
   const auditLog = {
-    record: (e: AuditEvent) => void audits.push(e),
-    recordOnce: async (_key: string, e: AuditEvent) => void audits.push(e),
+    record: (_t: unknown, e: AuditEvent) => void audits.push(e),
+    recordOnce: async (_t: unknown, _key: string, e: AuditEvent) => void audits.push(e),
     events: async () => [],
     tail: async () => [],
   };

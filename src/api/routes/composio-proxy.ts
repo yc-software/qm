@@ -243,7 +243,7 @@ async function proxy(ctx: ApiCtx): Promise<void> {
     if (binaryBody !== undefined)
       payload = { binary_body: { base64: binaryBody, ...(contentType ? { content_type: contentType } : {}) } };
     else if (input.body !== undefined) payload = { body: input.body };
-    audit(ctx.deps, {
+    audit(ctx, {
       principalId: access.principal,
       action: "composio.proxy.started",
       resource: `${account}/${resource}`,
@@ -265,7 +265,7 @@ async function proxy(ctx: ApiCtx): Promise<void> {
       EXECUTE_TIMEOUT_MS,
     );
     await relay(ctx, account, result);
-    audit(ctx.deps, {
+    audit(ctx, {
       principalId: access.principal,
       action: "composio.proxy.completed",
       resource: `${account}/${resource}`,
@@ -273,7 +273,7 @@ async function proxy(ctx: ApiCtx): Promise<void> {
     });
   } catch (error) {
     if (account)
-      audit(ctx.deps, {
+      audit(ctx, {
         principalId: access.principal,
         action: "composio.proxy.failed",
         resource: `${account}/${resource}`,

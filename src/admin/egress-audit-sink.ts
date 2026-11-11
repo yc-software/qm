@@ -1,4 +1,5 @@
 import type { ScopeId } from "../types.ts";
+import type { Tenant } from "../tenants/context.ts";
 import { createTimestampedEventSink } from "./scoped-event-sink.ts";
 
 export interface EgressAuditRecord {
@@ -23,10 +24,16 @@ interface EgressAuditQuery {
 }
 
 export interface EgressAuditSink {
-  record(r: Omit<EgressAuditRecord, "ts">): void;
-  list(opts?: EgressAuditQuery): Promise<EgressAuditRecord[]>;
+  record(t: Tenant, r: Omit<EgressAuditRecord, "ts">): void;
+  list(t: Tenant, opts?: EgressAuditQuery): Promise<EgressAuditRecord[]>;
 }
 
-export function createEgressAuditSink(): EgressAuditSink {
+export interface EgressAuditRecorder {
+  record(r: Omit<EgressAuditRecord, "ts">): void;
+}
+
+export function createEgressAuditSink(): EgressAuditRecorder & {
+  list(opts?: EgressAuditQuery): Promise<EgressAuditRecord[]>;
+} {
   return createTimestampedEventSink<EgressAuditRecord>({ max: 10000, defaultLimit: 5000, equalityFields: ["source"] });
 }

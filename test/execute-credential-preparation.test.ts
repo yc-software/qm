@@ -1,3 +1,4 @@
+import { testTenant } from "./support/test-tenant.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createToolContext, type CommandCredential, type ToolContextDeps } from "../src/tools/primitives.ts";
@@ -18,6 +19,7 @@ function context(events: string[], credentials: CommandCredential[], extra: Part
     },
   } as unknown as Sandbox;
   const ctx = createToolContext({
+    tenant: testTenant,
     sandbox,
     async provision() {
       events.push("provision");
