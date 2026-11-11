@@ -1,4 +1,6 @@
 import type { Agent, AgentTurnInput } from "../src/agent/agent.ts";
+import { postTurn } from "../src/api/routes/turns.ts";
+import type { ApiCtx } from "../src/api/routes/route.ts";
 import { gatewayActorId } from "../src/model/provider-endpoints.ts";
 import { createMemoryBlobTransferStore, type BlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
@@ -1727,7 +1729,24 @@ test("a live turn in an app edit chat gets a small prompt of its own and six too
   await memory.capture(scopeId("personal", actor.id), ["my favorite color is chartreuse"], Date.now());
   const sent = async (thread: string, note: string, origin?: OrchestratorInput["origin"]) => {
     const turn = dm(thread, "what is my favorite color?", { surface: "web", conversationHeader: note, origin });
-    assert.equal((await orchestrator.handleTurn(turn)).status, "ok");
+    await postTurn({
+      body: {
+        text: turn.text,
+        actor: { externalId: actor.id },
+        conversation: turn.conversation,
+        conversationHeader: note,
+        surfaceBriefing: { name: "Drawer", state: "CLICKED_ELEMENT" },
+      },
+      url: new URL("https://qm.test/turn"),
+      res: { writeHead() {}, end() {} },
+      app: {
+        turn: async (request: TurnRequest) => {
+          const result = await orchestrator.handleTurn({ ...turn, conversationHeader: request.conversationHeader });
+          assert.equal(result.status, "ok");
+          return result;
+        },
+      },
+    } as unknown as ApiCtx);
     const body = JSON.parse(requests.findLast((request) => request.headers.get("x-qm-purpose") === "turn")!.body);
     return {
       system: JSON.stringify(body.system),
@@ -1749,6 +1768,8 @@ test("a live turn in an app edit chat gets a small prompt of its own and six too
     assert.deepEqual(edit.tools, ["app_files", "apps", "execute", "files", "history", "skills"]);
     for (const kept of ["ORG_RULE", "MY_RULE"]) assert.ok(edit.system.includes(kept), kept);
     assert.ok(!edit.system.includes("Deploy the app"));
-    assert.ok(edit.message.includes(note) && !edit.message.includes("chartreuse"));
+    assert.ok(
+      edit.message.includes(note) && edit.message.includes("CLICKED_ELEMENT") && !edit.message.includes("chartreuse"),
+    );
   }
 });
