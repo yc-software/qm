@@ -17,7 +17,7 @@ const HOST_OBJECTS = [
 
 export const RETIRE_0116_HOSTS: PgMigrationDefinition = {
   id: "0000-tenancy/retire-0116-hosts",
-  statements: [`SET LOCAL lock_timeout = '5s'`, ...HOST_OBJECTS],
+  statements: [`SET LOCAL lock_timeout = '5s'`, ...HOST_OBJECTS, "DROP FUNCTION IF EXISTS qm_tenant_for_host(text)"],
 };
 
 export function retire0116Tenancy(boundTenant: string): PgMigrationDefinition {

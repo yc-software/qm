@@ -68,15 +68,6 @@ const BOOT_TENANT: PgMigrationDefinition = {
   ],
 };
 
-const DROP_TENANT_HOSTS: PgMigrationDefinition = {
-  id: "0000-tenancy/tenant-hosts-drop",
-  statements: [
-    `SET LOCAL lock_timeout = '5s'`,
-    `DROP FUNCTION IF EXISTS qm_tenant_for_host(text)`,
-    `DROP TABLE IF EXISTS tenant_hosts`,
-  ],
-};
-
 const SERVING_TENANTS: PgMigrationDefinition = {
   id: "0000-tenancy/serving-tenants",
   statements: [
@@ -100,7 +91,6 @@ export const TENANCY: readonly PgMigrationDefinition[] = [
   BOOT_TENANT,
   TENANT_APP_HANDLES,
   RETIRE_0116_HOSTS,
-  DROP_TENANT_HOSTS,
   TENANT_APP_HANDLE_DNS_BOUND,
   TENANT_APP_HOSTS_BY_HANDLE,
   TENANT_APP_HOSTS_LEGACY_NAMES,
