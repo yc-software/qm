@@ -3466,6 +3466,7 @@ test("quarantined mail remains pending for release and mailbox failures preserve
   assert.equal(pending, true);
   assert.equal(ref.pausedOnApproval, true);
   release = true;
+  ref.pausedOnApproval = false;
   const second = await call(
     createAgentTools(ref).find((tool) => tool.name === "files"),
     { action: "read", path: "a.txt" },
