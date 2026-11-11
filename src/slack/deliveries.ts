@@ -372,7 +372,12 @@ export function createDeliveryPoller(deps: {
                 ...messageFooter,
                 ...(d.destination.debugFooter ? [{ type: "mrkdwn", text: d.destination.debugFooter }] : []),
               ];
-              const footerBlocks = genCard?.blocks ?? (footer.length ? blocksWithContext(text, footer) : undefined);
+              let footerBlocks: Array<Record<string, unknown>> | undefined;
+              if (genCard?.blocks) {
+                footerBlocks = [...genCard.blocks, ...(footer.length ? [{ type: "context", elements: footer }] : [])];
+              } else if (footer.length) {
+                footerBlocks = blocksWithContext(text, footer);
+              }
               if (!text.trim() && !(messageFooter.length && d.attachments?.length)) {
                 if (editRef) {
                   await client.chat
@@ -498,8 +503,14 @@ export function createDeliveryPoller(deps: {
               const threadTs = d.destination.threadTs;
               const footer = deliveryFooter(d);
               if (!text.trim() && !footer.length && d.attachments?.length) text = "Files attached.";
-              const blocks =
-                card?.blocks ?? directGenCard?.blocks ?? (footer.length ? blocksWithContext(text, footer) : undefined);
+              let blocks = card?.blocks;
+              if (!blocks) {
+                if (directGenCard?.blocks) {
+                  blocks = [...directGenCard.blocks, ...(footer.length ? [{ type: "context", elements: footer }] : [])];
+                } else if (footer.length) {
+                  blocks = blocksWithContext(text, footer);
+                }
+              }
               let uploadError: unknown;
               let reused = false;
               if (text.trim() || blocks) {

@@ -37,6 +37,8 @@ export interface ActionButton {
   style?: "primary" | "danger";
 }
 
+export const GENERATIVE_ACTION_PREFIX = "gen_ui:";
+
 export interface ActionsElement {
   type: "actions";
   buttons: ActionButton[];
@@ -52,7 +54,6 @@ export interface TableElement {
   headers: string[];
   rows: string[][];
 }
-
 export interface ProgressCardElement {
   type: "progress";
   title: string;
@@ -124,6 +125,9 @@ export function renderGenerativeUI(spec: GenerativeUISpec): {
         const elements = element.buttons.slice(0, 25).map((btn) => {
           const label =
             btn.label.length <= SLACK_BUTTON_TEXT_MAX ? btn.label : clip(btn.label, SLACK_BUTTON_TEXT_MAX - 1);
+          const actionId = btn.actionId.startsWith(GENERATIVE_ACTION_PREFIX)
+            ? btn.actionId
+            : `${GENERATIVE_ACTION_PREFIX}${btn.actionId}`;
           return {
             type: "button",
             text: {
@@ -131,7 +135,7 @@ export function renderGenerativeUI(spec: GenerativeUISpec): {
               text: label,
               emoji: true,
             },
-            action_id: btn.actionId,
+            action_id: actionId,
             value: btn.value,
             ...(btn.style ? { style: btn.style } : {}),
           };
@@ -204,8 +208,81 @@ export function parseGenerativeUISpec(content: string): GenerativeUISpec | null 
     if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null;
     const parsed = JSON.parse(trimmed) as Record<string, unknown>;
     if (parsed.schema !== "generative-ui.v1" || !Array.isArray(parsed.elements)) return null;
-    return parsed as unknown as GenerativeUISpec;
+
+    const validatedElements: GenerativeUIElement[] = [];
+    for (const raw of parsed.elements) {
+      if (!raw || typeof raw !== "object") continue;
+      const el = raw as Record<string, unknown>;
+      if (el.type === "header" && typeof el.text === "string" && el.text.trim()) {
+        validatedElements.push({ type: "header", text: el.text });
+      } else if (el.type === "section" && typeof el.text === "string" && el.text.trim()) {
+        validatedElements.push({ type: "section", text: el.text });
+      } else if (el.type === "divider") {
+        validatedElements.push({ type: "divider" });
+      } else if (el.type === "fields" && Array.isArray(el.fields)) {
+        const fields = el.fields
+          .filter(
+            (f): f is { title: string; value: string } =>
+              !!f && typeof f.title === "string" && typeof f.value === "string",
+          )
+          .map((f) => ({ title: f.title, value: f.value }));
+        if (fields.length > 0) validatedElements.push({ type: "fields", fields });
+      } else if (el.type === "actions" && Array.isArray(el.buttons)) {
+        const buttons = el.buttons
+          .filter(
+            (b): b is ActionButton =>
+              !!b && typeof b.label === "string" && typeof b.actionId === "string" && typeof b.value === "string",
+          )
+          .map((b) => ({
+            label: b.label,
+            actionId: b.actionId,
+            value: b.value,
+            ...(b.style === "primary" || b.style === "danger" ? { style: b.style } : {}),
+          }));
+        if (buttons.length > 0) validatedElements.push({ type: "actions", buttons });
+      } else if (el.type === "context" && Array.isArray(el.elements)) {
+        const elements = el.elements.filter((item): item is string => typeof item === "string" && !!item.trim());
+        if (elements.length > 0) validatedElements.push({ type: "context", elements });
+      } else if (el.type === "table" && Array.isArray(el.headers) && Array.isArray(el.rows)) {
+        const headers = el.headers.filter((h): h is string => typeof h === "string");
+        const rows = el.rows
+          .filter((r): r is unknown[] => Array.isArray(r))
+          .map((r) => r.map((c) => (c === null || c === undefined ? "" : String(c))));
+        if (headers.length > 0 && rows.length > 0) validatedElements.push({ type: "table", headers, rows });
+      } else if (el.type === "progress" && typeof el.title === "string" && typeof el.status === "string") {
+        const status = ["queued", "in_progress", "complete", "failed"].includes(el.status)
+          ? (el.status as ProgressCardElement["status"])
+          : "in_progress";
+        const percentage =
+          typeof el.percentage === "number" && Number.isFinite(el.percentage) ? el.percentage : undefined;
+        const step = typeof el.step === "string" ? el.step : undefined;
+        validatedElements.push({
+          type: "progress",
+          title: el.title,
+          status,
+          ...(percentage !== undefined ? { percentage } : {}),
+          ...(step ? { step } : {}),
+        });
+      }
+    }
+
+    if (validatedElements.length === 0) return null;
+
+    return {
+      ...(typeof parsed.fallbackText === "string" && parsed.fallbackText.trim()
+        ? { fallbackText: parsed.fallbackText }
+        : {}),
+      elements: validatedElements,
+    };
   } catch {
     return null;
   }
+}
+
+export function registerGenerativeUIActions(app: {
+  action(pattern: RegExp, handler: (args: any) => Promise<void>): void;
+}): void {
+  app.action(new RegExp(`^${GENERATIVE_ACTION_PREFIX}`), async ({ ack }) => {
+    await ack();
+  });
 }

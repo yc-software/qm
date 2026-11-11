@@ -3,6 +3,7 @@ import { externalSlackNamespace, type ExternalSlackAccess } from "./external-acc
 import { registerKeychainApprovalActions } from "./keychain-approvals.ts";
 import { registerFinnyApprovalActions } from "./finny-approvals.ts";
 import { registerDeployAccessActions } from "./deploy-access.ts";
+import { registerGenerativeUIActions } from "./generative-ui.ts";
 import { SlackPluginStartCleanupError } from "../surfaces/slack-runtime.ts";
 import { createSlackRateLimitNotice } from "./rate-limit-notice.ts";
 import { createSlackHistoryReader } from "./history.ts";
@@ -367,6 +368,7 @@ export async function startSlackPlugin(
   });
   approvals.registerActions(app);
   registerFinnyApprovalActions(app, { bridge: core.finnyApprovals, directory });
+  registerGenerativeUIActions(app);
   const inboxMessage = (
     client: unknown,
     msg: {

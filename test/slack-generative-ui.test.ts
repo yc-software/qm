@@ -61,8 +61,27 @@ test("parseGenerativeUISpec detects and parses generative-ui.v1 JSON specs", () 
   assert.ok(blockTypes.includes("divider"));
   assert.ok(blockTypes.includes("actions"));
   assert.ok(blockTypes.includes("context"));
+  const actionBlock = rendered.blocks.find((b) => b.type === "actions") as { elements: Array<{ action_id: string }> };
+  assert.ok(actionBlock);
+  assert.ok(actionBlock.elements[0]!.action_id.startsWith("gen_ui:"));
 });
 
+test("parseGenerativeUISpec filters out malformed elements cleanly without throwing", () => {
+  const malformed = JSON.stringify({
+    schema: "generative-ui.v1",
+    elements: [
+      null,
+      {},
+      { type: "header" },
+      { type: "section", text: "Valid section" },
+      { type: "table", headers: "not-array" },
+    ],
+  });
+  const parsed = parseGenerativeUISpec(malformed);
+  assert.ok(parsed);
+  assert.equal(parsed.elements.length, 1);
+  assert.equal(parsed.elements[0]!.type, "section");
+});
 test("parseGenerativeUISpec returns null on plain text or non-generative content", () => {
   assert.equal(parseGenerativeUISpec("Hello world!"), null);
   assert.equal(parseGenerativeUISpec(""), null);
