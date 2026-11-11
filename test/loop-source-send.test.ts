@@ -35,12 +35,21 @@ function gmailFetch(send: (init: RequestInit) => Response): typeof fetch {
   const original = {
     id: "m1",
     payload: {
-      mimeType: "text/plain",
       headers: [
         { name: "From", value: "Ada <ada@example.com>" },
         { name: "Date", value: "Tue, 10 Nov 2026 12:36:00 -0800" },
       ],
-      body: { data: Buffer.from("Numbers attached.\n> older").toString("base64url") },
+      parts: [
+        { mimeType: "text/plain", body: { data: Buffer.from("Numbers attached.\n> older").toString("base64url") } },
+        {
+          mimeType: "text/html",
+          body: {
+            data: Buffer.from(
+              "<html><head><style>p{}</style></head><body><div>Numbers attached.</div></body></html>",
+            ).toString("base64url"),
+          },
+        },
+      ],
     },
   };
   return (async (url: Parameters<typeof fetch>[0], init?: RequestInit) =>
@@ -122,7 +131,11 @@ test("subjects keep an existing Re: and non-ASCII subjects get RFC 2047 encoding
 
 test("a gmail item with no recipient anywhere refuses to send", async () => {
   const result = await gmailAdapter.act(
-    { owner: "josh", tokens: tokens({ "gmail.googleapis.com": "tok" }) },
+    {
+      owner: "josh",
+      tokens: tokens({ "gmail.googleapis.com": "tok" }),
+      fetchImpl: gmailFetch(() => Response.json({})),
+    },
     item("gmail", { gmail: { threadId: "t1" } }),
     "send",
     { body: "hello" },
@@ -158,9 +171,11 @@ test("gmail send posts base64url raw with the thread id", async () => {
   const texts = mimeTexts(Buffer.from(body.raw, "base64url").toString("utf8"));
   assert.equal(
     texts["text/plain"],
-    "Confirmed.\n\nOn Tue, 10 Nov 2026 12:36:00 -0800 Ada <ada@example.com> wrote:\n\n> Numbers attached.\n>> older",
+    "Confirmed.\n\nOn Tue, Nov 10, 2026 at 12:36 PM Ada <ada@example.com> wrote:\n\n> Numbers attached.\n>> older",
   );
-  assert.ok(texts["text/html"]!.includes('<blockquote class="gmail_quote"'), "html quotes the thread like Gmail");
+  const html = texts["text/html"]!;
+  assert.ok(html.includes('Ada &lt;<a href="mailto:ada@example.com">ada@example.com</a>&gt; wrote:'), "sender links");
+  assert.ok(html.includes('padding-left:1ex"><div>Numbers attached.</div></blockquote>'), "original html nested bare");
 });
 
 test("a Gmail send refusal reports the upstream status and response excerpt", async () => {
@@ -177,7 +192,7 @@ test("a Gmail send refusal reports the upstream status and response excerpt", as
   assert.deepEqual(result, {
     ok: false,
     reason: "upstream",
-    message: "Gmail refused the send (400): Recipient address rejected",
+    message: "Gmail messages/send returned 400: Recipient address rejected",
   });
 });
 

@@ -37,7 +37,8 @@ import sys
 import urllib.parse
 from email.message import EmailMessage
 from email.policy import SMTP
-from email.utils import formataddr, getaddresses
+from email.utils import formataddr, getaddresses, parseaddr, parsedate_to_datetime
+from html.parser import HTMLParser
 
 API = "https://gmail.googleapis.com/gmail/v1/users/me"
 
@@ -155,22 +156,73 @@ def build_raw(headers: dict[str, str], body: str, thread_id: str | None = None,
     return {"raw": raw, **({"threadId": thread_id} if thread_id else {})}
 
 
+def attribution(h: dict[str, str]) -> tuple[str, str]:
+    try:
+        dt = parsedate_to_datetime(h.get("date", ""))
+        when = f"{dt:%a, %b} {dt.day}, {dt.year} at {dt.hour % 12 or 12}:{dt:%M %p} "
+    except (TypeError, ValueError):
+        when = ""
+    name, addr = parseaddr(h.get("from", ""))
+    link = f'<a href="mailto:{html.escape(addr)}">{html.escape(addr)}</a>'
+    who_html = f"{html.escape(name)} &lt;{link}&gt;" if name else link
+    return f"On {when}{h.get('from', '')} wrote:", f"On {html.escape(when)}{who_html} wrote:"
+
+
+class HtmlQuote(HTMLParser):
+    HIDDEN = {"head", "style", "script", "title"}
+
+    def __init__(self, source: str):
+        super().__init__(convert_charrefs=True)
+        self.markup: list[str] = []
+        self.text: list[str] = []
+        self.hidden = 0
+        self.feed(source)
+        self.close()
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self.HIDDEN:
+            self.hidden += 1
+        elif not self.hidden and tag not in ("html", "body"):
+            self.markup.append(self.get_starttag_text() or "")
+            if tag == "br":
+                self.text.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in self.HIDDEN:
+            self.hidden = max(0, self.hidden - 1)
+        elif not self.hidden and tag not in ("html", "body", "br"):
+            self.markup.append(f"</{tag}>")
+            if tag in ("div", "p"):
+                self.text.append("\n")
+
+    def handle_data(self, data):
+        if not self.hidden:
+            self.markup.append(html.escape(data, quote=False))
+            self.text.append(data)
+
+
 def quote_of(msg: dict) -> tuple[str, str] | None:
     payload = msg["payload"]
     h = headers_of(payload)
-    plain = part_text(payload, "text/plain").replace("\r\n", "\n").strip("\n")
+    plain = part_text(payload, "text/plain")
+    rich = part_text(payload, "text/html")
+    if rich:
+        parsed = HtmlQuote(rich)
+        rich = "".join(parsed.markup)
+        plain = plain or "".join(parsed.text)
+    plain = plain.replace("\r\n", "\n").strip("\n")
     if not plain:
-        print(f"note: {h.get('message-id', 'the original')} has no plain-text part; reply saved without a quote",
+        print(f"note: {h.get('message-id', 'the original')} has no text to quote; reply saved without a quote",
               file=sys.stderr)
         return None
-    attr = f"On {h.get('date', '')} {h.get('from', '')} wrote:"
-    quoted_plain = attr + "\n\n" + "\n".join(">" + (" " + ln if ln and not ln.startswith(">") else ln)
-                                              for ln in plain.split("\n"))
+    attr_plain, attr_html = attribution(h)
+    quoted_plain = attr_plain + "\n\n" + "\n".join(">" + (" " + ln if ln and not ln.startswith(">") else ln)
+                                                    for ln in plain.split("\n"))
     quoted_html = (
         '<br><div class="gmail_quote gmail_quote_container">'
-        f'<div dir="ltr" class="gmail_attr">{html.escape(attr)}<br></div>'
+        f'<div dir="ltr" class="gmail_attr">{attr_html}<br></div>'
         '<blockquote class="gmail_quote" style="margin:0px 0px 0px 0.8ex;'
-        f'border-left:1px solid rgb(204,204,204);padding-left:1ex">{html_alternative(plain)}</blockquote></div>'
+        f'border-left:1px solid rgb(204,204,204);padding-left:1ex">{rich or html_alternative(plain)}</blockquote></div>'
     )
     return quoted_plain, quoted_html
 
@@ -317,7 +369,7 @@ def main() -> None:
         message = build_raw({"To": a.to, "Subject": a.subject}, read_body(a.body_file))
         print(json.dumps(call("POST", "drafts", {"message": message})))
     elif a.cmd == "reply":
-        orig = call("GET", f"messages/{a.id}", query={"format": "full"})
+        orig = call("GET", f"messages/{a.id}", query={"format": "metadata"})
 
 
         latest = sent_messages(call("GET", f"threads/{orig['threadId']}",

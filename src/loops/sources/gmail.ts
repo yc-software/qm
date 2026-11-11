@@ -1,4 +1,6 @@
 import MailComposer from "nodemailer/lib/mail-composer";
+import addressparser from "nodemailer/lib/addressparser";
+import { DomUtils, parseDocument } from "htmlparser2";
 import type { LoopItem, LoopSourcePayload } from "../types.ts";
 import { isAccountType } from "../../connectors/oauth.ts";
 import {
@@ -105,21 +107,60 @@ const quoteLine = (line: string): string => {
   return line ? `> ${line}` : ">";
 };
 
-export function gmailQuote(message: Record<string, unknown>): GmailQuote | undefined {
-  const payload = isObj(message.payload) ? message.payload : {};
-  const plain = gmailPartText(payload)?.replaceAll("\r\n", "\n").trim();
-  if (!plain) return undefined;
-  const attribution = `On ${gmailHeader(payload, "Date")} ${gmailHeader(payload, "From")} wrote:`;
+const HIDDEN_HTML = new Set(["head", "style", "script", "title"]);
+
+function bodyMarkup(html: string): { markup: string; text: string } {
+  const doc = parseDocument(html);
+  for (const hidden of DomUtils.findAll((el) => HIDDEN_HTML.has(el.name), doc.children)) DomUtils.removeElement(hidden);
+  const body = DomUtils.findOne((el) => el.name === "body", doc.children);
   return {
-    text: `${attribution}\n\n${plain.split("\n").map(quoteLine).join("\n")}`,
-    html:
-      `<br><div class="gmail_quote gmail_quote_container"><div dir="ltr" class="gmail_attr">${escapeHtml(attribution)}<br></div>` +
-      `<blockquote class="gmail_quote" style="margin:0px 0px 0px 0.8ex;border-left:1px solid rgb(204,204,204);padding-left:1ex">${htmlMirror(plain)}</blockquote></div>`,
+    markup: body ? DomUtils.getInnerHTML(body) : DomUtils.getOuterHTML(doc),
+    text: DomUtils.innerText(body ?? doc),
   };
 }
 
-function replyRecipients(meta: GmailMeta, draft: ReplyDraft): string[] {
-  return draft.to ?? meta.to ?? [];
+const isOffset = (token: string): boolean =>
+  token.length === 5 && "+-".includes(token[0]!) && [...token.slice(1)].every((c) => c >= "0" && c <= "9");
+
+function gmailDate(header: string): string {
+  const ms = Date.parse(header);
+  const zone = header.split(" ").find(isOffset);
+  if (Number.isNaN(ms) || !zone) return header;
+  const minutes = (zone[0] === "-" ? -1 : 1) * (Number(zone.slice(1, 3)) * 60 + Number(zone.slice(3)));
+  const local = new Date(ms + minutes * 60_000);
+  const day = local.toLocaleDateString("en-US", {
+    timeZone: "UTC",
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+  const time = local.toLocaleTimeString("en-US", { timeZone: "UTC", hour: "numeric", minute: "2-digit" });
+  return `${day} at ${time.replaceAll("\u202f", " ")}`;
+}
+
+function attribution(payload: Record<string, unknown>): { text: string; html: string } {
+  const from = gmailHeader(payload, "From");
+  const when = gmailDate(gmailHeader(payload, "Date"));
+  const [sender] = addressparser(from, { flatten: true });
+  const link = sender ? `<a href="mailto:${escapeHtml(sender.address)}">${escapeHtml(sender.address)}</a>` : "";
+  const who = sender?.name ? `${escapeHtml(sender.name)} &lt;${link}&gt;` : link || escapeHtml(from);
+  return { text: `On ${when} ${from} wrote:`, html: `On ${escapeHtml(when)} ${who} wrote:` };
+}
+
+export function gmailQuote(message: Record<string, unknown>): GmailQuote | undefined {
+  const payload = isObj(message.payload) ? message.payload : {};
+  const rich = gmailPartText(payload, "text/html");
+  const parsed = rich ? bodyMarkup(rich) : undefined;
+  const plain = (gmailPartText(payload) ?? parsed?.text ?? "").replaceAll("\r\n", "\n").trim();
+  if (!plain) return undefined;
+  const attr = attribution(payload);
+  return {
+    text: `${attr.text}\n\n${plain.split("\n").map(quoteLine).join("\n")}`,
+    html:
+      `<br><div class="gmail_quote gmail_quote_container"><div dir="ltr" class="gmail_attr">${attr.html}<br></div>` +
+      `<blockquote class="gmail_quote" style="margin:0px 0px 0px 0.8ex;border-left:1px solid rgb(204,204,204);padding-left:1ex">${parsed?.markup ?? htmlMirror(plain)}</blockquote></div>`,
+  };
 }
 
 export async function buildGmailReplyMime(
@@ -131,7 +172,7 @@ export async function buildGmailReplyMime(
   if (!meta) return null;
   const parsed = parseReplyDraft(draft);
   if (!parsed) return null;
-  const to = replyRecipients(meta, parsed);
+  const to = parsed.to ?? meta.to ?? [];
   if (to.length === 0) return null;
   const rfcId = meta.rfcMessageId;
   return new MailComposer({
@@ -162,8 +203,6 @@ async function sendGmail(deps: SourceActionDeps, item: LoopItem, draft: ReplyDra
   if (!meta) return { ok: false, reason: "bad_item", message: "invalid Gmail metadata" };
   const token = await gmailToken(deps.tokens, deps.owner, item);
   if (!token) return { ok: false, reason: "not_connected", message: "Google is not connected for this account" };
-  if (replyRecipients(meta, draft).length === 0)
-    return { ok: false, reason: "bad_item", message: "no recipient — add a To: address to the draft" };
   const api = gmailApi(token, fetchImpl);
   try {
     const original = await repliedMessage(api, meta);
@@ -175,7 +214,7 @@ async function sendGmail(deps: SourceActionDeps, item: LoopItem, draft: ReplyDra
     });
   } catch (error) {
     if (!(error instanceof GmailApiError)) throw error;
-    return { ok: false, reason: "upstream", message: `Gmail refused the send (${error.status}): ${error.detail}` };
+    return { ok: false, reason: "upstream", message: `${error.message}: ${error.detail}` };
   }
   return { ok: true, result: draft.body };
 }
