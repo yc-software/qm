@@ -1,6 +1,7 @@
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import type { ScopeId } from "../types.ts";
-import { gatewayUpstream } from "./gateway-models.ts";
+import { gatewayUpstreamModelId } from "./gateway-models.ts";
+import { reportFailureAs } from "../util/errors.ts";
 import type { ModelRoutes } from "./model-route.ts";
 import { defaultModelForProvider, resolveModel } from "./pi-models.ts";
 import type { ModelProvider } from "./provider-endpoints.ts";
@@ -20,11 +21,14 @@ export async function moveGatewayDefaultsToProvider(
   org: ScopeId,
 ): Promise<MovedDefault[]> {
   const target = (id: string) => {
-    const native = gatewayUpstream(id)?.modelId ?? id;
+    const native = gatewayUpstreamModelId(id) ?? id;
     return resolveModel(native)?.provider === provider ? native : defaultModelForProvider(provider);
   };
   const destination = async (id: string) =>
-    (await routes.route(id).catch(() => undefined))?.billing === "model_gateway" ? target(id) : undefined;
+    (await routes.route(id).catch(reportFailureAs(`own provider defaults: route ${id}`, undefined)))?.billing ===
+    "model_gateway"
+      ? target(id)
+      : undefined;
   const moved: MovedDefault[] = [];
   const base = await config.getRuntimeSelectionDurable(org);
   const baseId = base?.modelId ?? routes.baseModelId();

@@ -26,10 +26,18 @@ const flagLabels: Record<string, string> = {
   auxiliary: "Eligible for auxiliary tasks",
 };
 const errorText = (error: unknown) => (error instanceof Error ? error.message : "Request failed.");
+const movedSettingLabels: Record<string, string> = {
+  "base-model": "Base model",
+  "fallback-runtime": "Fallback model",
+  "cron-runtime": "Cron model",
+  "subagent-runtime": "Subagent model",
+  "appEdit-runtime": "App edit model",
+};
+
 function providerSavedMessage(modelId: string, selected: { ok: boolean; data?: Data }, moved: Data[] = []) {
   const switched = moved.length
     ? " Defaults that used the model gateway now use this key: " +
-      moved.map((m) => m.setting + " " + m.from + " → " + m.to).join(", ") +
+      moved.map((m) => (movedSettingLabels[m.setting] || m.setting) + " " + m.from + " → " + m.to).join(", ") +
       "."
     : "";
   if (!modelId) return (moved.length ? "Key saved." : "Key saved. The base model is unchanged.") + switched;

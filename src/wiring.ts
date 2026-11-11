@@ -4,7 +4,6 @@ import { onTenantLoad, perTenant } from "./tenants/cache.ts";
 import { loadTenantSettings, TENANT_SETTINGS_REFRESH_MS } from "./tenants/settings.ts";
 import { nonDeploymentCredential, withDeploymentCredentials } from "./credentials/deployment-credentials.ts";
 import { resolveEmbeddingModel } from "./model/pi-models.ts";
-import { isGatewayModelId } from "./model/gateway-models.ts";
 import { createPostgresTeamStore, type TeamStore } from "./teams/teams.ts";
 import type { DecisionBackend } from "./decisions/decisions.ts";
 import { createDecisionHooks, createReplyCheck, routeTurnRuntime, turnStartState } from "./decisions/hooks.ts";
@@ -1422,9 +1421,8 @@ export function buildApp(
   const resolveMemoryEmbedder = async (id: string): Promise<MemoryEmbedder> => {
     const model = resolveEmbeddingModel(id);
     if (!model) throw new Error(`Embedding model unavailable: ${id}`);
-    const own = !isGatewayModelId(model.id) && (await ownModelProviders()).has(String(model.provider));
     const key = model.provider === "openai" ? await modelCredentials.resolve("openai") : null;
-    return createMemoryEmbedder(model, key, own ? undefined : gatewayTransport, overrides.modelCredentialFetch);
+    return createMemoryEmbedder(model, key, await modelRoutes.companyGateway(model), overrides.modelCredentialFetch);
   };
   const resolveModelProviderKeys = async () => {
     await refreshModels();
@@ -2240,7 +2238,7 @@ export function buildApp(
     ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
     capabilityTokenCompression: config.capabilityTokenCompression,
     ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-    ...(gatewayTransport ? { sandboxModels: async () => !(await ownModelProviders()).size } : {}),
+    ...(gatewayTransport ? { sandboxModels: true } : {}),
     ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),
     ...(config.deployAppsDomain ? { deployAppsDomain: config.deployAppsDomain } : {}),
     ...(config.resendApiKey && config.emailFrom
