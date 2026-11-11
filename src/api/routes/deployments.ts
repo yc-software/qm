@@ -1614,7 +1614,7 @@ async function visibleDeploymentsExport(ctx: BaseCtx): Promise<void> {
       ...(d.displayName ? { displayName: d.displayName } : {}),
       url: appUrlOf(byId.get(d.id) ?? d, { sharedWebUrl: deps.portalUrl, appsDomain: deps.deployAppsDomain }) ?? null,
       createdBy: d.createdBy,
-      owned: d.ownerScopeId === personalScope(principalId) || d.createdBy === principalId,
+      owned: d.ownerScopeId === personalScope(principalId),
       permission: d.permission,
       ...(d.updatedAt !== undefined ? { updatedAt: d.updatedAt } : {}),
       ...(d.lastAccessAt !== undefined ? { lastAccessAt: d.lastAccessAt } : {}),

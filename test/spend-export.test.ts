@@ -116,7 +116,12 @@ test("deployment export: lists the person's live Apps page apps with their addre
       versions: [{ version: 1, createdAt: 1, entrypoint: "x", snapshotDir: "/s" }],
     });
     const own = { ...app("own", "running"), ownerScopeId: scopeId("personal", "alice@example.com") };
-    const fleet = [app("live", "running"), app("gone", "archived"), own];
+    const given = {
+      ...app("given", "running"),
+      createdBy: "alice@example.com",
+      ownerScopeId: scopeId("personal", "bob@example.com"),
+    };
+    const fleet = [app("live", "running"), app("gone", "archived"), own, given];
     s.built.app.listDeployments = async () => fleet;
     s.built.app.listDeploymentsForViewer = async ({ actorId }) =>
       actorId === "alice@example.com" ? fleet.map((d) => ({ ...deploymentView(d), permission: "read" as const })) : [];
@@ -127,9 +132,17 @@ test("deployment export: lists the person's live Apps page apps with their addre
     assert.deepEqual(deployments, [
       { id: "live", name: "live", ...shown, url: "https://live.apps.example.com/", owned: false, viewedAt: 7 },
       { id: "own", name: "own", ...shown, url: "https://own.apps.example.com/", owned: true },
+      {
+        id: "given",
+        name: "given",
+        ...shown,
+        createdBy: "alice@example.com",
+        url: "https://given.apps.example.com/",
+        owned: false,
+      },
     ]);
     const events = (await s.built.auditLog.events(testTenant)).map((e) => [e.resource, e.detail]);
-    assert.deepEqual(events, [["alice@example.com", "deployments=2"]]);
+    assert.deepEqual(events, [["alice@example.com", "deployments=3"]]);
   } finally {
     await s.close();
   }
