@@ -21,6 +21,7 @@ import { frameAncestorsDirective, sendJson, UNTRUSTED_CONTENT_SANDBOX_CSP, verif
 import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
 import { audit, authorizeAdmin, exportTokenAccepted, isObj, orgScope } from "./shared.ts";
 import { personalScope, scopeId, type Permission } from "../../types.ts";
+import { resolveBranding } from "../../resolution/branding.ts";
 import { tenantOf, type ApiCtx, type BaseCtx, type Route } from "./route.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
 import { verifyDeployGitAccess, viewerIdentityKey } from "../../deploy/access-token.ts";
@@ -956,14 +957,21 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     }
     if (isShellRequest) {
       if (pathname === "/__claw__/version" && deployment) {
-        const [draft, grantees] = await Promise.all([
+        const [draft, grantees, branding] = await Promise.all([
           app.deploymentLiveEdit(deployment.id).then((edit) => edit?.draft),
           app.deploymentGrantees(deployment.id),
+          resolveBranding(deps.config, orgScope(deps), deps.brandingDefault),
         ]);
         sendJson(res, 200, {
           version: deployment.appliedVersion ?? deployment.currentVersion,
           ...(draft ? { live: draft.reloads } : {}),
-          access: appAccess({ ownerScopeId: deployment.ownerScopeId, public: isPublic, grantees, viewer: sub! }),
+          access: appAccess({
+            ownerScopeId: deployment.ownerScopeId,
+            public: isPublic,
+            grantees,
+            viewer: sub!,
+            orgName: branding.orgName,
+          }),
         });
       } else if (
         annotationsEnabled &&

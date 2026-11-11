@@ -482,7 +482,7 @@ test("app shell: the version poll tells the top bar who can open the app", async
     await f.app.shareDeployment(f.d.id, "org:acme", "read", { createdBy: "U1" });
     const after = JSON.parse((await httpGet(f.port, "/__claw__/version", headers)).body).access;
     assert.equal(after.level, "org", "a sharing change shows up on the next poll");
-    assert.equal(after.label, "Organization");
+    assert.equal(after.label, "Your organization");
   } finally {
     await f.close();
   }
@@ -505,4 +505,6 @@ test("app shell: access summary wording", async () => {
   const mixed = appAccess({ ...base, grantees: [{ scope: "channel:C1" }, { scope: "personal:a" }] });
   assert.equal(mixed.label, "Shared");
   assert.equal(mixed.detail, "Shared with 1 channel and 1 person");
+  const org = appAccess({ ...base, grantees: [{ scope: "org:acme" }], orgName: "Acme" });
+  assert.deepEqual([org.label, org.detail], ["Acme", "Anyone signed in to Acme can open"]);
 });

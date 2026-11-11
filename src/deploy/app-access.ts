@@ -26,13 +26,21 @@ export function appAccess(opts: {
   public: boolean;
   grantees: ReadonlyArray<{ scope: string }>;
   viewer: string;
+  orgName?: string | undefined;
 }): AppAccess {
   const canEdit = canEditAppPermissions(opts.ownerScopeId, opts.viewer);
   const general = generalAccessOf(opts);
   if (general === "public") return { level: "public", label: "Public", detail: PUBLIC_ACCESS_NOTE, canEdit };
-  if (general === "org")
-    return { level: "org", label: "Organization", detail: orgAccessNote("your organization"), canEdit };
-  const owner = opts.ownerScopeId.startsWith("personal:") ? [] : [opts.ownerScopeId];
+  if (general === "org") {
+    const org = opts.orgName?.trim();
+    return {
+      level: "org",
+      label: org || "Your organization",
+      detail: orgAccessNote(org || "your organization"),
+      canEdit,
+    };
+  }
+  const owner = parseScopeId(opts.ownerScopeId).kind === "personal" ? [] : [opts.ownerScopeId];
   const kinds = [...new Set([...owner, ...opts.grantees.map((g) => g.scope)])].flatMap(
     (scope) => parseScopeId(scope).kind ?? [],
   );
