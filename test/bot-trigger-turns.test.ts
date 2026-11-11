@@ -38,7 +38,7 @@ test("a cron a Slack bot's turn creates runs as the bot's work, with a bot turn'
     },
   };
   const built = buildApp(testConfig({}), { agent });
-  const control = createControlService(built.app, built.scheduler, built.admin);
+  const control = createControlService(built.app, built.scheduler);
   const fire = async (claims: CapabilityClaims) => {
     const created = await control.createCron(
       { schedule: { everyMs: 3_600_000 }, action: "post the release notes" },

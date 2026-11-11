@@ -56,6 +56,7 @@ async function call(
   isAdmin = true,
   managesScope = false,
   botActor = false,
+  triggered = false,
 ): Promise<{ status: number; body: unknown }> {
   const found = findRoute(loopRoutes as ReadonlyArray<Route<ApiCtx>>, method, path);
   assert.ok(found, `no route for ${method} ${path}`);
@@ -75,6 +76,7 @@ async function call(
             scopeId: scopeId("personal", actor),
             ...(liveActor ? { liveActor: true } : {}),
             ...(botActor ? { botActor: true } : {}),
+            ...(triggered ? { triggered: true } : {}),
             destinations: [{ key: "alerts", label: "Alerts", type: "slack", target: "C-alerts" }],
           }
         : null,
@@ -108,6 +110,20 @@ test("creating a loop with a schedule creates a bound child cron", async () => {
   const cron = await deps.crons!.get(loop.cronId!);
   assert.equal(cron?.loopId, loop.id);
   assert.equal(cron?.title, "Loop: Sentry triage");
+});
+
+test("a playbook an automated turn wrote is marked, until its owner rewrites it at the keyboard", async () => {
+  const deps = services();
+  const fire = (method: string, path: string, body: unknown) =>
+    call(deps, method, path, body, "josh", "capability", true, true, false, false, true);
+  const made = await fire("POST", "/v1/loops", CREATE);
+  assert.equal(made.status, 200);
+  const loop = (made.body as { loop: Loop }).loop;
+  assert.equal(loop.taskAuthor, "automation");
+  const typed = await call(deps, "PATCH", `/v1/loops/${loop.id}`, { playbook: "Triage Sentry, then summarise." });
+  assert.equal((typed.body as { loop: Loop }).loop.taskAuthor, undefined);
+  const rewritten = await fire("PATCH", `/v1/loops/${loop.id}`, { successCondition: "Every transcript is read." });
+  assert.equal((rewritten.body as { loop: Loop }).loop.taskAuthor, "automation");
 });
 
 test("create parses and validates schedules before storing the loop", async () => {
@@ -148,6 +164,21 @@ test("create and patch configure a validated escalation destination", async () =
   );
   assert.equal(denied.status, 403);
   assert.equal((denied.body as { error: string }).error, "human_required");
+  const fromFire = await call(
+    deps,
+    "PATCH",
+    `/v1/loops/${loop.id}`,
+    { destinationKey: "alerts" },
+    "josh",
+    "capability",
+    true,
+    true,
+    false,
+    false,
+    true,
+  );
+  assert.equal(fromFire.status, 403, "the owner's own fire carries their authority but is nobody at the keyboard");
+  assert.equal((fromFire.body as { error: string }).error, "human_required");
   const restored = await call(deps, "PATCH", `/v1/loops/${loop.id}`, { destinationKey: "alerts" });
   assert.equal((restored.body as { loop: Loop }).loop.destination?.target, "C-alerts");
 });
@@ -757,16 +788,10 @@ test("only a live human can re-enable an archived loop", async () => {
   assert.equal((revived.body as { loop: Loop }).loop.state, "enabled");
 });
 
-async function privilegedLoop(deps: LoopServiceDeps): Promise<Loop> {
+test("a bound loop's config and manual fires need only its owner, not a live turn", async () => {
+  const deps = services();
   const created = await call(deps, "POST", "/v1/loops", { ...CREATE, schedule: { everyMs: 60_000 } });
   const loop = (created.body as { loop: Loop }).loop;
-  await deps.crons!.update(loop.cronId!, { unattendedGrants: ["admin.sessions.read"] });
-  return loop;
-}
-
-test("privileged loop config and manual fires use the cron live-owner-admin gate", async () => {
-  const deps = services();
-  const loop = await privilegedLoop(deps);
   let fires = 0;
   deps.fire = {
     fire: async () => {
@@ -774,34 +799,19 @@ test("privileged loop config and manual fires use the cron live-owner-admin gate
       return { status: "ok" };
     },
   } as never;
-  for (const [method, suffix, body] of [
-    ["PATCH", "", { playbook: "changed instructions" }],
-    ["PATCH", "", { successCondition: "changed condition" }],
-    ["PATCH", "", { state: "enabled" }],
-    ["POST", "/fire", {}],
-    ["POST", "/autopilot", { enabled: true }],
-    ["POST", "/grants", { shipAction: "open_pr" }],
-    ["POST", "/outputs/output/decide", { decision: "return", note: "new instructions" }],
-  ] as const) {
-    const path = `/v1/loops/${loop.id}${suffix}`;
-    assert.equal((await call(deps, method, path, body, "josh", "capability", false)).status, 403);
-    assert.equal((await call(deps, method, path, body, "josh", "capability", true, false)).status, 403);
-    assert.equal((await call(deps, method, path, body, "mallory", "capability", true, true, true)).status, 403);
-    assert.equal((await call(deps, method, path, body, "josh", "source")).status, 403);
-  }
-  assert.equal(fires, 0);
-  assert.equal((await deps.store.get(loop.id))?.playbook, loop.playbook);
-  const permitted = await call(deps, "PATCH", `/v1/loops/${loop.id}`, { playbook: "owner revision" });
-  assert.equal(permitted.status, 200);
-  assert.deepEqual((await deps.crons!.get(loop.cronId!))?.unattendedGrants, ["admin.sessions.read"]);
-  assert.equal((await call(deps, "POST", `/v1/loops/${loop.id}/fire`, {})).status, 200);
-  assert.equal(fires, 1);
-  await deps.crons!.update(loop.cronId!, { unattendedGrants: [] });
-  assert.equal(
-    (await call(deps, "PATCH", `/v1/loops/${loop.id}`, { playbook: "ordinary revision" }, "josh", "capability", false))
-      .status,
-    200,
+  const revised = await call(
+    deps,
+    "PATCH",
+    `/v1/loops/${loop.id}`,
+    { playbook: "owner revision" },
+    "josh",
+    "capability",
+    false,
   );
+  assert.equal(revised.status, 200);
+  assert.equal((await deps.store.get(loop.id))?.playbook, "owner revision");
+  assert.equal((await call(deps, "POST", `/v1/loops/${loop.id}/fire`, {}, "josh", "capability", false)).status, 200);
+  assert.equal(fires, 1);
 });
 
 test("loop icons can be set and reset by their owner, reject invalid input and retain authorization", async () => {

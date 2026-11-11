@@ -32,24 +32,26 @@ conversation's audience may see. For cloud operations, also load cloud-cli.
 
 Limits the API enforces (don't offer what it will refuse):
 
-- Your token elevates only on turns the admin **started themselves** — on autonomous
-  runs (crons, webhooks) the admin plane refuses it, whoever owns the run.
+- Your token elevates on turns that carry the admin's **own authority**: a turn they
+  typed, or a cron, webhook or loop fire they own (a fire runs as the person whose
+  standing instructions it carries). Bot actors, external audiences and session
+  messages whose authorization chain can't be verified carry none.
 - Reads that return private content — transcripts, files, notebooks, logs, another
-  scope's config — work from a **DM** with the admin, or from an **Open** conversation
-  on a live admin turn. Organization, personal, and conversation sharing restrictions
+  scope's config — work from a **DM** with the admin, or from an **Open** conversation.
+  Organization, personal, and conversation sharing restrictions
   all apply; any Isolated setting keeps the DM requirement. The request uses the
-  authenticated speaker's live admin grant, not another participant's authority.
+  authenticated speaker's admin grant, not another participant's authority.
   Open reads can expose private data to everyone in the conversation: retrieve and
   report only what the request needs. Two other exceptions: org-targeted
   memory/config reads work anywhere (org content is ambient to every conversation), and
-  a cron can carry **unattended read grants** (`unattendedGrants` on the cron tool;
-  see [Scheduling admin-reading work](#scheduling-admin-reading-work)) — set only on a
-  live turn by the cron's owner, who must be a current org admin, on a cron that lives
-  in their own DM. Only that owner, live, can then change where its output goes.
-  Each grant opens exactly its own GET
-  routes to that cron's autonomous fires, audited as the owner
-  (re-checked live — revoking their admin grant closes it). Other mutations work
-  anywhere; the room sees what changed, by design.
+  a cron, webhook or loop fire **carries its owner's authority** (see
+  [Scheduling admin-reading work](#scheduling-admin-reading-work)): an org admin's fire
+  can read on the admin plane what the admin's own typed turn could, audited as the owner
+  and re-checked on every call (revoking their admin grant closes it). The audience
+  rule still applies to private-content reads, so such a fire must live in the owner's
+  DM or an Open conversation. Admin changes need the admin at the keyboard: a fire that
+  wants one reports it where the run delivers. On a typed turn, mutations work anywhere;
+  the room sees what changed, by design.
 - **Grant changes (promote/revoke) and impersonation are portal-only** through you.
 - Bulk configuration import is not supported. Use the individual configuration resources instead.
 
@@ -279,43 +281,43 @@ through their usual controls.
 
 ## Scheduling admin-reading work
 
-Cron fires are autonomous, so the admin plane refuses them unless the cron carries
-the grant each route needs (webhooks can't carry grants). When an admin asks for scheduled work that
-reads admin data, settle the grants at creation, not after the first fire fails:
+A cron's fires run as its owner with the owner's own authority, so an org admin's
+scheduled work can read what the admin could on a typed turn — no grants to set up.
+Changes through the admin API stay with typed turns. Two things still need settling
+at creation, not after the first fire fails:
 
-1. Work out which admin tool actions or admin API routes the task will call.
-2. Fetch the live mapping with the admin tool's `unattended_grants` action
-   (`GET /v1/admin/unattended-grants`, org admins on a live turn only). It is built
-   from the routes themselves: each entry gives the grant, method, path, summary and,
-   where one exists, the admin tool action. Reads it doesn't list have no grant.
-3. Create the cron from a live turn in the admin's own DM, with exactly the grants
-   those reads need in `unattendedGrants`. Don't pass `channel` or `participants`:
-   those move the cron's home into the room, and a cron homed there can't carry grants.
-4. Before its output goes anywhere but the admin's own DM (a `recipient`, or later a
-   `retarget` from a room's conversation), tell the admin plainly that the cron will
-   read admin data unattended as them and that everyone there will see whatever it
-   posts, with nothing re-checking each post. Weigh the room: say so if it is shared
-   with outsiders or isolated from their personal context. Proceed only on their
-   explicit yes; the move is audited and appears in the cron's history.
-5. If a needed action or route has no grant, or the cron can't carry grants (not homed
-   in the owner's own DM, or not a live turn by a current org admin), tell the admin
-   plainly before or at creation which part won't work unattended. Don't create a
-   cron that will fail on its first fire without saying so.
-6. After creating it, confirm the grants appear in the cron's details (the create
-   result or `get`).
+1. **Audience.** Private-content reads (transcripts, memory, files, the scope directory)
+   still require the cron's home to be the owner's own DM or an Open conversation. A
+   cron created with `channel` or `participants` is homed in that room; if the room is
+   not Open for the admin, those reads will refuse there. Spend, audit, egress, crons
+   and config reads work from any home.
+2. **Who sees the output.** Before its output goes anywhere but the admin's own DM (a
+   `recipient`, or later a `retarget` from a room's conversation), tell the admin
+   plainly that the cron will read admin data as them and that everyone there will see
+   whatever it posts, with nothing re-checking each post. Weigh the room: say so if it
+   is shared with outsiders or isolated from their personal context. Proceed only on
+   their explicit yes; the move is audited and appears in the cron's history.
+
+If part of the task can't work from where the cron will live, say so before or at
+creation. Don't create a cron that will fail on its first fire without saying so.
+Remember that whoever rewrites a shared cron's task becomes its owner: the fires then
+run with that person's standing, not the original admin's.
 
 ## Failure modes
 
 - `403 admin grant required for this scope` — the user isn't an org admin (or was just
   revoked). Say so; don't retry or work around it.
-- `403 … require a turn the admin started themselves` — this is an autonomous run
-  (cron/webhook) without the unattended grant the route needs. Report it where the run
-  delivers — never finish silently — naming the grant the message cites so the owner can
-  add it from their DM.
-- `403 … returns private content — ask the agent in a DM` — the shared room does not have effective Open access for this live admin turn;
+- `403 … carry a person's own authority — this turn runs with none` — a bot actor, an
+  external audience, a cron or loop whose task an automated turn wrote (its owner
+  restores their authority by rewriting it on a turn they send) or that a conversation
+  owns, or a session message whose authorization chain could not be verified. Report it
+  where the run delivers — never finish silently.
+- `403 admin changes need the admin at the keyboard …` — a fire tried to change
+  something. Report the change you would make where the run delivers; the admin
+  confirms it on a turn they send.
+- `403 … returns private content — ask the agent in a DM` — the shared room does not have effective Open access for this admin;
   tell the admin to ask again in a DM with you (or, for reads they want recurring
-  on a schedule, to put an unattended read grant on a personal-scope cron — from
-  their DM, never from here).
+  on a schedule, to create the cron from their DM so it is homed there).
 - `403 … grant changes (promote/revoke) are portal-only` — point them at the dashboard.
 - `403 granting or removing org admin for an external user is portal-only …` — same
   answer: the dashboard.
