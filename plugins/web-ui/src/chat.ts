@@ -27,7 +27,7 @@ import { playgroundPath, playgroundsIn, type PlaygroundArtifact } from "./playgr
 import { Agent } from "@earendil-works/pi-agent-core";
 import type { Attachment } from "@earendil-works/pi-web-ui";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage, TextContent } from "@earendil-works/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { UserMessageWithAttachments } from "@earendil-works/pi-web-ui";
 import { markdown } from "./message-markdown";
 import { onSpeakerAvatars, speakerAvatar } from "./speaker-avatars";
@@ -74,6 +74,7 @@ import {
   type IconNode,
 } from "lucide";
 import {
+  messageText,
   continuableMessages,
   hasRecordedRunReply,
   messagesWithStreaming,
@@ -2466,20 +2467,6 @@ export function createChatSurface(
   function assistantFileList(files: DeliveredFile[] | undefined): TemplateResult | typeof nothing {
     if (!files?.length) return nothing;
     return html`<div class="message-files">${files.map((f) => deliveredFileBadge(f))}</div>`;
-  }
-
-  function messageText(message: AgentMessage): string {
-    const content = (message as { content?: unknown }).content;
-    if (typeof content === "string") return content;
-    if (Array.isArray(content)) {
-      return content
-        .filter(
-          (c): c is TextContent => Boolean(c) && typeof c === "object" && (c as { type?: string }).type === "text",
-        )
-        .map((c) => c.text ?? "")
-        .join("\n");
-    }
-    return "";
   }
 
   function syncWorkTicker(): void {
