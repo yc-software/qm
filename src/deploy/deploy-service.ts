@@ -578,10 +578,10 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         const before = await deps.deployStore.get(id);
         if (before) await withdrawLoanUnlessPublisher(before, options?.actor);
         await deps.deployStore.deleteDraft(id);
-        await deps.deployStore.setCurrentVersion(id, version);
-        const v = await deps.deployStore.versionOf(id, version);
         const d = await deps.deployStore.get(id);
-        if (!d || !v) return;
+        if (!d) return;
+        const v = await deps.deployStore.versionOf(id, version);
+        if (!v) throw new Error(`no such version ${version}`);
         const endpoint = await applyVersion(id, v, options?.alwaysOn);
         await markVersionRunning(id, v.version, endpoint);
         recordAudit({

@@ -240,7 +240,7 @@ test("a failed redeploy does not move the hosted git current ref", async () => {
     /apply failed/,
   );
   const after = (await deployStore.get(d.id))!;
-  assert.equal(after.currentVersion, 2, "the failed candidate remains recorded as the desired version");
+  assert.equal(after.currentVersion, 1, "a failed candidate never becomes current");
   assert.equal(after.appliedVersion, 1);
   assert.equal(await deployStore.refOf(d.id, "refs/heads/current"), v1.commit);
 });

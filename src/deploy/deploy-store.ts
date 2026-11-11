@@ -130,7 +130,6 @@ export interface DeployStore {
   getByName(name: string): Promise<Deployment | null>;
   list(): Promise<Deployment[]>;
   claimTenants(): Promise<ClaimedRow[]>;
-  setCurrentVersion(id: string, version: number): Promise<void>;
   setVersionImage(id: string, version: number, image: string): Promise<void>;
   setStatus(id: string, status: DeploymentStatus): Promise<void>;
   setEndpoint(id: string, endpoint: DeployEndpoint | null): Promise<void>;
@@ -320,7 +319,6 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
       await backingMap.update(id, (cur) => {
         if (cur.versions.length + 1 !== version) throw new Error(`deployment ${id} gained a version concurrently`);
         cur.versions.push(v);
-        cur.currentVersion = version;
         return cur;
       });
       await updateVersionRef(id, v);
@@ -343,7 +341,6 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
           ...(current?.commit ? { parentCommit: current.commit } : {}),
         };
         d.versions.push(v);
-        d.currentVersion = version;
         return d;
       });
       if (!d) throw new Error(`unknown deployment: ${id}`);
@@ -367,13 +364,6 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
     async list() {
       const [ds, accessAt] = await Promise.all([backingMap.all(), access.readAll()]);
       return ds.map((d) => withAccess(d, accessAt.get(d.id)));
-    },
-    async setCurrentVersion(id, version) {
-      await backingMap.update(id, (d) => {
-        if (!d.versions.some((x) => x.version === version)) throw new Error(`no such version ${version}`);
-        d.currentVersion = version;
-        return d;
-      });
     },
     async setVersionImage(id, version, image) {
       await backingMap.update(id, (d) => {
@@ -420,6 +410,7 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
         if (!v) throw new Error(`no such version ${version}`);
         commit = v.commit;
         d.appliedVersion = version;
+        d.currentVersion = version;
         return d;
       });
       if (d) await updateAppliedRef(id, placedCommit ?? commit);

@@ -34,14 +34,16 @@ test("deploy versions are immutable and rollback flips the pointer", async () =>
   await s.addVersion(d.id, { entrypoint: "v2", snapshotDir: "/snap/v2" });
   const after = (await s.get(d.id))!;
   assert.equal(after.versions.length, 2, "v1 is retained — versions are append-only");
-  assert.equal(after.currentVersion, 2);
+  assert.equal(after.currentVersion, 1, "a new version is not current until it is applied");
   assert.equal((await s.versionOf(d.id, 1))!.snapshotDir, "/snap/v1");
 
-  await s.setCurrentVersion(d.id, 1);
+  await s.setAppliedVersion(d.id, 2);
+  assert.equal((await s.get(d.id))!.currentVersion, 2);
+  await s.setAppliedVersion(d.id, 1);
   assert.equal((await s.get(d.id))!.currentVersion, 1);
   assert.equal((await s.get(d.id))!.versions.length, 2, "rollback doesn't drop versions");
 
-  await assert.rejects(s.setCurrentVersion(d.id, 99), /no such version/);
+  await assert.rejects(s.setAppliedVersion(d.id, 99), /no such version/);
 });
 
 test("addVersion on an unknown deployment throws", async () => {
@@ -77,11 +79,12 @@ test("addVersionFromCommit registers a pushed commit as a new version inheriting
   assert.equal(v2.commit, pushed);
   assert.equal(v2.entrypoint, "node server.js");
   assert.deepEqual(v2.env, { FOO: "bar" });
-  assert.equal((await s.get(d.id))!.currentVersion, 2);
+  assert.equal((await s.get(d.id))!.currentVersion, 1, "a pushed version is not current until it is applied");
 
   const v2bundle = await s.bundleOf(d.id, pushed);
   assert.ok((v2bundle?.byteLength ?? 0) > 0, "a push-deployed version can be exported as a git bundle");
 
+  await s.setAppliedVersion(d.id, 2);
   assert.equal(await s.addVersionFromCommit(d.id, pushed), null);
   assert.equal((await s.get(d.id))!.versions.length, 2);
 });
@@ -293,12 +296,6 @@ test("deploy versions carry git commits for app files and rollback moves the cur
   execFileSync("git", ["checkout", "--quiet", "--force", "FETCH_HEAD"], { cwd: checkout });
   assert.equal(readFileSync(join(checkout, "data.json"), "utf8"), '{"n":2}');
 
-  await s2.setCurrentVersion(d.id, 1);
-  assert.equal(
-    await s2.refOf(d.id, deployCurrentGitRef),
-    v2.commit,
-    "selecting a rollback target does not move the hosted current ref before apply",
-  );
   await s2.setAppliedVersion(d.id, 1);
   assert.equal(
     await s2.refOf(d.id, deployCurrentGitRef),
@@ -450,7 +447,6 @@ test("deploy git repos restore from the durable archive into a fresh repo root",
     [["server.js", "console.log('v2')"]],
   );
 
-  await s2.setCurrentVersion(d.id, 1);
   await s2.setAppliedVersion(d.id, 1);
   const s3 = createDeployStore({
     ...backing,

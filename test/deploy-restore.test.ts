@@ -145,3 +145,21 @@ for (const failMethod of ["setVersionImage", "setEndpoint", "setStatus", "setApp
     assert.equal(after.endpoint, null);
   });
 }
+
+test("a failed redeploy or rollback leaves the applied version current", async () => {
+  const { deploy } = agent(true);
+  const d = await deploy.deploy({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "server.js",
+    files: [],
+  });
+
+  await assert.rejects(() => deploy.redeploy(d.id, { entrypoint: "server.js", files: [] }), /runtime unavailable/);
+  await assert.rejects(() => deploy.rollbackDeployment(d.id, 2), /runtime unavailable/);
+  const after = (await deploy.getDeployment(d.id))!;
+  assert.equal(after.versions.length, 2);
+  assert.equal(after.currentVersion, 1);
+  assert.equal(after.appliedVersion, 1);
+  assert.equal(after.endpoint?.port, 20201);
+});

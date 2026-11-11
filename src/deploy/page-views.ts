@@ -77,6 +77,13 @@ export const DEPLOYMENT_TABLES: PgMigrationDefinition[] = [
     ],
   },
   inboundIndexes("deployments", ["name"]),
+  {
+    id: "durable-map/deployments/0021-current-follows-applied",
+    statements: [
+      `UPDATE deployments SET json = jsonb_set(json, '{currentVersion}', json->'appliedVersion')
+        WHERE json ? 'appliedVersion' AND json->'currentVersion' IS DISTINCT FROM json->'appliedVersion'`,
+    ],
+  },
 ];
 
 export type AppViewAuthMode = "signed_in" | "public" | "app_only";

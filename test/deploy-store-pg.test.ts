@@ -172,25 +172,27 @@ test("pre-existing duplicate names degrade gracefully: no index, deterministic g
   assert.equal((await store.getByName("fresh-name"))!.id, created.id);
 });
 
-test("the name index migration skips a tenant's duplicate names instead of failing", { skip }, async () => {
+test("migrations over existing rows skip a duplicated name index and repair a diverged version", { skip }, async () => {
   const pg = (await import("pg")).default;
   for (const duplicated of [true, false]) {
     const owner = new pg.Pool({ connectionString: testBareDatabaseUrl(), max: 1 });
     try {
-      const nameIndex = DEPLOYMENT_TABLES.filter((m) => m.id.endsWith("-name-index")).map(definePgMigration);
-      const tables = DEPLOYMENT_TABLES.filter((m) => !m.id.endsWith("-name-index")).map(definePgMigration);
-      await applyPgMigrations(owner, tables);
+      const overRows = DEPLOYMENT_TABLES.findIndex((m) => m.id.endsWith("-name-index"));
+      const migrations = DEPLOYMENT_TABLES.map(definePgMigration);
+      await applyPgMigrations(owner, migrations.slice(0, overRows));
       await owner.query("INSERT INTO tenants DEFAULT VALUES");
       const tenant = (await owner.query("SELECT id FROM tenants LIMIT 1")).rows[0].id;
       for (const id of duplicated ? ["a", "b"] : ["a"])
         await owner.query("INSERT INTO deployments (tenant_id, id, json) VALUES ($1, $2, $3)", [
           tenant,
           id,
-          { name: "same" },
+          { name: "same", currentVersion: 2, ...(id === "a" ? { appliedVersion: 1 } : {}) },
         ]);
-      await applyPgMigrations(owner, nameIndex);
+      await applyPgMigrations(owner, migrations.slice(overRows));
       const index = await owner.query("SELECT to_regclass('deployments_name_unique') AS i");
       assert.equal(index.rows[0].i === null, duplicated);
+      const current = await owner.query("SELECT jsonb_agg(json->'currentVersion' ORDER BY id) AS v FROM deployments");
+      assert.deepEqual(current.rows[0].v, duplicated ? [1, 2] : [1]);
     } finally {
       await owner.end();
     }
@@ -232,8 +234,8 @@ test("version setters from two instances keep each other's writes on Postgres", 
 
   for (let i = 0; i < 10; i++) {
     const status = i % 2 ? "running" : "stopped";
-    await Promise.all([a.setCurrentVersion(d.id, (i % 2) + 1), b.setStatus(d.id, status)]);
-    assert.equal((await blob()).status, status, `status survives a concurrent current-version write (round ${i})`);
+    await Promise.all([a.setAppliedVersion(d.id, (i % 2) + 1), b.setStatus(d.id, status)]);
+    assert.equal((await blob()).status, status, `status survives a concurrent applied-version write (round ${i})`);
     assert.equal((await blob()).currentVersion, (i % 2) + 1);
   }
 
