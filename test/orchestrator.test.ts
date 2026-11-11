@@ -4443,7 +4443,7 @@ test("a provider policy refusal fails the turn with a plain notice and logs the 
     reason,
     /^Claude Opus 4\.8 declined this request under the provider's usage policy \("This request triggered restrictions on violative cyber content\."\)/,
   );
-  const logged = (await built.errors.list()).filter((e) => e.category === "turn");
+  const logged = (await built.errors.list(tenant)).filter((e) => e.category === "turn");
   assert.deepEqual(
     logged.map((e) => [e.code, e.message]),
     [["refusal", "This request triggered restrictions on violative cyber content."]],
