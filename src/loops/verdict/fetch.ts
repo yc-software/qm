@@ -111,7 +111,7 @@ export function createSourceClients(deps: SourceClientDeps): SourceClients {
   const limited = perTenant(() => new LRUCache<string, number>({ max: 100 }));
 
   function limitFor(owner: string, source: string, seconds: number): never {
-    const wait = Math.max(60, seconds);
+    const wait = Math.max(60, seconds || 0);
     limited().set(`${owner}:${source}`, Date.now() + wait * 1000, { ttl: wait * 1000 });
     throw new SourceRateLimited(source, wait);
   }
