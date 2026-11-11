@@ -4,6 +4,7 @@ import type { TurnSurfaceOrigin } from "../surfaces/contract.ts";
 import { slackSurfaceOrigin } from "../surfaces/slack/adapter.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
+import { MAX_DOCUMENT_TEXT_CHARS } from "../core/documents.ts";
 import { samePerson } from "../directory/person.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
 import type { CachedMessage } from "../surface-cache/surface-cache.ts";
@@ -311,6 +312,12 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
         `[ambient] solicited wake degraded to proactive (asked_by=${decision.askedBy}, container=${batch.container})`,
       );
     const shown = recentWakeMessages(batch);
+    const screenData = () =>
+      JSON.stringify({
+        messages: shown.map(({ authorId, authorName, ts, text }) => ({ authorId, authorName, ts, text })),
+        judgeReason: decision.reason ?? null,
+      });
+    while (!solicited && shown.length > 1 && screenData().length > MAX_DOCUMENT_TEXT_CHARS) shown.shift();
     const req: TurnRequest = solicited
       ? {
           surface: batch.surface,
@@ -347,10 +354,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
           }),
           origin: {
             kind: "automation",
-            screenData: JSON.stringify({
-              messages: shown.map(({ authorId, authorName, ts, text }) => ({ authorId, authorName, ts, text })),
-              judgeReason: decision.reason ?? null,
-            }),
+            screenData: screenData(),
           },
           surfaceTools: true,
           async: true,
