@@ -1,5 +1,6 @@
 import { orgId as configOrgId } from "../../config.ts";
 import {
+  botWorkInPersonsName,
   mintCapabilityToken,
   verifyCapabilityToken,
   MEMORY_BRAIN_DROP_AUD,
@@ -25,7 +26,6 @@ import {
   adminStanding,
   audit,
   BOT_WORK_PERSON_CREDENTIAL,
-  botWorkInPersonsName,
   orgScope,
   personalCapability,
   resolveCapabilityDestination,
@@ -356,7 +356,7 @@ async function mintDrop(ctx: ApiCtx): Promise<void> {
   if (!capSecret)
     return sendJson(res, 500, { error: "misconfigured", message: "no capability secret to bind the drop link with" });
   if (capability.triggered) return sendJson(res, 403, { error: "forbidden", message: TRIGGERED });
-  if (await botWorkInPersonsName(ctx, capability))
+  if (await botWorkInPersonsName(ctx.deps.admin?.users, capability))
     return sendJson(res, 403, { error: "forbidden", message: BOT_WORK_PERSON_CREDENTIAL });
   const b = body as {
     service?: unknown;

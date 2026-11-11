@@ -20,7 +20,7 @@ import { isTerminal, RUN_WAIT_FALLBACK_MS, type Run, type SessionWatch } from ".
 import type { RunSignal } from "../runs/run-signal-store.ts";
 import { deployRef, encodeRef, parseRef } from "../acl/resource-ref.ts";
 import type { Skill } from "../skills/skill-store.ts";
-import type { CapabilityClaims } from "../auth/capability-token.ts";
+import { botWorkInPersonsName, type CapabilityClaims } from "../auth/capability-token.ts";
 import {
   createCanReadScope,
   createCanManageScope,
@@ -34,7 +34,6 @@ import type { DirectoryMember } from "../directory/directory-store.ts";
 import { actorAssertionActive } from "../identity/identity-service.ts";
 import type { Deployment } from "../deploy/deploy-store.ts";
 import { reportFailureAs, swallow, swallowAs } from "../util/errors.ts";
-import { botWorkInPersonsName } from "./routes/shared.ts";
 import { adminSessionUrl } from "../util/admin-links.ts";
 import { sessionTurnOrigin } from "../core/turn-origin.ts";
 import {
@@ -544,7 +543,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       claims.botActor === true &&
       claims.liveActor === true &&
       claims.members?.some((member) => member.id === claims.actorId && member.type === "internal") === true &&
-      !(await botWorkInPersonsName({ deps }, claims));
+      !(await botWorkInPersonsName(deps.admin?.users, claims));
     if (
       (kind === "channel" &&
         !(

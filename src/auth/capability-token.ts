@@ -40,6 +40,16 @@ interface BlobGrant {
   id?: string;
 }
 
+export async function botWorkInPersonsName(
+  users: { resolve(aliases: readonly string[]): Promise<Map<string, { kind: string }>> } | undefined,
+  capability: Pick<CapabilityClaims, "actorId" | "botActor">,
+): Promise<boolean> {
+  return (
+    capability.botActor === true &&
+    (await users?.resolve([capability.actorId]))?.get(capability.actorId)?.kind === "person"
+  );
+}
+
 export async function personOrOwningBot(
   caller: Pick<CapabilityClaims, "botActor">,
   owns: () => Promise<boolean>,

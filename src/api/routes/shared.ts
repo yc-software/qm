@@ -2,7 +2,7 @@ import { orgId as configOrgId, orgScope as configOrgScope } from "../../config.t
 import { scopeId, type Principal } from "../../types.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import type { AuditEvent } from "../../audit/audit-log.ts";
-import { adminStatusFromGrants, type AdminService } from "../../admin/admin-service.ts";
+import { adminStatusFromGrants } from "../../admin/admin-service.ts";
 import { canonicalPerson, samePerson } from "../../directory/person.ts";
 import { isTerminal, type Run } from "../../runs/run-store.ts";
 import type { ServerDeps } from "../deps.ts";
@@ -29,16 +29,6 @@ export { isObj } from "../../util/objects.ts";
 
 export const BOT_WORK_PERSON_CREDENTIAL =
   "this work runs with a Slack bot's restrictions because a bot started it, so it can't ask for a person's credential; ask for it from your own conversation instead";
-
-export async function botWorkInPersonsName(
-  ctx: { deps: { admin?: Pick<AdminService, "users"> } },
-  capability: Pick<CapabilityClaims, "actorId" | "botActor">,
-): Promise<boolean> {
-  return (
-    capability.botActor === true &&
-    (await ctx.deps.admin?.users.resolve([capability.actorId]))?.get(capability.actorId)?.kind === "person"
-  );
-}
 
 export function personalCapability(ctx: Pick<ApiCtx, "capability" | "actor">): CapabilityClaims | null {
   if (ctx.capability) return ctx.capability;
