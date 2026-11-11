@@ -369,8 +369,8 @@ test("web turns keep a persisted OpenRouter model enabled when the refreshed cat
     const persisted = await turn("web:alice:persisted-openrouter-model", "anthropic/claude-sonnet-4.5");
     assert.equal(persisted.status, "queued");
 
-    await srv.built.config.setRuntimeSelection("personal:alice", { modelId: "openai/gpt-oss-20b:free" });
-    const arbitrary = await turn("web:alice:arbitrary-openrouter-model", "openai/gpt-oss-20b:free");
+    await srv.built.config.setRuntimeSelection("personal:alice", { modelId: "openai/gpt-oss-120b" });
+    const arbitrary = await turn("web:alice:arbitrary-openrouter-model", "openai/gpt-oss-120b");
     assert.equal(arbitrary.status, "refused");
     assert.match(arbitrary.reason ?? "", /not enabled for the web UI/);
   } finally {

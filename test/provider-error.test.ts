@@ -1,11 +1,28 @@
 import assert from "node:assert/strict";
-import { createServer } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
 import test from "node:test";
-import type { AssistantMessage, Model } from "@earendil-works/pi-ai";
-import { stream } from "@earendil-works/pi-ai/api/openai-completions";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import type { CapturedAssistantMessage, ProviderErrorInfo } from "../src/model/provider-capture.ts";
+import { buildModelRuntime } from "../src/model/model-runtime.ts";
+import { getRequiredModel } from "../src/model/pi-models.ts";
 import { providerTurnError } from "../src/model/provider-error.ts";
+import { isNonRetryable } from "../src/core/turn-error.ts";
 
-test("vendored pi-ai keeps a LiteLLM 429 budget_exceeded as structured providerError", async (t) => {
+async function serve(t: test.TestContext, reply: (res: ServerResponse) => void): Promise<string> {
+  const server = createServer((_req, res) => reply(res));
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  return `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+}
+
+async function failedCall(model: Model<Api>, provider: string): Promise<CapturedAssistantMessage> {
+  const runtime = await buildModelRuntime({ [provider]: "test-key" });
+  return runtime
+    .streamSimple(model, { messages: [{ role: "user", content: "hi", timestamp: 0 }] }, { maxRetries: 0 })
+    .result();
+}
+
+test("a LiteLLM 429 budget_exceeded keeps its status, type, code and body as providerError", async (t) => {
   const body = {
     error: {
       message: "Budget has been exceeded! Current cost: 5.1, Max budget: 5.0",
@@ -14,51 +31,75 @@ test("vendored pi-ai keeps a LiteLLM 429 budget_exceeded as structured providerE
       code: "400",
     },
   };
-  const server = createServer((_req, res) => {
+  const url = await serve(t, (res) => {
     res.writeHead(429, { "content-type": "application/json" });
     res.end(JSON.stringify(body));
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => server.close());
-  const { port } = server.address() as { port: number };
   const model = {
     id: "litellm-model",
     name: "litellm-model",
     api: "openai-completions",
-    provider: "litellm",
-    baseUrl: `http://127.0.0.1:${port}/v1`,
+    provider: "openai",
+    baseUrl: url,
     reasoning: false,
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 1000,
     maxTokens: 100,
-  } as Model<"openai-completions">;
+  } as Model<Api>;
 
-  const failed = await stream(
-    model,
-    { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
-    {
-      apiKey: "test-key",
-      maxRetries: 0,
-    },
-  ).result();
+  const failed = await failedCall(model, "openai");
 
   assert.equal(failed.stopReason, "error");
   assert.deepEqual(failed.providerError, { status: 429, type: "budget_exceeded", code: "400", body: body.error });
-  assert.match(failed.errorMessage ?? "", /^429: /, "errorMessage keeps stock pi-ai formatting");
+  assert.match(failed.errorMessage ?? "", /\(429\): /);
   const err = providerTurnError(failed);
   assert.deepEqual([err.code, err.status, err.retryable], ["model_budget", 429, false]);
 });
 
+test("an Anthropic error event mid-stream keeps its error type as providerError", async (t) => {
+  const url = await serve(t, (res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    const start = {
+      type: "message_start",
+      message: {
+        id: "msg_1",
+        type: "message",
+        role: "assistant",
+        model: "claude",
+        content: [],
+        stop_reason: null,
+        usage: { input_tokens: 1, output_tokens: 0 },
+      },
+    };
+    const error = { type: "error", error: { type: "overloaded_error", message: "Overloaded" } };
+    res.end(`event: message_start\ndata: ${JSON.stringify(start)}\n\nevent: error\ndata: ${JSON.stringify(error)}\n\n`);
+  });
+  const model = { ...getRequiredModel("claude-opus-5"), baseUrl: url } as Model<Api>;
+
+  const failed = await failedCall(model, "anthropic");
+
+  assert.equal(failed.stopReason, "error");
+  assert.deepEqual(failed.providerError, {
+    type: "overloaded_error",
+    body: { type: "overloaded_error", message: "Overloaded" },
+  });
+  const err = providerTurnError(failed);
+  assert.deepEqual(
+    [err.code, err.retryable, err.message],
+    ["transient", true, "Model provider API error (overloaded_error): Overloaded"],
+  );
+});
+
 test("providerTurnError maps documented status, type and code without reading errorMessage", () => {
-  const failed = (providerError: AssistantMessage["providerError"], rawStopReason?: string) =>
+  const failed = (providerError: ProviderErrorInfo | undefined, rawStopReason?: string) =>
     ({
       role: "assistant",
       stopReason: "error",
       errorMessage: "429 budget refusal timeout",
       providerError,
       rawStopReason,
-    }) as AssistantMessage;
+    }) as CapturedAssistantMessage;
   for (const [message, code, retryable] of [
     [failed({ status: 429, type: "budget_exceeded" }), "model_budget", false],
     [failed({ status: 429, code: "insufficient_quota" }), "model_budget", false],
@@ -81,7 +122,7 @@ test("providerTurnError maps documented status, type and code without reading er
   }
 });
 
-function failedWith(providerError: AssistantMessage["providerError"]): AssistantMessage {
+function failedWith(providerError: ProviderErrorInfo | undefined): CapturedAssistantMessage {
   return {
     role: "assistant",
     content: [],
@@ -100,7 +141,7 @@ function failedWith(providerError: AssistantMessage["providerError"]): Assistant
     errorMessage: "irrelevant text",
     timestamp: 0,
     ...(providerError ? { providerError } : {}),
-  } as AssistantMessage;
+  } as CapturedAssistantMessage;
 }
 
 test("gateway model_unavailable is its own code so the turn falls back", () => {
@@ -118,4 +159,81 @@ test("over-window prompts classify as context_too_long from structured signals",
     providerTurnError(anthropic400, { contextWindow: 200_000, lastInputTokens: 20_000 }).code,
     "bad_request",
   );
+});
+
+const sse = (events: ({ type?: string } & Record<string, unknown>)[]) =>
+  events.map((event) => `event: ${event.type ?? "chunk"}\ndata: ${JSON.stringify(event)}\n\n`).join("");
+const usage = { input_tokens: 1, output_tokens: 0, total_tokens: 1 };
+const served: Record<string, { provider: string; body: (reason: string) => string }> = {
+  "anthropic-messages": {
+    provider: "anthropic",
+    body: (reason) =>
+      sse([
+        { type: "message_start", message: { id: "m", role: "assistant", content: [], usage } },
+        { type: "message_delta", delta: { stop_reason: reason }, usage },
+        { type: "message_stop" },
+      ]),
+  },
+  "openai-responses": {
+    provider: "openai",
+    body: (reason) =>
+      sse([
+        {
+          type: "response.incomplete",
+          response: { id: "r", status: "incomplete", incomplete_details: { reason }, output: [], usage },
+        },
+      ]),
+  },
+  "openai-completions": {
+    provider: "openrouter",
+    body: (reason) =>
+      sse([{ id: "c", choices: [{ index: 0, delta: {}, finish_reason: reason }] }]) + "data: [DONE]\n\n",
+  },
+};
+
+test("a stop the provider made on purpose is not retried; every other error stop is", async (t) => {
+  for (const [api, reason, rawStopReason, code, retried] of [
+    ["anthropic-messages", "refusal", "refusal", "refusal", false],
+    ["anthropic-messages", "sensitive", "sensitive", "unknown", false],
+    ["anthropic-messages", "new_reason", "new_reason", "unknown", true],
+    ["openai-responses", "content_filter", "incomplete.content_filter", "unknown", false],
+    ["openai-responses", "new_reason", "incomplete.new_reason", "unknown", true],
+    ["openai-completions", "content_filter", "content_filter", "unknown", false],
+    ["openai-completions", "network_error", "network_error", "unknown", true],
+    ["openai-completions", "new_reason", "new_reason", "unknown", true],
+    ...[
+      "guardrail_intervened",
+      "content_filtered",
+      "SAFETY",
+      "RECITATION",
+      "BLOCKLIST",
+      "PROHIBITED_CONTENT",
+      "SPII",
+      "IMAGE_SAFETY",
+      "IMAGE_PROHIBITED_CONTENT",
+      "IMAGE_RECITATION",
+    ].map((raw) => [undefined, raw, raw, "unknown", false] as const),
+    ...["malformed_model_output", "malformed_tool_use", "OTHER", "MALFORMED_FUNCTION_CALL", "LANGUAGE"].map(
+      (raw) => [undefined, raw, raw, "unknown", true] as const,
+    ),
+  ] as const) {
+    let failed = { role: "assistant", stopReason: "error", rawStopReason } as CapturedAssistantMessage;
+    if (api) {
+      const url = await serve(t, (res) => {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.end(served[api]!.body(reason));
+      });
+      const model = {
+        ...getRequiredModel("claude-opus-5"),
+        id: api,
+        api,
+        provider: served[api]!.provider,
+        baseUrl: url,
+      };
+      failed = await failedCall(model as Model<Api>, served[api]!.provider);
+      assert.deepEqual([failed.stopReason, failed.rawStopReason], ["error", rawStopReason], `${api} ${reason}`);
+    }
+    const err = providerTurnError(failed);
+    assert.deepEqual([err.code, isNonRetryable(err)], [code, !retried], `${api} ${reason}`);
+  }
 });

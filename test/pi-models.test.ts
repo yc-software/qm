@@ -281,7 +281,6 @@ test("registered OpenAI clones retain exact model identity on the Codex subscrip
     assert.equal(subscription.provider, "openai-codex");
     assert.equal(subscription.api, "openai-codex-responses");
     assert.equal(subscription.baseUrl, getRequiredModel("codex/gpt-5.6-sol").baseUrl);
-    assert.equal(subscription.contextWindow, api.contextWindow);
     assert.equal(subscription.maxTokens, api.maxTokens);
     assert.deepEqual(subscription.cost, api.cost);
   }

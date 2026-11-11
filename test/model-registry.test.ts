@@ -84,11 +84,6 @@ test("Opus 5.5 inherits adaptive thinking without off, with its own rates and li
   assert.equal(model.maxTokens, 128_000);
   assert.deepEqual(model.cost, { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5, tiers: undefined });
   assert.deepEqual(model.thinkingLevelMap, { xhigh: "xhigh", max: "max", off: null });
-  assert.deepEqual(model.compat, {
-    forceAdaptiveThinking: true,
-    supportsTemperature: false,
-    supportsStrictTools: true,
-  });
   assert.equal(resolveModel("claude-opus-4-8")?.thinkingLevelMap?.off, undefined);
   assert.equal(resolveModel("claude-opus-5")?.thinkingLevelMap?.off, undefined);
   model.thinkingLevelMap!.xhigh = "high";

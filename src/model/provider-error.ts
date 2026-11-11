@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { ProviderTurnError, TRANSIENT_ERROR_CODES, type ProviderErrorCode } from "../core/turn-error.ts";
+import type { ProviderErrorInfo } from "./provider-capture.ts";
 
 const AUTH_TYPES = new Set(["authentication_error", "permission_error", "invalid_api_key"]);
 const TRANSIENT_TYPES = new Set(["overloaded_error", "api_error", "timeout_error"]);
@@ -7,6 +8,22 @@ const CONTEXT_CODES = new Set(["context_length_exceeded"]);
 const QUOTA_CODES = new Set(["insufficient_quota"]);
 const NOT_FOUND_CODES = new Set(["model_not_found"]);
 const RETRYABLE_CODES = new Set<ProviderErrorCode>([...TRANSIENT_ERROR_CODES, "unknown"]);
+const DELIBERATE_STOP_REASONS = new Set([
+  "refusal",
+  "sensitive",
+  "content_filter",
+  "incomplete.content_filter",
+  "guardrail_intervened",
+  "content_filtered",
+  "SAFETY",
+  "RECITATION",
+  "BLOCKLIST",
+  "PROHIBITED_CONTENT",
+  "SPII",
+  "IMAGE_SAFETY",
+  "IMAGE_PROHIBITED_CONTENT",
+  "IMAGE_RECITATION",
+]);
 
 export interface ContextUsage {
   contextWindow?: number | undefined;
@@ -20,7 +37,7 @@ function nearWindow(usage: ContextUsage | undefined): boolean {
   return !!contextWindow && !!lastInputTokens && lastInputTokens >= contextWindow * NEAR_WINDOW_RATIO;
 }
 
-type ProviderFailure = Pick<AssistantMessage, "providerError" | "rawStopReason" | "errorMessage">;
+type ProviderFailure = Pick<AssistantMessage, "rawStopReason" | "errorMessage"> & { providerError?: ProviderErrorInfo };
 
 function providerErrorCode(failed: ProviderFailure, usage?: ContextUsage): ProviderErrorCode {
   if (failed.rawStopReason === "refusal") return "refusal";
@@ -56,6 +73,7 @@ export function providerTurnError(failed: ProviderFailure, usage?: ContextUsage)
     ? `Model provider API error${type ? ` (${type})` : ""}: ${bodyMessage}`
     : raw || "The agent stopped with an error";
   const retryable =
-    RETRYABLE_CODES.has(code) && !(code === "unknown" && (status !== undefined || failed.rawStopReason));
+    RETRYABLE_CODES.has(code) &&
+    !(code === "unknown" && (status !== undefined || DELIBERATE_STOP_REASONS.has(failed.rawStopReason ?? "")));
   return new ProviderTurnError(message, { code, retryable, status, raw });
 }

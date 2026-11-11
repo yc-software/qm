@@ -14,7 +14,7 @@ const adaptiveId = "claude-sonnet-4-6";
 test("native Auto is model specific, while legacy auto remains valid", () => {
   assert.equal(validateRuntimeChoice({ modelId: adaptiveId, effortLevel: "auto" }), null);
   assert.equal(validateRuntimeChoice({ modelId: adaptiveId, effortLevel: "adaptive" }), null);
-  for (const modelId of ["gpt-6-astra", "codex/gpt-5.4", "claude-haiku-4-5", "openrouter/auto"])
+  for (const modelId of ["gpt-6-astra", "codex/gpt-5.6-sol", "claude-haiku-4-5", "openrouter/auto"])
     assert.equal(validateRuntimeChoice({ modelId, effortLevel: "adaptive" }), "effort_not_supported");
   assert.deepEqual(safeModelMetadata(adaptiveId)?.effortLevels, thinkingLevelsFor(adaptiveId));
 });
