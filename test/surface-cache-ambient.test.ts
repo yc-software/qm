@@ -135,6 +135,8 @@ test("a short instruction after channel history too long to screen still stops t
     await settle(flagged);
     assert.equal((await built.deliveries.pending("slack")).length, 0);
     assert.ok(await flagged());
+    const wakes = (await built.runs.list()).map((run) => run.request.text);
+    assert.ok(wakes.some((text) => text.includes("oldest of the recent messages are left out")));
   } finally {
     await built.runtime.stop();
   }

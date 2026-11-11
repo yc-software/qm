@@ -219,9 +219,13 @@ export function securityScreenPayload(input: SecurityScreenInput): SecurityScree
   return boundedPayload(securityScreenParts(input));
 }
 
+export function fitsScreenInput(length: number): boolean {
+  return length <= MAX_DOCUMENT_TEXT_CHARS;
+}
+
 export function securityScreenPayloads(input: SecurityScreenInput): string[] | null {
   const parts = securityScreenParts(input);
-  if (parts.reduce((total, part) => total + part.content.length, 0) > MAX_DOCUMENT_TEXT_CHARS) return null;
+  if (!fitsScreenInput(parts.reduce((total, part) => total + part.content.length, 0))) return null;
   const chunks: string[] = [];
   const groups: Array<Array<{ source: string; content: string }>> = [];
   let group: Array<{ source: string; content: string }> = [];
