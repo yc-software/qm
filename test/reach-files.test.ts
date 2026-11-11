@@ -289,7 +289,10 @@ describe("POST /v1/reach with files", () => {
       );
     const bot = await send(true, worker.id);
     assert.equal(bot.status, 403);
-    assert.equal(((await bot.json()) as any).error, "forbidden");
+    assert.deepEqual(await bot.json(), {
+      error: "forbidden",
+      message: "a Slack bot's turn can use only a computer it made that no person has used",
+    });
     const person = await send(false, worker.id);
     assert.equal(person.status, 200);
     assert.deepEqual(await readDelivered(((await person.json()) as any).deliveryId), ["plan.md:carol's plan\n"]);
