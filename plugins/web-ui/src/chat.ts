@@ -160,6 +160,7 @@ import { deepLinkPath, sessionLink, UI_BASE } from "./deep-link";
 import type { ChatSurface, ConvCtx } from "./conv-types";
 import { errMessage, swallow } from "../../chassis/src/errors";
 import { showStateError } from "./error-banner";
+import { tellEmbedderOfFinishedTools } from "./embedder";
 import { splitLinks } from "./linkify";
 import { slackPreviewText, slackWireToPlain, splitSlackWire, stripSlackDirectives } from "./slack-text";
 import { charForName } from "./emoji-picker";
@@ -1095,8 +1096,10 @@ export function createChatSurface(
   }
 
   function observeLiveWork(agent: Agent): (work: WorkBlock) => void {
+    const tellEmbedder = tellEmbedderOfFinishedTools();
     return (work: WorkBlock) => {
       if (agent !== chatState.agent) return;
+      tellEmbedder(work);
       appendConsumedSteers(agent.state.messages, work);
       if (work.runtime && switchedDefault(work.runtime) && work.runtime.modelId !== chatState.turnRuntime?.modelId)
         void ctx.composer.followScopeDefault(agent);
