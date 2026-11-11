@@ -64,7 +64,7 @@ export function computerTools(kit: ToolKit) {
     credentials: Type.Optional(
       Type.Array(Type.String(), {
         description:
-          "Exact authorized credential handles to materialize for this command only (for a background job, until it exits). Newly granted handles are accepted. In a shared conversation, credentials other than brokered org services run on this turn's scratch computer instead, even with sandbox_id (no shared workspace files: fetch scripts from Files or git in the command); a background job naming them gets its own computer that nothing else can reach.",
+          "Exact authorized credential handles to materialize for this command only (for a background job, until it exits). Newly granted handles are accepted. In a shared conversation, credentials other than brokered org services run on this turn's scratch computer instead, even with sandbox_id (no shared workspace files: fetch scripts and state from Files or git in the command, and save state back to Files); a background job naming them gets its own computer that nothing else can reach.",
       }),
     ),
   };
@@ -103,7 +103,7 @@ export function computerTools(kit: ToolKit) {
       const resultScope = scratchReroute ? { scope: "scratch" } : scopeNote;
       const parts = [r.stdout, r.stderr ? `[stderr]\n${r.stderr}` : ""].filter(Boolean).join("\n");
       const placePrefix = scratchReroute
-        ? "[ran on this turn's scratch computer, not the shared one, because it names a private credential; shared-computer files aren't here and its own are discarded after the turn, so carry state through Files (/v1/files/upload-client)]\n"
+        ? "[ran on this turn's scratch computer, not the shared one, because it names a private credential; its files are discarded after the turn]\n"
         : "";
       const localExec = !route?.scratch && !scratchReroute;
       const pressureNote =
