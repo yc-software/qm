@@ -300,8 +300,13 @@ async function buildInboundScreen(turn: InboundScreenTurn) {
         ...(input.conversationHeader?.trim()
           ? [{ source: "conversation-header", content: input.conversationHeader }]
           : []),
-        ...(conversation.channelName
-          ? [{ source: "conversation-metadata", content: JSON.stringify({ channel: conversation.channelName }) }]
+        ...(input.gatewayContext?.location || input.gatewayContext?.details
+          ? [
+              {
+                source: "conversation-metadata",
+                content: JSON.stringify({ location: input.gatewayContext.location, ...input.gatewayContext.details }),
+              },
+            ]
           : []),
         ...overheard.map((entry) => ({ source: "overheard", content: renderOverheard(entry) })),
         ...attachmentPromptData,
