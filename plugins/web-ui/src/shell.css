@@ -12391,6 +12391,7 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
     width: var(--composer-control-size, 34px);
     padding: 0;
     justify-content: center;
+    gap: 2px;
   }
 }
 
