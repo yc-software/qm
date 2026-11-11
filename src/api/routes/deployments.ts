@@ -1600,26 +1600,26 @@ async function visibleDeploymentsExport(ctx: BaseCtx): Promise<void> {
   const requested = url.searchParams.get("principalId")?.trim();
   if (!requested) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
   const principalId = canonicalPerson(requested);
-  const [visible, all] = await Promise.all([
-    app.listDeploymentsForViewer({ actorId: principalId }),
-    app.listDeployments(),
-  ]);
-  const byId = new Map(all.map((d) => [d.id, d]));
-  const live = visible.filter((d) => d.status !== "archived");
+  const live = (await app.listDeployments()).filter((d) => d.status !== "archived");
+  const permissions = await app.deploymentGitPermissionsFor(live, { actorId: principalId });
+  const visible = live.flatMap((deployment, i) => {
+    const permission = permissions[i];
+    return permission ? [{ deployment, view: deploymentView(deployment), permission }] : [];
+  });
   const viewed =
     (await deps.appPageViews?.lastViews(
       tenantOf(ctx),
       principalId,
-      live.map((d) => d.id),
+      visible.map(({ view }) => view.id),
     )) ?? new Map<string, number>();
-  const deployments = live.map((d) => ({
+  const deployments = visible.map(({ deployment, view: d, permission }) => ({
     id: d.id,
     ...(d.name ? { name: d.name } : {}),
     ...(d.displayName ? { displayName: d.displayName } : {}),
-    url: appUrlOf(byId.get(d.id) ?? d, { sharedWebUrl: deps.portalUrl, appsDomain: deps.deployAppsDomain }) ?? null,
+    url: appUrlOf(deployment, { sharedWebUrl: deps.portalUrl, appsDomain: deps.deployAppsDomain }) ?? null,
     createdBy: d.createdBy,
     owned: d.ownerScopeId === personalScope(principalId),
-    permission: d.permission,
+    permission,
     ...(d.updatedAt !== undefined ? { updatedAt: d.updatedAt } : {}),
     ...(d.lastAccessAt !== undefined ? { lastAccessAt: d.lastAccessAt } : {}),
     ...(viewed.has(d.id) ? { viewedAt: viewed.get(d.id) } : {}),

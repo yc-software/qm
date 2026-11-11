@@ -26,7 +26,7 @@ export function createResourceSearchMethods(
       let visibleSkills = new Set<string>();
       let crons: ReturnType<typeof cronVisibility> | undefined;
       let person: ReturnType<App["personMatcher"]> | undefined;
-      const canSee = async (kind: ResourceKind, row: ResourceCandidate): Promise<boolean> => {
+      const canSee = async (kind: Exclude<ResourceKind, "deploys">, row: ResourceCandidate): Promise<boolean> => {
         switch (kind) {
           case "skills":
             if (await helpers.canManageSkill(row, principalId)) return true;
@@ -35,8 +35,6 @@ export function createResourceSearchMethods(
           case "crons":
             crons ??= cronVisibility(deps, helpers, principalId);
             return (await crons).canSee(row);
-          case "deploys":
-            return (await helpers.principalGitPermission(row, principalId)) !== null;
           case "webhooks":
             person ??= app.personMatcher(principalId);
             return canAdministerWebhook(app, row, { actorId: principalId }, await person);
@@ -55,7 +53,10 @@ export function createResourceSearchMethods(
         }
         for (let i = 0; i < rows.length; i += 20) {
           const batch = rows.slice(i, i + 20);
-          const allowed = await Promise.all(batch.map((row) => canSee(kind, row)));
+          const allowed =
+            kind === "deploys"
+              ? (await helpers.deploymentPermissions(batch, principalId)).map((permission) => permission !== null)
+              : await Promise.all(batch.map((row) => canSee(kind, row)));
           for (const [j, row] of batch.entries()) {
             if (allowed[j]) hits.push(resourceHit(kind, row, query));
             if (hits.length === 8) {

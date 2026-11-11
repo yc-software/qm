@@ -28,6 +28,7 @@ export function createDeploymentMethods(
   | "listDeploymentsForViewer"
   | "effectiveDeploymentPermission"
   | "deploymentGitPermissionFor"
+  | "deploymentGitPermissionsFor"
   | "rollbackDeployment"
   | "canManageDeployment"
   | "archiveDeployment"
@@ -53,14 +54,28 @@ export function createDeploymentMethods(
   | "resolveEnvironmentByName"
   | "attachScope"
 > {
-  const { effectiveDeploymentPermission, principalCanReadDeployment, principalGitPermission } = h;
+  const { effectiveDeploymentPermission, principalCanReadDeployment, principalGitPermission, deploymentPermissions } =
+    h;
+  async function forCaller(
+    d: Deployment,
+    caller: Pick<CapabilityClaims, "actorId" | "botActor">,
+    permission: "read" | "write" | null,
+  ): Promise<"read" | "write" | null> {
+    if (permission !== "write" || caller.botActor !== true) return permission;
+    return (await deps.deploy.canManageDeployment(d.id, caller)) ? "write" : "read";
+  }
+  async function callerGitPermissions(
+    deployments: readonly Deployment[],
+    caller: Pick<CapabilityClaims, "actorId" | "botActor">,
+  ): Promise<Array<"read" | "write" | null>> {
+    const permissions = await deploymentPermissions(deployments, caller.actorId);
+    return Promise.all(deployments.map((d, i) => forCaller(d, caller, permissions[i]!)));
+  }
   async function callerGitPermission(
     d: Deployment,
     caller: Pick<CapabilityClaims, "actorId" | "botActor">,
   ): Promise<"read" | "write" | null> {
-    const permission = await principalGitPermission(d, caller.actorId);
-    if (permission !== "write" || caller.botActor !== true) return permission;
-    return (await deps.deploy.canManageDeployment(d.id, caller)) ? "write" : "read";
+    return forCaller(d, caller, await principalGitPermission(d, caller.actorId));
   }
   const invitationLock = deps.advisoryLock;
   return {
@@ -134,13 +149,11 @@ export function createDeploymentMethods(
     },
     async listDeploymentsForViewer(viewer) {
       const deployments = await deps.deploy.listDeployments();
-      const enriched = await Promise.all(
-        deployments.map(async (d): Promise<ViewerDeployment | null> => {
-          const permission = await callerGitPermission(d, viewer);
-          return permission ? { ...deploymentView(d), permission } : null;
-        }),
-      );
-      return enriched.filter((d): d is ViewerDeployment => d != null);
+      const permissions = await callerGitPermissions(deployments, viewer);
+      return deployments.flatMap((d, i): ViewerDeployment[] => {
+        const permission = permissions[i];
+        return permission ? [{ ...deploymentView(d), permission }] : [];
+      });
     },
     effectiveDeploymentPermission(d, principalId) {
       return effectiveDeploymentPermission(d, principalId);
@@ -148,6 +161,9 @@ export function createDeploymentMethods(
     async deploymentGitPermissionFor(idOrName, viewer) {
       const deployment = await deps.deploy.getDeployment(idOrName);
       return deployment ? callerGitPermission(deployment, viewer) : null;
+    },
+    deploymentGitPermissionsFor(deployments, viewer) {
+      return callerGitPermissions(deployments, viewer);
     },
     rollbackDeployment(id, version, actor) {
       return deps.deploy.rollbackDeployment(id, version, actor ? { actor } : undefined);

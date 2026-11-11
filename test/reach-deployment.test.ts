@@ -217,6 +217,72 @@ test("listDeploymentsForViewer: a write grant yields permission write for a non-
   assert.equal(rows.find((d) => d.id === shared.id)?.permission, "write");
 });
 
+test("listDeploymentsForViewer matches per-app permissions with store reads independent of app count", async () => {
+  const { app, acl, directory } = appWithFakeRuntime();
+  await directory.replace([{ principalId: "u2@example.com", slackId: "U2", displayName: "U2", type: "internal" }]);
+  await directory.replaceChannels(
+    [
+      { channelId: "CPRIV", name: "priv", isPrivate: true },
+      { channelId: "CPUB", name: "pub", isPrivate: false },
+      { channelId: "COUT", name: "out", isPrivate: true },
+    ],
+    [{ channelId: "CPRIV", principalId: "U2" }],
+  );
+  await directory.replaceGroups([{ groupId: "G1", principalId: "U2" }], Date.now(), ["G1"], ["G1"]);
+  const homes = [
+    scopeId("personal", "U1"),
+    scopeId("channel", "CPRIV"),
+    scopeId("group", "G1"),
+    scopeId("channel", "COUT"),
+  ];
+  const grantees = [
+    scopeId("channel", "CPUB"),
+    scopeId("channel", "CPRIV"),
+    scopeId("org", "default-org"),
+    scopeId("personal", "u2@example.com"),
+    scopeId("channel", "COUT"),
+  ];
+  const publish = async (i: number) => {
+    const d = await app.deploy({
+      ownerScopeId: scopeId("personal", `owner${i}`),
+      createdBy: `owner${i}`,
+      createdInScope: homes[i % homes.length]!,
+      entrypoint: "x",
+      files: [],
+    });
+    if (i % 3 !== 2)
+      await acl.grant(tenant, {
+        ownerScopeId: d.ownerScopeId,
+        ref: `deployment:${d.id}`,
+        granteeScopeId: grantees[i % grantees.length]!,
+        permission: i % 2 ? "write" : "read",
+        grantedBy: `owner${i}`,
+      });
+  };
+  let reads = 0;
+  for (const store of [acl, directory] as unknown as Record<string, unknown>[])
+    for (const [key, fn] of Object.entries(store))
+      if (typeof fn === "function")
+        store[key] = (...args: unknown[]) => (reads++, (fn as (...a: unknown[]) => unknown).apply(store, args));
+  const listedReads = async () => {
+    reads = 0;
+    const rows = await app.listDeploymentsForViewer({ actorId: "U2" });
+    const count = reads;
+    for (const d of await app.listDeployments())
+      assert.equal(
+        rows.find((r) => r.id === d.id)?.permission ?? null,
+        await app.deploymentGitPermissionFor(d.id, { actorId: "U2" }),
+      );
+    return { count, rows: rows.length };
+  };
+  for (let i = 0; i < 4; i++) await publish(i);
+  const few = await listedReads();
+  for (let i = 4; i < 20; i++) await publish(i);
+  const many = await listedReads();
+  assert.ok(many.rows > few.rows);
+  assert.equal(many.count, few.count);
+});
+
 test("HTTP: /v1/deployments?principalId= filters through viewer authz", async () => {
   const { app, acl, directory } = appWithFakeRuntime();
   const shared = await app.deploy({

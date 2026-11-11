@@ -126,6 +126,15 @@ export function createPostgresGrantStore(connectionString: string): GrantPersist
       if (query.ref !== undefined) match((p) => `path = ${p}`, query.ref);
       if (query.kind !== undefined) match((p) => `path LIKE ${p}`, `${likeEscape(refPrefix(query.kind))}%`);
       if (query.granteeScopeIds !== undefined) match((p) => `grantee_scope_id = ANY(${p})`, [...query.granteeScopeIds]);
+      if (query.resources !== undefined) {
+        params.push(
+          query.resources.map((r) => r.ownerScopeId),
+          query.resources.map((r) => r.ref),
+        );
+        where.push(
+          `(owner_scope_id, path) IN (SELECT * FROM unnest($${params.length - 1}::text[], $${params.length}::text[]))`,
+        );
+      }
       const rows = await db
         .forTenant(tenant)
         .q(

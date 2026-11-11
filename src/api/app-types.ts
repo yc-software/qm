@@ -596,6 +596,10 @@ export interface App {
     idOrName: string,
     viewer: Pick<CapabilityClaims, "actorId" | "botActor">,
   ): Promise<"read" | "write" | null>;
+  deploymentGitPermissionsFor(
+    deployments: readonly Deployment[],
+    viewer: Pick<CapabilityClaims, "actorId" | "botActor">,
+  ): Promise<Array<"read" | "write" | null>>;
   listSkills(): Promise<Skill[]>;
   getSkill(id: string): Promise<Skill | null>;
   archiveSkill(id: string): Promise<Skill>;
