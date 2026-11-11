@@ -593,6 +593,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             Object.entries(rest).filter(([, value]) => value !== undefined && value !== ""),
           ) as typeof rest),
           createdAt: Date.now(),
+          ...(input.runId ? { runId: input.runId } : {}),
           request: replayableRequest(input),
           ...grantModesWithin(resolution.approvalGrantModes, grantModes),
         };
@@ -627,9 +628,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       } as const;
       const approvalSession = input.approval ? await deps.sessions.getByThread(conversation.threadRef) : null;
       const approvalRecord = input.approval ? await pending.get(input.approval.requestId) : undefined;
+      const approvalResendsRequest = approvalRecord?.request?.text === input.text;
       const approvalReplaysFlaggedRequest =
         !!approvalRecord?.request &&
-        approvalRecord.request.text === input.text &&
+        approvalResendsRequest &&
         JSON.stringify(approvalRecord.request.overheard ?? []) === JSON.stringify(input.overheard ?? []) &&
         JSON.stringify(approvalRecord.request.attachments ?? []) === JSON.stringify(input.attachments ?? []) &&
         (approvalRecord.request.conversationHeader ?? "") === (input.conversationHeader ?? "");
@@ -1894,19 +1896,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           documentRoom.maxTokens -= loaded.tokens;
           return { ...loaded, unscreened };
         };
-        const pausedTurnUserEntry =
-          input.approval && approvalRecord?.kind !== "input"
-            ? visibleHistory.findLast((e) => isUserItem(e) && !isOverheard(e))
-            : undefined;
-        const approvalReplay = !!pausedTurnUserEntry && (pausedTurnUserEntry.text ?? "").trim() === input.text.trim();
+        const lastUserEntry = visibleHistory.findLast((e) => isUserItem(e) && !isOverheard(e));
+        const recoveredReplay =
+          !!input.approval &&
+          !approvalRecord &&
+          !!lastUserEntry &&
+          (lastUserEntry.text ?? "").trim() === input.text.trim();
+        const approvalReplay = recoveredReplay || (approvalRecord?.kind !== "input" && approvalResendsRequest);
+        const pausedRun =
+          approvalReplay && approvalRecord?.runId ? await deps.runs?.get(approvalRecord.runId) : undefined;
+        const pausedTurnSeq = recoveredReplay ? lastUserEntry.seq : pausedRun?.turnUserSeq;
         const documentInputs = await ingestDocuments(
-          [
-            ...turnDocumentMetas(history, partial?.userSeq ?? (approvalReplay ? pausedTurnUserEntry.seq : undefined)),
-            ...inbound.metas,
-          ],
+          [...turnDocumentMetas(history, partial?.userSeq ?? pausedTurnSeq ?? undefined), ...inbound.metas],
           input.text,
         );
-        const lastUserAt = visibleHistory.findLast((e) => isUserItem(e) && !isOverheard(e))?.createdAt;
+        const lastUserAt = lastUserEntry?.createdAt;
         const principalDelivered = await recentPrincipalDeliveryNote(deps.deliveries, session.threadRef, lastUserAt);
         const speakerLine = (speaker: Speaker) =>
           senderLine({ conversationKind: conversation.kind, ownerId: actor.id }, speaker, nameOf);

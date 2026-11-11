@@ -2781,15 +2781,21 @@ test("dangerous command pauses for HiLO approval, then proceeds when approved", 
   assert.equal(approved.status, "ok");
 
   const found = await app.getSession(approved.sessionId!);
-  const userEntries = found!.items.filter(isUserItem);
-  assert.equal(userEntries.length, 2, "the approval continuation re-records the turn input");
-  const [original, replay] = userEntries as [(typeof userEntries)[0], (typeof userEntries)[0]];
-  assert.notEqual(isHidden(original), true, "the human's original message stays visible");
-  assert.equal(
-    isHidden(replay),
-    true,
-    "the continuation's replay is hidden so the chat never shows the human saying it twice",
-  );
+  assert.deepEqual(found!.items.filter(isUserItem).map(isHidden), [false, true]);
+});
+
+test("an approval resumed after another message stays hidden and keeps the paused turn's document", async () => {
+  const built = freshApp();
+  const blob = await built.blobTransfer.put(Buffer.from("QUARTZ-731"));
+  const attachments = [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: blob.sizeBytes, blobId: blob.blobId }];
+  const first = await built.app.turn(dm("!collect-approval cmd-a --danger", { attachments }));
+  await built.app.turn(dm("what branch is this?"));
+  const approval = { requestId: first.pendingApprovals![0]!.requestId, approved: true };
+  const approved = await built.app.turn(dm("!collect-approval cmd-a --danger", { approval }));
+  const found = await built.app.getSession(approved.sessionId!);
+  assert.deepEqual(found!.items.filter(isUserItem).map(isHidden), [false, false, true]);
+  const requests = await built.sessions.listLlmRequests(approved.sessionId!);
+  assert.ok(JSON.stringify(requests.at(-1)!.promptEnvelope).includes('"documents":[{"name":"notes.txt"'));
 });
 
 test("a bot-requested turn never opens an approval when a command is gated", async () => {
@@ -3989,6 +3995,8 @@ test("approvals collected during an approval re-run are still surfaced (multi-st
   assert.ok(pendingB, "the approval collected during the re-run must not be silently discarded");
   assert.equal(pendingB!.command, "cmd-b --danger");
   assert.ok(pendingB!.requestId, "it carries a requestId so the chain can continue");
+  const found = await app.getSession(second.sessionId!);
+  assert.deepEqual(found!.items.filter(isUserItem).map(isHidden), [false, false]);
 });
 
 test("'allow once' authorizes exactly one execution — a sibling approval for the same command stays pending", async () => {
