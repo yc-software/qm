@@ -398,7 +398,9 @@ export function createSandboxResources(opts: {
           if (existing.state === "ready") return existing;
           if (existing.state === "retired") throw new Error("sandbox reservation is retired");
         }
-        await opts.records.put(id, existing?.personUsed ? { ...record, personUsed: true } : record);
+        if (existing)
+          await opts.records.update(id, (current) => (current.personUsed ? { ...record, personUsed: true } : record));
+        else await opts.records.put(id, record);
         const sandbox = opts.backends[record.backend]!;
         try {
           await sandbox.provision(record.backingScopeId, {

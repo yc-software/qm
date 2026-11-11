@@ -219,10 +219,10 @@ test("status and restart resolve the selected backing machine rather than legacy
   assert.deepEqual(provisioned, [record.backingScopeId, `restart:${record.backingScopeId}`]);
 });
 
-test("a person's use while a computer is being made outlasts a failed attempt and the retry", async () => {
+test("a person's use of a computer outlasts a failed first boot and a retry it races", async () => {
   let started!: () => void;
   let finish!: (error?: Error) => void;
-  const { resources } = fixture((backend) => {
+  const { options, records } = fixture((backend) => {
     const provision = backend.provision.bind(backend);
     backend.provision = async (id, opts) => {
       if (id === "sandbox-c1")
@@ -233,21 +233,29 @@ test("a person's use while a computer is being made outlasts a failed attempt an
       return provision(id, opts);
     };
   }, []);
-  const attempt = () => {
-    const begun = new Promise<void>((resolve) => (started = resolve));
-    return { creating: resources.create("alice", "channel:team", "local", "computer", "c1"), begun };
-  };
-  const first = attempt();
-  await first.begun;
+  let markOnRead = "";
+  const resources = createSandboxResources({
+    ...options,
+    records: {
+      ...records,
+      async get(id) {
+        const found = await records.get(id);
+        if (id === markOnRead) await records.update(id, (current) => ({ ...current, personUsed: true }));
+        return found;
+      },
+    },
+  });
+  const begun = new Promise<void>((resolve) => (started = resolve));
+  const creating = resources.create("alice", "channel:team", "local", "computer", "c1");
+  await begun;
   await resources.notePersonUse("c1");
   finish(new Error("boot failed"));
-  await assert.rejects(first.creating, /boot failed/);
-  assert.equal((await resources.get("c1")).personUsed, true);
-  const second = attempt();
-  await second.begun;
-  finish();
-  assert.equal((await second.creating).personUsed, true);
-  assert.equal((await resources.get("c1")).state, "ready");
+  await assert.rejects(creating, /boot failed/);
+  const failed = (await records.get("c1"))!;
+  assert.equal(failed.personUsed, true);
+  await records.put("c2", { ...failed, id: "c2", backingScopeId: "sandbox-c2", personUsed: undefined });
+  markOnRead = "c2";
+  assert.equal((await resources.create("alice", "channel:team", "local", "computer", "c2")).personUsed, true);
 });
 
 const sizedBackend = (sizes: Array<number | undefined>) => (backend: Sandbox) => {
