@@ -311,13 +311,14 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
       console.error(
         `[ambient] solicited wake degraded to proactive (asked_by=${decision.askedBy}, container=${batch.container})`,
       );
-    const recent = recentWakeMessages(batch);
+    const recent = solicited ? [] : recentWakeMessages(batch);
     const screened = ({ authorId, authorName, ts, text }: WakeMessage) => ({ authorId, authorName, ts, text });
     const judgeReason = decision.reason ?? null;
+    const screenDataOf = (messages: ReturnType<typeof screened>[]) => JSON.stringify({ messages, judgeReason });
     const sizes = recent.map((m) => JSON.stringify(screened(m)).length + 1);
-    let size = JSON.stringify({ messages: [], judgeReason }).length + sizes.reduce((total, n) => total + n, 0);
+    let size = screenDataOf([]).length + sizes.reduce((total, n) => total + n, 0);
     let omitted = 0;
-    while (!solicited && omitted < recent.length - 1 && !fitsScreenInput(size)) size -= sizes[omitted++]!;
+    while (omitted < recent.length - 1 && !fitsScreenInput(size)) size -= sizes[omitted++]!;
     const shown = recent.slice(omitted);
     if (omitted)
       console.error(
@@ -359,7 +360,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
           }),
           origin: {
             kind: "automation",
-            screenData: JSON.stringify({ messages: shown.map(screened), judgeReason }),
+            screenData: screenDataOf(shown.map(screened)),
           },
           surfaceTools: true,
           async: true,
