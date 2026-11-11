@@ -12,6 +12,7 @@ export interface CreateTriggerInput {
   destination?: Destination;
   ownerConsentedAt?: number;
   botActor?: boolean;
+  taskAuthor?: "automation";
 }
 
 export function contentPart(value: unknown): string {
@@ -43,6 +44,7 @@ export function buildTriggerBase(input: CreateTriggerInput, id: string, createdA
     ...(input.destination ? { destination: input.destination } : {}),
     ...(input.ownerConsentedAt ? { ownerConsentedAt: input.ownerConsentedAt } : {}),
     ...(input.botActor ? { botActor: true } : {}),
+    ...(input.taskAuthor ? { taskAuthor: input.taskAuthor } : {}),
   };
 }
 

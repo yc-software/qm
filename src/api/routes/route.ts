@@ -1,5 +1,4 @@
 import type { UpgradeTarget } from "../../../plugins/chassis/src/websocket-relay.ts";
-import type { UNATTENDED_ADMIN_GRANTS } from "../control-service.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { readCookie } from "../../../plugins/portal/src/session.ts";
 import { CAPABILITY_HEADER } from "../contract.ts";
@@ -51,7 +50,6 @@ export type RouteActor = "person" | "system" | `${"query" | "body"}.${string}`;
 export interface AdminAccess {
   agent?: "anyone" | { portalOnly: string };
   privateRead?: "always" | "unless-org-scope";
-  unattended?: { grant: (typeof UNATTENDED_ADMIN_GRANTS)[number]; summary: string };
 }
 
 export type Route<C extends BaseCtx = ApiCtx> = {
