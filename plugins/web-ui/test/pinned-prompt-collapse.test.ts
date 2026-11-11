@@ -460,3 +460,19 @@ test("border-box prompts reserve the entire row including the metadata lane", ()
     f.close();
   }
 });
+
+test("rest heights come from the unpinned row, so a pinned attachment's fold cannot shrink the reserved slot", () => {
+  const f = fixture();
+  try {
+    f.row.getBoundingClientRect = () =>
+      ({ top: 0, height: f.content.clientHeight + 24 + (f.row.classList.contains("stuck") ? 0 : 52) }) as DOMRect;
+    f.resize(300);
+    f.scroll(500);
+    assert.equal(f.row.classList.contains("stuck"), true);
+    f.resize(320);
+    assert.equal(f.row.style.getPropertyValue("--pin-rest-height"), "215.5px");
+    assert.equal(f.row.classList.contains("stuck"), true);
+  } finally {
+    f.close();
+  }
+});
