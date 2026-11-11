@@ -1,6 +1,7 @@
 import type { App } from "../../api/app-types.ts";
 import { refusedStatus, type Send } from "../../delivery/relay.ts";
-import type { Tenant } from "../../tenants/context.ts";
+import { loadTenant } from "../../tenants/cache.ts";
+import { tenantAppHandle } from "../../tenants/settings.ts";
 import type { Delivery } from "../../types.ts";
 import {
   partnerChatMessageId,
@@ -41,7 +42,7 @@ function parseJson(text: string): Record<string, unknown> {
 export function partnerChatSender(deps: {
   url: string;
   secret: string;
-  app: Pick<App, "ingestSurfaceEvents" | "tenantFor">;
+  app: Pick<App, "ingestSurfaceEvents">;
   fetch?: typeof fetch;
   now?: () => number;
 }): Send {
@@ -49,12 +50,10 @@ export function partnerChatSender(deps: {
   const send = deps.fetch ?? fetch;
   const now = deps.now ?? Date.now;
 
-  async function deliver(d: Delivery, tenant: Tenant): Promise<void> {
+  async function deliver(d: Delivery): Promise<void> {
     const ref = parsePartnerChatRef(d.destination.target);
     const body = d.text.trim();
     if (!ref) throw new UnsupportedDelivery(`partner-chat: unroutable target ${d.destination.target}`);
-    if ((await deps.app.tenantFor("partner_chat", ref.account)) !== tenant.id)
-      throw new UnsupportedDelivery(`partner-chat: account ${ref.account} is not bound to this workspace`);
     const { react, delete: del, pin, edit, editRef } = d.destination;
     if (react || del || pin || edit || editRef || !body)
       throw new UnsupportedDelivery("partner-chat: only non-empty text posts are supported");
@@ -63,7 +62,10 @@ export function partnerChatSender(deps: {
     const thread = d.destination.threadTs ? partnerChatMessageId(d.destination.threadTs) : ref.thread;
     if (thread !== undefined && !MESSAGE_ID.test(thread))
       throw new UnsupportedDelivery(`partner-chat: bad thread id ${thread}`);
+    await loadTenant();
+    const workspace = tenantAppHandle();
     const payload = JSON.stringify({
+      ...(workspace ? { workspace } : {}),
       client_message_id: d.idempotencyKey,
       chat_id: ref.chat,
       ...(thread ? { thread_id: thread } : {}),
@@ -113,9 +115,9 @@ export function partnerChatSender(deps: {
     );
   }
 
-  return async (d, tenant) => {
+  return async (d) => {
     try {
-      await deliver(d, tenant);
+      await deliver(d);
     } catch (e) {
       if (e instanceof UnsupportedDelivery) return { refused: e.message };
       if (e instanceof PartnerChatHttpError && refusedStatus(e.status)) return { refused: e.message };

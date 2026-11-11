@@ -19,6 +19,7 @@ const eventSchema = z.object({
   event_id: z.string().min(1),
   type: z.enum(["message.created", "message.updated", "message.deleted"]),
   account: id,
+  workspace: id.optional(),
   chat: z.object({ id, kind: z.enum(["group", "dm"]), name: z.string().optional(), members: z.array(user) }),
   thread_id: messageId.nullish(),
   message: z.object({

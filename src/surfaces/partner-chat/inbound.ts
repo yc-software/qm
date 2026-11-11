@@ -2,6 +2,7 @@ import type { App } from "../../api/app-types.ts";
 import type { SurfaceContextQuery, SurfaceContextResult } from "../../reach/reach.ts";
 import type { Destination, TurnResult } from "../../types.ts";
 import type { SurfaceCache } from "../../surface-cache/surface-cache.ts";
+import { bootTenant } from "../../tenants/boot.ts";
 import { inTenant } from "../../tenants/claim.ts";
 import { errMessage, reportFailureAs } from "../../util/errors.ts";
 import { buildContextWindow } from "../context-window.ts";
@@ -63,10 +64,12 @@ export function createPartnerChatInbound(deps: {
         body: { error: "bad_request", issues: result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`) },
       };
     const event = result.data;
-    const tenant = await deps.app.tenantFor("partner_chat", event.account);
+    const tenant = event.workspace ? await deps.app.tenantFor("partner_chat", event.workspace) : bootTenant();
     if (!tenant) {
-      console.log(`[partner-chat] ignoring an event for account ${event.account}: no serving workspace is bound to it`);
-      return { status: 404, body: { error: "unknown_account" } };
+      console.log(
+        `[partner-chat] ignoring an event for workspace ${event.workspace ?? "(none)"}: no serving workspace has it`,
+      );
+      return { status: 404, body: { error: "unknown_workspace" } };
     }
     return inTenant(tenant, () => accept(event));
   }

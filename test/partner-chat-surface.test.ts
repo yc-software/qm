@@ -9,7 +9,6 @@ import { createHmac } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { createPgPool } from "../src/persistence/pg-pool.ts";
 import type { IngestEvent } from "../src/surface-cache/types.ts";
 import { partnerChatPrincipal, createPartnerChatSurface } from "../src/surfaces/partner-chat/adapter.ts";
 import { PARTNER_CHAT_CLAIM_MS, partnerChatSender } from "../src/surfaces/partner-chat/outbound.ts";
@@ -24,11 +23,11 @@ import { scopeId } from "../src/types.ts";
 import { createPartnerChatNotices, partnerChatRunNotice } from "../src/surfaces/partner-chat/notices.ts";
 import { runResultDelivery, wireRunResultDeliveries } from "../src/delivery/run-result-delivery.ts";
 import type { Run } from "../src/runs/run-store.ts";
+import { bindBootTenant } from "../src/tenants/boot.ts";
 import { withTenant } from "../src/tenants/context.ts";
-import { ownerUrl, TEST_TENANT } from "./support/test-tenant.ts";
+import { TEST_TENANT } from "./support/test-tenant.ts";
 
 const SECRET = "partner-chat-test-secret-0123456789abcdef";
-const tenantFor = async () => TEST_TENANT;
 const PROVENANCE = { trigger: "cron", surface: "partner-chat", fireKey: "f", sourceScopeId: "s", sourceThreadRef: "t" };
 
 interface Received {
@@ -114,16 +113,15 @@ function signed(payload: unknown, at = Math.floor(Date.now() / 1000)) {
 }
 
 async function partnerChatApp() {
+  await bindBootTenant(async () => TEST_TENANT);
   const partnerChat = await fakePartnerChat();
-  const config = testConfig({
-    dataDir: mkdtempSync(join(tmpdir(), "partner-chat-surface-")),
-    partnerChat: { url: partnerChat.url, secret: SECRET },
-    emailAuthDomain: "example.com",
-  });
-  const owner = createPgPool(ownerUrl(config.databaseUrl!).toString());
-  await owner.q(`UPDATE tenants SET settings = '{"partnerChatAccount":"7001"}' WHERE id = $1`, [TEST_TENANT]);
-  await owner.close();
-  const built = buildApp(config);
+  const built = buildApp(
+    testConfig({
+      dataDir: mkdtempSync(join(tmpdir(), "partner-chat-surface-")),
+      partnerChat: { url: partnerChat.url, secret: SECRET },
+      emailAuthDomain: "example.com",
+    }),
+  );
   built.runtime.start();
   const deliver = (payload: unknown, at?: number) => built.partnerChatEvents!(...signed(payload, at));
   const close = async () => {
@@ -302,7 +300,7 @@ function outboundFor(url: string, deliveries = createDeliveryStore(), mirrored: 
   const send = partnerChatSender({
     url,
     secret: SECRET,
-    app: { tenantFor, ingestSurfaceEvents: async (events) => (mirrored.push(...events), { upserted: events.length }) },
+    app: { ingestSurfaceEvents: async (events) => (mirrored.push(...events), { upserted: events.length }) },
   });
   return { deliveries, mirrored, settled: (until: () => Promise<boolean>) => relayUntil(deliveries, send, until) };
 }
@@ -854,7 +852,7 @@ test("a retryable failure holds back later posts to the same chat target only", 
   const send = partnerChatSender({
     url: "https://chat.example",
     secret: SECRET,
-    app: { tenantFor, ingestSurfaceEvents: async () => ({ upserted: 0 }) },
+    app: { ingestSurfaceEvents: async () => ({ upserted: 0 }) },
     fetch: async (_url, init) => {
       const body = JSON.parse(String(init?.body)) as { chat_id: string; body: string };
       sent.push(body.body);

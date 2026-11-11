@@ -157,14 +157,15 @@ export const SLACK_BRIDGE_TENANT: PgMigrationDefinition = {
 };
 
 export const PARTNER_CHAT_TENANT: PgMigrationDefinition = {
-  id: "tenancy/lookups/0007-partner-chat",
+  id: "tenancy/lookups/0008-partner-chat-by-handle",
   statements: [
     `SET LOCAL check_function_bodies = off`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS tenants_partner_chat_account ON tenants ((settings->>'partnerChatAccount'))`,
+    `DROP INDEX IF EXISTS tenants_partner_chat_account`,
+    `UPDATE tenants SET settings = settings - 'partnerChatAccount' WHERE settings ? 'partnerChatAccount'`,
     definer(
       "qm_tenant_for_partner_chat",
       "uuid",
-      `SELECT id FROM tenants WHERE settings->>'partnerChatAccount' = $1${servingTenant("id")}`,
+      `SELECT id FROM tenants WHERE qm_tenant_handle(settings) = lower($1)${servingTenant("id")}`,
     ),
   ],
 };
