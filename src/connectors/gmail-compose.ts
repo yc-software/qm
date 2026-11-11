@@ -52,7 +52,7 @@ function bodyMarkup(html: string): { markup: string; text: string } {
 }
 
 const isOffset = (token: string): boolean =>
-  token.length === 5 && "+-".includes(token[0]!) && [...token.slice(1)].every((c) => c >= "0" && c <= "9");
+  token.length === 5 && "+-".includes(token[0]!) && Array.from(token.slice(1)).every((c) => c >= "0" && c <= "9");
 
 function gmailDate(header: string, viewerZone: string | undefined): string {
   const at = new Date(Date.parse(header));

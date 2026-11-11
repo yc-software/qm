@@ -86,6 +86,7 @@ test("draft stays outside AI chat and Send it submits the combined instruction",
           model: "gpt-5.6-sol",
           thinkingLevel: "medium",
           fastMode: false,
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         });
         render(html`${draftMessageTpl(item)}${chatTpl(item)}`, host);
         assert.equal(host.querySelector<HTMLButtonElement>(".inbox-suggest-chip.primary")!.disabled, true);
