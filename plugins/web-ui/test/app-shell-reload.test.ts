@@ -75,14 +75,16 @@ test("an open app reloads for each save its chat reports, even one that lands du
 });
 
 test("a chat embedded beside an app tells the app bar to check for a change once per finished tool", async () => {
+  const startedAt = Date.now() - 3000;
   const session = {
     id: "sess-app",
+    type: "dm" as const,
     threadRef: "web:tester:app-edit:demo",
     scopeId: "personal:tester",
+    createdAt: startedAt,
     title: "demo",
     canContinue: true,
   };
-  const startedAt = Date.now() - 3000;
   const step = (kind: "ToolCall" | "ToolResult", seq: number, callId: string, path: string) => ({
     item: item(kind, { seq, createdAt: startedAt + seq, tool: "app_files", callId, body: { action: "edit", path } }),
   });
