@@ -1,6 +1,4 @@
 import { test } from "node:test";
-import { once } from "node:events";
-import { createServer, type AddressInfo } from "node:net";
 import assert from "node:assert/strict";
 import { createMcpMemoryProvider } from "../src/memory/mcp-memory-provider.ts";
 import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
@@ -10,7 +8,7 @@ import type { MemoryProviderOutcome } from "../src/memory/memory-service.ts";
 import { sleep } from "../src/util/async.ts";
 import { recallText } from "./support/recall-text.ts";
 import { structuredRecall } from "./support/structured-recall.ts";
-import { routedTo, startMcpTestServer } from "./support/mcp-test-server.ts";
+import { closedPort, routedTo, startMcpTestServer } from "./support/mcp-test-server.ts";
 
 function client(calls: Array<{ tool: string; args: Record<string, unknown> }>, text = "result"): McpClient {
   return {
@@ -180,10 +178,7 @@ test("a brain forget reports each ref done, pending, unknown or failed, and a re
       forget: { client, tool: "forget_fact", idempotencyArg: "request_id", timeoutMs: 100 },
       attestActor: true,
     });
-  const closed = createServer().listen(0, "127.0.0.1");
-  await once(closed, "listening");
-  const gone = `http://127.0.0.1:${(closed.address() as AddressInfo).port}`;
-  closed.close();
+  const gone = `http://127.0.0.1:${await closedPort()}`;
   const down = createMcpClient({ url: `${gone}/mcp`, auth: { mode: "none" }, fetch: routedTo(gone) });
   const gateway = await startMcpTestServer(t, { status: 502 });
   const proxied = createMcpClient({ url: gateway.url, auth: { mode: "none" }, fetch: routedTo(gateway.url) });
@@ -217,7 +212,20 @@ test("a brain forget reports each ref done, pending, unknown or failed, and a re
     "acme:5 failed fact_not_found",
     "acme:x failed fact_not_found",
   ]);
-  assert.deepEqual(lines(await forget(["acme:2", "acme:3"])), ["acme:2 unknown", "acme:3 unknown"]);
+  const before = sent.length;
+  const late: string[] = [];
+  await memory.delete!(
+    "personal:U1",
+    ["acme:2", "acme:3"],
+    { actorId: "U1", context: "conversation", personTurn: true },
+    {
+      audienceScopeId: "personal:U1",
+      startedAt: Date.now() - 1000,
+      report: ({ ref, outcome }) => late.push(`${ref} ${outcome}`),
+    },
+  );
+  assert.deepEqual([late, sent.length], [["acme:2 unknown", "acme:3 unknown"], before]);
+  assert.deepEqual(lines(await forget(["acme:2"])), ["acme:2 unknown"]);
   assert.deepEqual(lines(await forget(["acme:2"])), ["acme:2 committed"]);
   const twice = sent.filter(({ id }) => id === 2);
   assert.deepEqual(sent[0], { id: 1, request_id: sent[0]?.request_id });

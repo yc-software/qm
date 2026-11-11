@@ -92,7 +92,7 @@ provider creation/retry loops.
 Each worker gets a dedicated **blank** computer owned by the parent's
 authorization scope. No parent files are copied. Data access, keychain policy,
 memory resolution, and approval grants continue through QM's existing scope and
-identity rules, with unattended rather than human-attended permissions. Session
+identity rules; a worker turn carries no person's live authority of its own. Session
 grants belong only to the session that received them, not its workers. A computer's backing storage key
 is not an authorization principal. Existing provider persistence behavior is
 unchanged; swarms add no filesystem snapshots, immutable copies, or restores.

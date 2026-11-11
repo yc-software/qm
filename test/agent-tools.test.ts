@@ -83,7 +83,7 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
       return true;
     },
     async memoryDelete(ids) {
-      return { forgotten: ids.length, outcomes: [], problems: [] };
+      return { forgotten: ids.length, notebook: ids.length, kept: false, outcomes: [], problems: [] };
     },
     async history(q) {
       return q.includes("budget") ? ["user#3 (2026-06-01T00:00:00.000Z): the budget doc is in shared/q2.md"] : [];
