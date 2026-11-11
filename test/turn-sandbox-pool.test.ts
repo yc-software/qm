@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
 import type { ProvisionOptions, Sandbox, SandboxHandle, TeardownOptions } from "../src/sandbox/sandbox.ts";
@@ -64,6 +64,7 @@ function fixture(
       return resource(id);
     },
     get: async (id: string) => resource(id),
+    notePersonUse: mock.fn(async (id: string) => resource(id)),
     resolve: async () => undefined,
     hold: async (id: string) => {
       if (holdFailures.delete(id)) throw new Error(`hold failed: ${id}`);
@@ -112,6 +113,7 @@ function fixture(
   const clearedTurnFiles = () => removed.filter(([, dir]) => dir === "turn/s/t").map(([id]) => id);
   return {
     turn,
+    notePersonUse: sandboxResources.notePersonUse,
     provisions,
     teardowns,
     tornDown,
@@ -131,6 +133,7 @@ test("each computer a turn touched is released exactly once, the default box wit
   const scoped = await f.turn.provision();
   await f.turn.provisionResource(scoped.id);
   await f.turn.provisionResource("other");
+  assert.ok(f.notePersonUse.mock.calls.some((call) => call.arguments[0] === "other"));
   await f.turn.reclaimBox();
   assert.deepEqual(f.teardowns.map(([id]) => id).sort(), [scoped.id, "other"].sort());
   assert.ok(f.teardowns.every(([, opts]) => !opts.keepWarm && !opts.homeUnchanged));

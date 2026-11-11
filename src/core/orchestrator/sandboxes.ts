@@ -359,7 +359,8 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   const notePersonUse = async (handle: SandboxHandle): Promise<void> => {
     const sandboxId = handle.resourceId ?? boundSandboxId;
     if (input.botActor || !deps.sandboxResources || !sandboxId || personUsed.has(sandboxId)) return;
-    await deps.swarms?.notePersonUse(await deps.sandboxResources.notePersonUse(sandboxId));
+    const used = await deps.sandboxResources.notePersonUse(sandboxId);
+    await deps.swarms?.notePersonUse(used);
     personUsed.add(sandboxId);
   };
   const turnAccess = {
