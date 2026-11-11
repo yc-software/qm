@@ -18,7 +18,7 @@ In Isolated posture, agent inventory and operations stay in the current owning s
 | `status`, `restart` | optional `sandbox_id`, `purpose`                                  |
 | `retire`            | `sandbox_id`, `purpose`                                           |
 
-A turn that runs as a Slack bot's work can retire only the computers that bot created. A proactive channel wake that a bot's message prompted runs as the organization's shared ambient actor rather than as the bot, so it retires none of that actor's computers and changes none of its crons, webhooks, deployments or shared artifacts. [Persistent subagent sessions](persistent-subagent-sessions.md) lists the turns that run as bot work.
+A turn that runs as a Slack bot's work can retire only the computers that bot created. Some bot work runs as a shared system actor rather than as the bot: a proactive channel wake that a bot's message prompted runs as the organization's ambient actor, and a bot-marked cron that runs as its channel runs as that channel's actor. Such work retires none of that actor's computers and changes none of its crons, loops, webhooks, monitor watches, deployments or shared artifacts. [Persistent subagent sessions](persistent-subagent-sessions.md) lists the turns that run as bot work.
 
 Commands use `execute(command, sandbox_id?, credentials?, background?)`. Set
 `background:true` for a detached job and a process ID. The short `purpose` is saved

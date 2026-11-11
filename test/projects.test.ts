@@ -111,7 +111,7 @@ test("batched loop administration preserves scope rules and observes membership 
       { owner: "other", ownerScopeId: "channel:C_PUBLIC" },
       { owner: "member", ownerScopeId: "group:unknown" },
     ] as Loop[];
-    const expected = await Promise.all(cases.map((loop) => canAdministerLoop(built.app, loop, "member")));
+    const expected = await Promise.all(cases.map((loop) => canAdministerLoop(built.app, loop, { actorId: "member" })));
     assert.deepEqual(expected, [true, true, false, true, true, false, false]);
     const getMany = built.directory.getMany.bind(built.directory);
     let reads = 0;

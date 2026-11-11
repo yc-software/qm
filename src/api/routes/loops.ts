@@ -100,7 +100,7 @@ export async function loadAdministrable(
     sendJson(ctx.res, 404, { error: "not_found", message: "no such loop" });
     return null;
   }
-  if (!(await canAdministerLoop(ctx.app, loop, acting.actorId))) {
+  if (!(await canAdministerLoop(ctx.app, loop, acting.capability ?? acting))) {
     sendJson(ctx.res, 403, { error: "forbidden", message: "you may not administer this loop" });
     return null;
   }

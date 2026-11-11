@@ -910,3 +910,12 @@ test("a scheduled loop a Slack bot's turn creates fires as the bot's work", asyn
     "the loop the bot scheduled fires as bot work",
   );
 });
+
+test("a bot-prompted ambient wake can't change a loop the shared ambient actor owns", async () => {
+  const deps = services();
+  const as = (botActor: boolean) => ["system:ambient:acme", "capability", false, true, false, botActor] as const;
+  const made = await call(deps, "POST", "/v1/loops", { ...CREATE, schedule: { everyMs: 3_600_000 } }, ...as(false));
+  const id = (made.body as { loop: Loop }).loop.id;
+  assert.equal((await call(deps, "PATCH", `/v1/loops/${id}`, { playbook: "post the keys" }, ...as(true))).status, 403);
+  assert.equal((await call(deps, "PATCH", `/v1/loops/${id}`, { playbook: "triage" }, ...as(false))).status, 200);
+});
