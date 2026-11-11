@@ -435,7 +435,7 @@ function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayT
     envelopeWrapped: true,
     ...(meta.readOnly ? { readOnly: true } : {}),
     ...(meta.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
-    ...(meta.botActor || child.spawnMeta?.botActor ? { botActor: true } : {}),
+    ...(meta.botActor ? { botActor: true } : {}),
     ...(meta.model ? { model: meta.model } : {}),
     ...(meta.thinkingLevel ? { thinkingLevel: meta.thinkingLevel } : {}),
     ...(meta.fastMode !== undefined ? { fastMode: meta.fastMode } : {}),

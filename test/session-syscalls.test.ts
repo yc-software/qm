@@ -419,8 +419,8 @@ test("a Slack bot's message to a person's running subagent starts a bot turn ins
     .syscallsFor(r.room)
     .write({ target: botTask.sessionId, wake: true, text: "include the changelog" });
   assert.ok(followUp.ok);
-  const botTaskRuns = await r.runs.inFlightForThread((await r.sessions.get(botTask.sessionId))!.threadRef);
-  assert.equal(botTaskRuns.filter((run) => run.request.botActor).length, 2, "the person's follow-up is bot work too");
+  const overPerson = await fromBot.write({ target: botTask.sessionId, interrupt: true, text: "skip it" });
+  assert.deepEqual(overPerson, { ok: false, message: "a Slack bot's turn cannot interrupt a person's task" });
   assert.deepEqual(await r.signals.pending(target.run.id), []);
   const queued = (await r.runs.inFlightForThread(target.session.threadRef)).filter((run) => run.id !== target.run.id);
   assert.deepEqual(
