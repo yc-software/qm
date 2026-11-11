@@ -53,7 +53,7 @@ test("side-chat previews show pending work and open loaded replies immediately",
             ? [
                 ...items,
                 item("AgentMessage", { seq: 1, variant: "narration", text: narration }),
-                ...(finalized ? [item("AgentMessage", { seq: 2, text: narration })] : []),
+                ...(finalized ? [item("AgentMessage", { seq: 2, text: "Both halves are tested." })] : []),
               ]
             : [...items, item("AgentMessage", { seq: 1, createdAt: Date.now(), text: "The queue survives restarts." })],
         });
@@ -85,7 +85,7 @@ test("side-chat previews show pending work and open loaded replies immediately",
     await until(() => document.querySelector(".side-chat-preview")?.textContent?.trim() === narration);
     finalized = true;
     h.visibleConversation().onDelivery(side.threadRef);
-    await until(() => document.querySelector(".side-chat-preview")?.textContent?.trim() === narration);
+    await until(() => document.querySelector(".side-chat-preview")?.textContent?.trim() === "Both halves are tested.");
   } finally {
     release();
     await h.close();
