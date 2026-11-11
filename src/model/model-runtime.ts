@@ -203,7 +203,9 @@ export async function buildModelRuntime(
           : {}),
         onPayload: async (payload: unknown) => {
           const transformed = options?.onPayload ? await options.onPayload(payload, model) : undefined;
-          return applyThinkingBinding(transformed === undefined ? payload : transformed, candidate);
+          return shortConversationCache(
+            applyThinkingBinding(transformed === undefined ? payload : transformed, candidate),
+          );
         },
       } as T;
       return {
@@ -330,6 +332,14 @@ export function applyThinkingBinding<T>(
   if (thinking?.type === "adaptive" || thinking?.type === "enabled") {
     (payload as Record<string, unknown>).thinking = { ...thinking, block_binding: THINKING_BINDING };
   }
+  return payload;
+}
+
+function shortConversationCache<T>(payload: T): T {
+  const messages = (payload as { messages?: unknown } | undefined)?.messages;
+  for (const message of Array.isArray(messages) ? (messages as Array<{ content?: unknown }>) : [])
+    for (const block of Array.isArray(message?.content) ? (message.content as Array<{ cache_control?: object }>) : [])
+      if (block?.cache_control) block.cache_control = { type: "ephemeral" };
   return payload;
 }
 
