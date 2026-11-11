@@ -5,14 +5,15 @@ import { canonicalPerson, samePersonInDirectory } from "../directory/person.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
 import { createMembershipControlsScope, createCanManageScope } from "../resolution/scope-membership.ts";
 import { swallowAs } from "../util/errors.ts";
+import type { TriggerBase } from "../triggers/types.ts";
 
 export async function canAdministerLoop(
   app: Pick<App, "membershipControlsScope" | "managesScope" | "samePerson">,
-  loop: { owner: string; ownerScopeId: ScopeId },
+  loop: Pick<TriggerBase, "owner" | "ownerScopeId" | "botActor">,
   actor: Pick<CapabilityClaims, "actorId" | "botActor">,
 ): Promise<boolean> {
   const { actorId } = actor;
-  if (!(await personOrOwningBot(actor, async () => app.samePerson(loop.owner, actorId)))) return false;
+  if (!(await personOrOwningBot(actor, async () => app.samePerson(loop.owner, actorId), loop))) return false;
   if (await app.membershipControlsScope(loop.ownerScopeId)) return app.managesScope(actorId, loop.ownerScopeId);
   if (await app.samePerson(loop.owner, actorId)) return true;
   return app.managesScope(actorId, loop.ownerScopeId);
@@ -21,7 +22,7 @@ export async function canAdministerLoop(
 export async function loopAdministration(
   deps: AppDeps,
   actor: Pick<CapabilityClaims, "actorId" | "botActor">,
-  loops: readonly { owner: string; ownerScopeId: ScopeId }[],
+  loops: readonly Pick<TriggerBase, "owner" | "ownerScopeId" | "botActor">[],
 ) {
   if (!loops.length) return [];
   const { actorId } = actor;

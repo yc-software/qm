@@ -175,7 +175,7 @@ export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
       if (!m || m.ownerScopeId !== deps.ownerScopeId) return { monitorId, removed: false };
       const owns = async () => samePerson(m.owner, deps.owner);
       const caller = { actorId: deps.owner, botActor: deps.botActor };
-      if (!(await personOrOwningBot(caller, owns)) || !(isSystemActor(m.owner) || (await owns())))
+      if (!(await personOrOwningBot(caller, owns, m)) || !(isSystemActor(m.owner) || (await owns())))
         return { monitorId, removed: false, notYours: true };
       await deps.store.delete(monitorId);
       return { monitorId, removed: true };

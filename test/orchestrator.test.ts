@@ -864,32 +864,34 @@ test("live bot attestation reaches control, OAuth, and egress capabilities", asy
     captured = opts;
     return realProvision(owner, opts);
   };
-  const actor = { externalId: "B-LEGACY", isBot: true };
-  const res = await app.turn(
-    channel("!run echo bot", {
-      actor,
-      botActor: true,
-      origin: { kind: "human" },
-      conversation: {
-        kind: "channel",
-        threadRef: "ch:C1:bot",
-        channelRef: "C1",
-        isPrivate: true,
-        audience: [actor],
-        publishMembers: [actor],
-      },
-    }),
-  );
-  assert.equal(res.status, "ok");
-  for (const token of [
-    captured!.env!.AGENT_API_TOKEN,
-    captured!.env!.AGENT_OAUTH_CONSENT_TOKEN,
-    captured!.egressToken,
-  ]) {
-    const claims = await verifyCapabilityToken(token!, TEST_CAPABILITY_SECRET);
-    assert.equal(claims?.botActor, true);
-    assert.equal(claims?.liveActor, true);
-    assert.deepEqual(claims?.members, [{ id: "B-LEGACY", type: "internal" }]);
+  for (const actor of [{ externalId: "B-LEGACY", isBot: true }, { externalId: "admin-alice" }]) {
+    const res = await app.turn(
+      channel("!run echo bot", {
+        actor,
+        botActor: true,
+        origin: { kind: "human" },
+        conversation: {
+          kind: "channel",
+          threadRef: `ch:C-${actor.externalId}:bot`,
+          channelRef: `C-${actor.externalId}`,
+          isPrivate: true,
+          audience: [actor],
+          publishMembers: [actor],
+        },
+      }),
+    );
+    assert.equal(res.status, "ok");
+    for (const token of [
+      captured!.env!.AGENT_API_TOKEN,
+      captured!.env!.AGENT_OAUTH_CONSENT_TOKEN,
+      captured!.egressToken,
+    ]) {
+      const claims = await verifyCapabilityToken(token!, TEST_CAPABILITY_SECRET);
+      assert.equal(claims?.botActor, true);
+      assert.equal(claims?.liveActor, true);
+      assert.deepEqual(claims?.members, [{ id: actor.externalId, type: "internal" }]);
+      assert.equal(claims?.memory?.orgWrite, undefined);
+    }
   }
 });
 
@@ -1516,10 +1518,10 @@ test("a turn's credential token says whether it may act as its actor in a shared
     assert.equal((await app.turn(request)).status, "ok");
     return (await verifyCapabilityToken(executed!.AGENT_CREDENTIAL_TOKEN!, TEST_CAPABILITY_SECRET))!.actAsActor;
   };
+  assert.equal(await actAsActor(channel(ask, { botActor: true })), undefined);
   assert.equal(await actAsActor(channel(ask)), true);
   assert.equal(await actAsActor(channel(ask, { origin: { kind: "ambient", live: true } })), true);
   assert.equal(await actAsActor(channel(ask, { origin: { kind: "automation" } })), true);
-  assert.equal(await actAsActor(channel(ask, { botActor: true })), undefined);
 });
 
 for (const hours of [undefined, "72", "0", "none"]) {
@@ -1598,8 +1600,13 @@ test("an owner's cron fire carries the owner's authority: liveActor, no org-note
     ...extra,
   });
 
-  assert.equal((await app.turn(fire())).status, "ok");
+  assert.equal((await app.turn(fire({ botActor: true }))).status, "ok");
   let claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
+  assert.equal(claims!.liveActor, undefined, "a bot actor's automation turn carries no authority");
+
+  captured = undefined;
+  assert.equal((await app.turn(fire())).status, "ok");
+  claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
   assert.equal(claims!.liveActor, true, "an owner's fire attests the owner's authority");
   assert.equal(claims!.triggered, true, "but it still records that nobody is at the keyboard");
   assert.equal(claims!.memory?.orgWrite, undefined, "org-notebook write stays off for automated turns");
@@ -1608,11 +1615,6 @@ test("an owner's cron fire carries the owner's authority: liveActor, no org-note
     fire({ text: "!sysprompt", conversation: { kind: "dm", threadRef: "dm:admin-alice:owner-fire-2" } }),
   );
   assert.match(prompt.reply ?? "", /## Acting for an org admin/, "an admin owner's fire gets the admin plane");
-
-  captured = undefined;
-  assert.equal((await app.turn(fire({ botActor: true }))).status, "ok");
-  claims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
-  assert.equal(claims!.liveActor, undefined, "a bot actor's automation turn carries no authority");
 
   captured = undefined;
   const unmarked = await app.turn(
