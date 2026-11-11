@@ -54,17 +54,9 @@ export function shotResult(shot: AppShot): ClientToolResult {
   return { content: lines.join("\n"), images: [{ data: shot.image, mimeType: shot.mimeType }] };
 }
 
-const CAPTURE_MARGIN_MS = 5_000;
-
 async function takeAppShot(_args: unknown, answerBy: number): Promise<ClientToolResult> {
   try {
-    return shotResult(
-      await askEmbedder<AppShot>(
-        { type: "qm:app-shot", deadline: answerBy - CAPTURE_MARGIN_MS },
-        "qm:app-shot-result",
-        answerBy - Date.now(),
-      ),
-    );
+    return shotResult(await askEmbedder<AppShot>({ type: "qm:app-shot" }, "qm:app-shot-result", answerBy - Date.now()));
   } catch (error) {
     return { content: `Screenshot failed: ${errMessage(error)}`, isError: true };
   }

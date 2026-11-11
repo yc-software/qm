@@ -12,22 +12,15 @@ const SHELL_ASSETS = {
   "/__claw__/annotate.css": { file: () => new URL("./vendor/devbar.css", import.meta.url), annotation: true },
 } as const;
 
-const shellAssetText = new Map<string, string>();
-
 export function appShellAsset(
   pathname: string,
   annotationsEnabled: boolean,
 ): { contentType: string; body: string } | null {
   const asset = SHELL_ASSETS[pathname as keyof typeof SHELL_ASSETS];
   if (!asset || (asset.annotation && !annotationsEnabled)) return null;
-  let body = shellAssetText.get(pathname);
-  if (body === undefined) {
-    body = readFileSync(asset.file(), "utf8");
-    shellAssetText.set(pathname, body);
-  }
   return {
     contentType: pathname.endsWith(".css") ? "text/css; charset=utf-8" : "text/javascript; charset=utf-8",
-    body,
+    body: readFileSync(asset.file(), "utf8"),
   };
 }
 
@@ -149,7 +142,7 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
   window.addEventListener("message", (event) => {
     if (event.source !== chat.contentWindow || event.origin !== portalOrigin) return;
     if (event.data?.type === "qm:app-check") return void poll();
-    if (event.data?.type === "qm:app-shot" && typeof event.data.id === "string" && typeof event.data.deadline === "number") return void answerShot(event.data.id, event.data.deadline);
+    if (event.data?.type === "qm:app-shot" && typeof event.data.id === "string") return void answerShot(event.data.id);
     const theme = event.data;
     if (theme?.type !== "qm:theme" || typeof theme.dark !== "boolean" || !theme.colors) return;
     if (!themeColors.every((key) => typeof theme.colors[key] === "string" && CSS.supports("color", theme.colors[key]))) return;
@@ -255,7 +248,7 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
     const r = await fetch("/__claw__/version", { cache: "no-store" });
     if (!r.ok) throw new Error("the version check failed with HTTP " + r.status);
     const d = await r.json();
-    if (mine !== polls || typeof d.version !== "number") return;
+    if ((!force && mine !== polls) || typeof d.version !== "number") return;
     verEl.textContent = "v" + d.version;
     const served = d.version + ":" + (d.live ?? "");
     if (base === null) {
@@ -295,24 +288,17 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
     const where = String(t && (t.currentSrc || t.src || t.href || t.tagName) || "");
     return "a " + error.type + " event" + (!where ? "" : where.startsWith("data:") ? " from a " + where.length + "-character data: URL the capture built" : " from " + where);
   };
-  let stage = "";
   const shoot = async () => {
     if (document.hidden) throw new Error("the app tab is hidden, so the browser will not render it; ask the person to bring it to the front");
-    stage = "checking for a newer app version";
     await checkVersion(true);
-    stage = "waiting for the app to reload";
     if (reloading) await new Promise((resolve) => app.addEventListener("load", resolve, { once: true }));
     const doc = app.contentDocument;
     if (!doc || !doc.documentElement) throw new Error("the app page is not readable from its shell (it may have navigated to another site)");
     const w = app.contentWindow;
-    stage = "waiting for the page to finish loading";
     if (doc.readyState !== "complete") await new Promise((resolve) => w.addEventListener("load", resolve, { once: true }));
-    stage = "waiting for fonts";
     if (doc.fonts) await doc.fonts.ready;
     await new Promise((r) => w.requestAnimationFrame(() => w.requestAnimationFrame(r)));
-    stage = "checking the page's images";
     const brokenImages = (await Promise.all([...doc.images].filter((i) => i.complete && i.currentSrc).map((i) => i.decode().then(() => null, () => i.currentSrc)))).filter(Boolean);
-    stage = "loading the capture library";
     const lib = await loadCapture();
     const width = app.clientWidth;
     const height = app.clientHeight;
@@ -324,10 +310,16 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
     doc.documentElement.appendChild(probe);
     const canvasColor = w.getComputedStyle(probe).backgroundColor;
     probe.remove();
-    stage = "drawing the picture";
     const dataUrl = await lib.toJpeg(doc.documentElement, {
       width, height, pixelRatio: 1, quality: 0.85, cacheBust: false,
-      imagePlaceholder: placeholder, onImageErrorHandler: () => {},
+      imagePlaceholder: placeholder,
+      onImageErrorHandler: (event) => new Promise((resolve) => {
+        const img = event.target;
+        img.onerror = () => resolve();
+        img.addEventListener("load", () => resolve(), { once: true });
+        if (img instanceof SVGImageElement) img.href.baseVal = placeholder;
+        else { img.srcset = ""; img.src = placeholder; }
+      }),
       backgroundColor: canvasColor,
       style: { transform: "translate(" + -sx + "px," + -sy + "px)", transformOrigin: "0 0" },
     });
@@ -338,17 +330,13 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
       version: base, brokenImages,
     };
   };
-  const answerShot = async (id, deadline) => {
-    let answered = false;
-    const answer = (reply) => {
-      if (answered) return;
-      answered = true;
-      chat.contentWindow.postMessage({ type: "qm:app-shot-result", id, ...reply }, portalOrigin);
-    };
-    setTimeout(() => answer({ ok: false, error: "the capture did not finish in time; it was stuck " + stage }), deadline - Date.now());
-    try { answer(await shoot()); }
-    catch (error) { answer({ ok: false, error: describe(error) }); }
+  const answerShot = async (id) => {
+    let reply;
+    try { reply = await shoot(); }
+    catch (error) { reply = { ok: false, error: describe(error) }; }
+    chat.contentWindow.postMessage({ type: "qm:app-shot-result", id, ...reply }, portalOrigin);
   };
+
 ${opts.annotationsEnabled ? ANNOTATE_JS : ""}
   upd.addEventListener("click", () => {
     void checkVersion(true).catch(() => reloadApp(base));
