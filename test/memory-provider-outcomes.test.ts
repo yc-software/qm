@@ -420,7 +420,7 @@ test("explicit writes record committed, pending and unknown with a stable UUID i
   assert.equal(unknown.added, 1);
   assert.deepEqual(
     unknown.problems.map(({ code }) => code),
-    ["memory_provider_timeout"],
+    ["memory_provider_unknown"],
   );
   assert.match(unknown.problems[0]?.detail ?? "", /whether it stored the facts is unknown; QM did not retry/);
   assert.deepEqual(committed.problems, []);

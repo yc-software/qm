@@ -78,12 +78,12 @@ function stores(url: string, overlay?: Parameters<typeof createMemoryRegistrySto
 
 const BRAIN_URL = "https://brain.acme.example/mcp";
 
-function personalBrain(secret: { clientSecret?: string } = { clientSecret: "personal-secret" }, preset = "gbrain-v1") {
+function personalBrain(secret: { clientSecret?: string } = { clientSecret: "personal-secret" }) {
   return (record: MemoryRegistry) =>
     putBrain(
       record,
       "acme-personal",
-      { preset, url: BRAIN_URL, clientId: "qm-personal", ...secret, label: "Acme personal memory" },
+      { preset: "gbrain-v1", url: BRAIN_URL, clientId: "qm-personal", ...secret, label: "Acme personal memory" },
       change,
     );
 }
@@ -754,7 +754,7 @@ async function boundToBrain(t: { after(fn: () => Promise<void>): void }, agent?:
   const bind = async () => {
     const admin = "admin-alice@default-org";
     const brainBody = {
-      preset: "gbrain-v3",
+      preset: "gbrain-v1",
       url: BRAIN_URL,
       clientId: "qm-personal",
       clientSecret: "personal-secret",
@@ -770,7 +770,7 @@ async function boundToBrain(t: { after(fn: () => Promise<void>): void }, agent?:
   return { brain, built, api, bind };
 }
 
-test("a brain forgets by ref only while a binding serves it on gbrain-v3: an update, a rollback and a revocation apply at once", async (t) => {
+test("a registry brain forgets by ref only while a binding serves it, so a revocation applies at once", async (t) => {
   const brain = await startBrain(t);
   const url = testDatabaseUrl();
   const registry = stores(url);
@@ -792,12 +792,7 @@ test("a brain forgets by ref only while a binding serves it on gbrain-v3: an upd
   await registry.update((record) =>
     putBinding(record, "alice", { brain: "acme-personal", scope: ALICE_SCOPE, capture: "explicit" }, change),
   );
-  await assert.rejects(forget(), /can't forget facts .* its preset has no forget\. Nothing was changed/);
-  await registry.update(personalBrain(undefined, "gbrain-v3"));
   assert.equal((await forget()).forgotten, 1);
-  await registry.update(personalBrain(undefined, "gbrain-v1"));
-  await assert.rejects(forget(), /Nothing was changed/);
-  await registry.update(personalBrain(undefined, "gbrain-v3"));
   await registry.update((record) => deleteBinding(record, "alice"));
   await assert.rejects(forget(), /Nothing was changed/);
 

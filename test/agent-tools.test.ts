@@ -80,7 +80,7 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
       return { added: facts.length, outcomes: [], problems: [] };
     },
     async memoryEdit() {
-      return { copies: [], problems: [] };
+      return true;
     },
     async memoryDelete(ids) {
       return { forgotten: ids.length, outcomes: [], problems: [] };

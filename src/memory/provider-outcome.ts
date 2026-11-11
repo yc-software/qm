@@ -6,16 +6,12 @@ import { TimeoutError } from "../util/async.ts";
 import { reportFailure } from "../util/errors.ts";
 import { OutsideAudience, UNATTESTABLE_ACTOR_FIX, UnattestableActor } from "../directory/person.ts";
 import type { ScopeId } from "../types.ts";
-import { normalizeClaim, parseFactId, type MemoryCaptureMetadata } from "./facts.ts";
-import {
-  changesBrainAsPerson,
-  type MemoryAuthority,
-  type MemoryCaptureContext,
-  type MemoryEdit,
-  type MemoryForgetContext,
-  type MemoryProviderOutcome,
-  type MemoryRecallContext,
-  type MemoryService,
+import type {
+  MemoryAuthority,
+  MemoryCaptureContext,
+  MemoryForgetContext,
+  MemoryProviderOutcome,
+  MemoryService,
 } from "./memory-service.ts";
 
 export const DENIED_CODES: ReadonlySet<string> = new Set([
@@ -53,8 +49,8 @@ export class MemoryProviderDisabled extends Error {
 
 export class MemoryWriteUnconfirmed extends Error {
   readonly code: string;
-  constructor(code: string) {
-    super(`memory provider didn't confirm the write (${code})`);
+  constructor(code: string, cause?: unknown) {
+    super(`memory provider didn't confirm the write (${code})`, { cause });
     this.code = code;
   }
 }
@@ -70,12 +66,13 @@ export function failedOutcome(error: unknown): Pick<MemoryProviderOutcome, "outc
   return { outcome: denied ? "denied" : "failed", ...(code ? { code } : {}) };
 }
 
-export function forgetFailure(error: unknown): Pick<MemoryProviderOutcome, "outcome" | "code"> {
+export function changeFailure(error: unknown): Pick<MemoryProviderOutcome, "outcome" | "code"> {
+  if (error instanceof MemoryWriteUnconfirmed) return { outcome: "unknown", code: error.code };
   const failed = failedOutcome(error);
-  if (failed.outcome === "denied" || (error instanceof McpCallError && error.code !== undefined)) return failed;
-  if (error instanceof McpCallError && error.unsent) return { outcome: "failed", code: failed.code ?? "unreachable" };
-  const code = error instanceof MemoryWriteUnconfirmed ? error.code : failed.code;
-  return { outcome: "unknown", ...(code ? { code } : {}) };
+  if (failed.outcome === "timed_out") return { outcome: "unknown" };
+  if (!(error instanceof McpCallError) || failed.outcome !== "failed" || error.code !== undefined) return failed;
+  if (error.unsent) return { outcome: "failed", code: failed.code ?? "unreachable" };
+  return { outcome: "unknown", ...(failed.code ? { code: failed.code } : {}) };
 }
 
 export interface MemoryProviderProblem {
@@ -98,79 +95,53 @@ function deniedFix(provider: string, code: string | undefined): string {
   return `Check ${provider}'s OAuth client and its grant, including the attest right when attestActor is set (${TROUBLESHOOTING}).`;
 }
 
-function forgetProblem(outcome: MemoryProviderOutcome): MemoryProviderProblem | undefined {
-  const { provider, ref, ms, code } = outcome;
+function failedFix(provider: string, code: string | undefined, docs: string): string {
+  if (code === "unreachable") return `Check that ${provider}'s host is up and reachable from QM (${docs}).`;
+  if (code === "fact_not_found")
+    return `${provider} forgets only facts on the person's own member page; search memory again for current refs.`;
+  return `Check ${provider}'s logs, URL and tool names (${docs}).`;
+}
+
+function problemOf(outcome: MemoryProviderOutcome, operation: ProviderOperation): MemoryProviderProblem | undefined {
+  const { provider, ms, code, ref } = outcome;
   const reason = code ? ` (${code})` : "";
+  const forget = operation === "forget";
+  const docs = forget ? FORGET_DOCS : TROUBLESHOOTING;
+  const asked = forget ? `to forget ${ref}` : "the request";
+  const effect = { search: "its results are missing", write: "it stored nothing", forget: `${ref} is unchanged there` }[
+    operation
+  ];
   switch (outcome.outcome) {
     case "denied":
       return {
         code: "memory_provider_denied",
         provider,
-        detail: `Memory provider ${provider} refused to forget ${ref}${reason}, so nothing changed there.`,
+        detail: `Memory provider ${provider} refused ${asked}${reason}${operation === "search" ? "" : `, so ${effect}`}.`,
         fix:
-          code === "actor_not_attested"
-            ? `On ${provider}'s host, list forget_fact in QM's client's --attest-ops (${FORGET_DOCS}).`
+          forget && code === "actor_not_attested"
+            ? `On ${provider}'s host, list forget_fact and get_write_request in QM's client's --attest-ops (${FORGET_DOCS}).`
             : deniedFix(provider, code),
       };
-    case "failed": {
-      const fixes: Record<string, string> = {
-        fact_not_found: `${provider} forgets only facts on the person's own member page; search memory again for current refs.`,
-        unreachable: `Check that ${provider}'s host is up and reachable from QM, then delete it again (${FORGET_DOCS}).`,
-      };
+    case "timed_out":
       return {
-        code: "memory_provider_failed",
+        code: "memory_provider_timeout",
         provider,
-        detail: `Memory provider ${provider} didn't forget ${ref}${reason}, so nothing changed there.`,
-        fix: fixes[code ?? ""] ?? `Check ${provider}'s logs (${FORGET_DOCS}).`,
+        detail: `Memory provider ${provider} timed out after ${ms}ms, so its results are missing.`,
+        fix: `Raise ${provider}'s timeoutMs in MEMORY_PROVIDER_CONFIG or check its latency.`,
       };
-    }
     case "unknown":
       return {
         code: "memory_provider_unknown",
         provider,
-        detail: `Memory provider ${provider} didn't confirm that it forgot ${ref}${code ? ` (${code})` : ` within ${ms}ms`}, so whether it did is unknown.`,
-        fix: `Search memory for it: if ${provider} still holds it, the search shows ${ref}, and deleting it again is safe.`,
-      };
-    default:
-      return undefined;
-  }
-}
-
-function problemOf(outcome: MemoryProviderOutcome, write: boolean): MemoryProviderProblem | undefined {
-  const { provider, ms, code } = outcome;
-  const reason = code ? ` (${code})` : "";
-  if (write && code === "fact_withdrawn")
-    return {
-      code: "memory_provider_denied",
-      provider,
-      detail: `Memory provider ${provider} refused to save it again (fact_withdrawn), because it was asked to forget this exact claim, so it stored nothing.`,
-      fix: `QM's notebook still saved it. ${provider} keeps a forgotten claim withdrawn; to have it there too, state it in other words.`,
-    };
-  const lost = write ? "whether it stored the facts is unknown; QM did not retry" : "its results are missing";
-  switch (outcome.outcome) {
-    case "denied":
-      return {
-        code: "memory_provider_denied",
-        provider,
-        detail: `Memory provider ${provider} refused the request${reason}${write ? ", so it stored nothing" : ""}.`,
-        fix: deniedFix(provider, code),
-      };
-    case "timed_out":
-    case "unknown":
-      return {
-        code: "memory_provider_timeout",
-        provider,
-        detail: `Memory provider ${provider} timed out after ${ms}ms, so ${lost}.`,
-        fix: write
-          ? `Check ${provider}'s latency, and whether it stored the facts before sending them again.`
-          : `Raise ${provider}'s timeoutMs in MEMORY_PROVIDER_CONFIG or check its latency.`,
+        detail: `Memory provider ${provider} didn't confirm ${forget ? `that it forgot ${ref}` : "the write"}${code ? reason : ` within ${ms}ms`}, so whether it ${forget ? "did" : "stored the facts"} is unknown; QM did not retry.`,
+        fix: `Check ${provider}'s logs before ${forget ? "deleting it" : "sending the facts"} again (${docs}).`,
       };
     case "failed":
       return {
         code: "memory_provider_failed",
         provider,
-        detail: `Memory provider ${provider} failed${reason}, so ${lost}.`,
-        fix: `Check ${provider}'s logs, URL and tool names (${TROUBLESHOOTING}).`,
+        detail: `Memory provider ${provider} failed${forget ? ` to forget ${ref}` : ""}${reason}, so ${effect}.`,
+        fix: failedFix(provider, code, docs),
       };
     case "disabled":
       return {
@@ -202,22 +173,20 @@ export interface MemoryProviderReport<T> {
   problems: MemoryProviderProblem[];
 }
 
+type ProviderOperation = "search" | "write" | "forget";
+
 export async function withProviders<T>(
-  operation: "search" | "write" | "forget",
+  operation: ProviderOperation,
   run: (report: OutcomeReport) => Promise<T>,
 ): Promise<MemoryProviderReport<T>> {
   const outcomes: MemoryProviderOutcome[] = [];
   const problems = () =>
-    outcomes.flatMap((outcome) =>
-      outcome.provider === "default"
-        ? []
-        : ((operation === "forget" ? forgetProblem(outcome) : problemOf(outcome, operation === "write")) ?? []),
-    );
+    outcomes.flatMap((outcome) => (outcome.provider === "default" ? [] : (problemOf(outcome, operation) ?? [])));
   try {
     const value = await run((outcome) => void outcomes.push(outcome));
     return { value, outcomes, problems: problems() };
   } catch (error) {
-    const notebookFailed = outcomes.some((outcome) => outcome.provider === "default" && problemOf(outcome, false));
+    const notebookFailed = outcomes.some((outcome) => outcome.provider === "default" && problemOf(outcome, operation));
     if (notebookFailed || !problems().length || !strictFailures.has(error as object)) throw error;
     reportFailure(`memory: provider ${operation}`, error);
     return { outcomes, problems: problems() };
@@ -273,33 +242,4 @@ export async function forgetFacts(
   );
   const forgotten = outcomes.length ? outcomes.filter(({ outcome }) => outcome === "committed").length : ids.length;
   return { forgotten, outcomes, problems };
-}
-
-export interface MemoryEdited {
-  copies: string[];
-  problems: MemoryProviderProblem[];
-}
-
-export async function editNotebookFacts(
-  memory: MemoryService,
-  scope: ScopeId,
-  edits: MemoryEdit[],
-  by: MemoryAuthority,
-  context: MemoryCaptureMetadata & Pick<MemoryRecallContext, "audienceScopeId">,
-): Promise<MemoryEdited> {
-  const before = new Map(((await memory.facts?.(scope)) ?? []).map((fact) => [fact.id, fact.text]));
-  await memory.edit!(scope, edits, by, context);
-  if (!changesBrainAsPerson(by)) return { copies: [], problems: [] };
-  const old = [...new Set(edits.flatMap((edit) => before.get(parseFactId(edit.id)) ?? []))];
-  const audience = context.audienceScopeId ? { audienceScopeId: context.audienceScopeId } : {};
-  const { value, problems } = await withProviders("search", (report) =>
-    Promise.all(
-      old.map(async (text) =>
-        (await memory.query(scope, text, 20, { actorId: by.actorId, ...audience, report })).filter(
-          (row) => row.ref !== undefined && normalizeClaim(row.claim ?? "") === normalizeClaim(text),
-        ),
-      ),
-    ),
-  );
-  return { copies: [...new Set((value ?? []).flat().map((row) => row.ref!))], problems };
 }

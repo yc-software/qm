@@ -8,7 +8,6 @@ import {
   type MemoryService,
 } from "../../memory/memory-service.ts";
 import {
-  editNotebookFacts,
   forgetFacts,
   MAX_FACTS_PER_WRITE,
   problemLine,
@@ -899,16 +898,9 @@ const captureFacts = writeMemory(async ({ res, deps, tenant, body }, memory, cap
 const editFacts = writeMemory(async ({ res, deps, tenant, body }, memory, capability, write) => {
   const edits = parseEdits(body);
   if (typeof edits === "string") return sendJson(res, 400, { error: "bad_request", message: edits });
-  const { copies, problems } = await editNotebookFacts(
-    memory,
-    write,
-    edits,
-    turnAuthority(capability.actorId, capability.memory, capability.botActor),
-    {
-      conversationScopeId: capability.scopeId,
-      ...(capability.audienceScopeId ? { audienceScopeId: capability.audienceScopeId } : {}),
-    },
-  );
+  await memory.edit?.(write, edits, turnAuthority(capability.actorId, capability.memory), {
+    conversationScopeId: capability.scopeId,
+  });
   audit(
     { deps, tenant },
     {
@@ -918,12 +910,7 @@ const editFacts = writeMemory(async ({ res, deps, tenant, body }, memory, capabi
       scopeLabel: write,
     },
   );
-  return sendJson(res, 200, {
-    ok: true,
-    scopeId: write,
-    ...(copies.length ? { copies } : {}),
-    ...(problems.length ? { problems } : {}),
-  });
+  return sendJson(res, 200, { ok: true, scopeId: write });
 });
 
 const deleteFacts = writeMemory(async ({ res, deps, tenant, body }, memory, capability, write) => {

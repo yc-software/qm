@@ -583,7 +583,7 @@ describe("agent memory routes report provider failures as problem+json", () => {
     assert.equal(written.added, 1);
     assert.deepEqual(
       written.problems.map(({ code }) => code),
-      ["memory_provider_timeout"],
+      ["memory_provider_unknown"],
     );
     assert.match(written.problems[0]?.detail ?? "", /whether it stored the facts is unknown; QM did not retry/);
     assert.deepEqual(

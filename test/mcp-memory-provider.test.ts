@@ -162,16 +162,31 @@ test("MCP recall alternates gbrain's own recent facts with its query matches, so
   );
 });
 
-test("a brain forget reports each ref done, unknown or failed, and a retry reuses its receipt", async (t) => {
+test("a brain forget reports each ref done, unknown or failed, reads gbrain's receipt until it settles, and a retry reuses its request id", async (t) => {
   const sent: Array<Record<string, unknown>> = [];
-  const states: Record<number, string> = { 1: "committed", 2: "committed", 3: "queued", 4: "conflict" };
+  const states: Record<number, string> = { 1: "committed", 2: "committed", 3: "queued", 4: "conflict", 6: "queued" };
+  const receipts: Record<number, Array<[string, number | null]>> = {
+    3: [
+      ["running", 10],
+      ["committed", null],
+    ],
+    6: [["queued", null]],
+    9: [["committed", null]],
+  };
+  const forgotten = new Map<unknown, number>();
   const brain: McpClient = {
     async listTools() {
       return { tools: [] };
     },
-    async callTool(_tool, args) {
+    async callTool(tool, args) {
+      if (tool === "get_write_request") {
+        const [state, retry_after_ms] = receipts[forgotten.get(args.request_id)!]!.shift()!;
+        return { content: [], structuredContent: { request_id: args.request_id, state, retry_after_ms } };
+      }
       sent.push(args);
+      forgotten.set(args.request_id, args.id as number);
       if (sent.length === 2) await sleep(300);
+      if (args.id === 9) throw new McpCallError("mcp tools/call failed (HTTP 502)", { status: 502 });
       const state = states[args.id as number];
       if (!state) throw new McpCallError("mcp tool forget_fact error: not on your page", { code: "fact_not_found" });
       return { content: [{ type: "text", text: state }], structuredContent: { ...args, state } };
@@ -180,7 +195,14 @@ test("a brain forget reports each ref done, unknown or failed, and a retry reuse
   const forgetting = (client: McpClient) =>
     createMcpMemoryProvider({
       read: { client, tool: "memory_recall", timeoutMs: 100 },
-      forget: { client, tool: "forget_fact", idArg: "id", requestIdArg: "request_id", timeoutMs: 100 },
+      forget: {
+        client,
+        tool: "forget_fact",
+        receiptTool: "get_write_request",
+        idArg: "id",
+        requestIdArg: "request_id",
+        timeoutMs: 100,
+      },
       attestActor: true,
     });
   const closed = createServer().listen(0, "127.0.0.1");
@@ -206,10 +228,12 @@ test("a brain forget reports each ref done, unknown or failed, and a retry reuse
       )
     ).outcomes.map(({ ref, outcome, code }) => `${ref} ${outcome}${code ? ` ${code}` : ""}`);
 
-  assert.deepEqual(await forget(["acme:1", "acme:2", "acme:3", "acme:4", "acme:5", "acme:x"]), [
+  assert.deepEqual(await forget(["acme:1", "acme:2", "acme:3", "acme:6", "acme:9", "acme:4", "acme:5", "acme:x"]), [
     "acme:1 committed",
     "acme:2 unknown",
-    "acme:3 unknown queued",
+    "acme:3 committed",
+    "acme:6 unknown queued",
+    "acme:9 committed",
     "acme:4 failed conflict",
     "acme:5 failed fact_not_found",
     "acme:x failed fact_not_found",

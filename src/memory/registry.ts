@@ -19,7 +19,7 @@ const BRAIN_PRESETS = {
   "gbrain-v1": {
     read: { tool: "memory_recall", queryArg: "query", maxCharsArg: "max_chars" },
     write: { tool: "memory_write", factsArg: "facts", idempotencyArg: "idempotency_key" },
-    forget: { tool: "forget_fact", idArg: "id", requestIdArg: "request_id" },
+    forget: { tool: "forget_fact", receiptTool: "get_write_request", idArg: "id", requestIdArg: "request_id" },
   },
 } as const;
 

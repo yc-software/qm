@@ -33,6 +33,7 @@ export interface McpMemoryOperationConfig {
 
 export interface McpMemoryForgetConfig {
   tool: string;
+  receiptTool: string;
   auth: McpMemoryAuthConfig;
   idArg: string;
   requestIdArg: string;
