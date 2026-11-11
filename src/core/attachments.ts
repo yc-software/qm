@@ -95,10 +95,29 @@ export function isVisionAttachment(attachment: Pick<IncomingAttachment, "name" |
   return VISION_MIME_TYPES.has(baseMime(attachment.mimetype || mimeFromName(attachment.name)));
 }
 
+const NAME_MAX = 255;
+
+function splitExtension(name: string): [string, string] {
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ""];
+}
+
+function fitName(stem: string, suffix: string): string {
+  if (Buffer.byteLength(suffix) >= NAME_MAX) return fitName(stem + suffix, "");
+  let room = NAME_MAX - Buffer.byteLength(suffix);
+  let end = 0;
+  for (const char of stem) {
+    room -= Buffer.byteLength(char);
+    if (room < 0) break;
+    end += char.length;
+  }
+  return stem.slice(0, end) + suffix;
+}
+
 export function safeAttachmentName(name: string): string {
   const base = basename(String(name ?? "").replace(/\\/g, "/")).trim();
   if (!base || /^\.+$/.test(base)) return "file";
-  return base;
+  return fitName(...splitExtension(base));
 }
 
 export function mimeFromName(name: string): string {
@@ -156,12 +175,10 @@ async function registerArtifact(
 
 function uniqueName(name: string, used: Set<string>): string {
   if (!used.has(name)) return name;
-  const dot = name.lastIndexOf(".");
-  const stem = dot > 0 ? name.slice(0, dot) : name;
-  const ext = dot > 0 ? name.slice(dot) : "";
+  const [stem, ext] = splitExtension(name);
   let n = 2;
-  while (used.has(`${stem}-${n}${ext}`)) n++;
-  return `${stem}-${n}${ext}`;
+  while (used.has(fitName(stem, `-${n}${ext}`))) n++;
+  return fitName(stem, `-${n}${ext}`);
 }
 
 export function withoutAlreadyIngested(

@@ -78,6 +78,7 @@ test("safeAttachmentName strips directories (no traversal) and keeps unicode", (
   assert.equal(safeAttachmentName("résumé-✨.txt"), "résumé-✨.txt");
   assert.equal(safeAttachmentName(".."), "file");
   assert.equal(safeAttachmentName(""), "file");
+  assert.equal(safeAttachmentName(`${"a".repeat(1_000_000)}.txt`), `${"a".repeat(251)}.txt`);
 });
 
 test("mimeFromName maps known extensions, defaults to octet-stream", () => {

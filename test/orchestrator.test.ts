@@ -2087,6 +2087,25 @@ test("turn-private transfer files are removed after staging", async () => {
   assert.deepEqual(await sandbox.listDir(usedHandle, TURN_FILES_DIR), []);
 });
 
+test("an attachment's name stays out of the screen's source labels", async () => {
+  const parts: Array<{ source: string; content: string }> = [];
+  const screener: SecurityScreener = {
+    provider: "spy",
+    async classify({ payload }) {
+      parts.push(...(JSON.parse(payload) as typeof parts));
+      return { verdict: { decision: "auto" }, score: 0, threshold: 0.7 };
+    },
+  };
+  const { app, blobTransfer } = freshApp({ securityPosture: "auto" }, screener);
+  const blob = await blobTransfer.put(Buffer.from("quarterly numbers"));
+  await app.turn(
+    dm("summarize", {
+      attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: blob.sizeBytes, blobId: blob.blobId }],
+    }),
+  );
+  assert.equal(parts.find((part) => part.content === "quarterly numbers")?.source, "attachment");
+});
+
 test("a later turn removes same-conversation and expired transfer files", async () => {
   const built = freshApp();
   const { app, sandbox } = built;
