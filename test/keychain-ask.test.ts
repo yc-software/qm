@@ -988,6 +988,8 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
       await post("/v1/keychain/credentials", { service: "release-signing", secret: "s" }, await capFor("U_ALICE"))
     ).json()) as any;
     const threadRef = "ch:C_RELEASE-thread";
+    await built.users.record({ id: "U_RELEASE_BOT", source: "turn", at: Date.now() });
+    await built.users.markApps(["U_RELEASE_BOT"]);
     const made = (await (
       await post(
         "/v1/keychain/asks",
