@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { McpCallError, mcpEnvelope, mcpResultText, type McpClient } from "../mcp/mcp-client.ts";
 import { TimeoutError, withTimeout } from "../util/async.ts";
@@ -205,8 +204,9 @@ export function createMcpMemoryProvider(opts: {
                 throw new McpCallError(`memory provider fact ids are whole numbers, not ${JSON.stringify(id)}`, {
                   code: "fact_not_found",
                 });
-              const args: Record<string, unknown> = { [op.idArg ?? "id"]: factId };
-              if (op.requestIdArg) args[op.requestIdArg] = requestKey(context?.idempotencyKey ?? randomUUID(), id);
+              const args: Record<string, unknown> = { id: factId };
+              if (context?.idempotencyKey && op.idempotencyArg)
+                args[op.idempotencyArg] = requestKey(context.idempotencyKey, id);
               const result = await call(op, args, undefined, by?.actorId, scopeId, context?.audienceScopeId);
               const state = (result.structuredContent as { state?: unknown } | undefined)?.state;
               if (state === "committed") continue;
@@ -215,7 +215,7 @@ export function createMcpMemoryProvider(opts: {
                   code: state,
                 });
               if (typeof state !== "string" || !PENDING_STATES.has(state))
-                throw new MemoryWriteUnconfirmed(typeof state === "string" ? state : "no_state");
+                throw new MemoryWriteUnconfirmed(typeof state === "string" ? state : "no_state", resultText(result));
               reportEnvelope({ status: "pending", code: state });
             }
           },

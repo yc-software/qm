@@ -541,6 +541,7 @@ export interface ToolContextDeps {
   attach?: AttachFiles;
   sessionSyscalls?: SessionSyscalls;
   humanTurn?: boolean;
+  personTurn?: boolean;
   toolOutput?: ToolOutputStore;
   sessionId?: string;
 }
@@ -1190,7 +1191,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         memory,
         write,
         ids,
-        turnAuthority(deps.createdBy, deps.memoryAccess, deps.humanTurn),
+        turnAuthority(deps.createdBy, deps.memoryAccess, deps.personTurn),
         deps.audienceScopeId ? { audienceScopeId: deps.audienceScopeId } : {},
         deps.sessionId && `${deps.sessionId}:${callId}`,
       );

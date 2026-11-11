@@ -41,7 +41,7 @@ export function attestableActor(id: unknown): string | undefined {
   return typeof id === "string" && /^[\x21-\x7e]{1,256}$/.test(id) ? id : undefined;
 }
 
-export function attestableAudience(actorId: string | undefined, scope: string | undefined): boolean {
+function attestableAudience(actorId: string | undefined, scope: string | undefined): boolean {
   const { kind, ref } = parseScopeId(scope ?? "");
   return kind === "personal" && !isSystemActor(actorId) && samePerson(actorId, ref);
 }

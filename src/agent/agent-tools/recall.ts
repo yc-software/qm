@@ -18,7 +18,7 @@ export function recallTools(kit: ToolKit) {
       "read: this notebook with fact #ids (pass `scope` from a search result for another notebook). " +
       "add: short, self-contained facts (preferences, identifiers, ongoing projects, how they work); never secrets, one-off trivia, or anything already recorded elsewhere. " +
       "Save pointers, not data: growing lists and working state belong in a file written with the files tool, with one memory line naming it. Files are this conversation's own; a pointer read from another notebook is a hint of where state lives, not a path you can open. " +
-      "edit: replace notebook facts' text by id; a brain copy that search shows as (also <ref>) keeps the old wording until you delete that ref. delete: forget by `ids`, notebook #ids and brain refs from search (like acme:4821); a brain ref is forgotten only on a turn the person sent in their own DM. Fix changed facts instead of adding contradictions; delete stale ones.",
+      "edit: replace notebook facts' text by id; a brain copy that search shows as (also <ref>) keeps the old wording until you delete that ref. delete: forget by `ids`. Fix changed facts instead of adding contradictions; delete stale ones.",
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal("search"),
@@ -44,9 +44,7 @@ export function recallTools(kit: ToolKit) {
         ),
       ),
       ids: Type.Optional(
-        Type.Array(Type.String(), {
-          description: "delete: notebook #ids and brain refs such as acme:4821, to forget.",
-        }),
+        Type.Array(Type.String(), { description: "delete: notebook #ids or brain refs from search, like acme:4821." }),
       ),
     }),
     async execute(callId, params) {

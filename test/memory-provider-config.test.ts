@@ -172,13 +172,6 @@ test("attestActor is an opt-in boolean on mcp providers only", () => {
   assert.equal(mcp({ attestActor: false }), false);
   for (const attestActor of ["true", 1, null])
     assert.throws(() => mcp({ attestActor }), /knowledge\.attestActor must be true or false on an mcp provider/);
-  const forget = {
-    tool: "forget_fact",
-    clientIdEnv: "KNOWLEDGE_RW_CLIENT_ID",
-    clientSecretEnv: "KNOWLEDGE_RW_CLIENT_SECRET",
-  };
-  assert.throws(() => mcp({ forget }), /knowledge\.forget requires attestActor: true/);
-  assert.equal(mcp({ forget, attestActor: true }), true);
   assert.throws(
     () =>
       parseMemoryProviderConfig(

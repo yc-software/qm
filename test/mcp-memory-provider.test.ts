@@ -181,7 +181,7 @@ test("a brain forget reports each ref done, pending, unknown or failed, and a re
   const forgetting = (client: McpClient) =>
     createMcpMemoryProvider({
       read: { client, tool: "memory_recall", timeoutMs: 100 },
-      forget: { client, tool: "forget_fact", idArg: "id", requestIdArg: "request_id", timeoutMs: 100 },
+      forget: { client, tool: "forget_fact", idempotencyArg: "request_id", timeoutMs: 100 },
       attestActor: true,
     });
   const closed = createServer().listen(0, "127.0.0.1");
