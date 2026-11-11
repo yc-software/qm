@@ -184,7 +184,7 @@ export function createRoutedMemoryService(opts: {
           {
             id: provider,
             label: label ?? provider,
-            ops: operations.ops,
+            tools: (context: BrainCall) => operations.tools(scopeId, context),
             call: (op: string, args: Record<string, unknown>, context: BrainCall) =>
               operations.call(scopeId, op, args, context),
           },

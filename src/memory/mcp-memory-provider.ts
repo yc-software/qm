@@ -81,8 +81,14 @@ export function createMcpMemoryProvider(opts: {
   write?: McpMemoryOperation;
   forget?: McpMemoryForget;
   attestActor?: boolean;
-  ops?: readonly string[];
 }): MemoryService {
+  const attest = (actorId: string | undefined, scopeId: string, audienceScopeId: string | undefined) => {
+    const person = opts.attestActor ? attestedPerson(actorId, "memory provider") : actorId;
+    if (opts.attestActor && !(attestableAudience(actorId, scopeId) && attestableAudience(actorId, audienceScopeId)))
+      throw new OutsideAudience("memory provider");
+    return { person, headers: opts.attestActor && person ? { "x-qm-actor": person } : undefined };
+  };
+
   const call = async (
     op: Pick<McpMemoryOperation, "client" | "tool" | "timeoutMs" | "actorArg">,
     args: Record<string, unknown>,
@@ -92,11 +98,8 @@ export function createMcpMemoryProvider(opts: {
     deadline = Date.now() + op.timeoutMs,
     signal?: AbortSignal,
   ) => {
-    const person = opts.attestActor ? attestedPerson(actorId, "memory provider") : actorId;
-    if (opts.attestActor && !(attestableAudience(actorId, scopeId) && attestableAudience(actorId, audienceScopeId)))
-      throw new OutsideAudience("memory provider");
+    const { person, headers } = attest(actorId, scopeId, audienceScopeId);
     if (person && (op === opts.read || op === opts.write)) args[op.actorArg ?? "acting_user"] = person;
-    const headers = opts.attestActor && person ? { "x-qm-actor": person } : undefined;
     const ms = deadline - Date.now();
     if (ms <= 0) throw new TimeoutError(`memory provider timed out after ${op.timeoutMs}ms`);
     const stop = new AbortController();
@@ -193,10 +196,18 @@ export function createMcpMemoryProvider(opts: {
 
     read: async (scopeId) => resultText(await read(scopeId, "")),
 
-    ...(opts.ops && opts.attestActor
+    ...(opts.attestActor
       ? {
           operations: {
-            ops: opts.ops,
+            async tools(scopeId, { actorId, audienceScopeId }) {
+              const { headers } = attest(actorId, scopeId, audienceScopeId);
+              const listing = await withTimeout(
+                () => opts.read.client.listTools(headers ? { headers } : {}),
+                opts.read.timeoutMs,
+                "memory provider",
+              );
+              return listing.tools.map((tool) => tool.name);
+            },
             call: (scopeId, tool, args, { actorId, audienceScopeId, signal }) =>
               call({ ...opts.read, tool }, { ...args }, actorId, scopeId, audienceScopeId, undefined, signal),
           },

@@ -345,7 +345,7 @@ gbrain auth rescope --client <client id> --attest-actor qm --attest-ops forget_f
 
 ### The brain tool
 
-A brain with the `gbrain-v3` preset also gives the member a `brain` tool in their own DM, so the agent can look up the people, companies and meetings in it instead of waiting for recall to surface them. Each action calls one gbrain operation as the member (`x-qm-actor`), and the operation reads only what that member may read:
+A gbrain brain bound to a member's personal scope also gives them a `brain` tool in their own DM, so the agent can look up the people, companies and meetings in it instead of waiting for recall to surface them. That holds for an admin's brain and a member's own alike. At the start of each DM turn QM lists the brain's tools once, as the member, and offers the actions whose operation the brain advertises; a gbrain build without these operations gets no tool. Each action calls one gbrain operation as the member (`x-qm-actor`), and the operation reads only what that member may read:
 
 | Action     | gbrain operation | Sends                                                      |
 | ---------- | ---------------- | ---------------------------------------------------------- |
@@ -366,9 +366,9 @@ gbrain auth rescope --client <QM client id> --attest-actor qm \
 gbrain auth rescope --client <QM client id> --attest-read person
 ```
 
-An operation left out of `--attest-ops` answers `actor_not_attested`, and the tool says so instead of guessing.
+A brain still advertises an operation left out of `--attest-ops`, so the tool offers it, and a call answers `actor_not_attested`. The tool then says that action is unavailable for this member and names the operation to add (problem `memory_provider_denied`), and the agent answers without it.
 
-- **Where it appears.** Only on a turn the member sent in their own DM, with memory on. Group DMs, channels, a bot's turn, ambient wakes, notebook-only turns (the nightly tidy and its subagents) and `gbrain-v1` brains get no tool, and the system prompt doesn't mention it. `MEMORY_BRAIN_TOOL=off` removes it everywhere; recall and writes don't change.
+- **Where it appears.** Only on a turn the member sent in their own DM, with memory on. Group DMs, channels, a bot's turn, ambient wakes, notebook-only turns (the nightly tidy and its subagents) and a brain whose tool list fails or lacks these operations get no tool, and the system prompt doesn't mention it. `MEMORY_BRAIN_TOOL=off` removes it everywhere and skips the tool list; recall and writes don't change.
 - **Checked on every call.** QM decides the brains and actions once per turn, then checks each call against the live registry, so a binding deleted mid-turn refuses the next call before it reaches the brain. A call naming a brain, action or ref the turn wasn't given is refused the same way.
 - **Refs.** Every record in a result carries a ref, `<brain>:<source>:<slug>`, and `page`, `timeline`, `links` and a ref-based `entity` or `brief` take only a ref a brain result in the conversation gave. A brain therefore never receives a slug the model made up. A saved fact in `search` results carries `<brain>:<fact id>` instead, the ref `memory` delete takes to [forget it](#forgetting-a-brain-fact).
 - **Nothing leaves through a lookup.** `query` and `after` are at most 200 characters. A lookup that repeats 24 or more characters of text that reached the conversation from anywhere but the member's own messages or that brain's own results (another brain, another tool, a channel message, recalled memory) is refused, so one brain's data never reaches another brain.

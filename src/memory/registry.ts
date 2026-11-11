@@ -21,7 +21,6 @@ interface BrainPreset {
   read: Omit<McpMemoryOperationConfig, "auth">;
   write: Omit<McpMemoryOperationConfig, "auth">;
   forget?: Omit<McpMemoryForgetConfig, "auth">;
-  ops?: readonly string[];
 }
 
 const GBRAIN_MEMORY: BrainPreset = {
@@ -31,11 +30,7 @@ const GBRAIN_MEMORY: BrainPreset = {
 
 const BRAIN_PRESETS: Record<string, BrainPreset> = {
   "gbrain-v1": GBRAIN_MEMORY,
-  "gbrain-v3": {
-    ...GBRAIN_MEMORY,
-    forget: { tool: "forget_fact", idArg: "id", requestIdArg: "request_id" },
-    ops: ["query", "get_page", "get_timeline", "get_backlinks", "find_experts", "whois", "entity", "context_pack"],
-  },
+  "gbrain-v3": { ...GBRAIN_MEMORY, forget: { tool: "forget_fact", idArg: "id", requestIdArg: "request_id" } },
 };
 
 export interface RegistryBrain {
@@ -131,18 +126,12 @@ function brainConfig(brain: RegistryBrain, bindings: readonly RegistryBinding[],
     }),
     { QM_BRAIN_CLIENT_ID: brain.auth.clientId, QM_BRAIN_CLIENT_SECRET: clientSecret },
   )!;
-  const { forget, ops } = preset;
-  if (!forget && !ops) return config;
+  const { forget } = preset;
+  if (!forget) return config;
   return {
     ...config,
     providers: config.providers.map((provider) =>
-      provider.type === "mcp"
-        ? {
-            ...provider,
-            ...(forget ? { forget: { ...forget, auth: provider.read.auth } } : {}),
-            ...(ops ? { ops } : {}),
-          }
-        : provider,
+      provider.type === "mcp" ? { ...provider, forget: { ...forget, auth: provider.read.auth } } : provider,
     ),
   };
 }

@@ -1,15 +1,15 @@
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { askBrain, brainActions, describeBrainActions } from "../../memory/brain.ts";
+import { askBrain, describeBrainActions } from "../../memory/brain.ts";
 import { text, type ToolKit } from "./kit.ts";
 
 export function brainTool(kit: ToolKit) {
   const { ref, recordCall, recordExternalResult, recordCoreAuthoredResult } = kit;
   const brains = ref.current?.brain?.brains ?? [];
   if (!brains.length) return [];
-  const actions = [...new Set(brains.flatMap(brainActions))];
+  const actions = [...new Set(brains.flatMap((brain) => brain.actions))];
   const offered = brains
-    .map((brain) => `- ${brain.id} (${brain.label}): ${describeBrainActions(brainActions(brain))}`)
+    .map((brain) => `- ${brain.id} (${brain.label}): ${describeBrainActions(brain.actions)}`)
     .join("\n");
   return [
     defineTool({

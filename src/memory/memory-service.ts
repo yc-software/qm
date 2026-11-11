@@ -95,14 +95,14 @@ export interface BrainCall {
 }
 
 interface BrainOperations {
-  ops: readonly string[];
+  tools(scopeId: ScopeId, context: BrainCall): Promise<string[]>;
   call(scopeId: ScopeId, op: string, args: Record<string, unknown>, context: BrainCall): Promise<CallToolResult>;
 }
 
 export interface BoundBrain {
   id: string;
   label: string;
-  ops: readonly string[];
+  tools(context: BrainCall): Promise<string[]>;
   call(op: string, args: Record<string, unknown>, context: BrainCall): Promise<CallToolResult>;
 }
 

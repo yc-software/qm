@@ -94,11 +94,17 @@ function gbrainAnswer(tool: string, args: Row, answers: Record<string, (args: Ro
   };
 }
 
-async function gbrain(t: { after(fn: () => Promise<void>): void }, answers: Record<string, (args: Row) => Row>) {
+const MEMORY_OPS = ["memory_recall", "memory_write"];
+
+async function gbrain(
+  t: { after(fn: () => Promise<void>): void },
+  answers: Record<string, (args: Row) => Row>,
+  advertised = [...OPS, ...MEMORY_OPS],
+) {
   const calls: Call[] = [];
   const failures = new Map<string, CallToolResult | number>();
   const server = await startMcpTestServer(t, {
-    tools: [...OPS, "memory_recall", "memory_write"].map((name) => ({
+    tools: advertised.map((name) => ({
       name,
       inputSchema: { type: "object" as const },
     })),
@@ -119,11 +125,11 @@ async function brainApp(
   t: { after(fn: () => Promise<void>): void },
   {
     brains = ["acme"],
-    preset = "gbrain-v3",
+    advertised,
     ...config
-  }: { brains?: string[]; preset?: string; memoryBrainTool?: boolean } = {},
+  }: { brains?: string[]; advertised?: string[]; memoryBrainTool?: boolean } = {},
 ) {
-  const acme = await gbrain(t, ACME);
+  const acme = await gbrain(t, ACME, advertised);
   const beta = await gbrain(t, { query: () => ({ results: [{ ...priya, chunk_text: `${CANARY} ${OWN_WORDS}` }] }) });
   const script: Step[] = [];
   const runs: Array<{ tools: string[]; prompt: string; texts: string[] }> = [];
@@ -173,7 +179,7 @@ async function brainApp(
     const url = `https://brain.${id}.example/mcp`;
     const label = `${id[0]!.toUpperCase()}${id.slice(1)} brain`;
     await admin("PUT", `/v1/admin/memory-registry/brains/${id}`, {
-      preset,
+      preset: "gbrain-v1",
       url,
       clientId: "qm",
       clientSecret: "brain-secret",
@@ -225,12 +231,14 @@ test("the brain tool comes only in the person's own DM, and the switch leaves re
   ];
   for (const request of others) assert.equal(await offered(request), false, JSON.stringify(request));
   assert.deepEqual(ops(acme), []);
+  assert.equal(acme.requests.filter(({ rpc }) => rpc === "tools/list").length, 1);
 
   const off = await brainApp(t, { memoryBrainTool: false });
   assert.equal((await off.turn([]))?.tools.includes("brain"), false);
   assert.ok(off.acme.calls.some(({ tool }) => tool === "memory_recall"));
-  const v1 = await brainApp(t, { preset: "gbrain-v1" });
-  assert.equal((await v1.turn([]))?.tools.includes("brain"), false);
+  const older = await brainApp(t, { advertised: MEMORY_OPS });
+  assert.equal((await older.turn([]))?.tools.includes("brain"), false);
+  assert.ok(older.acme.calls.some(({ tool }) => tool === "memory_recall"));
 });
 
 test("each action sends its own operation as the person, naming the record's source, and shows only its fields", async (t) => {
@@ -322,10 +330,12 @@ test("a slow, unlinked or refusing brain answers with what to do next", async (t
   acme.failures.set("slow", 2_000);
   acme.failures.set("Nobody", refusal("actor_unlinked"));
   acme.failures.set("Missing", refusal("page_not_found"));
+  acme.failures.set("Unlisted", refusal("actor_not_attested"));
   const { texts } = (await turn([
     { action: "search", query: "slow" },
     { action: "whois", query: "Nobody" },
     { action: "entity", query: "Missing" },
+    { action: "search", query: "Unlisted" },
   ]))!;
   assert.match(texts[0]!, /^\[memory_provider_timeout\] .*timed out after \d+ms/);
   assert.match(
@@ -333,6 +343,10 @@ test("a slow, unlinked or refusing brain answers with what to do next", async (t
     /\[memory_provider_denied\] .*Link this member's QM principal id[\s\S]*refused with actor_unlinked/,
   );
   assert.match(texts[2]!, /\[brain_answered page_not_found\][\s\S]*refused with page_not_found/);
+  assert.match(
+    texts[3]!,
+    /\[memory_provider_denied\] search is unavailable .*list query in QM's client's --attest-ops/,
+  );
 });
 
 test("strict posture holds a brain lookup for approval, and dangerous runs it", async (t) => {

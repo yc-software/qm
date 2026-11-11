@@ -2,6 +2,7 @@ import { McpCallError } from "../mcp/mcp-client.ts";
 import { attestableAudience, samePerson } from "../directory/person.ts";
 import { isOverheard, isUserItem, type Item } from "../sessions/items.ts";
 import type { ScopeId } from "../types.ts";
+import { swallowAs } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
 import { quotedData } from "../util/text.ts";
 import type { BoundBrain, BrainCall, MemoryService } from "./memory-service.ts";
@@ -9,6 +10,7 @@ import { failedOutcome, problemLine, problemOf } from "./provider-outcome.ts";
 
 const BRAIN_ARG_MAX_CHARS = 200;
 const QUOTED_SPAN = 24;
+const BRAIN_DOCS = "docs/memory-providers.md#the-brain-tool";
 const AMBIGUOUS =
   "Several records match. Ask the person which one they mean, naming what tells them apart; never pick one yourself.";
 
@@ -147,30 +149,46 @@ const BRAIN_ACTIONS = {
 
 export type BrainActionName = keyof typeof BRAIN_ACTIONS;
 
-export function brainActions(brain: Pick<BoundBrain, "ops">): BrainActionName[] {
-  return (Object.keys(BRAIN_ACTIONS) as BrainActionName[]).filter((action) =>
-    brain.ops.includes(BRAIN_ACTIONS[action].op),
-  );
+function brainActions(tools: readonly string[]): BrainActionName[] {
+  return (Object.keys(BRAIN_ACTIONS) as BrainActionName[]).filter((action) => tools.includes(BRAIN_ACTIONS[action].op));
 }
 
 export function describeBrainActions(actions: readonly BrainActionName[]): string {
   return actions.map((action) => `${action}: ${BRAIN_ACTIONS[action].describe}.`).join(" ");
 }
 
+export interface TurnBrain extends BoundBrain {
+  actions: BrainActionName[];
+}
+
 export interface BrainAccess {
-  brains: readonly BoundBrain[];
+  brains: readonly TurnBrain[];
   live(): Promise<BoundBrain[]>;
   retained(): Promise<Item[]>;
   call: Omit<BrainCall, "signal">;
 }
 
-export async function turnBrains(
-  memory: Pick<MemoryService, "brains">,
-  turn: { actorId: string; scopeId: ScopeId; audienceScopeId?: ScopeId },
-): Promise<BoundBrain[]> {
+interface BrainTurn {
+  actorId: string;
+  scopeId: ScopeId;
+  audienceScopeId?: ScopeId;
+}
+
+export async function boundBrains(memory: Pick<MemoryService, "brains">, turn: BrainTurn): Promise<BoundBrain[]> {
   if (!attestableAudience(turn.actorId, turn.scopeId) || !attestableAudience(turn.actorId, turn.audienceScopeId))
     return [];
-  return ((await memory.brains?.(turn.scopeId)) ?? []).filter((brain) => brainActions(brain).length);
+  return (await memory.brains?.(turn.scopeId)) ?? [];
+}
+
+export async function turnBrains(memory: Pick<MemoryService, "brains">, turn: BrainTurn): Promise<TurnBrain[]> {
+  const call = { actorId: turn.actorId, ...(turn.audienceScopeId ? { audienceScopeId: turn.audienceScopeId } : {}) };
+  const decided = await Promise.all(
+    (await boundBrains(memory, turn)).map(async (brain) => ({
+      ...brain,
+      actions: brainActions(await brain.tools(call).catch(swallowAs(`brain ${brain.id}: tools`, []))),
+    })),
+  );
+  return decided.filter((brain) => brain.actions.length);
 }
 
 const normalized = (text: string) => text.toLowerCase().replace(/\s+/g, " ");
@@ -235,7 +253,7 @@ export async function askBrain(
   if (!id) return refused(`name the brain to ask: ${ids.join(", ")}.`);
   const decided = access.brains.find((brain) => brain.id === id);
   if (!decided) return refused(`no brain named ${id} is connected to this conversation; use one of ${ids.join(", ")}.`);
-  if (!action || !brainActions(decided).includes(input.action as BrainActionName))
+  if (!action || !decided.actions.includes(input.action as BrainActionName))
     return refused(`brain ${id} does not offer ${input.action}.`, id);
   const query = input.query?.trim();
   if (action.takes === "query" && !query) return refused(`${input.action} needs a query.`, id);
@@ -248,7 +266,7 @@ export async function askBrain(
       id,
     );
   const brain = (await access.live()).find((candidate) => candidate.id === id);
-  if (!brain?.ops.includes(action.op)) return refused(`brain ${id} is no longer connected to this conversation.`, id);
+  if (!brain) return refused(`brain ${id} is no longer connected to this conversation.`, id);
   const context = heard(await access.retained(), access.call.actorId, id);
   if (ref && action.takes !== "query" && !context.refs.has(input.ref!))
     return refused(`${input.ref} is not a ref any brain result in this conversation gave; look it up again first.`, id);
@@ -285,10 +303,17 @@ export async function askBrain(
   } catch (error) {
     const failed = failedOutcome(error);
     const problem = problemLine(
-      problemOf(
-        { provider: id, scope: access.call.audienceScopeId ?? "", ms: Date.now() - started, ...failed },
-        false,
-      )!,
+      failed.code === "actor_not_attested"
+        ? {
+            code: "memory_provider_denied",
+            provider: id,
+            detail: `${input.action} is unavailable in brain ${id}: its operator hasn't let QM run ${action.op} as this person (actor_not_attested), so nothing was read.`,
+            fix: `Answer without it, or use another action. On ${id}'s host, the operator can list ${action.op} in QM's client's --attest-ops (${BRAIN_DOCS}).`,
+          }
+        : problemOf(
+            { provider: id, scope: access.call.audienceScopeId ?? "", ms: Date.now() - started, ...failed },
+            false,
+          )!,
     );
     const summary = { brain: id, ...(failed.code ? { code: failed.code } : {}) };
     if (!(error instanceof McpCallError) || !error.code || error.status !== undefined)

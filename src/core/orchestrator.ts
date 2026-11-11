@@ -16,7 +16,7 @@ import { externalTools } from "./orchestrator/external-tools.ts";
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import type { MemoryProviderOutcome } from "../memory/memory-service.ts";
 import { memoryRecallQuery } from "../memory/semantic-recall.ts";
-import { turnBrains } from "../memory/brain.ts";
+import { boundBrains, turnBrains } from "../memory/brain.ts";
 import {
   requiresDelegation,
   delegatedAuthorizationOrigin,
@@ -787,14 +787,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         projects: deps.projects,
       });
       const { sharingSources, memoryScopeId, baseRecallScopes, memoryAccess } = context;
-      const brains =
+      const brainsDecided =
         memoryPolicy.brainTool !== false && useMemory && !notebookOnly && !external && !input.botActor && !ambientTurn
-          ? await turnBrains(context.memory, {
+          ? turnBrains(context.memory, {
               actorId: actor.id,
               scopeId: memoryScopeId,
               ...(audienceScopeId ? { audienceScopeId } : {}),
             }).catch(swallowAs("orchestrator: brain bindings", []))
-          : [];
+          : Promise.resolve([]);
       resolution.grantedHandles = context.listFiles();
       const isWeb = input.surface === "web";
       const surfaceTool = input.surface ?? "slack";
@@ -841,6 +841,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (modeName === "mode-conversation" && input.proactiveOpener) {
         modeFrame += "\nNo one has written yet; open the conversation yourself per the onboarding note below.";
       }
+      const brains = await brainsDecided;
       const sharedCore = applyPromptVars(SHARED_CORE_MD, {
         botName,
         botHandle,
@@ -1690,7 +1691,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 brain: {
                   brains,
                   live: () =>
-                    turnBrains(context.memory, {
+                    boundBrains(context.memory, {
                       actorId: actor.id,
                       scopeId: memoryScopeId,
                       ...(audienceScopeId ? { audienceScopeId } : {}),
