@@ -11,7 +11,6 @@ import {
   type ExecutionFileCredential,
 } from "../credentials/execute-files.ts";
 import type { MemoryCaptureMetadata } from "../memory/facts.ts";
-import { askBrain, type BrainAccess, type BrainLookup } from "../memory/brain.ts";
 import { disclosedMemory } from "../memory/disclosure.ts";
 import { MaskedExecutionError, executionSecretEnv, createExactSecretValueMasker } from "../security/secret-masking.ts";
 import { withAbort, withTimeout } from "../util/async.ts";
@@ -209,7 +208,6 @@ export interface ToolContext extends SurfaceToolDeps {
   attach: AttachFiles;
   sessionSyscalls?: SessionSyscalls;
   humanTurn?: boolean;
-  brain?: BrainLookup;
   toolOutput?: Pick<ToolOutputStore, "inlineTokens" | "save">;
   execute(
     command: string,
@@ -258,6 +256,7 @@ export interface ToolContext extends SurfaceToolDeps {
   history(q: string, limit?: number): Promise<string[]>;
   historyOpen(seq: number): Promise<string | null>;
   callMcpTool(name: string, args: Record<string, unknown>, approval?: string): Promise<string>;
+  lookupBrain(tool: string, args: Record<string, unknown>): Promise<string>;
   mcpToolNeedsApproval(name: string, args: Record<string, unknown>): Promise<boolean>;
   awaitClientResult(
     callId: string,
@@ -518,7 +517,6 @@ export interface ToolContextDeps {
   memoryScopeId?: ScopeId;
   memoryCaptureMetadata?: () => MemoryCaptureMetadata;
   memoryAccess?: { write?: ScopeId; read: ScopeId[]; notebookOnly?: true };
-  brain?: BrainAccess;
   mcp?: McpToolService;
   audienceScopeId?: ScopeId;
   actAsActor?: boolean;
@@ -751,15 +749,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
   return {
     ...(deps.admin ? { admin: deps.admin } : {}),
     ...(deps.selfApi ? { selfApi: deps.selfApi } : {}),
-    ...(deps.brain
-      ? {
-          brain: {
-            brains: deps.brain.brains,
-            ask: (input, signal) =>
-              askBrain(deps.brain!, turnAuthority(deps.createdBy, deps.memoryAccess, deps.personTurn), input, signal),
-          },
-        }
-      : {}),
     ...(deps.toolOutput ? { toolOutput: deps.toolOutput } : {}),
     ...(deps.sandboxResources && deps.accessSandboxResource
       ? {
@@ -1225,6 +1214,17 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     async callMcpTool(name: string, args: Record<string, unknown>, approval?: string): Promise<string> {
       if (!deps.mcp) throw new Error("no MCP connectors are configured");
       return deps.mcp.call(name, args, deps.createdBy, approval, deps.audienceScopeId, deps.actAsActor);
+    },
+
+    async lookupBrain(tool: string, args: Record<string, unknown>): Promise<string> {
+      if (!memory?.lookup || !deps.memoryScopeId) throw new Error("no brain is connected to this conversation");
+      return memory.lookup(
+        deps.memoryScopeId,
+        tool,
+        args,
+        turnAuthority(deps.createdBy, deps.memoryAccess, deps.personTurn),
+        deps.audienceScopeId ? { audienceScopeId: deps.audienceScopeId } : {},
+      );
     },
 
     async mcpToolNeedsApproval(name: string, args: Record<string, unknown>): Promise<boolean> {

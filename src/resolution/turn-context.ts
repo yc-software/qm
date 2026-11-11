@@ -1,9 +1,8 @@
 import { memoryRecallLabels } from "../memory/recall-labels.ts";
-import { brainAccess } from "../memory/brain.ts";
 import type { DirectoryStore } from "../directory/directory-store.ts";
 import type { ProjectStore } from "../projects/project-store.ts";
 import { disclosedMemory, type MemoryDisclosure } from "../memory/disclosure.ts";
-import { readNotebook, recallAcrossScopes, searchNotebooks } from "../memory/cross-scope.ts";
+import { readNotebook, recallAcrossScopes, recallLabel, searchNotebooks } from "../memory/cross-scope.ts";
 import { shownFacts } from "../memory/recall-delta.ts";
 import { RECALL_MAX_CHARS } from "../memory/notebook.ts";
 import type { AclStore } from "../acl/acl-store.ts";
@@ -14,7 +13,14 @@ import { tracePhase } from "../../plugins/chassis/src/error-reporting.ts";
 import { readContextFile } from "./context-files.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
-import type { MemoryRecallContext, MemoryService } from "../memory/memory-service.ts";
+import {
+  brainActsAsPerson,
+  turnAuthority,
+  type MemoryRecallContext,
+  type MemoryService,
+} from "../memory/memory-service.ts";
+import { providerRef } from "../memory/provider-router.ts";
+import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import type { MemoryFact } from "../memory/facts.ts";
 import { recallMemoryScopes, type MemoryPolicy } from "../memory/policy.ts";
 import type { SkillStore, GrantedSkillRef } from "../skills/skill-store.ts";
@@ -42,6 +48,8 @@ type ContextInput = Omit<Parameters<typeof sharingSourcesForTurn>[0], "posture">
   directory?: DirectoryStore;
   projects?: Pick<ProjectStore, "recognizes" | "name">;
 };
+
+const BRAIN_ABOUT = "The person's own brain, read as them: check it before saying you don't know someone or something.";
 
 export async function resolveTurnContext(input: ContextInput) {
   const { resolution, memoryPolicy, useMemory } = input;
@@ -99,10 +107,25 @@ export async function resolveTurnContext(input: ContextInput) {
     memoryAccess,
     memory,
     memoryLabels,
-    brain:
-      useMemory && !input.external
-        ? brainAccess(memory, memoryScopeId, reader).catch(swallowAs("turn context: brains", undefined))
-        : undefined,
+    brainTools: async (personTurn: boolean): Promise<McpToolDescriptor[]> => {
+      const by = turnAuthority(input.actor.id, memoryAccess, personTurn);
+      if (!useMemory || input.external || !brainActsAsPerson(by, memoryScopeId, input.audienceScopeId)) return [];
+      const brains = (await memory.brains?.(memoryScopeId, reader).catch(swallowAs("turn context: brains", []))) ?? [];
+      return brains.flatMap((brain) =>
+        brain.tools.map((tool) => ({
+          name: providerRef(brain.id, tool.name),
+          serverId: brain.id,
+          serverName: recallLabel(brain.label),
+          serverAbout: BRAIN_ABOUT,
+          remoteName: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+          readOnly: true,
+          needsApproval: false,
+          brain: true as const,
+        })),
+      );
+    },
     memorySnapshot: async () => {
       const notebooks = await tracePhase(
         "turn.memory_snapshot",

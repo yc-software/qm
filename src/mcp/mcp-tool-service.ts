@@ -8,6 +8,7 @@ import {
   createMcpClient,
   mcpResultText,
   toolListings,
+  type ToolListings,
   type McpAuth,
   type McpClient,
   type McpListing,
@@ -74,6 +75,7 @@ export interface McpToolDescriptor {
   needsApproval: boolean;
   signIn?: true;
   catalog?: true;
+  brain?: true;
 }
 
 export interface McpToolService {
@@ -200,7 +202,7 @@ export function createMcpToolService(opts: {
     snapshot: McpToolDescriptor[];
     perUserServers: Map<string, McpServer>;
     attestedServers: Map<string, McpServer>;
-    catalogs: ReturnType<typeof toolListings>;
+    catalogs: ToolListings;
     loadedAt?: number;
     pending?: Promise<void>;
   }>(() => ({
@@ -265,9 +267,8 @@ export function createMcpToolService(opts: {
     const listing = await catalogs.fetch(key, {
       context: {
         label: `mcp ${server.id}: tools/list`,
-        list: async (signal) =>
-          (await client.listTools({ headers: headersFor(server, principalId), maxTools: CATALOG_MAX_TOOLS, signal }))
-            .tools,
+        list: async () =>
+          (await client.listTools({ headers: headersFor(server, principalId), maxTools: CATALOG_MAX_TOOLS })).tools,
       },
     });
     return listing ?? [];

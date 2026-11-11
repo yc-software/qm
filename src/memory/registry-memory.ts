@@ -1,3 +1,4 @@
+import { toolListings } from "../mcp/mcp-client.ts";
 import { perTenant } from "../tenants/cache.ts";
 import type { Item } from "../sessions/items.ts";
 import { SCOPE_KINDS } from "../types.ts";
@@ -62,6 +63,7 @@ export function createRegistryMemoryService(opts: {
       onError,
     });
   const overlayOnly = opts.overlay ? routed(opts.overlay.routes) : opts.defaultMemory;
+  const listings = perTenant(() => toolListings());
   const snapshots = perTenant<{ snapshot: Snapshot }>(() => ({ snapshot: { service: overlayOnly, disabled: [] } }));
 
   async function current(): Promise<Snapshot> {
@@ -77,7 +79,10 @@ export function createRegistryMemoryService(opts: {
         service: config.routes.length
           ? routed(
               [...(opts.overlay?.routes ?? [NOTEBOOK_ROUTE]), ...config.routes],
-              createMemoryProviders(config.providers, { fetch: opts.registryFetch ?? publicFetch }),
+              createMemoryProviders(config.providers, {
+                fetch: opts.registryFetch ?? publicFetch,
+                listings: listings(),
+              }),
             )
           : overlayOnly,
       };
@@ -125,7 +130,12 @@ export function createRegistryMemoryService(opts: {
         );
       },
       read: async (scopeId) => (await serve()).service.read(scopeId),
-      brains: async (scopeId) => (await (await serve()).service.brains?.(scopeId)) ?? [],
+      brains: async (scopeId, reader) => (await (await serve()).service.brains?.(scopeId, reader)) ?? [],
+      async lookup(scopeId, tool, args, by, context) {
+        const { service } = await serve();
+        if (!service.lookup) throw new Error("no brain is connected to this conversation");
+        return service.lookup(scopeId, tool, args, by, context);
+      },
       facts: async (scopeId) => (await (await serve()).service.facts?.(scopeId)) ?? [],
       async edit(scopeId, edits, by, context) {
         const { service } = await serve();

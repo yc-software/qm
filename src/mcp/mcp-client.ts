@@ -60,7 +60,7 @@ function envelopeOf(value: unknown): McpEnvelope {
 
 export const mcpEnvelope = (result: CallToolResult): McpEnvelope => envelopeOf(result.structuredContent);
 
-export function jsonOf(text: string): unknown {
+function jsonOf(text: string): unknown {
   try {
     return JSON.parse(text);
   } catch {
@@ -81,7 +81,7 @@ function httpStatus(error: unknown): number | undefined {
   return undefined;
 }
 
-interface McpRemoteTool {
+export interface McpRemoteTool {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
@@ -95,16 +95,19 @@ export interface McpListing {
 
 interface ToolListing {
   label: string;
-  list(signal: AbortSignal): Promise<McpRemoteTool[]>;
+  list(): Promise<McpRemoteTool[]>;
 }
 
-export function toolListings(): LRUCache<string, McpRemoteTool[], ToolListing> {
+export type ToolListings = LRUCache<string, McpRemoteTool[], ToolListing>;
+
+export function toolListings(): ToolListings {
   return new LRUCache<string, McpRemoteTool[], ToolListing>({
     max: LISTING_CACHE_MAX,
     ttl: LISTING_TTL_MS,
     allowStale: true,
-    fetchMethod: (_key, stale, { context, signal }) =>
-      context.list(signal).catch((error: unknown) => {
+    ignoreFetchAbort: true,
+    fetchMethod: (_key, stale, { context }) =>
+      context.list().catch((error: unknown) => {
         if (!stale) throw error;
         return swallowAs(context.label, stale)(error);
       }),

@@ -9,144 +9,89 @@ import type { Agent } from "../src/agent/agent.ts";
 import { createAgentTools } from "../src/agent/agent-tools.ts";
 import { turnToolRef } from "../src/agent/turn-open.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
+import { turnAuthority } from "../src/memory/memory-service.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { sleep } from "../src/util/async.ts";
 import type { AddressFetch } from "../src/util/network.ts";
 import { buildApp } from "./support/build-app.ts";
+import { contract, contractTools } from "./support/gbrain-contract.ts";
 import { routedTo, startMcpTestServer } from "./support/mcp-test-server.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 
 type Row = Record<string, unknown>;
-type Step = Row | ((texts: string[]) => Row) | "revoke";
+type Step = { search: string } | { call: { server?: string; tool: string; args?: Row } } | "revoke";
 interface Call {
   tool: string;
   args: Row;
   actor?: string;
 }
 
-const OPS = ["query", "get_page", "get_timeline", "get_backlinks", "find_experts", "whois", "entity", "context_pack"];
 const HOT_MEMORY = "Alice prefers morning meetings before 10am.";
-const priya = { slug: "people/priya-raman", source_id: "default", title: "Priya Raman", type: "person" };
-const alexes = ["people/alex-kim-helio", "people/alex-kim-tidepool"].map((slug) => ({
-  ...priya,
-  slug,
-  title: "Alex Kim",
-}));
+const LOOKUPS = contract.personal_tools.tools.filter(({ mutating }) => !mutating).map(({ name }) => name);
+const PRIYA = { slug: "people/priya-raman", source_id: "default", title: "Priya Raman", type: "person" };
 
-const ACME: Record<string, (args: Row) => Row> = {
-  query: () => ({
-    results: [
-      { ...priya, chunk_text: "Priya leads the warehouse robotics thesis.", chunk_id: 26, score: 1.1 },
-      {
-        result_type: "fact",
-        fact_id: "4821",
-        source_id: "default",
-        title: "Alice",
-        chunk_text: "Alice owes Priya a pilot summary.",
-      },
-    ],
-  }),
-  get_page: (args) => ({ ...priya, slug: args.slug, compiled_truth: "Priya Raman is a partner.", revision: "7" }),
-  get_timeline: () => ({
-    results: [
-      { id: 4, date: "2026-11-14", source: "Calendar", summary: "Q4 roadmap", detail: "", write_principal_id: "w-1" },
-    ],
-  }),
-  get_backlinks: (args) => ({
-    results: [
-      {
-        from_slug: "meetings/q4-roadmap",
-        from_source_id: "default",
-        to_slug: args.slug,
-        link_type: "mentions",
-        truncated: true,
-        next_cursor: "links-2",
-      },
-    ],
-  }),
-  find_experts: () => ({ results: [{ ...priya, score: 0.4, factors: { recency: 1 } }] }),
-  whois: (args) =>
-    args.query === "Alex Kim"
-      ? { query: args.query, matches: alexes.map((match) => ({ ...match, match: "title" })), ambiguous: true }
-      : { query: args.query, matches: [{ ...priya, match: "title" }], ambiguous: false },
-  entity: () => ({
-    protocol_version: 1,
-    found: true,
-    card: {
-      entity: priya,
-      trust_tier: "operator_curated",
-      summary: "Partner at Northwind.",
-      edges: [{ type: "works_at", slug: "companies/northwind" }],
-    },
-  }),
-  context_pack: () => ({
-    brief: { counterparty: { slug: priya.slug, display: "Priya Raman" }, items: [{ ...priya, text: "Q4 roadmap" }] },
-  }),
-};
-
-function gbrainAnswer(tool: string, args: Row, answers: Record<string, (args: Row) => Row>): CallToolResult {
-  const structured = answers[tool]?.(args) ?? {};
-  const text =
-    tool === "context_pack" ? "<!-- retrieved brain context -->\n- 2026-11-14 Q4 roadmap" : JSON.stringify(structured);
+function gbrainAnswer(tool: string, args: Row): CallToolResult {
+  const structured = { tool, args, results: [PRIYA] };
   return {
     structuredContent: structured,
     content: [
-      { type: "text", text },
+      { type: "text", text: JSON.stringify(structured) },
       { type: "text", text: "[gbrain degraded: embed_unavailable] partial" },
     ],
     _meta: { brain_hot_memory: HOT_MEMORY },
   };
 }
 
-const MEMORY_OPS = ["memory_recall", "memory_write"];
-
-async function gbrain(
-  t: { after(fn: () => Promise<void>): void },
-  answers: Record<string, (args: Row) => Row>,
-  advertised = [...OPS, ...MEMORY_OPS],
-) {
+async function gbrain(t: { after(fn: () => Promise<void>): void }) {
   const calls: Call[] = [];
   const failures = new Map<string, CallToolResult | number>();
   const server = await startMcpTestServer(t, {
-    tools: advertised.map((name) => ({
+    tools: contractTools.map(({ name, description, mutating, input_schema }) => ({
       name,
-      inputSchema: { type: "object" as const },
+      description,
+      inputSchema: input_schema,
+      annotations: { readOnlyHint: !mutating },
     })),
     clients: { qm: "brain-secret" },
     call: async (tool, args, _authorization, actor) => {
       calls.push({ tool, args, ...(actor ? { actor } : {}) });
       if (tool === "memory_recall") return { content: [] };
-      const failure = failures.get(String(args.query ?? args.name));
+      const failure = failures.get(String(args.query));
       if (typeof failure === "number") await sleep(failure);
       else if (failure) return failure;
-      return gbrainAnswer(tool, args, answers);
+      return gbrainAnswer(tool, args);
     },
   });
   return Object.assign(server, { calls, failures });
 }
 
-async function brainApp(t: { after(fn: () => Promise<void>): void }, { advertised }: { advertised?: string[] } = {}) {
-  const acme = await gbrain(t, ACME, advertised);
+async function brainApp(t: { after(fn: () => Promise<void>): void }) {
+  const acme = await gbrain(t);
   const script: Step[] = [];
-  const runs: Array<{ tools: string[]; prompt: string; texts: string[] }> = [];
+  const runs: Array<{ prompt: string; texts: string[] }> = [];
   const mock = createMockAgent();
   const agent: Agent = {
     ...mock,
     async runTurn(input) {
-      const tools = createAgentTools(turnToolRef(input), {});
-      const run = { tools: tools.map(({ name }) => name), prompt: input.systemPrompt, texts: [] as string[] };
+      const tools = createAgentTools(turnToolRef(input), input.mcpTools?.length ? { mcpTools: input.mcpTools } : {});
+      const run = { prompt: input.systemPrompt, texts: [] as string[] };
       runs.push(run);
       if (!script.length) return mock.runTurn(input);
       await input.emit({ kind: "UserMessage", text: input.input, author: input.runtimeActorId ?? null, body: {} });
-      const brain = tools.find(({ name }) => name === "brain")!;
       for (const step of script.splice(0)) {
-        if (step === "revoke") await admin("DELETE", "/v1/admin/memory-registry/bindings/acme");
-        else {
-          const params = typeof step === "function" ? step(run.texts) : step;
-          const result = await brain.execute(randomUUID(), params, undefined, undefined, {} as never);
-          run.texts.push(result.content.map((block) => ("text" in block ? block.text : "")).join("\n"));
+        if (step === "revoke") {
+          await admin("DELETE", "/v1/admin/memory-registry/bindings/acme");
+          continue;
         }
+        const tool = tools.find(({ name }) => name === ("search" in step ? "tool_search" : "mcp_call"));
+        if (!tool) {
+          run.texts.push("[no connector tools]");
+          continue;
+        }
+        const params = "search" in step ? { query: step.search } : step.call;
+        const result = await tool.execute(randomUUID(), params as never, undefined, undefined, {} as never);
+        run.texts.push(result.content.map((block) => ("text" in block ? block.text : "")).join("\n"));
       }
       await input.emit({ kind: "AgentMessage", text: "done" });
       return { reply: "done", modelCalls: 1 };
@@ -195,21 +140,45 @@ async function brainApp(t: { after(fn: () => Promise<void>): void }, { advertise
       origin: { kind: "human" },
       ...request,
     });
-    return runs.length > before ? runs.at(-1) : undefined;
+    return runs.length > before ? runs.at(-1)! : undefined;
   };
   return { built, acme, turn };
 }
 
-const ops = (brain: { calls: Call[] }) => brain.calls.filter(({ tool }) => OPS.includes(tool));
-const REF = "acme:default:people/priya-raman";
+const lookups = (brain: { calls: Call[] }) => brain.calls.filter(({ tool }) => tool !== "memory_recall");
+const listings = (brain: { requests: Array<{ rpc?: string }> }) =>
+  brain.requests.filter(({ rpc }) => rpc === "tools/list").length;
+const whois = { call: { server: "acme", tool: "whois", args: { query: "Priya Raman" } } };
 
-test("the brain tool is on every turn in the person's own DM, answers only turns they sent, and an older brain keeps recall", async (t) => {
+test("the person's own DM gets each brain's read-only tools through the connector bridge, called as them with the arguments as sent", async (t) => {
   const { acme, turn } = await brainApp(t);
-  const offered = async (request: Partial<TurnRequest>) => (await turn([], request))?.tools.includes("brain") ?? false;
-  assert.equal(await offered({}), true);
-  const automated = await turn([{ action: "whois", query: "Priya Raman" }], { origin: { kind: "automation" } });
-  assert.match(automated!.texts[0]!, /^\[brain_refused\] only the person/);
+  const run = (await turn([
+    { search: "whois" },
+    { call: { server: "acme", tool: "get_page", args: { slug: PRIYA.slug, include_deleted: true } } },
+  ]))!;
+  const listed = [...run.prompt.matchAll(/^ {2}- (\w+)/gm)].map(([, name]) => name);
+  assert.deepEqual(listed.toSorted(), LOOKUPS.toSorted());
+  assert.match(run.prompt, /^- Acme brain \[acme\] /m);
+  const found = JSON.parse(run.texts[0]!.split("\n\n")[0]!) as Row;
+  assert.deepEqual(
+    { server: found.server, tool: found.tool, parameters: found.parameters },
+    {
+      server: "acme",
+      tool: "whois",
+      parameters: contract.personal_tools.tools.find(({ name }) => name === "whois")!.input_schema,
+    },
+  );
+  assert.deepEqual(lookups(acme), [
+    { tool: "get_page", args: { slug: PRIYA.slug, include_deleted: true }, actor: "U1" },
+  ]);
+  assert.match(run.texts[1]!, /"include_deleted":true[\s\S]*\[gbrain degraded: embed_unavailable\] partial/);
+  assert.doesNotMatch(run.texts[1]!, /morning meetings/);
+});
+
+test("turns the person didn't send in their own DM never list, find or call the brain's tools", async (t) => {
+  const { acme, turn } = await brainApp(t);
   const others: Array<Partial<TurnRequest>> = [
+    { origin: { kind: "automation" } },
     {
       conversation: {
         kind: "group",
@@ -222,78 +191,31 @@ test("the brain tool is on every turn in the person's own DM, answers only turns
     { conversation: { kind: "channel", threadRef: "C1", channelRef: "C1" } },
     { actor: { externalId: "system:ambient:default-org" } },
   ];
-  for (const request of others) assert.equal(await offered(request), false, JSON.stringify(request));
-  assert.deepEqual(ops(acme), []);
-  assert.equal(await offered({}), true);
-  assert.equal(acme.requests.filter(({ rpc }) => rpc === "tools/list").length, 1);
-
-  const older = await brainApp(t, { advertised: MEMORY_OPS });
-  assert.equal((await older.turn([]))?.tools.includes("brain"), false);
-  assert.ok(older.acme.calls.some(({ tool }) => tool === "memory_recall"));
+  for (const request of others) {
+    const run = (await turn([{ search: "*" }, whois], request))!;
+    assert.doesNotMatch(run.prompt, /\[acme\]/, JSON.stringify(request));
+    assert.deepEqual(run.texts, ["[no connector tools]", "[no connector tools]"], JSON.stringify(request));
+  }
+  assert.equal(listings(acme), 0);
+  assert.deepEqual(lookups(acme), []);
+  assert.match((await turn([]))!.prompt, /\[acme\]/);
+  assert.equal(listings(acme), 1);
 });
 
-test("each action sends its own operation as the person, naming the record's source, and shows only its fields", async (t) => {
-  const { acme, turn } = await brainApp(t);
-  const { texts } = (await turn([
-    { action: "whois", query: "Priya Raman" },
-    { action: "page", ref: REF, cursor: "page-2" },
-    { action: "timeline", ref: REF, after: "2026-11-01", before: "2026-11-30" },
-    { action: "links", ref: REF, cursor: "links-1" },
-    { action: "entity", ref: REF },
-    { action: "brief", ref: REF },
-    { action: "search", query: "robotics thesis" },
-    { action: "experts", query: "robot perception" },
-    { action: "whois", query: "Alex Kim" },
-  ]))!;
-  const page = { slug: "people/priya-raman", source_id: "default" };
-  assert.deepEqual(ops(acme), [
-    { tool: "whois", args: { query: "Priya Raman" }, actor: "U1" },
-    { tool: "get_page", args: { ...page, cursor: "page-2" }, actor: "U1" },
-    { tool: "get_timeline", args: { ...page, after: "2026-11-01", before: "2026-11-30" }, actor: "U1" },
-    { tool: "get_backlinks", args: { ...page, cursor: "links-1" }, actor: "U1" },
-    { tool: "entity", args: { name: page.slug, source_id: "default" }, actor: "U1" },
-    { tool: "context_pack", args: { counterparty: page.slug, source_id: "default", intent: "meeting" }, actor: "U1" },
-    { tool: "query", args: { query: "robotics thesis" }, actor: "U1" },
-    { tool: "find_experts", args: { topic: "robot perception" }, actor: "U1" },
-    { tool: "whois", args: { query: "Alex Kim" }, actor: "U1" },
-  ]);
-  assert.equal(
-    texts[0],
-    [
-      "### brain · Acme brain",
-      "```untrusted-data",
-      `{"matches":[{"ref":"${REF}","title":"Priya Raman","type":"person","match":"title"}],"ambiguous":false}`,
-      "",
-      "[gbrain degraded: embed_unavailable] partial",
-      "```",
-    ].join("\n"),
+test("a lookup checks the person and the live binding when it runs, and sends nothing otherwise", async (t) => {
+  const { built, acme, turn } = await brainApp(t);
+  await assert.rejects(
+    built.memory.lookup!("personal:U1", "acme:whois", { query: "Priya Raman" }, turnAuthority("U1", undefined), {
+      audienceScopeId: "personal:U1",
+    }),
+    /^Error: \[brain_refused\] Only the person/,
   );
-  assert.match(texts[2]!, /"summary":"Q4 roadmap"/);
-  assert.match(texts[3]!, /"ref":"acme:default:meetings\/q4-roadmap".*"truncated":true,"next_cursor":"links-2"/);
-  assert.match(texts[4]!, /"ref":"acme:default:companies\/northwind"/);
-  assert.match(texts[5]!, /retrieved brain context/);
-  assert.match(texts[6]!, /"ref":"acme:4821","title":"Alice"/);
-  assert.match(texts[8]!, /Ask the person which one they mean/);
-  assert.doesNotMatch(texts.join("\n"), /morning meetings|w-1|factors|chunk_id|revision/);
+  const run = (await turn(["revoke", whois]))!;
+  assert.match(run.texts[0]!, /^\[error\] no brain is connected to this conversation$/);
+  assert.deepEqual(lookups(acme), []);
 });
 
-test("a forged brain or action, a malformed ref, a missing argument and a revoked binding never reach the brain", async (t) => {
-  const { acme, turn } = await brainApp(t);
-  const { texts } = (await turn([
-    { action: "page", ref: "never-shown" },
-    { brain: "elsewhere", action: "search", query: "robotics" },
-    { action: "forget_fact", query: "robotics" },
-    { action: "search" },
-    { action: "entity", query: " " },
-    "revoke",
-    { action: "search", query: "robotics" },
-  ]))!;
-  assert.equal(texts.length, 6);
-  for (const text of texts) assert.match(text, /^\[(brain_refused|error)\]/);
-  assert.deepEqual(ops(acme), []);
-});
-
-test("a lookup outlasts recall's timeout, and an unlinked or refusing brain answers with what to do next", async (t) => {
+test("a lookup outlasts recall's timeout, and a refusal or failure answers with what to do next and the brain's own words", async (t) => {
   const { acme, turn } = await brainApp(t);
   const refusal = (code: string) => ({
     isError: true,
@@ -301,34 +223,27 @@ test("a lookup outlasts recall's timeout, and an unlinked or refusing brain answ
   });
   acme.failures.set("slow", 600);
   acme.failures.set("Nobody", refusal("actor_unlinked"));
-  acme.failures.set("Missing", refusal("page_not_found"));
   acme.failures.set("Unlisted", refusal("actor_not_attested"));
-  const { texts } = (await turn([
-    { action: "search", query: "slow" },
-    { action: "whois", query: "Nobody" },
-    { action: "entity", query: "Missing" },
-    { action: "search", query: "Unlisted" },
-  ]))!;
-  assert.match(texts[0]!, /^### brain · Acme brain\n/);
+  acme.failures.set("Broken", { isError: true, content: [{ type: "text", text: "search index is rebuilding" }] });
+  const ask = (query: string) => ({ call: { server: "acme", tool: "query", args: { query } } });
+  const { texts } = (await turn([ask("slow"), ask("Nobody"), ask("Unlisted"), ask("Broken")]))!;
+  assert.match(texts[0]!, /"query":"slow"/);
   assert.match(
     texts[1]!,
-    /\[memory_provider_denied\] .*Link this member's QM principal id[\s\S]*refused with actor_unlinked/,
+    /^\[error\] \[memory_provider_denied\] .*Link this member's QM principal id[\s\S]*refused with actor_unlinked/,
   );
-  assert.match(texts[2]!, /\[brain_answered page_not_found\][\s\S]*refused with page_not_found/);
   assert.match(
-    texts[3]!,
-    /\[memory_provider_denied\] Memory provider acme refused query \(actor_not_attested\).*attest query with --attest-ops/,
+    texts[2]!,
+    /^\[error\] \[memory_provider_denied\] Memory provider acme refused query \(actor_not_attested\).*attest query with --attest-ops[\s\S]*refused with actor_not_attested/,
   );
+  assert.match(texts[3]!, /^\[error\] \[memory_provider_failed\][\s\S]*search index is rebuilding/);
 });
 
 test("strict posture holds a brain lookup for approval, and dangerous runs it", async (t) => {
   const { built, acme, turn } = await brainApp(t);
   await built.config.setSecurityPosture("personal:U1", "strict");
-  assert.match((await turn([{ action: "whois", query: "Priya Raman" }]))!.texts[0]!, /needs human approval/);
-  assert.deepEqual(ops(acme), []);
+  assert.match((await turn([whois]))!.texts[0]!, /needs human approval/);
+  assert.deepEqual(lookups(acme), []);
   await built.config.setSecurityPosture("personal:U1", "dangerous");
-  assert.match(
-    (await turn([{ action: "whois", query: "Priya Raman" }]))!.texts[0]!,
-    /acme:default:people\/priya-raman/,
-  );
+  assert.match((await turn([whois]))!.texts[0]!, /"query":"Priya Raman"/);
 });

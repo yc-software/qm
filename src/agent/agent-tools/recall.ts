@@ -44,7 +44,9 @@ export function recallTools(kit: ToolKit) {
         ),
       ),
       ids: Type.Optional(
-        Type.Array(Type.String(), { description: "delete: notebook #ids or brain refs from search, like acme:4821." }),
+        Type.Array(Type.String(), {
+          description: "delete: notebook #ids or brain refs, like acme:4821 for fact_id 4821 from brain acme.",
+        }),
       ),
     }),
     async execute(callId, params) {

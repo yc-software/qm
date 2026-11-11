@@ -1,4 +1,4 @@
-import { createMcpClient } from "../mcp/mcp-client.ts";
+import { createMcpClient, type ToolListings } from "../mcp/mcp-client.ts";
 import { errMessage } from "../util/errors.ts";
 import type { AddressFetch } from "../util/network.ts";
 import { createMcpMemoryProvider, type McpMemoryOperation } from "./mcp-memory-provider.ts";
@@ -37,7 +37,7 @@ export const logMemoryProviderError = (error: unknown, provider: string, operati
 
 export function createMemoryProviders(
   configs: MemoryProviderConfig["providers"],
-  opts: { sessionItems?: (sessionId: string) => Promise<Item[]>; fetch?: AddressFetch } = {},
+  opts: { sessionItems?: (sessionId: string) => Promise<Item[]>; fetch?: AddressFetch; listings?: ToolListings } = {},
 ): Record<string, MemoryService> {
   const fetchFn = opts.fetch ?? fetch;
   const providers: Record<string, MemoryService> = {};
@@ -61,7 +61,8 @@ export function createMemoryProviders(
       ...(provider.forget
         ? { forget: operation(provider.url, provider.forget, MAX_PROVIDER_TIMEOUT_MS, fetchFn) }
         : {}),
-      ...(provider.lookup ? { lookup: { label: provider.id } } : {}),
+      label: provider.id,
+      ...(opts.listings ? { listings: opts.listings } : {}),
       attestActor: provider.attestActor,
     });
   }

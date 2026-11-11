@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { Errors } from "typebox/value";
 import { installPrincipalLinks } from "../src/directory/person.ts";
 import type { MemoryProviderOutcome, MemoryService } from "../src/memory/memory-service.ts";
@@ -13,33 +13,9 @@ import { createPerTurnStrategy } from "../src/memory/strategies/per-turn.ts";
 import { recallAcrossScopes } from "../src/memory/cross-scope.ts";
 import { memoryRecallQuery } from "../src/memory/semantic-recall.ts";
 import { type NewItem, storedItem } from "../src/sessions/items.ts";
+import { contract, contractTools } from "./support/gbrain-contract.ts";
 import { routedTo, startMcpTestServer } from "./support/mcp-test-server.ts";
 import { emptyMemoryRegistry } from "./support/memory-registry.ts";
-
-interface ContractTool {
-  name: string;
-  description: string;
-  mutating: boolean;
-  input_schema: Tool["inputSchema"] & { properties: Record<string, unknown> };
-}
-
-const contract = JSON.parse(
-  readFileSync(new URL("./fixtures/gbrain/qm-memory-provider-v3.json", import.meta.url), "utf8"),
-) as {
-  tools: ContractTool[];
-  personal_tools: { tools: ContractTool[] };
-  actor: { header: string; argument: string; actor_id: { pattern: string } };
-  memory_recall: { limits: { max_chars: { min: number; max: number } } };
-  unlinked_recall: CallToolResult;
-  memory_write: {
-    limits: { facts: { min: number; max: number }; provenance_chars: number; idempotency_key: { pattern: string } };
-    committed: { content: string };
-    pending: { content: string };
-  };
-  errors: { codes: Array<{ code: string; class: string; summary: string; reasons?: Array<{ reason: string }> }> };
-};
-
-const contractTools = [...contract.tools, ...contract.personal_tools.tools];
 
 const guide = readFileSync(new URL("../docs/memory-providers.md", import.meta.url), "utf8");
 const recipe = JSON.parse(/```json\n([\s\S]*?)\n```/.exec(guide.split("\n## gbrain\n")[1] ?? "")?.[1] ?? "null") as {
@@ -149,7 +125,7 @@ const refusal = (code: string, reason?: string): CallToolResult => {
   };
 };
 
-test("the documented gbrain recipe keeps the notebook first everywhere, sends only personal turns to gbrain and offers no brain tool", async (t) => {
+test("the documented gbrain recipe keeps the notebook first everywhere and sends only personal turns to gbrain", async (t) => {
   const facts = [{ id: "41", text: "Prefers aisle seats", date: "2026-10-30", kind: "preference" }];
   const { calls, memory, notebookWrites } = await gbrain(t, (name) =>
     name === "memory_recall"
@@ -171,7 +147,6 @@ test("the documented gbrain recipe keeps the notebook first everywhere, sends on
     "team:T0ACME": ["default@team:T0ACME"],
     "org:acme": ["default@org:acme"],
   });
-  assert.deepEqual(await memory.brains!(JORDAN), []);
 
   await memory.capture(
     JORDAN,

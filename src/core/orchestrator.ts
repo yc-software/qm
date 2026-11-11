@@ -1600,7 +1600,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(liveAuthorTurn ? { liveAuthor: true } : {}),
           ...(automatedTurn ? { triggered: true } : {}),
         };
-        const brain = await context.brain;
+        const personTurn = personSentTurn(runtimeClaims);
+        const turnMcpTools = Promise.all([mcpToolsReady, context.brainTools(personTurn)]).then(
+          ([connectors, brains]) => (brains.length ? [...(connectors ?? []), ...brains] : connectors),
+        );
         const baseTools = createToolContext({
           tenant,
           desktopClientId: desktopClientForTurn(input),
@@ -1675,14 +1678,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             : {}),
           ...(deps.webhookPublicUrl ? { webhookPublicUrl: deps.webhookPublicUrl } : {}),
           ...(humanInput && !external && !input.botActor ? { humanTurn: true } : {}),
-          ...(personSentTurn(runtimeClaims) ? { personTurn: true } : {}),
+          ...(personTurn ? { personTurn: true } : {}),
           toolOutput: deps.toolOutput,
           sessionId: session.id,
           ...(surfaceToolDeps ? { surface: surfaceToolDeps } : {}),
           ...(turnSessionSyscalls ? { sessionSyscalls: turnSessionSyscalls } : {}),
           ...(strictReadOnly ? {} : { attach: attachStaging.attach }),
           memory: context.memory,
-          ...(brain ? { brain } : {}),
           memoryCaptureMetadata: () => ({ sessionId: session.id, inheritedFacts: captureDependencies() }),
           memoryScopeId,
           ...(memoryAccess ? { memoryAccess } : {}),
@@ -1934,7 +1936,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           deps.swarms && input.runId && !partial && !input.approval
             ? await openSwarmMailbox({ swarms: deps.swarms, input, screen: screenSwarmMessage })
             : undefined;
-        const mcpTools = await mcpToolsReady;
+        const mcpTools = await turnMcpTools;
         const freshBody = [systemPrompt, connectorToolsNote(deferredMcpTools(mcpTools, strictReadOnly))]
           .filter((s) => s.trim())
           .join("\n\n");
@@ -2231,7 +2233,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             swarmGoalTurn,
             screenSwarmMessage,
           });
-          const mcpTools = await mcpToolsReady;
+          const mcpTools = await turnMcpTools;
 
           dispatchTrace ??= startDispatchTrace();
           const turnRun = deps.agent.runTurn({

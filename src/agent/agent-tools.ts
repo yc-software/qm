@@ -21,7 +21,6 @@ import { surfaceTool } from "./agent-tools/surface.ts";
 import { goalTools } from "./agent-tools/goal.ts";
 import { pageClientTools } from "./agent-tools/client.ts";
 import { mcpTools } from "./agent-tools/mcp.ts";
-import { brainTool } from "./agent-tools/brain.ts";
 import { withRetrySafety, withRuntimeBarrier, withToolApprovalGate, withToolSpan } from "./agent-tools/wrappers.ts";
 import type { SurfaceToolPrompt } from "../surfaces/registry.ts";
 
@@ -120,15 +119,7 @@ export function coreToolOptions(config: Config): CoreToolOptions {
   };
 }
 
-const READ_ONLY_TOOL_NAMES = new Set([
-  "memory",
-  "brain",
-  "history",
-  "finish_silently",
-  "runtime",
-  "sessions",
-  "subagents",
-]);
+const READ_ONLY_TOOL_NAMES = new Set(["memory", "history", "finish_silently", "runtime", "sessions", "subagents"]);
 const SCHEDULING_TOOL_NAMES = new Set(["cron", "webhook", "goal"]);
 
 export function endedOnPurpose(ref: {
@@ -182,7 +173,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       ...(controlTools ? { share: sharingTool("deploy") } : {}),
     }),
     memory,
-    ...brainTool(kit),
     history,
     ...(!delegateWork ? [background] : []),
     ...(opts?.sessionTools === false ? [] : [subagentTool, ...(sidebarSessions ? [sessionTool] : [])]),

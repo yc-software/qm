@@ -25,7 +25,7 @@ export const DENIED_CODES: ReadonlySet<string> = new Set([
 export const MAX_FACTS_PER_WRITE = 20;
 const TROUBLESHOOTING = "docs/memory-providers.md#troubleshooting";
 const FORGET_DOCS = "docs/memory-providers.md#forgetting-a-brain-fact";
-const LOOKUP_DOCS = "docs/memory-providers.md#the-brain-tool";
+const LOOKUP_DOCS = "docs/memory-providers.md#looking-things-up-in-a-brain";
 
 const envelopes = new AsyncLocalStorage<(envelope: McpEnvelope) => void>();
 

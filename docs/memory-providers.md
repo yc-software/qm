@@ -342,39 +342,26 @@ gbrain keeps a forgotten claim withdrawn, so it refuses to save the exact same c
 gbrain auth rescope --client <client id> --attest-actor qm --attest-ops forget_fact,get_write_request,memory_recall,memory_write
 ```
 
-### The brain tool
+### Looking things up in a brain
 
-A brain the [memory registry](#memory-registry) binds to a member's personal scope, with recall on, also gives them a `brain` tool in their own DM, so the agent can look up the people, companies and meetings in it instead of waiting for recall to surface them. That holds for an admin's brain and a member's own alike. A provider in `MEMORY_PROVIDER_CONFIG`, the [gbrain recipe](#gbrain) included, gets no tool. As a turn in the DM starts, QM asks the brain for its tool list as the member and offers the actions whose operation the brain advertises; a gbrain build without these operations gets no tool. Asking uses the brain's `timeoutMs`, like recall, because it runs before the turn. QM keeps the list for a minute per member. After that it answers from the old list while it asks again, and when asking fails it keeps the old list and logs the failure. Each action calls one gbrain operation as the member (`x-qm-actor`), and the operation reads only what that member may read:
+In a member's own DM with QM, the agent can look things up in the brains that serve their personal scope, read as them: the people, companies, pages and meetings in it, not just the facts recall surfaces. Any memory provider that attests the member (`attestActor`) and has recall on for that scope takes part: a [registry](#memory-registry) brain, an admin's or the member's own, and an attested provider in `MEMORY_PROVIDER_CONFIG` such as the [gbrain recipe](#gbrain).
 
-| Action     | gbrain operation | Sends                                                      |
-| ---------- | ---------------- | ---------------------------------------------------------- |
-| `search`   | `query`          | `query`                                                    |
-| `page`     | `get_page`       | `slug`, `source_id` from a ref, and optionally `cursor`    |
-| `timeline` | `get_timeline`   | `slug`, `source_id`, and optionally `after` and `before`   |
-| `links`    | `get_backlinks`  | `slug`, `source_id`, and optionally `cursor`               |
-| `experts`  | `find_experts`   | `topic`                                                    |
-| `whois`    | `whois`          | `query`                                                    |
-| `entity`   | `entity`         | `name`, or a ref's `slug` as `name` with its `source_id`   |
-| `brief`    | `context_pack`   | `counterparty` (a name or a ref's slug), `intent: meeting` |
+- **What the agent gets.** QM asks the brain for its tool list as the member and offers each tool the brain marks read-only (`readOnlyHint`), except the recall, write and forget tools QM already uses for memory. The tools join the agent's connector list under the brain's label, like an MCP connector's tools: `tool_search` shows a tool's description and parameters as the brain advertises them, and `mcp_call` runs it with the arguments the agent wrote. So everything gbrain documents for a tool works, such as `include_deleted` on `get_page` or `limit` on `query`. The agent sees the brain's text result, which for gbrain is the JSON result and its notices; `_meta`, where gbrain carries the member's hot memory, is never shown.
+- **Which tools a gbrain offers.** gbrain lists only the operations QM's client may run as the member, so the operator picks them with `--attest-ops`. For recall, writes and forgetting with no lookups, leave the lookup operations out:
 
-On the brain host, let QM's client run these operations as the member, alongside forgetting, and read named sources as the member rather than as the source:
+  ```bash
+  gbrain auth rescope --client <QM client id> --attest-actor qm \
+    --attest-ops forget_fact,get_write_request,memory_recall,memory_write,query,get_page,get_timeline,get_backlinks,find_experts,whois,entity,context_pack,volunteer_context
+  gbrain auth rescope --client <QM client id> --attest-read person
+  ```
 
-```bash
-gbrain auth rescope --client <QM client id> --attest-actor qm \
-  --attest-ops forget_fact,get_write_request,memory_recall,memory_write,query,get_page,get_timeline,get_backlinks,find_experts,whois,entity,context_pack
-gbrain auth rescope --client <QM client id> --attest-read person
-```
-
-gbrain lists only the operations QM's client may run as the member, so an operation left out of `--attest-ops` isn't offered. For recall and writes with no `brain` tool, leave the lookup operations out and keep `memory_recall`, `memory_write`, `get_write_request` and `forget_fact`. If the operator removes an operation while QM still holds the old list, the next call answers `actor_not_attested`, and the tool says the brain refused that operation and names the one to add (problem `memory_provider_denied`).
-
-- **Where it appears.** On every turn in the member's own DM with QM, in Slack or their web chat, with memory on, so the agent's tools stay the same across the conversation and the model's prompt cache keeps working. Group DMs, channels, external Slack, notebook-only turns (the nightly tidy and its subagents), a binding with recall off and a brain whose tool list lacks these operations get no tool.
-- **When it answers.** A lookup reaches the brain only on the turns that can [forget a brain fact](#forgetting-a-brain-fact): a turn the member sent in their own DM, and work QM runs for such a turn, such as its subagents. That includes a message the member sends into one of their subagent threads, a request QM moves from a shared Slack channel into their DM to answer it privately, and the greeting QM writes when they open a web chat. On a turn a bot or an automation such as a cron, webhook or background watch started, the tool answers `[brain_refused]` and nothing reaches the brain.
-- **Checked on every call.** QM decides the brains and actions once per turn, then checks each call against the live registry, so a binding deleted mid-turn refuses the next call before it reaches the brain. A call naming a brain or action the turn wasn't given is refused the same way.
-- **Refs.** Every record in a result carries a ref, `<brain>:<source>:<slug>`, which `page`, `timeline`, `links` and a ref-based `entity` or `brief` take. A saved fact in `search` results carries `<brain>:<fact id>` instead, the ref `memory` delete takes to [forget it](#forgetting-a-brain-fact). The brain reads as the member whatever the ref says, so a made-up ref reaches only what the member may read.
-- **Long results.** gbrain returns a long page as an outline and a first window, and a long list of links a page at a time. The result then carries `next_cursor`, which `page` and `links` take as `cursor` to read on. `timeline` narrows by date with `after` and `before`.
-- **What a brain receives.** Each lookup sends the words the agent wrote, unscreened. In a DM with more than one brain, a lookup can carry text from one brain's results into another brain, where that brain's operator may see it in their logs. `memory` search already sends the agent's own query text to every recall-enabled brain the same way.
-- **What the agent sees.** A heading `### brain · <label>`, then the action's fields in a quoted data block, with gbrain's notices (such as a degraded search) beside them. Bookkeeping fields and `_meta`, which carries the member's hot memory, are never shown. When `whois` or `entity` reports several matches, the result tells the agent to ask which one the member means.
-- **Failures.** A refusal or an unlinked member answers with the same problem codes as recall, each with its fix, and an error gbrain names comes back quoted so the agent can correct the call. A lookup isn't held to the brain's `timeoutMs`, which bounds the work before every turn: like QM's other MCP tools, it runs until the brain answers, the turn stops, or the MCP client's five-minute call limit passes. QM logs every failed lookup and tool list with the brain's name, as it does for recall.
+- **Where they appear.** Only on a turn the member sent in their own DM with QM, in Slack or their web chat, with memory on, and in work QM runs for that turn, such as a subagent it starts. That includes a message the member sends into one of their subagent threads, a request QM moves from a shared Slack channel into their DM to answer privately, and the greeting QM writes when they open a web chat. A turn a bot or an automation such as a cron, webhook or background watch started gets none, and neither do read-only subagents, messages between sessions, notebook-only turns (the nightly tidy and its subagents), group DMs, channels, external Slack or a binding with recall off. When an earlier turn in the same DM listed them, the turn sees them under "Changed since the system prompt" as removed.
+- **Built for each turn.** The entries come from the brain's binding as each turn starts. QM never adds a brain to its MCP servers, so it doesn't appear on the connector admin pages or in any other conversation's connector list.
+- **Checked on every call.** A call checks again that the turn is the member's own and that the brain is still bound, so a binding deleted mid-turn refuses the next call (`[brain_refused]`) before anything reaches the brain.
+- **The tool list.** Asking for it uses the brain's `timeoutMs`, like recall. QM keeps each member's list for a minute, across registry changes; after that it answers from the old list while it asks again, and when asking fails it keeps the old list and logs the failure. A brain whose list has never come back offers nothing on that turn.
+- **Forgetting what a lookup found.** A saved fact in a lookup result carries gbrain's `fact_id`, and `memory` delete takes it as `<brain id>:<fact_id>`, for example `acme:4821`, to [forget it](#forgetting-a-brain-fact).
+- **What a brain receives.** Each lookup sends the arguments the agent wrote, unscreened. In a DM with more than one brain, a lookup can carry text from one brain's results into another brain, where that brain's operator may see it in their logs. `memory` search already sends the agent's own query text to every recall-enabled brain the same way.
+- **Failures.** A refusal or an unlinked member answers with the same problem codes as recall, each with its fix, followed by the brain's own error text quoted, so the agent can correct the call. A lookup isn't held to `timeoutMs`: like other MCP calls, it runs until the brain answers or the MCP client's five-minute call limit passes. Under the strict security posture it waits for approval like any connector call. QM logs every failed lookup and tool list with the brain's name, as it does for recall.
 
 ### A member's own brain
 

@@ -4,13 +4,21 @@ import type { McpEnvelope } from "../mcp/mcp-client.ts";
 import {
   brainActsAsPerson,
   changesNotebookOnly,
-  type BrainCall,
   type MemoryProviderOutcome,
   type MemoryRecallContext,
   type MemoryService,
 } from "./memory-service.ts";
 import { MemoryForgetRefused, type MemoryCandidate } from "./facts.ts";
-import { changeFailure, failedOutcome, strictFailure, withEnvelope } from "./provider-outcome.ts";
+import {
+  changeFailure,
+  failedOutcome,
+  problemLine,
+  problemOf,
+  strictFailure,
+  withEnvelope,
+} from "./provider-outcome.ts";
+import { errMessage } from "../util/errors.ts";
+import { quotedData } from "../util/text.ts";
 import { OutsideAudience } from "../directory/person.ts";
 
 export type MemoryCapturePolicy = "off" | "explicit" | "automatic";
@@ -32,7 +40,7 @@ function matches(route: MemoryProviderRoute, scopeId: ScopeId): boolean {
 
 export const providerRef = (provider: string, ref: string) => `${provider}:${ref}`;
 
-export function parseProviderRef(value: string): { provider: string; ref: string } | undefined {
+function parseProviderRef(value: string): { provider: string; ref: string } | undefined {
   const at = value.indexOf(":");
   return at < 0 ? undefined : { provider: value.slice(0, at), ref: value.slice(at + 1) };
 }
@@ -61,6 +69,10 @@ export function createRoutedMemoryService(opts: {
           ...(row.ref === undefined ? {} : { ref: providerRef(route.provider, row.ref) }),
           source: { provider: route.provider, label: route.label ?? route.provider },
         }));
+  const brainRoutes = (scopeId: ScopeId): MemoryProviderRoute[] =>
+    routesFor(scopeId)
+      .filter((route) => route.recall !== false && opts.providers[route.provider]?.lookup)
+      .filter((route, index, all) => all.findIndex((other) => other.provider === route.provider) === index);
   const managerFor = (scopeId: ScopeId): MemoryService | undefined => {
     const route = routesFor(scopeId).find((candidate) => candidate.manage !== false);
     return route ? providerFor(route) : undefined;
@@ -180,26 +192,41 @@ export function createRoutedMemoryService(opts: {
       return routes.flatMap((route, index) => tagged(route, batches[index]!));
     },
 
-    async brains(scopeId) {
-      const routes = routesFor(scopeId)
-        .filter((route) => route.recall !== false)
-        .filter((route, index, all) => all.findIndex((other) => other.provider === route.provider) === index);
-      return routes.flatMap(({ provider, label }) => {
-        const operations = opts.providers[provider]?.operations;
-        if (!operations) return [];
-        return [
-          {
-            id: provider,
-            label: label ?? provider,
-            tools: (context: BrainCall) => operations.tools(scopeId, context),
-            call: (op: string, args: Record<string, unknown>, context: BrainCall) =>
-              operations.call(scopeId, op, args, context).catch((error: unknown) => {
-                opts.onError?.(error, provider, "lookup");
-                throw error;
-              }),
-          },
-        ];
-      });
+    async brains(scopeId, reader) {
+      return Promise.all(
+        brainRoutes(scopeId).map(async ({ provider, label }) => ({
+          id: provider,
+          label: label ?? provider,
+          tools: await opts.providers[provider]!.lookupTools!(scopeId, reader).catch((error: unknown) => {
+            opts.onError?.(error, provider, "lookup");
+            return [];
+          }),
+        })),
+      );
+    },
+
+    async lookup(scopeId, tool, args, by, context) {
+      if (!brainActsAsPerson(by, scopeId, context?.audienceScopeId))
+        throw new Error(
+          "[brain_refused] Only the person, on a turn they sent in their own DM with QM, can look things up in their brain. Nothing was sent.",
+        );
+      const ref = parseProviderRef(tool);
+      const route = ref && brainRoutes(scopeId).find((candidate) => candidate.provider === ref.provider);
+      if (!ref || !route)
+        throw new Error(
+          `[brain_refused] ${tool} isn't a tool of a brain connected to this conversation. Nothing was sent.`,
+        );
+      const started = Date.now();
+      try {
+        return await opts.providers[route.provider]!.lookup!(scopeId, ref.ref, args, by, context);
+      } catch (error) {
+        opts.onError?.(error, route.provider, "lookup");
+        const problem = problemOf(
+          { provider: route.provider, scope: scopeId, ms: Date.now() - started, ref: ref.ref, ...failedOutcome(error) },
+          "lookup",
+        )!;
+        throw new Error(`${problemLine(problem)}\n${quotedData(errMessage(error))}`, { cause: error });
+      }
     },
 
     async read(scopeId) {

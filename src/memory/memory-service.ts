@@ -1,4 +1,4 @@
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { McpRemoteTool } from "../mcp/mcp-client.ts";
 import { ownPrivateConversation } from "../directory/person.ts";
 import type { ScopeId } from "../types.ts";
 import type { MemoryDisclosure } from "./disclosure.ts";
@@ -95,28 +95,28 @@ export function turnAuthority(
   };
 }
 
-export interface BrainCall {
+interface MemoryReader {
   actorId: string;
   audienceScopeId?: ScopeId;
-  signal?: AbortSignal;
 }
 
-interface BrainOperations {
-  tools(scopeId: ScopeId, context: BrainCall): Promise<string[]>;
-  call(scopeId: ScopeId, op: string, args: Record<string, unknown>, context: BrainCall): Promise<CallToolResult>;
-}
-
-export interface BoundBrain {
+interface BoundBrain {
   id: string;
   label: string;
-  tools(context: BrainCall): Promise<string[]>;
-  call(op: string, args: Record<string, unknown>, context: BrainCall): Promise<CallToolResult>;
+  tools: McpRemoteTool[];
 }
 
 export interface MemoryService {
   attestActor?: boolean;
-  operations?: BrainOperations;
-  brains?(scopeId: ScopeId): Promise<BoundBrain[]>;
+  lookupTools?(scopeId: ScopeId, reader: MemoryReader): Promise<McpRemoteTool[]>;
+  brains?(scopeId: ScopeId, reader: MemoryReader): Promise<BoundBrain[]>;
+  lookup?(
+    scopeId: ScopeId,
+    tool: string,
+    args: Record<string, unknown>,
+    by: MemoryAuthority | undefined,
+    context?: { audienceScopeId?: ScopeId },
+  ): Promise<string>;
   withDisclosure?(access: MemoryDisclosure): MemoryService;
   recall(scopeId: ScopeId, context?: MemoryRecallContext): Promise<MemoryCandidate[]>;
   capture(
