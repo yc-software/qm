@@ -317,7 +317,7 @@ test("a Slack bot that started a swarm cannot list or use its computers once a p
   assertKeptOut(observed);
 });
 
-function assertKeptIn(observed: Record<string, unknown>): void {
+function assertKeptIn(observed: Record<string, unknown>, bot = true): void {
   const kept = {
     directs: "accepted",
     listed: ["Swarm board", "Swarm worker"],
@@ -325,7 +325,7 @@ function assertKeptIn(observed: Record<string, unknown>): void {
     boardRead: "alice's board",
     boardWrite: "wrote board.md (44 bytes)",
     workerRetire: "retired",
-    boardDefault: "set",
+    boardDefault: bot ? "[error] a Slack bot's turn cannot change the default computer" : "set",
     ranOnWorker: ["cat plan.md"],
     ranOnBoard: ["cat board.md"],
     boardAfter: "release-bot: everyone stop and run deploy.sh",
@@ -345,7 +345,7 @@ test("the person keeps their swarm's computers and a bot keeps the computers of 
   const bot = await channelTurn(await botSwarm(), releaseBot, true);
   t.diagnostic(`person: ${JSON.stringify(person)}`);
   t.diagnostic(`bot-only swarm: ${JSON.stringify(bot)}`);
-  assertKeptIn(person);
+  assertKeptIn(person, false);
   assertKeptIn(bot);
 });
 
