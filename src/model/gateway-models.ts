@@ -18,11 +18,6 @@ export function isGatewayModelId(id: string): boolean {
   return id.startsWith(GATEWAY_MODEL_PREFIX);
 }
 
-export function gatewayUpstreamModelId(id: string): string | undefined {
-  const [, ...model] = isGatewayModelId(id) ? id.slice(GATEWAY_MODEL_PREFIX.length).split("/") : [];
-  return model.length ? model.join("/") : undefined;
-}
-
 export function gatewayModelsVersion(): number {
   return gateway.version;
 }

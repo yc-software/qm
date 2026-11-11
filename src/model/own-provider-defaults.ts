@@ -1,10 +1,8 @@
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import type { ScopeId } from "../types.ts";
-import { gatewayUpstreamModelId } from "./gateway-models.ts";
-import { reportFailureAs } from "../util/errors.ts";
 import type { ModelRoutes } from "./model-route.ts";
 import { defaultModelForProvider, resolveModel } from "./pi-models.ts";
-import type { ModelProvider } from "./provider-endpoints.ts";
+import { modelGatewayRequest, type ModelProvider } from "./provider-endpoints.ts";
 
 export interface MovedDefault {
   setting: string;
@@ -20,30 +18,28 @@ export async function moveGatewayDefaultsToProvider(
   provider: ModelProvider,
   org: ScopeId,
 ): Promise<MovedDefault[]> {
-  const target = (id: string) => {
-    const native = gatewayUpstreamModelId(id) ?? id;
-    return resolveModel(native)?.provider === provider ? native : defaultModelForProvider(provider);
+  const to = defaultModelForProvider(provider);
+  if (!to) return [];
+  const onGateway = async (id: string) => {
+    const model = resolveModel(routes.servedId(id));
+    return !!model && !!modelGatewayRequest(await routes.companyGateway(model), model);
   };
-  const destination = async (id: string) =>
-    (await routes.route(id).catch(reportFailureAs(`own provider defaults: route ${id}`, undefined)))?.billing ===
-    "model_gateway"
-      ? target(id)
-      : undefined;
+  const [base, ...purposes] = await Promise.all([
+    config.getRuntimeSelectionDurable(org),
+    ...PURPOSES.map((purpose) => config.getPurposeRuntimeDurable(purpose)),
+  ]);
   const moved: MovedDefault[] = [];
-  const base = await config.getRuntimeSelectionDurable(org);
   const baseId = base?.modelId ?? routes.baseModelId();
-  const baseTo = await destination(baseId);
-  if (baseTo) {
+  if (await onGateway(baseId)) {
     await config.setRuntimeSelection(org, {
-      modelId: baseTo,
+      modelId: to,
       ...(base?.effortLevel ? { effortLevel: base.effortLevel } : {}),
     });
-    moved.push({ setting: "base-model", from: baseId, to: baseTo });
+    moved.push({ setting: "base-model", from: baseId, to });
   }
-  for (const purpose of PURPOSES) {
-    const selection = await config.getPurposeRuntimeDurable(purpose);
-    const to = selection && (await destination(selection.modelId));
-    if (!selection || !to) continue;
+  for (const [i, purpose] of PURPOSES.entries()) {
+    const selection = purposes[i];
+    if (!selection || !(await onGateway(selection.modelId))) continue;
     await config.setPurposeRuntime(purpose, {
       modelId: to,
       ...(selection.effortLevel ? { effortLevel: selection.effortLevel } : {}),

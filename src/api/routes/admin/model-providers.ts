@@ -4,8 +4,7 @@ import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
 import { moveGatewayDefaultsToProvider } from "../../../model/own-provider-defaults.ts";
-import { scopeId } from "../../../types.ts";
-import { orgId as configOrgId } from "../../../config.ts";
+import type { ScopeId } from "../../../types.ts";
 
 const VALIDATION_REQUESTS: Record<
   ModelProvider,
@@ -95,7 +94,7 @@ export async function putModelProvider(ctx: ApiCtx): Promise<void> {
           ctx.deps.config,
           ctx.deps.modelRoutes,
           provider,
-          scopeId("org", configOrgId()),
+          orgScope(ctx.deps) as ScopeId,
         )
       : [];
   audit(ctx, {
