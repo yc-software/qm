@@ -25,7 +25,7 @@ describe("conversation pins self-API", async () => {
   let sessionId: string;
   const THREAD = "web:U1:pins";
 
-  const capFor = (actorId: string, threadRef?: string) =>
+  const capFor = (actorId: string, threadRef?: string, botActor?: true) =>
     mintCapabilityToken(
       {
         actorId,
@@ -34,6 +34,7 @@ describe("conversation pins self-API", async () => {
         exp: Date.now() + CAPABILITY_TTL_MS,
         liveActor: true,
         ...(threadRef ? { threadRef } : {}),
+        ...(botActor ? { botActor } : {}),
       },
       SECRET,
     );
@@ -127,6 +128,7 @@ describe("conversation pins self-API", async () => {
     const listing = await call("GET", "/v1/pins", undefined, await capFor("U1", THREAD));
     assert.ok(((await listing.json()) as { pins: { id: string }[] }).pins.some((p) => p.id === pin.id));
     assert.equal((await call("GET", "/v1/pins", undefined, await capFor("U2", nested.threadRef))).status, 403);
+    assert.equal((await call("GET", "/v1/pins", undefined, await capFor("U1", nested.threadRef, true))).status, 403);
     assert.equal((await call("DELETE", `/v1/pins/${pin.id}`, undefined, token)).status, 200);
   });
 
