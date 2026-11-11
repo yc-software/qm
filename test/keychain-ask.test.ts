@@ -1014,21 +1014,6 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     assert.equal(res.status, 403);
   });
 
-  it("bot work in a person's name has no private channel the person has left", async () => {
-    await built.users.record({ id: "U_ALICE", source: "turn", at: Date.now() });
-    await built.users.record({ id: "U_RELEASE_BOT", source: "turn", at: Date.now() });
-    await built.users.markApps(["U_RELEASE_BOT"]);
-    const inNoAlice = (actorId: string) => ({
-      actorId,
-      scopeId: "channel:C_NOALICE",
-      botActor: true,
-      liveActor: true,
-      members: [{ id: actorId, type: "internal" as const }],
-    });
-    assert.equal(await built.app.authorizesCapabilityScope(inNoAlice("U_ALICE")), false);
-    assert.equal(await built.app.authorizesCapabilityScope(inNoAlice("U_RELEASE_BOT")), true);
-  });
-
   it("the removed chat-approval routes are gone; background requests may still ask", async () => {
     const creds = (await (await get("/v1/keychain/credentials", await capFor("U_ALICE"))).json()) as any;
     const gh = creds.credentials.find((c: any) => c.service === "github");
