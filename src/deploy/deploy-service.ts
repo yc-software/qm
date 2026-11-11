@@ -33,7 +33,7 @@ import { errMessage, reportFailure, swallow } from "../util/errors.ts";
 import { uuidSchema } from "../util/ids.ts";
 import { claimThenBind } from "../tenants/claim.ts";
 import { assertAppLabelFits } from "../tenants/settings.ts";
-import { createLiveEdits, type LiveEditSaved, type SavedApp } from "./live-edits.ts";
+import { createLiveEdits, type LiveEditSaved } from "./live-edits.ts";
 import { ambientTenant, type Tenant } from "../tenants/context.ts";
 
 export interface DeployFile {
@@ -126,7 +126,11 @@ export interface DeployService {
   deploymentLogs(idOrName: string, opts: { tailLines: number }): Promise<string | null>;
   gitRepoPath(idOrName: string): Promise<string | null>;
   pushGit<T>(id: string, runReceivePack: () => Promise<{ result: T; ok: boolean }>, actor?: string): Promise<T>;
-  source(idOrName: string, paths?: string[], commit?: string): Promise<DeploymentSource | null>;
+  source(
+    idOrName: string,
+    paths?: string[],
+    at?: string | Pick<DeploymentSource, "commit" | "tree">,
+  ): Promise<DeploymentSource | null>;
   editSource(
     idOrName: string,
     actor: string,
@@ -340,7 +344,11 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     return v;
   };
 
-  const sourceOf = async (id: string, saved: SavedApp, paths: string[] = []): Promise<DeploymentSource> => ({
+  const sourceOf = async (
+    id: string,
+    saved: Pick<DeploymentSource, "commit" | "tree">,
+    paths: string[] = [],
+  ): Promise<DeploymentSource> => ({
     commit: saved.commit,
     tree: saved.tree.map(({ path, sha, size }) => ({ path, sha, size })),
     files: (
@@ -810,12 +818,14 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       });
     },
 
-    async source(idOrName, paths, commit) {
+    async source(idOrName, paths, at) {
       const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
       const saved = d
-        ? commit
-          ? { draft: null, commit, tree: await deps.deployStore.commitTreeOf(d.id, commit) }
-          : await liveEdits.savedOf(d)
+        ? typeof at === "object"
+          ? { draft: null, ...at }
+          : at
+            ? { draft: null, commit: at, tree: await deps.deployStore.commitTreeOf(d.id, at) }
+            : await liveEdits.savedOf(d)
         : null;
       return d && saved ? sourceOf(d.id, saved, paths) : null;
     },

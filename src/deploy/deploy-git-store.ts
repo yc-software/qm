@@ -34,7 +34,10 @@ export interface DeployGitStore {
   }): Promise<string>;
   treeOf(deploymentId: string, commitSha: string): Promise<DeployGitTreeFile[]>;
   filesOf(deploymentId: string, commitSha: string, paths?: string[]): Promise<DeployGitInputFile[]>;
-  filesIn(deploymentId: string, entries: readonly DeployGitTreeFile[]): Promise<DeployGitInputFile[]>;
+  filesIn(
+    deploymentId: string,
+    entries: readonly Pick<DeployGitTreeFile, "path" | "sha">[],
+  ): Promise<DeployGitInputFile[]>;
   bundle(deploymentId: string, commitSha: string): Promise<Uint8Array>;
   setRef(deploymentId: string, ref: string, sha: string): Promise<void>;
   deleteRef(deploymentId: string, ref: string): Promise<void>;
@@ -245,7 +248,10 @@ export function createDeployGitStore(opts: DeployGitStoreOptions = {}): DeployGi
     }
   }
 
-  async function filesIn(deploymentId: string, entries: readonly DeployGitTreeFile[]): Promise<DeployGitInputFile[]> {
+  async function filesIn(
+    deploymentId: string,
+    entries: readonly Pick<DeployGitTreeFile, "path" | "sha">[],
+  ): Promise<DeployGitInputFile[]> {
     if (entries.length === 0) return [];
     const repo = await ensureRepo(deploymentId);
     const shas = [...new Set(entries.map((entry) => entry.sha))];

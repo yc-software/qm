@@ -3,8 +3,8 @@ import type { ScopeId } from "../types.ts";
 
 export interface AppFiles {
   readonly app: string;
-  canManage(): Promise<boolean>;
-  source(paths?: string[], commit?: string): Promise<DeploymentSource>;
+  sourceReader(): Promise<AppFiles["source"] | undefined>;
+  source(paths?: string[], at?: string | Pick<DeploymentSource, "commit" | "tree">): Promise<DeploymentSource>;
   save(edit: (read: (paths: string[]) => Promise<DeploymentSource>) => Promise<SourceEdit>): Promise<SourceSaved>;
 }
 
@@ -22,14 +22,19 @@ export function createAppFiles(deps: {
     if (!(await canManage()))
       throw new Error(`you need write access to the app ${JSON.stringify(app)} to read or change its files`);
   };
+  const source: AppFiles["source"] = async (paths, at) => {
+    const saved = await deploy.source(app, paths, at);
+    if (!saved) throw new Error(`${app} has no saved source; publish it again first`);
+    return saved;
+  };
   return {
     app,
-    canManage,
-    async source(paths, commit) {
+    async sourceReader() {
+      return (await canManage()) ? source : undefined;
+    },
+    async source(paths, at) {
       await assertMayEdit();
-      const source = await deploy.source(app, paths, commit);
-      if (!source) throw new Error(`${app} has no saved source; publish it again first`);
-      return source;
+      return source(paths, at);
     },
     async save(edit) {
       await assertMayEdit();

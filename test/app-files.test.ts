@@ -473,7 +473,7 @@ test("app source budgets file headings, fences and skipped paths along with cont
   const shown = await appSourceShown(files, []);
   assert.ok(shown.text.length <= 80_000, String(shown.text.length));
   assert.ok(shown.text.includes("```untrusted-data\na\n```"));
-  assert.ok(shown.text.includes("more that app_files list names"));
+  assert.ok(shown.text.includes("more paths not shown"));
   const prior = storedItem(
     { kind: "UserMessage", text: "hi", body: { appSource: shown.record } },
     { sessionId: "s", seq: 1, createdAt: 1 },

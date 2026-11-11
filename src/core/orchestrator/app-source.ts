@@ -56,7 +56,7 @@ function listed(dir: string, files: DeploymentSource["tree"]): string {
 }
 
 function more(count: number): string {
-  return `${count} more that app_files list names`;
+  return `${count} more paths not shown`;
 }
 
 function boundedList(prefix: string, values: readonly string[], budget: number): string {
@@ -72,12 +72,16 @@ function boundedList(prefix: string, values: readonly string[], budget: number):
   return `${prefix}${shown.join(", ")}.`;
 }
 
-async function render(files: AppFiles, history: readonly Item[]): Promise<{ text: string; record: AppSourceShown }> {
+async function render(
+  files: Pick<AppFiles, "app" | "source">,
+  history: readonly Item[],
+): Promise<{ text: string; record: AppSourceShown }> {
   const { previous, anchorSeq } = retainedSnapshot(history, (item) => {
     const shown = item.body.appSource as Partial<AppSourceShown> | undefined;
     return shown?.app === files.app && typeof shown.commit === "string" ? (shown as AppSourceShown) : undefined;
   });
-  const { commit, tree } = await files.source();
+  const snapshot = await files.source();
+  const { commit, tree } = snapshot;
   if (previous?.commit === commit) return { text: "", record: { app: files.app, commit, anchorSeq } };
   const before = previous
     ? await files
@@ -118,7 +122,7 @@ async function render(files: AppFiles, history: readonly Item[]): Promise<{ text
     })
     .map((file) => file.path);
   const texts = new Map<string, string>();
-  for (const file of fits.length ? (await files.source(fits, commit)).files : []) {
+  for (const file of fits.length ? (await files.source(fits, snapshot)).files : []) {
     const text = tryDecodeUtf8(file.data);
     if (text === null || text.includes("\u0000")) continue;
     const block = fileBlock(file.path, text);
@@ -143,9 +147,12 @@ async function render(files: AppFiles, history: readonly Item[]): Promise<{ text
   ];
   const summaries = sections.filter(([, values]) => values.length);
   const minimum = (prefix: string, values: readonly string[]) => prefix.length + more(values.length).length + 2;
-  const extra = room - summaries.reduce((size, [prefix, values]) => size + minimum(prefix, values), 0);
+  let reserved = summaries.reduce((size, [prefix, values]) => size + minimum(prefix, values), 0);
   for (const [prefix, values] of summaries) {
-    chunks.push(boundedList(prefix, values, minimum(prefix, values) + Math.floor(extra / summaries.length)));
+    reserved -= minimum(prefix, values);
+    const line = boundedList(prefix, values, room - reserved);
+    chunks.push(line);
+    room -= line.length + 1;
   }
   return { text: [...chunks, "</app-source>"].join("\n"), record };
 }
@@ -154,6 +161,7 @@ export async function appSourceShown(
   files: AppFiles | undefined,
   history: readonly Item[],
 ): Promise<{ text: string; record?: AppSourceShown }> {
-  if (!files || !(await files.canManage())) return { text: "" };
-  return render(files, history).catch(swallowAs("orchestrator: app source", { text: "" }));
+  const source = await files?.sourceReader();
+  if (!files || !source) return { text: "" };
+  return render({ app: files.app, source }, history).catch(swallowAs("orchestrator: app source", { text: "" }));
 }
