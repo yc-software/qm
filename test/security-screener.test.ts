@@ -5,6 +5,7 @@ import { createSecurityClassifier } from "../src/core/orchestrator/security-scre
 import type { OrchestratorDeps } from "../src/core/orchestrator/types.ts";
 import type { AuditEvent } from "../src/audit/audit-log.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { sleep } from "../src/util/async.ts";
 
 test("the security screen proxy sends the neutral classifier contract and maps its scores", async () => {
   const calls: Array<{ url: string; init: RequestInit }> = [];
@@ -338,13 +339,15 @@ test("observed screening returns immediately, runs one screen at a time, and aud
     release = resolve;
   });
   let worker = pending;
+  let calls = 0;
   const events: AuditEvent[] = [];
   const classify = createSecurityClassifier({
     securityScreenTimeoutMs: 100,
     securityScreener: {
       provider: "example-screen",
       async classify() {
-        await (worker = worker.then(() => new Promise<void>((resolve) => setTimeout(resolve, 10))));
+        calls++;
+        await (worker = worker.then(() => sleep(10)));
         return { verdict: { decision: "strict", reason: "example-screen:injection" }, score: 0.9, threshold: 0.5 };
       },
     },
@@ -363,10 +366,11 @@ test("observed screening returns immediately, runs one screen at a time, and aud
   release();
   assert.equal((await screen("enforce", "hostile"))?.decision, "strict");
   const deadline = Date.now() + 2_000;
-  while (events.length < 21 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 1));
-  assert.equal(events.filter((event) => event.status === "would_block").length, 20);
+  while (events.length < 21 && Date.now() < deadline) await sleep(1);
   assert.equal(events.length, 21);
-  const detail = JSON.parse(events.at(-1)!.detail!) as Record<string, unknown>;
+  assert.ok(events.some((event) => event.status === "error"));
+  assert.ok(calls < events.length);
+  const detail = JSON.parse(events.find((event) => event.status === "would_block")!.detail!) as Record<string, unknown>;
   assert.equal(detail.sessionId, "s1");
   assert.equal(detail.runId, "r1");
   assert.deepEqual(detail.sources, ["webhook"]);

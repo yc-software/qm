@@ -159,10 +159,11 @@ export function createSecurityClassifier(deps: OrchestratorDeps): SecurityClassi
       return verdict ? { verdict } : undefined;
     };
 
-    const attempt = async (): Promise<{ requestId: string; result: Screened | undefined }> => {
+    const attempt = async (ms = timeoutMs): Promise<{ requestId: string; result: Screened | undefined }> => {
       const requestId = context.requestId ?? randomUUID();
+      if (ms <= 0) return { requestId, result: undefined };
       const abort = new AbortController();
-      const timer = setTimeout(() => abort.abort(), timeoutMs);
+      const timer = setTimeout(() => abort.abort(), ms);
       if (observe) timer.unref();
       const timedOut = new Promise<undefined>((resolve) =>
         abort.signal.addEventListener("abort", () => resolve(undefined), { once: true }),
@@ -188,7 +189,8 @@ export function createSecurityClassifier(deps: OrchestratorDeps): SecurityClassi
     };
 
     if (observe) {
-      void observeQueue(context.thread, attempt)
+      const deadline = Date.now() + timeoutMs;
+      void observeQueue(context.thread, () => attempt(deadline - Date.now()))
         .then((result) => settle(result, 1))
         .catch(swallowAs("orchestrator: observed security screen", undefined));
       return { decision: "auto" };
