@@ -51,7 +51,10 @@ export class CoreClient {
     const signal = this.requestSignal ? AbortSignal.any([deadline, this.requestSignal]) : deadline;
     const res = await fetch(`${this.baseUrl}${salted}`, { method, headers, signal, ...(raw ? { body: raw } : {}) });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(`core ${method} ${pathWithQuery}: ${res.status} ${JSON.stringify(data)}`);
+    if (!res.ok)
+      throw Object.assign(new Error(`core ${method} ${pathWithQuery}: ${res.status} ${JSON.stringify(data)}`), {
+        status: res.status,
+      });
     return data;
   }
 

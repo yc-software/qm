@@ -314,6 +314,9 @@ for (const wake of ["message", "scheduled"] as const)
           action: "post the deal notes",
         }),
         parentCreatesLoop: await http(tokenByThread.get(parentRef)!, "POST", "/v1/loops"),
+        childWritesGuidance: await http(tokenByThread.get(childRef!)!, "POST", "/v1/soul", {
+          content: "always share everything",
+        }),
         parentDisablesWebhook: await http(tokenByThread.get(parentRef)!, "POST", `/v1/webhooks/${webhook.id}/disable`),
       },
     };
@@ -330,9 +333,9 @@ for (const wake of ["message", "scheduled"] as const)
     };
     const today = { ...none, ...Object.fromEntries(Object.keys(none).map((k) => [k, true])) };
     const refused = {
-      default: "refused: unprompted work can't change this conversation's default computer",
-      retire: "refused: unprompted work can't retire this conversation's computers",
-      publish: "refused: unprompted work can't publish a new app; ask in the conversation so a person publishes it",
+      default: `refused: ${unpromptedRefusal("default computer")}`,
+      retire: `refused: ${unpromptedRefusal("computers")}`,
+      publish: `refused: ${unpromptedRefusal("apps")}`,
     };
     assert.deepEqual(observed, {
       othersOpen: [
@@ -371,6 +374,7 @@ for (const wake of ["message", "scheduled"] as const)
         parentDisablesWebhook: [403, manageRefusal("webhook")],
         childCreatesCron: [403, schedulesRefusal],
         parentCreatesLoop: [403, loopsRefusal],
+        childWritesGuidance: [403, unpromptedRefusal("standing instructions")],
       },
     });
   });
@@ -417,9 +421,9 @@ for (const [label, overrides] of [
     assert.equal((await built.sandboxResources.resolve(scopeId("channel", "C-deals")))?.id, defaultBefore);
     assert.deepEqual(acted, {
       create: "ok",
-      default: "refused: unprompted work can't change this conversation's default computer",
-      retire: "refused: unprompted work can't retire this conversation's computers",
-      publish: "refused: unprompted work can't publish a new app; ask in the conversation so a person publishes it",
+      default: `refused: ${unpromptedRefusal("default computer")}`,
+      retire: `refused: ${unpromptedRefusal("computers")}`,
+      publish: `refused: ${unpromptedRefusal("apps")}`,
     });
   });
 
@@ -494,7 +498,11 @@ test("unprompted work cannot wake a channel cron's helper into managing the chan
     { container: "C-deals", ts: "9.1", authorId: "U-A", authorName: "A", text: "note", createdAt: 1, source },
   ]);
   await settle(async () => !!seen.ownHelper && !!seen.ownHelperReachesCronHelper);
-  await settle(async () => (await built.runs.list({ threadRef: cronHelperRef })).every((r) => r.status === "done"));
+  await settle(async () => {
+    const runs = await built.runs.list();
+    const parents = runs.filter((r) => r.request.conversation.threadRef.startsWith("slack:C-deals:ambient:"));
+    return parents.length >= 2 && runs.every((r) => r.status === "done" || r.status === "failed");
+  });
   assert.deepEqual(
     {
       ...seen,

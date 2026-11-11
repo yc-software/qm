@@ -8,8 +8,8 @@ import {
 import { assert, type Scenario } from "./harness.ts";
 import { sleep } from "./slack.ts";
 
-const notFound = (err: Error) => {
-  if (/: 404 /.test(err.message)) return null;
+const notFound = (err: Error & { status?: number }) => {
+  if (err.status === 404) return null;
   throw err;
 };
 
@@ -17,6 +17,7 @@ export const ambientScenarios: Scenario[] = [
   {
     name: "ambient-helper-same-channel",
     lane: "parallel",
+    tags: ["named-only"],
     timeoutMs: 10 * 60_000,
     async run(ctx) {
       const { core, qaUserId, botUserId } = ctx.env;

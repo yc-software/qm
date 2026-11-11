@@ -170,6 +170,16 @@ function selectScenarios(env: Env): { selected: Scenario[]; skipped: ScenarioRes
       if (!byTag && !s.name.includes(filter) && !s.tags?.includes("provider-execution")) continue;
     }
     const tags = s.tags ?? [];
+    if (tags.includes("named-only") && !(filter && (s.name.includes(filter) || filter === "@named-only"))) {
+      skipped.push({
+        name: s.name,
+        status: "skip",
+        attempts: 0,
+        durationMs: 0,
+        skipReason: "runs only when LIVE_E2E_FILTER names it",
+      });
+      continue;
+    }
     if (tags.includes("sandbox") && !env.sandbox) {
       skipped.push({
         name: s.name,

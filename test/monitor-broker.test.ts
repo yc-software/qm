@@ -272,5 +272,20 @@ test("in a shared conversation, only whoever armed a watch can remove it, but an
     await watcher(scopeActor(channel)).watch("p-1", { instructions: "post the build result" }),
   );
   assert.equal((await watcher("release-bot", true).unwatch(conversation.monitorId)).notYours, true);
+  const unprompted = (threadRef: string) =>
+    createMonitorBroker({
+      store,
+      registry,
+      readOutputTail: async () => ({ outputTail: "" }),
+      scopeId: SCOPE,
+      owner: scopeActor(channel),
+      ownerScopeId: channel,
+      unprompted: true,
+      threadRef,
+      graceMs: 1000,
+    });
+  assert.equal((await unprompted("thread-2").unwatch(conversation.monitorId)).notYours, true);
+  const own = armed(await unprompted("thread-2").watch("p-1", { instructions: "note the build" }));
+  assert.equal((await unprompted("thread-2").unwatch(own.monitorId)).removed, true);
   assert.equal((await watcher("U2").unwatch(conversation.monitorId)).removed, true);
 });

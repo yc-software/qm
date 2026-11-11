@@ -1,7 +1,7 @@
 import { tenantSandboxChoice } from "./tenant-sandbox-shape.ts";
 import { perTenant } from "../tenants/cache.ts";
 import { withLiveTurnMembership } from "../resolution/scope-membership.ts";
-import { personOrOwningBot, proactiveScopeWork, type ManagingCaller } from "../auth/capability-token.ts";
+import { personOrOwningBot } from "../auth/capability-token.ts";
 import { samePerson } from "../directory/person.ts";
 import { randomUUID } from "node:crypto";
 import type { DurableMap } from "../persistence/durable-map.ts";
@@ -95,19 +95,14 @@ export interface SandboxResources {
   access(actorId: string, id: string): Promise<SandboxResource>;
   status(actorId: string, id: string): Promise<ComputerStatus>;
   restart(actorId: string, id: string, memoryGb?: number): Promise<void>;
-  retire(actorId: string, id: string, caller?: Omit<ManagingCaller, "actorId">): Promise<void>;
+  retire(actorId: string, id: string): Promise<void>;
   notePersonUse(id: string): Promise<SandboxResource>;
   use<T>(id: string, action: () => Promise<T>, exclusive?: boolean): Promise<T>;
   hold(id: string, runId: string): Promise<void>;
   recordLoad(id: string, sample: LoadSample): Promise<void>;
   load(id: string): Promise<LoadSample | null>;
   release(id: string, runId: string | undefined, isLive: (runId: string) => Promise<boolean>): Promise<boolean>;
-  setDefault(
-    actorId: string,
-    scopeId: ScopeId,
-    id: string | null,
-    caller?: Omit<ManagingCaller, "actorId">,
-  ): Promise<void>;
+  setDefault(actorId: string, scopeId: ScopeId, id: string | null): Promise<void>;
   resolve(scopeId: ScopeId): Promise<SandboxResource | null>;
   get(id: string): Promise<SandboxResource>;
   defaultBackend(): Promise<SandboxBackendName>;
@@ -291,11 +286,9 @@ export function createSandboxResources(opts: {
         }));
       return live.includes(true);
     },
-    async retire(actorId, id, caller) {
+    async retire(actorId, id) {
       await initialize();
       const record = await agentRecord(actorId, id);
-      if (proactiveScopeWork({ ...caller, actorId }))
-        throw new SandboxAccessError("unprompted work can't retire this conversation's computers");
       await opts.lock.withLock(`sandbox-resource:${id}`, () =>
         opts.lock.withLock(`sandbox-default:${record.ownerScopeId}`, async () => {
           const current = await get(id);
@@ -432,10 +425,8 @@ export function createSandboxResources(opts: {
         }
       });
     },
-    async setDefault(actorId, scopeId, id, caller) {
+    async setDefault(actorId, scopeId, id) {
       await initialize();
-      if (proactiveScopeWork({ ...caller, actorId }))
-        throw new SandboxAccessError("unprompted work can't change this conversation's default computer");
       await authorize(actorId, scopeId);
       await opts.lock.withLock(`sandbox-default:${scopeId}`, async () => {
         if (id !== null) {

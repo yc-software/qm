@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { xmlEscape } from "../../src/util/message-tag.ts";
 
 export interface StoredSession {
   threadRef?: string;
@@ -30,9 +31,6 @@ export interface AmbientPolicyShape {
   ambientEnabled: boolean | null;
 }
 
-const FINAL_ANSWER =
-  /<wake reason="subagent"[^>]*\bsessionId="([^"]+)"[^>]*\bkind="final_answer"[^>]*>[\s\S]*?<content>([\s\S]*?)<\/content>/g;
-
 export function newAmbientRun(e: AmbientEvidence): { parent?: string; child?: string } {
   const fresh = e.sessions.filter((s) => !e.baseline.includes(s.id));
   const parent = fresh.find((s) => s.session.threadRef === `slack:${e.channelId}:ambient:${e.rootTs}`)?.id;
@@ -63,13 +61,13 @@ export function assertAmbientRoundTrip(e: AmbientEvidence): void {
     .find((i) => i.kind === "AgentMessage")
     ?.text?.trim();
   assert.ok(answer, "the helper produced a final answer");
-  const returned = worker.items
+  const returns = worker.items
     .filter((i) => i.kind === "ToolResult")
-    .flatMap((i) => [...(i.text ?? "").matchAll(FINAL_ANSWER)])
-    .filter((m) => m[1] === child);
-  assert.equal(returned.length > 0, true, "the helper's final answer came back to the worker as its subagent wake");
+    .map((i) => i.text ?? "")
+    .filter((t) => t.includes(`sessionId="${child}"`) && t.includes(`kind="final_answer"`));
+  assert.equal(returns.length > 0, true, "the helper's final answer came back to the worker as its subagent wake");
   assert.equal(
-    returned.some((m) => m[2]!.trim() === answer),
+    returns.some((t) => t.includes(`<content>${xmlEscape(answer)}</content>`)),
     true,
     "the returned content is the helper's own final answer",
   );

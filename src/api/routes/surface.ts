@@ -1,5 +1,5 @@
 import { isSideChatAnchor } from "../../sessions/side-chat.ts";
-import type { CapabilityClaims } from "../../auth/capability-token.ts";
+import { proactiveScopeWork, unpromptedRefusal, type CapabilityClaims } from "../../auth/capability-token.ts";
 import { memoryForRequest } from "./memory-access.ts";
 import {
   turnAuthority,
@@ -1408,6 +1408,8 @@ export async function postSoul(ctx: ApiCtx): Promise<void> {
   let content: string;
   let actorId: string;
   if (capability) {
+    if (proactiveScopeWork(capability))
+      return sendJson(res, 403, { error: "soul_update_denied", message: unpromptedRefusal("standing instructions") });
     const b = body as { content?: unknown };
     if (typeof b.content !== "string")
       return sendJson(res, 400, { error: "bad_request", message: "content (string) required" });

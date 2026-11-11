@@ -251,6 +251,12 @@ function requiredEntrypoint(input: string | undefined, d: Deployment | null): st
   return entrypoint;
 }
 
+function manageRefusal(caller: ManagingCaller, name: string): string {
+  return proactiveScopeWork(caller)
+    ? unpromptedRefusal(`apps (${name})`)
+    : `not authorized to manage deployment: ${name}`;
+}
+
 export function createDeployService(deps: DeployServiceDeps): DeployService {
   const leaderLease = deps.leaderLease;
   const advisoryLock = deps.advisoryLock;
@@ -913,11 +919,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         const existing = await deps.deployStore.getByName(input.renameFrom);
         if (!existing) throw new Error(`no deployment named: ${input.renameFrom}`);
         if (!(await canManage(existing, caller, input.createdInScope)))
-          throw new Error(
-            proactiveScopeWork(caller)
-              ? unpromptedRefusal("apps")
-              : `not authorized to manage deployment: ${input.renameFrom}`,
-          );
+          throw new Error(manageRefusal(caller, input.renameFrom));
         const clash = await deps.deployStore.getByName(input.name);
         if (clash && clash.id !== existing.id) throw new Error(`deployment name taken: ${input.name}`);
         await deps.deployStore.setName(existing.id, input.name);
@@ -951,11 +953,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         const existing = await deps.deployStore.getByName(input.name);
         if (!existing) throw new Error(`no deployment named: ${input.name}`);
         if (!(await canManage(existing, caller, input.createdInScope)))
-          throw new Error(
-            proactiveScopeWork(caller)
-              ? unpromptedRefusal("apps")
-              : `not authorized to manage deployment: ${input.name}`,
-          );
+          throw new Error(manageRefusal(caller, input.name));
         await this.rollbackDeployment(existing.id, input.rollbackTo, {
           actor: createdBy,
           ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
@@ -972,11 +970,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           throw new Error(`deployment name taken: ${input.name}`);
         }
         if (!(await personOrOwningBot(caller, async () => samePerson(existing.createdBy, caller.actorId))))
-          throw new Error(
-            proactiveScopeWork(caller)
-              ? unpromptedRefusal("apps")
-              : `not authorized to manage deployment: ${input.name}`,
-          );
+          throw new Error(manageRefusal(caller, input.name ?? existing.name ?? existing.id));
         const entrypoint = requiredEntrypoint(input.entrypoint, existing);
         const { liveEdit } = await this.redeploy(existing.id, {
           actor: createdBy,
@@ -991,8 +985,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           await this.setDeploymentEmbedAncestors(existing.id, input.embedAncestors);
         return { ...(await deps.deployStore.get(existing.id))!, ...(liveEdit ? { liveEdit } : {}) };
       }
-      if (proactiveScopeWork(caller))
-        throw new Error("unprompted work can't publish a new app; ask in the conversation so a person publishes it");
+      if (proactiveScopeWork(caller)) throw new Error(unpromptedRefusal("apps"));
       const d = await this.deploy({
         ownerScopeId,
         createdBy,

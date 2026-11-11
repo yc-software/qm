@@ -1491,7 +1491,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
         const { backgroundBroker, monitorBroker } = createTurnBrokers({
           deps,
-          input,
+          input: scopeWork.unprompted ? { ...input, unprompted: true } : input,
           actor,
           conversation,
           session,
