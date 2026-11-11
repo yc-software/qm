@@ -4,7 +4,7 @@ import { normalizeRelPath } from "../../deploy/deploy-fs.ts";
 import type { SourceSaved } from "../../deploy/deploy-service.ts";
 import { inlineChars, inlineTokensOf } from "../../sessions/tool-output.ts";
 import type { AppFiles } from "../../tools/app-files.ts";
-import { headSlice, tailSlice, tryDecodeUtf8 } from "../../util/text.ts";
+import { decodeSourceText, headSlice, tailSlice } from "../../util/text.ts";
 import { errMessage } from "../../util/errors.ts";
 import { text, type ToolKit } from "./kit.ts";
 import { previousPublishFailure } from "./workspace.ts";
@@ -14,9 +14,9 @@ const NO_DIRECTORY = "/app-source";
 const REPLACEMENTS = createEditTool(NO_DIRECTORY).parameters.properties.edits;
 
 function textOf(file: { path: string; data: Uint8Array }): string {
-  const decoded = tryDecodeUtf8(file.data);
+  const decoded = decodeSourceText(file.data);
   if (decoded === null)
-    throw new Error(`${file.path} is not UTF-8 text (${file.data.byteLength} bytes), so it cannot be read or edited`);
+    throw new Error(`${file.path} is not text (${file.data.byteLength} bytes), so it cannot be read or edited`);
   return decoded;
 }
 
@@ -41,6 +41,7 @@ async function savedText(files: AppFiles, wanted: string) {
 
 interface Excerpt {
   path: string;
+  opensFile: boolean;
   content: string;
   start: number;
   end: number;
@@ -50,7 +51,8 @@ interface Excerpt {
 }
 
 function excerptHeading(w: Excerpt): string {
-  return `[${w.path} match ${w.first}${w.last > w.first ? `-${w.last}` : ""} from line ${w.line}]`;
+  const file = w.opensFile ? `[${w.path}]\n` : "";
+  return `${file}[match ${w.first}${w.last > w.first ? `-${w.last}` : ""} from line ${w.line}]`;
 }
 
 function shownSize(w: Excerpt): number {
@@ -58,16 +60,18 @@ function shownSize(w: Excerpt): number {
 }
 
 async function everyText(files: AppFiles) {
-  const { tree } = await files.source();
-  const { files: saved } = await files.source(tree.map((f) => f.path));
+  const reader = (await files.sourceReader()) ?? files;
+  const { tree } = await reader.source();
+  const { files: saved } = await reader.source(tree.map((f) => f.path));
   return saved.flatMap((file) => {
-    const content = tryDecodeUtf8(file.data);
+    const content = decodeSourceText(file.data);
     return content === null ? [] : [{ path: file.path, content }];
   });
 }
 
 export function appFileTools(kit: ToolKit) {
   const { ref, recordCall, recordResult } = kit;
+  const resultBudget = async () => inlineChars(await inlineTokensOf(ref.current?.toolOutput)) - RANGE_NOTE_CHARS;
 
   async function run(
     callId: string,
@@ -135,7 +139,7 @@ export function appFileTools(kit: ToolKit) {
         const lines = content.split("\n");
         const first = Math.min(params.from ?? 1, lines.length);
         const wanted = lines.slice(first - 1, Math.max(params.to ?? lines.length, first));
-        const budget = inlineChars(await inlineTokensOf(ref.current?.toolOutput)) - RANGE_NOTE_CHARS;
+        const budget = await resultBudget();
         const cut = truncateHead(wanted.join("\n"), { maxBytes: budget, maxLines: wanted.length });
         if (cut.firstLineExceedsLimit)
           throw new Error(
@@ -171,11 +175,7 @@ export function appFileTools(kit: ToolKit) {
         const searched = params.path ? [await savedText(files, params.path)] : await everyText(files);
         const sought = params.text;
         const from = params.from ?? 1;
-        const budget =
-          inlineChars(await inlineTokensOf(ref.current?.toolOutput)) -
-          RANGE_NOTE_CHARS -
-          JSON.stringify(sought).length -
-          (params.path ?? "").length;
+        const budget = (await resultBudget()) - JSON.stringify(sought).length - (params.path ?? "").length;
         const windows: Excerpt[] = [];
         let used = 0;
         let found = 0;
@@ -193,7 +193,8 @@ export function appFileTools(kit: ToolKit) {
             const previous = windows.at(-1);
             const joined =
               previous?.path === path && start <= previous.end ? { ...previous, end, last: found } : undefined;
-            const excerpt = joined ?? { path, content, start, end, line, first: found, last: found };
+            const opensFile = !params.path && previous?.path !== path;
+            const excerpt = joined ?? { path, opensFile, content, start, end, line, first: found, last: found };
             const grown = used - (joined ? shownSize(previous!) : 0) + shownSize(excerpt);
             if (grown > budget) {
               if (!windows.length)

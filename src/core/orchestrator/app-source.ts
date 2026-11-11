@@ -4,7 +4,7 @@ import type { Item } from "../../sessions/items.ts";
 import { inlineChars } from "../../sessions/tool-output.ts";
 import type { AppFiles } from "../../tools/app-files.ts";
 import { swallowAs } from "../../util/errors.ts";
-import { flatText, tryDecodeUtf8 } from "../../util/text.ts";
+import { decodeSourceText, flatText } from "../../util/text.ts";
 import { isTextMime, mimeFromName } from "../attachments.ts";
 
 const SOURCE_BUDGET_TOKENS = 20_000;
@@ -131,8 +131,8 @@ async function render(
     .map((file) => file.path);
   const texts = new Map<string, string>();
   for (const file of fits.length ? (await files.source(fits, commit)).files : []) {
-    const text = tryDecodeUtf8(file.data);
-    if (text === null || text.includes("\u0000")) continue;
+    const text = decodeSourceText(file.data);
+    if (text === null) continue;
     const block = fileBlock(file.path, text);
     if (block.length + 1 > room) continue;
     room -= block.length + 1;

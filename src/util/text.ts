@@ -57,6 +57,11 @@ export function tryDecodeUtf8(bytes: Uint8Array): string | null {
   }
 }
 
+export function decodeSourceText(bytes: Uint8Array): string | null {
+  const text = tryDecodeUtf8(bytes);
+  return text === null || text.includes("\u0000") ? null : text;
+}
+
 export function flatText(value: string): string {
   return value.replace(/[\s\u0085]+/g, " ").trim();
 }
