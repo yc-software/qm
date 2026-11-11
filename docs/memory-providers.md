@@ -366,7 +366,7 @@ gbrain auth rescope --client <QM client id> --attest-actor qm \
 gbrain auth rescope --client <QM client id> --attest-read person
 ```
 
-A brain still advertises an operation left out of `--attest-ops`, so the tool offers it, and a call answers `actor_not_attested`. The tool then says that action is unavailable for this member and names the operation to add (problem `memory_provider_denied`), and the agent answers without it.
+gbrain lists only the operations QM's client may run as the member, so an operation left out of `--attest-ops` isn't offered. If the operator removes one during a turn, the next call answers `actor_not_attested`, and the tool says that action is unavailable for this member and names the operation to add (problem `memory_provider_denied`).
 
 - **Where it appears.** Only on a turn the member sent in their own DM, with memory on. Group DMs, channels, a bot's turn, ambient wakes, notebook-only turns (the nightly tidy and its subagents) and a brain whose tool list fails or lacks these operations get no tool, and the system prompt doesn't mention it. `MEMORY_BRAIN_TOOL=off` removes it everywhere and skips the tool list; recall and writes don't change.
 - **Checked on every call.** QM decides the brains and actions once per turn, then checks each call against the live registry, so a binding deleted mid-turn refuses the next call before it reaches the brain. A call naming a brain, action or ref the turn wasn't given is refused the same way.
