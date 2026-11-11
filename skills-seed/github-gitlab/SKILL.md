@@ -1,6 +1,6 @@
 ---
 name: github-gitlab
-description: Work with GitHub and GitLab repositories through resident gh/glab/git auth on the agent computer.
+description: Clone, commit, and open or merge PRs/MRs in GitHub and GitLab repos, with a personal or shared account.
 requiredCapabilities:
   - egress:github.com
   - egress:api.github.com

@@ -56,7 +56,9 @@ uses its configured org account; a live personal OAuth connector does not change
 The credential name is an admin label, not a verified upstream username. Choose this account
 when it fits the user's intent, not as a silent fallback from a failed personal login. If the
 intended account is unclear before a write, ask. For personal access, see the GitHub / GitLab
-skill and use an authorized login that supports Git transport.
+skill and use an authorized login that supports Git transport. Whichever account you use, read the
+GitHub / GitLab skill before you clone or commit: it covers repos too large to clone, checking a
+commit before you push, and reading the change size back from the forge.
 
 ```bash
 git remote add broker "$AGENT_API_URL/v1/credentials/git/<slug>/<repo-path>.git"
