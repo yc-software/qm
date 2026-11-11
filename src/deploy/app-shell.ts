@@ -12,15 +12,22 @@ const SHELL_ASSETS = {
   "/__claw__/annotate.css": { file: () => new URL("./vendor/devbar.css", import.meta.url), annotation: true },
 } as const;
 
+const shellAssetText = new Map<string, string>();
+
 export function appShellAsset(
   pathname: string,
   annotationsEnabled: boolean,
 ): { contentType: string; body: string } | null {
   const asset = SHELL_ASSETS[pathname as keyof typeof SHELL_ASSETS];
   if (!asset || (asset.annotation && !annotationsEnabled)) return null;
+  let body = shellAssetText.get(pathname);
+  if (body === undefined) {
+    body = readFileSync(asset.file(), "utf8");
+    shellAssetText.set(pathname, body);
+  }
   return {
     contentType: pathname.endsWith(".css") ? "text/css; charset=utf-8" : "text/javascript; charset=utf-8",
-    body: readFileSync(asset.file(), "utf8"),
+    body,
   };
 }
 
@@ -310,14 +317,16 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
     if (!width || !height) throw new Error("the app frame has no size (" + width + "×" + height + ")");
     const sx = w.scrollX || 0;
     const sy = w.scrollY || 0;
-    const bg = w.getComputedStyle(doc.body || doc.documentElement).backgroundColor;
-    const htmlBg = w.getComputedStyle(doc.documentElement).backgroundColor;
-    const opaque = (c) => c && c !== "transparent" && !/rgba\\([^)]*,\\s*0\\)$/.test(c);
+    const probe = doc.createElement("div");
+    probe.style.background = "Canvas";
+    doc.documentElement.appendChild(probe);
+    const canvasColor = w.getComputedStyle(probe).backgroundColor;
+    probe.remove();
     stage = "drawing the picture";
     const dataUrl = await lib.toJpeg(doc.documentElement, {
       width, height, pixelRatio: 1, quality: 0.85, cacheBust: false,
       imagePlaceholder: placeholder, onImageErrorHandler: () => {},
-      backgroundColor: opaque(htmlBg) ? htmlBg : opaque(bg) ? bg : "#ffffff",
+      backgroundColor: canvasColor,
       style: { transform: "translate(" + -sx + "px," + -sy + "px)", transformOrigin: "0 0" },
     });
     return {
