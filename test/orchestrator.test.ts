@@ -864,32 +864,34 @@ test("live bot attestation reaches control, OAuth, and egress capabilities", asy
     captured = opts;
     return realProvision(owner, opts);
   };
-  const actor = { externalId: "B-LEGACY", isBot: true };
-  const res = await app.turn(
-    channel("!run echo bot", {
-      actor,
-      botActor: true,
-      origin: { kind: "human" },
-      conversation: {
-        kind: "channel",
-        threadRef: "ch:C1:bot",
-        channelRef: "C1",
-        isPrivate: true,
-        audience: [actor],
-        publishMembers: [actor],
-      },
-    }),
-  );
-  assert.equal(res.status, "ok");
-  for (const token of [
-    captured!.env!.AGENT_API_TOKEN,
-    captured!.env!.AGENT_OAUTH_CONSENT_TOKEN,
-    captured!.egressToken,
-  ]) {
-    const claims = await verifyCapabilityToken(token!, TEST_CAPABILITY_SECRET);
-    assert.equal(claims?.botActor, true);
-    assert.equal(claims?.liveActor, true);
-    assert.deepEqual(claims?.members, [{ id: "B-LEGACY", type: "internal" }]);
+  for (const actor of [{ externalId: "B-LEGACY", isBot: true }, { externalId: "admin-alice" }]) {
+    const res = await app.turn(
+      channel("!run echo bot", {
+        actor,
+        botActor: true,
+        origin: { kind: "human" },
+        conversation: {
+          kind: "channel",
+          threadRef: `ch:C1:${actor.externalId}`,
+          channelRef: "C1",
+          isPrivate: true,
+          audience: [actor],
+          publishMembers: [actor],
+        },
+      }),
+    );
+    assert.equal(res.status, "ok");
+    for (const token of [
+      captured!.env!.AGENT_API_TOKEN,
+      captured!.env!.AGENT_OAUTH_CONSENT_TOKEN,
+      captured!.egressToken,
+    ]) {
+      const claims = await verifyCapabilityToken(token!, TEST_CAPABILITY_SECRET);
+      assert.equal(claims?.botActor, true);
+      assert.equal(claims?.liveActor, true);
+      assert.deepEqual(claims?.members, [{ id: actor.externalId, type: "internal" }]);
+      assert.equal(claims?.memory?.orgWrite, undefined);
+    }
   }
 });
 
