@@ -12810,7 +12810,7 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  color: color-mix(in srgb, var(--ultrafast-accent) 70%, white);
+  color: var(--ultrafast-accent);
 }
 .loadout-ultrafast .loadout-setting-label {
   display: inline-flex;
