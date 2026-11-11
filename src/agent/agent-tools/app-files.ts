@@ -40,6 +40,8 @@ async function savedText(files: AppFiles, wanted: string) {
 }
 
 interface Excerpt {
+  path: string;
+  content: string;
   start: number;
   end: number;
   line: number;
@@ -48,11 +50,20 @@ interface Excerpt {
 }
 
 function excerptHeading(w: Excerpt): string {
-  return `[match ${w.first}${w.last > w.first ? `-${w.last}` : ""} from line ${w.line}]`;
+  return `[${w.path} match ${w.first}${w.last > w.first ? `-${w.last}` : ""} from line ${w.line}]`;
 }
 
 function shownSize(w: Excerpt): number {
   return excerptHeading(w).length + w.end - w.start + 2;
+}
+
+async function everyText(files: AppFiles) {
+  const { tree } = await files.source();
+  const { files: saved } = await files.source(tree.map((f) => f.path));
+  return saved.flatMap((file) => {
+    const content = tryDecodeUtf8(file.data);
+    return content === null ? [] : [{ path: file.path, content }];
+  });
 }
 
 export function appFileTools(kit: ToolKit) {
@@ -145,9 +156,9 @@ export function appFileTools(kit: ToolKit) {
     name: "find",
     label: "find",
     description:
-      "Find exact text in one source file, however long its lines, and return each place it occurs with the exact text around it, to quote in an edit.",
+      "Find exact text in the app's source files, however long their lines, and return each place it occurs with the exact text around it, to quote in an edit.",
     parameters: Type.Object({
-      path: Type.String({ description: "File path relative to the app root." }),
+      path: Type.Optional(Type.String({ description: "File to search; leave it out to search every file." })),
       text: Type.String({ minLength: 1, description: "Text to look for, matched literally and case-sensitively." }),
       from: Type.Optional(Type.Integer({ minimum: 1, description: "First match to show, counting from 1." })),
       around: Type.Integer({
@@ -157,46 +168,50 @@ export function appFileTools(kit: ToolKit) {
     }),
     execute: (callId, params) =>
       run(callId, { action: "find", path: params.path }, async (files) => {
-        const { path, content } = await savedText(files, params.path);
+        const searched = params.path ? [await savedText(files, params.path)] : await everyText(files);
         const sought = params.text;
         const from = params.from ?? 1;
         const budget =
           inlineChars(await inlineTokensOf(ref.current?.toolOutput)) -
           RANGE_NOTE_CHARS -
           JSON.stringify(sought).length -
-          path.length;
+          (params.path ?? "").length;
         const windows: Excerpt[] = [];
         let used = 0;
-        let line = 1;
-        let counted = 0;
         let found = 0;
         let next: number | undefined;
-        for (let at = content.indexOf(sought); at >= 0; at = content.indexOf(sought, at + sought.length)) {
-          found += 1;
-          if (found < from || next !== undefined) continue;
-          line += content.slice(counted, at).split("\n").length - 1;
-          counted = at;
-          const start = at - tailSlice(content.slice(0, at), params.around).length;
-          const end = at + sought.length + headSlice(content.slice(at + sought.length), params.around).length;
-          const previous = windows.at(-1);
-          const joined = previous && start <= previous.end ? { ...previous, end, last: found } : undefined;
-          const excerpt = joined ?? { start, end, line, first: found, last: found };
-          const grown = used - (joined ? shownSize(previous!) : 0) + shownSize(excerpt);
-          if (grown > budget) {
-            if (!windows.length)
-              throw new Error(
-                `the text around match ${found} in ${path} is more than one result can show; ask for fewer characters around it`,
-              );
-            next = found;
-            continue;
+        for (const { path, content } of searched) {
+          let line = 1;
+          let counted = 0;
+          for (let at = content.indexOf(sought); at >= 0; at = content.indexOf(sought, at + sought.length)) {
+            found += 1;
+            if (found < from || next !== undefined) continue;
+            line += content.slice(counted, at).split("\n").length - 1;
+            counted = at;
+            const start = at - tailSlice(content.slice(0, at), params.around).length;
+            const end = at + sought.length + headSlice(content.slice(at + sought.length), params.around).length;
+            const previous = windows.at(-1);
+            const joined =
+              previous?.path === path && start <= previous.end ? { ...previous, end, last: found } : undefined;
+            const excerpt = joined ?? { path, content, start, end, line, first: found, last: found };
+            const grown = used - (joined ? shownSize(previous!) : 0) + shownSize(excerpt);
+            if (grown > budget) {
+              if (!windows.length)
+                throw new Error(
+                  `the text around match ${found} in ${path} is more than one result can show; ask for fewer characters around it`,
+                );
+              next = found;
+              continue;
+            }
+            used = grown;
+            if (joined) windows[windows.length - 1] = joined;
+            else windows.push(excerpt);
           }
-          used = grown;
-          if (joined) windows[windows.length - 1] = joined;
-          else windows.push(excerpt);
         }
         const more = next ? `; too many to show at once, find on with from ${next}` : "";
-        const title = `[${JSON.stringify(sought)} in ${path}: ${found} found${more}]`;
-        const shown = windows.map((w) => `${excerptHeading(w)}\n${content.slice(w.start, w.end)}`);
+        const where = params.path ? searched[0]!.path : "the app's files";
+        const title = `[${JSON.stringify(sought)} in ${where}: ${found} found${more}]`;
+        const shown = windows.map((w) => `${excerptHeading(w)}\n${w.content.slice(w.start, w.end)}`);
         return { body: { matches: found }, result: [title, ...shown].join("\n") };
       }),
   });

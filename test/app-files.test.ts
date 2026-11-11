@@ -213,7 +213,7 @@ test("find shows exact text around each match in a built one-line stylesheet, en
   const found = await chat.call({ action: "find", path, text: ".dark{", around: 2000 });
   const [title, heading, excerpt] = found.split("\n");
   assert.equal(title, `[".dark{" in ${path}: 1 found]`);
-  assert.equal(heading, "[match 1 from line 1]");
+  assert.equal(heading, `[${path} match 1 from line 1]`);
   assert.equal(excerpt!.length, 2000 + ".dark{".length + 2000);
   assert.ok(css.includes(excerpt!) && excerpt!.includes(".dark{--"), "the excerpt is exact saved text");
 
@@ -232,10 +232,15 @@ test("find shows exact text around each match in a built one-line stylesheet, en
   const rest = (await chat.call({ action: "find", path, text: "@media", around: 200, from: Number(paged[1]) })).split(
     "\n",
   );
-  assert.match(rest[1]!, new RegExp(`^\\[match ${paged[1]}(-\\d+)? from line 1\\]$`));
+  assert.ok(rest[1]!.startsWith(`[${path} match ${paged[1]}`));
   assert.ok(rest.slice(1).every((l, i) => i % 2 === 0 || (l.includes("@media") && css.includes(l))));
-  const merged = (await chat.call({ action: "find", path, text: "--cta", around: 20 })).split("\n");
-  assert.equal(merged[1], "[match 1-3 from line 1]", "overlapping matches share one excerpt");
+  const merged = (await chat.call({ action: "find", text: "--cta", around: 20 })).split("\n");
+  assert.match(merged[0]!, /^\["--cta" in the app's files: \d+ found/);
+  assert.equal(
+    merged[1],
+    `[${path} match 1-3 from line 1]`,
+    "searched every file; overlapping matches share one excerpt",
+  );
   assert.ok(css.includes(merged[2]!));
   assert.equal(
     await chat.call({ action: "find", path, text: "no-such-rule", around: 10 }),
