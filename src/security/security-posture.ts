@@ -254,7 +254,7 @@ function boundedChunk(surface: string, slice: string, out: string[]): void {
 
 export function securityScreenChunks(surface: string, data: string): string[] {
   let label = surface;
-  while (JSON.stringify(label).length > MAX_SCREEN_CHARS - SCREEN_CHUNK_CHARS)
+  while (JSON.stringify(label).length > MAX_SCREEN_CHARS - 2 * SCREEN_CHUNK_CHARS)
     label = label.slice(0, label.length >> 1);
   const chunks: string[] = [];
   const step = SCREEN_CHUNK_CHARS - SCREEN_CHUNK_OVERLAP;

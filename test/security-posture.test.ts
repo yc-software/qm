@@ -265,16 +265,14 @@ test("an over-limit screen input packs whole messages into as few bounded payloa
   );
 });
 
-test("an over-limit part with a very long source label still screens in a few bounded payloads", () => {
-  const content = "notes ".repeat(10);
-  const payloads = securityScreenPayloads({
-    surface: "slack",
-    text: "",
-    externalPromptData: [{ source: "a".repeat(16_001), content }],
-  });
-  assert.equal(payloads.length, 1);
-  assert.ok(payloads.every((payload) => payload.length <= MAX_SCREEN_CHARS));
-  assert.equal(JSON.parse(payloads[0]!)[0].content, content);
+test("a very long source label does not multiply an over-limit part's payloads", () => {
+  const count = (source: string, content: string) =>
+    securityScreenPayloads({ surface: "slack", text: "", externalPromptData: [{ source, content }] }).length;
+  assert.equal(count("a".repeat(16_001), "notes"), 1);
+  assert.equal(
+    count("a".repeat(8_480), 'said "go"\n'.repeat(3_000)),
+    count("attachment:notes.md", 'said "go"\n'.repeat(3_000)),
+  );
 });
 
 test("the default rubric treats documentation and code as ordinary content", () => {
