@@ -6,7 +6,7 @@ import { UNSCREENED_REASON, type SecurityScreenVerdict } from "../../security/se
 import { estimateCostUsd } from "../../ratelimit/budget.ts";
 import type { TurnLlmRequestRecord } from "../../agent/agent.ts";
 import { swallowAs } from "../../util/errors.ts";
-import { sleep } from "../../util/async.ts";
+import { createKeyedQueue, sleep } from "../../util/async.ts";
 import { headSlice } from "../../util/text.ts";
 import { SECURITY_FLAGGED, type AuditEvent } from "../../audit/audit-log.ts";
 import {
@@ -92,6 +92,7 @@ function screenSources(payload: string): string[] {
 }
 
 export function createSecurityClassifier(deps: OrchestratorDeps): SecurityClassifier {
+  const observeQueue = createKeyedQueue<string | undefined>();
   return async function classifySecurityData(tenant, payload, actorId, scopeLabel, recordLlmRequest, context) {
     const screener = deps.securityScreener;
     const model = deps.agent.screenSecurity;
@@ -187,7 +188,7 @@ export function createSecurityClassifier(deps: OrchestratorDeps): SecurityClassi
     };
 
     if (observe) {
-      void attempt()
+      void observeQueue(context.thread, attempt)
         .then((result) => settle(result, 1))
         .catch(swallowAs("orchestrator: observed security screen", undefined));
       return { decision: "auto" };

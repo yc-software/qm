@@ -332,46 +332,40 @@ test("the security screen proxy accepts concurrent classifications and rejects o
   await Promise.all([first, second, third]);
 });
 
-test("observed screening returns immediately and audits each verdict once it settles", async () => {
+test("observed screening returns immediately, runs one screen at a time, and audits each verdict", async () => {
   let release!: () => void;
   const pending = new Promise<void>((resolve) => {
     release = resolve;
   });
+  let worker = pending;
   const events: AuditEvent[] = [];
   const classify = createSecurityClassifier({
+    securityScreenTimeoutMs: 100,
     securityScreener: {
       provider: "example-screen",
       async classify() {
-        await pending;
+        await (worker = worker.then(() => new Promise<void>((resolve) => setTimeout(resolve, 10))));
         return { verdict: { decision: "strict", reason: "example-screen:injection" }, score: 0.9, threshold: 0.5 };
       },
     },
     agent: { models: {} },
     auditLog: { record: (_t: unknown, event: AuditEvent) => events.push(event) },
   } as unknown as OrchestratorDeps);
-  const verdicts = await Promise.all(
-    Array.from({ length: 20 }, (_, i) =>
-      classify(
-        tenant,
-        JSON.stringify([{ source: "webhook", content: `hostile ${i}` }]),
-        "U1",
-        "personal:U1",
-        undefined,
-        {
-          mode: "observe",
-          sessionId: "s1",
-          runId: "r1",
-        },
-      ),
-    ),
-  );
+  const screen = (mode: "observe" | "enforce", content: string) =>
+    classify(tenant, JSON.stringify([{ source: "webhook", content }]), "U1", "personal:U1", undefined, {
+      mode,
+      sessionId: "s1",
+      runId: "r1",
+    });
+  const verdicts = await Promise.all(Array.from({ length: 20 }, (_, i) => screen("observe", `hostile ${i}`)));
   assert.ok(verdicts.every((verdict) => verdict?.decision === "auto" && !verdict.unscreened));
   assert.equal(events.length, 0);
   release();
+  assert.equal((await screen("enforce", "hostile"))?.decision, "strict");
   const deadline = Date.now() + 2_000;
-  while (events.length < 20 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 1));
-  assert.ok(events.every((event) => event.status === "would_block"));
-  assert.equal(events.length, 20);
+  while (events.length < 21 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 1));
+  assert.equal(events.filter((event) => event.status === "would_block").length, 20);
+  assert.equal(events.length, 21);
   const detail = JSON.parse(events.at(-1)!.detail!) as Record<string, unknown>;
   assert.equal(detail.sessionId, "s1");
   assert.equal(detail.runId, "r1");
