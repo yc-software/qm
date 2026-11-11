@@ -1,4 +1,5 @@
 import { resolveMentions } from "./mrkdwn.ts";
+import type { OverheardMessage } from "../types.ts";
 export { resolveMentions } from "./mrkdwn.ts";
 import { encodeTs, summarizeReactions, type ReactionTally } from "./reactions.ts";
 import {
@@ -25,6 +26,7 @@ export interface RecentMessage {
   name: string;
   text: string;
   authorId?: string;
+  principalId?: string;
   isTrigger?: boolean;
   isBot?: boolean;
   isSelf?: boolean;
@@ -92,13 +94,7 @@ export interface ConversationTurn {
   text: string;
 }
 
-export interface OverheardMessage {
-  ts: string;
-  role: "user" | "self";
-  name?: string;
-  text: string;
-  files?: string[];
-}
+export type { OverheardMessage } from "../types.ts";
 
 export interface RenderedConversation {
   header: string;
@@ -148,6 +144,7 @@ export function renderConversationView(view: ConversationView): RenderedConversa
         ts: m.ts,
         role: (m.isSelf ? "self" : "user") as "user" | "self",
         ...(m.isSelf ? {} : { name: m.name || "someone" }),
+        ...(m.principalId && !m.isSelf ? { speakerId: m.principalId } : {}),
         text,
         ...(m.files?.length ? { files: m.files } : {}),
       };

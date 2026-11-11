@@ -16,7 +16,8 @@ import type { BotIdentity, Directory } from "./directory.ts";
 import type { SlackConversationKind } from "./messaging.ts";
 import { type SlackHistoryMessage } from "./payloads.ts";
 import { slackMessageContent } from "./message-content.ts";
-import { isBotAuthored } from "./message-gating.ts";
+import { isBotAuthored, isOwnSlackMessage } from "./message-gating.ts";
+import { mentionedUserIds } from "./mrkdwn.ts";
 
 export const RECENT_HISTORY_LIMIT = 200;
 export const RECENT_THREAD_LIMIT = 200;
@@ -32,12 +33,17 @@ export function reactionTallies(raw: unknown): ReactionTally[] {
     .filter((r) => r.name && r.count > 0);
 }
 
+export interface SlackPeople {
+  names: Map<string, string>;
+  principals: Map<string, string>;
+}
+
 export interface ConversationSerializer {
   shapeRecentMessages(
     client: any,
     raw: SlackHistoryMessage[],
     triggerTs: string,
-    nameById: Map<string, string>,
+    people: SlackPeople,
   ): Promise<RecentMessage[]>;
   serializeSlackConversation(
     client: any,
@@ -79,38 +85,40 @@ export function createConversationSerializer(deps: {
   }
 
   function isSelfMessage(m: SlackHistoryMessage): boolean {
-    return Boolean((m.user && m.user === ids.botUserId) || (ids.ownBotId && m.bot_id === ids.ownBotId));
+    return isOwnSlackMessage(m, ids.botUserId, ids.ownBotId);
   }
 
-  function messageAuthorName(
-    m: SlackHistoryMessage,
-    nameById: Map<string, string>,
-    botNameById: Map<string, string>,
-  ): string {
+  function messageAuthorName(m: SlackHistoryMessage, people: SlackPeople, botNameById: Map<string, string>): string {
+    if (m.user && people.principals.has(m.user)) return people.names.get(m.user) ?? m.user;
     if (m.bot_profile?.name) return String(m.bot_profile.name);
     if (m.username) return String(m.username);
-    if (m.user) return nameById.get(m.user) ?? m.user;
+    if (m.user) return people.names.get(m.user) ?? m.user;
     if (m.bot_id) return botNameById.get(m.bot_id) ?? "someone";
     return "someone";
   }
 
-  async function resolveMissingAuthorNames(
+  async function resolveMissingPeople(
     client: any,
     messages: SlackHistoryMessage[],
-    nameById: Map<string, string>,
+    people: SlackPeople,
     botNameById: Map<string, string>,
   ): Promise<void> {
+    if (ids.botUserId && ids.botHandle && !people.names.has(ids.botUserId))
+      people.names.set(ids.botUserId, ids.botHandle);
     const needUsers = new Set<string>();
     const needBots = new Set<string>();
     for (const m of messages) {
-      if (m.bot_profile?.name || m.username) continue;
-      if (m.user && m.user !== ids.botUserId && !nameById.has(m.user)) needUsers.add(m.user);
-      else if (!m.user && m.bot_id && m.bot_id !== ids.ownBotId && !botNameById.has(m.bot_id)) needBots.add(m.bot_id);
+      if (isSelfMessage(m)) continue;
+      if (m.user && !people.principals.has(m.user)) needUsers.add(m.user);
+      else if (!m.user && m.bot_id && !botNameById.has(m.bot_id)) needBots.add(m.bot_id);
     }
+    for (const m of messages)
+      for (const id of mentionedUserIds(String(m.text ?? ""))) if (!people.names.has(id)) needUsers.add(id);
     await Promise.all([
-      ...[...needUsers].slice(0, MAX_NAME_LOOKUPS).map(async (id) => {
-        const dn = (await directory.classifyUserCached(client, id)).actor.displayName;
-        if (dn) nameById.set(id, dn);
+      ...[...needUsers].map(async (id) => {
+        const { actor, ok } = await directory.classifyUserCached(client, id);
+        if (actor.displayName && !people.names.has(id)) people.names.set(id, actor.displayName);
+        if (ok && !actor.isBot && actor.externalId) people.principals.set(id, actor.externalId);
       }),
       ...[...needBots].slice(0, MAX_NAME_LOOKUPS).map(async (id) => {
         try {
@@ -127,7 +135,7 @@ export function createConversationSerializer(deps: {
     client: any,
     raw: SlackHistoryMessage[],
     triggerTs: string,
-    nameById: Map<string, string>,
+    people: SlackPeople,
   ): Promise<RecentMessage[]> {
     const kept = raw.filter(isConversationMessage).sort((a, b) => {
       if (a.ts < b.ts) return -1;
@@ -135,13 +143,15 @@ export function createConversationSerializer(deps: {
       return 0;
     });
     const botNameById = new Map<string, string>();
-    await resolveMissingAuthorNames(client, kept, nameById, botNameById);
+    await resolveMissingPeople(client, kept, people, botNameById);
     return kept.map((m) => {
       const content = slackMessageContent(m);
+      const principalId = m.user ? people.principals.get(m.user) : undefined;
       return {
         ts: m.ts,
-        name: messageAuthorName(m, nameById, botNameById),
+        name: messageAuthorName(m, people, botNameById),
         ...(m.user || m.bot_id ? { authorId: String(m.user || m.bot_id) } : {}),
+        ...(principalId ? { principalId } : {}),
         text: decodeSlackEntities(content.text.trim()),
         ...(m.ts === triggerTs ? { isTrigger: true } : {}),
         ...(isBotAuthored(m) ? { isBot: true } : {}),
@@ -180,12 +190,13 @@ export function createConversationSerializer(deps: {
     };
     if (ctx.audience.some((a) => a.isExternalGuest) && !(await externalParticipantsEnabled())) return { view: empty };
 
-    const nameById = new Map<string, string>();
+    const people: SlackPeople = { names: new Map(), principals: new Map() };
     for (const a of ctx.audience) {
-      if (!a.displayName) continue;
-      nameById.set(a.externalId, a.displayName);
       const slackId = ctx.slackIdsByPrincipal?.get(a.externalId);
-      if (slackId) nameById.set(slackId, a.displayName);
+      if (slackId && !a.isBot) people.principals.set(slackId, a.externalId);
+      if (!a.displayName) continue;
+      people.names.set(a.externalId, a.displayName);
+      if (slackId) people.names.set(slackId, a.displayName);
     }
     const page = await deps.readHistory(client, inc.channel, inc.threadTs, undefined, true).catch((error) => {
       swallow("slack: conversation context", error);
@@ -200,15 +211,13 @@ export function createConversationSerializer(deps: {
     const raw = page.raw;
     if (inc.rawText !== undefined && !raw.some((m) => m.ts === inc.ts))
       raw.push({ ts: inc.ts, text: inc.rawText, user: inc.userId, thread_ts: inc.threadTs, files: inc.files });
-    const messages = recentWindow(await shapeRecentMessages(client, raw, inc.ts, nameById), RECENT_MESSAGE_WINDOW);
+    const messages = recentWindow(await shapeRecentMessages(client, raw, inc.ts, people), RECENT_MESSAGE_WINDOW);
 
     let here: ConversationView["here"];
     if (inc.threadTs) {
       const root = raw.find((m: any) => m.ts === inc.threadTs);
-      const youOpenedIt = Boolean(
-        root && ((root.user && root.user === ids.botUserId) || (ids.ownBotId !== "" && root.bot_id === ids.ownBotId)),
-      );
-      const starterName = root && !youOpenedIt ? messageAuthorName(root, nameById, new Map()) : undefined;
+      const youOpenedIt = Boolean(root && isSelfMessage(root));
+      const starterName = root && !youOpenedIt ? messageAuthorName(root, people, new Map()) : undefined;
       here = {
         kind: "thread",
         youOpenedIt,
@@ -232,7 +241,7 @@ export function createConversationSerializer(deps: {
       messages,
       here,
       omittedFiles,
-      nameById,
+      nameById: people.names,
       ...("note" in page && page.note ? { contextNote: page.note } : {}),
     };
     return { view };

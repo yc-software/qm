@@ -431,6 +431,8 @@ test("a delivery marks the web conversation unread for its participant", async (
   assert.equal((await sessions.getForParticipant(session.id, "alice@example.com"))!.unread, true);
 });
 
+const sentAsAlice = { ts: "123.789", name: "Alice", speakerId: "alice@example.com" };
+
 test("Slack send receipts survive a restart, retry a busy session, and collapse against the Slack event", async () => {
   const { sessions, inner, deliveries, runs } = wired();
   const session = await webSession(sessions, "dm:D123");
@@ -438,7 +440,7 @@ test("Slack send receipts survive a restart, retry a busy session, and collapse 
   const input = {
     destination: {
       ...webDestination("dm:D123"),
-      webTranscript: { kind: "slack_reply" as const, sessionId: session.id, ts: "123.789", name: "Alice" },
+      webTranscript: { kind: "slack_reply" as const, sessionId: session.id, ...sentAsAlice },
     },
     text: "Sent as Alice",
     idempotencyKey: "slack-reply:session:D123:123.789",
@@ -473,10 +475,13 @@ test("Slack send receipts are recorded immediately without a listener and skip a
   const session = await webSession(sessions, "dm:D123");
   const destination: Destination = {
     ...webDestination("dm:D123"),
-    webTranscript: { kind: "slack_reply", sessionId: session.id, ts: "123.789", name: "Alice" },
+    webTranscript: { kind: "slack_reply", sessionId: session.id, ...sentAsAlice },
   };
   await deliveries.enqueue({ destination, text: "Hello", idempotencyKey: "send-1" });
-  assert.equal((await sessions.getItems(session.id)).length, 1);
+  assert.deepEqual(
+    (await sessions.getItems(session.id)).map((item) => item.body.speakerId),
+    ["alice@example.com"],
+  );
   await deliveries.enqueue({ destination, text: "Hello", idempotencyKey: "send-2" });
   assert.equal((await sessions.getItems(session.id)).length, 1);
 });

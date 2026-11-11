@@ -74,6 +74,7 @@ export interface OverheardEntryPayload {
   ts: string;
   changeTime?: string;
   name?: string;
+  speakerId?: string;
   text: string;
   files?: string[];
   mentions?: Record<string, string>;
@@ -127,6 +128,7 @@ export function selectOverheardToImport(
       ...(m.role === "self" ? { sourceRole: "agent" as const } : {}),
       ts: m.ts,
       ...(m.name ? { name: m.name } : {}),
+      ...(m.speakerId ? { speakerId: m.speakerId } : {}),
       text,
       ...(m.files?.length ? { files: m.files } : {}),
       ...(m.mentions && Object.keys(m.mentions).length ? { mentions: m.mentions } : {}),
