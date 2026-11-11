@@ -82,6 +82,7 @@ export interface ModelRoutes {
   servedId(id: string, personalKeys?: ProviderKeys): string;
   route(modelId: string, personalKeys?: ProviderKeys): Promise<ModelRoute>;
   companyGateway(model: { id: string; provider: unknown }): Promise<ModelGatewayTransportConfig | undefined>;
+  onCompanyGateway(modelId: string): Promise<boolean>;
   servable(route: ModelRoute): ModelRoute | undefined;
   session(session: { runtime?: { modelId?: string }; providerKeys?: ProviderKeys }): Promise<ModelRoute>;
   utility(modelId?: string): Promise<ModelRoute | undefined>;
@@ -136,6 +137,10 @@ export function createModelRoutes(opts: ModelRouteOptions = {}): ModelRoutes {
     servedId,
     route,
     companyGateway,
+    onCompanyGateway: async (id) => {
+      const model = resolveModel(companyServedId(id));
+      return !!model && !!modelGatewayRequest(await companyGateway(model), model);
+    },
     servable,
     session: (session) => route(session.runtime?.modelId ?? baseModelId(), session.providerKeys),
     utility: async (modelId) => servable(await route(utilityModelId(modelId))),
