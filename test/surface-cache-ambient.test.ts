@@ -1242,37 +1242,46 @@ test("a Slack bot's legacy bot_message post marks its ambient wake as a bot's th
   }
 });
 
-test("a Slack bot's ambient wake does not steer into a live ambient worker a person's message started", async () => {
-  const built = freshApp();
-  const container = "C-bot-steer";
-  await built.app.setChannelPolicy(container, "!engage !post tag the team", "U-admin");
-  await built.app.ingestSurfaceEvents([
-    { container, ts: "720.1", authorId: "U1", text: "events site is down", createdAt: 1 },
-  ]);
-  await built.app.judgeAmbientContainer("slack", container);
-  const live = await built.runs.activeForThread(`slack:${container}:ambient:720.1`);
-  assert.ok(live, "the person's message spawned a live worker run");
+type WakeEvent = Parameters<SlackCoreClient["ingestSurfaceEvents"]>[0][number];
 
-  await built.app.ingestSurfaceEvents([
-    {
-      container,
-      ts: "720.2",
-      authorId: "U-deploybot",
-      authorName: "DeployBot",
-      bot: true,
-      text: "rollback finished",
-      createdAt: 2,
-    },
-  ]);
+async function wakeBesideLiveWorker(policy: string, first: WakeEvent, second: WakeEvent) {
+  const built = freshApp();
+  await built.app.setChannelPolicy(first.container, policy, "U-admin");
+  await built.app.ingestSurfaceEvents([first]);
+  await built.app.judgeAmbientContainer("slack", first.container);
+  const live = await built.runs.activeForThread(`slack:${first.container}:ambient:${first.ts}`);
+  assert.ok(live, "the first message spawned a live worker run");
+  await built.app.ingestSurfaceEvents([second]);
   const signals: any[] = [];
-  let botRun: any;
+  let next: any;
   await settle(async () => {
-    signals.push(...(await built.signals.takePending(live!.id)));
-    botRun = (await built.runs.list()).find((r) => r.sessionId === `slack:${container}:ambient:720.2`);
-    return signals.length > 0 || Boolean(botRun);
+    signals.push(...(await built.signals.takePending(live.id)));
+    next = (await built.runs.list()).find((r) => r.sessionId === `slack:${first.container}:ambient:${second.ts}`);
+    return signals.length > 0 || Boolean(next);
   });
-  assert.deepEqual(signals, [], "the bot's wake left the person's run alone");
-  assert.equal(botRun?.request.botActor, true, "the bot's wake runs as its own bot-marked worker");
+  assert.deepEqual(signals, [], "the second wake left the live worker alone");
+  return { live, next };
+}
+
+test("a Slack bot's ambient wake does not steer into a live ambient worker a person's message started", async () => {
+  const container = "C-bot-steer";
+  const { next } = await wakeBesideLiveWorker(
+    "!engage !post tag the team",
+    { container, ts: "720.1", authorId: "U1", text: "events site is down", createdAt: 1 },
+    { container, ts: "720.2", authorId: "U-deploybot", bot: true, text: "rollback finished", createdAt: 2 },
+  );
+  assert.equal(next?.request.botActor, true, "the bot's wake runs as its own bot-marked worker");
+});
+
+test("a person's ask that degrades to proactive does not steer into a live worker a Slack bot's post started", async () => {
+  const container = "C-ask-after-bot";
+  const { live, next } = await wakeBesideLiveWorker(
+    "!engage-asked",
+    { container, ts: "730.1", authorId: "U-deploybot", bot: true, text: "rollback finished", createdAt: 1 },
+    { container, ts: "730.2", authorId: "U1", text: "can you set gpu-2 as the default computer?", createdAt: 2 },
+  );
+  assert.equal(live.request.botActor, true, "the bot's post spawned a bot-marked worker");
+  assert.ok(next && !next.request.botActor, "the person's ask runs as its own worker without the bot marker");
 });
 
 test("a bot post whose content lives only in attachment blocks reaches the ambient judge through the Slack mirror", async () => {

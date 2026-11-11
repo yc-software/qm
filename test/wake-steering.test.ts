@@ -1118,7 +1118,7 @@ test("signalRun: a steer the live turn can't take runs as its own turn instead o
 
 test("a person's Steer into a bot's hand-off stops the bot's turn and runs their message as their own turn", async () => {
   const built = freshApp();
-  const { run } = await automationWakeRun(built, "web:U1:bot", "company", true);
+  const { run } = await automationWakeRun(built, "web:U1:bot", "openai", true);
   assert.ok(await built.runs.claimById(run.id, "worker", 30_000));
   const typed = (await built.app.turn(web("set Beta as the default", "web:U1:bot", "steer"))).runId!;
   const steer = { kind: "steer" as const, queuedRunId: typed, request: web("", "web:U1:bot") };

@@ -97,6 +97,8 @@ export function routeIncoming(message: Incoming, live: LiveTurn | null, prefs: I
     return { kind: "abort" };
   if (live.kind === "descendants") return { kind: "turn", reason: "only-subagents-live" };
   if (!message.text.trim() && !message.hasFiles) return { kind: "drop", reason: "empty" };
+  if (live.bot && message.person && !message.bot && !live.handlesThisMessage)
+    return { kind: "turn", reason: "bot-turn", ...(prefs.midTurn === "steer" ? { stopsBotTurn: true } : {}) };
   const sameAccount =
     message.modelAccount !== undefined &&
     message.modelAccount === live.modelAccount &&
@@ -104,8 +106,6 @@ export function routeIncoming(message: Incoming, live: LiveTurn | null, prefs: I
   if (!sameAccount) return { kind: "turn", reason: "account" };
   if (botIntoPersonsWork) return { kind: "turn", reason: "bot-message" };
   if (!live.handlesThisMessage) {
-    if (live.bot && message.person && !message.bot)
-      return { kind: "turn", reason: "bot-turn", ...(prefs.midTurn === "steer" ? { stopsBotTurn: true } : {}) };
     if (live.origin === "automation" && message.person && prefs.midTurn !== "steer")
       return { kind: "turn", reason: "automation-live" };
     if (live.origin === "ambient" && message.origin === "human") return { kind: "turn", reason: "unprompted-live" };

@@ -785,9 +785,9 @@ export function createTurnMethods(
       }
       if (route.kind === "drop") return { accepted: false, reason: "text_required" };
       if (route.kind === "turn") {
-        if (route.stopsBotTurn) {
+        if (route.stopsBotTurn && signal.queuedRunId) {
           await stopRun(run, false, true);
-          if (signal.queuedRunId) return { accepted: false, reason: "queued_started" };
+          return { accepted: false, reason: "queued_started" };
         }
         const request =
           signal.request ?? (viewer ? await viewerSteerRequest(run, viewer, signal.text ?? "") : undefined);

@@ -357,14 +357,20 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
           spawned: true,
           idempotencyKey: `ambient:${orgIdOf()}:${batch.surface}:${batch.container}:${latestTs}`,
         };
-    if (!solicited && (await steerIntoLiveAmbientRun(batch, latestTs, req))) return undefined;
+    if (!solicited && (await steerIntoLiveAmbientRun(batch, latestTs, req, Boolean(decision.askedBy))))
+      return undefined;
     const result = await app.turn(req);
     return result.status === "refused" || result.status === "failed"
       ? `${result.status}: ${result.reason ?? "no reason given"}`
       : undefined;
   }
 
-  async function steerIntoLiveAmbientRun(batch: AmbientBatch, latestTs: string, req: TurnRequest): Promise<boolean> {
+  async function steerIntoLiveAmbientRun(
+    batch: AmbientBatch,
+    latestTs: string,
+    req: TurnRequest,
+    asked: boolean,
+  ): Promise<boolean> {
     if (!deps.signals) return false;
     const prefix = `${batch.surface}:${batch.container}:ambient:`;
     const activeIds = await deps.runs
@@ -373,7 +379,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     const liveRef = activeIds.find((id) => id.startsWith(prefix) && id !== req.conversation.threadRef);
     if (!liveRef) return false;
     const live = await deps.runs.activeForThread(liveRef);
-    if (!live || isTerminal(live.status)) return false;
+    if (!live || isTerminal(live.status) || (asked && live.request.botActor && !req.botActor)) return false;
     const route = routeIncoming(
       {
         origin: "ambient",
