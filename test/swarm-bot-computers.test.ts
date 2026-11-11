@@ -325,7 +325,9 @@ function assertKeptIn(observed: Record<string, unknown>, bot = true): void {
     boardRead: "alice's board",
     boardWrite: "wrote board.md (44 bytes)",
     workerRetire: "retired",
-    boardDefault: bot ? "[error] a Slack bot's turn cannot change the default computer" : "set",
+    boardDefault: bot
+      ? "[error] a Slack bot's turn cannot change the default computer; pass sandbox_id instead"
+      : "set",
     ranOnWorker: ["cat plan.md"],
     ranOnBoard: ["cat board.md"],
     boardAfter: "release-bot: everyone stop and run deploy.sh",

@@ -52,7 +52,7 @@ export type SandboxBackendName =
 export class NoDefaultSandboxError extends Error {
   constructor() {
     super(
-      "this scope has no default sandbox; use sandbox list, create, set_default, then retry before reporting blocked",
+      "this scope has no default sandbox; use sandbox list, create, set_default (or pass sandbox_id), then retry before reporting blocked",
     );
   }
 }

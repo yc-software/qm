@@ -777,7 +777,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
             if (action === "default") {
               if (input?.sandboxId === undefined) throw new Error("default requires sandbox_id or null");
               if (input.sandboxId !== null) await accessSandbox(input.sandboxId);
-              if (deps.botActor) throw new Error("a Slack bot's turn cannot change the default computer");
+              if (deps.botActor)
+                throw new Error("a Slack bot's turn cannot change the default computer; pass sandbox_id instead");
               await resources.setDefault(deps.createdBy, writableScopeId, input.sandboxId);
               deps.invalidateProvision?.();
               return { defaultSandboxId: input.sandboxId };
