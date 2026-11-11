@@ -156,7 +156,7 @@ export function finnySlackAuthority(
 export function createFinnyToolServiceFactory(deps: {
   config: Omit<FinnyIntegrationConfig, "signingSecret">;
   jobs: Pick<FinnyStore, "createJob" | "getJob">;
-  runtime: Pick<FinnyRuntimeStore, "currentBinding" | "claimParentTurn">;
+  runtime: Pick<FinnyRuntimeStore, "currentBinding" | "claimParentTurn"> & Partial<Pick<FinnyRuntimeStore, "claimWorkerTurn" | "bindingForSession">>;
   integration: FinnyIntegrationStore;
   deliveries: Pick<DeliveryStore, "enqueue">;
   coordinator: FinnyCoordinatorPort;
@@ -184,13 +184,30 @@ export function createFinnyToolServiceFactory(deps: {
         current.scopeId === turn.scopeId &&
         current.principalId === turn.actor.id &&
         current.runId !== turn.runId
-      )
+      ) {
         current = await deps.runtime.claimParentTurn({
           sessionId: turn.sessionId,
           runId: turn.runId,
           scopeId: turn.scopeId,
           principalId: turn.actor.id,
         });
+      } else if (!current && deps.runtime.bindingForSession && deps.runtime.claimWorkerTurn) {
+        const historical = await deps.runtime.bindingForSession(turn.sessionId);
+        if (
+          historical &&
+          historical.active &&
+          historical.scopeId === turn.scopeId &&
+          (historical.role === "producer" || historical.role === "auditor")
+        ) {
+          const ttl = deps.config.workerGrantTtlMs ?? 3_600_000;
+          current = await deps.runtime.claimWorkerTurn({
+            sessionId: turn.sessionId,
+            runId: turn.runId,
+            scopeId: turn.scopeId,
+            expiresAt: Date.now() + ttl,
+          });
+        }
+      }
       if (
         current &&
         (current.sessionId !== turn.sessionId ||

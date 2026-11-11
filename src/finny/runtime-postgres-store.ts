@@ -287,6 +287,20 @@ export function createPostgresFinnyRuntimeStore(connectionString: string) {
       );
       return rows[0] ? rowToBinding(rows[0]) : null;
     },
+    async claimWorkerTurn(input: {
+      sessionId: string;
+      runId: string;
+      scopeId: string;
+      expiresAt: number;
+    }): Promise<FinnyRuntimeBinding | null> {
+      const rows = await q(
+        `UPDATE finny_runtime_bindings SET run_id=$2, expires_at=$4
+         WHERE session_id=$1 AND scope_id=$3 AND role IN ('producer','auditor') AND active=TRUE
+         RETURNING *`,
+        [input.sessionId, input.runId, input.scopeId, input.expiresAt],
+      );
+      return rows[0] ? rowToBinding(rows[0]) : null;
+    },
     async advanceWorkerRun(input: {
       sessionId: string;
       expectedRunId: string;

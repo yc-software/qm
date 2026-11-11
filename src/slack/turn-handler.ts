@@ -265,9 +265,10 @@ export function createTurnHandler(deps: {
     };
 
     if (inc.kind === "dm") {
-      threadRef = dmThreadRef(inc.channel, inc.threadTs);
+      const root = inc.threadTs ?? inc.ts;
+      threadRef = dmThreadRef(inc.channel, root);
       if (deps.externalAccess) threadRef = `slack-account:${ids.ownTeamId}:${threadRef}`;
-      replyThreadTs = inc.threadTs;
+      replyThreadTs = root;
       if (!actor.isBot && !actor.isExternalGuest)
         deps.ensureHeader?.(client, inc.channel, `personal:${actor.externalId}`, "dm");
     } else {
