@@ -419,16 +419,11 @@ export function createPostgresUserStore(connectionString: string): UserStore {
     withPgTransaction(await pg.pool(), fn);
   const ensureUser = async (alias: string): Promise<string> =>
     (await findUser(q, alias)) ?? transaction((client) => ensureUserIn(client, alias));
+  const roster = async (where: string): Promise<UserRecord[]> =>
+    (await q(`SELECT ${COLUMNS} FROM users u WHERE ${where}`)).map(toRecord);
   return {
-    async list() {
-      const rows = await q(
-        `SELECT ${COLUMNS} FROM users u WHERE u.first_seen_at IS NOT NULL OR u.offboarded_at IS NOT NULL`,
-      );
-      return rows.map(toRecord);
-    },
-    async offboarded() {
-      return (await q(`SELECT ${COLUMNS} FROM users u WHERE u.offboarded_at IS NOT NULL`)).map(toRecord);
-    },
+    list: () => roster("u.first_seen_at IS NOT NULL OR u.offboarded_at IS NOT NULL"),
+    offboarded: () => roster("u.offboarded_at IS NOT NULL"),
     async get(idOrAlias) {
       const rows = await q(
         `SELECT ${COLUMNS} FROM users u WHERE u.id = ${userOf("$1")} OR u.id::text = lower($2)
