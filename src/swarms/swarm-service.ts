@@ -245,8 +245,8 @@ export function createSwarmService(deps: {
   authorize(claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "members">): Promise<boolean>;
   signals?: Pick<RunSignalStore, "send">;
   defaults?: SwarmSettings;
-  processes?: Pick<ProcessRegistry, "listLive" | "markStatus">;
-  stopProcess?: (job: ProcessRecord) => Promise<void>;
+  processes?: Pick<ProcessRegistry, "listLive">;
+  sweepProcesses?: () => Promise<unknown>;
 }): SwarmService {
   const { store, sessions, runs } = deps;
   const update = (auth: Authority, mutate: (swarm: Swarm) => void) => store.update(auth.rootId, mutate, auth.fence);
@@ -281,13 +281,7 @@ export function createSwarmService(deps: {
       ),
     );
     await Promise.all([...running].map((runId) => deps.signals?.send(runId, { kind: "abort", reason })));
-    const { processes, stopProcess } = deps;
-    if (!processes || !stopProcess) return;
-    const lost = await lostJobs(await processes.listLive(), new Map([...computers].map((id) => [id, swarm])));
-    for (const job of lost)
-      void stopProcess(job)
-        .then(() => processes.markStatus(job.processId, "reaped"))
-        .catch(swallowAs(`swarm: stop job ${job.processId} of a bot that lost the swarm`, false));
+    void deps.sweepProcesses?.().catch(swallowAs("swarm: sweep the jobs of a bot that lost the swarm", null));
   };
   const view = (member: SwarmMember): SwarmMember => ({
     ...member,

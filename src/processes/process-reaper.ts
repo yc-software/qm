@@ -57,6 +57,7 @@ export interface ProcessReaper {
   start(): void;
   stop(): Promise<void>;
   sweep(): Promise<{ reaped: number }>;
+  sweepNow(): Promise<{ reaped: number } | null>;
 }
 
 export interface ProcessReaperOptions {
@@ -104,10 +105,12 @@ export function createProcessReaper(registry: ProcessRegistry, opts: ProcessReap
     return { reaped };
   }
 
-  const sweeper = createSweeper(() => leaderLease.hold(PROCESS_REAPER_LEASE_KEY, sweep), opts.intervalMs);
+  const sweepNow = () => leaderLease.hold(PROCESS_REAPER_LEASE_KEY, sweep);
+  const sweeper = createSweeper(sweepNow, opts.intervalMs);
   return {
     start: () => sweeper.start(),
     stop: () => sweeper.stop(),
     sweep,
+    sweepNow,
   };
 }

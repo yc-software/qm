@@ -18,6 +18,7 @@ import type { Principal, TurnRequest } from "../src/types.ts";
 import type { ProcessSandbox } from "../src/sandbox/sandbox.ts";
 import { createPostgresProcessRegistry, type ProcessRegistry } from "../src/processes/process-registry.ts";
 import { createProcessReaper } from "../src/processes/process-reaper.ts";
+import { createPostgresLeaderLease } from "../src/persistence/leader-lease.ts";
 import { createMonitorStore, type MonitorStore } from "../src/monitors/monitor-store.ts";
 import { createMonitorPoller } from "../src/monitors/monitor-poller.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
@@ -32,9 +33,10 @@ import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
-import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
+import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap, testPgPool } from "./support/test-database.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 import { errMessage } from "../src/util/errors.ts";
+import { sleep } from "../src/util/async.ts";
 import { probedCommand } from "./support/probed-command.ts";
 
 const releaseBot: Principal = { id: "release-bot", type: "internal", displayName: "Release bot" };
@@ -290,16 +292,28 @@ test("a Slack bot that started a swarm cannot list or use its computers once a p
   assertKeptOut(observed);
 });
 
-test("a Slack bot that started a swarm cannot list or use its computers, and its jobs there stop, once a person's turn worked on them", async (t) => {
+test("a Slack bot that started a swarm cannot list or use its computers once a person's turn worked on them, and the process reaper stops each of its jobs there exactly once", async (t) => {
   const f = await botSwarm();
   const swarm = (await f.store.get(f.root.id))!;
   const worker = swarm.members.find((member) => member.id !== swarm.id)!;
   const processes = createPostgresProcessRegistry(testDatabaseUrl());
   const stopped: unknown[] = [];
+  const instances = [1, 2].map(() =>
+    createProcessReaper(processes, {
+      intervalMs: 60_000,
+      leaderLease: createPostgresLeaderLease(testPgPool()),
+      kill: async (job) => {
+        stopped.push([job.sandboxId, job.runId]);
+        await sleep(100);
+      },
+      claimOwed: () => service.claimOwedStops(),
+    }),
+  );
+  let swept: Promise<unknown> = Promise.resolve();
   const service = createSwarmService({
     ...f.serviceOptions,
     processes,
-    stopProcess: async (job) => void stopped.push([job.sandboxId, job.runId]),
+    sweepProcesses: () => (swept = Promise.all([swept, ...instances.map((reaper) => reaper.sweepNow())])),
   });
   const botRun = (await f.runs.list()).find((run) => run.sessionId === f.root.threadRef && run.request.botActor)!;
   await workerJob(f, processes, new Map(), "", botRun.id);
@@ -326,6 +340,7 @@ test("a Slack bot that started a swarm cannot list or use its computers, and its
   const observed = await channelTurn(f, releaseBot, true);
   t.diagnostic(`observed: ${JSON.stringify(observed)}`);
   assertKeptOut(observed);
+  await swept;
   assert.deepEqual(stopped, [[worker.sandboxId, botRun.id]]);
 });
 
@@ -417,7 +432,7 @@ test("a bot's turn loses the swarm computer it already opened and is told to sto
   let failed: unknown[] = [];
   const computers = jobComputers(async () => {
     lookupFailures = 1;
-    failed = [await personSend().then(() => "sent", errMessage), stopped.length];
+    failed = [await personSend().then(() => "sent", errMessage), await swept, stopped.length];
   });
   const f = await botSwarm(computers.backend);
   const ran = recordRuns(f);
@@ -435,11 +450,18 @@ test("a bot's turn loses the swarm computer it already opened and is told to sto
   };
   const signals = createPostgresRunSignalStore(testDatabaseUrl());
   const stopped: unknown[] = [];
+  const reaper = createProcessReaper(processes, {
+    ...singleProcessDeps(),
+    intervalMs: 60_000,
+    kill: async (job) => void stopped.push([job.sandboxId, job.runId]),
+    claimOwed: () => service.claimOwedStops(),
+  });
+  let swept: Promise<unknown> = Promise.resolve();
   const service = createSwarmService({
     ...f.serviceOptions,
     signals,
     processes,
-    stopProcess: async (job) => void stopped.push([job.sandboxId, job.runId]),
+    sweepProcesses: () => (swept = reaper.sweepNow()),
   });
   await workerJob(f, processes, computers.output, "alice's build\n");
   const thread = `slack:C1:${f.root.id}`;
@@ -485,14 +507,9 @@ test("a bot's turn loses the swarm computer it already opened and is told to sto
     ["cat board.md"],
   );
   assert.ok(String(observed.started).endsWith(refusedComputer), String(observed.started));
-  assert.deepEqual(failed, ["process registry unavailable", 0]);
+  assert.deepEqual(failed, ["sent", { reaped: 0 }, 0]);
   assert.deepEqual(observed.stops, ["abort"]);
-  await createProcessReaper(processes, {
-    ...singleProcessDeps(),
-    intervalMs: 60_000,
-    kill: async (job) => void stopped.push([job.sandboxId, job.runId]),
-    claimOwed: service.claimOwedStops,
-  }).sweep();
+  await reaper.sweepNow();
   assert.deepEqual(stopped, [[swarm.board!.sandboxId, queued.id]]);
   assert.equal((await processes.get(`c2-${f.root.id}`))?.status, "reaped");
   const launched = (await processes.listByScope(f.root.scopeId)).filter((job) => job.runId === queued.id);
