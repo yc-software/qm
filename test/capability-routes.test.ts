@@ -901,15 +901,19 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     assert.equal((await get("/v1/soul", { "x-agent-capability": await capChannel("U8") })).status, 200);
   });
 
-  it("a live bot QM knows as an app retains private-channel tools without a Slack user principal; a person does not", async () => {
+  it("a live bot QM knows as an app retains private-channel tools without a Slack user principal; others do not", async () => {
     await built.directory.replaceChannels(
       [{ channelId: "C", name: "eng", isPrivate: true }],
       ["admin-alice", "U1", "U2"].map((principalId) => ({ channelId: "C", principalId })),
     );
-    for (const botActor of [true, false]) {
-      const actorId = botActor ? "B-LEGACY" : "U8";
+    for (const [actorId, botActor] of [
+      ["B-LEGACY", true],
+      ["U8", false],
+      ["B-UNSEEN", undefined],
+    ] as const) {
       const conversation = { kind: "channel", threadRef: `ch:C:${actorId}`, channelRef: "C" } as const;
-      await built.app.turn({ surface: "test", actor: { externalId: actorId }, conversation, text: "hi", botActor });
+      if (botActor !== undefined)
+        await built.app.turn({ surface: "test", actor: { externalId: actorId }, conversation, text: "hi", botActor });
       const members = [{ id: actorId, type: "internal" as const }];
       const soul = async (extra: Partial<CapabilityClaims>) =>
         (await get("/v1/soul", { "x-agent-capability": await capChannel(actorId, { members, ...extra }) })).status;
