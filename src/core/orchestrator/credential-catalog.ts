@@ -85,7 +85,8 @@ export async function createCredentialCatalog(turn: CredentialCatalogTurn) {
       config: deps.config,
       isCurrentSharedScopeMember: deps.isCurrentSharedScopeMember,
     }));
-  const ownCredentialsAllowed = scopeId === personalScope(actor.id) || openSpeakerKeychain || openAutomationKeychain;
+  const ownCredentialsAllowed =
+    input.botActor !== true && (scopeId === personalScope(actor.id) || openSpeakerKeychain || openAutomationKeychain);
   const sharedScope =
     !external &&
     (scopeId !== personalScope(actor.id) ||

@@ -742,7 +742,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const appEdit = appEditTurnPolicy(editingApp !== null);
       const mcpToolsReady =
         !external && !appEdit && deps.mcp ? deps.mcp.toolDefsFor(actor.id, audienceScopeId, actAsActor) : undefined;
-      const useMemory = !external && input.skipMemory !== true;
+      const useMemory =
+        !external && input.skipMemory !== true && !(input.botActor && scopeId === personalScope(actor.id));
       const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);
       resolution.writableScopeId = environmentId;
       const personaTurn =
@@ -778,7 +779,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         audience: conversation.audience,
         acl: deps.acl,
         origin: authorizationOrigin,
-        trustedLiveHuman: liveAuthorTurn,
+        trustedLiveHuman: liveAuthorTurn && input.botActor !== true,
         targetScope: scopeId,
         ...(audienceScopeId ? { audienceScopeId } : {}),
         config: deps.config,

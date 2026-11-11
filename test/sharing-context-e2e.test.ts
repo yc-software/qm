@@ -134,10 +134,9 @@ test("sharing e2e: personal files and memories follow the speaker, opt-out, and 
   assert.doesNotMatch(await b.turn("!memorysearch OWN_MEMORY", true), /OWN_MEMORY_U1/);
   await b.config.clearSharingPosture("personal:U1");
   assert.equal(await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true), "NEW_PRIVATE_PAYLOAD");
-  assert.match(
-    await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true, "U1", { origin: { kind: "automation" } }),
-    /no file/,
-  );
+  for (const extra of [{ origin: { kind: "automation" } }, { botActor: true }] as const)
+    assert.match(await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true, "U1", extra), /no file/);
+  assert.doesNotMatch(await b.turn("!sysprompt", false, "U1", { botActor: true }), /OWN_MEMORY_U1/);
 });
 
 test("sharing e2e: a delegated turn shares its live parent's access under current sharing permission", async (t) => {
@@ -559,9 +558,10 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
     "clean",
   );
   let deniedTurn = 0;
-  const denied = (origin: TurnRequest["origin"] = { kind: "human" }) =>
+  const denied = (origin: TurnRequest["origin"] = { kind: "human" }, botActor = false) =>
     b.failure(onScratch("true"), true, "U1", {
       origin,
+      botActor,
       conversation: {
         kind: "channel",
         channelRef: "C1",
@@ -585,6 +585,9 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
   assert.match(await denied({ kind: "automation" }), /credential handle is not available on this turn/);
   assert.match(await denied({ kind: "ambient" }), /credential handle is not available on this turn/);
   assert.match(await denied({ kind: "ambient", live: false }), /credential handle is not available on this turn/);
+  for (const origin of [{ kind: "human" }, { kind: "automation", useOwnerKeychain: true }] as const)
+    assert.match(await denied(origin, true), /credential handle is not available on this turn/);
+  assert.match(await b.failure(onScratch("true"), false, "U1", { botActor: true }), /handle is not available/);
   const firstTurn = (channelRef: string, origin: TurnRequest["origin"] = { kind: "human" }) =>
     b.turn(selected(), true, "U1", {
       origin,
