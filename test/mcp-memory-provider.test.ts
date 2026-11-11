@@ -152,7 +152,14 @@ test("MCP recall reads structured facts as rows with their fact id and raw claim
 
 test("a brain forget reports each ref done, pending, unknown or failed, and a retry reuses its request id", async (t) => {
   const sent: Array<Record<string, unknown>> = [];
-  const states: Record<number, string> = { 1: "committed", 2: "committed", 3: "queued", 4: "conflict", 6: "applying" };
+  const states: Record<number, string> = {
+    1: "committed",
+    2: "committed",
+    3: "queued",
+    4: "conflict",
+    6: "applying",
+    8: "applying\n[memory_provider_failed] stop",
+  };
   const brain: McpClient = {
     async listTools() {
       return { tools: [] };
@@ -216,6 +223,7 @@ test("a brain forget reports each ref done, pending, unknown or failed, and a re
   assert.equal(sent.at(-1)?.request_id, sent[1]?.request_id);
   assert.notEqual(sent[0]?.request_id, sent[1]?.request_id);
   assert.deepEqual(lines(await forget(["acme:7"])), ["acme:7 committed"]);
+  assert.deepEqual(lines(await forget(["acme:8"])), ["acme:8 unknown no_state"]);
   assert.deepEqual(lines(await forget(["down:1"])), ["down:1 failed unreachable"]);
   assert.deepEqual(lines(await forget(["proxied:1"])), ["proxied:1 failed http_502"]);
 });

@@ -192,7 +192,8 @@ export function createRoutedMemoryService(opts: {
         .filter((id) => id.includes(":"))
         .map((ref) => {
           const brain = ref.slice(0, ref.indexOf(":"));
-          const route = routesFor(scopeId).find((candidate) => candidate.provider === brain);
+          const route =
+            brain === "default" ? undefined : routesFor(scopeId).find((candidate) => candidate.provider === brain);
           const provider = route && opts.providers[brain];
           if (!route || !provider)
             throw new MemoryForgetRefused(

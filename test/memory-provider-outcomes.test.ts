@@ -12,6 +12,7 @@ import { searchNotebooks } from "../src/memory/cross-scope.ts";
 import { createMcpClient, McpCallError } from "../src/mcp/mcp-client.ts";
 import { createMcpMemoryProvider } from "../src/memory/mcp-memory-provider.ts";
 import { recallText } from "./support/recall-text.ts";
+import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 
 const notebook: MemoryService = {
   async recall() {
@@ -387,6 +388,7 @@ test("explicit writes record committed, pending and unknown with a stable UUID i
       if (args.content === "slow") await gate;
       if (args.content === "unlinked") return { content: [], structuredContent: { code: "actor_unlinked" } };
       if (args.content === "broken") return { isError: true, content: [{ type: "text", text: "database offline" }] };
+      if (args.content === "rejected") throw new McpError(ErrorCode.InvalidParams, "content must be a string");
       return args.content === "queued"
         ? { content: [], structuredContent: { status: "pending" } }
         : { content: [{ type: "text", text: JSON.stringify({ status: "pending" }) }] };
@@ -414,6 +416,7 @@ test("explicit writes record committed, pending and unknown with a stable UUID i
   await settled(mcp, 7);
   const refused = await write(["unlinked"], "run-1");
   const broken = await write(["broken"], "run-1");
+  const rejected = await write(["rejected"], "run-1");
 
   assert.deepEqual(external(committed.outcomes), [{ outcome: "committed", code: undefined }]);
   assert.deepEqual(external(repeated.outcomes), [{ outcome: "committed", code: undefined }]);
@@ -428,6 +431,7 @@ test("explicit writes record committed, pending and unknown with a stable UUID i
   assert.deepEqual(committed.problems, []);
   assert.deepEqual(external(refused.outcomes), [{ outcome: "denied", code: "actor_unlinked" }]);
   assert.deepEqual(external(broken.outcomes), [{ outcome: "failed", code: undefined }]);
+  assert.deepEqual(external(rejected.outcomes), [{ outcome: "failed", code: undefined }]);
   assert.match(refused.problems[0]?.detail ?? "", /refused the request \(actor_unlinked\), so it stored nothing/);
   assert.match(refused.problems[0]?.fix ?? "", /Link this member's QM principal id to their member in knowledge/);
 

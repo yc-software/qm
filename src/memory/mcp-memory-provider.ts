@@ -1,5 +1,5 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { McpCallError, mcpEnvelope, mcpResultText, type McpClient } from "../mcp/mcp-client.ts";
+import { McpCallError, mcpEnvelope, mcpResultText, providerCode, type McpClient } from "../mcp/mcp-client.ts";
 import { TimeoutError, withTimeout } from "../util/async.ts";
 import { attestedPerson, OutsideAudience, ownPrivateConversation } from "../directory/person.ts";
 import { MemoryRecallWithheld } from "./disclosure.ts";
@@ -210,7 +210,7 @@ export function createMcpMemoryProvider(opts: {
                   code: state,
                 });
               if (typeof state !== "string" || !PENDING_STATES.has(state))
-                throw new MemoryWriteUnconfirmed(typeof state === "string" ? state : "no_state", resultText(result));
+                throw new MemoryWriteUnconfirmed(providerCode(state) ?? "no_state", resultText(result));
               reportEnvelope({ status: "pending", code: state });
             }
           },
