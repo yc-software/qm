@@ -4,6 +4,7 @@ import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { createNotebookMemory, type FactStoreTx, type MemoryService } from "./memory-service.ts";
 import { isMemorySensitivity, type MemoryFact } from "./facts.ts";
 import { tenantTables } from "../tenants/migrations.ts";
+import { ambientTenant, type Tenant } from "../tenants/context.ts";
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS memory_facts(
@@ -67,21 +68,78 @@ type Row = Record<string, unknown>;
 
 function fact(row: Row): MemoryFact {
   const sensitivity = row.sensitivity;
-  return {
+  return Object.freeze({
     id: String(row.id),
     text: String(row.text),
     sensitivity: isMemorySensitivity(sensitivity) ? sensitivity : "unknown",
-    sources: (row.sources as string[] | null) ?? [],
+    sources: Object.freeze((row.sources as string[] | null) ?? []),
     sourceUnknown: row.source_unknown === true,
     ...(row.author ? { author: String(row.author) } : {}),
     ...(row.session_id ? { sessionId: String(row.session_id) } : {}),
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
-  };
+  });
 }
 
 const LIVE = `SELECT id, text, sensitivity, sources, source_unknown, author, session_id, created_at, updated_at
   FROM memory_facts WHERE scope_id = $1 AND deleted_at IS NULL ORDER BY id`;
+
+const ROW_HASH = `hashtextextended(concat_ws(chr(31), text_hash, sensitivity, array_to_string(sources, chr(30)),
+  source_unknown, COALESCE(author, chr(29)), COALESCE(session_id, chr(29)), created_at, updated_at), id)`;
+const LIVE_IN_TENANT = `FROM memory_facts WHERE tenant_id = $1 AND scope_id = $2 AND deleted_at IS NULL`;
+const MARK = `SELECT count(*) || ':' || COALESCE(sum(${ROW_HASH}), 0) AS mark ${LIVE_IN_TENANT}`;
+const HASHED = `SELECT id, text, sensitivity, sources, source_unknown, author, session_id, created_at, updated_at,
+  ${ROW_HASH} AS row_hash ${LIVE_IN_TENANT} ORDER BY id`;
+const CACHED_FACTS_MAX = 200_000;
+
+interface CachedNotebook {
+  mark: string;
+  facts: readonly MemoryFact[];
+}
+
+function createNotebookCache(load: (tenant: Tenant, scopeId: ScopeId) => Promise<Row[]>, mark: typeof load) {
+  const entries = new Map<string, CachedNotebook>();
+  const loads = new Map<string, Promise<CachedNotebook>>();
+  let size = 0;
+  function remember(key: string, entry: CachedNotebook): void {
+    const old = entries.get(key);
+    if (old) size -= old.facts.length;
+    entries.delete(key);
+    entries.set(key, entry);
+    size += entry.facts.length;
+    for (const [oldest, { facts }] of entries) {
+      if (size <= CACHED_FACTS_MAX) break;
+      entries.delete(oldest);
+      size -= facts.length;
+    }
+  }
+  async function fetch(tenant: Tenant, scopeId: ScopeId): Promise<CachedNotebook> {
+    const rows = await load(tenant, scopeId);
+    const sum = rows.reduce((total, row) => total + BigInt(String(row.row_hash)), 0n);
+    return { mark: `${rows.length}:${sum}`, facts: Object.freeze(rows.map(fact)) };
+  }
+  return async (scopeId: ScopeId): Promise<readonly MemoryFact[]> => {
+    const tenant = ambientTenant();
+    const key = JSON.stringify([tenant.id, scopeId]);
+    const cached = entries.get(key);
+    const current = cached ? String((await mark(tenant, scopeId))[0]?.mark) : "";
+    if (cached?.mark === current) {
+      remember(key, cached);
+      return cached.facts;
+    }
+    const loadKey = `${key}${current}`;
+    let pending = loads.get(loadKey);
+    if (!pending) {
+      pending = fetch(tenant, scopeId).finally(() => loads.delete(loadKey));
+      loads.set(loadKey, pending);
+      void pending.then(
+        (entry) => remember(key, entry),
+        () => {},
+      );
+    }
+    return (await pending).facts;
+  };
+}
 
 export const MEMORY_FACTS_MIGRATIONS = [
   {
@@ -113,7 +171,11 @@ export const MEMORY_FACTS_MIGRATIONS = [
 ];
 
 export function createPostgresMemoryService(connectionString: string): MemoryService {
-  const { q, pool } = createPgPool(connectionString, MEMORY_FACTS_MIGRATIONS);
+  const { q, pool, forTenant } = createPgPool(connectionString, MEMORY_FACTS_MIGRATIONS);
+  const list = createNotebookCache(
+    (tenant, scopeId) => forTenant(tenant).q(HASHED, [tenant.id, scopeId]),
+    (tenant, scopeId) => forTenant(tenant).q(MARK, [tenant.id, scopeId]),
+  );
 
   function tx(client: PoolClient, scopeId: ScopeId): FactStoreTx {
     return {
@@ -161,7 +223,7 @@ export function createPostgresMemoryService(connectionString: string): MemorySer
   }
 
   return createNotebookMemory({
-    list: async (scopeId) => (await q(LIVE, [scopeId])).map(fact),
+    list,
     transact: async (scopeId, fn) =>
       withPgTransaction(await pool(), async (client) => {
         await client.query("SELECT pg_advisory_xact_lock(hashtext('memory'), hashtext($1))", [scopeId]);

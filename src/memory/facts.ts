@@ -6,7 +6,7 @@ export type MemorySensitivity = "ordinary" | "unknown" | "sensitive" | "restrict
 
 export interface MemoryProvenance {
   sensitivity: MemorySensitivity;
-  sources: ScopeId[];
+  readonly sources: readonly ScopeId[];
   sourceUnknown: boolean;
 }
 

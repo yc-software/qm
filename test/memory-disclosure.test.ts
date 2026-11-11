@@ -159,7 +159,8 @@ test("empty audience and authorization lookup failures fail closed", async () =>
 test("source authorization requires every source, not merely the notebook owner", async () => {
   const f = fixture();
   f.put("personal:alice", "MERGED_SENTINEL", "ordinary");
-  f.notebooks.get("personal:alice")![0]!.sources.push("group:source");
+  const notebook = f.notebooks.get("personal:alice")!;
+  notebook[0] = { ...notebook[0]!, sources: [...notebook[0]!.sources, "group:source"] };
   assert.equal(await disclosedMemory(f.raw, f.access).read("personal:alice"), "");
 });
 

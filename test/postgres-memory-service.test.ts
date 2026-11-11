@@ -4,6 +4,7 @@ import { createPostgresMemoryService } from "../src/memory/postgres-memory-servi
 import { MemoryFactsMissing } from "../src/memory/facts.ts";
 import { scopeId } from "../src/types.ts";
 import { recallAcrossScopes, searchAcrossScopes } from "../src/memory/cross-scope.ts";
+import { withTenant } from "../src/tenants/context.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres memory tests";
@@ -142,4 +143,47 @@ test("pg memory: the capturing session is stored and that session never gets the
   assert.deepEqual(await recalled("T"), ["- (2026-05-31) Prefers terse replies", "- (2026-05-31) Owns billing"]);
   assert.deepEqual(await searchAcrossScopes(memory, [sid], "billing", 20, { sessionId: "S" }), []);
   assert.equal((await searchAcrossScopes(memory, [sid], "billing", 20, { sessionId: "T" })).length, 1);
+});
+
+test("pg memory: a write through one instance is visible to the next read on another", { skip }, async () => {
+  const writer = createPostgresMemoryService(URL!);
+  const reader = createPostgresMemoryService(URL!);
+  const sid = scopeId("personal", "U1");
+  const seen = async () =>
+    (await reader.facts!(sid)).map(({ text, sensitivity, sources }) => `${text}|${sensitivity}|${sources.join()}`);
+  assert.deepEqual(await seen(), []);
+  await writer.capture(sid, ["Owns billing"], at, { actorId: "U1", context: "self" });
+  assert.deepEqual(await seen(), ["Owns billing|unknown|personal:U1"]);
+  await writer.capture(
+    sid,
+    ["Owns billing"],
+    at,
+    { actorId: "U1", context: "self" },
+    {
+      mode: "explicit",
+      sensitivity: "sensitive",
+      conversationScopeId: scopeId("channel", "C1"),
+    },
+  );
+  const [merged] = await seen();
+  assert.notEqual(merged, "Owns billing|unknown|personal:U1");
+  const [fact] = await reader.facts!(sid);
+  await writer.edit!(sid, [{ id: fact!.id, text: "Owns billinG" }]);
+  assert.match((await seen())[0]!, /^Owns billinG\|/);
+  await writer.delete!(sid, [fact!.id]);
+  assert.deepEqual(await seen(), []);
+});
+
+test("pg memory: the same scope id in two tenants never shares a notebook", { skip }, async () => {
+  const other = "00000000-0000-4000-8000-000000000002";
+  await sql("INSERT INTO tenants(id) VALUES ($1) ON CONFLICT (id) DO NOTHING", [other]);
+  const memory = createPostgresMemoryService(URL!);
+  const sid = scopeId("personal", "U1");
+  const texts = async () => (await memory.facts!(sid)).map((fact) => fact.text);
+  await memory.capture(sid, ["Home tenant fact"], at);
+  assert.deepEqual(await texts(), ["Home tenant fact"]);
+  assert.deepEqual(await withTenant(other, texts), []);
+  await withTenant(other, () => memory.capture(sid, ["Other tenant fact"], at));
+  assert.deepEqual(await withTenant(other, texts), ["Other tenant fact"]);
+  assert.deepEqual(await texts(), ["Home tenant fact"]);
 });

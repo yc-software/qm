@@ -81,7 +81,7 @@ export interface MemoryService {
   ): Promise<number>;
   query(scopeId: ScopeId, q: string, limit?: number, context?: MemoryRecallContext): Promise<MemoryCandidate[]>;
   read(scopeId: ScopeId): Promise<string>;
-  facts?(scopeId: ScopeId): Promise<MemoryFact[]>;
+  facts?(scopeId: ScopeId): Promise<readonly MemoryFact[]>;
   edit?(scopeId: ScopeId, edits: MemoryEdit[], by?: MemoryAuthority, context?: MemoryCaptureMetadata): Promise<void>;
   delete?(scopeId: ScopeId, ids: string[], by?: MemoryAuthority): Promise<void>;
   metadata?(): Promise<Map<ScopeId, { bytes: number; updatedAt?: number }>>;
@@ -147,7 +147,7 @@ export interface FactStoreTx {
 }
 
 export interface FactStore {
-  list(scopeId: ScopeId): Promise<MemoryFact[]>;
+  list(scopeId: ScopeId): Promise<readonly MemoryFact[]>;
   transact<T>(scopeId: ScopeId, fn: (tx: FactStoreTx) => Promise<T>): Promise<T>;
   metadata?(): Promise<Map<ScopeId, { bytes: number; updatedAt?: number }>>;
 }

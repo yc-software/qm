@@ -3,7 +3,7 @@ import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { reportFailure } from "../util/errors.ts";
 import type { MemoryVectorStore } from "./postgres-vector-store.ts";
 import { inTenant, type ClaimedRow } from "../tenants/claim.ts";
-import { currentTenant } from "../tenants/context.ts";
+import type { Tenant } from "../tenants/context.ts";
 
 type IndexStore = Pick<MemoryVectorStore, "missing" | "put" | "prune">;
 interface IndexState {
@@ -26,14 +26,13 @@ export function createMemoryVectorIndexer(opts: {
   let active: AbortController | undefined;
   const states = new Map<string, IndexState>();
   let rotation = 0;
-  async function index(signal: AbortSignal): Promise<void> {
+  async function index(tenant: Tenant, signal: AbortSignal): Promise<void> {
     const current = await opts.resolve();
     if (!current) return;
     signal.throwIfAborted();
     const { embedder, store } = current;
-    const tenant = currentTenant();
-    const state = states.get(tenant) ?? { nextProbeAt: 0 };
-    states.set(tenant, state);
+    const state = states.get(tenant.id) ?? { nextProbeAt: 0 };
+    states.set(tenant.id, state);
     const now = clock();
     if (state.model !== embedder.id || state.dimensions === undefined || now >= state.nextProbeAt) {
       const probe = await embedder.embed(["Memory index dimension probe."], signal);
@@ -85,7 +84,7 @@ export function createMemoryVectorIndexer(opts: {
       for (const { tenantId } of [...claimed.slice(start), ...claimed.slice(0, start)]) {
         if (controller.signal.aborted) return;
         const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]);
-        await inTenant(tenantId, () => index(signal)).catch((e: unknown) =>
+        await inTenant(tenantId, (tenant) => index(tenant, signal)).catch((e: unknown) =>
           onError(new Error(`tenant ${tenantId}`, { cause: e })),
         );
       }
