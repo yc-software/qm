@@ -953,25 +953,16 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
       cleanUrlRedirect();
       return true;
     }
-    const shellAccess = async () =>
-      deployment && sub
-        ? appShellAccess({
-            ownerScopeId: deployment.ownerScopeId,
-            public: isPublic,
-            grantees: await app.deploymentGrantees(deployment.id),
-            viewer: sub,
-          })
-        : undefined;
     if (isShellRequest) {
       if (pathname === "/__claw__/version" && deployment) {
-        const [draft, access] = await Promise.all([
+        const [draft, grantees] = await Promise.all([
           app.deploymentLiveEdit(deployment.id).then((edit) => edit?.draft),
-          shellAccess(),
+          app.deploymentGrantees(deployment.id),
         ]);
         sendJson(res, 200, {
           version: deployment.appliedVersion ?? deployment.currentVersion,
           ...(draft ? { live: draft.reloads } : {}),
-          ...(access ? { access } : {}),
+          access: appShellAccess({ ownerScopeId: deployment.ownerScopeId, public: isPublic, grantees, viewer: sub! }),
         });
       } else if (
         annotationsEnabled &&
@@ -997,7 +988,6 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
         portalUrl: loginUrl,
         path: safePathname + url.search,
         ...(deployment ? { deploymentId: deployment.id } : {}),
-        access: await shellAccess(),
       }),
     );
     return true;

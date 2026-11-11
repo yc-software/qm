@@ -469,22 +469,20 @@ test("app shell: annotations default off and follow the signed-in manager flag",
   }
 });
 
-test("app shell: the top bar shows who can open the app and follows sharing changes", async () => {
+test("app shell: the version poll tells the top bar who can open the app", async () => {
   const f = await widgetFixture();
   try {
     const headers = { Host: HOST, Cookie: `portal_session=${mintPortalSession("U1")}` };
-    const page = await httpGet(f.port, "/", { ...headers, "Sec-Fetch-Dest": "document" });
-    const initial = JSON.parse(page.body.match(/let access = (\{.*?\});/)?.[1] ?? "null");
+    const before = JSON.parse((await httpGet(f.port, "/__claw__/version", headers)).body).access;
     assert.deepEqual(
-      { level: initial.level, label: initial.label, canEdit: initial.canEdit },
+      { level: before.level, label: before.label, canEdit: before.canEdit },
       { level: "context", label: "Shared", canEdit: true },
       "the fixture app is shared with a viewer and the channel it was built in",
     );
-    assert.match(page.body, new RegExp(`const deploymentId = "${f.d.id}"`), "the share dialog targets this app");
     await f.app.shareDeployment(f.d.id, "org", "read", { createdBy: "U1" });
-    const version = JSON.parse((await httpGet(f.port, "/__claw__/version", headers)).body);
-    assert.equal(version.access.level, "org", "the version poll carries the new access so the bar updates");
-    assert.equal(version.access.label, "Organization");
+    const after = JSON.parse((await httpGet(f.port, "/__claw__/version", headers)).body).access;
+    assert.equal(after.level, "org", "a sharing change shows up on the next poll");
+    assert.equal(after.label, "Organization");
   } finally {
     await f.close();
   }

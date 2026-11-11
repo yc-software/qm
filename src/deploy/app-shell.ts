@@ -70,7 +70,6 @@ export function appShellHtml(opts: {
   path: string;
   annotationsEnabled?: boolean;
   deploymentId?: string;
-  access?: AppShellAccess;
 }): string {
   const slug = escAttr(opts.slug);
   const path = escAttr(opts.path);
@@ -195,7 +194,7 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
     org: '<rect x="4" y="3" width="12" height="14" rx="1"/><path d="M8 17v-3h4v3M8 6.5h.01M12 6.5h.01M8 10h.01M12 10h.01"/>',
     public: '<circle cx="10" cy="10" r="7"/><path d="M3 10h14M10 3c2 2 2.8 4.4 2.8 7S12 15 10 17c-2-2-2.8-4.4-2.8-7S8 5 10 3Z"/>',
   };
-  let access = ${JSON.stringify(opts.access ?? null).replace(/</g, "\\u003c")};
+  let access = null;
   const showAccess = (next) => {
     if (!next || !accessIcons[next.level]) return;
     access = next;
@@ -209,7 +208,6 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
     text.textContent = next.label;
     accessBtn.append(text);
   };
-  showAccess(access);
   const shareUrl = portal + "/app-share?id=" + encodeURIComponent(deploymentId) + "&slug=" + encodeURIComponent(slug) + "&embed=1";
   const closeShare = () => {
     share.classList.remove("open");

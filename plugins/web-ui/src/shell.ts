@@ -1055,10 +1055,9 @@ async function bootAppShare(params: URLSearchParams): Promise<void> {
   document.documentElement.classList.add("app-share-embed");
   const done = () => tellEmbedder({ type: "qm:app-share-closed" });
   const id = params.get("id") ?? "";
-  const r = await webFetch(withBase("/me")).catch(() => null);
-  if (!r?.ok || !id) {
-    if (r?.status === 401) renderAuthGate(gateFor("portal"));
-    else done();
+  const r = await webFetch(withBase("/me"));
+  if (!r.ok || !id) {
+    renderAuthGate(r.status === 401 ? gateFor("portal") : { kind: "unreachable" });
     return;
   }
   appState.me = (await r.json()) as Me;
