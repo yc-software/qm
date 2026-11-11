@@ -1370,7 +1370,7 @@ test("the sessions listing digests cron fires from the fire table, even after th
     const row = listed.sessions.find((x: any) => x.id === session.id);
     assert.equal(row?.result, "42 signups today", "the digest is read from the cron_fires table by thread ref");
 
-    await s.built.app.deleteCron(cron.id);
+    await s.built.app.deleteCron(cron.id, { actorId: cron.owner });
     const relisted = await getJson(s.base, "/v1/admin/sessions?scope=org:default-org&category=background");
     const survivor = relisted.sessions.find((x: any) => x.id === session.id);
     assert.equal(survivor?.result, "42 signups today", "fire digests outlive their cron");

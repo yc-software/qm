@@ -556,7 +556,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         Object.assign(patch, await cronTaskRewrite(app, before, capability.actorId, personAtKeyboard(capability)));
       if (!cronPatchChanges(before, patch)) return { ok: true, cron: before };
       try {
-        const cron = await app.updateCron(id, patch, trial);
+        const cron = await app.updateCron(id, patch, capability, trial);
         if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
         const changeSummary: string[] = [];
         if (req.runtime !== undefined) changeSummary.push("runtime");
@@ -618,11 +618,15 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       }
       const ownFire = capability.threadRef?.startsWith(`cron:${id}:fire:`) === true;
       const fireEntry = ownFire ? await app.latestCronFireForThread(id, capability.threadRef!) : undefined;
-      const outcome = await app.setCronFireNote(id, {
-        text: flattened,
-        at: fireEntry?.firedAt ?? Date.now(),
-        ...(ownFire ? {} : { by: capability.actorId }),
-      });
+      const outcome = await app.setCronFireNote(
+        id,
+        {
+          text: flattened,
+          at: fireEntry?.firedAt ?? Date.now(),
+          ...(ownFire ? {} : { by: capability.actorId }),
+        },
+        capability,
+      );
       if (outcome === "missing") return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (outcome === "applied" && !ownFire) await notifyEdit(cron, capability, ["note"]);
       return { ok: true, applied: outcome === "applied" };
@@ -633,7 +637,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, cron, capability)))
         return { ok: false, code: "forbidden", message: "not your cron" };
-      await app.deleteCron(id);
+      await app.deleteCron(id, capability);
       await notifyEdit(cron, capability, ["deleted"]);
       return { ok: true };
     },
@@ -689,7 +693,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         };
       }
       if (isDeepStrictEqual(cron.destination, resolved.destination)) return { ok: true, cron };
-      const updated = await app.setCronDestination(id, resolved.destination);
+      const updated = await app.setCronDestination(id, resolved.destination, capability);
       const destLabel = capability.destinations?.find((d) => d.key === destinationKey)?.label;
       await notifyEdit(cron, capability, ["destination"], destLabel ? { destinationLabel: destLabel } : undefined);
       return { ok: true, cron: updated ?? cron };
