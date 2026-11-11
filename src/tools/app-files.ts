@@ -1,9 +1,16 @@
-import type { DeployService, DeploymentSource, SourceEdit, SourceSaved } from "../deploy/deploy-service.ts";
+import type {
+  AppSourceReader,
+  DeployService,
+  DeploymentSource,
+  SourceEdit,
+  SourceSaved,
+} from "../deploy/deploy-service.ts";
 import type { ScopeId } from "../types.ts";
 
 export interface AppFiles {
   readonly app: string;
-  source(paths?: string[]): Promise<DeploymentSource>;
+  sourceReader(): Promise<AppSourceReader | undefined>;
+  source(paths?: string[], commit?: string): Promise<DeploymentSource>;
   save(edit: (read: (paths: string[]) => Promise<DeploymentSource>) => Promise<SourceEdit>): Promise<SourceSaved>;
 }
 
@@ -15,18 +22,25 @@ export function createAppFiles(deps: {
   actingScopeId: ScopeId;
 }): AppFiles {
   const { deploy, app } = deps;
+  const caller = { actorId: deps.actorId, botActor: deps.botActor };
+  const canManage = () => deploy.canManageDeployment(app, caller, deps.actingScopeId);
   const assertMayEdit = async (): Promise<void> => {
-    const caller = { actorId: deps.actorId, botActor: deps.botActor };
-    if (!(await deploy.canManageDeployment(app, caller, deps.actingScopeId)))
+    if (!(await canManage()))
       throw new Error(`you need write access to the app ${JSON.stringify(app)} to read or change its files`);
+  };
+  const source: AppFiles["source"] = async (paths, commit) => {
+    const saved = await deploy.source(app, paths, commit);
+    if (!saved) throw new Error(`${app} has no saved source; publish it again first`);
+    return saved;
   };
   return {
     app,
-    async source(paths) {
+    async sourceReader() {
+      return (await deploy.sourceReader(app, caller, deps.actingScopeId)) ?? undefined;
+    },
+    async source(paths, commit) {
       await assertMayEdit();
-      const source = await deploy.source(app, paths);
-      if (!source) throw new Error(`${app} has no saved source; publish it again first`);
-      return source;
+      return source(paths, commit);
     },
     async save(edit) {
       await assertMayEdit();

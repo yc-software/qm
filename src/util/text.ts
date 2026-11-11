@@ -49,6 +49,14 @@ export function untrustedText(value: string): string {
     .replaceAll("</", "<\\/");
 }
 
+export function tryDecodeUtf8(bytes: Uint8Array): string | null {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
 export function flatText(value: string): string {
   return value.replace(/[\s\u0085]+/g, " ").trim();
 }
