@@ -98,6 +98,11 @@ export interface DeployOrUpdateInput {
   embedAncestors?: string[];
 }
 
+export interface DeploymentActor {
+  createdBy: string;
+  botActor?: boolean;
+}
+
 export interface ReachOptions {
   bypassAcl?: boolean;
 }
@@ -116,7 +121,7 @@ export interface DeployService {
   setDeploymentDisplayName(id: string, displayName: string): Promise<Deployment>;
   setDeploymentAlwaysOn(id: string, alwaysOn: boolean): Promise<Deployment>;
   setDeploymentEmbedAncestors(id: string, embedAncestors: string[]): Promise<Deployment>;
-  setDeploymentPublic(idOrName: string, isPublic: boolean, actor: { createdBy: string }): Promise<Deployment>;
+  setDeploymentPublic(idOrName: string, isPublic: boolean, actor: DeploymentActor): Promise<Deployment>;
   setDeploymentConnectors(idOrName: string, connectors: string[], actor: { createdBy: string }): Promise<Deployment>;
 
   maintainDeployments(): Promise<number>;
@@ -144,9 +149,10 @@ export interface DeployService {
     idOrName: string,
     grantee: ScopeId,
     permission: Permission | null,
-    actor: { createdBy: string },
+    actor: DeploymentActor,
     opts?: { notify?: boolean },
   ): Promise<DeploymentGrantee[]>;
+  assertDeploymentOwner(d: Deployment, actor: DeploymentActor): Promise<void>;
   assertShareAllowed(ownerScopeId: ScopeId, grantee: ScopeId, permission: Permission | null): Promise<void>;
   transferDeploymentOwner(
     idOrName: string,
@@ -704,9 +710,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     async setDeploymentPublic(idOrName, isPublic, actor) {
       const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
       if (!d) throw new DeployAccessError("not_found", `no such app: ${idOrName}`);
-      if (d.ownerScopeId !== scopeId("personal", actor.createdBy)) {
-        throw new DeployAccessError("forbidden", `only the owner can change who can reach "${d.name ?? d.id}"`);
-      }
+      await this.assertDeploymentOwner(d, actor);
       if (isPublic && !(await externalSharingAllowed(d.ownerScopeId)))
         throw new DeployAccessError("external_sharing_disabled", EXTERNAL_APP_SHARING_OFF);
       if (isPublic && deps.publicLinksAvailable === false)
@@ -930,6 +934,8 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         if (existing.ownerScopeId !== ownerScopeId && !(await canManage(existing, caller, input.createdInScope))) {
           throw new Error(`deployment name taken: ${input.name}`);
         }
+        if (!(await personOrOwningBot(caller, async () => samePerson(existing.createdBy, caller.actorId))))
+          throw new Error(`not authorized to manage deployment: ${input.name}`);
         const entrypoint = requiredEntrypoint(input.entrypoint, existing);
         const { liveEdit } = await this.redeploy(existing.id, {
           actor: createdBy,
@@ -960,6 +966,15 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       return (await deps.deployStore.get(d.id))!;
     },
 
+    async assertDeploymentOwner(d, actor) {
+      const caller = { actorId: actor.createdBy, botActor: actor.botActor };
+      if (
+        d.ownerScopeId !== scopeId("personal", actor.createdBy) ||
+        !(await personOrOwningBot(caller, async () => samePerson(d.createdBy, actor.createdBy)))
+      )
+        throw new DeployAccessError("forbidden", `only the owner can change who can reach "${d.name ?? d.id}"`);
+    },
+
     async canManageDeployment(idOrName, caller, actingScopeId) {
       const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
       if (!d) return false;
@@ -975,9 +990,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     async shareDeployment(idOrName, grantee, permission, actor, opts) {
       const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
       if (!d) throw new DeployAccessError("not_found", `no such app: ${idOrName}`);
-      if (d.ownerScopeId !== scopeId("personal", actor.createdBy)) {
-        throw new DeployAccessError("forbidden", `only the owner can change who can reach "${d.name ?? d.id}"`);
-      }
+      await this.assertDeploymentOwner(d, actor);
       grantee = await deploymentShareScope(grantee, permission, deps.canManageEmail);
       await assertShareAllowed(d.ownerScopeId, grantee, permission);
       const ref = deploymentRef(d.id);

@@ -1135,7 +1135,10 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     },
 
     async setDeploymentPublic(id: string, isPublic: boolean) {
-      const d = await deps.deploy.setDeploymentPublic(id, isPublic, { createdBy: deps.createdBy });
+      const d = await deps.deploy.setDeploymentPublic(id, isPublic, {
+        createdBy: deps.createdBy,
+        botActor: deps.botActor,
+      });
       return { id: d.id, ...(d.name ? { name: d.name } : {}), public: d.public === true };
     },
 

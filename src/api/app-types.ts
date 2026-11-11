@@ -98,6 +98,7 @@ import type {
   Reach,
   ReachOptions,
   DeploymentGrantee,
+  DeploymentActor,
 } from "../deploy/deploy-service.ts";
 import { type DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
@@ -644,7 +645,7 @@ export interface App {
   setDeploymentDisplayName(id: string, displayName: string): Promise<Deployment>;
   setDeploymentAlwaysOn(id: string, alwaysOn: boolean): Promise<Deployment>;
   setDeploymentEmbedAncestors(id: string, embedAncestors: string[]): Promise<Deployment>;
-  setDeploymentPublic(idOrName: string, isPublic: boolean, actor: { createdBy: string }): Promise<Deployment>;
+  setDeploymentPublic(idOrName: string, isPublic: boolean, actor: DeploymentActor): Promise<Deployment>;
   setDeploymentConnectors(idOrName: string, connectors: string[], actor: { createdBy: string }): Promise<Deployment>;
   maintainDeployments(): Promise<number>;
   publishDueLiveEdits(): Promise<number>;
@@ -659,13 +660,13 @@ export interface App {
     idOrName: string,
     grantee: ScopeId,
     permission: Permission | null,
-    actor: { createdBy: string },
+    actor: DeploymentActor,
     opts?: { notify?: boolean },
   ): Promise<DeploymentGrantee[]>;
   inviteToDeployment(
     idOrName: string,
     email: string,
-    actorId: string,
+    actor: DeploymentActor,
     opts?: { notify?: boolean },
   ): Promise<{
     grantees: DeploymentGrantee[];
