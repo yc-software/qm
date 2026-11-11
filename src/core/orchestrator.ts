@@ -1668,7 +1668,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(conversation.publishMembers ? { publishMembers: conversation.publishMembers } : {}),
           },
           config: deps.config,
-          ...(deps.control && controlClaims ? { control: deps.control, controlClaims } : {}),
+          ...(controlClaims ? { controlClaims } : {}),
+          ...(deps.control && controlClaims ? { control: deps.control } : {}),
           ...(deps.apiBaseUrl && connectorEnv.AGENT_API_TOKEN
             ? {
                 ...(securityPolicy.posture !== "strict"

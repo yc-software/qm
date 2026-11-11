@@ -542,9 +542,12 @@ test("a turn running as a Slack bot's work retires only the computers its actor 
   const { resources } = fixture();
   const record = await resources.create("alice", "channel:team", "local");
   const ambient = await resources.create("system:ambient:acme", "personal:system:ambient:acme", "local");
-  await assert.rejects(resources.retire("admin", record.id, true), /retire only a computer it created/);
-  await assert.rejects(resources.retire("system:ambient:acme", ambient.id, true), /retire only a computer it created/);
-  await resources.retire("alice", record.id, true);
+  await assert.rejects(resources.retire("admin", record.id, { botActor: true }), /retire only a computer it created/);
+  await assert.rejects(
+    resources.retire("system:ambient:acme", ambient.id, { botActor: true }),
+    /retire only a computer it created/,
+  );
+  await resources.retire("alice", record.id, { botActor: true });
 });
 
 test("retirement deletes an inferred missing computer without provisioning, status or restore", async () => {

@@ -12,7 +12,12 @@ import type { AclStore } from "../acl/acl-store.ts";
 import { deployRef, encodeRef } from "../acl/resource-ref.ts";
 import { bytes, normalizeRelPath } from "./deploy-fs.ts";
 import { samePerson } from "../directory/person.ts";
-import { personOrOwningBot, type CapabilityClaims } from "../auth/capability-token.ts";
+import {
+  personOrOwningBot,
+  proactiveScopeWork,
+  type CapabilityClaims,
+  type ManagingCaller,
+} from "../auth/capability-token.ts";
 import { CONNECTOR_HOSTS } from "../connectors/oauth.ts";
 import { recordAuditInBinding, type AuditEvent, type AuditLog } from "../audit/audit-log.ts";
 import {
@@ -86,7 +91,9 @@ export interface SourceSaved {
   liveEdit?: LiveEditSaved;
 }
 
-export interface DeployOrUpdateInput {
+export interface DeployOrUpdateInput extends Partial<
+  Pick<CapabilityClaims, "scopeId" | "triggered" | "liveActor" | "origin">
+> {
   ownerScopeId: ScopeId;
   createdBy: string;
   botActor?: boolean;
@@ -137,11 +144,7 @@ export interface DeployService {
   gitRepoPath(idOrName: string): Promise<string | null>;
   pushGit<T>(id: string, runReceivePack: () => Promise<{ result: T; ok: boolean }>, actor?: string): Promise<T>;
   source(idOrName: string, paths?: string[], commit?: string): Promise<DeploymentSource | null>;
-  sourceReader(
-    idOrName: string,
-    caller: Pick<CapabilityClaims, "actorId" | "botActor">,
-    actingScopeId?: ScopeId,
-  ): Promise<AppSourceReader | null>;
+  sourceReader(idOrName: string, caller: ManagingCaller, actingScopeId?: ScopeId): Promise<AppSourceReader | null>;
   editSource(
     idOrName: string,
     actor: string,
@@ -150,11 +153,7 @@ export interface DeployService {
   reapIdleDeployments(ttlMs: number, now?: number): Promise<number>;
   deployOrUpdate(input: DeployOrUpdateInput): Promise<PublishedDeployment>;
   deploymentGrantees(idOrName: string): Promise<DeploymentGrantee[]>;
-  canManageDeployment(
-    idOrName: string,
-    caller: Pick<CapabilityClaims, "actorId" | "botActor">,
-    actingScopeId?: ScopeId,
-  ): Promise<boolean>;
+  canManageDeployment(idOrName: string, caller: ManagingCaller, actingScopeId?: ScopeId): Promise<boolean>;
   shareDeployment(
     idOrName: string,
     grantee: ScopeId,
@@ -460,11 +459,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     return false;
   }
 
-  async function canManage(
-    d: Deployment,
-    caller: Pick<CapabilityClaims, "actorId" | "botActor">,
-    actingScopeId?: ScopeId,
-  ): Promise<boolean> {
+  async function canManage(d: Deployment, caller: ManagingCaller, actingScopeId?: ScopeId): Promise<boolean> {
     if (!(await personOrOwningBot(caller, async () => samePerson(d.createdBy, caller.actorId)))) return false;
     if (await managesHome(d, caller.actorId, actingScopeId)) return true;
     for (const grant of await grantsOn(ambientTenant(), d)) {
@@ -908,7 +903,14 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
 
     async deployOrUpdate(input) {
       const { ownerScopeId, createdBy } = input;
-      const caller = { actorId: createdBy, botActor: input.botActor };
+      const caller: ManagingCaller = {
+        actorId: createdBy,
+        botActor: input.botActor,
+        scopeId: input.scopeId,
+        triggered: input.triggered,
+        liveActor: input.liveActor,
+        origin: input.origin,
+      };
       if (input.embedAncestors !== undefined && !parseEmbedAncestors(input.embedAncestors))
         throw new Error(`embedAncestors must be an ${EMBED_ANCESTORS_HINT}`);
 
@@ -984,6 +986,8 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           await this.setDeploymentEmbedAncestors(existing.id, input.embedAncestors);
         return { ...(await deps.deployStore.get(existing.id))!, ...(liveEdit ? { liveEdit } : {}) };
       }
+      if (proactiveScopeWork(caller))
+        throw new Error("unprompted work can't publish a new app; ask in the conversation so a person publishes it");
       const d = await this.deploy({
         ownerScopeId,
         createdBy,

@@ -3,7 +3,7 @@ import { deflateRaw, inflateRaw } from "node:zlib";
 import { orgId as configOrgId } from "../config.ts";
 import { boundTenant, isTenantId } from "../tenants/context.ts";
 import type { CandidateDestination, Destination, EgressPolicy, Principal, ScopeId } from "../types.ts";
-import { isSystemActor } from "../types.ts";
+import { actsAsScope, isSystemActor } from "../types.ts";
 import type { SessionOrigin } from "../sessions/session-store.ts";
 import { mintSignedPayload, verifySignedPayload } from "./signed-token.ts";
 
@@ -41,11 +41,37 @@ interface BlobGrant {
   id?: string;
 }
 
+export type ManagingCaller = Pick<CapabilityClaims, "actorId" | "botActor"> &
+  Partial<Pick<CapabilityClaims, "scopeId" | "triggered" | "liveActor" | "origin">>;
+
+export function proactiveScopeWork(c: ManagingCaller): boolean {
+  return (
+    c.scopeId !== undefined &&
+    actsAsScope(c.actorId, c.scopeId) &&
+    c.triggered === true &&
+    c.liveActor !== true &&
+    c.origin === "conversation"
+  );
+}
+
+export function scopeWorkClaims(
+  c: Partial<Pick<CapabilityClaims, "scopeId" | "triggered" | "liveActor" | "origin">> | undefined,
+): Partial<Pick<CapabilityClaims, "scopeId" | "triggered" | "liveActor" | "origin">> {
+  if (!c) return {};
+  return {
+    ...(c.scopeId !== undefined ? { scopeId: c.scopeId } : {}),
+    ...(c.triggered !== undefined ? { triggered: c.triggered } : {}),
+    ...(c.liveActor !== undefined ? { liveActor: c.liveActor } : {}),
+    ...(c.origin !== undefined ? { origin: c.origin } : {}),
+  };
+}
+
 export async function personOrOwningBot(
-  caller: Pick<CapabilityClaims, "actorId" | "botActor">,
+  caller: ManagingCaller,
   owns: () => Promise<boolean>,
   record?: { botActor?: boolean } | null,
 ): Promise<boolean> {
+  if (proactiveScopeWork(caller)) return false;
   return (
     caller.botActor !== true || (!isSystemActor(caller.actorId) && (!record || record.botActor === true) && owns())
   );

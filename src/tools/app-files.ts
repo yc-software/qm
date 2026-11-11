@@ -6,6 +6,7 @@ import type {
   SourceSaved,
 } from "../deploy/deploy-service.ts";
 import type { ScopeId } from "../types.ts";
+import { scopeWorkClaims, type CapabilityClaims } from "../auth/capability-token.ts";
 
 export interface AppFiles {
   readonly app: string;
@@ -14,15 +15,17 @@ export interface AppFiles {
   save(edit: (read: (paths: string[]) => Promise<DeploymentSource>) => Promise<SourceEdit>): Promise<SourceSaved>;
 }
 
-export function createAppFiles(deps: {
-  deploy: DeployService;
-  app: string;
-  actorId: string;
-  botActor?: boolean;
-  actingScopeId: ScopeId;
-}): AppFiles {
+export function createAppFiles(
+  deps: {
+    deploy: DeployService;
+    app: string;
+    actorId: string;
+    botActor?: boolean;
+    actingScopeId: ScopeId;
+  } & Partial<Pick<CapabilityClaims, "scopeId" | "triggered" | "liveActor" | "origin">>,
+): AppFiles {
   const { deploy, app } = deps;
-  const caller = { actorId: deps.actorId, botActor: deps.botActor };
+  const caller = { actorId: deps.actorId, botActor: deps.botActor, ...scopeWorkClaims(deps) };
   const canManage = () => deploy.canManageDeployment(app, caller, deps.actingScopeId);
   const assertMayEdit = async (): Promise<void> => {
     if (!(await canManage()))

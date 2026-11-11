@@ -89,7 +89,7 @@ import type {
 } from "../api/control-service.ts";
 import type { ShareArtifactRequest, ShareArtifactResult } from "../api/artifact-share.ts";
 import type { Cron, Webhook } from "../triggers/types.ts";
-import type { CapabilityClaims } from "../auth/capability-token.ts";
+import { scopeWorkClaims, type CapabilityClaims } from "../auth/capability-token.ts";
 import type { VisibleCron } from "../api/app.ts";
 import { createPlaygroundArtifact, type PlaygroundArtifact } from "../playgrounds/playground.ts";
 
@@ -556,6 +556,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
   const inWorkdir = (handle: SandboxHandle, command: string): string =>
     deps.workdir ? `cd ${shq(posixJoin(handle.rootDir, deps.workdir))} || exit 1\n${command}` : command;
   const { writableScopeId } = deps;
+  const managing = { botActor: deps.botActor, ...scopeWorkClaims(deps.controlClaims) };
   const memory =
     deps.context?.memory ??
     (deps.memory
@@ -755,7 +756,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
             deploy: deps.deploy,
             app: deps.editingApp,
             actorId: deps.createdBy,
-            botActor: deps.botActor,
+            ...managing,
             actingScopeId: writableScopeId,
           }),
         }
@@ -785,13 +786,13 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
             if (action === "retire") {
               if (!input?.sandboxId) throw new Error("retire requires sandbox_id");
               const { resource } = await accessSandbox(input.sandboxId);
-              await resources.retire(deps.createdBy, resource.id, deps.botActor);
+              await resources.retire(deps.createdBy, resource.id, managing);
               return { retired: resource.id };
             }
             if (action === "default") {
               if (input?.sandboxId === undefined) throw new Error("default requires sandbox_id or null");
               if (input.sandboxId !== null) await accessSandbox(input.sandboxId);
-              await resources.setDefault(deps.createdBy, writableScopeId, input.sandboxId);
+              await resources.setDefault(deps.createdBy, writableScopeId, input.sandboxId, managing);
               deps.invalidateProvision?.();
               return { defaultSandboxId: input.sandboxId };
             }
@@ -1097,7 +1098,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       const d = await deps.deploy.deployOrUpdate({
         ownerScopeId: owner,
         createdBy: deps.createdBy,
-        botActor: deps.botActor,
+        ...managing,
         createdInScope,
         files,
         ...(input.entrypoint ? { entrypoint: input.entrypoint } : {}),

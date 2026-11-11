@@ -10,7 +10,7 @@ import { tenantAppHandle } from "../tenants/settings.ts";
 import type { App, AppDeps, ViewerDeployment } from "./app-types.ts";
 import { deploymentView } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
-import type { CapabilityClaims } from "../auth/capability-token.ts";
+import { proactiveScopeWork, type ManagingCaller } from "../auth/capability-token.ts";
 import type { Deployment } from "../deploy/deploy-store.ts";
 
 export function createDeploymentMethods(
@@ -54,12 +54,9 @@ export function createDeploymentMethods(
   | "attachScope"
 > {
   const { effectiveDeploymentPermission, principalCanReadDeployment, principalGitPermission } = h;
-  async function callerGitPermission(
-    d: Deployment,
-    caller: Pick<CapabilityClaims, "actorId" | "botActor">,
-  ): Promise<"read" | "write" | null> {
+  async function callerGitPermission(d: Deployment, caller: ManagingCaller): Promise<"read" | "write" | null> {
     const permission = await principalGitPermission(d, caller.actorId);
-    if (permission !== "write" || caller.botActor !== true) return permission;
+    if (permission !== "write" || (caller.botActor !== true && !proactiveScopeWork(caller))) return permission;
     return (await deps.deploy.canManageDeployment(d.id, caller)) ? "write" : "read";
   }
   const invitationLock = deps.advisoryLock;

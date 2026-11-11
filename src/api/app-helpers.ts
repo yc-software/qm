@@ -528,14 +528,17 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   const membershipControlsScope = createMembershipControlsScope(scopeMembershipDeps);
 
   async function authorizesCapabilityScope(
-    claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "botActor" | "liveActor" | "members">,
+    claims: Pick<
+      CapabilityClaims,
+      "actorId" | "scopeId" | "scopeVersion" | "botActor" | "liveActor" | "members" | "origin"
+    >,
   ): Promise<boolean> {
     const { kind, ref } = parseScopeId(claims.scopeId);
     if (kind === "channel" && !deps.identity.isInternal(deps.identity.classify(claims.actorId))) return false;
     const privateChannel =
       kind === "channel" && (await deps.directory.channelPrivacy?.(ref).catch(() => undefined)) === true;
     const capabilityMembership = privateChannel
-      ? actsAsScope(claims.actorId, claims.scopeId) ||
+      ? (claims.origin === "conversation" && actsAsScope(claims.actorId, claims.scopeId)) ||
         (await deps.directory.channelMembership(ref, claims.actorId).catch(() => undefined))
       : undefined;
     const attestedBot =

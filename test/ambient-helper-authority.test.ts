@@ -79,7 +79,7 @@ for (const wake of ["message", "scheduled"] as const)
     assert.equal((await withTenant(randomUUID(), () => open(scopeActor(here)))).ok, false);
     assert.equal((await built.sessions.childrenOf(session.id)).length, 1);
     const capability = (actorId: string, scope = here) =>
-      built.app.authorizesCapabilityScope({ actorId, scopeId: scope } as never);
+      built.app.authorizesCapabilityScope({ actorId, scopeId: scope, origin: "conversation" } as never);
     assert.deepEqual(
       await Promise.all([
         capability(scopeActor(here)),

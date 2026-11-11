@@ -5,7 +5,7 @@ import type { Cron, CronFireLogEntry, CronSchedule, CronScript, Webhook } from "
 import { cronScriptFrom, type CronScriptTrial } from "../cron/script.ts";
 import type { CreateCronInput, CronPatch } from "../cron/cron-store.ts";
 import type { CreateWebhookInput } from "../webhooks/webhook-store.ts";
-import { personOrOwningBot, type CapabilityClaims } from "../auth/capability-token.ts";
+import { personOrOwningBot, type CapabilityClaims, type ManagingCaller } from "../auth/capability-token.ts";
 import {
   cronFireReadsNotes,
   describeRunNowRefusal,
@@ -213,7 +213,7 @@ export async function canAdministerCron(
     "samePerson" | "isCurrentSharedScopeMember" | "artifactGrantPermission" | "membershipControlsScope" | "managesScope"
   >,
   cron: Cron,
-  actor: Pick<CapabilityClaims, "actorId" | "botActor">,
+  actor: ManagingCaller,
   isActor?: (id: string) => Promise<boolean>,
 ): Promise<boolean> {
   const owns = () => (isActor ? isActor(cron.owner) : app.samePerson(cron.owner, actor.actorId));
@@ -258,7 +258,7 @@ export async function editWebhookTask(
 export async function canAdministerWebhook(
   app: Pick<App, "membershipControlsScope" | "managesScope" | "samePerson">,
   webhook: Pick<Webhook, "ownerScopeId" | "owner" | "botActor">,
-  actor: Pick<CapabilityClaims, "actorId" | "botActor">,
+  actor: ManagingCaller,
   isActor?: (id: string) => Promise<boolean>,
 ): Promise<boolean> {
   const owns = () => (isActor ? isActor(webhook.owner) : app.samePerson(webhook.owner, actor.actorId));
