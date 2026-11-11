@@ -1054,23 +1054,18 @@ async function openAppEditChat(slug: string): Promise<void> {
 async function bootAppShare(params: URLSearchParams): Promise<void> {
   document.documentElement.classList.add("app-share-embed");
   const done = () => tellEmbedder({ type: "qm:app-share-closed" });
-  const id = params.get("id") ?? "";
+  const slug = params.get("slug") ?? "";
   const r = await webFetch(withBase("/me"));
-  if (!r.ok || !id) {
+  if (!r.ok || !slug) {
     renderAuthGate(r.status === 401 ? gateFor("portal") : { kind: "unreachable" });
     return;
   }
   appState.me = (await r.json()) as Me;
   const { openDeploymentPermissions } = await import("./deploy-permissions");
-  await openDeploymentPermissions(
-    id,
-    params.get("name") || params.get("slug") || "App",
-    `personal:${appState.me.user}`,
-    {
-      onChange: () => tellEmbedder({ type: "qm:app-check" }),
-      onClose: done,
-    },
-  );
+  await openDeploymentPermissions(slug, params.get("name") || slug, `personal:${appState.me.user}`, {
+    onChange: () => tellEmbedder({ type: "qm:app-check" }),
+    onClose: done,
+  });
 }
 
 export async function bootSafely(): Promise<void> {

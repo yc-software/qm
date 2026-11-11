@@ -91,11 +91,17 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
       });
     try {
       const deployment = await app.setDeploymentPublic(params.id!, b.public, actor);
+      const grantees = await app.deploymentGrantees(deployment.id);
       return sendJson(res, 200, {
         ok: true,
         public: deployment.public === true,
-        reach: deployment.public === true ? "anyone with the link" : "restricted",
-        grantees: await app.deploymentGrantees(deployment.id),
+        reach: appAccess({
+          ownerScopeId: deployment.ownerScopeId,
+          public: deployment.public === true,
+          grantees,
+          viewer: principalId,
+        }).detail,
+        grantees,
       });
     } catch (e) {
       return sendShareFailure(res, e);

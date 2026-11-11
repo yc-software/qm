@@ -12,7 +12,6 @@ export function appShellHtml(opts: {
   portalUrl: string;
   path: string;
   annotationsEnabled?: boolean;
-  deploymentId?: string;
 }): string {
   const slug = escAttr(opts.slug);
   const path = escAttr(opts.path);
@@ -129,7 +128,6 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
   const openKey = "qmChat:" + slug;
   const accessBtn = document.getElementById("access");
   const share = document.getElementById("share");
-  const deploymentId = ${JSON.stringify(opts.deploymentId ?? opts.slug).replace(/</g, "\\u003c")};
   const accessIcons = {
     private: '<rect x="4" y="9" width="12" height="8" rx="1.5"/><path d="M7 9V6.5a3 3 0 0 1 6 0V9"/>',
     shared: '<circle cx="8" cy="7" r="2.75"/><path d="M3 16.5c.6-2.6 2.6-4 5-4s4.4 1.4 5 4"/><path d="M13 4.6a2.75 2.75 0 0 1 0 4.8M15 12.8c1.1.6 1.8 1.9 2 3.7"/>',
@@ -150,7 +148,7 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
     text.textContent = next.label;
     accessBtn.append(text);
   };
-  const shareUrl = portal + "/app-share?id=" + encodeURIComponent(deploymentId) + "&slug=" + encodeURIComponent(slug);
+  const shareUrl = portal + "/app-share?slug=" + encodeURIComponent(slug);
   const closeShare = () => {
     share.classList.remove("open");
     share.src = "about:blank";

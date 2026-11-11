@@ -988,7 +988,6 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
         name: deployment?.displayName ?? slug,
         portalUrl: loginUrl,
         path: safePathname + url.search,
-        ...(deployment ? { deploymentId: deployment.id } : {}),
       }),
     );
     return true;

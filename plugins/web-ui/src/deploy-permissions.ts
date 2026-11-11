@@ -1,3 +1,4 @@
+import { isOrgScope, orgAccessNote, PUBLIC_ACCESS_NOTE } from "../../chassis/src/app-access.ts";
 import { html, render, nothing } from "lit";
 import { live } from "lit/directives/live.js";
 import { Building2, Globe, Lock, Search, X } from "lucide";
@@ -17,7 +18,7 @@ interface Grant {
 
 type GeneralAccess = "restricted" | "org" | "public";
 
-const isOrgGrant = (grant: Grant): boolean => grant.scope === "org" || grant.scope.startsWith("org:");
+const isOrgGrant = (grant: Grant): boolean => isOrgScope(grant.scope);
 
 export async function openDeploymentPermissions(
   id: string,
@@ -164,8 +165,8 @@ export async function openDeploymentPermissions(
   const orgName = (): string => appState.me?.companyName?.trim() || "Your organization";
   const generalAccessNote = (): string => {
     const level = generalAccess();
-    if (level === "public") return "Anyone on the internet with the link can open. No sign-in required";
-    if (level === "org") return `Anyone signed in to ${orgName()} can open`;
+    if (level === "public") return `${PUBLIC_ACCESS_NOTE}. No sign-in required`;
+    if (level === "org") return orgAccessNote(orgName());
     return "Only people with access can open";
   };
   const emailCandidate = (): string | null => {

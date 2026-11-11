@@ -1,3 +1,4 @@
+import { isOrgScope, orgAccessNote, PUBLIC_ACCESS_NOTE } from "../../plugins/chassis/src/app-access.ts";
 import { parseScopeId, type ScopeKind } from "../types.ts";
 
 export function canEditAppPermissions(ownerScopeId: string, principalId: string): boolean {
@@ -28,10 +29,9 @@ export function appAccess(opts: {
   const ownedByViewer = canEditAppPermissions(opts.ownerScopeId, opts.viewer);
   const canEdit = ownedByViewer;
   const kindOf = (scope: string) => parseScopeId(scope).kind;
-  if (opts.public)
-    return { level: "public", label: "Public", detail: "Anyone on the internet with the link can open", canEdit };
-  if (opts.grantees.some((g) => g.scope === "org" || kindOf(g.scope) === "org"))
-    return { level: "org", label: "Organization", detail: "Anyone signed in to your organization can open", canEdit };
+  if (opts.public) return { level: "public", label: "Public", detail: PUBLIC_ACCESS_NOTE, canEdit };
+  if (opts.grantees.some((g) => isOrgScope(g.scope)))
+    return { level: "org", label: "Organization", detail: orgAccessNote("your organization"), canEdit };
   const owner = kindOf(opts.ownerScopeId) === "personal" ? [] : [opts.ownerScopeId];
   const reach = new Set([...owner, ...opts.grantees.map((g) => g.scope)]);
   if (!reach.size)
