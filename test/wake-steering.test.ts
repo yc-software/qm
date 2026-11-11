@@ -386,6 +386,8 @@ test("a Slack bot's stop on its own live run leaves a person's queued turn and s
   });
   assert.ok(await built.runs.claimById(childRun.id, "worker", 30_000));
 
+  const fromPerson = await built.app.turn(mention("@bot and the changelog", channel, root));
+  assert.notEqual(fromPerson.runId, fromBot.runId, "the person's message got its own run, not a steer into the bot's");
   const stop = await built.app.turn({ ...mention("stop", channel, root), actor: bot, botActor: true });
   assert.deepEqual(
     {

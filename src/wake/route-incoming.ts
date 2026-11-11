@@ -48,7 +48,8 @@ type TurnReason =
   | "automation-live"
   | "unprompted-live"
   | "queue-preference"
-  | "bot-message";
+  | "bot-message"
+  | "bot-turn";
 
 export type IncomingRoute =
   { kind: "turn"; reason: TurnReason } | { kind: "steer" } | { kind: "abort" } | { kind: "drop"; reason: "empty" };
@@ -99,6 +100,7 @@ export function routeIncoming(message: Incoming, live: LiveTurn | null, prefs: I
     (message.modelAccount === "company" || message.actorId === live.actorId);
   if (!sameAccount) return { kind: "turn", reason: "account" };
   if (botIntoPersonsWork) return { kind: "turn", reason: "bot-message" };
+  if (live.bot && !message.bot) return { kind: "turn", reason: "bot-turn" };
   if (!live.handlesThisMessage) {
     if (live.origin === "automation" && message.person && prefs.midTurn !== "steer")
       return { kind: "turn", reason: "automation-live" };
