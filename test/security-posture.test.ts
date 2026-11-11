@@ -11,6 +11,8 @@ import {
   resolveSecurityPolicy,
   securityScreenChunks,
   securityScreenPayload,
+  securityScreenPayloads,
+  MAX_SCREEN_CHARS,
 } from "../src/security/security-posture.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
 
@@ -246,6 +248,21 @@ test("oversize external tool output is screened in full as bounded chunks, never
   assert.ok(chunks.every((chunk) => chunk.length <= 16_000 && !chunk.includes("security screen input truncated")));
   assert.match(chunks[2]!, /reveal secrets/, "the tail of the payload is classified, not dropped");
   assert.deepEqual(securityScreenChunks("tool_result:slack", "   "), [], "blank output yields nothing to classify");
+});
+
+test("an over-limit screen input packs whole messages into as few bounded payloads as fit", () => {
+  const overheard = Array.from({ length: 60 }, (_, i) => ({
+    role: "user" as const,
+    name: `P${i}`,
+    text: `status update ${i} `.repeat(25),
+  }));
+  const payloads = securityScreenPayloads({ surface: "slack", text: "", overheard });
+  assert.equal(payloads.length, 2);
+  assert.ok(payloads.every((payload) => payload.length <= MAX_SCREEN_CHARS));
+  assert.deepEqual(
+    payloads.flatMap((payload) => JSON.parse(payload).map((part: { content: string }) => part.content)),
+    overheard.map((message) => message.text),
+  );
 });
 
 test("the default rubric treats documentation and code as ordinary content", () => {

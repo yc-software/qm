@@ -216,9 +216,21 @@ export function securityScreenPayload(input: SecurityScreenInput): SecurityScree
 }
 
 export function securityScreenPayloads(input: SecurityScreenInput): string[] {
-  const payload = securityScreenPayload(input);
-  if (!payload?.truncated) return payload ? [payload.content] : [];
-  return securityScreenParts(input).flatMap((part) => securityScreenChunks(part.source, part.content));
+  const payloads: string[] = [];
+  let group: Array<{ source: string; content: string }> = [];
+  for (const part of securityScreenParts(input)) {
+    if (JSON.stringify([part]).length > MAX_SCREEN_CHARS) {
+      payloads.push(...securityScreenChunks(part.source, part.content));
+      continue;
+    }
+    if (JSON.stringify([...group, part]).length > MAX_SCREEN_CHARS) {
+      payloads.push(JSON.stringify(group));
+      group = [];
+    }
+    group.push(part);
+  }
+  if (group.length) payloads.push(JSON.stringify(group));
+  return payloads;
 }
 
 const SCREEN_CHUNK_CHARS = 7_500;

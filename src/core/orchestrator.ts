@@ -359,8 +359,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         ...(sessionId ? { sessionId } : {}),
       } as const;
       if (screening === "observe") {
-        await screenChunks(payloads, (chunk) =>
-          classifySecurityData(tenant, chunk, actor.id, scopeLabel, undefined, { ...steerContext, mode: "observe" }),
+        await screenChunks(
+          payloads,
+          (chunk) =>
+            classifySecurityData(tenant, chunk, actor.id, scopeLabel, undefined, { ...steerContext, mode: "observe" }),
+          { batch: 4 },
         );
         return "allow";
       }
@@ -381,19 +384,22 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (securitySteersInFlight.has(conversation.threadRef)) return block("steer-in-flight");
       if (!payloads.length) return block("empty-input");
       securitySteersInFlight.add(conversation.threadRef);
-      const verdict = await screenChunks(payloads, (chunk) =>
-        classifySecurityData(
-          tenant,
-          chunk,
-          actor.id,
-          scopeLabel,
-          sessionId
-            ? async (rec) => {
-                await deps.sessions.recordLlmRequest(sessionId, { ...rec, scopeLabel });
-              }
-            : undefined,
-          { ...steerContext, mode: "enforce" },
-        ),
+      const verdict = await screenChunks(
+        payloads,
+        (chunk) =>
+          classifySecurityData(
+            tenant,
+            chunk,
+            actor.id,
+            scopeLabel,
+            sessionId
+              ? async (rec) => {
+                  await deps.sessions.recordLlmRequest(sessionId, { ...rec, scopeLabel });
+                }
+              : undefined,
+            { ...steerContext, mode: "enforce" },
+          ),
+        { batch: 4 },
       ).finally(() => securitySteersInFlight.delete(conversation.threadRef));
       if (verdict?.decision === "auto") {
         if (!verdict.unscreened) return "allow";

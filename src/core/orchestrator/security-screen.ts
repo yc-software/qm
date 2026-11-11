@@ -361,6 +361,7 @@ export async function screenInboundInput(turn: InboundScreenTurn) {
         ? await screenChunks(
             screenPayloads,
             classifyAs({ hook: "user_input", surface: input.surface }, recordScreenRequest),
+            { batch: 4 },
           )
         : undefined;
       let unscreenableCause: "unscreenable-attachment" | "no-screener" | undefined;
