@@ -215,7 +215,7 @@ test("a brain forget reports each ref done, pending, unknown or failed, and a re
   assert.deepEqual(sent[0], { id: 1, request_id: sent[0]?.request_id });
   assert.equal(sent.at(-1)?.request_id, sent[1]?.request_id);
   assert.notEqual(sent[0]?.request_id, sent[1]?.request_id);
-  assert.equal((await forget(["acme:7"])).problems[0]?.fix, "Nothing to do: acme had already forgotten it.");
+  assert.deepEqual(lines(await forget(["acme:7"])), ["acme:7 committed"]);
   assert.deepEqual(lines(await forget(["down:1"])), ["down:1 failed unreachable"]);
   assert.deepEqual(lines(await forget(["proxied:1"])), ["proxied:1 failed http_502"]);
 });

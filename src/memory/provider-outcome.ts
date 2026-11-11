@@ -70,7 +70,8 @@ export function changeFailure(error: unknown): Pick<MemoryProviderOutcome, "outc
   if (error instanceof MemoryWriteUnconfirmed) return { outcome: "unknown", code: error.code };
   const failed = failedOutcome(error);
   if (failed.outcome === "timed_out") return { outcome: "unknown" };
-  if (!(error instanceof McpCallError) || failed.outcome !== "failed" || error.code !== undefined) return failed;
+  if (!(error instanceof McpCallError) || failed.outcome !== "failed" || error.code !== undefined || error.answered)
+    return failed;
   if (error.unsent) return { outcome: "failed", code: failed.code ?? "unreachable" };
   return { outcome: "unknown", ...(failed.code ? { code: failed.code } : {}) };
 }
@@ -95,9 +96,8 @@ function deniedFix(provider: string, code: string | undefined): string {
   return `Check ${provider}'s OAuth client and its grant, including the attest right when attestActor is set (${TROUBLESHOOTING}).`;
 }
 
-function failedFix(provider: string, code: string | undefined, docs: string, it: string): string {
+function failedFix(provider: string, code: string | undefined, docs: string): string {
   if (code === "unreachable") return `Check that ${provider}'s host is up and reachable from QM (${docs}).`;
-  if (code === "fact_already_expired") return `Nothing to do: ${provider} had already forgotten ${it}.`;
   if (code === "fact_not_found")
     return `${provider} forgets only facts on the person's own member page; search memory again for current refs.`;
   return `Check ${provider}'s logs, URL and tool names (${docs}).`;
@@ -148,7 +148,7 @@ function problemOf(group: ProblemGroup, operation: ProviderOperation): MemoryPro
         code: "memory_provider_failed",
         provider,
         detail: `Memory provider ${provider} failed${forget ? ` to forget ${refs}` : ""}${reason}, so ${effect}.`,
-        fix: failedFix(provider, code, docs, it),
+        fix: failedFix(provider, code, docs),
       };
     case "disabled":
       return {

@@ -196,7 +196,13 @@ export function createMcpMemoryProvider(opts: {
               const args: Record<string, unknown> = { id: factId };
               if (context?.idempotencyKey && op.idempotencyArg)
                 args[op.idempotencyArg] = requestKey(context.idempotencyKey, id);
-              const result = await call(op, args, undefined, by?.actorId, scopeId, context?.audienceScopeId);
+              const result = await call(op, args, undefined, by?.actorId, scopeId, context?.audienceScopeId).catch(
+                (error: unknown) => {
+                  if (error instanceof McpCallError && error.code === "fact_already_expired") return undefined;
+                  throw error;
+                },
+              );
+              if (!result) continue;
               const state = (result.structuredContent as { state?: unknown } | undefined)?.state;
               if (state === "committed") continue;
               if (typeof state === "string" && UNPUBLISHED_STATES.has(state))

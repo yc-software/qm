@@ -386,6 +386,7 @@ test("explicit writes record committed, pending and unknown with a stable UUID i
       keys.push(args.request_id);
       if (args.content === "slow") await gate;
       if (args.content === "unlinked") return { content: [], structuredContent: { code: "actor_unlinked" } };
+      if (args.content === "broken") return { isError: true, content: [{ type: "text", text: "database offline" }] };
       return args.content === "queued"
         ? { content: [], structuredContent: { status: "pending" } }
         : { content: [{ type: "text", text: JSON.stringify({ status: "pending" }) }] };
@@ -412,6 +413,7 @@ test("explicit writes record committed, pending and unknown with a stable UUID i
   release();
   await settled(mcp, 7);
   const refused = await write(["unlinked"], "run-1");
+  const broken = await write(["broken"], "run-1");
 
   assert.deepEqual(external(committed.outcomes), [{ outcome: "committed", code: undefined }]);
   assert.deepEqual(external(repeated.outcomes), [{ outcome: "committed", code: undefined }]);
@@ -425,6 +427,7 @@ test("explicit writes record committed, pending and unknown with a stable UUID i
   assert.match(unknown.problems[0]?.detail ?? "", /whether it stored the facts is unknown; QM did not retry/);
   assert.deepEqual(committed.problems, []);
   assert.deepEqual(external(refused.outcomes), [{ outcome: "denied", code: "actor_unlinked" }]);
+  assert.deepEqual(external(broken.outcomes), [{ outcome: "failed", code: undefined }]);
   assert.match(refused.problems[0]?.detail ?? "", /refused the request \(actor_unlinked\), so it stored nothing/);
   assert.match(refused.problems[0]?.fix ?? "", /Link this member's QM principal id to their member in knowledge/);
 

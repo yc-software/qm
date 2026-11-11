@@ -24,11 +24,16 @@ export class McpCallError extends Error {
   readonly status: number | undefined;
   readonly code: string | undefined;
   readonly unsent: boolean;
-  constructor(message: string, detail: { status?: number; code?: string; unsent?: boolean; cause?: unknown }) {
+  readonly answered: boolean;
+  constructor(
+    message: string,
+    detail: { status?: number; code?: string; unsent?: boolean; answered?: boolean; cause?: unknown },
+  ) {
     super(message, { cause: detail.cause });
     this.status = detail.status;
     this.code = detail.code;
     this.unsent = detail.unsent ?? false;
+    this.answered = detail.answered ?? false;
   }
 }
 
@@ -223,7 +228,7 @@ export function createMcpClient(opts: {
         const detail =
           mcpResultText(result) ||
           (result.structuredContent ? JSON.stringify(result.structuredContent) : "(no detail)");
-        throw new McpCallError(`mcp tool ${name} error: ${detail}`, code ? { code } : {});
+        throw new McpCallError(`mcp tool ${name} error: ${detail}`, { ...(code ? { code } : {}), answered: true });
       }
       return result;
     },
