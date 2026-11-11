@@ -339,11 +339,10 @@ export function applyThinkingBinding<T>(
 }
 
 function shortConversationCache<T>(payload: T, api: Api): T {
-  const messages = (payload as { messages?: unknown } | undefined)?.messages;
-  if (api !== "anthropic-messages" || !Array.isArray(messages)) return payload;
-  for (const message of messages as Array<{ content?: unknown }>)
-    for (const block of Array.isArray(message?.content) ? (message.content as Array<{ cache_control?: object }>) : [])
-      if (block?.cache_control) block.cache_control = { type: "ephemeral" };
+  const messages = (payload as { messages?: Array<{ content?: unknown }> } | undefined)?.messages;
+  const last = api === "anthropic-messages" && Array.isArray(messages) ? messages.at(-1)?.content : undefined;
+  for (const block of Array.isArray(last) ? (last as Array<{ cache_control?: object }>) : [])
+    if (block?.cache_control) block.cache_control = { type: "ephemeral" };
   return payload;
 }
 
