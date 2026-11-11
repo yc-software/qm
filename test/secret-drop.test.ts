@@ -251,7 +251,7 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
       keychain: built.keychain,
       secretDrops: built.secretDrops,
       deliveries: built.deliveries,
-      users: built.users,
+      admin: built.admin,
       auditLog: built.auditLog,
       runs: built.runs,
       signals: built.signals,
