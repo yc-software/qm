@@ -1,6 +1,7 @@
 import MailComposer from "nodemailer/lib/mail-composer";
 import addressparser from "nodemailer/lib/addressparser";
 import { DomUtils, parseDocument } from "htmlparser2";
+import { splitLinks } from "../../../plugins/chassis/src/links.ts";
 import type { LoopItem, LoopSourcePayload } from "../types.ts";
 import { isAccountType } from "../../connectors/oauth.ts";
 import {
@@ -100,7 +101,14 @@ export interface GmailQuote {
   html: string;
 }
 
-const htmlMirror = (text: string): string => `<div dir="ltr">${text.split("\n").map(escapeHtml).join("<br>")}</div>`;
+const linkedLine = (line: string): string =>
+  splitLinks(line)
+    .map((seg) =>
+      seg.kind === "link" ? `<a href="${escapeHtml(seg.href)}">${escapeHtml(seg.href)}</a>` : escapeHtml(seg.text),
+    )
+    .join("");
+
+const htmlMirror = (text: string): string => `<div dir="ltr">${text.split("\n").map(linkedLine).join("<br>")}</div>`;
 
 const quoteLine = (line: string): string => {
   if (line.startsWith(">")) return `>${line}`;
@@ -123,19 +131,17 @@ const isOffset = (token: string): boolean =>
   token.length === 5 && "+-".includes(token[0]!) && [...token.slice(1)].every((c) => c >= "0" && c <= "9");
 
 function gmailDate(header: string): string {
-  const ms = Date.parse(header);
-  const zone = header.split(" ").find(isOffset);
-  if (Number.isNaN(ms) || !zone) return header;
-  const minutes = (zone[0] === "-" ? -1 : 1) * (Number(zone.slice(1, 3)) * 60 + Number(zone.slice(3)));
-  const local = new Date(ms + minutes * 60_000);
-  const day = local.toLocaleDateString("en-US", {
-    timeZone: "UTC",
+  const at = new Date(Date.parse(header));
+  if (Number.isNaN(at.getTime())) return header;
+  const timeZone = header.split(" ").find(isOffset) ?? "+0000";
+  const day = at.toLocaleDateString("en-US", {
+    timeZone,
     weekday: "short",
     month: "short",
     day: "numeric",
     year: "numeric",
   });
-  const time = local.toLocaleTimeString("en-US", { timeZone: "UTC", hour: "numeric", minute: "2-digit" });
+  const time = at.toLocaleTimeString("en-US", { timeZone, hour: "numeric", minute: "2-digit" });
   return `${day} at ${time.replaceAll("\u202f", " ")}`;
 }
 
@@ -192,9 +198,13 @@ async function repliedMessage(
   api: ReturnType<typeof gmailApi>,
   meta: GmailMeta,
 ): Promise<Record<string, unknown> | undefined> {
-  if (meta.messageId) return await api(`messages/${encodeURIComponent(meta.messageId)}?format=full`);
-  const thread = await api<{ messages?: unknown[] }>(`threads/${encodeURIComponent(meta.threadId)}?format=full`);
-  return gmailThreadMessages(thread).at(-1);
+  const thread = meta.messageId
+    ? undefined
+    : await api<{ messages?: unknown[] }>(
+        `threads/${encodeURIComponent(meta.threadId)}?format=metadata&metadataHeaders=Message-ID`,
+      );
+  const id = meta.messageId ?? (thread && gmailThreadMessages(thread).at(-1)?.id);
+  return typeof id === "string" ? await api(`messages/${encodeURIComponent(id)}?format=full`) : undefined;
 }
 
 async function sendGmail(deps: SourceActionDeps, item: LoopItem, draft: ReplyDraft): Promise<SourceActionResult> {

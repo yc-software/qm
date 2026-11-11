@@ -52,8 +52,10 @@ export function gmailHeader(payload: Record<string, unknown>, name: string): str
   return typeof found?.value === "string" ? found.value : "";
 }
 
+const HIDDEN_LABELS = new Set<unknown>(["DRAFT", "TRASH", "SPAM"]);
+
 export function gmailThreadMessages(thread: { messages?: unknown[] }): Record<string, unknown>[] {
   return (Array.isArray(thread.messages) ? thread.messages.filter(isObj) : [])
-    .filter((m) => !(Array.isArray(m.labelIds) && m.labelIds.includes("DRAFT")))
+    .filter((m) => !(Array.isArray(m.labelIds) && m.labelIds.some((label) => HIDDEN_LABELS.has(label))))
     .sort((a, b) => Number(a.internalDate) - Number(b.internalDate));
 }

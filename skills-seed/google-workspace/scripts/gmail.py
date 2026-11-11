@@ -230,10 +230,10 @@ def quote_of(msg: dict) -> tuple[str, str] | None:
 def quote_for(thread_id: str | None, in_reply_to: str) -> tuple[str, str] | None:
     if not thread_id or not in_reply_to:
         return None
-    thread = call("GET", f"threads/{thread_id}", query={"format": "full"})
+    thread = call("GET", f"threads/{thread_id}", query={"format": "metadata", "metadataHeaders": ["Message-ID"]})
     for m in thread.get("messages", []):
         if headers_of(m["payload"]).get("message-id", "").strip() == in_reply_to.strip():
-            return quote_of(m)
+            return quote_of(call("GET", f"messages/{m['id']}", query={"format": "full"}))
     print(f"note: {in_reply_to} is not in thread {thread_id}; draft saved without a quote",
           file=sys.stderr)
     return None
@@ -373,8 +373,8 @@ def main() -> None:
 
 
         latest = sent_messages(call("GET", f"threads/{orig['threadId']}",
-                                    query={"format": "full"}))
-        orig = latest[-1] if latest else orig
+                                    query={"format": "metadata"}))
+        orig = call("GET", f"messages/{latest[-1]['id'] if latest else a.id}", query={"format": "full"})
         h = headers_of(orig["payload"])
         subject = h.get("subject", "")
         me = own_address()

@@ -4,6 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { gmailQuote } from "../src/loops/sources/gmail.ts";
 
 const SCRIPT = join(process.cwd(), "skills-seed", "google-workspace", "scripts", "gmail.py");
 
@@ -157,21 +158,47 @@ test("app-connection calls reuse the account the proxy resolved on the first cal
   );
 });
 
-test("replies quote the original like Gmail's composer, in both parts", { skip: !havePython }, () => {
-  const driver = `
-import base64, importlib.util, json, sys
+test(
+  "the skill helper and the loop sender quote a message identically, the way Gmail does",
+  { skip: !havePython },
+  () => {
+    const enc = (t: string) => Buffer.from(t).toString("base64url");
+    const original = {
+      payload: {
+        headers: [
+          { name: "From", value: "Ann <ann@x.test>" },
+          { name: "Date", value: "Tue, 10 Nov 2026 12:36:00 -0800" },
+        ],
+        parts: [
+          { mimeType: "text/plain", body: { data: enc("Hi\n\nSee https://x.test/a\n> older") } },
+          {
+            mimeType: "text/html",
+            body: {
+              data: enc('<html><head><style>p{}</style></head><body><div dir="ltr">Hi<br>older</div></body></html>'),
+            },
+          },
+        ],
+      },
+    };
+    const driver = `
+import importlib.util, json, sys
 spec = importlib.util.spec_from_file_location("gmail", sys.argv[1])
 gmail = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gmail)
-enc = lambda t: base64.urlsafe_b64encode(t.encode()).decode()
-orig = {"payload": {"headers": [{"name": "From", "value": "Ann <ann@x.test>"},
-                                {"name": "Date", "value": "Tue, 10 Nov 2026 12:36:00 -0800"}],
-                    "parts": [{"mimeType": "text/plain", "body": {"data": enc("Hi\\n\\n> older")}},
-                              {"mimeType": "text/html", "body": {"data": enc("<html><head><style>p{}</style></head><body><div>Hi</div></body></html>")}}]}}
-print(json.dumps(gmail.quote_of(orig)))
+print(json.dumps(gmail.quote_of(json.loads(sys.stdin.read()))))
 `;
-  const [plain, html] = JSON.parse(execFileSync("python3", ["-c", driver, SCRIPT], { encoding: "utf8" }));
-  assert.equal(plain, "On Tue, Nov 10, 2026 at 12:36 PM Ann <ann@x.test> wrote:\n\n> Hi\n>\n>> older");
-  assert.ok(html.includes('Ann &lt;<a href="mailto:ann@x.test">ann@x.test</a>&gt; wrote:'), "sender is a mailto link");
-  assert.ok(html.includes("<div>Hi</div></blockquote>"), "original html is nested without its document wrapper");
-});
+    const [text, html] = JSON.parse(
+      execFileSync("python3", ["-c", driver, SCRIPT], { input: JSON.stringify(original), encoding: "utf8" }),
+    );
+    assert.deepEqual({ text, html }, gmailQuote(original));
+    assert.equal(
+      text,
+      "On Tue, Nov 10, 2026 at 12:36 PM Ann <ann@x.test> wrote:\n\n> Hi\n>\n> See https://x.test/a\n>> older",
+    );
+    assert.ok(
+      html.includes('Ann &lt;<a href="mailto:ann@x.test">ann@x.test</a>&gt; wrote:'),
+      "sender is a mailto link",
+    );
+    assert.ok(html.includes('padding-left:1ex"><div dir="ltr">Hi<br>older</div></blockquote>'), "html nested bare");
+  },
+);

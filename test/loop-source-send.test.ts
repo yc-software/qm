@@ -35,40 +35,19 @@ function gmailFetch(send: (init: RequestInit) => Response): typeof fetch {
   const original = {
     id: "m1",
     payload: {
+      mimeType: "text/plain",
       headers: [
         { name: "From", value: "Ada <ada@example.com>" },
         { name: "Date", value: "Tue, 10 Nov 2026 12:36:00 -0800" },
       ],
-      parts: [
-        { mimeType: "text/plain", body: { data: Buffer.from("Numbers attached.\n> older").toString("base64url") } },
-        {
-          mimeType: "text/html",
-          body: {
-            data: Buffer.from(
-              "<html><head><style>p{}</style></head><body><div>Numbers attached.</div></body></html>",
-            ).toString("base64url"),
-          },
-        },
-      ],
+      body: { data: Buffer.from("Numbers attached.\n> older").toString("base64url") },
     },
   };
-  return (async (url: Parameters<typeof fetch>[0], init?: RequestInit) =>
-    String(url).includes("/threads/") ? Response.json({ messages: [original] }) : send(init!)) as typeof fetch;
-}
-
-function mimeTexts(mime: string): Record<string, string> {
-  const boundary = mime.match(/boundary="([^"]+)"/)![1]!;
-  const out: Record<string, string> = {};
-  for (const part of mime.split(`--${boundary}`)) {
-    const [head = "", body = ""] = part.split("\r\n\r\n");
-    const type = head.match(/Content-Type: (text\/\w+)/)?.[1];
-    const text = body.replace(/\r\n$/, "");
-    if (type)
-      out[type] = head.includes("base64")
-        ? Buffer.from(text.replaceAll("\r\n", ""), "base64").toString("utf8")
-        : text.replaceAll("\r\n", "\n");
-  }
-  return out;
+  return (async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    if (String(url).includes("/threads/")) return Response.json({ messages: [{ id: "m1", internalDate: "1" }] });
+    if (String(url).includes("/messages/m1")) return Response.json(original);
+    return send(init!);
+  }) as typeof fetch;
 }
 
 function tokens(map: Record<string, string | null>): ConnectorTokenSource {
@@ -106,13 +85,9 @@ test("gmail reply MIME threads correctly and survives a UTF-8 body", async () =>
   assert.match(mime, /^Subject: Re: Quarterly numbers\r$/m);
   assert.match(mime, /^In-Reply-To: <msg-1@mail>\r$/m);
   assert.match(mime, /^References: <msg-1@mail>\r$/m);
-  const texts = mimeTexts(mime);
-  assert.equal(texts["text/plain"], "Confirmed — see attached. ✅");
-  assert.equal(
-    texts["text/html"],
-    '<div dir="ltr">Confirmed — see attached. ✅</div>',
-    "html part keeps Gmail's width",
-  );
+  assert.match(mime, /^Content-Type: multipart\/alternative;/m);
+  assert.ok(mime.includes(Buffer.from("Confirmed — see attached. ✅").toString("base64")), "plain part");
+  assert.ok(mime.includes(Buffer.from('<div dir="ltr">Confirmed — see attached. ✅</div>').toString("base64")), "html");
 });
 
 test("subjects keep an existing Re: and non-ASCII subjects get RFC 2047 encoding", async () => {
@@ -159,23 +134,19 @@ test("gmail send posts base64url raw with the thread id", async () => {
   assert.deepEqual(
     calls.map((c) => c.url),
     [
-      "https://gmail.googleapis.com/gmail/v1/users/me/threads/t1?format=full",
+      "https://gmail.googleapis.com/gmail/v1/users/me/threads/t1?format=metadata&metadataHeaders=Message-ID",
+      "https://gmail.googleapis.com/gmail/v1/users/me/messages/m1?format=full",
       "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
     ],
   );
-  const headers = calls[1]!.init.headers as Record<string, string>;
+  const headers = calls[2]!.init.headers as Record<string, string>;
   assert.equal(headers.authorization, "Bearer tok-g");
-  const body = JSON.parse(String(calls[1]!.init.body)) as { raw: string; threadId: string };
+  const body = JSON.parse(String(calls[2]!.init.body)) as { raw: string; threadId: string };
   assert.equal(body.threadId, "t1");
   assert.doesNotMatch(body.raw, /[+/=]/);
-  const texts = mimeTexts(Buffer.from(body.raw, "base64url").toString("utf8"));
-  assert.equal(
-    texts["text/plain"],
-    "Confirmed.\n\nOn Tue, Nov 10, 2026 at 12:36 PM Ada <ada@example.com> wrote:\n\n> Numbers attached.\n>> older",
-  );
-  const html = texts["text/html"]!;
-  assert.ok(html.includes('Ada &lt;<a href="mailto:ada@example.com">ada@example.com</a>&gt; wrote:'), "sender links");
-  assert.ok(html.includes('padding-left:1ex"><div>Numbers attached.</div></blockquote>'), "original html nested bare");
+  const sent = Buffer.from(body.raw, "base64url").toString("utf8").replaceAll("\r\n", "\n");
+  assert.ok(sent.includes("Confirmed.\n\nOn Tue, Nov 10, 2026 at 12:36 PM Ada <ada@example.com> wrote:"));
+  assert.ok(sent.includes("> Numbers attached.\n>> older"), "the original is quoted under the reply");
 });
 
 test("a Gmail send refusal reports the upstream status and response excerpt", async () => {
@@ -215,7 +186,7 @@ test("the held proposal is what goes out when the action carries no draft", asyn
     {},
   );
   assert.equal(result.ok, true);
-  assert.ok(mimeTexts(sent)["text/plain"]!.startsWith("the held draft\n\nOn "));
+  assert.ok(sent.replaceAll("\r\n", "\n").includes("the held draft\n\nOn "));
 });
 
 test("a missing connector reads as not_connected, not an exception", async () => {
