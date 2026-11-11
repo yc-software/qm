@@ -96,7 +96,7 @@ export interface SandboxResources {
   hold(id: string, runId: string): Promise<void>;
   release(id: string, runId: string | undefined): Promise<boolean>;
   inUse(id: string): Promise<boolean>;
-  backingInUse(backend: SandboxBackendName, backingScopeId: string): Promise<boolean>;
+  heldIn(backend: SandboxBackendName): (backingScopeId: string) => Promise<boolean>;
   recordLoad(id: string, sample: LoadSample): Promise<void>;
   load(id: string): Promise<LoadSample | null>;
   setDefault(actorId: string, scopeId: ScopeId, id: string | null): Promise<void>;
@@ -274,10 +274,12 @@ export function createSandboxResources(opts: {
       const record = await opts.records.get(id);
       return !!record && liveHolders(record);
     },
-    async backingInUse(backend, backingScopeId) {
-      const records = await opts.records.all();
-      const held = records.filter((record) => record.backend === backend && record.backingScopeId === backingScopeId);
-      return (await Promise.all(held.map(liveHolders))).includes(true);
+    heldIn(backend) {
+      const records = opts.records.all();
+      return async (backingScopeId) => {
+        const held = (await records).filter((r) => r.backend === backend && r.backingScopeId === backingScopeId);
+        return (await Promise.all(held.map(liveHolders))).includes(true);
+      };
     },
     async retire(actorId, id) {
       await initialize();

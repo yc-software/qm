@@ -350,7 +350,7 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
             let reaped = 0;
             for (const [name, s] of Object.entries(backends)) {
               if (!s?.reapDeepIdle) continue;
-              const held = (scope: string) => resources.backingInUse(name as SandboxBackendName, scope);
+              const held = resources.heldIn(name as SandboxBackendName);
               reaped += (await s.reapDeepIdle(idleMs, devIdleMs, held).catch(swallowReap)).reaped ?? 0;
             }
             return { reaped };
