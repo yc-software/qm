@@ -179,7 +179,7 @@ test("the person's own DM gets each brain's read-only tools through the connecto
   assert.doesNotMatch(run.texts[1]!, /morning meetings/);
 });
 
-test("turns the person didn't send in their own DM never list, find or call the brain's tools", async (t) => {
+test("turns the person didn't send in their own DM, and app-drawer chats, never list, find or call the brain's tools", async (t) => {
   const { acme, turn } = await brainApp(t);
   const others: Array<Partial<TurnRequest>> = [
     { origin: { kind: "automation" } },
@@ -194,6 +194,7 @@ test("turns the person didn't send in their own DM never list, find or call the 
     },
     { conversation: { kind: "channel", threadRef: "C1", channelRef: "C1" } },
     { actor: { externalId: "system:ambient:default-org" } },
+    { conversation: { kind: "dm", threadRef: "web:U1:app-edit:notes" } },
   ];
   for (const request of others) {
     const run = (await turn([{ search: "*" }, whois], request))!;

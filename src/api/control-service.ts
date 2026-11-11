@@ -943,7 +943,12 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
 
         const invite =
           req.type === "deploy" && req.email !== undefined && permission === "read"
-            ? await app.inviteToDeployment(home.id, req.email, capability.actorId, notify)
+            ? await app.inviteToDeployment(
+                home.id,
+                req.email,
+                { createdBy: capability.actorId, botActor: capability.botActor },
+                notify,
+              )
             : undefined;
         if (!invite)
           await app.grant(
