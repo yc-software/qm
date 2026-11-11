@@ -732,8 +732,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         delegatedSession?.spawnMeta?.memoryNotebookOnly === true ||
         (await deps.notebookOnlyMemory?.(conversation.threadRef)) === true;
       const actAsActor = actor.type === "internal" && !input.botActor;
+      const isWeb = input.surface === "web";
+      let modeName = "mode-fallback";
+      if (input.surfaceTools) modeName = "mode-autonomous";
+      else if (!automatedTurn && !(sessionTurn && input.envelopeWrapped) && (conversation.kind === "dm" || isWeb))
+        modeName = "mode-conversation";
+      const editingApp = modeName === "mode-conversation" ? appEditSlug(conversation.threadRef, actor.id) : null;
+      const appEdit = appEditTurnPolicy(editingApp !== null);
       const mcpToolsReady =
-        !external && deps.mcp ? deps.mcp.toolDefsFor(actor.id, audienceScopeId, actAsActor) : undefined;
+        !external && !appEdit && deps.mcp ? deps.mcp.toolDefsFor(actor.id, audienceScopeId, actAsActor) : undefined;
       const useMemory = !external && input.skipMemory !== true;
       const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);
       resolution.writableScopeId = environmentId;
@@ -790,7 +797,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       });
       const { sharingSources, memoryScopeId, baseRecallScopes, memoryAccess } = context;
       resolution.grantedHandles = context.listFiles();
-      const isWeb = input.surface === "web";
       const surfaceTool = input.surface ?? "slack";
       const surfaceHints = surface?.promptHints;
       const surfaceName =
@@ -803,12 +809,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const orgName = branding.orgName ?? "this organization";
       const rawHandle = cleanBrandingLabel(input.gatewayContext?.botHandle?.replace(/^@/, ""), 40);
       const botHandle = rawHandle && rawHandle.toLowerCase() !== botName.toLowerCase() ? rawHandle : undefined;
-      let modeName = "mode-fallback";
-      if (input.surfaceTools) modeName = "mode-autonomous";
-      else if (!automatedTurn && !(sessionTurn && input.envelopeWrapped) && (conversation.kind === "dm" || isWeb))
-        modeName = "mode-conversation";
-      const editingApp = modeName === "mode-conversation" ? appEditSlug(conversation.threadRef, actor.id) : null;
-      const appEdit = appEditTurnPolicy(editingApp !== null);
       let frameMd = MODE_FALLBACK_MD;
       if (modeName === "mode-autonomous") frameMd = MODE_AUTONOMOUS_MD;
       else if (modeName === "mode-conversation") frameMd = appEdit?.frameMd ?? MODE_CONVERSATION_MD;
