@@ -1738,7 +1738,7 @@ test("a live turn in an app edit chat gets a small prompt of its own and six too
         surfaceBriefing: { name: "Drawer", state: "CLICKED_ELEMENT" },
       },
       url: new URL("https://qm.test/turn"),
-      res: { writeHead() {}, end() {} },
+      res: { getHeader() {}, writeHead() {}, end() {} },
       app: {
         turn: (request: TurnRequest) =>
           orchestrator.handleTurn({ ...turn, conversationHeader: request.conversationHeader }),
