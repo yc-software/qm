@@ -1,3 +1,4 @@
+import type { Tenant } from "../../tenants/context.ts";
 import type { AgentTurnResult } from "../../agent/agent.ts";
 import type { MemoryProvenance } from "../../memory/facts.ts";
 import type { MemoryPolicy } from "../../memory/policy.ts";
@@ -15,6 +16,7 @@ import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 type QuarantineReleaseApproval = Awaited<ReturnType<typeof createApprovalLedger>>["quarantineReleaseApprovals"][number];
 
 export function startMemoryCapture(turn: {
+  tenant: Tenant;
   deps: OrchestratorDeps;
   input: OrchestratorInput;
   actor: OrchestratorInput["actor"];
@@ -35,6 +37,7 @@ export function startMemoryCapture(turn: {
   spine: SpineState;
 }): void {
   const {
+    tenant,
     deps,
     input,
     actor,
@@ -79,6 +82,7 @@ export function startMemoryCapture(turn: {
         });
       } catch (e) {
         deps.errors.record(
+          tenant,
           {
             category: "memory",
             code: "capture_failed",
@@ -106,7 +110,7 @@ export async function selectTurnResult(turn: {
   reply: string;
   turnCompleted: boolean;
   cancelStopped: boolean;
-  isPollFire: boolean;
+  replyOptional: boolean;
   stagedAttachments: NonNullable<TurnResult["attachments"]>;
   quarantineReleaseApprovals: QuarantineReleaseApproval[];
   surfaceToolDeps: ReturnType<typeof createSurfaceToolDeps>;
@@ -130,7 +134,7 @@ export async function selectTurnResult(turn: {
     reply,
     turnCompleted,
     cancelStopped,
-    isPollFire,
+    replyOptional,
     stagedAttachments,
     quarantineReleaseApprovals,
     surfaceToolDeps,
@@ -156,7 +160,7 @@ export async function selectTurnResult(turn: {
     });
   if (cancelStopped && !result.pendingApprovals?.length) {
     finalResult = heldReply(true, false)!;
-  } else if (isPollFire && result.silent && !stagedAttachments.length && result.pausedOnApproval !== true) {
+  } else if (replyOptional && result.silent && !stagedAttachments.length && result.pausedOnApproval !== true) {
     finalResult = { status: "silent", sessionId: session.id };
   } else if (result.pendingApprovals?.length || quarantineReleaseApprovals.length) {
     const issued: Array<[string, Omit<PendingApprovalRecord, "createdAt" | "request">]> = [];
@@ -211,7 +215,7 @@ export async function selectTurnResult(turn: {
           ...(sourceAssistantEntrySeq !== undefined ? { sourceAssistantEntrySeq } : {}),
         }
       : { status: "pending_approval", sessionId: session.id, pendingApprovals: approvals };
-  } else if (isPollFire && !stagedAttachments.length && !reply.trim()) {
+  } else if (replyOptional && !stagedAttachments.length && !reply.trim()) {
     finalResult = { status: "silent", sessionId: session.id };
   } else if (input.surfaceTools && surfaceToolDeps && !strictReadOnly) {
     finalResult = heldReply(false, true)!;

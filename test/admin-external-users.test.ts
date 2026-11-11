@@ -18,10 +18,7 @@ import { coreEmailAdmission, coreEmailAllowed } from "../plugins/chassis/src/ext
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { TEST_TENANT } from "./support/test-tenant.ts";
-import { withTenant } from "../src/tenants/context.ts";
-
-const tenant = withTenant(TEST_TENANT, (t) => t);
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const ALICE = "admin-alice@default-org";
 const NOBODY = "user-uma@default-org";
@@ -162,7 +159,7 @@ test("inviting an external user stores the record, lists it as active, audits, a
     assert.equal(updated.emailSent, false);
     assert.equal(updated.emailProblem, undefined, "an update does not retry the invitation email");
 
-    const events = await s.built.auditLog.events();
+    const events = await s.built.auditLog.events(tenant);
     assert.ok(events.some((e) => e.action === "external_user.invite" && e.resource === "pat@partner.example"));
     assert.ok(events.some((e) => e.action === "external_user.update" && e.resource === "pat@partner.example"));
 
@@ -204,7 +201,7 @@ test("role org_admin grants admin; member revokes it; DELETE drops the grant and
       (await roster(s.base)).externalUsers.map((m: any) => [m.email, m.status]),
       [["boss@partner.example", "expired"]],
     );
-    const events = await s.built.auditLog.events();
+    const events = await s.built.auditLog.events(tenant);
     assert.ok(events.some((e) => e.action === "external_user.revoke"));
     assert.deepEqual(
       events.filter((e) => e.action === "grant.create" || e.action === "grant.revoke").map((e) => e.action),
@@ -231,7 +228,7 @@ test("role org_admin grants admin; member revokes it; DELETE drops the grant and
     const forgotten: any = await (await revoke(s.base, "old@partner.example")).json();
     assert.deepEqual(forgotten, { ok: true, removed: true });
     assert.equal(s.built.identity.externalMember("old@partner.example"), undefined);
-    assert.ok((await s.built.auditLog.events()).some((e) => e.action === "external_user.forget"));
+    assert.ok((await s.built.auditLog.events(tenant)).some((e) => e.action === "external_user.forget"));
   } finally {
     await s.close();
   }
@@ -289,7 +286,9 @@ test("an address that already belongs to an org member cannot be invited", async
       await invite(s.base, { email: "pat@partner.example", role: "org_admin", expiresAt: expiresAt + DAY_MS })
     ).json();
     assert.equal(adopt.member.role, "org_admin", "re-inviting with role org_admin adopts the grant");
-    const grantAudits = (await s.built.auditLog.events()).filter((e) => e.resource === "pat@partner.example/org_admin");
+    const grantAudits = (await s.built.auditLog.events(tenant)).filter(
+      (e) => e.resource === "pat@partner.example/org_admin",
+    );
     assert.deepEqual(grantAudits, [], "adopting an existing grant creates nothing");
     assert.equal((await revoke(s.base, "pat@partner.example")).status, 200);
     assert.equal(adminStatusFromGrants(await s.built.admin.listGrants(tenant), "pat@partner.example").isAdmin, false);
@@ -336,7 +335,7 @@ test("revoking the last org admin is refused and leaves the external record unto
     const kept = s.built.identity.externalMember("boss@partner.example");
     assert.equal(kept?.role, "org_admin");
     assert.equal(kept?.expiresAt, expiresAt);
-    assert.ok(!(await s.built.auditLog.events()).some((e) => e.action === "external_user.revoke"));
+    assert.ok(!(await s.built.auditLog.events(tenant)).some((e) => e.action === "external_user.revoke"));
 
     const demote = await invite(s.base, { email: "boss@partner.example", role: "member", expiresAt }, boss);
     assert.equal(demote.status, 400);

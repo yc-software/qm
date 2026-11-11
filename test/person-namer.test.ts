@@ -4,10 +4,7 @@ import type { App } from "../src/api/app.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 import { discoverScopes, personNamer, threadRefLabel } from "../src/api/routes/admin/common.ts";
 import { installPrincipalLinks } from "../src/directory/person.ts";
-import { TEST_TENANT } from "./support/test-tenant.ts";
-import { withTenant } from "../src/tenants/context.ts";
-
-const tenant = withTenant(TEST_TENANT, (t) => t);
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const trusted = "oidc:issuer-hash:c3ViamVjdA";
 

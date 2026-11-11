@@ -320,7 +320,6 @@ async function listSessionApprovals(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { approvals: [...approvals, ...(await credentialApprovals(ctx, id, viewer))] });
 }
 
-// Pending credential requests from this session or any of its sub-agents, shown inline to their owner.
 async function credentialApprovals(ctx: ApiCtx, sessionId: string, viewer: string): Promise<PendingApproval[]> {
   const kc = ctx.deps.keychain;
   const approvals = ctx.deps.keychainApprovals;
@@ -373,6 +372,7 @@ async function listFiles(ctx: ApiCtx): Promise<void> {
   const scope = url.searchParams.get("scope");
   const nameQuery = (url.searchParams.get("q") ?? "").trim();
   const page = await app.listFilesForViewer(
+    tenantOf(ctx),
     viewer,
     {
       ...(limitRaw ? { limit: Number(limitRaw) } : {}),
@@ -384,69 +384,50 @@ async function listFiles(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, page);
 }
 
-async function patchSession(ctx: ApiCtx): Promise<void> {
-  const { res, app, body } = ctx;
-  const id = ctx.params.id!;
-  const b = body as {
-    principalId?: unknown;
-    title?: unknown;
-    archived?: unknown;
-    pinned?: unknown;
-    color?: unknown;
-    unread?: unknown;
-  };
-  const principalId = typeof b.principalId === "string" ? b.principalId : null;
-  if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
-  const patch: {
-    title?: string | null;
-    archived?: boolean;
-    pinned?: boolean;
-    color?: string | null;
-    readAt?: number;
-  } = {};
+type SessionPatch = {
+  title?: string | null;
+  archived?: boolean;
+  pinned?: boolean;
+  color?: string | null;
+  readAt?: number;
+};
+
+function parseSessionPatch(b: Record<string, unknown>): { patch: SessionPatch } | { error: string } {
+  const patch: SessionPatch = {};
   if ("unread" in b) {
-    if (typeof b.unread !== "boolean") {
-      return sendJson(res, 400, { error: "bad_request", message: "unread must be a boolean" });
-    }
+    if (typeof b.unread !== "boolean") return { error: "unread must be a boolean" };
     patch.readAt = b.unread ? 0 : Date.now();
   }
   if ("title" in b) {
-    if (b.title !== null && typeof b.title !== "string") {
-      return sendJson(res, 400, { error: "bad_request", message: "title must be a string or null" });
-    }
+    if (b.title !== null && typeof b.title !== "string") return { error: "title must be a string or null" };
     const trimmed = typeof b.title === "string" ? b.title.trim().slice(0, 200) : null;
     patch.title = trimmed ? trimmed : null;
   }
   if ("archived" in b) {
-    if (typeof b.archived !== "boolean") {
-      return sendJson(res, 400, { error: "bad_request", message: "archived must be a boolean" });
-    }
+    if (typeof b.archived !== "boolean") return { error: "archived must be a boolean" };
     patch.archived = b.archived;
   }
   if ("pinned" in b) {
-    if (typeof b.pinned !== "boolean") {
-      return sendJson(res, 400, { error: "bad_request", message: "pinned must be a boolean" });
-    }
+    if (typeof b.pinned !== "boolean") return { error: "pinned must be a boolean" };
     patch.pinned = b.pinned;
   }
   if ("color" in b) {
-    if (!isConversationColor(b.color)) {
-      return sendJson(res, 400, { error: "bad_request", message: "color must be '#rrggbb' or null" });
-    }
+    if (!isConversationColor(b.color)) return { error: "color must be '#rrggbb' or null" };
     patch.color = typeof b.color === "string" ? b.color.toLowerCase() : null;
   }
-  if (
-    patch.title === undefined &&
-    patch.archived === undefined &&
-    patch.pinned === undefined &&
-    patch.color === undefined &&
-    patch.readAt === undefined
-  ) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "title, archived, pinned, color, or unread required",
-    });
-  }
+  if (Object.keys(patch).length === 0) return { error: "title, archived, pinned, color, or unread required" };
+  return { patch };
+}
+
+async function patchSession(ctx: ApiCtx): Promise<void> {
+  const { res, app, body } = ctx;
+  const id = ctx.params.id!;
+  const b = isObj(body) ? body : {};
+  const principalId = typeof b.principalId === "string" ? b.principalId : null;
+  if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
+  const parsed = parseSessionPatch(b);
+  if ("error" in parsed) return sendJson(res, 400, { error: "bad_request", message: parsed.error });
+  const patch = parsed.patch;
   const session = await app.updateSession(id, principalId, patch);
   if (!session) return sendJson(res, 404, { error: "not_found" });
   return sendJson(res, 200, { session });
@@ -469,48 +450,12 @@ async function patchAgentConversation(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 401, { error: "capability_required", message: "this endpoint is for the agent self-API" });
   }
   const b = isObj(body) ? body : {};
-  const patch: {
-    title?: string | null;
-    archived?: boolean;
-    pinned?: boolean;
-    color?: string | null;
-  } = {};
-  if ("archived" in b) {
-    if (typeof b.archived !== "boolean") {
-      return sendJson(res, 400, { error: "bad_request", message: "archived must be a boolean" });
-    }
-    patch.archived = b.archived;
-  }
-  if ("pinned" in b) {
-    if (typeof b.pinned !== "boolean") {
-      return sendJson(res, 400, { error: "bad_request", message: "pinned must be a boolean" });
-    }
-    patch.pinned = b.pinned;
-  }
-  if ("title" in b) {
-    if (b.title !== null && typeof b.title !== "string") {
-      return sendJson(res, 400, { error: "bad_request", message: "title must be a string or null" });
-    }
-    const trimmed = typeof b.title === "string" ? b.title.trim().slice(0, 200) : null;
-    patch.title = trimmed ? trimmed : null;
-  }
-  if ("color" in b) {
-    if (!isConversationColor(b.color)) {
-      return sendJson(res, 400, { error: "bad_request", message: "color must be '#rrggbb' or null" });
-    }
-    patch.color = typeof b.color === "string" ? b.color.toLowerCase() : null;
-  }
-  if (
-    patch.archived === undefined &&
-    patch.pinned === undefined &&
-    patch.title === undefined &&
-    patch.color === undefined
-  ) {
-    return sendJson(res, 400, { error: "bad_request", message: "archived, pinned, title, or color required" });
-  }
+  const parsed = parseSessionPatch(b);
+  if ("error" in parsed) return sendJson(res, 400, { error: "bad_request", message: parsed.error });
+  const patch = parsed.patch;
   const session = await app.updateSession(ctx.params.id!, capability.actorId, patch);
   if (!session) return sendJson(res, 404, { error: "not_found", message: "not a conversation you can see" });
-  audit(ctx.deps, {
+  audit(ctx, {
     principalId: capability.actorId,
     action: "conversation.update",
     resource: session.id,
@@ -632,7 +577,7 @@ async function listScopeResources(ctx: ApiCtx): Promise<void> {
   const scope = url.searchParams.get("scope");
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
   if (!scope) return sendJson(res, 400, { error: "bad_request", message: "scope required" });
-  const out = await app.listScopeResources(principalId, scope as ScopeId);
+  const out = await app.listScopeResources(tenantOf(ctx), principalId, scope as ScopeId);
   if (!out) return sendJson(res, 404, { error: "not_found", message: "not a context you can see" });
   return sendJson(res, 200, {
     files: out.files,
@@ -700,7 +645,7 @@ export function parseIds(body: unknown): string[] | string {
 }
 
 async function selfMemory(ctx: ApiCtx): Promise<void> {
-  const { res, deps, url, method, body } = ctx;
+  const { res, url, method, body } = ctx;
   const principalId =
     method === "GET" ? url.searchParams.get("principalId") : (body as { principalId?: unknown }).principalId;
   if (typeof principalId !== "string" || !principalId)
@@ -719,7 +664,7 @@ async function selfMemory(ctx: ApiCtx): Promise<void> {
     await memory.delete?.(scope, ids, by);
   }
   const action = method === "GET" ? "memory.self.read" : "memory.self.update";
-  audit(deps, { principalId, action, resource: "memory", scopeLabel: scope });
+  audit(ctx, { principalId, action, resource: "memory", scopeLabel: scope });
   return sendJson(res, 200, { scopeId: scope, facts: await memoryFacts(memory, scope) });
 }
 
@@ -731,7 +676,7 @@ async function listAgentApis(ctx: ApiCtx): Promise<void> {
         .adminStatusOf(tenantOf(ctx), { id: capability.actorId, type: "internal" })
         .catch(() => ({ isAdmin: false }))
     : { isAdmin: false };
-  audit(deps, {
+  audit(ctx, {
     principalId: capability.actorId,
     action: "apis.list",
     resource: "apis",
@@ -793,7 +738,7 @@ function sendProviderProblem(res: ApiCtx["res"], problems: MemoryProviderProblem
 }
 
 const searchMemory = agentMemory(async (ctx, memory, capability) => {
-  const { res, deps, body } = ctx;
+  const { res, body } = ctx;
   const b = body as { query?: unknown; limit?: unknown; scope?: unknown };
   if (typeof b.query !== "string" || !b.query.trim()) {
     return sendJson(res, 400, { error: "bad_request", message: "query (string) required" });
@@ -816,7 +761,7 @@ const searchMemory = agentMemory(async (ctx, memory, capability) => {
       report,
     }),
   );
-  audit(deps, {
+  audit(ctx, {
     principalId: capability.actorId,
     action: "memory.agent.search",
     resource: "memory",
@@ -827,7 +772,7 @@ const searchMemory = agentMemory(async (ctx, memory, capability) => {
 });
 
 const readOwnNotebook = agentMemory(async (ctx, memory, capability) => {
-  const { res, deps } = ctx;
+  const { res } = ctx;
   const requested = ctx.url.searchParams.get("scope");
   const read = capability.memory?.read ?? [];
   const target =
@@ -837,7 +782,7 @@ const readOwnNotebook = agentMemory(async (ctx, memory, capability) => {
   if (!target || !canReadNotebook({ ...capability.memory, read }, target)) {
     return sendJson(res, 403, { error: "forbidden", message: "notebook is not readable here" });
   }
-  audit(deps, {
+  audit(ctx, {
     principalId: capability.actorId,
     action: "memory.agent.read",
     resource: "memory",
@@ -865,7 +810,7 @@ const writeMemory = (handle: (...args: [...Parameters<AgentMemoryHandler>, write
     return handle(ctx, memory, capability, write);
   });
 
-const captureFacts = writeMemory(async ({ res, deps, body }, memory, capability, write) => {
+const captureFacts = writeMemory(async ({ res, deps, tenant, body }, memory, capability, write) => {
   const facts = parseFacts(body);
   if (typeof facts === "string") return sendJson(res, 400, { error: "bad_request", message: facts });
   const { added, outcomes, problems } = await writeFacts(
@@ -881,41 +826,50 @@ const captureFacts = writeMemory(async ({ res, deps, body }, memory, capability,
     },
     capability.runId,
   );
-  audit(deps, {
-    principalId: capability.actorId,
-    action: "memory.agent.capture",
-    resource: "memory",
-    scopeLabel: write,
-  });
+  audit(
+    { deps, tenant },
+    {
+      principalId: capability.actorId,
+      action: "memory.agent.capture",
+      resource: "memory",
+      scopeLabel: write,
+    },
+  );
   if (problems.length) return sendProviderProblem(res, problems, { added, scopeId: write, outcomes });
   return sendJson(res, 200, { ok: true, added, scopeId: write, ...(outcomes.length ? { outcomes } : {}) });
 });
 
-const editFacts = writeMemory(async ({ res, deps, body }, memory, capability, write) => {
+const editFacts = writeMemory(async ({ res, deps, tenant, body }, memory, capability, write) => {
   const edits = parseEdits(body);
   if (typeof edits === "string") return sendJson(res, 400, { error: "bad_request", message: edits });
   await memory.edit?.(write, edits, turnAuthority(capability.actorId, capability.memory), {
     conversationScopeId: capability.scopeId,
   });
-  audit(deps, {
-    principalId: capability.actorId,
-    action: "memory.agent.edit",
-    resource: "memory",
-    scopeLabel: write,
-  });
+  audit(
+    { deps, tenant },
+    {
+      principalId: capability.actorId,
+      action: "memory.agent.edit",
+      resource: "memory",
+      scopeLabel: write,
+    },
+  );
   return sendJson(res, 200, { ok: true, scopeId: write });
 });
 
-const deleteFacts = writeMemory(async ({ res, deps, body }, memory, capability, write) => {
+const deleteFacts = writeMemory(async ({ res, deps, tenant, body }, memory, capability, write) => {
   const ids = parseIds(body);
   if (typeof ids === "string") return sendJson(res, 400, { error: "bad_request", message: ids });
   await memory.delete?.(write, ids, turnAuthority(capability.actorId, capability.memory));
-  audit(deps, {
-    principalId: capability.actorId,
-    action: "memory.agent.delete",
-    resource: "memory",
-    scopeLabel: write,
-  });
+  audit(
+    { deps, tenant },
+    {
+      principalId: capability.actorId,
+      action: "memory.agent.delete",
+      resource: "memory",
+      scopeLabel: write,
+    },
+  );
   return sendJson(res, 200, { ok: true, scopeId: write });
 });
 
@@ -1164,7 +1118,7 @@ async function createGrant(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
   if (!isGrant(body)) return sendJson(res, 400, { error: "bad_request", message: "expected a Grant" });
   try {
-    await app.grant(body);
+    await app.grant(tenantOf(ctx), body);
     return sendJson(res, 200, { ok: true });
   } catch (e) {
     return sendJson(res, 400, { error: "grant_failed", message: errMessage(e) });
@@ -1181,7 +1135,7 @@ async function revokeGrant(ctx: ApiCtx): Promise<void> {
     });
   }
   try {
-    await app.revokeGrant(b.ownerScopeId, b.ref, b.granteeScopeId, b.revokedBy);
+    await app.revokeGrant(tenantOf(ctx), b.ownerScopeId, b.ref, b.granteeScopeId, b.revokedBy);
     return sendJson(res, 200, { ok: true });
   } catch (e) {
     return sendJson(res, 400, { error: "revoke_failed", message: errMessage(e) });
@@ -1264,7 +1218,6 @@ export async function shareArtifact(ctx: ApiCtx): Promise<void> {
   });
 }
 
-/** Workspace custom emoji (name → image URL, aliases resolved), from the catalog the Slack surface publishes. */
 async function getCustomEmoji(ctx: ApiCtx): Promise<void> {
   const catalog = await ctx.deps.config?.getSlackEmojiCatalogDurable(orgScope(ctx.deps));
   const raw = catalog?.emoji ?? {};
@@ -1387,7 +1340,7 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
     }
     await config.setRuntimeSelection(target.scope, choice);
   }
-  audit(ctx.deps, {
+  audit(ctx, {
     principalId: target.actorId,
     action: "runtime-config.update",
     resource: "runtime-config",
@@ -1424,7 +1377,7 @@ async function putChannelHeaderPin(ctx: ApiCtx): Promise<void> {
       message: "expected { on: boolean | null } (null reverts to the org default)",
     });
   await ctx.deps.config.setChannelHeaderPin(target.scope, ctx.body.on);
-  audit(ctx.deps, {
+  audit(ctx, {
     principalId: target.actorId,
     action: "channel-header-pin.update",
     resource: "channel-header-pin",

@@ -94,7 +94,7 @@ async function authorize(ctx: ApiCtx, linkSlack: boolean, callbackUrl: unknown):
       url.password
     )
       throw new Error("Invalid authorization URL");
-    audit(ctx.deps, {
+    audit(ctx, {
       principalId: access.principal,
       action: "composio.authorize",
       resource: toolkit,

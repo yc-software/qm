@@ -15,6 +15,8 @@ import { scopeId } from "../src/types.ts";
 import { artifactPath } from "../src/files/file-artifact-store.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
+
 const principals = [
   { id: "alice@example.com", type: "internal" as const },
   { id: "bob@example.com", type: "internal" as const },
@@ -111,7 +113,7 @@ test("POST /v1/search derives principals from capability and shared scopes fail 
     assert.equal(missing.status, 409);
     assert.equal(((await missing.json()) as { error: string }).error, "principal_set_unavailable");
 
-    const events = (await built.auditLog.events()).filter((e) => e.action === "search.query");
+    const events = (await built.auditLog.events(tenant)).filter((e) => e.action === "search.query");
     assert.equal(events.length, 1, "a fail-closed request runs no search and records none");
     assert.match(events[0]!.detail ?? "", /"principals":\["alice@example.com","bob@example.com"\]/);
     assert.doesNotMatch(events[0]!.detail ?? "", /pelican/, "query text is not copied into the audit log");
@@ -192,7 +194,7 @@ test("file search retains common artifact identities when viewers own different 
       direction: "in",
       createdAt: index + 1,
     });
-    await built.acl.grant({
+    await built.acl.grant(tenant, {
       ownerScopeId,
       ref: id,
       granteeScopeId: scopeId("personal", principals[1 - index]!.id),
@@ -200,8 +202,8 @@ test("file search retains common artifact identities when viewers own different 
       grantedBy: author.id,
     });
   }
-  const alice = await built.app.listFilesForViewer(principals[0]!.id);
-  const bob = await built.app.listFilesForViewer(principals[1]!.id);
+  const alice = await built.app.listFilesForViewer(tenant, principals[0]!.id);
+  const bob = await built.app.listFilesForViewer(tenant, principals[1]!.id);
   assert.deepEqual(
     alice.owned.map((f) => f.id),
     [ids[0]],
@@ -237,7 +239,7 @@ test("file search still reaches shared artifacts outside the first document page
       createdAt: n,
     });
     for (const person of principals)
-      await built.acl.grant({
+      await built.acl.grant(tenant, {
         ownerScopeId,
         ref: id,
         granteeScopeId: scopeId("personal", person.id),
@@ -245,7 +247,7 @@ test("file search still reaches shared artifacts outside the first document page
         grantedBy: "carol@example.com",
       });
   }
-  const page = await built.app.listFilesForViewer(principals[0]!.id, { limit: 200 });
+  const page = await built.app.listFilesForViewer(tenant, principals[0]!.id, { limit: 200 });
   assert.equal(page.shared.length, 200);
   assert.ok(page.nextCursor);
   assert.equal(

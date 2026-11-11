@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -56,7 +57,7 @@ function start(withLayer = true): { base: string; built: BuiltApp; close: () => 
 test("security flags are visible to an org admin", async () => {
   const srv = start();
   try {
-    srv.built.auditLog.record({
+    srv.built.auditLog.record(testTenant, {
       at: 123,
       principalId: "U1",
       action: "security_posture.flagged",
@@ -87,7 +88,13 @@ test("security flags include quarantines and survive a busy audit log (#868)", a
   const srv = start();
   try {
     const rec = (at: number, action: string) =>
-      srv.built.auditLog.record({ at, principalId: "U1", action, resource: "slack", scopeLabel: "channel:C1" });
+      srv.built.auditLog.record(testTenant, {
+        at,
+        principalId: "U1",
+        action,
+        resource: "slack",
+        scopeLabel: "channel:C1",
+      });
     rec(1, "security_posture.flagged");
     rec(2, "security_posture.tool_result_quarantine");
     for (let i = 0; i < 201; i++) rec(10 + i, "tool.call");

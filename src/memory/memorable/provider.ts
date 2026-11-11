@@ -9,7 +9,6 @@ export interface MemorableProviderDeps {
   argv: readonly string[];
   env: NodeJS.ProcessEnv;
   loadItems: (sessionId: string) => Promise<Item[]>;
-  /** Redacts secret values before anything leaves the process. */
   mask?: (text: string) => string;
   injectTimeoutMs?: number;
   recordTimeoutMs?: number;
@@ -41,14 +40,6 @@ function redactCapture(capture: MemorableCapture, mask: (text: string) => string
   };
 }
 
-/**
- * Procedural memory backed by the Memorable CLI, exposed as an ordinary memory provider.
- *
- * Recall shells out to `memorable inject` with the turn's task; capture ignores the extracted
- * facts and instead derives a tool-call trace from the session that produced the turn, then
- * relays it through `memorable record`. Query and read are no-ops: procedures are not a
- * notebook and are never surfaced for direct editing.
- */
 export function createMemorableMemoryProvider(deps: MemorableProviderDeps): MemoryService {
   const inject = deps.inject ?? memorableInject;
   const relay = deps.relay ?? relayRecord;

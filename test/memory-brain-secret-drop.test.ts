@@ -28,10 +28,7 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
-import { TEST_TENANT } from "./support/test-tenant.ts";
-import { withTenant } from "../src/tenants/context.ts";
-
-const tenant = withTenant(TEST_TENANT, (t) => t);
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const SECRET = "memory-brain-drop-test-secret".repeat(2);
 const BRAIN = {
@@ -208,7 +205,7 @@ test("an org admin's brain link saves the client secret core-only, from a projec
   assert.doesNotMatch(JSON.stringify((await built.memoryRegistry.current()).record), /brain-secret-/);
   assert.deepEqual(await built.keychain!.listByOwner("admin-alice"), [], "nothing enters a keychain");
   assert.deepEqual(await built.keychain!.listGrants({ ownerId: "admin-alice" }), [], "nothing is granted");
-  const rows = JSON.stringify(await built.auditLog.events());
+  const rows = JSON.stringify(await built.auditLog.events(tenant));
   assert.match(rows, /memory-registry\.brain\.secret/);
   assert.doesNotMatch(rows, /brain-secret-/);
 });
@@ -281,7 +278,7 @@ test("a brain link refuses non-admins, other drop fields, unknown and moved brai
     putBrain(record, "acme-personal", { url: "https://brain2.acme.example/mcp" }, change),
   );
   assert.equal((await carols.form()).status, 403, "a former admin's link stays refused after the brain moves");
-  const rows = JSON.stringify(await built.auditLog.events());
+  const rows = JSON.stringify(await built.auditLog.events(tenant));
   assert.match(rows, /memory-registry\.brain\.secret\.refused/);
   assert.equal(rows.match(/acme-personal: brain acme-personal changed after this link was made/g)?.length, 2);
   assert.equal(rows.match(/acme-personal: you can no longer set this brain's secret: only an org admin/g)?.length, 3);
@@ -361,7 +358,7 @@ test("a member connects their own brain from chat and sets its secret through th
   );
   let rows = "";
   for (let waited = 0; waited < 2_000; waited += 20) {
-    rows = JSON.stringify(await built.auditLog.events());
+    rows = JSON.stringify(await built.auditLog.events(tenant));
     if (actions.every((action) => rows.includes(action))) break;
     await new Promise((resolve) => setTimeout(resolve, 20));
   }

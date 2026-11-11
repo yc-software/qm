@@ -33,10 +33,7 @@ import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap, testUserStore } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { TEST_TENANT } from "./support/test-tenant.ts";
-import { withTenant } from "../src/tenants/context.ts";
-
-const tenant = withTenant(TEST_TENANT, (t) => t);
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const EMAIL = "jordan@acme.test";
 const SLACK = "U0JORDAN";
@@ -332,7 +329,7 @@ describe("linked sign-ins across the HTTP surface", () => {
     };
     assert.equal(listed.links.length, 1);
     assert.equal(listed.links[0]!.linkedBy, "admin-alice");
-    const audit = await built.auditLog.tail({ limit: 50, action: "principal_link.create" });
+    const audit = await built.auditLog.tail(tenant, { limit: 50, action: "principal_link.create" });
     assert.ok(audit.some((e) => e.resource === `${OIDC} -> ${EMAIL}`));
   });
 

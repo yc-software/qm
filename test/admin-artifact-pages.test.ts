@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -92,7 +93,9 @@ test("per-kind artifact reads are scope-filtered, authz-gated, and audited", asy
         `${kind}: admin-only`,
       );
       assert.ok(
-        (await s.built.auditLog.events()).some((e) => e.action === `${kind}.read` && e.scopeLabel === "personal:U1"),
+        (await s.built.auditLog.events(testTenant)).some(
+          (e) => e.action === `${kind}.read` && e.scopeLabel === "personal:U1",
+        ),
         `${kind}: the read is audited`,
       );
     }
@@ -155,7 +158,7 @@ test("an admin can edit and clear a cron destination inside the administered sco
     assert.equal(clear.status, 200);
     assert.equal((await s.built.app.getCron(cron.id))?.destination, undefined);
     assert.ok(
-      (await s.built.auditLog.events()).some(
+      (await s.built.auditLog.events(testTenant)).some(
         (e) => e.action === "cron.destination.update" && e.scopeLabel === "personal:U1",
       ),
       "the admin edit is audited",
@@ -186,7 +189,9 @@ test("a single skill drills in to its body, capabilities, and approvals — scop
     assert.equal(got.body, "# Summarize\nDo the thing.", "the full SKILL.md body comes back for the drill-in");
     assert.deepEqual(got.requiredCapabilities, ["egress:example.com"]);
     assert.ok(
-      (await s.built.auditLog.events()).some((e) => e.action === "skill.read" && e.scopeLabel === "personal:U1"),
+      (await s.built.auditLog.events(testTenant)).some(
+        (e) => e.action === "skill.read" && e.scopeLabel === "personal:U1",
+      ),
       "the read is audited",
     );
 
@@ -243,14 +248,19 @@ test('an org scope reads everything — the dashboard\'s default "All scopes" vi
       manifest: { name: "summarize", description: "sum it up", requiredCapabilities: [], body: "..." },
       createdBy: "U1",
     });
-    s.built.errors.record({
+    s.built.errors.record(testTenant, {
       category: "turn",
       code: "boom",
       message: "redacted",
       scopeLabel: "personal:U1",
       sessionId: "sess-1",
     });
-    s.built.errors.record({ category: "turn", code: "bang", message: "redacted", scopeLabel: "channel:C9" });
+    s.built.errors.record(testTenant, {
+      category: "turn",
+      code: "bang",
+      message: "redacted",
+      scopeLabel: "channel:C9",
+    });
 
     const crons = await json(await fetch(`${s.base}/v1/admin/crons?scope=org:default-org`, { headers: ALICE_ADMIN }));
     assert.deepEqual(
@@ -384,7 +394,7 @@ test("admin cron runtime edits preserve task authority and reject unavailable or
     assert.deepEqual(listed.crons[0].runtime, runtime);
     assert.equal((await put({ runtime: null })).status, 200);
     assert.deepEqual(await s.built.app.getCron(cron.id), { ...cron, runtime: null });
-    const audit = (await s.built.auditLog.events()).filter((event) => event.action === "cron.runtime.update");
+    const audit = (await s.built.auditLog.events(testTenant)).filter((event) => event.action === "cron.runtime.update");
     assert.equal(audit.length, 2);
     assert.ok(audit.every((event) => event.principalId === "admin-alice" && event.resource === cron.id));
   } finally {

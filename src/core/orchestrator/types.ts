@@ -70,6 +70,7 @@ import type { SwarmService, SwarmTurn } from "../../swarms/swarm-service.ts";
 import type { ChannelPolicyStore } from "../../surface-cache/channel-policy-store.ts";
 import type { SurfaceCache } from "../../surface-cache/types.ts";
 import type { SurfaceRegistry } from "../../surfaces/registry.ts";
+import type { Tenant } from "../../tenants/context.ts";
 
 export interface OrchestratorInput extends Omit<
   TurnRequest,
@@ -101,7 +102,6 @@ export interface OrchestratorInput extends Omit<
 }
 
 export interface OrchestratorDeps {
-  /** Tracks each turn's detached tail so shutdown drains it (box reclaim, fallback title). */
   admittedWork?: AdmittedWork;
   externalSlackPolicies?: ExternalSlackPolicies;
   swarms?: SwarmService;
@@ -206,6 +206,7 @@ export interface SurfaceContextPuller {
 export interface Orchestrator {
   handleTurn(input: OrchestratorInput): Promise<TurnResult>;
   screenSecuritySteer(input: {
+    tenant: Tenant;
     payload: string;
     actor: Principal;
     conversation: Conversation;

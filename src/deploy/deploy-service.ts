@@ -14,7 +14,7 @@ import { normalizeRelPath } from "./deploy-fs.ts";
 import { samePerson } from "../directory/person.ts";
 import { personOrOwningBot, type CapabilityClaims } from "../auth/capability-token.ts";
 import { CONNECTOR_HOSTS } from "../connectors/oauth.ts";
-import type { AuditLog } from "../audit/audit-log.ts";
+import { recordAuditInBinding, type AuditEvent, type AuditLog } from "../audit/audit-log.ts";
 import {
   appUrlOf,
   currentVersionOf,
@@ -34,6 +34,7 @@ import { uuidSchema } from "../util/ids.ts";
 import { claimThenBind } from "../tenants/claim.ts";
 import { assertAppLabelFits } from "../tenants/settings.ts";
 import { createLiveEdits, type LiveEditSaved } from "./live-edits.ts";
+import { ambientTenant, type Tenant } from "../tenants/context.ts";
 
 export interface DeployFile {
   path: string;
@@ -104,7 +105,6 @@ export interface DeployService {
   publishDueLiveEdits(): Promise<number>;
   liveEditOf(idOrName: string): Promise<{ draft: DeploymentDraft | null } | null>;
   reachDeployment(idOrName: string, principalId: string, opts?: ReachOptions): Promise<Reach>;
-  /** Recent app output (entrypoint stdout+stderr) for a deployment, newest last; null when the provider keeps none. */
   deploymentLogs(idOrName: string, opts: { tailLines: number }): Promise<string | null>;
   gitRepoPath(idOrName: string): Promise<string | null>;
   pushGit<T>(id: string, runReceivePack: () => Promise<{ result: T; ok: boolean }>, actor?: string): Promise<T>;
@@ -224,10 +224,11 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     if ((await deps.canManageEmail?.(ref)) || (await externalSharingAllowed(ownerScopeId))) return;
     throw new DeployAccessError("external_sharing_disabled", EXTERNAL_APP_SHARING_OFF);
   }
+  const recordAudit = (e: AuditEvent): void => recordAuditInBinding(deps.auditLog, e);
   async function withdrawLoanUnlessPublisher(d: Deployment, actor: string | undefined): Promise<void> {
     if (!d.connectors || samePerson(actor, d.createdBy)) return;
     await deps.deployStore.setConnectors(d.id, undefined);
-    deps.auditLog.record({
+    recordAudit({
       at: Date.now(),
       principalId: actor ?? "unknown",
       action: "deploy_connectors",
@@ -288,7 +289,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
   const liveEdits = createLiveEdits({
     deployStore: deps.deployStore,
     provider: deps.provider,
-    auditLog: deps.auditLog,
+    recordAudit,
     leaderLease,
     withDeployLock,
     applyVersion: (id, version) => applyVersion(id, version),
@@ -334,7 +335,8 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     });
 
   const deploymentRef = (id: string): string => encodeRef(deployRef(id));
-  const grantsOn = (d: Deployment): Promise<Grant[]> => deps.acl.grantsFor(d.ownerScopeId, deploymentRef(d.id));
+  const grantsOn = (tenant: Tenant, d: Deployment): Promise<Grant[]> =>
+    deps.acl.grantsFor(tenant, d.ownerScopeId, deploymentRef(d.id));
 
   async function reachAllowed(d: Deployment, principalId: string): Promise<boolean> {
     if (!principalId) return false;
@@ -344,7 +346,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       return kind === "org" || (kind === "personal" && samePerson(ref, principalId));
     };
     if (await reaches(d.ownerScopeId)) return true;
-    for (const g of await grantsOn(d)) {
+    for (const g of await grantsOn(ambientTenant(), d)) {
       if ((g.permission === "read" || g.permission === "write") && (await reaches(g.granteeScopeId))) return true;
     }
     return false;
@@ -374,7 +376,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
   ): Promise<boolean> {
     if (!(await personOrOwningBot(caller, async () => samePerson(d.createdBy, caller.actorId)))) return false;
     if (await managesHome(d, caller.actorId, actingScopeId)) return true;
-    for (const grant of await grantsOn(d)) {
+    for (const grant of await grantsOn(ambientTenant(), d)) {
       if (grant.permission !== "write") continue;
       if (await canWriteScope(caller.actorId, grant.granteeScopeId, actingScopeId)) return true;
     }
@@ -398,7 +400,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       const homeDir = input.homeFiles?.length ? await snapshotFiles(deps.deployDir, input.homeFiles) : undefined;
       const env = input.stampEnv ? { ...input.env, ...input.stampEnv } : input.env;
       if (input.createdInScope && parseScopeId(input.createdInScope).kind === "channel") {
-        await deps.acl.grant({
+        await deps.acl.grant(ambientTenant(), {
           ownerScopeId: input.ownerScopeId,
           ref: deploymentRef(id),
           granteeScopeId: input.createdInScope,
@@ -421,7 +423,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       });
       const endpoint = await applyVersion(d.id, d.versions[0]!);
       await markVersionRunning(d.id, d.versions[0]!.version, endpoint);
-      deps.auditLog.record({
+      recordAudit({
         at: Date.now(),
         principalId: input.createdBy,
         action: "deploy",
@@ -463,7 +465,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         });
         const endpoint = await applyVersion(id, v, input.alwaysOn);
         await markVersionRunning(id, v.version, endpoint);
-        deps.auditLog.record({
+        recordAudit({
           at: Date.now(),
           principalId: before.createdBy,
           action: "deploy_version",
@@ -493,7 +495,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         if (!d || !v) return;
         const endpoint = await applyVersion(id, v, options?.alwaysOn);
         await markVersionRunning(id, v.version, endpoint);
-        deps.auditLog.record({
+        recordAudit({
           at: Date.now(),
           principalId: d.createdBy,
           action: "deploy_rollback",
@@ -537,7 +539,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
             .catch((cleanupError) => swallow("deploy restore endpoint cleanup", cleanupError));
           throw error;
         }
-        deps.auditLog.record({
+        recordAudit({
           at: Date.now(),
           principalId: actorId ?? d.createdBy,
           action: "deploy_restore",
@@ -556,7 +558,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         const clash = await deps.deployStore.getByName(name);
         if (clash && clash.id !== id) throw new Error(`deployment name taken: ${name}`);
         await deps.deployStore.setName(id, name);
-        deps.auditLog.record({
+        recordAudit({
           at: Date.now(),
           principalId: d.createdBy,
           action: "deploy_rename",
@@ -573,7 +575,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         const d = await deps.deployStore.get(id);
         if (!d) throw new Error(`unknown deployment: ${id}`);
         await deps.deployStore.setDisplayName(id, displayName || undefined);
-        deps.auditLog.record({
+        recordAudit({
           at: Date.now(),
           principalId: d.createdBy,
           action: "deploy_display_name",
@@ -590,7 +592,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         if (!d) throw new Error(`unknown deployment: ${id}`);
         if (d.status === "running" && Boolean(d.alwaysOn) !== alwaysOn) await deps.provider.setAlwaysOn?.(d, alwaysOn);
         await deps.deployStore.setAlwaysOn(id, alwaysOn);
-        deps.auditLog.record({
+        recordAudit({
           at: Date.now(),
           principalId: d.createdBy,
           action: "deploy_always_on",
@@ -608,7 +610,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         const d = await deps.deployStore.get(id);
         if (!d) throw new Error(`unknown deployment: ${id}`);
         await deps.deployStore.setEmbedAncestors(id, ancestors);
-        deps.auditLog.record({
+        recordAudit({
           at: Date.now(),
           principalId: d.createdBy,
           action: "deploy_embed_ancestors",
@@ -634,7 +636,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       if (hosts.length && d.public)
         throw new DeployAccessError("forbidden", "a public app cannot borrow connectors; make it restricted first");
       await deps.deployStore.setConnectors(d.id, hosts.length ? hosts : undefined);
-      deps.auditLog.record({
+      recordAudit({
         at: Date.now(),
         principalId: actor.createdBy,
         action: "deploy_connectors",
@@ -661,7 +663,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           "an app that borrows connectors cannot be public; withdraw them first",
         );
       await deps.deployStore.setPublic(d.id, isPublic);
-      deps.auditLog.record({
+      recordAudit({
         at: Date.now(),
         principalId: actor.createdBy,
         action: isPublic ? "deploy_public_enable" : "deploy_public_disable",
@@ -743,7 +745,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           await deps.deployStore.deleteDraft(id);
           const endpoint = await applyVersion(id, v);
           await markVersionRunning(id, v.version, endpoint);
-          deps.auditLog.record({
+          recordAudit({
             at: Date.now(),
             principalId: before.createdBy,
             action: "deploy_git_push",
@@ -752,7 +754,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           });
         } catch (e) {
           reportFailure("deploy: register pushed version", e, `deployment=${id}`);
-          deps.auditLog.record({
+          recordAudit({
             at: Date.now(),
             principalId: "system",
             action: "deploy_git_push_failed",
@@ -801,7 +803,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         const clash = await deps.deployStore.getByName(input.name);
         if (clash && clash.id !== existing.id) throw new Error(`deployment name taken: ${input.name}`);
         await deps.deployStore.setName(existing.id, input.name);
-        deps.auditLog.record({
+        recordAudit({
           at: Date.now(),
           principalId: createdBy,
           action: "deploy_rename",
@@ -886,7 +888,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     async deploymentGrantees(idOrName) {
       const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
       if (!d) return [];
-      return (await grantsOn(d)).map((g) => ({ scope: g.granteeScopeId, permission: g.permission }));
+      return (await grantsOn(ambientTenant(), d)).map((g) => ({ scope: g.granteeScopeId, permission: g.permission }));
     },
 
     async shareDeployment(idOrName, grantee, permission, actor, opts) {
@@ -898,9 +900,10 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       grantee = await deploymentShareScope(grantee, permission, deps.canManageEmail);
       await assertShareAllowed(d.ownerScopeId, grantee, permission);
       const ref = deploymentRef(d.id);
-      await deps.acl.revoke(d.ownerScopeId, ref, grantee, actor.createdBy);
+      const tenant = ambientTenant();
+      await deps.acl.revoke(tenant, d.ownerScopeId, ref, grantee, actor.createdBy);
       if (permission === null) {
-        deps.auditLog.record({
+        deps.auditLog.record(tenant, {
           at: Date.now(),
           principalId: actor.createdBy,
           action: "deploy_unshare",
@@ -908,14 +911,14 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           scopeLabel: grantee,
         });
       } else {
-        await deps.acl.grant({
+        await deps.acl.grant(tenant, {
           ownerScopeId: d.ownerScopeId,
           ref,
           granteeScopeId: grantee,
           permission,
           grantedBy: actor.createdBy,
         });
-        deps.auditLog.record({
+        deps.auditLog.record(tenant, {
           at: Date.now(),
           principalId: actor.createdBy,
           action: "deploy_share",
@@ -924,7 +927,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         });
       }
       if (opts?.notify !== false) await notifyDeploymentShared(deps, d, grantee, permission, actor.createdBy);
-      return (await grantsOn(d)).map((g) => ({ scope: g.granteeScopeId, permission: g.permission }));
+      return (await grantsOn(tenant, d)).map((g) => ({ scope: g.granteeScopeId, permission: g.permission }));
     },
 
     async transferDeploymentOwner(idOrName, toScope, actor) {
@@ -936,20 +939,22 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       if (d.ownerScopeId === toScope) return d;
       const ref = deploymentRef(d.id);
       const fromScope = d.ownerScopeId;
-      const prior = await grantsOn(d);
+      const tenant = ambientTenant();
+      const prior = await grantsOn(tenant, d);
       const newOwnerId = parseScopeId(toScope).kind === "personal" ? parseScopeId(toScope).ref! : actor.callerId;
       const oldOwnerId = parseScopeId(fromScope).kind === "personal" ? parseScopeId(fromScope).ref! : actor.callerId;
       for (const g of prior) {
         if (g.granteeScopeId === toScope) continue;
-        await deps.acl.grant({ ...g, ownerScopeId: toScope, grantedBy: newOwnerId }, d.createdBy);
+        await deps.acl.grant(tenant, { ...g, ownerScopeId: toScope, grantedBy: newOwnerId }, d.createdBy);
       }
       await deps.acl.grant(
+        tenant,
         { ownerScopeId: toScope, ref, granteeScopeId: fromScope, permission: "write", grantedBy: newOwnerId },
         d.createdBy,
       );
       await deps.deployStore.setOwnerScope(d.id, toScope);
-      for (const g of prior) await deps.acl.revoke(fromScope, ref, g.granteeScopeId, oldOwnerId, d.createdBy);
-      deps.auditLog.record({
+      for (const g of prior) await deps.acl.revoke(tenant, fromScope, ref, g.granteeScopeId, oldOwnerId, d.createdBy);
+      deps.auditLog.record(tenant, {
         at: Date.now(),
         principalId: actor.callerId,
         action: "deploy_transfer",

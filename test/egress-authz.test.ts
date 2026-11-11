@@ -8,6 +8,7 @@ import {
   tokenFromRequest,
   hostFromAuthority,
   type EgressAuthzDeps,
+  tenantRecorder,
 } from "../src/egress-authz-main.ts";
 import { isNeverAllowedIp } from "../src/util/network.ts";
 import { verifySignature } from "../src/auth/source-auth.ts";
@@ -15,7 +16,7 @@ import { mintCapabilityToken, EGRESS_PROXY_AUD, CONTROL_PLANE_AUD } from "../src
 import type { EgressAuditRecord } from "../src/admin/egress-audit-sink.ts";
 import { scopeId, type EgressPolicy } from "../src/types.ts";
 import { randomUUID } from "node:crypto";
-import { boundTenant, withTenant, withoutTenant } from "../src/tenants/context.ts";
+import { withTenant, withoutTenant } from "../src/tenants/context.ts";
 
 const CAPABILITY_SECRET = "test-egress-capability-secret";
 const SOURCE_SECRET = "test-egress-source-secret";
@@ -306,8 +307,6 @@ test("a name RESOLVING to link-local / denied IP is denied (rebind guard)", asyn
   }
 });
 
-// A forward proxy dials from ITS namespace, so an allowed `CONNECT 127.0.0.1:<port>` would bridge
-// any caller to the services colocated with the proxy — this decision service, Envoy's admin.
 test("loopback destinations are denied even under an open policy, by literal and by resolved IP", async () => {
   const { server, records } = boot({ lookup: async () => ["127.0.0.1"] });
   const port = await listen(server);
@@ -499,10 +498,13 @@ test("relay sink: a batch is only dequeued once core acknowledges it", async () 
 test("the proxy stamps each decision with the tenant from the verified token and records it in that tenant", () =>
   withoutTenant(async () => {
     const tenant = randomUUID();
-    const seen: Array<{ tenant: string | undefined; bound: string | undefined }> = [];
+    const seen: Array<{ tenant: string | undefined; token: string }> = [];
     const server = buildEgressAuthzServer({
       capabilitySecret: CAPABILITY_SECRET,
-      audit: { record: (r) => seen.push({ tenant: r.tenant, bound: boundTenant() }) },
+      audit: tenantRecorder({
+        record: (t, r) => seen.push({ tenant: r.tenant, token: t.id }),
+        list: async () => [],
+      }),
       lookup: async () => ["93.184.216.34"],
     });
     const port = await listen(server);
@@ -510,10 +512,7 @@ test("the proxy stamps each decision with the tenant from the verified token and
       const token = await withTenant(tenant, () => egressToken({ allowedHosts: [] }));
       assert.equal(await check(port, "example.com:443", token), 200);
       assert.equal(await check(port, "example.com:443", await egressToken({ allowedHosts: [] })), 200);
-      assert.deepEqual(seen, [
-        { tenant, bound: tenant },
-        { tenant: undefined, bound: undefined },
-      ]);
+      assert.deepEqual(seen, [{ tenant, token: tenant }]);
     } finally {
       await close(server);
     }

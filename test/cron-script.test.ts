@@ -1,3 +1,4 @@
+import { testTenant } from "./support/test-tenant.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
@@ -129,6 +130,7 @@ test("a script needs a task cron and is removed by patch null or a switch to tex
 test("setting a script runs it once first and keeps it only when that run exits 0 or 1", async () => {
   const { built, control } = await setup();
   const ctx = createToolContext({
+    tenant: testTenant,
     sandbox: {} as unknown as Sandbox,
     provision: async () => ({ id: "h", rootDir: "/workspace" }),
     writableScopeId: HOME,

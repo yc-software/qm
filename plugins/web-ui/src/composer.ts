@@ -56,7 +56,6 @@ import { clearDraft, newChatDraftKey, saveDraft } from "./drafts";
 import { tip } from "./tooltip";
 import { isCompactLayout } from "./viewport";
 import {
-  LOADOUT_CAP,
   isUltrafastModel,
   presetModelId,
   ultrafastChoice,
@@ -1046,6 +1045,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         saveLoadout(entries, loadoutKey);
       },
       add: addLoadoutEntry,
+      removesSelected: true,
     },
     activeEntry: activeLoadoutEntry,
     apply: applyLoadout,
@@ -1125,8 +1125,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   }
 
   function addLoadoutEntry(option: ModelOption, agent: Agent): void {
-    const current = currentModelOption();
-    if (!current || seededLoadout(current).length >= LOADOUT_CAP) return;
+    if (!currentModelOption()) return;
     applyLoadout({ value: option.value, effort: defaultEffortForModel(option.model), fast: false }, agent);
     composerState.menuQuery = "";
   }
@@ -1343,9 +1342,6 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   }
 
   function onComposerKeydown(e: KeyboardEvent, agent: Agent): void {
-    // During IME composition (Japanese/Chinese/Korean), Enter confirms the
-    // conversion — it must never send. Safari reports composition Enter with
-    // keyCode 229 and may fire after compositionend, so check both.
     if (e.isComposing || e.keyCode === 229) return;
     const slash = currentSlashMenu();
     if (slash.open) {

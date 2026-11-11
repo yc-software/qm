@@ -31,6 +31,7 @@ import {
 import { actsAsScope, parseScopeId, type Permission, type ScopeId } from "../types.ts";
 import { cronRef, encodeRef } from "../acl/resource-ref.ts";
 import type { App, VisibleCron } from "./app.ts";
+import { ambientTenant } from "../tenants/context.ts";
 
 export interface CronCreateRequest {
   runtime?: Cron["runtime"];
@@ -906,6 +907,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
             : undefined;
         if (!invite)
           await app.grant(
+            ambientTenant(),
             {
               ownerScopeId: home.ownerScopeId,
               ref: home.grantRef,

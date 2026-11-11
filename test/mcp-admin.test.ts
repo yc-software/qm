@@ -107,7 +107,7 @@ test("MCP admin validates and preserves credential scope, without returning secr
   assert.equal((await store.get("crm"))?.approval, undefined);
   assert.equal((await put({ attestActor: true })).status, 400);
   assert.equal(
-    (await put({ catalog: true, attestActor: true })).status,
+    (await put({ catalog: true, attestActor: true, auth: "none" })).status,
     400,
     "an unauthenticated upstream cannot trust the actor",
   );
@@ -147,6 +147,29 @@ test("MCP admin validates and preserves credential scope, without returning secr
     [undefined, undefined],
     "turning attestation off drops its audience",
   );
+  const kept = { url: "https://tools.example.com/mcp", tools: [{ name: "lookup", description: "", inputSchema: {} }] };
+  const seeds = [
+    { id: "bearer", auth: "bearer", bearerToken: "s", ...kept },
+    { id: "client", auth: "client-credentials", clientId: "i", clientSecret: "s", ...kept },
+    {
+      id: "oauth",
+      auth: "oauth-user",
+      credentialScope: "per-user",
+      credentialHost: "tools.example.com",
+      clientId: "i",
+      oauthAuthorizeUrl: "https://id.example.com/a",
+      oauthTokenUrl: "https://id.example.com/t",
+      ...kept,
+    },
+  ];
+  for (const seed of seeds) {
+    const record = { name: "N", about: "A", credentialScope: "shared", readOnly: false, enabled: true, ...seed };
+    await store.put({ ...record, updatedAt: 0, updatedBy: "a" } as McpServer);
+    const edit = { method: "PUT", headers: ADMIN, body: JSON.stringify({ validate: false, readOnly: false }) };
+    assert.equal((await fetch(url.replace(/crm$/, seed.id), edit)).status, 200);
+    const after: Record<string, unknown> = { ...(await store.get(seed.id)) };
+    assert.deepEqual(Object.fromEntries(Object.keys(record).map((k) => [k, after[k]])), record);
+  }
 });
 
 test("production wiring never uses operator fallback tokens for per-user MCP calls and refuses private MCP addresses", async (t) => {

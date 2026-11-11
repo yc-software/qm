@@ -114,34 +114,25 @@ test("a Slack bot that started a swarm cannot direct the work a person later sen
   await first.done();
   await f.service.sweep();
   const person = await f.rootTurn("alice", false);
-  const [worker] = await f.service.spawn(person.caller, { requestId: "person-spawn", text: "person work" });
+  await f.service.send(person.caller, { requestId: "person-send", audience: [botWorker!.id], text: "person work" });
   await person.done();
   await f.service.sweep();
   const bot = await f.rootTurn("release-bot", true);
   const sent = await outcome(
-    f.service.send(bot.caller, { requestId: "bot-send", audience: [worker!.id], text: "drop that, do this" }),
+    f.service.send(bot.caller, { requestId: "bot-send", audience: [botWorker!.id], text: "drop that, do this" }),
   );
-  const stopped = await outcome(f.service.control(bot.caller, { memberId: worker!.id, state: "stopped" }));
+  const stopped = await outcome(f.service.control(bot.caller, { memberId: botWorker!.id, state: "stopped" }));
   const rewritten = await outcome(f.service.context(bot.caller, { plan: "bot plan" }));
   const inspected = await outcome(f.service.inspect(bot.caller));
   const botAgent = await f.workerCaller(botWorker!.id);
-  const personAgent = await f.workerCaller(worker!.id);
   const botWorkerSent = await outcome(
-    f.service.send(botAgent, { requestId: "bot-worker-send", audience: [worker!.id], text: "drop that, do this" }),
+    f.service.send(botAgent, { requestId: "bot-worker-send", audience: "all", text: "bot result" }),
   );
   const botWorkerInspected = await outcome(f.service.inspect(botAgent));
-  const personWorkerInspected = await outcome(f.service.inspect(personAgent));
-  const personWorkerSent = await outcome(
-    f.service.send(personAgent, { requestId: "result", audience: "all", text: "person result" }),
-  );
   await f.service.sweep();
   const swarm = (await f.store.get(f.root.id))!;
-  const result = swarm.messages.find((message) => message.text === "person result")!;
-  const woken = (await f.runs.list()).filter((entry) => entry.request.text.includes("person result"));
-  const queued = await f.service.queuedMessages({ ...f.template, actor: { id: "alice", type: "internal" } });
-  const [personChild] = await f.service.spawn(personAgent, { requestId: "person-child", text: "child work" });
-  await f.service.sweep();
-  const personChildInspected = await outcome(f.service.inspect(await f.workerCaller(personChild!.id)));
+  const personMessage = swarm.messages.find((message) => message.text === "person work")!;
+  const woken = (await f.runs.list()).filter((entry) => entry.request.text.includes("person work"));
   const refused = "a Slack bot's turn cannot direct a person's swarm";
   assert.deepEqual(
     {
@@ -151,13 +142,9 @@ test("a Slack bot that started a swarm cannot direct the work a person later sen
       inspected,
       botWorkerSent,
       botWorkerInspected,
-      personWorkerInspected,
-      personWorkerSent,
-      personChildInspected,
-      resultNotifications: result.notifications,
+      personNotifications: personMessage.notifications,
       woken: woken.map((entry) => entry.sessionId),
-      queued: queued.map((message) => message.text),
-      workerControl: swarm.members.find((member) => member.id === worker!.id)!.control,
+      workerControl: swarm.members.find((member) => member.id === botWorker!.id)!.control,
       rootContext: swarm.members.find((member) => member.id === f.root.id)!.context,
     },
     {
@@ -167,15 +154,36 @@ test("a Slack bot that started a swarm cannot direct the work a person later sen
       inspected: refused,
       botWorkerSent: refused,
       botWorkerInspected: refused,
-      personWorkerInspected: "accepted",
-      personWorkerSent: "accepted",
-      personChildInspected: "accepted",
-      resultNotifications: { [f.root.id]: { state: "mailbox" }, [botWorker!.id]: { state: "mailbox" } },
+      personNotifications: { [botWorker!.id]: { state: "mailbox" } },
       woken: [],
-      queued: ["person result"],
       workerControl: undefined,
       rootContext: {},
     },
+  );
+});
+
+test("a person's turn cannot add workers to a swarm a Slack bot started", async () => {
+  const f = await swarmFixture({ channel: "C1" });
+  if (f.caller.kind !== "agent") throw new Error("wrong caller");
+  await f.sessions.addParticipant(f.root.id, "release-bot");
+  await f.runs.complete(f.caller.claims.runId!, f.caller.claims.runLeaseToken!, { status: "ok", reply: "idle" });
+  const bot = await f.rootTurn("release-bot", true);
+  await f.service.spawn(bot.caller, { requestId: "bot-initial", text: "bot work" });
+  await bot.done();
+  await f.service.sweep();
+  const person = await f.rootTurn("alice", false);
+  const spawned = await outcome(f.service.spawn(person.caller, { requestId: "person-spawn", text: "person work" }));
+  await person.done();
+  await f.service.sweep();
+  const swarm = (await f.store.get(f.root.id))!;
+  const personRuns = (await f.runs.list()).filter((entry) => entry.request.text.includes("person work"));
+  assert.deepEqual(
+    {
+      spawned,
+      members: swarm.members.length,
+      personRuns: personRuns.map((entry) => [entry.request.actor.id, entry.request.botActor ?? false]),
+    },
+    { spawned: "a person's turn cannot add workers to a swarm a Slack bot started", members: 2, personRuns: [] },
   );
 });
 

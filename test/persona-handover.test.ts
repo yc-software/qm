@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -119,7 +120,7 @@ test("a persona's last active owner leaving hands it to the default admin, and o
   } finally {
     await close();
   }
-  const handovers = (await built.auditLog.events()).filter((e) => e.action === "persona_owner_handover");
+  const handovers = (await built.auditLog.events(testTenant)).filter((e) => e.action === "persona_owner_handover");
   assert.deepEqual(
     handovers.map((e) => [e.resource, e.detail]),
     [

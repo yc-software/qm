@@ -21,7 +21,7 @@ const COLS = "at, principal_id, action, resource, scope_label, status, detail";
 const MAX = 50000;
 
 export function createPostgresAuditLog(connectionString: string): AuditLog {
-  const { q } = createPgPool(connectionString, [
+  const pg = createPgPool(connectionString, [
     {
       id: "admin/audit-log/0001",
       expectedChecksum: "542f2a64d2814b329f2c1ad2eb8ed2728e8044b78efa6343eafb5598bc83cb1d",
@@ -72,46 +72,51 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
 
   const pendingWrites = new Set<Promise<void>>();
   const log: AuditLog = {
-    record(e) {
-      const write = q(`INSERT INTO audit_log(${COLS}) VALUES ($1,$2,$3,$4,$5,$6,$7)`, [
-        e.at,
-        e.principalId,
-        e.action,
-        e.resource,
-        e.scopeLabel,
-        e.status ?? null,
-        e.detail ?? null,
-      ])
+    record(tenant, e) {
+      const write = pg
+        .forTenant(tenant)
+        .q(`INSERT INTO audit_log(${COLS}, tenant_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, [
+          e.at,
+          e.principalId,
+          e.action,
+          e.resource,
+          e.scopeLabel,
+          e.status ?? null,
+          e.detail ?? null,
+          tenant.id,
+        ])
         .then(() => undefined)
         .catch(reportFailureAs("audit: persist event", undefined));
       pendingWrites.add(write);
       void write.finally(() => pendingWrites.delete(write));
     },
-    async recordOnce(key, e) {
-      await q(
-        `INSERT INTO audit_log(${COLS}, idempotency_key) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+    async recordOnce(tenant, key, e) {
+      await pg.forTenant(tenant).q(
+        `INSERT INTO audit_log(${COLS}, idempotency_key, tenant_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
          ON CONFLICT (tenant_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING`,
-        [e.at, e.principalId, e.action, e.resource, e.scopeLabel, e.status ?? null, e.detail ?? null, key],
+        [e.at, e.principalId, e.action, e.resource, e.scopeLabel, e.status ?? null, e.detail ?? null, key, tenant.id],
       );
     },
-    async events() {
+    async events(tenant) {
       await Promise.allSettled(pendingWrites);
-      const rows = await q(`SELECT ${COLS} FROM audit_log ORDER BY at DESC, id DESC LIMIT $1`, [MAX]);
+      const rows = await pg
+        .forTenant(tenant)
+        .q(`SELECT ${COLS} FROM audit_log WHERE tenant_id = $1 ORDER BY at DESC, id DESC LIMIT $2`, [tenant.id, MAX]);
       return rows.map(rowToEvent).reverse();
     },
-    async tail({ limit, scopeLabel, action, since, resourceContains }) {
+    async tail(tenant, { limit, scopeLabel, action, since, resourceContains }) {
       await Promise.allSettled(pendingWrites);
       if (Array.isArray(action) && action.length !== 1) {
         const batches = await Promise.all(
-          action.map((a) => log.tail({ limit, scopeLabel, action: a, since, resourceContains })),
+          action.map((a) => log.tail(tenant, { limit, scopeLabel, action: a, since, resourceContains })),
         );
         return batches
           .flat()
           .sort((a, b) => b.at - a.at)
           .slice(0, limit);
       }
-      const params: unknown[] = [];
-      const conds: string[] = [];
+      const params: unknown[] = [tenant.id];
+      const conds: string[] = ["tenant_id = $1"];
       if (scopeLabel !== undefined) {
         params.push(scopeLabel);
         conds.push(`scope_label = $${params.length}`);
@@ -128,12 +133,13 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
         params.push(likeContains(resourceContains));
         conds.push(`resource LIKE $${params.length} ESCAPE '\\'`);
       }
-      const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
       params.push(limit);
-      const rows = await q(
-        `SELECT ${COLS} FROM audit_log ${where} ORDER BY at DESC, id DESC LIMIT $${params.length}`,
-        params,
-      );
+      const rows = await pg
+        .forTenant(tenant)
+        .q(
+          `SELECT ${COLS} FROM audit_log WHERE ${conds.join(" AND ")} ORDER BY at DESC, id DESC LIMIT $${params.length}`,
+          params,
+        );
       return rows.map(rowToEvent);
     },
   };

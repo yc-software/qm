@@ -21,7 +21,7 @@ interface AgentApiFamily {
 }
 
 const CONVERSATION_UPDATE =
-  "update one of the asking person's conversations — body {archived?, pinned?, title?, color?}; archive/unarchive, pin/unpin, rename (null title clears), or set the sidebar color (#rrggbb; null clears). These are per-person.";
+  "update one of the asking person's conversations — body {archived?, pinned?, title?, color?, unread?}; archive/unarchive, pin/unpin, rename (null title clears), set the sidebar color (#rrggbb; null clears), or mark read/unread. These are per-person.";
 
 const FAMILIES: AgentApiFamily[] = [
   {
@@ -133,7 +133,7 @@ const FAMILIES: AgentApiFamily[] = [
   {
     when: (view) => view.swarmsEnabled,
     guidance:
-      "Start a swarm only when the person explicitly asks for a swarm; a large or parallelizable task is not a request for one, so do that work yourself or with subagents. Swarm workers are ordinary sessions with private blank computers. Inspect peers and their context, then send to chosen IDs or all; shared history is visible to every member. Notifications queue unattended turns. Each swarm gets one shared board computer (inspect returns board.sandboxId) that the root and every worker reach with execute's sandbox_id; pass forumSandboxId at creation to use an existing shared computer instead. Spawn accepts model, effort and fastMode to choose the runtime for the workers it creates; children inherit it unless they choose again. POST action control with memberId and state active, paused or stopped pauses delivery to, resumes, or stops a descendant worker. To keep a worker going instead of stopping after one reply, give it a goal on spawn or send ({objective, floor?, token_cap?}): its turn then runs like a goal turn, past the swarm turn deadline, until the goal is complete, paused or out of tokens. Any member can send any worker, itself included, a goal (not the root session); send a goal again to replace a running, paused or finished one.",
+      "Start a swarm only when the person explicitly asks for a swarm; a large or parallelizable task is not a request for one, so do that work yourself or with subagents. Swarm workers are ordinary sessions with private blank computers. Inspect peers and their context, then send to chosen IDs or all; shared history is visible to every member. Notifications queue unattended turns. Each swarm gets one shared board computer (inspect returns board.sandboxId) that the root and every worker reach with execute's sandbox_id; pass forumSandboxId at creation to use an existing shared computer instead (only in a swarm a person starts; a swarm a Slack bot starts never takes one, from the bot or from a person spawning into it, and always uses its own board). Spawn accepts model, effort and fastMode to choose the runtime for the workers it creates; children inherit it unless they choose again. POST action control with memberId and state active, paused or stopped pauses delivery to, resumes, or stops a descendant worker. To keep a worker going instead of stopping after one reply, give it a goal on spawn or send ({objective, floor?, token_cap?}): its turn then runs like a goal turn, past the swarm turn deadline, until the goal is complete, paused or out of tokens. Any member can send any worker, itself included, a goal (not the root session); send a goal again to replace a running, paused or finished one.",
     routes: [
       {
         method: "GET",

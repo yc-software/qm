@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -856,7 +857,7 @@ test("skill-pack routes are admin-only and audited", async () => {
       403,
     );
     await fetch(`${s.base}/v1/admin/skill-packs`, { headers: ADMIN });
-    assert.ok((await s.built.auditLog.events()).some((e) => e.action === "skill_packs.read"));
+    assert.ok((await s.built.auditLog.events(testTenant)).some((e) => e.action === "skill_packs.read"));
   } finally {
     await s.close();
   }

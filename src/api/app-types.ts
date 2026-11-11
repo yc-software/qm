@@ -1,4 +1,5 @@
 import type { PersonaHandover } from "../personas/persona-handover.ts";
+import type { Tenant } from "../tenants/context.ts";
 import type { PersonaService } from "../personas/persona-service.ts";
 import type { TeamStore } from "../teams/teams.ts";
 import type { CronScriptTrial } from "../cron/script.ts";
@@ -437,12 +438,19 @@ export interface App {
     principalId: string,
     opts?: { upToSeq?: number; sideChat?: { entrySeq: number; quote: string; occurrence: number } },
   ): Promise<{ session: Session; items: Item[] } | null>;
-  listFilesForViewer(principalId: string, opts?: ListOwnedOptions, inScope?: ScopeId): Promise<FileListPage>;
+  listFilesForViewer(
+    tenant: Tenant,
+    principalId: string,
+    opts?: ListOwnedOptions,
+    inScope?: ScopeId,
+  ): Promise<FileListPage>;
   uploadFileForViewer(
+    tenant: Tenant,
     principalId: string,
     input: { scopeId?: ScopeId; name: string; mimetype?: string; data: AsyncIterable<Uint8Array> },
   ): Promise<FileListItem | null>;
-  listScopeResources(principalId: string, scope: ScopeId): Promise<ScopeResources | null>;
+  listScopeResources(tenant: Tenant, principalId: string, scope: ScopeId): Promise<ScopeResources | null>;
+  loopAdministration(actorId: string, loops: readonly { owner: string; ownerScopeId: ScopeId }[]): Promise<boolean[]>;
   managesScope(principalId: string, scope: ScopeId): Promise<boolean>;
   currentScopeMembers(scope: ScopeId): Promise<Principal[] | undefined>;
   isCurrentSharedScopeMember(principalId: string, scope: ScopeId): Promise<boolean>;
@@ -451,9 +459,15 @@ export interface App {
   authorizesCapabilityScope(
     claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "botActor" | "liveActor" | "members">,
   ): Promise<boolean>;
-  openFileForViewer(id: string, principalId: string): Promise<OpenedFile | null>;
-  grant(g: Grant, opts?: { notify?: boolean }): Promise<void>;
-  revokeGrant(ownerScopeId: ScopeId, ref: string, granteeScopeId: ScopeId, revokedBy: string): Promise<void>;
+  openFileForViewer(tenant: Tenant, id: string, principalId: string): Promise<OpenedFile | null>;
+  grant(tenant: Tenant, g: Grant, opts?: { notify?: boolean }): Promise<void>;
+  revokeGrant(
+    tenant: Tenant,
+    ownerScopeId: ScopeId,
+    ref: string,
+    granteeScopeId: ScopeId,
+    revokedBy: string,
+  ): Promise<void>;
   promoteSkill(id: string, targetScopeId: ScopeId, actorId: string, liveActor: boolean): Promise<Skill>;
   belongsToScope(principalId: string, scope: ScopeId): Promise<boolean>;
   canManageArtifactHome(homeScopeId: ScopeId, createdBy: string, principalId: string): Promise<boolean>;
@@ -477,7 +491,7 @@ export interface App {
   ): Promise<number>;
   createCron(input: CreateCronInput, trial?: CronScriptTrial): Promise<Cron>;
   getCron(id: string): Promise<Cron | null>;
-  listCrons(): Promise<Cron[]>;
+  listCrons(ids?: readonly string[]): Promise<Cron[]>;
   listCronsForViewer(principalId: string): Promise<{ owned: Cron[]; visible: VisibleCron[] }>;
   updateCron(id: string, patch: CronPatch, trial?: CronScriptTrial): Promise<Cron | null>;
   deleteCron(id: string): Promise<void>;

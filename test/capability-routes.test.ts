@@ -1,4 +1,5 @@
 import { describe, it, before, after } from "node:test";
+import { testTenant } from "./support/test-tenant.ts";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
@@ -731,7 +732,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
 
   it("refuses webhook registration without a live person in personal and channel scopes", async () => {
     const webhooksBefore = await built.app.listWebhooks();
-    const auditBefore = (await built.auditLog.events()).filter((e) => e.action !== "turn");
+    const auditBefore = (await built.auditLog.events(testTenant)).filter((e) => e.action !== "turn");
     for (const scope of [scopeId("personal", "U1"), scopeId("channel", "C")]) {
       for (const extra of [
         {},
@@ -749,7 +750,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
         assert.equal(((await res.json()) as { error: string }).error, "forbidden");
         assert.deepEqual(await built.app.listWebhooks(), webhooksBefore);
         assert.deepEqual(
-          (await built.auditLog.events()).filter((e) => e.action !== "turn"),
+          (await built.auditLog.events(testTenant)).filter((e) => e.action !== "turn"),
           auditBefore,
         );
       }

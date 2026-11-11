@@ -25,10 +25,7 @@ import { testConfig } from "./support/test-config.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { TEST_TENANT } from "./support/test-tenant.ts";
-import { withTenant } from "../src/tenants/context.ts";
-
-const tenant = withTenant(TEST_TENANT, (t) => t);
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const SECRET = "agent-admin-test-secret".repeat(3);
 const ORG = scopeId("org", "default-org");
@@ -119,7 +116,7 @@ test("an org admin's capability token can read and rewrite a scope's notebook vi
     assert.equal(getRes.status, 200);
     assert.match(((await getRes.json()) as any).content, /standup is 9:30/);
 
-    const updates = (await s.built.auditLog.events()).filter((e) => e.action === "memory.update");
+    const updates = (await s.built.auditLog.events(tenant)).filter((e) => e.action === "memory.update");
     assert.equal(updates.length, 1);
     assert.equal(updates[0]!.principalId, "admin-alice", "the admin action is attributed to the acting admin");
   } finally {
@@ -670,7 +667,7 @@ for (const room of [scopeId("channel", "C1"), scopeId("group", "G1")]) {
       const response = await read();
       assert.equal(response.status, 200);
       assert.match(((await response.json()) as { content: string }).content, /private test sentinel/);
-      const reads = (await s.built.auditLog.events()).filter((e) => e.action === "memory.read");
+      const reads = (await s.built.auditLog.events(tenant)).filter((e) => e.action === "memory.read");
       assert.equal(reads.length, 1);
       assert.equal(reads[0]!.principalId, "admin-alice");
       assert.equal(reads[0]!.scopeLabel, target);
@@ -685,7 +682,7 @@ for (const room of [scopeId("channel", "C1"), scopeId("group", "G1")]) {
         });
       assert.equal((await write()).status, 200);
       assert.equal(await s.built.config.getSoul(target), "Open admin configuration sentinel");
-      const writes = (await s.built.auditLog.events()).filter((e) => e.action === "soul.update");
+      const writes = (await s.built.auditLog.events(tenant)).filter((e) => e.action === "soul.update");
       assert.equal(writes.length, 1);
       assert.equal(writes[0]!.principalId, "admin-alice");
       assert.equal(writes[0]!.scopeLabel, target);
@@ -855,8 +852,9 @@ test("native admin tools use the authenticated handler, including its live autho
       "- (2026-01-02) synthetic admin tool fixture",
     );
     assert.equal(
-      (await s.built.auditLog.events()).filter((e) => e.action === "memory.update" && e.principalId === "admin-alice")
-        .length,
+      (await s.built.auditLog.events(tenant)).filter(
+        (e) => e.action === "memory.update" && e.principalId === "admin-alice",
+      ).length,
       1,
     );
     for (const claims of [

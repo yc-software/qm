@@ -1,3 +1,4 @@
+import { testTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createToolContext, type ToolContextDeps } from "../src/tools/primitives.ts";
@@ -10,6 +11,7 @@ const healthy = { machine: "healthy", listed: "warm", provisioned: true, guestRe
 function ctxFor(sandbox: Partial<Sandbox>, provision: ToolContextDeps["provision"]) {
   const scope = scopeId("channel", "C1");
   return createToolContext({
+    tenant: testTenant,
     sandbox: { profile: { backend: "sprites" }, ...sandbox } as unknown as Sandbox,
     provision,
     writableScopeId: scope,
@@ -91,6 +93,7 @@ test("status for an explicit sandbox probes its exec path instead of trusting th
   const scope = scopeId("channel", "C1");
   const access = { resource: { id: "sb1", ownerScopeId: scope }, crossScope: false } as never;
   const ctx = createToolContext({
+    tenant: testTenant,
     sandbox: {
       profile: { backend: "sprites" },
       run: () => new Promise(() => {}),

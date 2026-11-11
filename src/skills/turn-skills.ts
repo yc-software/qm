@@ -1,3 +1,4 @@
+import type { Tenant } from "../tenants/context.ts";
 import { hashId } from "../util/crypto.ts";
 import type { ScopeId } from "../types.ts";
 import type { SandboxHandle } from "../sandbox/sandbox.ts";
@@ -18,6 +19,7 @@ import { loadActiveBundles } from "../core/orchestrator/turn-helpers.ts";
 import type { OrchestratorDeps } from "../core/orchestrator/types.ts";
 
 export interface TurnSkillsContext {
+  tenant: Tenant;
   deps: Pick<OrchestratorDeps, "sandbox" | "skills" | "skillBundles" | "errors">;
   scopeId: ScopeId;
   sessionId: string;
@@ -30,6 +32,7 @@ export interface TurnSkillsContext {
 
 export function createTurnSkills(ctx: TurnSkillsContext) {
   const {
+    tenant,
     deps,
     scopeId,
     sessionId,
@@ -51,6 +54,7 @@ export function createTurnSkills(ctx: TurnSkillsContext) {
       laidTrees.add(treeKey);
     } catch (err) {
       deps.errors?.record(
+        tenant,
         {
           category: "skills",
           code: "tree_materialize_failed",

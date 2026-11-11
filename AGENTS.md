@@ -40,28 +40,29 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   `gh pr merge <number>` queues it rather than merging it. The queue runs CI on the
   exact commit that will land, reusing the PR's run when `main` has not moved, and
   `main`'s own CI then reuses the queue's run. Never bypass the queue with `--admin`.
+- **Check the plan against the Wall of shame before writing code.** Hold what you plan to
+  add against each _always reviewed_ lens in the [Wall of shame](./docs/SPEC.md#wall-of-shame).
+  Changing the plan is free; the same finding at review costs a rewrite.
 - **Run independent Wall of shame reviews in parallel for every PR.** First triage with
   one fast, cheap model, the latest Haiku: give it the diff and every lens in the current
   [Wall of shame](./docs/SPEC.md#wall-of-shame), and have it mark each lens relevant or
   not, keeping any lens it is unsure about. Lenses marked _always reviewed_ in the spec
   skip triage and always get a reviewer. Then dispatch a separate fresh-context
-  subagent or independent reviewer for each relevant lens. Only
-  Honorable mentions may share one combined reviewer. Launch reviews asynchronously
+  subagent or independent reviewer for each relevant lens. Launch reviews asynchronously
   and in parallel within available capacity, queuing any overflow. Do not wait for
   reviews before opening or updating the PR, running checks, or continuing other work.
   Give each reviewer the raw evidence (diff, commands, logs, provider config), never the
-  author's summary of it. Each reviewer reads their lens and examples, examines the diff and affected paths,
-  and returns **accept** or **request changes**, a **score out of 100** (higher is
-  better), and **1–2 sentences** explaining their assessment. Cite concrete findings
-  and state the smallest correction needed; explain when a lens has no applicable
-  concerns. Scores are informational, with no aggregate score or numeric merge threshold.
-  Put each reviewer's actual verdict, score, and concise assessment in the **PR
-  description**, labeled by lens and reviewer and tied to the reviewed commit. Update
+  author's summary of it. Each reviewer follows the rules that open the Wall of shame,
+  where findings decide the verdict; point it at them rather than restating them.
+  Put each lens's verdict, with its reviewer's score and concise assessment, in the **PR
+  description**, labeled by lens and reviewer and tied to the reviewed commit, and list
+  every finding raised on the PR with how it ended, quoting any judge's ruling. Update
   the description as reviews arrive; mark pending reviews honestly and never invent
   results or substitute the author's self-review. After edits, have independent
-  reviewers reassess affected lenses and explicitly carry forward unaffected results.
-  These reviews run alongside PR work; before merging, every relevant lens must have accepted
-  and all requested changes must be resolved. Only a human maintainer can waive a lens, for
+  reviewers reassess affected lenses and explicitly carry forward unaffected results;
+  never re-run a reviewer on unchanged code to get a different verdict.
+  These reviews run alongside PR work; before merging, every relevant lens must have
+  accepted. Only a human maintainer can waive a lens, for
   one PR: keep the reviewer's actual score, set the verdict to `Waived`, and write the
   assessment as `Waived by <name>:` followed by the objection that was waived. Never
   write a waiver the maintainer did not give, and never record one as Accept. The
@@ -113,7 +114,8 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   in a temporary directory outside the checkout or an ignored local output directory,
   and attach them to the PR or host them externally. Do not bundle review screenshots
   into the app. Only actual product assets, such as icons and instructional media,
-  belong in the app bundle.
+  belong in the app bundle. `.gitignore` ignores image files and CI fails when a tracked
+  file is ignored; a product asset needs its own `!path` line there.
 - **Demo every front-end change in the PR.** Anything an operator or user sees
   rendered — admin/web/portal UI, Slack surfaces, emails — ships with a way for a
   reviewer to see the result without booting it. Prefer a link to a live demo app

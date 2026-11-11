@@ -6,7 +6,7 @@ import { sendJson } from "../http.ts";
 import { deployRef, encodeRef } from "../../acl/resource-ref.ts";
 import { externalMemberActive, validEmail } from "../../identity/external-members.ts";
 import { isObj, authorizeAdmin, orgScope, audit, activePrincipal } from "./shared.ts";
-import { type ApiCtx, type Route } from "./route.ts";
+import { tenantOf, type ApiCtx, type Route } from "./route.ts";
 import { inTenant } from "../../tenants/claim.ts";
 import { tenantAllowsEmail } from "../../tenants/settings.ts";
 import { bootTenant } from "../../tenants/boot.ts";
@@ -89,7 +89,8 @@ async function admission(ctx: ApiCtx, email: string, listed = false): Promise<Ad
   const allowed =
     deps.identity.classify(email).type === "internal" && (member ? externalMemberActive(member) : configured);
   if (allowed) return { allowed: true, expiresAt: member?.expiresAt };
-  const grants = (await deps.acl?.find({ granteeScopeIds: [`personal:${email}`], kind: "deploy" })) ?? [];
+  const grants =
+    (await deps.acl?.find(tenantOf(ctx), { granteeScopeIds: [`personal:${email}`], kind: "deploy" })) ?? [];
   const deployments = await app.listDeployments();
   const granted = deployments.filter(
     (d) =>
@@ -181,7 +182,7 @@ async function brokerSession(ctx: ApiCtx): Promise<void> {
   if (ctx.pathname.endsWith("/revoke")) {
     if (ctx.actor?.p.toLowerCase() !== email && !(await authorizeAdmin(ctx, orgScope()))) return;
     await deps.brokerSessions.revoke(email);
-    audit(deps, {
+    audit(ctx, {
       principalId: ctx.actor?.p ?? "admin",
       action: "auth.broker.revoke",
       resource: email,
@@ -240,7 +241,7 @@ async function trustedAdmin(ctx: ApiCtx): Promise<void> {
   try {
     const { grant, created } = await deps.admin.provisionTrustedEntry(tenant, claims.issuer, claims.subject);
     if (created)
-      audit(deps, {
+      audit(ctx, {
         principalId: grant.grantedBy!,
         action: "grant.create",
         resource: `${grant.principalId}/org_admin`,
@@ -292,7 +293,7 @@ async function redeemInvitation(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 403, { error: "invitation_revoked" });
   if (!(await deps.replayDedupe.claim(`teammate-invite:${claims.jti}`, claims.exp)))
     return sendJson(res, 400, { error: "invitation_used" });
-  audit(deps, {
+  audit(ctx, {
     principalId: claims.email,
     action: "user.invite.redeem",
     resource: claims.email,

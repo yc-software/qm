@@ -2,6 +2,7 @@ import pg from "pg";
 import { applyPgMigrations, definePgMigration } from "../../src/persistence/pg-pool.ts";
 import { TENANCY } from "../../src/tenants/migrations.ts";
 import { grantAppRole } from "../../src/persistence/app-role-grants.ts";
+import { withTenant } from "../../src/tenants/context.ts";
 
 export { TEST_TENANT } from "./test-tenant-id.ts";
 import { TEST_TENANT } from "./test-tenant-id.ts";
@@ -58,3 +59,5 @@ export function appUrl(databaseUrl: string): string {
   url.searchParams.set("options", [otherOptions(url), `-c role=${APP_ROLE}`].filter(Boolean).join(" "));
   return url.toString();
 }
+
+export const testTenant = withTenant(TEST_TENANT, (t) => t);

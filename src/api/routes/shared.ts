@@ -20,8 +20,8 @@ export function personalCapability(ctx: Pick<ApiCtx, "capability" | "actor">): C
   return ctx.actor ? { actorId: ctx.actor.p, scopeId: scopeId("personal", ctx.actor.p), exp: ctx.actor.exp } : null;
 }
 
-export function audit(deps: ServerDeps, e: Omit<AuditEvent, "at">): void {
-  deps.auditLog?.record({ at: Date.now(), ...e });
+export function audit(ctx: Pick<ApiCtx, "deps" | "tenant">, e: Omit<AuditEvent, "at">): void {
+  ctx.deps.auditLog?.record(tenantOf(ctx), { at: Date.now(), ...e });
 }
 
 function rawAdminActor(ctx: Pick<ApiCtx, "req" | "deps" | "capability" | "actor">): Principal | null {

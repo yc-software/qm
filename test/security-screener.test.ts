@@ -4,6 +4,7 @@ import { createSecurityScreenProxy } from "../src/security/security-screener.ts"
 import { createSecurityClassifier } from "../src/core/orchestrator/security-screen.ts";
 import type { OrchestratorDeps } from "../src/core/orchestrator/types.ts";
 import type { AuditEvent } from "../src/audit/audit-log.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 test("the security screen proxy sends the neutral classifier contract and maps its scores", async () => {
   const calls: Array<{ url: string; init: RequestInit }> = [];
@@ -346,15 +347,22 @@ test("observed screening returns immediately and audits each verdict once it set
       },
     },
     agent: { models: {} },
-    auditLog: { record: (event: AuditEvent) => events.push(event) },
+    auditLog: { record: (_t: unknown, event: AuditEvent) => events.push(event) },
   } as unknown as OrchestratorDeps);
   const verdicts = await Promise.all(
     Array.from({ length: 20 }, (_, i) =>
-      classify(JSON.stringify([{ source: "webhook", content: `hostile ${i}` }]), "U1", "personal:U1", undefined, {
-        mode: "observe",
-        sessionId: "s1",
-        runId: "r1",
-      }),
+      classify(
+        tenant,
+        JSON.stringify([{ source: "webhook", content: `hostile ${i}` }]),
+        "U1",
+        "personal:U1",
+        undefined,
+        {
+          mode: "observe",
+          sessionId: "s1",
+          runId: "r1",
+        },
+      ),
     ),
   );
   assert.ok(verdicts.every((verdict) => verdict?.decision === "auto" && !verdict.unscreened));

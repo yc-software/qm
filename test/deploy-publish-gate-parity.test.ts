@@ -14,6 +14,7 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const CH = "CBUILT";
 const CH_OTHER = "CSHARED";
@@ -80,7 +81,7 @@ test("canManage: a channel-creation member may manage from a DM/other context", 
 
 test("canManage: a member of a shared-into channel still cannot manage from any context", async () => {
   const { deploy, acl, d } = await setup();
-  await acl.grant({
+  await acl.grant(tenant, {
     ownerScopeId: scopeId("personal", "U1"),
     ref: `deployment:${d.id}`,
     granteeScopeId: scopeId("channel", CH_OTHER),
@@ -182,7 +183,7 @@ test("republishing channel apps neither widens their audience nor restores revok
   await deploy.deployOrUpdate({ ...input, createdInScope: scopeId("channel", CH_OTHER) });
   assert.deepEqual(await deploy.deploymentGrantees(d.id), [{ scope: scopeId("channel", CH), permission: "read" }]);
   assert.equal((await deploy.reachDeployment(d.id, "U3")).status, "denied");
-  await acl.revoke(d.ownerScopeId, `deployment:${d.id}`, scopeId("channel", CH), "U1");
+  await acl.revoke(tenant, d.ownerScopeId, `deployment:${d.id}`, scopeId("channel", CH), "U1");
   await deploy.deployOrUpdate({ ...input, createdInScope: scopeId("channel", CH) });
   assert.deepEqual(await deploy.deploymentGrantees(d.id), []);
   assert.equal((await deploy.reachDeployment(d.id, "U2")).status, "denied");

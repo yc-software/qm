@@ -15,10 +15,7 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import type { Loop, ShipGrant } from "../src/loops/types.ts";
 import { testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
-import { withTenant } from "../src/tenants/context.ts";
-import { TEST_TENANT } from "./support/test-tenant.ts";
-
-const tenant = withTenant(TEST_TENANT, (t) => t);
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 function fakeRes() {
   const out = { status: 0, body: undefined as unknown };
@@ -86,6 +83,8 @@ async function call(
     app: {
       membershipControlsScope: async () => false,
       managesScope: async () => managesScope,
+      loopAdministration: async (actor: string, loops: { owner: string }[]) =>
+        loops.map((loop) => loop.owner === actor || managesScope),
       samePerson: async (a: string, b: string) => a === b,
     },
     deps: { loops: deps, admin: { adminStatusOf: async () => ({ isAdmin }) } },

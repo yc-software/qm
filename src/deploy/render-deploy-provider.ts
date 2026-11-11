@@ -453,7 +453,7 @@ export function createRenderDeployProvider(opts: RenderDeployProviderOptions): D
     async resolveEndpoint(deployment) {
       if (deployment.status === "archived") return null;
       const record = await opts.store.get(deployment.id);
-      if (!record || record.suspended || record.pending || record.liveVersion === undefined) return null;
+      if (!record || record.suspended || record.liveVersion === undefined) return null;
       const cached = endpoints.get(deployment.id);
       if (cached) return cached;
       const running = checks.get(deployment.id);

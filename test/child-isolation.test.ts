@@ -1,3 +1,4 @@
+import { testTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
@@ -265,6 +266,7 @@ function turnRig() {
   const records = testMap<SandboxResource>();
   const resources = createSandboxResources({
     records,
+    loads: testMap(),
     defaults: testMap<SandboxDefault>(),
     backends: { local: disk.backend },
     defaultBackend: "local",
@@ -290,6 +292,7 @@ function turnRig() {
       visibleSkillsForTurn: async () => [],
     } as unknown as TurnSandboxContext);
     const tools = createToolContext({
+      tenant: testTenant,
       sandbox: router,
       sandboxResources: resources,
       provision: sandboxes.provision,

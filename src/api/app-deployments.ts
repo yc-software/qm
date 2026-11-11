@@ -260,7 +260,7 @@ export function createDeploymentMethods(
         name: input.name,
         ownerActorId: input.actorId,
       });
-      deps.auditLog.record({
+      h.recordAudit({
         at: Date.now(),
         principalId: input.actorId,
         action: "environment_create",
@@ -276,7 +276,7 @@ export function createDeploymentMethods(
     async attachScope(input) {
       if (!deps.environments) throw new Error("environments not wired");
       await deps.environments.attach(input.scopeId, input.environmentId, input.actorId);
-      deps.auditLog.record({
+      h.recordAudit({
         at: Date.now(),
         principalId: input.actorId,
         action: "environment_attach",

@@ -1,3 +1,4 @@
+import { loopAdministration } from "./loop-administration.ts";
 import type { ScopeId } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
@@ -119,6 +120,7 @@ export function createMessagingMethods(
   | "directoryChannels"
   | "directoryChannelsFor"
   | "directoryMember"
+  | "loopAdministration"
   | "samePerson"
   | "personMatcher"
   | "cronAdminUrl"
@@ -133,9 +135,6 @@ export function createMessagingMethods(
   const contextRequests = deps.contextRequests;
   const contextRequestListeners = tenantListeners<[SurfaceContextRequest]>("context request");
   const contextRequestTokens = new Map<string, string>();
-  // Principals identity knows about that the Slack directory never sees: the email
-  // allow-list, invited external users, and anyone who has signed in. On a Slack-less
-  // deployment these are the only members there are.
   const identityMembers = async (): Promise<DirectoryMember[]> => {
     const [externals, participants] = await Promise.all([
       deps.identity.listExternalMembers(),
@@ -183,7 +182,7 @@ export function createMessagingMethods(
       validateUserSchedule(input.schedule);
       await trialBeforeSave(input.script, input.schedule, trial);
       const cron = await deps.crons.create(input);
-      deps.auditLog.record({
+      h.recordAudit({
         at: Date.now(),
         principalId: cron.createdBy,
         action: "cron_create",
@@ -204,8 +203,8 @@ export function createMessagingMethods(
     latestCronFireForThread(id, threadRef) {
       return deps.crons.latestFireForThread(id, threadRef);
     },
-    listCrons() {
-      return deps.crons.list();
+    listCrons(ids) {
+      return deps.crons.list(ids);
     },
     async listCronsForViewer(principalId) {
       const all = await deps.crons.list();
@@ -227,7 +226,7 @@ export function createMessagingMethods(
       if (patch.schedule) validateUserSchedule(patch.schedule);
       await trialBeforeSave(patch.script, patch.schedule, trial);
       const updated = await deps.crons.update(id, patch);
-      deps.auditLog.record({
+      h.recordAudit({
         at: Date.now(),
         principalId: patch.owner ?? before.owner,
         action: "cron_update",
@@ -240,7 +239,7 @@ export function createMessagingMethods(
       const before = await deps.crons.get(id);
       await deps.crons.delete(id);
       if (before)
-        deps.auditLog.record({
+        h.recordAudit({
           at: Date.now(),
           principalId: before.owner,
           action: "cron_delete",
@@ -256,7 +255,7 @@ export function createMessagingMethods(
       if (!before) return "missing";
       const outcome = await deps.crons.setFireNote(id, note);
       if (outcome === "applied") {
-        deps.auditLog.record({
+        h.recordAudit({
           at: Date.now(),
           principalId: note.by ?? before.owner,
           action: "cron_note",
@@ -276,7 +275,7 @@ export function createMessagingMethods(
       const before = await deps.crons.get(id);
       if (!before) return null;
       await deps.crons.setDestination(id, destination);
-      deps.auditLog.record({
+      h.recordAudit({
         at: Date.now(),
         principalId: before.owner,
         action: "cron_retarget",
@@ -287,7 +286,7 @@ export function createMessagingMethods(
     },
     async createWebhook(input) {
       const webhook = await deps.webhooks.create(input);
-      deps.auditLog.record({
+      h.recordAudit({
         at: Date.now(),
         principalId: webhook.createdBy,
         action: "webhook_create",
@@ -457,7 +456,7 @@ export function createMessagingMethods(
       const outcome = await deps.identity.recordDirectorySync(removed, present);
       const orgScope = scopeId("org", orgIdOf());
       for (const id of outcome.deactivated) {
-        deps.auditLog.record({
+        h.recordAudit({
           at: Date.now(),
           principalId: id,
           action: "principal.deactivate",
@@ -466,7 +465,7 @@ export function createMessagingMethods(
         });
       }
       for (const id of outcome.reactivated) {
-        deps.auditLog.record({
+        h.recordAudit({
           at: Date.now(),
           principalId: id,
           action: "principal.reactivate",
@@ -544,6 +543,7 @@ export function createMessagingMethods(
         (await identityMembers()).find((member) => personKey(member.principalId) === personKey(principalId)) ?? null
       );
     },
+    loopAdministration: (actorId, loops) => loopAdministration(deps, actorId, loops),
     samePerson(a, b) {
       return samePersonInDirectory(deps.directory, a, b);
     },
@@ -646,7 +646,7 @@ export function createMessagingMethods(
         ...(input.attachments?.length ? { attachments: input.attachments } : {}),
         ...(!input.react && !input.delete && sender?.displayName ? { attributeAs: sender.displayName } : {}),
       });
-      deps.auditLog.record({
+      h.recordAudit({
         at: Date.now(),
         principalId: input.senderId,
         action: "reach_now",

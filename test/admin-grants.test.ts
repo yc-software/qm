@@ -11,10 +11,7 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testAdminGrantStore, testDatabaseUrl, testUsers } from "./support/test-database.ts";
 import { createPostgresUserStore } from "../src/identity/user-store.ts";
-import { TEST_TENANT } from "./support/test-tenant.ts";
-import { withTenant } from "../src/tenants/context.ts";
-
-const tenant = withTenant(TEST_TENANT, (t) => t);
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-grants-")) }));
@@ -61,7 +58,7 @@ test("an org admin promotes a user to org_admin; whoami reflects it; audited", a
       permissions: ["admin"],
     });
     assert.ok(
-      (await s.built.auditLog.events()).some((e) => e.action === "grant.create" && e.resource === "U1/org_admin"),
+      (await s.built.auditLog.events(tenant)).some((e) => e.action === "grant.create" && e.resource === "U1/org_admin"),
     );
   } finally {
     await s.close();
@@ -127,7 +124,7 @@ test("revoke flips a promoted user back to non-admin; audited", async () => {
     assert.equal(r.status, 200);
     assert.deepEqual(await whoami(s.base, "U1@default-org"), { isAdmin: false, permissions: [] });
     assert.ok(
-      (await s.built.auditLog.events()).some((e) => e.action === "grant.revoke" && e.resource === "U1/org_admin"),
+      (await s.built.auditLog.events(tenant)).some((e) => e.action === "grant.revoke" && e.resource === "U1/org_admin"),
     );
   } finally {
     await s.close();

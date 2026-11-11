@@ -10,7 +10,7 @@ import { MAX_ATTACHMENT_BYTES } from "../../core/attachments.ts";
 import { sendJson } from "../http.ts";
 import { relayStream } from "../../../plugins/chassis/src/http.ts";
 import { audit, isObj } from "./shared.ts";
-import type { ApiCtx, Route } from "./route.ts";
+import { tenantOf, type ApiCtx, type Route } from "./route.ts";
 
 async function createShare(ctx: ApiCtx): Promise<void> {
   const { deps, app, res, body, params } = ctx;
@@ -52,7 +52,7 @@ async function createShare(ctx: ApiCtx): Promise<void> {
   const pending: Array<{ sourceId: string; name: string; mimetype: string; data: Buffer }> = [];
   let totalBytes = 0;
   for (const id of ids) {
-    const file = await app.openFileForViewer(id, viewer);
+    const file = await app.openFileForViewer(tenantOf(ctx), id, viewer);
     if (!file)
       return sendJson(res, 409, {
         error: "attachment_unavailable",
@@ -93,7 +93,7 @@ async function createShare(ctx: ApiCtx): Promise<void> {
     files,
   };
   await deps.sessionShares.putIfAbsent(share.token, share);
-  audit(deps, {
+  audit(ctx, {
     principalId: viewer,
     action: "session.share",
     resource: share.sessionId,

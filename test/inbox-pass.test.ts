@@ -712,7 +712,7 @@ test("the pass skips items without a usable source reference and logs model fail
   const summary = await createInboxPass({
     items,
     model,
-    errors: { record: (event: { code: string; message: string }) => void errors.push(event) },
+    errors: { record: (_t, event: { code: string; message: string }) => void errors.push(event) },
     fetch: createConversationFetcher(clientsFor(world)),
     discover: async () => [],
   })(loop, { discover: false });
@@ -740,7 +740,7 @@ test("a failed draft keeps the verdict and records the model's reply in the erro
   await createInboxPass({
     items,
     model,
-    errors: { record: (event: { code: string; message: string }) => void errors.push(event) },
+    errors: { record: (_t, event: { code: string; message: string }) => void errors.push(event) },
     fetch: createConversationFetcher(clientsFor(world)),
     discover: async () => [],
   })(loop, { discover: false });

@@ -338,6 +338,7 @@ test("the next turn's OpenAI Responses request replays the previous turn's reaso
 
 test("a steer and an empty-ending re-prompt replay as the exact user messages the model saw", async () => {
   const signals = createPostgresRunSignalStore(testDatabaseUrl());
+  const taken = Promise.withResolvers<void>();
   const first = await runTurn(
     "where is the budget doc?",
     [],
@@ -347,11 +348,11 @@ test("a steer and an empty-ending re-prompt replay as the exact user messages th
       () => anthropicSse([{ type: "thinking", thinking: "Nothing to add.", signature: "sig-empty" }], "end_turn"),
       () => anthropicSse([{ type: "text", text: "Q2 is in shared/q2.md; no Q3 doc." }], "end_turn"),
     ],
-    { prepareSteer: async (text) => ({ text: `<steer>${text}</steer>` }) },
+    { prepareSteer: async (text) => (setImmediate(taken.resolve), { text: `<steer>${text}</steer>` }) },
     signals,
     async () => {
       await signals.send("run-1", { kind: "steer", text: "also check Q3", ts: "steer.1" });
-      await new Promise((resolve) => setTimeout(resolve, 30));
+      await taken.promise;
     },
   );
   assert.equal(first.result.reply, "Q2 is in shared/q2.md; no Q3 doc.");
@@ -396,6 +397,7 @@ test("user and steer images replay as the exact image blocks the model saw, rest
       createdAt: 1,
     });
   const signals = createPostgresRunSignalStore(testDatabaseUrl());
+  const taken = Promise.withResolvers<void>();
   const first = await runTurn(
     "what is in this photo?",
     [],
@@ -405,15 +407,15 @@ test("user and steer images replay as the exact image blocks the model saw, rest
     ],
     {
       images: [{ mimeType: "image/png", dataBase64: PNG_A, artifactId: "art-photo" }],
-      prepareSteer: async (text) => ({
-        text,
-        images: [{ mimeType: "image/png", dataBase64: PNG_B, artifactId: "art-steer" }],
-      }),
+      prepareSteer: async (text) => {
+        setImmediate(taken.resolve);
+        return { text, images: [{ mimeType: "image/png", dataBase64: PNG_B, artifactId: "art-steer" }] };
+      },
     },
     signals,
     async () => {
       await signals.send("run-1", { kind: "steer", text: "and this one", ts: "steer.img" });
-      await new Promise((resolve) => setTimeout(resolve, 30));
+      await taken.promise;
     },
   );
   assert.equal(first.result.reply, "A single pixel, twice.");

@@ -1,3 +1,4 @@
+import { testTenant } from "./support/test-tenant.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 import { withResolvedRuntime, resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
 import { test } from "node:test";
@@ -613,7 +614,9 @@ test("a runaway summarizer output does not commit a compaction checkpoint", asyn
   assert.equal(res.status, "ok");
 
   const deadline = Date.now() + 3_000;
-  while (!(await errors.list({ sessionId: sid })).some((error) => error.code === "background_compaction_failed")) {
+  while (
+    !(await errors.list(testTenant, { sessionId: sid })).some((error) => error.code === "background_compaction_failed")
+  ) {
     assert.ok(Date.now() < deadline, "background compaction never reported failure");
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -1143,7 +1146,7 @@ test("a teamed owner's swarm worker can start its default computer mid-turn", as
   const teams: TeamStore = {
     list: async () => [],
     forTurn: async () => [team],
-    isMember: async (id) => id === "alice",
+    isMember: async (_tenant, id) => id === "alice",
     apply: async () => {},
   };
   const base = createMockAgent();

@@ -423,7 +423,8 @@ test("late session creation remains fenced from cleanup until its side effect se
   await enableMockTimers(context, { apis: ["Date", "setTimeout"], now: Date.now() });
   try {
     const sweep = fixture.service.sweep();
-    await entered;
+    await Promise.race([entered, sweep]);
+    assert.partialDeepStrictEqual((await fixture.store.get(fixture.root.id))!.members[1], { state: "reserved" });
     context.mock.timers.tick(SWARM_LIMITS.reconcileMs + 1);
     await sweep;
     await createSwarmService(fixture.serviceOptions).sweep();

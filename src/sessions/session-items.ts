@@ -76,6 +76,7 @@ export function createSessionItems(deps: {
   | "setGoal"
   | "hasDeliveryEntry"
   | "getItems"
+  | "userItemSeqs"
   | "getContextWindow"
   | "getItem"
   | "visibleItems"
@@ -236,7 +237,9 @@ export function createSessionItems(deps: {
              token_cap = EXCLUDED.token_cap, tokens_used = EXCLUDED.tokens_used, active_ms = EXCLUDED.active_ms,
              active_since = EXCLUDED.active_since, completion_note = EXCLUDED.completion_note,
              cancel_note = EXCLUDED.cancel_note, governor = EXCLUDED.governor, pause_reason = EXCLUDED.pause_reason,
-             created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at`,
+             created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at
+           WHERE session_goals.status NOT IN ('complete', 'cancelled')
+              OR session_goals.created_at IS DISTINCT FROM EXCLUDED.created_at`,
           [
             writer.sessionId,
             goal.objective,
@@ -266,9 +269,28 @@ export function createSessionItems(deps: {
       return rows.length > 0;
     },
 
+    async userItemSeqs(ranges) {
+      if (!ranges.length) return [];
+      return (
+        await q(
+          `SELECT i.session_id, i.seq FROM items i
+        JOIN jsonb_to_recordset($1::jsonb) AS wanted("sessionId" text, "sinceSeq" bigint)
+          ON i.session_id = wanted."sessionId" AND i.seq >= wanted."sinceSeq"
+        WHERE i.tenant_id = ${TENANT} AND i.kind IN ('UserMessage', 'SteeringMessage')
+          AND ${transcriptItemPredicate("i")}`,
+          [JSON.stringify(ranges)],
+        )
+      ).map((row) => ({ sessionId: row.session_id as string, seq: Number(row.seq) }));
+    },
+
     async getItems(sessionId, opts?: GetItemsOptions): Promise<Item[]> {
       const params: unknown[] = [sessionId, opts?.sinceSeq ?? 0];
       let sql = `SELECT ${ITEM_FIELDS} FROM ${ITEM_FROM} WHERE i.tenant_id = ${TENANT} AND i.session_id = $1 AND i.seq >= $2`;
+      if (opts?.seqs) {
+        if (!opts.seqs.length) return [];
+        params.push(opts.seqs);
+        sql += ` AND i.seq = ANY($${params.length}::bigint[])`;
+      }
       if (opts?.messagesOnly)
         sql += " AND i.kind IN ('UserMessage', 'SteeringMessage', 'AgentMessage') AND i.variant IS NULL";
       if (opts?.transcript) sql += ` AND ${transcriptItemPredicate("i")}`;
@@ -321,6 +343,11 @@ export function createSessionItems(deps: {
       let sql = `SELECT ${ITEM_FIELDS} FROM ${ITEM_FROM}
            JOIN participants p ON p.session_id = i.session_id AND p.principal_id = $2
           WHERE i.tenant_id = ${TENANT} AND i.session_id = $1 AND i.seq >= $3`;
+      if (opts?.seqs) {
+        if (!opts.seqs.length) return [];
+        params.push(opts.seqs);
+        sql += ` AND i.seq = ANY($${params.length}::bigint[])`;
+      }
       if (opts?.messagesOnly)
         sql += " AND i.kind IN ('UserMessage', 'SteeringMessage', 'AgentMessage') AND i.variant IS NULL";
       if (opts?.transcript) sql += ` AND ${transcriptItemPredicate("i")}`;

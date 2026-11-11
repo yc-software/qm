@@ -162,9 +162,9 @@ export function createAskExpirySweep(deps: {
 }): (now: number) => Promise<void> {
   return async (now) => {
     for (const ask of await deps.keychain.unnotifiedResolvedAsks(now))
-      await withTenant(ask.tenantId, async () => {
+      await withTenant(ask.tenantId, async (tenant) => {
         if (ask.status === "expired") {
-          deps.auditLog?.record({
+          deps.auditLog?.record(tenant, {
             at: now,
             principalId: ask.ownerId,
             action: "keychain.ask.expire",

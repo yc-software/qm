@@ -1,3 +1,4 @@
+import { testTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { NeedsApproval, createToolContext } from "../src/tools/primitives.ts";
@@ -10,6 +11,7 @@ test("an approved command whose computer is not ready yet keeps its one-time app
   let uses = 1;
   const ran: string[] = [];
   const ctx = createToolContext({
+    tenant: testTenant,
     sandbox: {
       async run(_handle: SandboxHandle, script: string) {
         ran.push(script);

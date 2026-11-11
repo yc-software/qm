@@ -1,3 +1,4 @@
+import { testTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createToolContext, type ToolContextDeps } from "../src/tools/primitives.ts";
@@ -20,6 +21,7 @@ function recordingSandbox(): { sandbox: Sandbox; lastOpts: () => ExecOptions | u
 function ctxFor(sandbox: Sandbox, extra: Partial<ToolContextDeps> = {}) {
   const scope = scopeId("personal", "U1");
   return createToolContext({
+    tenant: testTenant,
     sandbox,
     provision: async () => handle,
     writableScopeId: scope,

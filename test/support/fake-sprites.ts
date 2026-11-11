@@ -50,7 +50,6 @@ export interface FakeSprites {
   refuseDelete(status?: number): void;
   rateLimitCreate(retryAfterSeconds: number): void;
   breakPolicyReadback(name: string): void;
-  setPressure(name: string, p: { full10: number; full60: number; load1: number }): void;
   restarts(): string[];
   reset(): void;
   cleanup(): void;
@@ -213,8 +212,6 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
       script
         .replace(/\btimeout \d+ /g, "")
         .replace(/\bsha256sum -c --status\b/g, "shasum -a 256 -c --status")
-        .replace(/\/proc\/pressure\/io/g, `${home}/.proc-pressure-io`)
-        .replace(/\/proc\/loadavg/g, `${home}/.proc-loadavg`)
         .replace(/\/usr\/local/g, `${home}/.usr-local`)
         .replace(/\/home\/sprite/g, home)
         .replace(remapPath, (m) => (m.startsWith(home) ? m : `${home}/tmp/`))
@@ -485,14 +482,6 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
     },
     breakPolicyReadback: (name) => {
       brokenReadback.add(name);
-    },
-    setPressure: (name, p) => {
-      const home = ensureDir(name);
-      writeFileSync(
-        join(home, ".proc-pressure-io"),
-        `some avg10=${p.full10} avg60=${p.full60} avg300=0.00 total=0\nfull avg10=${p.full10} avg60=${p.full60} avg300=0.00 total=0\n`,
-      );
-      writeFileSync(join(home, ".proc-loadavg"), `${p.load1} 0.00 0.00 1/100 1\n`);
     },
     restarts: () => [...restarts],
     reset: () => {

@@ -62,6 +62,7 @@ export interface SessionPin extends NewSessionPin {
 export const isWebThread = (threadRef: string): boolean => threadRef.startsWith("web:");
 
 export interface GetItemsOptions {
+  seqs?: readonly number[];
   messagesOnly?: boolean;
   transcript?: boolean;
   turnId?: string;
@@ -402,6 +403,10 @@ export interface SessionStore {
   ): Promise<Session>;
   getByThread(threadRef: string): Promise<Session | null>;
   get(sessionId: string): Promise<Session | null>;
+  getMany(refs: { ids: readonly string[]; threadRefs: readonly string[] }): Promise<Session[]>;
+  userItemSeqs(
+    ranges: readonly { sessionId: string; sinceSeq: number }[],
+  ): Promise<Array<{ sessionId: string; seq: number }>>;
 
   updateTitle(sessionId: string, title: string): Promise<void>;
   setParentSession(sessionId: string, parentSessionId: string | null): Promise<void>;
@@ -411,7 +416,7 @@ export interface SessionStore {
   threadsWithPersona(personaId: string, threadRefs: readonly string[]): Promise<Set<string>>;
   endedInFailure(sessionIds: readonly string[]): Promise<Set<string>>;
   childrenOf(parentSessionId: string): Promise<Session[]>;
-  sideChatsOf(sessionId: string): Promise<Session[]>;
+  sideChatsOf(sessionId: string, principalId?: string): Promise<Session[]>;
   expandSideChat(sessionId: string): Promise<void>;
   updateForkProvenance(
     sessionId: string,
@@ -435,6 +440,7 @@ export interface SessionStore {
   setGoal(writer: SessionWriter, goal: GoalRecord, notices?: readonly NewItem[]): Promise<void>;
 
   recordLlmRequest(sessionId: string, rec: NewLlmRequest): Promise<LlmRequestRecord>;
+  listLlmRequestsForTurns(turns: readonly { sessionId: string; turnSeq: number }[]): Promise<LlmRequestRecord[]>;
   listLlmRequests(sessionId: string, opts?: ListLlmRequestsOptions): Promise<LlmRequestRecord[]>;
   purgeLlmCaptures?(cutoff: number, opts?: { deadline?: number; stop?: () => boolean }): Promise<number>;
 

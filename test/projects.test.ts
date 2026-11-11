@@ -9,6 +9,8 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { configureCommandRules } from "./support/command-rules.ts";
+import { canAdministerLoop } from "../src/api/loop-administration.ts";
+import type { Loop } from "../src/loops/types.ts";
 import { projectRoutes } from "../src/api/routes/projects.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
@@ -33,6 +35,7 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { testMap, testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { isAgentReply } from "../src/sessions/items.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 test("ProjectStore atomically maintains a managed-group roster", async () => {
   let at = 10;
@@ -68,25 +71,58 @@ test("session lists check each project once per request and observe membership c
       await built.sessions.addParticipant(session.id, "member");
       await built.sessions.updateTitle(session.id, `History ${i}`);
     }
-    const get = built.projects.get.bind(built.projects);
-    const membership = built.projects.membership.bind(built.projects);
-    let gets = 0;
-    let memberships = 0;
-    built.projects.get = async (id) => {
-      gets++;
-      return get(id);
-    };
-    built.projects.membership = async (ref, principal) => {
-      memberships++;
-      return membership(ref, principal);
+    const list = built.projects.listForMember.bind(built.projects);
+    let reads = 0;
+    built.projects.listForMember = async (...args) => {
+      reads++;
+      return list(...args);
     };
     assert.equal((await built.app.listSessions("member")).length, 50);
-    assert.equal(gets, 1);
-    assert.equal(memberships, 1);
+    assert.equal(reads, 1);
     await built.projects.removeMember(project.id, "owner", "member");
     assert.deepEqual(await built.app.listSessions("member"), []);
-    assert.equal(gets, 2);
-    assert.equal(memberships, 2);
+    assert.equal(reads, 2);
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("batched loop administration preserves scope rules and observes membership revocation", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "loop-membership-")) }));
+  try {
+    await built.directory.replace([
+      { principalId: "member", slackId: "U_MEMBER", displayName: "Member", type: "internal" },
+    ]);
+    await built.directory.replaceChannels(
+      [
+        { channelId: "C_PRIVATE", name: "private", isPrivate: true },
+        { channelId: "C_PUBLIC", name: "public", isPrivate: false },
+      ],
+      [{ channelId: "C_PRIVATE", principalId: "U_MEMBER" }],
+    );
+    const project = await built.projects.create({ name: "Shared", ownerId: "owner" });
+    await built.projects.addMember(project.id, "owner", "member");
+    const cases = [
+      { owner: "member", ownerScopeId: "personal:member" },
+      { owner: "U_MEMBER", ownerScopeId: "personal:U_MEMBER" },
+      { owner: "other", ownerScopeId: "personal:other" },
+      { owner: "owner", ownerScopeId: projectScopeId(project.id) },
+      { owner: "other", ownerScopeId: "channel:C_PRIVATE" },
+      { owner: "other", ownerScopeId: "channel:C_PUBLIC" },
+      { owner: "member", ownerScopeId: "group:unknown" },
+    ] as Loop[];
+    const expected = await Promise.all(cases.map((loop) => canAdministerLoop(built.app, loop, "member")));
+    assert.deepEqual(expected, [true, true, false, true, true, false, false]);
+    const getMany = built.directory.getMany.bind(built.directory);
+    let reads = 0;
+    built.directory.getMany = async (ids) => {
+      reads++;
+      return getMany(ids);
+    };
+    assert.deepEqual(await built.app.loopAdministration("member", [...cases, ...cases]), [...expected, ...expected]);
+    assert.equal(reads, 1);
+    await built.projects.removeMember(project.id, "owner", "member");
+    assert.equal((await built.app.loopAdministration("member", cases))[3], false);
   } finally {
     await built.runtime.stop();
   }
@@ -204,7 +240,6 @@ test("ProjectStore derives membership from the linked channel roster", async () 
   const project = await projects.create({ name: "Derived", ownerId: "owner" });
   const groupRef = projectGroupRef(project.id);
 
-  // no link yet: sync is refused
   assert.equal((await projects.syncChannelMembers(project.id, ["chan-pal"])).status, "forbidden");
 
   await projects.setSlackChannel(project.id, "owner", { channelId: "C1", channelName: "eng" });
@@ -213,24 +248,20 @@ test("ProjectStore derives membership from the linked channel roster", async () 
   assert.ok(synced.status === "ok" && synced.changed);
   assert.notEqual(await projects.version(groupRef), versionLinked, "derived roster change bumps the scope version");
 
-  // union semantics: manual + derived, deduped
   assert.deepEqual(await projects.members(groupRef), ["owner", "chan-pal"]);
   assert.equal(await projects.membership(groupRef, "chan-pal"), true);
   assert.ok((await projects.listForMember("chan-pal")).some((candidate) => candidate.id === project.id));
 
-  // idempotent re-sync: no version churn
   const versionAfter = await projects.version(groupRef);
   const again = await projects.syncChannelMembers(project.id, ["owner", "chan-pal"]);
   assert.ok(again.status === "ok" && !again.changed);
   assert.equal(await projects.version(groupRef), versionAfter);
 
-  // channel rename flows through without a roster-version bump
   const renamed = await projects.syncChannelMembers(project.id, ["owner", "chan-pal"], "eng-renamed");
   assert.ok(renamed.status === "ok" && renamed.changed);
   assert.equal((await projects.slackChannel(groupRef))?.channelName, "eng-renamed");
   assert.equal(await projects.version(groupRef), versionAfter);
 
-  // unlink drops the derived members with the link
   await projects.setSlackChannel(project.id, "owner", null);
   assert.deepEqual(await projects.members(groupRef), ["owner"]);
   assert.equal(await projects.membership(groupRef, "chan-pal"), false);
@@ -398,7 +429,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.equal(projectContext?.sessionCount, 0);
   assert.equal(projectContext?.project?.id, project.id);
   assert.deepEqual(projectContext?.project?.members, [{ principalId: "owner", displayName: "Owner" }]);
-  assert.ok(await built.app.listScopeResources("owner", scope));
+  assert.ok(await built.app.listScopeResources(tenant, "owner", scope));
 
   const turn = (actor: string, threadRef: string, text = "hello project") =>
     built.app.turn({
@@ -480,7 +511,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   );
   assert.match(JSON.stringify((await built.app.getSessionForViewer(first.id, "member"))?.items), /secret-before-join/);
   assert.equal(await built.app.managesScope("member", scope), true);
-  assert.ok(await built.app.listScopeResources("member", scope));
+  assert.ok(await built.app.listScopeResources(tenant, "member", scope));
   assert.deepEqual(await built.app.listSessionApprovals(pendingBeforeJoin.sessionId!, "member"), []);
   const hiddenBlocked = await turn("member", "web:owner:approval", "new work while blocked");
   assert.equal(
@@ -516,7 +547,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
     entrypoint: "node server.js",
     files: [{ path: "server.js", data: "console.log('ready')" }],
   });
-  await deployAcl.grant({
+  await deployAcl.grant(tenant, {
     ownerScopeId: "personal:owner",
     ref: `deployment:${deployment.id}`,
     granteeScopeId: scope,
@@ -698,7 +729,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.equal(await built.app.belongsToScope("member", scope), false);
   assert.equal(await built.app.managesScope("member", scope), false);
   assert.equal((await deploy.reachDeployment(deployment.id, "member")).status, "denied");
-  assert.equal(await built.app.listScopeResources("member", scope), null);
+  assert.equal(await built.app.listScopeResources(tenant, "member", scope), null);
   assert.ok(!(await built.app.listSessions("member")).some((session) => session.scopeId === scope));
   assert.equal(await built.app.getSessionForViewer(first.id, "member"), null);
   assert.equal((await turn("member", "web:owner:first")).status, "refused");
@@ -1001,7 +1032,6 @@ test("linking a just-created channel refreshes the surface directory and retries
   );
   const project = await built.app.createProject("owner", "Fresh");
   assert.ok(project);
-  // Fulfil the on-demand sync the way the Slack surface would: push the new channel.
   const unlisten = built.app.onContextRequestCreated((r) => {
     if (!r.query.syncDirectory) return;
     void built.app
@@ -1071,7 +1101,6 @@ test("Project slack-channel routes gate on visibility and workspace use, and syn
     body: JSON.stringify({ principalId: "owner", memberId: "member" }),
   });
 
-  // a session predating the link, so channel-derived members should inherit it
   await built.app.turn({
     surface: "web",
     actor: { externalId: "owner" },
@@ -1079,20 +1108,16 @@ test("Project slack-channel routes gate on visibility and workspace use, and syn
     text: "before the link",
   });
 
-  // a non-member of the project can't link even a channel they can see
   assert.equal((await put(project.id, "outsider", "eng")).status, 403);
-  // a private channel the actor can't see reads as invalid
   assert.equal((await put(project.id, "owner", "war-room")).status, 400);
   assert.equal((await put(project.id, "owner", "no-such-channel")).status, 400);
   assert.equal((await put("missing", "owner", "eng")).status, 404);
 
-  // a channel that already has its own workspace can't become a home channel
   await built.sessions.getOrCreateByThread("ch:C-BUSY:1", "channel", "channel:C-BUSY", "busy", "slack");
   const busy = await put(project.id, "owner", "busy");
   assert.equal(busy.status, 409);
   assert.equal(((await busy.json()) as { error: string }).error, "channel_in_use");
 
-  // linking by #name resolves through the directory and pulls in the channel roster
   const linked = await put(project.id, "owner", "#eng");
   assert.equal(linked.status, 200);
   const linkedProject = (
@@ -1110,10 +1135,8 @@ test("Project slack-channel routes gate on visibility and workspace use, and syn
   assert.equal(linkedProject.members.find((m) => m.principalId === "chan-pal")?.viaChannel, true);
   assert.equal(linkedProject.members.find((m) => m.principalId === "member")?.viaChannel, undefined);
   assert.equal(await built.projects.membership(groupRef, "chan-pal"), true);
-  // ...including the conversations that predate the link
   assert.ok((await built.app.listSessions("chan-pal")).some((s) => s.scopeId === scope));
 
-  // the roster keeps following the channel through directory syncs
   await built.app.upsertChannels(channels, [
     { channelId: "C-SECRET", principalId: "member" },
     { channelId: "C-ENG", principalId: "owner" },
@@ -1130,10 +1153,8 @@ test("Project slack-channel routes gate on visibility and workspace use, and syn
     "rejoining the channel rejoins the project",
   );
 
-  // manual members never ride the channel roster
   assert.equal(await built.projects.membership(groupRef, "member"), true);
 
-  // unlink: project members only; derived members leave with the link
   const outsiderUnlink = await fetch(`${base}/v1/projects/${project.id}/slack-channel`, {
     method: "DELETE",
     headers: { "content-type": "application/json" },

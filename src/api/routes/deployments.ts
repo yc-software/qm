@@ -21,7 +21,7 @@ import { frameAncestorsDirective, sendJson, UNTRUSTED_CONTENT_SANDBOX_CSP, verif
 import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
 import { audit, authorizeAdmin, isObj, orgScope } from "./shared.ts";
 import { scopeId, type Permission } from "../../types.ts";
-import type { ApiCtx, BaseCtx, Route } from "./route.ts";
+import { tenantOf, type ApiCtx, type BaseCtx, type Route } from "./route.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
 import { verifyDeployGitAccess, viewerIdentityKey } from "../../deploy/access-token.ts";
 import { appAnnotationAsset } from "../../deploy/app-annotate.ts";
@@ -160,7 +160,7 @@ async function proxyAdminDeployment(ctx: BaseCtx): Promise<void> {
   );
   if (!actor) return;
   if (!deployment) return sendJson(res, 404, { error: "not_found" });
-  audit(deps, {
+  audit(ctx, {
     principalId: actor.id,
     action: "deployment.visit",
     resource: deployment.id,
@@ -449,11 +449,6 @@ function proxyReachHttp2(
   start(false);
 }
 
-// --- cold-start warming page -------------------------------------------------
-// AWS microVMs auto-resume on first connect, which can take many seconds. During
-// that window a browser navigation would otherwise hang for the full dial timeout
-// and then land on raw gateway JSON. For document requests we instead answer
-// quickly with a small self-refreshing "warming up" page.
 const WARM_RECENT_MS = 60_000;
 const COLD_FIRST_BYTE_TIMEOUT_MS = 4_000;
 const upstreamLastOk = new Map<string, number>();
@@ -521,7 +516,6 @@ function sendWarmingPage(res: BaseCtx["res"]): void {
   });
   res.end(WARMING_PAGE_HTML);
 }
-// -----------------------------------------------------------------------------
 
 async function proxyReach(
   ctx: BaseCtx,
@@ -1011,8 +1005,9 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
       status: "denied",
     };
     const hour = Math.floor(ev.at / 3_600_000);
-    if (deps.auditLog?.recordOnce) await deps.auditLog.recordOnce(`reach_denied|${viewer}|${slug}|${hour}`, ev);
-    else deps.auditLog?.record(ev);
+    if (deps.auditLog?.recordOnce)
+      await deps.auditLog.recordOnce(tenantOf(ctx), `reach_denied|${viewer}|${slug}|${hour}`, ev);
+    else deps.auditLog?.record(tenantOf(ctx), ev);
   }
   if (reach.status === "denied" && ctx.method === "POST" && pathname === REQUEST_ACCESS_PATH) {
     const d = await app.getDeployment(slug).catch(swallowAs("deployments: load deployment", null));
@@ -1020,11 +1015,9 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
       sendJson(res, 404, { error: "not_found" });
       return true;
     }
-    // The recipient is the app's owner: the personal home scope if it has one, else whoever created it.
     const [ownerKind, ownerRef] = String(d.ownerScopeId).split(":", 2);
     const ownerId = ownerKind === "personal" && ownerRef ? ownerRef : d.createdBy;
     const label = d.displayName ?? d.name ?? slug;
-    // One request per visitor per app per day — the idempotent outbox absorbs button mashing.
     const day = Math.floor(Date.now() / 86_400_000);
     try {
       await app.enqueueDelivery({

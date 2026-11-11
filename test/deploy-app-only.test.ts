@@ -27,6 +27,7 @@ import { onTenantLoad } from "../src/tenants/cache.ts";
 import { loadTenantSettings } from "../src/tenants/settings.ts";
 import { TEST_APP_HANDLE } from "./support/app-handle.ts";
 import { ownerUrl, TEST_TENANT } from "./support/test-tenant.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const externalSharingOn = { enabled: async () => true } as unknown as FeatureFlagStore;
 
@@ -147,7 +148,7 @@ test("app-only gateway checks exact current personal read grants without inherit
     assert.equal((await get("shared")).status, 403);
     assert.equal((await get("org-app")).status, 403, "org ownership is not an app-only entitlement");
     for (const granteeScopeId of [scopeId("org", "acme"), scopeId("channel", "C1")]) {
-      await acl.grant({
+      await acl.grant(tenant, {
         ownerScopeId,
         ref: encodeRef(deployRef(shared.id)),
         granteeScopeId,
@@ -156,7 +157,7 @@ test("app-only gateway checks exact current personal read grants without inherit
       });
     }
     assert.equal((await get("shared")).status, 403, "scope grants never admit app-only sessions");
-    await acl.grant({
+    await acl.grant(tenant, {
       ownerScopeId,
       ref: encodeRef(deployRef(shared.id)),
       granteeScopeId: scopeId("personal", guest),

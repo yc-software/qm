@@ -3,19 +3,14 @@ import type { MemoryCapturePolicy } from "../provider-router.ts";
 export interface MemorableMemoryProviderConfig {
   id: string;
   type: "memorable";
-  /** Command and leading arguments used to run the Memorable CLI, e.g. ["memorable"] or ["node", "/opt/memorable/cli.js"]. */
   argv: string[];
-  /** Allow-listed environment handed to the spawned CLI. Never the whole process environment. */
   env: NodeJS.ProcessEnv;
   injectTimeoutMs: number;
   recordTimeoutMs: number;
-  /** Process environment values that must be redacted from anything relayed to the CLI. */
   redactValues: Record<string, string>;
-  /** Capture policies a route may set for this provider. Procedures are only ever recorded automatically. */
   capturePolicies: ReadonlySet<MemoryCapturePolicy>;
 }
 
-/** Baseline environment every spawn gets; operators extend it per provider with `passEnv`. */
 const BASE_ENV_ALLOWLIST = [
   "PATH",
   "TMPDIR",
@@ -44,7 +39,6 @@ function childEnv(env: NodeJS.ProcessEnv, passEnv: readonly string[]): NodeJS.Pr
   const out: NodeJS.ProcessEnv = {};
   for (const name of [...BASE_ENV_ALLOWLIST, ...passEnv]) if (env[name] !== undefined) out[name] = env[name];
   out.MEMORABLE_BACKEND = env.MEMORABLE_BACKEND?.trim() || "qm";
-  // The CLI gets the connection string under its own name only; DATABASE_URL itself never crosses.
   if (!out.MEMORABLE_DB_URL && env.DATABASE_URL) out.MEMORABLE_DB_URL = env.DATABASE_URL;
   return out;
 }
@@ -80,7 +74,6 @@ function passEnv(value: unknown, at: string): string[] {
   return value as string[];
 }
 
-/** Parses one `type: "memorable"` provider entry from MEMORY_PROVIDER_CONFIG. */
 export function parseMemorableProvider(
   raw: Record<string, unknown>,
   id: string,

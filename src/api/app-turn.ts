@@ -364,7 +364,7 @@ export function createTurnMethods(
           if (cause === "ok" && record?.blocksInput === false) cause = "nonblocking";
           if (cause !== "ok") {
             if (req.approval) {
-              deps.auditLog.record({
+              h.recordAudit({
                 at: Date.now(),
                 principalId: actor.id,
                 action: `command_approval.${req.approval.approved ? "approve" : "deny"}`,
