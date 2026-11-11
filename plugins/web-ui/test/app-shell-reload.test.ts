@@ -25,7 +25,12 @@ test("an open app reloads for each save its chat reports, even one that lands du
   });
   const win = dom.window;
   let served: { version: number; live?: number } = { version: 1 };
-  win.fetch = (async () => ({ ok: true, json: async () => served })) as unknown as typeof win.fetch;
+  let held: Promise<void> | undefined;
+  win.fetch = (async () => {
+    const answer = served;
+    await held;
+    return { ok: true, json: async () => answer };
+  }) as unknown as typeof win.fetch;
   let reloads = 0;
   const app = win.document.querySelector<HTMLIFrameElement>("#app")!;
   Object.defineProperty(app, "contentWindow", {
@@ -55,6 +60,17 @@ test("an open app reloads for each save its chat reports, even one that lands du
   assert.equal(reloads, 2);
   await chatReports();
   assert.equal(reloads, 2);
+
+  let release = (): void => {};
+  held = new Promise((resolve) => (release = resolve));
+  await chatReports();
+  held = undefined;
+  served = { version: 1, live: 3 };
+  await chatReports();
+  assert.equal(reloads, 3);
+  release();
+  await settle();
+  assert.equal(reloads, 3, "an older answer arriving late does not reload back");
   dom.window.close();
 });
 
