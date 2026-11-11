@@ -5,7 +5,9 @@ import type { ProvisionOptions, Sandbox, SandboxHandle, TeardownOptions } from "
 
 const OWN = "personal:alice";
 
-function fixture(over: { holdKeepsWarm?: boolean | Error; live?: string[] | Error; teardownFails?: string[] } = {}) {
+function fixture(
+  over: { holdKeepsWarm?: boolean | Error; live?: string[] | Error; teardownFails?: string[]; botActor?: true } = {},
+) {
   const provisions: Array<ProvisionOptions | undefined> = [];
   const teardowns: Array<[string, TeardownOptions]> = [];
   const tornDown: SandboxHandle[] = [];
@@ -92,7 +94,7 @@ function fixture(over: { holdKeepsWarm?: boolean | Error; live?: string[] | Erro
       isCurrentSharedScopeMember: async () => true,
       errors: { record: (_t: unknown, event: { code: string; message: string }) => errors.push(event) },
     },
-    input: { origin: { kind: "user" }, runId: "run-1" },
+    input: { origin: { kind: "user" }, runId: "run-1", botActor: over.botActor },
     actor: { id: "alice", type: "internal" },
     session: { id: "s" },
     resolution: { writableScopeId: OWN, readOnlyScopeIds: ["org:global"], orgScopeId: "org:global" },
@@ -327,6 +329,12 @@ test("reopening a computer under a different egress policy releases it once", as
   await f.turn.reclaimBox();
   assert.equal(f.tornDown.length, 1);
   assert.equal(f.tornDown[0], narrowed);
+});
+
+test("a Slack bot's turn cannot open a background job's computer it didn't make", async () => {
+  const f = fixture({ botActor: true });
+  await assert.rejects(f.turn.provisionJobSandbox("job-only-1"), /can use only a computer it made/);
+  assert.equal(f.provisions.length, 0);
 });
 
 test("concurrent opens of a background job's own computer share one provision", async () => {

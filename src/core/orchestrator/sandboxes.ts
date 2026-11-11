@@ -422,11 +422,11 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     const resources = deps.sandboxResources!;
     const backend = await preferredBackend(resources, memoryScopeId);
     const resource = await resources.create(actor.id, memoryScopeId, backend, "background job", undefined, true);
-    return provisionResource(jobComputerPlan(resource));
+    return provisionResource(await jobComputerPlan(resource));
   };
   const provisionJobSandbox = async (id: string): Promise<SandboxHandle> => {
     const resource = await deps.sandboxResources!.get(id);
-    return resource.jobOnly ? provisionResource(jobComputerPlan(resource)) : provisionResource(id);
+    return resource.jobOnly ? provisionResource(await jobComputerPlan(resource)) : provisionResource(id);
   };
   const provisionResource = async (
     input: string | SandboxAccessPlan,

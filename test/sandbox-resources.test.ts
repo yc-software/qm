@@ -219,6 +219,37 @@ test("status and restart resolve the selected backing machine rather than legacy
   assert.deepEqual(provisioned, [record.backingScopeId, `restart:${record.backingScopeId}`]);
 });
 
+test("a person's use while a computer is being made outlasts a failed attempt and the retry", async () => {
+  let started!: () => void;
+  let finish!: (error?: Error) => void;
+  const { resources } = fixture((backend) => {
+    const provision = backend.provision.bind(backend);
+    backend.provision = async (id, opts) => {
+      if (id === "sandbox-c1")
+        await new Promise<void>((resolve, reject) => {
+          finish = (error) => (error ? reject(error) : resolve());
+          started();
+        });
+      return provision(id, opts);
+    };
+  }, []);
+  const attempt = () => {
+    const begun = new Promise<void>((resolve) => (started = resolve));
+    return { creating: resources.create("alice", "channel:team", "local", "computer", "c1"), begun };
+  };
+  const first = attempt();
+  await first.begun;
+  await resources.notePersonUse("c1");
+  finish(new Error("boot failed"));
+  await assert.rejects(first.creating, /boot failed/);
+  assert.equal((await resources.get("c1")).personUsed, true);
+  const second = attempt();
+  await second.begun;
+  finish();
+  assert.equal((await second.creating).personUsed, true);
+  assert.equal((await resources.get("c1")).state, "ready");
+});
+
 const sizedBackend = (sizes: Array<number | undefined>) => (backend: Sandbox) => {
   backend.profile.sizesMemory = true;
   const provision = backend.provision.bind(backend);

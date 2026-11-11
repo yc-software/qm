@@ -398,26 +398,24 @@ export function createSandboxResources(opts: {
           if (existing.state === "ready") return existing;
           if (existing.state === "retired") throw new Error("sandbox reservation is retired");
         }
-        await opts.records.put(id, record);
+        await opts.records.put(id, existing?.personUsed ? { ...record, personUsed: true } : record);
         const sandbox = opts.backends[record.backend]!;
         try {
           await sandbox.provision(record.backingScopeId, {
             ...(await opts.provisionOptions?.(scopeId)),
             ...(memoryGb ? { memoryGb } : {}),
           });
-          const ready: SandboxResource = {
-            ...record,
+          return (await opts.records.update(id, (current) => ({
+            ...current,
             state: "ready",
             spec: sandbox.profile.spec,
-          };
-          await opts.records.put(id, ready);
-          return ready;
+          })))!;
         } catch (error) {
-          await opts.records.put(id, {
-            ...record,
+          await opts.records.update(id, (current) => ({
+            ...current,
             state: "failed",
             error: error instanceof Error ? error.message : String(error),
-          });
+          }));
           throw error;
         }
       });
@@ -495,11 +493,9 @@ export function createTurnSandboxAccess(ctx: {
       ...(credentialScopeId ? { credentialScopeId } : {}),
     };
   };
-  const jobComputerPlan = (resource: SandboxResource): SandboxAccessPlan => ({
-    resource,
-    crossScope: false,
-    egress: resolution.egress,
-    commandPolicy: null,
-  });
+  const jobComputerPlan = async (resource: SandboxResource): Promise<SandboxAccessPlan> => {
+    if (botMayUse && !(await botMayUse(resource))) throw new SandboxAccessError(BOT_COMPUTER_REFUSAL);
+    return { resource, crossScope: false, egress: resolution.egress, commandPolicy: null };
+  };
   return { accessResource, jobComputerPlan };
 }
