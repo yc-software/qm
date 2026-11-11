@@ -70,7 +70,9 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   for the PR head: relevant lenses with an Accept or Waived verdict, and the rest as
   `Not relevant` with the triage model as reviewer and its one-line reason as the
   assessment. Lenses marked _checked by CI_ are computed by that check from the diff: skip
-  them in triage and review, and give them a row only to record a waiver.
+  them in triage and review, and give them a row only to record a waiver. Rerunning an old
+  run of that check replays the description it started with; edit the description to start
+  a run that reads the current one.
 - **Disclose configuration changes in the PR description.** Name added, removed,
   or changed settings, flags, modes, and providers, including defaults, precedence,
   and supported combinations. Explain why; keep this proportional to the change.

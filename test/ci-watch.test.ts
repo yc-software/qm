@@ -10,6 +10,7 @@ const head = "a".repeat(40);
 const watcher = fileURLToPath(new URL("../skills-seed/github-gitlab/scripts/watch-ci.mjs", import.meta.url));
 const view = { operation: "view", json: { headRefOid: head } };
 const pass = { operation: "checks", json: [{ name: "CI", bucket: "pass" }] };
+const passSkip = { ...pass, json: [...pass.json, { name: "Q", bucket: "skipping" }] };
 const pending = { operation: "checks", json: [{ name: "CI", bucket: "pending" }], code: 8 };
 type Step = { operation: string; json?: unknown; stdout?: string; stderr?: string; code?: number; hang?: boolean };
 
@@ -120,8 +121,9 @@ for (const stderr of [
 }
 
 test("pending exit 8 and exit 0 poll until a complete passing snapshot", () => {
-  const result = run([view, pending, view, { ...pending, code: 0 }, view, pass, view]);
+  const result = run([view, pending, view, { ...pending, code: 0 }, view, passSkip, view]);
   assert.equal(result.code, 0);
+  assert.deepEqual(result.lines.at(-1).skipped, ["Q"]);
   assert.deepEqual(
     result.lines.map((line) => line.status),
     ["pending", "pending", "success"],
