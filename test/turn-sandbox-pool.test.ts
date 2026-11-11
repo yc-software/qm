@@ -113,6 +113,7 @@ function fixture(
   const clearedTurnFiles = () => removed.filter(([, dir]) => dir === "turn/s/t").map(([id]) => id);
   return {
     turn,
+    resource,
     notePersonUse: sandboxResources.notePersonUse,
     provisions,
     teardowns,
@@ -143,10 +144,14 @@ test("each computer a turn touched is released exactly once, the default box wit
 
 test("an eagerly warmed default box the turn never used is released as unchanged", async () => {
   const f = fixture();
+  f.notePersonUse.mock.mockImplementation(async (id: string) => {
+    assert.deepEqual(f.clearedTurnFiles(), []);
+    return f.resource(id);
+  });
   const box = await f.turn.provision(true);
   await f.turn.reclaimBox();
   assert.deepEqual(f.released(), { [box.id]: { homeUnchanged: true } });
-  assert.equal(f.notePersonUse.mock.callCount(), 0);
+  assert.equal(f.notePersonUse.mock.callCount(), 1);
 });
 
 test("overlapping opens of one computer record a person's use once", async () => {
