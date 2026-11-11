@@ -14,7 +14,13 @@ import { sendJson } from "../http.ts";
 import { normalizeInboundExpiresAt } from "../expiry.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
-import { audit, personalCapability, resolveCapabilityDestination } from "./shared.ts";
+import {
+  audit,
+  BOT_WORK_PERSON_CREDENTIAL,
+  botWorkInPersonsName,
+  personalCapability,
+  resolveCapabilityDestination,
+} from "./shared.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { cronIdOf } from "../../sessions/session-store.ts";
 import { connectorHostLabel } from "../../connectors/oauth.ts";
@@ -309,13 +315,8 @@ const createAsk = keychainRoute(async (ctx, kc, capability) => {
   if (scope.kind !== "channel" && scope.kind !== "personal" && scope.kind !== "group") {
     return sendJson(res, 403, { error: "forbidden", message: "asks require a personal or shared conversation" });
   }
-  const originRun = capability.runId ? await deps.runs?.get(capability.runId) : null;
-  if (capability.botActor && originRun && !originRun.request.botActor)
-    return sendJson(res, 403, {
-      error: "forbidden",
-      message:
-        "this turn runs as a Slack bot's work because a bot started this task, so it can't ask for a person's credential; ask for it from your own conversation instead",
-    });
+  if (await botWorkInPersonsName(ctx, capability))
+    return sendJson(res, 403, { error: "forbidden", message: BOT_WORK_PERSON_CREDENTIAL });
   let credentialId = typeof b.credential === "string" ? b.credential : undefined;
   if (credentialId === undefined) {
     const target = await resolveAskTarget(ctx, kc, capability.scopeId, b.owner as string, b.service as string);
@@ -342,6 +343,7 @@ const createAsk = keychainRoute(async (ctx, kc, capability) => {
   const dest = resolveCapabilityDestination(capability, undefined);
   const requesterDestination =
     (dest.ok && dest.destination) || (cron?.ownerScopeId === capability.scopeId ? cron.destination : undefined);
+  const originRun = capability.runId ? await deps.runs?.get(capability.runId) : null;
   const requesterSeq = originRun && originRun.sessionId === capability.threadRef ? originRun?.turnUserSeq : null;
   const requesterMessageTs =
     originRun && originRun.sessionId === capability.threadRef && originRun.request.origin.kind === "human"

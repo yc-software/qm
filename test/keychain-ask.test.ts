@@ -668,7 +668,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
       keychain: built.keychain,
       keychainApprovals: approvals,
       deliveries: built.deliveries,
-      runs: built.runs,
+      users: built.users,
       ...(built.fireAskResolution ? { fireAskResolution: built.fireAskResolution } : {}),
       auditLog: built.auditLog,
       credentialUsage: built.credentialUsage,
@@ -1004,18 +1004,12 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     assert.equal(run?.request.botActor, true);
   });
 
-  it("a person's turn in a task a Slack bot started can't ask for a person's credential", async () => {
+  it("bot work in a person's name can't ask for a person's credential", async () => {
     const { credential } = (await (
       await post("/v1/keychain/credentials", { service: "deploy-key", secret: "s" }, await capFor("U_ALICE"))
     ).json()) as any;
-    const threadRef = "agent:main:subagent:bot-task";
-    const conversation = { kind: "channel" as const, channelRef: "C_INFRA", threadRef, audience: [] };
-    const request = { surface: "web", actor: { id: "U_BOB", type: "internal" as const }, conversation, text: "go" };
-    const { run } = await built.runs.enqueue({
-      sessionId: threadRef,
-      request: { ...request, origin: { kind: "human" } },
-    });
-    const floored = await capFor("U_BOB", "channel:C_INFRA", { threadRef, runId: run.id, botActor: true });
+    await built.users.record({ id: "U_BOB", source: "turn", at: Date.now() });
+    const floored = await capFor("U_BOB", "channel:C_INFRA", { botActor: true });
     const res = await post("/v1/keychain/asks", { credential: credential.id, purpose: "deploy" }, floored);
     assert.equal(res.status, 403);
   });

@@ -24,6 +24,8 @@ import { tenantOf, type ApiCtx, type Route } from "./route.ts";
 import {
   adminStanding,
   audit,
+  BOT_WORK_PERSON_CREDENTIAL,
+  botWorkInPersonsName,
   orgScope,
   personalCapability,
   resolveCapabilityDestination,
@@ -354,6 +356,8 @@ async function mintDrop(ctx: ApiCtx): Promise<void> {
   if (!capSecret)
     return sendJson(res, 500, { error: "misconfigured", message: "no capability secret to bind the drop link with" });
   if (capability.triggered) return sendJson(res, 403, { error: "forbidden", message: TRIGGERED });
+  if (await botWorkInPersonsName(ctx, capability))
+    return sendJson(res, 403, { error: "forbidden", message: BOT_WORK_PERSON_CREDENTIAL });
   const b = body as {
     service?: unknown;
     envKey?: unknown;
