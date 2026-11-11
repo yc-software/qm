@@ -1,8 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { swarmFixture } from "./support/swarm-fixture.ts";
+import { createSwarmService } from "../src/swarms/swarm-service.ts";
 import { testMap } from "./support/test-database.ts";
 
+test("a first spawn in a project is authorized at the project version the turn carries", async () => {
+  const f = await swarmFixture({ request: { scopeVersion: "v7" }, claims: { scopeVersion: "v7" } });
+  const service = createSwarmService({ ...f.serviceOptions, authorize: async (c) => c.scopeVersion === "v7" });
+  assert.equal((await service.spawn(f.caller, { requestId: "initial", text: "work" })).length, 1);
+});
 test("explicit self-recipient remains in shared history without waking itself", async () => {
   const f = await swarmFixture();
   await f.service.spawn(f.caller, { requestId: "initial", text: "work" });
