@@ -1,8 +1,8 @@
 import { generalAccessOf, orgAccessNote, PUBLIC_ACCESS_NOTE } from "../../plugins/chassis/src/app-access.ts";
-import { parseScopeId, type ScopeKind } from "../types.ts";
+import { parseScopeId, personalScope, type ScopeKind } from "../types.ts";
 
 export function canEditAppPermissions(ownerScopeId: string, principalId: string): boolean {
-  return ownerScopeId === `personal:${principalId}`;
+  return ownerScopeId === personalScope(principalId);
 }
 
 export type AppAccess = {
@@ -33,8 +33,10 @@ export function appAccess(opts: {
   if (general === "org")
     return { level: "org", label: "Organization", detail: orgAccessNote("your organization"), canEdit };
   const owner = opts.ownerScopeId.startsWith("personal:") ? [] : [opts.ownerScopeId];
-  const reach = new Set([...owner, ...opts.grantees.map((g) => g.scope)]);
-  if (!reach.size)
+  const kinds = [...new Set([...owner, ...opts.grantees.map((g) => g.scope)])].flatMap(
+    (scope) => parseScopeId(scope).kind ?? [],
+  );
+  if (!kinds.length)
     return {
       level: "private",
       label: "Private",
@@ -42,10 +44,7 @@ export function appAccess(opts: {
       canEdit,
     };
   const counts = new Map<ScopeKind, number>();
-  for (const scope of reach) {
-    const kind = parseScopeId(scope).kind ?? "group";
-    counts.set(kind, (counts.get(kind) ?? 0) + 1);
-  }
+  for (const kind of kinds) counts.set(kind, (counts.get(kind) ?? 0) + 1);
   const words = [...counts].map(([kind, n]) => `${n} ${NOUNS[kind][n === 1 ? 0 : 1]}`);
   const [only] = counts;
   let label = only && counts.size === 1 ? words[0]! : "Shared";

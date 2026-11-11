@@ -52,8 +52,8 @@ export function appShellHtml(opts: {
     color: var(--foreground); border-radius: var(--radius-sm); padding: 0 8px; min-height: 24px; font: inherit;
     font-size: 11px; cursor: pointer; white-space: nowrap; }
   header button:hover { background: var(--secondary); }
-  header .chat-btn { display: inline-flex; align-items: center; gap: 6px; color: var(--muted-foreground); }
-  header .chat-btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; }
+  header .chat-btn, header .access-btn { display: inline-flex; align-items: center; gap: 6px; color: var(--muted-foreground); }
+  header .chat-btn svg, header .access-btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; }
   header .chat-btn[data-on="1"] { color: var(--foreground); }
   header .chat-btn::after { content: ""; width: 4px; height: 4px; border-radius: 50%; background: currentColor; visibility: hidden; }
   header .chat-btn[data-on="1"]::after { visibility: visible; }

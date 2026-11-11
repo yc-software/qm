@@ -1,6 +1,6 @@
 import { tellEmbedder } from "./embedder";
 import { loadMessageTranscript, messageLinkSeq } from "./message-link.ts";
-import { initializeBrowserErrors, stopBrowserErrors } from "./browser-errors";
+import { initializeBrowserErrors, reportHandledError, stopBrowserErrors } from "./browser-errors";
 import { initializeAnalytics, capturePageview, stopAnalytics } from "./product-analytics";
 import { captureSlackReturn } from "./slack-account";
 import { clearTranscriptCache } from "./transcript-cache";
@@ -1053,22 +1053,22 @@ async function openAppEditChat(slug: string): Promise<void> {
 
 async function bootAppShare(params: URLSearchParams): Promise<void> {
   document.documentElement.classList.add("app-share-embed");
-  const done = () => tellEmbedder({ type: "qm:app-share-closed" });
-  const fail = (reason: string) => {
-    swallow("web-ui: app-share", new Error(reason));
+  try {
+    const slug = params.get("slug");
+    if (!slug) throw new Error("app-share opened without an app slug");
+    const r = await webFetch(withBase("/me"));
+    if (r.status === 401) return renderAuthGate(gateFor("portal"));
+    if (!r.ok) throw new Error(`app-share: /me answered ${r.status} ${(await r.text()).slice(0, 200)}`);
+    appState.me = (await r.json()) as Me;
+    const { openDeploymentPermissions } = await import("./deploy-permissions");
+    await openDeploymentPermissions(slug, params.get("name") || slug, `personal:${appState.me.user}`, {
+      onChange: () => tellEmbedder({ type: "qm:app-check" }),
+      onClose: () => tellEmbedder({ type: "qm:app-share-closed" }),
+    });
+  } catch (e) {
+    reportHandledError("web-ui: app-share", e);
     renderAuthGate({ kind: "unreachable" });
-  };
-  const slug = params.get("slug");
-  if (!slug) return fail("app-share opened without an app slug");
-  const r = await webFetch(withBase("/me"));
-  if (r.status === 401) return renderAuthGate(gateFor("portal"));
-  if (!r.ok) return fail(`app-share: /me answered ${r.status} ${(await r.text()).slice(0, 200)}`);
-  appState.me = (await r.json()) as Me;
-  const { openDeploymentPermissions } = await import("./deploy-permissions");
-  await openDeploymentPermissions(slug, params.get("name") || slug, `personal:${appState.me.user}`, {
-    onChange: () => tellEmbedder({ type: "qm:app-check" }),
-    onClose: done,
-  });
+  }
 }
 
 export async function bootSafely(): Promise<void> {
