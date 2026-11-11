@@ -2,7 +2,7 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { MemoryFactsMissing, MemoryForgetRefused } from "../../memory/facts.ts";
 import { MemoryDisclosureDenied } from "../../memory/disclosure.ts";
-import { forgetKnown, MAX_FACTS_PER_WRITE, problemLine } from "../../memory/provider-outcome.ts";
+import { MAX_FACTS_PER_WRITE, problemLine } from "../../memory/provider-outcome.ts";
 import { quotedData } from "../../util/text.ts";
 import { text, type ToolKit } from "./kit.ts";
 
@@ -153,10 +153,9 @@ export function recallTools(kit: ToolKit) {
             if (!ids.length) return fail("memory delete requires `ids` (a non-empty list).");
             const forgot = await tc.memoryDelete(ids, callId);
             if (forgot === null) return unavailable();
-            const { forgotten, outcomes, problems } = forgot;
-            const notebook = ids.length - outcomes.length;
+            const { forgotten, notebook, kept, outcomes, problems } = forgot;
             const plural = notebook === 1 ? "" : "s";
-            const notebookLine = forgetKnown(outcomes)
+            const notebookLine = !kept
               ? `Forgot ${notebook} fact${plural}.`
               : `Kept ${notebook} notebook fact${plural} because a brain didn't confirm a ref in this delete; send the same delete again to finish.`;
             const refs = (state: string) =>

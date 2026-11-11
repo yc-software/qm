@@ -238,6 +238,8 @@ export async function writeFacts(
 
 export interface MemoryForget {
   forgotten: number;
+  notebook: number;
+  kept: boolean;
   outcomes: MemoryProviderOutcome[];
   problems: MemoryProviderProblem[];
 }
@@ -258,7 +260,8 @@ export async function forgetFacts(
   const { outcomes, problems } = await withProviders("forget", (report) =>
     memory.delete!(scope, ids, by, { ...context, idempotencyKey, startedAt: Date.now(), report }),
   );
-  const notebook = forgetKnown(outcomes) ? ids.length - outcomes.length : 0;
-  const forgotten = notebook + outcomes.filter(({ outcome }) => outcome === "committed").length;
-  return { forgotten, outcomes, problems };
+  const notebook = ids.length - outcomes.length;
+  const kept = !forgetKnown(outcomes);
+  const forgotten = (kept ? 0 : notebook) + outcomes.filter(({ outcome }) => outcome === "committed").length;
+  return { forgotten, notebook, kept, outcomes, problems };
 }
