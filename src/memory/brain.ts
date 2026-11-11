@@ -6,9 +6,15 @@ import type { ScopeId } from "../types.ts";
 import { swallowAs } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
 import { quotedData } from "../util/text.ts";
-import type { BoundBrain, BrainCall, MemoryService } from "./memory-service.ts";
+import {
+  brainActsAsPerson,
+  type BoundBrain,
+  type BrainCall,
+  type MemoryAuthority,
+  type MemoryService,
+} from "./memory-service.ts";
 import { failedOutcome, problemLine, problemOf } from "./provider-outcome.ts";
-import { providerRef } from "./provider-router.ts";
+import { parseProviderRef, providerRef } from "./provider-router.ts";
 
 const AMBIGUOUS =
   "Several records match. Ask the person which one they mean, naming what tells them apart; never pick one yourself.";
@@ -22,10 +28,22 @@ interface BrainRef {
   slug: string;
 }
 
-interface BrainRequest {
+type BrainRequest = {
   query?: string;
   ref?: BrainRef;
   after?: string;
+  before?: string;
+  cursor?: string;
+};
+
+export interface BrainInput {
+  action: string;
+  brain?: string;
+  query?: string;
+  ref?: string;
+  after?: string;
+  before?: string;
+  cursor?: string;
 }
 
 interface BrainAction {
@@ -38,13 +56,18 @@ interface BrainAction {
 
 const QUERY = Type.String({ description: "A few words: a name, email, topic or question." });
 const REF = Type.String({ description: "A ref from an earlier brain result." });
+const CURSOR = Type.Optional(Type.String({ description: "next_cursor from the previous result, to read on." }));
 const RECORD = { ref: Type.Optional(REF), query: Type.Optional(QUERY) };
 
 const rows = (value: unknown): Row[] => (Array.isArray(value) ? value.filter(isObj) : []);
 const pick = (row: Row, keys: readonly string[]): Row =>
   Object.fromEntries(keys.flatMap((key) => (row[key] == null || row[key] === "" ? [] : [[key, row[key]]])));
 const refField = (ref: string | undefined) => (ref ? { ref } : {});
-const pageOf = ({ ref }: BrainRequest) => ({ slug: ref!.slug, source_id: ref!.source });
+const pageOf = (request: BrainRequest) => ({
+  slug: request.ref!.slug,
+  source_id: request.ref!.source,
+  ...pick(request, ["cursor"]),
+});
 const listed =
   (keys: readonly string[], slug = "slug", source = "source_id") =>
   (result: Row, refOf: RefOf) =>
@@ -65,32 +88,46 @@ export const BRAIN_ACTIONS = {
   },
   page: {
     op: "get_page",
-    describe: "the whole page for `ref`",
-    parameters: { ref: REF },
+    describe:
+      "the page for `ref`; a long page comes back as an outline and a first window, with next_cursor to pass as `cursor`",
+    parameters: { ref: REF, cursor: CURSOR },
     args: pageOf,
     project: (page, refOf) => ({
       ...refField(refOf(page.source_id, page.slug)),
-      ...pick(page, ["title", "type", "compiled_truth", "timeline", "frontmatter", "truncated", "trust_tier"]),
+      ...pick(page, [
+        "title",
+        "type",
+        "compiled_truth",
+        "timeline",
+        "frontmatter",
+        "body",
+        "outline",
+        "window",
+        "truncated",
+        "next_cursor",
+        "trust_tier",
+      ]),
     }),
   },
   timeline: {
     op: "get_timeline",
-    describe: "dated events on the page for `ref`, newest first; `after` keeps later ones",
+    describe: "dated events on the page for `ref`, newest first; `after` and `before` bound the dates",
     parameters: {
       ref: REF,
       after: Type.Optional(Type.String({ description: "Only events on or after this YYYY-MM-DD date." })),
+      before: Type.Optional(Type.String({ description: "Only events on or before this YYYY-MM-DD date." })),
     },
-    args: (request) => ({ ...pageOf(request), ...(request.after ? { after: request.after } : {}) }),
+    args: (request) => ({ ...pageOf(request), ...pick(request, ["after", "before"]) }),
     project: (result) =>
       rows(result.results).map((row) => pick(row, ["date", "source", "summary", "detail", "trust_tier"])),
   },
   links: {
     op: "get_backlinks",
     describe:
-      "pages that link to `ref`, with the sentence that links them; the last row says truncated when more remain",
-    parameters: { ref: REF },
+      "pages that link to `ref`, with the sentence that links them; when more remain, the last row carries next_cursor to pass as `cursor`",
+    parameters: { ref: REF, cursor: CURSOR },
     args: pageOf,
-    project: listed(["link_type", "context", "truncated"], "from_slug", "from_source_id"),
+    project: listed(["link_type", "context", "truncated", "next_cursor"], "from_slug", "from_source_id"),
   },
   experts: {
     op: "find_experts",
@@ -154,39 +191,35 @@ export const BRAIN_ACTIONS = {
   },
 } satisfies Record<string, BrainAction>;
 
-export type BrainActionName = keyof typeof BRAIN_ACTIONS;
+type BrainActionName = keyof typeof BRAIN_ACTIONS;
 
 function brainActions(tools: readonly string[]): BrainActionName[] {
   return (Object.keys(BRAIN_ACTIONS) as BrainActionName[]).filter((action) => tools.includes(BRAIN_ACTIONS[action].op));
 }
 
-export interface TurnBrain extends BoundBrain {
+interface TurnBrain extends BoundBrain {
   actions: BrainActionName[];
 }
 
 export interface BrainAccess {
   brains: readonly TurnBrain[];
   live(): Promise<BoundBrain[]>;
+  scopeId: ScopeId;
   call: Omit<BrainCall, "signal">;
 }
 
-export interface BrainTurn {
-  personTurn: boolean;
-  useMemory: boolean;
-  notebookOnly: boolean;
-  actorId: string;
-  scopeId: ScopeId;
-  audienceScopeId?: ScopeId;
+export interface BrainLookup {
+  brains: readonly TurnBrain[];
+  ask(input: BrainInput, signal?: AbortSignal): Promise<BrainAnswer>;
 }
 
 export async function brainAccess(
   memory: Pick<MemoryService, "brains">,
-  turn: BrainTurn,
+  scopeId: ScopeId,
+  call: Omit<BrainCall, "signal">,
 ): Promise<BrainAccess | undefined> {
-  if (!turn.personTurn || !turn.useMemory || turn.notebookOnly) return undefined;
-  if (!ownPrivateConversation(turn.actorId, turn.scopeId, turn.audienceScopeId)) return undefined;
-  const call = { actorId: turn.actorId, ...(turn.audienceScopeId ? { audienceScopeId: turn.audienceScopeId } : {}) };
-  const live = async () => (await memory.brains?.(turn.scopeId)) ?? [];
+  if (!ownPrivateConversation(call.actorId, scopeId, call.audienceScopeId)) return undefined;
+  const live = async () => (await memory.brains?.(scopeId)) ?? [];
   const decided = await Promise.all(
     (await live()).map(async (brain) => ({
       ...brain,
@@ -194,12 +227,15 @@ export async function brainAccess(
     })),
   );
   const brains = decided.filter((brain) => brain.actions.length);
-  return brains.length ? { brains, live, call } : undefined;
+  return brains.length ? { brains, live, scopeId, call } : undefined;
 }
 
 function parseRef(value: string): BrainRef | undefined {
-  const [brain, source, ...slug] = value.split(":");
-  return brain && source && slug.join(":") ? { brain, source, slug: slug.join(":") } : undefined;
+  const outer = parseProviderRef(value);
+  const at = outer ? outer.ref.indexOf(":") : -1;
+  return outer?.provider && at > 0 && at < outer.ref.length - 1
+    ? { brain: outer.provider, source: outer.ref.slice(0, at), slug: outer.ref.slice(at + 1) }
+    : undefined;
 }
 
 export interface BrainAnswer {
@@ -218,9 +254,14 @@ const refused = (text: string, brain?: string): BrainAnswer => ({
 
 export async function askBrain(
   access: BrainAccess,
-  input: { action: string; brain?: string; query?: string; ref?: string; after?: string },
+  by: MemoryAuthority,
+  input: BrainInput,
   signal?: AbortSignal,
 ): Promise<BrainAnswer> {
+  if (!brainActsAsPerson(by, access.scopeId, access.call.audienceScopeId))
+    return refused(
+      "only the person can look things up in their brain, on a turn they sent in their own DM with QM or in work QM runs for that turn, such as a subagent; nothing was sent to the brain.",
+    );
   const ref = input.ref === undefined ? undefined : parseRef(input.ref);
   if (input.ref !== undefined && !ref)
     return refused(`${input.ref} is not a brain ref; use a ref from a brain result.`);
@@ -242,6 +283,8 @@ export async function askBrain(
     ...(query ? { query } : {}),
     ...(ref ? { ref } : {}),
     ...(input.after ? { after: input.after } : {}),
+    ...(input.before ? { before: input.before } : {}),
+    ...(input.cursor ? { cursor: input.cursor } : {}),
   };
   const started = Date.now();
   const header = `### brain · ${brain.label}`;
@@ -252,7 +295,7 @@ export async function askBrain(
     const failed = failedOutcome(error);
     const problem = problemLine(
       problemOf(
-        { provider: id, scope: access.call.audienceScopeId ?? "", ms: Date.now() - started, ref: action.op, ...failed },
+        { provider: id, scope: access.scopeId, ms: Date.now() - started, ref: action.op, ...failed },
         "lookup",
       )!,
     );
@@ -263,9 +306,7 @@ export async function askBrain(
     return { text: [header, lead, quotedData(error.message)].join("\n"), isError: true, fromBrain: true, summary };
   }
   const refOf: RefOf = (...parts) =>
-    parts.every((part) => (typeof part === "string" && part) || typeof part === "number")
-      ? providerRef(id, parts.join(":"))
-      : undefined;
+    parts.every((part) => typeof part === "string" && part) ? providerRef(id, parts.join(":")) : undefined;
   const structured = isObj(result.structuredContent) ? result.structuredContent : {};
   const notes = result.content.flatMap((block) =>
     block.type === "text" && jsonOf(block.text) === undefined ? [block.text] : [],

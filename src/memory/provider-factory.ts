@@ -61,6 +61,7 @@ export function createMemoryProviders(
       ...(provider.forget
         ? { forget: operation(provider.url, provider.forget, MAX_PROVIDER_TIMEOUT_MS, fetchFn) }
         : {}),
+      ...(provider.lookup ? { lookup: { label: provider.id } } : {}),
       attestActor: provider.attestActor,
     });
   }

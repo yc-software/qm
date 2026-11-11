@@ -149,7 +149,7 @@ const refusal = (code: string, reason?: string): CallToolResult => {
   };
 };
 
-test("the documented gbrain recipe keeps the notebook first everywhere and sends only personal turns to gbrain", async (t) => {
+test("the documented gbrain recipe keeps the notebook first everywhere, sends only personal turns to gbrain and offers no brain tool", async (t) => {
   const facts = [{ id: "41", text: "Prefers aisle seats", date: "2026-10-30", kind: "preference" }];
   const { calls, memory, notebookWrites } = await gbrain(t, (name) =>
     name === "memory_recall"
@@ -171,6 +171,7 @@ test("the documented gbrain recipe keeps the notebook first everywhere and sends
     "team:T0ACME": ["default@team:T0ACME"],
     "org:acme": ["default@org:acme"],
   });
+  assert.deepEqual(await memory.brains!(JORDAN), []);
 
   await memory.capture(
     JORDAN,

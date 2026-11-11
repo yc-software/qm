@@ -38,6 +38,7 @@ interface McpMemoryProviderConfig {
   read: McpMemoryOperationConfig;
   write?: McpMemoryOperationConfig;
   forget?: McpMemoryOperationConfig;
+  lookup?: true;
   timeoutMs: number;
   attestActor: boolean;
 }

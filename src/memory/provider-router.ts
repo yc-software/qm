@@ -2,7 +2,7 @@ import { disclosedMemory, MemoryRecallWithheld } from "./disclosure.ts";
 import { isSystemActor, parseScopeId, type ScopeId, type ScopeKind } from "../types.ts";
 import type { McpEnvelope } from "../mcp/mcp-client.ts";
 import {
-  changesBrainAsPerson,
+  brainActsAsPerson,
   changesNotebookOnly,
   type BrainCall,
   type MemoryProviderOutcome,
@@ -11,7 +11,7 @@ import {
 } from "./memory-service.ts";
 import { MemoryForgetRefused, type MemoryCandidate } from "./facts.ts";
 import { changeFailure, failedOutcome, strictFailure, withEnvelope } from "./provider-outcome.ts";
-import { OutsideAudience, ownPrivateConversation } from "../directory/person.ts";
+import { OutsideAudience } from "../directory/person.ts";
 
 export type MemoryCapturePolicy = "off" | "explicit" | "automatic";
 
@@ -31,6 +31,11 @@ function matches(route: MemoryProviderRoute, scopeId: ScopeId): boolean {
 }
 
 export const providerRef = (provider: string, ref: string) => `${provider}:${ref}`;
+
+export function parseProviderRef(value: string): { provider: string; ref: string } | undefined {
+  const at = value.indexOf(":");
+  return at < 0 ? undefined : { provider: value.slice(0, at), ref: value.slice(at + 1) };
+}
 
 function captureAllowed(policy: MemoryCapturePolicy | undefined, mode: "explicit" | "automatic"): boolean {
   if (policy === "automatic") return true;
@@ -176,9 +181,9 @@ export function createRoutedMemoryService(opts: {
     },
 
     async brains(scopeId) {
-      const routes = routesFor(scopeId).filter(
-        (route, index, all) => all.findIndex((other) => other.provider === route.provider) === index,
-      );
+      const routes = routesFor(scopeId)
+        .filter((route) => route.recall !== false)
+        .filter((route, index, all) => all.findIndex((other) => other.provider === route.provider) === index);
       return routes.flatMap(({ provider, label }) => {
         const operations = opts.providers[provider]?.operations;
         if (!operations) return [];
@@ -213,38 +218,34 @@ export function createRoutedMemoryService(opts: {
     },
 
     async delete(scopeId, ids, by, context) {
-      const refs = ids
-        .filter((id) => id.includes(":"))
-        .map((ref) => {
-          const brain = ref.slice(0, ref.indexOf(":"));
-          const route = routesFor(scopeId).find((candidate) => candidate.provider === brain);
-          const provider = route && opts.providers[brain];
-          if (!route || !provider?.delete)
-            throw new MemoryForgetRefused(
-              `Memory provider ${brain} can't forget ${ref} here: it doesn't serve this conversation's notebook, or it has no forget operation. Nothing was changed.`,
-            );
-          return { ref, brain, route, provider };
-        });
-      if (
-        refs.length &&
-        (!changesBrainAsPerson(by) || !ownPrivateConversation(by!.actorId, scopeId, context?.audienceScopeId))
-      )
+      const refs = ids.flatMap((ref) => {
+        const parsed = parseProviderRef(ref);
+        if (!parsed) return [];
+        const route = routesFor(scopeId).find((candidate) => candidate.provider === parsed.provider);
+        const provider = route && opts.providers[parsed.provider];
+        if (!route || !provider?.delete)
+          throw new MemoryForgetRefused(
+            `Memory provider ${parsed.provider} can't forget ${ref} here: it doesn't serve this conversation's notebook, or it has no forget operation. Nothing was changed.`,
+          );
+        return [{ ref, brain: parsed.provider, factId: parsed.ref, route, provider }];
+      });
+      if (refs.length && !brainActsAsPerson(by, scopeId, context?.audienceScopeId))
         throw new MemoryForgetRefused(
           "Only the person, on a turn they sent in their own DM with QM, can forget a brain fact; admin, maintenance, self-service, bot, automation and ambient changes reach the notebook only. Nothing was changed.",
         );
-      const notebookIds = ids.filter((id) => !id.includes(":"));
+      const notebookIds = ids.filter((id) => !parseProviderRef(id));
       if (notebookIds.length) {
         const manager = managerFor(scopeId);
         if (!manager?.delete) throw new Error(`memory for ${scopeId} is not directly editable`);
         await manager.delete(scopeId, notebookIds, by, context);
       }
-      for (const { ref, brain, route, provider } of refs) {
+      for (const { ref, brain, factId, route, provider } of refs) {
         const { error } = await attempt(
           route,
           scopeId,
           "forget",
           { report: (outcome) => context?.report?.({ ...outcome, ref }) },
-          () => provider.delete!(scopeId, [ref.slice(brain.length + 1)], by, context),
+          () => provider.delete!(scopeId, [factId], by, context),
           (_, envelope) => ({ outcome: envelope.status === "pending" ? "pending" : "committed" }),
           undefined,
         );

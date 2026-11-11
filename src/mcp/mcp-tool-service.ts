@@ -2,14 +2,12 @@ import type { ConnectorTokenStore } from "../credentials/keychain.ts";
 import { recordAuditInBinding, type AuditLog } from "../audit/audit-log.ts";
 import { errMessage, reportFailureAs } from "../util/errors.ts";
 import { setPublicOAuthClientSource, setPublicOAuthClients, type PublicOAuthClient } from "../connectors/oauth.ts";
-import { LRUCache } from "lru-cache";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { onTenantLoad, perTenant } from "../tenants/cache.ts";
 import {
   createMcpClient,
-  LISTING_CACHE_MAX,
-  LISTING_TTL_MS,
   mcpResultText,
+  toolListings,
   type McpAuth,
   type McpClient,
   type McpListing,
@@ -202,7 +200,7 @@ export function createMcpToolService(opts: {
     snapshot: McpToolDescriptor[];
     perUserServers: Map<string, McpServer>;
     attestedServers: Map<string, McpServer>;
-    catalogs: LRUCache<string, Promise<RemoteTool[]>>;
+    catalogs: ReturnType<typeof toolListings>;
     loadedAt?: number;
     pending?: Promise<void>;
   }>(() => ({
@@ -210,7 +208,7 @@ export function createMcpToolService(opts: {
     snapshot: [],
     perUserServers: new Map(),
     attestedServers: new Map(),
-    catalogs: new LRUCache({ max: LISTING_CACHE_MAX, ttl: LISTING_TTL_MS }),
+    catalogs: toolListings(),
   }));
 
   function signInMessage(server: McpServer): string {
@@ -264,16 +262,15 @@ export function createMcpToolService(opts: {
     const client = await callerClient(server, principalId);
     const perPerson = server.attestActor || server.credentialScope === "per-user";
     const key = `${server.id}\0${server.updatedAt}\0${perPerson ? (principalId ?? "") : ""}`;
-    const cached = catalogs.get(key);
-    if (cached) return cached;
-    const listing = client
-      .listTools({ headers: headersFor(server, principalId), maxTools: CATALOG_MAX_TOOLS })
-      .then((listed) => listed.tools);
-    catalogs.set(key, listing);
-    listing.catch(() => {
-      if (catalogs.peek(key) === listing) catalogs.delete(key);
+    const listing = await catalogs.fetch(key, {
+      context: {
+        label: `mcp ${server.id}: tools/list`,
+        list: async (signal) =>
+          (await client.listTools({ headers: headersFor(server, principalId), maxTools: CATALOG_MAX_TOOLS, signal }))
+            .tools,
+      },
     });
-    return listing;
+    return listing ?? [];
   }
 
   async function catalogEntry(server: McpServer, principalId: string | undefined, name: unknown): Promise<RemoteTool> {

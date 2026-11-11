@@ -4,14 +4,15 @@ import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { OAuthError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { LRUCache } from "lru-cache";
 import { boundedResponse } from "../util/bytes.ts";
 import { swallowAs } from "../util/errors.ts";
 import { publicFetch, type AddressFetch } from "../util/network.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
 
 const MAX_TOOLS = 64;
-export const LISTING_TTL_MS = 60_000;
-export const LISTING_CACHE_MAX = 1_000;
+const LISTING_TTL_MS = 60_000;
+const LISTING_CACHE_MAX = 1_000;
 const CALL_TIMEOUT_MS = 300_000;
 const OAUTH_DENIALS: ReadonlySet<string> = new Set([
   "invalid_client",
@@ -90,6 +91,24 @@ interface McpRemoteTool {
 export interface McpListing {
   tools: McpRemoteTool[];
   about?: string;
+}
+
+interface ToolListing {
+  label: string;
+  list(signal: AbortSignal): Promise<McpRemoteTool[]>;
+}
+
+export function toolListings(): LRUCache<string, McpRemoteTool[], ToolListing> {
+  return new LRUCache<string, McpRemoteTool[], ToolListing>({
+    max: LISTING_CACHE_MAX,
+    ttl: LISTING_TTL_MS,
+    allowStale: true,
+    fetchMethod: (_key, stale, { context, signal }) =>
+      context.list(signal).catch((error: unknown) => {
+        if (!stale) throw error;
+        return swallowAs(context.label, stale)(error);
+      }),
+  });
 }
 
 export type McpAuth =

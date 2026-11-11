@@ -40,7 +40,7 @@ const ACME: Record<string, (args: Row) => Row> = {
       { ...priya, chunk_text: "Priya leads the warehouse robotics thesis.", chunk_id: 26, score: 1.1 },
       {
         result_type: "fact",
-        fact_id: 4821,
+        fact_id: "4821",
         source_id: "default",
         title: "Alice",
         chunk_text: "Alice owes Priya a pilot summary.",
@@ -55,7 +55,14 @@ const ACME: Record<string, (args: Row) => Row> = {
   }),
   get_backlinks: (args) => ({
     results: [
-      { from_slug: "meetings/q4-roadmap", from_source_id: "default", to_slug: args.slug, link_type: "mentions" },
+      {
+        from_slug: "meetings/q4-roadmap",
+        from_source_id: "default",
+        to_slug: args.slug,
+        link_type: "mentions",
+        truncated: true,
+        next_cursor: "links-2",
+      },
     ],
   }),
   find_experts: () => ({ results: [{ ...priya, score: 0.4, factors: { recency: 1 } }] }),
@@ -196,10 +203,12 @@ async function brainApp(t: { after(fn: () => Promise<void>): void }, { advertise
 const ops = (brain: { calls: Call[] }) => brain.calls.filter(({ tool }) => OPS.includes(tool));
 const REF = "acme:default:people/priya-raman";
 
-test("the brain tool comes only on a turn the person sent in their own DM, and an older brain keeps recall", async (t) => {
+test("the brain tool is on every turn in the person's own DM, answers only turns they sent, and an older brain keeps recall", async (t) => {
   const { acme, turn } = await brainApp(t);
   const offered = async (request: Partial<TurnRequest>) => (await turn([], request))?.tools.includes("brain") ?? false;
   assert.equal(await offered({}), true);
+  const automated = await turn([{ action: "whois", query: "Priya Raman" }], { origin: { kind: "automation" } });
+  assert.match(automated!.texts[0]!, /^\[brain_refused\] only the person/);
   const others: Array<Partial<TurnRequest>> = [
     {
       conversation: {
@@ -211,9 +220,6 @@ test("the brain tool comes only on a turn the person sent in their own DM, and a
       },
     },
     { conversation: { kind: "channel", threadRef: "C1", channelRef: "C1" } },
-    { botActor: true },
-    { origin: { kind: "ambient", live: true } },
-    { origin: { kind: "automation" } },
     { actor: { externalId: "system:ambient:default-org" } },
   ];
   for (const request of others) assert.equal(await offered(request), false, JSON.stringify(request));
@@ -230,9 +236,9 @@ test("each action sends its own operation as the person, naming the record's sou
   const { acme, turn } = await brainApp(t);
   const { texts } = (await turn([
     { action: "whois", query: "Priya Raman" },
-    { action: "page", ref: REF },
-    { action: "timeline", ref: REF, after: "2026-11-01" },
-    { action: "links", ref: REF },
+    { action: "page", ref: REF, cursor: "page-2" },
+    { action: "timeline", ref: REF, after: "2026-11-01", before: "2026-11-30" },
+    { action: "links", ref: REF, cursor: "links-1" },
     { action: "entity", ref: REF },
     { action: "brief", ref: REF },
     { action: "search", query: "robotics thesis" },
@@ -242,9 +248,9 @@ test("each action sends its own operation as the person, naming the record's sou
   const page = { slug: "people/priya-raman", source_id: "default" };
   assert.deepEqual(ops(acme), [
     { tool: "whois", args: { query: "Priya Raman" }, actor: "U1" },
-    { tool: "get_page", args: page, actor: "U1" },
-    { tool: "get_timeline", args: { ...page, after: "2026-11-01" }, actor: "U1" },
-    { tool: "get_backlinks", args: page, actor: "U1" },
+    { tool: "get_page", args: { ...page, cursor: "page-2" }, actor: "U1" },
+    { tool: "get_timeline", args: { ...page, after: "2026-11-01", before: "2026-11-30" }, actor: "U1" },
+    { tool: "get_backlinks", args: { ...page, cursor: "links-1" }, actor: "U1" },
     { tool: "entity", args: { name: page.slug, source_id: "default" }, actor: "U1" },
     { tool: "context_pack", args: { counterparty: page.slug, source_id: "default", intent: "meeting" }, actor: "U1" },
     { tool: "query", args: { query: "robotics thesis" }, actor: "U1" },
@@ -263,7 +269,7 @@ test("each action sends its own operation as the person, naming the record's sou
     ].join("\n"),
   );
   assert.match(texts[2]!, /"summary":"Q4 roadmap"/);
-  assert.match(texts[3]!, /"ref":"acme:default:meetings\/q4-roadmap"/);
+  assert.match(texts[3]!, /"ref":"acme:default:meetings\/q4-roadmap".*"truncated":true,"next_cursor":"links-2"/);
   assert.match(texts[4]!, /"ref":"acme:default:companies\/northwind"/);
   assert.match(texts[5]!, /retrieved brain context/);
   assert.match(texts[6]!, /"ref":"acme:4821","title":"Alice"/);
@@ -287,13 +293,13 @@ test("a forged brain or action, a malformed ref, a missing argument and a revoke
   assert.deepEqual(ops(acme), []);
 });
 
-test("a slow, unlinked or refusing brain answers with what to do next", async (t) => {
+test("a lookup outlasts recall's timeout, and an unlinked or refusing brain answers with what to do next", async (t) => {
   const { acme, turn } = await brainApp(t);
   const refusal = (code: string) => ({
     isError: true,
     content: [{ type: "text" as const, text: JSON.stringify({ code, message: `refused with ${code}` }) }],
   });
-  acme.failures.set("slow", 2_000);
+  acme.failures.set("slow", 600);
   acme.failures.set("Nobody", refusal("actor_unlinked"));
   acme.failures.set("Missing", refusal("page_not_found"));
   acme.failures.set("Unlisted", refusal("actor_not_attested"));
@@ -303,7 +309,7 @@ test("a slow, unlinked or refusing brain answers with what to do next", async (t
     { action: "entity", query: "Missing" },
     { action: "search", query: "Unlisted" },
   ]))!;
-  assert.match(texts[0]!, /^\[memory_provider_timeout\] .*timed out after \d+ms/);
+  assert.match(texts[0]!, /^### brain · Acme brain\n/);
   assert.match(
     texts[1]!,
     /\[memory_provider_denied\] .*Link this member's QM principal id[\s\S]*refused with actor_unlinked/,

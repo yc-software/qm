@@ -11,7 +11,7 @@ import {
   type ExecutionFileCredential,
 } from "../credentials/execute-files.ts";
 import type { MemoryCaptureMetadata } from "../memory/facts.ts";
-import type { BrainAccess } from "../memory/brain.ts";
+import { askBrain, type BrainAccess, type BrainLookup } from "../memory/brain.ts";
 import { disclosedMemory } from "../memory/disclosure.ts";
 import { MaskedExecutionError, executionSecretEnv, createExactSecretValueMasker } from "../security/secret-masking.ts";
 import { withAbort, withTimeout } from "../util/async.ts";
@@ -209,7 +209,7 @@ export interface ToolContext extends SurfaceToolDeps {
   attach: AttachFiles;
   sessionSyscalls?: SessionSyscalls;
   humanTurn?: boolean;
-  brain?: BrainAccess;
+  brain?: BrainLookup;
   toolOutput?: Pick<ToolOutputStore, "inlineTokens" | "save">;
   execute(
     command: string,
@@ -751,7 +751,15 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
   return {
     ...(deps.admin ? { admin: deps.admin } : {}),
     ...(deps.selfApi ? { selfApi: deps.selfApi } : {}),
-    ...(deps.brain ? { brain: deps.brain } : {}),
+    ...(deps.brain
+      ? {
+          brain: {
+            brains: deps.brain.brains,
+            ask: (input, signal) =>
+              askBrain(deps.brain!, turnAuthority(deps.createdBy, deps.memoryAccess, deps.personTurn), input, signal),
+          },
+        }
+      : {}),
     ...(deps.toolOutput ? { toolOutput: deps.toolOutput } : {}),
     ...(deps.sandboxResources && deps.accessSandboxResource
       ? {

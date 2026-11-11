@@ -20,6 +20,7 @@ const BRAIN_PRESETS = {
     read: { tool: "memory_recall", queryArg: "query", maxCharsArg: "max_chars" },
     write: { tool: "memory_write", factsArg: "facts", idempotencyArg: "idempotency_key" },
     forget: { tool: "forget_fact", idempotencyArg: "request_id" },
+    lookup: true,
   },
 } as const;
 
@@ -121,7 +122,9 @@ function brainConfig(brain: RegistryBrain, bindings: readonly RegistryBinding[],
   return {
     ...config,
     providers: config.providers.map((provider) =>
-      provider.type === "mcp" ? { ...provider, forget: { ...preset.forget, auth: provider.read.auth } } : provider,
+      provider.type === "mcp"
+        ? { ...provider, forget: { ...preset.forget, auth: provider.read.auth }, lookup: preset.lookup }
+        : provider,
     ),
   };
 }

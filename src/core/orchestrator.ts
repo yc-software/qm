@@ -16,7 +16,6 @@ import { externalTools } from "./orchestrator/external-tools.ts";
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import type { MemoryProviderOutcome } from "../memory/memory-service.ts";
 import { memoryRecallQuery } from "../memory/semantic-recall.ts";
-import { brainAccess } from "../memory/brain.ts";
 import {
   requiresDelegation,
   delegatedAuthorizationOrigin,
@@ -506,7 +505,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         !isSubagentThreadRef(conversation.threadRef) &&
         !input.botActor &&
         !input.proactiveOpener;
-      const personTurn = humanInput && !external && !input.botActor;
       const allInternal =
         deps.identity.audienceIsAllInternal(conversation.audience) &&
         (conversation.kind === "dm" ||
@@ -789,14 +787,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         projects: deps.projects,
       });
       const { sharingSources, memoryScopeId, baseRecallScopes, memoryAccess } = context;
-      const brainDecided = brainAccess(context.memory, {
-        personTurn,
-        useMemory,
-        notebookOnly,
-        actorId: actor.id,
-        scopeId: memoryScopeId,
-        ...(audienceScopeId ? { audienceScopeId } : {}),
-      }).catch(swallowAs("orchestrator: brain bindings", undefined));
       resolution.grantedHandles = context.listFiles();
       const isWeb = input.surface === "web";
       const surfaceTool = input.surface ?? "slack";
@@ -891,15 +881,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       });
 
       await deps.skillsReady?.();
-      const brain = await brainDecided;
-      const configuredProviders = [
-        ...(!external && deps.resolveConnectorClient
+      const configuredProviders =
+        !external && deps.resolveConnectorClient
           ? await configuredConnectorProviders(deps.resolveConnectorClient).catch(
               swallowAs("orchestrator: configured connector providers", []),
             )
-          : []),
-        ...(brain ? ["brain"] : []),
-      ];
+          : [];
       const {
         aclGrantedServiceCredSlugs,
         orgWideAudience,
@@ -1613,6 +1600,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(liveAuthorTurn ? { liveAuthor: true } : {}),
           ...(automatedTurn ? { triggered: true } : {}),
         };
+        const brain = await context.brain;
         const baseTools = createToolContext({
           tenant,
           desktopClientId: desktopClientForTurn(input),
@@ -1686,7 +1674,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }
             : {}),
           ...(deps.webhookPublicUrl ? { webhookPublicUrl: deps.webhookPublicUrl } : {}),
-          ...(personTurn ? { humanTurn: true } : {}),
+          ...(humanInput && !external && !input.botActor ? { humanTurn: true } : {}),
           ...(personSentTurn(runtimeClaims) ? { personTurn: true } : {}),
           toolOutput: deps.toolOutput,
           sessionId: session.id,

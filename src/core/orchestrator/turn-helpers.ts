@@ -44,7 +44,6 @@ export function stripAckPrefix(text: string, ack: string | undefined): string {
 }
 
 const CONNECTOR_SKILLS: Readonly<Record<string, { provider: string; appConnection?: true }>> = {
-  brain: { provider: "brain" },
   dropbox: { provider: "dropbox", appConnection: true },
   "email-draft-in-voice": { provider: "google" },
   "email-voice-profile": { provider: "google" },

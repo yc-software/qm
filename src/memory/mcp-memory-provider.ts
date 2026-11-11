@@ -1,13 +1,5 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { LRUCache } from "lru-cache";
-import {
-  LISTING_CACHE_MAX,
-  LISTING_TTL_MS,
-  McpCallError,
-  mcpEnvelope,
-  mcpResultText,
-  type McpClient,
-} from "../mcp/mcp-client.ts";
+import { McpCallError, mcpEnvelope, mcpResultText, toolListings, type McpClient } from "../mcp/mcp-client.ts";
 import { TimeoutError, withTimeout } from "../util/async.ts";
 import { attestedPerson, OutsideAudience, ownPrivateConversation } from "../directory/person.ts";
 import { MemoryRecallWithheld } from "./disclosure.ts";
@@ -89,6 +81,7 @@ export function createMcpMemoryProvider(opts: {
   read: McpMemoryOperation;
   write?: McpMemoryOperation;
   forget?: McpMemoryOperation;
+  lookup?: { label: string };
   attestActor?: boolean;
 }): MemoryService {
   const attest = (actorId: string | undefined, scopeId: string, audienceScopeId: string | undefined) => {
@@ -98,14 +91,7 @@ export function createMcpMemoryProvider(opts: {
     return { person, headers: opts.attestActor && person ? { "x-qm-actor": person } : undefined };
   };
 
-  const listings = new LRUCache<string, string[], Record<string, string>>({
-    max: LISTING_CACHE_MAX,
-    ttl: LISTING_TTL_MS,
-    fetchMethod: async (_person, _stale, { context: headers }) =>
-      (await opts.read.client.listTools({ headers, signal: AbortSignal.timeout(opts.read.timeoutMs) })).tools.map(
-        (tool) => tool.name,
-      ),
-  });
+  const listings = toolListings();
 
   const call = async (
     op: Pick<McpMemoryOperation, "client" | "tool" | "timeoutMs">,
@@ -115,7 +101,6 @@ export function createMcpMemoryProvider(opts: {
     scopeId: string,
     audienceScopeId: string | undefined,
     deadline = Date.now() + op.timeoutMs,
-    signal?: AbortSignal,
   ) => {
     const { person, headers } = attest(actorId, scopeId, audienceScopeId);
     if (person && actorArg) args[actorArg] = person;
@@ -123,7 +108,7 @@ export function createMcpMemoryProvider(opts: {
     if (ms <= 0) throw new TimeoutError(`memory provider timed out after ${op.timeoutMs}ms`);
     const stop = new AbortController();
     const result = await withTimeout(
-      () => op.client.callTool(op.tool, args, headers, signal ? AbortSignal.any([stop.signal, signal]) : stop.signal),
+      () => op.client.callTool(op.tool, args, headers, stop.signal),
       ms,
       "memory provider",
     ).finally(() => stop.abort());
@@ -216,24 +201,27 @@ export function createMcpMemoryProvider(opts: {
 
     read: async (scopeId) => resultText(await read(scopeId, "")),
 
-    ...(opts.attestActor
+    ...(opts.lookup && opts.attestActor
       ? {
           operations: {
             async tools(scopeId, { actorId, audienceScopeId }) {
               const { person, headers } = attest(actorId, scopeId, audienceScopeId);
-              return (await listings.fetch(person!, { context: headers! })) ?? [];
+              const listed = await listings.fetch(person!, {
+                context: {
+                  label: `memory provider ${opts.lookup!.label}: tools/list`,
+                  list: async (signal) =>
+                    (
+                      await opts.read.client.listTools({
+                        headers: headers!,
+                        signal: AbortSignal.any([signal, AbortSignal.timeout(opts.read.timeoutMs)]),
+                      })
+                    ).tools,
+                },
+              });
+              return (listed ?? []).map((tool) => tool.name);
             },
             call: (scopeId, tool, args, { actorId, audienceScopeId, signal }) =>
-              call(
-                { ...opts.read, tool },
-                { ...args },
-                undefined,
-                actorId,
-                scopeId,
-                audienceScopeId,
-                undefined,
-                signal,
-              ),
+              opts.read.client.callTool(tool, args, attest(actorId, scopeId, audienceScopeId).headers, signal),
           },
         }
       : {}),

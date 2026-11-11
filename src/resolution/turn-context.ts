@@ -1,4 +1,5 @@
 import { memoryRecallLabels } from "../memory/recall-labels.ts";
+import { brainAccess } from "../memory/brain.ts";
 import type { DirectoryStore } from "../directory/directory-store.ts";
 import type { ProjectStore } from "../projects/project-store.ts";
 import { disclosedMemory, type MemoryDisclosure } from "../memory/disclosure.ts";
@@ -98,6 +99,10 @@ export async function resolveTurnContext(input: ContextInput) {
     memoryAccess,
     memory,
     memoryLabels,
+    brain:
+      useMemory && !input.external
+        ? brainAccess(memory, memoryScopeId, reader).catch(swallowAs("turn context: brains", undefined))
+        : undefined,
     memorySnapshot: async () => {
       const notebooks = await tracePhase(
         "turn.memory_snapshot",
