@@ -159,6 +159,7 @@ def build_raw(headers: dict[str, str], body: str, thread_id: str | None = None,
 def attribution(h: dict[str, str]) -> tuple[str, str]:
     try:
         dt = parsedate_to_datetime(h.get("date", ""))
+        dt = dt.astimezone() if os.environ.get("TZ") else dt
         when = f"{dt:%a, %b} {dt.day}, {dt.year} at {dt.hour % 12 or 12}:{dt:%M %p} "
     except (TypeError, ValueError):
         when = ""

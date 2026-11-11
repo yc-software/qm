@@ -44,9 +44,15 @@ function gmailFetch(send: (init: RequestInit) => Response): typeof fetch {
     },
   };
   return (async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
-    if (String(url).includes("/threads/")) return Response.json({ messages: [{ id: "m1", internalDate: "1" }] });
-    if (String(url).includes("/messages/m1")) return Response.json(original);
-    return send(init!);
+    if (String(url).includes("/threads/"))
+      return Response.json({
+        messages: [
+          { id: "m1", internalDate: "1", payload: { headers: [{ name: "Message-ID", value: "<msg-1@mail>" }] } },
+          { id: "m9", internalDate: "2", payload: { headers: [{ name: "Message-ID", value: "<later@mail>" }] } },
+        ],
+      });
+    if (String(url).endsWith("/messages/send")) return send(init!);
+    return Response.json(original);
   }) as typeof fetch;
 }
 

@@ -197,6 +197,15 @@ print(json.dumps([gmail.quote_of(m) for m in json.loads(sys.stdin.read())]))
       python.map(([text, html]) => ({ text, html })),
       originals.map((m) => gmailQuote(m)),
     );
+    const [zoned] = JSON.parse(
+      execFileSync("python3", ["-c", driver, SCRIPT], {
+        input: JSON.stringify([originals[1]]),
+        encoding: "utf8",
+        env: { ...process.env, TZ: "America/Los_Angeles" },
+      }),
+    ) as [string, string][];
+    assert.deepEqual({ text: zoned![0], html: zoned![1] }, gmailQuote(originals[1]!, "America/Los_Angeles"));
+    assert.ok(zoned![0].startsWith("On Tue, Nov 10, 2026 at 6:28 PM "), "quoted in the replier's zone");
     const [text, html] = python[0]!;
     assert.ok(text.startsWith("On Tue, Nov 10, 2026 at 12:36 PM Ann Lee <ann@x.test> wrote:\n\n> Hi\n"));
     assert.ok(

@@ -949,9 +949,10 @@ async function refetchItem(item: InboxItem): Promise<void> {
 }
 
 async function postAction(item: InboxItem, kind: string, args?: Record<string, unknown>): Promise<InboxItem> {
+  const payload = kind === "send" ? { ...args, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone } : args;
   const { item: next, outputs } = await api<{ item: LedgerItem; outputs: ReviewOutput[] }>(actionPath(item, "action"), {
     method: "POST",
-    body: JSON.stringify({ kind, ...(args ? { args } : {}) }),
+    body: JSON.stringify({ kind, ...(payload ? { args: payload } : {}) }),
   });
   updateSentChat(next);
   return { ...toInboxItem(next), outputs, detailLoaded: true };
