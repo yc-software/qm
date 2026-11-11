@@ -1,3 +1,4 @@
+import { recordErrorInBinding } from "../admin/error-log.ts";
 import type { ErrorLog } from "../admin/error-log.ts";
 import type { Agent } from "../agent/agent.ts";
 import { MAX_TITLE_CHARS } from "../agent/session-title-prompt.ts";
@@ -33,7 +34,8 @@ export function createSessionTitles(deps: {
     try {
       title = await deps.agent.generateTitle?.(transcript);
     } catch (e) {
-      deps.errors?.record(
+      recordErrorInBinding(
+        deps.errors,
         {
           category: "session_title",
           code: e instanceof TitleRejected ? `rejected_${e.rule}` : "generation_failed",

@@ -97,7 +97,7 @@ test("portal provisioning creates a durable ordinary grant once and preserves ex
   const first = await s.built.admin.listGrants(tenant);
   await provisionTrustedAdmin(config, "founder-7");
   assert.deepEqual(await s.built.admin.listGrants(tenant), first);
-  assert.equal((await s.built.auditLog.events()).filter((e) => e.action === "grant.create").length, 1);
+  assert.equal((await s.built.auditLog.events(tenant)).filter((e) => e.action === "grant.create").length, 1);
   assert.equal((await s.built.admin.adminStatusOf(tenant, { id: "founder-7", type: "internal" })).isAdmin, false);
   assert.equal(
     (await s.built.admin.adminStatusOf(tenant, { id: "founder@example.test", type: "internal" })).isAdmin,

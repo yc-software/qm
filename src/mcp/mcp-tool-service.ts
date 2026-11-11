@@ -1,5 +1,5 @@
 import type { ConnectorTokenStore } from "../credentials/keychain.ts";
-import type { AuditLog } from "../audit/audit-log.ts";
+import { recordAuditInBinding, type AuditLog } from "../audit/audit-log.ts";
 import { errMessage, reportFailureAs } from "../util/errors.ts";
 import { setPublicOAuthClientSource, setPublicOAuthClients, type PublicOAuthClient } from "../connectors/oauth.ts";
 import { LRUCache } from "lru-cache";
@@ -216,7 +216,7 @@ export function createMcpToolService(opts: {
   let closed = false;
 
   function record(action: string, resource: string, status: string, principalId?: string): void {
-    opts.audit?.record({
+    recordAuditInBinding(opts.audit, {
       at: now(),
       principalId: principalId || "system",
       action: `mcp.${action}`,

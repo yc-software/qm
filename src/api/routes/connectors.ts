@@ -168,7 +168,7 @@ async function oauthCallback(ctx: BaseCtx): Promise<void> {
     const stamped = { ...token, clientRef: client.clientRef, accountType, orgId: configOrgId() };
     for (const host of hosts)
       await deps.connectorTokens.setConnectorToken(host, state.principalId, stamped, accountType);
-    audit(deps, {
+    audit(ctx, {
       principalId: state.principalId,
       action: "connector.oauth.connected",
       resource: provider,
@@ -218,7 +218,7 @@ async function consentRedeem(ctx: ApiCtx): Promise<void> {
   if (!oauthProvider(rec.provider)) return sendJson(res, 200, { status: "invalid" });
   if (!samePerson(clicker, rec.principalId)) {
     const clickerConnected = await principalHasProvider(deps, rec.provider, clicker);
-    audit(deps, {
+    audit(ctx, {
       principalId: clicker,
       action: "connector.oauth.consent.wrong_recipient",
       resource: rec.provider,
@@ -259,7 +259,7 @@ async function consentRedeem(ctx: ApiCtx): Promise<void> {
       accountType: rec.accountType,
       ...(codeVerifier ? { codeChallenge: codeChallengeS256(codeVerifier) } : {}),
     });
-    audit(deps, {
+    audit(ctx, {
       principalId: rec.principalId,
       action: "connector.oauth.consent.redeem",
       resource: rec.provider,
@@ -335,7 +335,7 @@ async function consentMint(ctx: ApiCtx): Promise<void> {
     redirectUri,
     ...(returnTo ? { returnTo } : {}),
   });
-  audit(deps, {
+  audit(ctx, {
     principalId: capability.actorId,
     action: "connector.oauth.consent.mint",
     resource: provider,
@@ -419,7 +419,7 @@ async function startOAuth(ctx: ApiCtx, start: OAuthStart): Promise<void> {
       accountType,
       ...(codeVerifier ? { codeChallenge: codeChallengeS256(codeVerifier) } : {}),
     });
-    audit(deps, {
+    audit(ctx, {
       principalId,
       action: "connector.oauth.start",
       resource: start.provider,
@@ -443,7 +443,7 @@ async function oauthStatus(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
   const principalId = url.searchParams.get("principalId") ?? "";
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
-  audit(deps, { principalId, action: "connector.oauth.status", resource: "connectors", scopeLabel: principalId });
+  audit(ctx, { principalId, action: "connector.oauth.status", resource: "connectors", scopeLabel: principalId });
   return sendJson(res, 200, {
     principalId,
     providers: await connectorProviderStatus(deps, deps.connectorTokens, principalId),
@@ -479,11 +479,11 @@ export async function oauthRevoke(ctx: ApiCtx): Promise<void> {
       return sendJson(res, 404, { error: "not_found", message: `unknown OAuth provider: ${providerName}` });
     for (const h of provider.hosts)
       for (const at of ACCOUNT_TYPES) await deps.connectorTokens.deleteConnectorToken(h, principalId, at);
-    audit(deps, { principalId, action: "connector.oauth.revoked", resource: providerName, scopeLabel: principalId });
+    audit(ctx, { principalId, action: "connector.oauth.revoked", resource: providerName, scopeLabel: principalId });
     return sendJson(res, 200, { ok: true, principalId, provider: providerName, hosts: provider.hosts });
   }
   for (const at of ACCOUNT_TYPES) await deps.connectorTokens.deleteConnectorToken(host, principalId, at);
-  audit(deps, { principalId, action: "connector.oauth.revoked", resource: host, scopeLabel: principalId });
+  audit(ctx, { principalId, action: "connector.oauth.revoked", resource: host, scopeLabel: principalId });
   return sendJson(res, 200, { ok: true, principalId, host });
 }
 
@@ -505,7 +505,7 @@ async function setToken(ctx: ApiCtx): Promise<void> {
     ...(typeof b.refreshToken === "string" ? { refreshToken: b.refreshToken } : {}),
     ...(expiresAt.value !== undefined ? { expiresAt: expiresAt.value } : {}),
   });
-  audit(deps, { principalId, action: "connector.token.set", resource: host, scopeLabel: principalId });
+  audit(ctx, { principalId, action: "connector.token.set", resource: host, scopeLabel: principalId });
   return sendJson(res, 200, { ok: true });
 }
 

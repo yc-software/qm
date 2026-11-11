@@ -27,7 +27,7 @@ import { errMessage, errorAlreadyReported, reportFailure, swallow, swallowAs } f
 import { sleep } from "../util/async.ts";
 import { retryDelay } from "./retry-delay.ts";
 import { FLUSH_MS, traceQueued } from "../../plugins/chassis/src/error-reporting.ts";
-import { withTenant } from "../tenants/context.ts";
+import { type Tenant, withTenant } from "../tenants/context.ts";
 
 export interface ProcessDeps {
   runs: RunStore;
@@ -55,7 +55,7 @@ export async function processRun(
   opts?: { shutdown?: AbortSignal; park?: TurnPark },
 ): Promise<TurnResult> {
   const { trace, ...request } = run.request;
-  return withTenant(run.tenantId, () =>
+  return withTenant(run.tenantId, (tenant) =>
     traceQueued(
       trace,
       "run",
@@ -69,13 +69,14 @@ export async function processRun(
         "qm.surface": request.surface,
         "qm.origin": "origin" in request ? request.origin.kind : undefined,
       },
-      () => attemptRun(deps, { ...run, request }, opts),
+      () => attemptRun(tenant, deps, { ...run, request }, opts),
       (result) => opts?.shutdown?.aborted === true || result.stopped === true || result.status === "queued",
     ),
   );
 }
 
 async function attemptRun(
+  tenant: Tenant,
   deps: ProcessDeps,
   run: Run,
   opts?: { shutdown?: AbortSignal; park?: TurnPark },
@@ -169,6 +170,7 @@ async function attemptRun(
     console.error(`[worker] run ${run.id} turn failed: ${errMessage(err)}`);
     if (!errorAlreadyReported(err))
       deps.errors?.record(
+        tenant,
         {
           category: "turn",
           code: "error",

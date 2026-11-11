@@ -1,3 +1,4 @@
+import { testTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createToolContext, type ToolContextDeps } from "../src/tools/primitives.ts";
@@ -43,6 +44,7 @@ function agent(opts: { access?: SandboxAccessPlan; extra?: Partial<ToolContextDe
     listDir: async (h: SandboxHandle) => [...disks.get(h.id)!.keys()].filter((p) => p.startsWith("app/")),
   } as unknown as Sandbox;
   const ctx = createToolContext({
+    tenant: testTenant,
     sandbox,
     provision: async () => {
       defaultProvisions += 1;

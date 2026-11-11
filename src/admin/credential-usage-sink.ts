@@ -1,4 +1,5 @@
 import type { ScopeId } from "../types.ts";
+import type { Tenant } from "../tenants/context.ts";
 
 export interface CredentialUsageSample {
   ts: number;
@@ -29,10 +30,10 @@ interface CredentialUsageSummary {
 }
 
 export interface CredentialUsageSink {
-  record(s: Omit<CredentialUsageSample, "ts">): void;
-  list(opts?: CredentialUsageQuery): Promise<CredentialUsageSample[]>;
-  summary(slugs: readonly string[]): Promise<CredentialUsageSummary[]>;
-  admitDailyCall(slug: string, cap: number): Promise<boolean>;
+  record(t: Tenant, s: Omit<CredentialUsageSample, "ts">): void;
+  list(t: Tenant, opts?: CredentialUsageQuery): Promise<CredentialUsageSample[]>;
+  summary(t: Tenant, slugs: readonly string[]): Promise<CredentialUsageSummary[]>;
+  admitDailyCall(t: Tenant, slug: string, cap: number): Promise<boolean>;
 }
 
 export const utcDayStart = (ms: number): number => ms - (ms % 86_400_000);

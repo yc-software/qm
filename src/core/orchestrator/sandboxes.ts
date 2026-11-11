@@ -1,3 +1,4 @@
+import type { Tenant } from "../../tenants/context.ts";
 import type { ChildIsolation, Principal, Resolution, ScopeId, Session } from "../../types.ts";
 import {
   type ProvisionOptions,
@@ -44,6 +45,7 @@ interface Release {
 }
 
 export interface TurnSandboxContext {
+  tenant: Tenant;
   deps: OrchestratorDeps;
   input: OrchestratorInput;
   actor: Principal;
@@ -93,7 +95,7 @@ interface TurnPool {
 }
 
 async function releasePool(t: TurnPool): Promise<void> {
-  const { deps, input, session, scopeId, turnFilesDir } = t.ctx;
+  const { tenant, deps, input, session, scopeId, turnFilesDir } = t.ctx;
   const { pool, writableScopeId, scopedUsed, audit } = t;
   const releaseHold = async (handle: SandboxHandle): Promise<boolean> => {
     const runs = deps.runs;
@@ -125,6 +127,7 @@ async function releasePool(t: TurnPool): Promise<void> {
         const message = `${handle.backend}:${handle.id}: ${errMessage(error)}`;
         swallow(`orchestrator: teardown ${message}`, error);
         deps.errors?.record(
+          tenant,
           { category: "sandbox", code: "teardown_failed", message, scopeLabel: scopeId, sessionId: session.id },
           error,
         );
@@ -140,6 +143,7 @@ async function releasePool(t: TurnPool): Promise<void> {
       const message = errMessage(error);
       audit("scratch.release_failed", handle, { cleanupMs: Date.now() - cleanupStart, error: message });
       deps.errors?.record(
+        tenant,
         { category: "sandbox", code: "scratch_destroy_failed", message, scopeLabel: scopeId, sessionId: session.id },
         error,
       );
@@ -205,7 +209,7 @@ function openSlot(
 }
 
 async function openScoped(t: TurnPool, slot: Slot, eager: boolean): Promise<SandboxHandle> {
-  const { deps, input, actor, session, resolution, scopeId, memoryScopeId } = t.ctx;
+  const { tenant, deps, input, actor, session, resolution, scopeId, memoryScopeId } = t.ctx;
   const {
     isolation,
     boundSandboxId,
@@ -245,6 +249,7 @@ async function openScoped(t: TurnPool, slot: Slot, eager: boolean): Promise<Sand
       await reconcileProcesses(deps.sandbox, handle, deps.processes, memoryScopeId, finishProcess);
     } catch (err) {
       deps.errors?.record(
+        tenant,
         {
           category: "process_session",
           code: "reconcile_failed",
@@ -326,6 +331,7 @@ async function openResource(
 
 export function createTurnSandboxes(ctx: TurnSandboxContext) {
   const {
+    tenant,
     deps,
     input,
     actor,
@@ -368,7 +374,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   let scopedUsed = false;
   const scratchKey = () => `turn:${session.id}:${transferId}`;
   const audit = (action: string, handle?: SandboxHandle, extra?: Record<string, unknown>): void => {
-    deps.auditLog?.record({
+    deps.auditLog?.record(tenant, {
       at: Date.now(),
       principalId: actor.id,
       action: `sandbox.${action}`,
@@ -434,6 +440,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   };
   const provisionScratch = (): Promise<SandboxHandle> => openScratch(turnPool);
   const turnSkills = createTurnSkills({
+    tenant,
     deps,
     scopeId,
     sessionId: session.id,

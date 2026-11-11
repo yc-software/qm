@@ -916,7 +916,7 @@ test("a note from the cron's own fire is anonymous and stamped with that fire's 
   assert.ok(afterLateFire.ok);
   assert.equal(afterLateFire.cron.lastFireNote?.text, "skip the Smith account");
 
-  const noteAudit = (await built.auditLog.events()).filter((e) => e.action === "cron_note" && e.resource === id);
+  const noteAudit = (await built.auditLog.events(tenant)).filter((e) => e.action === "cron_note" && e.resource === id);
   assert.equal(noteAudit.length, 2, "a superseded write leaves no audit row");
   assert.deepEqual(
     noteAudit.map((e) => e.principalId),

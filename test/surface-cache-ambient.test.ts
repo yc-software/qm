@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -83,7 +84,7 @@ test("a prompt-injected ambient judge reason is screened even when the shown mes
       },
     ]);
     const flagged = async () =>
-      (await built.auditLog.events()).some((event) => event.action === "security_posture.flagged");
+      (await built.auditLog.events(testTenant)).some((event) => event.action === "security_posture.flagged");
     await settle(flagged);
     assert.equal((await built.deliveries.pending("slack")).length, 0);
     assert.ok(await flagged());
@@ -1442,7 +1443,7 @@ test("under external Slack isolation, an ambient wake without a recorded source 
     assert.equal(await built.sessions.getByThread(`slack:${container}:ambient:520.1`), null);
     assert.deepEqual(await built.deliveries.pending("slack"), []);
     await built.errors.flush();
-    const errors = await built.errors.list({ scopeId: `channel:${container}` });
+    const errors = await built.errors.list(testTenant, { scopeId: `channel:${container}` });
     assert.deepEqual(
       errors.map((e) => [e.category, e.code, e.message]),
       [["ambient", "worker_start_failed", rows[0]!.startError]],
@@ -1490,7 +1491,7 @@ test("a judge call that throws is recorded in the admin error log instead of van
     const rows = await judged(built.ambientJudgments!, container);
     assert.equal(rows[0]!.decision, "ignore");
     await built.errors.flush();
-    const errors = await built.errors.list({ scopeId: `channel:${container}` });
+    const errors = await built.errors.list(testTenant, { scopeId: `channel:${container}` });
     assert.deepEqual(
       errors.map((e) => [e.category, e.code, e.message]),
       [["ambient", "judge_failed", "mock judge outage"]],

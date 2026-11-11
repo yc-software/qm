@@ -69,8 +69,8 @@ async function ingestEgressAudit(ctx: ApiCtx): Promise<void> {
   for (const [tenant, batch] of byTenant) {
     if (!(await exists(tenant))) continue;
     const sink = deps.egressAudit;
-    const ok = await inTenant(tenant, async () => {
-      for (const record of batch) sink.record(record);
+    const ok = await inTenant(tenant, async (t) => {
+      for (const record of batch) sink.record(t, record);
       return true;
     }).catch(swallowAs(`egress audit: records for tenant ${tenant}`, false));
     if (ok) accepted += batch.length;

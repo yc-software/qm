@@ -92,7 +92,7 @@ const keychainRoute =
     }
   };
 
-const saveCredential = keychainRoute(async ({ res, deps, body }, kc, { actorId, scopeId }) => {
+const saveCredential = keychainRoute(async ({ res, deps, tenant, body }, kc, { actorId, scopeId }) => {
   const b = body as {
     service?: unknown;
     secret?: unknown;
@@ -165,12 +165,15 @@ const saveCredential = keychainRoute(async ({ res, deps, body }, kc, { actorId, 
     origin: typeof b.origin === "string" ? b.origin : `agent-session:${scopeId}`,
     ...(expiresAt.value !== undefined ? { expiresAt: expiresAt.value } : {}),
   });
-  audit(deps, {
-    principalId: actorId,
-    action: "keychain.save",
-    resource: `${meta.service}:${meta.id}`,
-    scopeLabel: scopeId,
-  });
+  audit(
+    { deps, tenant },
+    {
+      principalId: actorId,
+      action: "keychain.save",
+      resource: `${meta.service}:${meta.id}`,
+      scopeLabel: scopeId,
+    },
+  );
   return sendJson(res, 200, { credential: meta });
 });
 
@@ -190,10 +193,11 @@ const keychainOverview = keychainRoute(async ({ res, app, deps }, kc, { actorId 
   return sendJson(res, 200, { credentials, connectorCredentials, grants, asks, scopeNames });
 }, true);
 
-const deleteCredential = keychainRoute(async ({ res, deps, params }, kc, { actorId, scopeId }) => {
+const deleteCredential = keychainRoute(async ({ res, deps, tenant, params }, kc, { actorId, scopeId }) => {
   const id = params.id!;
   const ok = await kc.remove(actorId, id);
-  if (ok) audit(deps, { principalId: actorId, action: "keychain.delete", resource: id, scopeLabel: scopeId });
+  if (ok)
+    audit({ deps, tenant }, { principalId: actorId, action: "keychain.delete", resource: id, scopeLabel: scopeId });
   return ok ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: "not_found" });
 }, true);
 
@@ -204,10 +208,11 @@ const listGrants = keychainRoute(async ({ res }, kc, { actorId, scopeId }) => {
   return sendJson(res, 200, { grants: [...byId.values()] });
 });
 
-const revokeGrant = keychainRoute(async ({ res, deps, params }, kc, { actorId, scopeId }) => {
+const revokeGrant = keychainRoute(async ({ res, deps, tenant, params }, kc, { actorId, scopeId }) => {
   const id = params.id!;
   const ok = await kc.revokeGrant(actorId, id);
-  if (ok) audit(deps, { principalId: actorId, action: "keychain.revoke", resource: id, scopeLabel: scopeId });
+  if (ok)
+    audit({ deps, tenant }, { principalId: actorId, action: "keychain.revoke", resource: id, scopeLabel: scopeId });
   return ok ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: "not_found" });
 }, true);
 
@@ -366,7 +371,7 @@ const createAsk = keychainRoute(async (ctx, kc, capability) => {
       idempotencyKey: `ask:${ask.id}:notice`,
     });
   if (!existing) {
-    audit(deps, {
+    audit(ctx, {
       principalId: actorId,
       action: "keychain.ask",
       resource: `${ask.id} (${cred.service}:${cred.id}→${cred.ownerId})`,

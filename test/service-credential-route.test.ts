@@ -853,7 +853,7 @@ test("broker route: a credential-broker token uses the secret by proxy; usage is
     assert.equal(json.body, '{"data":[]}');
     assert.equal(calls[0]!.headers["Authorization"], "Bearer super-secret-bearer");
     assert.doesNotMatch(JSON.stringify(json), /super-secret-bearer/);
-    assert.equal((await srv.built.credentialUsage.list({ slug: "x-firehose" })).length, 1);
+    assert.equal((await srv.built.credentialUsage.list(tenant, { slug: "x-firehose" })).length, 1);
   } finally {
     await srv.close();
   }
@@ -962,7 +962,10 @@ test("git http broker streams smart-http GET and POST through an entitled servic
     assert.equal(calls[1]!.headers.Authorization, "Basic dXNlcjp0b2tlbg==");
     assert.equal(calls[1]!.headers["content-type"], "application/x-git-receive-pack-request");
     assert.equal(calls[1]!.body, "PACKDATA");
-    assert.equal((await srv.built.credentialUsage.list({ slug: "gitlab" })).filter((r) => r.status === "ok").length, 2);
+    assert.equal(
+      (await srv.built.credentialUsage.list(tenant, { slug: "gitlab" })).filter((r) => r.status === "ok").length,
+      2,
+    );
   } finally {
     await srv.close();
   }
@@ -1335,21 +1338,21 @@ test("usage summaries authorize before reads and include only the requested scop
   const srv = start();
   t.after(srv.close);
   await putCred(srv.base, { slug: "summary", name: "Summary", host: "api.example.com", secret: "private" });
-  srv.built.credentialUsage.record({
+  srv.built.credentialUsage.record(tenant, {
     slug: "summary",
     host: "api.example.com",
     status: "ok",
     scopeLabel: "personal:U1",
     principalId: "U1",
   });
-  srv.built.credentialUsage.record({
+  srv.built.credentialUsage.record(tenant, {
     slug: "unlisted",
     host: "api.example.com",
     status: "ok",
     scopeLabel: "personal:U2",
     principalId: "U2",
   });
-  await settle(async () => (await srv.built.credentialUsage.list()).length >= 2);
+  await settle(async () => (await srv.built.credentialUsage.list(tenant)).length >= 2);
   const read = t.mock.method(srv.built.serviceCreds, "listServiceCredentials");
   const summarize = t.mock.method(srv.built.credentialUsage, "summary");
   const path = `${srv.base}/v1/admin/scopes/org:default-org/credential-usage`;
@@ -1365,7 +1368,7 @@ test("usage summaries authorize before reads and include only the requested scop
   assert.equal(body.summaries[0]!.slug, "summary");
   assert.equal(body.summaries[0]!.usageCount, 1);
   assert.deepEqual(body.summaries[0]!.recentUsagePrincipals, ["U1"]);
-  assert.deepEqual(summarize.mock.calls[0]!.arguments, [["summary"]]);
+  assert.deepEqual(summarize.mock.calls[0]!.arguments, [tenant, ["summary"]]);
   assert.doesNotMatch(JSON.stringify(body), /private|unlisted|U2/);
 });
 

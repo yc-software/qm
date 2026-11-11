@@ -1,3 +1,4 @@
+import { testTenant } from "./support/test-tenant.ts";
 import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import { brokerCredentialCall, type BrokerFetch } from "../src/api/credential-broker.ts";
@@ -48,6 +49,7 @@ function captureFetch(): {
 }
 
 const base = (over: Partial<Parameters<typeof brokerCredentialCall>[0]> = {}) => ({
+  tenant: testTenant,
   claims: claims(["x-firehose"]),
   body: { credential: "x-firehose", method: "GET", url: "https://api.x.com/2/tweets/search/recent?query=ai" },
   orgScopeId: "org:default-org",
@@ -65,7 +67,7 @@ test("happy path: injects the secret as Bearer, never exposes it in the result",
   assert.doesNotMatch(JSON.stringify(r.json), new RegExp(SECRET));
   assert.equal(cap.calls.length, 1);
   assert.equal(cap.calls[0]!.headers["Authorization"], `Bearer ${SECRET}`);
-  const used = await usage.list({ slug: "x-firehose" });
+  const used = await usage.list(testTenant, { slug: "x-firehose" });
   assert.equal(used.length, 1);
   assert.equal(used[0]!.host, "api.x.com");
   assert.equal(used[0]!.status, "ok");
@@ -311,7 +313,7 @@ test("an upstream fetch error is reported generically (never leaks the URL/heade
   assert.equal(r.status, 502);
   assert.match(JSON.stringify(r.json), /upstream_unreachable/);
   assert.doesNotMatch(JSON.stringify(r.json), new RegExp(SECRET));
-  assert.equal((await usage.list({ slug: "x-firehose" }))[0]!.status, "error");
+  assert.equal((await usage.list(testTenant, { slug: "x-firehose" }))[0]!.status, "error");
 });
 
 test("a missing slug or url is a 400 bad_request", async () => {
@@ -394,6 +396,7 @@ test("actor-attested credentials require exact host while legacy subdomain match
   for (const actor of [false, true]) {
     const cap = captureFetch();
     const result = await brokerCredentialCall({
+      tenant: testTenant,
       claims: claims(["relay"]),
       body: { credential: "relay", url: "https://child.example.test/read" },
       orgScopeId: "org:default-org",
@@ -405,6 +408,7 @@ test("actor-attested credentials require exact host while legacy subdomain match
   }
   const cap = captureFetch();
   const result = await brokerCredentialCall({
+    tenant: testTenant,
     claims: claims(["relay"]),
     body: { credential: "relay", url: "https://example.test/read" },
     orgScopeId: "org:default-org",
@@ -418,6 +422,7 @@ test("actor-attested credentials require exact host while legacy subdomain match
 test("actor attestation rejects alternate ports before sending credentials", async () => {
   const cap = captureFetch();
   const result = await brokerCredentialCall({
+    tenant: testTenant,
     claims: claims(["relay"]),
     body: { credential: "relay", url: "https://example.test:8443/read" },
     orgScopeId: "org:default-org",

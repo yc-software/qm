@@ -182,7 +182,7 @@ async function brokerSession(ctx: ApiCtx): Promise<void> {
   if (ctx.pathname.endsWith("/revoke")) {
     if (ctx.actor?.p.toLowerCase() !== email && !(await authorizeAdmin(ctx, orgScope()))) return;
     await deps.brokerSessions.revoke(email);
-    audit(deps, {
+    audit(ctx, {
       principalId: ctx.actor?.p ?? "admin",
       action: "auth.broker.revoke",
       resource: email,
@@ -241,7 +241,7 @@ async function trustedAdmin(ctx: ApiCtx): Promise<void> {
   try {
     const { grant, created } = await deps.admin.provisionTrustedEntry(tenant, claims.issuer, claims.subject);
     if (created)
-      audit(deps, {
+      audit(ctx, {
         principalId: grant.grantedBy!,
         action: "grant.create",
         resource: `${grant.principalId}/org_admin`,
@@ -293,7 +293,7 @@ async function redeemInvitation(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 403, { error: "invitation_revoked" });
   if (!(await deps.replayDedupe.claim(`teammate-invite:${claims.jti}`, claims.exp)))
     return sendJson(res, 400, { error: "invitation_used" });
-  audit(deps, {
+  audit(ctx, {
     principalId: claims.email,
     action: "user.invite.redeem",
     resource: claims.email,

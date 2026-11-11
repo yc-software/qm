@@ -347,7 +347,7 @@ test("observed screening returns immediately and audits each verdict once it set
       },
     },
     agent: { models: {} },
-    auditLog: { record: (event: AuditEvent) => events.push(event) },
+    auditLog: { record: (_t: unknown, event: AuditEvent) => events.push(event) },
   } as unknown as OrchestratorDeps);
   const verdicts = await Promise.all(
     Array.from({ length: 20 }, (_, i) =>

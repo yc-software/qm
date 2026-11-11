@@ -329,7 +329,7 @@ describe("linked sign-ins across the HTTP surface", () => {
     };
     assert.equal(listed.links.length, 1);
     assert.equal(listed.links[0]!.linkedBy, "admin-alice");
-    const audit = await built.auditLog.tail({ limit: 50, action: "principal_link.create" });
+    const audit = await built.auditLog.tail(tenant, { limit: 50, action: "principal_link.create" });
     assert.ok(audit.some((e) => e.resource === `${OIDC} -> ${EMAIL}`));
   });
 

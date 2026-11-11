@@ -94,7 +94,7 @@ export function createDecisionHooks(store: DecisionStore | undefined, backend: D
     const signal = AbortSignal.any([AbortSignal.timeout(HOOK_TIMEOUT_MS), ...(turn.cancel ? [turn.cancel] : [])]);
     const { decisive, results } = await runHook(turn.tenant, rules, hook, state, backend, signal);
     for (const result of results)
-      audit.record({
+      audit.record(turn.tenant, {
         at: Date.now(),
         principalId: turn.actorId ?? "system",
         action: "decision.classify",

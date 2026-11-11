@@ -141,12 +141,12 @@ function brainChangedHtml(): string {
   );
 }
 
-function auditBrainRefusal(deps: ApiCtx["deps"], drop: SecretDropRecord, message: string): void {
-  audit(deps, {
+function auditBrainRefusal(ctx: Pick<ApiCtx, "deps" | "tenant">, drop: SecretDropRecord, message: string): void {
+  audit(ctx, {
     principalId: drop.ownerId,
     action: "memory-registry.brain.secret.refused",
     resource: `${drop.memoryBrain!.id}: ${message}`,
-    scopeLabel: orgScope(deps),
+    scopeLabel: orgScope(ctx.deps),
   });
 }
 
@@ -309,7 +309,7 @@ async function saveBrainSecret(
   if (!registry) return sendJson(res, 404, { error: "not_found" });
   const target = drop.memoryBrain!;
   const refuse = (status: number, error: string, message: string) => {
-    auditBrainRefusal(deps, drop, message);
+    auditBrainRefusal(ctx, drop, message);
     return sendJson(res, status, { error, message });
   };
   const owner = canonicalPerson(drop.ownerId);
@@ -332,7 +332,7 @@ async function saveBrainSecret(
     if (!(error instanceof MemoryRegistryError)) throw error;
     return refuse(error.status, REGISTRY_ERRORS[error.status], error.message);
   }
-  audit(deps, {
+  audit(ctx, {
     principalId: drop.ownerId,
     action: "memory-registry.brain.secret",
     resource: target.id,
@@ -412,7 +412,7 @@ async function mintDrop(ctx: ApiCtx): Promise<void> {
         }),
     requiresToken: true,
   });
-  audit(deps, {
+  audit(ctx, {
     principalId: capability.actorId,
     action: "keychain.drop.mint",
     resource: `${service.trim()}:${dropId}${samePerson(ownerId, capability.actorId) ? "" : ` (onBehalfOf ${ownerId})`}`,
@@ -460,7 +460,7 @@ async function dropForm(ctx: ApiCtx): Promise<void> {
   };
   const brain = await brainDestination(ctx, peeked.rec);
   if (brain && "refused" in brain) {
-    auditBrainRefusal(deps, peeked.rec, brain.refused);
+    auditBrainRefusal(ctx, peeked.rec, brain.refused);
     res.writeHead(brain.status, { "content-type": "text/html; charset=utf-8" });
     return void res.end(brain.status === 403 ? brainRefusedHtml() : brainChangedHtml());
   }
@@ -542,7 +542,7 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
       });
       grantId = grant.id;
     }
-    audit(deps, {
+    audit(ctx, {
       principalId: drop.ownerId,
       action: "keychain.drop.redeem",
       resource: `${meta.service}:${meta.id}`,

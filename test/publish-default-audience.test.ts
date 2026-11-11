@@ -1,3 +1,4 @@
+import { testTenant } from "./support/test-tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -66,6 +67,7 @@ function ctxFor(
   },
 ) {
   const deps: ToolContextDeps = {
+    tenant: testTenant,
     sandbox: fileSandbox(),
     provision: async () => ({}) as SandboxHandle,
     writableScopeId: opts.contextScope,

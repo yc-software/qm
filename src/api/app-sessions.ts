@@ -541,7 +541,7 @@ export function createSessionMethods(
           grantedBy: principalId,
         });
       }
-      deps.auditLog?.record({
+      deps.auditLog?.record(tenant, {
         at: Date.now(),
         principalId,
         action: "file.upload",
@@ -770,7 +770,7 @@ export function createSessionMethods(
       const principal = deps.identity.classify(principalId);
       if (!deps.projects || !deps.identity.isInternal(principal) || !name.trim()) return null;
       const project = await deps.projects.create({ name, ownerId: principalId });
-      deps.auditLog.record({
+      h.recordAudit({
         at: Date.now(),
         principalId,
         action: "project.create",
@@ -791,7 +791,7 @@ export function createSessionMethods(
         return { status: "invalid_member" };
       const result = await deps.projects.addMember(id, principalId, memberId, async ({ project, changed }) => {
         if (changed)
-          deps.auditLog.record({
+          h.recordAudit({
             at: Date.now(),
             principalId,
             action: "project.member.add",
@@ -813,7 +813,7 @@ export function createSessionMethods(
       if (!existing || existing.orgId !== orgIdOf()) return { status: "not_found" };
       const result = await deps.projects.removeMember(id, principalId, memberId, async ({ project, changed }) => {
         if (changed)
-          deps.auditLog.record({
+          h.recordAudit({
             at: Date.now(),
             principalId,
             action: "project.member.remove",
@@ -858,7 +858,7 @@ export function createSessionMethods(
       const manual = new Set([existing.ownerId, ...existing.memberIds]);
       const result = await deps.projects.setSlackChannel(id, principalId, link, async ({ project, changed }) => {
         if (changed)
-          deps.auditLog.record({
+          h.recordAudit({
             at: Date.now(),
             principalId,
             action: link ? "project.slack_channel.link" : "project.slack_channel.unlink",
@@ -868,7 +868,7 @@ export function createSessionMethods(
         if (!link) {
           for (const m of prevDerived) {
             if (manual.has(m)) continue;
-            deps.auditLog.record({
+            h.recordAudit({
               at: Date.now(),
               principalId,
               action: "project.member.remove",
@@ -892,7 +892,7 @@ export function createSessionMethods(
       if (!existing || existing.orgId !== orgIdOf()) return { status: "not_found" };
       const result = await deps.projects.rename(id, principalId, name, async ({ project, changed }) => {
         if (changed)
-          deps.auditLog.record({
+          h.recordAudit({
             at: Date.now(),
             principalId,
             action: "project.rename",
@@ -917,7 +917,7 @@ export function createSessionMethods(
       }
       const result = await deps.projects.setIcon(id, principalId, icon, async ({ project, changed }) => {
         if (changed)
-          deps.auditLog.record({
+          h.recordAudit({
             at: Date.now(),
             principalId,
             action: "project.icon",
@@ -1122,7 +1122,7 @@ export function createSessionMethods(
         const sourceTitle = source.title?.trim();
         if (sourceTitle && projectMembers === undefined)
           await deps.sessions.updateTitle(forked.id, `${sourceTitle} (fork)`);
-        deps.auditLog.record({
+        h.recordAudit({
           at: Date.now(),
           principalId,
           action: "session.fork",
@@ -1158,7 +1158,7 @@ export function createSessionMethods(
           (projectMembers ?? [principalId]).map((memberId) => deps.sessions.addParticipant(session.id, memberId)),
         );
         if (opts.title?.trim()) await deps.sessions.updateTitle(session.id, opts.title.trim());
-        deps.auditLog.record({
+        h.recordAudit({
           at: Date.now(),
           principalId,
           action: "session.spawn",
@@ -1191,7 +1191,7 @@ export function createSessionMethods(
       if (!session) return false;
       if ((await deps.runs.inFlightForThread(session.threadRef)).length) return false;
       if (!(await deps.sessions.deleteSessionIfEmpty(sessionId))) return false;
-      deps.auditLog.record({
+      h.recordAudit({
         at: Date.now(),
         principalId,
         action: "session.discard",
@@ -1216,7 +1216,7 @@ export function createSessionMethods(
         await deps.deploy.assertShareAllowed(g.ownerScopeId, g.granteeScopeId, g.permission);
       }
       await deps.acl.grant(tenant, g, await artifactAuthor(g.ownerScopeId, g.ref));
-      deps.auditLog.record({
+      deps.auditLog.record(tenant, {
         at: Date.now(),
         principalId: g.grantedBy,
         action: "grant",
@@ -1242,7 +1242,7 @@ export function createSessionMethods(
         revokedBy,
         await artifactAuthor(ownerScopeId, ref),
       );
-      deps.auditLog.record({
+      deps.auditLog.record(tenant, {
         at: Date.now(),
         principalId: revokedBy,
         action: "revoke",
@@ -1259,7 +1259,7 @@ export function createSessionMethods(
       const status = await deps.admin.adminStatusOf(ambientTenant(), { id: actorId, type: "internal" });
       if (!status.isAdmin) throw new AdminError(403, "only an org admin can promote a skill org-wide");
       const promoted = await deps.skills.promote(id, targetScopeId);
-      deps.auditLog.record({
+      h.recordAudit({
         at: Date.now(),
         principalId: actorId,
         action: "skill_promote",
@@ -1315,7 +1315,7 @@ export function createSessionMethods(
         throw new Error(`moving a ${type}'s home isn't supported — share it instead (add a grant)`);
       }
       await deps.skills.move(id, toScope);
-      deps.auditLog.record({
+      h.recordAudit({
         at: Date.now(),
         principalId: movedBy,
         action: "skill_move",
@@ -1362,7 +1362,7 @@ export function createSessionMethods(
                   opts.sessionId,
                 );
           if (version === null) throw new SoulVersionConflictError();
-          deps.auditLog.record({
+          h.recordAudit({
             at: Date.now(),
             principalId: actorId,
             action: "soul_update",

@@ -12,6 +12,7 @@ import { createKeychain } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { orgId } from "../src/config.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const cap: CapabilityClaims = {
   runId: "test-run",
@@ -50,7 +51,9 @@ async function fixture() {
   const deps: Partial<ServerDeps> = {
     keychain,
     serviceCreds: keychain,
-    auditLog: { record: (e: { action: string }) => audits.push(e.action) } as unknown as ServerDeps["auditLog"],
+    auditLog: {
+      record: (_t: unknown, e: { action: string }) => audits.push(e.action),
+    } as unknown as ServerDeps["auditLog"],
     runs: {
       get: async () => ({
         status: "running",
@@ -96,6 +99,7 @@ async function fixture() {
     const ctx = {
       deps,
       res,
+      tenant: testTenant,
       url: new URL("/v1/composio/proxy", "http://localhost"),
       body,
       capability: "capability" in options ? options.capability : cap,

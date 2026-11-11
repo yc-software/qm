@@ -182,7 +182,7 @@ export function createMessagingMethods(
       validateUserSchedule(input.schedule);
       await trialBeforeSave(input.script, input.schedule, trial);
       const cron = await deps.crons.create(input);
-      deps.auditLog.record({
+      h.recordAudit({
         at: Date.now(),
         principalId: cron.createdBy,
         action: "cron_create",
@@ -229,7 +229,7 @@ export function createMessagingMethods(
       const guardedPatch =
         (before.unattendedGrants?.length ?? 0) > 0 && !grantsReaffirmed ? { ...patch, unattendedGrants: [] } : patch;
       const updated = await deps.crons.update(id, guardedPatch);
-      deps.auditLog.record({
+      h.recordAudit({
         at: Date.now(),
         principalId: before.owner,
         action: "cron_update",
@@ -242,7 +242,7 @@ export function createMessagingMethods(
       const before = await deps.crons.get(id);
       await deps.crons.delete(id);
       if (before)
-        deps.auditLog.record({
+        h.recordAudit({
           at: Date.now(),
           principalId: before.owner,
           action: "cron_delete",
@@ -258,7 +258,7 @@ export function createMessagingMethods(
       if (!before) return "missing";
       const outcome = await deps.crons.setFireNote(id, note);
       if (outcome === "applied") {
-        deps.auditLog.record({
+        h.recordAudit({
           at: Date.now(),
           principalId: note.by ?? before.owner,
           action: "cron_note",
@@ -278,7 +278,7 @@ export function createMessagingMethods(
       const before = await deps.crons.get(id);
       if (!before) return null;
       await deps.crons.setDestination(id, destination);
-      deps.auditLog.record({
+      h.recordAudit({
         at: Date.now(),
         principalId: before.owner,
         action: "cron_retarget",
@@ -289,7 +289,7 @@ export function createMessagingMethods(
     },
     async createWebhook(input) {
       const webhook = await deps.webhooks.create(input);
-      deps.auditLog.record({
+      h.recordAudit({
         at: Date.now(),
         principalId: webhook.createdBy,
         action: "webhook_create",
@@ -459,7 +459,7 @@ export function createMessagingMethods(
       const outcome = await deps.identity.recordDirectorySync(removed, present);
       const orgScope = scopeId("org", orgIdOf());
       for (const id of outcome.deactivated) {
-        deps.auditLog.record({
+        h.recordAudit({
           at: Date.now(),
           principalId: id,
           action: "principal.deactivate",
@@ -468,7 +468,7 @@ export function createMessagingMethods(
         });
       }
       for (const id of outcome.reactivated) {
-        deps.auditLog.record({
+        h.recordAudit({
           at: Date.now(),
           principalId: id,
           action: "principal.reactivate",
@@ -649,7 +649,7 @@ export function createMessagingMethods(
         ...(input.attachments?.length ? { attachments: input.attachments } : {}),
         ...(!input.react && !input.delete && sender?.displayName ? { attributeAs: sender.displayName } : {}),
       });
-      deps.auditLog.record({
+      h.recordAudit({
         at: Date.now(),
         principalId: input.senderId,
         action: "reach_now",

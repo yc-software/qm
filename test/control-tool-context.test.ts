@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -43,6 +44,7 @@ const claims = (actorId: string): CapabilityClaims => ({
 function ctxFor(extra: Partial<ToolContextDeps>) {
   const scope = scopeId("personal", "U1");
   return createToolContext({
+    tenant: testTenant,
     sandbox: {} as unknown as Sandbox,
     provision: async () => handle,
     writableScopeId: scope,
@@ -119,7 +121,7 @@ test("the cron tool lets a live org-admin owner attach unattended admin-read gra
 test("webhook registration through the tool requires a live person and leaves refused calls without effects", async () => {
   const { built, control } = build();
   const request = { action: "handle the event", verification: { scheme: "hmac-sha256" as const, secret: "secret" } };
-  const auditBefore = await built.auditLog.events();
+  const auditBefore = await built.auditLog.events(testTenant);
   for (const scope of ["personal:U1", "channel:C1"] as const) {
     for (const extra of [
       {},
@@ -133,7 +135,7 @@ test("webhook registration through the tool requires a live person and leaves re
       assert.equal(result.ok, false, JSON.stringify({ scope, extra }));
       assert.equal(result.ok ? undefined : result.code, "forbidden");
       assert.deepEqual(await built.app.listWebhooks(), []);
-      assert.deepEqual(await built.auditLog.events(), auditBefore);
+      assert.deepEqual(await built.auditLog.events(testTenant), auditBefore);
     }
   }
   for (const extra of [{ liveActor: true }, { liveAuthor: true }]) {
@@ -146,12 +148,12 @@ test("webhook registration through the tool requires a live person and leaves re
   const [webhook] = await built.app.listWebhooks();
   await built.app.setWebhookEnabled(webhook!.id, false);
   const disabled = await built.app.listWebhooks();
-  const auditAfter = await built.auditLog.events();
+  const auditAfter = await built.auditLog.events(testTenant);
   const ctx = ctxFor({ control, controlClaims: { ...claims("U1"), triggered: true } });
   const result = await ctx.webhookCreate(request);
   assert.equal(result.ok ? undefined : result.code, "forbidden");
   assert.deepEqual(await built.app.listWebhooks(), disabled);
-  assert.deepEqual(await built.auditLog.events(), auditAfter);
+  assert.deepEqual(await built.auditLog.events(testTenant), auditAfter);
 });
 
 test("createToolContext.soulWrite then soulRead reflect the new SOUL", async () => {

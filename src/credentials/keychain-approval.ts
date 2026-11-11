@@ -2,7 +2,7 @@ import { KeychainError, type Keychain, type KeychainAsk, type KeychainGrant } fr
 import type { App } from "../api/app.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
-import type { AuditLog } from "../audit/audit-log.ts";
+import { recordAuditInBinding, type AuditLog } from "../audit/audit-log.ts";
 import type { ActorAssertion, Destination } from "../types.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import { principalDestination } from "../reach/reach.ts";
@@ -126,7 +126,7 @@ export function createKeychainApprovals(deps: {
         if (!latest || latest.ask.status === "pending") throw error;
         return latest;
       }
-      deps.audit?.record({
+      recordAuditInBinding(deps.audit, {
         at: Date.now(),
         principalId: actor.id,
         action: decision === "deny" ? "keychain.ask.decline" : `keychain.grant.${decision}`,
