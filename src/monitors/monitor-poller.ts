@@ -46,6 +46,7 @@ export interface MonitorPollerDeps {
   currentScopeMembers?: CurrentScopeMembers;
   sessions?: TriggerDeps["sessions"];
   resolveRecipient?: TriggerDeps["resolveRecipient"];
+  declineApproval?: TriggerDeps["declineApproval"];
   now?: () => number;
   maxFiresPerTick?: number;
   leaderLease: LeaderLease;
@@ -149,6 +150,7 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
     ...(deps.currentScopeMembers ? { currentScopeMembers: deps.currentScopeMembers } : {}),
     ...(deps.sessions ? { sessions: deps.sessions } : {}),
     ...(deps.resolveRecipient ? { resolveRecipient: deps.resolveRecipient } : {}),
+    ...(deps.declineApproval ? { declineApproval: deps.declineApproval } : {}),
   };
 
   async function fire(

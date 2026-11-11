@@ -88,6 +88,7 @@ export interface SchedulerDeps {
     getByThread(threadRef: string): Promise<{ personaId?: string } | null>;
   };
   resolveRecipient?: TriggerDeps["resolveRecipient"];
+  declineApproval?: TriggerDeps["declineApproval"];
   skipFire?: (cron: Cron) => Promise<string | undefined>;
   notebookOnlyMemory?: (cron: Cron) => Promise<boolean>;
   deleteCron?: (id: string) => Promise<void>;
@@ -314,6 +315,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           ...(deps.currentScopeMembers ? { currentScopeMembers: deps.currentScopeMembers } : {}),
           ...(deps.sessions ? { sessions: deps.sessions } : {}),
           ...(deps.resolveRecipient ? { resolveRecipient: deps.resolveRecipient } : {}),
+          ...(deps.declineApproval ? { declineApproval: deps.declineApproval } : {}),
         },
         {
           ...cronTriggerAuthority(cron),

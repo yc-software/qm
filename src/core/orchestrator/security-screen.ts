@@ -364,7 +364,7 @@ export async function screenInboundInput(turn: InboundScreenTurn) {
     audit,
     approvalGrantsFor,
   } = turn;
-  let flaggedScreenedInput: { reason: string; sources: string[]; onceOnly: boolean; refused: boolean } | undefined;
+  let flaggedScreenedInput: { reason: string; sources: string[]; onceOnly: boolean } | undefined;
   let inputUnscreened = false;
   if (replaysHeldInput && enforceScreen) {
     const { screenPayloads, hasUnscreenableAttachment } = await buildInboundScreen({ ...turn, screenInbound: true });
@@ -393,21 +393,12 @@ export async function screenInboundInput(turn: InboundScreenTurn) {
       else if (!deps.securityScreener && !deps.agent.screenSecurity) unscreenableCause = "no-screener";
       if (verdict?.decision === "strict") {
         const sources = externalPromptData.map((item) => item.source);
-        const onceOnly = verdict.unscreened === true;
         flaggedScreenedInput = {
           reason: verdict.reason ?? "strict security screen verdict",
           sources,
-          onceOnly,
-          refused: onceOnly && input.origin.kind === "automation",
+          onceOnly: verdict.unscreened === true,
         };
-        audit(
-          flaggedAudit(
-            input.surface ?? "unknown",
-            flaggedScreenedInput.refused ? "refused" : "pending_approval",
-            flaggedScreenedInput.reason,
-            sources,
-          ),
-        );
+        audit(flaggedAudit(input.surface ?? "unknown", "pending_approval", flaggedScreenedInput.reason, sources));
       } else if (unscreenableCause || verdict?.unscreened) {
         inputUnscreened = true;
         audit({

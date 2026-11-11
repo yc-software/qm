@@ -712,7 +712,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           return { status: "queued", sessionId: session.id, ...(input.runId ? { runId: input.runId } : {}) };
         const heldReason = `${flaggedScreenedInput.reason}; flagged sources: ${flaggedScreenedInput.sources.join(", ") || "message"}`;
         if (botRequester) return botApprovalRefusal(audit, session.id, "security-screen", heldReason);
-        if (flaggedScreenedInput.refused) return { status: "refused", sessionId: session.id, reason: heldReason };
         let approval: PendingApproval;
         try {
           approval = await withManagedRosterVersion(async () => {
