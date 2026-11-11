@@ -8,7 +8,7 @@ import type { Agent } from "../src/agent/agent.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { verifyCapabilityToken, type CapabilityClaims } from "../src/auth/capability-token.ts";
+import { mintCapabilityToken, verifyCapabilityToken, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createCanReadScope, createCanWriteScope } from "../src/resolution/scope-membership.ts";
@@ -210,14 +210,18 @@ test("unprompted channel work delegates and computes as the channel, but its min
       )) === "ok",
     privateChannelGate: await built.app.authorizesCapabilityScope(c),
   });
-  const http = async (token: string, method: string, path: string) =>
-    (
-      await fetch(`${base}${path}`, {
-        method,
-        headers: { "x-agent-capability": token, "content-type": "application/json" },
-        body: JSON.stringify(method === "PATCH" ? { title: "renamed" } : {}),
-      })
-    ).status;
+  const http = async (token: string, method: string, path: string) => {
+    const res = await fetch(`${base}${path}`, {
+      method,
+      headers: { "x-agent-capability": token, "content-type": "application/json" },
+      ...(method === "GET" ? {} : { body: JSON.stringify(method === "PATCH" ? { title: "renamed" } : {}) }),
+    });
+    const body = (await res.json().catch(() => ({}))) as { message?: string; crons?: Array<{ id: string }> };
+    return method === "GET"
+      ? [res.status, body.crons?.some((c) => c.id === cron.id) ?? null]
+      : [res.status, body.message ?? null];
+  };
+  const legacyToken = await mintCapabilityToken(legacy, TEST_CAPABILITY_SECRET);
   const markers = (c: CapabilityClaims) => [c.actorId, c.scopeId, c.triggered, c.liveActor, c.origin];
   const observed = {
     minted: { parent: markers(parent), child: markers(child), cronFire: markers(cronFire), person: markers(person) },
@@ -229,6 +233,9 @@ test("unprompted channel work delegates and computes as the channel, but its min
     cronFire: await manages(cronFire),
     person: await manages(person),
     http: {
+      parentListsCrons: await http(tokenByThread.get(parentRef)!, "GET", "/v1/crons"),
+      childListsCrons: await http(tokenByThread.get(childRef!)!, "GET", "/v1/crons"),
+      legacyListsCrons: await http(legacyToken, "GET", "/v1/crons"),
       parentPatchesCron: await http(tokenByThread.get(parentRef)!, "PATCH", `/v1/crons/${cron.id}`),
       childDisablesCron: await http(tokenByThread.get(childRef!)!, "POST", `/v1/crons/${cron.id}/disable`),
       parentDisablesWebhook: await http(tokenByThread.get(parentRef)!, "POST", `/v1/webhooks/${webhook.id}/disable`),
@@ -265,6 +272,13 @@ test("unprompted channel work delegates and computes as the channel, but its min
     legacy: { ...today, privateChannelGate: false },
     cronFire: { ...today, privateChannelGate: false },
     person: today,
-    http: { parentPatchesCron: 403, childDisablesCron: 403, parentDisablesWebhook: 403 },
+    http: {
+      parentListsCrons: [200, false],
+      childListsCrons: [200, false],
+      legacyListsCrons: [403, null],
+      parentPatchesCron: [403, "not your cron"],
+      childDisablesCron: [403, "not your cron"],
+      parentDisablesWebhook: [403, "not your webhook"],
+    },
   });
 });

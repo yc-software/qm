@@ -183,6 +183,7 @@ async function verifyCapability(
           ...(capability.botActor ? { botActor: true } : {}),
           ...(capability.liveActor ? { liveActor: true } : {}),
           ...(capability.members ? { members: capability.members } : {}),
+          ...(capability.origin ? { origin: capability.origin } : {}),
         }))
   ) {
     sendJson(res, 403, {
