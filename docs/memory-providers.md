@@ -306,7 +306,7 @@ The record's `schema` is `2` while it holds a member's brain and `1` otherwise. 
 
 ### Brains and bindings
 
-A brain is one MCP endpoint plus one OAuth client-credentials pair, used for reads and writes, and it always attests the member (`attestActor`). Its `preset` names the provider contract; this build knows `gbrain-v1`, gbrain's frozen v1 contract. A binding connects a brain to the kind `personal` (every member) or to one member's personal scope (`personal:<principal id>`). Shared scopes (channels, teams, the org and groups) can't be bound yet: that needs a gbrain contract that reads a shared scope as the scope.
+A brain is one MCP endpoint plus one OAuth client-credentials pair, used for reads and writes, and it always attests the member (`attestActor`). Its `preset` names the provider contract; this build knows `gbrain-v1`, gbrain's frozen v1 contract, and `gbrain-v3`, its v3 contract from release `v0.60.655.0` (`79781ec0`), vendored at [`test/fixtures/gbrain/qm-memory-provider-v3.json`](../test/fixtures/gbrain/README.md). A binding connects a brain to the kind `personal` (every member) or to one member's personal scope (`personal:<principal id>`). Shared scopes (channels, teams, the org and groups) can't be bound yet: that needs a gbrain contract that reads a shared scope as the scope.
 
 A scope binds to a brain once, and a binding for the kind `personal` already covers every member's scope, so a brain bound to the kind can't also take a binding for one member, or the reverse. Capture is `off` or `explicit`; automatic capture into a brain isn't available yet.
 

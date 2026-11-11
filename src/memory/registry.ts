@@ -20,6 +20,10 @@ const BRAIN_PRESETS = {
     read: { tool: "memory_recall", queryArg: "query", maxCharsArg: "max_chars" },
     write: { tool: "memory_write", factsArg: "facts", idempotencyArg: "idempotency_key" },
   },
+  "gbrain-v3": {
+    read: { tool: "memory_recall", queryArg: "query", maxCharsArg: "max_chars" },
+    write: { tool: "memory_write", factsArg: "facts", idempotencyArg: "idempotency_key" },
+  },
 } as const;
 
 export interface RegistryBrain {
