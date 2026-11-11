@@ -53,22 +53,26 @@ test("an earlier turn's document is not re-sent on later turns and stays saved i
   assert.doesNotMatch(JSON.stringify(otherRequests), /notes.txt/);
 });
 
-for (const extension of ["docx", "pdf"]) {
-  test(`automatic ${extension} input respects a strict content-screen verdict`, async () => {
+for (const [file, extension] of [
+  ["hostile", "docx"],
+  ["hostile", "pdf"],
+  ["long", "docx"],
+]) {
+  test(`automatic ${file}.${extension} input is withheld unless the content screen clears it`, async () => {
     const built = freshApp();
-    const bytes = await readFile(new URL(`./fixtures/documents/hostile.${extension}`, import.meta.url));
+    const bytes = await readFile(new URL(`./fixtures/documents/${file}.${extension}`, import.meta.url));
     const blob = await built.blobTransfer.put(bytes);
     const request = {
       surface: "test" as const,
       actor: { externalId: "U1" },
-      conversation: { kind: "dm" as const, threadRef: `dm:U1:hostile-${extension}` },
+      conversation: { kind: "dm" as const, threadRef: `dm:U1:${file}-${extension}` },
     };
     const result = await built.app.turn({
       ...request,
       text: "summarize",
       attachments: [
         {
-          name: `hostile.${extension}`,
+          name: `${file}.${extension}`,
           mimetype:
             extension === "pdf"
               ? "application/pdf"

@@ -3862,20 +3862,30 @@ test("Auto treats a fresh authenticated ambient speaker as the initiating human"
   );
 });
 
-test("Auto fails open on input too long to screen, flagging it unscreened to the model", async () => {
+test("Auto holds input too long to screen until a person allows it, and withholds an attachment too long to screen", async () => {
   const built = freshApp();
   const padded = `please note ${"x".repeat(MAX_DOCUMENT_TEXT_CHARS)} thanks`;
+  const request = dm(padded, { surface: "monitor", origin: { kind: "automation" } });
 
-  const result = await built.app.turn(dm(padded, { surface: "monitor", origin: { kind: "automation" } }));
-  assert.equal(result.status, "ok");
-  const oversize = (await built.auditLog.events(tenant)).find(
-    (event) => event.action === "security_posture.input_failed_open",
+  const held = await built.app.turn(request);
+  assert.equal(held.status, "pending_approval");
+  assert.match(held.pendingApprovals?.[0]?.reason ?? "", /too long for the security screen to read/);
+  assert.equal(
+    built.modelCalls.some((call) => call.model === "mock"),
+    false,
   );
-  assert.match(oversize?.detail ?? "", /"cause":"oversize-input"/);
-  const main = [...(await built.sessions.listLlmRequests(result.sessionId!))]
-    .reverse()
-    .find((rec) => rec.model !== "mock-security");
-  assert.match(JSON.stringify(main?.promptEnvelope), /NOT security-screened/);
+  const approval = { requestId: held.pendingApprovals![0]!.requestId, approved: true };
+  assert.equal((await built.app.turn({ ...request, approval })).status, "ok");
+
+  const blob = await built.blobTransfer.put(Buffer.from(padded));
+  const attached = await built.app.turn(
+    dm("summarize this", {
+      conversation: { kind: "dm", threadRef: "dm:U1:t2" },
+      attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: blob.sizeBytes, blobId: blob.blobId }],
+    }),
+  );
+  const main = (await built.sessions.listLlmRequests(attached.sessionId!)).findLast((rec) => rec.model === "mock");
+  assert.match(JSON.stringify(main?.promptEnvelope), /notes\.txt — withheld by the external-data security screen/);
 });
 
 test("an Auto-downgraded turn is quarantined from later full-authority model history", async () => {

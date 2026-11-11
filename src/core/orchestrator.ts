@@ -203,6 +203,7 @@ import {
   createDocumentScreen,
   createSkillScreen,
   createToolResultScreen,
+  oversizeVerdict,
   screenInboundInput,
   type SecurityScreenContext,
   unscreenedVerdict,
@@ -1764,7 +1765,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 securityPolicy.screening !== "off"
                   ? async ({ content, name, mimetype }) => {
                       const payload = JSON.stringify({ name, mimetype, content });
-                      if (payload.length > MAX_DOCUMENT_TEXT_CHARS) return unscreenedVerdict();
+                      if (payload.length > MAX_DOCUMENT_TEXT_CHARS)
+                        return enforceScreen ? oversizeVerdict() : unscreenedVerdict();
                       return screenChunks(
                         securityScreenChunks("tool_result:inbound_file", payload),
                         classifyAs({

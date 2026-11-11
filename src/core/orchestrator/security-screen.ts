@@ -20,7 +20,13 @@ import { securityScreenPayloads } from "../../security/security-posture.ts";
 import type { CommandApprovalGrant } from "../../types.ts";
 import { isVisionAttachment, safeAttachmentName } from "../attachments.ts";
 import { wordsToScreen } from "./intake.ts";
-import { documentText, type ExtractedDocumentText, isTextDocument, type loadDocumentInputs } from "../documents.ts";
+import {
+  documentText,
+  type ExtractedDocumentText,
+  isTextDocument,
+  type loadDocumentInputs,
+  MAX_DOCUMENT_TEXT_CHARS,
+} from "../documents.ts";
 import { senderNote } from "./prompt-blocks.ts";
 import { isScreenableTextAttachment, MAX_AUTO_ATTACHMENT_SCREEN_BYTES } from "./turn-helpers.ts";
 import { tracePhase } from "../../../plugins/chassis/src/error-reporting.ts";
@@ -51,6 +57,11 @@ export const unscreenedVerdict = (): SecurityScreenVerdict => ({
   decision: "auto",
   unscreened: true,
   reason: UNSCREENED_REASON,
+});
+
+export const oversizeVerdict = (): SecurityScreenVerdict => ({
+  decision: "strict",
+  reason: `too long for the security screen to read (over ${MAX_DOCUMENT_TEXT_CHARS} characters)`,
 });
 
 type ScreenStatus = "allow" | "block" | "would_block" | "error";
@@ -357,17 +368,15 @@ export async function screenInboundInput(turn: InboundScreenTurn) {
     const { hasUnscreenableAttachment, externalPromptData, screenPayloads } = await buildInboundScreen(turn);
     if (!screenPayloads || screenPayloads.length || hasUnscreenableAttachment) {
       const canScreenText = !!screenPayloads?.length && (!!deps.securityScreener || !!deps.agent.screenSecurity);
-      const verdict =
-        canScreenText && screenPayloads
-          ? await screenChunks(
-              screenPayloads,
-              classifyAs({ hook: "user_input", surface: input.surface }, recordScreenRequest),
-              { batch: 4 },
-            )
-          : undefined;
-      let unscreenableCause: "unscreenable-attachment" | "oversize-input" | "no-screener" | undefined;
+      let verdict = screenPayloads ? undefined : oversizeVerdict();
+      if (canScreenText && screenPayloads)
+        verdict = await screenChunks(
+          screenPayloads,
+          classifyAs({ hook: "user_input", surface: input.surface }, recordScreenRequest),
+          { batch: 4 },
+        );
+      let unscreenableCause: "unscreenable-attachment" | "no-screener" | undefined;
       if (hasUnscreenableAttachment) unscreenableCause = "unscreenable-attachment";
-      else if (!screenPayloads) unscreenableCause = "oversize-input";
       else if (!deps.securityScreener && !deps.agent.screenSecurity) unscreenableCause = "no-screener";
       if (verdict?.decision === "strict") {
         const sources = externalPromptData.map((item) => item.source);
@@ -665,20 +674,23 @@ export function createDocumentScreen(turn: {
           documentsUnscreened = true;
           continue;
         }
-        const verdict = await screenChunks(
-          securityScreenChunks("tool_result:inbound_document", extracted.text),
-          classifyAs({
-            sessionId: session.id,
-            hook: "tool_response",
-            request: requestText,
-            surface: "inbound_file",
-          }),
-          { signal: turnAbort.signal },
-        );
+        const verdict =
+          enforceScreen && extracted.truncated
+            ? oversizeVerdict()
+            : await screenChunks(
+                securityScreenChunks("tool_result:inbound_document", extracted.text),
+                classifyAs({
+                  sessionId: session.id,
+                  hook: "tool_response",
+                  request: requestText,
+                  surface: "inbound_file",
+                }),
+                { signal: turnAbort.signal },
+              );
         if (verdict.decision === "strict") {
           documentInputs.documents.splice(documentInputs.documents.indexOf(document), 1);
           documentInputs.notices.push(`${document.name}: document withheld by the external-data security screen.`);
-        } else if (verdict.unscreened || extracted.truncated) documentsUnscreened = true;
+        } else if (verdict.unscreened) documentsUnscreened = true;
       }
     }
     return enforceScreen && documentsUnscreened;
