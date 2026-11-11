@@ -83,26 +83,10 @@ test("a chat embedded beside an app tells the app bar to check for a change once
     canContinue: true,
   };
   const startedAt = Date.now() - 3000;
-  const call = (seq: number, callId: string, path: string) => ({
-    item: item("ToolCall", {
-      seq,
-      createdAt: startedAt + seq,
-      tool: "app_files",
-      callId,
-      body: { action: "edit", path },
-    }),
+  const step = (kind: "ToolCall" | "ToolResult", seq: number, callId: string, path: string) => ({
+    item: item(kind, { seq, createdAt: startedAt + seq, tool: "app_files", callId, body: { action: "edit", path } }),
   });
-  const result = (seq: number, callId: string, path: string) => ({
-    item: item("ToolResult", {
-      seq,
-      createdAt: startedAt + seq,
-      tool: "app_files",
-      callId,
-      text: `Saved ${path}.`,
-      body: { action: "edit", path },
-    }),
-  });
-  const activity: RunActivityEntry[] = [call(2, "c1", "styles.css")];
+  const activity: RunActivityEntry[] = [step("ToolCall", 2, "c1", "styles.css")];
   const run = () => ({ status: "running", alive: true, startedAt, attempt: 1, activity, result: null });
   const h = await harness({
     path: "/app-edit?slug=demo&embed=1",
@@ -138,15 +122,15 @@ test("a chat embedded beside an app tells the app bar to check for a change once
     await until(() => /styles\.css/.test(working()));
     assert.deepEqual(checks(), []);
 
-    activity.push(result(3, "c1", "styles.css"));
+    activity.push(step("ToolResult", 3, "c1", "styles.css"));
     await until(() => checks().length === 1);
     assert.deepEqual(checks(), [{ type: "qm:app-check", origin: APP }]);
 
-    activity.push(call(4, "c2", "about.html"));
+    activity.push(step("ToolCall", 4, "c2", "about.html"));
     await until(() => /about\.html/.test(working()));
     assert.equal(checks().length, 1);
 
-    activity.push(result(5, "c2", "about.html"));
+    activity.push(step("ToolResult", 5, "c2", "about.html"));
     await until(() => checks().length === 2);
   } finally {
     embedder.close();

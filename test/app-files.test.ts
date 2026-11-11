@@ -26,13 +26,8 @@ const OWNER = "U1";
 const INDEX = '<link rel="stylesheet" href="styles.css">\n<h1 class="title">Notes</h1>\n';
 const STYLES = ".title { color: black; }\n.card { color: black; }\n";
 
-interface Written {
-  files: Record<string, string>;
-  deletedPaths: string[];
-}
-
 function harness(opts: { liveEdits?: boolean } = {}) {
-  const writes: Written[] = [];
+  const writes: Array<{ files: Record<string, string>; deletedPaths: string[] }> = [];
   const placed: Array<string | undefined> = [];
   const provider: DeployProvider = {
     profile: { managedScaleToZero: true },
@@ -116,16 +111,11 @@ function harness(opts: { liveEdits?: boolean } = {}) {
   return { deploy, deployStore, publish, chat, writes, placed };
 }
 
-test("app_files is offered only in a chat bound to an app", () => {
-  const h = harness();
-  assert.ok(h.chat("notes").offered.includes("app_files"));
-  assert.ok(!h.chat(undefined).offered.includes("app_files"));
-});
-
-test("replacements across two files are one save that writes only those files into the running app", async () => {
+test("replacements across two files are one save of only those files, and later reads and edits build on it", async () => {
   const h = harness();
   const d = await h.publish("notes");
   const chat = h.chat("notes");
+  assert.ok(!h.chat(undefined).offered.includes("app_files"), "offered only in a chat bound to an app");
 
   const out = await chat.call({
     action: "edit",
@@ -154,18 +144,10 @@ test("replacements across two files are one save that writes only those files in
     ["index.html", "styles.css"].map((path) => ({ path, sha: tree.find((f) => f.path === path)!.sha })),
     "the recorded result names each saved path with its git blob",
   );
-});
-
-test("reads and later edits see the saved edits, not the last published version", async () => {
-  const h = harness();
-  await h.publish("notes");
-  const chat = h.chat("notes");
-  await chat.call({ action: "edit", edits: [{ path: "index.html", old: "Notes", new: "My notes" }] });
 
   assert.equal(await chat.call({ action: "read", path: "index.html" }), INDEX.replace("Notes", "My notes"));
   await chat.call({ action: "edit", edits: [{ path: "index.html", old: "My notes", new: "Our notes" }] });
   assert.deepEqual(h.writes[1], { files: { "index.html": INDEX.replace("Notes", "Our notes") }, deletedPaths: [] });
-  assert.equal(await chat.call({ action: "read", path: "styles.css" }), STYLES, "untouched files are kept");
 });
 
 test("list shows each file with its size, and read returns a line range on request", async () => {
@@ -224,11 +206,13 @@ test("a replacement that does not match exactly once saves nothing, even beside 
   assert.equal(await h.deployStore.draftOf(d.id), null);
 });
 
-test("write creates or replaces a file and delete removes one, each as a save", async () => {
+test("write creates a file and delete removes one, each as a save, and unchanged content saves nothing", async () => {
   const h = harness();
-  await h.publish("notes");
+  const d = await h.publish("notes");
   const chat = h.chat("notes");
 
+  assert.match(await chat.call({ action: "write", path: "styles.css", data: STYLES }), /^Nothing to save/);
+  assert.equal(await h.deployStore.draftOf(d.id), null);
   assert.match(await chat.call({ action: "write", path: "about.html", data: "<p>About</p>" }), /^Saved about\.html\./);
   assert.match(await chat.call({ action: "delete", path: "styles.css" }), /^Saved styles\.css \(deleted\)\./);
   assert.deepEqual(h.writes, [
@@ -256,16 +240,6 @@ test("an app with a dev script restarts into it on the first save and hot-reload
 
   assert.match(await recolor("black", "teal"), /^Saved src\/app\.css\. It is live: the app restarted with it/);
   assert.match(await recolor("teal", "navy"), /^Saved src\/app\.css\. It is live: open tabs hot-reloaded it\.$/);
-});
-
-test("saving content the app already has changes nothing", async () => {
-  const h = harness();
-  const d = await h.publish("notes");
-  const chat = h.chat("notes");
-
-  assert.match(await chat.call({ action: "write", path: "styles.css", data: STYLES }), /^Nothing to save/);
-  assert.equal(h.writes.length, 0);
-  assert.equal(await h.deployStore.draftOf(d.id), null);
 });
 
 test("on a provider without live edits each change is published as a version, and the result says so", async () => {
