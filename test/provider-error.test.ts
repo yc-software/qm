@@ -202,8 +202,16 @@ test("a stop the provider made on purpose is not retried; every other error stop
     ["openai-completions", "network_error", "network_error", "unknown", true],
     ["openai-completions", "new_reason", "new_reason", "unknown", true],
     ...[
-      ...["guardrail_intervened", "content_filtered", "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT"],
-      ...["SPII", "IMAGE_SAFETY", "IMAGE_PROHIBITED_CONTENT", "IMAGE_RECITATION"],
+      "guardrail_intervened",
+      "content_filtered",
+      "SAFETY",
+      "RECITATION",
+      "BLOCKLIST",
+      "PROHIBITED_CONTENT",
+      "SPII",
+      "IMAGE_SAFETY",
+      "IMAGE_PROHIBITED_CONTENT",
+      "IMAGE_RECITATION",
     ].map((raw) => [undefined, raw, raw, "unknown", false] as const),
     ...["malformed_model_output", "malformed_tool_use", "OTHER", "MALFORMED_FUNCTION_CALL", "LANGUAGE"].map(
       (raw) => [undefined, raw, raw, "unknown", true] as const,
