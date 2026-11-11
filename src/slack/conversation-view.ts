@@ -115,7 +115,7 @@ export function createConversationSerializer(deps: {
     for (const m of messages)
       for (const id of mentionedUserIds(String(m.text ?? ""))) if (!people.names.has(id)) needUsers.add(id);
     await Promise.all([
-      ...[...needUsers].slice(0, MAX_NAME_LOOKUPS).map(async (id) => {
+      ...[...needUsers].map(async (id) => {
         const { actor, ok } = await directory.classifyUserCached(client, id);
         if (actor.displayName && !people.names.has(id)) people.names.set(id, actor.displayName);
         if (ok && !actor.isBot && actor.externalId) people.principals.set(id, actor.externalId);
