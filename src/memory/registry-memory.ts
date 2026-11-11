@@ -1,4 +1,3 @@
-import { toolListings } from "../mcp/mcp-client.ts";
 import { perTenant } from "../tenants/cache.ts";
 import type { Item } from "../sessions/items.ts";
 import { SCOPE_KINDS } from "../types.ts";
@@ -63,7 +62,6 @@ export function createRegistryMemoryService(opts: {
       onError,
     });
   const overlayOnly = opts.overlay ? routed(opts.overlay.routes) : opts.defaultMemory;
-  const listings = perTenant(() => toolListings());
   const snapshots = perTenant<{ snapshot: Snapshot }>(() => ({ snapshot: { service: overlayOnly, disabled: [] } }));
 
   async function current(): Promise<Snapshot> {
@@ -79,10 +77,7 @@ export function createRegistryMemoryService(opts: {
         service: config.routes.length
           ? routed(
               [...(opts.overlay?.routes ?? [NOTEBOOK_ROUTE]), ...config.routes],
-              createMemoryProviders(config.providers, {
-                fetch: opts.registryFetch ?? publicFetch,
-                listings: listings(),
-              }),
+              createMemoryProviders(config.providers, { fetch: opts.registryFetch ?? publicFetch }),
             )
           : overlayOnly,
       };

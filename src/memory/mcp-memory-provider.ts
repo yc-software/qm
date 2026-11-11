@@ -6,7 +6,6 @@ import {
   providerCode,
   toolListings,
   type McpClient,
-  type ToolListings,
 } from "../mcp/mcp-client.ts";
 import { TimeoutError, withTimeout } from "../util/async.ts";
 import { attestedPerson, OutsideAudience, ownPrivateConversation } from "../directory/person.ts";
@@ -79,7 +78,6 @@ export function createMcpMemoryProvider(opts: {
   write?: McpMemoryOperation;
   forget?: McpMemoryOperation;
   label?: string;
-  listings?: ToolListings;
   attestActor?: boolean;
 }): MemoryService {
   const attest = (actorId: string | undefined, scopeId: string, audienceScopeId: string | undefined) => {
@@ -89,11 +87,11 @@ export function createMcpMemoryProvider(opts: {
     return { person, headers: opts.attestActor && person ? { "x-qm-actor": person } : undefined };
   };
 
-  const listings = opts.listings ?? toolListings();
+  const listings = toolListings();
   const memoryTools = new Set([opts.read.tool, opts.write?.tool, opts.forget?.tool]);
   const lookupTools = async (scopeId: string, actorId: string | undefined, audienceScopeId: string | undefined) => {
     const { person, headers } = attest(actorId, scopeId, audienceScopeId);
-    const listed = await listings.fetch(`${opts.label}\0${person}`, {
+    const listed = await listings.fetch(person!, {
       context: {
         label: `memory provider ${opts.label}: tools/list`,
         list: async () =>
