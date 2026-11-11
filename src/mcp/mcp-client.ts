@@ -10,6 +10,8 @@ import { publicFetch, type AddressFetch } from "../util/network.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
 
 const MAX_TOOLS = 64;
+export const LISTING_TTL_MS = 60_000;
+export const LISTING_CACHE_MAX = 1_000;
 const CALL_TIMEOUT_MS = 300_000;
 const OAUTH_DENIALS: ReadonlySet<string> = new Set([
   "invalid_client",
@@ -57,7 +59,7 @@ function envelopeOf(value: unknown): McpEnvelope {
 
 export const mcpEnvelope = (result: CallToolResult): McpEnvelope => envelopeOf(result.structuredContent);
 
-function jsonOf(text: string): unknown {
+export function jsonOf(text: string): unknown {
   try {
     return JSON.parse(text);
   } catch {
@@ -96,7 +98,7 @@ export type McpAuth =
   | { mode: "client-credentials"; clientId: string; clientSecret: string };
 
 export interface McpClient {
-  listTools(opts?: { headers?: Record<string, string>; maxTools?: number }): Promise<McpListing>;
+  listTools(opts?: { headers?: Record<string, string>; maxTools?: number; signal?: AbortSignal }): Promise<McpListing>;
   callTool(
     name: string,
     args: Record<string, unknown>,
@@ -209,6 +211,7 @@ export function createMcpClient(opts: {
           };
         },
         opts?.headers,
+        opts?.signal,
       ),
     async callTool(name, args, headers, signal) {
       const result = (await session(

@@ -1,6 +1,14 @@
 import { randomUUID } from "node:crypto";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { McpCallError, mcpEnvelope, mcpResultText, type McpClient } from "../mcp/mcp-client.ts";
+import { LRUCache } from "lru-cache";
+import {
+  LISTING_CACHE_MAX,
+  LISTING_TTL_MS,
+  McpCallError,
+  mcpEnvelope,
+  mcpResultText,
+  type McpClient,
+} from "../mcp/mcp-client.ts";
 import { TimeoutError, withTimeout } from "../util/async.ts";
 import { attestedPerson, OutsideAudience, ownPrivateConversation } from "../directory/person.ts";
 import { MemoryRecallWithheld } from "./disclosure.ts";
@@ -90,6 +98,15 @@ export function createMcpMemoryProvider(opts: {
       throw new OutsideAudience("memory provider");
     return { person, headers: opts.attestActor && person ? { "x-qm-actor": person } : undefined };
   };
+
+  const listings = new LRUCache<string, string[], Record<string, string>>({
+    max: LISTING_CACHE_MAX,
+    ttl: LISTING_TTL_MS,
+    fetchMethod: async (_person, _stale, { context: headers }) =>
+      (await opts.read.client.listTools({ headers, signal: AbortSignal.timeout(opts.read.timeoutMs) })).tools.map(
+        (tool) => tool.name,
+      ),
+  });
 
   const call = async (
     op: Pick<McpMemoryOperation, "client" | "tool" | "timeoutMs">,
@@ -204,13 +221,8 @@ export function createMcpMemoryProvider(opts: {
       ? {
           operations: {
             async tools(scopeId, { actorId, audienceScopeId }) {
-              const { headers } = attest(actorId, scopeId, audienceScopeId);
-              const listing = await withTimeout(
-                () => opts.read.client.listTools(headers ? { headers } : {}),
-                opts.read.timeoutMs,
-                "memory provider",
-              );
-              return listing.tools.map((tool) => tool.name);
+              const { person, headers } = attest(actorId, scopeId, audienceScopeId);
+              return (await listings.fetch(person!, { context: headers! })) ?? [];
             },
             call: (scopeId, tool, args, { actorId, audienceScopeId, signal }) =>
               call(

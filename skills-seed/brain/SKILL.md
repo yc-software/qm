@@ -22,10 +22,9 @@ about people, companies and meetings, with dated timelines and the links between
 - `search` for pages and notes about a topic, `experts` for who knows most about it,
   `links` for what points at a record.
 - Every record carries a `ref` like `acme:default:people/priya-raman`. Pass it back as
-  `ref` to stay on exactly that record; a ref no brain result in this conversation gave is
-  refused.
-- Write lookups in your own words or the person's. Text copied from another tool, another
-  brain or another person is refused, so the brain never receives what it didn't already have.
+  `ref` to stay on exactly that record.
+- Each brain sees the words you send it. Look things up with a name or a few words of your
+  own, and don't paste one brain's results into a lookup on another.
 
 ## What comes back
 

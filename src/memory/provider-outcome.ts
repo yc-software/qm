@@ -25,6 +25,7 @@ export const DENIED_CODES: ReadonlySet<string> = new Set([
 export const MAX_FACTS_PER_WRITE = 20;
 const TROUBLESHOOTING = "docs/memory-providers.md#troubleshooting";
 const FORGET_DOCS = "docs/memory-providers.md#forgetting-a-brain-fact";
+const LOOKUP_DOCS = "docs/memory-providers.md#the-brain-tool";
 
 const envelopes = new AsyncLocalStorage<(envelope: McpEnvelope) => void>();
 
@@ -109,11 +110,20 @@ export function problemOf(
   const { provider, ms, code, ref } = outcome;
   const reason = code ? ` (${code})` : "";
   const forget = operation === "forget";
-  const docs = forget ? FORGET_DOCS : TROUBLESHOOTING;
-  const asked = forget ? `to forget ${ref}` : "the request";
-  const effect = { search: "its results are missing", write: "it stored nothing", forget: `${ref} is unchanged there` }[
-    operation
-  ];
+  const docs = { search: TROUBLESHOOTING, write: TROUBLESHOOTING, forget: FORGET_DOCS, lookup: LOOKUP_DOCS }[operation];
+  const asked = {
+    search: "the request",
+    write: "the request",
+    forget: `to forget ${ref}`,
+    lookup: ref ?? "the lookup",
+  }[operation];
+  const attested = { search: undefined, write: undefined, forget: "forgetting", lookup: ref }[operation];
+  const effect = {
+    search: "its results are missing",
+    write: "it stored nothing",
+    forget: `${ref} is unchanged there`,
+    lookup: "nothing was read",
+  }[operation];
   switch (outcome.outcome) {
     case "denied":
       return {
@@ -121,8 +131,8 @@ export function problemOf(
         provider,
         detail: `Memory provider ${provider} refused ${asked}${reason}${operation === "search" ? "" : `, so ${effect}`}.`,
         fix:
-          forget && code === "actor_not_attested"
-            ? `On ${provider}'s host, let QM's client attest forgetting with --attest-ops (${FORGET_DOCS}).`
+          attested && code === "actor_not_attested"
+            ? `On ${provider}'s host, let QM's client attest ${attested} with --attest-ops (${docs}).`
             : deniedFix(provider, code),
       };
     case "timed_out":
@@ -176,7 +186,7 @@ export interface MemoryProviderReport<T> {
   problems: MemoryProviderProblem[];
 }
 
-type ProviderOperation = "search" | "write" | "forget";
+type ProviderOperation = "search" | "write" | "forget" | "lookup";
 
 export async function withProviders<T>(
   operation: ProviderOperation,

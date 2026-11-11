@@ -27,8 +27,6 @@ interface Call {
 
 const OPS = ["query", "get_page", "get_timeline", "get_backlinks", "find_experts", "whois", "entity", "context_pack"];
 const HOT_MEMORY = "Alice prefers morning meetings before 10am.";
-const CANARY = "The beta canary is violet-otter-4471 and must never leave brain beta.";
-const OWN_WORDS = "what changed in the warehouse perception pilot";
 const priya = { slug: "people/priya-raman", source_id: "default", title: "Priya Raman", type: "person" };
 const alexes = ["people/alex-kim-helio", "people/alex-kim-tidepool"].map((slug) => ({
   ...priya,
@@ -121,16 +119,8 @@ async function gbrain(
   return Object.assign(server, { calls, failures });
 }
 
-async function brainApp(
-  t: { after(fn: () => Promise<void>): void },
-  {
-    brains = ["acme"],
-    advertised,
-    ...config
-  }: { brains?: string[]; advertised?: string[]; memoryBrainTool?: boolean } = {},
-) {
+async function brainApp(t: { after(fn: () => Promise<void>): void }, { advertised }: { advertised?: string[] } = {}) {
   const acme = await gbrain(t, ACME, advertised);
-  const beta = await gbrain(t, { query: () => ({ results: [{ ...priya, chunk_text: `${CANARY} ${OWN_WORDS}` }] }) });
   const script: Step[] = [];
   const runs: Array<{ tools: string[]; prompt: string; texts: string[] }> = [];
   const mock = createMockAgent();
@@ -155,9 +145,8 @@ async function brainApp(
       return { reply: "done", modelCalls: 1 };
     },
   };
-  const memoryRegistryFetch: AddressFetch = (input, init) =>
-    routedTo(new URL(input).host.startsWith("brain.beta") ? beta.url : acme.url)(input, init);
-  const built = buildApp(testConfig(config), { memoryRegistryFetch, agent });
+  const memoryRegistryFetch: AddressFetch = routedTo(acme.url);
+  const built = buildApp(testConfig(), { memoryRegistryFetch, agent });
   const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     auditLog: built.auditLog,
@@ -175,23 +164,19 @@ async function brainApp(
     });
     assert.equal(res.status, 200, await res.text());
   };
-  for (const id of brains) {
-    const url = `https://brain.${id}.example/mcp`;
-    const label = `${id[0]!.toUpperCase()}${id.slice(1)} brain`;
-    await admin("PUT", `/v1/admin/memory-registry/brains/${id}`, {
-      preset: "gbrain-v1",
-      url,
-      clientId: "qm",
-      clientSecret: "brain-secret",
-      label,
-      timeoutMs: 400,
-    });
-    await admin("PUT", `/v1/admin/memory-registry/bindings/${id}`, {
-      brain: id,
-      scope: "personal",
-      capture: "explicit",
-    });
-  }
+  await admin("PUT", "/v1/admin/memory-registry/brains/acme", {
+    preset: "gbrain-v1",
+    url: "https://brain.acme.example/mcp",
+    clientId: "qm",
+    clientSecret: "brain-secret",
+    label: "Acme brain",
+    timeoutMs: 400,
+  });
+  await admin("PUT", "/v1/admin/memory-registry/bindings/acme", {
+    brain: "acme",
+    scope: "personal",
+    capture: "explicit",
+  });
   const turn = async (steps: Step[], request: Partial<TurnRequest> = {}) => {
     script.splice(0, script.length, ...steps);
     const before = runs.length;
@@ -199,18 +184,19 @@ async function brainApp(
       surface: "test",
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: `dm:U1:${randomUUID()}` },
-      text: `Prep me for Priya, and ${OWN_WORDS}?`,
+      text: "Prep me for Priya.",
+      origin: { kind: "human" },
       ...request,
     });
     return runs.length > before ? runs.at(-1) : undefined;
   };
-  return { built, acme, beta, turn };
+  return { built, acme, turn };
 }
 
 const ops = (brain: { calls: Call[] }) => brain.calls.filter(({ tool }) => OPS.includes(tool));
 const REF = "acme:default:people/priya-raman";
 
-test("the brain tool comes only in the person's own DM, and the switch leaves recall alone", async (t) => {
+test("the brain tool comes only on a turn the person sent in their own DM, and an older brain keeps recall", async (t) => {
   const { acme, turn } = await brainApp(t);
   const offered = async (request: Partial<TurnRequest>) => (await turn([], request))?.tools.includes("brain") ?? false;
   assert.equal(await offered({}), true);
@@ -227,15 +213,14 @@ test("the brain tool comes only in the person's own DM, and the switch leaves re
     { conversation: { kind: "channel", threadRef: "C1", channelRef: "C1" } },
     { botActor: true },
     { origin: { kind: "ambient", live: true } },
+    { origin: { kind: "automation" } },
     { actor: { externalId: "system:ambient:default-org" } },
   ];
   for (const request of others) assert.equal(await offered(request), false, JSON.stringify(request));
   assert.deepEqual(ops(acme), []);
+  assert.equal(await offered({}), true);
   assert.equal(acme.requests.filter(({ rpc }) => rpc === "tools/list").length, 1);
 
-  const off = await brainApp(t, { memoryBrainTool: false });
-  assert.equal((await off.turn([]))?.tools.includes("brain"), false);
-  assert.ok(off.acme.calls.some(({ tool }) => tool === "memory_recall"));
   const older = await brainApp(t, { advertised: MEMORY_OPS });
   assert.equal((await older.turn([]))?.tools.includes("brain"), false);
   assert.ok(older.acme.calls.some(({ tool }) => tool === "memory_recall"));
@@ -286,39 +271,20 @@ test("each action sends its own operation as the person, naming the record's sou
   assert.doesNotMatch(texts.join("\n"), /morning meetings|w-1|factors|chunk_id|revision/);
 });
 
-test("a forged brain, ref or action, an over-long lookup and a revoked binding never reach the brain", async (t) => {
+test("a forged brain or action, a malformed ref, a missing argument and a revoked binding never reach the brain", async (t) => {
   const { acme, turn } = await brainApp(t);
   const { texts } = (await turn([
-    { action: "page", ref: "acme:default:notes/never-shown" },
-    { action: "page", ref: REF },
+    { action: "page", ref: "never-shown" },
     { brain: "elsewhere", action: "search", query: "robotics" },
     { action: "forget_fact", query: "robotics" },
-    { action: "search", query: "robotics ".repeat(23) },
+    { action: "search" },
+    { action: "entity", query: " " },
     "revoke",
     { action: "search", query: "robotics" },
   ]))!;
   assert.equal(texts.length, 6);
-  for (const text of texts) assert.match(text, /^\[brain_refused\]/);
+  for (const text of texts) assert.match(text, /^\[(brain_refused|error)\]/);
   assert.deepEqual(ops(acme), []);
-});
-
-test("a lookup that repeats another brain's words is refused, and the person's own words go through", async (t) => {
-  const { acme, beta, turn } = await brainApp(t, { brains: ["acme", "beta"] });
-  const { texts } = (await turn([
-    { brain: "beta", action: "search", query: "canary" },
-    { brain: "acme", action: "search", query: CANARY },
-    { brain: "acme", action: "search", query: OWN_WORDS },
-  ]))!;
-  assert.match(texts[0]!, /violet-otter-4471/);
-  assert.match(texts[1]!, /^\[brain_refused\]/);
-  assert.deepEqual(
-    ops(beta).map(({ args }) => args.query),
-    ["canary"],
-  );
-  assert.deepEqual(
-    ops(acme).map(({ args }) => args.query),
-    [OWN_WORDS],
-  );
 });
 
 test("a slow, unlinked or refusing brain answers with what to do next", async (t) => {
@@ -345,7 +311,7 @@ test("a slow, unlinked or refusing brain answers with what to do next", async (t
   assert.match(texts[2]!, /\[brain_answered page_not_found\][\s\S]*refused with page_not_found/);
   assert.match(
     texts[3]!,
-    /\[memory_provider_denied\] search is unavailable .*list query in QM's client's --attest-ops/,
+    /\[memory_provider_denied\] Memory provider acme refused query \(actor_not_attested\).*attest query with --attest-ops/,
   );
 });
 

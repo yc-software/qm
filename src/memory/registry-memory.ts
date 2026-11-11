@@ -51,7 +51,7 @@ export function createRegistryMemoryService(opts: {
   registry: Pick<MemoryRegistryStore, "current" | "overlayIds" | "key">;
   sessionItems?: (sessionId: string) => Promise<Item[]>;
   registryFetch?: AddressFetch;
-  onError?: (error: unknown, provider: string, operation: "recall" | "query" | "capture" | "forget") => void;
+  onError?: (error: unknown, provider: string, operation: "recall" | "query" | "capture" | "forget" | "lookup") => void;
 }): MemoryService {
   const overlayProviders = createMemoryProviders(opts.overlay?.providers ?? [], opts);
   const onError = opts.onError ?? logMemoryProviderError;

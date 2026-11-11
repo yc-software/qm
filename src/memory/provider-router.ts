@@ -30,6 +30,8 @@ function matches(route: MemoryProviderRoute, scopeId: ScopeId): boolean {
   return route.scopes.some((scope) => scope === scopeId || scope === kind);
 }
 
+export const providerRef = (provider: string, ref: string) => `${provider}:${ref}`;
+
 function captureAllowed(policy: MemoryCapturePolicy | undefined, mode: "explicit" | "automatic"): boolean {
   if (policy === "automatic") return true;
   return policy === "explicit" && mode === "explicit";
@@ -38,7 +40,7 @@ function captureAllowed(policy: MemoryCapturePolicy | undefined, mode: "explicit
 export function createRoutedMemoryService(opts: {
   providers: Readonly<Record<string, MemoryService>>;
   routes: readonly MemoryProviderRoute[];
-  onError?: (error: unknown, provider: string, operation: "recall" | "query" | "capture" | "forget") => void;
+  onError?: (error: unknown, provider: string, operation: "recall" | "query" | "capture" | "forget" | "lookup") => void;
 }): MemoryService {
   const routesFor = (scopeId: ScopeId): MemoryProviderRoute[] => opts.routes.filter((route) => matches(route, scopeId));
   const providerFor = (route: MemoryProviderRoute): MemoryService => {
@@ -51,7 +53,7 @@ export function createRoutedMemoryService(opts: {
       ? rows
       : rows.map((row) => ({
           ...row,
-          ...(row.ref === undefined ? {} : { ref: `${route.provider}:${row.ref}` }),
+          ...(row.ref === undefined ? {} : { ref: providerRef(route.provider, row.ref) }),
           source: { provider: route.provider, label: route.label ?? route.provider },
         }));
   const managerFor = (scopeId: ScopeId): MemoryService | undefined => {
@@ -186,7 +188,10 @@ export function createRoutedMemoryService(opts: {
             label: label ?? provider,
             tools: (context: BrainCall) => operations.tools(scopeId, context),
             call: (op: string, args: Record<string, unknown>, context: BrainCall) =>
-              operations.call(scopeId, op, args, context),
+              operations.call(scopeId, op, args, context).catch((error: unknown) => {
+                opts.onError?.(error, provider, "lookup");
+                throw error;
+              }),
           },
         ];
       });

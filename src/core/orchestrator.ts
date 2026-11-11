@@ -16,7 +16,7 @@ import { externalTools } from "./orchestrator/external-tools.ts";
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import type { MemoryProviderOutcome } from "../memory/memory-service.ts";
 import { memoryRecallQuery } from "../memory/semantic-recall.ts";
-import { boundBrains, turnBrains } from "../memory/brain.ts";
+import { brainAccess } from "../memory/brain.ts";
 import {
   requiresDelegation,
   delegatedAuthorizationOrigin,
@@ -505,6 +505,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         !isSubagentThreadRef(conversation.threadRef) &&
         !input.botActor &&
         !input.proactiveOpener;
+      const personTurn = humanInput && !external && !input.botActor;
       const allInternal =
         deps.identity.audienceIsAllInternal(conversation.audience) &&
         (conversation.kind === "dm" ||
@@ -787,14 +788,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         projects: deps.projects,
       });
       const { sharingSources, memoryScopeId, baseRecallScopes, memoryAccess } = context;
-      const brainsDecided =
-        memoryPolicy.brainTool !== false && useMemory && !notebookOnly && !external && !input.botActor && !ambientTurn
-          ? turnBrains(context.memory, {
-              actorId: actor.id,
-              scopeId: memoryScopeId,
-              ...(audienceScopeId ? { audienceScopeId } : {}),
-            }).catch(swallowAs("orchestrator: brain bindings", []))
-          : Promise.resolve([]);
+      const brainDecided = brainAccess(context.memory, {
+        personTurn,
+        useMemory,
+        notebookOnly,
+        actorId: actor.id,
+        scopeId: memoryScopeId,
+        ...(audienceScopeId ? { audienceScopeId } : {}),
+      }).catch(swallowAs("orchestrator: brain bindings", undefined));
       resolution.grantedHandles = context.listFiles();
       const isWeb = input.surface === "web";
       const surfaceTool = input.surface ?? "slack";
@@ -841,7 +842,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (modeName === "mode-conversation" && input.proactiveOpener) {
         modeFrame += "\nNo one has written yet; open the conversation yourself per the onboarding note below.";
       }
-      const brains = await brainsDecided;
       const sharedCore = applyPromptVars(SHARED_CORE_MD, {
         botName,
         botHandle,
@@ -849,7 +849,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         web: isWeb,
         surfaceLinks: surfaceHints?.linkSyntax ?? "",
         sessions: isWeb && surfaceName === "web" && Boolean(sessionSyscalls) && !input.swarm,
-        brain: brains.length > 0,
       });
       let personaBlock = persona ? personaPrompt(persona) : "";
       if (typeof personaTurn === "string") personaBlock = `## Persona\n${personaTurn}`;
@@ -891,13 +890,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       });
 
       await deps.skillsReady?.();
+      const brain = await brainDecided;
       const configuredProviders = [
         ...(!external && deps.resolveConnectorClient
           ? await configuredConnectorProviders(deps.resolveConnectorClient).catch(
               swallowAs("orchestrator: configured connector providers", []),
             )
           : []),
-        ...(brains.length ? ["brain"] : []),
+        ...(brain ? ["brain"] : []),
       ];
       const {
         aclGrantedServiceCredSlugs,
@@ -1679,29 +1679,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }
             : {}),
           ...(deps.webhookPublicUrl ? { webhookPublicUrl: deps.webhookPublicUrl } : {}),
-          ...(humanInput && !external && !input.botActor ? { humanTurn: true } : {}),
+          ...(personTurn ? { humanTurn: true } : {}),
           toolOutput: deps.toolOutput,
           sessionId: session.id,
           ...(surfaceToolDeps ? { surface: surfaceToolDeps } : {}),
           ...(turnSessionSyscalls ? { sessionSyscalls: turnSessionSyscalls } : {}),
           ...(strictReadOnly ? {} : { attach: attachStaging.attach }),
           memory: context.memory,
-          ...(brains.length
-            ? {
-                brain: {
-                  brains,
-                  live: () =>
-                    boundBrains(context.memory, {
-                      actorId: actor.id,
-                      scopeId: memoryScopeId,
-                      ...(audienceScopeId ? { audienceScopeId } : {}),
-                    }),
-                  retained: async () =>
-                    filterHistory(forModelContext((await deps.sessions.getContextWindow(session.id)).items)),
-                  call: { actorId: actor.id, ...(audienceScopeId ? { audienceScopeId } : {}) },
-                },
-              }
-            : {}),
+          ...(brain ? { brain } : {}),
           memoryCaptureMetadata: () => ({ sessionId: session.id, inheritedFacts: captureDependencies() }),
           memoryScopeId,
           ...(memoryAccess ? { memoryAccess } : {}),

@@ -5,15 +5,21 @@ import { setPublicOAuthClientSource, setPublicOAuthClients, type PublicOAuthClie
 import { LRUCache } from "lru-cache";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { onTenantLoad, perTenant } from "../tenants/cache.ts";
-import { createMcpClient, mcpResultText, type McpAuth, type McpClient, type McpListing } from "./mcp-client.ts";
+import {
+  createMcpClient,
+  LISTING_CACHE_MAX,
+  LISTING_TTL_MS,
+  mcpResultText,
+  type McpAuth,
+  type McpClient,
+  type McpListing,
+} from "./mcp-client.ts";
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
 import { attestsInAudience, attestedPerson, OutsideAudience } from "../directory/person.ts";
 import type { AddressFetch } from "../util/network.ts";
 import type { ScopeId } from "../types.ts";
 
 const REFRESH_INTERVAL_MS = 5 * 60_000;
-const CATALOG_TTL_MS = 60_000;
-const CATALOG_CACHE_MAX = 1_000;
 const CATALOG_MAX_TOOLS = 5_000;
 const CATALOG_SEARCH_LIMIT = 50;
 const CATALOG_OPERATIONS = ["search", "describe", "invoke"];
@@ -204,7 +210,7 @@ export function createMcpToolService(opts: {
     snapshot: [],
     perUserServers: new Map(),
     attestedServers: new Map(),
-    catalogs: new LRUCache({ max: CATALOG_CACHE_MAX, ttl: CATALOG_TTL_MS }),
+    catalogs: new LRUCache({ max: LISTING_CACHE_MAX, ttl: LISTING_TTL_MS }),
   }));
 
   function signInMessage(server: McpServer): string {

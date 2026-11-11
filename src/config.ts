@@ -149,7 +149,6 @@ export interface Config extends SandboxSettings, DeploySettings {
   cronFireConcurrency: number;
   memoryRecall: MemoryRecallMode;
   memoryCapture: MemoryCaptureMode;
-  memoryBrainTool: boolean;
   memoryStrategy: MemoryStrategyKind;
   memoryProviderConfig?: MemoryProviderConfig;
   memoryCaptureQuietMs: number;
@@ -636,7 +635,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.DEPLOYMENT_LAYER ? { deploymentLayerDir: resolve(env.DEPLOYMENT_LAYER) } : {}),
     memoryRecall: parseMemoryRecallMode(env.MEMORY_RECALL),
     memoryCapture: parseMemoryCaptureMode(env.MEMORY_CAPTURE),
-    memoryBrainTool: boolEnvStrict("MEMORY_BRAIN_TOOL", env.MEMORY_BRAIN_TOOL) ?? true,
     memoryStrategy: parseMemoryStrategyKind(env.MEMORY_STRATEGY),
     ...(memoryProviderConfig ? { memoryProviderConfig } : {}),
     privateNetworkAllowedOrigins,
