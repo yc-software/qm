@@ -350,7 +350,7 @@ const SOURCE = {
   "logo.png": "\u0000PNG",
   "node_modules/dep/index.js": "x\n",
   "node_modules/dep/package.json": "{}\n",
-  "cities.json": "9".repeat(79_772),
+  "cities.json": "9".repeat(79_000),
   "towns.json": "8".repeat(90_000),
   ...Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`photo-${i}.jpg`, "\u0000JPEG"])),
 };
@@ -410,7 +410,7 @@ test("an app edit chat is shown the app's small text files once, then only the f
   assert.ok(first.source.includes(`### cities.json\n\`\`\`untrusted-data\n${SOURCE["cities.json"]}\n`), "it fits");
   assert.ok(
     first.source.includes(
-      "logo.png (4 bytes), node_modules/ (2 files, 5 bytes), package-lock.json (3 bytes), photo-0.jpg (5 bytes), 9 more that app_files list names.",
+      "logo.png (4 bytes), node_modules/ (2 files, 5 bytes), package-lock.json (3 bytes), photo-0.jpg (5 bytes)",
     ),
     first.source.slice(-400),
   );
@@ -452,14 +452,29 @@ test("a later turn skips what this chat saved, and resends everything once the f
   );
   const { commit } = await files.source();
 
-  assert.match(
-    (await appSourceShown(files, [first])).text,
-    /changed since[^]*### styles\.css\n```untrusted-data\n\.title \{ color: red/,
-  );
+  assert.ok((await appSourceShown(files, [first])).text.includes(`### styles.css\n\`\`\`untrusted-data\n${RED}`));
   assert.deepEqual(await appSourceShown(files, [first, result]), { text: "", record: { commit, anchorSeq: 9 } });
   for (const earlier of [{ commit, anchorSeq: 2 }, { commit: "0".repeat(40) }]) {
     const again = await appSourceShown(files, [shown(earlier)]);
     assert.ok(again.text.includes("### index.html") && again.text.includes("### styles.css"), again.text);
     assert.deepEqual(again.record, { commit });
   }
+});
+
+test("app source budgets file headings, fences and skipped paths along with contents", async () => {
+  const h = harness();
+  await h.publish(
+    "notes",
+    Object.fromEntries(Array.from({ length: 1500 }, (_, i) => [`${"x".repeat(100)}-${i}.txt`, "a"])),
+  );
+  const files = createAppFiles({
+    deploy: h.deploy,
+    app: "notes",
+    actorId: OWNER,
+    actingScopeId: scopeId("personal", OWNER),
+  });
+  const shown = await appSourceShown(files, []);
+  assert.ok(shown.text.length <= 80_000, String(shown.text.length));
+  assert.ok(shown.text.includes("```untrusted-data\na\n```"));
+  assert.ok(shown.text.includes("more that app_files list names"));
 });
