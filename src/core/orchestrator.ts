@@ -20,6 +20,7 @@ import { memoryRecallQuery } from "../memory/semantic-recall.ts";
 import {
   requiresDelegation,
   delegatedAuthorizationOrigin,
+  isOwnerFire,
   ownsSessionContext,
   isSubagentThreadRef,
   sessionContextOf,
@@ -519,10 +520,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ? await delegatedAuthorizationOrigin(input, { runs: deps.runs, sessions: deps.sessions })
           : undefined;
       const authorizationOrigin = sessionTurn ? (delegatedOrigin ?? { kind: "automation" as const }) : input.origin;
-      const liveTurn = authorizationOrigin.kind === "human" && allInternal && !external;
+      const ownerFireTurn = isOwnerFire({ origin: authorizationOrigin, botActor: input.botActor }) && !input.swarm;
+      const liveTurn = (authorizationOrigin.kind === "human" || ownerFireTurn) && allInternal && !external;
       const liveAuthorTurn =
         !external &&
-        ((!sessionTurn && (humanTurn || authoredDetection)) || delegatedOrigin !== undefined) &&
+        ((!sessionTurn && (humanTurn || authoredDetection)) || (delegatedOrigin !== undefined && !ownerFireTurn)) &&
         allInternal;
       const messageTs = humanInput && input.origin.kind === "human" ? input.origin.messageTs : undefined;
       const entryTs =
@@ -1598,7 +1600,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           session,
           scopeId: scopeId as ScopeId,
           orgScopeId: resolution.orgScopeId,
-          liveTurn,
+          liveTurn: liveTurn && !automatedTurn,
           request: { ...input, readOnly: strictReadOnly, memoryNotebookOnly: notebookOnly, cancel: turnAbort.signal },
           switchedRuntime: () => switchedRuntime,
         });
@@ -1672,8 +1674,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   : {}),
                 admin: {
                   call: createAdminCall(deps.apiBaseUrl, connectorEnv.AGENT_API_TOKEN),
-                  operationsAvailable:
-                    actorIsOrgAdmin || Boolean(controlClaims?.grants?.some((grant) => grant.startsWith("admin."))),
+                  operationsAvailable: actorIsOrgAdmin,
                 },
               }
             : {}),

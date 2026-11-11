@@ -13,6 +13,7 @@ import {
 } from "../../surfaces/ui-canvas.ts";
 import { uiStateId, UI_STATE_MAX_BYTES } from "../../surfaces/ui-state.ts";
 import { scopeId } from "../../types.ts";
+import { personAtKeyboard } from "../artifact-share.ts";
 import { sendJson } from "../http.ts";
 import { conversationRef } from "./pins.ts";
 import { samePerson } from "../../directory/person.ts";
@@ -47,7 +48,7 @@ async function liveWebTurn(ctx: ApiCtx): Promise<UiTurn | null> {
     });
     return null;
   }
-  if (cap.surface !== "web" || !cap.liveActor || cap.triggered || cap.botActor) {
+  if (cap.surface !== "web" || !cap.liveActor || !personAtKeyboard(cap)) {
     sendJson(res, 403, {
       error: "not_live_web_turn",
       message: "Only available during a turn the person started from the web UI.",

@@ -11,7 +11,6 @@ import { reachEnqueue } from "../reach/reach.ts";
 import { isVisible, type VisibilityDirectory } from "../directory/visibility.ts";
 import type { DirectoryMember, DirectoryStore, RecipientResolution } from "../directory/directory-store.ts";
 import { samePerson } from "../directory/person.ts";
-import { grantsHomedWithOwner } from "../cron/authority.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { isProjectGroupRef } from "../projects/project-store.ts";
 import { reportFailureAs, swallowAs } from "../util/errors.ts";
@@ -52,7 +51,7 @@ export interface TriggerSpec extends Pick<
   message?: string;
   threadRef?: string;
   personaId?: string;
-  unattendedGrants?: string[];
+  ownerFire?: boolean;
   cronScript?: CronScript;
   shadow?: boolean;
   thinkingLevel?: string;
@@ -298,11 +297,11 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       text: typeof spec.input === "string" ? spec.input : spec.input(roster),
       origin: {
         kind: "automation",
+        ...(spec.ownerFire && !runsAsScope ? { ownerFire: true as const } : {}),
         ...(spec.securityScreenData !== undefined ? { screenData: spec.securityScreenData } : {}),
         ...(spec.destination ? { destination: spec.destination } : {}),
         ...(scheduled && !runsAsScope && conversation.kind !== "dm" ? { useOwnerKeychain: true } : {}),
       },
-      ...(spec.unattendedGrants && grantsHomedWithOwner(spec) ? { unattendedGrants: spec.unattendedGrants } : {}),
       ...(spec.cronScript ? { cronScript: spec.cronScript } : {}),
       ...(spec.personaId ? { personaId: spec.personaId } : {}),
       ...(spec.botActor ? { botActor: true } : {}),
