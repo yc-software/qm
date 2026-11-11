@@ -220,16 +220,15 @@ test("status and restart resolve the selected backing machine rather than legacy
 });
 
 test("a person's use of a computer outlasts a failed first boot and a retry it races", async () => {
-  let started!: () => void;
-  let finish!: (error?: Error) => void;
+  const booting = Promise.withResolvers<void>();
+  const boot = Promise.withResolvers<void>();
   const { options, records } = fixture((backend) => {
     const provision = backend.provision.bind(backend);
     backend.provision = async (id, opts) => {
-      if (id === "sandbox-c1")
-        await new Promise<void>((resolve, reject) => {
-          finish = (error) => (error ? reject(error) : resolve());
-          started();
-        });
+      if (id === "sandbox-c1") {
+        booting.resolve();
+        await boot.promise;
+      }
       return provision(id, opts);
     };
   }, []);
@@ -245,11 +244,10 @@ test("a person's use of a computer outlasts a failed first boot and a retry it r
       },
     },
   });
-  const begun = new Promise<void>((resolve) => (started = resolve));
   const creating = resources.create("alice", "channel:team", "local", "computer", "c1");
-  await begun;
+  await booting.promise;
   await resources.notePersonUse("c1");
-  finish(new Error("boot failed"));
+  boot.reject(new Error("boot failed"));
   await assert.rejects(creating, /boot failed/);
   const failed = (await records.get("c1"))!;
   assert.equal(failed.personUsed, true);
