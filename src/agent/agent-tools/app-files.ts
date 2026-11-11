@@ -4,7 +4,7 @@ import { normalizeRelPath } from "../../deploy/deploy-fs.ts";
 import type { SourceSaved } from "../../deploy/deploy-service.ts";
 import { inlineChars, inlineTokensOf } from "../../sessions/tool-output.ts";
 import type { AppFiles } from "../../tools/app-files.ts";
-import { tryDecodeUtf8 } from "../../util/text.ts";
+import { headSlice, tailSlice, tryDecodeUtf8 } from "../../util/text.ts";
 import { errMessage } from "../../util/errors.ts";
 import { text, type ToolKit } from "./kit.ts";
 import { previousPublishFailure } from "./workspace.ts";
@@ -32,8 +32,16 @@ function describeSaved(r: SourceSaved): string {
   return `Saved ${paths.join(", ")}. ${shown}${previousPublishFailure(r.liveEdit)}`;
 }
 
+async function savedText(files: AppFiles, wanted: string) {
+  const path = normalizeRelPath(wanted);
+  const file = (await files.source([path])).files[0];
+  if (!file) throw new Error(`no such file: ${path}; list shows the app's files`);
+  return { path, file, content: textOf(file) };
+}
+
 export function appFileTools(kit: ToolKit) {
   const { ref, recordCall, recordResult } = kit;
+  const resultChars = async () => inlineChars(await inlineTokensOf(ref.current?.toolOutput));
 
   async function run(
     callId: string,
@@ -97,17 +105,15 @@ export function appFileTools(kit: ToolKit) {
     }),
     execute: (callId, params) =>
       run(callId, { action: "read", path: params.path }, async (files) => {
-        const path = normalizeRelPath(params.path);
-        const file = (await files.source([path])).files[0];
-        if (!file) throw new Error(`no such file: ${path}; list shows the app's files`);
-        const lines = textOf(file).split("\n");
+        const { path, file, content } = await savedText(files, params.path);
+        const lines = content.split("\n");
         const first = Math.min(params.from ?? 1, lines.length);
         const wanted = lines.slice(first - 1, Math.max(params.to ?? lines.length, first));
-        const budget = inlineChars(await inlineTokensOf(ref.current?.toolOutput)) - RANGE_NOTE_CHARS;
+        const budget = (await resultChars()) - RANGE_NOTE_CHARS;
         const cut = truncateHead(wanted.join("\n"), { maxBytes: budget, maxLines: wanted.length });
         if (cut.firstLineExceedsLimit)
           throw new Error(
-            `line ${first} of ${path} is ${formatSize(Buffer.byteLength(wanted[0]!))}, more than one result can show, and app_files cannot show part of a line; work on this file from the shell through the app's git remote`,
+            `line ${first} of ${path} is ${formatSize(Buffer.byteLength(wanted[0]!))}, more than one result can show; find returns the exact text around what you are looking for in it`,
           );
         const shown = cut.truncated ? cut.outputLines : wanted.length;
         const last = first + shown - 1;
@@ -117,6 +123,45 @@ export function appFileTools(kit: ToolKit) {
           body: { bytes: file.data.byteLength, ...(range ? { lines: [first, last, lines.length] } : {}) },
           result: `${range}${cut.content}`,
         };
+      }),
+  });
+
+  const find = defineTool({
+    name: "find",
+    label: "find",
+    description:
+      "Find exact text in one source file, however long its lines, and return each place it occurs with the exact text around it, to quote in an edit.",
+    parameters: Type.Object({
+      path: Type.String({ description: "File path relative to the app root." }),
+      text: Type.String({ minLength: 1, description: "Text to look for, matched literally and case-sensitively." }),
+    }),
+    execute: (callId, params) =>
+      run(callId, { action: "find", path: params.path }, async (files) => {
+        const { path, content } = await savedText(files, params.path);
+        const sought = params.text;
+        const found: number[] = [];
+        for (let at = content.indexOf(sought); at >= 0; at = content.indexOf(sought, at + sought.length))
+          found.push(at);
+        const title = `[${JSON.stringify(sought)} in ${path}: ${found.length} found]`;
+        if (!found.length) return { body: { matches: 0 }, result: title };
+        const budget = (await resultChars()) - title.length;
+        const share = Math.floor(budget / found.length);
+        let line = 1;
+        let counted = 0;
+        const shown = found.map((at, i) => {
+          line += content.slice(counted, at).split("\n").length - 1;
+          counted = at;
+          const heading = `[match ${i + 1} at line ${line}]`;
+          const around = share - heading.length - 2 - sought.length;
+          if (around <= 0)
+            throw new Error(
+              `${found.length} matches of ${JSON.stringify(sought)} in ${path} are more than one result can show with the text around each; find a longer piece of text`,
+            );
+          const before = tailSlice(content.slice(0, at), Math.floor(around / 2));
+          const after = headSlice(content.slice(at + sought.length), Math.ceil(around / 2));
+          return `${heading}\n${before}${sought}${after}`;
+        });
+        return { body: { matches: found.length }, result: [title, ...shown].join("\n") };
       }),
   });
 
@@ -186,5 +231,5 @@ export function appFileTools(kit: ToolKit) {
       }),
   });
 
-  return { list, read, edit, write, delete: remove };
+  return { list, read, find, edit, write, delete: remove };
 }
