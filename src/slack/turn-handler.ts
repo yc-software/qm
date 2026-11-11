@@ -61,6 +61,7 @@ import {
   uploadAttachments,
   uploadFailureNote,
 } from "./lib.ts";
+import { parseGenerativeUISpec, renderGenerativeUI } from "./generative-ui.ts";
 import type { GatewayContext, TurnResult } from "../types.ts";
 import { replyEditNote } from "../delivery/run-result-delivery.ts";
 import type { AckGate } from "./deferred-ack.ts";
@@ -626,7 +627,10 @@ export function createTurnHandler(deps: {
       const { text: replyBody, reactions } = cleanAgentReplyForSlack(result.reply ?? "");
       const hasNonText = !!(result.attachments?.length || reactions.length || result.pendingApprovals?.length);
       let reply = result.stopped ? "Stopped." : "(no response)";
-      if (replyBody) reply = toSlackMrkdwn(replyBody);
+      const genSpec = replyBody ? parseGenerativeUISpec(replyBody) : null;
+      const genCard = genSpec ? renderGenerativeUI(genSpec) : null;
+      if (genCard) reply = genCard.text;
+      else if (replyBody) reply = toSlackMrkdwn(replyBody);
       else if (hasNonText) reply = "";
       const postText = reply;
       const runKey = queuedRunId ? `run:${queuedRunId}` : undefined;
@@ -642,7 +646,8 @@ export function createTurnHandler(deps: {
         }
         await ack?.drain();
         const editNote = replyEditNote(result.retracted);
-        const noteBlocks = editNote ? blocksWithContext(postText, [plainContext(editNote)]) : undefined;
+        const noteBlocks =
+          genCard?.blocks ?? (editNote ? blocksWithContext(postText, [plainContext(editNote)]) : undefined);
         if (postText) await postReply(postText, noteBlocks, runKey);
         if (uploadError) await postReply(uploadFailureNote(uploadError));
         const { directives, dropped } = resolveReactionTargets(reactions, allowedTs);

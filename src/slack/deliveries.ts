@@ -1,4 +1,5 @@
 import { escapeSlackText } from "./mrkdwn.ts";
+import { parseGenerativeUISpec, renderGenerativeUI } from "./generative-ui.ts";
 import { extractPrivateContinuation } from "./external-access.ts";
 import { deployAccessMessage } from "./deploy-access.ts";
 import { approvalDeliveryKey, approvalDeliveryRecipient } from "./approval-store.ts";
@@ -345,7 +346,11 @@ export function createDeliveryPoller(deps: {
                   editRef = placeholder.ts;
                 }
               }
-              let text = toSlackMrkdwn(runId ? cleanAgentReplyForSlack(d.text).text : stripSlackDirectives(d.text));
+              const genSpec = parseGenerativeUISpec(d.text);
+              const genCard = genSpec ? renderGenerativeUI(genSpec) : null;
+              let text = genCard
+                ? genCard.text
+                : toSlackMrkdwn(runId ? cleanAgentReplyForSlack(d.text).text : stripSlackDirectives(d.text));
               const replayAttachments = async (root?: string): Promise<void> => {
                 if (!d.attachments?.length) return;
                 try {
@@ -367,7 +372,7 @@ export function createDeliveryPoller(deps: {
                 ...messageFooter,
                 ...(d.destination.debugFooter ? [{ type: "mrkdwn", text: d.destination.debugFooter }] : []),
               ];
-              const footerBlocks = footer.length ? blocksWithContext(text, footer) : undefined;
+              const footerBlocks = genCard?.blocks ?? (footer.length ? blocksWithContext(text, footer) : undefined);
               if (!text.trim() && !(messageFooter.length && d.attachments?.length)) {
                 if (editRef) {
                   await client.chat
@@ -485,13 +490,16 @@ export function createDeliveryPoller(deps: {
                       : {}),
                   },
                 ]);
-              let text = card?.text ?? toSlackMrkdwn(stripReactionDirectives(d.text));
+              const directGenSpec = parseGenerativeUISpec(d.text);
+              const directGenCard = directGenSpec ? renderGenerativeUI(directGenSpec) : null;
+              let text = card?.text ?? directGenCard?.text ?? toSlackMrkdwn(stripReactionDirectives(d.text));
               if (!text.trim() && !d.attachments?.length) return undefined;
               const channel = await openConversationFor(client, [d.destination.target]);
               const threadTs = d.destination.threadTs;
               const footer = deliveryFooter(d);
               if (!text.trim() && !footer.length && d.attachments?.length) text = "Files attached.";
-              const blocks = card?.blocks ?? (footer.length ? blocksWithContext(text, footer) : undefined);
+              const blocks =
+                card?.blocks ?? directGenCard?.blocks ?? (footer.length ? blocksWithContext(text, footer) : undefined);
               let uploadError: unknown;
               let reused = false;
               if (text.trim() || blocks) {

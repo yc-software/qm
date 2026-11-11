@@ -137,14 +137,50 @@ export function createSlackSessionStatus(
           const content = JSON.stringify(blocks);
           try {
             if (state.cardContent !== content && (state.cardTs || optedIn)) {
-              const result = (await client.apiCall(state.cardTs ? "chat.update" : "chat.postMessage", {
-                channel: state.channel,
-                ...(state.cardTs ? { ts: state.cardTs } : { thread_ts: state.threadTs, client_msg_id: state.cardId }),
-                text: title,
-                blocks,
-                unfurl_links: false,
-                unfurl_media: false,
-              })) as { ts?: string };
+              let result: { ts?: string };
+              try {
+                result = (await client.apiCall(state.cardTs ? "chat.update" : "chat.postMessage", {
+                  channel: state.channel,
+                  ...(state.cardTs ? { ts: state.cardTs } : { thread_ts: state.threadTs, client_msg_id: state.cardId }),
+                  text: title,
+                  blocks,
+                  unfurl_links: false,
+                  unfurl_media: false,
+                })) as { ts?: string };
+              } catch (postError) {
+                const errCode = (postError as { data?: { error?: string } }).data?.error;
+                if (errCode === "invalid_blocks") {
+                  const fallbackBlocks = [
+                    {
+                      type: "section",
+                      text: {
+                        type: "mrkdwn",
+                        text: `${ongoing ? "⏳" : "✅"} *${title}*`,
+                      },
+                    },
+                    ...(state.followUrl
+                      ? [
+                          {
+                            type: "context",
+                            elements: [{ type: "mrkdwn", text: `<${state.followUrl}|Follow via QM Web>` }],
+                          },
+                        ]
+                      : []),
+                  ];
+                  result = (await client.apiCall(state.cardTs ? "chat.update" : "chat.postMessage", {
+                    channel: state.channel,
+                    ...(state.cardTs
+                      ? { ts: state.cardTs }
+                      : { thread_ts: state.threadTs, client_msg_id: state.cardId }),
+                    text: title,
+                    blocks: fallbackBlocks,
+                    unfurl_links: false,
+                    unfurl_media: false,
+                  })) as { ts?: string };
+                } else {
+                  throw postError;
+                }
+              }
               const cardTs = state.cardTs ?? result.ts;
               if (!cardTs) throw new Error("Slack task card response missing timestamp");
               if (leaseLost) {
