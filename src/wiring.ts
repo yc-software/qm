@@ -1,3 +1,4 @@
+import type { LoadSample } from "./sandbox/load-probe.ts";
 import type { PromptSnapshot } from "./core/orchestrator/prompt-snapshot.ts";
 import { onTenantLoad, perTenant } from "./tenants/cache.ts";
 import { loadTenantSettings, TENANT_SETTINGS_REFRESH_MS } from "./tenants/settings.ts";
@@ -1192,6 +1193,7 @@ export function buildApp(
   const sandboxDefaults = artifactMap<SandboxDefault>("sandbox_defaults");
   const sandboxResources = createSandboxResources({
     records: sandboxRecords,
+    loads: artifactMap<LoadSample>("sandbox_loads"),
     defaults: sandboxDefaults,
     upgrade: async () => {
       const choice = await tenantSandboxChoice({
@@ -1520,7 +1522,7 @@ export function buildApp(
     decisions,
     overrides.decisionBackend ??
       createDecisionBackend({
-        providers: async (ids) => (await decisions?.providers(ids)) ?? [],
+        providers: async (tenant, ids) => (await decisions?.providers(tenant, ids)) ?? [],
         ...(modelRoutes.gateway ? { gateway: modelRoutes.gateway } : {}),
         credential: async (slug) => {
           const rec = keychain
@@ -1558,6 +1560,7 @@ export function buildApp(
     async (input, routedBy) => {
       const decision = await tracePhase("turn.decision", () =>
         decide("turn_start", turnStartState(input), {
+          tenant: ambientTenant(),
           ...(input.runtimeActorId ? { actorId: input.runtimeActorId } : {}),
           scopeLabel: input.scopeLabel,
           sessionId: input.session.id,
@@ -1915,6 +1918,7 @@ export function buildApp(
           deploymentEnv: async (deployment: Deployment): Promise<Record<string, string>> => {
             const orgScope = scopeId("org", config.orgId);
             const credentials = await deploymentCredentialSlugs(
+              ambientTenant(),
               await serviceCreds.listServiceCredentials(orgScope),
               orgScope,
               acl,

@@ -59,7 +59,6 @@ export function mcpPublicOAuthClients(servers: McpServer[]): PublicOAuthClient[]
 }
 
 export interface McpToolDescriptor {
-  /** Namespaced tool name exposed to the model, e.g. "salesforce_query". */
   name: string;
   serverId: string;
   serverName: string;
@@ -74,10 +73,8 @@ export interface McpToolDescriptor {
 }
 
 export interface McpToolService {
-  /** Current snapshot of injectable tools across enabled servers. */
   toolDefs(): Promise<McpToolDescriptor[]>;
   toolDefsFor(principalId?: string, audienceScopeId?: ScopeId, actAsActor?: boolean): Promise<McpToolDescriptor[]>;
-  /** Call a namespaced tool. Returns the tool's text output (clamped). */
   call(
     name: string,
     args: Record<string, unknown>,
@@ -93,7 +90,6 @@ export interface McpToolService {
     audienceScopeId?: ScopeId,
     actAsActor?: boolean,
   ): Promise<boolean>;
-  /** Force a registry re-read + tools/list refresh (admin save path, tests). */
   refresh(): Promise<void>;
   probe(server: McpServer, principalId?: string): Promise<McpListing>;
   close(): void;

@@ -4,9 +4,7 @@ import assert from "node:assert/strict";
 import { createAdminGrantStore, grantKey } from "../src/admin/admin-grant-store.ts";
 import { createPostgresAdminGrantStore } from "../src/admin/postgres-admin-grant-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { withTenant } from "../src/tenants/context.ts";
-
-const tenant = withTenant(TEST_TENANT, (t) => t);
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 test("grant store: add / list / revoke round-trip on (principal, scope, role)", async () => {
   const store = createAdminGrantStore(createPostgresAdminGrantStore(testDatabaseUrl()));

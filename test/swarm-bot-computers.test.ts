@@ -33,11 +33,15 @@ import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 import { errMessage } from "../src/util/errors.ts";
+import { probedCommand } from "./support/probed-command.ts";
 
 const releaseBot: Principal = { id: "release-bot", type: "internal", displayName: "Release bot" };
 const alice: Principal = { id: "alice", type: "internal" };
 const refusedDirection = "a Slack bot's turn cannot direct a person's swarm";
 const refusedComputer = "a Slack bot's turn cannot use the computers of a person's swarm";
+const refusedForum =
+  "a swarm a Slack bot starts cannot take forumSandboxId; spawn without it and the swarm uses its own board computer";
+const forumSpawn = { requestId: "forum", text: "work", forumSandboxId: "shared-notes" };
 
 type Fixture = Awaited<ReturnType<typeof swarmFixture>>;
 
@@ -59,7 +63,7 @@ const textOf = (result: ToolResult): string => result.content.map((part) => part
 function recordRuns(f: Fixture): Array<{ on: string; command: string }> {
   const ran: Array<{ on: string; command: string }> = [];
   f.backend.run = async (handle, command) => {
-    ran.push({ on: handle.id, command });
+    ran.push({ on: handle.id, command: probedCommand(command) });
     return { stdout: f.disks.get(handle.id)?.get("plan.md") ?? "", stderr: "", code: 0, timedOut: false };
   };
   return ran;
@@ -252,6 +256,7 @@ async function botSwarm(backend?: ProcessSandbox) {
   await f.sessions.addParticipant(f.root.id, releaseBot.id);
   await f.runs.complete(f.caller.claims.runId!, f.caller.claims.runLeaseToken!, { status: "ok", reply: "idle" });
   const first = await f.rootTurn(releaseBot.id, true);
+  await assert.rejects(f.service.spawn(first.caller, forumSpawn), { message: refusedForum });
   await f.service.spawn(first.caller, { requestId: "bot-initial", text: "bot work" });
   await first.done();
   await f.service.sweep();
@@ -385,6 +390,7 @@ test("a worker in a bot-started swarm keeps its swarm's board only while the bot
   const workerTurn = { actorId: releaseBot.id, threadRef: worker.threadRef, sessionId: worker.sessionId! };
   assert.equal(await f.service.botMayUseComputer(board, workerTurn), true);
   const person = await f.rootTurn(alice.id, false);
+  await assert.rejects(f.service.spawn(person.caller, forumSpawn), { message: refusedForum });
   await f.service.send(person.caller, { requestId: "person-send", audience: [worker.id], text: "alice's work" });
   await person.done();
   assert.equal(await f.service.botMayUseComputer(board, workerTurn), false);

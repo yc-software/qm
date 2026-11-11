@@ -130,7 +130,6 @@ test("store round-trip: upsert encrypts the key, statuses never leak it, delete 
   assert.equal(await store.resolveKey("acme-gateway"), "sk-secret-123");
   assert.deepEqual(await store.enabled(), [GATEWAY]);
 
-  // Upsert without a key keeps the existing one.
   await store.upsert({ ...GATEWAY, name: "Renamed" }, undefined, "admin@example.com");
   assert.equal(await store.resolveKey("acme-gateway"), "sk-secret-123");
 

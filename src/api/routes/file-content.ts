@@ -7,7 +7,7 @@ import {
   sendRedirect,
   UNTRUSTED_CONTENT_SANDBOX_CSP,
 } from "../http.ts";
-import { withActor, type ApiCtx, type Route } from "./route.ts";
+import { tenantOf, withActor, type ApiCtx, type Route } from "./route.ts";
 
 const PLAYGROUND_CSP = [
   "sandbox allow-scripts allow-pointer-lock",
@@ -32,7 +32,7 @@ function viewerOf(ctx: ApiCtx): string | null {
 async function openForViewer(ctx: ApiCtx) {
   const viewer = viewerOf(ctx);
   if (!viewer) return null;
-  const opened = await ctx.app.openFileForViewer(ctx.params.id!, viewer);
+  const opened = await ctx.app.openFileForViewer(tenantOf(ctx), ctx.params.id!, viewer);
   if (!opened) sendJson(ctx.res, 404, { error: "not_found" });
   return opened;
 }
@@ -88,7 +88,11 @@ async function getFileByName(ctx: ApiCtx): Promise<void> {
   if (!viewer) return;
   let cursor: string | undefined;
   do {
-    const listed = await app.listFilesForViewer(viewer, { limit: 200, name, ...(cursor ? { cursor } : {}) });
+    const listed = await app.listFilesForViewer(tenantOf(ctx), viewer, {
+      limit: 200,
+      name,
+      ...(cursor ? { cursor } : {}),
+    });
     const newest = [...listed.owned, ...listed.shared]
       .filter((file) => file.openable)
       .sort((a, b) => b.createdAt - a.createdAt)[0];

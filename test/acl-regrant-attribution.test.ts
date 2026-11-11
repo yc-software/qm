@@ -3,13 +3,14 @@ import test from "node:test";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import type { Grant } from "../src/types.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const base = { ownerScopeId: "org:default-org", granteeScopeId: "personal:alice", permission: "read" } as const;
 
 async function regrant(acl: ReturnType<typeof createAclStore>, ref: string): Promise<Grant[]> {
-  await acl.grant({ ...base, ref, grantedBy: "first-admin" });
-  await acl.grant({ ...base, ref, grantedBy: "second-admin" });
-  return acl.grantsFor(base.ownerScopeId, ref);
+  await acl.grant(tenant, { ...base, ref, grantedBy: "first-admin" });
+  await acl.grant(tenant, { ...base, ref, grantedBy: "second-admin" });
+  return acl.grantsFor(tenant, base.ownerScopeId, ref);
 }
 
 test(
@@ -26,7 +27,7 @@ test(
         ["second-admin"],
       );
     } finally {
-      await persist.remove({ ...base, ref, grantedBy: "second-admin" });
+      await persist.remove(tenant, { ...base, ref, grantedBy: "second-admin" });
     }
   },
 );

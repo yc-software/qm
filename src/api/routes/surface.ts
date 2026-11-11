@@ -320,7 +320,6 @@ async function listSessionApprovals(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { approvals: [...approvals, ...(await credentialApprovals(ctx, id, viewer))] });
 }
 
-// Pending credential requests from this session or any of its sub-agents, shown inline to their owner.
 async function credentialApprovals(ctx: ApiCtx, sessionId: string, viewer: string): Promise<PendingApproval[]> {
   const kc = ctx.deps.keychain;
   const approvals = ctx.deps.keychainApprovals;
@@ -373,6 +372,7 @@ async function listFiles(ctx: ApiCtx): Promise<void> {
   const scope = url.searchParams.get("scope");
   const nameQuery = (url.searchParams.get("q") ?? "").trim();
   const page = await app.listFilesForViewer(
+    tenantOf(ctx),
     viewer,
     {
       ...(limitRaw ? { limit: Number(limitRaw) } : {}),
@@ -632,7 +632,7 @@ async function listScopeResources(ctx: ApiCtx): Promise<void> {
   const scope = url.searchParams.get("scope");
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
   if (!scope) return sendJson(res, 400, { error: "bad_request", message: "scope required" });
-  const out = await app.listScopeResources(principalId, scope as ScopeId);
+  const out = await app.listScopeResources(tenantOf(ctx), principalId, scope as ScopeId);
   if (!out) return sendJson(res, 404, { error: "not_found", message: "not a context you can see" });
   return sendJson(res, 200, {
     files: out.files,
@@ -1164,7 +1164,7 @@ async function createGrant(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
   if (!isGrant(body)) return sendJson(res, 400, { error: "bad_request", message: "expected a Grant" });
   try {
-    await app.grant(body);
+    await app.grant(tenantOf(ctx), body);
     return sendJson(res, 200, { ok: true });
   } catch (e) {
     return sendJson(res, 400, { error: "grant_failed", message: errMessage(e) });
@@ -1181,7 +1181,7 @@ async function revokeGrant(ctx: ApiCtx): Promise<void> {
     });
   }
   try {
-    await app.revokeGrant(b.ownerScopeId, b.ref, b.granteeScopeId, b.revokedBy);
+    await app.revokeGrant(tenantOf(ctx), b.ownerScopeId, b.ref, b.granteeScopeId, b.revokedBy);
     return sendJson(res, 200, { ok: true });
   } catch (e) {
     return sendJson(res, 400, { error: "revoke_failed", message: errMessage(e) });
@@ -1264,7 +1264,6 @@ export async function shareArtifact(ctx: ApiCtx): Promise<void> {
   });
 }
 
-/** Workspace custom emoji (name → image URL, aliases resolved), from the catalog the Slack surface publishes. */
 async function getCustomEmoji(ctx: ApiCtx): Promise<void> {
   const catalog = await ctx.deps.config?.getSlackEmojiCatalogDurable(orgScope(ctx.deps));
   const raw = catalog?.emoji ?? {};

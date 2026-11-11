@@ -1,5 +1,5 @@
 import { PEER_TASK_BANNER } from "../../sessions/session-mailbox.ts";
-import { parkIfOverCap } from "../../sessions/tool-output.ts";
+import { cutIfOverCap, parkFullText, type ToolOutputRef } from "../../sessions/tool-output.ts";
 import { handbackStop } from "../../runs/run-store.ts";
 import { createKeyedQueue } from "../../util/async.ts";
 import type { ScopeId } from "../../types.ts";
@@ -164,9 +164,11 @@ export function createRecorder(ref: ToolContextRef) {
         .filter((c) => c.type === "text")
         .map((c) => c.text ?? "")
         .join("\n");
-      const parked = ref.current?.toolOutput ? await parkIfOverCap(ref.current.toolOutput, t, callId) : null;
-      const output = parked?.output;
-      let result = parked?.text ?? capResultText(t);
+      const toolOutput = ref.current?.toolOutput;
+      const cut = toolOutput ? await cutIfOverCap(toolOutput, t, callId) : null;
+      let output: ToolOutputRef | undefined;
+      let quarantined = false;
+      let result = cut?.unparkedText ?? capResultText(t);
       const resultTruncated = result !== t;
       if (result !== t) {
         const firstText = ret.content.findIndex((c) => c.type === "text");
@@ -215,6 +217,7 @@ export function createRecorder(ref: ToolContextRef) {
             quarantineReason: "screen_verdict",
             ...(screen.reason ? { securityReason: screen.reason } : {}),
           };
+          quarantined = true;
           isError = true;
           if (releaseRequested) {
             if (!screen.approvalRequested)
@@ -242,6 +245,17 @@ export function createRecorder(ref: ToolContextRef) {
             ...(originalTool === "execute" ? { code: summary.code, timedOut: summary.timedOut } : {}),
             unscreened: true,
           };
+        }
+      }
+      if (cut && toolOutput && !quarantined) {
+        output = (await parkFullText(toolOutput, t, cut)) ?? undefined;
+        if (output) {
+          result = result.replace(cut.unparkedText, () => cut.text);
+          (ret as { content: Array<{ type: string; text?: string }> }).content = ret.content.map((c) =>
+            c.type === "text" && c.text?.includes(cut.unparkedText)
+              ? { ...c, text: c.text.replace(cut.unparkedText, () => cut.text) }
+              : c,
+          );
         }
       }
       if (stopped()) return ret;

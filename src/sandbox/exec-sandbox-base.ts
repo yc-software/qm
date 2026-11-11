@@ -15,7 +15,6 @@ import type { ExecOptions, ExecResult, ProvisionOptions, SandboxHandle, Teardown
 const WORKSPACE_BASENAME = "workspace";
 const PREP_TIMEOUT_SEC = 60;
 
-// Provider instance names are DNS-style labels; Sprites rejects anything over 63 chars.
 const MAX_SANDBOX_NAME = 63;
 const HASH_LEN = 6;
 
@@ -25,10 +24,7 @@ export const sandboxScopeName = (prefix: string, id: string): string => {
     .replace(/[^a-z0-9-]+/g, "-")
     .replace(/^-+|-+$/g, "");
   const name = `${prefix}-${cleaned.slice(0, 40).replace(/-+$/, "") || "scope"}-${shortHash(id)}`;
-  // Names that already fit are kept byte-for-byte so existing computers stay addressable.
   if (name.length <= MAX_SANDBOX_NAME) return name;
-  // Over budget (long deployment prefix, or prefix + "-scratch"): shorten the readable parts and
-  // hash the full untruncated name so distinct prefixes/ids still map to distinct names.
   const hash = shortHash(name);
   const slugBudget = MAX_SANDBOX_NAME - prefix.length - HASH_LEN - 2;
   const slug = slugBudget > 0 ? cleaned.slice(0, slugBudget).replace(/-+$/, "") : "";

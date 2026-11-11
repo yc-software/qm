@@ -40,13 +40,15 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   `gh pr merge <number>` queues it rather than merging it. The queue runs CI on the
   exact commit that will land, reusing the PR's run when `main` has not moved, and
   `main`'s own CI then reuses the queue's run. Never bypass the queue with `--admin`.
+- **Check the plan against the Wall of shame before writing code.** Hold what you plan to
+  add against each _always reviewed_ lens in the [Wall of shame](./docs/SPEC.md#wall-of-shame).
+  Changing the plan is free; the same finding at review costs a rewrite.
 - **Run independent Wall of shame reviews in parallel for every PR.** First triage with
   one fast, cheap model, the latest Haiku: give it the diff and every lens in the current
   [Wall of shame](./docs/SPEC.md#wall-of-shame), and have it mark each lens relevant or
   not, keeping any lens it is unsure about. Lenses marked _always reviewed_ in the spec
   skip triage and always get a reviewer. Then dispatch a separate fresh-context
-  subagent or independent reviewer for each relevant lens. Only
-  Honorable mentions may share one combined reviewer. Launch reviews asynchronously
+  subagent or independent reviewer for each relevant lens. Launch reviews asynchronously
   and in parallel within available capacity, queuing any overflow. Do not wait for
   reviews before opening or updating the PR, running checks, or continuing other work.
   Give each reviewer the raw evidence (diff, commands, logs, provider config), never the
@@ -113,7 +115,8 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   in a temporary directory outside the checkout or an ignored local output directory,
   and attach them to the PR or host them externally. Do not bundle review screenshots
   into the app. Only actual product assets, such as icons and instructional media,
-  belong in the app bundle.
+  belong in the app bundle. `.gitignore` ignores image files and CI fails when a tracked
+  file is ignored; a product asset needs its own `!path` line there.
 - **Demo every front-end change in the PR.** Anything an operator or user sees
   rendered — admin/web/portal UI, Slack surfaces, emails — ships with a way for a
   reviewer to see the result without booting it. Prefer a link to a live demo app

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { scopeTeamsToTurn, teamsForTurn, type TeamStore, type TurnTeam } from "../src/teams/teams.ts";
 import { createCanReadScope, createCanWriteScope } from "../src/resolution/scope-membership.ts";
 import { scopeId, type Conversation, type Principal, type ScopeId } from "../src/types.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const person = (id: string): Principal => ({ id, type: "internal" }) as Principal;
 const team = (over: Partial<TurnTeam> = {}): TurnTeam => ({
@@ -62,8 +63,8 @@ test("multiple teams all apply; the note names the configured room's team or ask
 
 const fakeStore = (teams: TurnTeam[]): TeamStore => ({
   list: async () => [],
-  forTurn: async (_scope, ids) => teams.filter((t) => ids.some((id) => t.present.has(id.toLowerCase()))),
-  isMember: async (id, teamId) => teams.some((t) => t.id === teamId && t.present.has(id.toLowerCase())),
+  forTurn: async (_tenant, _scope, ids) => teams.filter((t) => ids.some((id) => t.present.has(id.toLowerCase()))),
+  isMember: async (_tenant, id, teamId) => teams.some((t) => t.id === teamId && t.present.has(id.toLowerCase())),
   apply: async () => {},
 });
 const group = (audience: Principal[]) =>
@@ -74,6 +75,7 @@ const open = { resolveSharingPostureDurable: async () => "open" as const };
 test("scopeTeamsToTurn stamps teams only onto members and keeps their existing team ids", async () => {
   const teams = fakeStore([team()]);
   const out = await scopeTeamsToTurn(
+    tenant,
     {
       actor: { ...person("ann@x.com"), teamIds: ["legacy"] },
       conversation: group([person("ann@x.com"), person("bo@x.com")]),
@@ -90,6 +92,7 @@ test("scopeTeamsToTurn stamps teams only onto members and keeps their existing t
 
   const guest = { id: "g@y.com", type: "guest" } as Principal;
   const mixed = await scopeTeamsToTurn(
+    tenant,
     { actor: person("ann@x.com"), conversation: group([person("ann@x.com"), person("cy@x.com"), guest]) },
     { teams, config: open },
     false,
@@ -103,8 +106,8 @@ test("scopeTeamsToTurn stamps teams only onto members and keeps their existing t
 test("scopeTeamsToTurn leaves the turn untouched when no team applies or the turn is external", async () => {
   const teams = fakeStore([team()]);
   const input = { actor: person("ann@x.com"), conversation: group([person("ann@x.com"), person("cy@x.com")]) };
-  assert.equal(await scopeTeamsToTurn(input, { teams, config: isolated }, false), input);
-  assert.equal(await scopeTeamsToTurn(input, { teams, config: open }, true), input);
+  assert.equal(await scopeTeamsToTurn(tenant, input, { teams, config: isolated }, false), input);
+  assert.equal(await scopeTeamsToTurn(tenant, input, { teams, config: open }, true), input);
 });
 
 test("team scope read and write follow team membership", async () => {
