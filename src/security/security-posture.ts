@@ -168,6 +168,7 @@ interface SecurityScreenInput {
 
 const DATA_BEARING_SURFACES = new Set(["monitor", "webhook"]);
 export const MAX_SCREEN_CHARS = 16_000;
+const MAX_SCREEN_SOURCE_CHARS = 200;
 
 export interface SecurityScreenPayload {
   content: string;
@@ -224,7 +225,7 @@ export function securityScreenPayloads(input: SecurityScreenInput): string[] {
   let group: Array<{ source: string; content: string }> = [];
   for (const part of securityScreenParts(input)) {
     if (boundedPayload([part])?.truncated) {
-      chunks.push(...securityScreenChunks(part.source, part.content));
+      chunks.push(...securityScreenChunks(part.source.slice(0, MAX_SCREEN_SOURCE_CHARS), part.content));
     } else if (boundedPayload([...group, part])?.truncated) {
       groups.push(group);
       group = [part];

@@ -265,6 +265,18 @@ test("an over-limit screen input packs whole messages into as few bounded payloa
   );
 });
 
+test("an over-limit part with a very long source label still screens in a few bounded payloads", () => {
+  const content = "notes ".repeat(10);
+  const payloads = securityScreenPayloads({
+    surface: "slack",
+    text: "",
+    externalPromptData: [{ source: "a".repeat(16_001), content }],
+  });
+  assert.equal(payloads.length, 1);
+  assert.ok(payloads.every((payload) => payload.length <= MAX_SCREEN_CHARS));
+  assert.equal(JSON.parse(payloads[0]!)[0].content, content);
+});
+
 test("the default rubric treats documentation and code as ordinary content", () => {
   assert.match(SECURITY_SCREEN_SYSTEM_PROMPT, /Injection is an authority problem/);
   assert.match(SECURITY_SCREEN_SYSTEM_PROMPT, /skill or agent instruction files routinely describe agent workflows/);
