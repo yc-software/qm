@@ -52,7 +52,10 @@ type TurnReason =
   | "bot-turn";
 
 export type IncomingRoute =
-  { kind: "turn"; reason: TurnReason } | { kind: "steer" } | { kind: "abort" } | { kind: "drop"; reason: "empty" };
+  | { kind: "turn"; reason: TurnReason; stopsBotTurn?: true }
+  | { kind: "steer" }
+  | { kind: "abort" }
+  | { kind: "drop"; reason: "empty" };
 
 export function mayMeetLiveTurn(message: Incoming): boolean {
   return !message.routed && (message.origin === "human" || message.origin === "ambient");
@@ -100,8 +103,9 @@ export function routeIncoming(message: Incoming, live: LiveTurn | null, prefs: I
     (message.modelAccount === "company" || message.actorId === live.actorId);
   if (!sameAccount) return { kind: "turn", reason: "account" };
   if (botIntoPersonsWork) return { kind: "turn", reason: "bot-message" };
-  if (live.bot && !message.bot) return { kind: "turn", reason: "bot-turn" };
   if (!live.handlesThisMessage) {
+    if (live.bot && message.person && !message.bot)
+      return { kind: "turn", reason: "bot-turn", ...(prefs.midTurn === "steer" ? { stopsBotTurn: true } : {}) };
     if (live.origin === "automation" && message.person && prefs.midTurn !== "steer")
       return { kind: "turn", reason: "automation-live" };
     if (live.origin === "ambient" && message.origin === "human") return { kind: "turn", reason: "unprompted-live" };

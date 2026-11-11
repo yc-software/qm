@@ -458,6 +458,10 @@ export function createTurnMethods(
           return { status: "silent", steered: true, stopped };
         }
         if (route.kind === "drop") return { status: "refused", reason: "empty message" };
+        if (route.kind === "turn" && route.stopsBotTurn && live?.run) {
+          const botTurn = live.run;
+          await withCurrentProjectRoster(() => stopRun(botTurn, false, true));
+        }
         if (live?.run && route.kind !== "turn") {
           const sealed = await sealedByApproval();
           if (sealed) return sealed;
@@ -781,6 +785,10 @@ export function createTurnMethods(
       }
       if (route.kind === "drop") return { accepted: false, reason: "text_required" };
       if (route.kind === "turn") {
+        if (route.stopsBotTurn) {
+          await stopRun(run, false, true);
+          if (signal.queuedRunId) return { accepted: false, reason: "queued_started" };
+        }
         const request =
           signal.request ?? (viewer ? await viewerSteerRequest(run, viewer, signal.text ?? "") : undefined);
         if (signal.queuedRunId || !request) return { accepted: false, reason: "not_steerable", why: route.reason };

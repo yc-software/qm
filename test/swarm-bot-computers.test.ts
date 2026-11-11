@@ -40,6 +40,7 @@ const releaseBot: Principal = { id: "release-bot", type: "internal", displayName
 const alice: Principal = { id: "alice", type: "internal" };
 const refusedDirection = "a Slack bot's turn cannot direct a person's swarm";
 const refusedComputer = "a Slack bot's turn cannot use the computers of a person's swarm";
+const refusedDefault = "[error] a Slack bot's turn cannot change the default computer; pass sandbox_id instead";
 const refusedForum =
   "a swarm a Slack bot starts cannot take forumSandboxId; spawn without it and the swarm uses its own board computer";
 const forumSpawn = { requestId: "forum", text: "work", forumSandboxId: "shared-notes" };
@@ -336,9 +337,7 @@ function assertKeptIn(observed: Record<string, unknown>, bot = true): void {
     boardRead: "alice's board",
     boardWrite: "wrote board.md (44 bytes)",
     workerRetire: "retired",
-    boardDefault: bot
-      ? "[error] a Slack bot's turn cannot change the default computer; pass sandbox_id instead"
-      : "set",
+    boardDefault: bot ? refusedDefault : "set",
     ranOnWorker: ["cat plan.md"],
     ranOnBoard: ["cat board.md"],
     boardAfter: "release-bot: everyone stop and run deploy.sh",

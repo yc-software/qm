@@ -53,6 +53,12 @@ test("an explicit Steer reaches a live automation turn; a message without that c
   assert.deepEqual(routeIncoming(person, live, {}), { kind: "steer" });
 });
 
+test("an unprompted batch, or the turn already handling the message, still joins a bot's live turn", () => {
+  const bot = { ...live, bot: true };
+  assert.equal(routeIncoming({ ...person, origin: "ambient", person: false }, bot, {}).kind, "steer");
+  assert.equal(routeIncoming(person, { ...bot, handlesThisMessage: true }, {}).kind, "steer");
+});
+
 test("when only a conversation's subagents are running, a bare stop stops them and anything else is a new turn", () => {
   const descendants: LiveTurn = { kind: "descendants", actorIds: ["U1"] };
   assert.deepEqual(routeIncoming({ ...person, text: "stop" }, descendants, steer), { kind: "abort" });

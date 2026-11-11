@@ -174,7 +174,7 @@ test("unset defaults remain unset durably while explicit execution remains usabl
   assert.equal((await defaults.get("personal:alice"))?.sandboxId, null);
   await assert.rejects(
     router.provision("personal:alice"),
-    /sandbox list, create, set_default \(or pass sandbox_id\), then retry before reporting blocked/,
+    /sandbox list, create, set_default, then retry before reporting blocked/,
   );
   const explicit = await router.provision("personal:alice", { sandboxId: record.id });
   assert.equal(explicit.resourceId, record.id);
