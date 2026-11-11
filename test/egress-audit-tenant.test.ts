@@ -12,7 +12,7 @@ import { createPostgresEgressAuditSink } from "../src/admin/postgres-egress-audi
 import type { EgressAuditSink } from "../src/admin/egress-audit-sink.ts";
 import { assertRowsByTenant, describeTwoTenants } from "./support/two-tenants.ts";
 import { settle } from "./support/settle.ts";
-import { boundTenant, withoutTenant } from "../src/tenants/context.ts";
+import { boundTenant, withoutTenant, type Tenant } from "../src/tenants/context.ts";
 import { tenantLookup } from "../src/tenants/lookup.ts";
 
 const SECRET = "egress-audit-tenant-capability-secret".repeat(2);
@@ -33,9 +33,9 @@ async function ingest(
 ): Promise<{ status: number; body: unknown; saved: Array<{ host: string; tenant: string | undefined }> }> {
   const saved: Array<{ host: string; tenant: string | undefined }> = [];
   const egressAudit = {
-    record: (r: Omit<EgressAuditRecord, "ts">) => {
+    record: (t: Tenant, r: Omit<EgressAuditRecord, "ts">) => {
       saved.push({ host: r.host, tenant: boundTenant() });
-      persist?.record(r);
+      persist?.record(t, r);
     },
     list: async () => [],
   };

@@ -289,7 +289,7 @@ export function createSkillMethods(
         return republishIfShared(updated, principalId);
       });
       if (!live) return null;
-      deps.auditLog.record({
+      h.recordAudit({
         at: Date.now(),
         principalId,
         action: "skill_update",
@@ -309,7 +309,7 @@ export function createSkillMethods(
           return "exists" as const;
         await deps.skills.review(id, principalId, current.manifest.requiredCapabilities);
         const restored = await deps.skills.publish(id);
-        deps.auditLog.record({
+        h.recordAudit({
           at: Date.now(),
           principalId,
           action: "skill_restore",
@@ -432,7 +432,7 @@ export function createSkillMethods(
         const skill = await deps.skills.create({ scopeId: homeScope, manifest, createdBy: input.principalId });
         await deps.skills.review(skill.id, "system:skill-authoring", manifest.requiredCapabilities);
         const published = await deps.skills.publish(skill.id);
-        deps.auditLog.record({
+        h.recordAudit({
           at: Date.now(),
           principalId: input.principalId,
           action: "skill_create",
@@ -448,7 +448,7 @@ export function createSkillMethods(
       if (!(await canManageSkill(skill, principalId))) return "forbidden";
       if (triggerBlocksSharedSkill(skill.scopeId, liveActor === true)) return "trigger_blocked";
       await deps.skills.archive(id);
-      deps.auditLog.record({
+      h.recordAudit({
         at: Date.now(),
         principalId,
         action: "skill_archive",

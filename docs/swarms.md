@@ -260,16 +260,16 @@ transaction; credentials from replaced attempts cannot authorize new work. Compl
 operations. A Slack bot's turn cannot direct a person's swarm: `inspect`, `spawn`,
 `send`, `context`, `control` and message reads refuse it unless a bot's turn started
 the swarm. Once anyone other than that bot has posted a swarm message, or a person's turn has worked on one of the swarm's computers, the bot's root
-turn and every worker in a branch the bot started lose that access too. Workers in a
-branch someone else started keep it: every mail-woken worker turn in a bot-started
-swarm runs as the bot, so a worker's access comes from who sent the message that
-spawned the top of its branch. The same rule covers the board and worker computers a
+turn and every worker it started lose that access too. Only the bot's own turns
+can add workers to a swarm a bot started: a person's turn that tries is refused, so
+every worker in a bot-started swarm is the bot's work and runs as the bot. The same rule covers the board and worker computers a
 swarm creates: a bot's turn that may not direct the swarm cannot list them, reach them with
 `sandbox_id`, make one the conversation's default, use one a person made the default, or
 run on its own worker computer. The check runs each time the turn uses a computer, so a
 turn that is already running loses that access as soon as someone else posts or a person's turn works on one of those computers. Background
 jobs on those computers are covered too: the bot's `background` list leaves them out, it
 cannot watch them, and a watch it armed while it could stops reading the job's output.
+When the bot loses that access, its turns still running in the swarm's threads or on the swarm's computers are told to stop, and background jobs its turns started on the swarm's board and worker computers are stopped and marked reaped.
 A computer supplied as `forumSandboxId` stays an ordinary computer of its scope, which is
 why a swarm a bot starts never takes one, from the bot or from a person: every computer in
 a swarm a bot starts belongs to the swarm. A person's own swarm can still take one.

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import type { AuditLog } from "../audit/audit-log.ts";
+import type { AuditEvent } from "../audit/audit-log.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { claimThenBind } from "../tenants/claim.ts";
 import { errMessage, reportFailure } from "../util/errors.ts";
@@ -32,7 +32,7 @@ export interface LiveEditSaved {
 interface LiveEditDeps {
   deployStore: DeployStore;
   provider: DeployProvider;
-  auditLog: AuditLog;
+  recordAudit: (e: AuditEvent) => void;
   leaderLease: LeaderLease;
   publishDelayMs?: number;
   withDeployLock<T>(id: string, fn: () => Promise<T>): Promise<T>;
@@ -179,7 +179,7 @@ export function createLiveEdits(deps: LiveEditDeps) {
     await store.putDraft(saved).catch((put: unknown) => {
       throw edited.status === "rejected" ? new AggregateError([put, edited.reason], "saving the edit failed") : put;
     });
-    deps.auditLog.record({
+    deps.recordAudit({
       at: now,
       principalId: actor,
       action: "deploy_live_edit",
@@ -216,7 +216,7 @@ export function createLiveEdits(deps: LiveEditDeps) {
         const v = (await store.addVersionFromCommit(id, draft.commit)) ?? current;
         await deps.markVersionRunning(id, v.version, endpoint);
         await store.deleteDraft(id);
-        deps.auditLog.record({
+        deps.recordAudit({
           at: Date.now(),
           principalId: draft.savedBy,
           action: "deploy_version",
@@ -230,7 +230,7 @@ export function createLiveEdits(deps: LiveEditDeps) {
           (r: unknown) => [r],
         );
         const failure = [e, ...restore].map(errMessage).join("; putting the saved edits back also failed: ");
-        deps.auditLog.record({
+        deps.recordAudit({
           at: Date.now(),
           principalId: draft.savedBy,
           action: "deploy_version",

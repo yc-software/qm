@@ -20,6 +20,7 @@ import { createMockAgent } from "./support/mock-agent.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const ENDPOINT: DeployEndpoint = { host: "body", port: 443, tls: true };
 const OWNER = "U1";
@@ -58,7 +59,7 @@ function harness(opts: { liveEdits?: boolean } = {}) {
     ...singleProcessDeps(),
     deployStore,
     provider,
-    auditLog: { record: (event) => void audited.push(event), events: async () => [], tail: async () => [] },
+    auditLog: { record: (_tenant, event) => void audited.push(event), events: async () => [], tail: async () => [] },
     acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
     deployDir: mkdtempSync(join(tmpdir(), "app-files-")),
   });
@@ -78,6 +79,7 @@ function harness(opts: { liveEdits?: boolean } = {}) {
   const chat = (editingApp: string | undefined, by = OWNER, inlineTokens = 4096) => {
     const results: Array<Record<string, unknown>> = [];
     const current = createToolContext({
+      tenant: testTenant,
       sandbox: noComputer,
       provision: async () => {
         throw new Error("app_files provisioned a computer");

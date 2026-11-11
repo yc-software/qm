@@ -64,7 +64,7 @@ export async function resolveTurnContext(input: ContextInput) {
       : undefined;
   const recordRead = (scope: ScopeId, resource: string) => {
     if (!sharingSources.includes(scope)) return;
-    input.auditLog?.record({
+    input.auditLog?.record(input.tenant, {
       at: Date.now(),
       principalId: input.actor.id,
       action: "sharing.cross_context_read",

@@ -101,7 +101,7 @@ test("one context recalls capped, source-labelled memory and shares authority wi
   assert.ok(result && "bytes" in result);
   assert.equal(Buffer.from(result.bytes!).toString(), "PLAN_CONTENT");
   assert.equal(await context.readFile("shared/open-channel-other/plan.txt"), null);
-  const events = await auditLog.events();
+  const events = await auditLog.events(tenant);
   assert.ok(events.some((e) => e.resource === "memory" && e.detail?.includes("channel:eng")));
   assert.ok(events.some((e) => e.resource === "1".repeat(32) && e.detail?.includes("channel:eng")));
 });

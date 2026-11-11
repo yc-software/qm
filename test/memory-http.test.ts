@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -59,7 +60,9 @@ test("a user edits and forgets facts in their OWN personal notebook only", async
     assert.equal((await send(s.base, "/v1/memory", "PATCH", { principalId: "U1", facts: [] })).status, 400);
     assert.equal((await fetch(`${s.base}/v1/memory`)).status, 400, "GET needs principalId");
 
-    const actions = (await s.built.auditLog.events()).filter((e) => e.principalId === "U1").map((e) => e.action);
+    const actions = (await s.built.auditLog.events(testTenant))
+      .filter((e) => e.principalId === "U1")
+      .map((e) => e.action);
     assert.ok(actions.includes("memory.self.read") && actions.includes("memory.self.update"));
   } finally {
     await s.close();
@@ -94,7 +97,7 @@ test("an admin edits any scope's facts by id; non-admins are refused without a w
       `- (${new Date().toISOString().slice(0, 10)}) Retro is on Fridays`,
     );
 
-    const actions = (await s.built.auditLog.events()).map((e) => e.action);
+    const actions = (await s.built.auditLog.events(testTenant)).map((e) => e.action);
     assert.ok(actions.includes("memory.read") && actions.includes("memory.update"), "admin memory access is audited");
   } finally {
     await s.close();
@@ -132,7 +135,7 @@ test("the admin memory directory lists every known scope, notebooks-first (power
       "org_admin-only",
     );
     assert.ok(
-      (await s.built.auditLog.events()).some((e) => e.action === "memory.scopes.read"),
+      (await s.built.auditLog.events(testTenant)).some((e) => e.action === "memory.scopes.read"),
       "the directory read is audited",
     );
   } finally {

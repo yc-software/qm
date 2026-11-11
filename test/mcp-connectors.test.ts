@@ -1,4 +1,5 @@
 import { tenantTest as test } from "./support/tenant-test.ts";
+import { testTenant } from "./support/test-tenant.ts";
 import assert from "node:assert/strict";
 import { createMcpClient, mcpResultText } from "../src/mcp/mcp-client.ts";
 import { createMcpServerStore, isValidMcpServerId, type McpServer } from "../src/mcp/mcp-server-store.ts";
@@ -360,7 +361,7 @@ test("an attested connector refuses a call outside its person's own conversation
   await assert.rejects(service.call("records", invoke, "U2", undefined, "personal:U1"), privateOnly);
   assert.equal(mcp.requests.length, 0);
   assert.deepEqual(
-    (await audit.tail({ limit: 10, action: "mcp.call", resourceContains: "records" }))
+    (await audit.tail(testTenant, { limit: 10, action: "mcp.call", resourceContains: "records" }))
       .filter((event) => privateOnly.test(event.status ?? ""))
       .map((event) => event.principalId)
       .sort(),
@@ -410,7 +411,7 @@ test("attested connectors send one canonical person and never call for an actor 
     );
   assert.equal(mcp.requests.length, sent);
   assert.equal(
-    (await audit.tail({ limit: 10, action: "mcp.call", resourceContains: "records" })).filter((event) =>
+    (await audit.tail(testTenant, { limit: 10, action: "mcp.call", resourceContains: "records" })).filter((event) =>
       /principal-links/.test(event.status ?? ""),
     ).length,
     2,

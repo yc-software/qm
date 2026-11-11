@@ -270,8 +270,10 @@ export function createLoopIngress(deps: LoopIngressDeps) {
       void process(source.id).catch((error) => swallow("Loop conversation event", error));
       return true;
     },
-    async list(loopId: string) {
-      return (await deps.sources.select({ omit: ["secret"], where: { field: "loopId", anyOfFold: [loopId] } })).filter(
+    async list(loopId: string | readonly string[]) {
+      const ids = typeof loopId === "string" ? [loopId] : loopId;
+      if (!ids.length) return [];
+      return (await deps.sources.select({ omit: ["secret"], where: { field: "loopId", anyOfFold: ids } })).filter(
         (source) => source.kind !== "conversation",
       );
     },

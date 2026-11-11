@@ -428,9 +428,15 @@ test("pause failures are durable and visible and leave the source available for 
   };
   const first = make({ client, store });
   const handle = await first.provision(scope);
-  await assert.rejects(first.teardown(handle), /pause unavailable/);
-  assert.equal((await store.get(scope))?.preservationState, "pause_failed");
-  assert.equal(fake.current(scopeName())?.state, "running");
+  for (const next of [first, make({ client, store })]) {
+    await assert.rejects(first.teardown(handle), /pause unavailable/);
+    assert.equal((await store.get(scope))?.preservationState, "pause_failed");
+    assert.equal(fake.current(scopeName())?.state, "running");
+    await next.computerStatus?.(scope);
+    await next.provision(scope);
+    const stored = await store.get(scope);
+    assert.deepEqual([stored?.preservationState, stored?.preservationError], ["running", undefined]);
+  }
   fail = false;
   await first.teardown(handle);
   assert.equal((await store.get(scope))?.preservationState, "paused");

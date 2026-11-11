@@ -17,11 +17,6 @@ export const FEATURES = {
     label: "Slack loading indicator (experimental)",
     hint: "Shows a live activity card in Slack threads: the current step, background work, monitors and subagents, with a link to the web conversation. The card disappears once the reply has landed. Everyone in a shared thread can see it. Top-level DMs stay unchanged. Turning this off removes open cards.",
   },
-  descriptive_session_titles: {
-    label: "Descriptive session titles",
-    personalOnly: true,
-    hint: "Titles the selected people's new conversations with a short summary of what they asked, anchored on a name or distinctive word, written by a stronger model. Regenerating a title uses it too.",
-  },
   next_prompt_suggestions: {
     label: "Next-message suggestions (experimental)",
     personalOnly: true,

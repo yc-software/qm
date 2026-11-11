@@ -311,7 +311,7 @@ export function createChatSurface(
   const transcriptFetcher = dependencies.fetchTranscript ?? fetchTranscript;
   const sessionOpener = dependencies.openSession ?? openSession;
 
-  const goalCancels = new Map<string, "pending" | "done">();
+  const goalCancels = new Set<string>();
   const goalResumes = new Set<string>();
   const chatState = {
     agent: null as Agent | null,
@@ -2979,18 +2979,23 @@ export function createChatSurface(
     const sessionId = chatState.sessionId;
     const key = `${sessionId}:${goal.createdAt}`;
     if (!sessionId || goalCancels.has(key)) return;
-    goalCancels.set(key, "pending");
+    goalCancels.add(key);
     drawActiveChat(agent);
     try {
       await cancelSessionGoal(sessionId);
-      goalCancels.set(key, "done");
+      if (sessionId === chatState.sessionId) markGoalCancelled(goal.createdAt);
       if (agent === chatState.agent) await refreshTranscriptFromItems(agent);
     } catch (err) {
-      goalCancels.delete(key);
       ctx.composer.state.error = errMessage(err, "Could not cancel the goal.");
     } finally {
+      goalCancels.delete(key);
       if (agent === chatState.agent) drawActiveChat(agent);
     }
+  }
+
+  function markGoalCancelled(createdAt: number): void {
+    for (const holder of [chatState, chatState.liveWork])
+      if (holder?.goal?.createdAt === createdAt) holder.goal = { ...holder.goal, status: "cancelled" };
   }
 
   async function resumeGoalFromBar(agent: Agent, goal: GoalStripState): Promise<void> {
@@ -3017,8 +3022,7 @@ export function createChatSurface(
     const goal = currentGoal();
     if (!goal) return nothing;
     const key = `${chatState.sessionId}:${goal.createdAt}`;
-    const cancel = goalCancels.get(key);
-    if (cancel === "done") return nothing;
+    const cancelling = goalCancels.has(key);
     const workedMs = goalWorked(messages, goal);
     const paused = goal.status === "paused";
     if (goal.status !== "active" && !paused) return nothing;
@@ -3035,7 +3039,7 @@ export function createChatSurface(
                 class="chip-x goal-strip-resume"
                 aria-label="Resume goal"
                 ${tip("Resume goal")}
-                ?disabled=${goalResumes.has(key) || cancel === "pending" || !ctx.composer.readyToSend()}
+                ?disabled=${goalResumes.has(key) || cancelling || !ctx.composer.readyToSend()}
                 @click=${() => void resumeGoalFromBar(agent, goal)}
               >
                 ${icon(Play, 13)}
@@ -3049,7 +3053,7 @@ export function createChatSurface(
           class="chip-x"
           aria-label="Cancel goal"
           ${tip("Cancel goal")}
-          ?disabled=${cancel === "pending" || goalResumes.has(key)}
+          ?disabled=${cancelling || goalResumes.has(key)}
           @click=${() => void cancelGoal(agent, goal)}
         >
           ${icon(X, 13)}

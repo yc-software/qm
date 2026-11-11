@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -173,7 +174,7 @@ test("offboarding previews, then disables, revokes, archives and retires what th
     assert.equal((await sandboxResources.get(computer.id)).state, "retired");
     assert.equal(await sandboxResources.resolve("personal:U1"), null, "the default was cleared first");
 
-    const events = await s.built.auditLog.events();
+    const events = await s.built.auditLog.events(testTenant);
     for (const change of applied.changes)
       assert.ok(
         events.some(
@@ -214,7 +215,7 @@ test("offboarding previews, then disables, revokes, archives and retires what th
       "reactivation clears offboarding",
     );
     assert.ok(
-      (await s.built.auditLog.events()).some((e) => e.action === "principal.reactivate"),
+      (await s.built.auditLog.events(testTenant)).some((e) => e.action === "principal.reactivate"),
       "the audit log keeps the history",
     );
   } finally {

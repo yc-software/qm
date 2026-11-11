@@ -143,7 +143,7 @@ companyTest("approve is audited and idempotent, preserves manage access, and res
   assert.equal(notices.length, 1);
   assert.equal(notices[0]!.destination.target, requester);
   assert.match(notices[0]!.text, /gave you access.*https:\/\/acme1-mysite.apps.example.com\//);
-  assert.ok((await f.auditLog.events()).some((e) => e.action === "grant"));
+  assert.ok((await f.auditLog.events(tenant)).some((e) => e.action === "grant"));
   await f.share(null);
   assert.deepEqual(await f.grants(), []);
   await assert.rejects(f.decide(requester), /owner/);

@@ -27,7 +27,8 @@ test("dismiss toast undoes the correct item and failed dismissals do not offer u
   const vite = await testViteServer();
   try {
     await vite.ssrLoadModule("/src/shell.ts");
-    const { setItemStatus, toInboxItem, inboxState, resetInboxState } = await vite.ssrLoadModule("/src/inbox.ts");
+    const { setItemStatus, toInboxItem, inboxState, resetInboxState, askAgent } =
+      await vite.ssrLoadModule("/src/inbox.ts");
     const entry = {
       id: "item-1",
       loopId: "loop-1",
@@ -36,15 +37,17 @@ test("dismiss toast undoes the correct item and failed dismissals do not offer u
       sourcePayload: { title: "Example", from: "Sam", snippet: "Hello" },
       thread: [],
     };
-    const item = toInboxItem(entry);
+    const outputs = [{ id: "out-1", title: "Reply", shipAction: "send_email", state: "draft" }];
+    const item = { ...toInboxItem(entry), outputs };
     inboxState.items = [item];
     const actions: string[] = [];
     globalThis.fetch = async (_url, options) => {
       const { kind } = JSON.parse(String(options?.body));
       actions.push(kind);
-      return Response.json({ item: { ...entry, state: kind === "dismiss" ? "dismissed" : "held" } });
+      return Response.json({ item: { ...entry, state: kind === "dismiss" ? "dismissed" : "held" }, outputs });
     };
     assert.equal(await setItemStatus(item, "dismissed"), true);
+    assert.deepEqual(inboxState.items[0].outputs, outputs);
     const toast = document.querySelector(".action-toast")!;
     assert.match(toast.textContent!, /Dismissed from inbox/);
     const undo = toast.querySelector<HTMLButtonElement>("button")!;
@@ -52,7 +55,12 @@ test("dismiss toast undoes the correct item and failed dismissals do not offer u
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.deepEqual(actions, ["dismiss", "reopen"]);
     assert.equal(inboxState.items[0].status, "open");
+    assert.deepEqual(inboxState.items[0].outputs, outputs);
     assert.equal(document.querySelector(".action-toast"), null);
+    const revised = [{ ...outputs[0], title: "Shorter reply" }];
+    globalThis.fetch = async () => Response.json({ item: entry, outputs: revised });
+    assert.equal(await askAgent({ ...inboxState.items[0], detailLoaded: true }, "Shorten it"), true);
+    assert.deepEqual(inboxState.items[0].outputs, revised);
     globalThis.fetch = async () => {
       throw new Error("Offline");
     };

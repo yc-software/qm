@@ -27,10 +27,10 @@ import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 const audits: Array<(e: AuditEvent) => void> = [];
 const onceKeys = new Set<string>();
 const auditLog = {
-  record(e: AuditEvent) {
+  record(_t: unknown, e: AuditEvent) {
     for (const fn of audits) fn(e);
   },
-  async recordOnce(key: string, e: AuditEvent) {
+  async recordOnce(_t: unknown, key: string, e: AuditEvent) {
     if (onceKeys.has(key)) return;
     onceKeys.add(key);
     for (const fn of audits) fn(e);

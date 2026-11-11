@@ -81,6 +81,8 @@ async function call(
     app: {
       membershipControlsScope: async () => false,
       managesScope: async () => managesScope,
+      loopAdministration: async (actor: string, loops: { owner: string }[]) =>
+        loops.map((loop) => loop.owner === actor || managesScope),
       samePerson: async (a: string, b: string) => a === b,
     },
     deps: { loops: deps, admin: { adminStatusOf: async () => ({ isAdmin }) } },

@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { testTenant } from "./support/test-tenant.ts";
 import { test, type TestContext } from "node:test";
 import pg from "pg";
 import { migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
@@ -296,7 +297,7 @@ pgTest("HTTP Open DM combines room and current memory, then blocks reads after m
   assert.doesNotMatch(await turn("!memoryread channel:C1", "read-revoked"), /REMOTE_BEST/);
   assert.doesNotMatch(await turn("!sysprompt\nverify the change", "recall-revoked"), /REMOTE_BEST/);
   assert.ok(
-    (await built.auditLog.events()).some(
+    (await built.auditLog.events(testTenant)).some(
       (event) => event.action === "sharing.cross_context_read" && event.resource === "memory",
     ),
   );
