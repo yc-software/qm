@@ -206,6 +206,22 @@ test("app shell: the owner version endpoint reports the applied version", async 
   }
 });
 
+test("app shell: the owner gets the capture script the shell screenshots the app with", async () => {
+  const f = await widgetFixture();
+  try {
+    const owner = await httpGet(f.port, "/__claw__/capture.js", {
+      Host: HOST,
+      Cookie: `portal_session=${mintPortalSession("U1")}`,
+    });
+    assert.equal(owner.status, 200);
+    assert.match(owner.body, /htmlToImage/);
+    const viewer = await httpGet(f.port, "/__claw__/capture.js", { Host: HOST, Cookie: viewerCookie() });
+    assert.doesNotMatch(viewer.body, /htmlToImage/, "only someone who can edit the app gets it");
+  } finally {
+    await f.close();
+  }
+});
+
 test("app shell: an owner's XHR/fetch HTML fragment is not shelled (sec-fetch-dest gate)", async () => {
   const f = await widgetFixture();
   try {

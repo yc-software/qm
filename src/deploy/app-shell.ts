@@ -1,6 +1,15 @@
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { ANNOTATE_BUTTON, ANNOTATE_CSS, ANNOTATE_JS, ANNOTATE_MARKUP } from "./app-annotate.ts";
 
 export const APP_SHELL_PATH_PREFIX = "/__claw__/";
+
+let captureScript: string | undefined;
+
+export function appCaptureScript(): string {
+  captureScript ??= readFileSync(createRequire(import.meta.url).resolve("html-to-image/dist/html-to-image.js"), "utf8");
+  return captureScript;
+}
 
 function escAttr(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
@@ -120,6 +129,7 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
   window.addEventListener("message", (event) => {
     if (event.source !== chat.contentWindow || event.origin !== portalOrigin) return;
     if (event.data?.type === "qm:app-check") return void poll();
+    if (event.data?.type === "qm:app-shot" && typeof event.data.id === "string") return void answerShot(event.data.id);
     const theme = event.data;
     if (theme?.type !== "qm:theme" || typeof theme.dark !== "boolean" || !theme.colors) return;
     if (!themeColors.every((key) => typeof theme.colors[key] === "string" && CSS.supports("color", theme.colors[key]))) return;
@@ -241,6 +251,95 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
   };
   void poll();
   setInterval(poll, 5000);
+
+  let consoleErrors = [];
+  const watchErrors = () => {
+    consoleErrors = [];
+    try {
+      const w = app.contentWindow;
+      if (!w || w.__qmShotWatch) return;
+      w.__qmShotWatch = true;
+      const original = w.console.error.bind(w.console);
+      w.console.error = (...args) => {
+        consoleErrors.push(args.map((a) => (a instanceof Error ? a.stack || a.message : String(a))).join(" ").slice(0, 500));
+        original(...args);
+      };
+      w.addEventListener("error", (e) => consoleErrors.push(String(e.message || "error loading " + (e.target && (e.target.src || e.target.href) || "resource")).slice(0, 500)), true);
+      w.addEventListener("unhandledrejection", (e) => consoleErrors.push(("Unhandled rejection: " + String(e.reason && (e.reason.stack || e.reason.message) || e.reason)).slice(0, 500)));
+    } catch {}
+  };
+  watchErrors();
+  app.addEventListener("load", watchErrors);
+  const waitFor = (test, ms) => new Promise((resolve) => {
+    const end = Date.now() + ms;
+    const tick = () => (test() || Date.now() > end ? resolve(test()) : setTimeout(tick, 100));
+    tick();
+  });
+  let captureLib = null;
+  const loadCapture = () => captureLib || (captureLib = new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = "/__claw__/capture.js";
+    s.onload = () => (window.htmlToImage ? resolve(window.htmlToImage) : reject(new Error("capture library missing")));
+    s.onerror = () => { captureLib = null; reject(new Error("could not load the capture library")); };
+    document.head.appendChild(s);
+  }));
+  const shoot = async () => {
+    if (document.hidden) throw new Error("the app tab is hidden, so the browser will not render it; ask the person to bring it to the front");
+    const r = await fetch("/__claw__/version", { cache: "no-store" });
+    if (r.ok) {
+      const d = await r.json();
+      const served = d.version + ":" + (d.live ?? "");
+      if (base !== null && served !== base && !reloading) reloadApp(served);
+    }
+    if (!(await waitFor(() => !reloading && app.contentDocument && app.contentDocument.readyState === "complete", 20000)))
+      throw new Error("the app did not finish reloading within 20s");
+    let doc;
+    try { doc = app.contentDocument; } catch {}
+    if (!doc || !doc.documentElement) throw new Error("the app page is not readable from its shell (it may have navigated to another site)");
+    const w = app.contentWindow;
+    if (doc.fonts && doc.fonts.ready) await Promise.race([doc.fonts.ready, new Promise((r) => setTimeout(r, 3000))]);
+    await new Promise((r) => w.requestAnimationFrame(() => w.requestAnimationFrame(r)));
+    const lib = await loadCapture();
+    const width = app.clientWidth;
+    const height = app.clientHeight;
+    const sx = w.scrollX || 0;
+    const sy = w.scrollY || 0;
+    const bg = w.getComputedStyle(doc.body || doc.documentElement).backgroundColor;
+    const htmlBg = w.getComputedStyle(doc.documentElement).backgroundColor;
+    const opaque = (c) => c && c !== "transparent" && !/rgba\\([^)]*,\\s*0\\)$/.test(c);
+    const canvas = await Promise.race([
+      lib.toCanvas(doc.documentElement, {
+        width, height, pixelRatio: 1, cacheBust: false,
+        backgroundColor: opaque(htmlBg) ? htmlBg : opaque(bg) ? bg : "#ffffff",
+        style: { transform: "translate(" + -sx + "px," + -sy + "px)", transformOrigin: "0 0" },
+      }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("capture took longer than 15s")), 15000)),
+    ]);
+    const ctx = canvas.getContext("2d");
+    let px;
+    try { px = ctx.getImageData(0, 0, canvas.width, canvas.height).data; }
+    catch { throw new Error("the picture was blocked by a cross-origin image or font on the page"); }
+    let varied = false;
+    for (let i = 4; i < px.length; i += 4 * 97) {
+      if (px[i] !== px[0] || px[i + 1] !== px[1] || px[i + 2] !== px[2]) { varied = true; break; }
+    }
+    if (!varied || canvas.width === 0 || canvas.height === 0) throw new Error("the capture came out as one flat color, so it would not show the page; nothing was returned");
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+    const scheme = w.getComputedStyle(doc.documentElement).colorScheme || "";
+    const lum = (c) => { const m = String(c).match(/\\d+(\\.\\d+)?/g); return m ? (0.2126 * +m[0] + 0.7152 * +m[1] + 0.0722 * +m[2]) : 255; };
+    const dark = /dark/.test(scheme) && !/light/.test(scheme) ? true : lum(opaque(bg) ? bg : opaque(htmlBg) ? htmlBg : "rgb(255,255,255)") < 110;
+    return {
+      ok: true, image: dataUrl.slice(dataUrl.indexOf(",") + 1), mimeType: "image/jpeg",
+      url: w.location.href, width, height, scrollY: Math.round(sy), dark,
+      version: base, consoleErrors: consoleErrors.slice(-20),
+    };
+  };
+  const answerShot = async (id) => {
+    let reply;
+    try { reply = await shoot(); }
+    catch (error) { reply = { ok: false, error: String(error && error.message || error) }; }
+    chat.contentWindow.postMessage({ type: "qm:app-shot-result", id, ...reply }, portalOrigin);
+  };
 ${opts.annotationsEnabled ? ANNOTATE_JS : ""}
   upd.addEventListener("click", () => {
     void fetch("/__claw__/version", { cache: "no-store" })

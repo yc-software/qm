@@ -29,3 +29,27 @@ export function tellEmbedderOfFinishedTools(): (work: WorkBlock) => void {
     tellEmbedder({ type: "qm:app-check" });
   };
 }
+
+export function askEmbedder<T>(message: Record<string, unknown>, replyType: string, timeoutMs: number): Promise<T> {
+  const origin = embedderOrigin;
+  if (!origin) return Promise.reject(new Error("The app page is not connected to this chat."));
+  const id = crypto.randomUUID();
+  return new Promise<T>((resolve, reject) => {
+    const done = (): void => {
+      window.removeEventListener("message", onMessage);
+      clearTimeout(timer);
+    };
+    const onMessage = (event: MessageEvent): void => {
+      if (event.source !== window.parent || event.origin !== origin) return;
+      if (event.data?.type !== replyType || event.data?.id !== id) return;
+      done();
+      resolve(event.data as T);
+    };
+    const timer = setTimeout(() => {
+      done();
+      reject(new Error(`The app page did not answer within ${Math.round(timeoutMs / 1000)}s.`));
+    }, timeoutMs);
+    window.addEventListener("message", onMessage);
+    window.parent.postMessage({ ...message, id }, origin);
+  });
+}

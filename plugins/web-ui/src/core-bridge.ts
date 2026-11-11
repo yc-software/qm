@@ -1,4 +1,5 @@
 import { desktopTurnId, serveDesktopRun, webClientSurface } from "./desktop-computer.ts";
+import { appViewClientTools, serveAppViewRun } from "./app-view.ts";
 import { CLIENT_SURFACE_HEADER } from "../../chassis/src/client-surface.ts";
 import { reportHandledError, reportRequestTiming, stopBrowserErrors } from "./browser-errors.ts";
 import { captureMessage, stopAnalytics } from "./product-analytics.ts";
@@ -971,8 +972,10 @@ export async function api<T = unknown>(path: string, init?: RequestInit): Promis
     throw new ApiError(msg, r.status, body);
   }
   if (path === "/api/turn" && typeof init?.body === "string") {
-    const request = JSON.parse(init.body) as { desktopClientId?: string };
+    const request = JSON.parse(init.body) as { desktopClientId?: string; clientTools?: unknown[] };
     const response = body as { runId?: string } | null;
+    if (request.clientTools?.length && response?.runId)
+      void serveAppViewRun(response.runId, withBase, api).catch((error) => reportHandledError("app-view", error));
     if (request.desktopClientId && response?.runId)
       void serveDesktopRun(response.runId, request.desktopClientId, withBase, api).catch((error) =>
         reportHandledError("desktop-computer", error),
@@ -1311,8 +1314,10 @@ function turnRequestBody(
   const turnOptions = getTurnOptions?.() ?? {};
   const thinkingLevel = turnOptions.effortLevel;
   const timezone = browserTimezone();
+  const clientTools = appViewClientTools();
   return {
     desktopClientId: desktopTurnId(),
+    ...(clientTools.length ? { clientTools } : {}),
     text,
     threadRef,
     ...(thinkingLevel ? { model: model.id, thinkingLevel } : {}),

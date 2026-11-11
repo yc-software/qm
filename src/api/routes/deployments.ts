@@ -25,7 +25,7 @@ import { tenantOf, type ApiCtx, type BaseCtx, type Route } from "./route.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
 import { verifyDeployGitAccess, viewerIdentityKey } from "../../deploy/access-token.ts";
 import { appAnnotationAsset } from "../../deploy/app-annotate.ts";
-import { APP_SHELL_PATH_PREFIX, appShellHtml } from "../../deploy/app-shell.ts";
+import { APP_SHELL_PATH_PREFIX, appCaptureScript, appShellHtml } from "../../deploy/app-shell.ts";
 import type { AppViewAuthMode } from "../../deploy/page-views.ts";
 import { principalDestination } from "../../reach/reach.ts";
 import { FRAME_SESSION_COOKIE, portalSession, portalSessionFrom } from "../../deploy/viewer-session.ts";
@@ -960,6 +960,13 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
           version: deployment.appliedVersion ?? deployment.currentVersion,
           ...(draft ? { live: draft.reloads } : {}),
         });
+      } else if (pathname === "/__claw__/capture.js") {
+        res.writeHead(200, {
+          "content-type": "text/javascript; charset=utf-8",
+          "cache-control": "public, max-age=86400",
+          "x-content-type-options": "nosniff",
+        });
+        res.end(appCaptureScript());
       } else if (
         annotationsEnabled &&
         (pathname === "/__claw__/annotate.js" || pathname === "/__claw__/annotate.css")

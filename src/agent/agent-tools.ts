@@ -206,14 +206,14 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   ];
   const { inline, inlineTools, connectorTools } = mcpTools(kit, new Set(tools.map((t) => t.name)));
   tools.push(...inlineTools, ...connectorTools);
+  const clientNames = new Set(clientTools.map((tool) => tool.name));
   const active = tools.filter(
     (t) =>
-      (!ref.current?.appFiles || APP_EDIT_TOOL_NAMES.has(t.name)) &&
+      (!ref.current?.appFiles || APP_EDIT_TOOL_NAMES.has(t.name) || clientNames.has(t.name)) &&
       (opts?.readOnly
         ? READ_ONLY_TOOL_NAMES.has(t.name) || inline.has(t.name) || connectorTools.includes(t)
         : !(opts?.memoryNotebookOnly && SCHEDULING_TOOL_NAMES.has(t.name))),
   );
-  const clientNames = new Set(clientTools.map((tool) => tool.name));
   return active.map((tool) => {
     const wrapped = withRuntimeBarrier(
       withToolSpan(withToolApprovalGate(validateSandboxTool(tool, kit), kit), ref),
