@@ -350,7 +350,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     return v;
   };
 
-  const findDeployment = async (idOrName: string) =>
+  const getDeployment = async (idOrName: string) =>
     (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
 
   async function sourceReaderOf(d: Deployment): Promise<AppSourceReader | null> {
@@ -561,9 +561,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       });
     },
 
-    async getDeployment(idOrName) {
-      return (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
-    },
+    getDeployment,
 
     listDeployments() {
       return deps.deployStore.list();
@@ -842,13 +840,13 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     },
 
     async source(idOrName, paths, commit) {
-      const d = await findDeployment(idOrName);
+      const d = await getDeployment(idOrName);
       const reader = d ? await sourceReaderOf(d) : null;
       return reader ? reader.source(paths, commit) : null;
     },
 
     async sourceReader(idOrName, caller, actingScopeId) {
-      const d = await findDeployment(idOrName);
+      const d = await getDeployment(idOrName);
       return d && (await canManage(d, caller, actingScopeId)) ? sourceReaderOf(d) : null;
     },
 
@@ -997,7 +995,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     },
 
     async canManageDeployment(idOrName, caller, actingScopeId) {
-      const d = await findDeployment(idOrName);
+      const d = await getDeployment(idOrName);
       if (!d) return false;
       return canManage(d, caller, actingScopeId);
     },

@@ -22,8 +22,8 @@ export function createAppFiles(deps: {
   actingScopeId: ScopeId;
 }): AppFiles {
   const { deploy, app } = deps;
-  const canManage = () =>
-    deploy.canManageDeployment(app, { actorId: deps.actorId, botActor: deps.botActor }, deps.actingScopeId);
+  const caller = { actorId: deps.actorId, botActor: deps.botActor };
+  const canManage = () => deploy.canManageDeployment(app, caller, deps.actingScopeId);
   const assertMayEdit = async (): Promise<void> => {
     if (!(await canManage()))
       throw new Error(`you need write access to the app ${JSON.stringify(app)} to read or change its files`);
@@ -36,10 +36,7 @@ export function createAppFiles(deps: {
   return {
     app,
     async sourceReader() {
-      return (
-        (await deploy.sourceReader(app, { actorId: deps.actorId, botActor: deps.botActor }, deps.actingScopeId)) ??
-        undefined
-      );
+      return (await deploy.sourceReader(app, caller, deps.actingScopeId)) ?? undefined;
     },
     async source(paths, commit) {
       await assertMayEdit();
