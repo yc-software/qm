@@ -250,7 +250,7 @@ describe("POST /v1/reach with files", () => {
     assert.equal(malformed.status, 400);
   });
 
-  it("refuses a Slack bot's turn a swarm computer it may not use, named by sandbox_id or as the default", async () => {
+  it("refuses a Slack bot's turn a swarm computer it may not use, named by sandbox_id or as the default", async (t) => {
     const scope = scopeId("personal", "U-carol");
     const resources = built.sandboxResources.forTurn({
       actorId: "U-carol",
@@ -277,7 +277,12 @@ describe("POST /v1/reach with files", () => {
         { text: "plan", recipient: "Alice", files, ...(sandboxId ? { sandbox_id: sandboxId } : {}) },
         {
           "x-agent-capability": await mintCapabilityToken(
-            { actorId: "U-carol", scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS, botActor },
+            {
+              actorId: "U-carol",
+              scopeId: scope,
+              exp: Date.now() + CAPABILITY_TTL_MS,
+              ...(botActor ? { botActor } : {}),
+            },
             SECRET,
           ),
         },
@@ -293,10 +298,11 @@ describe("POST /v1/reach with files", () => {
     assert.deepEqual(await readDelivered(((await person.json()) as any).deliveryId), ["plan.md:carol's plan\n"]);
     const previousDefault = (await resources.resolve(scope))?.id ?? null;
     const provision = built.sandbox.provision.bind(built.sandbox);
-    built.sandbox.provision = (...args) => {
-      built.sandbox.provision = provision;
-      return resources.setDefault("U-carol", scope, worker.id).then(() => provision(...args));
-    };
+    t.mock
+      .method(built.sandbox, "provision")
+      .mock.mockImplementationOnce((...args) =>
+        resources.setDefault("U-carol", scope, worker.id).then(() => provision(...args)),
+      );
     try {
       assert.match(((await (await send(true)).json()) as any).message, /plan\.md \(not found\)/);
       const botDefault = await send(true);

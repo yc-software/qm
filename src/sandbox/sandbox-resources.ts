@@ -19,7 +19,7 @@ import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import type { IsCurrentSharedScopeMember } from "../resolution/scope-membership.ts";
 import { intersectEgressPolicies } from "../resolution/egress-policy.ts";
 import { isOpenScopeMember } from "../resolution/sharing-access.ts";
-import type { SandboxBackendName } from "./sandbox-routing.ts";
+import { NoDefaultSandboxError, type SandboxBackendName } from "./sandbox-routing.ts";
 import type { Sandbox, AgentComputerSpec, ProvisionOptions, ComputerStatus, EgressEnforcement } from "./sandbox.ts";
 import { JOB_COMPUTER_SCOPE_PREFIX } from "./home-snapshot.ts";
 import { claimThenBind } from "../tenants/claim.ts";
@@ -89,6 +89,7 @@ export interface SandboxResources {
     jobOnly?: boolean,
     memoryGb?: number,
     swarmId?: string,
+    personUsed?: boolean,
   ): Promise<SandboxResource>;
   eachJobComputer(work: (computer: SandboxResource) => Promise<void>): Promise<void>;
   retireJobComputer(id: string, seenState: SandboxResource["state"]): Promise<void>;
@@ -156,11 +157,23 @@ export async function assertBotMayUseComputer(
   scopeId: ScopeId,
   sandboxId: string | undefined,
   botMayUse: ((resource: SandboxResource) => Promise<boolean>) | undefined,
-): Promise<SandboxResource | undefined> {
+): Promise<void> {
   if (!botMayUse) return;
   const resource = sandboxId ? await resources?.get(sandboxId) : await resources?.resolve(scopeId);
   if (resource && !(await botMayUse(resource))) throw new BotComputerRefusedError();
-  return resource ?? undefined;
+}
+
+export async function defaultComputer(
+  resources: SandboxResources | undefined,
+  scopeId: ScopeId,
+  botMayUse: ((resource: SandboxResource) => Promise<boolean>) | undefined,
+): Promise<SandboxResource | undefined> {
+  if (!resources) return;
+  const resource = await resources.resolve(scopeId);
+  if (!botMayUse) return resource ?? undefined;
+  if (!resource) throw new NoDefaultSandboxError();
+  if (!(await botMayUse(resource))) throw new BotComputerRefusedError();
+  return resource;
 }
 
 export function createSandboxResources(opts: {
@@ -369,7 +382,7 @@ export function createSandboxResources(opts: {
         providers: profiles(),
       };
     },
-    async create(actorId, scopeId, backend, name, reservationId, jobOnly, memoryGb, swarmId) {
+    async create(actorId, scopeId, backend, name, reservationId, jobOnly, memoryGb, swarmId, personUsed) {
       await initialize();
       await authorize(actorId, scopeId);
       if (!Object.hasOwn(opts.backends, backend) || !opts.backends[backend as SandboxBackendName])
@@ -394,6 +407,7 @@ export function createSandboxResources(opts: {
         ...(jobOnly ? { jobOnly } : {}),
         ...(memoryGb ? { memoryGb } : {}),
         ...(swarmId ? { swarmId } : {}),
+        ...(personUsed ? { personUsed } : {}),
       };
       return opts.lock.withLock(`sandbox-resource:${id}`, async () => {
         const existing = await opts.records.get(id);

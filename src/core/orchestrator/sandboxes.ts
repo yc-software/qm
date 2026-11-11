@@ -10,6 +10,7 @@ import {
   assertBotMayUseComputer,
   botMayUseComputers,
   createTurnSandboxAccess,
+  defaultComputer,
   preferredBackend,
   type SandboxAccessPlan,
   type SandboxResource,
@@ -86,7 +87,8 @@ interface TurnPool {
   audit: (action: string, handle?: SandboxHandle, extra?: Record<string, unknown>) => void;
   isolation: ChildIsolation | undefined;
   boundSandboxId: string | undefined;
-  assertDefaultUsable: (sandboxId?: string) => Promise<SandboxResource | undefined>;
+  assertDefaultUsable: (sandboxId?: string) => Promise<void>;
+  turnDefault: () => Promise<SandboxResource | undefined>;
   turnAccess: ProvisionOptions;
   scratchKey: () => string;
   holdResource: (handle: SandboxHandle) => Promise<void>;
@@ -216,6 +218,7 @@ async function openScoped(t: TurnPool, slot: Slot, eager: boolean): Promise<Sand
     isolation,
     boundSandboxId,
     assertDefaultUsable,
+    turnDefault,
     turnAccess,
     holdResource,
     notePersonUse,
@@ -235,7 +238,8 @@ async function openScoped(t: TurnPool, slot: Slot, eager: boolean): Promise<Sand
       scopeId: resolution.writableScopeId,
       backendScopeId: memoryScopeId,
     });
-  const sandboxId = (await assertDefaultUsable())?.id ?? boundSandboxId;
+  if (boundSandboxId) await assertDefaultUsable();
+  const sandboxId = boundSandboxId ?? (await turnDefault())?.id;
   const handle = await deps.sandbox.provision(resolution.writableScopeId, {
     ...(sandboxId ? { sandboxId } : {}),
     ...turnAccess,
@@ -358,8 +362,9 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   const botMayUse = input.botActor
     ? botMayUseComputers(deps.swarms, { actorId: actor.id, threadRef: session.threadRef, sessionId: session.id })
     : undefined;
-  const assertDefaultUsable = (sandboxId = boundSandboxId): Promise<SandboxResource | undefined> =>
+  const assertDefaultUsable = (sandboxId = boundSandboxId): Promise<void> =>
     assertBotMayUseComputer(deps.sandboxResources, resolution.writableScopeId, sandboxId, botMayUse);
+  const turnDefault = () => defaultComputer(deps.sandboxResources, resolution.writableScopeId, botMayUse);
   const personUsed = new Map<string, Promise<void>>();
   const notePersonUse = async (handle: SandboxHandle): Promise<void> => {
     const sandboxId = handle.resourceId ?? boundSandboxId;
@@ -467,6 +472,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     isolation,
     boundSandboxId,
     assertDefaultUsable,
+    turnDefault,
     turnAccess,
     scratchKey,
     holdResource,
@@ -482,6 +488,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   return {
     boundSandboxId,
     assertDefaultUsable,
+    turnDefault,
     workdir: isolation?.workdir,
     provision,
     provisionScratch,

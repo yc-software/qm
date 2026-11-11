@@ -39,13 +39,17 @@ export async function manageSandboxResources(ctx: ApiCtx): Promise<void> {
     }
     if (input.action !== "create" || typeof input.backend !== "string")
       throw new Error("choose create with backend, or default with sandboxId");
-    const created = await resources.create(
+    const record = await resources.create(
       actor.id,
       scopeId,
       input.backend,
       typeof input.name === "string" ? input.name : undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      true,
     );
-    const record = await resources.notePersonUse(created.id);
     audit(ctx, { principalId: actor.id, action: "sandbox.create", resource: record.id, scopeLabel: scopeId });
     return sendJson(ctx.res, 201, record);
   } catch (error) {

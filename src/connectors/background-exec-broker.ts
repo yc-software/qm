@@ -22,7 +22,7 @@ export interface BackgroundExecBrokerDeps {
   pollMs?: number;
   termGraceMs?: number;
   killGraceMs?: number;
-  assertComputerUsable?: (sandboxId: string | undefined) => Promise<unknown>;
+  assertComputerUsable?: (sandboxId: string | undefined) => Promise<void>;
 }
 
 export interface BackgroundStartResult {

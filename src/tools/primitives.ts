@@ -482,7 +482,7 @@ export interface ToolContextDeps {
     authorize?: (access: SandboxAccessPlan) => void,
   ) => Promise<SandboxHandle>;
   accessSandboxResource?: (id: string) => Promise<SandboxAccessPlan>;
-  assertDefaultSandboxUsable?: () => Promise<SandboxResource | undefined>;
+  defaultComputer?: () => Promise<SandboxResource | undefined>;
   boundSandboxId?: string;
   workdir?: string;
   listSkills?: (source?: string) => Promise<SkillResolution[]>;
@@ -811,7 +811,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         }
       : {}),
     async computerStatus(requested?: string): Promise<ComputerStatus> {
-      const sandboxId = requested ?? deps.boundSandboxId ?? (await deps.assertDefaultSandboxUsable?.())?.id;
+      const sandboxId = requested ?? deps.boundSandboxId ?? (await deps.defaultComputer?.())?.id;
       const probe = async (status: ComputerStatus, provision: () => Promise<SandboxHandle>) => {
         if (!status.provisioned || status.lifecycleState === "paused") return status;
         try {
@@ -837,12 +837,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return probe(await deps.sandbox.computerStatus(writableScopeId), deps.provision);
     },
     async restartComputer(requested?: string, memoryGb?: number): Promise<void> {
-      const sandboxId =
-        requested ??
-        deps.boundSandboxId ??
-        (memoryGb === undefined
-          ? (await deps.assertDefaultSandboxUsable?.())?.id
-          : (await deps.sandboxResources?.resolve(writableScopeId))?.id);
+      const sandboxId = requested ?? deps.boundSandboxId ?? (await deps.defaultComputer?.())?.id;
       if (sandboxId !== undefined) {
         const resources = deps.sandboxResources;
         if (!resources) throw new Error("sandbox inventory unavailable");
