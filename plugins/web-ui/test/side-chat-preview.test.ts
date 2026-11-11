@@ -12,7 +12,7 @@ async function until(check: () => boolean): Promise<void> {
   assert.fail("Side chat did not reach the expected state");
 }
 
-test("clicking a loaded preview opens its conversation before the refresh finishes", async () => {
+test("side-chat previews show pending work and open loaded replies immediately", async () => {
   const source: CoreSession = {
     id: "source",
     threadRef: "web:tester:source",
@@ -36,6 +36,8 @@ test("clicking a loaded preview opens its conversation before the refresh finish
     release = resolve;
   });
   let refreshing = false;
+  let working = false;
+  let narration = "";
   const h = await harness({
     path: "/s/source",
     session: source,
@@ -45,11 +47,10 @@ test("clicking a loaded preview opens its conversation before the refresh finish
       if (!path.startsWith("/api/sessions/side?")) return undefined;
       const response = () =>
         Response.json({
-          session: side,
-          items: [
-            ...items,
-            item("AgentMessage", { seq: 1, createdAt: Date.now(), text: "The queue survives restarts." }),
-          ],
+          session: { ...side, working },
+          items: working
+            ? [...items, item("AgentMessage", { seq: 1, variant: "narration", text: narration })]
+            : [...items, item("AgentMessage", { seq: 1, createdAt: Date.now(), text: "The queue survives restarts." })],
         });
       if (path === "/api/sessions/side?tailTurns=1") return response();
       refreshing = true;
@@ -69,6 +70,14 @@ test("clicking a loaded preview opens its conversation before the refresh finish
       () => document.querySelector(".side-chat-conversation")?.textContent?.includes("survives restarts") === true,
     );
     assert.equal(document.querySelector(".side-chat-marker")?.getAttribute("aria-expanded"), "true");
+    working = true;
+    document
+      .querySelector(".side-chat-panel")!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await until(() => document.querySelector(".side-chat-preview")?.textContent?.trim() === "Working…");
+    narration = "On it: I will build both halves and test them.";
+    h.visibleConversation().onDelivery(side.threadRef);
+    await until(() => document.querySelector(".side-chat-preview")?.textContent?.trim() === narration);
   } finally {
     release();
     await h.close();

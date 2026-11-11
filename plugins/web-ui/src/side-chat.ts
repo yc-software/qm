@@ -3,7 +3,7 @@ import { cachedTranscript, storeTranscript } from "./transcript-cache";
 import { passageOccurrence, passageRange } from "./passage-range";
 import { html, nothing } from "lit";
 import { markdown } from "./message-markdown";
-import { isHidden } from "./items";
+import { isHidden, isNarration, retractedReason } from "./items";
 import { ref } from "lit/directives/ref.js";
 import { ArrowUp, ArrowUpRight, Maximize2, Minimize2, Minus, MessageSquare, X } from "lucide";
 import { tip } from "./tooltip";
@@ -215,10 +215,13 @@ export function createSideChatController(ctx: ConvCtx) {
         (item) =>
           item.seq > (session.forkBoundarySeq ?? -1) &&
           item.kind === "AgentMessage" &&
-          item.variant === null &&
+          (item.variant === null || isNarration(item)) &&
+          !retractedReason(item) &&
           !isHidden(item),
       );
-      preview.text = replies.map((item) => item.text ?? "").join("\n\n");
+      preview.text =
+        replies.map((item) => item.text ?? "").join("\n\n") ||
+        ((page.session ?? session).working ? "Working…" : "No reply yet.");
     } catch (cause) {
       reportHandledError("web:side_chat_preview", cause);
       if (sourceId !== id || previews.get(session.id) !== preview) return;
@@ -652,11 +655,7 @@ export function createSideChatController(ctx: ConvCtx) {
               ${
                 active?.id === chat.id
                   ? this.card()
-                  : html`
-                      <div class="side-chat-preview">
-                        ${markdown(previews.get(chat.id)?.text || "Start the conversation about this passage.")}
-                      </div>
-                    `
+                  : html` <div class="side-chat-preview">${markdown(previews.get(chat.id)?.text || "Loading…")}</div> `
               }
             </div>`,
         )}
