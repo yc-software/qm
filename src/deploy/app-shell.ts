@@ -310,6 +310,8 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
     stage = "waiting for fonts";
     if (doc.fonts) await doc.fonts.ready;
     await new Promise((r) => w.requestAnimationFrame(() => w.requestAnimationFrame(r)));
+    stage = "checking the page's images";
+    const brokenImages = (await Promise.all([...doc.images].filter((i) => i.complete && i.currentSrc).map((i) => i.decode().then(() => null, () => i.currentSrc)))).filter(Boolean);
     stage = "loading the capture library";
     const lib = await loadCapture();
     const width = app.clientWidth;
@@ -333,7 +335,7 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
       ok: true, image: dataUrl.slice(dataUrl.indexOf(",") + 1), mimeType: "image/jpeg",
       url: w.location.href, width, height, scrollY: Math.round(sy),
       dark: !!(w.matchMedia && w.matchMedia("(prefers-color-scheme: dark)").matches),
-      version: base,
+      version: base, brokenImages,
     };
   };
   const answerShot = async (id, deadline) => {
@@ -349,10 +351,7 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
   };
 ${opts.annotationsEnabled ? ANNOTATE_JS : ""}
   upd.addEventListener("click", () => {
-    void fetch("/__claw__/version", { cache: "no-store" })
-      .then((r) => r.json())
-      .then((d) => reloadApp(typeof d.version === "number" ? d.version + ":" + (d.live ?? "") : base))
-      .catch(() => reloadApp(base));
+    void checkVersion(true).catch(() => reloadApp(base));
   });
 })();
 </script>

@@ -1,11 +1,11 @@
+import { desktopComputerTool } from "../../chassis/src/desktop-computer.ts";
 import { fetchServerSentEvents } from "@tanstack/ai-client";
 import { errMessage } from "../../chassis/src/errors.ts";
 import type { RunActivityEntry } from "./items.ts";
 import { createClientToolExecutor, postClientResult, type ClientToolResult } from "./client-tools.ts";
 
-type Result = ClientToolResult;
 type Desk = {
-  call(args: unknown, clientId?: string, deadline?: number): Promise<Result>;
+  call(args: unknown, clientId?: string, deadline?: number): Promise<ClientToolResult>;
   stop?(clientId: string): Promise<unknown>;
 };
 export type DesktopRun = {
@@ -34,7 +34,7 @@ export function desktopTurnId(): string | undefined {
   return desktop() ? crypto.randomUUID() : undefined;
 }
 
-async function executeComputer(desk: Desk, raw: unknown, deadline?: number): Promise<Result> {
+async function executeComputer(desk: Desk, raw: unknown, deadline?: number): Promise<ClientToolResult> {
   try {
     return await desk.call(raw, undefined, deadline);
   } catch (error) {
@@ -42,15 +42,17 @@ async function executeComputer(desk: Desk, raw: unknown, deadline?: number): Pro
   }
 }
 
+const WORK_MARGIN_MS = 5_000;
+
 export function createDesktopExecutor(
   clientId: string,
   desk: Desk,
-  send: (callId: string, result: Result) => Promise<unknown>,
+  send: (callId: string, result: ClientToolResult) => Promise<unknown>,
 ) {
   const execute = createClientToolExecutor(
-    "desktop",
-    async (args, createdAt) =>
-      !createdAt || Date.now() - createdAt > 55_000 ? null : executeComputer(desk, args, createdAt + 50_000),
+    desktopComputerTool.name,
+    desktopComputerTool.timeoutMs,
+    (args, answerBy) => executeComputer(desk, args, answerBy - WORK_MARGIN_MS),
     send,
   );
   return async (run: DesktopRun): Promise<void> => {
