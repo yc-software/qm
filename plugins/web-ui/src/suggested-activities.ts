@@ -113,6 +113,7 @@ export function suggestedActivities(
               <button
                 type="button"
                 class="suggested-activity"
+                title=${activity.title}
                 ?disabled=${collapsed}
                 @click=${() => onSelect(activity)}
               >

@@ -1817,14 +1817,13 @@ export function createChatSurface(
                 ${chatState.earlierCount > 0 ? earlierNotice() : nothing} ${messageContent} ${waitingSteerRows(agent)}
                 ${glanceTier ? nothing : liveWorkStatus(agent)}
                 ${emptyChat && !isNewUser && !editingApp && !showWelcome ? html`<h1 class="chat-cta">${chatCta()}</h1>` : nothing}
-                ${ctx.pane ? suggestions : nothing}
                 ${showStateError(messages, agent.state.errorMessage) ? html`<div class="composer-error inline">${agent.state.errorMessage}</div>` : nothing}
               </div>
             </section>
             <div class="chat-bottom-dock">
               ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)} ${subagentStrip()}
               ${swarmUi.strip(chatState.sessionId)} ${backgroundActivityStrip()} ${ctx.composer.composerForm(agent)}
-              ${ctx.pane ? nothing : suggestions} ${scrollBottomButton()}
+              ${suggestions} ${scrollBottomButton()}
             </div>
           </div>
           ${sideChats.view()}

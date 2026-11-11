@@ -23,12 +23,14 @@ import {
   Lock,
   Mail,
   MailOpen,
+  MessageSquare,
   Palette,
   Pencil,
   Pin,
   PinOff,
   Plus,
   RefreshCw,
+  Search,
   Smile,
   SquareTerminal,
   Users,
@@ -92,7 +94,7 @@ import { errMessage, swallow, swallowAs } from "../../chassis/src/errors";
 import { copyText, menuSelect, relTime, sheenLabel, workingWave } from "./ui";
 import { slackMark } from "./slack-mark";
 import { icon } from "./icons";
-import { listPageTpl } from "./list-page";
+import { listPageTpl, type ListEmptyOpts } from "./list-page";
 import {
   contextsState,
   ensureContexts,
@@ -808,6 +810,14 @@ function reloadChatsPage(): void {
   void loadChatsPage(false);
 }
 
+function clearChatsFilters(): void {
+  chatsPageQuery = "";
+  chatsPageStatus = "active";
+  chatsPageSurface = "all";
+  chatsPageScope = null;
+  reloadChatsPage();
+}
+
 export function drawChatsPage(): void {
   if (appState.currentView !== "chats" || !appState.mainEl || splitState.active) return;
   mainConversation().state.host = null;
@@ -835,10 +845,28 @@ export function drawChatsPage(): void {
         </button>
       </div>`,
     );
-  let empty = "No conversations yet. Start a new chat.";
-  if (chatsPageLoading && chatsPageRows.length === 0) empty = "Loading conversations…";
-  else if (chatsPageScope || chatsPageQuery.trim() || chatsPageStatus !== "active" || chatsPageSurface !== "all") {
-    empty = "No conversations match.";
+  const chatsFiltersActive =
+    Boolean(chatsPageScope) ||
+    Boolean(chatsPageQuery.trim()) ||
+    chatsPageStatus !== "active" ||
+    chatsPageSurface !== "all";
+  let empty: string | TemplateResult | undefined;
+  let emptyState: ListEmptyOpts | undefined = {
+    icon: MessageSquare,
+    title: "No conversations yet",
+    body: "Start a new chat and the agent jumps in.",
+    action: { label: "New chat", onClick: () => startNewChat() },
+  };
+  if (chatsPageLoading && chatsPageRows.length === 0) {
+    empty = "Loading conversations…";
+    emptyState = undefined;
+  } else if (chatsFiltersActive) {
+    emptyState = {
+      icon: Search,
+      title: "No conversations match",
+      body: "Try a different search, or clear the filters to see everything.",
+      action: { label: "Clear filters", onClick: clearChatsFilters },
+    };
   }
   render(
     listPageTpl({
@@ -904,6 +932,7 @@ export function drawChatsPage(): void {
       </div>`,
       rows,
       empty,
+      emptyState,
     }),
     chatsPageHost,
   );

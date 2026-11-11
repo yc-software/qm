@@ -1,12 +1,12 @@
 import { openDeploymentPermissions } from "./deploy-permissions";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
-import { Archive, Check, Copy, ExternalLink, Plus, RotateCcw, Trash2, X } from "lucide";
+import { Archive, Check, Copy, ExternalLink, Plus, Rocket, RotateCcw, Trash2, X } from "lucide";
 import { api, withBase } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { copyText, relTime } from "./ui";
 import { icon } from "./icons";
-import { listBackLink, listPageTpl } from "./list-page";
+import { listBackLink, listPageTpl, type ListEmptyOpts } from "./list-page";
 import { contextsState, ensureContexts, scopeChip } from "./contexts";
 import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { appState } from "./shell";
@@ -199,11 +199,25 @@ function drawDeploysPage(): void {
   const allForTab = deployList.filter(
     (d) => deploymentTab(d, viewer) === deployTab && deploymentInScope(d, deployScope),
   );
-  let empty = deploymentTabEmptyMessage(deployTab);
-  if (!deployList.length && deployNotices.list) empty = deployNotices.list;
-  else if (deployLoading && deployList.length === 0) empty = "Loading apps…";
-  else if (deployQuery && allForTab.length) empty = "No apps match your search.";
-  else if (deployScope) empty = "No apps in this context.";
+  let empty: string | TemplateResult = deploymentTabEmptyMessage(deployTab);
+  let emptyState: ListEmptyOpts | undefined = {
+    icon: Rocket,
+    title: "No apps yet",
+    body: "Deploy an app from a conversation and it shows up here.",
+  };
+  if (!deployList.length && deployNotices.list) {
+    empty = deployNotices.list;
+    emptyState = undefined;
+  } else if (deployLoading && deployList.length === 0) {
+    empty = "Loading apps…";
+    emptyState = undefined;
+  } else if (deployQuery && allForTab.length) {
+    empty = "No apps match your search.";
+    emptyState = undefined;
+  } else if (deployScope) {
+    empty = "No apps in this context.";
+    emptyState = undefined;
+  }
   const content = deployList.length
     ? [
         deployTabs(),
@@ -232,6 +246,7 @@ function drawDeploysPage(): void {
         },
         rows: content,
         empty,
+        emptyState,
       })}
       ${archiveCandidate ? archiveDialog(archiveCandidate) : nothing} ${deployToast ? undoToast(deployToast) : nothing}
     `,

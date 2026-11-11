@@ -381,3 +381,96 @@ test("New session starts a personal chat even while a scoped chat is open", asyn
     assert.equal(canvas.currentScope(), null);
   });
 });
+
+test("middle-click closes the clicked tab and keeps the rest", async () => {
+  await withCanvas(async (canvas) => {
+    await canvas.split();
+    canvas.newChat();
+    canvas.newChat();
+    canvas.newChat();
+    assert.deepEqual(canvas.tabCounts(), [1, 1, 3]);
+    const group = document.querySelectorAll(".dv-groupview").item(2)!;
+    const tabs = group.querySelectorAll(".dv-tab");
+    assert.equal(tabs.length, 3);
+    tabs.item(0)!.dispatchEvent(new MouseEvent("auxclick", { bubbles: true, button: 1 }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(canvas.tabCounts(), [1, 1, 2]);
+    assert.equal(canvas.panes(), 4);
+  });
+});
+
+test("ctrl+shift+] and ctrl+shift+[ cycle the focused pane's tabs", async () => {
+  await withCanvas(async (canvas) => {
+    await canvas.split();
+    canvas.newChat();
+    canvas.newChat();
+    canvas.newChat();
+    assert.deepEqual(canvas.tabCounts(), [1, 1, 3]);
+    const start = canvas.activeTabs()[2];
+    const press = (code: string) =>
+      document.dispatchEvent(
+        new window.KeyboardEvent("keydown", { code, ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true }),
+      );
+    press("BracketRight");
+    assert.deepEqual(canvas.activeTabs(), [0, 0, (start + 1) % 3]);
+    press("BracketLeft");
+    assert.deepEqual(canvas.activeTabs(), [0, 0, start]);
+    press("KeyK");
+    assert.deepEqual(canvas.activeTabs(), [0, 0, start], "unrelated keys do not cycle");
+    const platform = Object.getOwnPropertyDescriptor(window.navigator, "platform");
+    Object.defineProperty(window.navigator, "platform", { value: "MacIntel", configurable: true });
+    try {
+      const macPress = (code: string, mods: KeyboardEventInit) =>
+        document.dispatchEvent(
+          new window.KeyboardEvent("keydown", { code, shiftKey: true, bubbles: true, cancelable: true, ...mods }),
+        );
+      macPress("BracketRight", { ctrlKey: true });
+      assert.deepEqual(canvas.activeTabs(), [0, 0, start], "ctrl chord is inert on macOS");
+      macPress("BracketRight", { metaKey: true });
+      assert.deepEqual(canvas.activeTabs(), [0, 0, (start + 1) % 3], "cmd+shift+] cycles on macOS");
+      macPress("BracketLeft", { metaKey: true });
+      assert.deepEqual(canvas.activeTabs(), [0, 0, start]);
+    } finally {
+      if (platform) Object.defineProperty(window.navigator, "platform", platform);
+    }
+  });
+});
+
+test("overflow dropdown gets button semantics and Enter stays inside the dock", async () => {
+  await withCanvas(async () => {
+    const dockEl = document.querySelector<HTMLElement>(".split-dock")!;
+    assert.ok(dockEl, "the split dock is mounted");
+    const drop = document.createElement("div");
+    drop.className = "dv-tabs-overflow-dropdown-default";
+    const count = document.createElement("span");
+    count.textContent = "2";
+    drop.appendChild(count);
+    dockEl.appendChild(drop);
+    const menu = document.createElement("div");
+    menu.className = "dv-tabs-overflow-container";
+    const item = document.createElement("div");
+    item.className = "dv-tab";
+    menu.appendChild(item);
+    dockEl.appendChild(menu);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(drop.getAttribute("role"), "button");
+    assert.equal(drop.getAttribute("aria-label"), "Show 2 hidden tabs");
+    assert.equal(drop.tabIndex, 0);
+    assert.equal(menu.getAttribute("role"), "menu");
+    assert.equal(menu.getAttribute("aria-label"), "Hidden tabs");
+    assert.equal(item.getAttribute("role"), "menuitem");
+    let windowSawEnter = false;
+    const spy = () => {
+      windowSawEnter = true;
+    };
+    window.addEventListener("keydown", spy);
+    let clicked = 0;
+    drop.addEventListener("click", () => {
+      clicked += 1;
+    });
+    drop.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    window.removeEventListener("keydown", spy);
+    assert.equal(clicked, 1);
+    assert.equal(windowSawEnter, false, "Enter on the overflow control must not reach window-level popup handlers");
+  });
+});

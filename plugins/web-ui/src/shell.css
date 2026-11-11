@@ -3448,84 +3448,86 @@ qm-markdown .tok-in {
   }
 }
 .suggested-activities {
-  display: grid;
-  grid-template-rows: 1fr;
+  position: absolute;
+  bottom: calc(100% + 12px);
+  left: 0;
+  right: 0;
   width: min(var(--content-w), calc(100% - 32px));
-  margin: 10px auto max(18px, calc(10px + env(safe-area-inset-bottom)));
-  padding: 0 2px;
+  margin-inline: auto;
   opacity: 1;
   visibility: visible;
   transition:
-    grid-template-rows 220ms ease,
-    margin-top 220ms ease,
-    margin-bottom 220ms ease,
     opacity 160ms ease,
+    transform 160ms ease,
     visibility 0s;
 }
 .suggested-activities.is-empty {
-  margin-top: 0;
-  margin-bottom: 0;
+  display: none;
 }
 .suggested-activities-list {
-  min-height: 0;
-  overflow: hidden;
+  display: flex;
+  gap: 8px;
+  padding: 3px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+}
+.suggested-activities-list::-webkit-scrollbar {
+  display: none;
 }
 .suggested-activities.is-collapsed {
-  grid-template-rows: 0fr;
-  margin-top: 0;
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
-  transition:
-    grid-template-rows 220ms ease,
-    margin-top 220ms ease,
-    opacity 140ms ease,
-    visibility 0s 220ms;
-}
-.empty-chat:has(.suggested-activities:not(.is-empty)) .composer-wrap {
-  margin-bottom: 0;
-}
-.empty-chat:has(.suggested-activities:not(.is-empty)) .chat-cta {
   transform: translateY(8px);
-}
-.custom-chat-shell.in-pane.empty-chat:has(.suggested-activities:not(.is-empty)) > .chat-scroll {
-  padding-bottom: 0;
-}
-.message-stack > .suggested-activities {
-  margin-bottom: 6px;
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease,
+    visibility 0s 160ms;
 }
 @keyframes suggested-activity-enter {
   from {
-    grid-template-rows: 0fr;
     opacity: 0;
+    transform: translateY(6px) scale(0.96);
   }
 }
 @keyframes suggested-activity-leave {
   to {
-    grid-template-rows: 0fr;
     opacity: 0;
+    transform: translateY(4px) scale(0.96);
   }
 }
 .suggested-activity-row {
-  display: grid;
-  grid-template-rows: 1fr;
+  flex: 0 0 auto;
+  min-width: 0;
 }
 .suggested-activity-row.is-entering {
-  animation: suggested-activity-enter 220ms ease;
+  animation: suggested-activity-enter 200ms ease;
 }
 .suggested-activity-row.is-leaving {
-  animation: suggested-activity-leave 220ms ease forwards;
+  animation: suggested-activity-leave 200ms ease forwards;
   pointer-events: none;
 }
 .suggested-activity-row-inner {
   display: flex;
   align-items: center;
-  min-height: 0;
-  overflow: hidden;
-  border-radius: 12px;
+  gap: 2px;
+  min-height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--background);
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.05),
+    0 8px 20px rgb(0 0 0 / 0.08);
+  transition:
+    border-color 120ms ease,
+    background 120ms ease,
+    box-shadow 120ms ease;
 }
 .suggested-activity-row-inner:hover {
-  background: var(--muted);
+  border-color: color-mix(in srgb, var(--foreground) 18%, var(--border));
+  background: var(--secondary);
 }
 @media (prefers-reduced-motion: reduce) {
   .suggested-activities,
@@ -3540,19 +3542,22 @@ qm-markdown .tok-in {
   }
 }
 .suggested-activity {
-  display: flex;
-  flex: 1;
+  display: inline-flex;
+  flex: 0 1 auto;
   align-items: center;
-  gap: 11px;
+  gap: 7px;
   min-width: 0;
-  min-height: 38px;
-  padding: 8px 10px;
+  max-width: 300px;
+  min-height: 34px;
+  padding-block: 4px;
+  padding-inline: 13px 4px;
   border: 0;
-  border-radius: 12px;
+  border-radius: 999px;
   background: transparent;
-  color: var(--muted-foreground);
-  text-align: left;
+  color: var(--foreground);
   font: inherit;
+  text-align: left;
+  white-space: nowrap;
   cursor: pointer;
 }
 .suggested-activity-dismiss {
@@ -3560,27 +3565,29 @@ qm-markdown .tok-in {
   flex-shrink: 0;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
-  margin-right: 5px;
+  width: 26px;
+  height: 26px;
+  margin-inline-end: 5px;
   padding: 0;
   border: 0;
-  border-radius: 8px;
+  border-radius: 999px;
   background: transparent;
   color: var(--muted-foreground);
-  opacity: 0.3;
+  opacity: 0.4;
   cursor: pointer;
   transition:
     opacity 120ms ease,
-    color 120ms ease;
+    color 120ms ease,
+    background 120ms ease;
 }
 .suggested-activity-row-inner:hover .suggested-activity-dismiss,
 .suggested-activity-dismiss:focus-visible {
-  opacity: 0.75;
+  opacity: 0.85;
 }
 .suggested-activity-dismiss:hover,
 .suggested-activity-dismiss:focus-visible {
   color: color-mix(in srgb, var(--muted-foreground) 70%, var(--foreground));
+  background: color-mix(in srgb, var(--muted-foreground) 12%, transparent);
 }
 .suggested-activity-dismiss:focus-visible {
   outline: 2px solid var(--primary);
@@ -3591,22 +3598,22 @@ qm-markdown .tok-in {
   outline-offset: -2px;
 }
 .suggested-activity-title {
-  font-size: var(--font-14);
-  line-height: 1.4;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-13);
+  line-height: 1.35;
   letter-spacing: -0.1px;
-  overflow-wrap: anywhere;
-}
-.dark .suggested-activity-title {
-  color: rgb(94 112 130);
 }
 .suggested-activity-icon {
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  width: 20px;
+  width: 18px;
   font:
-    17px/1 "Apple Color Emoji",
+    16px/1 "Apple Color Emoji",
     "Segoe UI Emoji",
     "Noto Color Emoji",
     sans-serif;
@@ -3618,14 +3625,8 @@ qm-markdown .tok-in {
   .suggested-activity-dismiss {
     width: 44px;
     height: 44px;
-    margin-right: 0;
+    margin-inline-end: 2px;
     opacity: 0.55;
-  }
-}
-@media (max-width: 860px) {
-  :where(html:not(.desktop-embed)) .suggested-activities {
-    padding: 0 2px;
-    margin-top: 12px;
   }
 }
 .custom-chat-shell:has(> .chat-scroll):not(.empty-chat) > .chat-bottom-dock {
@@ -4511,6 +4512,41 @@ summary.stopped-head:focus-visible {
 }
 .empty.compact {
   padding: 24px;
+}
+.list-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  max-width: 380px;
+  margin: 56px auto 0;
+  padding: 8px 24px 32px;
+  text-align: center;
+}
+.list-empty-state-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--secondary);
+  color: var(--muted-foreground);
+}
+.list-empty-state-title {
+  font-size: var(--font-15);
+  font-weight: 600;
+  color: var(--foreground);
+}
+.list-empty-state-body {
+  font-size: var(--font-13);
+  line-height: 1.55;
+  color: var(--muted-foreground);
+}
+.list-empty-state-action {
+  margin-top: 12px;
 }
 
 .btn {
@@ -7909,6 +7945,7 @@ h3.ambient-field-label {
   display: flex;
   align-items: center;
   margin-right: 4px;
+  transition: background-color 120ms ease;
 }
 
 .dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .split-pane-title {
@@ -8095,6 +8132,97 @@ h3.ambient-field-label {
 
 .split-canvas:not(.single-pane) .dv-tabs-and-actions-container .icon-btn:hover {
   color: var(--foreground);
+}
+
+.dockview-theme-qm .dv-tab:focus::after,
+.dockview-theme-qm .dv-tab:focus-within::after {
+  outline: 2px solid var(--primary) !important;
+  border-radius: var(--radius-sm);
+}
+
+.dockview-theme-qm .dv-tabs-overflow-dropdown-root {
+  display: flex;
+  align-items: center;
+  align-self: center;
+  height: var(--split-tab-h);
+}
+
+.dockview-theme-qm .dv-tabs-overflow-dropdown-default {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 100%;
+  margin: 0;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--secondary);
+  color: var(--muted-foreground);
+  font-size: var(--font-12-5);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition:
+    color 120ms ease,
+    background 120ms ease,
+    border-color 120ms ease;
+}
+
+.dockview-theme-qm .dv-tabs-overflow-dropdown-default:hover {
+  background: color-mix(in srgb, var(--foreground) 8%, var(--secondary));
+  color: var(--foreground);
+}
+
+.dockview-theme-qm .dv-tabs-overflow-dropdown-default:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+
+.dockview-theme-qm .dv-tabs-overflow-container {
+  --dv-tab-divider-color: var(--border);
+  min-width: 200px;
+  max-width: 320px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--background);
+  box-shadow:
+    0 10px 32px rgb(0 0 0 / 0.16),
+    0 2px 8px rgb(0 0 0 / 0.1);
+}
+
+.dockview-theme-qm .dv-tabs-overflow-container .dv-tab {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  height: auto;
+  min-height: 34px;
+  margin: 0;
+  padding: 5px 9px;
+  border-radius: var(--radius-sm);
+}
+
+.dockview-theme-qm .dv-tabs-overflow-container .dv-tab.dv-inactive-tab {
+  background: transparent;
+}
+
+.dockview-theme-qm .dv-tabs-overflow-container .dv-tab:hover {
+  background: var(--secondary);
+}
+
+.dockview-theme-qm .dv-tabs-overflow-container .dv-tab.dv-active-tab {
+  background: var(--conversation-hover);
+}
+
+.dockview-theme-qm .dv-tabs-overflow-container .dv-tab:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+
+.dockview-theme-qm .dv-tabs-overflow-container .split-pane-title {
+  font-size: var(--font-13);
+  font-weight: 500;
 }
 
 .split-pane-content {
@@ -9264,7 +9392,15 @@ h3.ambient-field-label {
   padding: 6px 10px 14px;
 }
 .inbox-zero {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   margin-top: 18px;
+}
+.inbox-zero svg {
+  flex-shrink: 0;
+  color: var(--muted-foreground);
 }
 .inbox-list {
   display: flex;

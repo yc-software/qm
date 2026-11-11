@@ -1,11 +1,11 @@
 import { LOOP_ICONS, loopIcon, readLoopIcon } from "./loop-icon";
 import { html, nothing, render, type TemplateResult } from "lit";
-import { CheckCircle2, ChevronDown, ChevronRight, CornerUpLeft, Pause, Play, Zap } from "lucide";
+import { CheckCircle2, ChevronDown, ChevronRight, CornerUpLeft, Pause, Play, Repeat, Zap } from "lucide";
 import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { fieldSelect } from "./ui";
 import { icon } from "./icons";
-import { listBackLink, listPageTpl } from "./list-page";
+import { listBackLink, listPageTpl, type ListEmptyOpts } from "./list-page";
 import { appState, can } from "./shell";
 import { tip } from "./tooltip";
 
@@ -910,14 +910,25 @@ function paint(): void {
     render(activeDetail ? detailTpl(activeDetail) : html`<p class="list-empty">Loading…</p>`, loopsHost);
     return;
   }
+  let empty: string | TemplateResult | undefined;
+  let emptyState: ListEmptyOpts | undefined = {
+    icon: Repeat,
+    title: "No loops yet",
+    body: "Ask the agent to set one up. The define-loop skill walks through it, shadow run first.",
+  };
+  if (loopsLoading) {
+    empty = "Loading…";
+    emptyState = undefined;
+  } else if (loopsNotice) {
+    empty = loopsNotice;
+    emptyState = undefined;
+  }
   render(
     listPageTpl({
       title: "Loops",
       rows: loopList.map(loopRow),
-      empty: loopsLoading
-        ? "Loading…"
-        : (loopsNotice ??
-          "No loops yet. Ask the agent to set one up. The define-loop skill walks through it, shadow run first."),
+      empty,
+      emptyState,
     }),
     loopsHost,
   );
