@@ -77,6 +77,12 @@ export const DEPLOYMENT_TABLES: PgMigrationDefinition[] = [
     ],
   },
   inboundIndexes("deployments", ["name"]),
+  {
+    id: "durable-map/deployments/0030-page-views-by-viewer",
+    statements: [
+      `CREATE INDEX CONCURRENTLY IF NOT EXISTS app_page_views_by_viewer ON app_page_views(tenant_id, viewer, deployment_id, at DESC)`,
+    ],
+  },
 ];
 
 export type AppViewAuthMode = "signed_in" | "public" | "app_only";
@@ -94,6 +100,7 @@ export interface AppPageView {
 
 export interface AppPageViewLog {
   record(view: AppPageView): Promise<void>;
+  lastViews(viewer: string): Promise<Map<string, number>>;
 }
 
 const MAX_PATH = 2048;
@@ -139,6 +146,13 @@ export function createPostgresAppPageViewLog(connectionString: string): AppPageV
       } finally {
         inFlight--;
       }
+    },
+    async lastViews(viewer) {
+      const rows = await q(
+        "SELECT deployment_id, max(at) AS at FROM app_page_views WHERE viewer = $1 GROUP BY deployment_id",
+        [viewer],
+      );
+      return new Map(rows.map((r) => [String(r.deployment_id), Number(r.at)]));
     },
   };
 }

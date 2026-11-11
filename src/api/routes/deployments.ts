@@ -20,7 +20,7 @@ import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.
 import { frameAncestorsDirective, sendJson, UNTRUSTED_CONTENT_SANDBOX_CSP, verifyOrReject } from "../http.ts";
 import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
 import { audit, authorizeAdmin, exportTokenAccepted, isObj, orgScope } from "./shared.ts";
-import { scopeId, type Permission } from "../../types.ts";
+import { personalScope, scopeId, type Permission } from "../../types.ts";
 import { tenantOf, type ApiCtx, type BaseCtx, type Route } from "./route.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
 import { verifyDeployGitAccess, viewerIdentityKey } from "../../deploy/access-token.ts";
@@ -1600,9 +1600,10 @@ async function visibleDeploymentsExport(ctx: BaseCtx): Promise<void> {
   const requested = url.searchParams.get("principalId")?.trim();
   if (!requested) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
   const principalId = canonicalPerson(requested);
-  const [visible, all] = await Promise.all([
+  const [visible, all, viewed] = await Promise.all([
     app.listDeploymentsForViewer({ actorId: principalId }),
     app.listDeployments(),
+    deps.appPageViews?.lastViews(principalId) ?? new Map<string, number>(),
   ]);
   const byId = new Map(all.map((d) => [d.id, d]));
   const deployments = visible
@@ -1613,9 +1614,11 @@ async function visibleDeploymentsExport(ctx: BaseCtx): Promise<void> {
       ...(d.displayName ? { displayName: d.displayName } : {}),
       url: appUrlOf(byId.get(d.id) ?? d, { sharedWebUrl: deps.portalUrl, appsDomain: deps.deployAppsDomain }) ?? null,
       createdBy: d.createdBy,
+      owned: d.ownerScopeId === personalScope(principalId) || d.createdBy === principalId,
       permission: d.permission,
       ...(d.updatedAt !== undefined ? { updatedAt: d.updatedAt } : {}),
       ...(d.lastAccessAt !== undefined ? { lastAccessAt: d.lastAccessAt } : {}),
+      ...(viewed.has(d.id) ? { viewedAt: viewed.get(d.id) } : {}),
     }));
   audit(ctx, {
     principalId: VISIBLE_DEPLOYMENTS_PRINCIPAL,
