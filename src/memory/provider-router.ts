@@ -10,7 +10,7 @@ import {
   resolveIds,
 } from "./memory-service.ts";
 import { MemoryForgetRefused, type MemoryCandidate } from "./facts.ts";
-import { changeFailure, failedOutcome, forgetFinished, strictFailure, withEnvelope } from "./provider-outcome.ts";
+import { changeFailure, failedOutcome, forgetKnown, strictFailure, withEnvelope } from "./provider-outcome.ts";
 import { OutsideAudience, ownPrivateConversation } from "../directory/person.ts";
 
 export type MemoryCapturePolicy = "off" | "explicit" | "automatic";
@@ -235,7 +235,7 @@ export function createRoutedMemoryService(opts: {
         );
         if (error) opts.onError?.(error, brain, "forget");
       }
-      if (manager?.delete && forgetFinished(settled)) await manager.delete(scopeId, notebookIds, by, context);
+      if (manager?.delete && forgetKnown(settled)) await manager.delete(scopeId, notebookIds, by, context);
     },
 
     async metadata() {
