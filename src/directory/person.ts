@@ -46,6 +46,14 @@ export function attestableAudience(actorId: string | undefined, scope: string | 
   return kind === "personal" && !isSystemActor(actorId) && samePerson(actorId, ref);
 }
 
+export function ownPrivateConversation(
+  actorId: string | undefined,
+  scope: string | undefined,
+  audienceScope: string | undefined,
+): boolean {
+  return attestableAudience(actorId, scope) && attestableAudience(actorId, audienceScope);
+}
+
 export type AttestAudience = "personal" | "any";
 
 export function attestsInAudience(

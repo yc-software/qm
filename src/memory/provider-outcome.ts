@@ -49,8 +49,8 @@ export class MemoryProviderDisabled extends Error {
 
 export class MemoryWriteUnconfirmed extends Error {
   readonly code: string;
-  constructor(code: string, cause?: unknown) {
-    super(`memory provider didn't confirm the write (${code})`, { cause });
+  constructor(code: string) {
+    super(`memory provider didn't confirm the write (${code})`);
     this.code = code;
   }
 }
@@ -119,7 +119,7 @@ function problemOf(outcome: MemoryProviderOutcome, operation: ProviderOperation)
         detail: `Memory provider ${provider} refused ${asked}${reason}${operation === "search" ? "" : `, so ${effect}`}.`,
         fix:
           forget && code === "actor_not_attested"
-            ? `On ${provider}'s host, list forget_fact and get_write_request in QM's client's --attest-ops (${FORGET_DOCS}).`
+            ? `On ${provider}'s host, let QM's client attest forgetting with --attest-ops (${FORGET_DOCS}).`
             : deniedFix(provider, code),
       };
     case "timed_out":
@@ -240,6 +240,6 @@ export async function forgetFacts(
   const { outcomes, problems } = await withProviders("forget", (report) =>
     memory.delete!(scope, ids, by, { ...context, idempotencyKey, report }),
   );
-  const forgotten = outcomes.length ? outcomes.filter(({ outcome }) => outcome === "committed").length : ids.length;
+  const forgotten = ids.length - outcomes.filter(({ outcome }) => outcome !== "committed").length;
   return { forgotten, outcomes, problems };
 }

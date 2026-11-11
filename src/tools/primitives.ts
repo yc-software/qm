@@ -1162,7 +1162,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         memory,
         write,
         facts,
-        turnAuthority(deps.createdBy, deps.memoryAccess, deps.botActor),
+        turnAuthority(deps.createdBy, deps.memoryAccess),
         {
           ...deps.memoryCaptureMetadata?.(),
           mode: "explicit",
@@ -1190,7 +1190,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         memory,
         write,
         ids,
-        turnAuthority(deps.createdBy, deps.memoryAccess, deps.botActor),
+        turnAuthority(deps.createdBy, deps.memoryAccess, deps.humanTurn),
         deps.audienceScopeId ? { audienceScopeId: deps.audienceScopeId } : {},
         deps.sessionId && `${deps.sessionId}:${callId}`,
       );

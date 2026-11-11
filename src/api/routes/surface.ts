@@ -818,7 +818,7 @@ const captureFacts = writeMemory(async ({ res, deps, tenant, body }, memory, cap
     memory,
     write,
     facts,
-    turnAuthority(capability.actorId, capability.memory, capability.botActor),
+    turnAuthority(capability.actorId, capability.memory),
     {
       mode: "explicit",
       ...(capability.audienceScopeId ? { audienceScopeId: capability.audienceScopeId } : {}),
@@ -865,7 +865,7 @@ const deleteFacts = writeMemory(async ({ res, deps, tenant, body }, memory, capa
     memory,
     write,
     ids,
-    turnAuthority(capability.actorId, capability.memory, capability.botActor),
+    turnAuthority(capability.actorId, capability.memory, livePersonCapability(capability) && !capability.triggered),
     capability.audienceScopeId ? { audienceScopeId: capability.audienceScopeId } : {},
     capability.sessionId && capability.runId && `${capability.sessionId}:${capability.runId}`,
   );

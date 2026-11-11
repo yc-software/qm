@@ -416,7 +416,7 @@ test("the `memory` tool quotes what it reads", async () => {
   );
 });
 
-test("the memory tool forgets a brain ref only in the person's own DM, one store per call", async () => {
+test("the memory tool forgets notebook ids and brain refs in one call, a brain ref only on a turn the person sent in their own DM", async () => {
   const notebook = createPostgresMemoryService(testDatabaseUrl());
   const personal = scopeId("personal", "U1");
   await notebook.capture(personal, ["Alice drinks rooibos.", "Alice sits at desk 4B."], at);
@@ -443,7 +443,6 @@ test("the memory tool forgets a brain ref only in the person's own DM, one store
         forget: {
           ...op,
           tool: "forget_fact",
-          receiptTool: "get_write_request",
           idArg: "id",
           requestIdArg: "request_id",
         },
@@ -459,7 +458,7 @@ test("the memory tool forgets a brain ref only in the person's own DM, one store
     const current = ctxFor({
       scope: personal,
       memory: memory as ReturnType<typeof createPostgresMemoryService>,
-      deps: { sessionId: "s1", audienceScopeId: personal, ...deps },
+      deps: { sessionId: "s1", audienceScopeId: personal, humanTurn: true, ...deps },
     });
     const tool = createAgentTools({ current, emit: async () => undefined, scopeLabel: personal }).find(
       (t) => t.name === "memory",
@@ -468,16 +467,16 @@ test("the memory tool forgets a brain ref only in the person's own DM, one store
   };
   const forgets = () => calls.filter(({ tool }) => tool === "forget_fact").map(({ args }) => args.id);
 
-  assert.match(await run({ action: "delete", ids: ["#1", "acme:7"] }), /^\[error\] Forget from one store per call/);
-  for (const deps of [
-    { audienceScopeId: scopeId("channel", "C1") },
-    { botActor: true },
-    { createdBy: "system:ambient:default-org" },
-  ])
-    assert.match(await run({ action: "delete", ids: ["acme:7"] }, deps), /^\[error\] Only the person, in their own DM/);
+  for (const deps of [{ audienceScopeId: scopeId("channel", "C1") }, { humanTurn: false }])
+    assert.match(
+      await run({ action: "delete", ids: ["#1", "acme:7"] }, deps),
+      /^\[error\] Only the person, on a turn they sent in their own DM/,
+    );
   assert.deepEqual(forgets(), []);
-  assert.equal(await run({ action: "delete", ids: ["acme:7"] }), "Forgot acme:7 in memory provider acme.");
-  assert.equal(await run({ action: "delete", ids: ["#1"] }), "Forgot 1 fact.");
+  assert.equal(
+    await run({ action: "delete", ids: ["#1", "acme:7"] }),
+    "Forgot 1 fact.\nForgot acme:7 in memory provider acme.",
+  );
   assert.deepEqual(await notebook.facts!(personal).then((facts) => facts.map(({ text }) => text)), [
     "Alice sits at desk 4B.",
   ]);

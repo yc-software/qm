@@ -1,4 +1,4 @@
-import { isSystemActor, type ScopeId } from "../types.ts";
+import type { ScopeId } from "../types.ts";
 import type { MemoryDisclosure } from "./disclosure.ts";
 import {
   MemoryFactsMissing,
@@ -64,7 +64,7 @@ export interface MemoryEdit {
 export interface MemoryAuthority {
   actorId: string;
   context: "conversation" | "self" | "admin" | "maintenance";
-  botActor?: true;
+  personTurn?: true;
 }
 
 export function changesNotebookOnly(by: MemoryAuthority | undefined): boolean {
@@ -72,18 +72,18 @@ export function changesNotebookOnly(by: MemoryAuthority | undefined): boolean {
 }
 
 export function changesBrainAsPerson(by: MemoryAuthority | undefined): boolean {
-  return !changesNotebookOnly(by) && !by!.botActor && !isSystemActor(by!.actorId);
+  return !changesNotebookOnly(by) && by!.personTurn === true;
 }
 
 export function turnAuthority(
   actorId: string,
   access: { notebookOnly?: true } | undefined,
-  botActor?: boolean,
+  personTurn?: boolean,
 ): MemoryAuthority {
   return {
     actorId,
     context: access?.notebookOnly ? "maintenance" : "conversation",
-    ...(botActor ? { botActor: true } : {}),
+    ...(personTurn ? { personTurn: true } : {}),
   };
 }
 
