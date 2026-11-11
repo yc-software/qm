@@ -715,6 +715,8 @@ test("the worker's wake shows the same recent messages the judge saw (§2.4)", a
     const block = (text: string) => text.slice(text.indexOf("  <recent-messages"), text.indexOf("</recent-messages>"));
     assert.equal(block(wake), block(judgment!.prompt!), "the judge and the worker read the same rendered messages");
     assert.ok(block(wake).includes(`id="401.0"`), "the window reaches back past the old three-message seed");
+    const screen = (await built.sessions.listLlmRequests(sub!.id)).find((rec) => rec.model === "mock-security");
+    assert.match(JSON.stringify(screen?.promptEnvelope), /msg 1(?!\d)/, "the screen reads every shown message");
     assert.ok(
       wake.includes("read_thread") && wake.includes("search"),
       "the instructions point at read_thread/search for more context",

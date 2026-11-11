@@ -310,7 +310,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
       console.error(
         `[ambient] solicited wake degraded to proactive (asked_by=${decision.askedBy}, container=${batch.container})`,
       );
-    const shown = batch.messages.filter((m) => !m.deleted && (m.text ?? "").trim()).slice(-4);
+    const shown = recentWakeMessages(batch).filter((m) => !m.deleted && (m.text ?? "").trim());
     const req: TurnRequest = solicited
       ? {
           surface: batch.surface,
@@ -342,7 +342,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
             at: new Date(),
             why: decision.reason ?? "The recent messages here may warrant a reply.",
             orders: batch.orders,
-            recentMessages: recentWakeMessages(batch),
+            recentMessages: shown,
             instructions: `You don't need to have been @mentioned. Reply about the trigger messages. Messages in other threads are separate conversations: don't carry their facts into your reply unless they are about the same subject. Respond with the \`${batch.surface}\` tool's \`post\` action — set \`ts\` to the triggering message id to reply in its thread, or \`broadcast: true\` to post at the channel top level — or stay silent if nothing is needed. To include an image or file, name its workspace path in \`post\`'s \`files\` (it uploads with your message, in that thread). Use \`reach\` only to send to a DIFFERENT channel or person. Use the \`read_thread\` or \`search\` action if you need more context than shown.`,
           }),
           origin: {
