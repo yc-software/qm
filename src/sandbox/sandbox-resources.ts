@@ -156,10 +156,11 @@ export async function assertBotMayUseComputer(
   scopeId: ScopeId,
   sandboxId: string | undefined,
   botMayUse: ((resource: SandboxResource) => Promise<boolean>) | undefined,
-): Promise<void> {
+): Promise<SandboxResource | undefined> {
   if (!botMayUse) return;
   const resource = sandboxId ? await resources?.get(sandboxId) : await resources?.resolve(scopeId);
   if (resource && !(await botMayUse(resource))) throw new BotComputerRefusedError();
+  return resource ?? undefined;
 }
 
 export function createSandboxResources(opts: {

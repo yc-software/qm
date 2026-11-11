@@ -209,7 +209,7 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
       }
     } else if (needsSandbox) {
       try {
-        await assertBotMayUseComputer(deps.sandboxResources, envScope, undefined, botMayUse);
+        resource = await assertBotMayUseComputer(deps.sandboxResources, envScope, undefined, botMayUse);
       } catch (e) {
         if (!(e instanceof SandboxAccessError)) throw e;
         return sendJson(res, 403, { error: "forbidden", message: e.message });

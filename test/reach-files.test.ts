@@ -277,12 +277,7 @@ describe("POST /v1/reach with files", () => {
         { text: "plan", recipient: "Alice", files, ...(sandboxId ? { sandbox_id: sandboxId } : {}) },
         {
           "x-agent-capability": await mintCapabilityToken(
-            {
-              actorId: "U-carol",
-              scopeId: scope,
-              exp: Date.now() + CAPABILITY_TTL_MS,
-              ...(botActor ? { botActor } : {}),
-            },
+            { actorId: "U-carol", scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS, botActor },
             SECRET,
           ),
         },
@@ -297,8 +292,13 @@ describe("POST /v1/reach with files", () => {
     assert.equal(person.status, 200);
     assert.deepEqual(await readDelivered(((await person.json()) as any).deliveryId), ["plan.md:carol's plan\n"]);
     const previousDefault = (await resources.resolve(scope))?.id ?? null;
-    await resources.setDefault("U-carol", scope, worker.id);
+    const provision = built.sandbox.provision.bind(built.sandbox);
+    built.sandbox.provision = (...args) => {
+      built.sandbox.provision = provision;
+      return resources.setDefault("U-carol", scope, worker.id).then(() => provision(...args));
+    };
     try {
+      assert.match(((await (await send(true)).json()) as any).message, /plan\.md \(not found\)/);
       const botDefault = await send(true);
       assert.equal(botDefault.status, 403);
       assert.equal(((await botDefault.json()) as any).error, "forbidden");

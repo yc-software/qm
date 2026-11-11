@@ -12,6 +12,7 @@ import {
   createTurnSandboxAccess,
   preferredBackend,
   type SandboxAccessPlan,
+  type SandboxResource,
 } from "../../sandbox/sandbox-resources.ts";
 import { ensureChildSandbox, prepareChildWorkdir } from "../../sessions/child-isolation.ts";
 import { reconcileProcesses } from "../../processes/reconcile.ts";
@@ -85,7 +86,7 @@ interface TurnPool {
   audit: (action: string, handle?: SandboxHandle, extra?: Record<string, unknown>) => void;
   isolation: ChildIsolation | undefined;
   boundSandboxId: string | undefined;
-  assertDefaultUsable: (sandboxId?: string) => Promise<void>;
+  assertDefaultUsable: (sandboxId?: string) => Promise<SandboxResource | undefined>;
   turnAccess: ProvisionOptions;
   scratchKey: () => string;
   holdResource: (handle: SandboxHandle) => Promise<void>;
@@ -234,9 +235,9 @@ async function openScoped(t: TurnPool, slot: Slot, eager: boolean): Promise<Sand
       scopeId: resolution.writableScopeId,
       backendScopeId: memoryScopeId,
     });
-  await assertDefaultUsable();
+  const sandboxId = (await assertDefaultUsable())?.id ?? boundSandboxId;
   const handle = await deps.sandbox.provision(resolution.writableScopeId, {
-    ...(boundSandboxId ? { sandboxId: boundSandboxId } : {}),
+    ...(sandboxId ? { sandboxId } : {}),
     ...turnAccess,
   });
   slot.handles.push(handle);
@@ -357,7 +358,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   const botMayUse = input.botActor
     ? botMayUseComputers(deps.swarms, { actorId: actor.id, threadRef: session.threadRef, sessionId: session.id })
     : undefined;
-  const assertDefaultUsable = (sandboxId = boundSandboxId): Promise<void> =>
+  const assertDefaultUsable = (sandboxId = boundSandboxId): Promise<SandboxResource | undefined> =>
     assertBotMayUseComputer(deps.sandboxResources, resolution.writableScopeId, sandboxId, botMayUse);
   const personUsed = new Map<string, Promise<void>>();
   const notePersonUse = async (handle: SandboxHandle): Promise<void> => {

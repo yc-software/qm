@@ -482,7 +482,7 @@ export interface ToolContextDeps {
     authorize?: (access: SandboxAccessPlan) => void,
   ) => Promise<SandboxHandle>;
   accessSandboxResource?: (id: string) => Promise<SandboxAccessPlan>;
-  assertDefaultSandboxUsable?: () => Promise<void>;
+  assertDefaultSandboxUsable?: () => Promise<SandboxResource | undefined>;
   boundSandboxId?: string;
   workdir?: string;
   listSkills?: (source?: string) => Promise<SkillResolution[]>;
@@ -811,7 +811,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         }
       : {}),
     async computerStatus(requested?: string): Promise<ComputerStatus> {
-      const sandboxId = requested ?? deps.boundSandboxId;
+      const sandboxId = requested ?? deps.boundSandboxId ?? (await deps.assertDefaultSandboxUsable?.())?.id;
       const probe = async (status: ComputerStatus, provision: () => Promise<SandboxHandle>) => {
         if (!status.provisioned || status.lifecycleState === "paused") return status;
         try {
@@ -831,7 +831,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         const access = await accessSandbox(sandboxId);
         return probe(await resources.status(deps.createdBy, sandboxId), () => deps.provisionResource!(access));
       }
-      await deps.assertDefaultSandboxUsable?.();
       if (!deps.sandbox.computerStatus) {
         throw new CapabilityUnsupportedError(deps.sandbox.profile.backend, "reporting computer status");
       }
@@ -841,7 +840,9 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       const sandboxId =
         requested ??
         deps.boundSandboxId ??
-        (memoryGb === undefined ? undefined : (await deps.sandboxResources?.resolve(writableScopeId))?.id);
+        (memoryGb === undefined
+          ? (await deps.assertDefaultSandboxUsable?.())?.id
+          : (await deps.sandboxResources?.resolve(writableScopeId))?.id);
       if (sandboxId !== undefined) {
         const resources = deps.sandboxResources;
         if (!resources) throw new Error("sandbox inventory unavailable");
@@ -849,7 +850,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         return resources.restart(deps.createdBy, sandboxId, memoryGb);
       }
       if (memoryGb !== undefined) throw new Error("a memory size needs a computer from sandbox list");
-      await deps.assertDefaultSandboxUsable?.();
       if (!deps.sandbox.restartComputer) {
         throw new CapabilityUnsupportedError(deps.sandbox.profile.backend, "restarting the computer");
       }

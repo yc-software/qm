@@ -107,7 +107,7 @@ export interface MonitorBrokerDeps {
   destination?: Destination;
   returnsToParent?: boolean;
   graceMs?: number;
-  assertComputerUsable?: (sandboxId: string | undefined) => Promise<void>;
+  assertComputerUsable?: (sandboxId: string | undefined) => Promise<unknown>;
 }
 
 export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
