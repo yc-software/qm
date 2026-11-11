@@ -147,7 +147,7 @@ export const isSidebarSession = (session: Session): boolean =>
   !session.parentSessionId && !isSubagentThreadRef(session.threadRef) && !session.threadRef.startsWith("swarm:");
 
 const UNPROMPTED_REACH_REFUSAL =
-  "unprompted work can reach only the sessions it started; ask in the conversation so a person does it";
+  "unprompted work can reach only its own unprompted sessions, such as its helpers; ask in the conversation so a person does it";
 
 export function storedContext(session: Session): SpawnMeta | undefined {
   return (

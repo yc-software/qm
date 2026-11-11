@@ -37,7 +37,7 @@ const source = { account: "default", workspace: "TINTERNAL", assistant: "UBOT" }
 const notMember = (channel: string) =>
   `can't currently be confirmed as a member of channel:${channel}, so helpers can't run here; nothing was started or sent.`;
 const reachRefusal =
-  "unprompted work can reach only the sessions it started; ask in the conversation so a person does it";
+  "unprompted work can reach only its own unprompted sessions, such as its helpers; ask in the conversation so a person does it";
 const schedulesRefusal = unpromptedRefusal("schedules");
 const loopsRefusal = unpromptedRefusal("loops");
 const manageRefusal = (what: string) =>
