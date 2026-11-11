@@ -379,8 +379,9 @@ test("provider refusals and key-account failures are logged but never reported; 
     const { reportFailure } = await import('./src/util/errors.ts');
     const { withErrorReporting } = await import('./src/admin/error-log.ts');
     const { providerTurnError } = await import('./src/model/provider-error.ts');
+    const { testTenant } = await import('./test/support/test-tenant.ts');
     const logged = [];
-    const errors = withErrorReporting({ record: (e) => logged.push(e.code), flush: async () => {}, list: async () => [], count: async () => 0 });
+    const errors = withErrorReporting({ record: (t, e) => logged.push(e.code), flush: async () => {}, list: async () => [], count: async () => 0 });
     const failures = {
       account: providerTurnError({ errorMessage: '402 billing', providerError: { status: 402, type: 'billing_error', code: 'insufficient_credits' } }),
       auth: providerTurnError({ errorMessage: '401 invalid x-api-key', providerError: { status: 401, type: 'authentication_error' } }),
@@ -388,7 +389,7 @@ test("provider refusals and key-account failures are logged but never reported; 
       model_budget: providerTurnError({ errorMessage: '429 budget', providerError: { status: 429, type: 'budget_exceeded' } }),
       transient: providerTurnError({ errorMessage: '529 overloaded', providerError: { status: 529, type: 'overloaded_error' } }),
     };
-    for (const [code, error] of Object.entries(failures)) errors.record({ category: 'turn', code, message: error.raw, scopeLabel: 'private-scope' }, error);
+    for (const [code, error] of Object.entries(failures)) errors.record(testTenant, { category: 'turn', code, message: error.raw, scopeLabel: 'private-scope' }, error);
     reportFailure('model verification', providerTurnError({ errorMessage: '402', providerError: { status: 402 } }));
     reportFailure('model verification', providerTurnError({ errorMessage: '500', providerError: { status: 500 } }));
     await flushErrorReporting();
