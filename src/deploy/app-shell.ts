@@ -300,6 +300,11 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
     const htmlBg = w.getComputedStyle(doc.documentElement).backgroundColor;
     const opaque = (c) => c && c !== "transparent" && !/rgba\\([^)]*,\\s*0\\)$/.test(c);
     const notes = [];
+    const { fetch: realFetch } = window;
+    window.fetch = (input, init) => realFetch(input, init).catch((error) => {
+      notes.push("could not fetch " + String(input && input.url || input).slice(0, 300) + " (" + describe(error) + ")");
+      throw error;
+    });
     const { warn, error: logError } = console;
     console.warn = (...args) => { notes.push(args.map(describe).join(" ")); warn(...args); };
     console.error = (...args) => { notes.push(args.map(describe).join(" ")); logError(...args); };
@@ -311,6 +316,7 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
         style: { transform: "translate(" + -sx + "px," + -sy + "px)", transformOrigin: "0 0" },
       });
     } finally {
+      window.fetch = realFetch;
       console.warn = warn;
       console.error = logError;
     }
