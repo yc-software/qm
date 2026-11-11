@@ -165,7 +165,8 @@ def attribution(h: dict[str, str]) -> tuple[str, str]:
     name, addr = parseaddr(h.get("from", ""))
     link = f'<a href="mailto:{html.escape(addr)}">{html.escape(addr)}</a>'
     who_html = f"{html.escape(name)} &lt;{link}&gt;" if name else link
-    return f"On {when}{h.get('from', '')} wrote:", f"On {html.escape(when)}{who_html} wrote:"
+    who = f"{name} <{addr}>" if name else addr
+    return f"On {when}{who} wrote:", f"On {html.escape(when)}{who_html} wrote:"
 
 
 class HtmlQuote(HTMLParser):

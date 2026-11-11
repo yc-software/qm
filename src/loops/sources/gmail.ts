@@ -1,6 +1,7 @@
 import MailComposer from "nodemailer/lib/mail-composer";
 import addressparser from "nodemailer/lib/addressparser";
-import { DomUtils, parseDocument } from "htmlparser2";
+import { isTag, type ChildNode } from "domhandler";
+import { DomUtils, ElementType, parseDocument } from "htmlparser2";
 import { splitLinks } from "../../../plugins/chassis/src/links.ts";
 import type { LoopItem, LoopSourcePayload } from "../types.ts";
 import { isAccountType } from "../../connectors/oauth.ts";
@@ -117,14 +118,28 @@ const quoteLine = (line: string): string => {
 
 const HIDDEN_HTML = new Set(["head", "style", "script", "title"]);
 
+function textOf(nodes: ChildNode[]): string {
+  return nodes
+    .map((node) => {
+      if (node.type === ElementType.Text) return node.data;
+      if (!isTag(node)) return "";
+      if (node.name === "br") return "\n";
+      return textOf(node.children) + (node.name === "div" || node.name === "p" ? "\n" : "");
+    })
+    .join("");
+}
+
 function bodyMarkup(html: string): { markup: string; text: string } {
   const doc = parseDocument(html);
-  for (const hidden of DomUtils.findAll((el) => HIDDEN_HTML.has(el.name), doc.children)) DomUtils.removeElement(hidden);
+  const dropped = DomUtils.filter(
+    (node) => node.type === ElementType.Comment || (isTag(node) && HIDDEN_HTML.has(node.name)),
+    doc.children,
+  );
+  for (const node of dropped) DomUtils.removeElement(node);
   const body = DomUtils.findOne((el) => el.name === "body", doc.children);
-  return {
-    markup: body ? DomUtils.getInnerHTML(body) : DomUtils.getOuterHTML(doc),
-    text: DomUtils.innerText(body ?? doc),
-  };
+  const html2 = DomUtils.findOne((el) => el.name === "html", doc.children);
+  const root = body?.children ?? html2?.children ?? doc.children;
+  return { markup: DomUtils.getOuterHTML(root, { encodeEntities: "utf8" }), text: textOf(root) };
 }
 
 const isOffset = (token: string): boolean =>
@@ -132,7 +147,7 @@ const isOffset = (token: string): boolean =>
 
 function gmailDate(header: string): string {
   const at = new Date(Date.parse(header));
-  if (Number.isNaN(at.getTime())) return header;
+  if (Number.isNaN(at.getTime())) return "";
   const timeZone = header.split(" ").find(isOffset) ?? "+0000";
   const day = at.toLocaleDateString("en-US", {
     timeZone,
@@ -142,23 +157,34 @@ function gmailDate(header: string): string {
     year: "numeric",
   });
   const time = at.toLocaleTimeString("en-US", { timeZone, hour: "numeric", minute: "2-digit" });
-  return `${day} at ${time.replaceAll("\u202f", " ")}`;
+  return `${day} at ${time.replaceAll("\u202f", " ")} `;
 }
 
 function attribution(payload: Record<string, unknown>): { text: string; html: string } {
   const from = gmailHeader(payload, "From");
   const when = gmailDate(gmailHeader(payload, "Date"));
   const [sender] = addressparser(from, { flatten: true });
-  const link = sender ? `<a href="mailto:${escapeHtml(sender.address)}">${escapeHtml(sender.address)}</a>` : "";
-  const who = sender?.name ? `${escapeHtml(sender.name)} &lt;${link}&gt;` : link || escapeHtml(from);
-  return { text: `On ${when} ${from} wrote:`, html: `On ${escapeHtml(when)} ${who} wrote:` };
+  const address = sender?.address ?? "";
+  const link = `<a href="mailto:${escapeHtml(address)}">${escapeHtml(address)}</a>`;
+  return {
+    text: `On ${when}${sender?.name ? `${sender.name} <${address}>` : address} wrote:`,
+    html: `On ${escapeHtml(when)}${sender?.name ? `${escapeHtml(sender.name)} &lt;${link}&gt;` : link} wrote:`,
+  };
 }
+
+const trimNewlines = (text: string): string => {
+  let start = 0;
+  let end = text.length;
+  while (start < end && text[start] === "\n") start++;
+  while (end > start && text[end - 1] === "\n") end--;
+  return text.slice(start, end);
+};
 
 export function gmailQuote(message: Record<string, unknown>): GmailQuote | undefined {
   const payload = isObj(message.payload) ? message.payload : {};
   const rich = gmailPartText(payload, "text/html");
   const parsed = rich ? bodyMarkup(rich) : undefined;
-  const plain = (gmailPartText(payload) ?? parsed?.text ?? "").replaceAll("\r\n", "\n").trim();
+  const plain = trimNewlines((gmailPartText(payload) || parsed?.text || "").replaceAll("\r\n", "\n"));
   if (!plain) return undefined;
   const attr = attribution(payload);
   return {

@@ -36,14 +36,15 @@ export function gmailApi(token: string, fetchImpl: typeof fetch = fetch) {
 }
 
 export function gmailPartText(part: Record<string, unknown>, mimeType = "text/plain"): string | undefined {
-  const data = isObj(part.body) ? part.body.data : undefined;
-  if (part.mimeType === mimeType && !part.filename && typeof data === "string")
-    return Buffer.from(data, "base64url").toString("utf8");
-  for (const nested of Array.isArray(part.parts) ? part.parts.filter(isObj) : []) {
-    const text = gmailPartText(nested, mimeType);
-    if (text) return text;
-  }
-  return undefined;
+  const texts: string[] = [];
+  const visit = (node: Record<string, unknown>): void => {
+    const data = isObj(node.body) ? node.body.data : undefined;
+    if (node.mimeType === mimeType && !node.filename && typeof data === "string")
+      texts.push(Buffer.from(data, "base64url").toString("utf8"));
+    for (const nested of Array.isArray(node.parts) ? node.parts.filter(isObj) : []) visit(nested);
+  };
+  visit(part);
+  return texts.length ? texts.join("\n") : undefined;
 }
 
 export function gmailHeader(payload: Record<string, unknown>, name: string): string {

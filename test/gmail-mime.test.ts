@@ -159,44 +159,48 @@ test("app-connection calls reuse the account the proxy resolved on the first cal
 });
 
 test(
-  "the skill helper and the loop sender quote a message identically, the way Gmail does",
+  "the skill helper and the loop sender quote messages identically, the way Gmail does",
   { skip: !havePython },
   () => {
     const enc = (t: string) => Buffer.from(t).toString("base64url");
-    const original = {
-      payload: {
-        headers: [
-          { name: "From", value: "Ann <ann@x.test>" },
-          { name: "Date", value: "Tue, 10 Nov 2026 12:36:00 -0800" },
+    const part = (mimeType: string, text: string) => ({ mimeType, body: { data: enc(text) } });
+    const from = { name: "From", value: '"Ann Lee" <ann@x.test>' };
+    const date = { name: "Date", value: "Tue, 10 Nov 2026 12:36:00 -0800" };
+    const originals = [
+      [
+        [from, date],
+        [
+          part("text/plain", "Hi\n\nSee https://x.test/a, \u201chttps://x.test/b\u201d [https://x.test/c]\n> older"),
+          part(
+            "text/html",
+            '<html><head><style>p{}</style></head><body><div dir="ltr">Hi<br>older</div></body></html>',
+          ),
         ],
-        parts: [
-          { mimeType: "text/plain", body: { data: enc("Hi\n\nSee https://x.test/a\n> older") } },
-          {
-            mimeType: "text/html",
-            body: {
-              data: enc('<html><head><style>p{}</style></head><body><div dir="ltr">Hi<br>older</div></body></html>'),
-            },
-          },
-        ],
-      },
-    };
+      ],
+      [
+        [from, { name: "Date", value: "Wed, 11 Nov 2026 02:28:00 GMT" }],
+        [part("text/html", "<html><body><!-- c --><div>Caf\u00e9 &amp; co</div><p>para</p>line<br>end</body></html>")],
+      ],
+      [[{ name: "From", value: "ann@x.test" }], [part("text/plain", "one"), part("text/plain", "two")]],
+    ].map(([headers, parts]) => ({ payload: { headers, parts } }));
     const driver = `
 import importlib.util, json, sys
 spec = importlib.util.spec_from_file_location("gmail", sys.argv[1])
 gmail = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gmail)
-print(json.dumps(gmail.quote_of(json.loads(sys.stdin.read()))))
+print(json.dumps([gmail.quote_of(m) for m in json.loads(sys.stdin.read())]))
 `;
-    const [text, html] = JSON.parse(
-      execFileSync("python3", ["-c", driver, SCRIPT], { input: JSON.stringify(original), encoding: "utf8" }),
+    const python = JSON.parse(
+      execFileSync("python3", ["-c", driver, SCRIPT], { input: JSON.stringify(originals), encoding: "utf8" }),
+    ) as [string, string][];
+    assert.deepEqual(
+      python.map(([text, html]) => ({ text, html })),
+      originals.map((m) => gmailQuote(m)),
     );
-    assert.deepEqual({ text, html }, gmailQuote(original));
-    assert.equal(
-      text,
-      "On Tue, Nov 10, 2026 at 12:36 PM Ann <ann@x.test> wrote:\n\n> Hi\n>\n> See https://x.test/a\n>> older",
-    );
+    const [text, html] = python[0]!;
+    assert.ok(text.startsWith("On Tue, Nov 10, 2026 at 12:36 PM Ann Lee <ann@x.test> wrote:\n\n> Hi\n"));
     assert.ok(
-      html.includes('Ann &lt;<a href="mailto:ann@x.test">ann@x.test</a>&gt; wrote:'),
+      html.includes('Ann Lee &lt;<a href="mailto:ann@x.test">ann@x.test</a>&gt; wrote:'),
       "sender is a mailto link",
     );
     assert.ok(html.includes('padding-left:1ex"><div dir="ltr">Hi<br>older</div></blockquote>'), "html nested bare");

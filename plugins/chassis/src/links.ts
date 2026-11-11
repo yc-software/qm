@@ -2,19 +2,19 @@ export type LinkSegment = { kind: "text"; text: string } | { kind: "link"; href:
 
 const URL_RE = /https?:\/\/[^\s<>"']+/g;
 
+const CLOSERS: Record<string, string> = { ")": "(", "]": "[", "}": "{" };
+
+const count = (text: string, ch: string): number => text.split(ch).length - 1;
+
 function trimTrailing(url: string): string {
   let out = url;
   for (;;) {
-    const last = out[out.length - 1] ?? "";
-    if (".,;:!?".includes(last)) {
-      out = out.slice(0, -1);
-      continue;
-    }
-    if (last === ")" && (out.match(/\(/g)?.length ?? 0) < (out.match(/\)/g)?.length ?? 0)) {
-      out = out.slice(0, -1);
-      continue;
-    }
-    return out;
+    const last = out.at(-1);
+    if (last === undefined) return out;
+    const opener = CLOSERS[last];
+    const unbalanced = opener !== undefined && count(out, opener) < count(out, last);
+    if (!".,;:!?\u201c\u201d\u2018\u2019\u00ab\u00bb\u2026".includes(last) && !unbalanced) return out;
+    out = out.slice(0, -1);
   }
 }
 
