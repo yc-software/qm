@@ -79,7 +79,6 @@ test("seedRawMessagesIntoSession is a no-op for empty input and degrades gracefu
 test("agentConfigOptions and configRouteOptions map every Config knob the agent consumes, field by field", () => {
   const config = testConfig({
     modelId: "model-base",
-    detectModelId: "model-detect",
     titleModelId: "model-title",
     anthropicApiKey: "sk-test",
     modelGateway: {
@@ -110,7 +109,6 @@ test("agentConfigOptions and configRouteOptions map every Config knob the agent 
     },
   });
   assert.deepEqual(agentConfigOptions(config), {
-    detectModelId: "model-detect",
     titleModelId: "model-title",
     captureRequests: false,
     sandboxResources: true,
@@ -382,7 +380,6 @@ async function detectAgainst(
         models: { "claude-haiku-4-5": "detect-model" },
       },
     }),
-    detectModelId: "claude-sonnet-5",
   });
   const rows: TurnLlmRequestRecord[] = [];
   const outcome = await agent.shouldRespond!({
@@ -430,7 +427,7 @@ test(
 
 test("agentConfigOptions omits the optional fields when the config leaves them unset", () => {
   const opts = { ...agentConfigOptions(testConfig()), ...configRouteOptions(testConfig()) };
-  for (const key of ["defaultModelId", "detectModelId", "titleModelId", "apiKey"] as const) {
+  for (const key of ["defaultModelId", "titleModelId", "apiKey"] as const) {
     assert.equal(key in opts, false, `${key} must be omitted, not undefined`);
   }
 });

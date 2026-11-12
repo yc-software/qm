@@ -28,7 +28,26 @@ import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 const actor: Principal = { id: "U1", type: "internal" };
 
-function orchestratorFor(agent: Agent, config = testConfigStore("default-org")) {
+test("ambient reply detection runs on the scope's model, and its failure stays silent and is logged", async () => {
+  const base = createMockAgent();
+  let ran = false;
+  let detectModel: string | undefined;
+  const detector: Agent = {
+    ...base,
+    runTurn: async () => {
+      ran = true;
+      return { reply: "spurious" };
+    },
+    shouldRespond: async (detect) => {
+      detectModel = detect.runtime?.modelId;
+      throw new Error("401 invalid x-api-key");
+    },
+  };
+  const config = testConfigStore("default-org");
+  await config.setRuntimeSelection("channel:C1", { modelId: "claude-sonnet-5" });
+  const resolve = (route: SessionRoute) =>
+    resolveRuntimeChoice(config, "org:default-org", route.scopeLabel!, { modelId: "claude-opus-4-8" }, route.runtime);
+  const agent = withResolvedRuntime(detector, resolve, resolve);
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const errors = createPostgresErrorLog(testDatabaseUrl());
@@ -57,24 +76,6 @@ function orchestratorFor(agent: Agent, config = testConfigStore("default-org")) 
     acl,
   });
 
-  return { orch, auditLog, errors };
-}
-
-test("an ambient message whose reply detection fails stays silent and leaves the failure in the error and audit logs", async () => {
-  const base = createMockAgent();
-  let ran = false;
-  const agent: Agent = {
-    ...base,
-    runTurn: async () => {
-      ran = true;
-      return { reply: "spurious" };
-    },
-    shouldRespond: async () => {
-      throw new Error("401 invalid x-api-key");
-    },
-  };
-  const { orch, auditLog, errors } = orchestratorFor(agent);
-
   const result = await orch.handleTurn({
     surface: "slack",
     actor,
@@ -84,6 +85,7 @@ test("an ambient message whose reply detection fails stays silent and leaves the
   });
 
   assert.equal(result.status, "silent");
+  assert.equal(detectModel, "claude-sonnet-5");
   assert.equal(ran, false);
   const [failure] = await errors.list(testTenant, { sessionId: result.sessionId! });
   assert.deepEqual(
@@ -92,31 +94,4 @@ test("an ambient message whose reply detection fails stays silent and leaves the
   );
   const silent = (await auditLog.events(testTenant)).find((e) => e.action === "turn.silent");
   assert.equal(silent?.detail, "detection failed: 401 invalid x-api-key");
-});
-
-test("ambient reply detection runs on the model the conversation's scope has selected", async () => {
-  const config = testConfigStore("default-org");
-  await config.setRuntimeSelection("channel:C1", { modelId: "claude-sonnet-5" });
-  let detectModel: string | undefined;
-  const base: Agent = {
-    ...createMockAgent(),
-    shouldRespond: async (detect) => {
-      detectModel = detect.runtime?.modelId;
-      return { respond: false };
-    },
-  };
-  const resolveScope = (route: SessionRoute) =>
-    resolveRuntimeChoice(config, "org:default-org", route.scopeLabel!, { modelId: "claude-opus-4-8" }, route.runtime);
-  const { orch } = orchestratorFor(withResolvedRuntime(base, resolveScope, resolveScope), config);
-
-  const result = await orch.handleTurn({
-    surface: "slack",
-    actor,
-    conversation: { kind: "channel", threadRef: "ch:C1:300.1", channelRef: "C1", audience: [actor] } as Conversation,
-    origin: { kind: "ambient" },
-    text: "how's it going?",
-  });
-
-  assert.equal(result.status, "silent");
-  assert.equal(detectModel, "claude-sonnet-5");
 });
