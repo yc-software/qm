@@ -1,5 +1,6 @@
 import {
   generalAccessOf,
+  type GeneralAccess,
   orgAccessNote,
   orgDisplayName,
   PUBLIC_ACCESS_NOTE,
@@ -7,7 +8,7 @@ import {
 import { parseScopeId, personalScope, type ScopeKind } from "../types.ts";
 
 export type AppAccess = {
-  level: "private" | "shared" | "org" | "public";
+  level: GeneralAccess;
   label: string;
   detail: string;
   canEdit: boolean;
@@ -22,6 +23,9 @@ const NOUNS: Record<ScopeKind, [one: string, many: string]> = {
   persona: ["persona", "personas"],
 };
 
+export const canEditAppPermissions = (ownerScopeId: string, principalId: string): boolean =>
+  ownerScopeId === personalScope(principalId);
+
 export function appAccess(opts: {
   ownerScopeId: string;
   public: boolean;
@@ -29,7 +33,7 @@ export function appAccess(opts: {
   viewer: string;
   orgName?: string | undefined;
 }): AppAccess {
-  const canEdit = opts.ownerScopeId === personalScope(opts.viewer);
+  const canEdit = canEditAppPermissions(opts.ownerScopeId, opts.viewer);
   const general = generalAccessOf(opts);
   if (general === "public") return { level: "public", label: "Public", detail: PUBLIC_ACCESS_NOTE, canEdit };
   if (general === "org") {
@@ -41,7 +45,7 @@ export function appAccess(opts: {
   );
   if (!kinds.length)
     return {
-      level: "private",
+      level: general,
       label: "Restricted",
       detail: canEdit ? "Only you can open" : "Only the owner can open",
       canEdit,
@@ -56,7 +60,7 @@ export function appAccess(opts: {
     label = noun[0]!.toUpperCase() + noun.slice(1);
   }
   return {
-    level: "shared",
+    level: general,
     label,
     detail: `Shared with ${new Intl.ListFormat("en", { type: "conjunction" }).format(words)}`,
     canEdit,

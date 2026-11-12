@@ -46,6 +46,10 @@ export function withBase(path: string): string {
   return `${BASE_URL}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
+export function portalLoginUrl(): string {
+  return `/auth/login?returnTo=${encodeURIComponent(`${location.pathname}${location.search}`)}`;
+}
+
 export function fileContentUrl(id: string, name?: string): string {
   const base = `/api/files/${encodeURIComponent(id)}/content`;
   return withBase(name ? `${base}/${encodeURIComponent(name)}` : base);

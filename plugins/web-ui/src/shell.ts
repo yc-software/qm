@@ -1,6 +1,5 @@
-import { tellEmbedder } from "./embedder";
 import { loadMessageTranscript, messageLinkSeq } from "./message-link.ts";
-import { initializeBrowserErrors, reportHandledError, stopBrowserErrors } from "./browser-errors";
+import { initializeBrowserErrors, stopBrowserErrors } from "./browser-errors";
 import { initializeAnalytics, capturePageview, stopAnalytics } from "./product-analytics";
 import { captureSlackReturn } from "./slack-account";
 import { clearTranscriptCache } from "./transcript-cache";
@@ -41,6 +40,7 @@ import {
   TAIL_TURNS,
   webFetch,
   withBase,
+  portalLoginUrl,
   loadChatPrefs,
   fetchSessionRow,
 } from "./core-bridge";
@@ -371,10 +371,7 @@ function signInWithPortal(): void {
   } catch {
     void 0;
   }
-  const returnTo = `${location.pathname}${location.search}`;
-  const login = `/auth/login?returnTo=${encodeURIComponent(returnTo)}`;
-  if (document.documentElement.classList.contains("app-share-embed")) window.open(login, "_blank", "noopener");
-  else location.href = login;
+  location.href = portalLoginUrl();
 }
 
 function clearPortalAttempt(): void {
@@ -1053,30 +1050,6 @@ async function openAppEditChat(slug: string): Promise<void> {
   renderList();
 }
 
-async function bootAppShare(params: URLSearchParams): Promise<void> {
-  document.documentElement.classList.add("app-share-embed");
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && !document.querySelector("dialog[open]"))
-      tellEmbedder({ type: "qm:app-share-closed" });
-  });
-  try {
-    const slug = params.get("slug");
-    if (!slug) throw new Error("app-share opened without an app slug");
-    const r = await webFetch(withBase("/me"));
-    if (r.status === 401) return renderAuthGate(gateFor("portal"));
-    if (!r.ok) throw new Error(`app-share: /me answered ${r.status} ${(await r.text()).slice(0, 200)}`);
-    appState.me = (await r.json()) as Me;
-    const { openDeploymentPermissions } = await import("./deploy-permissions");
-    await openDeploymentPermissions(slug, params.get("name") || slug, `personal:${appState.me.user}`, {
-      onChange: () => tellEmbedder({ type: "qm:app-check" }),
-      onClose: () => tellEmbedder({ type: "qm:app-share-closed" }),
-    });
-  } catch (e) {
-    reportHandledError("web-ui: app-share", e);
-    renderAuthGate({ kind: "unreachable" });
-  }
-}
-
 export async function bootSafely(): Promise<void> {
   try {
     await boot();
@@ -1109,6 +1082,7 @@ export async function boot(): Promise<void> {
     item: wantedItem,
   } = parseDeepLink(UI_BASE, location.pathname, location.search);
   if (wanted === "app-share") {
+    const { bootAppShare } = await import("./app-share-embed");
     await bootAppShare(params);
     return;
   }
