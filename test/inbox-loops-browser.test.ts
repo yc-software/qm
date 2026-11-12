@@ -9,7 +9,7 @@ import { scopeId } from "../src/types.ts";
 import { serverDeps } from "../src/wiring.ts";
 import { buildApp, stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
+import { browserImpersonationCookie, browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 
 const SECRET = "inbox-loops-browser-signing-secret-0123456789";
 const config = testConfig({ signingSecret: SECRET, capabilitySecret: SECRET, publicWebUrl: "https://qm.test" });
@@ -31,10 +31,10 @@ const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 const flag = (user: string, on: boolean) =>
   built.featureFlags.setEnabled("inbox_loops", scopeId("personal", user), on, "test");
 
-function browser(user: string, method: string, path: string, body?: unknown): Promise<Response> {
+function browser(user: string, method: string, path: string, body?: unknown, cookie = browserSessionCookie(user)) {
   return fetch(`${base}${path}`, {
     method,
-    headers: { cookie: browserSessionCookie(user), origin: "https://qm.test", "content-type": "application/json" },
+    headers: { cookie, origin: "https://qm.test", "content-type": "application/json" },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
 }
@@ -91,6 +91,45 @@ test("agents keep using loops through their capability without the person flag",
   );
   const response = await fetch(`${base}/v1/loops`, { headers: { "x-agent-capability": cap } });
   assert.equal(response.status, 200, await response.clone().text());
+});
+
+test("loop grants and decisions need the person's own session or running turn", async () => {
+  await flag("fay", true);
+  const loopId = await firstInboxLoop("fay");
+  const impersonating = `${browserSessionCookie("admin-alice")}; ${browserImpersonationCookie("admin-alice", "fay")}`;
+  for (const [path, body] of [
+    ["grants", { shipAction: "send" }],
+    ["outputs/o1/decide", { decision: "ship" }],
+    ["autopilot", { enabled: true }],
+  ] as const) {
+    const refused = await browser("fay", "POST", `/api/loops/${loopId}/${path}`, body, impersonating);
+    assert.deepEqual(
+      [refused.status, await refused.json()],
+      [403, { error: "forbidden", message: "Unavailable while impersonating." }],
+      path,
+    );
+  }
+  const ended = await mintCapabilityToken(
+    {
+      actorId: "fay",
+      scopeId: scopeId("personal", "fay"),
+      aud: CONTROL_PLANE_AUD,
+      liveActor: true,
+      runId: "run-that-ended",
+      runLeaseToken: "lease",
+      runAttempt: 1,
+      threadRef: "dm:fay",
+      exp: Date.now() + CAPABILITY_TTL_MS,
+    },
+    SECRET,
+  );
+  const late = await fetch(`${base}/v1/loops/${loopId}/grants`, {
+    method: "POST",
+    headers: { "x-agent-capability": ended, "content-type": "application/json" },
+    body: JSON.stringify({ shipAction: "send" }),
+  });
+  assert.deepEqual([late.status, ((await late.json()) as { error: string }).error], [403, "inactive_run"]);
+  assert.deepEqual(await built.loops.grants.byLoop(loopId), []);
 });
 
 test("an inbox item image is served only as a sandboxed, non-sniffable image", async () => {

@@ -20,8 +20,8 @@ import type { CronStore } from "../../cron/cron-store.ts";
 import { DEFAULT_CRON_TIMEZONE, userScheduleFromBody, validateUserSchedule } from "../../cron/schedule.ts";
 import type { ScopedConfigStore } from "../../resolution/config-store.ts";
 import { errMessage, reportFailure, swallow } from "../../util/errors.ts";
-import { sendJson } from "../http.ts";
-import { isObj, resolveCapabilityDestination } from "./shared.ts";
+import { refuseImpersonated, sendJson } from "../http.ts";
+import { isObj, livePersonTurn, resolveCapabilityDestination } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 
 export interface LoopServiceDeps {
@@ -68,19 +68,20 @@ export function actingPrincipal(ctx: ApiCtx): ActingPrincipal | null {
       actorId: ctx.capability.actorId,
       scopeId: ctx.capability.scopeId as ScopeId,
       capability: ctx.capability,
-      liveHuman: ctx.actor?.p !== undefined || (ctx.capability.liveActor === true && personAtKeyboard(ctx.capability)),
+      liveHuman: ctx.capability.liveActor === true && personAtKeyboard(ctx.capability),
     };
   }
-  if (ctx.actor?.p) return { actorId: ctx.actor.p, liveHuman: true };
+  if (ctx.actor?.p) return { actorId: ctx.actor.p, liveHuman: !ctx.actor.imp };
   const principalId = (ctx.url.searchParams.get("principalId") ?? "").trim();
   if (principalId) return { actorId: principalId, liveHuman: false };
   sendJson(ctx.res, 403, { error: "forbidden", message: "loops need an agent capability or a principalId" });
   return null;
 }
 
-function requireLiveHuman(ctx: ApiCtx, acting: ActingPrincipal): boolean {
-  if (acting.liveHuman) return true;
-  sendJson(ctx.res, 403, { error: "human_required", message: "this action requires a live human actor" });
+export async function requireLiveHuman(ctx: ApiCtx, acting: ActingPrincipal): Promise<boolean> {
+  if (acting.liveHuman) return livePersonTurn(ctx);
+  if (ctx.actor?.imp) refuseImpersonated(ctx.res);
+  else sendJson(ctx.res, 403, { error: "human_required", message: "this action requires a live human actor" });
   return false;
 }
 
@@ -217,7 +218,7 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
       error: "bad_request",
       message: 'shipActions must be [{action, gate: "auto"|"hold"}]',
     });
-  if (shipActions.some((policy) => policy.gate === "auto") && !requireLiveHuman(ctx, acting)) return;
+  if (shipActions.some((policy) => policy.gate === "auto") && !(await requireLiveHuman(ctx, acting))) return;
   const capsResult = capsFromBody(b.caps);
   if (capsResult.invalidField)
     return sendJson(ctx.res, 400, {
@@ -256,7 +257,7 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
     const resolved = resolveCapabilityDestination(ctx.capability, b.destinationKey);
     if (!resolved.ok || !resolved.destination)
       return sendJson(ctx.res, 400, { error: "bad_request", message: "destinationKey is not available" });
-    if (!requireLiveHuman(ctx, acting)) return;
+    if (!(await requireLiveHuman(ctx, acting))) return;
     destination = resolved.destination;
   }
   const ownerScopeId: ScopeId = scopeId("personal", acting.actorId);
@@ -386,7 +387,7 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
       });
     patch.state = b.state as LoopState;
     if (patch.state === "enabled" && (loop.state === "quarantined" || loop.state === "archived")) {
-      if (!requireLiveHuman(ctx, acting)) return;
+      if (!(await requireLiveHuman(ctx, acting))) return;
       if (loop.state === "quarantined") {
         patch.quarantineClearedBy = acting.actorId;
         patch.quarantineClearedAt = Date.now();
@@ -423,7 +424,7 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
   const existingGates = new Map(loop.shipActions.map((policy) => [policy.action, policy.gate]));
   if (
     shipActions.some((policy) => policy.gate === "auto" && existingGates.get(policy.action) !== "auto") &&
-    !requireLiveHuman(ctx, acting)
+    !(await requireLiveHuman(ctx, acting))
   )
     return;
   if (b.shipActions !== undefined) patch.shipActions = shipActions;
@@ -450,7 +451,7 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
         error: "forbidden",
         message: "loop triage is not enabled for this loop's owner",
       });
-    if (!requireLiveHuman(ctx, acting)) return;
+    if (!(await requireLiveHuman(ctx, acting))) return;
     patch.triage = triage;
   }
   if (b.destinationKey !== undefined) {
@@ -458,7 +459,7 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
       return sendJson(ctx.res, 400, { error: "bad_request", message: "destinationKey must be a string or null" });
     if (!ctx.capability)
       return sendJson(ctx.res, 400, { error: "bad_request", message: "destinationKey requires an agent capability" });
-    if (!requireLiveHuman(ctx, acting)) return;
+    if (!(await requireLiveHuman(ctx, acting))) return;
     if (b.destinationKey === null) {
       patch.destination = null;
     } else {
@@ -518,7 +519,7 @@ async function previewLoopTriage(ctx: ApiCtx): Promise<void> {
       error: "bad_request",
       message: `triage must be {prioritize?, consolidate?: {enabled: boolean, instructions?: string up to ${TRIAGE_INSTRUCTIONS_MAX} chars}}`,
     });
-  if (!requireLiveHuman(ctx, acting)) return;
+  if (!(await requireLiveHuman(ctx, acting))) return;
   try {
     const items = await deps.fire.previewTriage(loop, { ...loop.triage, ...triage });
     return sendJson(ctx.res, 200, { items });
@@ -556,7 +557,7 @@ async function decideOutputLocked(ctx: ApiCtx): Promise<void> {
   if (!loaded) return;
   const { deps, loop, acting } = loaded;
   if (!(await requireLoopAuthority(ctx, deps, loop))) return;
-  if (!requireLiveHuman(ctx, acting)) return;
+  if (!(await requireLiveHuman(ctx, acting))) return;
   if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
   const b = isObj(ctx.body) ? ctx.body : {};
   const outputId = ctx.params.outputId ?? "";
@@ -595,7 +596,7 @@ async function graduateShipAction(ctx: ApiCtx): Promise<void> {
   if (!loaded) return;
   const { deps, loop, acting } = loaded;
   if (!(await requireLoopAuthority(ctx, deps, loop))) return;
-  if (!requireLiveHuman(ctx, acting)) return;
+  if (!(await requireLiveHuman(ctx, acting))) return;
   const b = isObj(ctx.body) ? ctx.body : {};
   if (typeof b.shipAction !== "string" || !b.shipAction.trim())
     return sendJson(ctx.res, 400, { error: "bad_request", message: "shipAction required" });
@@ -628,7 +629,7 @@ async function setAutopilot(ctx: ApiCtx): Promise<void> {
   if (typeof b.enabled !== "boolean")
     return sendJson(ctx.res, 400, { error: "bad_request", message: "enabled must be a boolean" });
   if (b.enabled) {
-    if (!requireLiveHuman(ctx, acting)) return;
+    if (!(await requireLiveHuman(ctx, acting))) return;
     if (loop.state === "quarantined" || loop.state === "archived")
       return sendJson(ctx.res, 409, {
         error: "conflict",
@@ -679,7 +680,7 @@ async function revokeShipGrant(ctx: ApiCtx): Promise<void> {
   const loaded = await loadAdministrable(ctx);
   if (!loaded) return;
   const { deps, loop, acting } = loaded;
-  if (!requireLiveHuman(ctx, acting)) return;
+  if (!(await requireLiveHuman(ctx, acting))) return;
   const grantId = ctx.params.grantId ?? "";
   const grant = await deps.grants.get(grantId);
   if (!grant || grant.loopId !== loop.id)

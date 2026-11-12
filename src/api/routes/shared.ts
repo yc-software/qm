@@ -8,7 +8,7 @@ import { isTerminal, type Run } from "../../runs/run-store.ts";
 import type { ServerDeps } from "../deps.ts";
 import { tenantOf, type ApiCtx, type BaseCtx } from "./route.ts";
 import type { Tenant } from "../../tenants/context.ts";
-import { headerValue, sendJson } from "../http.ts";
+import { headerValue, refuseWithoutPerson, sendJson } from "../http.ts";
 import { currentModelRequestContext } from "../../model/request-context.ts";
 import { constantTimeEqual } from "../../util/crypto.ts";
 import { personAtKeyboard } from "../artifact-share.ts";
@@ -63,7 +63,7 @@ export async function activeRun(ctx: ApiCtx): Promise<boolean> {
 
 export async function livePersonTurn(ctx: ApiCtx): Promise<boolean> {
   if (ctx.capability && !personAtKeyboard(ctx.capability)) {
-    sendJson(ctx.res, 403, { error: "human_consent_required" });
+    refuseWithoutPerson(ctx.res);
     return false;
   }
   return activeRun(ctx);
