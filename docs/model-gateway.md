@@ -66,8 +66,8 @@ listed model carries `endpoints: ["/v1/chat/completions"]`: core resolves it wit
 not name directly) and translates OpenAI chat completions (text, inline data-URL images passed to the provider as sent, and
 an optional `json_schema` response format; no tools or streaming) into the route's protocol through the same code the
 browser model uses, returning a non-streamed completion. Other paths and streaming are refused for these with a 400
-that says so, and provider errors come back with their text. These calls are charged to the actor's QM budget, since
-no gateway meters them.
+that says so, and provider errors come back with their text. Calls billed to the organization are charged to the
+actor's QM budget, since no gateway meters them.
 
 For gateway models, core forwards any JSON request under the prefix to the same path on the gateway, so
 `$MODEL_GATEWAY_URL/v1/...` behaves as an OpenAI-compatible base URL. It accepts the token as `Authorization: Bearer`,

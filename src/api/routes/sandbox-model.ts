@@ -91,7 +91,7 @@ async function complete(ctx: ApiCtx, modelId: string, input: Record<string, unkn
     "sandbox",
     error,
   );
-  if (result)
+  if (result && route.billing === "org_key")
     await deps.budget
       ?.record(tenantOf(ctx), capability!.actorId, estimateCostUsd(result.usage.prompt_tokens))
       .catch((e: unknown) => reportFailure("sandbox model: budget record", e, capability!.actorId));
