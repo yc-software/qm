@@ -4,6 +4,7 @@ import type { TurnSurfaceOrigin } from "../surfaces/contract.ts";
 import { slackSurfaceOrigin } from "../surfaces/slack/adapter.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
+import { fitsScreenInput } from "../security/security-posture.ts";
 import { samePerson } from "../directory/person.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
 import type { CachedMessage } from "../surface-cache/surface-cache.ts";
@@ -18,7 +19,7 @@ import {
 } from "../surface-cache/ambient-judge.ts";
 import type { AmbientJudgmentStore } from "../surface-cache/ambient-judgment-store.ts";
 import { errMessage, reportFailureAs } from "../util/errors.ts";
-import { buildWakeEnvelope } from "../wake/wake-envelope.ts";
+import { buildWakeEnvelope, type WakeMessage } from "../wake/wake-envelope.ts";
 import { liveTurnOf, routeIncoming } from "../wake/route-incoming.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import { isTerminal } from "../runs/run-store.ts";
@@ -310,7 +311,19 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
       console.error(
         `[ambient] solicited wake degraded to proactive (asked_by=${decision.askedBy}, container=${batch.container})`,
       );
-    const shown = batch.messages.filter((m) => !m.deleted && (m.text ?? "").trim()).slice(-4);
+    const recent = solicited ? [] : recentWakeMessages(batch);
+    const screened = ({ authorId, authorName, ts, text }: WakeMessage) => ({ authorId, authorName, ts, text });
+    const judgeReason = decision.reason ?? null;
+    const screenDataOf = (messages: ReturnType<typeof screened>[]) => JSON.stringify({ messages, judgeReason });
+    const sizes = recent.map((m) => JSON.stringify(screened(m)).length + 1);
+    let size = screenDataOf([]).length + sizes.reduce((total, n) => total + n, 0);
+    let omitted = 0;
+    while (omitted < recent.length && !fitsScreenInput(size)) size -= sizes[omitted++]!;
+    const shown = recent.slice(omitted);
+    if (omitted)
+      console.error(
+        `[ambient] wake left out ${omitted} earlier messages past the content screen's input limit (container=${batch.container})`,
+      );
     const req: TurnRequest = solicited
       ? {
           surface: batch.surface,
@@ -342,15 +355,12 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
             at: new Date(),
             why: decision.reason ?? "The recent messages here may warrant a reply.",
             orders: batch.orders,
-            recentMessages: recentWakeMessages(batch),
-            instructions: `You don't need to have been @mentioned. Reply about the trigger messages. Messages in other threads are separate conversations: don't carry their facts into your reply unless they are about the same subject. Respond with the \`${batch.surface}\` tool's \`post\` action — set \`ts\` to the triggering message id to reply in its thread, or \`broadcast: true\` to post at the channel top level — or stay silent if nothing is needed. To include an image or file, name its workspace path in \`post\`'s \`files\` (it uploads with your message, in that thread). Use \`reach\` only to send to a DIFFERENT channel or person. Use the \`read_thread\` or \`search\` action if you need more context than shown.`,
+            recentMessages: shown,
+            instructions: `You don't need to have been @mentioned. Reply about the trigger messages. Messages in other threads are separate conversations: don't carry their facts into your reply unless they are about the same subject. Respond with the \`${batch.surface}\` tool's \`post\` action — set \`ts\` to the triggering message id to reply in its thread, or \`broadcast: true\` to post at the channel top level — or stay silent if nothing is needed. To include an image or file, name its workspace path in \`post\`'s \`files\` (it uploads with your message, in that thread). Use \`reach\` only to send to a DIFFERENT channel or person. Use the \`read_thread\` or \`search\` action if you need more context than shown.${omitted ? ` The ${omitted} oldest of the recent messages are left out because together they pass the content screen's input limit; read them with \`read_thread\` or \`search\`.` : ""}`,
           }),
           origin: {
             kind: "automation",
-            screenData: JSON.stringify({
-              messages: shown.map(({ authorId, authorName, ts, text }) => ({ authorId, authorName, ts, text })),
-              judgeReason: decision.reason ?? null,
-            }),
+            screenData: screenDataOf(shown.map(screened)),
           },
           surfaceTools: true,
           async: true,
