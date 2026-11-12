@@ -235,22 +235,15 @@ export async function exerciseDeliveryStore(store: DeliveryStore): Promise<void>
   );
   await store.ack(abandoned.id, 700);
 
-  const deferred = await store.enqueue({
-    destination: { type: "group", target: "C-backoff" },
-    text: "its receiver failed; retry later",
-    idempotencyKey: "fire-retry-after",
-  });
+  const held = await store.enqueue({ destination: { type: "group", target: "C" }, text: "x", idempotencyKey: "ra" });
   assert.equal((await store.claimPending("group", 50)).length, 1);
-  await store.retryAfter(ambientTenant(), deferred.id, 300);
+  await store.retryAfter(ambientTenant(), held.id, 300);
   await new Promise((r) => setTimeout(r, 80));
   assert.deepEqual(await store.claimPending("group", 60_000), [], "a row waiting out its retry delay is not claimed");
   await new Promise((r) => setTimeout(r, 300));
-  assert.deepEqual(
-    (await store.claimPending("group", 60_000)).map((d) => d.id),
-    [deferred.id],
-    "a row is claimable again once its retry delay passes",
-  );
-  await store.ack(deferred.id, 800);
+  const reclaimed = (await store.claimPending("group", 60_000)).map((d) => d.id);
+  assert.deepEqual(reclaimed, [held.id], "a row is claimable again once its retry delay passes");
+  await store.ack(held.id, 800);
 
   assert.deepEqual(
     [...(await store.existingKeys(["fire-1", "run:r-2", "fire-race-2", "never-enqueued"]))].sort(),
