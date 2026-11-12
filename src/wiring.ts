@@ -2957,8 +2957,8 @@ export function buildApp(
   );
   const approvalExpirySweeper = createSweeper(
     () =>
-      claimThenBind(approvals.claimTenants, () =>
-        expireStaleApprovals({ approvals, sessions, audit: auditLog }, ambientTenant(), orgScope),
+      claimThenBind(approvals.claimTenants, (_id, tenant) =>
+        expireStaleApprovals({ approvals, sessions, audit: auditLog }, tenant, orgScope),
       ),
     60_000,
     { label: "approval expiry", immediate: true },
