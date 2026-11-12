@@ -80,9 +80,7 @@ async function granteeLabel(ctx: ApiCtx, scopeId: string): Promise<string | unde
   const [kind, ...rest] = scopeId.split(":");
   const ref = rest.join(":");
   if (kind === "channel")
-    return (
-      (await ctx.app.channelName(ref).catch(swallowAs(`persona grantee label ${scopeId}`, undefined))) ?? `#${ref}`
-    );
+    return ctx.app.channelName(ref).catch(swallowAs(`persona grantee label ${scopeId}`, undefined));
   if (kind === "personal")
     return (
       (await ctx.app.directoryMember(ref).catch(swallowAs(`persona grantee label ${scopeId}`, null)))?.displayName ||
