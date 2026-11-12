@@ -372,7 +372,9 @@ function signInWithPortal(): void {
     void 0;
   }
   const returnTo = `${location.pathname}${location.search}`;
-  location.href = `/auth/login?returnTo=${encodeURIComponent(returnTo)}`;
+  const login = `/auth/login?returnTo=${encodeURIComponent(returnTo)}`;
+  if (document.documentElement.classList.contains("app-share-embed")) window.open(login, "_blank", "noopener");
+  else location.href = login;
 }
 
 function clearPortalAttempt(): void {
