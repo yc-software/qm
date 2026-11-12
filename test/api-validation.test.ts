@@ -25,6 +25,12 @@ test("malformed request bodies are 400", async () => {
   const s = start();
   try {
     assert.equal((await post(s.base, "/v1/turns", JSON.stringify({ text: "hi" }))).status, 400);
+    const noSurface = {
+      text: "hi",
+      actor: { externalId: "a@example.test" },
+      conversation: { kind: "dm", threadRef: "t" },
+    };
+    assert.equal((await post(s.base, "/v1/turns", JSON.stringify(noSurface))).status, 400);
     assert.equal((await post(s.base, "/v1/turns", "{not json")).status, 400);
     assert.equal((await post(s.base, "/v1/grants", JSON.stringify({ path: "x" }))).status, 400);
     assert.equal((await post(s.base, "/v1/deployments", JSON.stringify({ entrypoint: "x" }))).status, 400);

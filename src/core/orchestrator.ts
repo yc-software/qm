@@ -152,6 +152,7 @@ import {
 import { attestableAudience, personKey, rosterIds, samePerson } from "../directory/person.ts";
 import { sleep } from "../util/async.ts";
 import { hashId } from "../util/crypto.ts";
+import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { randomUUID } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import type { Orchestrator, OrchestratorDeps, OrchestratorInput } from "./orchestrator/types.ts";
@@ -208,6 +209,7 @@ import {
   flaggedAudit,
   oversizeVerdict,
   screenInboundInput,
+  screenedFields,
   type SecurityScreenContext,
   unscreenedVerdict,
 } from "./orchestrator/security-screen.ts";
@@ -647,10 +649,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const approvalRecord = input.approval ? await pending.get(input.approval.requestId) : undefined;
       const approvalReplaysFlaggedRequest =
         !!approvalRecord?.request &&
-        approvalRecord.request.text === input.text &&
-        JSON.stringify(approvalRecord.request.overheard ?? []) === JSON.stringify(input.overheard ?? []) &&
-        JSON.stringify(approvalRecord.request.attachments ?? []) === JSON.stringify(input.attachments ?? []) &&
-        (approvalRecord.request.conversationHeader ?? "") === (input.conversationHeader ?? "");
+        canonicalJson(screenedFields(approvalRecord.request)) === canonicalJson(screenedFields(input));
       const replaysHeldInput =
         !!approvalSession &&
         approvalRecord?.sessionId === approvalSession.id &&
@@ -1250,6 +1249,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const {
         boundSandboxId,
         assertDefaultUsable,
+        turnDefault,
         workdir,
         provision,
         provisionScratch,
@@ -1633,7 +1633,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           provisionJobComputer,
           provisionResource,
           accessSandboxResource: accessResource,
-          assertDefaultSandboxUsable: assertDefaultUsable,
+          defaultComputer: turnDefault,
           boundSandboxId,
           workdir,
           useSkill,
