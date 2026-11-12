@@ -1073,8 +1073,8 @@ export function createAgent(opts?: AgentOptions): Agent {
       }
     },
 
-    contextTokenBudget(model?: string): number | undefined {
-      return contextTokenBudgetForModel(model && resolveModel(model) ? model : baseModelId());
+    contextTokenBudget(model?: string, cap?: number): number | undefined {
+      return contextTokenBudgetForModel(model && resolveModel(model) ? model : baseModelId(), cap);
     },
 
     async oneShot(systemPrompt: string, prompt: string, purpose?: ModelRequestPurpose): Promise<string | undefined> {

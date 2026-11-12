@@ -210,7 +210,7 @@ export interface CompactInput extends SessionRoute {
 export interface ModelUtilities {
   shouldRespond?(input: DetectInput): Promise<DetectResult>;
   compactHistory?(input: CompactInput): Promise<string>;
-  contextTokenBudget?(model?: string): number | undefined;
+  contextTokenBudget?(model?: string, cap?: number): number | undefined;
   oneShot?(systemPrompt: string, prompt: string, purpose?: ModelRequestPurpose): Promise<string | undefined>;
   judge?(
     systemPrompt: string,

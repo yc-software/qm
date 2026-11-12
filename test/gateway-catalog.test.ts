@@ -155,6 +155,7 @@ test("output limits at or above the context window fall back to a safe limit ins
   assert.deepEqual(limits("vendor/honest-output"), [1_000_000, 128_000]);
   assert.equal(contextTokenBudgetForModel("gateway/vendor/equal-limits"), 150_000);
   assert.equal(contextTokenBudgetForModel("gateway/vendor/small-context"), 8_000);
+  assert.equal(contextTokenBudgetForModel("gateway/vendor/small-context", 50_000), 8_000);
 });
 
 test("successful revocation clears legacy aliases and cached models and cannot be undone by a failure", async () => {

@@ -104,6 +104,7 @@ function buildOrchestrator(
   teams?: TeamStore,
   runs?: RunStore,
 ) {
+  if (maxContextTokens !== undefined) agent.contextTokenBudget = () => maxContextTokens;
   const config = testConfigStore(ORG);
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
@@ -134,7 +135,6 @@ function buildOrchestrator(
     memory: createPostgresMemoryService(testDatabaseUrl()),
     deploy,
     acl,
-    maxContextTokens,
     ...(defaultTurnWallClockMs !== undefined ? { defaultTurnWallClockMs } : {}),
     runtime: createRuntimeService(
       { config, baseModelDefault: "claude-sonnet-5" },
@@ -472,6 +472,28 @@ test("a model-overridden session's background pass sizes against the override's 
   assert.equal(compactCalls.length, 1, "exactly one background compaction against the override's budget");
   assert.equal(compactCalls[0]!.runtime?.modelId, OVERRIDE, "and summarizes on the session's own model");
 });
+
+for (const [label, budget] of [
+  ["the model budget", (_model?: string, cap?: number) => cap ?? 1_000_000],
+  ["the no-window fallback", () => undefined],
+] as const) {
+  test(`the org history budget caps ${label}, so background compaction fires at the lower size`, async () => {
+    const { agent, compactCalls } = spyAgent();
+    agent.contextTokenBudget = budget;
+    const { orch, sessions, config } = buildOrchestrator(agent);
+    await config.setHistoryBudgetTokens(budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
+    const sid = await seed(
+      sessions,
+      msgTexts(8).map((text) => user(text)),
+    );
+
+    const res = await orch.handleTurn(turn("!histcount"));
+    assert.equal(res.status, "ok");
+    assert.equal(res.reply, "history:8");
+    assert.equal((await waitForSummary(sessions, sid)).length, 1);
+    assert.equal(compactCalls.length, 1);
+  });
+}
 
 test("a rapid follow-up that outran the background pass AND is over the HARD limit blocks and compacts inline", async () => {
   const { agent, compactCalls } = spyAgent();
