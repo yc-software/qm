@@ -2109,7 +2109,7 @@ export function createChatSurface(
     }
     if (role === "approval-decision") {
       const decision = message as unknown as HistoryApprovalDecision;
-      let label = "Approval denied";
+      let label = decision.declined === "expired" ? "Approval expired" : "Approval denied";
       if (decision.approved) {
         const labels: Record<string, string> = {
           once: "Approved once",

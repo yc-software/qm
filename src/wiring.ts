@@ -338,6 +338,7 @@ import { createControlService } from "./api/control-service.ts";
 import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
 import { ambientTenant, boundTenant, currentTenant, withTenant } from "./tenants/context.ts";
 import { claimThenBind } from "./tenants/claim.ts";
+import { expireStaleApprovals } from "./core/approval-requester.ts";
 import { inboundTenancy } from "./tenants/lookup.ts";
 import type { RunSignalStore } from "./runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "./runs/postgres-run-signal-store.ts";
@@ -2955,7 +2956,10 @@ export function buildApp(
     { label: "Composio consent returns", immediate: true },
   );
   const approvalExpirySweeper = createSweeper(
-    () => claimThenBind(approvals.claimTenants, () => approvals.expireStale(auditLog, ambientTenant(), orgScope)),
+    () =>
+      claimThenBind(approvals.claimTenants, () =>
+        expireStaleApprovals({ approvals, sessions, audit: auditLog }, ambientTenant(), orgScope),
+      ),
     60_000,
     { label: "approval expiry", immediate: true },
   );

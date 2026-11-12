@@ -1,7 +1,8 @@
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
-import type { AuditEvent } from "../audit/audit-log.ts";
-import type { PendingApprovalRecord, TurnResult } from "../types.ts";
+import type { AuditEvent, AuditLog } from "../audit/audit-log.ts";
+import type { Tenant } from "../tenants/context.ts";
+import { APPROVAL_LIFETIME_MS, type PendingApprovalRecord, type ScopeId, type TurnResult } from "../types.ts";
 
 export const BOT_REQUESTER_APPROVAL_NOTE =
   "This request came from a bot or app, not a person. Only the person who asked can approve a step that needs approval, so no approval was requested and the step did not run. Continue without it, and tell the thread that a person has to ask for this step themselves.";
@@ -29,6 +30,35 @@ export const undeliverableApprovalNote = (failure: string): string =>
 
 export const UNREACHABLE_APPROVAL_DECIDER = "system:approval-unreachable";
 
+export const APPROVAL_EXPIRED_DECIDER = "system:approval-expired";
+
+export const expiredApprovalNote = (): string =>
+  `Nobody answered the approval card for this step within ${APPROVAL_LIFETIME_MS / 60_000} minutes, so it expired and the step did not run. If it's still wanted, try the step again to raise a new card.`;
+
+async function recordDeclined(
+  sessions: Pick<SessionStore, "append">,
+  requestId: string,
+  record: PendingApprovalRecord,
+  author: string,
+  body: Record<string, unknown>,
+  note: string,
+): Promise<void> {
+  const writer = { sessionId: record.sessionId };
+  await sessions.append(writer, {
+    kind: "ElicitationResponse",
+    elicitId: requestId,
+    approved: false,
+    author,
+    body: { command: record.command, ...body },
+  });
+  if (record.kind !== "input" && !record.screenedOutput)
+    await sessions.append(writer, {
+      kind: "UserMessage",
+      hidden: true,
+      text: `${note}\nThe step: ${record.summary ?? record.command}`,
+    });
+}
+
 export async function declineUnreachableApproval(
   deps: { approvals: DurableMap<PendingApprovalRecord>; sessions: Pick<SessionStore, "append"> },
   requestId: string,
@@ -36,19 +66,49 @@ export async function declineUnreachableApproval(
 ): Promise<PendingApprovalRecord | null> {
   const record = await deps.approvals.take(requestId);
   if (!record) return null;
-  const writer = { sessionId: record.sessionId };
-  await deps.sessions.append(writer, {
-    kind: "ElicitationResponse",
-    elicitId: requestId,
-    approved: false,
-    author: UNREACHABLE_APPROVAL_DECIDER,
-    body: { command: record.command, declined: "requester_unreachable", failure },
-  });
-  if (record.kind !== "input" && !record.screenedOutput)
-    await deps.sessions.append(writer, {
-      kind: "UserMessage",
-      hidden: true,
-      text: `${undeliverableApprovalNote(failure)}\nThe step: ${record.summary ?? record.command}`,
-    });
+  await recordDeclined(
+    deps.sessions,
+    requestId,
+    record,
+    UNREACHABLE_APPROVAL_DECIDER,
+    { declined: "requester_unreachable", failure },
+    undeliverableApprovalNote(failure),
+  );
   return record;
+}
+
+export async function expireStaleApprovals(
+  deps: {
+    approvals: DurableMap<PendingApprovalRecord>;
+    sessions: Pick<SessionStore, "append">;
+    audit: Pick<AuditLog, "record">;
+  },
+  tenant: Tenant,
+  scopeLabel: ScopeId,
+): Promise<void> {
+  for (const [id, record] of await deps.approvals.deleteBefore("createdAt", Date.now() - APPROVAL_LIFETIME_MS)) {
+    await recordDeclined(
+      deps.sessions,
+      id,
+      record,
+      APPROVAL_EXPIRED_DECIDER,
+      { declined: "expired", lifetimeMs: APPROVAL_LIFETIME_MS },
+      expiredApprovalNote(),
+    );
+    deps.audit.record(tenant, {
+      at: Date.now(),
+      principalId: "system",
+      action: "command_approval.expire",
+      resource: id,
+      scopeLabel,
+      status: "ok",
+      detail: JSON.stringify({
+        lifetimeMs: APPROVAL_LIFETIME_MS,
+        kind: record.kind ?? "approval",
+        command: record.summary ?? record.command,
+        sessionId: record.sessionId,
+        requester: record.request?.actor.externalId,
+      }),
+    });
+  }
 }

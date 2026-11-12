@@ -2014,12 +2014,13 @@ export interface HistoryApprovalDecision {
   approved: boolean;
   command: string;
   scope?: string;
+  declined?: string;
   timestamp: number;
 }
 
 function approvalDecisionMessage(item: Item): HistoryApprovalDecision | null {
   if (item.kind !== "ElicitationResponse") return null;
-  const { command, scope } = item.body;
+  const { command, scope, declined } = item.body;
   if (typeof item.approved !== "boolean" || typeof command !== "string") return null;
   return {
     role: "approval-decision",
@@ -2028,6 +2029,7 @@ function approvalDecisionMessage(item: Item): HistoryApprovalDecision | null {
     command,
     requestId: item.elicitId,
     ...(typeof scope === "string" ? { scope } : {}),
+    ...(typeof declined === "string" ? { declined } : {}),
     timestamp: item.createdAt,
   };
 }
