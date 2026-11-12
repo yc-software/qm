@@ -106,6 +106,7 @@ async function agent(opts?: {
   heartbeatMs?: number;
   minFireIntervalMs?: number;
   onRun?: () => Promise<void>;
+  respond?: (req: TurnRequest) => Promise<TurnResult>;
 }) {
   const fake = fakeSandbox();
   const monitors = createMonitorStore(testMap());
@@ -115,6 +116,7 @@ async function agent(opts?: {
   const run = async (req: TurnRequest): Promise<TurnResult> => {
     calls.push(req);
     await opts?.onRun?.();
+    if (opts?.respond) return opts.respond(req);
     return opts?.result ?? { status: "ok", reply: opts?.reply ?? "MONITOR-REPLY" };
   };
   const identity = createIdentityService(testMap(), { externalMembers: testMap() });
@@ -343,18 +345,20 @@ test("a wake whose turn didn't complete is reported to the destination, not sile
   assert.match(after?.lastError ?? "", /rate limit/);
 });
 
-test("a wake handed off at shutdown posts no failure notice and re-runs the same event on the next poll", async () => {
-  const h = await agent({ result: { status: "queued", sessionId: "s1", runId: "r1" } });
-  const m = await h.arm();
+test("a wake whose turn never finishes is handed off without holding up the next watch", async () => {
+  const h = await agent({
+    respond: (req) => (req.async ? Promise.resolve({ status: "queued", runId: "r1" }) : new Promise(() => {})),
+  });
+  const a = await h.arm();
+  await h.arm({ threadRef: "thread-2" });
   h.append("p-1", "line\n");
-  await h.poller.tick();
-  assert.deepEqual(await h.deliveries.pending("slack"), []);
-  assert.equal((await h.monitors.get(m.id))?.cursor, 0);
-  await h.poller.tick();
-  assert.deepEqual(
-    h.calls.map((c) => c.idempotencyKey),
-    [`monitor:${m.id}:0`, `monitor:${m.id}:0`],
+  const stalled = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error("tick waited on the turn")), 2_000).unref(),
   );
+  await Promise.race([h.poller.tick(), stalled]);
+  assert.deepEqual(h.calls.map((c) => c.conversation.threadRef).sort(), ["thread-1", "thread-2"]);
+  assert.deepEqual(await h.deliveries.pending("slack"), []);
+  assert.equal((await h.monitors.get(a.id))?.cursor, "line\n".length);
 });
 
 test("a non-leader instance does not poll", async () => {

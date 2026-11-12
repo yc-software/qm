@@ -37,7 +37,7 @@ export interface TriggerDeps {
 
 export interface TriggerSpec extends Pick<
   TurnRequest,
-  "model" | "fastMode" | "attachments" | "infrequentCron" | "memoryNotebookOnly" | "botActor"
+  "model" | "fastMode" | "attachments" | "infrequentCron" | "memoryNotebookOnly" | "botActor" | "async"
 > {
   runtime?: import("../agent/agent.ts").RuntimeChoice | null;
   title?: string;
@@ -323,9 +323,11 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         ? { deliveryTarget: spec.destination.target }
         : {}),
       ...(liveDelivery ? { surfaceTools: true, addressed: true } : {}),
+      ...(spec.async ? { async: true } : {}),
       idempotencyKey: spec.fireKey,
     });
     if (res.status === "queued") {
+      if (spec.async) return;
       if (!spec.redrivesHandOff) await sendErrorNotice(userFacingFailureClause(res));
       throw new TransientTurnFailure(`turn ${res.runId ?? ""} was still waiting to finish when this process shut down`);
     }

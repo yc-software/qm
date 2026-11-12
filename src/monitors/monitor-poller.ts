@@ -144,6 +144,7 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
   const heartbeatMs = deps.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
   const minFireIntervalMs = deps.minFireIntervalMs ?? DEFAULT_MIN_FIRE_INTERVAL_MS;
   const leaderLease = deps.leaderLease;
+  let inFlight: { monitorId: string; since: number; reported: boolean } | undefined;
 
   const triggerDeps: TriggerDeps = {
     deliveries: deps.deliveries,
@@ -169,7 +170,7 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
       fireKey,
       surface: "monitor",
       threadRef: m.threadRef,
-      redrivesHandOff: true,
+      async: true,
       ...(m.destination ? { destination: m.destination } : {}),
       ...(withErrorNotice
         ? {
@@ -343,9 +344,11 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
           console.warn(`[monitor] fan-out capped: fired ${fires}/${enabled.length} watched jobs this tick`);
           break;
         }
+        inFlight = { monitorId: m.id, since: now(), reported: false };
         fires += await withTenant(m.tenantId, (tenant) => pollMonitor(sandbox, handles, m, t, tenant));
       }
     } finally {
+      inFlight = undefined;
       for (const { tenantId, handle } of handles.values()) {
         await withTenant(tenantId, () => sandbox.teardown(handle, { keepWarm: true })).catch((e: unknown) => {
           console.error("[monitor] teardown failed:", errMessage(e));
@@ -357,6 +360,12 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
   const tick = async (nowArg?: number): Promise<void> => {
     const t = nowArg ?? now();
     const observed = epoch;
+    if (inFlight && !inFlight.reported) {
+      inFlight.reported = true;
+      console.warn(
+        `[monitor] tick overran: still polling watch ${inFlight.monitorId} after ${Math.round((now() - inFlight.since) / 1000)}s; every watch waits until it returns`,
+      );
+    }
     const work = () => leaderLease.hold(TICK_LEASE_KEY, () => pollAll(t, observed));
     if (deps.admittedWork) await deps.admittedWork.run(work);
     else await work();
