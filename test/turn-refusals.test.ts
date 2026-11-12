@@ -1,7 +1,6 @@
 import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { installPrincipalLinks } from "../src/directory/person.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
@@ -48,7 +47,6 @@ test("a web turn starts new threads only under the caller's own IDs and refuses 
     webTurn("alice", { conversation: { kind: "channel", channelRef: "C-NOT-JOINED", threadRef: "web:alice:channel" } }),
   );
   assert.deepEqual([channel.status, channel.reason], ["refused", "you're not a member of that context"]);
-  installPrincipalLinks({ canonical: (key) => (key === "sso:alice" ? "alice" : undefined), aliases: () => [] });
-  assert.notEqual((await built.app.turn(webTurn("sso:alice"))).status, "refused");
-  installPrincipalLinks(null);
+  await built.principalLinks.link({ principalId: "sso:a", canonicalId: "alice", evidence: "x", linkedBy: "t" });
+  assert.notEqual((await built.app.turn(webTurn("sso:a"))).status, "refused");
 });
