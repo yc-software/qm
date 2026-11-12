@@ -18,7 +18,7 @@ import {
 import { collectBlob } from "../../persistence/blob-transfer.ts";
 import { securityScreenPayloads } from "../../security/security-posture.ts";
 import type { CommandApprovalGrant } from "../../types.ts";
-import { isVisionAttachment, safeAttachmentName, withheldName } from "../attachments.ts";
+import { isVisionAttachment, type materializeInbound, safeAttachmentName, withheldName } from "../attachments.ts";
 import { wordsToScreen } from "./intake.ts";
 import {
   documentText,
@@ -685,6 +685,37 @@ export function createToolResultScreen(turn: ToolResultScreenTurn) {
     });
     return { outcome: "unscreened" };
   };
+}
+
+export function createInboundFileScreen(turn: {
+  session: Session;
+  securityPolicy: InboundScreenTurn["resolution"]["securityPolicy"];
+  enforceScreen: boolean;
+  classifyAs: ClassifyAs;
+  turnAbort: AbortController;
+  audit: InboundScreenTurn["audit"];
+}) {
+  const { session, securityPolicy, enforceScreen, classifyAs, turnAbort, audit } = turn;
+  return (requestText: string): Parameters<typeof materializeInbound>[6] =>
+    securityPolicy.screening === "off"
+      ? undefined
+      : async ({ content, name, mimetype }) => {
+          const payload = JSON.stringify({ name, mimetype, content });
+          let verdict = enforceScreen ? oversizeVerdict() : unscreenedVerdict();
+          if (payload.length <= MAX_DOCUMENT_TEXT_CHARS)
+            verdict = await screenChunks(
+              securityScreenChunks("tool_result:inbound_file", payload),
+              classifyAs({
+                sessionId: session.id,
+                hook: "tool_response",
+                request: requestText,
+                surface: "inbound_file",
+              }),
+              { batch: 4, signal: turnAbort.signal },
+            );
+          if (verdict.decision === "strict") audit(flaggedAudit("inbound_file", "withheld", verdict.reason, [name]));
+          return verdict;
+        };
 }
 
 export function createDocumentScreen(turn: {
