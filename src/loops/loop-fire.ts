@@ -609,15 +609,11 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
   }
 
   async function triage(loop: Loop, fireKey: string, threadRef: string): Promise<void> {
-    try {
-      if (!(await deps.triageEnabledFor?.(loop.owner))) return;
-      const work = triageWork(loop, await deps.items.byLoop(loop.id));
-      if (!work) return;
-      const patches = await decideTriage(loop, work, `${fireKey}:triage`, threadRef);
-      for (const [id, patch] of patches) await deps.items.setTriage(id, patch, "agent");
-    } catch (error) {
-      console.error("%s", `[loops] triage for ${loop.id} failed:`, errMessage(error));
-    }
+    if (!(await deps.triageEnabledFor?.(loop.owner))) return;
+    const work = triageWork(loop, await deps.items.byLoop(loop.id));
+    if (!work) return;
+    const patches = await decideTriage(loop, work, `${fireKey}:triage`, threadRef);
+    for (const [id, patch] of patches) await deps.items.setTriage(id, patch, "agent");
   }
 
   function stageFailure(stage: string, outcome: TriggerOutcome): { error: Error; userMessage: string } | null {

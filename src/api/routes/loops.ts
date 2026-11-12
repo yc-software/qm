@@ -534,7 +534,13 @@ async function fireLoopNow(ctx: ApiCtx): Promise<void> {
   if (!(await requireLoopAuthority(ctx, deps, loop))) return;
   if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
   const fireKey = `loop:${loop.id}:manual:${Date.now()}`;
-  void deps.fire.fire(loop.id, fireKey).catch((e: unknown) => swallow(`manual fire of loop ${loop.id}`, e));
+  void deps.fire
+    .fire(loop.id, fireKey)
+    .then((result) => {
+      if (result.status === "failed")
+        console.error("%s", `[loops] manual fire of ${loop.id} failed: ${result.note ?? ""}`);
+    })
+    .catch((e: unknown) => swallow(`manual fire of loop ${loop.id}`, e));
   return sendJson(ctx.res, 200, { ok: true, fireKey });
 }
 
