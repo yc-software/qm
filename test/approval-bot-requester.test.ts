@@ -1,13 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  APPROVAL_EXPIRED_DECIDER,
   UNREACHABLE_APPROVAL_DECIDER,
   declineUnreachableApproval,
+  expireStaleApprovals,
+  expiredApprovalNote,
   undeliverableApprovalNote,
 } from "../src/core/approval-requester.ts";
+import type { AuditEvent } from "../src/audit/audit-log.ts";
+import { ambientTenant } from "../src/tenants/context.ts";
 import { botAuthoredActor } from "../src/slack/turn-handler.ts";
 import type { NewItem } from "../src/sessions/items.ts";
-import type { PendingApprovalRecord, TurnRequest } from "../src/types.ts";
+import { APPROVAL_LIFETIME_MS, type PendingApprovalRecord, type TurnRequest } from "../src/types.ts";
 import { testMap } from "./support/test-database.ts";
 
 function record(request: Partial<TurnRequest> = {}): PendingApprovalRecord {
@@ -72,4 +77,63 @@ test("bot-authored Slack messages keep bot provenance only when the author staye
     { externalId: "U3" },
     "slack-id mode can't tell a person posting through an app from a bot, so it relies on the profile",
   );
+});
+
+test("a card past the approval lifetime is settled as expired, told to the agent, and audited", async () => {
+  const approvals = testMap<PendingApprovalRecord>();
+  await approvals.put("OLD", { ...record(), createdAt: Date.now() - APPROVAL_LIFETIME_MS - 1_000 });
+  await approvals.put("FRESH", { ...record(), createdAt: Date.now() });
+  const appended: NewItem[] = [];
+  const sessions = {
+    append: async (_writer: { sessionId: string }, item: NewItem) => {
+      appended.push(item);
+      return { ...item, seq: appended.length } as never;
+    },
+  };
+  const events: AuditEvent[] = [];
+  await expireStaleApprovals(
+    { approvals, sessions, audit: { record: (_tenant, e) => events.push(e) } },
+    ambientTenant(),
+    "org:acme",
+  );
+  assert.equal(await approvals.get("OLD"), null);
+  assert.ok(await approvals.get("FRESH"));
+  const decision = appended[0] as NewItem & { approved?: boolean; elicitId?: string; author?: string };
+  assert.equal(decision.elicitId, "OLD");
+  assert.equal(decision.approved, false);
+  assert.equal(decision.author, APPROVAL_EXPIRED_DECIDER);
+  assert.equal((appended[1] as NewItem & { text?: string }).text, `${expiredApprovalNote()}\nThe step: Install a CLI`);
+  assert.deepEqual(
+    events.map((e) => [e.action, e.resource]),
+    [["command_approval.expire", "OLD"]],
+  );
+});
+
+test("an expired held-output card tells the agent without repeating the held content", async () => {
+  const approvals = testMap<PendingApprovalRecord>();
+  await approvals.put("HELD", {
+    ...record(),
+    command: "release quarantined execute output",
+    summary: "Blocked content preview: secret payload",
+    screenedOutput: { tool: "execute", text: "secret payload" },
+    createdAt: Date.now() - APPROVAL_LIFETIME_MS - 1_000,
+  });
+  const appended: NewItem[] = [];
+  const sessions = {
+    append: async (_writer: { sessionId: string }, item: NewItem) => {
+      appended.push(item);
+      return { ...item, seq: appended.length } as never;
+    },
+  };
+  const events: AuditEvent[] = [];
+  await expireStaleApprovals(
+    { approvals, sessions, audit: { record: (_tenant, e) => events.push(e) } },
+    ambientTenant(),
+    "org:acme",
+  );
+  assert.equal(
+    (appended[1] as NewItem & { text?: string }).text,
+    `${expiredApprovalNote()}\nThe step: release quarantined execute output`,
+  );
+  assert.ok(!JSON.stringify([appended, events]).includes("secret payload"));
 });

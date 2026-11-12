@@ -171,7 +171,6 @@ test("the personal-account picker preserves composer choices and saves context d
           resolvingApprovals: new Set<string>(),
         },
         activePendingApprovals: () => [],
-        hasUnresolvedApproval: () => false,
         turnRuntime: () => null,
         hasLiveRun: () => false,
         drawActiveChat: draw,

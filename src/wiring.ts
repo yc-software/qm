@@ -338,6 +338,7 @@ import { createControlService } from "./api/control-service.ts";
 import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
 import { ambientTenant, boundTenant, currentTenant, withTenant } from "./tenants/context.ts";
 import { claimThenBind } from "./tenants/claim.ts";
+import { expireStaleApprovals } from "./core/approval-requester.ts";
 import { inboundTenancy } from "./tenants/lookup.ts";
 import type { RunSignalStore } from "./runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "./runs/postgres-run-signal-store.ts";
@@ -2954,6 +2955,14 @@ export function buildApp(
     30 * 60_000,
     { label: "Composio consent returns", immediate: true },
   );
+  const approvalExpirySweeper = createSweeper(
+    () =>
+      claimThenBind(approvals.claimTenants, (_id, tenant) =>
+        expireStaleApprovals({ approvals, sessions, audit: auditLog }, tenant, orgScope),
+      ),
+    60_000,
+    { label: "approval expiry", immediate: true },
+  );
   const blobSweeper = createSweeper(() => blobTransfer.sweep(BLOB_TTL_MS), 30 * 60_000);
   const BLOB_TRANSFER_EXPIRY_DAYS = 1;
   void blobTransfer
@@ -3011,6 +3020,7 @@ export function buildApp(
       if (config.skillSyncPollMs > 0) skillSyncEngine.start(config.skillSyncPollMs);
       blobSweeper.start();
       composioReturnSweeper.start();
+      approvalExpirySweeper.start();
       fileUploads?.start();
       idleSweeper?.start();
       deployMaintenanceSweeper.start();
@@ -3053,6 +3063,7 @@ export function buildApp(
       deepIdleSweeper?.stop(),
       blobSweeper.stop(),
       composioReturnSweeper.stop(),
+      approvalExpirySweeper.stop(),
       fileUploads?.stop(),
       wakeSweep.stop(),
       swarms?.stop(),
