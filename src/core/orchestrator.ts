@@ -54,7 +54,7 @@ import type {
   PendingApprovalRecord,
 } from "../types.ts";
 import { scopeId as toScopeId, personalScope } from "../types.ts";
-import { desktopClientForTurn, introducesUser, isPersonAuthored, isSessionTurn } from "./turn-origin.ts";
+import { boundWebhook, desktopClientForTurn, introducesUser, isPersonAuthored, isSessionTurn } from "./turn-origin.ts";
 import { resolveTurnFastMode } from "./turn-options.ts";
 import { orgId } from "../config.ts";
 import { type Tenant, ambientTenant } from "../tenants/context.ts";
@@ -173,6 +173,7 @@ import {
   currentTimeBlock,
   defaultSandboxLoadLine,
   environmentNote,
+  RELAYED_WEB_NOTE,
   renderGatewayContext,
   renderSandboxProviders,
   sharedFilesSystemSection,
@@ -736,6 +737,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         (await deps.notebookOnlyMemory?.(conversation.threadRef)) === true;
       const actAsActor = actor.type === "internal" && !input.botActor;
       const isWeb = input.surface === "web";
+      const relayedWeb = isWeb && boundWebhook(input) !== undefined;
       let modeName = "mode-fallback";
       if (input.surfaceTools) modeName = "mode-autonomous";
       else if (!automatedTurn && !(sessionTurn && input.envelopeWrapped) && (conversation.kind === "dm" || isWeb))
@@ -811,6 +813,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const toolSurface = deps.surfaces.get(surfaceName || "slack");
       const branding = await resolveBranding(deps.config, resolution.orgScopeId, deps.brandingDefault);
       const botName = branding.selfLabel ?? "QM";
+      let webSurfaceLabel: string | undefined;
+      if (relayedWeb) webSurfaceLabel = `another app that relays this chat to ${botName}`;
+      else if (isWeb) webSurfaceLabel = `the ${botName} web app`;
       const orgName = branding.orgName ?? "this organization";
       const rawHandle = cleanBrandingLabel(input.gatewayContext?.botHandle?.replace(/^@/, ""), 40);
       const botHandle = rawHandle && rawHandle.toLowerCase() !== botName.toLowerCase() ? rawHandle : undefined;
@@ -821,7 +826,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         botName,
         orgName,
         surfaceTool,
-        surfaceLabel: isWeb ? `the ${botName} web app` : (toolSurface?.label ?? "Slack"),
+        surfaceLabel: webSurfaceLabel ?? toolSurface?.label ?? "Slack",
         conversationType: { dm: "private 1:1", group: "group conversation", channel: "channel conversation" }[
           conversation.kind
         ],
@@ -954,7 +959,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         input.gatewayContext,
         conversation.kind === "dm" ? (cleanBrandingLabel(actor.displayName, 80) ?? personLabel(actor.id)) : undefined,
       );
-      if (gatewayBlock) turnContextBlocks["Where you are"] = gatewayBlock;
+      if (gatewayBlock)
+        turnContextBlocks["Where you are"] = relayedWeb ? `${gatewayBlock}\n${RELAYED_WEB_NOTE}` : gatewayBlock;
       const homeChannel =
         conversation.kind === "group" && conversation.channelRef
           ? await deps.managedGroups

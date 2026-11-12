@@ -125,6 +125,9 @@ function guidanceOf(item: Item): GuidanceSnapshot | undefined {
     : undefined;
 }
 
+export const RELAYED_WEB_NOTE =
+  "This chat reaches you through another app, not the QM web UI: that app sends you the messages and shows your replies itself. It renders ordinary Markdown, but not web-UI directives such as `::connect-apps{}`, `::add-to-slack{}` or `::link-slack-account{}`, canvases or embeds; those would appear as raw text. When a skill offers a web-chat widget, take its path for other surfaces instead, e.g. an ordinary authorization link to connect an app.";
+
 export function renderGatewayContext(surface: string | undefined, ctx?: GatewayContext, dmWith?: string): string {
   const gateway = (surface ?? "").trim();
   const location = ctx?.location?.trim();

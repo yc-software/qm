@@ -122,6 +122,30 @@ test("web prompt tells cron creators to use a real notification destination", as
   assert.doesNotMatch(res.reply ?? "", /cannot receive future external notifications/);
 });
 
+test("a web chat relayed by another app tells the agent its web-UI widgets won't render", async () => {
+  const { app } = freshApp();
+  const relayed = await app.turn({
+    surface: "web",
+    actor: { externalId: "U4" },
+    conversation: { kind: "dm", threadRef: "web:U4:t1" },
+    deliveryTarget: "web:U4:t1",
+    deliveryWebhook: { binding: "6f1c7a2e-4b8d-4c1e-9a3f-2d5e8b7c0a11", url: "https://receiver.example/qm" },
+    text: "!sysprompt",
+  });
+  assert.equal(relayed.status, "ok", JSON.stringify(relayed));
+  assert.match(relayed.reply ?? "", /over another app that relays this chat to/);
+  assert.match(relayed.reply ?? "", /not web-UI directives such as `::connect-apps\{\}`/);
+
+  const own = await app.turn({
+    surface: "web",
+    actor: { externalId: "U4" },
+    conversation: { kind: "dm", threadRef: "web:U4:t2" },
+    text: "!sysprompt",
+  });
+  assert.match(own.reply ?? "", /web app\./);
+  assert.doesNotMatch(own.reply ?? "", /relays this chat/);
+});
+
 test("triggered destination turns tell the agent to return the deliverable, not self-send it", async () => {
   const { app } = freshApp();
   const res = await app.turn({
