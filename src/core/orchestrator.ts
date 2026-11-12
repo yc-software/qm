@@ -89,7 +89,7 @@ import type {
 import { compactedSinceLastTurn, forModelContext, forSearchView } from "../agent/context-compaction.ts";
 import {
   securityScreenChunks,
-  securityScreenPayload,
+  securityScreenPayloads,
   UNSCREENED_REASON,
   unscreenedNotice,
 } from "../security/security-posture.ts";
@@ -205,6 +205,8 @@ import {
   createDocumentScreen,
   createSkillScreen,
   createToolResultScreen,
+  flaggedAudit,
+  oversizeVerdict,
   screenInboundInput,
   type SecurityScreenContext,
   unscreenedVerdict,
@@ -354,7 +356,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         scopeId: scopeLabel,
         origin: sessionId ? await originOf(session) : sessionOrigin(conversation.threadRef),
       });
-      const bounded = securityScreenPayload({
+      const payloads = securityScreenPayloads({
         surface: "external",
         text: "",
         origin: { kind: "automation", screenData: payload },
@@ -368,11 +370,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         ...(sessionId ? { sessionId } : {}),
       } as const;
       if (screening === "observe") {
-        if (bounded && !bounded.truncated)
-          await classifySecurityData(tenant, bounded.content, actor.id, scopeLabel, undefined, {
-            ...steerContext,
-            mode: "observe",
-          });
+        if (!payloads) return "allow";
+        await screenChunks(
+          payloads,
+          (chunk) =>
+            classifySecurityData(tenant, chunk, actor.id, scopeLabel, undefined, { ...steerContext, mode: "observe" }),
+          { batch: 4 },
+        );
         return "allow";
       }
       const block = (cause: string, reason?: string): "block" => {
@@ -390,19 +394,25 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (!deps.securityScreener && !deps.agent.screenSecurity) return block("no-screener");
       if (deps.budget && !(await deps.budget.check(tenant, actor.id)).allowed) return block("over-budget");
       if (securitySteersInFlight.has(conversation.threadRef)) return block("steer-in-flight");
-      if (!bounded || bounded.truncated) return block("oversize-input");
+      if (!payloads) return block("oversize-input");
+      if (!payloads.length) return block("empty-input");
       securitySteersInFlight.add(conversation.threadRef);
-      const verdict = await classifySecurityData(
-        tenant,
-        bounded.content,
-        actor.id,
-        scopeLabel,
-        sessionId
-          ? async (rec) => {
-              await deps.sessions.recordLlmRequest(sessionId, { ...rec, scopeLabel });
-            }
-          : undefined,
-        { ...steerContext, mode: "enforce" },
+      const verdict = await screenChunks(
+        payloads,
+        (chunk) =>
+          classifySecurityData(
+            tenant,
+            chunk,
+            actor.id,
+            scopeLabel,
+            sessionId
+              ? async (rec) => {
+                  await deps.sessions.recordLlmRequest(sessionId, { ...rec, scopeLabel });
+                }
+              : undefined,
+            { ...steerContext, mode: "enforce" },
+          ),
+        { batch: 4 },
       ).finally(() => securitySteersInFlight.delete(conversation.threadRef));
       if (verdict?.decision === "auto") {
         if (!verdict.unscreened) return "allow";
@@ -641,14 +651,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         JSON.stringify(approvalRecord.request.overheard ?? []) === JSON.stringify(input.overheard ?? []) &&
         JSON.stringify(approvalRecord.request.attachments ?? []) === JSON.stringify(input.attachments ?? []) &&
         (approvalRecord.request.conversationHeader ?? "") === (input.conversationHeader ?? "");
-      const screenInbound =
-        securityPolicy.screening !== "off" &&
-        !(
-          approvalSession &&
-          approvalRecord?.sessionId === approvalSession.id &&
-          approvalRecord.kind === "input" &&
-          approvalReplaysFlaggedRequest
-        );
+      const replaysHeldInput =
+        !!approvalSession &&
+        approvalRecord?.sessionId === approvalSession.id &&
+        approvalRecord.kind === "input" &&
+        approvalReplaysFlaggedRequest;
+      const screenInbound = securityPolicy.screening !== "off" && !replaysHeldInput;
       const screenSession: { id?: string } = {};
       const pendingScreenRequests: TurnLlmRequestRecord[] = [];
       const recordScreenRequest = async (rec: TurnLlmRequestRecord): Promise<void> => {
@@ -681,6 +689,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         scopeId,
         resolution,
         screenInbound,
+        replaysHeldInput,
         enforceScreen,
         ambientTurn,
         sessionTurn,
@@ -707,13 +716,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await deps.sessions.addParticipant(session.id, actor.id);
         if (input.shutdown?.aborted)
           return { status: "queued", sessionId: session.id, ...(input.runId ? { runId: input.runId } : {}) };
-        if (botRequester)
-          return botApprovalRefusal(
-            audit,
-            session.id,
-            "security-screen",
-            `${flaggedScreenedInput.reason}; flagged sources: ${flaggedScreenedInput.sources.join(", ") || "message"}`,
-          );
+        const heldReason = `${flaggedScreenedInput.reason}; flagged sources: ${flaggedScreenedInput.sources.join(", ") || "message"}`;
+        if (botRequester) return botApprovalRefusal(audit, session.id, "security-screen", heldReason);
         let approval: PendingApproval;
         try {
           approval = await withManagedRosterVersion(async () => {
@@ -722,10 +726,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             return issueApproval(inputApprovalId(session.id, replayableRequest(input)), {
               sessionId: session.id,
               command: "security-screen",
-              reason: `${flaggedScreenedInput.reason}; flagged sources: ${flaggedScreenedInput.sources.join(", ") || "message"}`,
+              reason: heldReason,
               blocksInput: true,
               kind: "input",
               approvalKey: `security-screen:${input.surface ?? "unknown"}`,
+              ...(flaggedScreenedInput.onceOnly ? { grantModes: { session: false, always: false } } : {}),
             });
           });
         } catch (err) {
@@ -1768,17 +1773,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 securityPolicy.screening !== "off"
                   ? async ({ content, name, mimetype }) => {
                       const payload = JSON.stringify({ name, mimetype, content });
-                      if (payload.length > MAX_DOCUMENT_TEXT_CHARS) return unscreenedVerdict();
-                      return screenChunks(
-                        securityScreenChunks("tool_result:inbound_file", payload),
-                        classifyAs({
-                          sessionId: session.id,
-                          hook: "tool_response",
-                          request: requestText,
-                          surface: "inbound_file",
-                        }),
-                        { batch: 4, signal: turnAbort.signal },
-                      );
+                      let verdict = enforceScreen ? oversizeVerdict() : unscreenedVerdict();
+                      if (payload.length <= MAX_DOCUMENT_TEXT_CHARS)
+                        verdict = await screenChunks(
+                          securityScreenChunks("tool_result:inbound_file", payload),
+                          classifyAs({
+                            sessionId: session.id,
+                            hook: "tool_response",
+                            request: requestText,
+                            surface: "inbound_file",
+                          }),
+                          { batch: 4, signal: turnAbort.signal },
+                        );
+                      if (verdict.decision === "strict")
+                        audit(flaggedAudit("inbound_file", "withheld", verdict.reason, [name]));
+                      return verdict;
                     }
                   : undefined,
               )
@@ -1876,6 +1885,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           enforceScreen,
           classifyAs,
           turnAbort,
+          audit,
         });
         const documentRoom = {
           maxBytes: MAX_DOCUMENT_BYTES,
