@@ -2775,7 +2775,7 @@ export function buildApp(
     skipFire: async (cron) => (await memoryTidy.skipFire(cron)) ?? suggestedActivities.skipFire(cron),
     notebookOnlyMemory: (cron) => memoryTidy.manages(cron),
     runtimeError: (scope, runtime) => availableRuntimeError({ deps: runtimeDeps }, scope, runtime, "cron"),
-    deleteCron: (id) => app.deleteCron(id),
+    deleteCron: (id) => app.deleteCron(id, { actorId: "system" }),
     advisoryLock,
     crons,
     deliveries,
