@@ -127,7 +127,7 @@ function guidanceOf(item: Item): GuidanceSnapshot | undefined {
 
 export function webSurfaceLabel(botName: string, relayed: boolean): string {
   if (!relayed) return `the ${botName} web app`;
-  return `another app that relays this chat to ${botName}. It renders ordinary Markdown but not the ${botName} web UI's directives (\`::connect-apps{}\`, \`::add-to-slack{}\`, \`::link-slack-account{}\`), canvases or embeds, which would show as raw text; where a skill offers a web-chat widget, take its path for other surfaces, such as an ordinary authorization link`;
+  return `another app that relays this chat to ${botName} and shows ordinary Markdown, not ${botName} web UI widgets; where a skill has a web-chat path, take its path for other surfaces`;
 }
 
 export function renderGatewayContext(surface: string | undefined, ctx?: GatewayContext, dmWith?: string): string {
