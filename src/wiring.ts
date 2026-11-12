@@ -1552,6 +1552,7 @@ export function buildApp(
       requested,
       hydrateModelCatalog,
       route.runtimePurpose,
+      route.session?.runtime?.modelId,
     );
   const resolveSessionRuntime = async (route: SessionRoute): Promise<RuntimeChoice> => {
     if (!route.runtimePinned || !route.runtime?.modelId) return resolveRequestedRuntime(route, route.runtime);
