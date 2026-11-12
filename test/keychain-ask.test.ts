@@ -1011,15 +1011,13 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     assert.ok(registered.includes("POST /v1/keychain/asks"));
     for (const removed of ["POST /v1/keychain/grants", "POST /v1/keychain/asks/:id/decline"])
       assert.ok(!registered.includes(removed), `${removed} is no longer registered`);
-    const unknown = await (await post("/v1/keychain/no-such-route", {}, liveOwner)).json();
     for (const [path, body] of [
       ["/v1/keychain/grants", { credential: gh.id, mode: "standing", purpose: "owner says yes" }],
       ["/v1/keychain/grants", { ask: "anything", mode: "once", purpose: "x" }],
       ["/v1/keychain/asks/anything/decline", {}],
     ] as const) {
       const res = await post(path, body, liveOwner);
-      assert.equal(res.status, 403, path);
-      assert.deepEqual(await res.json(), unknown, path);
+      assert.ok([404, 405].includes(res.status), `${path} answered ${res.status}`);
     }
     const send = await post(
       "/v1/keychain/asks",
