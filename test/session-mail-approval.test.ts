@@ -16,7 +16,7 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { scopeId, type Conversation, type Principal } from "../src/types.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 
-import { createAgentTools } from "../src/agent/agent-tools.ts";
+import { createAgentTools, pauseStampAfterToolCall } from "../src/agent/agent-tools.ts";
 import { createFeatureFlagStore } from "../src/feature-flags.ts";
 import { createSessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
 import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
@@ -88,7 +88,9 @@ async function scenario() {
       };
       const tool = createAgentTools(ref).find((tool) => tool.name === "subagents")!;
       const execute = tool.execute as unknown as (id: string, input: unknown) => Promise<{ content: unknown[] }>;
-      const result = await execute(`wait-call-${++callSeq}`, { action: "wait", timeoutMs: 0 });
+      const callId = `wait-call-${++callSeq}`;
+      const result = await execute(callId, { action: "wait", timeoutMs: 0 });
+      await pauseStampAfterToolCall(ref)({ toolCall: { id: callId }, result });
       const reply = JSON.stringify(result.content);
       await turn.emit({ kind: "AgentMessage", text: reply });
       return { reply, modelCalls: 1 };

@@ -329,6 +329,7 @@ export interface SessionSyscallsFactory {
 
 export interface SessionSyscallDeps {
   mailbox: SessionMailbox;
+  awaitingApproval?: (sessionId: string) => Promise<boolean>;
   enabled?: (actorId: string) => Promise<boolean>;
   sessions: Pick<
     SessionStore,

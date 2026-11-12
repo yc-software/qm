@@ -69,7 +69,13 @@ import {
   REPLY_CHECK_LIMITS,
   replyCheckPrompt,
 } from "./agent.ts";
-import { coreToolOptions, createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "./agent-tools.ts";
+import {
+  acknowledgePersistedMail,
+  coreToolOptions,
+  createAgentTools,
+  pauseStampAfterToolCall,
+  type ToolContextRef,
+} from "./agent-tools.ts";
 import { endedOnPurpose } from "./agent-tools/record.ts";
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
 import {
@@ -481,6 +487,7 @@ export function createAgent(opts?: AgentOptions): Agent {
       const desiredModelId = route.modelId;
       const wantFast = wantsFastMode(dispatched.runtime?.fastMode, desiredModelId);
       const ref = turnToolRef(dispatched);
+      await acknowledgePersistedMail(dispatched.tools, dispatched.history);
       let activeSteps: StepRecorder | undefined;
       const tools = recordingTools(createTurnTools(ref, dispatched), () => activeSteps);
       const approvedTurn = await replayApprovedCalls(dispatched, ref, tools);

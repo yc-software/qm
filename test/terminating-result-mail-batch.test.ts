@@ -55,7 +55,7 @@ function anthropicSse(blocks: Block[], stop: string): Response {
   return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
 }
 
-function inbox(opts: { receiveDelayMs?: number } = {}) {
+function inbox(opts: { receiveDelayMs?: number; crashOnAck?: boolean } = {}) {
   const rows = new Map<string, SessionMessage & { consumed?: boolean }>();
   let receives = 0;
   const log: string[] = [];
@@ -80,6 +80,11 @@ function inbox(opts: { receiveDelayMs?: number } = {}) {
         return [...rows.values()].filter((row) => !row.consumed).map(({ consumed: _consumed, ...row }) => row);
       },
       async acknowledge(ids: string[]) {
+        if (opts.crashOnAck) {
+          opts.crashOnAck = false;
+          log.push("crash");
+          throw new Error("worker died before the acknowledgement");
+        }
         for (const id of ids) rows.get(id)!.consumed = true;
         log.push(`ack:${ids.join(",")}`);
       },
@@ -91,6 +96,7 @@ function inbox(opts: { receiveDelayMs?: number } = {}) {
   };
 }
 
+let deployApproved = false;
 let slowRun: (emitted: Item[]) => Promise<unknown> = async () => ({ stdout: "ok", stderr: "", code: 0 });
 
 async function runTurn(
@@ -125,6 +131,7 @@ async function runTurn(
         },
         async execute(command: string) {
           if (command !== "deploy ledger") return slowRun(emitted);
+          if (deployApproved) return { stdout: "deployed", stderr: "", code: 0 };
           await new Promise((resolve) => setTimeout(resolve, 20));
           throw new NeedsApproval("deploy ledger", "deploys need a human");
         },
@@ -365,3 +372,57 @@ for (const ending of ["settle then message_end", "message_end only", "stopped be
     assert.doesNotMatch(JSON.stringify(results(items)[0]), new RegExp(ANSWER));
     assert.match(results(items)[0]!.text ?? "", /found it/);
   });
+
+test("a crash after the shown result is durable but before its acknowledgement does not show the mail twice", async () => {
+  const r = inbox({ crashOnAck: true });
+  slowRun = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    return { stdout: "built", stderr: "", code: 0 };
+  };
+  const first = await runTurn(
+    [],
+    [() => slowBatch(), () => anthropicSse([{ type: "text", text: "Built." }], "end_turn")],
+    r.syscalls,
+  );
+  assert.ok(r.log.includes("crash"));
+  assert.deepEqual(r.unread(), ["helper-answer"], "the acknowledgement never landed");
+  assert.equal(durableResults(first.emitted, "toolu_mail").length, 1);
+  const { next, replayedSightings } = await followUp(r, first.emitted);
+  assert.equal(replayedSightings, 1, "the retried turn replays the durable result");
+  assert.equal(sightings(next.bodies.at(-1)), 1, "and does not receive the same mail again");
+  assert.deepEqual(r.unread(), [], "the persisted delivery is acknowledged on the retry");
+});
+
+test("a real approval pause then approved resume delivers the held answer once and acknowledges it once", async () => {
+  const r = inbox({ receiveDelayMs: 60 });
+  const paused = await runTurn([], [() => pausingBatch()], r.syscalls);
+  assert.equal(paused.result.pausedOnApproval, true);
+  assert.deepEqual(r.unread(), ["helper-answer"]);
+  deployApproved = true;
+  try {
+    const resumed = await runTurn(
+      forModelContext(paused.emitted),
+      [() => anthropicSse([{ type: "text", text: "Deployed." }], "end_turn")],
+      r.syscalls,
+      {
+        approvedToolCalls: [
+          {
+            callId: "toolu_pause",
+            requestId: "req-1",
+            tool: "execute",
+            input: { command: "deploy ledger", purpose: "ship it" },
+          },
+        ],
+      },
+    );
+    assert.equal(sightings(resumed.bodies[0]), 1, "the resumed model call sees the answer once");
+    assert.deepEqual(r.unread(), []);
+    assert.equal(r.log.filter((entry) => entry.startsWith("ack:")).length, 1, "acknowledged exactly once");
+    assert.ok(!r.log.some((entry) => entry.startsWith("release")));
+    const { next, replayedSightings } = await followUp(r, [...paused.emitted, ...resumed.emitted]);
+    assert.equal(replayedSightings, 1);
+    assert.equal(sightings(next.bodies.at(-1)), 1, "a later turn still sees it once, from history");
+  } finally {
+    deployApproved = false;
+  }
+});

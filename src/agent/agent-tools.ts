@@ -90,7 +90,7 @@ export interface ToolContextRef {
 
 type ResultContent = Array<TextContent | ImageContent>;
 
-export interface ResultHold {
+interface ResultHold {
   holdResult(callId: string, mail: readonly string[]): void;
   settleResult(callId: string, content: ResultContent, withheld: readonly string[]): Promise<unknown> | undefined;
 }
@@ -162,14 +162,35 @@ export function pauseStampAfterToolCall(
   };
 }
 
+export async function acknowledgePersistedMail(
+  tools: Pick<ToolContext, "sessionSyscalls"> | undefined,
+  history: readonly Item[],
+): Promise<void> {
+  const persisted = new Set(
+    history.flatMap((item) => {
+      const ids = item.kind === "ToolResult" ? item.body?.mailIds : undefined;
+      return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [];
+    }),
+  );
+  if (!persisted.size || !tools?.sessionSyscalls?.acknowledge) return;
+  const unread = (await tools.sessionSyscalls.receive?.().catch(() => [])) ?? [];
+  const seen = unread.filter((message) => persisted.has(message.id)).map((message) => message.id);
+  if (seen.length) await tools.sessionSyscalls.acknowledge(seen).catch(() => undefined);
+}
+
 export async function acknowledgeShownMail(
   ref: Pick<ToolContextRef, "mailShown"> & Partial<Pick<ToolContextRef, "current">>,
   callId: string,
 ): Promise<void> {
   const shown = ref.mailShown?.get(callId);
   if (!shown) return;
-  await ref.current?.sessionSyscalls?.acknowledge?.(shown.messages.map((message) => message.id)).catch(() => undefined);
-  ref.mailShown?.delete(callId);
+  const acknowledged = await Promise.resolve(
+    ref.current?.sessionSyscalls?.acknowledge?.(shown.messages.map((message) => message.id)),
+  ).then(
+    () => true,
+    () => false,
+  );
+  if (acknowledged) ref.mailShown?.delete(callId);
 }
 
 const APP_EDIT_TOOL_NAMES = new Set(["app_files", "apps", "execute", "skills", "files", "history"]);

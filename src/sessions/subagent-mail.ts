@@ -84,9 +84,13 @@ export interface SubagentMailDeps {
   runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "withdraw"> & Partial<Pick<RunStore, "get">>;
   maxAttempts: number;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
+  awaitingApproval?: (sessionId: string) => Promise<boolean>;
 }
 
-type ParentMailDeps = Pick<SubagentMailDeps, "mailbox" | "runs" | "maxAttempts" | "prepareRequest">;
+type ParentMailDeps = Pick<
+  SubagentMailDeps,
+  "mailbox" | "runs" | "maxAttempts" | "prepareRequest" | "awaitingApproval"
+>;
 
 interface ParentSource {
   actor: Principal;
@@ -259,6 +263,7 @@ async function wakeParent(
   }
   if (existing && (existing.status === "done" || existing.status === "failed")) return "settled";
   if ((await deps.runs.inFlightForThread(parent.threadRef)).length) return "busy";
+  if (await deps.awaitingApproval?.(parent.id)) return "busy";
   const surfaceTools = meta.surfaceTools === true || requiresDelegation(prepared);
   await deps.runs.enqueue({
     sessionId: parent.threadRef,

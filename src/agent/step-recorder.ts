@@ -92,11 +92,14 @@ export function createStepRecorder(
   >();
   const withoutMail = (callId: string, content: ToolResultMessage["content"], mail: readonly string[]) => {
     const logged = executing.get(callId);
-    if (logged?.text && mail.length)
+    if (logged && mail.length) {
+      const { mailIds: _mailIds, ...body } = logged.body ?? {};
       executing.set(callId, {
         ...logged,
-        text: mail.reduce((text, block) => text.replace(`\n\n${block}`, ""), logged.text),
+        body,
+        ...(logged.text ? { text: mail.reduce((text, block) => text.replace(`\n\n${block}`, ""), logged.text) } : {}),
       });
+    }
     return content.filter((block) => block.type !== "text" || !mail.includes(block.text));
   };
   let pending: { step: ReplayStep; parts: Positioned[] } | null = null;

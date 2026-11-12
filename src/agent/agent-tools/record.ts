@@ -318,6 +318,7 @@ export function createRecorder(ref: ToolContextRef) {
         callId,
         isError,
         ...(resultTruncated ? { resultTruncated: true } : {}),
+        ...(mail.delivered.length ? { mailIds: mail.delivered.map((message) => message.id) } : {}),
         result,
         ...(output ? { output } : {}),
       });
