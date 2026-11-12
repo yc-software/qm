@@ -1,5 +1,5 @@
 import { loadMessageTranscript, messageLinkSeq } from "./message-link.ts";
-import { initializeBrowserErrors, stopBrowserErrors } from "./browser-errors";
+import { initializeBrowserErrors, reportHandledError, stopBrowserErrors } from "./browser-errors";
 import { initializeAnalytics, capturePageview, stopAnalytics } from "./product-analytics";
 import { captureSlackReturn } from "./slack-account";
 import { clearTranscriptCache } from "./transcript-cache";
@@ -371,7 +371,8 @@ function signInWithPortal(): void {
   } catch {
     void 0;
   }
-  location.href = portalLoginUrl();
+  if (window.top === window) location.href = portalLoginUrl();
+  else window.open(portalLoginUrl(), "_blank", "noopener");
 }
 
 function clearPortalAttempt(): void {
@@ -1083,7 +1084,10 @@ export async function boot(): Promise<void> {
   } = parseDeepLink(UI_BASE, location.pathname, location.search);
   if (wanted === "app-share") {
     const { bootAppShare } = await import("./app-share-embed");
-    await bootAppShare(params);
+    await bootAppShare(params).catch((e: unknown) => {
+      reportHandledError("web-ui: app-share", e);
+      renderAuthGate({ kind: "unreachable" });
+    });
     return;
   }
   const appEditEmbed = wanted === "app-edit" && params.get("embed") === "1";
