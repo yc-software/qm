@@ -54,6 +54,7 @@ export type PersistedScopedFlag = ScopedRow<"on", boolean>;
 export interface PersistedBaseModel {
   scopeId: ScopeId;
   embeddingModelId?: string;
+  compactionKeepPercent?: number;
   modelId?: string;
   cronRuntime?: RuntimeSelection;
   subagentRuntime?: RuntimeSelection;
@@ -168,8 +169,8 @@ export interface ScopedConfigStore {
   setSpendLimit(id: ScopeId, limit: SpendLimit | null): Promise<void>;
   getBrowseMaxSteps(id: ScopeId): number | null;
   setBrowseMaxSteps(id: ScopeId, steps: number | null): Promise<void>;
-  getCompactionKeepPercent(id: ScopeId): number | null;
-  setCompactionKeepPercent(id: ScopeId, percent: number | null): Promise<void>;
+  getCompactionKeepPercent(): number | null;
+  setCompactionKeepPercent(percent: number | null): Promise<void>;
   getEmbeddingModelDurable(): Promise<string | null>;
   setEmbeddingModel(modelId: string | null): Promise<void>;
   setConnectorClient(id: ScopeId, provider: string, input: ConnectorClientInput): Promise<void>;
@@ -200,7 +201,6 @@ export interface ConfigStoreMaps {
   slackEmojiCatalog?: DurableMap<PersistedSlackEmojiCatalog>;
   branding?: DurableMap<ScopedRow<"branding", OrgBranding>>;
   browseMaxSteps?: DurableMap<ScopedRow<"steps", number>>;
-  compactionKeepPercent?: DurableMap<ScopedRow<"percent", number>>;
   spendLimits?: DurableMap<ScopedRow<"limit", SpendLimit>>;
   deploymentIdentity?: DurableMap<PersistedDeploymentIdentity>;
 }
@@ -225,7 +225,6 @@ const CONFIG_STORE_TABLES: Record<keyof ConfigStoreMaps, string> = {
   slackEmojiCatalog: "slack_emoji_catalog",
   branding: "branding_configs",
   browseMaxSteps: "browse_max_steps_configs",
-  compactionKeepPercent: "compaction_keep_percent_configs",
   spendLimits: "spend_limit_configs",
   deploymentIdentity: "deployment_identity",
 };
@@ -325,7 +324,6 @@ export function createConfigStore(
     ackEmoji: field("ackEmoji", "names"),
     branding: field("branding", "branding"),
     browseMaxSteps: field("browseMaxSteps", "steps"),
-    compactionKeepPercent: field("compactionKeepPercent", "percent", true),
     spendLimits: field("spendLimits", "limit"),
   } satisfies Partial<Record<SettingKey, unknown>>;
   const allSettings = Object.values(settings);
@@ -342,6 +340,7 @@ export function createConfigStore(
     id === org
       ? {
           ...(row?.embeddingModelId ? { embeddingModelId: row.embeddingModelId } : {}),
+          ...(row?.compactionKeepPercent ? { compactionKeepPercent: row.compactionKeepPercent } : {}),
           ...(row?.cronRuntime ? { cronRuntime: row.cronRuntime } : {}),
           ...(row?.subagentRuntime ? { subagentRuntime: row.subagentRuntime } : {}),
           ...(row?.fallbackRuntime ? { fallbackRuntime: row.fallbackRuntime } : {}),
@@ -738,8 +737,18 @@ export function createConfigStore(
     setSpendLimit: (id, limit) => settings.spendLimits.set(id, limit),
     getBrowseMaxSteps: (id) => settings.browseMaxSteps.get(id) ?? null,
     setBrowseMaxSteps: (id, steps) => settings.browseMaxSteps.set(id, steps),
-    getCompactionKeepPercent: (id) => settings.compactionKeepPercent.get(id) ?? null,
-    setCompactionKeepPercent: (id, percent) => settings.compactionKeepPercent.set(id, percent),
+    getCompactionKeepPercent: () => tenantState().baseModels.get(org)?.compactionKeepPercent ?? null,
+    setCompactionKeepPercent: async (percent) => {
+      await writeQueue(`model:${org}`, async () => {
+        const saved = await updateBaseModelRow(org, (current) => {
+          const row: PersistedBaseModel = { ...current, scopeId: org };
+          if (percent) row.compactionKeepPercent = percent;
+          else delete row.compactionKeepPercent;
+          return row;
+        });
+        cacheBaseModel(org, saved);
+      });
+    },
     getEmbeddingModelDurable: async () => (await baseModelStore.get(org))?.embeddingModelId ?? null,
     setEmbeddingModel: async (modelId) => {
       await writeQueue(`model:${org}`, async () => {

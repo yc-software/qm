@@ -27,7 +27,6 @@ const TABLES = [
   "base_model_configs",
   "browse_provider_configs",
   "browse_max_steps_configs",
-  "compaction_keep_percent_configs",
   "deployment_identity",
 ];
 
@@ -325,6 +324,8 @@ test("pg config store: settings written on one core reach another core through r
   await a.setChannelHeaderPin(ch, true);
   await a.setApprovalGrantModes(ch, { session: false, always: true });
   await a.setOrgAmbient(false);
+  await a.setCompactionKeepPercent(25);
+  await a.setRuntimeSelection(org, { modelId: "claude-opus-4-8" });
   await b.refreshScope(ch);
   await b.refreshScope(org);
 
@@ -335,14 +336,17 @@ test("pg config store: settings written on one core reach another core through r
   assert.equal(b.getChannelHeaderPin(ch), true);
   assert.deepEqual(await b.getApprovalGrantModesDurable(ch), { session: false, always: true });
   assert.equal(b.getOrgAmbient(), false);
+  assert.equal(b.getCompactionKeepPercent(), 25, "a runtime change keeps the org compaction setting");
 
   await a.setWebuiModels(ch, null);
   await a.setAckEmoji(ch, null);
   await a.setBrowseMaxSteps(ch, null);
+  await a.setCompactionKeepPercent(null);
   await b.refreshScope(ch);
   await b.refreshScope(org);
 
   assert.equal(b.getWebuiModels(ch), null);
   assert.equal(b.getAckEmoji(ch), null);
   assert.equal(b.getBrowseMaxSteps(ch), null);
+  assert.equal(b.getCompactionKeepPercent(), null);
 });

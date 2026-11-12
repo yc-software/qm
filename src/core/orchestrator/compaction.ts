@@ -1,6 +1,5 @@
 import type { ScopeId, Session } from "../../types.ts";
-import { parseScopeId, scopeId } from "../../types.ts";
-import { orgId } from "../../config.ts";
+import { parseScopeId } from "../../types.ts";
 import type { SessionWriter } from "../../sessions/session-store.ts";
 import { contextSummary } from "../../sessions/session-store.ts";
 import {
@@ -90,7 +89,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
   };
 
   const keepRecentTokenFraction = (): number =>
-    (deps.config.getCompactionKeepPercent(scopeId("org", orgId())) ?? COMPACT_KEEP_PERCENT.default) / 100;
+    (deps.config.getCompactionKeepPercent() ?? COMPACT_KEEP_PERCENT.default) / 100;
 
   async function summarizeForCompaction(
     input: Omit<CompactionInput, "writer">,
