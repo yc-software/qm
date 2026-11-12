@@ -1,15 +1,19 @@
 import type { App, AppDeps } from "./app-types.ts";
+import { personOrOwningBot, type CapabilityClaims } from "../auth/capability-token.ts";
 import { parseScopeId, type ScopeId } from "../types.ts";
 import { canonicalPerson, samePersonInDirectory } from "../directory/person.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
 import { createMembershipControlsScope, createCanManageScope } from "../resolution/scope-membership.ts";
 import { swallowAs } from "../util/errors.ts";
+import type { TriggerBase } from "../triggers/types.ts";
 
 export async function canAdministerLoop(
   app: Pick<App, "membershipControlsScope" | "managesScope" | "samePerson">,
-  loop: { owner: string; ownerScopeId: ScopeId },
-  actorId: string,
+  loop: Pick<TriggerBase, "owner" | "ownerScopeId" | "botActor">,
+  actor: Pick<CapabilityClaims, "actorId" | "botActor">,
 ): Promise<boolean> {
+  const { actorId } = actor;
+  if (!(await personOrOwningBot(actor, async () => app.samePerson(loop.owner, actorId), loop))) return false;
   if (await app.membershipControlsScope(loop.ownerScopeId)) return app.managesScope(actorId, loop.ownerScopeId);
   if (await app.samePerson(loop.owner, actorId)) return true;
   return app.managesScope(actorId, loop.ownerScopeId);
@@ -17,10 +21,11 @@ export async function canAdministerLoop(
 
 export async function loopAdministration(
   deps: AppDeps,
-  actorId: string,
-  loops: readonly { owner: string; ownerScopeId: ScopeId }[],
+  actor: Pick<CapabilityClaims, "actorId" | "botActor">,
+  loops: readonly Pick<TriggerBase, "owner" | "ownerScopeId" | "botActor">[],
 ) {
   if (!loops.length) return [];
+  const { actorId } = actor;
   const scopes = [...new Set(loops.map((loop) => loop.ownerScopeId))];
   const ids = [...new Set([actorId, ...loops.map((loop) => loop.owner)].flatMap((id) => [id, canonicalPerson(id)]))];
   const members = await deps.directory
@@ -95,5 +100,5 @@ export async function loopAdministration(
     managesScope: async (_actor: string, scope: ScopeId) => permissions.get(scope)!.manages,
     samePerson: (a: string, b: string) => samePersonInDirectory(snapshot.directory, a, b),
   };
-  return Promise.all(loops.map((loop) => canAdministerLoop(policy, loop, actorId)));
+  return Promise.all(loops.map((loop) => canAdministerLoop(policy, loop, actor)));
 }

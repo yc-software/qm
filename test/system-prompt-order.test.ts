@@ -1,4 +1,6 @@
 import type { Agent, AgentTurnInput } from "../src/agent/agent.ts";
+import { postTurn } from "../src/api/routes/turns.ts";
+import type { ApiCtx } from "../src/api/routes/route.ts";
 import { gatewayActorId } from "../src/model/provider-endpoints.ts";
 import { createMemoryBlobTransferStore, type BlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
@@ -1710,4 +1712,51 @@ test("a shared thread keeps one byte-identical system prompt until compaction; c
   assert.doesNotMatch(compacted.system, /NPM_TOKEN/);
   assert.doesNotMatch(compacted.environment, /Changed since the system prompt/);
   assert.equal((await turn(teammate)).system, compacted.system);
+});
+
+test("a live turn in an app edit chat gets a small prompt of its own and six tools, whatever prompt that chat had saved", async (t) => {
+  const requests = recordRequests(t);
+  const gateway = { url: "https://gateway.test", apiKey: "k", apiKeyHeader: "api-key", actorKey: "test-actor-key" };
+  const routes = createModelRoutes({
+    defaultModelId: "claude-haiku-4-5",
+    modelGateway: { ...gateway, models: { "claude-haiku-4-5": "m" } },
+  });
+  const { orchestrator, config } = buildOrchestrator({
+    agent: createAgent({ routes, detectModelId: "claude-haiku-4-5" }),
+  });
+  await config.setSoul(scopeId("org", ORG), "ORG_RULE");
+  const sent = async (thread: string, note: string, origin?: OrchestratorInput["origin"]) => {
+    const turn = dm(thread, "edit the app", { surface: "web", conversationHeader: note, origin });
+    await postTurn({
+      body: {
+        text: turn.text,
+        actor: { externalId: actor.id },
+        conversation: turn.conversation,
+        conversationHeader: note,
+        surfaceBriefing: { name: "Drawer", state: "CLICKED_ELEMENT" },
+      },
+      url: new URL("https://qm.test/turn"),
+      res: { getHeader() {}, writeHead() {}, end() {} },
+      app: {
+        turn: (request: TurnRequest) =>
+          orchestrator.handleTurn({ ...turn, conversationHeader: request.conversationHeader }),
+      },
+    } as unknown as ApiCtx);
+    const body = JSON.parse(requests.findLast((request) => request.headers.get("x-qm-purpose") === "turn")!.body);
+    return {
+      system: JSON.stringify(body.system),
+      message: JSON.stringify(body.messages.at(-1)),
+      tools: body.tools.map((tool: { name: string }) => tool.name).sort(),
+    };
+  };
+  const drawer = "web:U1:app-edit:notes";
+  const general = await sent(drawer, "NOTE_0", { kind: "automation" });
+  assert.ok(general.tools.includes("memory") && !general.tools.includes("app_files"));
+  for (const carried of ["ORG_RULE", "Deploy the app"]) assert.ok(general.system.includes(carried), carried);
+  for (const note of ["NOTE_1", "NOTE_2"]) {
+    const edit = await sent(drawer, note);
+    assert.deepEqual(edit.tools, ["app_files", "apps", "execute", "files", "history", "skills"]);
+    assert.ok(edit.system.includes("ORG_RULE"));
+    assert.ok(edit.message.includes(note) && edit.message.includes("CLICKED_ELEMENT"));
+  }
 });

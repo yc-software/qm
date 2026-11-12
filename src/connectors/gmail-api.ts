@@ -1,5 +1,3 @@
-import { isObj } from "../util/objects.ts";
-
 export class GmailApiError extends Error {
   readonly status: number;
   readonly retryAfterSeconds: number;
@@ -23,8 +21,6 @@ export function gmailApi(token: string, fetchImpl: typeof fetch = fetch) {
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       signal: AbortSignal.timeout(timeoutMs),
-    }).catch((cause: unknown) => {
-      throw new Error(`Gmail ${path.split("?")[0]} request failed`, { cause });
     });
     if (!response.ok)
       throw new GmailApiError(
@@ -33,41 +29,6 @@ export function gmailApi(token: string, fetchImpl: typeof fetch = fetch) {
         Number(response.headers.get("retry-after")),
         (await response.text().catch(() => "")).slice(0, 300),
       );
-    return (await response.json().catch((cause: unknown) => {
-      throw new Error(`Gmail ${path.split("?")[0]} returned unreadable JSON`, { cause });
-    })) as T;
+    return (await response.json()) as T;
   };
-}
-
-export function gmailPartText(part: Record<string, unknown>, mimeType = "text/plain"): string | undefined {
-  const texts: string[] = [];
-  const visit = (node: Record<string, unknown>): void => {
-    if (node.filename) return;
-    const data = isObj(node.body) ? node.body.data : undefined;
-    if (node.mimeType === mimeType && typeof data === "string")
-      texts.push(Buffer.from(data, "base64url").toString("utf8"));
-    for (const nested of Array.isArray(node.parts) ? node.parts.filter(isObj) : []) visit(nested);
-  };
-  visit(part);
-  return texts.length ? texts.join("\n") : undefined;
-}
-
-export function gmailHeader(payload: Record<string, unknown>, name: string): string {
-  const headers = Array.isArray(payload.headers) ? payload.headers.filter(isObj) : [];
-  const found = headers.find((h) => typeof h.name === "string" && h.name.toLowerCase() === name.toLowerCase());
-  return typeof found?.value === "string" ? found.value : "";
-}
-
-const HIDDEN_LABELS = new Set<unknown>(["DRAFT", "TRASH", "SPAM"]);
-
-export function gmailThreadMessages(thread: { messages?: unknown[] }): Record<string, unknown>[] {
-  return (Array.isArray(thread.messages) ? thread.messages.filter(isObj) : [])
-    .filter((m) => !(Array.isArray(m.labelIds) && m.labelIds.some((label) => HIDDEN_LABELS.has(label))))
-    .sort((a, b) => Number(a.internalDate) - Number(b.internalDate));
-}
-
-export function stripQuoted(text: string): string {
-  const lines = text.split(/\r?\n/);
-  const cut = lines.findIndex((line) => /^On .+wrote:\s*$/.test(line.trim()) || line.startsWith(">"));
-  return (cut > 0 ? lines.slice(0, cut) : lines).join("\n").trim();
 }

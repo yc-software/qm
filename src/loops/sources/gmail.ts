@@ -1,8 +1,7 @@
 import MailComposer from "nodemailer/lib/mail-composer";
-import { gmailBodyParts } from "../../connectors/gmail-compose.ts";
 import type { LoopItem, LoopSourcePayload } from "../types.ts";
 import { isAccountType } from "../../connectors/oauth.ts";
-import { GmailApiError, gmailApi, gmailHeader, gmailThreadMessages } from "../../connectors/gmail-api.ts";
+import { GmailApiError, gmailApi } from "../../connectors/gmail-api.ts";
 import { errMessage } from "../../util/errors.ts";
 import {
   addressList,
@@ -87,12 +86,7 @@ export function replySubject(item: LoopItem, draft: ReplyDraft): string {
   return /^re:/i.test(original) ? original : `Re: ${original}`;
 }
 
-export async function buildGmailReplyMime(
-  item: LoopItem,
-  draft: ReplyDraft,
-  original: Record<string, unknown> | undefined,
-  viewerZone?: string,
-): Promise<Buffer | null> {
+export async function buildGmailReplyMime(item: LoopItem, draft: ReplyDraft): Promise<Buffer | null> {
   const meta = metaOf(item);
   if (!meta) return null;
   const parsed = parseReplyDraft(draft);
@@ -105,60 +99,35 @@ export async function buildGmailReplyMime(
     cc: parsed.cc ?? meta.cc ?? [],
     subject: replySubject(item, parsed),
     ...(rfcId ? { inReplyTo: rfcId, references: rfcId } : {}),
-    ...gmailBodyParts(parsed.body, original, viewerZone),
-    textEncoding: "quoted-printable",
+    text: parsed.body,
+    textEncoding: "base64",
   })
     .compile()
     .build();
 }
 
-async function repliedMessage(
-  api: ReturnType<typeof gmailApi>,
-  meta: GmailMeta,
-): Promise<Record<string, unknown> | undefined> {
-  const thread = meta.messageId
-    ? undefined
-    : await api<{ messages?: unknown[] }>(
-        `threads/${encodeURIComponent(meta.threadId)}?format=metadata&metadataHeaders=Message-ID`,
-      );
-  const messages = Array.isArray(thread?.messages) ? thread.messages.filter(isObj) : [];
-  const visible = thread ? gmailThreadMessages(thread) : [];
-  const answered = (rfcId: string) =>
-    messages.find((m) => isObj(m.payload) && gmailHeader(m.payload, "Message-ID").trim() === rfcId.trim());
-  const id = meta.messageId ?? (meta.rfcMessageId ? answered(meta.rfcMessageId) : visible.at(-1))?.id;
-  return typeof id === "string" ? await api(`messages/${encodeURIComponent(id)}?format=full`) : undefined;
-}
-
-async function sendGmail(
-  deps: SourceActionDeps,
-  item: LoopItem,
-  draft: ReplyDraft,
-  viewerZone: string | undefined,
-): Promise<SourceActionResult> {
+async function sendGmail(deps: SourceActionDeps, item: LoopItem, draft: ReplyDraft): Promise<SourceActionResult> {
   const fetchImpl = deps.fetchImpl ?? fetch;
   const meta = metaOf(item);
   if (!meta) return { ok: false, reason: "bad_item", message: "invalid Gmail metadata" };
   const token = await gmailToken(deps.tokens, deps.owner, item);
   if (!token) return { ok: false, reason: "not_connected", message: "Google is not connected for this account" };
-  const api = gmailApi(token, fetchImpl);
-  let original: Record<string, unknown> | undefined;
+  const mime = await buildGmailReplyMime(item, draft);
+  if (!mime) return { ok: false, reason: "bad_item", message: "no recipient — add a To: address to the draft" };
+  const threadId = metaOf(item)?.threadId;
   try {
-    original = await repliedMessage(api, meta);
-    const mime = await buildGmailReplyMime(item, draft, original, viewerZone);
-    if (!mime) return { ok: false, reason: "bad_item", message: "no recipient — add a To: address to the draft" };
-    await api("messages/send", {
+    await gmailApi(token, fetchImpl)("messages/send", {
       timeoutMs: 30_000,
-      body: { raw: mime.toString("base64url"), threadId: meta.threadId },
+      body: {
+        raw: mime.toString("base64url"),
+        ...(threadId ? { threadId } : {}),
+      },
     });
   } catch (error) {
     if (!(error instanceof GmailApiError)) throw error;
-    return { ok: false, reason: "upstream", message: `${error.message}: ${error.detail}` };
+    return { ok: false, reason: "upstream", message: `Gmail refused the send (${error.status}): ${error.detail}` };
   }
-  if (original || !meta.rfcMessageId) return { ok: true, result: draft.body };
-  return {
-    ok: true,
-    result: `${draft.body}\n\n(Sent without a quote: ${meta.rfcMessageId} is no longer in thread ${meta.threadId}.)`,
-  };
+  return { ok: true, result: draft.body };
 }
 
 export const gmailAdapter: LoopSourceAdapter = {
@@ -194,7 +163,7 @@ export const gmailAdapter: LoopSourceAdapter = {
     const draft = args.body !== undefined ? parseReplyDraft(args) : draftOf(item);
     if (!draft || !draft.body.trim()) return { ok: false, reason: "bad_item", message: "the draft is empty" };
     try {
-      return await sendGmail(deps, item, { ...draft, body: draft.body.trim() }, deps.timezone);
+      return await sendGmail(deps, item, { ...draft, body: draft.body.trim() });
     } catch (err) {
       return { ok: false, reason: "upstream", message: errMessage(err) };
     }

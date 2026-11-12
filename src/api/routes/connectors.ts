@@ -1,6 +1,5 @@
 import { getSentEmail, listSentEmails } from "../../connectors/gmail-sent.ts";
 import { GmailApiError } from "../../connectors/gmail-api.ts";
-import { gmailBodyParts } from "../../connectors/gmail-compose.ts";
 import { orgId as configOrgId } from "../../config.ts";
 import {
   authorizeUrl,
@@ -588,25 +587,7 @@ export async function gmailSent(ctx: ApiCtx): Promise<void> {
   }
 }
 
-const GMAIL_MESSAGE_LIMIT_AS_BASE64_JSON_BYTES = Math.ceil((35 * 1024 * 1024 * 4) / 3) + 1_000_000;
-
-async function gmailCompose(ctx: ApiCtx): Promise<void> {
-  const b = isObj(ctx.body) ? ctx.body : {};
-  if (typeof b.body !== "string")
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "body (string) required" });
-  if (b.original !== undefined && !isObj(b.original))
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "original must be a Gmail message object" });
-  sendJson(ctx.res, 200, gmailBodyParts(b.body, b.original, ctx.capability?.timezone));
-}
-
 export const connectorRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  {
-    method: "POST",
-    path: "/v1/connectors/gmail/compose",
-    auth: "either",
-    maxBodyBytes: GMAIL_MESSAGE_LIMIT_AS_BASE64_JSON_BYTES,
-    handle: gmailCompose,
-  },
   ...forInboxLoopsPeople([
     { method: "GET", path: "/v1/connectors/gmail/sent/:messageId", actor: "person", auth: "source", handle: gmailSent },
     { method: "GET", path: "/v1/connectors/gmail/sent", actor: "person", auth: "source", handle: gmailSent },

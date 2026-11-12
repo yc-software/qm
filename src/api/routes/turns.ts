@@ -105,7 +105,7 @@ function zodMessage(field: string, error: z.ZodError): string {
 
 function publicOrigin(origin: TurnOrigin | undefined): TurnOrigin | undefined {
   if (origin?.kind !== "automation") return origin;
-  const { useOwnerKeychain: _internalOnly, ...safe } = origin;
+  const { useOwnerKeychain: _internalOnly, ownerFire: _fireOnly, ...safe } = origin;
   return safe;
 }
 
@@ -133,7 +133,6 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
   const {
     surfaceOrigin: _surfaceOrigin,
     spawned: _spawned,
-    unattendedGrants: _unattendedGrants,
     cronScript: _cronScript,
     infrequentCron: _infrequentCron,
     redeliveryKey: _redeliveryKey,

@@ -132,7 +132,6 @@ test("a sent email draft saves and sends into the original Gmail thread exactly 
   const originalFetch = globalThis.fetch;
   let sent = 0;
   globalThis.fetch = async (_url, init) => {
-    if (!init?.body) return Response.json({ messages: [] });
     sent++;
     const message = JSON.parse(String(init!.body));
     assert.equal(message.threadId, "thread-1");
@@ -187,7 +186,7 @@ test("sent chat preserves long quoted recipient headers and rejects oversized in
   await ensureSentChat(ctx);
   assert.equal(status, 200);
   const stored = (await items.get(id))!;
-  const mime = (await buildGmailReplyMime(stored, { body: "Hello" }, undefined))!.toString();
+  const mime = (await buildGmailReplyMime(stored, { body: "Hello" }))!.toString();
   assert.ok(mime.replaceAll("\r\n ", " ").startsWith(`To: ${to}\r\nCc: ${cc}\r\n`));
   for (const invalid of [
     { to: "x".repeat(8001) },

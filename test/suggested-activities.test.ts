@@ -200,6 +200,11 @@ test("a task edited and later reverted to the standard instructions is managed a
   await f.crons.update(id, { action: standard.replace("No special deployment context.", "Older guidance") });
   await service.get("alice", []);
   assert.match((await f.crons.get(id))!.action!, /Changed guidance/);
+  assert.equal(
+    (await f.crons.get(id))!.taskAuthor,
+    "automation",
+    "a task the platform rewrote is not its owner's words",
+  );
   await service.dismiss("alice", "brief");
   const action = (await f.crons.get(id))!.action!;
   assert.ok(action.includes(JSON.stringify(["Build my brief"])));

@@ -63,7 +63,17 @@ export function withRetrySafety(tool: ToolDefinition, marks: Map<string, RetryMa
   } as ToolDefinition;
 }
 
-const RESOURCE_TOOL_NAMES = new Set(["sandbox", "background", "files", "apps", "skills", "goal", "cron", "admin"]);
+const RESOURCE_TOOL_NAMES = new Set([
+  "sandbox",
+  "background",
+  "files",
+  "apps",
+  "app_files",
+  "skills",
+  "goal",
+  "cron",
+  "admin",
+]);
 const TOOL_APPROVAL_EXEMPT = new Set(["finish_silently", "tool_search", "mcp_call", "withdraw_approval"]);
 const STRICT_TOOL_APPROVAL_REASON = "strict posture: this tool call requires human approval";
 const DECLARED_TOOL_APPROVAL_REASON = "this tool asks for approval before each call";

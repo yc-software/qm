@@ -9,7 +9,15 @@ import type { RuntimeChange, RuntimeConfig } from "./runtime-config-cache.ts";
 import type { ChatBrowseStatus } from "./session-list.ts";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import type { Attachment } from "@earendil-works/pi-web-ui";
-import type { Api, AssistantMessage, AssistantMessageEventStream, Context, Model, Usage } from "@earendil-works/pi-ai";
+import type {
+  Api,
+  AssistantMessage,
+  AssistantMessageEventStream,
+  Context,
+  Model,
+  Usage,
+  TextContent,
+} from "@earendil-works/pi-ai";
 import type { Agent, AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
 import { errMessage, swallow } from "../../chassis/src/errors.ts";
 import { userFacingFailureText } from "../../chassis/src/failure-copy.ts";
@@ -343,7 +351,7 @@ export function sharedContextLabel(scopeId: string | null, name: string | null):
   return null;
 }
 
-export function browserTimezone(): string {
+function browserTimezone(): string {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone ?? "";
   } catch {
@@ -2167,6 +2175,18 @@ function isFinishedReplyItem(item: Item): boolean {
 function isWorkHistoryItem(item: Item): boolean {
   if (item.kind === "Reasoning") return isRenderableThinking(item);
   return item.kind === "ToolCall" || item.kind === "ToolResult" || item.kind === "Elicitation" || isNarration(item);
+}
+
+export function messageText(message: AgentMessage): string {
+  const content = (message as { content?: unknown }).content;
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter((c): c is TextContent => Boolean(c) && typeof c === "object" && (c as { type?: string }).type === "text")
+      .map((c) => c.text ?? "")
+      .join("\n");
+  }
+  return "";
 }
 
 export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage[] {

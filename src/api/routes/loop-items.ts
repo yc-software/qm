@@ -1,5 +1,3 @@
-import { isValidCapabilityTimezone } from "../../auth/capability-token.ts";
-import { stripQuoted } from "../../connectors/gmail-api.ts";
 import { z } from "zod";
 import type { Cron } from "../../triggers/types.ts";
 import type { Loop, LoopItem, LoopSourcePayload } from "../../loops/types.ts";
@@ -154,7 +152,7 @@ async function ingestItems(ctx: ApiCtx): Promise<void> {
 
 async function loadItem(
   ctx: ApiCtx,
-): Promise<{ deps: LoopServiceDeps; loop: Loop; item: LoopItem; actorId: string } | null> {
+): Promise<{ deps: LoopServiceDeps; loop: Loop; item: LoopItem; actorId: string; unattended?: true } | null> {
   const loaded = await loadAdministrable(ctx);
   if (!loaded) return null;
   if (!readableItems(ctx, loaded.loop)) return null;
@@ -163,7 +161,13 @@ async function loadItem(
     sendJson(ctx.res, 404, { error: "not_found", message: "no such ledger item" });
     return null;
   }
-  return { deps: loaded.deps, loop: loaded.loop, item, actorId: loaded.acting.actorId };
+  return {
+    deps: loaded.deps,
+    loop: loaded.loop,
+    item,
+    actorId: loaded.acting.actorId,
+    ...(loaded.acting.liveHuman ? {} : { unattended: true as const }),
+  };
 }
 
 const IMAGE_MAX_BYTES = 8_000_000;
@@ -362,13 +366,7 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
       item = current;
       const slackClient = ctx.deps.loopSlackClient;
       const result = await adapter.act(
-        {
-          owner: loop.owner,
-          actor: proposalAuthor,
-          tokens,
-          ...(slackClient ? { slackClient } : {}),
-          ...(ctx.capability?.timezone ? { timezone: ctx.capability.timezone } : {}),
-        },
+        { owner: loop.owner, actor: proposalAuthor, tokens, ...(slackClient ? { slackClient } : {}) },
         item,
         kind,
         args,
@@ -389,7 +387,14 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
 
   if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
   if (!(await requireLoopAuthority(ctx, deps, loop))) return;
-  const turn = await deps.fire.itemAction(loop, item, kind, args, loaded.actorId);
+  const turn = await deps.fire.itemAction(
+    loop,
+    item,
+    kind,
+    args,
+    loaded.actorId,
+    loaded.unattended ? { unattended: true } : undefined,
+  );
   if (!turn.ok) {
     return sendJson(ctx.res, 502, { error: "action_failed", message: turn.userNote ?? "the agent turn did not run" });
   }
@@ -406,7 +411,6 @@ const followUpOptionsSchema = z.object({
   model: z.string().trim().min(1).optional(),
   thinkingLevel: z.string().trim().pipe(z.enum(THINKING_LEVELS)).optional(),
   fastMode: z.boolean().optional(),
-  timezone: z.string().refine(isValidCapabilityTimezone).optional(),
   attachments: z
     .array(
       z.object({
@@ -448,13 +452,10 @@ async function followUpOnItem(ctx: ApiCtx): Promise<void> {
   }
   if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
   try {
-    const next = await deps.fire.followUp(
-      loop,
-      item,
-      message || "Please review the attached files.",
-      loaded.actorId,
-      options,
-    );
+    const next = await deps.fire.followUp(loop, item, message || "Please review the attached files.", loaded.actorId, {
+      ...options,
+      ...(loaded.unattended ? { unattended: true as const } : {}),
+    });
     sendJson(ctx.res, 200, await itemDetail(ctx, deps, loop, next ?? item));
   } catch (e) {
     sendJson(ctx.res, 502, { error: "followup_failed", message: errMessage(e) });
@@ -507,7 +508,7 @@ export async function ensureSentChat(ctx: ApiCtx): Promise<void> {
   const payload = {
     title: text("subject", 300),
     from: text("from", 500),
-    snippet: stripQuoted(text("text", 50000)),
+    snippet: text("text", 50000),
     gmail: {
       threadId,
       accountType,

@@ -8,14 +8,7 @@ import { slackConversationOf } from "../sources/slack.ts";
 import { normalizeSlackApiUrl } from "../../slack/config.ts";
 import { slackMessageContent } from "../../slack/message-content.ts";
 import { slackWebClient } from "../../slack/web-client.ts";
-import {
-  GmailApiError,
-  gmailApi,
-  gmailHeader,
-  gmailPartText,
-  gmailThreadMessages,
-  stripQuoted,
-} from "../../connectors/gmail-api.ts";
+import { GmailApiError, gmailApi } from "../../connectors/gmail-api.ts";
 import { TransientTurnFailure } from "../../core/turn-error.ts";
 import { perTenant } from "../../tenants/cache.ts";
 import {
@@ -194,6 +187,30 @@ export function createSourceClients(deps: SourceClientDeps): SourceClients {
   return clients;
 }
 
+function plainText(part: Record<string, unknown>): string | undefined {
+  const body = isObj(part.body) ? part.body : {};
+  if (part.mimeType === "text/plain" && typeof body.data === "string")
+    return Buffer.from(body.data, "base64url").toString("utf8");
+  const parts = Array.isArray(part.parts) ? part.parts.filter(isObj) : [];
+  for (const nested of parts) {
+    const text = plainText(nested);
+    if (text) return text;
+  }
+  return undefined;
+}
+
+function header(payload: Record<string, unknown>, name: string): string {
+  const headers = Array.isArray(payload.headers) ? payload.headers.filter(isObj) : [];
+  const found = headers.find((h) => typeof h.name === "string" && h.name.toLowerCase() === name.toLowerCase());
+  return typeof found?.value === "string" ? found.value : "";
+}
+
+function stripQuoted(text: string): string {
+  const lines = text.split(/\r?\n/);
+  const cut = lines.findIndex((line) => /^On .+wrote:\s*$/.test(line.trim()) || line.startsWith(">"));
+  return (cut > 0 ? lines.slice(0, cut) : lines).join("\n").trim();
+}
+
 function countAttachments(part: Record<string, unknown>): number {
   const own = typeof part.filename === "string" && part.filename ? 1 : 0;
   const parts = Array.isArray(part.parts) ? part.parts.filter(isObj) : [];
@@ -333,21 +350,23 @@ export function createConversationFetcher(clients: SourceClients): ConversationF
       token,
       `threads/${encodeURIComponent(threadId)}?format=full`,
     );
-    const raw = gmailThreadMessages(thread);
+    const raw = (Array.isArray(thread.messages) ? thread.messages.filter(isObj) : [])
+      .filter((m) => !(Array.isArray(m.labelIds) && m.labelIds.includes("DRAFT")))
+      .sort((a, b) => Number(a.internalDate) - Number(b.internalDate));
     let subject = "";
     const isOwner = (box: { address: string }) => address !== undefined && box.address.toLowerCase() === address;
     const messages = raw.map((m): TranscriptMessage => {
       const payload = isObj(m.payload) ? m.payload : {};
-      subject ||= gmailHeader(payload, "Subject");
-      const from = mailboxes(gmailHeader(payload, "From"))[0];
+      subject ||= header(payload, "Subject");
+      const from = mailboxes(header(payload, "From"))[0];
       const sent = Array.isArray(m.labelIds) && m.labelIds.includes("SENT");
       const owner = sent || (from !== undefined && isOwner(from));
-      const body = gmailPartText(payload);
+      const body = plainText(payload);
       const snippet = typeof m.snippet === "string" ? m.snippet : "";
       const attachments = countAttachments(payload);
-      const to = mailboxes(gmailHeader(payload, "To")).filter((box) => !isOwner(box));
-      const cc = mailboxes(gmailHeader(payload, "Cc")).filter((box) => !isOwner(box));
-      const rfcMessageId = gmailHeader(payload, "Message-ID");
+      const to = mailboxes(header(payload, "To")).filter((box) => !isOwner(box));
+      const cc = mailboxes(header(payload, "Cc")).filter((box) => !isOwner(box));
+      const rfcMessageId = header(payload, "Message-ID");
       return {
         ts: String(m.internalDate),
         at: Number(m.internalDate),

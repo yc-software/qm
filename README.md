@@ -4,7 +4,7 @@
 
 <div align="center">
 
-**An agent harness for teams. In Slack and on the web.**<br>
+**A multiplayer agent harness for teams. In Slack and on the web.**<br>
 Run it in your own cloud, with your own models and keys.
 
 [![CI](https://img.shields.io/github/actions/workflow/status/yc-software/qm/cicd.yml?branch=main&label=CI&style=flat-square)](https://github.com/yc-software/qm/actions/workflows/cicd.yml)
@@ -24,6 +24,10 @@ their own isolated workspace, and can also collaborate with the agent in channel
 
 Each person and each room has its own scoped memory, files, keychain view, permissions,
 crons, web apps, and durable sandbox.
+
+Agents are always on. Each one has its own computer and memory, and keeps working on
+schedules and webhooks while you're away. Hosted always-on agents like ChatGPT Dots and
+Grok Bot run in the vendor's cloud on the vendor's models. QM runs in yours.
 
 It's built with open source in mind. Pick your own model and switch between models; Pi
 runs models from many providers, so a deployment isn't tied to any single vendor.

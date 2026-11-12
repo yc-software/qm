@@ -15,9 +15,8 @@ Usage:
   gmail.py thread THREAD_ID [--full]    # all messages oldest-first + lastFromMe
   gmail.py draft --to EMAIL --subject TEXT --body-file FILE
   gmail.py reply MESSAGE_ID --body-file FILE [--all]   # reply-draft anchored to the
-                                                       # thread's latest sent message,
-                                                       # quoting it like Gmail does
-  gmail.py update-draft DRAFT_ID --body-file FILE      # keeps recipients/threading/quote
+                                                       # thread's latest sent message
+  gmail.py update-draft DRAFT_ID --body-file FILE      # keeps recipients/threading
   gmail.py send-draft DRAFT_ID
 
 Body files are plain text. Lines that look hard-wrapped (long lines inside a
@@ -27,8 +26,10 @@ their breaks. Blank lines separate paragraphs.
 
 import argparse
 import base64
+import html
 import json
 import os
+import re
 import subprocess
 import tempfile
 import sys
@@ -105,45 +106,48 @@ def read_body(path: str) -> str:
     return "\n\n".join(out)
 
 
-def compose(body: str, original: dict | None = None) -> dict:
-    base, cap = os.environ.get("AGENT_API_URL", ""), os.environ.get("AGENT_API_TOKEN", "")
-    if not (base and cap):
-        sys.exit("composing mail needs the agent API (AGENT_API_URL / AGENT_API_TOKEN)")
-    res = subprocess.run(
-        ["curl", "-sS", "-X", "POST", "--data-binary", "@-",
-         "-H", f"X-Agent-Capability: {cap}", "-H", "Content-Type: application/json",
-         "-w", "\n%{http_code}", f"{base}/v1/connectors/gmail/compose"],
-        input=json.dumps({"body": body, **({"original": original} if original else {})}),
-        capture_output=True, text=True)
-    text, _, status = res.stdout.rpartition("\n")
-    if res.returncode != 0 or not status.startswith("2"):
-        sys.exit(f"compose failed (HTTP {status}, curl exit {res.returncode}: {res.stderr.strip()}): {text}")
-    return json.loads(text)
+URL_RE = re.compile(r"https?://[^\s<>\"']+")
 
 
-def build_raw(headers: dict[str, str], body: str, thread_id: str | None = None,
-              original: dict | None = None) -> dict:
+def linkify_escaped(text: str) -> str:
+    out, last = [], 0
+    for m in URL_RE.finditer(text):
+        url = m.group(0)
+        # Trailing punctuation belongs to the sentence, not the URL; a closing
+        # bracket stays only when the URL itself opened it (wikipedia-style
+        # paths, IPv6 hosts).
+        closers = {")": "(", "]": "[", "}": "{"}
+        while url:
+            ch = url[-1]
+            unbalanced = ch in closers and url.count(closers[ch]) < url.count(ch)
+            if ch in ".,;:!?\u201c\u201d\u2018\u2019\u00ab\u00bb\u2026" or unbalanced:
+                url = url[:-1]
+            else:
+                break
+        out.append(html.escape(text[last:m.start()]))
+        out.append(f'<a href="{html.escape(url, quote=True)}">{html.escape(url)}</a>')
+        last = m.start() + len(url)
+    out.append(html.escape(text[last:]))
+    return "".join(out)
+
+
+def html_alternative(body: str) -> str:
+    # Gmail renders text/plain-only mail at a narrower measure for recipients
+    # (the sender's composer view looks normal), so every message carries a
+    # text/html mirror of the same body, shaped like Gmail's own composer output.
+    paragraphs = ["<br>".join(linkify_escaped(ln) for ln in p.split("\n")) for p in body.split("\n\n")]
+    return '<div dir="ltr">' + "<br><br>".join(paragraphs) + "</div>"
+
+
+def build_raw(headers: dict[str, str], body: str, thread_id: str | None = None) -> dict:
     msg = EmailMessage(policy=SMTP)
     for k, v in headers.items():
         if v:
             msg[k] = v
-    parts = compose(body, original)
-    msg.set_content(parts["text"], cte="quoted-printable")
-    msg.add_alternative(parts["html"], subtype="html", cte="quoted-printable")
+    msg.set_content(body, cte="quoted-printable")
+    msg.add_alternative(html_alternative(body), subtype="html", cte="quoted-printable")
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
     return {"raw": raw, **({"threadId": thread_id} if thread_id else {})}
-
-
-def replied_message(thread_id: str | None, in_reply_to: str) -> dict | None:
-    if not thread_id or not in_reply_to:
-        return None
-    thread = call("GET", f"threads/{thread_id}", query={"format": "metadata", "metadataHeaders": ["Message-ID"]})
-    for m in thread.get("messages", []):
-        if headers_of(m["payload"]).get("message-id", "").strip() == in_reply_to.strip():
-            return call("GET", f"messages/{m['id']}", query={"format": "full"})
-    print(f"note: {in_reply_to} is not in thread {thread_id}; draft saved without a quote",
-          file=sys.stderr)
-    return None
 
 
 def headers_of(payload: dict) -> dict[str, str]:
@@ -274,11 +278,12 @@ def main() -> None:
         message = build_raw({"To": a.to, "Subject": a.subject}, read_body(a.body_file))
         print(json.dumps(call("POST", "drafts", {"message": message})))
     elif a.cmd == "reply":
-        orig = call("GET", f"messages/{a.id}", query={"format": "full"})
+        orig = call("GET", f"messages/{a.id}", query={"format": "metadata"})
+
+
         latest = sent_messages(call("GET", f"threads/{orig['threadId']}",
                                     query={"format": "metadata"}))
-        if latest and latest[-1]["id"] != a.id:
-            orig = call("GET", f"messages/{latest[-1]['id']}", query={"format": "full"})
+        orig = latest[-1] if latest else orig
         h = headers_of(orig["payload"])
         subject = h.get("subject", "")
         me = own_address()
@@ -294,7 +299,7 @@ def main() -> None:
         }
         if a.all:
             headers["Cc"] = strip_addrs(f"{h.get('to', '')}, {h.get('cc', '')}", f"{me}, {headers['To']}")
-        message = build_raw(headers, read_body(a.body_file), orig["threadId"], orig)
+        message = build_raw(headers, read_body(a.body_file), orig["threadId"])
         print(json.dumps(call("POST", "drafts", {"message": message})))
     elif a.cmd == "update-draft":
         d0 = call("GET", f"drafts/{a.draft_id}", query={"format": "full"})
@@ -304,8 +309,7 @@ def main() -> None:
         h = headers_of(payload)
         headers = {k.title(): h.get(k, "") for k in
                    ("from", "to", "cc", "bcc", "subject", "in-reply-to", "references")}
-        original = replied_message(d0["message"].get("threadId"), headers["In-Reply-To"])
-        message = build_raw(headers, read_body(a.body_file), d0["message"].get("threadId"), original)
+        message = build_raw(headers, read_body(a.body_file), d0["message"].get("threadId"))
         print(json.dumps(call("PUT", f"drafts/{a.draft_id}", {"message": message})))
     elif a.cmd == "send-draft":
         print(json.dumps(call("POST", "drafts/send", {"id": a.draft_id})))

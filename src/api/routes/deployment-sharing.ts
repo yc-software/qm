@@ -6,12 +6,12 @@ import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { parseScopeId, type Permission } from "../../types.ts";
 import type { ApiCtx, Route } from "./route.ts";
-import { livePersonCapability, resolveShareTarget as resolveShareTargetGrammar } from "../artifact-share.ts";
+import { personAtKeyboard, resolveShareTarget as resolveShareTargetGrammar } from "../artifact-share.ts";
 
 async function setDeploymentConnectors(ctx: ApiCtx): Promise<void> {
   const { res, app, params, body, capability, actor } = ctx;
   const principalId = capability ? capability.actorId : actor?.p;
-  if (!principalId || (capability && !livePersonCapability(capability)))
+  if (!principalId || (capability && !personAtKeyboard(capability)))
     return sendJson(res, 403, {
       error: "forbidden",
       message: "only the publisher, in a live conversation or signed in, can lend an app their connectors",
@@ -68,6 +68,7 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
       error: "forbidden",
       message: "sharing requires a signed-in person or an agent capability token",
     });
+  const actor = { createdBy: principalId, botActor: ctx.capability?.botActor };
   const b = (isObj(body) ? body : {}) as {
     scope?: unknown;
     recipient?: unknown;
@@ -88,7 +89,7 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
         message: "public access and person/scope access must be changed separately",
       });
     try {
-      const deployment = await app.setDeploymentPublic(params.id!, b.public, { createdBy: principalId });
+      const deployment = await app.setDeploymentPublic(params.id!, b.public, actor);
       return sendJson(res, 200, {
         ok: true,
         public: deployment.public === true,
@@ -130,11 +131,10 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
   try {
     const invite =
       typeof b.email === "string" && permission === "read"
-        ? await app.inviteToDeployment(params.id!, b.email, principalId, notify)
+        ? await app.inviteToDeployment(params.id!, b.email, actor, notify)
         : undefined;
     const grantees =
-      invite?.grantees ??
-      (await app.shareDeployment(params.id!, target.scope, permission, { createdBy: principalId }, notify));
+      invite?.grantees ?? (await app.shareDeployment(params.id!, target.scope, permission, actor, notify));
     const orgGrant = grantees.find((g) => parseScopeId(g.scope).kind === "org");
     let reach = "owner-only";
     if (orgGrant) reach = `everyone in ${parseScopeId(orgGrant.scope).ref}`;

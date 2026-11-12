@@ -72,7 +72,7 @@ import type {
   RecipientResolution,
 } from "../directory/directory-store.ts";
 import type { Delivery, Destination } from "../types.ts";
-import type { Cron, CronFireLogEntry, CronFireNote, Webhook } from "../triggers/types.ts";
+import type { Cron, CronFireLogEntry, CronFireNote, TriggerBase, Webhook } from "../triggers/types.ts";
 import type { SurfaceContextQuery, SurfaceContextRequest, SurfaceContextResult } from "../reach/reach.ts";
 import type {
   ActiveThread,
@@ -98,6 +98,7 @@ import type {
   Reach,
   ReachOptions,
   DeploymentGrantee,
+  DeploymentActor,
 } from "../deploy/deploy-service.ts";
 import { type DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
@@ -450,7 +451,10 @@ export interface App {
     input: { scopeId?: ScopeId; name: string; mimetype?: string; data: AsyncIterable<Uint8Array> },
   ): Promise<FileListItem | null>;
   listScopeResources(tenant: Tenant, principalId: string, scope: ScopeId): Promise<ScopeResources | null>;
-  loopAdministration(actorId: string, loops: readonly { owner: string; ownerScopeId: ScopeId }[]): Promise<boolean[]>;
+  loopAdministration(
+    actor: Pick<CapabilityClaims, "actorId" | "botActor">,
+    loops: readonly Pick<TriggerBase, "owner" | "ownerScopeId" | "botActor">[],
+  ): Promise<boolean[]>;
   managesScope(principalId: string, scope: ScopeId): Promise<boolean>;
   currentScopeMembers(scope: ScopeId): Promise<Principal[] | undefined>;
   isCurrentSharedScopeMember(principalId: string, scope: ScopeId): Promise<boolean>;
@@ -641,7 +645,7 @@ export interface App {
   setDeploymentDisplayName(id: string, displayName: string): Promise<Deployment>;
   setDeploymentAlwaysOn(id: string, alwaysOn: boolean): Promise<Deployment>;
   setDeploymentEmbedAncestors(id: string, embedAncestors: string[]): Promise<Deployment>;
-  setDeploymentPublic(idOrName: string, isPublic: boolean, actor: { createdBy: string }): Promise<Deployment>;
+  setDeploymentPublic(idOrName: string, isPublic: boolean, actor: DeploymentActor): Promise<Deployment>;
   setDeploymentConnectors(idOrName: string, connectors: string[], actor: { createdBy: string }): Promise<Deployment>;
   maintainDeployments(): Promise<number>;
   publishDueLiveEdits(): Promise<number>;
@@ -656,13 +660,13 @@ export interface App {
     idOrName: string,
     grantee: ScopeId,
     permission: Permission | null,
-    actor: { createdBy: string },
+    actor: DeploymentActor,
     opts?: { notify?: boolean },
   ): Promise<DeploymentGrantee[]>;
   inviteToDeployment(
     idOrName: string,
     email: string,
-    actorId: string,
+    actor: DeploymentActor,
     opts?: { notify?: boolean },
   ): Promise<{
     grantees: DeploymentGrantee[];

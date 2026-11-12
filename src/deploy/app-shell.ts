@@ -119,6 +119,7 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
   const themeColors = ["--background", "--foreground", "--secondary", "--muted-foreground", "--border", "--brand-accent"];
   window.addEventListener("message", (event) => {
     if (event.source !== chat.contentWindow || event.origin !== portalOrigin) return;
+    if (event.data?.type === "qm:app-check") return void poll();
     const theme = event.data;
     if (theme?.type !== "qm:theme" || typeof theme.dark !== "boolean" || !theme.colors) return;
     if (!themeColors.every((key) => typeof theme.colors[key] === "string" && CSS.supports("color", theme.colors[key]))) return;
@@ -207,19 +208,26 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
   app.addEventListener("load", sync);
   if (location.hash) app.src += location.hash;
   let base = null;
-  app.addEventListener("load", () => { base = null; });
+  let reloading = false;
+  app.addEventListener("load", () => {
+    if (reloading) reloading = false;
+    else base = null;
+  });
   const reloadApp = (v) => {
     base = v;
+    reloading = true;
     upd.classList.remove("show");
     try { app.contentWindow.location.reload(); } catch { app.src = app.src; }
   };
+  let polls = 0;
   const poll = async () => {
     if (document.hidden || bare) return;
+    const mine = ++polls;
     try {
       const r = await fetch("/__claw__/version", { cache: "no-store" });
       if (!r.ok) return;
       const d = await r.json();
-      if (typeof d.version !== "number") return;
+      if (mine !== polls || typeof d.version !== "number") return;
       verEl.textContent = "v" + d.version;
       const served = d.version + ":" + (d.live ?? "");
       if (base === null) {

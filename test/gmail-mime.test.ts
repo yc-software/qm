@@ -4,68 +4,76 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { gmailBodyParts } from "../src/connectors/gmail-compose.ts";
 
 const SCRIPT = join(process.cwd(), "skills-seed", "google-workspace", "scripts", "gmail.py");
 
+const DRIVER = `
+import base64, importlib.util, json, sys
+from email import message_from_bytes
+from email.policy import default as default_policy
+spec = importlib.util.spec_from_file_location("gmail", sys.argv[1])
+gmail = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gmail)
+raw = gmail.build_raw({"To": "a@b.com", "Subject": "Probe"}, sys.stdin.read())["raw"]
+msg = message_from_bytes(base64.urlsafe_b64decode(raw), policy=default_policy)
+parts = {p.get_content_type(): p.get_content() for p in msg.walk() if not p.is_multipart()}
+print(json.dumps({"contentType": msg.get_content_type(), "parts": parts}))
+`;
+
 const havePython = spawnSync("python3", ["--version"]).status === 0;
 
-const enc = (t: string) => Buffer.from(t).toString("base64url");
-const part = (mimeType: string, text: string) => ({ mimeType, body: { data: enc(text) } });
-const message = (headers: Array<{ name: string; value: string }>, parts: unknown[]) => ({
-  payload: { headers, parts },
+function buildMime(body: string): { contentType: string; parts: Record<string, string> } {
+  const out = execFileSync("python3", ["-c", DRIVER, SCRIPT], { input: body, encoding: "utf8" });
+  return JSON.parse(out);
+}
+
+test(
+  "drafted mail is multipart/alternative so recipients don't get Gmail's narrow plain-text rendering",
+  { skip: !havePython },
+  () => {
+    const body =
+      "Hi Alice and Bob,\n\nWould you fill this out? Takes ~5 minutes:\nhttps://forms.example.com/abc123\n\nCarol";
+    const mime = buildMime(body);
+    assert.equal(mime.contentType, "multipart/alternative");
+    const plain = mime.parts["text/plain"];
+    const html = mime.parts["text/html"];
+    assert.ok(plain && html, "both alternatives exist");
+    assert.ok(plain.includes("Takes ~5 minutes"), "plain part keeps the body");
+    assert.ok(html.startsWith('<div dir="ltr">'), "html mirror is composer-shaped");
+    assert.ok(html.includes("Hi Alice and Bob,<br><br>"), "paragraph breaks survive");
+    assert.ok(
+      html.includes('<a href="https://forms.example.com/abc123">https://forms.example.com/abc123</a>'),
+      "bare URLs stay clickable in the html mirror",
+    );
+  },
+);
+
+test("html mirror escapes markup and keeps sentence punctuation out of links", { skip: !havePython }, () => {
+  const mime = buildMime('a < b & "c" — see https://x.test/a?b=1&c=2.');
+  const plain = mime.parts["text/plain"];
+  const html = mime.parts["text/html"];
+  assert.ok(plain && html, "both alternatives exist");
+  assert.ok(plain.includes('a < b & "c"'), "plain part is untouched");
+  assert.ok(html.includes("a &lt; b &amp; &quot;c&quot; — see"), "text is html-escaped");
+  assert.ok(html.includes('<a href="https://x.test/a?b=1&amp;c=2">'), "url is escaped for the attribute");
+  assert.ok(html.includes("</a>."), "trailing period stays outside the link");
 });
 
-test("drafted mail gets a composer-shaped html mirror with clickable links", () => {
-  const { text, html } = gmailBodyParts(
-    "Hi Alice,\n\nTakes ~5 minutes:\nhttps://forms.example.com/abc123\n\nCarol",
-    undefined,
-    undefined,
-  );
-  assert.ok(text.includes("Takes ~5 minutes"), "plain part keeps the body");
-  assert.ok(html.startsWith('<div dir="ltr">Hi Alice,<div><br></div><div>Takes ~5 minutes:</div>'), "line divs");
-  assert.equal(gmailBodyParts(`${"word ".repeat(16)}end`, undefined, undefined).text.split("\n")[0]!.length, 74);
-  assert.ok(html.includes('<a href="https://forms.example.com/abc123">https://forms.example.com/abc123</a>'));
+test("smart punctuation stays out of links; balanced brackets stay in", { skip: !havePython }, () => {
+  const mime = buildMime("See \u201chttps://x.test/reset?token=abc\u201d and http://[::1]/path\u2026");
+  const html = mime.parts["text/html"];
+  assert.ok(html, "html part exists");
+  assert.ok(html.includes('<a href="https://x.test/reset?token=abc">'), "smart quote trimmed from the href");
+  assert.ok(html.includes('<a href="http://[::1]/path">'), "balanced IPv6 brackets kept");
+  assert.ok(html.includes("</a>…"), "trailing ellipsis stays outside the link");
 });
 
-test("html mirror escapes markup and keeps punctuation out of links", () => {
-  const { html } = gmailBodyParts(
-    "a < b & see https://x.test/a?b=1&c=2. and (https://x.test/w_(x)) and http://[::1]/p",
-    undefined,
-    undefined,
-  );
-  assert.ok(html.includes("a &lt; b &amp; see"), "text is html-escaped");
-  assert.ok(html.includes('<a href="https://x.test/a?b=1&amp;c=2">https://x.test/a?b=1&amp;c=2</a>.'));
-  assert.ok(html.includes('<a href="https://x.test/w_(x)">https://x.test/w_(x)</a>)'), "balanced parens kept");
-  assert.ok(html.includes('<a href="http://[::1]/p">'), "brackets inside the url kept");
-});
-
-test("replies quote the original the way Gmail's composer does", () => {
-  const original = message(
-    [
-      { name: "From", value: '"Ann Lee" <ann@x.test>' },
-      { name: "Date", value: "Wed, 11 Nov 2026 02:28:00 GMT" },
-    ],
-    [
-      part(
-        "text/html",
-        '<html><head><style>p{}</style></head><body><!-- c --><div>Caf\u00e9</div><p>para</p>a<br><a href="u">b</a></body></html>',
-      ),
-    ],
-  );
-  const { text, html } = gmailBodyParts("Thanks", original, "America/Los_Angeles");
-  assert.equal(
-    text,
-    "Thanks\n\nOn Tue, Nov 10, 2026 at 6:28\u202fPM Ann Lee <ann@x.test> wrote:\n\n> Caf\u00e9\n> para\n> a\n> b",
-  );
-  assert.ok(html.includes('Ann Lee &lt;<a href="mailto:ann@x.test">ann@x.test</a>&gt; wrote:<br></div>'));
-  assert.ok(
-    html.endsWith(
-      'padding-left:1ex"><div>Caf\u00e9</div><p>para</p>a<br><a href="u" target="_blank">b</a></blockquote></div>',
-    ),
-  );
-  const bare = gmailBodyParts("Ok", message([{ name: "From", value: "a@b.test" }], []), undefined);
-  assert.ok(bare.text.includes("On <a@b.test> wrote:\n\n>"), "nameless sender keeps brackets; empty body still quoted");
+test("intra-paragraph line breaks survive as <br> in the html mirror", { skip: !havePython }, () => {
+  const mime = buildMime("Short.\n\nTwo lines\nin one paragraph");
+  assert.equal(mime.contentType, "multipart/alternative");
+  const html = mime.parts["text/html"];
+  assert.ok(html, "html part exists");
+  assert.ok(html.includes("Two lines<br>in one paragraph"), "intra-paragraph breaks become <br>");
 });
 
 test(
@@ -147,38 +155,4 @@ test("app-connection calls reuse the account the proxy resolved on the first cal
     calls.slice(1).map((c: { accountId?: string }) => c.accountId),
     ["ca_resolved1", "ca_resolved1"],
   );
-});
-
-test("the skill helper composes drafts through core", { skip: !havePython }, () => {
-  const dir = mkdtempSync(join(tmpdir(), "gmail-compose-"));
-  const log = join(dir, "calls.jsonl");
-  const stub = join(dir, "curl");
-  writeFileSync(
-    stub,
-    `#!/usr/bin/env python3\nimport json, sys\nargs = sys.argv[1:]\nbody = sys.stdin.read() if "@-" in args else ""\n` +
-      `open(${JSON.stringify(log)}, "a").write(json.dumps({"url": args[-1], "body": body}) + "\\n")\n` +
-      `out = {"text": "T", "html": "<b>H</b>"} if args[-1].endswith("/compose") else {"id": "d1"}\n` +
-      `print(json.dumps(out) + "\\n200", end="")\n`,
-  );
-  chmodSync(stub, 0o755);
-  const body = join(dir, "body.txt");
-  writeFileSync(body, "Hello");
-  execFileSync("python3", [SCRIPT, "draft", "--to", "a@b.test", "--subject", "S", "--body-file", body], {
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      PATH: `${dir}:${process.env.PATH}`,
-      AGENT_API_URL: "http://qm.test",
-      AGENT_API_TOKEN: "cap",
-      VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM: "tok",
-    },
-  });
-  const [compose, draft] = readFileSync(log, "utf8")
-    .trim()
-    .split("\n")
-    .map((l) => JSON.parse(l));
-  assert.equal(compose.url, "http://qm.test/v1/connectors/gmail/compose");
-  assert.deepEqual(JSON.parse(compose.body), { body: "Hello" });
-  const raw = Buffer.from(JSON.parse(draft.body).message.raw, "base64url").toString();
-  assert.ok(raw.includes("text/plain") && raw.includes("text/html") && raw.includes("<b>H</b>"), "core's parts go out");
 });

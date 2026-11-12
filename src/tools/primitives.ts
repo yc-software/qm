@@ -58,11 +58,12 @@ import { deploymentEntrypoint, type DeployService, type DeployFile } from "../de
 import { appUrlOf } from "../deploy/deploy-store.ts";
 import { carriesGitMetadata } from "../deploy/deploy-fs.ts";
 import type { LiveEditSaved } from "../deploy/live-edits.ts";
+import { createAppFiles, type AppFiles } from "./app-files.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import type { OutboundFile } from "../core/attachments.ts";
 import { errMessage, withCleanup } from "../util/errors.ts";
-import { quotedData, trimTrailingSlashes } from "../util/text.ts";
+import { quotedData, trimTrailingSlashes, tryDecodeUtf8 } from "../util/text.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { MEMORY_FILE, turnAuthority, type MemoryEdit, type MemoryService } from "../memory/memory-service.ts";
@@ -240,6 +241,7 @@ export interface ToolContext extends SurfaceToolDeps {
   ): Promise<SkillResult>;
   write(path: string, data: string, sandboxId?: string): Promise<void>;
   publish(input: PublishInput): Promise<PublishResult>;
+  appFiles?: AppFiles;
   setDeploymentPublic(id: string, isPublic: boolean): Promise<{ id: string; name?: string; public: boolean }>;
   createPlayground(input: { title: string; html: string }): Promise<PlaygroundArtifact>;
   memorySearch(
@@ -496,6 +498,7 @@ export interface ToolContextDeps {
   sandboxResources?: SandboxResources;
   invalidateProvision?: () => void;
   deploy: DeployService;
+  editingApp?: string;
   acl: AclStore;
   files?: FileArtifactStore;
   auditLog?: AuditLog;
@@ -746,6 +749,17 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     ...(deps.admin ? { admin: deps.admin } : {}),
     ...(deps.selfApi ? { selfApi: deps.selfApi } : {}),
     ...(deps.toolOutput ? { toolOutput: deps.toolOutput } : {}),
+    ...(deps.editingApp
+      ? {
+          appFiles: createAppFiles({
+            deploy: deps.deploy,
+            app: deps.editingApp,
+            actorId: deps.createdBy,
+            botActor: deps.botActor,
+            actingScopeId: writableScopeId,
+          }),
+        }
+      : {}),
     ...(deps.sandboxResources && deps.accessSandboxResource
       ? {
           async sandboxResources(
@@ -1121,7 +1135,10 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     },
 
     async setDeploymentPublic(id: string, isPublic: boolean) {
-      const d = await deps.deploy.setDeploymentPublic(id, isPublic, { createdBy: deps.createdBy });
+      const d = await deps.deploy.setDeploymentPublic(id, isPublic, {
+        createdBy: deps.createdBy,
+        botActor: deps.botActor,
+      });
       return { id: d.id, ...(d.name ? { name: d.name } : {}), public: d.public === true };
     },
 
@@ -1385,14 +1402,6 @@ function audienceFromGrantees(
       ? { memberCount: granteeScopeIds.length }
       : {}),
   };
-}
-
-function tryDecodeUtf8(bytes: Uint8Array): string | null {
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  } catch {
-    return null;
-  }
 }
 
 const COMMAND_PATH_PROBE_TIMEOUT_MS = 10_000;
