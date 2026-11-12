@@ -451,7 +451,6 @@ export function createTurnHandler(deps: {
       const serialize = () =>
         serializer.serializeSlackConversation(client, inc, {
           audience,
-          ...(channelName ? { channelName } : {}),
           ...(isPrivate !== undefined ? { isPrivate } : {}),
           kind: conversationKind,
           ...(slackIdsByPrincipal ? { slackIdsByPrincipal } : {}),

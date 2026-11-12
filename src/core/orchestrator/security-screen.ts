@@ -320,6 +320,14 @@ async function buildInboundScreen(turn: InboundScreenTurn) {
         ...(input.conversationHeader?.trim()
           ? [{ source: "conversation-header", content: input.conversationHeader }]
           : []),
+        ...(input.gatewayContext?.details?.channel_name
+          ? [
+              {
+                source: "conversation-metadata",
+                content: JSON.stringify({ channel: input.gatewayContext.details.channel_name }),
+              },
+            ]
+          : []),
         ...overheard.map((entry) => ({ source: "overheard", content: renderOverheard(entry) })),
         ...attachmentPromptData,
         ...(input.inboundNotes ?? []).map((note) => ({ source: "inbound-file-note", content: note })),

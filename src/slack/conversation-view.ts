@@ -9,7 +9,6 @@ import {
   type SlackFile,
   MAX_RECENT_MESSAGES,
   decodeSlackEntities,
-  isOversize,
   recentWindow,
 } from "./lib.ts";
 import type { BotIdentity, Directory } from "./directory.ts";
@@ -52,7 +51,6 @@ export interface ConversationSerializer {
     },
     ctx: {
       audience: ActorAssertion[];
-      channelName?: string;
       isPrivate?: boolean;
       kind?: SlackConversationKind;
       slackIdsByPrincipal?: ReadonlyMap<string, string>;
@@ -166,7 +164,6 @@ export function createConversationSerializer(deps: {
     },
     ctx: {
       audience: ActorAssertion[];
-      channelName?: string;
       isPrivate?: boolean;
       kind?: SlackConversationKind;
       slackIdsByPrincipal?: ReadonlyMap<string, string>;
@@ -176,7 +173,6 @@ export function createConversationSerializer(deps: {
       channel: { kind: ctx.kind ?? inc.kind },
       messages: [],
       here: inc.threadTs ? { kind: "thread", youOpenedIt: false } : { kind: "top-level" },
-      omittedFiles: [],
     };
     if (ctx.audience.some((a) => a.isExternalGuest) && !(await externalParticipantsEnabled())) return { view: empty };
 
@@ -208,30 +204,22 @@ export function createConversationSerializer(deps: {
       const youOpenedIt = Boolean(
         root && ((root.user && root.user === ids.botUserId) || (ids.ownBotId !== "" && root.bot_id === ids.ownBotId)),
       );
-      const starterName = root && !youOpenedIt ? messageAuthorName(root, nameById, new Map()) : undefined;
       here = {
         kind: "thread",
         youOpenedIt,
-        ...(starterName ? { starterName } : {}),
         ...(youOpenedIt && root?.text ? { openerText: decodeSlackEntities(String(root.text).trim()) } : {}),
       };
     } else {
       here = { kind: "top-level" };
     }
 
-    const omittedFiles = inc.files
-      .filter((f) => isOversize(f))
-      .map((f) => ({ name: slackFileName(f), reason: "too-big" as const }));
-
     const view: ConversationView = {
       channel: {
-        ...(ctx.channelName ? { name: ctx.channelName } : {}),
         kind: ctx.kind ?? inc.kind,
         ...(ctx.isPrivate !== undefined ? { isPrivate: ctx.isPrivate } : {}),
       },
       messages,
       here,
-      omittedFiles,
       nameById,
       ...("note" in page && page.note ? { contextNote: page.note } : {}),
     };
