@@ -1,39 +1,29 @@
 const LINK_RE = /https?:\/\/[^\s<>()[\]]+/gi;
 
-export const CONNECTOR_LABELS: Record<string, { name: string; hosts: string }> = {
-  google: {
-    name: "Google Workspace",
-    hosts: "Gmail, Calendar, Drive, Sheets",
-  },
-  slack: {
-    name: "Slack",
-    hosts: "Channels & messages",
-  },
-  notion: {
-    name: "Notion",
-    hosts: "Pages & databases",
-  },
-  linear: {
-    name: "Linear",
-    hosts: "Issues & projects",
-  },
-  github: {
-    name: "GitHub",
-    hosts: "Repos, issues & PRs",
-  },
-  dropbox: {
-    name: "Dropbox",
-    hosts: "Files & folders",
-  },
-  x: {
-    name: "X (Twitter)",
-    hosts: "Posts & profile",
-  },
-  zoom: {
-    name: "Zoom",
-    hosts: "Meetings",
-  },
-};
+export interface ConnectorInfo {
+  label?: string;
+  description?: string;
+}
+
+const knownConnectors = new Map<string, ConnectorInfo>();
+let knownConnectorsRevision = 0;
+
+export function rememberConnectors(providers: Record<string, ConnectorInfo>): void {
+  for (const [id, info] of Object.entries(providers)) knownConnectors.set(id, info);
+  knownConnectorsRevision++;
+}
+
+export function connectorsRevision(): number {
+  return knownConnectorsRevision;
+}
+
+export function connectorName(id: string): string {
+  return knownConnectors.get(id)?.label || id.charAt(0).toUpperCase() + id.slice(1);
+}
+
+export function connectorDescription(id: string): string {
+  return knownConnectors.get(id)?.description ?? "";
+}
 
 export interface ConnectorLink {
   provider: string;
@@ -74,7 +64,7 @@ export function connectorLinksIn(text: string, trustedOrigin?: string): Connecto
     if (trustedOrigin && parsed.origin !== trustedOrigin) continue;
     if (!/^\/(?:connect\/redeem|v1\/connectors\/oauth\/consent\/redeem)\/[^/]+$/.test(parsed.pathname)) continue;
     const provider = parsed.searchParams.get("p") ?? "";
-    if (!CONNECTOR_LABELS[provider]) continue;
+    if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(provider)) continue;
     if (!out.some((l) => l.url === url)) out.push({ provider, url });
   }
   return out;
