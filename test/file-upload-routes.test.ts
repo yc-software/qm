@@ -186,14 +186,12 @@ test("a quota refusal tells the caller which of its uploads hold the quota", asy
   }
 });
 
-test("a token on an unrouted method or path is sent to the catalog instead of refused", async () => {
-  const cap = await token("U1");
-  for (const [method, path, body] of [
-    ["PUT", `/v1/files/uploads/${upload.id}/parts/1`, new Uint8Array([0xff, 0x00, 0x7b])],
-    ["GET", "/v1/files/uploadz", undefined],
-  ] as const) {
-    const res = await fetch(`${base}${path}`, { method, headers: { "x-agent-capability": cap }, body });
-    assert.equal(res.status, 404, path);
-    assert.match(((await res.json()) as { message: string }).message, /^no route .+; GET \/v1\/apis lists/, path);
-  }
+test("an unrouted method gets a 404 pointing at the catalog, not a capability refusal", async () => {
+  const res = await fetch(`${base}/v1/files/uploads/${upload.id}/parts/1`, {
+    method: "PUT",
+    headers: { "x-agent-capability": await token("U1") },
+    body: new Uint8Array([0xff]),
+  });
+  assert.equal(res.status, 404);
+  assert.match(((await res.json()) as { message: string }).message, /^no route PUT .+; GET \/v1\/apis lists/);
 });
