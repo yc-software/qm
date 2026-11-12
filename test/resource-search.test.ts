@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { testTenant } from "./support/test-tenant.ts";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -47,13 +48,13 @@ test("resource search filters private data, includes owned drafts, and bounds sn
     action: "zanzibar private",
     schedule: { everyMs: 60000 },
   });
-  const result = await app.searchResources("U1", "zanzibar");
+  const result = await app.searchResources(testTenant, "U1", "zanzibar");
   assert.deepEqual(result.failed, []);
   assert.deepEqual(new Set(result.hits.map((h) => h.id)), new Set([owned.id, cron.id]));
   assert.ok(result.hits.every((h) => h.title.length <= 121 && h.snippet.length <= 242));
   assert.ok(result.hits.every((h) => Object.keys(h).sort().join() === "id,kind,snippet,title"));
-  assert.deepEqual(await app.searchResources("U1", " "), { hits: [], failed: [], limited: [] });
-  assert.deepEqual(await app.searchResources("U1", "not searchable private body"), {
+  assert.deepEqual(await app.searchResources(testTenant, "U1", " "), { hits: [], failed: [], limited: [] });
+  assert.deepEqual(await app.searchResources(testTenant, "U1", "not searchable private body"), {
     hits: [],
     failed: [],
     limited: [],
@@ -76,11 +77,11 @@ test("revoked project membership removes both project and cron hits, even for th
     action: "zanzibar work",
     schedule: { everyMs: 60000 },
   });
-  let result = await app.searchResources("member", "zanzibar");
+  let result = await app.searchResources(testTenant, "member", "zanzibar");
   assert.ok(result.hits.some((h) => h.id === cron.id));
   assert.ok(result.hits.some((h) => h.id === project.scopeId));
   await app.removeProjectMember(project.id, "owner", "member");
-  result = await app.searchResources("member", "zanzibar");
+  result = await app.searchResources(testTenant, "member", "zanzibar");
   assert.equal(result.hits.length, 0);
 });
 
@@ -109,14 +110,14 @@ test("private matches within the candidate cap are filtered and authorized hits 
         })
       ).id,
     );
-  const result = await app.searchResources("U1", "zanzibar");
+  const result = await app.searchResources(testTenant, "U1", "zanzibar");
   assert.equal(result.hits.length, 8);
   assert.ok(result.hits.every((h) => ids.has(h.id)));
 });
 
 test("private matches beyond the candidate cap reveal no search metadata", async () => {
   const { app } = fresh();
-  const empty = await app.searchResources("U1", "zanzibar");
+  const empty = await app.searchResources(testTenant, "U1", "zanzibar");
   for (let i = 0; i < 201; i++)
     await app.createCron({
       owner: `private${Math.floor(i / 100)}`,
@@ -126,7 +127,7 @@ test("private matches beyond the candidate cap reveal no search metadata", async
       action: `zanzibar private ${i}`,
       schedule: { everyMs: 60000 },
     });
-  assert.deepEqual(await app.searchResources("U1", "zanzibar"), empty);
+  assert.deepEqual(await app.searchResources(testTenant, "U1", "zanzibar"), empty);
 });
 
 test("published skill search resolves shadowing without calling the full visible-skills API", async () => {
@@ -148,7 +149,7 @@ test("published skill search resolves shadowing without calling the full visible
   app.listVisibleSkills = async () => {
     throw new Error("must not load full registry");
   };
-  const result = await app.searchResources("U1", "zanzibar");
+  const result = await app.searchResources(testTenant, "U1", "zanzibar");
   assert.deepEqual(result.failed, []);
   assert.equal(result.hits.length, 1);
   assert.ok(result.hits[0]!.snippet.includes("personal:U1"));
@@ -170,7 +171,7 @@ test("webhook search uses the existing owner and project controls without exposi
     action: "zanzibar hidden",
     verification: { scheme: "github", secret: "another-secret" },
   });
-  const result = await app.searchResources("U1", "zanzibar");
+  const result = await app.searchResources(testTenant, "U1", "zanzibar");
   assert.deepEqual(
     result.hits.map((h) => h.id),
     [own.id],
