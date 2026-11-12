@@ -23,12 +23,20 @@ const htmlMirror = (text: string): string => {
   return `<div dir="ltr">${htmlLine(first)}${rest.map((line) => `<div>${htmlLine(line)}</div>`).join("")}</div>`;
 };
 
+function withoutBlocks(html: string, tag: string): string {
+  const lower = html.toLowerCase();
+  const open = lower.indexOf(`<${tag}`);
+  const close = lower.indexOf(`</${tag}>`, open);
+  if (open === -1 || close === -1) return html;
+  return withoutBlocks(html.slice(0, open) + html.slice(close + tag.length + 3), tag);
+}
+
 function bodyOf(html: string): string {
   const lower = html.toLowerCase();
   const open = lower.indexOf("<body");
-  if (open === -1) return html;
   const close = lower.lastIndexOf("</body>");
-  return html.slice(lower.indexOf(">", open) + 1, close === -1 ? html.length : close);
+  const body = open === -1 ? html : html.slice(lower.indexOf(">", open) + 1, close === -1 ? html.length : close);
+  return withoutBlocks(withoutBlocks(body, "style"), "script");
 }
 
 const isOffset = (token: string): boolean =>
@@ -59,8 +67,7 @@ function gmailQuote(message: Record<string, unknown>, timeZone: string | undefin
   const [sender] = addressparser(header(payload, "From"), { flatten: true });
   const address = sender?.address ?? "";
   const attribution = `${sentAt(header(payload, "Date"), timeZone)}${sender?.name ? `${sender.name} ` : ""}`;
-  const snippet = typeof message.snippet === "string" ? message.snippet : "";
-  const plain = (plainText(payload) ?? snippet).replaceAll("\r\n", "\n");
+  const plain = (plainText(payload) ?? "").replaceAll("\r\n", "\n");
   const rich = plainText(payload, "text/html");
   const quoted = plain.split("\n").map(quoteLine).join("\n");
   return {
