@@ -318,11 +318,11 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     return (await managedProjectMemberships([scope], principalId)).get(scope);
   }
 
-  async function sessionsForViewer(principalId: string): Promise<Session[]> {
-    const sessions = await deps.sessions.listByParticipant(principalId);
+  async function sessionsForViewer(viewer: Pick<CapabilityClaims, "actorId" | "botActor">): Promise<Session[]> {
+    const sessions = await deps.sessions.listByParticipant(viewer.actorId, { botActor: viewer.botActor });
     const allowed = await managedProjectMemberships(
       sessions.map((session) => session.scopeId),
-      principalId,
+      viewer.actorId,
     );
     return sessions.filter((session) => allowed.get(session.scopeId) !== false);
   }

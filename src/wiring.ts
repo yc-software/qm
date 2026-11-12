@@ -2144,8 +2144,8 @@ export function buildApp(
     prepareRequest: prepareSessionRequest,
     authorize: (session, actorId) => canWriteScope(actorId, session.scopeId),
     conversations: {
-      search: ({ query, principals, limit }) => app.searchConversations(query, principals, limit),
-      list: (actorId) => app.listSessions(actorId),
+      search: (input) => app.searchConversations(input),
+      list: (viewer) => app.listSessions(viewer),
       start: (actorId, input) => startSession(app, sessions, actorId, input),
     },
     async validateRuntime(input, scope) {
