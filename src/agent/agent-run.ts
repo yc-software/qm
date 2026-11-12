@@ -138,7 +138,6 @@ import { createFloorCapPolicy, createGrindMeter, enforceGoal, type GovernorVerdi
 
 export interface AgentOptions {
   routes?: ModelRoutes;
-  detectModelId?: string;
   titleModelId?: string;
   judgeModelId?: string;
   tempDirPrefix?: string;
@@ -156,7 +155,6 @@ export interface AgentOptions {
 
 export function agentConfigOptions(config: Config): AgentOptions {
   return {
-    ...(config.detectModelId ? { detectModelId: config.detectModelId } : {}),
     ...(config.titleModelId ? { titleModelId: config.titleModelId } : {}),
     ...(config.judgeModelId ? { judgeModelId: config.judgeModelId } : {}),
     captureRequests: config.captureLlmRequests,
@@ -1021,7 +1019,7 @@ export function createAgent(opts?: AgentOptions): Agent {
     },
 
     async shouldRespond(detect: DetectInput): Promise<DetectResult> {
-      const route = await utilityRoute(opts?.detectModelId);
+      const route = servable(await sessionRoute(detect));
       if (!route) return { respond: true };
       const detectSystemPrompt = buildDetectionPrompt(detect.reactionGuidance);
       const prompt = renderDetectPrompt(detect);
@@ -1107,7 +1105,7 @@ export function createAgent(opts?: AgentOptions): Agent {
     async screenSecurity({ payload, signal, recordModelCall, recordLlmRequest }) {
       const systemPrompt = SECURITY_SCREEN_SYSTEM_PROMPT;
       try {
-        const route = await utilityRoute(opts?.detectModelId);
+        const route = await utilityRoute();
         if (!route) return undefined;
         recordModelCall({
           model: route.modelId,

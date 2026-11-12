@@ -611,7 +611,7 @@ test("a judged batch records a durable judgment row: prompt, decision, model, ts
 
 test("the ambient judge model is independent of the detect model (PI_JUDGE_MODEL)", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-surfcache-"));
-  const built = buildApp(testConfig({ dataDir, detectModelId: "claude-opus-4-8", judgeModelId: "claude-sonnet-5" }));
+  const built = buildApp(testConfig({ dataDir, judgeModelId: "claude-sonnet-5" }));
   built.runtime.start();
   try {
     const container = "C-judgemodel";
