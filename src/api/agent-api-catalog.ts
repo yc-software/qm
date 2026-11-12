@@ -1,5 +1,6 @@
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import { livePersonCapability, personAtKeyboard } from "./artifact-share.ts";
+import { matchesSearchTerms, searchTerms } from "../sessions/entry-search.ts";
 
 interface AgentApiRoute {
   method: string;
@@ -785,6 +786,7 @@ export function renderAgentApis(
   claims: CapabilityClaims,
   admin: { isAdmin: boolean; role?: string },
   features: { swarmsEnabled: boolean; personasEnabled: boolean },
+  query = "",
 ): AgentApiListing {
   const view: AgentApiView = {
     claims,
@@ -792,7 +794,17 @@ export function renderAgentApis(
     swarmsEnabled: features.swarmsEnabled,
     personasEnabled: features.personasEnabled,
   };
-  const visible = [...FAMILIES, WHOAMI_FOR_ALL].filter((f) => f.when?.(view) ?? true);
+  const terms = searchTerms(query);
+  const visible = [...FAMILIES, WHOAMI_FOR_ALL]
+    .filter((f) => f.when?.(view) ?? true)
+    .filter(
+      (f) =>
+        !terms.length ||
+        matchesSearchTerms(
+          [f.guidance ?? "", ...f.routes.map((r) => `${r.method} ${r.path} ${r.summary}`)].join(" "),
+          terms,
+        ),
+    );
   return {
     actorId: claims.actorId,
     scopeId: claims.scopeId,
