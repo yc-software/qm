@@ -170,7 +170,7 @@ export async function buildModelRuntime(
           ...options,
           cacheRetention,
           onPayload: (payload: unknown, model: Model<Api>) =>
-            thenPayload(options, model, shortConversationCache)(payload),
+            thenPayload(options, model, (body) => shortConversationCache(body, model.api))(payload),
         } as T)
       : options;
   const wireModelId = <T extends Pick<ModelsSimpleStreamOptions, "onPayload"> | undefined>(
@@ -344,12 +344,11 @@ export function applyThinkingBinding<T>(
 
 type PayloadStep = (payload: unknown) => unknown;
 
-function shortConversationCache(payload: unknown): unknown {
-  const messages = (payload as { messages?: Array<{ role?: string; content?: unknown }> } | undefined)?.messages;
-  const breakpoint = (Array.isArray(messages) ? messages : [])
-    .filter((message) => message?.role !== "system" && message?.role !== "developer")
+function shortConversationCache(payload: unknown, api: Api): unknown {
+  const messages = (payload as { messages?: Array<{ content?: unknown }> } | undefined)?.messages;
+  const breakpoint = (api === "anthropic-messages" && Array.isArray(messages) ? messages : [])
     .flatMap((message) =>
-      Array.isArray(message.content) ? (message.content as Array<{ cache_control?: object }>) : [],
+      Array.isArray(message?.content) ? (message.content as Array<{ cache_control?: object }>) : [],
     )
     .findLast((block) => block?.cache_control);
   if (breakpoint) breakpoint.cache_control = { type: "ephemeral" };
