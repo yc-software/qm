@@ -38,7 +38,7 @@ export interface DurableMap<T> {
   take(id: string): Promise<T | null>;
   claimIds(): Promise<ClaimedRow[]>;
   claimTenants(): Promise<ClaimedRow[]>;
-  deleteBefore(field: Extract<keyof T, string>, cutoff: number): Promise<Array<[string, T]>>;
+  deleteBefore(field: Extract<keyof T, string>, cutoff: number): Promise<void>;
   claimTenantsWhere(field: Extract<keyof T, string>, value: string): Promise<ClaimedRow[]>;
   version(): Promise<string>;
 }
@@ -303,13 +303,9 @@ export function createPostgresMap<T>(
       return claimRows(pg, `claim_${table}_tenants`);
     },
     async deleteBefore(field, cutoff) {
-      const res = await withBump((client) =>
-        client.query(`DELETE FROM ${table} WHERE (json->>$2)::double precision < $1 RETURNING id, json`, [
-          cutoff,
-          field,
-        ]),
+      await withBump((client) =>
+        client.query(`DELETE FROM ${table} WHERE (json->>$2)::double precision < $1`, [cutoff, field]),
       );
-      return res.rows.map((row) => [row.id as string, row.json as T]);
     },
     async claimTenantsWhere(field, value) {
       if (!indexedFields.includes(field)) throw new Error(`${table}.${field} is not an indexed field`);

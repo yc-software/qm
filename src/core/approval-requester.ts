@@ -86,7 +86,9 @@ export async function expireStaleApprovals(
   tenant: Tenant,
   scopeLabel: ScopeId,
 ): Promise<void> {
-  for (const [id, record] of await deps.approvals.deleteBefore("createdAt", Date.now() - APPROVAL_LIFETIME_MS)) {
+  const cutoff = Date.now() - APPROVAL_LIFETIME_MS;
+  for (const [id, record] of await deps.approvals.entries()) {
+    if (record.createdAt === undefined || record.createdAt >= cutoff) continue;
     await recordDeclined(
       deps.sessions,
       id,
@@ -110,5 +112,6 @@ export async function expireStaleApprovals(
         requester: record.request?.actor.externalId,
       }),
     });
+    await deps.approvals.deleteIf(id, (current) => current.createdAt === record.createdAt);
   }
 }
