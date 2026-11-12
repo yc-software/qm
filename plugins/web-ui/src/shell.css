@@ -13510,3 +13510,8 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   background: color-mix(in srgb, var(--destructive) 10%, var(--background));
   font-size: var(--font-13);
 }
+
+html.app-share-embed,
+html.app-share-embed body {
+  background: transparent;
+}
