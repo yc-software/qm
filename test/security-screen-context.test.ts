@@ -26,7 +26,7 @@ for (const surface of ["web", "slack", "swarm"]) {
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     const request = `!screened-run printf '%s' "$(printf 'x%.0s' $(seq 1 20000)) quoted transcript"`;
     try {
-      for (const text of ["earlier private conversation", request]) {
+      for (const text of ["earlier private conversation", "!sysprompt", request]) {
         const response = await fetch(`${base}/v1/turns`, {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -35,13 +35,16 @@ for (const surface of ["web", "slack", "swarm"]) {
             actor: { externalId: "U1" },
             conversation: { kind: "dm", threadRef: `${surface}-context` },
             text,
+            gatewayContext: { details: { topic: "Room Topic" }, hostIds: { channel: "Forged" } },
             origin: surface === "swarm" ? { kind: "automation", screenData: "assigned task" } : { kind: "human" },
           }),
         });
         assert.equal(response.status, 200);
         const result = (await response.json()) as { status: string; reply?: string };
         assert.equal(result.status, "ok");
+        if (text === "!sysprompt") assert.ok(result.reply?.includes("Room Topic") && !result.reply.includes("Forged"));
       }
+      assert.ok(calls.some((call) => call.hook !== "tool_response" && call.payload.includes("Room Topic")));
       const outputs = calls.filter((call) => call.hook === "tool_response");
       assert.ok(outputs.length >= 3);
       for (const call of outputs) {

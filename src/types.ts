@@ -331,6 +331,7 @@ export interface AttachmentMeta {
 export interface GatewayContext {
   location?: string;
   details?: Record<string, string>;
+  hostIds?: Record<string, string>;
   instructions?: string;
   reactionGuidance?: string;
   botHandle?: string;

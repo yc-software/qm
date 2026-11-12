@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ScopeId } from "../../types.ts";
+import type { ScopeId, TurnRequest } from "../../types.ts";
 import type { TurnOrigin } from "../turn-origin.ts";
 import type { SecurityScreenClassification, SecurityScreenHook } from "../../security/security-screener.ts";
 import { UNSCREENED_REASON, type SecurityScreenVerdict } from "../../security/security-posture.ts";
@@ -27,7 +27,7 @@ import {
   type loadDocumentInputs,
   MAX_DOCUMENT_TEXT_CHARS,
 } from "../documents.ts";
-import { senderNote } from "./prompt-blocks.ts";
+import { senderNote, shownPlace } from "./prompt-blocks.ts";
 import { isScreenableTextAttachment, MAX_AUTO_ATTACHMENT_SCREEN_BYTES } from "./turn-helpers.ts";
 import { tracePhase } from "../../../plugins/chassis/src/error-reporting.ts";
 import type { resolveTurnContext } from "../../resolution/turn-context.ts";
@@ -265,19 +265,40 @@ export interface InboundScreenTurn {
   approvalGrantsFor: (actorId: string) => Promise<CommandApprovalGrant[]>;
 }
 
+export function screenedFields(
+  request: Pick<
+    TurnRequest,
+    "text" | "gatewayContext" | "conversationHeader" | "overheard" | "attachments" | "inboundNotes"
+  > & {
+    surface?: string;
+    conversation: { kind: string };
+  },
+) {
+  const dm = request.conversation.kind === "dm";
+  return {
+    text: request.text,
+    conversationHeader: request.conversationHeader ?? "",
+    place: shownPlace(request.surface, request.gatewayContext, dm),
+    overheard: request.overheard ?? [],
+    attachments: request.attachments ?? [],
+    inboundNotes: request.inboundNotes ?? [],
+  };
+}
+
 async function buildInboundScreen(turn: InboundScreenTurn) {
   const { deps, input, actor, conversation, scopeId, screenInbound, ambientTurn, sessionTurn, swarmBinding } = turn;
+  const screened = screenedFields(input);
   const blobTransfer = deps.blobTransfer;
   let overheard: OverheardEntryPayload[] = [];
   if (screenInbound) {
     const existingSession = await deps.sessions.getByThread(conversation.threadRef);
     const recorded = recordedMessageTimestamps(existingSession ? await deps.sessions.getItems(existingSession.id) : []);
-    overheard = conversation.kind === "dm" ? [] : selectOverheardToImport(input.overheard ?? [], recorded);
+    overheard = conversation.kind === "dm" ? [] : selectOverheardToImport(screened.overheard, recorded);
   }
   let hasUnscreenableAttachment = false;
   const attachmentPromptData: Array<{ source: string; content: string }> = [];
   if (screenInbound) {
-    for (const attachment of input.attachments ?? []) {
+    for (const attachment of screened.attachments) {
       attachmentPromptData.push({
         source: "attachment-metadata",
         content: JSON.stringify({
@@ -317,20 +338,15 @@ async function buildInboundScreen(turn: InboundScreenTurn) {
         ...(ambientTurn && actor.displayName?.trim()
           ? [{ source: "sender", content: senderNote(actor.displayName) }]
           : []),
-        ...(input.conversationHeader?.trim()
-          ? [{ source: "conversation-header", content: input.conversationHeader }]
+        ...(screened.conversationHeader.trim()
+          ? [{ source: "conversation-header", content: screened.conversationHeader }]
           : []),
-        ...(input.gatewayContext?.details?.channel_name
-          ? [
-              {
-                source: "conversation-metadata",
-                content: JSON.stringify({ channel: input.gatewayContext.details.channel_name }),
-              },
-            ]
+        ...(Object.keys(screened.place).length
+          ? [{ source: "conversation-metadata", content: JSON.stringify(screened.place) }]
           : []),
         ...overheard.map((entry) => ({ source: "overheard", content: renderOverheard(entry) })),
         ...attachmentPromptData,
-        ...(input.inboundNotes ?? []).map((note) => ({ source: "inbound-file-note", content: note })),
+        ...screened.inboundNotes.map((note) => ({ source: "inbound-file-note", content: note })),
       ]
     : [];
   const sessionSender = input.sessionSenderId ? await deps.sessions.get(input.sessionSenderId) : null;
