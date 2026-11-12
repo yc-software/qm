@@ -1063,6 +1063,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 const delivered = woken === "woken" ? "queued_turn" : "queued_message";
                 return { ok: true, sessionId: target.id, title, delivered, busy: woken === "busy" };
               }
+              if (target.parentSessionId !== binding.session.id && (await deps.awaitingApproval?.(target.id)))
+                return leaveMail("that session is paused on an approval; it sees this message when it resumes");
               const dedupKey = input.requestId ? `subagent-followup:${messageId}` : undefined;
               const accepted = await acceptedFollowup(deps.runs, dedupKey, target, stamped, title);
               if (accepted) return accepted;

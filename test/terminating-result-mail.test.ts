@@ -380,3 +380,23 @@ test("a helper return carrying unattended ambient origin wakes even a person's s
     "the restricted sender narrows the wake; it never takes the person's origin",
   );
 });
+
+test("a sibling's message to a helper paused on an approval waits as mail and starts no turn", async () => {
+  const awaiting = new Set<string>();
+  const r = await rig(awaiting);
+  const parent = await parentTurn(r);
+  await parent.step("subagents", "c1", { action: "open", task: "check the harbor ledger" });
+  await parent.step("subagents", "c2", { action: "open", task: "check the tide tables" });
+  await parent.finish({ status: "ok", reply: "" });
+  const [first, second] = await r.sessions.childrenOf(r.room.id);
+  const paused = await finishedHelper(r, first!.id);
+  const sender = await finishedHelper(r, second!.id);
+  awaiting.add(paused.child.id);
+  const out = await r.factory
+    .forTurn({ session: sender.child, scopeId: scope, request: { ...sender.run.request, runId: sender.run.id } })
+    .write({ target: paused.child.id, text: "compare notes", wake: true });
+  assert.equal(out.ok && out.delivered, "queued_message");
+  assert.ok(out.ok && out.notWoken, "the paused helper is not started past its approval");
+  assert.deepEqual(await r.runs.inFlightForThread(paused.child.threadRef), []);
+  assert.equal((await r.mailbox.pending(paused.child.id)).length, 1, "the message waits for the resumed helper");
+});
