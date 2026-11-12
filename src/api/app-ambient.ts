@@ -326,14 +326,13 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
       console.error(
         `[ambient] wake left out ${omitted} earlier messages past the content screen's input limit (container=${batch.container})`,
       );
-    const fileFields = await pullSurfaceFiles(
-      app,
-      batch.surface,
-      batch.container,
-      batch.messages
-        .filter((m) => !m.deleted && (!solicited || m.authorId === solicited.message.authorId))
-        .flatMap((m) => (m.files ?? []).map((f) => f.fileId)),
-    );
+    const fileFields = await pullSurfaceFiles(app, batch.surface, batch.container, [
+      ...new Set(
+        batch.messages
+          .filter((m) => !m.deleted && (!solicited || m.authorId === solicited.message.authorId))
+          .flatMap((m) => (m.files ?? []).map((f) => f.fileId)),
+      ),
+    ]);
     const req: TurnRequest = solicited
       ? {
           surface: batch.surface,

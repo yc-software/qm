@@ -167,19 +167,20 @@ export async function stageSlackFiles(
   deps: {
     token: string;
     trustedHost?: string;
-    stage: (bytes: Uint8Array) => Promise<{ blobId: string }>;
-    author: (userId: string) => Promise<string | undefined>;
+    core: { stageBlob(bytes: Uint8Array): Promise<{ blobId: string }> };
+    directory: { classifyUserCached(client: any, userId: string): Promise<{ actor: { displayName?: string } }> };
   },
 ): Promise<ProcessedInbound> {
   const hydrated = await hydrateSlackFiles(
-    files,
+    files.slice(0, MAX_ATTACHMENTS_PER_TURN),
     async (id) => ((await client.files.info({ file: id })) as { file?: SlackFile } | undefined)?.file,
   );
   return processInboundFiles(
-    hydrated,
+    [...hydrated, ...files.slice(MAX_ATTACHMENTS_PER_TURN)],
     (f) => downloadSlackFile(f, { token: deps.token, ...(deps.trustedHost ? { trustedHost: deps.trustedHost } : {}) }),
-    deps.stage,
-    (userId) => (userId ? deps.author(userId) : undefined),
+    (bytes) => deps.core.stageBlob(bytes),
+    async (userId) =>
+      userId ? (await deps.directory.classifyUserCached(client, userId)).actor.displayName : undefined,
   );
 }
 

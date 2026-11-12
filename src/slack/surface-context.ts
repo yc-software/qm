@@ -165,8 +165,8 @@ export function createSurfaceContextFulfiller(deps: {
     return stageSlackFiles(client, files, {
       token: botToken,
       ...(trustedFileHost ? { trustedHost: trustedFileHost } : {}),
-      stage: (bytes) => core.stageBlob(bytes),
-      author: async (userId) => (await directory.classifyUserCached(client, userId)).actor.displayName,
+      core,
+      directory,
     });
   }
 

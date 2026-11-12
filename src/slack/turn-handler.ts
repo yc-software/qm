@@ -472,8 +472,8 @@ export function createTurnHandler(deps: {
     const { attachments, issues } = await stageSlackFiles(client, ownFiles, {
       token: deps.botToken,
       ...(deps.trustedFileHost ? { trustedHost: deps.trustedFileHost } : {}),
-      stage: (bytes) => core.stageBlob(bytes),
-      author: async (userId) => (await classifyUserCached(client, userId)).actor.displayName,
+      core,
+      directory,
     });
 
     if (inc.unprompted && !text.trim() && attachments.length === 0) return;
