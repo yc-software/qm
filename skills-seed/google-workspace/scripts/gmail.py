@@ -14,10 +14,10 @@ Usage:
   gmail.py read MESSAGE_ID [--full]
   gmail.py thread THREAD_ID [--full]    # all messages oldest-first + lastFromMe
   gmail.py draft --to EMAIL --subject TEXT --body-file FILE
-  gmail.py reply MESSAGE_ID --body-file FILE [--all] [--tz ZONE]  # reply-draft anchored to the
+  gmail.py reply MESSAGE_ID --body-file FILE [--all]   # reply-draft anchored to the
                                                        # thread's latest sent message,
                                                        # quoting it like Gmail does
-  gmail.py update-draft DRAFT_ID --body-file FILE [--tz ZONE]  # keeps recipients/threading/quote
+  gmail.py update-draft DRAFT_ID --body-file FILE      # keeps recipients/threading/quote
   gmail.py send-draft DRAFT_ID
 
 Body files are plain text. Lines that look hard-wrapped (long lines inside a
@@ -39,13 +39,11 @@ from email.message import EmailMessage
 from email.policy import SMTP
 from email.utils import formataddr, getaddresses, parseaddr, parsedate_to_datetime
 from html.parser import HTMLParser
-from zoneinfo import ZoneInfo
 
 API = "https://gmail.googleapis.com/gmail/v1/users/me"
 
 
 ACCOUNT: str | None = None
-ZONE: str | None = None
 
 
 def call(method: str, path: str, body: dict | None = None, query: dict | None = None):
@@ -111,8 +109,6 @@ def read_body(path: str) -> str:
 
 
 URL_RE = re.compile(r"https?://[^\s<>\"']+")
-CLOSERS = {")": "(", "]": "[", "}": "{"}
-TRAILING = ".,;:!?\u201c\u201d\u2018\u2019\u00ab\u00bb\u2026"
 QUOTE_STYLE = "margin:0px 0px 0px 0.8ex;border-left:1px solid rgb(204,204,204);padding-left:1ex"
 
 
@@ -120,25 +116,20 @@ def esc(text: str) -> str:
     return html.escape(text).replace("&#x27;", "&#39;")
 
 
-def link_end(url: str) -> int:
-    unmatched = {close: url.count(close) - url.count(open_) for close, open_ in CLOSERS.items()}
-    end = len(url)
-    while end:
-        ch = url[end - 1]
-        if unmatched.get(ch, 0) > 0:
-            unmatched[ch] -= 1
-        elif ch not in TRAILING:
-            break
-        end -= 1
-    return end
-
-
 def html_line(line: str) -> str:
     if not line:
         return "<br>"
     text, out, last = line.replace("  ", "\u00a0 "), [], 0
     for m in URL_RE.finditer(text):
-        url = m.group(0)[:link_end(m.group(0))]
+        url = m.group(0)
+        closers = {")": "(", "]": "[", "}": "{"}
+        while url:
+            ch = url[-1]
+            unbalanced = ch in closers and url.count(closers[ch]) < url.count(ch)
+            if ch in ".,;:!?\u201c\u201d\u2018\u2019\u00ab\u00bb\u2026" or unbalanced:
+                url = url[:-1]
+            else:
+                break
         out.append(esc(text[last:m.start()]))
         out.append(f'<a href="{esc(url)}">{esc(url)}</a>')
         last = m.start() + len(url)
@@ -198,8 +189,8 @@ def quoted_html(markup: str) -> str:
 
 
 def part_text(payload: dict, mime: str) -> str:
-    return next((b64url_decode(p["body"]["data"]) for p in walk_parts(payload)
-                 if p.get("mimeType") == mime and p.get("body", {}).get("data")), "")
+    return "\n".join(b64url_decode(p["body"]["data"]) for p in walk_parts(payload)
+                     if p.get("mimeType") == mime and p.get("body", {}).get("data"))
 
 
 def sent_at(date: str) -> str:
@@ -207,8 +198,14 @@ def sent_at(date: str) -> str:
         at = parsedate_to_datetime(date)
     except (TypeError, ValueError):
         return ""
-    at = at.astimezone(ZoneInfo(ZONE)) if ZONE and at.tzinfo else at
+    at = at.astimezone()
     return f"{at:%a, %b} {at.day}, {at.year} at {at.hour % 12 or 12}:{at:%M}\u202f{at:%p} "
+
+
+def quote_line(line: str) -> str:
+    if line.startswith(">"):
+        return f">{line}"
+    return f"> {line}" if line else ">"
 
 
 def gmail_quote(original: dict) -> tuple[str, str]:
@@ -217,8 +214,8 @@ def gmail_quote(original: dict) -> tuple[str, str]:
     attribution = sent_at(h.get("date", "")) + (f"{name} " if name else "")
     plain = part_text(original["payload"], "text/plain").replace("\r\n", "\n")
     rich = part_text(original["payload"], "text/html").replace("\r\n", "\n")
-    quoted = "\n".join(f">{ln}" if ln.startswith(">") else (f"> {ln}" if ln else ">") for ln in plain.split("\n"))
-    text = f"On {attribution}<{address}> wrote:\n\n{quoted}"
+    quoted = "\n".join(quote_line(ln) for ln in plain.split("\n"))
+    text = f"On {attribution}<{address}> wrote:\n\n{quoted}" if plain else ""
     markup = (f'<br><div class="gmail_quote gmail_quote_container"><div dir="ltr" class="gmail_attr">'
               f'On {esc(attribution)}&lt;<a href="mailto:{esc(address)}">'
               f'{esc(address)}</a>&gt; wrote:<br></div>'
@@ -272,12 +269,7 @@ def walk_parts(payload: dict):
 
 
 def extract_body(payload: dict) -> str:
-    for want in ("text/plain", "text/html"):
-        texts = [p["body"]["data"] for p in walk_parts(payload)
-                 if p.get("mimeType") == want and p.get("body", {}).get("data")]
-        if texts:
-            return "\n".join(b64url_decode(t) for t in texts)
-    return ""
+    return part_text(payload, "text/plain") or part_text(payload, "text/html")
 
 
 def own_address() -> str:
@@ -309,7 +301,7 @@ def strip_addrs(addrs: str, exclude: str) -> str:
 
 
 def main() -> None:
-    global ACCOUNT, ZONE
+    global ACCOUNT
     p = argparse.ArgumentParser()
     p.add_argument("--account", help="app connection id (ca_...) when several Gmail connections match")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -333,12 +325,10 @@ def main() -> None:
     u = sub.add_parser("update-draft")
     u.add_argument("draft_id")
     u.add_argument("--body-file", required=True)
-    for cmd in (rp, u):
-        cmd.add_argument("--tz", help="the owner's IANA time zone, for the quote's \"On ... wrote:\" time")
     sd = sub.add_parser("send-draft")
     sd.add_argument("draft_id")
     a = p.parse_args()
-    ACCOUNT, ZONE = a.account, getattr(a, "tz", None)
+    ACCOUNT = a.account
 
     if a.cmd == "search":
         meta_q = {"format": "metadata", "metadataHeaders": ["From", "Date", "Subject"]}

@@ -14,7 +14,6 @@ from email.policy import default as default_policy
 spec = importlib.util.spec_from_file_location("gmail", sys.argv[1])
 gmail = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gmail)
-gmail.ZONE = "America/Los_Angeles"
 original = json.loads(sys.argv[2]) if len(sys.argv) > 2 else None
 raw = gmail.build_raw({"To": "a@b.com", "Subject": "Probe"}, sys.stdin.read(), None, original)["raw"]
 msg = message_from_bytes(base64.urlsafe_b64decode(raw), policy=default_policy)
@@ -26,7 +25,11 @@ const havePython = spawnSync("python3", ["--version"]).status === 0;
 
 function buildMime(body: string, original?: object): { contentType: string; parts: Record<string, string> } {
   const args = ["-c", DRIVER, SCRIPT, ...(original ? [JSON.stringify(original)] : [])];
-  const out = execFileSync("python3", args, { input: body, encoding: "utf8" });
+  const out = execFileSync("python3", args, {
+    input: body,
+    encoding: "utf8",
+    env: { ...process.env, TZ: "America/Los_Angeles" },
+  });
   return JSON.parse(out);
 }
 

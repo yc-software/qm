@@ -83,8 +83,8 @@ bulk`) below personal mail, but never suppress transactional notices (DocuSign,
 - `reply` threads onto the original message and quotes it below the body the way
   Gmail's composer does ("On ... wrote:" plus the earlier thread), so recipients see the
   whole conversation; `update-draft` keeps that quote. Write only the new text in the body
-  file, and pass `--tz` with the person's time zone (e.g. `America/Los_Angeles`) so the
-  quote's time reads as Gmail would show it to them. `--all` keeps every recipient. Don't rebuild To/CC by hand. To change a draft,
+  file, and run the helper with `TZ` set to the person's time zone (e.g.
+  `TZ=America/Los_Angeles`) so the quote's time reads as Gmail would show it to them. `--all` keeps every recipient. Don't rebuild To/CC by hand. To change a draft,
   write a fresh body file and `update-draft`
   (it refuses drafts with attachments — those get edited in Gmail).
 - Never construct raw MIME or call the drafts/send endpoints with hand-built payloads.
