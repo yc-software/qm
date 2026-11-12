@@ -101,6 +101,8 @@ test("loop grants and decisions need the person's own session or running turn", 
     ["grants", { shipAction: "send" }],
     ["outputs/o1/decide", { decision: "ship" }],
     ["autopilot", { enabled: true }],
+    ["items/x1/action", { kind: "prioritize", args: { priority: "urgent" } }],
+    ["items/x1/followup", { message: "Draft it." }],
   ] as const) {
     const refused = await browser("fay", "POST", `/api/loops/${loopId}/${path}`, body, impersonating);
     assert.deepEqual(

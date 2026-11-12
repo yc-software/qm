@@ -53,7 +53,7 @@ export async function inboxPreviewEnabled(deps: ApiCtx["deps"], principalId: str
 export function forInboxLoopsPeople(routes: Route<ApiCtx>[]): Route<ApiCtx>[] {
   return routes.map((route) => ({
     ...route,
-    browser: true,
+    browser: route.browser ?? true,
     handle: async (ctx) => {
       if (ctx.actor && !(await inboxPreviewEnabled(ctx.deps, ctx.actor.p)))
         return sendJson(ctx.res, 403, { error: "feature_disabled" });

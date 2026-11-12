@@ -150,9 +150,7 @@ async function ingestItems(ctx: ApiCtx): Promise<void> {
   sendJson(ctx.res, 200, await deps.items.ingest(entries));
 }
 
-async function loadItem(
-  ctx: ApiCtx,
-): Promise<{
+async function loadItem(ctx: ApiCtx): Promise<{
   deps: LoopServiceDeps;
   loop: Loop;
   item: LoopItem;
@@ -636,12 +634,14 @@ export const loopItemRoutes: ReadonlyArray<Route<ApiCtx>> = [
       {
         method: "POST",
         path: "/v1/loops/:id/items/:itemId/action",
+        browser: "self",
         auth: "either",
         handle: serializeItemAction(actOnItem),
       },
       {
         method: "POST",
         path: "/v1/loops/:id/items/:itemId/followup",
+        browser: "self",
         auth: "either",
         handle: serializeItemAction(followUpOnItem),
       },
