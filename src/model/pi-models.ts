@@ -21,10 +21,7 @@ import { MODEL_PROVIDERS, providerBaseUrl, type ModelProvider } from "./provider
 import { type CustomRuntimeModel, isCustomModelId, resolveCustomModel } from "./custom-providers.ts";
 import type { ProviderKeys } from "./model-runtime.ts";
 
-const getModel = (provider: string, id: string): Model<Api> | undefined => {
-  const model = (getBuiltinModel as unknown as (provider: string, id: string) => Model<Api> | undefined)(provider, id);
-  return model?.id === id ? model : undefined;
-};
+const getModel = getBuiltinModel as unknown as (provider: string, id: string) => Model<Api> | undefined;
 
 export const DEFAULT_AGENT_MODEL_ID = "claude-opus-5";
 export const DEFAULT_CODEX_MODEL_ID = "gpt-6.1-sol";

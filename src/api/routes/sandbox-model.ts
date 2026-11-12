@@ -6,8 +6,7 @@ import {
   modelGatewayHeaders,
   type ModelGatewayTransportConfig,
 } from "../../model/provider-endpoints.ts";
-import type { ModelRoute } from "../../model/model-route.ts";
-import { resolveModel } from "../../model/pi-models.ts";
+import { routeLabel } from "../../model/model-route.ts";
 import { estimateCostUsd } from "../../ratelimit/budget.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { reportFailure } from "../../util/errors.ts";
@@ -74,20 +73,16 @@ async function listModels(ctx: ApiCtx, gateway: ModelGatewayTransportConfig | un
   sendJson(ctx.res, 200, { object: "list", data });
 }
 
-async function companyRoute(ctx: ApiCtx, modelId: string): Promise<ModelRoute | undefined> {
-  const routes = ctx.deps.modelRoutes;
-  if (!routes || !resolveModel(modelId)) return undefined;
-  return routes.servable(await routes.route(modelId));
-}
-
-async function complete(ctx: ApiCtx, route: ModelRoute, input: Record<string, unknown>): Promise<void> {
+async function complete(ctx: ApiCtx, modelId: string, input: Record<string, unknown>): Promise<void> {
   const { deps, pathname, res, capability } = ctx;
   const error = (message: string) => ({ error: { message } });
+  const route = await deps.modelRoutes!.route(modelId);
+  if (!deps.modelRoutes!.servable(route)) return sendJson(res, 503, error(`${routeLabel(route)} has no credential`));
   if (pathname !== `${SANDBOX_MODEL_PREFIX}/v1/chat/completions` || input.stream === true)
     return sendJson(
       res,
       400,
-      error(`${route.modelId} takes only non-streamed chat completions: POST $MODEL_GATEWAY_URL/v1/chat/completions`),
+      error(`${modelId} takes only non-streamed chat completions: POST $MODEL_GATEWAY_URL/v1/chat/completions`),
     );
   const result = await respondChatCompletion(ctx, route, input, "sandbox", error);
   if (result)
@@ -107,8 +102,10 @@ async function proxy(ctx: ApiCtx): Promise<void> {
     body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : undefined;
   const requested = typeof input?.model === "string" ? input.model : undefined;
   const target = requested ? gatewayTarget(gateway, requested) : undefined;
-  const route = input && requested && !target ? await companyRoute(ctx, requested) : undefined;
-  if (input && route) return complete(ctx, route, input);
+  if (input && requested && !target && deps.modelRoutes) {
+    const { models } = await runtimeConfigBody(ctx, capability!.scopeId);
+    if (models.includes(requested)) return complete(ctx, requested, input);
+  }
   if (!gateway || (input && Object.hasOwn(input, "model") && !target))
     return sendJson(res, 400, {
       error: {
