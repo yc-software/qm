@@ -47,7 +47,7 @@ export function createDirectorySync(deps: {
     hashCol: string,
     hash: string,
     syncedAt: number | undefined,
-    write: (client: PoolClient) => Promise<boolean | void>,
+    write: (client: PoolClient, storedSyncedAt: number) => Promise<boolean | void>,
     partial = false,
   ): Promise<boolean> {
     const syncedAtCol = hashCol.replace(/_hash$/, "_synced_at");
@@ -57,11 +57,7 @@ export function createDirectorySync(deps: {
         orgId,
       ]);
       const row = sync.rows[0];
-      if (
-        syncedAt !== undefined &&
-        row?.[syncedAtCol] != null &&
-        (partial ? Number(row[syncedAtCol]) >= syncedAt : Number(row[syncedAtCol]) > syncedAt)
-      ) {
+      if (!partial && syncedAt !== undefined && row?.[syncedAtCol] != null && Number(row[syncedAtCol]) > syncedAt) {
         console.warn(
           `[directory] refused stale ${hashCol.replace(/_hash$/, "")} swap for ${orgId}: stamped ${Number(row[syncedAtCol]) - syncedAt}ms behind`,
         );
@@ -76,7 +72,7 @@ export function createDirectorySync(deps: {
         }
         return true;
       }
-      const complete = await write(client);
+      const complete = await write(client, Number(row?.[syncedAtCol] ?? 0));
       if (partial && complete === false) return false;
       await client.query(
         `INSERT INTO directory_sync (org_id, ${hashCol}, ${syncedAtCol}, updated_at) VALUES ($1, $2, $3, $4)
@@ -151,19 +147,26 @@ export function createDirectorySync(deps: {
         "channels_hash",
         hash,
         syncedAt,
-        async (client) => {
+        async (client, storedSyncedAt) => {
           const protectedRows = await client.query(
             "SELECT channel_id FROM directory_channels WHERE org_id = $1 AND (observed_at > $2 OR ($3 AND observed_at = $2))",
             [orgId, syncedAt ?? null, partial],
           );
           const protectedIds = new Set(protectedRows.rows.map((row) => row.channel_id as string));
-          if (partial && list.some((channel) => protectedIds.has(channel.channelId))) return false;
+          if (partial && storedSyncedAt >= syncedAt!) {
+            const stored = await client.query(
+              "SELECT channel_id FROM directory_channels WHERE org_id = $1 AND channel_id = ANY($2::text[])",
+              [orgId, [...listedIds]],
+            );
+            if (stored.rowCount !== listedIds.size) return false;
+          }
           list = list.filter((channel) => !protectedIds.has(channel.channelId));
           rosterIds = rosterIds && new Set([...rosterIds].filter((id) => !protectedIds.has(id)));
           membershipRows = membershipRows?.filter((member) => !protectedIds.has(member.channelId));
           revokedRows = revokedRows.filter((member) => !protectedIds.has(member.channelId));
           const retainedIds = [...listedIds, ...protectedIds];
           const channelIds = list.map((channel) => channel.channelId);
+          const revokedIds = new Set(revokedRows.map((member) => member.channelId));
           if (!partial) {
             await client.query(
               "DELETE FROM directory_channels WHERE org_id = $1 AND NOT (channel_id = ANY($2::text[]))",
@@ -177,14 +180,14 @@ export function createDirectorySync(deps: {
           if (list.length) {
             await client.query(
               `INSERT INTO directory_channels (org_id, channel_id, name, name_lc, is_private, is_external, roster_known, observed_at)
-             SELECT $1, rows.*, $8::bigint FROM unnest($2::text[], $3::text[], $4::text[], $5::boolean[], $6::boolean[], $7::boolean[]) AS rows
+             SELECT $1, rows.* FROM unnest($2::text[], $3::text[], $4::text[], $5::boolean[], $6::boolean[], $7::boolean[], $8::bigint[]) AS rows
              ON CONFLICT (tenant_id, org_id, channel_id) DO UPDATE SET
                name = EXCLUDED.name,
                name_lc = EXCLUDED.name_lc,
                is_private = EXCLUDED.is_private,
                is_external = EXCLUDED.is_external,
                roster_known = directory_channels.roster_known OR EXCLUDED.roster_known,
-               observed_at = EXCLUDED.observed_at`,
+               observed_at = COALESCE(EXCLUDED.observed_at, directory_channels.observed_at)`,
               [
                 orgId,
                 channelIds,
@@ -193,7 +196,7 @@ export function createDirectorySync(deps: {
                 list.map((c) => !!c.isPrivate),
                 list.map((c) => !!c.isExternal),
                 list.map((c) => rosterIds?.has(c.channelId) ?? false),
-                partial ? syncedAt : null,
+                channelIds.map((id) => (rosterIds?.has(id) || revokedIds.has(id) ? (syncedAt ?? null) : null)),
               ],
             );
           }
