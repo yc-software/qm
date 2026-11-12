@@ -1,5 +1,6 @@
 import { isAgentReply, type Item, proseText } from "./items.ts";
-import { isSessionTurn, sessionTurnOrigin } from "../core/turn-origin.ts";
+import { isSessionTurn, keepingUnattended, sessionTurnOrigin, unattendedAmbient } from "../core/turn-origin.ts";
+import { proactiveScopeWork, turnOriginClaim } from "../auth/capability-token.ts";
 import type { SessionMailbox, SessionMessage } from "./session-mailbox.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import { sleep } from "../util/async.ts";
@@ -145,6 +146,9 @@ export function ownsSessionContext(
 
 export const isSidebarSession = (session: Session): boolean =>
   !session.parentSessionId && !isSubagentThreadRef(session.threadRef) && !session.threadRef.startsWith("swarm:");
+
+const UNPROMPTED_REACH_REFUSAL =
+  "unprompted work can reach only its own unprompted sessions, such as its helpers; ask in the conversation so a person does it";
 
 export function storedContext(session: Session): SpawnMeta | undefined {
   return (
@@ -324,6 +328,7 @@ export interface SessionSyscallsFactory {
 
 export interface SessionSyscallDeps {
   mailbox: SessionMailbox;
+  awaitingApproval?: (sessionId: string) => Promise<boolean>;
   enabled?: (actorId: string) => Promise<boolean>;
   sessions: Pick<
     SessionStore,
@@ -917,6 +922,16 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 };
               if (!(await deps.sessions.getForParticipant(target.id, binding.request.actor.id)))
                 return { ok: false, message: "you are not a participant in that session." };
+              if (
+                proactiveScopeWork({
+                  actorId: binding.request.actor.id,
+                  scopeId: binding.scopeId,
+                  ...(binding.request.origin ? { turnOrigin: turnOriginClaim(binding.request.origin) } : {}),
+                  ...(binding.liveTurn ? { liveActor: true } : {}),
+                }) &&
+                !unattendedAmbient(target.spawnMeta?.origin)
+              )
+                return { ok: false, message: UNPROMPTED_REACH_REFUSAL };
               if (target.spawnMeta?.retired && target.parentSessionId === binding.session.id)
                 return {
                   ok: false,
@@ -945,7 +960,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                     : {}),
                   surface: meta.surface ?? target.surface ?? "web",
                   actor: caller.actor,
-                  origin: caller.origin,
+                  origin: keepingUnattended(caller.origin, meta.origin),
                   readOnly: privateMessage || caller.readOnly || meta.readOnly || target.spawnMeta?.readOnly,
                   memoryNotebookOnly: caller.memoryNotebookOnly || meta.memoryNotebookOnly,
                   botActor: caller.botActor,
@@ -1048,6 +1063,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 const delivered = woken === "woken" ? "queued_turn" : "queued_message";
                 return { ok: true, sessionId: target.id, title, delivered, busy: woken === "busy" };
               }
+              if (target.parentSessionId !== binding.session.id && (await deps.awaitingApproval?.(target.id)))
+                return leaveMail("that session is paused on an approval; it sees this message when it resumes");
               const dedupKey = input.requestId ? `subagent-followup:${messageId}` : undefined;
               const accepted = await acceptedFollowup(deps.runs, dedupKey, target, stamped, title);
               if (accepted) return accepted;

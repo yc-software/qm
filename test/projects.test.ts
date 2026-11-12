@@ -461,6 +461,8 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.equal(pendingBeforeJoin.status, "pending_approval");
   const pendingApproval = pendingBeforeJoin.pendingApprovals?.[0];
   assert.ok(pendingApproval);
+  const held = () => built.app.sessionsAwaitingApproval([pendingBeforeJoin.sessionId!]);
+  assert.deepEqual([...(await held())], [pendingBeforeJoin.sessionId]);
   const denied = await fetch(`${base}/v1/projects/${project.id}/members`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -517,6 +519,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.equal(await built.app.managesScope("member", scope), true);
   assert.ok(await built.app.listScopeResources(tenant, "member", scope));
   assert.deepEqual(await built.app.listSessionApprovals(pendingBeforeJoin.sessionId!, "member"), []);
+  assert.deepEqual([...(await held())], [], "a stale approval no longer holds the session's mail wakes");
   const hiddenBlocked = await turn("member", "web:owner:approval", "new work while blocked");
   assert.equal(
     hiddenBlocked.status,

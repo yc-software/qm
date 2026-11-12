@@ -353,7 +353,7 @@ export interface OverheardMessage {
 
 export type TurnOrigin =
   | { kind: "human"; messageTs?: string; entryTs?: string }
-  | { kind: "ambient"; entryTs?: string; live?: boolean }
+  | { kind: "ambient"; entryTs?: string; live?: boolean; screenData?: string }
   | {
       kind: "automation";
       screenData?: string;

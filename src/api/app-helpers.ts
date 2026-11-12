@@ -21,7 +21,7 @@ import { isTerminal, RUN_WAIT_FALLBACK_MS, type Run, type SessionWatch } from ".
 import type { RunSignal } from "../runs/run-signal-store.ts";
 import { deployRef, encodeRef, parseRef } from "../acl/resource-ref.ts";
 import type { Skill } from "../skills/skill-store.ts";
-import type { CapabilityClaims } from "../auth/capability-token.ts";
+import { proactiveScopeWork, type CapabilityClaims } from "../auth/capability-token.ts";
 import {
   createCanReadScope,
   createCanManageScope,
@@ -574,14 +574,18 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   const membershipControlsScope = createMembershipControlsScope(scopeMembershipDeps);
 
   async function authorizesCapabilityScope(
-    claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "botActor" | "liveActor" | "members">,
+    claims: Pick<
+      CapabilityClaims,
+      "actorId" | "scopeId" | "scopeVersion" | "botActor" | "liveActor" | "members" | "turnOrigin"
+    >,
   ): Promise<boolean> {
     const { kind, ref } = parseScopeId(claims.scopeId);
     if (kind === "channel" && !deps.identity.isInternal(deps.identity.classify(claims.actorId))) return false;
     const privateChannel =
       kind === "channel" && (await deps.directory.channelPrivacy?.(ref).catch(() => undefined)) === true;
     const capabilityMembership = privateChannel
-      ? await deps.directory.channelMembership(ref, claims.actorId).catch(() => undefined)
+      ? proactiveScopeWork(claims) ||
+        (await deps.directory.channelMembership(ref, claims.actorId).catch(() => undefined))
       : undefined;
     const attestedBot =
       privateChannel &&

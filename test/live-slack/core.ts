@@ -6,6 +6,12 @@ import type { Item } from "../../src/sessions/items.ts";
 
 const ADMIN_PRINCIPAL = process.env.LIVE_E2E_ADMIN_PRINCIPAL || "admin-alice";
 
+export interface AmbientPolicy {
+  orders: string;
+  bots?: Record<string, unknown>;
+  ambientEnabled: boolean | null;
+}
+
 export interface SessionSummary {
   id: string;
   type?: string;
@@ -45,7 +51,10 @@ export class CoreClient {
     const signal = this.requestSignal ? AbortSignal.any([deadline, this.requestSignal]) : deadline;
     const res = await fetch(`${this.baseUrl}${salted}`, { method, headers, signal, ...(raw ? { body: raw } : {}) });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(`core ${method} ${pathWithQuery}: ${res.status} ${JSON.stringify(data)}`);
+    if (!res.ok)
+      throw Object.assign(new Error(`core ${method} ${pathWithQuery}: ${res.status} ${JSON.stringify(data)}`), {
+        status: res.status,
+      });
     return data;
   }
 
@@ -81,6 +90,18 @@ export class CoreClient {
         });
       throw error;
     }
+  }
+
+  setAmbientPolicy(channelId: string, policy: AmbientPolicy): Promise<unknown> {
+    return this.request("PUT", `/v1/admin/scopes/${encodeURIComponent(`channel:${channelId}`)}/ambient-policy`, policy);
+  }
+
+  async ambientPolicy(channelId: string): Promise<AmbientPolicy | undefined> {
+    const config = (await this.request("GET", `/v1/admin/scopes/${encodeURIComponent(`channel:${channelId}`)}`)) as {
+      ambientPolicy?: AmbientPolicy;
+    };
+    const p = config.ambientPolicy;
+    return p && { orders: p.orders, bots: p.bots, ambientEnabled: p.ambientEnabled };
   }
 
   listSandboxes(scopeId: string): Promise<{

@@ -1,5 +1,5 @@
 import { swallowAs } from "../util/errors.ts";
-import { endedOnPurpose } from "./agent-tools.ts";
+import { endedOnPurpose } from "./agent-tools/record.ts";
 import { piFailedAssistant, type AssistantTextSession } from "./pi-messages.ts";
 
 export type TurnWallClockOutcome = "ok" | "aborted" | "abandoned";

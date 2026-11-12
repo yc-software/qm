@@ -54,7 +54,7 @@ import type { SkillPackFetcher } from "../skills/pack-fetcher.ts";
 import { type IngestPlan, type ImportResult } from "../skills/ingest.ts";
 import { type SkillBundleStore } from "../skills/skill-bundle-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
-import type { CapabilityClaims } from "../auth/capability-token.ts";
+import type { CapabilityClaims, ManagingCaller } from "../auth/capability-token.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { type AdminService } from "../admin/admin-service.ts";
 import type { CronStore, CreateCronInput, CronPatch } from "../cron/cron-store.ts";
@@ -295,6 +295,7 @@ export interface App {
   subscribeSessionStates(cb: (event: SessionStateEvent) => void | Promise<void>, opts?: SubscribeOptions): () => void;
   subscribeLedgerEvents(cb: (event: OwnedLedgerEvent) => void | Promise<void>, opts?: SubscribeOptions): () => void;
   listSessionApprovals(sessionId: string, viewer: string): Promise<PendingApproval[]>;
+  sessionsAwaitingApproval(sessionIds: readonly string[]): Promise<Set<string>>;
   pendingApprovalForThread(threadRef: string, viewer?: string): Promise<TurnResult | null>;
   subscribeRun(runId: string, listener: (event: RunStreamEvent) => void, onResync?: () => void): () => void;
   syncRunStream(runId: string, offset: number, reasoning: Record<string, number>): void;
@@ -453,7 +454,7 @@ export interface App {
   ): Promise<FileListItem | null>;
   listScopeResources(tenant: Tenant, principalId: string, scope: ScopeId): Promise<ScopeResources | null>;
   loopAdministration(
-    actor: Pick<CapabilityClaims, "actorId" | "botActor">,
+    actor: ManagingCaller,
     loops: readonly Pick<TriggerBase, "owner" | "ownerScopeId" | "botActor">[],
   ): Promise<boolean[]>;
   managesScope(principalId: string, scope: ScopeId): Promise<boolean>;
@@ -462,7 +463,10 @@ export interface App {
   isOpenScopeMember(principalId: string, scope: ScopeId): Promise<boolean>;
   membershipControlsScope(scope: ScopeId): Promise<boolean>;
   authorizesCapabilityScope(
-    claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "botActor" | "liveActor" | "members">,
+    claims: Pick<
+      CapabilityClaims,
+      "actorId" | "scopeId" | "scopeVersion" | "botActor" | "liveActor" | "members" | "turnOrigin"
+    >,
   ): Promise<boolean>;
   openFileForViewer(tenant: Tenant, id: string, principalId: string): Promise<OpenedFile | null>;
   grant(tenant: Tenant, g: Grant, opts?: { notify?: boolean }): Promise<void>;
@@ -591,19 +595,13 @@ export interface App {
   redeploy(id: string, input: RedeployInput): Promise<Deployment>;
   listDeployments(): Promise<Deployment[]>;
   getDeployment(idOrName: string): Promise<Deployment | null>;
-  listDeploymentsForViewer(
-    tenant: Tenant,
-    viewer: Pick<CapabilityClaims, "actorId" | "botActor">,
-  ): Promise<ViewerDeployment[]>;
+  listDeploymentsForViewer(tenant: Tenant, viewer: ManagingCaller): Promise<ViewerDeployment[]>;
   effectiveDeploymentPermission(d: Deployment, principalId: string): Promise<Permission | null>;
-  deploymentGitPermissionFor(
-    idOrName: string,
-    viewer: Pick<CapabilityClaims, "actorId" | "botActor">,
-  ): Promise<"read" | "write" | null>;
+  deploymentGitPermissionFor(idOrName: string, viewer: ManagingCaller): Promise<"read" | "write" | null>;
   deploymentGitPermissionsFor(
     tenant: Tenant,
     deployments: readonly Deployment[],
-    viewer: Pick<CapabilityClaims, "actorId" | "botActor">,
+    viewer: ManagingCaller,
   ): Promise<Array<"read" | "write" | null>>;
   listSkills(): Promise<Skill[]>;
   getSkill(id: string): Promise<Skill | null>;
@@ -645,11 +643,7 @@ export interface App {
   rollbackDeployment(id: string, version: number, actor?: string): Promise<void>;
   archiveDeployment(id: string): Promise<void>;
   restoreDeployment(id: string, actorId?: string): Promise<Deployment>;
-  canManageDeployment(
-    idOrName: string,
-    caller: Pick<CapabilityClaims, "actorId" | "botActor">,
-    actingScopeId?: ScopeId,
-  ): Promise<boolean>;
+  canManageDeployment(idOrName: string, caller: ManagingCaller, actingScopeId?: ScopeId): Promise<boolean>;
   renameDeployment(id: string, name: string): Promise<Deployment>;
   setDeploymentDisplayName(id: string, displayName: string): Promise<Deployment>;
   setDeploymentAlwaysOn(id: string, alwaysOn: boolean): Promise<Deployment>;
@@ -690,7 +684,7 @@ export interface App {
   ): Promise<T>;
   deploymentGitUrlFor(
     idOrName: string,
-    caller: Pick<CapabilityClaims, "actorId" | "botActor">,
+    caller: ManagingCaller,
     opts: { secret: string; baseUrl: string; ttlMs?: number },
   ): Promise<DeploymentGitUrl | null>;
   authorizesDeploymentGitAccess(id: string, principalId: string, permission: "read" | "write"): Promise<boolean>;

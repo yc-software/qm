@@ -257,6 +257,10 @@ export class ChannelHandle {
     return this.postAs(this.env.qa, "qa", text, text, rootTs);
   }
 
+  async say(text: string): Promise<string> {
+    return this.postAs(this.env.qa, "qa", text, text);
+  }
+
   as(actor: Actor): ActorPoster {
     return {
       mention: (text, threadTs) =>
@@ -333,7 +337,7 @@ export class DmHandle {
 }
 
 export class Ctx {
-  readonly createdChannels: Array<{ id: string; rootTs?: string }> = [];
+  readonly createdChannels: Array<{ id: string; rootTs?: string; owner?: SlackClient }> = [];
   private dmChannel: DmHandle | null = null;
   readonly env: Env;
   readonly scenario: Scenario;
@@ -350,11 +354,21 @@ export class Ctx {
     return `ci-${this.env.runId}-${slug(this.scenario.name)}${this.attempt > 1 ? `-r${this.attempt}` : ""}${suffix ? `-${suffix}` : ""}`;
   }
 
-  async freshChannel(): Promise<ChannelHandle> {
+  async freshChannel(opts: { isPrivate?: boolean } = {}): Promise<ChannelHandle> {
     const name = this.marker()
       .toLowerCase()
       .replace(/[^a-z0-9-]/g, "-")
       .slice(0, 75);
+    if (opts.isPrivate) {
+      const id = await this.env.bot.createChannel(name, { isPrivate: true });
+      this.createdChannels.push({ id, owner: this.env.bot });
+      await this.env.bot.invite(id, this.env.qaUserId);
+      const { isPrivate, members } = await this.env.bot.channelPrivacy(id);
+      if (!isPrivate) throw new Error(`fixture channel ${id} was created public; refusing to continue`);
+      for (const user of [this.env.botUserId, this.env.qaUserId])
+        if (!members.includes(user)) throw new Error(`fixture channel ${id} is missing member ${user}`);
+      return new ChannelHandle(this, id, name);
+    }
     const id = await this.env.qa.createChannel(name);
     this.createdChannels.push({ id });
     await this.env.qa.invite(id, this.env.botUserId);
@@ -362,6 +376,14 @@ export class Ctx {
       await this.env.qa.invite(id, this.actor(name).userId);
     }
     return new ChannelHandle(this, id, name);
+  }
+
+  async fixtureChannel(id: string): Promise<ChannelHandle> {
+    const { isPrivate, members } = await this.env.bot.channelPrivacy(id);
+    if (!isPrivate) throw new Error(`fixture channel ${id} is not private; refusing to continue`);
+    for (const user of [this.env.botUserId, this.env.qaUserId])
+      if (!members.includes(user)) throw new Error(`fixture channel ${id} is missing member ${user}`);
+    return new ChannelHandle(this, id, id);
   }
 
   actor(name: string): Actor {
@@ -409,7 +431,7 @@ export class Ctx {
   }
 
   async cleanup(): Promise<void> {
-    for (const ch of this.createdChannels) await this.env.qa.archive(ch.id);
+    for (const ch of this.createdChannels) await (ch.owner ?? this.env.qa).archive(ch.id);
     try {
       const { crons } = await this.env.core.listCrons();
       for (const c of crons) {

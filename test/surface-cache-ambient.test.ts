@@ -13,6 +13,7 @@ import { amazonQAlarm } from "./support/slack-amazon-q-alarm.ts";
 import { createMirror } from "../src/slack/mirror.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import type { BotIdentity, Directory } from "../src/slack/directory.ts";
+import { scopeActor } from "../src/types.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -1008,7 +1009,11 @@ test("a solicited ask in a group DM whose author is NOT a pushed member degrades
     const session = await built.sessions.getByThread(`slack:${container}:ambient:600.1`);
     assert.ok(session, "the worker session exists");
     const participants = await built.sessions.participantsOf(session!.id);
-    assert.deepEqual(participants, [], "degraded to the system actor — no person's authority conferred");
+    assert.deepEqual(
+      participants,
+      [scopeActor(session!.scopeId)],
+      "degraded to the system actor — no person's authority conferred",
+    );
   } finally {
     await built.runtime.stop();
   }
@@ -1042,7 +1047,7 @@ test("a solicited verdict for a message that isn't the newest speaker's degrades
     const session = await built.sessions.getByThread(`slack:${container}:ambient:500.2`);
     assert.ok(session, "the worker session exists, keyed on the batch's latest ts");
     const participants = await built.sessions.participantsOf(session!.id);
-    assert.deepEqual(participants, [], "no person's authority was borrowed");
+    assert.deepEqual(participants, [scopeActor(session!.scopeId)], "no person's authority was borrowed");
   } finally {
     await built.runtime.stop();
   }
@@ -1097,7 +1102,11 @@ test("a solicited wake whose author isn't in the directory degrades to the proac
     const session = await built.sessions.getByThread(`slack:${container}:ambient:400.1`);
     assert.ok(session, "the worker session exists");
     const participants = await built.sessions.participantsOf(session!.id);
-    assert.deepEqual(participants, [], "no person was impersonated — the system actor ran the turn");
+    assert.deepEqual(
+      participants,
+      [scopeActor(session!.scopeId)],
+      "no person was impersonated — the system actor ran the turn",
+    );
   } finally {
     await built.runtime.stop();
   }
@@ -1197,7 +1206,7 @@ test("a Slack bot cannot be the asker of a solicited ambient wake, and its wake 
     ]);
     const run = await ambientRun(built, `slack:${container}:ambient:705.1`);
     assert.ok(run, "the bot's post woke an ambient worker");
-    assert.equal(run.request.actor.id, "system:ambient:default-org", "the bot is never the asking member");
+    assert.equal(run.request.actor.id, "system:channel:C-bot-asks", "the bot is never the asking member");
     assert.equal((await built.app.getChannelPolicy(container))?.orders, "watch the deploys");
     assert.equal(run.request.botActor, true, "the woken turn carries the bot marker");
   } finally {
@@ -1387,7 +1396,7 @@ test("with an external Slack account configured, an internal channel's proactive
     );
     assert.deepEqual(
       await built.sessions.participantsOf(worker!.id),
-      [],
+      [scopeActor(worker!.scopeId)],
       "the proactive worker does not take on the message author's identity",
     );
     const rows = await judged(built.ambientJudgments!, container);
@@ -1529,7 +1538,7 @@ test("with an external Slack account configured, a scheduled check-in with no ne
       workspace: "TINTERNAL",
       audience: "internal",
     });
-    assert.deepEqual(await built.sessions.participantsOf(worker!.id), []);
+    assert.deepEqual(await built.sessions.participantsOf(worker!.id), [scopeActor(worker!.scopeId)]);
   } finally {
     await built.runtime.stop();
   }

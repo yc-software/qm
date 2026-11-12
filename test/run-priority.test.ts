@@ -144,7 +144,13 @@ async function until(check: () => Promise<boolean>): Promise<void> {
 
 async function withWorkers(
   slots: number,
-  body: (ctx: { runs: RunStore; log: string[]; sweep: () => Promise<boolean>; worker: Worker }) => Promise<void>,
+  body: (ctx: {
+    runs: RunStore;
+    log: string[];
+    sweep: () => Promise<boolean>;
+    worker: Worker;
+    running: (run: Run) => () => Promise<boolean>;
+  }) => Promise<void>,
   maxClaims?: number,
   setup?: (runs: RunStore) => Promise<void>,
 ): Promise<void> {
@@ -155,7 +161,9 @@ async function withWorkers(
   const preemption = createRunPreemption({ runs, worker, graceMs: 0 });
   worker.start();
   try {
-    await body({ runs, log, sweep: () => preemption.sweep(), worker });
+    const running = (run: Run) => async () =>
+      (await status(runs, run, "running")()) && worker.held().some((held) => held.run.id === run.id);
+    await body({ runs, log, sweep: () => preemption.sweep(), worker, running });
   } finally {
     await worker.releaseInFlight();
   }
@@ -197,9 +205,9 @@ test("a person's run goes ahead of started background runs only, keeping later w
 test("a busy worker parks a cron turn for a person's turn, then resumes it", () =>
   withWorkers(
     1,
-    async ({ runs, log, sweep }) => {
+    async ({ runs, log, sweep, running }) => {
       const background = (await runs.enqueue({ sessionId: "cron", request: cron("long cron") })).run;
-      await until(status(runs, background, "running"));
+      await until(running(background));
       await runs.enqueue({ sessionId: "dm", request: request("quick person") });
       assert.equal(await sweep(), true);
       await until(status(runs, background, "done"));
@@ -216,11 +224,11 @@ test("a busy worker parks a cron turn for a person's turn, then resumes it", () 
   ));
 
 test("a park waiting for its step does not hold back a park for a person in another conversation", () =>
-  withWorkers(2, async ({ runs, sweep }) => {
+  withWorkers(2, async ({ runs, sweep, running }) => {
     const busy = (await runs.enqueue({ sessionId: "dm", request: cron("busy cron") })).run;
     const other = (await runs.enqueue({ sessionId: "other", request: cron("forever other") })).run;
-    await until(status(runs, busy, "running"));
-    await until(status(runs, other, "running"));
+    await until(running(busy));
+    await until(running(other));
     await runs.enqueue({ sessionId: "dm", request: request("quick person in its conversation") });
     assert.equal(await sweep(), true);
     assert.equal((await runs.get(busy.id))!.status, "running", "the busy cron is still inside its step");
@@ -230,9 +238,9 @@ test("a park waiting for its step does not hold back a park for a person in anot
   }));
 
 test("a park request is withdrawn when the person it was for no longer waits", () =>
-  withWorkers(2, async ({ runs, sweep, worker }) => {
+  withWorkers(2, async ({ runs, sweep, worker, running }) => {
     const busy = (await runs.enqueue({ sessionId: "dm", request: cron("busy cron") })).run;
-    await until(status(runs, busy, "running"));
+    await until(running(busy));
     const person = (await runs.enqueue({ sessionId: "dm", request: request("quick person") })).run;
     assert.equal(await sweep(), true);
     assert.equal(worker.held()[0]!.parkRequested, true);
@@ -242,22 +250,22 @@ test("a park request is withdrawn when the person it was for no longer waits", (
   }));
 
 test("a run parked to free a slot and claimed again can be parked again", () =>
-  withWorkers(1, async ({ runs, sweep }) => {
+  withWorkers(1, async ({ runs, sweep, running }) => {
     const background = (await runs.enqueue({ sessionId: "c", request: cron("forever cron") })).run;
-    await until(status(runs, background, "running"));
+    await until(running(background));
     const first = (await runs.enqueue({ sessionId: "p1", request: request("quick first person") })).run;
     assert.equal(await sweep(), true);
     await until(status(runs, first, "done"));
     await until(async () => (await runs.get(background.id))!.attempts === 2);
-    await until(status(runs, background, "running"));
+    await until(running(background));
     await runs.enqueue({ sessionId: "p2", request: request("quick second person") });
     assert.equal(await sweep(), true, "the re-claimed run is not mistaken for the earlier park");
   }));
 
 test("a person's turn parks the background turn running in its conversation, which then resumes once", () =>
-  withWorkers(2, async ({ runs, log, sweep }) => {
+  withWorkers(2, async ({ runs, log, sweep, running }) => {
     const background = (await runs.enqueue({ sessionId: "dm", request: cron("long cron") })).run;
-    await until(status(runs, background, "running"));
+    await until(running(background));
     assert.equal(await sweep(), false, "nothing waits behind it yet");
     await runs.enqueue({ sessionId: "dm", request: request("quick person") });
     assert.equal(await sweep(), true);
@@ -274,11 +282,11 @@ test("a person's turn parks the background turn running in its conversation, whi
   }));
 
 test("one waiting turn parks one run, even while that run is slow to stop", () =>
-  withWorkers(3, async ({ runs, sweep }) => {
+  withWorkers(3, async ({ runs, sweep, running }) => {
     const crons: Run[] = [];
     for (const name of ["a", "b", "c"])
       crons.push((await runs.enqueue({ sessionId: name, request: cron(`slow ${name}`) })).run);
-    for (const run of crons) await until(status(runs, run, "running"));
+    for (const run of crons) await until(running(run));
     const person = (await runs.enqueue({ sessionId: "dm", request: request("quick person") })).run;
     assert.deepEqual([await sweep(), await sweep(), await sweep()], [true, false, false]);
     await until(status(runs, person, "done"));
@@ -290,12 +298,12 @@ test("subagents of a person's turn and thrice-parked runs keep their worker", ()
   let capped!: Run;
   return withWorkers(
     2,
-    async ({ runs, sweep }) => {
+    async ({ runs, sweep, running }) => {
       const parent = (await runs.enqueue({ sessionId: "parent", request: request("quick parent") })).run;
       await until(status(runs, parent, "done"));
       const child = (await runs.enqueue({ sessionId: "child", request: subagentOf(parent, "forever child") })).run;
-      await until(status(runs, capped, "running"));
-      await until(status(runs, child, "running"));
+      await until(running(capped));
+      await until(running(child));
       await runs.enqueue({ sessionId: "dm", request: request("quick person") });
       assert.equal(await sweep(), false);
       assert.equal((await runs.get(capped.id))?.attempts, 4, "parks don't spend a swarm worker's claim budget");

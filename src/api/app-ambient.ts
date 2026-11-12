@@ -1,4 +1,4 @@
-import { scopeId, type ActorAssertion, type TurnRequest } from "../types.ts";
+import { scopeActor, scopeId, type ActorAssertion, type TurnRequest } from "../types.ts";
 import { personLabel } from "../identity/person-names.ts";
 import type { TurnSurfaceOrigin } from "../surfaces/contract.ts";
 import { slackSurfaceOrigin } from "../surfaces/slack/adapter.ts";
@@ -289,6 +289,10 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     return slackSurfaceOrigin({ accountId: batch.source.account, teamId: batch.source.workspace, userId });
   }
 
+  function conversationActor(batch: AmbientBatch): string {
+    return scopeActor(scopeId(batch.kind === "group" ? "group" : "channel", batch.container));
+  }
+
   async function spawnAmbientWorker(batch: AmbientBatch, decision: AmbientDecision): Promise<string | undefined> {
     const latestTs = batch.messages.reduce((max, m) => (m.ts > max ? m.ts : max), "");
     const threadRef = `${batch.surface}:${batch.container}:ambient:${latestTs}`;
@@ -331,7 +335,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
       : {
           surface: batch.surface,
           ...(surfaceOrigin ? { surfaceOrigin } : {}),
-          actor: { externalId: `system:ambient:${orgIdOf()}` },
+          actor: { externalId: conversationActor(batch) },
           ...(batch.messages.some((m) => m.bot) ? { botActor: true } : {}),
           conversation,
           deliveryTarget: batch.container,
@@ -346,7 +350,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
             instructions: `You don't need to have been @mentioned. Reply about the trigger messages. Messages in other threads are separate conversations: don't carry their facts into your reply unless they are about the same subject. Respond with the \`${batch.surface}\` tool's \`post\` action — set \`ts\` to the triggering message id to reply in its thread, or \`broadcast: true\` to post at the channel top level — or stay silent if nothing is needed. To include an image or file, name its workspace path in \`post\`'s \`files\` (it uploads with your message, in that thread). Use \`reach\` only to send to a DIFFERENT channel or person. Use the \`read_thread\` or \`search\` action if you need more context than shown.`,
           }),
           origin: {
-            kind: "automation",
+            kind: "ambient",
             screenData: JSON.stringify({
               messages: shown.map(({ authorId, authorName, ts, text }) => ({ authorId, authorName, ts, text })),
               judgeReason: decision.reason ?? null,

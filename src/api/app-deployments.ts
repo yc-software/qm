@@ -11,7 +11,7 @@ import type { Tenant } from "../tenants/context.ts";
 import type { App, AppDeps, ViewerDeployment } from "./app-types.ts";
 import { deploymentView } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
-import type { CapabilityClaims } from "../auth/capability-token.ts";
+import { proactiveScopeWork, type ManagingCaller } from "../auth/capability-token.ts";
 import type { Deployment } from "../deploy/deploy-store.ts";
 
 export function createDeploymentMethods(
@@ -59,24 +59,23 @@ export function createDeploymentMethods(
     h;
   async function forCaller(
     d: Deployment,
-    caller: Pick<CapabilityClaims, "actorId" | "botActor">,
+    caller: ManagingCaller,
     permission: "read" | "write" | null,
   ): Promise<"read" | "write" | null> {
-    if (permission !== "write" || caller.botActor !== true) return permission;
+    if (permission !== "write") return permission;
+    if (proactiveScopeWork(caller)) return "read";
+    if (caller.botActor !== true) return permission;
     return (await deps.deploy.canManageDeployment(d.id, caller)) ? "write" : "read";
   }
   async function callerGitPermissions(
     tenant: Tenant,
     deployments: readonly Deployment[],
-    caller: Pick<CapabilityClaims, "actorId" | "botActor">,
+    caller: ManagingCaller,
   ): Promise<Array<"read" | "write" | null>> {
     const permissions = await deploymentPermissions(tenant, deployments, caller.actorId);
     return Promise.all(deployments.map((d, i) => forCaller(d, caller, permissions[i]!)));
   }
-  async function callerGitPermission(
-    d: Deployment,
-    caller: Pick<CapabilityClaims, "actorId" | "botActor">,
-  ): Promise<"read" | "write" | null> {
+  async function callerGitPermission(d: Deployment, caller: ManagingCaller): Promise<"read" | "write" | null> {
     return forCaller(d, caller, await principalGitPermission(d, caller.actorId));
   }
   const invitationLock = deps.advisoryLock;

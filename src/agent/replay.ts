@@ -329,10 +329,25 @@ export function reconstructMessagesFromHistory(
 ): PiReplayMessage[] {
   const resultByCallId = new Map<string, Item>();
   const callById = new Map<string, Item>();
+  const occurrences = new Map<string, number>();
+  const resultOfCall = new Map<Item, Item>();
   for (const e of history) {
-    if (e.kind === "ToolCall" && e.callId) callById.set(e.callId, e);
-    else if (e.kind === "ToolResult" && e.callId) resultByCallId.set(e.callId, e);
+    if (e.kind === "ToolCall" && e.callId) {
+      callById.set(e.callId, e);
+      occurrences.set(e.callId, (occurrences.get(e.callId) ?? 0) + 1);
+    } else if (e.kind === "ToolResult" && e.callId) {
+      resultByCallId.set(e.callId, e);
+      const call = callById.get(e.callId);
+      if (call && !resultOfCall.has(call)) resultOfCall.set(call, e);
+    }
   }
+  const callItemOf = new WeakMap<object, Item>();
+  const ownCall = (block: ToolCall) => {
+    const item = callItemOf.get(block);
+    if (!item || (occurrences.get(block.id) ?? 0) < 2)
+      return { call: callById.get(block.id), result: resultByCallId.get(block.id) };
+    return { call: item, result: resultOfCall.get(item) };
+  };
   const stopped = stoppedToolCalls(history, resultByCallId);
   const raw: PiReplayMessage[] = [];
   const stepped = new Set<PiReplayMessage>();
@@ -377,6 +392,7 @@ export function reconstructMessagesFromHistory(
         raw.push(message);
       }
       for (const { index, block } of blocks) {
+        if (block.type === "toolCall") callItemOf.set(block, e);
         blockIndex.set(block, index);
         const at = message.content.findIndex((b) => blockIndex.get(b)! > index);
         if (at < 0) message.content.push(block);
@@ -427,6 +443,7 @@ export function reconstructMessagesFromHistory(
         name: e.tool ?? "tool",
         arguments: recordedToolArguments(e),
       };
+      callItemOf.set(block, e);
       if (prior?.kind === "ToolCall" && batch && raw.at(-1) === batch) batch.content.push(block);
       else {
         batch = legacyAssistant([block], e.createdAt);
@@ -454,12 +471,11 @@ export function reconstructMessagesFromHistory(
     for (const c of m.content) {
       if (c.type !== "toolCall") continue;
       const reason = stopped.reasons.get(c.id);
-      const re = resultByCallId.get(c.id);
-      if (reason === undefined) out.push(toolResultMessage(c, callById.get(c.id), re, m.timestamp));
-      else if (!re)
-        out.push(toolResultMessage(c, callById.get(c.id), undefined, m.timestamp, stoppedToolResult(reason)));
+      const { call, result: re } = ownCall(c);
+      if (reason === undefined) out.push(toolResultMessage(c, call, re, m.timestamp));
+      else if (!re) out.push(toolResultMessage(c, call, undefined, m.timestamp, stoppedToolResult(reason)));
       else {
-        const result = toolResultMessage(c, callById.get(c.id), re, m.timestamp);
+        const result = toolResultMessage(c, call, re, m.timestamp);
         out.push({ ...result, content: [...result.content, { type: "text", text: turnStoppedNote(reason) }] });
       }
     }

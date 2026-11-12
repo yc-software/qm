@@ -18,7 +18,12 @@ import type { RuntimeRequest, RuntimeResult } from "../agent/runtime-types.ts";
 import { readContextFile } from "../resolution/context-files.ts";
 import { type TurnContext } from "../resolution/turn-context.ts";
 import { canReadNotebook, readNotebook, searchNotebooks } from "../memory/cross-scope.ts";
-import type { SandboxAccessPlan, SandboxResource, SandboxResources } from "../sandbox/sandbox-resources.ts";
+import {
+  SandboxAccessError,
+  type SandboxAccessPlan,
+  type SandboxResource,
+  type SandboxResources,
+} from "../sandbox/sandbox-resources.ts";
 import { posix } from "node:path";
 import { posixJoin, workspacePathOf } from "../sandbox/exec-file-ops.ts";
 import { shq } from "../util/shell.ts";
@@ -89,7 +94,13 @@ import type {
 } from "../api/control-service.ts";
 import type { ShareArtifactRequest, ShareArtifactResult } from "../api/artifact-share.ts";
 import type { Cron, Webhook } from "../triggers/types.ts";
-import type { CapabilityClaims } from "../auth/capability-token.ts";
+import {
+  proactiveScopeWork,
+  scopeWorkClaims,
+  unpromptedRefusal,
+  type CapabilityClaims,
+  type ScopeWorkClaims,
+} from "../auth/capability-token.ts";
 import type { VisibleCron } from "../api/app.ts";
 import { createPlaygroundArtifact, type PlaygroundArtifact } from "../playgrounds/playground.ts";
 
@@ -537,6 +548,7 @@ export interface ToolContextDeps {
   monitorBroker?: MonitorBroker;
   control?: ControlService;
   controlClaims?: CapabilityClaims;
+  scopeWork?: ScopeWorkClaims;
   webhookPublicUrl?: string;
   surface?: SurfaceToolDeps;
   attach?: AttachFiles;
@@ -556,6 +568,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
   const inWorkdir = (handle: SandboxHandle, command: string): string =>
     deps.workdir ? `cd ${shq(posixJoin(handle.rootDir, deps.workdir))} || exit 1\n${command}` : command;
   const { writableScopeId } = deps;
+  const managing = { botActor: deps.botActor, ...scopeWorkClaims(deps.scopeWork) };
   const memory =
     deps.context?.memory ??
     (deps.memory
@@ -755,7 +768,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
             deploy: deps.deploy,
             app: deps.editingApp,
             actorId: deps.createdBy,
-            botActor: deps.botActor,
+            ...managing,
             actingScopeId: writableScopeId,
           }),
         }
@@ -784,12 +797,16 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
             }
             if (action === "retire") {
               if (!input?.sandboxId) throw new Error("retire requires sandbox_id");
+              if (proactiveScopeWork({ ...managing, actorId: deps.createdBy }))
+                throw new SandboxAccessError(unpromptedRefusal("computers"));
               const { resource } = await accessSandbox(input.sandboxId);
               await resources.retire(deps.createdBy, resource.id);
               return { retired: resource.id };
             }
             if (action === "default") {
               if (input?.sandboxId === undefined) throw new Error("default requires sandbox_id or null");
+              if (proactiveScopeWork({ ...managing, actorId: deps.createdBy }))
+                throw new SandboxAccessError(unpromptedRefusal("default computer"));
               if (input.sandboxId !== null) await accessSandbox(input.sandboxId);
               await resources.setDefault(deps.createdBy, writableScopeId, input.sandboxId);
               deps.invalidateProvision?.();
@@ -1097,7 +1114,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       const d = await deps.deploy.deployOrUpdate({
         ownerScopeId: owner,
         createdBy: deps.createdBy,
-        botActor: deps.botActor,
+        ...managing,
         createdInScope,
         files,
         ...(input.entrypoint ? { entrypoint: input.entrypoint } : {}),

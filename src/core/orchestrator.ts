@@ -53,7 +53,7 @@ import type {
   PendingApproval,
   PendingApprovalRecord,
 } from "../types.ts";
-import { scopeId as toScopeId, personalScope } from "../types.ts";
+import { isSystemActor, scopeId as toScopeId, personalScope } from "../types.ts";
 import { boundWebhook, desktopClientForTurn, introducesUser, isPersonAuthored, isSessionTurn } from "./turn-origin.ts";
 import { resolveTurnFastMode } from "./turn-options.ts";
 import { orgId } from "../config.ts";
@@ -78,7 +78,12 @@ import { askResolutionEvents, type KeychainAsk } from "../credentials/keychain.t
 import { configuredConnectorProviders } from "../credentials/connector-status.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
 import { createSpendLimits, spendLimitNote } from "../ratelimit/spend-limits.ts";
-import { CAPABILITY_TTL_MS, isValidCapabilityTimezone, type CapabilityClaims } from "../auth/capability-token.ts";
+import {
+  CAPABILITY_TTL_MS,
+  isValidCapabilityTimezone,
+  unattendedAmbient,
+  type CapabilityClaims,
+} from "../auth/capability-token.ts";
 import type {
   DetectResult,
   TurnLlmRequestRecord,
@@ -499,8 +504,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       await deps.refreshModels?.();
       input = await scopeTeamsToTurn(tenant, input, deps, external);
       const { actor, conversation } = input;
-      const automatedTurn = input.origin.kind === "automation";
-      const ambientTurn = input.origin.kind === "ambient";
+      const ambientWork = unattendedAmbient(input.origin) && isSystemActor(actor.id);
+      const automatedTurn = input.origin.kind === "automation" || ambientWork;
+      const ambientTurn = input.origin.kind === "ambient" && !ambientWork;
       const humanTurn = input.origin.kind === "human";
       const sessionTurn = isSessionTurn(input);
       const humanInput = humanTurn && !sessionTurn;
@@ -698,7 +704,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           desktopClientForTurn(input) ? [desktopComputerTool] : undefined,
         );
         screenSession.id = session.id;
-        if (!input.sessionParticipantIds?.length && !automatedTurn)
+        if (!input.sessionParticipantIds?.length && (!automatedTurn || (ambientWork && !sessionTurn)))
           await deps.sessions.addParticipant(session.id, actor.id);
         if (input.shutdown?.aborted)
           return { status: "queued", sessionId: session.id, ...(input.runId ? { runId: input.runId } : {}) };
@@ -1003,7 +1009,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         !!swarmBinding &&
         swarmBinding.rootSessionId !== session.id &&
         (!!input.swarmGoal || !!openGoal((await deps.sessions.goals([session.id])).get(session.id)));
-      if (!input.sessionParticipantIds?.length && !automatedTurn)
+      if (!input.sessionParticipantIds?.length && (!automatedTurn || (ambientWork && !sessionTurn)))
         await deps.sessions.addParticipant(session.id, actor.id);
       if (introducesUser(input.origin, input)) await recordUser(deps.users, actor.id, input.botActor);
 
@@ -1148,6 +1154,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         actorIsOrgAdmin,
         orgMemoryWritable,
         controlClaims,
+        scopeWork,
         sandboxTokenExpiry,
         scopeAttestation,
         egressTokenForPolicy,
@@ -1494,6 +1501,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const { backgroundBroker, monitorBroker } = createTurnBrokers({
           deps,
           input,
+          scopeWork,
           actor,
           conversation,
           session,
@@ -1606,7 +1614,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           scopeId: scopeId as ScopeId,
           orgScopeId: resolution.orgScopeId,
           liveTurn: liveTurn && !automatedTurn,
-          request: { ...input, readOnly: strictReadOnly, memoryNotebookOnly: notebookOnly, cancel: turnAbort.signal },
+          request: {
+            ...input,
+            readOnly: strictReadOnly,
+            memoryNotebookOnly: notebookOnly,
+            cancel: turnAbort.signal,
+          },
           switchedRuntime: () => switchedRuntime,
         });
         const liveNote = async () =>
@@ -1671,7 +1684,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(conversation.publishMembers ? { publishMembers: conversation.publishMembers } : {}),
           },
           config: deps.config,
-          ...(deps.control && controlClaims ? { control: deps.control, controlClaims } : {}),
+          ...(controlClaims ? { controlClaims } : {}),
+          scopeWork,
+          ...(deps.control && controlClaims ? { control: deps.control } : {}),
           ...(deps.apiBaseUrl && connectorEnv.AGENT_API_TOKEN
             ? {
                 ...(securityPolicy.posture !== "strict"

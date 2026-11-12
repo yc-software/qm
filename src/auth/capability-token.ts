@@ -2,10 +2,12 @@ import { promisify } from "node:util";
 import { deflateRaw, inflateRaw } from "node:zlib";
 import { orgId as configOrgId } from "../config.ts";
 import { boundTenant, isTenantId } from "../tenants/context.ts";
-import type { CandidateDestination, Destination, EgressPolicy, Principal, ScopeId } from "../types.ts";
-import { isSystemActor } from "../types.ts";
+import type { CandidateDestination, Destination, EgressPolicy, Principal, ScopeId, TurnOrigin } from "../types.ts";
+import { actsAsScope, isSystemActor } from "../types.ts";
 import type { SessionOrigin } from "../sessions/session-store.ts";
 import { mintSignedPayload, verifySignedPayload } from "./signed-token.ts";
+import { unattendedAmbient } from "../core/turn-origin.ts";
+export { unattendedAmbient } from "../core/turn-origin.ts";
 
 export const CAPABILITY_TTL_MS = 60 * 60_000;
 export const DEPLOYMENT_CREDENTIAL_TTL_MS = 10 * 365 * 24 * 60 * 60_000;
@@ -41,11 +43,54 @@ interface BlobGrant {
   id?: string;
 }
 
+export interface TurnOriginClaim {
+  kind: TurnOrigin["kind"];
+  live?: true;
+}
+
+const TURN_ORIGIN_KINDS: ReadonlySet<string> = new Set<TurnOrigin["kind"]>([
+  "human",
+  "ambient",
+  "automation",
+  "direct",
+]);
+
+export function turnOriginClaim(origin: TurnOrigin): TurnOriginClaim {
+  return { kind: origin.kind, ...(origin.kind === "ambient" && origin.live === true ? { live: true as const } : {}) };
+}
+
+export type ScopeWorkClaims = Partial<Pick<CapabilityClaims, "scopeId" | "liveActor" | "turnOrigin">>;
+
+export type ManagingCaller = Pick<CapabilityClaims, "actorId" | "botActor"> & ScopeWorkClaims;
+
+export function proactiveScopeWork(c: ManagingCaller): boolean {
+  return (
+    c.scopeId !== undefined &&
+    actsAsScope(c.actorId, c.scopeId) &&
+    c.liveActor !== true &&
+    unattendedAmbient(c.turnOrigin)
+  );
+}
+
+export function scopeWorkClaims(c: ScopeWorkClaims | undefined): ScopeWorkClaims {
+  if (!c) return {};
+  return {
+    ...(c.scopeId !== undefined ? { scopeId: c.scopeId } : {}),
+    ...(c.liveActor !== undefined ? { liveActor: c.liveActor } : {}),
+    ...(c.turnOrigin !== undefined ? { turnOrigin: c.turnOrigin } : {}),
+  };
+}
+
+export function unpromptedRefusal(what: string): string {
+  return `unprompted work can't manage this conversation's ${what}; ask in the conversation so a person does it`;
+}
+
 export async function personOrOwningBot(
-  caller: Pick<CapabilityClaims, "actorId" | "botActor">,
+  caller: ManagingCaller,
   owns: () => Promise<boolean>,
   record?: { botActor?: boolean } | null,
 ): Promise<boolean> {
+  if (proactiveScopeWork(caller)) return false;
   return (
     caller.botActor !== true || (!isSystemActor(caller.actorId) && (!record || record.botActor === true) && owns())
   );
@@ -84,6 +129,7 @@ export interface CapabilityClaims {
   runLeaseToken?: string;
   deployment?: string;
   botActor?: boolean;
+  turnOrigin?: TurnOriginClaim;
   liveAuthor?: boolean;
   actAsActor?: boolean;
   triggered?: boolean;
@@ -169,6 +215,15 @@ export async function verifyCapabilityToken(
   if (claims.memory !== undefined && !Array.isArray(claims.memory?.read)) return null;
   if (claims.liveActor !== undefined && typeof claims.liveActor !== "boolean") return null;
   if (claims.botActor !== undefined && typeof claims.botActor !== "boolean") return null;
+  if (
+    claims.turnOrigin !== undefined &&
+    (typeof claims.turnOrigin !== "object" ||
+      claims.turnOrigin === null ||
+      !TURN_ORIGIN_KINDS.has(claims.turnOrigin.kind) ||
+      (claims.turnOrigin.live !== undefined &&
+        (claims.turnOrigin.live !== true || claims.turnOrigin.kind !== "ambient")))
+  )
+    return null;
   if (claims.liveAuthor !== undefined && typeof claims.liveAuthor !== "boolean") return null;
   if (claims.actAsActor !== undefined && typeof claims.actAsActor !== "boolean") return null;
   if (claims.blob !== undefined && claims.blob?.dir !== "read" && claims.blob?.dir !== "write") return null;

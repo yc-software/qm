@@ -1,7 +1,7 @@
 import { steerWithheldItem } from "../core/turn-error.ts";
 import type { ResumableToolCall } from "../core/turn-resume.ts";
 import type { ReplayImageRef } from "./replay.ts";
-import type { ToolContextRef } from "./agent-tools.ts";
+import { acknowledgeShownMail, type ToolContextRef } from "./agent-tools.ts";
 import type { AgentTurnInput, ApprovedToolCall } from "./agent.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { INTERRUPTED_TOOL_RESULT } from "./context-compaction.ts";
@@ -200,6 +200,7 @@ async function runToolCallOnce(
     ref.emit = emit;
     ref.abortSignal = abortSignal;
   }
+  await acknowledgeShownMail(ref, call.callId);
   if (result?.isError === true) isError = true;
   return { items, text, content, isError, ...(result ? { result } : {}) };
 }

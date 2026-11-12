@@ -106,6 +106,7 @@ export function createSessionMethods(
   | "currentScopeMembers"
   | "membershipControlsScope"
   | "authorizesCapabilityScope"
+  | "sessionsAwaitingApproval"
   | "updateSession"
   | "detachSession"
   | "cancelSessionGoal"
@@ -1011,6 +1012,22 @@ export function createSessionMethods(
 
     async authorizesCapabilityScope(claims) {
       return authorizesCapabilityScope(claims);
+    },
+
+    async sessionsAwaitingApproval(sessionIds) {
+      const awaiting = new Set<string>();
+      if (!sessionIds.length) return awaiting;
+      const wanted = new Set(sessionIds);
+      const records = await deps.approvals?.select({ where: { field: "sessionId", anyOfFold: sessionIds } });
+      for (const record of records ?? [])
+        if (
+          wanted.has(record.sessionId) &&
+          !awaiting.has(record.sessionId) &&
+          record.blocksInput !== false &&
+          (await approvalRecordIsCurrent(record))
+        )
+          awaiting.add(record.sessionId);
+      return awaiting;
     },
 
     async updateSession(sessionId, principalId, patch) {

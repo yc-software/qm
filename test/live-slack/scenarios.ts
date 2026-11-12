@@ -7,6 +7,7 @@ import { multiUserScenarios } from "./scenarios-multiuser.ts";
 import { twinScenarios } from "./scenarios-twin.ts";
 import { deployAccessScenarios } from "./scenarios-deploy-access.ts";
 import { credentialApprovalScenarios } from "./scenarios-credential-approval.ts";
+import { ambientScenarios } from "./scenarios-ambient.ts";
 
 const RAW_MARKDOWN_ARTIFACTS: Array<[string, RegExp]> = [
   ["**bold**", /\*\*[^*\n]+\*\*/],
@@ -468,4 +469,5 @@ export const scenarios: Scenario[] = [
   ...twinScenarios,
   ...deployAccessScenarios,
   ...credentialApprovalScenarios,
+  ...ambientScenarios,
 ];

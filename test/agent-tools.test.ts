@@ -3466,11 +3466,14 @@ test("quarantined mail remains pending for release and mailbox failures preserve
   assert.equal(pending, true);
   assert.equal(ref.pausedOnApproval, true);
   release = true;
+  ref.pausedOnApproval = false;
   const second = await call(
     createAgentTools(ref).find((tool) => tool.name === "files"),
     { action: "read", path: "a.txt" },
   );
   assert.ok(JSON.stringify(second).includes("held finding"));
+  assert.equal(pending, true, "mail stays unread until the result is settled for the model");
+  assert.equal(await pauseStampAfterToolCall(ref)({ toolCall: { id: "t" }, result: second }), undefined);
   assert.equal(pending, false);
   tc.sessionSyscalls.receive = async () => {
     throw new Error("flag disabled");
@@ -4132,13 +4135,16 @@ test("thrown execution errors leave pending child messages for the next delivere
         pending = false;
       },
     };
-    const tools = createAgentTools({ current: context }, { sandboxResources });
+    const ref: ToolContextRef = { current: context };
+    const tools = createAgentTools(ref, { sandboxResources });
     const tool = tools.find((t) => t.name === "execute")!;
     const input = { command: "true", purpose: "Check provider" };
     await assert.rejects(() => call(tool, input), /provider unavailable/);
     assert.equal(pending, true);
     context.execute = async () => ({ stdout: "ok", stderr: "", code: 0, timedOut: false });
-    assert.match(JSON.stringify(await call(tool, input)), /Important child finding/);
+    const delivered = await call(tool, input);
+    assert.match(JSON.stringify(delivered), /Important child finding/);
+    await pauseStampAfterToolCall(ref)({ toolCall: { id: "t" }, result: delivered });
     assert.equal(pending, false);
   }
 });

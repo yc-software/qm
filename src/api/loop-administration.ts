@@ -1,5 +1,5 @@
 import type { App, AppDeps } from "./app-types.ts";
-import { personOrOwningBot, type CapabilityClaims } from "../auth/capability-token.ts";
+import { personOrOwningBot, type ManagingCaller } from "../auth/capability-token.ts";
 import type { ScopeId } from "../types.ts";
 import { samePersonInDirectory } from "../directory/person.ts";
 import {
@@ -12,7 +12,7 @@ import type { TriggerBase } from "../triggers/types.ts";
 export async function canAdministerLoop(
   app: Pick<App, "membershipControlsScope" | "managesScope" | "samePerson">,
   loop: Pick<TriggerBase, "owner" | "ownerScopeId" | "botActor">,
-  actor: Pick<CapabilityClaims, "actorId" | "botActor">,
+  actor: ManagingCaller,
 ): Promise<boolean> {
   const { actorId } = actor;
   if (!(await personOrOwningBot(actor, async () => app.samePerson(loop.owner, actorId), loop))) return false;
@@ -23,7 +23,7 @@ export async function canAdministerLoop(
 
 export async function loopAdministration(
   deps: AppDeps,
-  actor: Pick<CapabilityClaims, "actorId" | "botActor">,
+  actor: ManagingCaller,
   loops: readonly Pick<TriggerBase, "owner" | "ownerScopeId" | "botActor">[],
 ) {
   if (!loops.length) return [];

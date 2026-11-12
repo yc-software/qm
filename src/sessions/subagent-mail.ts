@@ -1,10 +1,10 @@
-import { sessionTurnOrigin } from "../core/turn-origin.ts";
+import { keepingUnattended, sessionTurnOrigin } from "../core/turn-origin.ts";
 import { principalDestination } from "../reach/reach.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import { deliveryCandidatesFor } from "../core/orchestrator/turn-helpers.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
-import type { Principal, Session, SpawnMeta, StopScope } from "../types.ts";
+import type { Principal, Session, SpawnMeta, StopScope, TurnOrigin } from "../types.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SessionStore } from "./session-store.ts";
@@ -84,13 +84,18 @@ export interface SubagentMailDeps {
   runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "withdraw"> & Partial<Pick<RunStore, "get">>;
   maxAttempts: number;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
+  awaitingApproval?: (sessionId: string) => Promise<boolean>;
 }
 
-type ParentMailDeps = Pick<SubagentMailDeps, "mailbox" | "runs" | "maxAttempts" | "prepareRequest">;
+type ParentMailDeps = Pick<
+  SubagentMailDeps,
+  "mailbox" | "runs" | "maxAttempts" | "prepareRequest" | "awaitingApproval"
+>;
 
 interface ParentSource {
   actor: Principal;
   botActor?: boolean;
+  origin?: TurnOrigin;
   conversation: Pick<OrchestratorInput["conversation"], "audience">;
   runId?: string;
   delegatingRunId?: string;
@@ -202,7 +207,7 @@ async function parentTurn(
         : {}),
       threadRef: parent.threadRef,
     },
-    origin: sessionTurnOrigin(meta.origin, text),
+    origin: keepingUnattended(sessionTurnOrigin(meta.origin, text), source.origin, currentContext?.origin),
     text,
     displayText,
     envelopeWrapped: true,
@@ -257,6 +262,7 @@ async function wakeParent(
   }
   if (existing && (existing.status === "done" || existing.status === "failed")) return "settled";
   if ((await deps.runs.inFlightForThread(parent.threadRef)).length) return "busy";
+  if (await deps.awaitingApproval?.(parent.id)) return "busy";
   const surfaceTools = meta.surfaceTools === true || requiresDelegation(prepared);
   await deps.runs.enqueue({
     sessionId: parent.threadRef,
@@ -332,11 +338,47 @@ export async function wakePeer(
   return mailParent(deps, sender, recipient, turn, marked, messageWake(mail.id, true));
 }
 
+type HeldSessions = (sessionIds: readonly string[]) => Promise<Set<string>>;
+
 type UnreadMailDeps = ParentMailDeps & {
   sessions: Pick<SessionStore, "get" | "getByThread">;
   signals: Pick<RunSignalStore, "pending">;
   advisoryLock: AdvisoryLock;
+  blockingApprovalSessions?: HeldSessions;
 };
+
+export async function sweepPendingReturns(
+  deps: {
+    runs: Pick<RunStore, "pendingReturns">;
+    sessions: Pick<SessionStore, "getMany">;
+    blockingApprovalSessions?: HeldSessions;
+  },
+  inTenant: <T>(tenantId: string, work: () => Promise<T>) => Promise<T>,
+  returnRun: (run: Run) => Promise<void>,
+): Promise<void> {
+  for (let batch = await deps.runs.pendingReturns(100); batch.length;) {
+    for (const [tenantId, group] of Map.groupBy(batch, (run) => run.tenantId)) {
+      const held = await inTenant(tenantId, () => returnsToHeldParents(deps, group)).catch(
+        swallowAs("sessions: held parent returns", new Set<string>()),
+      );
+      for (const run of group) if (!held.has(run.id)) await inTenant(tenantId, () => returnRun(run));
+    }
+    batch = await deps.runs.pendingReturns(100, batch.at(-1)!.id);
+  }
+}
+
+async function returnsToHeldParents(
+  deps: { sessions: Pick<SessionStore, "getMany">; blockingApprovalSessions?: HeldSessions },
+  runs: readonly Run[],
+): Promise<Set<string>> {
+  if (!deps.blockingApprovalSessions) return new Set();
+  const children = await deps.sessions.getMany({ ids: [], threadRefs: runs.map((run) => run.sessionId) });
+  const parentOf = new Map(
+    children.flatMap((child) => (child.parentSessionId ? [[child.threadRef, child.parentSessionId]] : [])),
+  );
+  const held = await deps.blockingApprovalSessions([...new Set(parentOf.values())]);
+  return new Set(runs.filter((run) => held.has(parentOf.get(run.sessionId) ?? "")).map((run) => run.id));
+}
 
 export async function wakeForUnreadMail(
   deps: UnreadMailDeps,
@@ -350,7 +392,12 @@ export async function wakeForUnreadMail(
 export async function sweepUnreadMailWakes(deps: UnreadMailDeps): Promise<void> {
   await claimThenBind(deps.mailbox.claimWakeTenants, async () => {
     for (let page = await deps.mailbox.awaitingWake(); page.length;) {
-      for (const recipientId of new Set(page.map((message) => message.recipientId))) {
+      const recipients = [...new Set(page.map((message) => message.recipientId))];
+      const held =
+        (await deps
+          .blockingApprovalSessions?.(recipients)
+          .catch(swallowAs("sessions: held mail recipients", undefined))) ?? new Set<string>();
+      for (const recipientId of recipients.filter((id) => !held.has(id))) {
         const parent = await deps.sessions.get(recipientId);
         if (parent && !(await deps.runs.inFlightForThread(parent.threadRef)).length)
           await wakeParentForMail(deps, parent).catch(swallowAs("sessions: recover unread mail wake", undefined));
@@ -382,6 +429,7 @@ async function wakeParentForMail(
             const source = {
               actor: message.actor,
               ...(message.botActor ? { botActor: true } : {}),
+              ...(child.spawnMeta?.origin ? { origin: child.spawnMeta.origin } : {}),
               conversation: { audience: message.audience },
               ...(message.delegatingRunId ? { delegatingRunId: message.delegatingRunId } : {}),
               ...(peer ? { peerDepth: message.peerDepth ?? 1 } : {}),

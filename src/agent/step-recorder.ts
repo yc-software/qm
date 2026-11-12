@@ -78,10 +78,30 @@ function resultText(content: ToolResultMessage["content"]): string {
 
 export type StepRecorder = ReturnType<typeof createStepRecorder>;
 
-export function createStepRecorder(turn: Pick<AgentTurnInput, "emit" | "shutdown">, persist: Persist) {
+export function createStepRecorder(
+  turn: Pick<AgentTurnInput, "emit" | "shutdown">,
+  persist: Persist,
+  persisted?: () => Promise<unknown>,
+) {
   const calls = new Map<string, { step: ReplayStep; block: ToolCall }>();
   const called = new Set<string>();
   const executing = new Map<string, NewItem>();
+  const held = new Map<
+    string,
+    { mail: readonly string[]; returned?: { content: ToolResultMessage["content"]; isError: boolean } }
+  >();
+  const withoutMail = (callId: string, content: ToolResultMessage["content"], mail: readonly string[]) => {
+    const logged = executing.get(callId);
+    if (logged && mail.length) {
+      const { mailIds: _mailIds, ...body } = logged.body ?? {};
+      executing.set(callId, {
+        ...logged,
+        body,
+        ...(logged.text ? { text: mail.reduce((text, block) => text.replace(`\n\n${block}`, ""), logged.text) } : {}),
+      });
+    }
+    return content.filter((block) => block.type !== "text" || !mail.includes(block.text));
+  };
   let pending: { step: ReplayStep; parts: Positioned[] } | null = null;
   let last: ReplayStep | undefined;
   let streamingStep: string | undefined;
@@ -162,14 +182,42 @@ export function createStepRecorder(turn: Pick<AgentTurnInput, "emit" | "shutdown
     streamingStepId(): string {
       return (streamingStep ??= randomUUID());
     },
-    toolReturned: recordResult,
+    toolReturned(callId: string, content: ToolResultMessage["content"], isError: boolean): void {
+      const hold = held.get(callId);
+      if (hold) hold.returned = { content, isError };
+      else recordResult(callId, content, isError);
+    },
+    holdResult(callId: string, mail: readonly string[]): void {
+      if (calls.has(callId)) held.set(callId, { mail });
+    },
+    settleResult(
+      callId: string,
+      content: ToolResultMessage["content"],
+      withheld: readonly string[],
+    ): Promise<unknown> | undefined {
+      const hold = held.get(callId);
+      if (!hold) return undefined;
+      held.delete(callId);
+      recordResult(callId, withoutMail(callId, content, withheld), hold.returned?.isError ?? false);
+      return persisted?.();
+    },
     toolResult(message: ToolResultMessage): void {
-      recordResult(message.toolCallId, message.content, message.isError);
+      const hold = held.get(message.toolCallId);
+      held.delete(message.toolCallId);
+      recordResult(
+        message.toolCallId,
+        hold ? withoutMail(message.toolCallId, message.content, hold.mail) : message.content,
+        message.isError,
+      );
     },
     flush: () => flush(),
     mark: (verdict: { action: "retry" | "prod"; reason: string }) =>
       flush(verdict.action === "retry" ? { retracted: verdict.reason } : { prodded: verdict.reason }),
     settleResults(): void {
+      for (const [callId, hold] of held)
+        if (hold.returned)
+          recordResult(callId, withoutMail(callId, hold.returned.content, hold.mail), hold.returned.isError);
+      held.clear();
       for (const item of executing.values()) write(item);
       executing.clear();
     },
