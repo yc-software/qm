@@ -610,7 +610,15 @@ test("a project session names its linked Slack home channel; unlinked projects g
     slackChannel: async (ref: string) =>
       ref === "web-project-linked" ? { channelId: "C-ENG", channelName: "eng" } : undefined,
   };
-  const { orchestrator: orch } = buildOrchestrator({ managedGroups });
+  const screened: string[] = [];
+  const securityScreener: SecurityScreener = {
+    provider: "test",
+    classify: async ({ payload }) => {
+      screened.push(payload);
+      return { verdict: { decision: "auto" }, score: 0, threshold: 1 };
+    },
+  };
+  const { orchestrator: orch } = buildOrchestrator({ managedGroups, securityScreener });
 
   const group = (ref: string, thread: string): OrchestratorInput => ({
     surface: "test",
@@ -634,6 +642,7 @@ test("a project session names its linked Slack home channel; unlinked projects g
   assert.match(prompt, /## Project home channel/);
   assert.match(prompt, /#eng/);
   assert.match(prompt, /channel: "eng"/);
+  assert.ok(screened.some((payload) => payload.includes("homeChannel") && payload.includes("eng")));
 
   const unlinked = await orch.handleTurn(group("web-project-bare", "grp:bare:1"));
   assert.equal(unlinked.status, "ok");

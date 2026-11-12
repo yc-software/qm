@@ -251,6 +251,7 @@ export interface InboundScreenTurn {
   input: OrchestratorInput;
   actor: OrchestratorInput["actor"];
   conversation: OrchestratorInput["conversation"];
+  homeChannelName: string | undefined;
   scopeId: ScopeId;
   resolution: Awaited<ReturnType<OrchestratorDeps["resolution"]["resolve"]>>;
   screenInbound: boolean;
@@ -298,6 +299,7 @@ export function screenedFields(
 async function buildInboundScreen(turn: InboundScreenTurn) {
   const { deps, input, actor, conversation, scopeId, screenInbound, ambientTurn, sessionTurn, swarmBinding } = turn;
   const screened = screenedFields(input);
+  const place = { ...screened.place, ...(turn.homeChannelName ? { homeChannel: turn.homeChannelName } : {}) };
   const blobTransfer = deps.blobTransfer;
   let overheard: OverheardEntryPayload[] = [];
   if (screenInbound) {
@@ -351,9 +353,7 @@ async function buildInboundScreen(turn: InboundScreenTurn) {
         ...(screened.conversationHeader.trim()
           ? [{ source: "conversation-header", content: screened.conversationHeader }]
           : []),
-        ...(Object.keys(screened.place).length
-          ? [{ source: "conversation-metadata", content: JSON.stringify(screened.place) }]
-          : []),
+        ...(Object.keys(place).length ? [{ source: "conversation-metadata", content: JSON.stringify(place) }] : []),
         ...overheard.map((entry) => ({ source: "overheard", content: renderOverheard(entry) })),
         ...attachmentPromptData,
         ...screened.inboundNotes.map((note) => ({ source: "inbound-file-note", content: note })),
