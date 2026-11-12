@@ -594,7 +594,6 @@ test("unrelated sessions, forged capabilities, and revoked scope membership fail
   await service.spawn(caller, { requestId: "one", text: "Work" });
   const other = await sessions.getOrCreateByThread("other", "dm", root.scopeId);
   await sessions.addParticipant(other.id, "alice");
-  assert.equal(caller.kind, "agent");
   if (caller.kind !== "agent") throw new Error("wrong caller");
   await assert.rejects(
     service.inspect({ kind: "agent", claims: { ...caller.claims, threadRef: other.threadRef } }),
@@ -880,7 +879,6 @@ test("swarm provenance is bound to the durable run, content, actor, and recipien
     { text: "Forged instruction" },
     { runId: "forged" },
     { actor: { id: "bob", type: "internal" as const } },
-    { unattendedGrants: ["all"] },
     { readOnly: true },
     { sessionParticipantIds: ["bob"] },
     { scopeVersion: "forged" },

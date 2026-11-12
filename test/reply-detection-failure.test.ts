@@ -12,7 +12,8 @@ import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import type { Agent } from "../src/agent/agent.ts";
+import type { Agent, SessionRoute } from "../src/agent/agent.ts";
+import { resolveRuntimeChoice, withResolvedRuntime } from "../src/agent/runtime-choice.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { Conversation, Principal } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
@@ -27,20 +28,26 @@ import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 const actor: Principal = { id: "U1", type: "internal" };
 
-test("an ambient message whose reply detection fails stays silent and leaves the failure in the error and audit logs", async () => {
+test("ambient reply detection runs on the scope's model, and its failure stays silent and is logged", async () => {
   const base = createMockAgent();
   let ran = false;
-  const agent: Agent = {
+  let detectModel: string | undefined;
+  const detector: Agent = {
     ...base,
     runTurn: async () => {
       ran = true;
       return { reply: "spurious" };
     },
-    shouldRespond: async () => {
+    shouldRespond: async (detect) => {
+      detectModel = detect.runtime?.modelId;
       throw new Error("401 invalid x-api-key");
     },
   };
   const config = testConfigStore("default-org");
+  await config.setRuntimeSelection("channel:C1", { modelId: "claude-sonnet-5" });
+  const resolve = (route: SessionRoute) =>
+    resolveRuntimeChoice(config, "org:default-org", route.scopeLabel!, { modelId: "claude-opus-4-8" }, route.runtime);
+  const agent = withResolvedRuntime(detector, resolve, resolve);
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const errors = createPostgresErrorLog(testDatabaseUrl());
@@ -78,6 +85,7 @@ test("an ambient message whose reply detection fails stays silent and leaves the
   });
 
   assert.equal(result.status, "silent");
+  assert.equal(detectModel, "claude-sonnet-5");
   assert.equal(ran, false);
   const [failure] = await errors.list(testTenant, { sessionId: result.sessionId! });
   assert.deepEqual(

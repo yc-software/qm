@@ -1,4 +1,4 @@
-import { cronTriggerAuthority } from "./authority.ts";
+import { ownerAuthored, cronTriggerAuthority } from "./authority.ts";
 import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
 import { randomUUID } from "node:crypto";
 import { type ScopeId, type TurnRequest, type TurnResult } from "../types.ts";
@@ -173,7 +173,7 @@ function renderCronFireInput(
     "[Cron runtime context]",
     `Cron id: ${cron.id}${cron.title ? ` (${cron.title})` : ""}.`,
     "Each fire runs as a fresh thread with no memory of previous fires. Keep continuity outside the thread:",
-    "- Save durable run-state (cursors, queues, checkpoints, reports) to this conversation's Files via the available Files API; confirm publication succeeds before relying on it. Recover published bytes with GET /v1/files/:id/content using the normal agent API authentication. Sandbox disk is working storage, not a durable checkpoint.",
+    "- Save durable run-state (cursors, queues, checkpoints, reports) to this conversation's Files with the upload helper listed in GET /v1/apis; confirm publication succeeds before relying on it. Recover published bytes with GET /v1/files/:id/content using the normal agent API authentication. Sandbox disk is working storage, not a durable checkpoint.",
     "- The stored task below: the standing instructions every fire receives. Edit it (via the cron tool) only to change what future fires are told to do.",
     "Use a cron-specific filename. Never put credentials in published state. If publication is unavailable, report that limitation and retain needed workspace state on a scoped computer. Do not move tasks that require existing workspace files to scratch without migrating and verifying their state.",
     `The retained fire log (cron tool, action="runs", id="${cron.id}") shows how prior fires went — useful when this run hits errors or surprising state.`,
@@ -322,6 +322,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           fireKey,
           threadRef,
           surface: "cron",
+          ownerFire: ownerAuthored(cron),
           redrivesHandOff: true,
           ...(firesAtMostDaily(cron.schedule, scheduledAt ?? t) ? { infrequentCron: true } : {}),
           ...(cron.runtime && !runtimeProblem ? { runtime: cron.runtime } : {}),

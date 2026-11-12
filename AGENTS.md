@@ -40,9 +40,46 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   `gh pr merge <number>` queues it rather than merging it. The queue runs CI on the
   exact commit that will land, reusing the PR's run when `main` has not moved, and
   `main`'s own CI then reuses the queue's run. Never bypass the queue with `--admin`.
-- **Check the plan against the Wall of shame before writing code.** Hold what you plan to
-  add against each _always reviewed_ lens in the [Wall of shame](./docs/SPEC.md#wall-of-shame).
-  Changing the plan is free; the same finding at review costs a rewrite.
+- **Check the plan against the Wall of shame before writing code.** A PR cannot merge
+  until every relevant lens in the [Wall of shame](./docs/SPEC.md#wall-of-shame) accepts
+  it. Before building, hold what you plan
+  to add against each lens below and change the plan where it would draw a finding. Do the
+  same for every fix you make during review: a fix that clears one lens by tripping
+  another costs a round. Changing the plan is free; the same finding at review costs a
+  rewrite. The spec holds each lens's full text and examples.
+  - **Overengineering:** a subsystem, layer, flag, hook or option the change does not
+    need. Prefer deleting; net-negative lines are rewarded.
+  - **Band-aid fixes:** hiding a symptom with a special case, a string match or one more
+    branch instead of fixing the cause.
+  - **Duplication:** a second implementation or source of truth for something that
+    already has an owner.
+  - **Hand-rolling:** reimplementing what an SDK, library or supported API provides.
+  - **Non-durability:** state the system relies on kept in process memory, not Postgres.
+  - **Config-matrix expansion:** new env vars, settings or schema, and implicit modes
+    picked by conditionals, text matching or flags.
+  - **Historylessness:** shims, dual paths or special handling for old data shapes
+    instead of one migration.
+  - **Provider drift:** sandbox providers giving the agent different machines.
+  - **God files:** one file or module taking on unrelated responsibilities.
+  - **Mismatched UI:** interface that disagrees with the product around it instead of
+    reusing its components.
+  - **Over-indexing on YC:** architecture bent around YC's own usage.
+  - **Regex:** reaching for regular expressions.
+  - **YC info leaking into public qm:** organization-specific names, details or
+    references in the public repository.
+  - **Discarded error evidence:** replacing or swallowing a failure so it cannot be
+    diagnosed.
+  - **Arbitrary limits:** a cap, timeout or retry budget no real constraint requires.
+  - **Explaining-away UI:** copy that justifies the UI not doing what the person asked.
+  - **Category gate without census:** gating on a category without listing everything
+    that falls into it.
+  - **Over-testing:** net test lines above the source lines added; CI counts it.
+  - **Prod-like QA:** a behavior change not exercised on the real system and the
+    production path before merge.
+  - **Performance:** unnecessary, repeated or serialized work, N+1 queries and
+    unbounded reads.
+  - **Token performance:** anything added to the system prompt or per-turn context that
+    does not earn its place.
 - **Run independent Wall of shame reviews in parallel for every PR.** First triage with
   one fast, cheap model, the latest Haiku: give it the diff and every lens in the current
   [Wall of shame](./docs/SPEC.md#wall-of-shame), and have it mark each lens relevant or
@@ -61,8 +98,7 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   results or substitute the author's self-review. After edits, have independent
   reviewers reassess affected lenses and explicitly carry forward unaffected results;
   never re-run a reviewer on unchanged code to get a different verdict.
-  These reviews run alongside PR work; before merging, every relevant lens must have
-  accepted. Only a human maintainer can waive a lens, for
+  These reviews run alongside PR work. Only a human maintainer can waive a lens, for
   one PR: keep the reviewer's actual score, set the verdict to `Waived`, and write the
   assessment as `Waived by <name>:` followed by the objection that was waived. Never
   write a waiver the maintainer did not give, and never record one as Accept. The

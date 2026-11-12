@@ -20,7 +20,7 @@ import {
   resolveEmbeddingModel,
   embeddingModelCatalog,
   selectableBaseModels,
-  defaultWebuiModelIds,
+  modelOfferedInWebui,
   modelSupported,
 } from "../src/model/pi-models.ts";
 import { setModelOverlays } from "../src/model/model-overlay-store.ts";
@@ -76,7 +76,7 @@ test("verified embedding definitions survive registry reload but never become ch
   assert.deepEqual(requests, [{ model: "embed-small", input: ["verification"], encoding_format: "float" }]);
   assert.equal(resolveModel("embed-small"), undefined);
   assert.ok(!selectableBaseModels().some((m) => m.id === "embed-small"));
-  assert.ok(!defaultWebuiModelIds().includes("embed-small"));
+  assert.ok(!modelOfferedInWebui("embed-small"));
   assert.equal(modelSupported("embed-small"), false);
   await writer.delete("embed-small", "admin");
   await writer.refresh();

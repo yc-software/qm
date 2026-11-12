@@ -9,7 +9,7 @@ import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { isObj } from "../../util/objects.ts";
 import { withAbort } from "../../util/async.ts";
 import type { ToolContextRef } from "../agent-tools.ts";
-import type { ToolKit } from "./kit.ts";
+import { blockedForApprovalText, type ToolKit } from "./kit.ts";
 
 const RETRY_SAFE_FIELD = "retrySafe";
 
@@ -92,7 +92,7 @@ async function declaredApprovalReason(tool: ToolApprovalDeclaration, params: unk
 
 function keyedApprovalBlockedText(reason: string, callKey: string): string {
   return (
-    `[blocked: needs human approval] ${reason}. ` +
+    `${blockedForApprovalText(reason)} ` +
     `An approval card for this exact call (card ${approvalCardId(callKey)}) is now waiting for the person. ` +
     "If they approve it, QM runs exactly this call and records its result in this conversation, so do not propose it again. " +
     "If they change their mind before approving, withdraw the card with withdraw_approval."
@@ -203,9 +203,7 @@ export function withToolApprovalGate(
               {
                 type: "text" as const,
                 text:
-                  callKey && isObj(params)
-                    ? keyedApprovalBlockedText(reason, callKey)
-                    : `[blocked: needs human approval] ${reason}`,
+                  callKey && isObj(params) ? keyedApprovalBlockedText(reason, callKey) : blockedForApprovalText(reason),
               },
             ],
             details: {},
