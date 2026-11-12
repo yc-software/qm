@@ -248,6 +248,28 @@ test("a persona's page lists crons from conversations with it, only to people wh
   }
 });
 
+test("a channel grant whose name core doesn't know is labelled by its id", async () => {
+  const { built, personas, enable } = setup();
+  await enable(ALICE);
+  const ada = ok(await personas.create(ALICE, { name: "Ada" }));
+  ok(
+    await personas.setAccess(ALICE, ada.id, [
+      { scopeId: scopeId("personal", ALICE), role: "owner" },
+      { scopeId: "channel:C0UNKNOWN", role: "read" },
+    ]),
+  );
+  const server = createInsecureTestServer(built.app, { sessions: built.sessions });
+  server.listen(0);
+  try {
+    const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+    const r = await fetch(`${base}/v1/personas/${ada.id}?principalId=${ALICE}`);
+    const body = (await r.json()) as { persona: { access: Array<{ scopeId: string; label?: string }> } };
+    assert.equal(body.persona.access.find((g) => g.scopeId === "channel:C0UNKNOWN")?.label, "#C0UNKNOWN");
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
 test("credentials attached by an owner reach every turn that uses the persona, and leave with it", async () => {
   const { built, personas, enable, sysprompt } = setup();
   const keychain = built.keychain;

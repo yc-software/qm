@@ -281,14 +281,13 @@ test("a reader sees each part of the persona with nothing to add or remove", asy
   assert.equal(main.querySelector(".persona-item-remove"), null);
 });
 
-test("a channel with no name and no conversation here keeps its id, and such a group reads as Group like elsewhere", async () => {
+test("a group with no name and no conversation here reads Group, as elsewhere in the UI", async () => {
   access = [
     { scopeId: "personal:tester", role: "owner", personasEnabled: true },
-    { scopeId: "channel:C7", role: "read", personasEnabled: true },
     { scopeId: "group:G7", role: "read", personasEnabled: true },
   ];
   const { main } = await openPersonaPage("Ada");
-  assert.deepEqual(sections(main)["Channels and groups"]!.items, ["#C7", "Group"]);
+  assert.deepEqual(sections(main)["Channels and groups"]!.items, ["Group"]);
 });
 
 function searchFor(root: ParentNode, text: string): HTMLInputElement {
