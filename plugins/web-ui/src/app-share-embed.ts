@@ -15,7 +15,7 @@ export async function bootAppShare(params: URLSearchParams): Promise<void> {
   if (r.status === 401) return;
   if (!r.ok) {
     const body = await r.text().catch((e: unknown) => `<body unreadable: ${String(e)}>`);
-    throw new Error(`app-share: /me answered ${r.status} ${body.slice(0, 200)}`);
+    throw new Error(`app-share: /me answered ${r.status} ${body}`);
   }
   appState.me = (await r.json()) as Me;
   const { openDeploymentPermissions } = await import("./deploy-permissions");
