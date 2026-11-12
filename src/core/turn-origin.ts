@@ -1,4 +1,4 @@
-import type { DeliveryWebhook, TurnOrigin, TurnRequest } from "../types.ts";
+import type { DeliveryWebhook, Destination, TurnOrigin, TurnRequest } from "../types.ts";
 export type { TurnOrigin } from "../types.ts";
 
 export function isPersonAuthored(kind: TurnOrigin["kind"]): boolean {
@@ -38,6 +38,12 @@ export function desktopClientForTurn(
     (input.attempt ?? 1) <= 1
     ? input.desktopClientId
     : undefined;
+}
+
+export function liveAutomationDestination(
+  request: Pick<Partial<TurnRequest>, "surfaceTools" | "origin">,
+): Destination | undefined {
+  return request.surfaceTools && request.origin?.kind === "automation" ? request.origin.destination : undefined;
 }
 
 export function boundWebhook(

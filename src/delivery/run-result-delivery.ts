@@ -2,7 +2,7 @@ import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type { DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
 import { waitForNoRunningRun, type Run, type RunStore } from "../runs/run-store.ts";
 import { turnDeliveryProvenance, type DeliveryStore } from "./delivery-store.ts";
-import { boundWebhook, isSessionTurn } from "../core/turn-origin.ts";
+import { boundWebhook, isSessionTurn, liveAutomationDestination } from "../core/turn-origin.ts";
 import { turnFailureItem } from "../core/turn-error.ts";
 import { standaloneFailureText, unfinishedTurnText, userFacingFailureClause } from "../core/failure-copy.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
@@ -43,26 +43,29 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor, notice?: 
   const webhook = bound?.webhook;
   const target = bound?.target ?? run.request.deliveryTarget;
   const surface = run.request.surface;
-  if (!target || !surface) return null;
   const editRef = run.deliveryState?.editRef;
   const failed = run.status === "failed";
+  if (!surface) return null;
   const webTranscript = webTranscriptNote(run, surface, failed);
-  const destination: Destination = {
-    type: webhook ? "webhook" : surface,
-    ...(webhook ? { webhook } : {}),
-    target,
-    ...(surfaceOrigin
-      ? {
-          account: {
-            id: surfaceOrigin.author.account,
-            workspace: surfaceOrigin.workspace,
-            ...(surfaceOrigin.policyNamespace ? { policyNamespace: surfaceOrigin.policyNamespace } : {}),
-          },
-        }
-      : {}),
-    ...(editRef ? { editRef } : {}),
-    ...(webTranscript ? { webTranscript } : {}),
-  };
+  const destination: Destination | undefined = !target
+    ? liveAutomationDestination(run.request)
+    : {
+        type: webhook ? "webhook" : surface,
+        ...(webhook ? { webhook } : {}),
+        target,
+        ...(surfaceOrigin
+          ? {
+              account: {
+                id: surfaceOrigin.author.account,
+                workspace: surfaceOrigin.workspace,
+                ...(surfaceOrigin.policyNamespace ? { policyNamespace: surfaceOrigin.policyNamespace } : {}),
+              },
+            }
+          : {}),
+        ...(editRef ? { editRef } : {}),
+        ...(webTranscript ? { webTranscript } : {}),
+      };
+  if (!destination) return null;
   const idempotencyKey = `run:${run.id}`;
   const provenance = turnDeliveryProvenance({
     origin,

@@ -8,7 +8,7 @@ import type {
   TurnRequest,
   ActorAssertion,
 } from "../../types.ts";
-import { boundWebhook } from "../turn-origin.ts";
+import { boundWebhook, liveAutomationDestination } from "../turn-origin.ts";
 import { isAgentReply, isHidden, isOverheard, isUserItem, type Item, proseText } from "../../sessions/items.ts";
 import type { DeliveryStore } from "../../delivery/delivery-store.ts";
 import type { SkillBundle, SkillBundleStore } from "../../skills/skill-bundle-store.ts";
@@ -340,8 +340,8 @@ export function resolveTurnDelivery(turn: {
       ...(defaultCandidate.account ? { account: defaultCandidate.account } : {}),
       ...(defaultCandidate.audienceScopeId ? { audienceScopeId: defaultCandidate.audienceScopeId } : {}),
     };
-  } else if (input.surfaceTools && input.origin.kind === "automation" && input.origin.destination) {
-    defaultDestination = input.origin.destination;
+  } else {
+    defaultDestination = liveAutomationDestination(input);
   }
   const wornPersona = persona
     ? {

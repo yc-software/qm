@@ -133,6 +133,20 @@ test("runResultDelivery still posts a surface-spine turn's FAILURE note", () => 
   assert.equal(runResultDelivery(spine)?.text, "⚠️ I couldn't finish that turn: something went wrong on my end");
 });
 
+test("runResultDelivery posts a failed live job-watch wake's note to the watch's destination", () => {
+  const destination = { type: "slack", target: "D1", audienceScopeId: "personal:U1" } as const;
+  const wake = run({ status: "failed", result: { status: "failed", reason: "boom" } });
+  wake.request = {
+    ...turn("wake"),
+    surface: "monitor",
+    surfaceTools: true,
+    origin: { kind: "automation", destination },
+  };
+  assert.deepEqual(runResultDelivery(wake)?.destination, destination);
+  assert.equal(runResultDelivery(wake)?.text, "⚠️ I couldn't finish that turn: something went wrong on my end");
+  assert.equal(runResultDelivery({ ...wake, status: "done", result: { status: "ok", reply: "posted live" } }), null);
+});
+
 test("runResultDelivery recovers an addressed model-budget refusal with its explanation", () => {
   const reason = "This workspace has used up its model budget, so I can't run until it resets.";
   const spine = run({ result: { status: "refused", refusalKind: "model_budget", reason } });
