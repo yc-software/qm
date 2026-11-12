@@ -84,7 +84,13 @@ async function complete(ctx: ApiCtx, modelId: string, input: Record<string, unkn
       400,
       error(`${modelId} takes only non-streamed chat completions: POST $MODEL_GATEWAY_URL/v1/chat/completions`),
     );
-  const result = await respondChatCompletion(ctx, route, input, "sandbox", error);
+  const result = await respondChatCompletion(
+    ctx,
+    { ...route, model: { ...route.model, input: ["text", "image"] } },
+    input,
+    "sandbox",
+    error,
+  );
   if (result)
     await deps.budget
       ?.record(tenantOf(ctx), capability!.actorId, estimateCostUsd(result.usage.prompt_tokens))

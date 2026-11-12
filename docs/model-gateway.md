@@ -63,7 +63,7 @@ key enters the sandbox.
 who bills each: `gateway` or `organization`. A model the gateway names is forwarded to it as described below. Every other
 listed model carries `endpoints: ["/v1/chat/completions"]`: core resolves it with the same model route a turn would use
 (a saved provider key, a deployment key, a custom provider, a company subscription, or a gateway model the gateway does
-not name directly) and translates OpenAI chat completions (text, inline data-URL images for models that take them, and
+not name directly) and translates OpenAI chat completions (text, inline data-URL images passed to the provider as sent, and
 an optional `json_schema` response format; no tools or streaming) into the route's protocol through the same code the
 browser model uses, returning a non-streamed completion. Other paths and streaming are refused for these with a 400
 that says so, and provider errors come back with their text. These calls are charged to the actor's QM budget, since

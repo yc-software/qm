@@ -342,6 +342,7 @@ test("sandbox code reaches a company's own provider through core's chat completi
   const sent = seen.find((s) => s.path.endsWith("/chat/completions"))!;
   assert.equal(sent.auth, "Bearer sk-acme-company");
   assert.equal(sent.body.model, "gpt-6-astra");
+  assert.match(JSON.stringify(sent.body.messages), /iVBORw0KGgo=/);
 
   const before = seen.length;
   assert.equal((await call("/v1/chat/completions", { ...chat, stream: true })).status, 400);
