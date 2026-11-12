@@ -227,7 +227,7 @@ async function visibleApprovalThread(ctx: ApiCtx, user: string, threadRef: strin
   if (ownsWebThread(threadRef, user)) return true;
   const found =
     typeof sessionId === "string" && sessionId
-      ? await ctx.app.getSessionForViewer(sessionId, user, { tailTurns: 1 })
+      ? await ctx.app.getSessionForViewer(sessionId, { actorId: user }, { tailTurns: 1 })
       : null;
   if (!found) return false;
   if (!threadRef.startsWith("swarm:") && !isSubagentThreadRef(threadRef)) return true;

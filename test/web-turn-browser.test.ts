@@ -73,8 +73,8 @@ const app = {
     const record = viewer === "alice" ? approvals[requestId] : undefined;
     return record ? { requestId, command: "git push", ...record } : null;
   },
-  getSessionForViewer: async (sessionId: string, viewer: string) => {
-    const session = viewer === "alice" ? sessions[sessionId] : undefined;
+  getSessionForViewer: async (sessionId: string, viewer: { actorId: string }) => {
+    const session = viewer.actorId === "alice" ? sessions[sessionId] : undefined;
     return session ? { session: { id: sessionId, ...session } } : null;
   },
 } as unknown as App;

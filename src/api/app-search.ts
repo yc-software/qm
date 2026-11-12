@@ -14,8 +14,8 @@ function conversationBackend(app: App, publicWebUrl: string | undefined): Search
   return createIntersectionBackend({
     name: "conversations",
     key: (hit) => hit.id,
-    searchForPrincipal: async (principal, query, limit) =>
-      (await app.searchSessions(principal.id, query, limit)).map((hit) => {
+    searchForPrincipal: async (principal, { query, limit, botActor }) =>
+      (await app.searchSessions({ actorId: principal.id, botActor }, query, limit)).map((hit) => {
         const url = conversationWebUrl(publicWebUrl, hit.sessionId);
         return {
           id: `${hit.sessionId}:${hit.seq}`,
@@ -156,8 +156,5 @@ export function createSearchMethods(
     options,
   );
   const conversations = createCoreSearch([conversationsBackend], options);
-  return {
-    search: (query, principals, limit) => core.search({ query, principals, limit }),
-    searchConversations: (query, principals, limit) => conversations.search({ query, principals, limit }),
-  };
+  return { search: core.search, searchConversations: conversations.search };
 }

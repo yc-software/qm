@@ -148,8 +148,8 @@ test("fresh shares freeze messages and authorized attachments with separate audi
       deps: { identity, sessionShares: store, sessionShareBytes: countedBytes, deliveries },
       app: {
         canViewSessionSnapshot: async (_id: string, user: string) => accessible && user === "alice",
-        getSessionForViewer: async (_id: string, user: string) =>
-          accessible && user === "alice"
+        getSessionForViewer: async (_id: string, user: { actorId: string }) =>
+          accessible && user.actorId === "alice"
             ? {
                 session: { id: "s1", threadRef: "web:alice:s1", scopeId: scopeId("personal", "alice") },
                 items: visible,
