@@ -454,7 +454,7 @@ async function oauthStatus(ctx: ApiCtx): Promise<void> {
   });
 }
 
-export async function oauthRevoke(ctx: ApiCtx): Promise<void> {
+async function oauthRevoke(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, capability } = ctx;
   if (capability && !personAtKeyboard(capability)) return sendJson(res, 403, { error: "human_consent_required" });
   if (!(await activeRun(ctx))) return;
