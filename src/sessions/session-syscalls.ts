@@ -352,7 +352,8 @@ export interface SessionSyscallDeps {
   maxAttempts: number;
   advisoryLock: AdvisoryLock;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
-  authorize?: (target: Session, request: SessionSyscallBinding["request"], from?: Session) => Promise<boolean>;
+  authorize?: (target: Session, request: SessionSyscallBinding["request"]) => Promise<boolean>;
+  reaches?: (target: Session, request: SessionSyscallBinding["request"], from: Session) => Promise<boolean>;
   validateRuntime?: (input: SessionOpenInput, scopeId: ScopeId) => Promise<void>;
   defaultModel?: (scopeId: ScopeId) => Promise<string>;
   conversations?: {
@@ -923,7 +924,10 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   message:
                     "that subagent finished and retired; open a fresh one with `open` (its result is already in your transcript).",
                 };
-              if (deps.authorize && !(await deps.authorize(target, caller, binding.session)))
+              if (
+                (deps.authorize && !(await deps.authorize(target, caller))) ||
+                (deps.reaches && !(await deps.reaches(target, caller, binding.session)))
+              )
                 return { ok: false, message: "you no longer have access to the target session" };
               const meta = storedContext(target);
               if (!meta) return { ok: false, message: "the target has no verified runtime context yet" };
@@ -1146,7 +1150,10 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
             return { ok: false, message: "that session lives in a different context and cannot be read from here." };
           const limit = Math.min(Math.max(1, input.limit ?? READ_DEFAULT_LIMIT), 200);
           const maxChars = Math.min(Math.max(200, input.maxChars ?? READ_DEFAULT_MAX_CHARS), READ_MAX_CHARS_CEILING);
-          if (!(await deps.sessions.getForParticipant(target.id, binding.request.actor.id)))
+          if (
+            !(await deps.sessions.getForParticipant(target.id, binding.request.actor.id)) ||
+            (deps.reaches && !(await deps.reaches(target, binding.request, binding.session)))
+          )
             return { ok: false, message: "you are not a participant in that session." };
           const items = await visibleHistory(target);
           const lines: string[] = [];

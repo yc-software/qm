@@ -15,7 +15,8 @@ test("an unprompted wake's helper runs in its channel and reports back, out of o
       const tools = turn.tools.sessionSyscalls!;
       if (turn.session.parentSessionId) return { reply: "memo found", modelCalls: 1 };
       if (!helper) helper = await tools.open({ task: "find the memo" }).then((o) => (o.ok ? o.sessionId : o.message));
-      else if (turn.session.threadRef.endsWith(":2")) seen.push(await tools.write({ target: helper, text: "stop" }));
+      else if (turn.session.threadRef.endsWith(":2"))
+        seen.push(await tools.write({ target: helper, text: "stop" }), await tools.read({ target: helper }));
       else seen.push(...(await tools.receive!(0)).map((m) => m.text));
       return { reply: "done", modelCalls: 1 };
     },
@@ -39,4 +40,5 @@ test("an unprompted wake's helper runs in its channel and reports back, out of o
   await wake("2");
   assert.match(String(seen[0]), /<content>memo found<\/content>/, helper);
   assert.deepEqual(seen[1], { ok: false, message: "you no longer have access to the target session" });
+  assert.deepEqual(seen[2], { ok: false, message: "you are not a participant in that session." });
 });

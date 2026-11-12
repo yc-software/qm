@@ -30,5 +30,6 @@ export async function ambientWakeReaches(
   from: Session,
 ): Promise<boolean> {
   if (request.actor.id !== ambientActorId() || target.id === from.id) return true;
-  return (await sessionTreeRoot(sessions, target)).id === (await sessionTreeRoot(sessions, from)).id;
+  const [a, b] = await Promise.all([sessionTreeRoot(sessions, target), sessionTreeRoot(sessions, from)]);
+  return a.id === b.id;
 }

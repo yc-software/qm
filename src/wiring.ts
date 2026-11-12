@@ -2144,9 +2144,8 @@ export function buildApp(
     maxAttempts,
     advisoryLock,
     prepareRequest: prepareSessionRequest,
-    authorize: async (target, request, from) =>
-      (await canActInScope(request, target.scopeId)) &&
-      (!from || (await ambientWakeReaches(sessions, request, target, from))),
+    authorize: (target, request) => canActInScope(request, target.scopeId),
+    reaches: (target, request, from) => ambientWakeReaches(sessions, request, target, from),
     conversations: {
       search: ({ query, principals, limit }) => app.searchConversations(query, principals, limit),
       list: (actorId) => app.listSessions(actorId),
