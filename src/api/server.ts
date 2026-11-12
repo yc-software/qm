@@ -238,7 +238,7 @@ async function gate(
           return null;
         }
       }
-    } else if (!requiredAud) {
+    } else if (route && !requiredAud) {
       sendJson(res, 403, { error: "forbidden", message: "capability token not valid for this route" });
       return null;
     }
@@ -256,6 +256,7 @@ async function gate(
   ) {
     return null;
   }
+  if (!route) return { body: {}, capability, actor: null };
   let body: unknown = {};
   if (raw) {
     try {
@@ -434,7 +435,10 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
         await run(found.route, found.params, ctx);
         return;
       }
-      sendJson(res, 404, { error: "not_found", message: `${base.method} ${base.pathname}` });
+      sendJson(res, 404, {
+        error: "not_found",
+        message: `no route ${base.method} ${base.pathname}; GET /v1/apis lists the available calls`,
+      });
     } catch (err) {
       respondError(req, res, err);
     }

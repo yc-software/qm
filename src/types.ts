@@ -466,6 +466,8 @@ export interface ApprovedToolCallSpec {
   input: Record<string, unknown>;
 }
 
+export const APPROVAL_LIFETIME_MS = 60 * 60_000;
+
 export interface PendingApprovalRecord {
   screenedOutput?: { tool: string; text: string; sourceScopeId?: ScopeId };
   sessionId: string;

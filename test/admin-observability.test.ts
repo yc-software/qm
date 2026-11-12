@@ -1307,6 +1307,66 @@ test("admin governance: browse step limit round-trips, validates, and is org-sco
   }
 });
 
+test("admin governance: compaction keep percent round-trips, validates, and is org-scoped", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-compactionkeep-")) }));
+  const server = createInsecureTestServer(built.app, {
+    admin: built.admin,
+    config: built.config,
+    auditLog: built.auditLog,
+  });
+  server.listen(0);
+  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const put = (scope: string, percent: unknown, headers: Record<string, string>) =>
+    fetch(base + `/v1/admin/scopes/${encodeURIComponent(scope)}/compaction-keep-percent`, {
+      method: "PUT",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ percent }),
+    });
+  try {
+    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).compactionKeepPercent, null);
+    assert.equal((await put("org:default-org", 30, { "x-admin-actor": "nobody@default-org" })).status, 403);
+    assert.equal((await put("channel:C1", 30, ALICE)).status, 400);
+    for (const bad of [0, 70, 2.5, "abc"]) assert.equal((await put("org:default-org", bad, ALICE)).status, 400);
+    assert.equal((await put("org:default-org", "25", ALICE)).status, 200);
+    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).compactionKeepPercent, 25);
+    assert.equal((await built.config.getCompactionSettingsDurable()).keepPercent, 25);
+    assert.equal((await put("org:default-org", "", ALICE)).status, 200);
+    assert.equal((await built.config.getCompactionSettingsDurable()).keepPercent, null);
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
+test("admin governance: history budget round-trips, validates, and is org-scoped", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-historybudget-")) }));
+  const server = createInsecureTestServer(built.app, {
+    admin: built.admin,
+    config: built.config,
+    auditLog: built.auditLog,
+  });
+  server.listen(0);
+  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const put = (scope: string, tokens: unknown, headers: Record<string, string>) =>
+    fetch(base + `/v1/admin/scopes/${encodeURIComponent(scope)}/history-budget-tokens`, {
+      method: "PUT",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ tokens }),
+    });
+  try {
+    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).historyBudgetTokens, null);
+    assert.equal((await put("org:default-org", 60_000, { "x-admin-actor": "nobody@default-org" })).status, 403);
+    assert.equal((await put("channel:C1", 60_000, ALICE)).status, 400);
+    for (const bad of [0, -5, 20_000.5, "abc"]) assert.equal((await put("org:default-org", bad, ALICE)).status, 400);
+    assert.equal((await put("org:default-org", "60000", ALICE)).status, 200);
+    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).historyBudgetTokens, 60_000);
+    assert.equal((await built.config.getCompactionSettingsDurable()).historyBudgetTokens, 60_000);
+    assert.equal((await put("org:default-org", "", ALICE)).status, 200);
+    assert.equal((await built.config.getCompactionSettingsDurable()).historyBudgetTokens, null);
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
 test("admin governance: spend limits round-trip per scope, validate, and clear", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-spendlimit-")) }));
   const server = createInsecureTestServer(built.app, {

@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
+      issues: read
     outputs:
       tag: ${{ steps.version.outputs.tag }}
       version: ${{ steps.version.outputs.version }}
@@ -20,6 +22,19 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
           persist-credentials: false
+      - name: Require a green CI/CD run on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          run=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/cicd.yml/runs?head_sha=$GITHUB_SHA" \
+            -q '.workflow_runs[0] // empty | "\(.status) \(.conclusion) \(.html_url)"')
+          case "$run" in
+            "") echo "no CI/CD run found for $GITHUB_SHA; refusing to release" >&2; exit 1 ;;
+            "completed success "*) echo "CI/CD passed on $GITHUB_SHA: ${run##* }" ;;
+            completed*) echo "CI/CD did not pass on $GITHUB_SHA ($run); refusing to release" >&2; exit 1 ;;
+            *) echo "CI/CD is still running on $GITHUB_SHA ($run); refusing to release" >&2; exit 1 ;;
+          esac
       - id: version
         name: Resolve the release tag
         env:
@@ -51,6 +66,17 @@ jobs:
             exit 1
           fi
           printf 'tag=%s\nversion=%s\n' "$tag" "$version" >> "$GITHUB_OUTPUT"
+      - name: Refuse while release blockers are open
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          blockers=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --label release-blocker \
+            --json number,title,url --jq '.[] | "#\(.number) \(.title) \(.url)"')
+          if [ -n "$blockers" ]; then
+            printf 'open release-blocker issues; fix them or remove the label first:\n%s\n' "$blockers" >&2
+            exit 1
+          fi
 
   images:
     name: Images
@@ -97,5 +123,14 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --title "$TAG" \
+            --prerelease \
+            --notes "Published to npm as \`@yc-software/qm@next\`. It becomes \`latest\` after a maintainer upgrades a running deployment to it." \
             --generate-notes \
             "images.json#Pinned image digests"
+          {
+            echo "Released $TAG on npm \`next\`. After upgrading a running deployment to it and getting a model reply, promote it:"
+            echo '```'
+            echo "npm dist-tag add @yc-software/qm@${TAG#v} latest"
+            echo "gh release edit $TAG --repo $GITHUB_REPOSITORY --prerelease=false --latest"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

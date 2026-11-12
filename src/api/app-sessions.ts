@@ -143,7 +143,7 @@ export function createSessionMethods(
     principalCanAccessCurrentScope,
     principalCanWriteScope,
     canContinueOnWeb,
-    principalGitPermission,
+    deploymentPermissions,
     principalCanManageScope,
     membershipControlsScope,
     authorizesCapabilityScope,
@@ -948,24 +948,22 @@ export function createSessionMethods(
         cursor = next.nextCursor;
       }
       files.sort((a, b) => b.createdAt - a.createdAt);
-      const deployments = (
-        await Promise.all(
-          allDeployments
-            .filter((d) => d.createdInScope === scope || d.ownerScopeId === scope)
-            .map(async (d): Promise<ScopeDeployment | null> => {
-              const permission = await principalGitPermission(d, principalId);
-              return permission
-                ? {
-                    id: d.id,
-                    name: d.displayName ?? d.name ?? d.id,
-                    status: d.status,
-                    permission,
-                    currentVersion: d.currentVersion,
-                  }
-                : null;
-            }),
-        )
-      ).filter((d): d is ScopeDeployment => d != null);
+      const inScope = allDeployments.filter((d) => d.createdInScope === scope || d.ownerScopeId === scope);
+      const permissions = await deploymentPermissions(tenant, inScope, principalId);
+      const deployments = inScope.flatMap((d, i): ScopeDeployment[] => {
+        const permission = permissions[i];
+        return permission
+          ? [
+              {
+                id: d.id,
+                name: d.displayName ?? d.name ?? d.id,
+                status: d.status,
+                permission,
+                currentVersion: d.currentVersion,
+              },
+            ]
+          : [];
+      });
       const skills = allSkills
         .filter((s) => s.scopeId === scope)
         .map((s) => ({ id: s.id, name: s.manifest.name, description: s.manifest.description, status: s.status }));
