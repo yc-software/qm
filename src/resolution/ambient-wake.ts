@@ -30,7 +30,11 @@ export async function ambientWakeReaches(
   from: Session,
 ): Promise<boolean> {
   if (request.actor.id !== ambientActorId() || target.id === from.id) return true;
-  const root = async (session: Session) => (session.parentSessionId ? stoppableRoot(sessions, session) : session);
+  const root = async (session: Session) => {
+    const found = session.parentSessionId ? await stoppableRoot(sessions, session) : session;
+    if (!found) throw new Error(`session ${session.id} has no root in its scope (a parent cycle or a missing root)`);
+    return found;
+  };
   const [a, b] = await Promise.all([root(target), root(from)]);
-  return !!a && a.id === b?.id;
+  return a.id === b.id;
 }
