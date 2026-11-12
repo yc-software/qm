@@ -67,7 +67,9 @@ reactivating them restores their role.
 A session's `persona_id` is set from the Personas page ("Chat") or by the agent
 (`PUT /v1/sessions/:id/persona`). A conversation in a channel or group with a pinned persona
 and no persona of its own wears the pinned one; the `## Persona` block then says it was pinned
-and how to change that. With no pin, the block says so and how to pin one. There is no lock: the channel's own instructions and skills
+and how to change that.
+A turn without a persona, from a person with personas enabled, gets a short `## Personas`
+context block saying what personas do and where the API is, so the agent can offer one. There is no lock: the channel's own instructions and skills
 still apply, and anyone may still pick another persona for one conversation. On each turn,
 if the sender holds a role on the persona (counting the conversation's channel), the turn:
 

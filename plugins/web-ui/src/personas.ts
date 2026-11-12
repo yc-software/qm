@@ -17,7 +17,7 @@ import {
   Trash2,
   X,
 } from "lucide";
-import { api, ApiError, type CoreSession, type ProjectIcon } from "./core-bridge";
+import { api, ApiError, sharedContextLabel, type CoreSession, type ProjectIcon } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { icon } from "./icons";
 import { listBackLink, listPageTpl } from "./list-page";
@@ -379,7 +379,6 @@ function granteeLabel(scopeId: string): string {
   if (kind === "org") return `Everyone at ${orgName()}`;
   if (kind === "team") return `Team ${ref}`;
   if (kind === "channel") return `#${ref}`;
-  if (kind === "group") return `Group ${ref}`;
   return scopeId;
 }
 
@@ -390,6 +389,8 @@ const isMe = (grant: Pick<PersonaGrant, "scopeId">): boolean => grant.scopeId ==
 
 function grantLabel(grant: PersonaGrant): string {
   if (isMe(grant)) return "You";
+  if (grant.scopeId.startsWith("group:"))
+    return sharedContextLabel(grant.scopeId, grant.label ?? null) ?? grant.scopeId;
   return grant.label ?? granteeLabel(grant.scopeId);
 }
 

@@ -298,6 +298,9 @@ export function createPersonaService(deps: {
   };
 }
 
+export const PERSONAS_HINT =
+  "## Personas\nA persona changes your name, icon and instructions. Anyone can give one conversation a persona; an owner can pin one in a channel or group so every conversation there wears it (personas in /v1/apis).";
+
 export function personaPrompt({ persona, scope, pinned }: PersonaForTurn): string {
   const lines = [
     `## Persona: ${persona.name}`,
