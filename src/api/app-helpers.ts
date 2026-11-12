@@ -687,13 +687,22 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     return (await effectiveDeploymentPermission(d, principalId)) != null;
   }
 
-  function principalGitPermission(d: DeploymentAccess, principalId: string): Promise<"read" | "write" | null> {
-    return live.deploymentPermission(
-      d,
-      principalId,
-      async () =>
-        (await deps.acl?.grantsFor(ambientTenant(), d.ownerScopeId, encodeRef(deployRef(d.id))).catch(() => [])) ?? [],
+  const deploymentResource = (d: DeploymentAccess) => ({
+    ownerScopeId: d.ownerScopeId,
+    ref: encodeRef(deployRef(d.id)),
+  });
+  const resourceKey = (r: { ownerScopeId: ScopeId; ref: string }) => `${r.ownerScopeId}\n${r.ref}`;
+
+  async function deploymentGrants(deployments: readonly DeploymentAccess[]): Promise<readonly Grant[]> {
+    return (
+      (await deps.acl
+        ?.find(ambientTenant(), { resources: deployments.map(deploymentResource) })
+        .catch(swallowAs("deployment permissions: grants", []))) ?? []
     );
+  }
+
+  function principalGitPermission(d: DeploymentAccess, principalId: string): Promise<"read" | "write" | null> {
+    return live.deploymentPermission(d, principalId, () => deploymentGrants([d]));
   }
 
   async function deploymentPermissions(
@@ -701,10 +710,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     principalId: string,
   ): Promise<Array<"read" | "write" | null>> {
     if (!principalId || !deployments.length) return deployments.map(() => null);
-    const resourceOf = (d: DeploymentAccess) => ({ ownerScopeId: d.ownerScopeId, ref: encodeRef(deployRef(d.id)) });
-    const keyOf = (r: { ownerScopeId: ScopeId; ref: string }) => `${r.ownerScopeId}\n${r.ref}`;
-    const grants =
-      (await deps.acl?.find(ambientTenant(), { resources: deployments.map(resourceOf) }).catch(() => [])) ?? [];
+    const grants = await deploymentGrants(deployments);
     const scopes = [
       ...deployments.flatMap((d) => [d.ownerScopeId, ...(d.createdInScope ? [d.createdInScope] : [])]),
       ...grants.map((g) => g.granteeScopeId),
@@ -712,10 +718,14 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     const rules = scopeRules(
       await scopeMembershipSnapshot({ ...scopeMembershipDeps, directory: deps.directory }, principalId, scopes),
     );
-    const byResource = Map.groupBy(grants, keyOf);
+    const byResource = Map.groupBy(grants, resourceKey);
     return Promise.all(
       deployments.map((d) =>
-        rules.deploymentPermission(d, principalId, async () => byResource.get(keyOf(resourceOf(d))) ?? []),
+        rules.deploymentPermission(
+          d,
+          principalId,
+          async () => byResource.get(resourceKey(deploymentResource(d))) ?? [],
+        ),
       ),
     );
   }

@@ -37,6 +37,24 @@ function makeDeps() {
     channelMember: async (channelId: string, principalId: string) => principalId === U1 && channelId === C1,
     channelPrivacy: async (channelId: string): Promise<boolean | undefined> => (channelId === C1 ? true : undefined),
     groupRosters: async () => new Map(),
+    getMany: async () => new Map(),
+    groupMemberships: async () => new Map(),
+    channelMemberships: async (ids: readonly string[], principalId: string) =>
+      new Map(
+        await Promise.all(
+          ids.map(
+            async (id) =>
+              [
+                id,
+                {
+                  member: await directory.channelMember(id, principalId),
+                  membership: undefined,
+                  isPrivate: await directory.channelPrivacy(id),
+                },
+              ] as const,
+          ),
+        ),
+      ),
   };
   const sessions: {
     listByParticipant: (principalId: string) => Promise<unknown[]>;

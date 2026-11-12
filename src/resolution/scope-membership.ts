@@ -330,7 +330,9 @@ export async function scopeMembershipSnapshot(
     managedGroups
       ?.membersMany(groups.filter((ref) => managedGroups.recognizes(ref)))
       .catch(swallowAs("scope membership: managed group", new Map<string, string[]>())),
-    scopes.some((scope) => parseScopeId(scope).kind === "persona") ? personas?.roles(principalId) : undefined,
+    scopes.some((scope) => parseScopeId(scope).kind === "persona")
+      ? personas?.roles(principalId).catch(swallowAs("scope membership: persona roles", new Map<string, PersonaRole>()))
+      : undefined,
   ]);
   const channelsBy = new Map(channelFacts);
   const groupsBy = new Map(groupFacts);
