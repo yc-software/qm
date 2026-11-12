@@ -1791,7 +1791,8 @@ a.chat-row-open {
 
 .message-stack {
   width: min(var(--content-w), 100%);
-  padding: 0 var(--composer-inset);
+  /* Breathing room between the chat header and the first message. */
+  padding: 16px var(--composer-inset) 0;
   min-height: 100%;
   margin: 0 auto;
   display: flex;
@@ -8456,6 +8457,7 @@ h3.ambient-field-label {
 }
 [data-density="compact"] .message-stack {
   gap: 0;
+  padding-top: 8px;
   font-size: var(--font-13-5);
 }
 [data-density="compact"] .live-work-detail {
