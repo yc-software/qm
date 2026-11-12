@@ -5,8 +5,11 @@ import {
   buildContextWindow as buildSurfaceContextWindow,
   clipText,
   compareTs as compareSlackTimestamps,
+  detectInputs,
   epochTsTime,
+  MAX_RECENT_MESSAGES,
 } from "../surfaces/context-window.ts";
+export { MAX_RECENT_MESSAGES } from "../surfaces/context-window.ts";
 
 export function buildContextWindow(
   scanned: readonly RecentMessage[],
@@ -34,8 +37,6 @@ export interface RecentMessage {
 }
 
 const MAX_CONTEXT_MESSAGE_CHARS = 600;
-export const MAX_RECENT_MESSAGES = 20;
-const MAX_RECENT_MESSAGE_CHARS = 300;
 const MAX_TURN_MESSAGE_CHARS = 4000;
 
 export function recentWindow(
@@ -108,7 +109,7 @@ export interface RenderedConversation {
   detectOpener?: string;
 }
 
-const clipMessage = (t: string, max: number = MAX_RECENT_MESSAGE_CHARS): string => clipText(t, max);
+const clipMessage = (t: string, max: number): string => clipText(t, max);
 
 export const formatSlackTs = epochTsTime;
 
@@ -165,16 +166,12 @@ export function renderConversationView(view: ConversationView): RenderedConversa
 
   const header = [where, here, view.contextNote].filter(Boolean).join(" ");
 
-  const detectContext = msgs
-    .filter((m) => !m.isBot && !m.isSelf && !m.isTrigger)
-    .map((m) => `${m.name || "someone"}: ${clipMessage(resolveMentions(m.text ?? "", view.nameById))}`)
-    .join("\n");
-  const detectOpener =
-    view.here.kind === "thread" && view.here.youOpenedIt
-      ? clipMessage(view.here.openerText ?? "") || undefined
-      : undefined;
+  const detect = detectInputs(
+    msgs.map((m) => ({ ...m, text: resolveMentions(m.text ?? "", view.nameById) })),
+    view.here.kind === "thread" && view.here.youOpenedIt ? view.here.openerText : undefined,
+  );
 
-  return { header, priorTurns, overheard, allowedTs, detectContext, ...(detectOpener ? { detectOpener } : {}) };
+  return { header, priorTurns, overheard, allowedTs, ...detect };
 }
 
 export function mergeConsecutiveTurns(turns: readonly ConversationTurn[]): ConversationTurn[] {
