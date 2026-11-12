@@ -255,7 +255,7 @@ test("on an API-only host (no PUBLIC_WEB_URL) the callback does NOT default to t
 test("the consent-mint route takes only the oauth-consent token of a turn with a person at the keyboard", async () => {
   const srv = await start();
   try {
-    await selectDefaultSandbox(srv.built, "U1", "personal:U1", "channel:C1");
+    await selectDefaultSandbox(srv.built, "U1", "channel:C1");
     await selectDefaultSandbox(srv.built, "release-bot", "personal:release-bot");
     const envs: Record<string, string>[] = [];
     const provision = srv.built.sandbox.provision.bind(srv.built.sandbox);
@@ -281,6 +281,7 @@ test("the consent-mint route takes only the oauth-consent token of a turn with a
       { surface: "cron", origin: { kind: "automation", ownerFire: true } },
     ];
     for (const [i, extra] of turns.entries()) {
+      await selectDefaultSandbox(srv.built, "U1", "personal:U1");
       const res = await srv.built.app.turn({
         surface: "test",
         actor: { externalId: "U1" },
