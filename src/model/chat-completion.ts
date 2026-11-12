@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Type } from "typebox";
 import type { Context, ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { buildModelRuntime, zeroUsage } from "./model-runtime.ts";
@@ -118,7 +119,7 @@ export async function completeChatRequest(
           .map((part) => part.text)
           .join("");
   return {
-    id: `${purpose}-completion`,
+    id: `${purpose}-${randomUUID()}`,
     object: "chat.completion",
     created: Math.floor(Date.now() / 1000),
     model: route.modelId,
