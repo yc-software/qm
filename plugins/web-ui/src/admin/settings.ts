@@ -22,6 +22,11 @@ import { runtimesCard } from "./settings-runtimes.ts";
 type Model = { id: string; name?: string };
 type Data = Record<string, any>;
 const runtimeKeys = ["runtime", "cron-runtime", "subagent-runtime", "fallback-runtime"];
+export const RECALL = "memory-embedding-model";
+export const COMPACTION = "compaction-keep-percent";
+export const BUDGET = "history-budget-tokens";
+export const runtimeCardKeys = [...runtimeKeys, RECALL, COMPACTION, BUDGET];
+const modelKeys = [...runtimeCardKeys, "webui-models"];
 const runtimeReadKey = (key: string) => key.replace(/-runtime$/, "Runtime");
 export class SettingsState extends SettingState {
   context: Data = {};
@@ -80,16 +85,7 @@ export class SettingsState extends SettingState {
   }
 }
 export const states = new Map(
-  [
-    ...runtimeKeys,
-    "webui-models",
-    "memory-embedding-model",
-    "compaction-keep-percent",
-    "history-budget-tokens",
-    "soul",
-    "branding",
-    "app-handle",
-  ].map((key) => [key, new SettingsState(key)]),
+  [...modelKeys, "soul", "branding", "app-handle"].map((key) => [key, new SettingsState(key)]),
 );
 export let page: AdminPage;
 let savedBranding: Data = {};
@@ -276,15 +272,7 @@ export async function mount(next: AdminPage) {
   const r = await next.api("GET", scopeUrl("?view=" + encodeURIComponent(next.view)));
   if (!next.current()) return;
   if (!r.ok) status = r.status === 403 ? "You don't administer this scope." : r.data?.message || "Failed to load.";
-  if (r.ok && next.view === "models")
-    for (const key of [
-      ...runtimeKeys,
-      "webui-models",
-      "memory-embedding-model",
-      "compaction-keep-percent",
-      "history-budget-tokens",
-    ])
-      load(r.data, next.orgScope, key);
+  if (r.ok && next.view === "models") for (const key of modelKeys) load(r.data, next.orgScope, key);
   if (r.ok && next.view === "customize") {
     savedBranding = r.data.branding || {};
     load(r.data, next.orgScope, "soul");

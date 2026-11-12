@@ -4,7 +4,7 @@ import { createModelPicker, type ModelCatalog } from "../model-picker.ts";
 import { runtimeModelOptions, type EffortLevel, type ModelOption } from "../model-options.ts";
 import { fieldSelect } from "../ui.ts";
 import { loadoutActions, type LoadoutEntry } from "../composer-loadout.ts";
-import { states, type SettingsState } from "./settings.ts";
+import { BUDGET, COMPACTION, RECALL, runtimeCardKeys, states, type SettingsState } from "./settings.ts";
 
 const rows: [key: string, label: string, inherit?: string][] = [
   ["runtime", "Conversation runtime"],
@@ -12,12 +12,8 @@ const rows: [key: string, label: string, inherit?: string][] = [
   ["subagent-runtime", "Subagent runtime", "Child's scope default"],
   ["fallback-runtime", "Fallback runtime", "No fallback"],
 ];
-const RECALL = "memory-embedding-model";
-const COMPACTION = "compaction-keep-percent";
 const COMPACTION_LABEL = "Compaction keeps";
-const BUDGET = "history-budget-tokens";
 const BUDGET_LABEL = "History budget";
-const keys = [...rows.map(([key]) => key), RECALL, COMPACTION, BUDGET];
 type Embedding = { id: string; name: string; provider: string };
 const pickers = new Map<string, ReturnType<typeof picker>>();
 const modelOptions = new WeakMap<object, ModelOption[]>();
@@ -170,7 +166,7 @@ const budgetRow = () =>
   );
 
 export function runtimesCard() {
-  const shown = keys.map((key) => states.get(key)!).filter((s) => s.available);
+  const shown = runtimeCardKeys.map((key) => states.get(key)!).filter((s) => s.available);
   const dirty = shown.filter((s) => s.dirty);
   const labels = Object.fromEntries([
     ...rows,
