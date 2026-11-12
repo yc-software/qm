@@ -1,7 +1,7 @@
 import { html, render } from "lit";
 import { X } from "lucide";
 import { reportHandledError } from "./browser-errors";
-import { portalLoginUrl, webFetch, withBase } from "./core-bridge";
+import { portalLoginUrl, withBase } from "./core-bridge";
 import { tellEmbedder } from "./embedder";
 import { icon } from "./icons";
 import { appState, type Me } from "./shell-state";
@@ -41,7 +41,7 @@ export async function bootAppShare(params: URLSearchParams): Promise<void> {
   const title = params.get("name") || slug || "";
   try {
     if (!slug) throw new Error("app-share opened without an app slug");
-    const r = await webFetch(withBase("/me"));
+    const r = await fetch(withBase("/me"));
     if (r.status === 401)
       return showProblem(title, "You're signed out. Sign in, then open this again.", {
         label: "Sign in",
