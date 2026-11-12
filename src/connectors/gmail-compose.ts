@@ -1,7 +1,6 @@
-import addressparser from "nodemailer/lib/addressparser";
 import { splitLinks } from "../../plugins/chassis/src/links.ts";
 import { escapeHtml } from "../../plugins/chassis/src/http.ts";
-import { header, plainText } from "../loops/verdict/fetch.ts";
+import { header, mailboxes, plainText } from "../loops/verdict/fetch.ts";
 import { isObj } from "../util/objects.ts";
 
 export interface GmailParts {
@@ -23,12 +22,17 @@ const htmlMirror = (text: string): string => {
   return `<div dir="ltr">${htmlLine(first)}${rest.map((line) => `<div>${htmlLine(line)}</div>`).join("")}</div>`;
 };
 
-function withoutBlocks(html: string, tag: string): string {
+function withoutStyles(html: string): string {
   const lower = html.toLowerCase();
-  const open = lower.indexOf(`<${tag}`);
-  const close = lower.indexOf(`</${tag}>`, open);
-  if (open === -1 || close === -1) return html;
-  return withoutBlocks(html.slice(0, open) + html.slice(close + tag.length + 3), tag);
+  let kept = "";
+  let at = 0;
+  for (;;) {
+    const open = lower.indexOf("<style", at);
+    const close = open === -1 ? -1 : lower.indexOf("</style>", open);
+    if (close === -1) return kept + html.slice(at);
+    kept += html.slice(at, open);
+    at = close + "</style>".length;
+  }
 }
 
 function bodyOf(html: string): string {
@@ -36,16 +40,16 @@ function bodyOf(html: string): string {
   const open = lower.indexOf("<body");
   const close = lower.lastIndexOf("</body>");
   const body = open === -1 ? html : html.slice(lower.indexOf(">", open) + 1, close === -1 ? html.length : close);
-  return withoutBlocks(withoutBlocks(body, "style"), "script");
+  return withoutStyles(body);
 }
 
 const isOffset = (token: string): boolean =>
   token.length === 5 && "+-".includes(token[0]!) && Array.from(token.slice(1)).every((c) => c >= "0" && c <= "9");
 
-function sentAt(date: string, timeZone: string | undefined): string {
+function sentAt(date: string): string {
   const at = new Date(Date.parse(date));
   if (Number.isNaN(at.getTime())) return "";
-  const zone = timeZone ?? date.split(" ").find(isOffset) ?? "+0000";
+  const zone = date.split(" ").find(isOffset) ?? "+0000";
   const day = at.toLocaleDateString("en-US", {
     timeZone: zone,
     weekday: "short",
@@ -62,11 +66,11 @@ function quoteLine(line: string): string {
   return line ? `> ${line}` : ">";
 }
 
-function gmailQuote(message: Record<string, unknown>, timeZone: string | undefined): GmailParts {
+function gmailQuote(message: Record<string, unknown>): GmailParts {
   const payload = isObj(message.payload) ? message.payload : {};
-  const [sender] = addressparser(header(payload, "From"), { flatten: true });
+  const [sender] = mailboxes(header(payload, "From"));
   const address = sender?.address ?? "";
-  const attribution = `${sentAt(header(payload, "Date"), timeZone)}${sender?.name ? `${sender.name} ` : ""}`;
+  const attribution = `${sentAt(header(payload, "Date"))}${sender?.name ? `${sender.name} ` : ""}`;
   const plain = (plainText(payload) ?? "").replaceAll("\r\n", "\n");
   const rich = plainText(payload, "text/html");
   const quoted = plain.split("\n").map(quoteLine).join("\n");
@@ -80,12 +84,8 @@ function gmailQuote(message: Record<string, unknown>, timeZone: string | undefin
   };
 }
 
-export function gmailBodyParts(
-  body: string,
-  original: Record<string, unknown> | undefined,
-  timeZone: string | undefined,
-): GmailParts {
-  const quote = original && gmailQuote(original, timeZone);
+export function gmailBodyParts(body: string, original?: Record<string, unknown>): GmailParts {
+  const quote = original && gmailQuote(original);
   return {
     text: quote ? `${body}\n\n${quote.text}` : body,
     html: htmlMirror(body) + (quote?.html ?? ""),

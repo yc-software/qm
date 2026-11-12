@@ -91,7 +91,6 @@ export async function buildGmailReplyMime(
   item: LoopItem,
   draft: ReplyDraft,
   original?: Record<string, unknown>,
-  timeZone?: string,
 ): Promise<Buffer | null> {
   const meta = metaOf(item);
   if (!meta) return null;
@@ -105,8 +104,8 @@ export async function buildGmailReplyMime(
     cc: parsed.cc ?? meta.cc ?? [],
     subject: replySubject(item, parsed),
     ...(rfcId ? { inReplyTo: rfcId, references: rfcId } : {}),
-    ...gmailBodyParts(parsed.body, original, timeZone),
-    textEncoding: "quoted-printable",
+    ...gmailBodyParts(parsed.body, original),
+    textEncoding: "base64",
   })
     .compile()
     .build();
@@ -124,7 +123,7 @@ async function sendGmail(deps: SourceActionDeps, item: LoopItem, draft: ReplyDra
     const original = meta.messageId
       ? await api<Record<string, unknown>>(`messages/${encodeURIComponent(meta.messageId)}?format=full`)
       : undefined;
-    const mime = await buildGmailReplyMime(item, draft, original, deps.timezone);
+    const mime = await buildGmailReplyMime(item, draft, original);
     if (!mime) return { ok: false, reason: "bad_item", message: "no recipient — add a To: address to the draft" };
     await api("messages/send", {
       timeoutMs: 30_000,
@@ -135,7 +134,7 @@ async function sendGmail(deps: SourceActionDeps, item: LoopItem, draft: ReplyDra
     });
   } catch (error) {
     if (!(error instanceof GmailApiError)) throw error;
-    return { ok: false, reason: "upstream", message: `${error.message}: ${error.detail}` };
+    return { ok: false, reason: "upstream", message: `Gmail refused the send (${error.status}): ${error.detail}` };
   }
   return { ok: true, result: draft.body };
 }

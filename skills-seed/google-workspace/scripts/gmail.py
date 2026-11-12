@@ -274,11 +274,12 @@ def main() -> None:
         message = build_raw({"To": a.to, "Subject": a.subject}, read_body(a.body_file))
         print(json.dumps(call("POST", "drafts", {"message": message})))
     elif a.cmd == "reply":
-        orig = call("GET", f"messages/{a.id}", query={"format": "full"})
+        orig = call("GET", f"messages/{a.id}", query={"format": "metadata"})
+
+
         latest = sent_messages(call("GET", f"threads/{orig['threadId']}",
                                     query={"format": "metadata"}))
-        if latest and latest[-1]["id"] != a.id:
-            orig = call("GET", f"messages/{latest[-1]['id']}", query={"format": "full"})
+        orig = call("GET", f"messages/{(latest[-1] if latest else orig)['id']}", query={"format": "full"})
         h = headers_of(orig["payload"])
         subject = h.get("subject", "")
         me = own_address()

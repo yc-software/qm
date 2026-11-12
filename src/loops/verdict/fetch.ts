@@ -217,7 +217,7 @@ function countAttachments(part: Record<string, unknown>): number {
   return own + parts.reduce((sum, nested) => sum + countAttachments(nested), 0);
 }
 
-function mailboxes(value: string): Array<{ address: string; name: string }> {
+export function mailboxes(value: string): Array<{ address: string; name: string }> {
   return addressparser(value).flatMap((entry) =>
     "address" in entry && typeof entry.address === "string" && entry.address
       ? [{ address: entry.address, name: typeof entry.name === "string" ? entry.name : "" }]

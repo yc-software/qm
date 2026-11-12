@@ -17,11 +17,7 @@ const message = (headers: Array<{ name: string; value: string }>, parts: unknown
 });
 
 test("drafted mail gets a composer-shaped html mirror with clickable links", () => {
-  const { text, html } = gmailBodyParts(
-    "Hi Alice,\n\nTakes ~5 minutes:\nhttps://forms.example.com/abc123\n\nCarol",
-    undefined,
-    undefined,
-  );
+  const { text, html } = gmailBodyParts("Hi Alice,\n\nTakes ~5 minutes:\nhttps://forms.example.com/abc123\n\nCarol");
   assert.ok(text.includes("Takes ~5 minutes"), "plain part keeps the body");
   assert.ok(html.startsWith('<div dir="ltr">Hi Alice,<div><br></div><div>Takes ~5 minutes:</div>'), "line divs");
   assert.ok(html.includes('<a href="https://forms.example.com/abc123">https://forms.example.com/abc123</a>'));
@@ -29,14 +25,16 @@ test("drafted mail gets a composer-shaped html mirror with clickable links", () 
 
 test("html mirror escapes markup and keeps punctuation out of links", () => {
   const { html } = gmailBodyParts(
-    "a < b & see https://x.test/a?b=1&c=2. and (https://x.test/w_(x)) and http://[::1]/p",
-    undefined,
-    undefined,
+    "a < b & see https://x.test/a?b=1&c=2. and (https://x.test/w_(x)) and http://[::1]/p [\u201chttps://x.test/q\u201d]",
   );
   assert.ok(html.includes("a &lt; b &amp; see"), "text is html-escaped");
   assert.ok(html.includes('<a href="https://x.test/a?b=1&amp;c=2">https://x.test/a?b=1&amp;c=2</a>.'));
   assert.ok(html.includes('<a href="https://x.test/w_(x)">https://x.test/w_(x)</a>)'), "balanced parens kept");
   assert.ok(html.includes('<a href="http://[::1]/p">'), "brackets inside the url kept");
+  assert.ok(
+    html.includes('<a href="https://x.test/q">https://x.test/q</a>\u201d]'),
+    "closing quote and bracket trimmed",
+  );
 });
 
 test("replies quote the original the way Gmail's composer does", () => {
@@ -53,10 +51,10 @@ test("replies quote the original the way Gmail's composer does", () => {
       ),
     ],
   );
-  const { text, html } = gmailBodyParts("Thanks", original, "America/Los_Angeles");
+  const { text, html } = gmailBodyParts("Thanks", original);
   assert.equal(
     text,
-    "Thanks\n\nOn Tue, Nov 10, 2026 at 6:28\u202fPM Ann Lee <ann@x.test> wrote:\n\n> Caf\u00e9\n>\n>> older",
+    "Thanks\n\nOn Wed, Nov 11, 2026 at 2:28\u202fAM Ann Lee <ann@x.test> wrote:\n\n> Caf\u00e9\n>\n>> older",
   );
   assert.ok(html.includes('Ann Lee &lt;<a href="mailto:ann@x.test">ann@x.test</a>&gt; wrote:<br></div>'));
   assert.ok(
@@ -64,7 +62,7 @@ test("replies quote the original the way Gmail's composer does", () => {
       'padding-left:1ex"><!-- c --><div>Caf\u00e9</div><p>para</p>a<br><a href="u">b</a></blockquote></div>',
     ),
   );
-  const bare = gmailBodyParts("Ok", message([{ name: "From", value: "a@b.test" }], []), undefined);
+  const bare = gmailBodyParts("Ok", message([{ name: "From", value: "a@b.test" }], []));
   assert.ok(bare.text.includes("On <a@b.test> wrote:\n\n>"), "nameless sender keeps brackets; empty body still quoted");
 });
 

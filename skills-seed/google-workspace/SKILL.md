@@ -83,11 +83,10 @@ bulk`) below personal mail, but never suppress transactional notices (DocuSign,
 - `reply` threads onto the original message and quotes it below the body the way
   Gmail's composer does ("On ... wrote:" plus the earlier thread), so recipients see the
   whole conversation; `update-draft` keeps that quote. Write only the new text in the body
-  file. `--all` keeps every recipient. Don't rebuild To/CC by hand. To change a draft, write a fresh body file and `update-draft`
+  file. `--all` keeps every recipient. Don't rebuild To/CC by hand. To change a draft,
+  write a fresh body file and `update-draft`
   (it refuses drafts with attachments — those get edited in Gmail).
-- Every email you send goes through this helper, including pre-approved sends from
-  scheduled jobs (`draft`/`reply`, then `send-draft` on the returned id), however short. Never
-  construct raw MIME or call `messages/send` or `drafts/send` with hand-built payloads.
+- Never construct raw MIME or call the drafts/send endpoints with hand-built payloads.
 - Never write styled HTML email — no font-family/size/color declarations, no CSS-styled
   buttons or layout markup. Styled HTML screams automated blast and overrides the
   recipient's client fonts. The helper's generated HTML mirror (bare `<div dir="ltr">`,

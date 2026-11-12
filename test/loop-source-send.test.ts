@@ -60,11 +60,8 @@ function slackSpy(fail?: string): { calls: SlackCall[]; factory: (token: string)
   };
 }
 
-const decodedMime = (mime: string): string => {
-  const qp = mime.replaceAll("\r\n", "\n").replaceAll("=\n", "");
-  const bytes = qp.replace(/=([0-9A-F]{2})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)));
-  return Buffer.from(bytes, "latin1").toString("utf8");
-};
+const mimePart = (mime: string, n: number): string =>
+  Buffer.from(mime.split("base64\r\n\r\n")[n]!.split("\r\n--")[0]!, "base64").toString("utf8");
 
 test("gmail reply MIME threads correctly and survives a UTF-8 body", async () => {
   const mime = (await buildGmailReplyMime(gmailItem, { body: "Confirmed — see attached. ✅" }))!.toString();
@@ -72,7 +69,7 @@ test("gmail reply MIME threads correctly and survives a UTF-8 body", async () =>
   assert.match(mime, /^Subject: Re: Quarterly numbers\r$/m);
   assert.match(mime, /^In-Reply-To: <msg-1@mail>\r$/m);
   assert.match(mime, /^References: <msg-1@mail>\r$/m);
-  assert.ok(decodedMime(mime).includes("\nConfirmed — see attached. ✅\n"));
+  assert.equal(mimePart(mime, 1), "Confirmed — see attached. ✅");
 });
 
 test("subjects keep an existing Re: and non-ASCII subjects get RFC 2047 encoding", async () => {
@@ -132,30 +129,22 @@ test("a reply quotes the message it answers below the new text", async () => {
     },
   };
   const urls: string[] = [];
-  let raw = "";
+  let sent = "";
   const fetchImpl = (async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
     urls.push(String(url).split("/me/")[1]!);
     if (!init?.body) return Response.json(original);
-    raw = (JSON.parse(String(init.body)) as { raw: string }).raw;
+    sent = Buffer.from((JSON.parse(String(init.body)) as { raw: string }).raw, "base64url").toString("utf8");
     return Response.json({ id: "m2" });
   }) as typeof fetch;
   const answered = item("gmail", { gmail: { threadId: "t1", messageId: "m1", to: ["ada@example.com"] } });
-  await gmailAdapter.act(
-    { owner: "josh", tokens: tokens({ "gmail.googleapis.com": "t" }), fetchImpl },
-    answered,
-    "send",
-    {
-      body: "Confirmed.",
-    },
-  );
+  const deps = { owner: "josh", tokens: tokens({ "gmail.googleapis.com": "t" }), fetchImpl };
+  await gmailAdapter.act(deps, answered, "send", { body: "Confirmed." });
   assert.deepEqual(urls, ["messages/m1?format=full", "messages/send"]);
-  const sent = decodedMime(Buffer.from(raw, "base64url").toString("latin1"));
-  assert.ok(
-    sent.includes(
-      "Confirmed.\n\nOn Tue, Nov 10, 2026 at 12:36\u202fPM Ada <ada@example.com> wrote:\n\n> Numbers attached.\n>> older",
-    ),
+  assert.equal(
+    mimePart(sent, 1),
+    "Confirmed.\n\nOn Tue, Nov 10, 2026 at 12:36\u202fPM Ada <ada@example.com> wrote:\n\n> Numbers attached.\n>> older",
   );
-  assert.ok(sent.includes('<blockquote class="gmail_quote"'));
+  assert.ok(mimePart(sent, 2).includes('<blockquote class="gmail_quote"'));
 });
 
 test("a Gmail send refusal reports the upstream status and response excerpt", async () => {
@@ -172,7 +161,7 @@ test("a Gmail send refusal reports the upstream status and response excerpt", as
   assert.deepEqual(result, {
     ok: false,
     reason: "upstream",
-    message: "Gmail messages/send returned 400: Recipient address rejected",
+    message: "Gmail refused the send (400): Recipient address rejected",
   });
 });
 

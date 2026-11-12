@@ -14,7 +14,6 @@ export interface SlackUserClient {
 export interface SourceActionDeps {
   owner: string;
   actor?: "human" | "agent";
-  timezone?: string;
   tokens: ConnectorTokenSource;
   fetchImpl?: typeof fetch;
   slackClient?: (token: string) => SlackUserClient;
