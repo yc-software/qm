@@ -199,7 +199,7 @@ import {
   type CanManageScope,
   type ManagesArtifactHome,
 } from "./resolution/scope-membership.ts";
-import { ambientActorId, withAmbientWakes } from "./resolution/ambient-wake.ts";
+import { ambientWakeReaches, withAmbientWakes } from "./resolution/ambient-wake.ts";
 import type { DeployGitArchive } from "./deploy/deploy-git-store.ts";
 import type { MemoryService } from "./memory/memory-service.ts";
 import { createRegistryMemoryService } from "./memory/registry-memory.ts";
@@ -2100,7 +2100,6 @@ export function buildApp(
     return broker;
   };
   const canActInScope = withAmbientWakes(canWriteScope, config.externalSlackPolicies);
-  const treeRoot = async (session: Session) => (await stoppableRoot(sessions, session))?.id ?? session.id;
   const prepareSessionRequest = async (request: Parameters<RunStore["enqueue"]>[0]["request"]) => {
     const scope = resolution.scopeFor(request.conversation, request.actor);
     if (!(await canActInScope(request, scope))) throw new Error("session actor no longer has scope access");
@@ -2147,7 +2146,7 @@ export function buildApp(
     prepareRequest: prepareSessionRequest,
     authorize: async (target, request, from) =>
       (await canActInScope(request, target.scopeId)) &&
-      (request.actor.id !== ambientActorId() || (await treeRoot(target)) === (await treeRoot(from))),
+      (!from || (await ambientWakeReaches(sessions, request, target, from))),
     conversations: {
       search: ({ query, principals, limit }) => app.searchConversations(query, principals, limit),
       list: (actorId) => app.listSessions(actorId),

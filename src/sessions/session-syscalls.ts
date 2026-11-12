@@ -352,7 +352,7 @@ export interface SessionSyscallDeps {
   maxAttempts: number;
   advisoryLock: AdvisoryLock;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
-  authorize?: (target: Session, request: SessionSyscallBinding["request"], from: Session) => Promise<boolean>;
+  authorize?: (target: Session, request: SessionSyscallBinding["request"], from?: Session) => Promise<boolean>;
   validateRuntime?: (input: SessionOpenInput, scopeId: ScopeId) => Promise<void>;
   defaultModel?: (scopeId: ScopeId) => Promise<string>;
   conversations?: {
@@ -730,7 +730,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           throw new Error(
             `this session moved from ${binding.scopeId} to ${current.scopeId}; nothing was started or sent.`,
           );
-        if (deps.authorize && !(await deps.authorize(current, binding.request, current)))
+        if (deps.authorize && !(await deps.authorize(current, binding.request)))
           throw new Error(
             `${binding.request.actor.id} can't currently be confirmed as a member of ${binding.scopeId}, so helpers can't run here; nothing was started or sent.`,
           );
@@ -754,7 +754,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
             for (const message of messages) {
               const sender = await deps.sessions.getForParticipant(message.senderId, caller.actor.id);
               if (!sender || sender.scopeId !== binding.scopeId) continue;
-              if (deps.authorize && !(await deps.authorize(sender, caller, binding.session))) continue;
+              if (deps.authorize && !(await deps.authorize(sender, caller))) continue;
               try {
                 assertAudienceCompatible(
                   { actor: message.actor, conversation: { ...caller.conversation, audience: message.audience } },
