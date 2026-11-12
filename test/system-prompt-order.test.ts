@@ -869,11 +869,10 @@ test("carried skill and steer screens tell the model gateway which session they 
         url: "https://gateway.test",
         apiKey: "k",
         apiKeyHeader: "api-key",
-        models: { "claude-haiku-4-5": "m" },
+        models: { "claude-haiku-5-5": "m" },
         actorKey: "test-actor-key",
       },
     }),
-    detectModelId: "claude-haiku-4-5",
   }).screenSecurity;
   const { orchestrator, config, sessions } = buildOrchestrator({
     skills,
@@ -952,11 +951,10 @@ test("a steer delivered by notification is screened in the context of the turn i
           url: "https://gateway.test",
           apiKey: "k",
           apiKeyHeader: "api-key",
-          models: { "claude-haiku-4-5": "m" },
+          models: { "claude-haiku-4-5": "m", "claude-haiku-5-5": "m" },
           actorKey: "test-actor-key",
         },
       }),
-      detectModelId: "claude-haiku-4-5",
       signals,
     }),
   });
@@ -1722,7 +1720,7 @@ test("a live turn in an app edit chat gets a small prompt of its own and six too
     modelGateway: { ...gateway, models: { "claude-haiku-4-5": "m" } },
   });
   const { orchestrator, config } = buildOrchestrator({
-    agent: createAgent({ routes, detectModelId: "claude-haiku-4-5" }),
+    agent: createAgent({ routes }),
   });
   await config.setSoul(scopeId("org", ORG), "ORG_RULE");
   const sent = async (thread: string, note: string, origin?: OrchestratorInput["origin"]) => {

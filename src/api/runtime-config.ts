@@ -22,7 +22,6 @@ import {
   codexProviderModelId,
   codexSubscriptionModelId,
   companyModelId,
-  defaultWebuiModelIds,
   THINKING_LEVELS,
   modelServiceable,
   resolveModel,
@@ -121,10 +120,6 @@ export async function runtimeConfigBody(
   const managedKeys = ctx.deps.modelCredentials ? await ctx.deps.modelCredentials.availability() : configuredKeys;
   const fallback = runtimeFallback(ctx);
   const org = orgScope();
-  const catalog =
-    ctx.deps.modelCredentials && managedKeys.openrouter
-      ? await selectableModelCatalog(ctx.deps.modelCredentialFetch)
-      : builtInModelCatalog();
   const orgStored = await config.getRuntimeSelectionDurable(org);
   const orgLegacyModel = orgStored ? null : await config.getBaseModelOwnDurable(org);
   let orgDefault: RuntimeChoice & { revision: number } = { ...fallback, revision: orgStored?.revision ?? 0 };
@@ -144,14 +139,17 @@ export async function runtimeConfigBody(
   const offered =
     allowlist != null
       ? allowlist.filter((id) => modelSupported(id))
-      : selectableCatalog(catalog)
+      : selectableCatalog(
+          ctx.deps.modelCredentials && managedKeys.openrouter
+            ? await selectableModelCatalog(ctx.deps.modelCredentialFetch)
+            : builtInModelCatalog(),
+        )
           .filter((model) => modelOfferedInWebui(model.id))
           .map((model) => model.id);
   for (const choice of selected) {
     if (
       allowlist?.length !== 0 &&
-      (!authorizeChoice ||
-        !allowlist ||
+      (!allowlist ||
         choice.modelId === orgDefault.modelId ||
         choice.modelId === purposeDefault?.modelId ||
         allowlist.includes(codexProviderModelId(choice.modelId))) &&
@@ -205,22 +203,6 @@ export function validateRuntimeChoice(choice: RuntimeChoice): string | null {
   return null;
 }
 
-export async function webuiModelEnabled(
-  ctx: { deps: RuntimeDeps },
-  modelId: string,
-  purpose?: TurnRuntimePurpose,
-): Promise<boolean> {
-  modelId = codexProviderModelId(modelId);
-  const config = ctx.deps.config!;
-  const picker = await config.getWebuiModelsDurable(orgScope());
-  if (picker == null || picker.includes(modelId)) return true;
-  if (picker.length === 0) return false;
-  const org = orgScope();
-  const orgModel = (await config.getBaseModelOwnDurable(org)) ?? runtimeFallback(ctx).modelId;
-  const purposeModel = purpose ? (await config.getPurposeRuntimeDurable(purpose))?.modelId : undefined;
-  return modelId === orgModel || modelId === purposeModel;
-}
-
 export async function availableRuntimeError(
   ctx: { deps: RuntimeDeps },
   scope: ScopeId,
@@ -231,7 +213,7 @@ export async function availableRuntimeError(
   let reason: string;
   try {
     const choices = await runtimeConfigBody(ctx, scope, undefined, purpose, choice);
-    if (choices.models.includes(choice.modelId) && (await webuiModelEnabled(ctx, choice.modelId, purpose)))
+    if (choices.models.includes(choice.modelId))
       return validateRuntimeChoice({
         ...choice,
         effortLevel:
@@ -245,9 +227,7 @@ export async function availableRuntimeError(
   const head = `${choice.modelId} can't run here (${reason}). Pick from this list rather than guessing another model: the default`;
   try {
     const { effective, models } = await runtimeConfigBody(ctx, scope, undefined, purpose);
-    const usable: string[] = [];
-    for (const modelId of models) if (await webuiModelEnabled(ctx, modelId, purpose)) usable.push(modelId);
-    return `${head}, ${effective.modelId}${usable.length ? `, or one of: ${usable.join(", ")}` : ""}.`;
+    return `${head}, ${effective.modelId}${models.length ? `, or one of: ${models.join(", ")}` : ""}.`;
   } catch (listError) {
     return `${head} (listing usable models failed: ${errMessage(listError)}).`;
   }
@@ -276,11 +256,10 @@ export async function requestedRuntimeError(
 
 export function validateWebTurnModelOptions(
   input: { model?: string; thinkingLevel?: string },
-  enabledModels: readonly string[] | null,
+  enabledModels: readonly string[],
   providers: ModelProviderAvailability = ALL_PROVIDERS_AVAILABLE,
 ): string | null {
-  const enabled = enabledModels ?? defaultWebuiModelIds();
-  const allowedModels = serviceableModelIds(enabled, providers);
+  const allowedModels = serviceableModelIds(enabledModels, providers);
   if (input.model && !allowedModels.includes(input.model)) {
     return resolveModel(input.model) && !modelServiceable(input.model, providers)
       ? "that model isn't available on this deployment (its provider isn't configured)"
@@ -289,20 +268,6 @@ export function validateWebTurnModelOptions(
   if (input.thinkingLevel && !(THINKING_LEVELS as readonly string[]).includes(input.thinkingLevel))
     return "unsupported thinking level";
   return null;
-}
-
-async function webuiModels(
-  deps: AppDeps,
-  orgModelId: string,
-  providers: ModelProviderAvailability | undefined,
-): Promise<string[] | null> {
-  const configured = await deps.config.getWebuiModelsDurable(orgScope());
-  if (configured != null) return configured.length ? [...new Set([...configured, orgModelId])] : [];
-  if (!providers?.openrouter) return null;
-  const offered = selectableCatalog(await selectableModelCatalog(deps.modelCredentialFetch))
-    .filter((model) => modelOfferedInWebui(model.id))
-    .map((model) => model.id);
-  return [...new Set([...offered, orgModelId])];
 }
 
 export async function turnModelRefusal(
@@ -336,19 +301,19 @@ export async function turnModelRefusal(
     : (deps.providerKeys ?? deps.modelProviders);
   const hydrate = async () =>
     deps.modelCredentials && providers?.openrouter ? selectableModelCatalog(deps.modelCredentialFetch) : undefined;
-  let orgModelId: string;
+  const modelCredentials = deps.modelCredentials && { ...deps.modelCredentials, availability: async () => providers! };
   let runtime: RuntimeChoice;
+  let pickerModels: string[];
   try {
-    const orgModel = (await deps.config.getBaseModelOwnDurable(org)) ?? fallback.modelId;
-    orgModelId = modelUnavailableReason(orgModel)
-      ? orgModel
-      : (await resolveRuntimeChoice(deps.config, org, org, fallback, undefined, hydrate)).modelId;
-    runtime = await resolveRuntimeChoice(deps.config, org, scope, fallback, requested, hydrate, purpose);
+    [runtime, { models: pickerModels }] = await Promise.all([
+      resolveRuntimeChoice(deps.config, org, scope, fallback, requested, hydrate, purpose),
+      runtimeConfigBody({ deps: { ...deps, modelCredentials } }, scope),
+    ]);
   } catch (error) {
     swallow("turn: runtime resolution", error);
     return `I couldn't set up that runtime choice — ${GENERIC_FAILURE_CLAUSE}`;
   }
   if (providers && !modelServiceable(runtime.modelId, providers))
     return "that model isn't available on this deployment (its provider isn't configured)";
-  return validateWebTurnModelOptions(req, await webuiModels(deps, orgModelId, providers), providers);
+  return validateWebTurnModelOptions(req, pickerModels, providers);
 }

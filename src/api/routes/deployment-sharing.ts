@@ -1,4 +1,5 @@
 import { externalAppSharingAllowed } from "../../feature-flags.ts";
+import { canEditAppPermissions } from "../../deploy/app-access.ts";
 import { DeployAccessError, type DeployAccessErrorCode } from "../../deploy/deploy-service.ts";
 import { deploymentView, type App } from "../app.ts";
 import { errMessage } from "../../util/errors.ts";
@@ -50,7 +51,7 @@ export async function getDeploymentShares(ctx: ApiCtx): Promise<void> {
   if (!principalId) return sendJson(res, 403, { error: "forbidden" });
   const deployment = await app.getDeployment(params.id!);
   if (!deployment) return sendJson(res, 404, { error: "not_found" });
-  if (deployment.ownerScopeId !== `personal:${principalId}`)
+  if (!canEditAppPermissions(deployment.ownerScopeId, principalId))
     return sendJson(res, 403, { error: "forbidden", message: "Only the owner can edit app permissions." });
   const externalSharing = await externalAppSharingAllowed(ctx.deps.featureFlags, deployment.ownerScopeId);
   return sendJson(res, 200, {

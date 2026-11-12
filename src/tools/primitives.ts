@@ -791,7 +791,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
             if (action === "retire") {
               if (!input?.sandboxId) throw new Error("retire requires sandbox_id");
               const { resource } = await accessSandbox(input.sandboxId);
-              await resources.retire(deps.createdBy, resource.id, deps.botActor);
+              await resources.retire(deps.createdBy, resource.id);
               return { retired: resource.id };
             }
             if (action === "default") {

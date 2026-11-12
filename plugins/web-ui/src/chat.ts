@@ -74,6 +74,7 @@ import {
   type IconNode,
 } from "lucide";
 import {
+  APPROVAL_GONE_MESSAGE,
   messageText,
   continuableMessages,
   hasRecordedRunReply,
@@ -85,7 +86,6 @@ import {
   activeRunForThread,
   stopThreadRun,
   api,
-  approvalBlocksComposer,
   approvalDecidableDuringRun,
   createRunSlot,
   hasLiveRun,
@@ -885,6 +885,7 @@ export function createChatSurface(
     try {
       const threadRef = chatState.threadRef;
       const runId = await resolveApproval(decision);
+      if (!runId && agent === chatState.agent) ctx.composer.state.error = APPROVAL_GONE_MESSAGE;
       if (runId && chatState.normalStreamFn && chatState.onWork)
         await resumeRun(agent, threadRef, chatState.normalStreamFn, chatState.onWork, runId, undefined, () => {
           releaseSubmission();
@@ -934,10 +935,6 @@ export function createChatSurface(
       }
     }
     return unresolvedApprovals([...byId.values()]);
-  }
-
-  function hasUnresolvedApproval(): boolean {
-    return activePendingApprovals().some(approvalBlocksComposer);
   }
 
   async function syncPendingApprovals(
@@ -1474,8 +1471,7 @@ export function createChatSurface(
       Boolean(chatState.pendingSend) ||
       Boolean(ctx.composer.state.draft) ||
       Boolean(ctx.composer.state.attachments.length) ||
-      ctx.composer.state.processingFiles ||
-      hasUnresolvedApproval()
+      ctx.composer.state.processingFiles
     );
   }
 
@@ -2113,7 +2109,7 @@ export function createChatSurface(
     }
     if (role === "approval-decision") {
       const decision = message as unknown as HistoryApprovalDecision;
-      let label = "Approval denied";
+      let label = decision.declined === "expired" ? "Approval expired" : "Approval denied";
       if (decision.approved) {
         const labels: Record<string, string> = {
           once: "Approved once",
@@ -3888,7 +3884,6 @@ export function createChatSurface(
     setTurnRuntime,
     requestBackgroundPanel,
     activePendingApprovals,
-    hasUnresolvedApproval,
     resolveCommandApproval,
     approvalSummaryView,
     notePendingSessionOnSend,

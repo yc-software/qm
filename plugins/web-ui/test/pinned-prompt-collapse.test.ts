@@ -329,9 +329,11 @@ test("the collapse is measured from the row's resting place, so it survives bein
   }
 });
 
-test("rest heights are re-measured for pane and content changes, condensed or not", () => {
+test("rest heights are re-measured for pane and content changes, condensed or not, from the unpinned row", () => {
   const f = fixture();
   try {
+    f.row.getBoundingClientRect = () =>
+      ({ top: 0, height: f.content.clientHeight + (f.row.classList.contains("stuck") ? 0 : 24) }) as DOMRect;
     f.scroll(500);
     assert.equal(f.row.classList.contains("pin-condensed"), true);
     f.grow(40);
