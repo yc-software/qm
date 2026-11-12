@@ -52,6 +52,13 @@ export const MARK_SWARM_FORUMS_PERSON_USED_MIGRATION = {
         FROM swarms s, jsonb_array_elements(s.json -> 'members') AS member
         WHERE r.tenant_id = s.tenant_id AND r.id = member ->> 'forumSandboxId' AND NOT r.json ? 'personUsed'
           AND s.json #>> '{template,botActor}' IS DISTINCT FROM 'true';
+        UPDATE durable_map_versions SET v = v + 1 WHERE tbl = 'swarms';
+        UPDATE swarms b SET json = b.json || '{"personUsedComputers": true}'::jsonb
+        FROM sandbox_resources r, swarms s, jsonb_array_elements(s.json -> 'members') AS member
+        WHERE r.tenant_id = s.tenant_id AND r.id = member ->> 'forumSandboxId'
+          AND s.json #>> '{template,botActor}' IS DISTINCT FROM 'true'
+          AND b.tenant_id = r.tenant_id AND b.id = r.json ->> 'swarmId'
+          AND b.json #>> '{template,botActor}' = 'true' AND NOT b.json ? 'personUsedComputers';
       END IF;
     END $$`,
   ],

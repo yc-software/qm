@@ -21,9 +21,12 @@ test("the swarm computer migration marks each swarm's board and worker computers
     template: { botActor: true },
     members: [{ id: "S4" }, { id: "worker-4", forumSandboxId: "bot-forum" }],
   });
+  await swarms.put("S5", { id: "S5", template: { botActor: true }, members: [{ id: "S5" }] });
+  await swarms.put("S6", { id: "S6", members: [{ id: "S6" }, { id: "worker-6", forumSandboxId: "worker-5" }] });
   for (const id of ["board-1", "worker-1", "worker-2", "shared-1", "other-1", "bot-forum"])
     await records.put(id, { id });
   await records.put("worker-3", { id: "worker-3", swarmId: "S3" });
+  await records.put("worker-5", { id: "worker-5", swarmId: "S5" });
   const pg = createPgPool(url);
   try {
     await pg.migrate(STAMP_SWARM_COMPUTERS_MIGRATION);
@@ -35,10 +38,13 @@ test("the swarm computer migration marks each swarm's board and worker computers
       "worker-1": "S1",
       "worker-2": "S2",
       "worker-3": "S3",
+      "worker-5": "S5",
     });
     await pg.migrate(MARK_SWARM_FORUMS_PERSON_USED_MIGRATION);
     const used = (await records.all()).flatMap((record) => (record.personUsed ? [record.id] : []));
-    assert.deepEqual(used, ["shared-1"]);
+    assert.deepEqual(used.sort(), ["shared-1", "worker-5"]);
+    const cut = (await swarms.all()).flatMap((swarm) => (swarm.personUsedComputers ? [swarm.id] : []));
+    assert.deepEqual(cut, ["S5"]);
   } finally {
     await pg.close();
   }
