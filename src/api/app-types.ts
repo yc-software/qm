@@ -107,7 +107,7 @@ import type { ModelProviderAvailability } from "../model/pi-models.ts";
 import type { RuntimeChoice } from "../agent/agent.ts";
 import { type ReachOpts, type ReachResolution, type ReachTarget } from "../reach/reach.ts";
 import { type Project, type ProjectIcon, type ProjectStore } from "../projects/project-store.ts";
-import type { SearchHit } from "../search/core-search.ts";
+import type { CoreSearch } from "../search/core-search.ts";
 import type { ErrorLog } from "../admin/error-log.ts";
 
 interface DeploymentVersionView {
@@ -358,7 +358,7 @@ export interface App {
   ): Promise<{ session: Session; items: TranscriptItem[]; earlierItems?: number; pins?: SessionPinView[] } | null>;
   getSessionForViewer(
     sessionId: string,
-    principalId: string,
+    viewer: Pick<CapabilityClaims, "actorId" | "botActor">,
     window?: TranscriptWindow,
   ): Promise<{
     session: Session;
@@ -377,7 +377,7 @@ export interface App {
   ): Promise<PinItemResult>;
   listConversationPins(threadRef: string, reader: string): Promise<SessionPinView[] | null>;
   unpinConversationItem(threadRef: string, pinId: string): Promise<boolean | null>;
-  listSessions(principalId: string): Promise<Session[]>;
+  listSessions(viewer: Pick<CapabilityClaims, "actorId" | "botActor">): Promise<Session[]>;
   listSessionPage(principalId: string, query: SessionPageQuery): Promise<SessionPageResult>;
   sideChats(principalId: string, sessionId: string): Promise<Session[] | null>;
   expandSideChat(principalId: string, sessionId: string): Promise<Session | null>;
@@ -388,13 +388,13 @@ export interface App {
     principalId: string,
     query: string,
   ): Promise<{ hits: ResourceSearchHit[]; failed: string[]; limited: string[] }>;
-  searchConversations: App["search"];
-  searchSessions(principalId: string, query: string, limit?: number): Promise<SessionSearchHit[]>;
-  search(
+  searchConversations: CoreSearch["search"];
+  searchSessions(
+    viewer: Pick<CapabilityClaims, "actorId" | "botActor">,
     query: string,
-    principals: readonly Principal[],
     limit?: number,
-  ): Promise<{ hits: SearchHit[]; failedBackends: string[] }>;
+  ): Promise<SessionSearchHit[]>;
+  search: CoreSearch["search"];
   sessionBackground(sessionId: string, viewer: string): Promise<SessionBackgroundView | null>;
   readSessionBackgroundOutput(
     sessionId: string,
@@ -412,7 +412,7 @@ export interface App {
   setProjectIcon(id: string, principalId: string, icon: ProjectIcon | null): Promise<ProjectViewMutation>;
   updateSession(
     sessionId: string,
-    principalId: string,
+    viewer: Pick<CapabilityClaims, "actorId" | "botActor">,
     patch: {
       title?: string | null;
       archived?: boolean;

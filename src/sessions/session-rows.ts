@@ -8,6 +8,10 @@ const AUTOMATION_SURFACES = "('cron', 'webhook', 'loop')";
 export const OWN_CHAT = (s: string): string =>
   `${s}.parent_session_id IS NULL AND (${s}.surface IS NULL OR ${s}.surface NOT IN ${AUTOMATION_SURFACES})`;
 export const USER_ACTIVITY = "COALESCE(s.last_user_activity, s.created_at)";
+export const BOT_VISIBLE = (botActor: boolean | undefined): string =>
+  botActor === true
+    ? " AND CASE WHEN pg_input_is_valid(s.spawn_meta, 'jsonb') THEN s.spawn_meta::jsonb -> 'botActor' = 'true'::jsonb END"
+    : "";
 
 export function rowToSession(r: Record<string, unknown>): Session {
   return {

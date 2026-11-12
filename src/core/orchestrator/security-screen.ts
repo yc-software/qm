@@ -18,9 +18,15 @@ import {
 import { collectBlob } from "../../persistence/blob-transfer.ts";
 import { securityScreenPayloads } from "../../security/security-posture.ts";
 import type { CommandApprovalGrant } from "../../types.ts";
-import { isVisionAttachment, safeAttachmentName } from "../attachments.ts";
+import { isVisionAttachment, safeAttachmentName, withheldName } from "../attachments.ts";
 import { wordsToScreen } from "./intake.ts";
-import { documentText, type ExtractedDocumentText, isTextDocument, type loadDocumentInputs } from "../documents.ts";
+import {
+  documentText,
+  type ExtractedDocumentText,
+  isTextDocument,
+  type loadDocumentInputs,
+  MAX_DOCUMENT_TEXT_CHARS,
+} from "../documents.ts";
 import { senderNote } from "./prompt-blocks.ts";
 import { isScreenableTextAttachment, MAX_AUTO_ATTACHMENT_SCREEN_BYTES } from "./turn-helpers.ts";
 import { tracePhase } from "../../../plugins/chassis/src/error-reporting.ts";
@@ -51,6 +57,19 @@ export const unscreenedVerdict = (): SecurityScreenVerdict => ({
   decision: "auto",
   unscreened: true,
   reason: UNSCREENED_REASON,
+});
+
+export const oversizeVerdict = (): SecurityScreenVerdict => ({
+  decision: "strict",
+  unscreened: true,
+  reason: `too long for the security screen to read, over ${MAX_DOCUMENT_TEXT_CHARS} characters`,
+});
+
+export const flaggedAudit = (resource: string, status: string, reason: string | undefined, sources: string[]) => ({
+  action: SECURITY_FLAGGED,
+  resource,
+  status,
+  detail: JSON.stringify({ cause: "strict-verdict", reason, source: sources }),
 });
 
 type ScreenStatus = "allow" | "block" | "would_block" | "error";
@@ -235,6 +254,7 @@ export interface InboundScreenTurn {
   scopeId: ScopeId;
   resolution: Awaited<ReturnType<OrchestratorDeps["resolution"]["resolve"]>>;
   screenInbound: boolean;
+  replaysHeldInput: boolean;
   enforceScreen: boolean;
   ambientTurn: boolean;
   sessionTurn: boolean;
@@ -336,15 +356,19 @@ export async function screenInboundInput(turn: InboundScreenTurn) {
     conversation,
     resolution,
     screenInbound,
+    replaysHeldInput,
     enforceScreen,
     classifyAs,
     recordScreenRequest,
     audit,
     approvalGrantsFor,
   } = turn;
-  let flaggedScreenedInput: { reason: string; sources: string[] } | undefined;
+  let flaggedScreenedInput: { reason: string; sources: string[]; onceOnly: boolean } | undefined;
   let inputUnscreened = false;
-  if (screenInbound && !enforceScreen) {
+  if (replaysHeldInput && enforceScreen) {
+    const { screenPayloads, hasUnscreenableAttachment } = await buildInboundScreen({ ...turn, screenInbound: true });
+    inputUnscreened = !screenPayloads || hasUnscreenableAttachment;
+  } else if (screenInbound && !enforceScreen) {
     void buildInboundScreen(turn)
       .then(({ screenPayloads }) =>
         screenPayloads?.length
@@ -356,30 +380,24 @@ export async function screenInboundInput(turn: InboundScreenTurn) {
     const { hasUnscreenableAttachment, externalPromptData, screenPayloads } = await buildInboundScreen(turn);
     if (!screenPayloads || screenPayloads.length || hasUnscreenableAttachment) {
       const canScreenText = !!screenPayloads?.length && (!!deps.securityScreener || !!deps.agent.screenSecurity);
-      const verdict =
-        canScreenText && screenPayloads
-          ? await screenChunks(
-              screenPayloads,
-              classifyAs({ hook: "user_input", surface: input.surface }, recordScreenRequest),
-              { batch: 4 },
-            )
-          : undefined;
-      let unscreenableCause: "unscreenable-attachment" | "oversize-input" | "no-screener" | undefined;
+      let verdict = screenPayloads ? undefined : oversizeVerdict();
+      if (canScreenText && screenPayloads)
+        verdict = await screenChunks(
+          screenPayloads,
+          classifyAs({ hook: "user_input", surface: input.surface }, recordScreenRequest),
+          { batch: 4 },
+        );
+      let unscreenableCause: "unscreenable-attachment" | "no-screener" | undefined;
       if (hasUnscreenableAttachment) unscreenableCause = "unscreenable-attachment";
-      else if (!screenPayloads) unscreenableCause = "oversize-input";
       else if (!deps.securityScreener && !deps.agent.screenSecurity) unscreenableCause = "no-screener";
       if (verdict?.decision === "strict") {
         const sources = externalPromptData.map((item) => item.source);
         flaggedScreenedInput = {
           reason: verdict.reason ?? "strict security screen verdict",
           sources,
+          onceOnly: verdict.unscreened === true,
         };
-        audit({
-          action: SECURITY_FLAGGED,
-          resource: input.surface ?? "unknown",
-          status: "pending_approval",
-          detail: JSON.stringify({ cause: "strict-verdict", reason: flaggedScreenedInput.reason, source: sources }),
-        });
+        audit(flaggedAudit(input.surface ?? "unknown", "pending_approval", flaggedScreenedInput.reason, sources));
       } else if (unscreenableCause || verdict?.unscreened) {
         inputUnscreened = true;
         audit({
@@ -391,7 +409,7 @@ export async function screenInboundInput(turn: InboundScreenTurn) {
       }
     }
   }
-  if (flaggedScreenedInput) {
+  if (flaggedScreenedInput && !flaggedScreenedInput.onceOnly) {
     const existing = await deps.sessions.getByThread(conversation.threadRef);
     const flagGrantKey = `security-screen:${input.surface ?? "unknown"}`;
     for (const grant of await approvalGrantsFor(actor.id)) {
@@ -642,8 +660,9 @@ export function createDocumentScreen(turn: {
   enforceScreen: boolean;
   classifyAs: ClassifyAs;
   turnAbort: AbortController;
+  audit: InboundScreenTurn["audit"];
 }) {
-  const { deps, session, securityPolicy, enforceScreen, classifyAs, turnAbort } = turn;
+  const { deps, session, securityPolicy, enforceScreen, classifyAs, turnAbort, audit } = turn;
   return async (
     documentInputs: Awaited<ReturnType<typeof loadDocumentInputs>>,
     requestText: string,
@@ -664,20 +683,26 @@ export function createDocumentScreen(turn: {
           documentsUnscreened = true;
           continue;
         }
-        const verdict = await screenChunks(
-          securityScreenChunks("tool_result:inbound_document", extracted.text),
-          classifyAs({
-            sessionId: session.id,
-            hook: "tool_response",
-            request: requestText,
-            surface: "inbound_file",
-          }),
-          { signal: turnAbort.signal },
-        );
+        const verdict =
+          enforceScreen && extracted.truncated
+            ? oversizeVerdict()
+            : await screenChunks(
+                securityScreenChunks("tool_result:inbound_document", extracted.text),
+                classifyAs({
+                  sessionId: session.id,
+                  hook: "tool_response",
+                  request: requestText,
+                  surface: "inbound_file",
+                }),
+                { signal: turnAbort.signal },
+              );
         if (verdict.decision === "strict") {
           documentInputs.documents.splice(documentInputs.documents.indexOf(document), 1);
-          documentInputs.notices.push(`${document.name}: document withheld by the external-data security screen.`);
-        } else if (verdict.unscreened || extracted.truncated) documentsUnscreened = true;
+          audit(flaggedAudit("inbound_document", "withheld", verdict.reason, [document.name]));
+          documentInputs.notices.push(
+            `${withheldName(document.name, verdict)}: document withheld by the external-data security screen.`,
+          );
+        } else if (verdict.unscreened) documentsUnscreened = true;
       }
     }
     return enforceScreen && documentsUnscreened;
