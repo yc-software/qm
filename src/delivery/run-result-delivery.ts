@@ -2,7 +2,7 @@ import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type { DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
 import { waitForNoRunningRun, type Run, type RunStore } from "../runs/run-store.ts";
 import { turnDeliveryProvenance, type DeliveryStore } from "./delivery-store.ts";
-import { boundWebhook, isSessionTurn } from "../core/turn-origin.ts";
+import { boundWebhook, isSessionTurn, liveAutomationDestination } from "../core/turn-origin.ts";
 import { turnFailureItem } from "../core/turn-error.ts";
 import { standaloneFailureText, unfinishedTurnText, userFacingFailureClause } from "../core/failure-copy.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
@@ -45,12 +45,10 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor, notice?: 
   const surface = run.request.surface;
   const editRef = run.deliveryState?.editRef;
   const failed = run.status === "failed";
-  const liveDestination =
-    failed && run.request.surfaceTools && origin.kind === "automation" ? origin.destination : undefined;
   if (!surface) return null;
   const webTranscript = webTranscriptNote(run, surface, failed);
   const destination: Destination | undefined = !target
-    ? liveDestination
+    ? liveAutomationDestination(run.request)
     : {
         type: webhook ? "webhook" : surface,
         ...(webhook ? { webhook } : {}),
