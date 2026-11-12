@@ -89,6 +89,33 @@ function safeReturnTo(value: unknown): string | undefined {
   return url.host === "x" && !url.pathname.startsWith("//") ? value : undefined;
 }
 
+const APP_RETURN_CONTEXT = ["composioReturn", "slackReturn", "view", "session", "scope", "seq", "tab"];
+const APP_RETURN_OUTCOME = ["status", "error", "connectedAccountId", "connector"];
+
+export function appReturnPath(body: Record<string, unknown>, returnTo: string): string | null {
+  if (body.mobileReturn !== true) return returnTo;
+  if (typeof body.state !== "string" || !body.state) return null;
+  return `/api/app-return?${new URLSearchParams({ state: body.state, returnTo })}`;
+}
+
+function appReturn(ctx: ApiCtx): void {
+  ctx.res.setHeader("Cache-Control", "no-store");
+  ctx.res.setHeader("Referrer-Policy", "no-referrer");
+  const state = ctx.url.searchParams.get("state");
+  const returnTo = safeReturnTo(ctx.url.searchParams.get("returnTo"));
+  if (!state || !returnTo) return sendJson(ctx.res, 400, { error: "invalid_return_url" });
+  const target = new URL(returnTo, "http://x");
+  const kept = [
+    ...[...target.searchParams].filter(([key]) => APP_RETURN_CONTEXT.includes(key)),
+    ...[...ctx.url.searchParams].filter(([key]) => APP_RETURN_OUTCOME.includes(key)),
+  ].map(([key, value]) => `${key}=${encodeURIComponent(value)}`);
+  const path = `${target.pathname}${kept.length ? `?${kept.join("&")}` : ""}`;
+  ctx.res.writeHead(303, {
+    location: `qm://connection/callback?state=${encodeURIComponent(state)}&returnTo=${encodeURIComponent(path)}`,
+  });
+  ctx.res.end();
+}
+
 function latestRefreshFailure(
   entries: ReadonlyArray<Pick<OAuthTokenStatus, "refreshFailedAt" | "refreshError">>,
 ): Pick<OAuthTokenStatus, "refreshFailedAt" | "refreshError"> {
@@ -378,11 +405,14 @@ async function browserOAuthStart(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 401, { error: "unauthorized", message: "portal identity required" });
   const base = ctx.deps.portalUrl.replace(/\/$/, "");
   const provider = ctx.params.provider!;
+  const body = isObj(ctx.body) ? ctx.body : {};
+  const returnTo = appReturnPath(body, safeReturnTo(body.returnTo) ?? "/keychain");
+  if (!returnTo) return sendJson(ctx.res, 400, { error: "invalid_return_url" });
   return startOAuth(ctx, {
     provider,
     principalId: ctx.actor.p,
     redirectUri: `${base}/v1/connectors/oauth/${encodeURIComponent(provider)}/callback`,
-    returnTo: safeReturnTo(isObj(ctx.body) ? ctx.body.returnTo : undefined) ?? "/keychain",
+    returnTo,
     accountType: "default",
   });
 }
@@ -612,6 +642,7 @@ export const connectorRoutes: ReadonlyArray<Route<ApiCtx>> = [
     auth: "source",
     handle: browserOAuthStart,
   },
+  { method: "GET", path: "/v1/app-return", browser: true, actor: "person", auth: "source", handle: appReturn },
   {
     match: (m, p) => m === "GET" && parseOAuthRoute(p)?.action === "start",
     actor: "query.principalId",
