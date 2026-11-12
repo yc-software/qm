@@ -208,7 +208,17 @@ export class OnboardingWelcome extends LitElement {
     ) {
       this.classList.add("welcome-rolling");
     }
-    if (!["slack", "slack-account"].includes(this.widget)) void this.loadCatalog();
+    if (!["slack", "slack-account"].includes(this.widget)) void this.loadCatalog().then(() => this.connectRequested());
+  }
+  private connectRequested(): void {
+    const url = new URL(location.href);
+    const service = this.services.find((item) => item.id === url.searchParams.get("connect"));
+    if (!service) return;
+    const replaces = url.searchParams.get("replaces") ?? undefined;
+    url.searchParams.delete("connect");
+    url.searchParams.delete("replaces");
+    history.replaceState(history.state, "", url);
+    void this.authorize(service, replaces);
   }
   private drawPicker(): void {
     const target = this.querySelector<HTMLElement>(".welcome-picker");
@@ -391,7 +401,8 @@ export class OnboardingWelcome extends LitElement {
     this.authorizing = service.name;
     this.authorizationError = "";
     try {
-      if (await openDesktopBrowser(`${this.base}settings`)) return;
+      const handoff = new URLSearchParams({ connect: service.id, ...(replaces ? { replaces } : {}) });
+      if (await openDesktopBrowser(`${this.base}settings?${handoff}`)) return;
       const state = crypto.randomUUID();
       const attempt: ConnectionAttempt = {
         state,
