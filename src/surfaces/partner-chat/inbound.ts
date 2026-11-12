@@ -19,6 +19,7 @@ import {
 const SURFACE = "partner-chat";
 const CONTEXT_SCAN = 500;
 const CONTEXT_DEFAULT_COUNT = 100;
+const DETECT_THREAD_COUNT = 30;
 
 type InboundApp = Pick<
   App,
@@ -45,6 +46,21 @@ export function createPartnerChatInbound(deps: {
       noFallback: true,
     });
     return mine.length > 0 || (await findMessage(cache, container, thread, { self: true })) !== undefined;
+  }
+
+  async function threadDetection(container: string, thread: string, triggerTs: string) {
+    const [root, replies] = await Promise.all([
+      findMessage(cache, container, thread),
+      cache.readMessages(container, { surface: SURFACE, sub: thread, limit: DETECT_THREAD_COUNT, noFallback: true }),
+    ]);
+    const detectContext = replies
+      .filter((m) => !m.self && !m.bot && m.ts !== triggerTs)
+      .map((m) => `${m.authorName ?? m.authorId ?? "someone"}: ${m.text}`)
+      .join("\n");
+    return {
+      ...(detectContext ? { detectContext } : {}),
+      ...(root?.self && root.text ? { detectOpener: root.text } : {}),
+    };
   }
 
   async function handle(timestamp: string | undefined, signature: string | undefined, rawBody: string) {
@@ -108,12 +124,10 @@ export function createPartnerChatInbound(deps: {
       return { status: 200, body: { ok: true, ignored: "own_message" } };
     }
     const ts = own?.ts ?? partnerChatTs(message.created_at, message.id);
-    const addressed =
-      event.type === "message.created" &&
-      !bot &&
-      (chat.kind === "dm" ||
-        message.mentions_agent ||
-        (thread !== undefined && (await threadEngaged(container, thread))));
+    const startsTurn = event.type === "message.created" && !bot;
+    const direct = chat.kind === "dm" || message.mentions_agent;
+    const following = startsTurn && !direct && thread !== undefined && (await threadEngaged(container, thread));
+    const addressed = startsTurn && (direct || following);
     await deps.app.ingestSurfaceEvents(
       [
         {
@@ -172,7 +186,12 @@ export function createPartnerChatInbound(deps: {
           }
         : {}),
       text: message.body,
-      origin: { kind: "human", messageTs: ts },
+      ...(following && thread
+        ? {
+            origin: { kind: "ambient" as const, entryTs: ts, live: true },
+            ...(await threadDetection(container, thread, ts)),
+          }
+        : { origin: { kind: "human" as const, messageTs: ts } }),
       async: true,
       redeliveryKey: `${SURFACE}:${event.account}:${chat.id}:${message.id}`,
     });

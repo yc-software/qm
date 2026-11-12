@@ -195,7 +195,7 @@ test("unmentioned chatter goes to the ambient judge, whose worker posts into the
   }
 });
 
-test("a reply in a thread the agent already posted in is addressed without a mention", async () => {
+test("a thread the agent already posted in is followed without a mention, and an aside between people gets no reply", async () => {
   const { built, partnerChat, deliver } = await partnerChatApp();
   try {
     const bodies = () => partnerChat.shown().map((m) => [m.thread_id, m.body]);
@@ -221,6 +221,9 @@ test("a reply in a thread the agent already posted in is addressed without a men
     await settle(async () => bodies().some(([, b]) => b === "under your post"));
     assert.deepEqual(bodies().at(-1), [root, "under your post"]);
     await deliver(event({ body: "!post nobody asked", eventId: "ev-other", messageId: "1013", thread: "1001" }));
+    await deliver(
+      event({ body: "sounds good, see you at lunch", eventId: "ev-aside", messageId: "1015", thread: "1008" }),
+    );
     await new Promise((r) => setTimeout(r, 3_000));
     assert.equal(partnerChat.shown().length, 3);
   } finally {
