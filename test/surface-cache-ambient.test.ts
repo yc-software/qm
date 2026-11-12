@@ -142,6 +142,33 @@ test("a short instruction after channel history too long to screen still stops t
   }
 });
 
+test("a newest message too long to screen on its own is left out of the wake too", async () => {
+  const built = freshApp();
+  built.runtime.start();
+  try {
+    await built.app.setChannelPolicy("C-long", "watch", "U-admin");
+    await built.app.ingestSurfaceEvents([
+      {
+        container: "C-long",
+        ts: "300.1",
+        authorId: "U9",
+        text: `${"all green. ".repeat(20_500)}!engage`,
+        createdAt: 1,
+      },
+    ]);
+    let wake: any;
+    await settle(async () => {
+      wake = (await built.runs.list()).find((run) => run.request.text?.includes("left out"));
+      return wake?.status === "done" || wake?.status === "failed";
+    });
+    assert.ok(wake, "the wake ran with the left-out note");
+    const events = await built.auditLog.events(testTenant);
+    assert.ok(!events.some((event) => event.action === "security_posture.input_failed_open"));
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
 test("unaddressed chatter with no standing orders stays silent (silence is the default)", async () => {
   const built = freshApp();
   built.runtime.start();
@@ -660,7 +687,7 @@ test("a judged batch records a durable judgment row: prompt, decision, model, ts
 
 test("the ambient judge model is independent of the detect model (PI_JUDGE_MODEL)", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-surfcache-"));
-  const built = buildApp(testConfig({ dataDir, detectModelId: "claude-opus-4-8", judgeModelId: "claude-sonnet-5" }));
+  const built = buildApp(testConfig({ dataDir, judgeModelId: "claude-sonnet-5" }));
   built.runtime.start();
   try {
     const container = "C-judgemodel";

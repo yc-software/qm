@@ -84,6 +84,7 @@ function fixture(
   };
   const resources = {
     get: async () => resource,
+    notePersonUse: async () => resource,
     access: async () => {
       if (!state.allowed) throw new Error("permission revoked");
       return resource;

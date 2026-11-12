@@ -318,7 +318,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     const sizes = recent.map((m) => JSON.stringify(screened(m)).length + 1);
     let size = screenDataOf([]).length + sizes.reduce((total, n) => total + n, 0);
     let omitted = 0;
-    while (omitted < recent.length - 1 && !fitsScreenInput(size)) size -= sizes[omitted++]!;
+    while (omitted < recent.length && !fitsScreenInput(size)) size -= sizes[omitted++]!;
     const shown = recent.slice(omitted);
     if (omitted)
       console.error(
@@ -429,6 +429,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
           ts: input.origin.kind === "human" ? (input.origin.messageTs ?? "") : "",
           ...(input.actor.displayName ? { authorName: input.actor.displayName } : {}),
           authorId: input.actor.id,
+          ...(input.botActor ? { bot: true } : {}),
           text: input.text,
         },
       ],

@@ -1,6 +1,7 @@
 import { durableMapTenancy } from "../persistence/durable-map.ts";
 import type { PgMigrationDefinition, PgPool } from "../persistence/pg-pool.ts";
 import { fold } from "../identity/user-tenancy.ts";
+import { servingTenant } from "./claim.ts";
 import { withTenant } from "./context.ts";
 
 const ACTIVE = `json->>'disabled' IS DISTINCT FROM 'true'`;
@@ -34,7 +35,7 @@ export function inboundTenancy(table: string): PgMigrationDefinition[] {
   return [...durableMapTenancy(table), inboundIndexes(table)];
 }
 
-export type TenantKey = keyof typeof KEYS | "slack_bridge" | "app_host";
+export type TenantKey = keyof typeof KEYS | "slack_bridge" | "partner_chat" | "app_host";
 
 const definer = (name: string, returns: string, body: string): string =>
   `CREATE OR REPLACE FUNCTION ${name}(key text) RETURNS ${returns}
@@ -151,6 +152,19 @@ export const SLACK_BRIDGE_TENANT: PgMigrationDefinition = {
       "qm_tenant_for_slack_bridge",
       "uuid",
       `SELECT (array_agg(id))[1] FROM tenants WHERE settings->>'slackBridgeToken' = $1 HAVING count(*) = 1`,
+    ),
+  ],
+};
+
+export const PARTNER_CHAT_TENANT: PgMigrationDefinition = {
+  id: "tenancy/lookups/0007-partner-chat",
+  statements: [
+    `SET LOCAL check_function_bodies = off`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS tenants_partner_chat_account ON tenants ((settings->>'partnerChatAccount'))`,
+    definer(
+      "qm_tenant_for_partner_chat",
+      "uuid",
+      `SELECT id FROM tenants WHERE settings->>'partnerChatAccount' = $1${servingTenant("id")}`,
     ),
   ],
 };

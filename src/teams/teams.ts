@@ -40,6 +40,7 @@ export interface TeamStore {
   list(tenant: Tenant): Promise<Team[]>;
   forTurn(tenant: Tenant, scope: ScopeId, principalIds: readonly string[]): Promise<TurnTeam[]>;
   isMember(tenant: Tenant, principalId: string, teamId: string): Promise<boolean>;
+  memberTeams(tenant: Tenant, principalId: string, teamIds: readonly string[]): Promise<Set<string>>;
   apply(tenant: Tenant, change: TeamChange, actorId: string): Promise<void>;
 }
 
@@ -97,6 +98,17 @@ export function createPostgresTeamStore(
     ),
   ]);
   const enabled = () => flags.enabled("team_scopes", orgScope);
+  async function memberTeams(tenant: Tenant, principalId: string, teamIds: readonly string[]): Promise<Set<string>> {
+    if (!teamIds.length || !(await enabled())) return new Set();
+    const rows = await pg
+      .forTenant(tenant)
+      .q(
+        "SELECT DISTINCT team_id FROM team_members WHERE tenant_id = $1 AND team_id = ANY($2) AND principal_id = ANY($3)",
+        [tenant.id, [...new Set(teamIds)], keysOf(principalId)],
+      );
+    return new Set(rows.map((r) => r.team_id as string));
+  }
+
   return {
     async list(tenant) {
       if (!(await enabled())) return [];
@@ -137,16 +149,9 @@ export function createPostgresTeamStore(
       }));
     },
     async isMember(tenant, principalId, teamId) {
-      if (!(await enabled())) return false;
-      const rows = await pg
-        .forTenant(tenant)
-        .q("SELECT 1 FROM team_members WHERE tenant_id = $1 AND team_id = $2 AND principal_id = ANY($3) LIMIT 1", [
-          tenant.id,
-          teamId,
-          keysOf(principalId),
-        ]);
-      return rows.length > 0;
+      return (await memberTeams(tenant, principalId, [teamId])).has(teamId);
     },
+    memberTeams,
     async apply(tenant, c, actorId) {
       const now = Date.now();
       await pg.forTenant(tenant).transaction(async (db) => {

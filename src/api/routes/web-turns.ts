@@ -10,6 +10,7 @@ import { inboxView } from "./inbox.ts";
 import { inboxPreviewEnabled } from "./loops.ts";
 import { postRunSignal, postTurn } from "./turns.ts";
 import { isObj } from "./shared.ts";
+import { ownsWebThread } from "../../directory/person.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
 type WebConversation = TurnRequest["conversation"];
@@ -199,7 +200,7 @@ async function webTurn(ctx: ApiCtx): Promise<void> {
   const scope = typeof p.scopeId === "string" && p.scopeId ? p.scopeId : undefined;
   const resolved = await resolveWebConversation(ctx, user, threadRef, scope, trimmed(p.channelName, 200));
   if ("error" in resolved) return sendJson(ctx.res, 403, resolved);
-  const privateConversation = threadRef.startsWith(`web:${user}:`) && resolved.conversation.kind === "dm";
+  const privateConversation = ownsWebThread(threadRef, user) && resolved.conversation.kind === "dm";
   const idempotencyKey = namespacedSendKey(user, p.idempotencyKey);
   const desktopClientId =
     typeof p.desktopClientId === "string" && p.desktopClientId.length === 36 ? p.desktopClientId : undefined;
@@ -223,7 +224,7 @@ async function webTurn(ctx: ApiCtx): Promise<void> {
 }
 
 async function visibleApprovalThread(ctx: ApiCtx, user: string, threadRef: string, sessionId: unknown) {
-  if (threadRef.startsWith(`web:${user}:`)) return true;
+  if (ownsWebThread(threadRef, user)) return true;
   const found =
     typeof sessionId === "string" && sessionId
       ? await ctx.app.getSessionForViewer(sessionId, user, { tailTurns: 1 })

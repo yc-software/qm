@@ -340,7 +340,6 @@ async function buildInboundScreen(turn: InboundScreenTurn) {
     ? securityScreenPayloads({
         ...input,
         ...(screenedWords !== undefined ? { origin: { kind: "automation" as const, screenData: screenedWords } } : {}),
-        overheard: [],
         externalPromptData,
         verifiedSwarm: Boolean(input.swarm && swarmBinding),
         verifiedSessionMessage,

@@ -76,7 +76,6 @@ export interface Config extends SandboxSettings, DeploySettings {
   modelId?: string;
   codexAuthCredential?: string;
   claudeAuthCredential?: string;
-  detectModelId?: string;
   titleModelId?: string;
   judgeModelId?: string;
   anthropicApiKey?: string;
@@ -96,7 +95,6 @@ export interface Config extends SandboxSettings, DeploySettings {
   budgetUsdPerWindow?: number;
   orgBudgetUsdPerWindow?: number;
   budgetWindowMs: number;
-  maxContextTokens?: number;
   execTimeoutDefaultMs: number;
   execTimeoutMaxMs: number;
   turnWallClockMs: number;
@@ -529,7 +527,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.PI_MODEL ? { modelId: env.PI_MODEL } : {}),
     ...(codexAuthCredential ? { codexAuthCredential } : {}),
     ...(claudeAuthCredential ? { claudeAuthCredential } : {}),
-    ...(env.PI_DETECT_MODEL ? { detectModelId: env.PI_DETECT_MODEL } : {}),
     ...(env.PI_TITLE_MODEL ? { titleModelId: env.PI_TITLE_MODEL } : {}),
     ...(env.PI_JUDGE_MODEL ? { judgeModelId: env.PI_JUDGE_MODEL } : {}),
     ...(env.ANTHROPIC_API_KEY ? { anthropicApiKey: env.ANTHROPIC_API_KEY } : {}),
@@ -561,7 +558,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...optNum(env, "BUDGET_USD_PER_WINDOW", "budgetUsdPerWindow"),
     ...optNum(env, "ORG_BUDGET_USD_PER_WINDOW", "orgBudgetUsdPerWindow"),
     budgetWindowMs: numEnvStrict("BUDGET_WINDOW_MS", env.BUDGET_WINDOW_MS) ?? CONFIG_DEFAULTS.budgetWindowMs,
-    ...optNum(env, "MAX_CONTEXT_TOKENS", "maxContextTokens"),
     execTimeoutDefaultMs:
       (numEnvStrict("EXEC_TIMEOUT_DEFAULT_SEC", env.EXEC_TIMEOUT_DEFAULT_SEC) ??
         CONFIG_DEFAULTS.execTimeoutDefaultSec) * 1000,
