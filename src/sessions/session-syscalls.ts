@@ -455,6 +455,9 @@ export function assertAudienceCompatible(
     throw new Error("the target audience includes people outside the sender's authorized audience");
 }
 
+export const AMBIENT_REACH_REFUSAL =
+  "that helper belongs to another unprompted wake; only the wake that opened it can reach it.";
+
 export async function sessionTreeRoots(
   sessions: Pick<SessionStore, "treeRoots">,
   list: readonly Session[],
@@ -917,11 +920,10 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   message:
                     "that subagent finished and retired; open a fresh one with `open` (its result is already in your transcript).",
                 };
-              if (
-                (deps.authorize && !(await deps.authorize(target, caller))) ||
-                (deps.reaches && !(await deps.reaches(target, caller, binding.session)))
-              )
+              if (deps.authorize && !(await deps.authorize(target, caller)))
                 return { ok: false, message: "you no longer have access to the target session" };
+              if (deps.reaches && !(await deps.reaches(target, caller, binding.session)))
+                return { ok: false, message: AMBIENT_REACH_REFUSAL };
               const meta = storedContext(target);
               if (!meta) return { ok: false, message: "the target has no verified runtime context yet" };
               const privateChild = isSubagentThreadRef(target.threadRef);
@@ -1143,11 +1145,10 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
             return { ok: false, message: "that session lives in a different context and cannot be read from here." };
           const limit = Math.min(Math.max(1, input.limit ?? READ_DEFAULT_LIMIT), 200);
           const maxChars = Math.min(Math.max(200, input.maxChars ?? READ_DEFAULT_MAX_CHARS), READ_MAX_CHARS_CEILING);
-          if (
-            !(await deps.sessions.getForParticipant(target.id, binding.request.actor.id)) ||
-            (deps.reaches && !(await deps.reaches(target, binding.request, binding.session)))
-          )
+          if (!(await deps.sessions.getForParticipant(target.id, binding.request.actor.id)))
             return { ok: false, message: "you are not a participant in that session." };
+          if (deps.reaches && !(await deps.reaches(target, binding.request, binding.session)))
+            return { ok: false, message: AMBIENT_REACH_REFUSAL };
           const items = await visibleHistory(target);
           const lines: string[] = [];
           for (const item of items.slice(-limit)) {

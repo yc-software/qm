@@ -6,6 +6,7 @@ import { settle } from "./support/settle.ts";
 import type { Agent } from "../src/agent/agent.ts";
 import { ambientActorId } from "../src/resolution/ambient-wake.ts";
 import { slackSurfaceOrigin } from "../src/surfaces/slack/adapter.ts";
+import { AMBIENT_REACH_REFUSAL } from "../src/sessions/session-syscalls.ts";
 
 test("an unprompted wake's helper runs in its channel and reports back, out of other wakes' reach", async () => {
   let helper = "";
@@ -39,6 +40,8 @@ test("an unprompted wake's helper runs in its channel and reports back, out of o
   await settle(async () => seen.length > 0);
   await wake("2");
   assert.match(String(seen[0]), /<content>memo found<\/content>/, helper);
-  assert.deepEqual(seen[1], { ok: false, message: "you no longer have access to the target session" });
-  assert.deepEqual(seen[2], { ok: false, message: "you are not a participant in that session." });
+  assert.deepEqual(
+    seen.slice(1),
+    [1, 2].map(() => ({ ok: false, message: AMBIENT_REACH_REFUSAL })),
+  );
 });

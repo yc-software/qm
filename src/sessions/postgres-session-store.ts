@@ -296,10 +296,11 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
              CROSS JOIN LATERAL (SELECT id, parent_session_id FROM sessions WHERE id = u.parent_id OFFSET 0) p
             WHERE NOT p.id = ANY(u.path)
          )
-         SELECT DISTINCT ON (u.leaf_id) u.leaf_id, s.* FROM up u JOIN sessions s ON s.id = u.id
-          ORDER BY u.leaf_id, cardinality(u.path) DESC`,
+         SELECT DISTINCT ON (u.leaf_id) u.leaf_id, u.parent_id = ANY(u.path) AS cycled, s.*
+           FROM up u JOIN sessions s ON s.id = u.id ORDER BY u.leaf_id, cardinality(u.path) DESC`,
         [[...sessionIds]],
       );
+      if (rows.some((row) => row.cycled)) throw new Error("session parent cycle");
       return new Map(rows.map((row) => [row.leaf_id as string, rowToSession(row)]));
     },
 
