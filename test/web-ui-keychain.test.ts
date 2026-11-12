@@ -71,6 +71,7 @@ test("a signed-in person adds, lists and removes only their own keychain entries
       "/v1/connectors/oauth/google/start",
     ],
     DELETE: [`/v1/keychain/credentials/${saved.id}`, "/v1/personas/missing", "/v1/personas/missing/credentials/x"],
+    PATCH: ["/v1/runs/missing/input"],
   };
   for (const [method, paths] of Object.entries(routes))
     for (const path of paths) {

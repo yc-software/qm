@@ -192,18 +192,20 @@ test("the server writes who sent a turn and where it goes; the browser's own cla
   assert.equal((await sentTurn({ threadRef: "dm:D1" })).conversation.threadRef, "web:alice:default");
 });
 
-test("a turn, approval or steer sent while impersonating someone never claims that person is present", async () => {
+test("while impersonating someone, a new message reaches the agent as a direct turn and nothing else reaches a run", async () => {
   const cookie = `${browserSessionCookie("admin-carol")}; ${browserImpersonationCookie("admin-carol", "alice")}`;
   assert.equal((await post("/api/turn", { text: "hi", threadRef: "web:alice:t1" }, { cookie })).status, 202);
   assert.deepEqual([turns.at(-1)!.actor.externalId, turns.at(-1)!.origin], ["alice", { kind: "direct" }]);
-  assert.equal((await post("/api/approvals/a-1", { approved: true }, { cookie })).status, 202);
-  assert.deepEqual(turns.at(-1)!.origin, { kind: "direct" });
-  const steer = { kind: "steer", text: "more", threadRef: "web:alice:t1" };
-  assert.equal((await post("/api/runs/r1/signal", steer, { cookie })).status, 200);
-  assert.deepEqual(signals.at(-1)!.signal.request?.origin, { kind: "direct" });
-  const signalCount = signals.length;
-  assert.equal((await post("/api/runs/r1/signal", { kind: "steer", text: "more" }, { cookie })).status, 403);
-  assert.equal(signals.length, signalCount);
+  const counts = [turns.length, signals.length];
+  for (const [path, body] of [
+    ["/api/turn", { threadRef: "web:alice:t1", approval: { requestId: "a-1", approved: true } }],
+    ["/api/approvals/a-1", { approved: true }],
+    ["/api/runs/r1/signal", { kind: "steer", text: "more", threadRef: "web:alice:t1" }],
+    ["/api/runs/r1/signal", { kind: "client_result", callId: "c1", result: {} }],
+  ] as const)
+    assert.equal((await post(path, body, { cookie })).status, 403, path);
+  assert.deepEqual([turns.length, signals.length], counts);
+  assert.equal((await post("/api/runs/r1/signal", { kind: "abort" }, { cookie })).status, 200);
 });
 
 test("a turn with nothing to send is refused before it reaches the agent", async () => {
