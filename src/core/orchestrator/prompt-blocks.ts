@@ -149,7 +149,7 @@ export function shownPlace(surface: string | undefined, ctx: GatewayContext | un
 
 export function renderGatewayContext(surface: string | undefined, ctx?: GatewayContext, dmWith?: string): string {
   const gateway = (surface ?? "").trim();
-  const { location } = shownPlace(surface, ctx, Boolean(dmWith));
+  const { location } = shownPlace(surface, ctx, dmWith !== undefined);
   const details = trimmedEntries({ ...ctx?.hostIds, ...ctx?.details });
   const instructions = ctx?.instructions?.trim();
   if (!gateway && !location && details.length === 0 && !instructions) return "";

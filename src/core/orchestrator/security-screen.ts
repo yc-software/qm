@@ -265,7 +265,10 @@ export interface InboundScreenTurn {
 }
 
 export function screenedFields(
-  request: Pick<TurnRequest, "text" | "gatewayContext" | "conversationHeader" | "overheard" | "attachments" | "inboundNotes"> & {
+  request: Pick<
+    TurnRequest,
+    "text" | "gatewayContext" | "conversationHeader" | "overheard" | "attachments" | "inboundNotes"
+  > & {
     surface?: string;
     origin?: TurnOrigin;
     actor: { displayName?: string };
