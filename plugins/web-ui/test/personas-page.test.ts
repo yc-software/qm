@@ -41,7 +41,7 @@ interface Grant {
 
 const defaultAccess = (): Grant[] => [
   { scopeId: "personal:tester", role: "owner", personasEnabled: true },
-  { scopeId: "channel:C9", role: "read", label: "design", personasEnabled: true },
+  { scopeId: "channel:C9", role: "read", label: "#design", personasEnabled: true },
 ];
 
 let calls: Call[] = [];
@@ -274,7 +274,7 @@ test("a reader sees each part of the persona with nothing to add or remove", asy
     Skills: { actions: [], items: [] },
     Crons: { actions: ["New cron"], items: [] },
     Credentials: { actions: [], items: ["github"] },
-    "Channels and groups": { actions: [], items: ["design"] },
+    "Channels and groups": { actions: [], items: ["#design"] },
     "Who has access": { actions: [], items: ["You"] },
     History: { actions: ["Show 3 versions"], items: [] },
   });
@@ -359,9 +359,9 @@ test("Add channel searches your Slack channels on the page and adds one with cha
     return true;
   };
   calls = [];
-  main.querySelector<HTMLButtonElement>('button[aria-label="Remove design"]')!.click();
+  main.querySelector<HTMLButtonElement>('button[aria-label="Remove #design"]')!.click();
   await settle();
-  assert.equal(asked, "Remove design from Ada?");
+  assert.equal(asked, "Remove #design from Ada?");
   assert.deepEqual(putBody(), { access: [{ scopeId: "personal:tester", role: "owner" }] });
 });
 
@@ -653,7 +653,7 @@ test("people and groups the Personas flag doesn't reach are marked with where an
     { scopeId: "personal:tester", role: "owner", personasEnabled: true },
     { scopeId: "personal:bo@acme.com", role: "read", label: "Bo Person", personasEnabled: false },
     { scopeId: "org:acme", role: "read", personasEnabled: false },
-    { scopeId: "channel:C9", role: "read", label: "design", personasEnabled: false },
+    { scopeId: "channel:C9", role: "read", label: "#design", personasEnabled: false },
   ];
   const { main } = await openPersonaPage("Ada");
   const notes = (scope: string) =>

@@ -378,7 +378,6 @@ function granteeLabel(scopeId: string): string {
   if (kind === "personal") return ref === appState.me?.user ? "You" : ref;
   if (kind === "org") return `Everyone at ${orgName()}`;
   if (kind === "team") return `Team ${ref}`;
-  if (kind === "channel") return `#${ref}`;
   return scopeId;
 }
 
@@ -386,7 +385,7 @@ const isMe = (grant: Pick<PersonaGrant, "scopeId">): boolean => grant.scopeId ==
 
 function grantLabel(grant: PersonaGrant): string {
   if (isMe(grant)) return "You";
-  if (grant.scopeId.startsWith("group:")) return scopeTitle(grant.scopeId, grant.label ?? null);
+  if (isSharedScopeId(grant.scopeId)) return scopeTitle(grant.scopeId, grant.label ?? null);
   return grant.label ?? granteeLabel(grant.scopeId);
 }
 
@@ -686,7 +685,7 @@ async function changeRole(persona: PersonaDetail, grant: PersonaGrant, value: st
 }
 
 async function togglePin(persona: PersonaDetail, grant: PersonaGrant): Promise<void> {
-  const label = `#${grantLabel(grant).replace(/^#/, "")}`;
+  const label = grantLabel(grant);
   const pinned = !grant.pinned;
   const saved = await saveAccess(persona, (access) =>
     access.map((g) => (g.scopeId === grant.scopeId ? { ...g, pinned } : g)),
