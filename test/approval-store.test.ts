@@ -3,7 +3,8 @@ import test from "node:test";
 import { createApprovalStore } from "../src/slack/approval-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { slackSurfaceOrigin } from "../src/surfaces/slack/adapter.ts";
-import type { PendingApprovalRecord } from "../src/types.ts";
+import { APPROVAL_LIFETIME_MS, type PendingApprovalRecord } from "../src/types.ts";
+import type { AuditEvent } from "../src/audit/audit-log.ts";
 import { testMap } from "./support/test-database.ts";
 
 function record(threadRef: string, createdAt = 1): PendingApprovalRecord {
@@ -136,4 +137,20 @@ test("a Slack-originated approval goes to the Slack author even when the actor i
   assert.equal(delivery?.destination.target, "U9");
   assert.equal(delivery?.destination.onBehalfOf, "oidc:linked-principal");
   assert.equal(delivery?.destination.audienceScopeId, "personal:oidc:linked-principal");
+});
+
+test("cards older than the approval lifetime are removed and each removal is audited", async () => {
+  const backing = testMap<PendingApprovalRecord>();
+  const approvals = createApprovalStore(backing, createDeliveryStore());
+  await backing.put("old", record("dm:D1", Date.now() - APPROVAL_LIFETIME_MS - 1_000));
+  await backing.put("fresh", record("dm:D2", Date.now()));
+  const events: AuditEvent[] = [];
+  await approvals.expireStale({ record: (_tenant, e) => events.push(e) }, "t1", "org:acme");
+  assert.equal(await backing.get("old"), null);
+  assert.ok(await backing.get("fresh"));
+  assert.deepEqual(
+    events.map((e) => [e.action, e.resource]),
+    [["command_approval.expire", "old"]],
+  );
+  assert.equal(JSON.parse(events[0]!.detail!).lifetimeMs, APPROVAL_LIFETIME_MS);
 });

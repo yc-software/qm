@@ -130,7 +130,7 @@ import type {
 import type { Cron, Monitor, Webhook } from "./triggers/types.ts";
 import type { Loop, LoopItem, LoopOutput, ShipGrant } from "./loops/types.ts";
 import type { SurfaceContextRequest } from "./reach/reach.ts";
-import { APPROVAL_LIFETIME_MS, personalScope, scopeId } from "./types.ts";
+import { personalScope, scopeId } from "./types.ts";
 import type { AuditLog } from "./audit/audit-log.ts";
 import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
 import { createPostgresAppPageViewLog, DEPLOYMENT_TABLES, type AppPageViewLog } from "./deploy/page-views.ts";
@@ -2955,29 +2955,7 @@ export function buildApp(
     { label: "Composio consent returns", immediate: true },
   );
   const approvalExpirySweeper = createSweeper(
-    () =>
-      claimThenBind(approvals.claimTenants, async () => {
-        const cutoff = Date.now() - APPROVAL_LIFETIME_MS;
-        for (const [id, record] of await approvals.entries()) {
-          if (record.createdAt === undefined || record.createdAt >= cutoff) continue;
-          if (!(await approvals.deleteIf(id, (r) => r.createdAt === record.createdAt))) continue;
-          auditLog.record(ambientTenant(), {
-            at: Date.now(),
-            principalId: "system",
-            action: "command_approval.expire",
-            resource: id,
-            scopeLabel: orgScope,
-            status: "ok",
-            detail: JSON.stringify({
-              lifetimeMs: APPROVAL_LIFETIME_MS,
-              kind: record.kind ?? "approval",
-              command: record.summary ?? record.command,
-              sessionId: record.sessionId,
-              requester: record.request?.actor.externalId,
-            }),
-          });
-        }
-      }),
+    () => claimThenBind(approvals.claimTenants, () => approvals.expireStale(auditLog, ambientTenant(), orgScope)),
     60_000,
     { label: "approval expiry", immediate: true },
   );
