@@ -25,7 +25,7 @@ import type { SessionRoute } from "../../agent/agent.ts";
 import type { Tenant } from "../../tenants/context.ts";
 
 const MAX_CONTEXT_TOKENS = 120_000;
-const KEEP_RECENT_TOKEN_FRACTION = 0.6;
+const COMPACTION_HEADROOM_FRACTION = 0.3;
 const DOCUMENT_TOKEN_FRACTION = 0.5;
 const RECENT_NOTICE =
   "[Context reduced without a new summary. Earlier entries are excluded, not deleted. Use history to reopen missing requests and tool calls; history does not return tool results. Check actual state before repeating actions whose outcomes are missing.]";
@@ -88,7 +88,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     return parsed.kind === "group" && deps.managedGroups?.recognizes(parsed.ref) === true;
   };
 
-  const keepRecentTokenFraction = Math.min(KEEP_RECENT_TOKEN_FRACTION, COMPACT_SOFT_FRACTION - 0.1);
+  const keepRecentTokenFraction = COMPACT_SOFT_FRACTION - COMPACTION_HEADROOM_FRACTION;
 
   async function summarizeForCompaction(
     input: Omit<CompactionInput, "writer">,
