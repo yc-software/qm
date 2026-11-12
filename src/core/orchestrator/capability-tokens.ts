@@ -228,7 +228,7 @@ async function mintControlPlaneTokens(
         deps.capabilityTokenCompression,
       );
       turnContextBlocks["Model access"] =
-        "## Model access\nSandbox code can call this company's models through core at `$MODEL_GATEWAY_URL` with `Authorization: Bearer $MODEL_GATEWAY_TOKEN`. `GET $MODEL_GATEWAY_URL/v1/models` lists them; `owned_by` says who bills each, and a model that lists `endpoints` takes only non-streamed OpenAI chat completions (text and data-URL images). The token expires with this turn; never send it anywhere but `$MODEL_GATEWAY_URL`.";
+        "## Model access\nSandbox code can call this company's models through core at `$MODEL_GATEWAY_URL` with `Authorization: Bearer $MODEL_GATEWAY_TOKEN`; `GET $MODEL_GATEWAY_URL/v1/models` lists them. The token expires with this turn; never send it anywhere but `$MODEL_GATEWAY_URL`.";
     }
     connectorEnv.AGENT_OAUTH_CONSENT_TOKEN = await mintCapabilityToken(
       {

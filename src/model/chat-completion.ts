@@ -81,7 +81,7 @@ export async function completeChatRequest(
     systems.push("Return your result by calling structured_result exactly once.");
   }
   context.systemPrompt = systems.join("\n\n");
-  const limit = body.max_completion_tokens ?? body.max_tokens ?? 4096;
+  const limit = body.max_completion_tokens ?? body.max_tokens ?? model.maxTokens;
   if (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit <= 0)
     throw new ChatCompletionError("max_tokens must be a positive integer");
   const runtime = await buildModelRuntime(route.keys, route.gateway, purpose);

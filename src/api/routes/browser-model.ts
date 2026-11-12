@@ -1,9 +1,8 @@
 import { loadPersonalModelAuth } from "../../core/individual-auth-routing.ts";
-import { ChatCompletionError, completeChatRequest } from "../../model/chat-completion.ts";
 import { BROWSER_MODEL_AUD } from "../../auth/capability-token.ts";
 import { routeLabel } from "../../model/model-route.ts";
-import { errMessage, reportFailure } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
+import { companyClaudeSubscription, respondChatCompletion } from "./chat-completion-response.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
 const REQUEST_FIELDS = new Set([
@@ -41,49 +40,24 @@ async function browserModel(ctx: ApiCtx): Promise<void> {
   )
     return sendJson(res, 400, { error: "invalid browser model request" });
   if (!deps.modelRoutes) return sendJson(res, 503, { error: "browser model unavailable" });
-  const controller = new AbortController();
-  const abort = () => controller.abort();
-  res.once("close", abort);
-  try {
-    const account = capability.browserAccount;
-    const personal =
-      account === "company" || !deps.userModelCredentials
-        ? undefined
-        : await loadPersonalModelAuth(deps.userModelCredentials, capability.actorId, account, capability.browserModel);
-    if (account !== "company" && personal?.modelId !== capability.browserModel)
-      return sendJson(res, 409, { error: "Reconnect your selected AI account in Settings, then start a new turn" });
-    const route = await deps.modelRoutes.session({
-      runtime: { modelId: capability.browserModel },
-      ...(personal ? { providerKeys: personal.keys } : {}),
+  const account = capability.browserAccount;
+  const personal =
+    account === "company" || !deps.userModelCredentials
+      ? undefined
+      : await loadPersonalModelAuth(deps.userModelCredentials, capability.actorId, account, capability.browserModel);
+  if (account !== "company" && personal?.modelId !== capability.browserModel)
+    return sendJson(res, 409, { error: "Reconnect your selected AI account in Settings, then start a new turn" });
+  const route = await deps.modelRoutes.session({
+    runtime: { modelId: capability.browserModel },
+    ...(personal ? { providerKeys: personal.keys } : {}),
+  });
+  if (personal ? personal.subscription === "anthropic" : companyClaudeSubscription(deps, route))
+    return sendJson(res, 422, {
+      error:
+        "Claude subscription access does not support the browser agent. Choose company access, ChatGPT, or a Claude API key in Settings.",
     });
-    if (
-      personal
-        ? personal.subscription === "anthropic"
-        : deps.companySubscriptionAuth === "anthropic" && route.model.provider === "anthropic"
-    )
-      return sendJson(res, 422, {
-        error:
-          "Claude subscription access does not support the browser agent. Choose company access, ChatGPT, or a Claude API key in Settings.",
-      });
-    if (!deps.modelRoutes.servable(route))
-      return sendJson(res, 503, { error: `${routeLabel(route)} has no credential` });
-    sendJson(
-      res,
-      200,
-      await completeChatRequest(
-        route,
-        input,
-        AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]),
-        "browser",
-      ),
-    );
-  } catch (error) {
-    if (error instanceof ChatCompletionError) return sendJson(res, error.status, { error: error.message });
-    reportFailure("browser model request", error, capability.scopeId);
-    if (!res.destroyed) sendJson(res, 502, { error: `the browser model request failed: ${errMessage(error)}` });
-  } finally {
-    res.off("close", abort);
-  }
+  if (!deps.modelRoutes.servable(route)) return sendJson(res, 503, { error: `${routeLabel(route)} has no credential` });
+  await respondChatCompletion(ctx, route, input, "browser", (error) => ({ error }), 120_000);
 }
 
 export const browserModelRoutes: Route[] = [

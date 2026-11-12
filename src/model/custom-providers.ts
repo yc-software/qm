@@ -98,7 +98,7 @@ function toRuntimeModel(provider: CustomProviderSpec, m: CustomModelSpec): Custo
     api: customProviderApi(provider.protocol),
     baseUrl: provider.baseUrl,
     reasoning: m.reasoning ?? false,
-    input: ["text"],
+    input: ["text", "image"],
     cost: { input: m.input ?? 0, output: m.output ?? 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: m.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
     maxTokens: m.maxTokens ?? DEFAULT_MAX_TOKENS,

@@ -1,10 +1,17 @@
 import { SANDBOX_MODEL_AUD } from "../../auth/capability-token.ts";
-import { gatewayActorId, gatewayKey, gatewayRoot, modelGatewayHeaders } from "../../model/provider-endpoints.ts";
-import { ChatCompletionError, completeChatRequest } from "../../model/chat-completion.ts";
-import { routeLabel } from "../../model/model-route.ts";
+import {
+  gatewayActorId,
+  gatewayKey,
+  gatewayRoot,
+  modelGatewayHeaders,
+  type ModelGatewayTransportConfig,
+} from "../../model/provider-endpoints.ts";
+import type { ModelRoute } from "../../model/model-route.ts";
+import { estimateCostUsd } from "../../ratelimit/budget.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
-import { errMessage, reportFailure } from "../../util/errors.ts";
+import { reportFailure } from "../../util/errors.ts";
 import { runtimeConfigBody } from "../runtime-config.ts";
+import { companyClaudeSubscription, respondChatCompletion } from "./chat-completion-response.ts";
 import { SANDBOX_MODEL_PREFIX } from "../contract.ts";
 import { sendJson } from "../http.ts";
 import { relayStream } from "../../../plugins/chassis/src/http.ts";
@@ -46,94 +53,74 @@ async function denied(ctx: ApiCtx): Promise<boolean> {
   return false;
 }
 
-async function companyModels(ctx: ApiCtx): Promise<Record<string, "model_gateway" | "org_key">> {
+async function listModels(ctx: ApiCtx, gateway: ModelGatewayTransportConfig | undefined): Promise<void> {
   const { modelCatalog } = await runtimeConfigBody(ctx, ctx.capability!.scopeId);
-  return Object.fromEntries(
-    Object.entries(modelCatalog).map(([id, meta]) => [id, meta.billing === "org_key" ? "org_key" : "model_gateway"]),
-  );
-}
-
-async function listModels(ctx: ApiCtx): Promise<void> {
-  const gateway = ctx.deps.modelGatewayTransport?.actorKey ? ctx.deps.modelGatewayTransport : undefined;
-  await gateway?.refresh?.();
-  const company = await companyModels(ctx);
-  const data: Array<{ id: string; object: "model"; owned_by: string; endpoints?: string[] }> = Object.keys(
-    gateway?.models ?? {},
-  )
-    .filter((id) => company[id] !== "org_key")
-    .map((id) => ({ id, object: "model", owned_by: "gateway" }));
-  for (const [id, billing] of Object.entries(company))
+  const data: Array<{ id: string; object: "model"; owned_by: string; endpoints?: string[] }> = [];
+  for (const id of Object.keys(gateway?.models ?? {}))
+    if (modelCatalog[id]?.billing !== "org_key") data.push({ id, object: "model", owned_by: "gateway" });
+  for (const [id, meta] of Object.entries(modelCatalog))
     if (!data.some((model) => model.id === id))
       data.push({
         id,
         object: "model",
-        owned_by: billing === "org_key" ? "organization" : "gateway",
+        owned_by: meta.billing === "org_key" ? "organization" : "gateway",
         endpoints: ["/v1/chat/completions"],
       });
   sendJson(ctx.res, 200, { object: "list", data });
 }
 
-async function complete(ctx: ApiCtx, modelId: string, input: Record<string, unknown>): Promise<void> {
-  const { deps, pathname, res } = ctx;
-  if (pathname !== `${SANDBOX_MODEL_PREFIX}/v1/chat/completions` || input.stream === true)
-    return sendJson(res, 400, {
-      error: {
-        message: `${modelId} is served through core's chat completions only: POST $MODEL_GATEWAY_URL/v1/chat/completions without stream`,
-      },
-    });
-  const route = deps.modelRoutes && deps.modelRoutes.servable(await deps.modelRoutes.route(modelId));
-  if (!route) return sendJson(res, 503, { error: { message: `${modelId} has no credential configured` } });
-  const controller = new AbortController();
-  const abort = () => controller.abort();
-  res.once("close", abort);
+async function companyRoute(ctx: ApiCtx, modelId: string): Promise<ModelRoute | undefined> {
   try {
-    sendJson(res, 200, await completeChatRequest(route, input, controller.signal, "sandbox"));
-  } catch (error) {
-    if (error instanceof ChatCompletionError) return sendJson(res, error.status, { error: { message: error.message } });
-    if (controller.signal.aborted) return;
-    reportFailure("sandbox model: completion", error, routeLabel(route));
-    if (!res.destroyed)
-      sendJson(res, 502, {
-        error: { message: `${routeLabel(route)} could not complete the request: ${errMessage(error)}` },
-      });
-  } finally {
-    res.off("close", abort);
+    const routes = ctx.deps.modelRoutes;
+    return routes?.servable(await routes.route(modelId));
+  } catch {
+    return undefined;
   }
+}
+
+async function complete(ctx: ApiCtx, route: ModelRoute, input: Record<string, unknown>): Promise<void> {
+  const { deps, pathname, res, capability } = ctx;
+  const error = (message: string) => ({ error: { message } });
+  if (pathname !== `${SANDBOX_MODEL_PREFIX}/v1/chat/completions` || input.stream === true)
+    return sendJson(
+      res,
+      400,
+      error(`${route.modelId} takes only non-streamed chat completions: POST $MODEL_GATEWAY_URL/v1/chat/completions`),
+    );
+  if (companyClaudeSubscription(deps, route))
+    return sendJson(res, 422, error("Claude subscription access can't serve sandbox requests; pick another model"));
+  const result = await respondChatCompletion(ctx, route, input, "sandbox", error);
+  if (result)
+    await deps.budget
+      ?.record(tenantOf(ctx), capability!.actorId, estimateCostUsd(result.usage.prompt_tokens))
+      .catch((e: unknown) => reportFailure("sandbox model: budget record", e, capability!.actorId));
 }
 
 async function proxy(ctx: ApiCtx): Promise<void> {
   if (await denied(ctx)) return;
   const { deps, body, req, res, capability, url, pathname, method } = ctx;
   const path = pathname.slice(SANDBOX_MODEL_PREFIX.length);
-  if (method === "GET" && path === "/v1/models") return listModels(ctx);
+  const gateway = deps.modelGatewayTransport?.actorKey ? deps.modelGatewayTransport : undefined;
   const input =
     body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : undefined;
   const requested = typeof input?.model === "string" ? input.model : undefined;
-  const gateway = deps.modelGatewayTransport?.actorKey ? deps.modelGatewayTransport : undefined;
-  await gateway?.refresh?.();
-  const company = input && Object.hasOwn(input, "model") ? await companyModels(ctx) : {};
+  const [, route] = await Promise.all([gateway?.refresh?.(), requested ? companyRoute(ctx, requested) : undefined]);
+  if (method === "GET" && path === "/v1/models") return listModels(ctx, gateway);
   const gatewayTarget =
-    requested && gateway && Object.hasOwn(gateway.models, requested) && company[requested] !== "org_key"
+    requested && gateway && Object.hasOwn(gateway.models, requested) && route?.billing !== "org_key"
       ? gateway.models[requested]
       : undefined;
-  if (input && requested && !gatewayTarget && Object.hasOwn(company, requested)) return complete(ctx, requested, input);
-  if (!gateway)
+  if (input && route && !gatewayTarget) return complete(ctx, route, input);
+  if (!gateway || (input && Object.hasOwn(input, "model") && !gatewayTarget))
     return sendJson(res, 400, {
       error: {
-        message: `name a model from GET $MODEL_GATEWAY_URL/v1/models: ${Object.keys(company).join(", ") || "none are configured"}`,
+        message: `model ${JSON.stringify(input?.model)} is not available; GET $MODEL_GATEWAY_URL/v1/models lists the models you can use`,
       },
     });
   let payload = body;
   if (input) {
     const user = gatewayActorId(capability!.actorId, gateway.actorKey!);
-    if (!Object.hasOwn(input, "model")) payload = attributed(path, input, user);
-    else if (!gatewayTarget)
-      return sendJson(res, 400, {
-        error: {
-          message: `model ${JSON.stringify(input.model)} is not available; choose one of: ${[...new Set([...Object.keys(gateway.models), ...Object.keys(company)])].join(", ")}`,
-        },
-      });
-    else payload = attributed(path, { ...input, model: gatewayTarget }, user);
+    payload = attributed(path, gatewayTarget ? { ...input, model: gatewayTarget } : input, user);
   }
   const headers: Record<string, string> = {
     "content-type": "application/json",
