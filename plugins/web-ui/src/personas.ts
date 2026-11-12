@@ -385,7 +385,8 @@ const isMe = (grant: Pick<PersonaGrant, "scopeId">): boolean => grant.scopeId ==
 
 function grantLabel(grant: PersonaGrant): string {
   if (isMe(grant)) return "You";
-  if (isSharedScopeId(grant.scopeId)) return scopeTitle(grant.scopeId, grant.label ?? null);
+  if (isSharedScopeId(grant.scopeId))
+    return scopeTitle(grant.scopeId, grant.label ?? grant.scopeId.slice(grant.scopeId.indexOf(":") + 1));
   return grant.label ?? granteeLabel(grant.scopeId);
 }
 

@@ -281,6 +281,16 @@ test("a reader sees each part of the persona with nothing to add or remove", asy
   assert.equal(main.querySelector(".persona-item-remove"), null);
 });
 
+test("a channel or group with no name and no conversation here is still told apart by its id", async () => {
+  access = [
+    { scopeId: "personal:tester", role: "owner", personasEnabled: true },
+    { scopeId: "channel:C7", role: "read", personasEnabled: true },
+    { scopeId: "group:G7", role: "read", personasEnabled: true },
+  ];
+  const { main } = await openPersonaPage("Ada");
+  assert.deepEqual(sections(main)["Channels and groups"]!.items, ["#C7", "G7"]);
+});
+
 function searchFor(root: ParentNode, text: string): HTMLInputElement {
   const input = root.querySelector<HTMLInputElement>("#persona-grantee-search")!;
   input.value = text;
