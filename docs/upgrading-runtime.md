@@ -47,6 +47,12 @@ existing function privileges. Deployments that revoke default function EXECUTE
 must grant execution to their application role, as with the other tenant lookup
 functions (`qm db grant` grants application access to all functions).
 
+On Fly Managed Postgres, enable the `vector` extension through the provider before
+running migrations: the managed login cannot install superuser-only extensions.
+Run `flyctl mpg databases extensions enable vector --cluster <cluster-id> --database <database-name>`
+for the database selected by `DATABASE_URL`. This also applies when upgrading an
+existing deployment; an already configured `DATABASE_URL` does not provision extensions.
+
 Migration identifiers and SQL checksums retain their original meaning. An existing
 checksum mismatch stops the upgrade; do not clear the migration ledger or edit its
 checksums to bypass this check. A previously completed legacy webhook sweep is
