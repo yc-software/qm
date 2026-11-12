@@ -383,6 +383,7 @@ export interface App {
   sessionChildren(principalId: string, sessionId: string): Promise<Session[] | null>;
   sessionRow(principalId: string, ref: { id?: string; threadRef?: string }): Promise<Session | null>;
   searchResources(
+    tenant: Tenant,
     principalId: string,
     query: string,
   ): Promise<{ hits: ResourceSearchHit[]; failed: string[]; limited: string[] }>;
@@ -594,9 +595,14 @@ export interface App {
   redeploy(id: string, input: RedeployInput): Promise<Deployment>;
   listDeployments(): Promise<Deployment[]>;
   getDeployment(idOrName: string): Promise<Deployment | null>;
-  listDeploymentsForViewer(viewer: ManagingCaller): Promise<ViewerDeployment[]>;
+  listDeploymentsForViewer(tenant: Tenant, viewer: ManagingCaller): Promise<ViewerDeployment[]>;
   effectiveDeploymentPermission(d: Deployment, principalId: string): Promise<Permission | null>;
   deploymentGitPermissionFor(idOrName: string, viewer: ManagingCaller): Promise<"read" | "write" | null>;
+  deploymentGitPermissionsFor(
+    tenant: Tenant,
+    deployments: readonly Deployment[],
+    viewer: ManagingCaller,
+  ): Promise<Array<"read" | "write" | null>>;
   listSkills(): Promise<Skill[]>;
   getSkill(id: string): Promise<Skill | null>;
   archiveSkill(id: string): Promise<Skill>;
@@ -737,7 +743,7 @@ export interface AppDeps {
   webhooks: WebhookStore;
   deliveries: DeliveryStore;
   directory: DirectoryStore;
-  teams?: Pick<TeamStore, "isMember">;
+  teams?: Pick<TeamStore, "isMember" | "memberTeams">;
   emailAuthMembers?: DirectoryMember[];
   projects?: ProjectStore;
   deploy: DeployService;

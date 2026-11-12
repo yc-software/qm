@@ -551,7 +551,7 @@ async function searchResources(ctx: ApiCtx): Promise<void> {
   const principalId = ctx.actor?.p ?? ctx.url.searchParams.get("principalId");
   if (!principalId) return sendJson(ctx.res, 400, { error: "bad_request" });
   const query = (ctx.url.searchParams.get("q") ?? "").slice(0, 500);
-  return sendJson(ctx.res, 200, await ctx.app.searchResources(principalId, query));
+  return sendJson(ctx.res, 200, await ctx.app.searchResources(tenantOf(ctx), principalId, query));
 }
 
 async function searchSessions(ctx: ApiCtx): Promise<void> {

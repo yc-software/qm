@@ -58,18 +58,17 @@ const TENANT_ROW_SECURITY: PgMigrationDefinition = {
 };
 
 const BOOT_TENANT: PgMigrationDefinition = {
-  id: "0000-tenancy/boot-tenant",
+  id: "0000-tenancy/boot-tenant-function",
   statements: [
     `CREATE OR REPLACE FUNCTION qm_boot_tenant() RETURNS uuid LANGUAGE sql STABLE SECURITY DEFINER
       SET search_path = pg_catalog, public AS $qm_boot_tenant$
       SELECT CASE WHEN count(*) = 1 THEN (array_agg(id))[1] END FROM (SELECT id FROM public.tenants LIMIT 2) one
     $qm_boot_tenant$`,
-    `GRANT EXECUTE ON FUNCTION qm_boot_tenant() TO PUBLIC`,
   ],
 };
 
 const SERVING_TENANTS: PgMigrationDefinition = {
-  id: "0000-tenancy/serving-tenants",
+  id: "0000-tenancy/serving-tenants-function",
   statements: [
     `DO $serving$ BEGIN EXECUTE format($sql$CREATE OR REPLACE FUNCTION qm_serving_tenants() RETURNS SETOF uuid
       LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = %1$I, pg_temp AS $f$
@@ -77,7 +76,6 @@ const SERVING_TENANTS: PgMigrationDefinition = {
         RETURN QUERY SELECT id FROM tenants
           WHERE settings->>'serving' IS DISTINCT FROM 'false' OR qm_boot_tenant() IS NOT NULL;
       END $f$$sql$, current_schema()); END $serving$`,
-    `GRANT EXECUTE ON FUNCTION qm_serving_tenants() TO PUBLIC`,
   ],
 };
 

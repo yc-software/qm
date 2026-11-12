@@ -777,7 +777,7 @@ test("cron fires do not replay prior sessions or inline prior fire context", asy
   assert.deepEqual(priorAssistantSeen, [0, 0], "fire 2 does not replay fire 1's assistant entry");
   assert.match(texts[1] ?? "", /no memory of previous fires/);
   assert.match(texts[1] ?? "", /action="runs"/);
-  assert.match(texts[1] ?? "", /Files via the available Files API/);
+  assert.match(texts[1] ?? "", /upload helper listed in GET \/v1\/apis/);
   assert.match(texts[1] ?? "", /GET \/v1\/files\/:id\/content/);
   assert.match(texts[1] ?? "", /confirm publication succeeds/);
   assert.match(texts[1] ?? "", /If publication is unavailable/);

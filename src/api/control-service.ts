@@ -607,7 +607,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         return {
           ok: false,
           code: "bad_request",
-          message: `the note is ${length} chars — the cap is ${CRON_FIRE_NOTE_MAX_CHARS}. Trim it to the outcome plus what the next fire must know; publish longer state to this conversation's Files via the available Files API, verify success, and put the file ID in the note for GET /v1/files/:id/content. If publication is unavailable, report it and retain needed local state on a scoped computer.`,
+          message: `the note is ${length} chars — the cap is ${CRON_FIRE_NOTE_MAX_CHARS}. Trim it to the outcome plus what the next fire must know; publish longer state to this conversation's Files with the upload helper listed in GET /v1/apis, verify success, and put the file ID in the note for GET /v1/files/:id/content. If publication is unavailable, report it and retain needed local state on a scoped computer.`,
         };
       }
       if (echoesCronContextMarkers(flattened)) {
@@ -632,7 +632,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         return {
           ok: false,
           code: "bad_request",
-          message: `cron ${id}'s fires don't read shift-change notes (it is loop-backed, one-shot, or runs a raw !run/!scratch task) — publish durable handoff state to this conversation's Files via the available Files API and verify success. Keep the published file ID in the consuming workflow for GET /v1/files/:id/content; these fires cannot recover it from a note. If publication is unavailable, report it and retain needed local state on a scoped computer.`,
+          message: `cron ${id}'s fires don't read shift-change notes (it is loop-backed, one-shot, or runs a raw !run/!scratch task) — publish durable handoff state to this conversation's Files with the upload helper listed in GET /v1/apis and verify success. Keep the published file ID in the consuming workflow for GET /v1/files/:id/content; these fires cannot recover it from a note. If publication is unavailable, report it and retain needed local state on a scoped computer.`,
         };
       }
       const ownFire = capability.threadRef?.startsWith(`cron:${id}:fire:`) === true;
