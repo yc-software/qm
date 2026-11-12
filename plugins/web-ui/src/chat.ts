@@ -161,7 +161,7 @@ import type { ChatSurface, ConvCtx } from "./conv-types";
 import { errMessage, swallow } from "../../chassis/src/errors";
 import { showStateError } from "./error-banner";
 import { tellEmbedderOfFinishedTools } from "./embedder";
-import { splitLinks } from "../../chassis/src/links.ts";
+import { splitLinks } from "./linkify";
 import { slackPreviewText, slackWireToPlain, splitSlackWire, stripSlackDirectives } from "./slack-text";
 import { charForName } from "./emoji-picker";
 import { installMarkdownSanitizer } from "./markdown-sanitize";

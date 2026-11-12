@@ -27,15 +27,18 @@ their breaks. Blank lines separate paragraphs.
 
 import argparse
 import base64
+import html
 import json
 import os
+import re
 import subprocess
 import tempfile
 import sys
 import urllib.parse
 from email.message import EmailMessage
 from email.policy import SMTP
-from email.utils import formataddr, getaddresses
+from email.utils import formataddr, getaddresses, parseaddr, parsedate_to_datetime
+from html.parser import HTMLParser
 
 API = "https://gmail.googleapis.com/gmail/v1/users/me"
 
@@ -105,20 +108,130 @@ def read_body(path: str) -> str:
     return "\n\n".join(out)
 
 
+URL_RE = re.compile(r"https?://[^\s<>\"']+")
+CLOSERS = {")": "(", "]": "[", "}": "{"}
+TRAILING = ".,;:!?\u201c\u201d\u2018\u2019\u00ab\u00bb\u2026"
+DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+QUOTE_STYLE = "margin:0px 0px 0px 0.8ex;border-left:1px solid rgb(204,204,204);padding-left:1ex"
+
+
+def esc(text: str) -> str:
+    return html.escape(text).replace("&#x27;", "&#39;")
+
+
+def link_end(url: str) -> int:
+    unmatched = {close: url.count(close) - url.count(open_) for close, open_ in CLOSERS.items()}
+    end = len(url)
+    while end:
+        ch = url[end - 1]
+        if unmatched.get(ch, 0) > 0:
+            unmatched[ch] -= 1
+        elif ch not in TRAILING:
+            break
+        end -= 1
+    return end
+
+
+def html_line(line: str) -> str:
+    if not line:
+        return "<br>"
+    text, out, last = line.replace("  ", "\u00a0 "), [], 0
+    for m in URL_RE.finditer(text):
+        url = m.group(0)[:link_end(m.group(0))]
+        out.append(esc(text[last:m.start()]))
+        out.append(f'<a href="{esc(url)}">{esc(url)}</a>')
+        last = m.start() + len(url)
+    return "".join(out) + esc(text[last:])
+
+
+def html_mirror(text: str) -> str:
+    first, *rest = text.split("\n")
+    return '<div dir="ltr">' + html_line(first) + "".join(f"<div>{html_line(ln)}</div>" for ln in rest) + "</div>"
+
+
+class QuotedBody(HTMLParser):
+    SKIP = {"head", "style", "script", "title"}
+    DROP = {"html", "body", "meta", "link", "base"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=False)
+        self.out: list[str] = []
+        self.skipping = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self.SKIP:
+            self.skipping += 1
+        elif not self.skipping and tag not in self.DROP and not (
+                tag == "img" and (dict(attrs).get("src") or "").lower().startswith("cid:")):
+            self.out.append(self.get_starttag_text())
+
+    def handle_startendtag(self, tag, attrs):
+        if tag not in self.SKIP:
+            self.handle_starttag(tag, attrs)
+
+    def handle_endtag(self, tag):
+        if tag in self.SKIP:
+            self.skipping = max(0, self.skipping - 1)
+        elif not self.skipping and tag not in self.DROP and tag != "img":
+            self.out.append(f"</{tag}>")
+
+    def handle_data(self, data):
+        if not self.skipping:
+            self.out.append(data)
+
+    def handle_entityref(self, name):
+        self.handle_data(f"&{name};")
+
+    def handle_charref(self, name):
+        self.handle_data(f"&#{name};")
+
+    def handle_comment(self, data):
+        self.handle_data(f"<!--{data}-->")
+
+
+def quoted_html(markup: str) -> str:
+    parser = QuotedBody()
+    parser.feed(markup)
+    parser.close()
+    return "".join(parser.out)
+
+
+def part_text(payload: dict, mime: str) -> str:
+    if payload.get("mimeType") == mime and payload.get("body", {}).get("data"):
+        return base64.urlsafe_b64decode(payload["body"]["data"] + "==").decode("utf-8", "replace")
+    return next((t for p in payload.get("parts", []) if (t := part_text(p, mime))), "")
+
+
+def sent_at(date: str) -> str:
+    try:
+        at = parsedate_to_datetime(date)
+    except (TypeError, ValueError):
+        return ""
+    hour = at.hour % 12 or 12
+    return (f"{DAYS[at.weekday()]}, {MONTHS[at.month - 1]} {at.day}, {at.year} at "
+            f"{hour}:{at.minute:02d}\u202f{'PM' if at.hour >= 12 else 'AM'} ")
+
+
+def gmail_quote(original: dict) -> tuple[str, str]:
+    h = headers_of(original["payload"])
+    name, address = parseaddr(h.get("from", ""))
+    attribution = sent_at(h.get("date", "")) + (f"{name} " if name else "")
+    plain = part_text(original["payload"], "text/plain").replace("\r\n", "\n")
+    rich = part_text(original["payload"], "text/html").replace("\r\n", "\n")
+    quoted = "\n".join(f">{ln}" if ln.startswith(">") else (f"> {ln}" if ln else ">") for ln in plain.split("\n"))
+    text = f"On {attribution}<{address}> wrote:\n\n{quoted}"
+    markup = (f'<br><div class="gmail_quote gmail_quote_container"><div dir="ltr" class="gmail_attr">'
+              f'On {esc(attribution)}&lt;<a href="mailto:{esc(address)}">'
+              f'{esc(address)}</a>&gt; wrote:<br></div>'
+              f'<blockquote class="gmail_quote" style="{QUOTE_STYLE}">'
+              f'{quoted_html(rich) if rich else html_mirror(plain)}</blockquote></div>')
+    return text, markup
+
+
 def compose(body: str, original: dict | None = None) -> dict:
-    base, cap = os.environ.get("AGENT_API_URL", ""), os.environ.get("AGENT_API_TOKEN", "")
-    if not (base and cap):
-        sys.exit("composing mail needs the agent API (AGENT_API_URL / AGENT_API_TOKEN)")
-    res = subprocess.run(
-        ["curl", "-sS", "-X", "POST", "--data-binary", "@-",
-         "-H", f"X-Agent-Capability: {cap}", "-H", "Content-Type: application/json",
-         "-w", "\n%{http_code}", f"{base}/v1/connectors/gmail/compose"],
-        input=json.dumps({"body": body, **({"original": original} if original else {})}),
-        capture_output=True, text=True)
-    text, _, status = res.stdout.rpartition("\n")
-    if res.returncode != 0 or not status.startswith("2"):
-        sys.exit(f"compose failed (HTTP {status}, curl exit {res.returncode}: {res.stderr.strip()}): {text}")
-    return json.loads(text)
+    text, markup = gmail_quote(original) if original else ("", "")
+    return {"text": f"{body}\n\n{text}" if text else body, "html": html_mirror(body) + markup}
 
 
 def build_raw(headers: dict[str, str], body: str, thread_id: str | None = None,
