@@ -595,6 +595,16 @@ test("an ask's resolution is one event line, shown only to the first turn after 
   );
 });
 
+const LIVE = { runId: "live-run", runAttempt: 1, runLeaseToken: "live-lease", threadRef: "dm:U_ALICE-live" };
+const liveRun = {
+  status: "running",
+  leaseToken: LIVE.runLeaseToken,
+  attempts: 1,
+  sessionId: LIVE.threadRef,
+  leaseExpiresAt: Infinity,
+  request: { actor: { id: "U_ALICE" } },
+} as never;
+
 describe("/v1/keychain/asks — card approval end to end", async () => {
   let server: Server;
   let base: string;
@@ -671,6 +681,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
       ...(built.fireAskResolution ? { fireAskResolution: built.fireAskResolution } : {}),
       auditLog: built.auditLog,
       credentialUsage: built.credentialUsage,
+      runs: { ...built.runs, get: async (id) => (id === LIVE.runId ? liveRun : built.runs.get(id)) },
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -1169,7 +1180,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
       const threadRef = `dm:U_ALICE-cron-${mode}`;
       const personal = scopeId("personal", "U_ALICE");
       const token = await capFor("U_ALICE", personal, { triggered: true, threadRef });
-      const live = await capFor("U_ALICE", personal, { liveActor: true });
+      const live = await capFor("U_ALICE", personal, { liveActor: true, ...LIVE });
       const { credential } = (await (
         await post(
           "/v1/keychain/credentials",
