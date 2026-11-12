@@ -2,25 +2,22 @@ export type LinkSegment = { kind: "text"; text: string } | { kind: "link"; href:
 
 const URL_RE = /https?:\/\/[^\s<>"']+/g;
 
-const OPENERS: Record<string, string> = { ")": "(", "]": "[", "}": "{" };
-
-const count = (text: string, ch: string): number => text.split(ch).length - 1;
+const CLOSERS: Record<string, string> = { "(": ")", "[": "]", "{": "}" };
 
 function trimTrailing(url: string): string {
-  let out = url;
-  for (;;) {
-    const last = out[out.length - 1] ?? "";
-    if (".,;:!?\u201c\u201d\u2018\u2019\u00ab\u00bb\u2026".includes(last)) {
-      out = out.slice(0, -1);
-      continue;
-    }
-    const opener = OPENERS[last];
-    if (opener && count(out, opener) < count(out, last)) {
-      out = out.slice(0, -1);
-      continue;
-    }
-    return out;
+  const unmatched: Record<string, number> = { ")": 0, "]": 0, "}": 0 };
+  for (const ch of url) {
+    if (ch in unmatched) unmatched[ch]! += 1;
+    if (ch in CLOSERS) unmatched[CLOSERS[ch]!]! -= 1;
   }
+  let end = url.length;
+  for (; end > 0; end--) {
+    const last = url[end - 1]!;
+    if (".,;:!?\u201c\u201d\u2018\u2019\u00ab\u00bb\u2026".includes(last)) continue;
+    if (!((unmatched[last] ?? 0) > 0)) break;
+    unmatched[last]! -= 1;
+  }
+  return url.slice(0, end);
 }
 
 export function splitLinks(text: string): LinkSegment[] {

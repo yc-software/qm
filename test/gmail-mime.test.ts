@@ -35,6 +35,9 @@ test("html mirror escapes markup and keeps punctuation out of links", () => {
     html.includes('<a href="https://x.test/q">https://x.test/q</a>\u201d]'),
     "closing quote and bracket trimmed",
   );
+  const started = performance.now();
+  gmailBodyParts(`http://a.test/${")".repeat(200_000)}`);
+  assert.ok(performance.now() - started < 1000, "a long run of closers trims in linear time");
 });
 
 test("replies quote the original the way Gmail's composer does", () => {
