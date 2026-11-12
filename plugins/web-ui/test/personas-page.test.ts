@@ -274,7 +274,7 @@ test("a reader sees each part of the persona with nothing to add or remove", asy
     Skills: { actions: [], items: [] },
     Crons: { actions: ["New cron"], items: [] },
     Credentials: { actions: [], items: ["github"] },
-    "Slack channels": { actions: [], items: ["design"] },
+    "Channels and groups": { actions: [], items: ["design"] },
     "Who has access": { actions: [], items: ["You"] },
     History: { actions: ["Show 3 versions"], items: [] },
   });
@@ -670,7 +670,7 @@ test("people and groups the Personas flag doesn't reach are marked with where an
   );
   assert.deepEqual(notes("org:acme"), [orgNote]);
   const channels = [...main.querySelectorAll(".persona-section")].find(
-    (section) => section.querySelector("h3")?.textContent?.trim() === "Slack channels",
+    (section) => section.querySelector("h3")?.textContent?.trim() === "Channels and groups",
   )!;
   assert.equal(channels.querySelector(".persona-item .hint"), null);
   assert.equal(channels.querySelector(".permission-note")?.textContent?.trim(), orgNote);

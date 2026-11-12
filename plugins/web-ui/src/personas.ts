@@ -17,7 +17,7 @@ import {
   Trash2,
   X,
 } from "lucide";
-import { api, ApiError, sharedContextLabel, type CoreSession, type ProjectIcon } from "./core-bridge";
+import { api, ApiError, isSharedScopeId, sharedContextLabel, type CoreSession, type ProjectIcon } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { icon } from "./icons";
 import { listBackLink, listPageTpl } from "./list-page";
@@ -382,9 +382,6 @@ function granteeLabel(scopeId: string): string {
   return scopeId;
 }
 
-const inRoom = (grant: Pick<PersonaGrant, "scopeId">): boolean =>
-  grant.scopeId.startsWith("channel:") || grant.scopeId.startsWith("group:");
-
 const isMe = (grant: Pick<PersonaGrant, "scopeId">): boolean => grant.scopeId === `personal:${appState.me?.user ?? ""}`;
 
 function grantLabel(grant: PersonaGrant): string {
@@ -554,7 +551,7 @@ function credentialsSection(persona: PersonaDetail, reload: (flash: string) => v
 
 function channelsSection(persona: PersonaDetail): TemplateResult {
   const owner = canSharePersona(persona.role);
-  const channels = persona.access.filter(inRoom);
+  const channels = persona.access.filter((grant) => isSharedScopeId(grant.scopeId));
   const flagNotes = new Set(channels.filter((grant) => !grant.personasEnabled).map(flagOffNote));
   const flagNote = [...flagNotes].map((note) => html`<p class="permission-note">${note}</p>`);
   const list = channels.length
@@ -582,16 +579,16 @@ function channelsSection(persona: PersonaDetail): TemplateResult {
       </div>`
     : emptyTpl("No channels.");
   return sectionTpl(
-    "Slack channels",
+    "Channels and groups",
     owner ? rowAction("Add channel", Plus, () => void openGranteePicker(persona.id, "channels")) : nothing,
     html`${list}${flagNote}${granteePickerTpl(persona, "channels")}`,
-    `People in these channels and groups can ask QM to use ${persona.name} in a thread there; they can't edit ${persona.name}. Pin it in one to make every conversation there ${persona.name}, posting under its name and icon.`,
+    `People in these channels and groups can ask QM to use ${persona.name} in a thread there; they can't edit ${persona.name}. Pin it in one to make every conversation there ${persona.name}; in Slack it posts under its name and icon.`,
   );
 }
 
 function accessSection(persona: PersonaDetail): TemplateResult {
   const owner = canSharePersona(persona.role);
-  const people = persona.access.filter((grant) => !inRoom(grant));
+  const people = persona.access.filter((grant) => !isSharedScopeId(grant.scopeId));
   const owners = persona.access.filter((grant) => grant.role === "owner");
   return sectionTpl(
     "Who has access",

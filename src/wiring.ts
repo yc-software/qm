@@ -3376,6 +3376,7 @@ export function serverDeps(
     ...(built.processes ? { processes: built.processes } : {}),
     ...(built.browserSessionStore ? { browserSessionStore: built.browserSessionStore } : {}),
     directory: built.directory,
+    projects: built.projects,
     ...(built.ambientJudgments ? { ambientJudgments: built.ambientJudgments } : {}),
     ...(built.ackEmojiPicks ? { ackEmojiPicks: built.ackEmojiPicks } : {}),
     channelPolicy: built.channelPolicy,

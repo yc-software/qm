@@ -18,6 +18,7 @@ import {
 } from "lucide";
 import {
   api,
+  isSharedScopeId,
   sharedContextLabel,
   type CoreContext,
   type CoreProject,
@@ -240,7 +241,7 @@ export function personalScopeId(): string | null {
 }
 
 export function resolveProjectScope(contexts: readonly CoreContext[], slug: string): string | null {
-  if (slug.startsWith("channel:") || slug.startsWith("group:")) {
+  if (isSharedScopeId(slug)) {
     return contexts.some((context) => context.scopeId === slug) ? slug : null;
   }
   const normalized = slug.toLowerCase();
