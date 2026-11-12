@@ -789,7 +789,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           code: "not_found",
           message:
             req.type === "file"
-              ? `no Files record "${req.id}"; put the file in Files first using POST /v1/files/uploads, then share its ID`
+              ? `no Files record "${req.id}"; put the file in Files first with the helper from GET /v1/files/upload-client, then share its ID`
               : `no ${req.type} "${req.id}"`,
         };
 

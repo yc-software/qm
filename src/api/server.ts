@@ -262,7 +262,10 @@ async function gate(
     try {
       body = JSON.parse(raw);
     } catch {
-      sendJson(res, 400, { error: "bad_request", message: "invalid JSON body" });
+      sendJson(res, 400, {
+        error: "bad_request",
+        message: "invalid JSON body; GET /v1/apis lists the available calls and their bodies",
+      });
       return null;
     }
   }

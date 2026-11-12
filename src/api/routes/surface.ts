@@ -692,6 +692,7 @@ async function listAgentApis(ctx: ApiCtx): Promise<void> {
         swarmsEnabled: Boolean(await ctx.app.swarms?.authorizes(capability)),
         personasEnabled: Boolean(await ctx.app.personas?.enabledFor(capability.actorId)),
       },
+      ctx.url.searchParams.get("q") ?? "",
     ),
   );
 }

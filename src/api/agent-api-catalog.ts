@@ -785,6 +785,7 @@ export function renderAgentApis(
   claims: CapabilityClaims,
   admin: { isAdmin: boolean; role?: string },
   features: { swarmsEnabled: boolean; personasEnabled: boolean },
+  query = "",
 ): AgentApiListing {
   const view: AgentApiView = {
     claims,
@@ -792,7 +793,10 @@ export function renderAgentApis(
     swarmsEnabled: features.swarmsEnabled,
     personasEnabled: features.personasEnabled,
   };
-  const visible = [...FAMILIES, WHOAMI_FOR_ALL].filter((f) => f.when?.(view) ?? true);
+  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const visible = [...FAMILIES, WHOAMI_FOR_ALL]
+    .filter((f) => f.when?.(view) ?? true)
+    .filter((f) => terms.every((t) => JSON.stringify(f).toLowerCase().includes(t)));
   return {
     actorId: claims.actorId,
     scopeId: claims.scopeId,
