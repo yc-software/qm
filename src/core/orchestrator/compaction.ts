@@ -88,8 +88,8 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     return parsed.kind === "group" && deps.managedGroups?.recognizes(parsed.ref) === true;
   };
 
-  const keepRecentTokenFraction = (): number =>
-    (deps.config.getCompactionKeepPercent() ?? COMPACT_KEEP_PERCENT.default) / 100;
+  const keepRecentTokenFraction = async (): Promise<number> =>
+    ((await deps.config.getCompactionKeepPercentDurable()) ?? COMPACT_KEEP_PERCENT.default) / 100;
 
   async function summarizeForCompaction(
     input: Omit<CompactionInput, "writer">,
@@ -98,7 +98,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     if (isManagedGroupScope(input.scopeId)) return null;
     if (!deps.agent.compactHistory) return null;
     const maxContextTokens = historyBudgetFor(input);
-    const keepFraction = keepRecentTokenFraction();
+    const keepFraction = await keepRecentTokenFraction();
     const reuseBudgetTokens = Math.floor(maxContextTokens * keepFraction);
     const plan = planCompaction(input.visibleHistory, maxContextTokens, keepFraction, reuseBudgetTokens);
     if (!plan || !plan.toSummarize.length) return null;
@@ -178,7 +178,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
 
   async function compactRecent(input: CompactionInput, failure?: string): Promise<Item[]> {
     input.cancel?.throwIfAborted();
-    const budget = Math.floor(historyBudgetFor(input) * keepRecentTokenFraction());
+    const budget = Math.floor(historyBudgetFor(input) * (await keepRecentTokenFraction()));
     const prior = input.visibleHistory.findLast((entry) => contextSummary(entry));
     const rest = input.visibleHistory.filter((entry) => !contextSummary(entry));
     const header = failure ? `${RECENT_NOTICE}\nThe summary call failed: ${failure}` : RECENT_NOTICE;

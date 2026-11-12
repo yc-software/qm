@@ -35,7 +35,7 @@ async function fixture(keepPercent: number | null = null) {
     errors: createPostgresErrorLog(testDatabaseUrl()),
     agent,
     maxContextTokens: 500,
-    config: { getCompactionKeepPercent: () => keepPercent },
+    config: { getCompactionKeepPercentDurable: async () => keepPercent },
   } as unknown as OrchestratorDeps);
   const input = {
     tenant,

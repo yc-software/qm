@@ -667,7 +667,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     clearable: true,
     label: `Percent of the history budget compaction keeps verbatim, ${COMPACT_KEEP_PERCENT.min}-${COMPACT_KEEP_PERCENT.max} (empty restores the default of ${COMPACT_KEEP_PERCENT.default}). Lower keeps less recent history verbatim but compacts less often and costs less.`,
     readKey: "compactionKeepPercent",
-    get: (deps) => deps.config!.getCompactionKeepPercent(),
+    get: (deps) => deps.config!.getCompactionKeepPercentDurable(),
     apply: generic<number | null>(
       (body, { scope }) =>
         orgOnly(scope, "the compaction keep percent is org-wide") ??

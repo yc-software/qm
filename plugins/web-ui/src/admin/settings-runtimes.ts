@@ -14,6 +14,7 @@ const rows: [key: string, label: string, inherit?: string][] = [
 ];
 const RECALL = "memory-embedding-model";
 const COMPACTION = "compaction-keep-percent";
+const COMPACTION_LABEL = "Compaction keeps";
 const keys = [...rows.map(([key]) => key), RECALL, COMPACTION];
 type Embedding = { id: string; name: string; provider: string };
 const pickers = new Map<string, ReturnType<typeof picker>>();
@@ -123,12 +124,12 @@ function compactionRow() {
   if (!s.available) return nothing;
   const fallback = String(s.context.compactionKeepPercentDefault ?? "");
   return html`<div class="runtime-row" data-runtime-row=${COMPACTION}>
-      <span class="runtime-label">Compaction keeps</span>
+      <span class="runtime-label">${COMPACTION_LABEL}</span>
       <input
         type="number"
         step="1"
         placeholder=${fallback}
-        aria-label="Compaction keeps (percent)"
+        aria-label=${`${COMPACTION_LABEL} (percent)`}
         .value=${s.draft.percent}
         ?disabled=${s.saving}
         @input=${(e: Event) => s.change("percent", (e.target as HTMLInputElement).value.trim())}
@@ -143,7 +144,7 @@ function compactionRow() {
 export function runtimesCard() {
   const shown = keys.map((key) => states.get(key)!).filter((s) => s.available);
   const dirty = shown.filter((s) => s.dirty);
-  const labels = Object.fromEntries([...rows, [RECALL, "Recall runtime"], [COMPACTION, "Compaction keeps"]]);
+  const labels = Object.fromEntries([...rows, [RECALL, "Recall runtime"], [COMPACTION, COMPACTION_LABEL]]);
   const failed = shown.filter((s) => s.tone === "err");
   const status = failed.length
     ? { tone: "err", message: failed.map((s) => `${labels[s.key]}: ${s.message}`).join(" · ") }

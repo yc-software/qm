@@ -66,6 +66,14 @@ export interface PersistedBaseModel {
   fastMode?: boolean;
 }
 type RuntimePurpose = "cron" | "subagent" | "fallback" | "appEdit";
+const ORG_MODEL_FIELDS = [
+  "embeddingModelId",
+  "compactionKeepPercent",
+  "cronRuntime",
+  "subagentRuntime",
+  "fallbackRuntime",
+  "appEditRuntime",
+] as const satisfies readonly (keyof PersistedBaseModel)[];
 export type TurnRuntimePurpose = RuntimePurpose | "infrequentCron";
 
 interface RuntimeSelection {
@@ -169,7 +177,7 @@ export interface ScopedConfigStore {
   setSpendLimit(id: ScopeId, limit: SpendLimit | null): Promise<void>;
   getBrowseMaxSteps(id: ScopeId): number | null;
   setBrowseMaxSteps(id: ScopeId, steps: number | null): Promise<void>;
-  getCompactionKeepPercent(): number | null;
+  getCompactionKeepPercentDurable(): Promise<number | null>;
   setCompactionKeepPercent(percent: number | null): Promise<void>;
   getEmbeddingModelDurable(): Promise<string | null>;
   setEmbeddingModel(modelId: string | null): Promise<void>;
@@ -336,16 +344,9 @@ export function createConfigStore(
   const connectorMapKey = (id: ScopeId, provider: string) => `${id}|${provider}`;
 
   const org = scopeId("org", orgId);
-  const purposeFields = (id: ScopeId, row?: PersistedBaseModel | null) =>
-    id === org
-      ? {
-          ...(row?.embeddingModelId ? { embeddingModelId: row.embeddingModelId } : {}),
-          ...(row?.compactionKeepPercent ? { compactionKeepPercent: row.compactionKeepPercent } : {}),
-          ...(row?.cronRuntime ? { cronRuntime: row.cronRuntime } : {}),
-          ...(row?.subagentRuntime ? { subagentRuntime: row.subagentRuntime } : {}),
-          ...(row?.fallbackRuntime ? { fallbackRuntime: row.fallbackRuntime } : {}),
-          ...(row?.appEditRuntime ? { appEditRuntime: row.appEditRuntime } : {}),
-        }
+  const purposeFields = (id: ScopeId, row?: PersistedBaseModel | null): Partial<PersistedBaseModel> =>
+    id === org && row
+      ? Object.fromEntries(ORG_MODEL_FIELDS.filter((key) => row[key]).map((key) => [key, row[key]]))
       : {};
   const withoutRuntime = (id: ScopeId, row: PersistedBaseModel | null): PersistedBaseModel => ({
     scopeId: id,
@@ -382,7 +383,7 @@ export function createConfigStore(
     if (row) tenantState().baseModels.set(id, row);
     else tenantState().baseModels.delete(id);
   };
-  const setOrgModelField = async <K extends "embeddingModelId" | "compactionKeepPercent" | `${RuntimePurpose}Runtime`>(
+  const setOrgModelField = async <K extends (typeof ORG_MODEL_FIELDS)[number]>(
     key: K,
     value: PersistedBaseModel[K] | null,
   ) => {
@@ -741,7 +742,7 @@ export function createConfigStore(
     setSpendLimit: (id, limit) => settings.spendLimits.set(id, limit),
     getBrowseMaxSteps: (id) => settings.browseMaxSteps.get(id) ?? null,
     setBrowseMaxSteps: (id, steps) => settings.browseMaxSteps.set(id, steps),
-    getCompactionKeepPercent: () => tenantState().baseModels.get(org)?.compactionKeepPercent ?? null,
+    getCompactionKeepPercentDurable: async () => (await baseModelStore.get(org))?.compactionKeepPercent ?? null,
     setCompactionKeepPercent: (percent) => setOrgModelField("compactionKeepPercent", percent),
     getEmbeddingModelDurable: async () => (await baseModelStore.get(org))?.embeddingModelId ?? null,
     setEmbeddingModel: (modelId) => setOrgModelField("embeddingModelId", modelId),
