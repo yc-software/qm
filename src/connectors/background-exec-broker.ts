@@ -8,7 +8,6 @@ import { CONFIG_DEFAULTS } from "../config.ts";
 import { createExactSecretValueMasker } from "../security/secret-masking.ts";
 import { withCleanup } from "../util/errors.ts";
 import { SandboxAccessError } from "../sandbox/sandbox-resources.ts";
-import { NoDefaultSandboxError } from "../sandbox/sandbox-routing.ts";
 
 export interface BackgroundExecBrokerDeps {
   sandbox: ProcessSandbox;
@@ -282,7 +281,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
           (deps.assertComputerUsable?.(r.sandboxId) ?? Promise.resolve()).then(
             () => true,
             (error: unknown) => {
-              if (error instanceof SandboxAccessError || error instanceof NoDefaultSandboxError) return false;
+              if (error instanceof SandboxAccessError) return false;
               throw error;
             },
           ),

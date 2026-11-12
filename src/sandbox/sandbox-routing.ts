@@ -100,8 +100,11 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
   const useHandle = <T>(handle: SandboxHandle, action: () => Promise<T>): Promise<T> =>
     handle.resourceId ? resources.use(handle.resourceId, action) : action();
 
+  const resourceFor = (scopeId: string, sandboxId: string | undefined) =>
+    sandboxId !== undefined ? resources.get(sandboxId) : resources.resolve(scopeId);
+
   async function computerTarget(scopeId: string, sandboxId?: string) {
-    const resource = sandboxId !== undefined ? await resources.get(sandboxId) : await resources.resolve(scopeId);
+    const resource = await resourceFor(scopeId, sandboxId);
     if (!resource) throw new NoDefaultSandboxError();
     return {
       sandbox: backendFor(resource.backend),
@@ -160,13 +163,12 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
     profile: fallback.profile,
 
     async profileFor(scopeId: string, sandboxId?: string): Promise<AgentComputerProfile> {
-      const resource = sandboxId !== undefined ? await resources.get(sandboxId) : await resources.resolve(scopeId);
+      const resource = await resourceFor(scopeId, sandboxId);
       return resource ? backendFor(resource.backend).profile : fallback.profile;
     },
 
     async provision(scope: ScopeId, provOpts?: ProvisionOptions): Promise<SandboxHandle> {
-      const resource =
-        provOpts?.sandboxId !== undefined ? await resources.get(provOpts.sandboxId) : await resources.resolve(scope);
+      const resource = await resourceFor(scope, provOpts?.sandboxId);
       const backend = resource?.backend ?? (provOpts?.scratch ? await resources.defaultBackend() : defaultBackend);
       const sandbox = backendFor(backend);
       const provision = async (target: ScopeId, options = provOpts) => {
