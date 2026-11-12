@@ -327,6 +327,7 @@ test("outside a swarm, a Slack bot's background job on its own computer is stopp
   await turn(releaseBot, true);
   const [botJob] = (await processes.listLive()).filter((job) => job.sandboxId === bots.id);
   await reaper.sweepNow();
+  assert.deepEqual(stopped, []);
   assert.equal((await processes.get(botJob!.processId))?.botActor, releaseBot.id);
   const personJob = await processes.register({
     processId: `alice-${bots.id}`,

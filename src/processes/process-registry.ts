@@ -124,7 +124,7 @@ export function createPostgresProcessRegistry(connectionString: string): Process
       id: "processes/registry/0007-bot-actor",
       statements: [
         "ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS bot_actor TEXT",
-        `CREATE OR REPLACE FUNCTION fill_process_session_bot_actors() RETURNS void LANGUAGE plpgsql AS $$ BEGIN IF to_regclass('runs') IS NOT NULL THEN UPDATE process_sessions p SET bot_actor = CASE WHEN r.request::jsonb ->> 'botActor' = 'true' THEN coalesce(r.request::jsonb -> 'actor' ->> 'id', '') ELSE '' END FROM runs r WHERE r.tenant_id = p.tenant_id AND r.id = p.run_id AND p.status = 'running' AND p.bot_actor IS NULL; END IF; END $$`,
+        `CREATE OR REPLACE FUNCTION fill_process_session_bot_actors() RETURNS void LANGUAGE plpgsql AS $$ BEGIN IF to_regclass('runs') IS NOT NULL THEN UPDATE process_sessions p SET bot_actor = CASE WHEN r.request::jsonb ->> 'botActor' = 'true' THEN coalesce(r.request::jsonb -> 'actor' ->> 'id', '') ELSE '' END FROM runs r WHERE r.tenant_id = p.tenant_id AND r.id = p.run_id AND p.status = 'running' AND p.bot_actor IS NULL AND pg_input_is_valid(r.request, 'jsonb'); END IF; END $$`,
         claimFunction(
           "claim_live_bot_process_sessions",
           "bigint",

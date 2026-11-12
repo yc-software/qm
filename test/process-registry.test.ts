@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import pg from "pg";
 import assert from "node:assert/strict";
 import {
   createPostgresProcessRegistry,
@@ -219,7 +220,7 @@ test("registry preserves purpose without replacing the command and accepts legac
   }
 });
 
-test("a running job whose run was a bot's turn is claimed as that bot's job, and a person's job is not", async () => {
+test("a running job whose run was a bot's turn is claimed as that bot's job, while a person's job and a job whose run Postgres can't read as JSON are not", async () => {
   const url = testDatabaseUrl();
   const { runs } = createPostgresRunStore(url);
   const registry = createPostgresProcessRegistry(url);
@@ -245,9 +246,14 @@ test("a running job whose run was a bot's turn is claimed as that bot's job, and
       ttlMs: 600_000,
       runId: run.id,
     });
+    return run.id;
   };
   await job("bot-job", { id: "release-bot", type: "internal" }, true);
   await job("person-job", { id: "alice", type: "internal" }, false);
+  const unreadable = await job("unreadable-job", { id: "release-bot", type: "internal" }, true);
+  const raw = new pg.Pool({ connectionString: url, max: 1 });
+  await raw.query("UPDATE runs SET request = $2 WHERE id = $1", [unreadable, '{"text":"\\u0000"}']);
+  await raw.end();
   assert.deepEqual(
     (await registry.claimLiveBotJobs()).map((row) => row.id),
     ["bot-job"],
