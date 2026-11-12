@@ -2,7 +2,7 @@ import { loadPersonalModelAuth } from "../../core/individual-auth-routing.ts";
 import { BROWSER_MODEL_AUD } from "../../auth/capability-token.ts";
 import { routeLabel } from "../../model/model-route.ts";
 import { sendJson } from "../http.ts";
-import { companyClaudeSubscription, respondChatCompletion } from "./chat-completion-response.ts";
+import { respondChatCompletion } from "./chat-completion-response.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
 const REQUEST_FIELDS = new Set([
@@ -51,7 +51,11 @@ async function browserModel(ctx: ApiCtx): Promise<void> {
     runtime: { modelId: capability.browserModel },
     ...(personal ? { providerKeys: personal.keys } : {}),
   });
-  if (personal ? personal.subscription === "anthropic" : companyClaudeSubscription(deps, route))
+  if (
+    personal
+      ? personal.subscription === "anthropic"
+      : deps.companySubscriptionAuth === "anthropic" && route.model.provider === "anthropic"
+  )
     return sendJson(res, 422, {
       error:
         "Claude subscription access does not support the browser agent. Choose company access, ChatGPT, or a Claude API key in Settings.",

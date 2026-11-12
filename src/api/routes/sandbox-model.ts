@@ -12,7 +12,7 @@ import { estimateCostUsd } from "../../ratelimit/budget.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { reportFailure } from "../../util/errors.ts";
 import { runtimeConfigBody } from "../runtime-config.ts";
-import { companyClaudeSubscription, respondChatCompletion } from "./chat-completion-response.ts";
+import { respondChatCompletion } from "./chat-completion-response.ts";
 import { SANDBOX_MODEL_PREFIX } from "../contract.ts";
 import { sendJson } from "../http.ts";
 import { relayStream } from "../../../plugins/chassis/src/http.ts";
@@ -54,24 +54,23 @@ async function denied(ctx: ApiCtx): Promise<boolean> {
   return false;
 }
 
+function gatewayTarget(gateway: ModelGatewayTransportConfig | undefined, modelId: string): string | undefined {
+  return gateway && Object.hasOwn(gateway.models, modelId) ? gateway.models[modelId] : undefined;
+}
+
 async function listModels(ctx: ApiCtx, gateway: ModelGatewayTransportConfig | undefined): Promise<void> {
-  const { models } = await runtimeConfigBody(ctx, ctx.capability!.scopeId);
-  const ids = [...new Set([...Object.keys(gateway?.models ?? {}), ...models])];
-  const routes = await Promise.all(ids.map((id) => companyRoute(ctx, id)));
-  const data = ids.flatMap((id, i) => {
-    const route = routes[i];
-    if (gateway && Object.hasOwn(gateway.models, id) && route?.billing !== "org_key")
-      return [{ id, object: "model", owned_by: "gateway" }];
-    if (!route) return [];
-    return [
-      {
+  const { modelCatalog } = await runtimeConfigBody(ctx, ctx.capability!.scopeId);
+  const data: Array<{ id: string; object: "model"; owned_by: string; endpoints?: string[] }> = Object.keys(
+    gateway?.models ?? {},
+  ).map((id) => ({ id, object: "model", owned_by: "gateway" }));
+  for (const [id, meta] of Object.entries(modelCatalog))
+    if (!gatewayTarget(gateway, id))
+      data.push({
         id,
         object: "model",
-        owned_by: route.billing === "org_key" ? "organization" : "gateway",
+        owned_by: meta.billing === "org_key" ? "organization" : "gateway",
         endpoints: ["/v1/chat/completions"],
-      },
-    ];
-  });
+      });
   sendJson(ctx.res, 200, { object: "list", data });
 }
 
@@ -90,8 +89,6 @@ async function complete(ctx: ApiCtx, route: ModelRoute, input: Record<string, un
       400,
       error(`${route.modelId} takes only non-streamed chat completions: POST $MODEL_GATEWAY_URL/v1/chat/completions`),
     );
-  if (companyClaudeSubscription(deps, route))
-    return sendJson(res, 422, error("Claude subscription access can't serve sandbox requests; pick another model"));
   const result = await respondChatCompletion(ctx, route, input, "sandbox", error);
   if (result)
     await deps.budget
@@ -104,27 +101,27 @@ async function proxy(ctx: ApiCtx): Promise<void> {
   const { deps, body, req, res, capability, url, pathname, method } = ctx;
   const path = pathname.slice(SANDBOX_MODEL_PREFIX.length);
   const gateway = deps.modelGatewayTransport?.actorKey ? deps.modelGatewayTransport : undefined;
+  await gateway?.refresh?.();
+  if (method === "GET" && path === "/v1/models") return listModels(ctx, gateway);
   const input =
     body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : undefined;
   const requested = typeof input?.model === "string" ? input.model : undefined;
-  const [, route] = await Promise.all([gateway?.refresh?.(), requested ? companyRoute(ctx, requested) : undefined]);
-  if (method === "GET" && path === "/v1/models") return listModels(ctx, gateway);
-  const gatewayTarget =
-    requested && gateway && Object.hasOwn(gateway.models, requested) && route?.billing !== "org_key"
-      ? gateway.models[requested]
-      : undefined;
-  if (input && route && !gatewayTarget) return complete(ctx, route, input);
-  if (!gateway || (input && Object.hasOwn(input, "model") && !gatewayTarget))
+  const target = requested ? gatewayTarget(gateway, requested) : undefined;
+  const route = input && requested && !target ? await companyRoute(ctx, requested) : undefined;
+  if (input && route) return complete(ctx, route, input);
+  if (!gateway || (input && Object.hasOwn(input, "model") && !target))
     return sendJson(res, 400, {
       error: {
         message: `model ${JSON.stringify(input?.model)} is not available; GET $MODEL_GATEWAY_URL/v1/models lists the models you can use`,
       },
     });
   let payload = body;
-  if (input) {
-    const user = gatewayActorId(capability!.actorId, gateway.actorKey!);
-    payload = attributed(path, gatewayTarget ? { ...input, model: gatewayTarget } : input, user);
-  }
+  if (input)
+    payload = attributed(
+      path,
+      target ? { ...input, model: target } : input,
+      gatewayActorId(capability!.actorId, gateway.actorKey!),
+    );
   const headers: Record<string, string> = {
     "content-type": "application/json",
     ...modelGatewayHeaders(gateway, "sandbox"),

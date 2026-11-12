@@ -4,12 +4,6 @@ import { errMessage, reportFailure } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import type { ApiCtx } from "./route.ts";
 
-export function companyClaudeSubscription(deps: ApiCtx["deps"], route: ModelRoute): boolean {
-  return (
-    deps.companySubscriptionAuth === "anthropic" && route.model.provider === "anthropic" && route.billing === "org_key"
-  );
-}
-
 export async function respondChatCompletion(
   ctx: ApiCtx,
   route: ModelRoute,

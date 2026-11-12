@@ -60,15 +60,14 @@ grant: the token authorizes model inference and nothing else. Strict posture iss
 key enters the sandbox.
 
 `GET /v1/models` lists what the company's turns can use, by the same IDs the model picker uses, with `owned_by` saying
-who bills each: `gateway` or `organization`. A request names a model; core resolves it with the same model route a
-turn would use. A model the gateway offers and the route bills to the gateway is forwarded as described below. Any
-other servable model (a saved provider key, a deployment key, a custom provider, or a gateway model the gateway does
-not name directly) is listed with `endpoints: ["/v1/chat/completions"]`: core translates OpenAI chat completions (text,
-inline data-URL images and an optional `json_schema` response format, no tools or streaming) into the route's protocol
-through the same code the browser model uses, and returns a non-streamed completion. Other paths and streaming are
-refused for these with a 400 that says so, and company Claude subscription routes are refused as they are for the
-browser model. These calls are charged to the actor's QM budget, since no gateway meters them. Custom provider models
-accept image input; a provider that cannot take images answers with its own error.
+who bills each: `gateway` or `organization`. A model the gateway names is forwarded to it as described below. Every other
+listed model carries `endpoints: ["/v1/chat/completions"]`: core resolves it with the same model route a turn would use
+(a saved provider key, a deployment key, a custom provider, a company subscription, or a gateway model the gateway does
+not name directly) and translates OpenAI chat completions (text, inline data-URL images for models that take them, and
+an optional `json_schema` response format; no tools or streaming) into the route's protocol through the same code the
+browser model uses, returning a non-streamed completion. Other paths and streaming are refused for these with a 400
+that says so, and provider errors come back with their text. These calls are charged to the actor's QM budget, since
+no gateway meters them.
 
 For gateway models, core forwards any JSON request under the prefix to the same path on the gateway, so
 `$MODEL_GATEWAY_URL/v1/...` behaves as an OpenAI-compatible base URL. It accepts the token as `Authorization: Bearer`,
