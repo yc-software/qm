@@ -9,7 +9,7 @@ import type {
   SessionStore,
 } from "./session-store.ts";
 import { AGENT_REPLY_ITEM, msOf, TENANT } from "./items.ts";
-import { LIST_COLUMNS, OWN_CHAT, rowToParticipantSession, USER_ACTIVITY } from "./session-rows.ts";
+import { BOT_VISIBLE, LIST_COLUMNS, OWN_CHAT, rowToParticipantSession, USER_ACTIVITY } from "./session-rows.ts";
 
 const SEES_ITEMS = "COALESCE(s.messages, 0) > 0";
 const HAS_CONTENT = `(NULLIF(btrim(COALESCE(p.title, s.title)), '') IS NOT NULL OR ${SEES_ITEMS})`;
@@ -39,10 +39,10 @@ export function createSessionParticipants(
   | "distinctParticipants"
   | "participantsOf"
 > {
-  const participantSessions = async (principalId: string, opts?: { limit: number }): Promise<Session[]> => {
-    const limit = opts ? Math.max(0, Math.floor(opts.limit)) : undefined;
+  const participantSessions: SessionStore["listByParticipant"] = async (principalId, opts) => {
+    const limit = opts?.limit === undefined ? undefined : Math.max(0, Math.floor(opts.limit));
     const rows = await q(
-      participantSessionsSql("", LIST_COLUMNS) +
+      participantSessionsSql(BOT_VISIBLE(opts?.botActor), LIST_COLUMNS) +
         (limit === undefined ? "" : " ORDER BY COALESCE(s.last_activity, s.created_at) DESC, s.id LIMIT $2"),
       limit === undefined ? [principalId] : [principalId, limit],
     );
