@@ -1,7 +1,8 @@
 import type { AuditEvent } from "../../audit/audit-log.ts";
 import { orgId } from "../../config.ts";
 import { createSpendLimits, spendLimitRefusal } from "../../ratelimit/spend-limits.ts";
-import { createCanWriteScope, proactiveScopeDelegation, rosterAdmits } from "../../resolution/scope-membership.ts";
+import { createCanWriteScope, rosterAdmits } from "../../resolution/scope-membership.ts";
+import { withAmbientWakes } from "../../resolution/ambient-wake.ts";
 import { isSubagentThreadRef } from "../../sessions/session-syscalls.ts";
 import { scopeId as toScopeId, type ScopeId, type Session, type TurnResult } from "../../types.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
@@ -38,11 +39,10 @@ export async function admitSubagentSession(
       !delegatedSession?.spawnMeta ||
       delegatedSession.scopeId !== deps.resolution.scopeFor(conversation, actor) ||
       !(await deps.sessions.getForParticipant(delegatedSession.id, actor.id)) ||
-      (!(await canWrite(actor.id, delegatedSession.scopeId)) &&
-        !(
-          delegatedSession.spawnMeta.actor.id === actor.id &&
-          proactiveScopeDelegation(delegatedSession.spawnMeta, delegatedSession.scopeId, deps.externalSlackPolicies)
-        ))
+      !(await withAmbientWakes(canWrite, deps.externalSlackPolicies)(
+        { ...delegatedSession.spawnMeta, actor },
+        delegatedSession.scopeId,
+      ))
     )
       return {
         delegatedSession,

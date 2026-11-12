@@ -46,7 +46,6 @@ import { createRuntimeService } from "./agent/runtime-control.ts";
 import {
   createSessionSyscalls,
   type SessionSyscallsFactory,
-  sessionTreeRoot,
   sessionTreeWorking,
   stoppableRoot,
 } from "./sessions/session-syscalls.ts";
@@ -195,13 +194,12 @@ import {
   createCurrentScopeMembers,
   createIsCurrentSharedScopeMember,
   createManagesArtifactHome,
-  proactiveScopeDelegation,
   rosterAdmits,
   type CanReadScope,
   type CanManageScope,
   type ManagesArtifactHome,
-  type ScopeDelegationRequest,
 } from "./resolution/scope-membership.ts";
+import { ambientActorId, withAmbientWakes } from "./resolution/ambient-wake.ts";
 import type { DeployGitArchive } from "./deploy/deploy-git-store.ts";
 import type { MemoryService } from "./memory/memory-service.ts";
 import { createRegistryMemoryService } from "./memory/registry-memory.ts";
@@ -2101,12 +2099,11 @@ export function buildApp(
     }
     return broker;
   };
-  const scopeDelegation = (request: ScopeDelegationRequest, scope: ScopeId) =>
-    proactiveScopeDelegation(request, scope, config.externalSlackPolicies);
+  const canActInScope = withAmbientWakes(canWriteScope, config.externalSlackPolicies);
+  const treeRoot = async (session: Session) => (await stoppableRoot(sessions, session))?.id ?? session.id;
   const prepareSessionRequest = async (request: Parameters<RunStore["enqueue"]>[0]["request"]) => {
     const scope = resolution.scopeFor(request.conversation, request.actor);
-    if (!(await canWriteScope(request.actor.id, scope)) && !scopeDelegation(request, scope))
-      throw new Error("session actor no longer has scope access");
+    if (!(await canActInScope(request, scope))) throw new Error("session actor no longer has scope access");
     const ref = request.conversation.channelRef;
     if (request.conversation.kind !== "group" || !ref || !projects.recognizes(ref)) return request;
     const version = await projects.version(ref);
@@ -2148,11 +2145,9 @@ export function buildApp(
     maxAttempts,
     advisoryLock,
     prepareRequest: prepareSessionRequest,
-    authorize: async (session, actorId, request, caller) =>
-      (await canWriteScope(actorId, session.scopeId)) ||
-      (request.actor.id === actorId &&
-        scopeDelegation(request, session.scopeId) &&
-        (await sessionTreeRoot(sessions, session)).id === (await sessionTreeRoot(sessions, caller)).id),
+    authorize: async (target, request, from) =>
+      (await canActInScope(request, target.scopeId)) &&
+      (request.actor.id !== ambientActorId() || (await treeRoot(target)) === (await treeRoot(from))),
     conversations: {
       search: ({ query, principals, limit }) => app.searchConversations(query, principals, limit),
       list: (actorId) => app.listSessions(actorId),
