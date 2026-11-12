@@ -530,6 +530,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ? await delegatedAuthorizationOrigin(input, { runs: deps.runs, sessions: deps.sessions })
           : undefined;
       const authorizationOrigin = sessionTurn ? (delegatedOrigin ?? { kind: "automation" as const }) : input.origin;
+      const triggeredTurn = automatedTurn || authorizationOrigin.kind === "automation";
       const ownerFireTurn = isOwnerFire({ origin: authorizationOrigin, botActor: input.botActor }) && !input.swarm;
       const liveTurn = (authorizationOrigin.kind === "human" || ownerFireTurn) && allInternal && !external;
       const liveAuthorTurn =
@@ -1166,7 +1167,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         allInternal,
         liveTurn,
         liveAuthorTurn: livePersonTurn,
-        automatedTurn,
+        triggeredTurn,
         actAsActor,
         useMemory,
         memoryPolicy,
@@ -2059,7 +2060,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...scopeAttestation,
           exp: Date.now() + CAPABILITY_TTL_MS,
           ...(livePersonTurn ? { liveAuthor: true } : {}),
-          ...(automatedTurn ? { triggered: true } : {}),
+          ...(triggeredTurn ? { triggered: true } : {}),
         };
         const restoredRuntime =
           input.runId && isRetry
