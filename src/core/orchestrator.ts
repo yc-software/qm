@@ -690,6 +690,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         screenInbound,
         replaysHeldInput,
         enforceScreen,
+        ambientTurn,
         sessionTurn,
         swarmBinding,
         classifyAs,

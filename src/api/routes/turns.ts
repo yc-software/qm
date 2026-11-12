@@ -22,6 +22,7 @@ function renderSurfaceBriefing(surface: SurfaceBriefing): string {
 function isTurnRequest(body: unknown): body is TurnRequest {
   return (
     isObj(body) &&
+    typeof body.surface === "string" &&
     typeof body.text === "string" &&
     isObj(body.actor) &&
     typeof body.actor.externalId === "string" &&

@@ -256,6 +256,7 @@ export interface InboundScreenTurn {
   screenInbound: boolean;
   replaysHeldInput: boolean;
   enforceScreen: boolean;
+  ambientTurn: boolean;
   sessionTurn: boolean;
   swarmBinding: Awaited<ReturnType<NonNullable<OrchestratorDeps["swarms"]>["binding"]>> | undefined;
   classifyAs: ClassifyAs;
@@ -270,15 +271,12 @@ export function screenedFields(
     "text" | "gatewayContext" | "conversationHeader" | "overheard" | "attachments" | "inboundNotes"
   > & {
     surface?: string;
-    origin?: TurnOrigin;
-    actor: { displayName?: string };
     conversation: { kind: string };
   },
 ) {
   const dm = request.conversation.kind === "dm";
   return {
     text: request.text,
-    sender: request.origin?.kind === "ambient" ? (request.actor.displayName ?? "") : "",
     conversationHeader: request.conversationHeader ?? "",
     place: shownPlace(request.surface, request.gatewayContext, dm),
     overheard: request.overheard ?? [],
@@ -288,7 +286,7 @@ export function screenedFields(
 }
 
 async function buildInboundScreen(turn: InboundScreenTurn) {
-  const { deps, input, actor, conversation, scopeId, screenInbound, sessionTurn, swarmBinding } = turn;
+  const { deps, input, actor, conversation, scopeId, screenInbound, ambientTurn, sessionTurn, swarmBinding } = turn;
   const screened = screenedFields(input);
   const blobTransfer = deps.blobTransfer;
   let overheard: OverheardEntryPayload[] = [];
@@ -337,7 +335,9 @@ async function buildInboundScreen(turn: InboundScreenTurn) {
   }
   const externalPromptData = screenInbound
     ? [
-        ...(screened.sender.trim() ? [{ source: "sender", content: senderNote(screened.sender) }] : []),
+        ...(ambientTurn && actor.displayName?.trim()
+          ? [{ source: "sender", content: senderNote(actor.displayName) }]
+          : []),
         ...(screened.conversationHeader.trim()
           ? [{ source: "conversation-header", content: screened.conversationHeader }]
           : []),

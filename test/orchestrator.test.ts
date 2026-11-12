@@ -4835,9 +4835,12 @@ for (const [what, change] of [
   });
 }
 
-test("an approved replay of held input goes through when its details keys come back in another order", async () => {
+test("an approved replay of held input goes through when it resends its file notes with details keys in another order", async () => {
   const built = freshApp({ securityPosture: "auto" }, fixtureScreen());
-  const request = dm("hello", { gatewayContext: { details: { topic: "SCREENING_FIXTURE_BLOCK", id: "1" } } });
+  const request = dm("hello", {
+    gatewayContext: { details: { topic: "SCREENING_FIXTURE_BLOCK", id: "1" } },
+    inboundNotes: ["note"],
+  });
   const first = await built.app.turn(request);
   const approval = { requestId: first.pendingApprovals![0]!.requestId, approved: true };
   assert.equal((await built.app.turn({ ...request, approval })).status, "ok");
