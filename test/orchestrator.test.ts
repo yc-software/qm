@@ -314,7 +314,7 @@ test("a silent cron source run stays out of normal human chat history", async ()
     "source run keeps its assistant output for audit/origin",
   );
   assert.equal(
-    (await built.app.listSessions("U1")).some((s) => s.id === source!.id),
+    (await built.app.listSessions({ actorId: "U1" })).some((s) => s.id === source!.id),
     false,
     "background cron source run is not a normal participant chat",
   );
@@ -361,7 +361,7 @@ test("a cron-delivered digest lands as a delivery event with origin, not recipie
   assert.equal(events[0]!.id, pending[0]!.id);
   assert.equal(events[0]!.provenance?.sourceSessionId, pending[0]!.provenance?.sourceSessionId);
 
-  const visibleToSender = await built.app.listSessions("U-carol");
+  const visibleToSender = await built.app.listSessions({ actorId: "U-carol" });
   assert.equal(
     visibleToSender.some((s) => s.threadRef === events[0]!.provenance?.sourceThreadRef),
     false,
@@ -2082,6 +2082,25 @@ test("turn-private transfer files are removed after staging", async () => {
   assert.equal(cleanupAttempts, 3);
   await settle(async () => (await sandbox.listDir(usedHandle!, TURN_FILES_DIR)).length === 0);
   assert.deepEqual(await sandbox.listDir(usedHandle, TURN_FILES_DIR), []);
+});
+
+test("an attachment's name stays out of the screen's source labels", async () => {
+  const parts: Array<{ source: string; content: string }> = [];
+  const screener: SecurityScreener = {
+    provider: "spy",
+    async classify({ payload }) {
+      parts.push(...(JSON.parse(payload) as typeof parts));
+      return { verdict: { decision: "auto" }, score: 0, threshold: 0.7 };
+    },
+  };
+  const { app, blobTransfer } = freshApp({ securityPosture: "auto" }, screener);
+  const blob = await blobTransfer.put(Buffer.from("quarterly numbers"));
+  await app.turn(
+    dm("summarize", {
+      attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: blob.sizeBytes, blobId: blob.blobId }],
+    }),
+  );
+  assert.equal(parts.find((part) => part.content === "quarterly numbers")?.source, "attachment");
 });
 
 test("a later turn removes same-conversation and expired transfer files", async () => {

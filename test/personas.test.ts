@@ -173,7 +173,7 @@ test("a persona conversation stays private to the people in it, even from the pe
   );
   const bobChat = await sysprompt(BOB, { kind: "dm", threadRef: "dm:U_BOB:with-ada" });
   ok(await personas.assign(BOB, (await built.sessions.get(bobChat.sessionId))!, ada.id));
-  assert.equal(await built.app.getSessionForViewer(bobChat.sessionId, ALICE), null);
+  assert.equal(await built.app.getSessionForViewer(bobChat.sessionId, { actorId: ALICE }), null);
   const aliceList = await built.app.listSessionPage(ALICE, { limit: 50, status: "active" });
   assert.ok(!aliceList.sessions.some((session) => session.id === bobChat.sessionId));
   const bobList = await built.app.listSessionPage(BOB, { limit: 50, status: "active" });

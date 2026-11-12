@@ -28,6 +28,7 @@ import { personKey, samePerson } from "../../directory/person.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
 import { normalizeInboundExpiresAt } from "../expiry.ts";
 import { sendJson, sendRedirect } from "../http.ts";
+import { activeRun } from "./composio.ts";
 import { audit, isObj } from "./shared.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 import { forInboxLoopsPeople } from "./loops.ts";
@@ -278,6 +279,7 @@ async function consentMint(ctx: ApiCtx): Promise<void> {
   if (!capability)
     return sendJson(res, 401, { error: "unauthorized", message: "oauth-consent capability token required" });
   if (!personAtKeyboard(capability)) return sendJson(res, 403, { error: "human_consent_required" });
+  if (!(await activeRun(ctx))) return;
   const b = body as {
     provider?: unknown;
     accountType?: unknown;
