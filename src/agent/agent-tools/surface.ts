@@ -59,7 +59,9 @@ export function surfaceTool(kit: ToolKit) {
         Type.String({
           description:
             "reach: send to THIS named channel (a channel you and the recipient can both see). EXTREMELY IMPORTANT: a channel post is a broadcast to everyone there — pick the narrowest audience that can act. A question or errand for one person (or a few) goes to their DM via `recipient`, NEVER to a public channel; use a channel only when the person you're helping explicitly named it as the destination, or the message genuinely concerns that whole room." +
-            (textOnly ? "" : " react/edit/delete: which channel the target message is in (omit for the current one).") +
+            (textOnly
+              ? ""
+              : " react/edit/delete: which channel the target message is in (omit for the current one). read_thread: read recent messages in THIS channel instead of the current conversation.") +
             " NOT valid on post — post only ever replies in the current conversation.",
         }),
       ),
@@ -135,21 +137,6 @@ export function surfaceTool(kit: ToolKit) {
         ...(params.channel !== undefined ? { channel: params.channel } : {}),
         ...(params.participants !== undefined ? { participants: params.participants } : {}),
       };
-      if (
-        (params.action === "read_thread" || params.action === "whats_new") &&
-        (params.channel !== undefined || params.recipient !== undefined || params.participants !== undefined)
-      ) {
-        return recordResult(
-          callId,
-          { tool: surfaceName, action: params.action, error: "reads_here_only" },
-          text(
-            `[not read] \`${params.action}\` only reads this conversation, so the channel or people you named were not looked at. ` +
-              'To find a message elsewhere, use `action: "search"` with `source: "slack"`: each hit names its channel and thread, ' +
-              "and `reach` with that `channel` plus `ts` replies inside that thread.",
-          ),
-          true,
-        );
-      }
       switch (params.action) {
         case "post": {
           if (params.text === undefined) return missing("text");
@@ -284,12 +271,13 @@ export function surfaceTool(kit: ToolKit) {
           );
         }
         case "read_thread": {
-          await recordCall(callId, {
-            tool: surfaceName,
-            action: "read_thread",
+          const readOpts = {
             ...(params.limit !== undefined ? { limit: params.limit } : {}),
-          });
-          const r = await tc.readThread(params.limit !== undefined ? { limit: params.limit } : undefined);
+            ...routing,
+            ...(params.recipient !== undefined ? { recipient: params.recipient } : {}),
+          };
+          await recordCall(callId, { tool: surfaceName, action: "read_thread", ...readOpts });
+          const r = await tc.readThread(readOpts);
           if (!r.ok)
             return recordResult(
               callId,

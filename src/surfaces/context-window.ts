@@ -52,7 +52,6 @@ export function buildContextWindow(
     scanHasMore?: boolean;
     renderText?: (text: string) => string;
     clipChars?: number;
-    selfClipChars?: number;
   },
 ): { messages: ContextWireMessage[]; hasMore: boolean; nextBefore?: string; selfTs?: string[] } {
   const asc = [...scanned].sort(compareTs);
@@ -64,12 +63,11 @@ export function buildContextWindow(
   const messages = kept.map((m) => {
     const time = epochTsTime(m.ts);
     const text = render(m.text ?? "");
-    const clip = m.isSelf ? (opts.selfClipChars ?? opts.clipChars) : opts.clipChars;
     return {
       ts: m.ts,
       ...(time ? { time } : {}),
       author: m.isSelf ? "you" : m.name || "someone",
-      text: clip === undefined ? text : clipText(text, clip),
+      text: opts.clipChars === undefined ? text : clipText(text, opts.clipChars),
       ...(m.parentTs ? { threadTs: m.parentTs } : {}),
       ...(m.where ? { where: m.where } : {}),
       ...(m.files?.length ? { files: m.files } : {}),

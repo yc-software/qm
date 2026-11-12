@@ -386,11 +386,16 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       if (textOnly(d.destination)) return { ok: false, message: "Messages in this conversation can't be deleted." };
       return enqueue(withDelete(d.destination, { messageTs: input.ref }), "", seq);
     },
-    readThread: async (opts?: { limit?: number }) => {
+    readThread: async (opts) => {
       if (!deps.surfaceContext) return { ok: false, message: "the surface can't be read from this turn" };
-      if (!currentDestination.target) return { ok: false, message: "this conversation has no thread to read" };
-      const result = await deps.surfaceContext.pull(input.surface ?? "unknown", {
-        conversationTarget: currentDestination.target,
+      const elsewhere =
+        opts?.channel !== undefined || opts?.participants !== undefined || opts?.recipient !== undefined;
+      const d = elsewhere ? await resolveDestination(opts) : { ok: true as const, destination: currentDestination };
+      if (!d.ok) return { ok: false, message: d.message };
+      if (!d.destination.target || d.destination.type === "principal")
+        return { ok: false, message: "I can read this conversation, a channel, or a group DM, not someone's DM" };
+      const result = await deps.surfaceContext.pull(elsewhere ? "slack" : (input.surface ?? "unknown"), {
+        ...(elsewhere ? { channelId: d.destination.target } : { conversationTarget: d.destination.target }),
         viewer: actor.id,
         ...rateLimitRecipient,
         ...(opts?.limit !== undefined ? { count: Math.max(1, Math.min(SURFACE_READ_MAX, opts.limit)) } : {}),

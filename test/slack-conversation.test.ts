@@ -81,8 +81,8 @@ test("buildContextWindow labels self messages, resolves mentions, threads, files
   const nameById = new Map([["U1", "Alice"]]);
   const w = buildContextWindow(
     [
-      ctxMsg("1700000001.000100", "Alice", `root post ${"x".repeat(700)}`),
-      ctxMsg("1700000002.000100", "agent", `ping <@U1> ${"x".repeat(4100)}`, {
+      ctxMsg("1700000001.000100", "Alice", "root post"),
+      ctxMsg("1700000002.000100", "agent", `ping <@U1> ${"x".repeat(700)}`, {
         isSelf: true,
         parentTs: "1700000001.000100",
         files: ["plan.pdf"],
@@ -96,8 +96,7 @@ test("buildContextWindow labels self messages, resolves mentions, threads, files
   assert.equal(self.threadTs, "1700000001.000100");
   assert.deepEqual(self.files, ["plan.pdf"]);
   assert.ok(self.text.startsWith("ping @Alice"), "mentions resolve to names");
-  assert.ok(w.messages[0]!.text.length <= 601, "others' long text is clipped short");
-  assert.ok(self.text.length > 601 && self.text.length <= 4001, "my own text is clipped only when very long");
+  assert.ok(self.text.length <= 601 && self.text.endsWith("…"), "long text is clipped");
 });
 
 test("buildContextWindow preserves reaction counts without inventing missing reaction data", () => {

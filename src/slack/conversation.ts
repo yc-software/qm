@@ -17,7 +17,6 @@ export function buildContextWindow(
     ...rest,
     renderText: (text) => resolveMentions(text, nameById),
     clipChars: MAX_CONTEXT_MESSAGE_CHARS,
-    selfClipChars: MAX_TURN_MESSAGE_CHARS,
   });
 }
 

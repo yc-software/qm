@@ -735,7 +735,8 @@ export function createMockAgent(): Agent {
         usedTool = true;
         reply = r.ok ? "(deleted)" : `[not deleted] ${r.message ?? "failed"}`;
       } else if (command0 === "!read_thread" || command0.startsWith("!read_thread ")) {
-        const r = await turn.tools.readThread();
+        const channel = cmd.slice(cmd.indexOf("!read_thread") + "!read_thread".length).trim();
+        const r = await turn.tools.readThread(channel ? { channel } : undefined);
         await record({ kind: "ToolResult", tool: "read_thread", body: { ok: r.ok, count: (r.messages ?? []).length } });
         usedTool = true;
         reply = r.ok ? `read ${(r.messages ?? []).length} message(s)` : `[couldn't read] ${r.message ?? "unavailable"}`;
