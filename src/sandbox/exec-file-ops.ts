@@ -20,8 +20,6 @@ import {
 } from "./sandbox.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
 
-const posixDirname = (p: string): string => p.slice(0, Math.max(0, p.lastIndexOf("/"))) || "/";
-
 export const tempPathBeside = (absPath: string): string =>
   posix.join(posix.dirname(absPath), `.qm-${randomBytes(8).toString("hex")}`);
 
@@ -317,7 +315,7 @@ function createExecBlobStaging(deps: ExecBlobStagingDeps): ExecBlobStaging {
       const tmp = `${tempPathBeside(abs)}.part`;
       const script =
         proxyPrefix(handle) +
-        `mkdir -p ${shq(posixDirname(abs))} && ` +
+        `mkdir -p ${shq(posix.dirname(abs))} && ` +
         `curl -fsS --connect-timeout 15 -H ${shq(`${capabilityHeader}: ${token}`)} ${shq(`${base}/v1/blobs/${blobId}`)} -o ${shq(tmp)} && ` +
         `mv -f ${shq(tmp)} ${shq(abs)}`;
       const r = await exec(handle.id, script, effectiveTimeoutSec);
