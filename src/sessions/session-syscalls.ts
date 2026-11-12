@@ -63,11 +63,12 @@ export function isOwnerFire(request: Pick<OrchestratorInput, "origin" | "botActo
   return request.origin.kind === "automation" && request.origin.ownerFire === true && !request.botActor;
 }
 
-export async function delegatedAuthorizationOrigin(
+export async function delegatedAuthorization(
   request: OrchestratorInput,
   deps: { runs: Pick<RunStore, "get">; sessions: Pick<SessionStore, "get" | "getByThread"> },
-): Promise<OrchestratorInput["origin"] | undefined> {
+): Promise<{ origin: OrchestratorInput["origin"]; attended: boolean } | undefined> {
   const seen = new Set<string>();
+  let attended = true;
   let current = request;
   for (let depth = 0; depth < 32; depth++) {
     if (
@@ -99,6 +100,7 @@ export async function delegatedAuthorizationOrigin(
       !isSubagentThreadRef(child.threadRef) &&
       source.sessionId === sender.threadRef;
     if (!delegated && !continued && !started) return;
+    attended &&= source.status === "running" && (source.leaseExpiresAt ?? 0) > Date.now();
     const parent = source.request;
     const audience = new Set([parent.actor.id, ...parent.conversation.audience.map((person) => person.id)]);
     if (
@@ -125,7 +127,7 @@ export async function delegatedAuthorizationOrigin(
         isOwnerFire(parent) ||
         (parent.origin.kind === "ambient" && parent.origin.live === true && parent.conversation.kind !== "dm"))
     )
-      return parent.origin;
+      return { origin: parent.origin, attended };
     current = parent;
   }
 }

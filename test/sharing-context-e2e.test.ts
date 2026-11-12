@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import type { AddressInfo } from "node:net";
+import { createServer } from "../src/api/server.ts";
+import { serverDeps } from "../src/wiring.ts";
 import { credentialHandle } from "../src/credentials/keychain.ts";
 import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
 import "./support/auto-fake-sprites.ts";
@@ -15,7 +18,8 @@ import { sleep } from "../src/util/async.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
 
 async function fixture(t: TestContext, config: Partial<Config> = {}) {
-  const built = buildApp(testConfig({ memoryCapture: "off", ...config }));
+  const cfg = testConfig({ memoryCapture: "off", ...config });
+  const built = buildApp(cfg);
   await built.config.hydrate?.();
   await built.identity.refresh();
   await built.deploymentLayerReady;
@@ -103,7 +107,7 @@ async function fixture(t: TestContext, config: Partial<Config> = {}) {
   };
   const filePath = (ownerScopeId: string, name: string) =>
     `shared/open-${ownerScopeId.replace(":", "-")}/${fileIds.get(`${ownerScopeId}/${name}`)}/${name}`;
-  return { ...built, turn, failure, skill, remove, file, filePath };
+  return { ...built, cfg, turn, failure, skill, remove, file, filePath };
 }
 
 test("sharing e2e: personal files and memories follow the speaker, opt-out, and automation boundaries", async (t) => {
@@ -145,7 +149,7 @@ test("sharing e2e: personal files and memories follow the speaker, opt-out, and 
 });
 
 test("sharing e2e: a delegated turn shares its live parent's access under current sharing permission", async (t) => {
-  const b = await fixture(t, { apiBaseUrl: "https://core.example.com", signingSecret: "test-ingress-secret" });
+  const b = await fixture(t, { apiBaseUrl: "https://core.example.com", signingSecret: "i".repeat(32) });
   await b.file("personal:U1", "notes.txt", "DELEGATED_PERSONAL_FILE");
   await b.turn("inspect my personal notes", true);
   const parent = await b.runs.list({ threadRef: "C1:shared-test", limit: 1 }).then(([run]) => run);
@@ -170,15 +174,17 @@ test("sharing e2e: a delegated turn shares its live parent's access under curren
     token = opts?.env?.AGENT_API_TOKEN;
     return provision(owner, opts);
   };
+  const { run: running } = await b.runs.enqueue({ sessionId: parent.sessionId, request: parent.request });
+  assert.ok(await b.runs.claimById(running.id, "parent", 60_000));
   b.runtime.start();
-  const childTurn = async (text: string, expectedStatus: "ok" | "refused" = "ok") => {
+  const childTurn = async (text: string, expectedStatus: "ok" | "refused" = "ok", delegatingRunId = parent.id) => {
     const { run } = await b.runs.enqueue({
       sessionId: child.threadRef,
       request: {
         ...parent.request,
         conversation: { ...parent.request.conversation, threadRef: child.threadRef },
         origin: parent.request.origin,
-        delegatingRunId: parent.id,
+        delegatingRunId,
         sessionSenderId: parentSession.id,
         text,
       },
@@ -202,7 +208,15 @@ test("sharing e2e: a delegated turn shares its live parent's access under curren
   const delegatedClaims = await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET);
   assert.equal(delegatedClaims?.liveAuthor, true);
   assert.equal(delegatedClaims?.liveActor, true);
-  assert.equal(delegatedClaims?.triggered, undefined);
+  assert.equal(delegatedClaims?.triggered, true);
+  const server = createServer(b.app, serverDeps(b.cfg, b));
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/memory/brain`;
+  const brain = async () => (await fetch(url, { headers: { "x-agent-capability": token ?? "" } })).status;
+  assert.equal(await brain(), 403);
+  await childTurn("!run true", "ok", running.id);
+  assert.equal(await brain(), 200);
   const credential = await b.keychain!.save({
     ownerId: "U1",
     service: "delegated-test",
