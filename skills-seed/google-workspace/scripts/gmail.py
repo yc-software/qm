@@ -116,10 +116,19 @@ def esc(text: str) -> str:
     return html.escape(text).replace("&#x27;", "&#39;")
 
 
+def keep_spaces(line: str) -> str:
+    out: list[str] = []
+    for i, ch in enumerate(line):
+        after = line[i + 1:i + 2]
+        hard = not out or out[-1] == " " or (after == " " and out[-1] != "\u00a0")
+        out.append("\u00a0" if ch == " " and hard else ch)
+    return "".join(out)
+
+
 def html_line(line: str) -> str:
     if not line:
         return "<br>"
-    text, out, last = line.replace("  ", "\u00a0 "), [], 0
+    text, out, last = keep_spaces(line), [], 0
     for m in URL_RE.finditer(text):
         url = m.group(0)
         closers = {")": "(", "]": "[", "}": "{"}
@@ -197,6 +206,7 @@ def sent_at(date: str) -> str:
     try:
         at = parsedate_to_datetime(date)
     except (TypeError, ValueError):
+        print(f"note: unparseable Date {date!r}; the quote line omits the time", file=sys.stderr)
         return ""
     at = at.astimezone()
     return f"{at:%a, %b} {at.day}, {at.year} at {at.hour % 12 or 12}:{at:%M}\u202f{at:%p} "
