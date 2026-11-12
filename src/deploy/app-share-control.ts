@@ -1,5 +1,3 @@
-import { GENERAL_ACCESS_ICONS } from "../../plugins/chassis/src/app-access.ts";
-
 export const SHARE_CSS = `
   header .access-btn[hidden] { display: none; }
   header .access-btn[data-level="public"] { color: var(--brand-accent); }
@@ -17,25 +15,16 @@ export const SHARE_BUTTON = '<button type="button" class="access-btn" id="access
 export const shareMarkup = (name: string): string =>
   `<dialog id="share-dialog" tabindex="-1" aria-label="Share ${name}"><iframe id="share" title="Share ${name}" allowtransparency="true"></iframe></dialog>`;
 
-const ACCESS_ICON_SVG = Object.fromEntries(
-  Object.entries(GENERAL_ACCESS_ICONS).map(([level, nodes]) => [
-    level,
-    nodes
-      .map(
-        ([tag, attrs]) =>
-          `<${tag}${Object.entries(attrs)
-            .map(([k, v]) => ` ${k}="${v}"`)
-            .join("")}/>`,
-      )
-      .join(""),
-  ]),
-);
-
 export const SHARE_JS = String.raw`
   const accessBtn = document.getElementById("access");
   const shareDialog = document.getElementById("share-dialog");
   const share = document.getElementById("share");
-  const accessIcons = ${JSON.stringify(ACCESS_ICON_SVG)};
+  const lock = '<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>';
+  const accessIcons = {
+    restricted: lock,
+    org: '<path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z"/><path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/><path d="M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2"/><path d="M10 6h4"/><path d="M10 10h4"/><path d="M10 14h4"/><path d="M10 18h4"/>',
+    public: '<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>',
+  };
   const showAccess = (next) => {
     if (!next || !accessIcons[next.level]) return;
     accessBtn.hidden = false;
