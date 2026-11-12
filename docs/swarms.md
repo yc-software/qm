@@ -28,10 +28,9 @@ a Slack bot's turn is kept off a person's swarm computers. Releases from before 
 field leave it unset; `durable-map/swarms/0040-stamp-computers` stamps the computers of
 existing swarms once at startup. Drain an older release's cores and workers before
 upgrading from it, because a computer the older release provisions after that migration
-stays unmarked. A computer supplied as `forumSandboxId` never records a `swarmId`; the
-check finds the swarms using it as a forum by looking up the swarm records of its scope.
-That lookup uses an index on each swarm's `scopeId`, which startup creates like the
-table's other indexed fields; no swarm or computer record is rewritten.
+stays unmarked. A computer a person's swarm takes as its forum counts as used by a person;
+`durable-map/swarms/0041-mark-forums-person-used` marks the forums of existing
+swarms the same way once at startup.
 
 ## Agent API
 
@@ -275,11 +274,9 @@ cannot watch them, and a watch it armed while it could stops reading the job's o
 When the bot loses that access, its turns still running in the swarm's threads or on the swarm's computers are told to stop, and background jobs its turns started on the swarm's board and worker computers are stopped and marked reaped.
 A computer supplied as `forumSandboxId` stays an ordinary computer of its scope, which is
 why a swarm a bot starts never takes one, from the bot or from a person: every computer in
-a swarm a bot starts belongs to the swarm. A person's own swarm can still take one, and the
-same rule keeps a bot's turn off that forum, from the swarm's thread or from anywhere else,
-until the swarm's work window ends. Swarms have no work window unless `lifetimeMs` is set, and
-swarm records are kept, so by default a computer that has served as a person's forum stays
-off-limits to those turns permanently. This covers forums named before this rule existed.
+a swarm a bot starts belongs to the swarm. A person's own swarm can still take one, and
+taking it counts as a person using that computer, so from then on a Slack bot's turn can
+no longer use it, even when the bot made it.
 Worker sessions never inherit the root session's command or security-screen
 approval grants; a worker must obtain its own approval. Auto screening receives host-verified swarm delegation provenance, so routine delegated tasks and in-swarm reporting are distinguished from external instructions. Delegation does not authorize credential disclosure, permission changes, or overriding higher-priority instructions; those remain screened. Frozen swarm roster checks
 apply to swarm notifications, not ordinary human follow-ups in the root session.

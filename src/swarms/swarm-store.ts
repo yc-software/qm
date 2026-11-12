@@ -41,6 +41,22 @@ export const STAMP_SWARM_COMPUTERS_MIGRATION = {
   ],
 };
 
+export const MARK_SWARM_FORUMS_PERSON_USED_MIGRATION = {
+  id: "durable-map/swarms/0041-mark-forums-person-used",
+  statements: [
+    `DO $$
+    BEGIN
+      IF to_regclass('swarms') IS NOT NULL AND to_regclass('sandbox_resources') IS NOT NULL THEN
+        UPDATE durable_map_versions SET v = v + 1 WHERE tbl = 'sandbox_resources';
+        UPDATE sandbox_resources r SET json = r.json || '{"personUsed": true}'::jsonb
+        FROM swarms s, jsonb_array_elements(s.json -> 'members') AS member
+        WHERE r.tenant_id = s.tenant_id AND r.id = member ->> 'forumSandboxId' AND NOT r.json ? 'personUsed'
+          AND s.json #>> '{template,botActor}' IS DISTINCT FROM 'true';
+      END IF;
+    END $$`,
+  ],
+};
+
 export interface SwarmMember {
   id: string;
   sessionId?: string;
@@ -130,7 +146,6 @@ export function assertSwarmOpen(swarm: Swarm): void {
 
 export interface SwarmStore {
   get(id: string): Promise<Swarm | null>;
-  withForum(sandboxId: string, scopeId: string): Promise<Swarm[]>;
   create(swarm: Swarm, fence?: SwarmRunFence): Promise<Swarm>;
   update(id: string, mutate: (swarm: Swarm) => void, fence?: SwarmRunFence): Promise<Swarm>;
   pending(afterId?: string): Promise<PendingSwarm[]>;
@@ -221,14 +236,6 @@ export function createSwarmStore(
     async get(id) {
       const row = await backing.get(id);
       return row ? decode(row) : null;
-    },
-    async withForum(sandboxId, scopeId) {
-      const rows = await backing.selectEntries({
-        where: { field: "scopeId", anyOfFold: [scopeId] },
-        omit: ["messages"],
-      });
-      const ids = rows.filter(([, row]) => row.members.some((member) => member.forumSandboxId === sandboxId));
-      return (await Promise.all(ids.map(([id]) => backing.get(id)))).flatMap((row) => (row ? [decode(row)] : []));
     },
     async create(swarm, fence) {
       const create = (current: SwarmStorage | null) => {

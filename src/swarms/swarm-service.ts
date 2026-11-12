@@ -90,7 +90,7 @@ export interface SwarmService {
   read(caller: SwarmCaller, options: { after?: number; replyTo?: string; waitMs?: number }): Promise<SwarmMessage[]>;
   control(caller: SwarmCaller, input: { memberId: string; state: SwarmControlState }): Promise<SwarmMember>;
   botMayUseComputer(
-    computer: Pick<SandboxResource, "id" | "ownerScopeId" | "swarmId">,
+    computer: Pick<SandboxResource, "swarmId">,
     turn: { actorId: string; threadRef: string; sessionId: string },
   ): Promise<boolean>;
   authorizes(claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "members">): Promise<boolean>;
@@ -274,6 +274,16 @@ export function createSwarmService(deps: {
       void stopProcess(job)
         .then(() => processes.markStatus(job.processId, "reaped"))
         .catch(swallowAs(`swarm: stop job ${job.processId} of a bot that lost the swarm`, false));
+  };
+  const notePersonUse = async (computer: Pick<SandboxResource, "swarmId">): Promise<void> => {
+    const swarm = computer.swarmId ? await store.get(computer.swarmId) : null;
+    if (!swarm?.template.botActor) return;
+    const used = swarm.personUsedComputers
+      ? swarm
+      : await store.update(swarm.id, (current) => {
+          current.personUsedComputers = true;
+        });
+    await cutOffBot(used, "because a person used the swarm's computers");
   };
   const view = (member: SwarmMember): SwarmMember => ({
     ...member,
@@ -716,6 +726,7 @@ export function createSwarmService(deps: {
         const forum = await deps.sandboxes.access(auth.actorId, input.forumSandboxId);
         const session = await sessions.get(auth.sessionId);
         if (forum.ownerScopeId !== session?.scopeId) throw new Error("forum scope mismatch");
+        await notePersonUse(await deps.sandboxes.notePersonUse(forum.id));
       }
       const reserve = (swarm: Swarm): void => {
         const previous = swarm.spawnRequests[key];
@@ -909,21 +920,10 @@ export function createSwarmService(deps: {
     },
     authorizes: (claims) => deps.authorize(claims),
     async botMayUseComputer(computer, turn) {
-      const forums = await store.withForum(computer.id, computer.ownerScopeId);
-      if (!forums.every((swarm) => swarmExpired(swarm) || botMayDirect(swarm, turn.actorId))) return false;
       const swarm = computer.swarmId ? await store.get(computer.swarmId) : null;
       return !!swarm && botMayDirect(swarm, turn.actorId);
     },
-    async notePersonUse(computer) {
-      const swarm = computer.swarmId ? await store.get(computer.swarmId) : null;
-      if (!swarm?.template.botActor) return;
-      const used = swarm.personUsedComputers
-        ? swarm
-        : await store.update(swarm.id, (current) => {
-            current.personUsedComputers = true;
-          });
-      await cutOffBot(used, "because a person used the swarm's computers");
-    },
+    notePersonUse,
     async control(caller, input) {
       const { auth, swarm } = await load(caller);
       if (!["active", "paused", "stopped"].includes(input.state)) throw new Error("invalid control state");

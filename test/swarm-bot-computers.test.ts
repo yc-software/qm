@@ -239,7 +239,7 @@ async function personSwarm(backend?: ProcessSandbox, forum?: "forum") {
   const f = await channelSwarm(backend);
   if (f.caller.kind !== "agent") throw new Error("wrong caller");
   await f.sessions.addParticipant(f.root.id, releaseBot.id);
-  const shared = forum && (await f.sandboxes.create(alice.id, f.root.scopeId, "modal", "Swarm board"));
+  const shared = forum && (await f.sandboxes.create(releaseBot.id, f.root.scopeId, "modal", "Swarm board"));
   if (shared) f.disks.set(shared.backingScopeId, new Map());
   await f.service.spawn(f.caller, { requestId: "initial", text: "alice's work", forumSandboxId: shared?.id });
   await f.service.sweep();
@@ -387,13 +387,6 @@ test("the person keeps their swarm's computers and a bot keeps the computers of 
   assertKeptIn(person);
   assertKeptIn(bot);
   assertKeptIn(await channelTurn(await personSwarm(undefined, "forum"), alice, false));
-  const ended = await personSwarm(undefined, "forum");
-  const forum = (await ended.records.get((await ended.store.get(ended.root.id))!.members[1]!.forumSandboxId!))!;
-  await ended.store.update(ended.root.id, (swarm) => void (swarm.expiresAt = Date.now() - 1));
-  assert.equal(
-    await ended.service.botMayUseComputer(forum, { actorId: releaseBot.id, threadRef: "", sessionId: "" }),
-    true,
-  );
 });
 
 test("a person's turn that only lists computers and background jobs leaves a bot-started swarm's computers to its bot", async (t) => {
