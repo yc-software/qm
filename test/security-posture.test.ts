@@ -52,7 +52,7 @@ test("each posture resolves to exactly one mechanism", () => {
 });
 
 test("auto screens only data-bearing inputs and parses a strict downgrade", () => {
-  assert.match(SECURITY_SCREEN_SYSTEM_PROMPT, /Sources named sender or ending in :unprompted are direct human context/);
+  assert.match(SECURITY_SCREEN_SYSTEM_PROMPT, /The source named sender is direct human context/);
   assert.match(SECURITY_SCREEN_SYSTEM_PROMPT, /try to control the agent/);
   assert.match(
     SECURITY_SCREEN_SYSTEM_PROMPT,
