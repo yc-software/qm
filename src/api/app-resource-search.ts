@@ -51,13 +51,12 @@ export function createResourceSearchMethods(
           const { ordered, granted } = await skillVisibilityContext(deps, helpers, principalId, homes);
           visibleSkills = new Set(visibleSkillRows(skills, ordered, granted).map((r) => r.skill.id));
         }
+        const deploys = kind === "deploys" ? await helpers.deploymentPermissions(tenant, rows, principalId) : [];
         for (let i = 0; i < rows.length; i += 20) {
           const batch = rows.slice(i, i + 20);
           const allowed =
             kind === "deploys"
-              ? (await helpers.deploymentPermissions(tenant, batch, principalId)).map(
-                  (permission) => permission !== null,
-                )
+              ? deploys.slice(i, i + 20).map((permission) => permission !== null)
               : await Promise.all(batch.map((row) => canSee(kind, row)));
           for (const [j, row] of batch.entries()) {
             if (allowed[j]) hits.push(resourceHit(kind, row, query));
