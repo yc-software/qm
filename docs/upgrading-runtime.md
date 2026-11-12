@@ -39,6 +39,14 @@ bootstrap. A role with only application data grants cannot apply pending
 migrations; granting it schema `CREATE` alone does not grant authority over an
 existing ledger. PostgreSQL still enforces privileges on each migrated object.
 
+The boot and serving tenant function migrations use PostgreSQL's default function
+EXECUTE privileges instead of redundant grants to `PUBLIC`, which Fly Managed
+Postgres rejects. They supersede the earlier definitions under new migration IDs;
+existing ledger checksums are not changed. `CREATE OR REPLACE FUNCTION` preserves
+existing function privileges. Deployments that revoke default function EXECUTE
+must grant execution to their application role, as with the other tenant lookup
+functions (`qm db grant` grants application access to all functions).
+
 Migration identifiers and SQL checksums retain their original meaning. An existing
 checksum mismatch stops the upgrade; do not clear the migration ledger or edit its
 checksums to bypass this check. A previously completed legacy webhook sweep is
