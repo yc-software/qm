@@ -1748,14 +1748,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (input.attachments?.some((attachment) => attachment.sourceId)) {
           input.attachments = withoutAlreadyIngested(input.attachments, (await turnWindow()).items);
         }
-        const screenInboundFile = createInboundFileScreen({
-          session,
-          securityPolicy,
-          enforceScreen,
-          classifyAs,
-          turnAbort,
-          audit,
-        });
+        const fileScreenTurn = { deps, session, securityPolicy, enforceScreen, classifyAs, turnAbort, audit };
+        const screenInboundFile = createInboundFileScreen(fileScreenTurn);
         const receiveInbound = async (
           attachments: IncomingAttachment[] | undefined,
           registration: ArtifactRegistration,
@@ -1859,15 +1853,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }),
             );
         contextRecovered = history !== visibleHistory && history.some((item) => item.body.mode === "recent");
-        const screenDocuments = createDocumentScreen({
-          deps,
-          session,
-          securityPolicy,
-          enforceScreen,
-          classifyAs,
-          turnAbort,
-          audit,
-        });
+        const screenDocuments = createDocumentScreen(fileScreenTurn);
         const documentRoom = {
           maxBytes: MAX_DOCUMENT_BYTES,
           maxDocuments: MAX_DOCUMENTS,

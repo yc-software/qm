@@ -53,19 +53,19 @@ const DEFAULT_SECURITY_SCREEN_TIMEOUT_MS = 15_000;
 const MAX_SCREEN_REQUEST_CHARS = 2_000;
 const MAX_AUDITED_SOURCES = 20;
 
-export const unscreenedVerdict = (): SecurityScreenVerdict => ({
+const unscreenedVerdict = (): SecurityScreenVerdict => ({
   decision: "auto",
   unscreened: true,
   reason: UNSCREENED_REASON,
 });
 
-export const oversizeVerdict = (): SecurityScreenVerdict => ({
+const oversizeVerdict = (): SecurityScreenVerdict => ({
   decision: "strict",
   unscreened: true,
   reason: `too long for the security screen to read, over ${MAX_DOCUMENT_TEXT_CHARS} characters`,
 });
 
-export const flaggedAudit = (resource: string, status: string, reason: string | undefined, sources: string[]) => ({
+const flaggedAudit = (resource: string, status: string, reason: string | undefined, sources: string[]) => ({
   action: SECURITY_FLAGGED,
   resource,
   status,
@@ -687,14 +687,7 @@ export function createToolResultScreen(turn: ToolResultScreenTurn) {
   };
 }
 
-export function createInboundFileScreen(turn: {
-  session: Session;
-  securityPolicy: InboundScreenTurn["resolution"]["securityPolicy"];
-  enforceScreen: boolean;
-  classifyAs: ClassifyAs;
-  turnAbort: AbortController;
-  audit: InboundScreenTurn["audit"];
-}) {
+export function createInboundFileScreen(turn: Parameters<typeof createDocumentScreen>[0]) {
   const { session, securityPolicy, enforceScreen, classifyAs, turnAbort, audit } = turn;
   return (requestText: string): Parameters<typeof materializeInbound>[6] =>
     securityPolicy.screening === "off"
