@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { renderGatewayContext } from "../src/core/orchestrator/prompt-blocks.ts";
+import { renderGatewayContext, webSurfaceLabel } from "../src/core/orchestrator/prompt-blocks.ts";
 import { buildApp } from "./support/build-app.ts";
 import type { Config } from "../src/config.ts";
 import { scopeId } from "../src/types.ts";
@@ -40,6 +40,11 @@ test("surface-supplied instructions are appended verbatim (and alone are enough 
   const only = renderGatewayContext(undefined, { instructions: "do the thing" });
   assert.match(only, /^## Where you are/);
   assert.match(only, /do the thing/);
+});
+
+test("a web chat relayed by another app says so and names what won't render there", () => {
+  assert.equal(webSurfaceLabel("QM", false), "the QM web app");
+  assert.match(webSurfaceLabel("QM", true), /^another app that relays this chat to QM\..*`::connect-apps\{\}`/);
 });
 
 test("reactionGuidance is detection-only — never rendered into the main prompt", () => {
@@ -120,18 +125,6 @@ test("web prompt tells cron creators to use a real notification destination", as
   assert.equal(res.status, "ok");
   assert.match(res.reply ?? "", /^Crons you create here post back here\.$/m);
   assert.doesNotMatch(res.reply ?? "", /cannot receive future external notifications/);
-});
-
-test("a web chat relayed by another app warns that web-UI widgets won't render there", async () => {
-  const res = await freshApp().app.turn({
-    surface: "web",
-    actor: { externalId: "U4" },
-    conversation: { kind: "dm", threadRef: "web:U4:t1" },
-    deliveryTarget: "web:U4:t1",
-    deliveryWebhook: { binding: "6f1c7a2e-4b8d-4c1e-9a3f-2d5e8b7c0a11", url: "https://receiver.example/qm" },
-    text: "!sysprompt",
-  });
-  assert.match(res.reply ?? "", /over another app that relays this chat[\s\S]*not web-UI directives/);
 });
 
 test("triggered destination turns tell the agent to return the deliverable, not self-send it", async () => {
