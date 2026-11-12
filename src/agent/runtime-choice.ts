@@ -83,7 +83,13 @@ export async function resolveRuntimeChoice(
     purpose ? config.getPurposeRuntimeDurable(purpose) : undefined,
   ]);
   if (hydrateModelCatalog) {
-    const candidates = [requested?.modelId, purposeRuntime?.modelId, scopedStored?.modelId, orgStored?.modelId];
+    const candidates = [
+      requested?.modelId,
+      purposeRuntime?.modelId,
+      sessionModelId,
+      scopedStored?.modelId,
+      orgStored?.modelId,
+    ];
     if (candidates.some((modelId) => modelId && !resolveModel(modelId))) await hydrateModelCatalog();
   }
   if (purposeRuntime) {
