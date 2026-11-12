@@ -12,6 +12,8 @@ import type { Agent } from "../src/agent/agent.ts";
 import { slackSurfaceOrigin } from "../src/surfaces/slack/adapter.ts";
 import { proactiveScopeDelegation, type ScopeDelegationRequest } from "../src/resolution/scope-membership.ts";
 import type { SessionSyscallBinding, SessionSyscalls } from "../src/sessions/session-syscalls.ts";
+import { createSessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
+import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { scopeId, type Principal, type TurnRequest } from "../src/types.ts";
 
 const ambient = `system:ambient:${orgId()}`;
@@ -190,4 +192,56 @@ test("an ambient helper caller is refused in another channel and for sessions it
   await built.sessions.addParticipant(someoneElses.id, "U1");
   const sent = await ok.write({ target: someoneElses.id, text: "hi" });
   assert.deepEqual(sent, { ok: false, message: "you are not a participant in that session." });
+});
+
+test("an ambient wake cannot reach a helper of another ambient wake in the same channel", async () => {
+  const config = testConfig({ openaiApiKey: "sk-test" });
+  const built = buildApp(config);
+  const mail = createSessionMailbox(
+    createPostgresMapFactory(config.databaseUrl!).map<SessionMessage>("session_mailbox", ["recipientId", "wake"]),
+  );
+  const actor: Principal = { id: ambient, type: "internal" };
+  const wake = async () => {
+    const room = await built.sessions.getOrCreateByThread(
+      `slack:${channel}:ambient:${Math.random()}`,
+      "channel",
+      scope,
+      undefined,
+      "slack",
+    );
+    await built.sessions.addParticipant(room.id, actor.id);
+    return built.sessionSyscalls.forTurn({
+      session: room,
+      scopeId: scope,
+      request: {
+        surface: "slack",
+        surfaceOrigin: internalSource,
+        conversation: { kind: "channel", threadRef: room.threadRef, channelRef: channel, audience: [actor] },
+        actor,
+        origin: { kind: "automation" },
+      },
+    });
+  };
+  const a = await wake();
+  const b = await wake();
+  const opened = await b.open({ task: "look up the memo" });
+  assert.ok(opened.ok, opened.ok ? "" : opened.message);
+  const helper = (await built.sessions.get(opened.sessionId))!;
+  const runs = async () => (await built.runs.inFlightForThread(helper.threadRef)).length;
+  const before = await runs();
+
+  const foreign = [
+    await a.write({ target: helper.id, text: "FOREIGN-WAKE-INSTRUCTION", wake: true }),
+    await a.write({ target: helper.id, text: "FOREIGN-MAIL" }),
+    await a.write({ target: helper.id, interrupt: true }),
+    await a.read({ target: helper.id }),
+  ];
+  for (const out of foreign)
+    assert.deepEqual(out, { ok: false, message: "you no longer have access to the target session" });
+  assert.equal(await runs(), before, "no run queued or stopped for the foreign helper");
+  assert.deepEqual(await mail.pending(helper.id), [], "no mail left for the foreign helper");
+
+  assert.equal((await b.read({ target: helper.id })).ok, true, "its own parent still reads it");
+  const own = await b.write({ target: helper.id, text: "also check the deck", wake: true });
+  assert.ok(own.ok, own.ok ? "" : own.message);
 });

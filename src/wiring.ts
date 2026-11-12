@@ -46,6 +46,7 @@ import { createRuntimeService } from "./agent/runtime-control.ts";
 import {
   createSessionSyscalls,
   type SessionSyscallsFactory,
+  sessionTreeRoot,
   sessionTreeWorking,
   stoppableRoot,
 } from "./sessions/session-syscalls.ts";
@@ -2147,9 +2148,11 @@ export function buildApp(
     maxAttempts,
     advisoryLock,
     prepareRequest: prepareSessionRequest,
-    authorize: async (session, actorId, request) =>
+    authorize: async (session, actorId, request, caller) =>
       (await canWriteScope(actorId, session.scopeId)) ||
-      (request.actor.id === actorId && scopeDelegation(request, session.scopeId)),
+      (request.actor.id === actorId &&
+        scopeDelegation(request, session.scopeId) &&
+        (await sessionTreeRoot(sessions, session)).id === (await sessionTreeRoot(sessions, caller)).id),
     conversations: {
       search: ({ query, principals, limit }) => app.searchConversations(query, principals, limit),
       list: (actorId) => app.listSessions(actorId),

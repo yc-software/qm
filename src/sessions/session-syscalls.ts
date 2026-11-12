@@ -352,7 +352,12 @@ export interface SessionSyscallDeps {
   maxAttempts: number;
   advisoryLock: AdvisoryLock;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
-  authorize?: (session: Session, actorId: string, request: SessionSyscallBinding["request"]) => Promise<boolean>;
+  authorize?: (
+    session: Session,
+    actorId: string,
+    request: SessionSyscallBinding["request"],
+    caller: Session,
+  ) => Promise<boolean>;
   validateRuntime?: (input: SessionOpenInput, scopeId: ScopeId) => Promise<void>;
   defaultModel?: (scopeId: ScopeId) => Promise<string>;
   conversations?: {
@@ -730,7 +735,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           throw new Error(
             `this session moved from ${binding.scopeId} to ${current.scopeId}; nothing was started or sent.`,
           );
-        if (deps.authorize && !(await deps.authorize(current, binding.request.actor.id, binding.request)))
+        if (deps.authorize && !(await deps.authorize(current, binding.request.actor.id, binding.request, current)))
           throw new Error(
             `${binding.request.actor.id} can't currently be confirmed as a member of ${binding.scopeId}, so helpers can't run here; nothing was started or sent.`,
           );
@@ -754,7 +759,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
             for (const message of messages) {
               const sender = await deps.sessions.getForParticipant(message.senderId, caller.actor.id);
               if (!sender || sender.scopeId !== binding.scopeId) continue;
-              if (deps.authorize && !(await deps.authorize(sender, caller.actor.id, caller))) continue;
+              if (deps.authorize && !(await deps.authorize(sender, caller.actor.id, caller, binding.session))) continue;
               try {
                 assertAudienceCompatible(
                   { actor: message.actor, conversation: { ...caller.conversation, audience: message.audience } },
@@ -923,7 +928,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   message:
                     "that subagent finished and retired; open a fresh one with `open` (its result is already in your transcript).",
                 };
-              if (deps.authorize && !(await deps.authorize(target, caller.actor.id, caller)))
+              if (deps.authorize && !(await deps.authorize(target, caller.actor.id, caller, binding.session)))
                 return { ok: false, message: "you no longer have access to the target session" };
               const meta = storedContext(target);
               if (!meta) return { ok: false, message: "the target has no verified runtime context yet" };
@@ -1148,6 +1153,11 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           const maxChars = Math.min(Math.max(200, input.maxChars ?? READ_DEFAULT_MAX_CHARS), READ_MAX_CHARS_CEILING);
           if (!(await deps.sessions.getForParticipant(target.id, binding.request.actor.id)))
             return { ok: false, message: "you are not a participant in that session." };
+          if (
+            deps.authorize &&
+            !(await deps.authorize(target, binding.request.actor.id, binding.request, binding.session))
+          )
+            return { ok: false, message: "you no longer have access to the target session" };
           const items = await visibleHistory(target);
           const lines: string[] = [];
           for (const item of items.slice(-limit)) {
