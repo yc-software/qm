@@ -74,6 +74,7 @@ import {
   type IconNode,
 } from "lucide";
 import {
+  APPROVAL_GONE_MESSAGE,
   messageText,
   continuableMessages,
   hasRecordedRunReply,
@@ -884,6 +885,7 @@ export function createChatSurface(
     try {
       const threadRef = chatState.threadRef;
       const runId = await resolveApproval(decision);
+      if (!runId && agent === chatState.agent) ctx.composer.state.error = APPROVAL_GONE_MESSAGE;
       if (runId && chatState.normalStreamFn && chatState.onWork)
         await resumeRun(agent, threadRef, chatState.normalStreamFn, chatState.onWork, runId, undefined, () => {
           releaseSubmission();

@@ -1215,7 +1215,8 @@ export async function runApprovalTurn(
   if (outcome.stopReason === "error") throw new Error(outcome.errorMessage || "Could not send the approval.");
 }
 
-const APPROVAL_GONE_MESSAGE = "This approval is no longer available — it may have expired or already been handled.";
+export const APPROVAL_GONE_MESSAGE =
+  "This approval is no longer available — it may have expired or already been handled.";
 const APPROVAL_NOT_APPLIED_MESSAGE =
   "This approval couldn't be applied right now — the conversation is waiting on a different approval.";
 
