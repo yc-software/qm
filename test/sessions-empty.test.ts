@@ -42,7 +42,7 @@ test("listSessions hides a stranded entry-less session", async () => {
   await app.turn(dm("Just a question", "web:U1:real"));
   const strandedId = await strandShell(sessions, "web:U1:stranded");
 
-  const list = await app.listSessions("U1");
+  const list = await app.listSessions({ actorId: "U1" });
   assert.ok(
     list.find((s) => s.threadRef === "web:U1:real"),
     "the real conversation is listed",
@@ -60,14 +60,14 @@ test("an entry-less session with an in-flight turn stays visible", async () => {
   const id = await strandShell(sessions, thread);
   await runs.enqueue({ sessionId: thread, request: enqueueRequest(thread) });
 
-  const row = (await app.listSessions("U1")).find((s) => s.id === id);
+  const row = (await app.listSessions({ actorId: "U1" })).find((s) => s.id === id);
   assert.equal(row?.working, true, "a brand-new chat is visible (and working) while its first turn runs");
 
   const claimed = (await runs.claim("w1", 5_000))[0] ?? null;
   await runs.complete(claimed!.id, claimed!.leaseToken ?? "", { status: "failed", reason: "boom" });
 
   assert.ok(
-    !(await app.listSessions("U1")).find((s) => s.id === id),
+    !(await app.listSessions({ actorId: "U1" })).find((s) => s.id === id),
     "once the failed turn settles with nothing written, the shell disappears",
   );
 });
@@ -79,7 +79,7 @@ test("a titled entry-less session stays listed", async () => {
   await sessions.updateTitle(id, "Planning (fork)");
 
   assert.ok(
-    (await app.listSessions("U1")).find((s) => s.id === id),
+    (await app.listSessions({ actorId: "U1" })).find((s) => s.id === id),
     "a title marks the session deliberately created, so it is listed even with no entries",
   );
 });
@@ -104,12 +104,12 @@ test("a session becomes visible once its first entry lands", async () => {
 
   const thread = "web:U1:lands";
   const id = await strandShell(sessions, thread);
-  assert.ok(!(await app.listSessions("U1")).find((s) => s.id === id));
+  assert.ok(!(await app.listSessions({ actorId: "U1" })).find((s) => s.id === id));
 
   const outcome = await app.turn(dm("hello", thread));
   assert.equal(outcome.sessionId, id, "the turn reuses the existing shell");
   assert.ok(
-    (await app.listSessions("U1")).find((s) => s.id === id),
+    (await app.listSessions({ actorId: "U1" })).find((s) => s.id === id),
     "listed once the transcript exists",
   );
 });

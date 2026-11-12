@@ -3,6 +3,7 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { NoDefaultSandboxError } from "../src/sandbox/sandbox-routing.ts";
+import { BotComputerRefusedError, SandboxAccessError } from "../src/sandbox/sandbox-resources.ts";
 import { scopeId, type GrantedHandle, type IncomingAttachment } from "../src/types.ts";
 import { createToolContext } from "../src/tools/primitives.ts";
 import { createSpritesSandbox } from "../src/sandbox/sprites-sandbox.ts";
@@ -537,26 +538,27 @@ test("a binary file round-trips through the sandbox (base64-over-exec) without u
   assert.deepEqual(new Uint8Array(read!), raw);
 });
 
-test("materializeInbound keeps uploads registered when the scope has no default sandbox", async () => {
-  const { sandbox, files } = fakeSandbox();
-  const transfer = createMemoryBlobTransferStore();
-  const put = async () => ({ created: true });
-  const register = { seed: "s", ownerScopeId: "channel:C1", createdBy: "U1", store: { put } } as never;
-  const noComputer = () => Promise.reject(new NoDefaultSandboxError());
-  const got = await materializeInbound(
-    sandbox,
-    noComputer,
-    [await inFile(transfer, "a b.txt", "hi")],
-    transfer,
-    register,
-  );
-  assert.equal(files.size, 0);
-  assert.equal(got.metas.length, 1);
-  assert.ok(got.unstaged?.has("a b.txt"));
-  const manifest = inboundManifest(got.metas, "inbox", got.unstaged);
-  assert.match(manifest, new RegExp(`/v1/files/${got.metas[0]!.artifactId}/content`));
-  assert.doesNotMatch(manifest, /available in/);
-});
+for (const refusal of [new NoDefaultSandboxError(), new BotComputerRefusedError()])
+  test(`materializeInbound keeps uploads registered when the scope has no usable sandbox (${refusal.constructor.name})`, async () => {
+    const { sandbox, files } = fakeSandbox();
+    const transfer = createMemoryBlobTransferStore();
+    const put = async () => ({ created: true });
+    const register = { seed: "s", ownerScopeId: "channel:C1", createdBy: "U1", store: { put } } as never;
+    const noComputer = () => Promise.reject(refusal);
+    const got = await materializeInbound(
+      sandbox,
+      noComputer,
+      [await inFile(transfer, "a b.txt", "hi")],
+      transfer,
+      register,
+    );
+    assert.equal(files.size, 0);
+    assert.equal(got.metas.length, 1);
+    assert.ok(got.unstaged?.has("a b.txt"));
+    const manifest = inboundManifest(got.metas, "inbox", got.unstaged);
+    assert.match(manifest, new RegExp(`/v1/files/${got.metas[0]!.artifactId}/content`));
+    assert.doesNotMatch(manifest, /available in/);
+  });
 
 test("materializeInbound drops an unstaged upload it could not register, and rethrows other provision failures", async () => {
   const { sandbox } = fakeSandbox();
@@ -576,10 +578,10 @@ test("materializeInbound drops an unstaged upload it could not register, and ret
   await assert.rejects(
     materializeInbound(
       sandbox,
-      () => Promise.reject(new Error("provider down")),
+      () => Promise.reject(new SandboxAccessError("sandbox not found: c9")),
       [await inFile(transfer, "b.txt", "x")],
       transfer,
     ),
-    /provider down/,
+    /sandbox not found: c9/,
   );
 });

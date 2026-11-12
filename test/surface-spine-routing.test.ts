@@ -633,11 +633,11 @@ test('Door 2: an addressed @mention opens the sub-conversation with a <wake reas
     const items = await built.sessions.getItems(sub!.id);
     const userText = items.find((item) => USER_ITEM_KINDS.includes(item.kind))?.text ?? "";
     assert.match(userText, /^<wake reason="addressed"/, "the addressed turn opens with a wake envelope");
-    assert.match(
-      userText,
-      /<addressed-messages[^>]*>[\s\S]*!post ahoy[\s\S]*<\/addressed-messages>/,
-      "the trigger rides the addressed block",
-    );
+    assert.match(userText, /<addressed-messages[^>]*>\s*<message [^>]*from="human"[^>]*>!post ahoy</);
+    await built.app.turn({ ...mention("!post beep", channel, "700.2"), botActor: true });
+    await pollFor(built.deliveries, (d) => d.destination.target === `slack:${channel}:700.2`);
+    const botItems = await built.sessions.getItems((await built.sessions.getByThread(`ch:${channel}:700.2`))!.id);
+    assert.ok(botItems.some((item) => /<addressed-messages[^>]*>\s*<message [^>]*from="bot"/.test(item.text ?? "")));
   } finally {
     await built.runtime.stop();
   }

@@ -73,7 +73,6 @@ test("a finished reply shows the predicted next message in the empty composer an
           resolvingApprovals: new Set<string>(),
         },
         activePendingApprovals: () => [],
-        hasUnresolvedApproval: () => false,
         turnRuntime: () => null,
         isStopping: () => false,
         hasLiveRun: () => false,

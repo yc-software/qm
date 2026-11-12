@@ -91,7 +91,12 @@ type GrantQuery = {
   ref?: string;
   kind?: Exclude<ResourceKind, "file">;
   granteeScopeIds?: readonly ScopeId[];
-} & ({ ownerScopeId: ScopeId } | { granteeScopeIds: readonly ScopeId[] });
+  resources?: readonly { ownerScopeId: ScopeId; ref: string }[];
+} & (
+  | { ownerScopeId: ScopeId }
+  | { granteeScopeIds: readonly ScopeId[] }
+  | { resources: readonly { ownerScopeId: ScopeId; ref: string }[] }
+);
 
 export interface AclStoreOptions {
   manages?: ScopeManagement;

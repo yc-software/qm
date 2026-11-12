@@ -1,6 +1,7 @@
 import { durableMapTenancy } from "../persistence/durable-map.ts";
 import { inboundIndexes } from "../tenants/lookup.ts";
 import { createPgPool, type PgMigrationDefinition } from "../persistence/pg-pool.ts";
+import type { Tenant } from "../tenants/context.ts";
 
 export const NAME_INDEX = "deployments_name_unique";
 
@@ -77,6 +78,12 @@ export const DEPLOYMENT_TABLES: PgMigrationDefinition[] = [
     ],
   },
   inboundIndexes("deployments", ["name"]),
+  {
+    id: "durable-map/deployments/0030-page-views-by-viewer",
+    statements: [
+      `CREATE INDEX CONCURRENTLY IF NOT EXISTS app_page_views_by_viewer ON app_page_views(tenant_id, viewer, deployment_id, at DESC)`,
+    ],
+  },
 ];
 
 export type AppViewAuthMode = "signed_in" | "public" | "app_only";
@@ -94,6 +101,7 @@ export interface AppPageView {
 
 export interface AppPageViewLog {
   record(view: AppPageView): Promise<void>;
+  lastViews(tenant: Tenant, viewer: string, deploymentIds: string[]): Promise<Map<string, number>>;
 }
 
 const MAX_PATH = 2048;
@@ -105,7 +113,7 @@ const DROP_REPORT_INTERVAL_MS = 60_000;
 const clip = (value: string | null, max: number): string | null => (value === null ? null : value.slice(0, max));
 
 export function createPostgresAppPageViewLog(connectionString: string): AppPageViewLog {
-  const { q } = createPgPool(connectionString, DEPLOYMENT_TABLES);
+  const pg = createPgPool(connectionString, DEPLOYMENT_TABLES);
   let inFlight = 0;
   let dropped = 0;
   let lastDropReport = 0;
@@ -122,7 +130,7 @@ export function createPostgresAppPageViewLog(connectionString: string): AppPageV
       }
       inFlight++;
       try {
-        await q(
+        await pg.q(
           `INSERT INTO app_page_views(deployment_id, version, viewer, auth_mode, at, path, ip, user_agent)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
           [
@@ -139,6 +147,15 @@ export function createPostgresAppPageViewLog(connectionString: string): AppPageV
       } finally {
         inFlight--;
       }
+    },
+    async lastViews(tenant, viewer, deploymentIds) {
+      const rows = await pg.forTenant(tenant).q(
+        `SELECT d.id AS deployment_id, v.at FROM unnest($3::text[]) AS d(id)
+           CROSS JOIN LATERAL (SELECT at FROM app_page_views
+             WHERE tenant_id = $1 AND viewer = $2 AND deployment_id = d.id ORDER BY at DESC LIMIT 1) v`,
+        [tenant.id, viewer, deploymentIds],
+      );
+      return new Map(rows.map((r) => [String(r.deployment_id), Number(r.at)]));
     },
   };
 }

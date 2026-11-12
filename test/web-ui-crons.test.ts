@@ -157,7 +157,7 @@ test("retained cron runs are private to people who can manage the cron", async (
   assert.equal(huge.status, 400);
   assert.equal((await fetch(`${coreBase}/api/crons/${cron.id}/runs`, asUser("other-user"))).status, 404);
 
-  await built.app.deleteCron(cron.id);
+  await built.app.deleteCron(cron.id, { actorId: cron.owner });
 });
 
 test("list splits owned crons from ones visible through shared scopes, and visibility never grants administration", async () => {
@@ -220,7 +220,8 @@ test("list splits owned crons from ones visible through shared scopes, and visib
     assert.equal((await attempt).status, 404);
   }
 
-  for (const id of [publicCron.id, privateCron.id, dmCron.id, personalCron.id]) await built.app.deleteCron(id);
+  for (const id of [publicCron.id, privateCron.id, dmCron.id, personalCron.id])
+    await built.app.deleteCron(id, { actorId: "bob" });
 });
 
 test("a channel member sees a teammate's cron read-only via the web until the owner shares write access", async () => {
@@ -291,7 +292,7 @@ test("a channel member sees a teammate's cron read-only via the web until the ow
   assert.ok(!bobList.crons.some((c) => c.id === privCron.id), "the former owner no longer lists it as theirs");
   assert.equal(bobList.visible.find((c) => c.id === privCron.id)?.owner, "alice");
 
-  await built.app.deleteCron(privCron.id);
+  await built.app.deleteCron(privCron.id, { actorId: privCron.owner });
 });
 
 test("cron runtime patches pass through the web API, validate, and clear", async () => {
@@ -348,5 +349,5 @@ test("a browser cron edit accepts only the fields the web app edits", async () =
   assert.equal(edited.status, 200);
   assert.deepEqual(((await edited.json()) as CronBody).cron.enabled, false);
   assert.equal((await built.app.getCron(cron.id))!.owner, "alice", "an owner editing their own task stays owner");
-  await built.app.deleteCron(cron.id);
+  await built.app.deleteCron(cron.id, { actorId: cron.owner });
 });

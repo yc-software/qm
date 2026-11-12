@@ -54,7 +54,7 @@ import type {
   PendingApprovalRecord,
 } from "../types.ts";
 import { scopeId as toScopeId, personalScope } from "../types.ts";
-import { desktopClientForTurn, introducesUser, isPersonAuthored, isSessionTurn } from "./turn-origin.ts";
+import { boundWebhook, desktopClientForTurn, introducesUser, isPersonAuthored, isSessionTurn } from "./turn-origin.ts";
 import { resolveTurnFastMode } from "./turn-options.ts";
 import { orgId } from "../config.ts";
 import { type Tenant, ambientTenant } from "../tenants/context.ts";
@@ -89,7 +89,7 @@ import type {
 import { compactedSinceLastTurn, forModelContext, forSearchView } from "../agent/context-compaction.ts";
 import {
   securityScreenChunks,
-  securityScreenPayload,
+  securityScreenPayloads,
   UNSCREENED_REASON,
   unscreenedNotice,
 } from "../security/security-posture.ts";
@@ -177,6 +177,7 @@ import {
   renderSandboxProviders,
   sharedFilesSystemSection,
   renderProjectHomeChannel,
+  webSurfaceLabel,
   type SystemContextBlocks,
 } from "./orchestrator/prompt-blocks.ts";
 import { createCompaction } from "./orchestrator/compaction.ts";
@@ -204,6 +205,8 @@ import {
   createDocumentScreen,
   createSkillScreen,
   createToolResultScreen,
+  flaggedAudit,
+  oversizeVerdict,
   screenInboundInput,
   type SecurityScreenContext,
   unscreenedVerdict,
@@ -287,8 +290,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   }
 
   const securitySteersInFlight = new Set<string>();
-  const { compactContextIfNeeded, compactRecent, scheduleBackgroundCompaction, documentTokenBudget } =
-    createCompaction(deps);
+  const {
+    compactContextIfNeeded,
+    compactRecent,
+    scheduleBackgroundCompaction,
+    compactionSettings,
+    documentTokenBudget,
+  } = createCompaction(deps);
   const originOf = async (session: Session | null) => {
     if (!session) return undefined;
     if (!session.parentSessionId && session.origin) return session.origin;
@@ -348,7 +356,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         scopeId: scopeLabel,
         origin: sessionId ? await originOf(session) : sessionOrigin(conversation.threadRef),
       });
-      const bounded = securityScreenPayload({
+      const payloads = securityScreenPayloads({
         surface: "external",
         text: "",
         origin: { kind: "automation", screenData: payload },
@@ -362,11 +370,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         ...(sessionId ? { sessionId } : {}),
       } as const;
       if (screening === "observe") {
-        if (bounded && !bounded.truncated)
-          await classifySecurityData(tenant, bounded.content, actor.id, scopeLabel, undefined, {
-            ...steerContext,
-            mode: "observe",
-          });
+        if (!payloads) return "allow";
+        await screenChunks(
+          payloads,
+          (chunk) =>
+            classifySecurityData(tenant, chunk, actor.id, scopeLabel, undefined, { ...steerContext, mode: "observe" }),
+          { batch: 4 },
+        );
         return "allow";
       }
       const block = (cause: string, reason?: string): "block" => {
@@ -384,19 +394,25 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (!deps.securityScreener && !deps.agent.screenSecurity) return block("no-screener");
       if (deps.budget && !(await deps.budget.check(tenant, actor.id)).allowed) return block("over-budget");
       if (securitySteersInFlight.has(conversation.threadRef)) return block("steer-in-flight");
-      if (!bounded || bounded.truncated) return block("oversize-input");
+      if (!payloads) return block("oversize-input");
+      if (!payloads.length) return block("empty-input");
       securitySteersInFlight.add(conversation.threadRef);
-      const verdict = await classifySecurityData(
-        tenant,
-        bounded.content,
-        actor.id,
-        scopeLabel,
-        sessionId
-          ? async (rec) => {
-              await deps.sessions.recordLlmRequest(sessionId, { ...rec, scopeLabel });
-            }
-          : undefined,
-        { ...steerContext, mode: "enforce" },
+      const verdict = await screenChunks(
+        payloads,
+        (chunk) =>
+          classifySecurityData(
+            tenant,
+            chunk,
+            actor.id,
+            scopeLabel,
+            sessionId
+              ? async (rec) => {
+                  await deps.sessions.recordLlmRequest(sessionId, { ...rec, scopeLabel });
+                }
+              : undefined,
+            { ...steerContext, mode: "enforce" },
+          ),
+        { batch: 4 },
       ).finally(() => securitySteersInFlight.delete(conversation.threadRef));
       if (verdict?.decision === "auto") {
         if (!verdict.unscreened) return "allow";
@@ -635,14 +651,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         JSON.stringify(approvalRecord.request.overheard ?? []) === JSON.stringify(input.overheard ?? []) &&
         JSON.stringify(approvalRecord.request.attachments ?? []) === JSON.stringify(input.attachments ?? []) &&
         (approvalRecord.request.conversationHeader ?? "") === (input.conversationHeader ?? "");
-      const screenInbound =
-        securityPolicy.screening !== "off" &&
-        !(
-          approvalSession &&
-          approvalRecord?.sessionId === approvalSession.id &&
-          approvalRecord.kind === "input" &&
-          approvalReplaysFlaggedRequest
-        );
+      const replaysHeldInput =
+        !!approvalSession &&
+        approvalRecord?.sessionId === approvalSession.id &&
+        approvalRecord.kind === "input" &&
+        approvalReplaysFlaggedRequest;
+      const screenInbound = securityPolicy.screening !== "off" && !replaysHeldInput;
       const screenSession: { id?: string } = {};
       const pendingScreenRequests: TurnLlmRequestRecord[] = [];
       const recordScreenRequest = async (rec: TurnLlmRequestRecord): Promise<void> => {
@@ -675,6 +689,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         scopeId,
         resolution,
         screenInbound,
+        replaysHeldInput,
         enforceScreen,
         ambientTurn,
         sessionTurn,
@@ -701,13 +716,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await deps.sessions.addParticipant(session.id, actor.id);
         if (input.shutdown?.aborted)
           return { status: "queued", sessionId: session.id, ...(input.runId ? { runId: input.runId } : {}) };
-        if (botRequester)
-          return botApprovalRefusal(
-            audit,
-            session.id,
-            "security-screen",
-            `${flaggedScreenedInput.reason}; flagged sources: ${flaggedScreenedInput.sources.join(", ") || "message"}`,
-          );
+        const heldReason = `${flaggedScreenedInput.reason}; flagged sources: ${flaggedScreenedInput.sources.join(", ") || "message"}`;
+        if (botRequester) return botApprovalRefusal(audit, session.id, "security-screen", heldReason);
         let approval: PendingApproval;
         try {
           approval = await withManagedRosterVersion(async () => {
@@ -716,10 +726,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             return issueApproval(inputApprovalId(session.id, replayableRequest(input)), {
               sessionId: session.id,
               command: "security-screen",
-              reason: `${flaggedScreenedInput.reason}; flagged sources: ${flaggedScreenedInput.sources.join(", ") || "message"}`,
+              reason: heldReason,
               blocksInput: true,
               kind: "input",
               approvalKey: `security-screen:${input.surface ?? "unknown"}`,
+              ...(flaggedScreenedInput.onceOnly ? { grantModes: { session: false, always: false } } : {}),
             });
           });
         } catch (err) {
@@ -744,7 +755,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const appEdit = appEditTurnPolicy(editingApp !== null);
       const mcpToolsReady =
         !external && !appEdit && deps.mcp ? deps.mcp.toolDefsFor(actor.id, audienceScopeId, actAsActor) : undefined;
-      const useMemory = !external && input.skipMemory !== true;
+      const livePersonTurn = liveAuthorTurn && input.botActor !== true;
+      const useMemory =
+        !external && input.skipMemory !== true && !(input.botActor && scopeId === personalScope(actor.id));
       const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);
       resolution.writableScopeId = environmentId;
       const personaTurn =
@@ -780,7 +793,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         audience: conversation.audience,
         acl: deps.acl,
         origin: authorizationOrigin,
-        trustedLiveHuman: liveAuthorTurn,
+        trustedLiveHuman: livePersonTurn,
         targetScope: scopeId,
         ...(audienceScopeId ? { audienceScopeId } : {}),
         config: deps.config,
@@ -819,7 +832,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         botName,
         orgName,
         surfaceTool,
-        surfaceLabel: isWeb ? `the ${botName} web app` : (toolSurface?.label ?? "Slack"),
+        surfaceLabel: isWeb ? webSurfaceLabel(botName, Boolean(boundWebhook(input))) : (toolSurface?.label ?? "Slack"),
         conversationType: { dm: "private 1:1", group: "group conversation", channel: "channel conversation" }[
           conversation.kind
         ],
@@ -1084,7 +1097,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         external,
         strictReadOnly,
         allInternal,
-        liveAuthorTurn,
+        liveAuthorTurn: livePersonTurn,
         scopeId,
         environmentId,
         sharingSources,
@@ -1161,7 +1174,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         strictReadOnly,
         allInternal,
         liveTurn,
-        liveAuthorTurn,
+        liveAuthorTurn: livePersonTurn,
         automatedTurn,
         actAsActor,
         useMemory,
@@ -1264,7 +1277,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         connectorEnv,
         egressTokenForTurn,
         egressTokenForPolicy,
-        openResourceAccess: !external && (liveAuthorTurn || openAutomationKeychain),
+        openResourceAccess: !external && (livePersonTurn || openAutomationKeychain),
         visibleSkillsForTurn,
       });
       if (input.shutdown?.aborted)
@@ -1403,6 +1416,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           rosterMembers,
           scopeAskList,
         }));
+        const turnCompactionSettings = await compactionSettings();
         const finished = await finishSystemPrompt({
           deps,
           input,
@@ -1414,7 +1428,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           swarmBinding,
           swarmGoalTurn,
           onboardingBlock,
-          documentTokenBudget,
+          documentTokenBudget: (model) => documentTokenBudget(model, turnCompactionSettings),
         });
         systemPrompt = finished.systemPrompt;
         const { sideDiscussions } = finished;
@@ -1431,6 +1445,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const detectHistory = filterHistory((await turnWindow()).items.slice(-DETECT_HISTORY_TAIL));
           const decision = await deps.agent
             .shouldRespond({
+              ...sessionRoute,
+              scopeLabel: scopeId,
               session,
               message: input.text,
               recentContext: input.detectContext ?? "",
@@ -1757,17 +1773,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 securityPolicy.screening !== "off"
                   ? async ({ content, name, mimetype }) => {
                       const payload = JSON.stringify({ name, mimetype, content });
-                      if (payload.length > MAX_DOCUMENT_TEXT_CHARS) return unscreenedVerdict();
-                      return screenChunks(
-                        securityScreenChunks("tool_result:inbound_file", payload),
-                        classifyAs({
-                          sessionId: session.id,
-                          hook: "tool_response",
-                          request: requestText,
-                          surface: "inbound_file",
-                        }),
-                        { batch: 4, signal: turnAbort.signal },
-                      );
+                      let verdict = enforceScreen ? oversizeVerdict() : unscreenedVerdict();
+                      if (payload.length <= MAX_DOCUMENT_TEXT_CHARS)
+                        verdict = await screenChunks(
+                          securityScreenChunks("tool_result:inbound_file", payload),
+                          classifyAs({
+                            sessionId: session.id,
+                            hook: "tool_response",
+                            request: requestText,
+                            surface: "inbound_file",
+                          }),
+                          { batch: 4, signal: turnAbort.signal },
+                        );
+                      if (verdict.decision === "strict")
+                        audit(flaggedAudit("inbound_file", "withheld", verdict.reason, [name]));
+                      return verdict;
                     }
                   : undefined,
               )
@@ -1833,7 +1853,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const effectiveFastMode = resolveTurnFastMode(input.fastMode, humanInput, wantsOrgFastMode === true);
         compactionRoute = sessionRoute;
         const preTurnRoute = compactionRoute;
-        const documentBudget = documentTokenBudget(sessionModel);
+        const documentBudget = documentTokenBudget(sessionModel, turnCompactionSettings);
         const history = !preTurnRoute
           ? visibleHistory
           : await withManagedRosterVersion(() =>
@@ -1846,6 +1866,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 scopeId,
                 actorId: actor.id,
                 route: preTurnRoute,
+                settings: turnCompactionSettings,
                 reservedTokens:
                   countTokens(sideDiscussions) +
                   (strictReadOnly
@@ -1864,6 +1885,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           enforceScreen,
           classifyAs,
           turnAbort,
+          audit,
         });
         const documentRoom = {
           maxBytes: MAX_DOCUMENT_BYTES,
@@ -2069,7 +2091,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const runtimeClaims: CapabilityClaims = controlClaims ?? {
           ...scopeAttestation,
           exp: Date.now() + CAPABILITY_TTL_MS,
-          ...(liveAuthorTurn ? { liveAuthor: true } : {}),
+          ...(livePersonTurn ? { liveAuthor: true } : {}),
           ...(automatedTurn ? { triggered: true } : {}),
         };
         const restoredRuntime =

@@ -153,10 +153,11 @@ async function mintControlPlaneTokens(
   let orgMemoryWrite: ScopeId | undefined;
   const orgMemoryWritable = useMemory && memoryPolicy.capture !== "off" && resolution.orgScopeId !== memoryScopeId;
   let controlClaims: CapabilityClaims | undefined;
+  const presence = { ...(liveAuthorTurn ? { liveAuthor: true } : {}), ...(automatedTurn ? { triggered: true } : {}) };
   if (!strictReadOnly && deps.signingSecret && deps.apiBaseUrl) {
     const destination = defaultDestination;
     connectorEnv.AGENT_API_URL = deps.apiBaseUrl;
-    if (deps.admin && (liveAuthorTurn || liveTurn)) {
+    if (deps.admin && input.botActor !== true && (liveAuthorTurn || liveTurn)) {
       try {
         actorIsOrgAdmin = (await deps.admin.adminStatusOf(tenant, actor)).isAdmin;
       } catch (e) {
@@ -187,8 +188,7 @@ async function mintControlPlaneTokens(
         ? { privateScope: true }
         : {}),
       ...(memoryClaim ? { memory: memoryClaim } : {}),
-      ...(liveAuthorTurn ? { liveAuthor: true } : {}),
-      ...(automatedTurn ? { triggered: true } : {}),
+      ...presence,
       ...(input.runId ? { runId: input.runId } : {}),
       sessionId: session.id,
       origin,
@@ -230,6 +230,7 @@ async function mintControlPlaneTokens(
     connectorEnv.AGENT_OAUTH_CONSENT_TOKEN = await mintCapabilityToken(
       {
         ...scopeAttestation,
+        ...presence,
         aud: OAUTH_CONSENT_AUD,
         exp: sandboxTokenExpiry,
       },

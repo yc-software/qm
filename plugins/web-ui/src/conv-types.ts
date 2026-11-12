@@ -107,7 +107,6 @@ export interface ChatSurface {
   setTurnRuntime(runtime: TurnRuntime | null): void;
   requestBackgroundPanel(sessionId: string | null, threadRef: string | null): void;
   activePendingApprovals(): PendingApproval[];
-  hasUnresolvedApproval(): boolean;
   resolveCommandApproval(decision: ApprovalDecision): void;
   approvalSummaryView(a: PendingApproval, expanded?: boolean): TemplateResult;
   notePendingSessionOnSend(): void;
