@@ -121,26 +121,23 @@ function recallRow() {
 function compactionRow() {
   const s = states.get(COMPACTION)!;
   if (!s.available) return nothing;
+  const fallback = String(s.context.compactionKeepPercentDefault ?? "");
   return html`<div class="runtime-row" data-runtime-row=${COMPACTION}>
       <span class="runtime-label">Compaction keeps</span>
-      <span
-        ><input
-          type="number"
-          min="10"
-          max="60"
-          step="1"
-          placeholder="40"
-          aria-label="Compaction keeps (percent)"
-          style="width: 80px"
-          .value=${s.draft.percent}
-          ?disabled=${s.saving}
-          @input=${(e: Event) => s.change("percent", (e.target as HTMLInputElement).value.trim())}
-        />
-        %</span
-      >
+      <input
+        type="number"
+        class="runtime-percent"
+        min="1"
+        step="1"
+        placeholder=${fallback}
+        aria-label="Compaction keeps (percent)"
+        .value=${s.draft.percent}
+        ?disabled=${s.saving}
+        @input=${(e: Event) => s.change("percent", (e.target as HTMLInputElement).value.trim())}
+      />
     </div>
     <p class="hint runtime-hint">
-      Share of the history budget kept verbatim when a conversation compacts, 10-60%, empty for the default of 40%.
+      Percent of the history budget kept verbatim when a conversation compacts; empty uses the default of ${fallback}%.
       Lower keeps less recent history verbatim but compacts less often and costs less.
     </p>`;
 }

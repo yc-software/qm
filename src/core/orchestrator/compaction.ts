@@ -5,6 +5,7 @@ import type { SessionWriter } from "../../sessions/session-store.ts";
 import { contextSummary } from "../../sessions/session-store.ts";
 import {
   COMPACT_HARD_FRACTION,
+  COMPACT_KEEP_PERCENT,
   COMPACT_SOFT_FRACTION,
   validateCompactSummary,
   compactionThroughSeq,
@@ -26,7 +27,6 @@ import type { SessionRoute } from "../../agent/agent.ts";
 import type { Tenant } from "../../tenants/context.ts";
 
 const MAX_CONTEXT_TOKENS = 120_000;
-const COMPACTION_HEADROOM_FRACTION = 0.3;
 const DOCUMENT_TOKEN_FRACTION = 0.5;
 const RECENT_NOTICE =
   "[Context reduced without a new summary. Earlier entries are excluded, not deleted. Use history to reopen missing requests and tool calls; history does not return tool results. Check actual state before repeating actions whose outcomes are missing.]";
@@ -89,10 +89,8 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     return parsed.kind === "group" && deps.managedGroups?.recognizes(parsed.ref) === true;
   };
 
-  const keepRecentTokenFraction = (): number => {
-    const percent = deps.config.getCompactionKeepPercent(scopeId("org", orgId()));
-    return percent === null ? COMPACT_SOFT_FRACTION - COMPACTION_HEADROOM_FRACTION : percent / 100;
-  };
+  const keepRecentTokenFraction = (): number =>
+    (deps.config.getCompactionKeepPercent(scopeId("org", orgId())) ?? COMPACT_KEEP_PERCENT.default) / 100;
 
   async function summarizeForCompaction(
     input: Omit<CompactionInput, "writer">,

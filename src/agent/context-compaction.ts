@@ -160,6 +160,11 @@ export function compactTranscript(history: Item[]): string {
 
 export const COMPACT_SOFT_FRACTION = 0.7;
 export const COMPACT_HARD_FRACTION = 0.9;
+const COMPACT_HEADROOM_FRACTION = 0.3;
+export const COMPACT_KEEP_PERCENT = {
+  default: Math.round((COMPACT_SOFT_FRACTION - COMPACT_HEADROOM_FRACTION) * 100),
+  max: Math.round(COMPACT_SOFT_FRACTION * 100) - 1,
+};
 
 export function overBudgetFraction(history: Item[], maxTokens: number, fraction: number): boolean {
   return estimateHistoryTokens(history) > maxTokens * fraction;

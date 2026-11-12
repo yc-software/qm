@@ -325,7 +325,7 @@ export function createConfigStore(
     ackEmoji: field("ackEmoji", "names"),
     branding: field("branding", "branding"),
     browseMaxSteps: field("browseMaxSteps", "steps"),
-    compactionKeepPercent: field("compactionKeepPercent", "percent"),
+    compactionKeepPercent: field("compactionKeepPercent", "percent", true),
     spendLimits: field("spendLimits", "limit"),
   } satisfies Partial<Record<SettingKey, unknown>>;
   const allSettings = Object.values(settings);

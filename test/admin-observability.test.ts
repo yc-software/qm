@@ -1326,7 +1326,7 @@ test("admin governance: compaction keep percent round-trips, validates, and is o
     assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).compactionKeepPercent, null);
     assert.equal((await put("org:default-org", 30, { "x-admin-actor": "nobody@default-org" })).status, 403);
     assert.equal((await put("channel:C1", 30, ALICE)).status, 400);
-    for (const bad of [9, 61, 70, 2.5, "abc"]) assert.equal((await put("org:default-org", bad, ALICE)).status, 400);
+    for (const bad of [0, 70, 2.5, "abc"]) assert.equal((await put("org:default-org", bad, ALICE)).status, 400);
     assert.equal((await put("org:default-org", "25", ALICE)).status, 200);
     assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).compactionKeepPercent, 25);
     assert.equal(built.config.getCompactionKeepPercent("org:default-org"), 25);

@@ -46,6 +46,7 @@ import { FEATURE_NAMES, FEATURES, type FeatureName } from "../../feature-flags.t
 import { parseSharingPosture, SHARING_POSTURES, type SharingPosture } from "../../resolution/sharing-posture.ts";
 import { appHandleResource } from "./admin/app-handle.ts";
 import type { Tenant } from "../../tenants/context.ts";
+import { COMPACT_KEEP_PERCENT } from "../../agent/context-compaction.ts";
 
 type Actor = { id: string };
 
@@ -87,6 +88,17 @@ const orgOnly = (scope: string, label: string): { error: string } | null =>
   parseScopeId(scope).kind === "org" ? null : { error: `${label}; target an org scope` };
 
 const boolBody = (body: unknown): { value: boolean } => ({ value: !!(body as { on?: unknown }).on });
+
+function clearableInt(
+  raw: unknown,
+  min: number,
+  max: number,
+  error: string,
+): { value: number | null } | { error: string } {
+  if (raw === undefined || raw === null || raw === "") return { value: null };
+  const value = typeof raw === "number" || typeof raw === "string" ? Number(raw) : NaN;
+  return Number.isInteger(value) && value >= min && value <= max ? { value } : { error };
+}
 
 const MAX_ORDERS_CHARS = 20_000;
 const MAX_SOUL_CHARS = 100_000;
@@ -637,19 +649,14 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     readKey: "browseMaxSteps",
     get: (deps, scope) => deps.config!.getBrowseMaxSteps(scope),
     apply: generic<number | null>(
-      (body, { scope }) => {
-        const bad = orgOnly(scope, "the browse step limit is org-wide");
-        if (bad) return bad;
-        const raw = (body as { steps?: unknown }).steps;
-        if (raw === undefined || raw === null || raw === "") return { value: null };
-        let steps = NaN;
-        if (typeof raw === "number") steps = raw;
-        else if (typeof raw === "string") steps = Number(raw.trim());
-        if (!Number.isInteger(steps) || steps < 1 || steps > 500) {
-          return { error: "browse-max-steps requires { steps: integer 1-500 } (empty clears to the default of 50)" };
-        }
-        return { value: steps };
-      },
+      (body, { scope }) =>
+        orgOnly(scope, "the browse step limit is org-wide") ??
+        clearableInt(
+          (body as { steps?: unknown }).steps,
+          1,
+          500,
+          "browse-max-steps requires { steps: integer 1-500 } (empty clears to the default of 50)",
+        ),
       (deps, scope, steps) => deps.config!.setBrowseMaxSteps(scope, steps),
     ),
   },
@@ -658,26 +665,18 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     kind: "string",
     target: "org",
     clearable: true,
-    label:
-      "Percent of the history budget compaction keeps verbatim, 10-60 (empty restores the default of 40). Lower keeps less recent history verbatim but compacts less often and costs less.",
+    label: `Percent of the history budget compaction keeps verbatim, 1-${COMPACT_KEEP_PERCENT.max} (empty restores the default of ${COMPACT_KEEP_PERCENT.default}). Lower keeps less recent history verbatim but compacts less often and costs less.`,
     readKey: "compactionKeepPercent",
     get: (deps, scope) => deps.config!.getCompactionKeepPercent(scope),
     apply: generic<number | null>(
-      (body, { scope }) => {
-        const bad = orgOnly(scope, "the compaction keep percent is org-wide");
-        if (bad) return bad;
-        const raw = (body as { percent?: unknown }).percent;
-        if (raw === undefined || raw === null || raw === "") return { value: null };
-        let percent = NaN;
-        if (typeof raw === "number") percent = raw;
-        else if (typeof raw === "string") percent = Number(raw.trim());
-        if (!Number.isInteger(percent) || percent < 10 || percent > 60) {
-          return {
-            error: "compaction-keep-percent requires { percent: integer 10-60 } (empty clears to the default of 40)",
-          };
-        }
-        return { value: percent };
-      },
+      (body, { scope }) =>
+        orgOnly(scope, "the compaction keep percent is org-wide") ??
+        clearableInt(
+          (body as { percent?: unknown }).percent,
+          1,
+          COMPACT_KEEP_PERCENT.max,
+          `compaction-keep-percent requires { percent: integer 1-${COMPACT_KEEP_PERCENT.max} } (empty clears to the default of ${COMPACT_KEEP_PERCENT.default})`,
+        ),
       (deps, scope, percent) => deps.config!.setCompactionKeepPercent(scope, percent),
     ),
   },

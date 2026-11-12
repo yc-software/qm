@@ -353,6 +353,7 @@ test("the models view saves runtime rows chosen in the composer picker", async (
       memoryEmbeddingModel: null,
       memoryEmbeddingOptions: [{ id: "gateway/embed", name: "embed", provider: "qm:gateway" }],
       compactionKeepPercent: null,
+      compactionKeepPercentDefault: 40,
     },
     "PUT /scopes/org:acme/runtime": save,
     "PUT /scopes/org:acme/cron-runtime": save,
