@@ -43,26 +43,31 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor, notice?: 
   const webhook = bound?.webhook;
   const target = bound?.target ?? run.request.deliveryTarget;
   const surface = run.request.surface;
-  if (!target || !surface) return null;
   const editRef = run.deliveryState?.editRef;
   const failed = run.status === "failed";
+  const liveDestination =
+    failed && run.request.surfaceTools && origin.kind === "automation" ? origin.destination : undefined;
+  if (!surface) return null;
   const webTranscript = webTranscriptNote(run, surface, failed);
-  const destination: Destination = {
-    type: webhook ? "webhook" : surface,
-    ...(webhook ? { webhook } : {}),
-    target,
-    ...(surfaceOrigin
-      ? {
-          account: {
-            id: surfaceOrigin.author.account,
-            workspace: surfaceOrigin.workspace,
-            ...(surfaceOrigin.policyNamespace ? { policyNamespace: surfaceOrigin.policyNamespace } : {}),
-          },
-        }
-      : {}),
-    ...(editRef ? { editRef } : {}),
-    ...(webTranscript ? { webTranscript } : {}),
-  };
+  const destination: Destination | undefined = !target
+    ? liveDestination
+    : {
+        type: webhook ? "webhook" : surface,
+        ...(webhook ? { webhook } : {}),
+        target,
+        ...(surfaceOrigin
+          ? {
+              account: {
+                id: surfaceOrigin.author.account,
+                workspace: surfaceOrigin.workspace,
+                ...(surfaceOrigin.policyNamespace ? { policyNamespace: surfaceOrigin.policyNamespace } : {}),
+              },
+            }
+          : {}),
+        ...(editRef ? { editRef } : {}),
+        ...(webTranscript ? { webTranscript } : {}),
+      };
+  if (!destination) return null;
   const idempotencyKey = `run:${run.id}`;
   const provenance = turnDeliveryProvenance({
     origin,

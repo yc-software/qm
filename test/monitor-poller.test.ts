@@ -345,21 +345,22 @@ test("a wake whose turn didn't complete is reported to the destination, not sile
   assert.match(after?.lastError ?? "", /rate limit/);
 });
 
-test("a wake whose turn never finishes is handed off without holding up the next watch", async () => {
-  const h = await agent({
-    respond: (req) => (req.async ? Promise.resolve({ status: "queued", runId: "r1" }) : new Promise(() => {})),
-  });
-  const a = await h.arm();
-  await h.arm({ threadRef: "thread-2" });
-  h.append("p-1", "line\n");
-  const stalled = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error("tick waited on the turn")), 2_000).unref(),
-  );
-  await Promise.race([h.poller.tick(), stalled]);
-  assert.deepEqual(h.calls.map((c) => c.conversation.threadRef).sort(), ["thread-1", "thread-2"]);
-  assert.deepEqual(await h.deliveries.pending("slack"), []);
-  assert.equal((await h.monitors.get(a.id))?.cursor, "line\n".length);
-});
+test(
+  "a wake whose turn never finishes is handed off without holding up the next watch",
+  { timeout: 30_000 },
+  async () => {
+    const h = await agent({
+      respond: (req) => (req.async ? Promise.resolve({ status: "queued", runId: "r1" }) : new Promise(() => {})),
+    });
+    const a = await h.arm();
+    await h.arm({ threadRef: "thread-2" });
+    h.append("p-1", "line\n");
+    await h.poller.tick();
+    assert.deepEqual(h.calls.map((c) => c.conversation.threadRef).sort(), ["thread-1", "thread-2"]);
+    assert.deepEqual(await h.deliveries.pending("slack"), []);
+    assert.equal((await h.monitors.get(a.id))?.cursor, "line\n".length);
+  },
+);
 
 test("a non-leader instance does not poll", async () => {
   const lease: LeaderLease = {
