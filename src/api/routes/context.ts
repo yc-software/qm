@@ -170,6 +170,7 @@ function awaitFileFulfillment(ctx: ApiCtx, requestId: string): Promise<void> {
       return sendJson(res, 502, {
         error: "surface_error",
         message:
+          [...(result.issues ?? []), ...(result.note ? [result.note] : [])].join("; ") ||
           "the surface can't fetch files yet (it may be mid-deploy) — tell the person plainly rather than retrying",
       });
     }

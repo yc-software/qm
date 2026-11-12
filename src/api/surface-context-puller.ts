@@ -71,12 +71,12 @@ export async function pullSurfaceFiles(
   app: SurfaceContextApp,
   source: string,
   conversationTarget: string,
-  fileIds: readonly string[][],
+  fileIds: readonly string[],
 ): Promise<Pick<TurnRequest, "attachments" | "inboundNotes">> {
-  const count = fileIds.flat().length;
+  const count = fileIds.length;
   if (!count) return {};
   const result = await createSurfaceContextPuller(app, { waitMs: SURFACE_FILE_WAIT_MS })
-    .pull(source, { conversationTarget, count: 1, fileIds: fileIds.map((ids) => [...ids]) })
+    .pull(source, { conversationTarget, count: 1, fileIds: [...fileIds] })
     .catch((e: unknown): SurfaceContextResult => {
       swallow("surface-context: files", e);
       return { messages: [], note: errMessage(e) };

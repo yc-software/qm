@@ -230,20 +230,13 @@ export function createSurfaceContextFulfiller(deps: {
       if (q.file && typeof q.file.ts === "string" && q.file.ts) {
         return await post(await fetchSurfaceFile(client, channel, threadTs, q.file));
       }
-      if (q.fileIds?.length) {
-        const staged = await Promise.all(
-          q.fileIds.map((ids) =>
-            stageFiles(
-              client,
-              ids.map((id) => ({ id })),
-            ),
+      if (q.fileIds?.length)
+        return await post(
+          await stageFiles(
+            client,
+            q.fileIds.map((id) => ({ id })),
           ),
         );
-        return await post({
-          attachments: staged.flatMap((s) => s.attachments),
-          issues: staged.flatMap((s) => s.issues),
-        });
-      }
       const count = Math.max(
         1,
         Math.min(
