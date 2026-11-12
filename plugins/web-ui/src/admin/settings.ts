@@ -37,7 +37,8 @@ export class SettingsState extends SettingState {
       return structuredClone(selection);
     }
     if (this.key === "memory-embedding-model") return { modelId: this.draft.modelId || null };
-    if (this.key === "compaction-keep-percent") return { percent: this.draft.percent || null };
+    if (this.key === "compaction-keep-percent") return { percent: this.draft.value || null };
+    if (this.key === "history-budget-tokens") return { tokens: this.draft.value || null };
     if (this.key === "app-handle") {
       const handle = String(this.draft.handle || "").trim();
       const error = _validate ? appHandleError(handle) : undefined;
@@ -84,6 +85,7 @@ export const states = new Map(
     "webui-models",
     "memory-embedding-model",
     "compaction-keep-percent",
+    "history-budget-tokens",
     "soul",
     "branding",
     "app-handle",
@@ -118,8 +120,11 @@ export function load(data: Data, scope: string, only?: string) {
       s.draft = { modelId: data.memoryEmbeddingModel || "" };
       s.available = scope.startsWith("org:") && "memoryEmbeddingModel" in data;
     } else if (key === "compaction-keep-percent") {
-      s.draft = { percent: data.compactionKeepPercent ? String(data.compactionKeepPercent) : "" };
+      s.draft = { value: data.compactionKeepPercent ? String(data.compactionKeepPercent) : "" };
       s.available = scope.startsWith("org:") && "compactionKeepPercent" in data;
+    } else if (key === "history-budget-tokens") {
+      s.draft = { value: data.historyBudgetTokens ? String(data.historyBudgetTokens) : "" };
+      s.available = scope.startsWith("org:") && "historyBudgetTokens" in data;
     } else if (key === "soul") {
       s.draft = { content: data.soul || "", expectedVersion: data.soulVersion || 0 };
       s.history = data.soulHistory || [];
@@ -272,7 +277,13 @@ export async function mount(next: AdminPage) {
   if (!next.current()) return;
   if (!r.ok) status = r.status === 403 ? "You don't administer this scope." : r.data?.message || "Failed to load.";
   if (r.ok && next.view === "models")
-    for (const key of [...runtimeKeys, "webui-models", "memory-embedding-model", "compaction-keep-percent"])
+    for (const key of [
+      ...runtimeKeys,
+      "webui-models",
+      "memory-embedding-model",
+      "compaction-keep-percent",
+      "history-budget-tokens",
+    ])
       load(r.data, next.orgScope, key);
   if (r.ok && next.view === "customize") {
     savedBranding = r.data.branding || {};

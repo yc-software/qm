@@ -326,15 +326,15 @@ export function auxiliaryModelFor(baseModelId: string): string {
 }
 
 const CONTEXT_BUDGET_FRACTION = 0.5;
-const CONTEXT_BUDGET_CAP_TOKENS = 150_000;
+export const HISTORY_BUDGET_TOKENS = { min: 10_000, default: 150_000, max: 1_000_000 };
 
-export function contextTokenBudgetForModel(id: string): number | undefined {
+export function contextTokenBudgetForModel(id: string, cap = HISTORY_BUDGET_TOKENS.default): number | undefined {
   const model = resolveModel(id);
   const window = model?.contextWindow;
   const output = model?.maxTokens;
   if (typeof window !== "number" || window <= 0 || typeof output !== "number" || output <= 0 || output >= window)
     return undefined;
-  return Math.min(CONTEXT_BUDGET_CAP_TOKENS, Math.floor((window - output) * CONTEXT_BUDGET_FRACTION));
+  return Math.min(cap, Math.floor((window - output) * CONTEXT_BUDGET_FRACTION));
 }
 
 export function modelHasPrices(model: Pick<Model<Api>, "cost">): boolean {

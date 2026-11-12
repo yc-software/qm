@@ -210,7 +210,7 @@ export async function finishSystemPrompt(turn: {
   swarmBinding: Awaited<ReturnType<NonNullable<OrchestratorDeps["swarms"]>["binding"]>> | undefined;
   swarmGoalTurn: boolean;
   onboardingBlock: string;
-  documentTokenBudget: (model: OrchestratorInput["model"]) => number;
+  documentTokenBudget: (model: OrchestratorInput["model"]) => Promise<number>;
 }): Promise<{ systemPrompt: string; sideDiscussions: string }> {
   const {
     deps,
@@ -236,7 +236,7 @@ export async function finishSystemPrompt(turn: {
         ...(input.sessionParticipantIds ?? []),
       ]),
     ],
-    documentTokenBudget(input.model),
+    await documentTokenBudget(input.model),
   );
   if (sideDiscussions) systemPrompt += `\n\n${sideDiscussions}`;
   systemPrompt += `\n\n${USER_REPLY_RULES_MD.trim()}`;

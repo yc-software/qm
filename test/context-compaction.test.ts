@@ -473,6 +473,23 @@ test("a model-overridden session's background pass sizes against the override's 
   assert.equal(compactCalls[0]!.runtime?.modelId, OVERRIDE, "and summarizes on the session's own model");
 });
 
+test("the org history budget caps the model budget, so background compaction fires at the lower size", async () => {
+  const { agent, compactCalls } = spyAgent();
+  agent.contextTokenBudget = (_model?: string, cap?: number) => cap ?? 1_000_000;
+  const { orch, sessions, config } = buildOrchestrator(agent);
+  await config.setHistoryBudgetTokens(budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
+  const sid = await seed(
+    sessions,
+    msgTexts(8).map((text) => user(text)),
+  );
+
+  const res = await orch.handleTurn(turn("!histcount"));
+  assert.equal(res.status, "ok");
+  assert.equal(res.reply, "history:8");
+  assert.equal((await waitForSummary(sessions, sid)).length, 1);
+  assert.equal(compactCalls.length, 1);
+});
+
 test("a rapid follow-up that outran the background pass AND is over the HARD limit blocks and compacts inline", async () => {
   const { agent, compactCalls } = spyAgent();
   const { orch, sessions } = buildOrchestrator(agent, Math.floor(tokensOf(...msgTexts(8)) * COMPACT_HARD_FRACTION));

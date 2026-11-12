@@ -1337,6 +1337,37 @@ test("admin governance: compaction keep percent round-trips, validates, and is o
   }
 });
 
+test("admin governance: history budget round-trips, validates, and is org-scoped", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-historybudget-")) }));
+  const server = createInsecureTestServer(built.app, {
+    admin: built.admin,
+    config: built.config,
+    auditLog: built.auditLog,
+  });
+  server.listen(0);
+  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const put = (scope: string, tokens: unknown, headers: Record<string, string>) =>
+    fetch(base + `/v1/admin/scopes/${encodeURIComponent(scope)}/history-budget-tokens`, {
+      method: "PUT",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ tokens }),
+    });
+  try {
+    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).historyBudgetTokens, null);
+    assert.equal((await put("org:default-org", 60_000, { "x-admin-actor": "nobody@default-org" })).status, 403);
+    assert.equal((await put("channel:C1", 60_000, ALICE)).status, 400);
+    for (const bad of [9_999, 1_000_001, 20_000.5, "abc"])
+      assert.equal((await put("org:default-org", bad, ALICE)).status, 400);
+    assert.equal((await put("org:default-org", "60000", ALICE)).status, 200);
+    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).historyBudgetTokens, 60_000);
+    assert.equal(await built.config.getHistoryBudgetTokensDurable(), 60_000);
+    assert.equal((await put("org:default-org", "", ALICE)).status, 200);
+    assert.equal(await built.config.getHistoryBudgetTokensDurable(), null);
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
 test("admin governance: spend limits round-trip per scope, validate, and clear", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-spendlimit-")) }));
   const server = createInsecureTestServer(built.app, {

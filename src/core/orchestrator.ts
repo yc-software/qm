@@ -1838,7 +1838,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const effectiveFastMode = resolveTurnFastMode(input.fastMode, humanInput, wantsOrgFastMode === true);
         compactionRoute = sessionRoute;
         const preTurnRoute = compactionRoute;
-        const documentBudget = documentTokenBudget(sessionModel);
+        const documentBudget = await documentTokenBudget(sessionModel);
         const history = !preTurnRoute
           ? visibleHistory
           : await withManagedRosterVersion(() =>

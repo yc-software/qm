@@ -55,6 +55,7 @@ export interface PersistedBaseModel {
   scopeId: ScopeId;
   embeddingModelId?: string;
   compactionKeepPercent?: number;
+  historyBudgetTokens?: number;
   modelId?: string;
   cronRuntime?: RuntimeSelection;
   subagentRuntime?: RuntimeSelection;
@@ -69,6 +70,7 @@ type RuntimePurpose = "cron" | "subagent" | "fallback" | "appEdit";
 const ORG_MODEL_FIELDS = [
   "embeddingModelId",
   "compactionKeepPercent",
+  "historyBudgetTokens",
   "cronRuntime",
   "subagentRuntime",
   "fallbackRuntime",
@@ -179,6 +181,8 @@ export interface ScopedConfigStore {
   setBrowseMaxSteps(id: ScopeId, steps: number | null): Promise<void>;
   getCompactionKeepPercentDurable(): Promise<number | null>;
   setCompactionKeepPercent(percent: number | null): Promise<void>;
+  getHistoryBudgetTokensDurable(): Promise<number | null>;
+  setHistoryBudgetTokens(tokens: number | null): Promise<void>;
   getEmbeddingModelDurable(): Promise<string | null>;
   setEmbeddingModel(modelId: string | null): Promise<void>;
   setConnectorClient(id: ScopeId, provider: string, input: ConnectorClientInput): Promise<void>;
@@ -744,6 +748,8 @@ export function createConfigStore(
     setBrowseMaxSteps: (id, steps) => settings.browseMaxSteps.set(id, steps),
     getCompactionKeepPercentDurable: async () => (await baseModelStore.get(org))?.compactionKeepPercent ?? null,
     setCompactionKeepPercent: (percent) => setOrgModelField("compactionKeepPercent", percent),
+    getHistoryBudgetTokensDurable: async () => (await baseModelStore.get(org))?.historyBudgetTokens ?? null,
+    setHistoryBudgetTokens: (tokens) => setOrgModelField("historyBudgetTokens", tokens),
     getEmbeddingModelDurable: async () => (await baseModelStore.get(org))?.embeddingModelId ?? null,
     setEmbeddingModel: (modelId) => setOrgModelField("embeddingModelId", modelId),
     async setConnectorClient(id, provider, input) {

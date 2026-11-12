@@ -18,6 +18,7 @@ import {
   thinkingLevelsFor,
   selectableBaseModels,
   ALL_PROVIDERS_AVAILABLE,
+  HISTORY_BUDGET_TOKENS,
 } from "../../model/pi-models.ts";
 import { resolveRuntimeChoice } from "../../agent/runtime-choice.ts";
 import { APP_EDIT_DEFAULT_RUNTIME } from "../runtime-config.ts";
@@ -678,6 +679,26 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
           `compaction-keep-percent requires { percent: integer ${COMPACT_KEEP_PERCENT.min}-${COMPACT_KEEP_PERCENT.max} } (empty clears to the default of ${COMPACT_KEEP_PERCENT.default})`,
         ),
       (deps, _scope, percent) => deps.config!.setCompactionKeepPercent(percent),
+    ),
+  },
+  {
+    id: "history-budget-tokens",
+    kind: "string",
+    target: "org",
+    clearable: true,
+    label: `Ceiling on the conversation history budget in tokens, ${HISTORY_BUDGET_TOKENS.min}-${HISTORY_BUDGET_TOKENS.max} (empty restores the default of ${HISTORY_BUDGET_TOKENS.default}). The budget still never exceeds half of a model's usable context window. Applies to every model. Lower makes long conversations cheaper on per-token providers but keeps less history verbatim.`,
+    readKey: "historyBudgetTokens",
+    get: (deps) => deps.config!.getHistoryBudgetTokensDurable(),
+    apply: generic<number | null>(
+      (body, { scope }) =>
+        orgOnly(scope, "the history budget is org-wide") ??
+        clearableInt(
+          (body as { tokens?: unknown }).tokens,
+          HISTORY_BUDGET_TOKENS.min,
+          HISTORY_BUDGET_TOKENS.max,
+          `history-budget-tokens requires { tokens: integer ${HISTORY_BUDGET_TOKENS.min}-${HISTORY_BUDGET_TOKENS.max} } (empty clears to the default of ${HISTORY_BUDGET_TOKENS.default})`,
+        ),
+      (deps, _scope, tokens) => deps.config!.setHistoryBudgetTokens(tokens),
     ),
   },
   {
