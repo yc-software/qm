@@ -17,12 +17,12 @@ import {
   Trash2,
   X,
 } from "lucide";
-import { api, ApiError, isSharedScopeId, sharedContextLabel, type CoreSession, type ProjectIcon } from "./core-bridge";
+import { api, ApiError, isSharedScopeId, type CoreSession, type ProjectIcon } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { icon } from "./icons";
 import { listBackLink, listPageTpl } from "./list-page";
 import { appState } from "./shell-state";
-import { ensureContexts, personalScopeId } from "./contexts";
+import { ensureContexts, personalScopeId, scopeGlyph, scopeTitle } from "./contexts";
 import { openSession, renderList, replacePendingSession, sessionsState, startNewChat } from "./sessions";
 import { newChatDraftKey, saveDraft } from "./drafts";
 import { deepLinkPath, UI_BASE } from "./deep-link";
@@ -386,8 +386,7 @@ const isMe = (grant: Pick<PersonaGrant, "scopeId">): boolean => grant.scopeId ==
 
 function grantLabel(grant: PersonaGrant): string {
   if (isMe(grant)) return "You";
-  if (grant.scopeId.startsWith("group:"))
-    return sharedContextLabel(grant.scopeId, grant.label ?? null) ?? grant.scopeId;
+  if (grant.scopeId.startsWith("group:")) return scopeTitle(grant.scopeId, grant.label ?? null);
   return grant.label ?? granteeLabel(grant.scopeId);
 }
 
@@ -558,7 +557,9 @@ function channelsSection(persona: PersonaDetail): TemplateResult {
     ? html`<div class="persona-skill-list">
         ${channels.map((grant) =>
           removableRow(
-            html`<span class="persona-channel-glyph">${icon(Hash, 14)}</span>`,
+            html`<span class="persona-channel-glyph"
+              >${icon(scopeGlyph(grant.scopeId, grant.label ?? null), 14)}</span
+            >`,
             grantLabel(grant),
             grant.pinned ? `Pinned: QM answers as ${persona.name} here` : "",
             owner ? `Remove ${grantLabel(grant)}` : null,
@@ -577,7 +578,7 @@ function channelsSection(persona: PersonaDetail): TemplateResult {
           ),
         )}
       </div>`
-    : emptyTpl("No channels.");
+    : emptyTpl("No channels or groups.");
   return sectionTpl(
     "Channels and groups",
     owner ? rowAction("Add channel", Plus, () => void openGranteePicker(persona.id, "channels")) : nothing,

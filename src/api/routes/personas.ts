@@ -1,11 +1,11 @@
 import { sendJson } from "../http.ts";
+import { swallowAs } from "../../util/errors.ts";
 import { isObj } from "./shared.ts";
 import { personAtKeyboard } from "../artifact-share.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 import { KeychainError } from "../../credentials/keychain.ts";
 import type { PersonaResult } from "../../personas/persona-service.ts";
 import type { Cron } from "../../triggers/types.ts";
-import { memoryRecallLabels } from "../../memory/recall-labels.ts";
 
 function principalOf(ctx: ApiCtx, from: "query" | "body"): string | null {
   const body = isObj(ctx.body) && typeof ctx.body.principalId === "string" ? ctx.body.principalId : "";
@@ -53,15 +53,9 @@ async function getPersona(ctx: ApiCtx): Promise<void> {
   if (!personas || !principalId) return;
   const result = await personas.detail(principalId, ctx.params.id!);
   if (result.status !== "ok") return respond(ctx, result, "persona");
-  const labels = await memoryRecallLabels(
-    result.value.access.map((grant) => grant.scopeId),
-    ctx.deps.directory,
-    ctx.deps.projects,
+  const access = await Promise.all(
+    result.value.access.map(async (grant) => ({ ...grant, label: await granteeLabel(ctx, grant.scopeId) })),
   );
-  const access = result.value.access.map((grant) => {
-    const label = labels.get(grant.scopeId);
-    return { ...grant, label: label === grant.scopeId || grant.scopeId.startsWith("org:") ? undefined : label };
-  });
   const home = `persona:${result.value.id}`;
   const skills = (await ctx.app.listVisibleSkills(principalId))
     .flatMap((row) => (row.skill?.scopeId === home ? [row.skill] : []))
@@ -80,6 +74,19 @@ async function personaCrons(ctx: ApiCtx, principalId: string, personaId: string)
   return crons
     .filter((c) => refsOf(c).some((ref) => personaThreads.has(ref)))
     .map(({ id, title, action, message, schedule, enabled }) => ({ id, title, action, message, schedule, enabled }));
+}
+
+async function granteeLabel(ctx: ApiCtx, scopeId: string): Promise<string | undefined> {
+  const [kind, ...rest] = scopeId.split(":");
+  const ref = rest.join(":");
+  if (kind === "channel")
+    return ctx.app.channelName(ref).catch(swallowAs(`persona grantee label ${scopeId}`, undefined));
+  if (kind === "personal")
+    return (
+      (await ctx.app.directoryMember(ref).catch(swallowAs(`persona grantee label ${scopeId}`, null)))?.displayName ||
+      undefined
+    );
+  return undefined;
 }
 
 async function createPersona(ctx: ApiCtx): Promise<void> {

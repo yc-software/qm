@@ -70,6 +70,9 @@ export interface PersonaService {
   ): Promise<PersonaForTurn | string | null>;
 }
 
+const PERSONAS_HINT =
+  "A persona changes your name, icon and instructions. Anyone can give one conversation a persona; an owner can pin one in a channel or group so every conversation there wears it (personas in /v1/apis).";
+
 const GRANTEE_KINDS = new Set(["personal", "team", "org", "channel", "group"]);
 function fieldsFrom(input: unknown, requireName: boolean): PersonaFields | string {
   if (!input || typeof input !== "object") return "expected an object";
@@ -280,14 +283,14 @@ export function createPersonaService(deps: {
       return { status: "ok", value: { ...persona, role: held } };
     },
     async forTurn(personaId, actorId, contextScope) {
+      if (!(await enabledFor(actorId)))
+        return personaId ? "Personas are turned off for this person, so this turn runs without one." : null;
       let pinned = false;
-      if (!personaId && isSharedScope(contextScope) && (await enabledFor(actorId))) {
+      if (!personaId && isSharedScope(contextScope)) {
         personaId = (await store.pinnedIn(contextScope)) ?? undefined;
         pinned = Boolean(personaId);
       }
-      if (!personaId) return null;
-      if (!(await enabledFor(actorId)))
-        return "Personas are turned off for this person, so this turn runs without one.";
+      if (!personaId) return PERSONAS_HINT;
       const persona = await store.get(personaId);
       if (!persona) return "This conversation's persona was deleted, so this turn runs without one.";
       const held = await role(actorId, personaId, contextScope);
@@ -297,9 +300,6 @@ export function createPersonaService(deps: {
     },
   };
 }
-
-export const PERSONAS_HINT =
-  "## Personas\nA persona changes your name, icon and instructions. Anyone can give one conversation a persona; an owner can pin one in a channel or group so every conversation there wears it (personas in /v1/apis).";
 
 export function personaPrompt({ persona, scope, pinned }: PersonaForTurn): string {
   const lines = [

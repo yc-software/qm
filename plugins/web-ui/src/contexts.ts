@@ -269,6 +269,10 @@ export function scopeTitle(scopeId: string | null, fallbackName?: string | null)
   return metaForScope(scopeId, fallbackName).title;
 }
 
+export function scopeGlyph(scopeId: string | null, fallbackName?: string | null): IconNode {
+  return metaForScope(scopeId, fallbackName).glyph;
+}
+
 export function scopeChip(scopeId: string | null, fallbackName?: string | null): TemplateResult {
   const { title, glyph } = metaForScope(scopeId, fallbackName);
   return html`<span class="scope-chip" ${tip(`In ${title}`)}
