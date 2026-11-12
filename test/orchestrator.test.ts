@@ -4821,14 +4821,26 @@ test("enforced screening flags strict-posture inbound data before model executio
   assert.equal(approved.status, "ok");
 });
 
-test("an approved replay of held input is screened again when the place it shows has changed", async () => {
+for (const [what, change] of [
+  ["place it shows", { gatewayContext: { details: { topic: "SCREENING_FIXTURE_BLOCK, moved" } } }],
+  ["file notes it carries", { inboundNotes: ["note"] }],
+] satisfies Array<[string, Partial<TurnRequest>]>) {
+  test(`an approved replay of held input is screened again when the ${what} changed`, async () => {
+    const built = freshApp({ securityPosture: "auto" }, fixtureScreen());
+    const request = dm("hello", { gatewayContext: { details: { topic: "SCREENING_FIXTURE_BLOCK" } } });
+    const first = await built.app.turn(request);
+    assert.equal(first.status, "pending_approval");
+    const approval = { requestId: first.pendingApprovals![0]!.requestId, approved: true };
+    assert.equal((await built.app.turn({ ...request, ...change, approval })).status, "pending_approval");
+  });
+}
+
+test("an approved replay of held input goes through when its details keys come back in another order", async () => {
   const built = freshApp({ securityPosture: "auto" }, fixtureScreen());
-  const request = dm("hello", { gatewayContext: { details: { topic: "SCREENING_FIXTURE_BLOCK" } } });
+  const request = dm("hello", { gatewayContext: { details: { topic: "SCREENING_FIXTURE_BLOCK", id: "1" } } });
   const first = await built.app.turn(request);
-  assert.equal(first.status, "pending_approval");
   const approval = { requestId: first.pendingApprovals![0]!.requestId, approved: true };
-  const moved = { ...request, gatewayContext: { details: { topic: "SCREENING_FIXTURE_BLOCK, moved" } }, approval };
-  assert.equal((await built.app.turn(moved)).status, "pending_approval");
+  assert.equal((await built.app.turn({ ...request, approval })).status, "ok");
 });
 
 for (const failure of ["error", "timeout"] as const) {

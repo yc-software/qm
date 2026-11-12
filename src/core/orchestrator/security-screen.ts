@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ScopeId } from "../../types.ts";
+import type { ScopeId, TurnRequest } from "../../types.ts";
 import type { TurnOrigin } from "../turn-origin.ts";
 import type { SecurityScreenClassification, SecurityScreenHook } from "../../security/security-screener.ts";
 import { UNSCREENED_REASON, type SecurityScreenVerdict } from "../../security/security-posture.ts";
@@ -256,7 +256,6 @@ export interface InboundScreenTurn {
   screenInbound: boolean;
   replaysHeldInput: boolean;
   enforceScreen: boolean;
-  ambientTurn: boolean;
   sessionTurn: boolean;
   swarmBinding: Awaited<ReturnType<NonNullable<OrchestratorDeps["swarms"]>["binding"]>> | undefined;
   classifyAs: ClassifyAs;
@@ -265,19 +264,40 @@ export interface InboundScreenTurn {
   approvalGrantsFor: (actorId: string) => Promise<CommandApprovalGrant[]>;
 }
 
+export function screenedFields(
+  request: Pick<TurnRequest, "text" | "gatewayContext" | "conversationHeader" | "overheard" | "attachments" | "inboundNotes"> & {
+    surface?: string;
+    origin?: TurnOrigin;
+    actor: { displayName?: string };
+    conversation: { kind: string };
+  },
+) {
+  const dm = request.conversation.kind === "dm";
+  return {
+    text: request.text,
+    sender: request.origin?.kind === "ambient" ? (request.actor.displayName ?? "") : "",
+    conversationHeader: request.conversationHeader ?? "",
+    place: shownPlace(request.surface, request.gatewayContext, dm),
+    overheard: request.overheard ?? [],
+    attachments: request.attachments ?? [],
+    inboundNotes: request.inboundNotes ?? [],
+  };
+}
+
 async function buildInboundScreen(turn: InboundScreenTurn) {
-  const { deps, input, actor, conversation, scopeId, screenInbound, ambientTurn, sessionTurn, swarmBinding } = turn;
+  const { deps, input, actor, conversation, scopeId, screenInbound, sessionTurn, swarmBinding } = turn;
+  const screened = screenedFields(input);
   const blobTransfer = deps.blobTransfer;
   let overheard: OverheardEntryPayload[] = [];
   if (screenInbound) {
     const existingSession = await deps.sessions.getByThread(conversation.threadRef);
     const recorded = recordedMessageTimestamps(existingSession ? await deps.sessions.getItems(existingSession.id) : []);
-    overheard = conversation.kind === "dm" ? [] : selectOverheardToImport(input.overheard ?? [], recorded);
+    overheard = conversation.kind === "dm" ? [] : selectOverheardToImport(screened.overheard, recorded);
   }
   let hasUnscreenableAttachment = false;
   const attachmentPromptData: Array<{ source: string; content: string }> = [];
   if (screenInbound) {
-    for (const attachment of input.attachments ?? []) {
+    for (const attachment of screened.attachments) {
       attachmentPromptData.push({
         source: "attachment-metadata",
         content: JSON.stringify({
@@ -312,19 +332,18 @@ async function buildInboundScreen(turn: InboundScreenTurn) {
       });
     }
   }
-  const place = shownPlace(input.surface, input.gatewayContext, conversation.kind === "dm");
   const externalPromptData = screenInbound
     ? [
-        ...(ambientTurn && actor.displayName?.trim()
-          ? [{ source: "sender", content: senderNote(actor.displayName) }]
+        ...(screened.sender.trim() ? [{ source: "sender", content: senderNote(screened.sender) }] : []),
+        ...(screened.conversationHeader.trim()
+          ? [{ source: "conversation-header", content: screened.conversationHeader }]
           : []),
-        ...(input.conversationHeader?.trim()
-          ? [{ source: "conversation-header", content: input.conversationHeader }]
+        ...(Object.keys(screened.place).length
+          ? [{ source: "conversation-metadata", content: JSON.stringify(screened.place) }]
           : []),
-        ...(Object.keys(place).length ? [{ source: "conversation-metadata", content: JSON.stringify(place) }] : []),
         ...overheard.map((entry) => ({ source: "overheard", content: renderOverheard(entry) })),
         ...attachmentPromptData,
-        ...(input.inboundNotes ?? []).map((note) => ({ source: "inbound-file-note", content: note })),
+        ...screened.inboundNotes.map((note) => ({ source: "inbound-file-note", content: note })),
       ]
     : [];
   const sessionSender = input.sessionSenderId ? await deps.sessions.get(input.sessionSenderId) : null;

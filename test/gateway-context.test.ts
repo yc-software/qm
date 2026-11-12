@@ -28,6 +28,9 @@ test("the screen reads the place the prompt shows, and never host IDs", () => {
   assert.deepEqual(shownPlace("slack", ctx, true), { details: { location: "Detail" } });
   assert.deepEqual(shownPlace(undefined, ctx, true), { location: "Room", details: { location: "Detail" } });
   assert.match(renderGatewayContext(undefined, ctx, "ada"), /^In Room\.$/m);
+  const twice = { details: { " topic": "Hidden", topic: "Shown" } };
+  assert.deepEqual(shownPlace("slack", twice, false), { details: { topic: "Shown" } });
+  assert.doesNotMatch(renderGatewayContext("slack", twice), /Hidden/);
 });
 
 test("gateway only (no surface-provided context) still names the gateway", () => {

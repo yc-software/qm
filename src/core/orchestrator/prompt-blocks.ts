@@ -131,9 +131,11 @@ export function webSurfaceLabel(botName: string, relayed: boolean): string {
 }
 
 function trimmedEntries(record: Record<string, string> | undefined) {
-  return Object.entries(record ?? {})
+  const entries = Object.entries(record ?? {})
     .map(([k, v]) => [k.trim(), String(v).trim()] as const)
-    .filter(([k, v]) => k && v);
+    .filter(([k, v]) => k && v)
+    .sort(([a, av], [b, bv]) => a.localeCompare(b) || av.localeCompare(bv));
+  return [...new Map(entries)];
 }
 
 export function shownPlace(surface: string | undefined, ctx: GatewayContext | undefined, dm: boolean) {
@@ -148,9 +150,7 @@ export function shownPlace(surface: string | undefined, ctx: GatewayContext | un
 export function renderGatewayContext(surface: string | undefined, ctx?: GatewayContext, dmWith?: string): string {
   const gateway = (surface ?? "").trim();
   const { location } = shownPlace(surface, ctx, Boolean(dmWith));
-  const details = trimmedEntries({ ...ctx?.hostIds, ...ctx?.details }).sort(
-    ([a, av], [b, bv]) => a.localeCompare(b) || av.localeCompare(bv),
-  );
+  const details = trimmedEntries({ ...ctx?.hostIds, ...ctx?.details });
   const instructions = ctx?.instructions?.trim();
   if (!gateway && !location && details.length === 0 && !instructions) return "";
 
