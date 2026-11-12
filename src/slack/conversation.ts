@@ -7,7 +7,9 @@ import {
   compareTs as compareSlackTimestamps,
   detectInputs,
   epochTsTime,
+  MAX_RECENT_MESSAGES,
 } from "../surfaces/context-window.ts";
+export { MAX_RECENT_MESSAGES } from "../surfaces/context-window.ts";
 
 export function buildContextWindow(
   scanned: readonly RecentMessage[],
@@ -35,7 +37,6 @@ export interface RecentMessage {
 }
 
 const MAX_CONTEXT_MESSAGE_CHARS = 600;
-export const MAX_RECENT_MESSAGES = 20;
 const MAX_TURN_MESSAGE_CHARS = 4000;
 
 export function recentWindow(

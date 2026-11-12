@@ -31,6 +31,7 @@ export function clipText(t: string, max: number): string {
 }
 
 const DETECT_MESSAGE_CHARS = 300;
+export const MAX_RECENT_MESSAGES = 20;
 
 export interface DetectSourceMessage {
   name: string;
@@ -46,6 +47,7 @@ export function detectInputs(
 ): { detectContext: string; detectOpener?: string } {
   const detectContext = messages
     .filter((m) => !m.isBot && !m.isSelf && !m.isTrigger)
+    .slice(-MAX_RECENT_MESSAGES)
     .map((m) => `${m.name || "someone"}: ${clipText(m.text, DETECT_MESSAGE_CHARS)}`)
     .join("\n");
   const detectOpener = clipText(ownOpener ?? "", DETECT_MESSAGE_CHARS);
