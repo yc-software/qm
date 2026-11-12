@@ -231,6 +231,22 @@ async function fulfillContextRequest(ctx: ApiCtx): Promise<void> {
           ...(typeof f.author === "string" ? { author: f.author } : {}),
         }
       : undefined;
+  const attachments = Array.isArray(b.attachments)
+    ? b.attachments.flatMap((a) =>
+        isObj(a) && typeof a.blobId === "string" && typeof a.name === "string" && typeof a.sizeBytes === "number"
+          ? [
+              {
+                blobId: a.blobId,
+                name: a.name,
+                sizeBytes: a.sizeBytes,
+                mimetype: typeof a.mimetype === "string" ? a.mimetype : "application/octet-stream",
+                ...(typeof a.sourceId === "string" ? { sourceId: a.sourceId } : {}),
+                ...(typeof a.author === "string" ? { author: a.author } : {}),
+              },
+            ]
+          : [],
+      )
+    : undefined;
   const g = isObj(b.group) ? b.group : undefined;
   const group = g && typeof g.groupId === "string" && g.groupId ? { groupId: g.groupId } : undefined;
   const outcome =
@@ -245,6 +261,8 @@ async function fulfillContextRequest(ctx: ApiCtx): Promise<void> {
             ...(Array.isArray(b.selfTs) ? { selfTs: b.selfTs.filter((ts) => typeof ts === "string") } : {}),
             ...(b.liveSearch === "unconfigured" || b.liveSearch === "unconnected" ? { liveSearch: b.liveSearch } : {}),
             ...(file ? { file } : {}),
+            ...(attachments ? { attachments } : {}),
+            ...(Array.isArray(b.issues) ? { issues: b.issues.filter((i) => typeof i === "string") } : {}),
             ...(group ? { group } : {}),
           } satisfies SurfaceContextResult,
         };

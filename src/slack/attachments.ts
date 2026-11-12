@@ -1,6 +1,7 @@
 import { sleep } from "./util.ts";
 import { channelShareTs, parseUploadedFileIds, slackErrorCode } from "./payloads.ts";
 import { BlobTooLargeError } from "../persistence/blob-transfer.ts";
+import { swallow } from "../util/errors.ts";
 
 export interface IncomingAttachment {
   name: string;
@@ -148,6 +149,7 @@ export async function processInboundFiles(
       const author = resolveAuthor ? await resolveAuthor(f.user) : undefined;
       attachments.push(attachmentFromBytes(f, bytes, blobId, author));
     } catch (err) {
+      swallow(`slack: inbound file "${label}"`, err);
       const detail =
         err instanceof BlobTooLargeError
           ? "that request was too large — try fewer or smaller files"

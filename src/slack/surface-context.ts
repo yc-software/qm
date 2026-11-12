@@ -167,15 +167,17 @@ export function createSurfaceContextFulfiller(deps: {
     client: any,
     channel: string,
     conversationThreadTs: string | undefined,
-    ref: { ts: string; threadTs?: string },
+    refs: ReadonlyArray<{ ts: string; threadTs?: string }>,
   ): Promise<Record<string, unknown>> {
-    const msg = await findMessageAt(client, channel, ref.ts, ref.threadTs || conversationThreadTs);
-    if (!msg) return { error: "I couldn't find that message" };
+    const found = await Promise.all(
+      refs.map((ref) => findMessageAt(client, channel, ref.ts, ref.threadTs || conversationThreadTs)),
+    );
     const { attachments, issues } = await stageFiles(
       client,
-      (msg.files ?? []).filter((f) => f?.id),
+      found.flatMap((msg) => (msg?.files ?? []).filter((f) => f?.id)),
     );
-    return { attachments, issues };
+    const missing = refs.filter((_, i) => !found[i]).map((ref) => `I couldn't find message ${ref.ts}`);
+    return { attachments, issues: [...missing, ...issues] };
   }
 
   function stageFiles(client: any, files: SlackFile[]) {
@@ -253,7 +255,7 @@ export function createSurfaceContextFulfiller(deps: {
       if (q.file && typeof q.file.ts === "string" && q.file.ts) {
         return await post(await fetchSurfaceFile(client, channel, threadTs, q.file));
       }
-      if (q.messageFiles?.ts) return await post(await fetchMessageFiles(client, channel, threadTs, q.messageFiles));
+      if (q.messageFiles?.length) return await post(await fetchMessageFiles(client, channel, threadTs, q.messageFiles));
       const count = Math.max(
         1,
         Math.min(

@@ -18,7 +18,7 @@ export interface SurfaceContextQuery {
   searchAll?: string;
   viewerToken?: string;
   file?: { ts: string; threadTs?: string; name?: string };
-  messageFiles?: { ts: string; threadTs?: string };
+  messageFiles?: Array<{ ts: string; threadTs?: string }>;
   openGroup?: { participants: string[] };
   syncDirectory?: boolean;
 }

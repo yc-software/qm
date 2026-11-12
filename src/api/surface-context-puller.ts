@@ -72,24 +72,23 @@ export async function pullMessageFiles(
   conversationTarget: string,
   messages: ReadonlyArray<{ ts: string; sub?: string }>,
 ): Promise<Pick<TurnRequest, "attachments" | "inboundNotes">> {
-  const puller = createSurfaceContextPuller(app, { waitMs: SURFACE_FILE_WAIT_MS });
-  const pulled = await Promise.all(
-    messages.map(async ({ ts, sub }) => {
-      const result = await puller
-        .pull(source, { conversationTarget, count: 1, messageFiles: { ts, ...(sub ? { threadTs: sub } : {}) } })
-        .catch((e: unknown): SurfaceContextResult => {
-          swallow("surface-context: message files", e);
-          return { messages: [], note: errMessage(e) };
-        });
-      if (result?.attachments || result?.issues)
-        return { attachments: result.attachments ?? [], notes: result.issues ?? [] };
-      const why =
-        result?.note ??
-        (result ? `the ${source} surface can't fetch files` : `the ${source} surface didn't answer in time`);
-      return { attachments: [], notes: [`I couldn't fetch the files on message ${ts}: ${why}`] };
-    }),
-  );
-  const attachments = pulled.flatMap((p) => p.attachments);
-  const notes = pulled.flatMap((p) => p.notes);
+  if (!messages.length) return {};
+  const messageFiles = messages.map(({ ts, sub }) => ({ ts, ...(sub ? { threadTs: sub } : {}) }));
+  const result = await createSurfaceContextPuller(app, { waitMs: SURFACE_FILE_WAIT_MS })
+    .pull(source, { conversationTarget, count: 1, messageFiles })
+    .catch((e: unknown): SurfaceContextResult => {
+      swallow("surface-context: message files", e);
+      return { messages: [], note: errMessage(e) };
+    });
+  const attachments = result?.attachments ?? [];
+  const notes =
+    result?.attachments || result?.issues
+      ? (result.issues ?? [])
+      : [
+          `I couldn't fetch the files on ${messages.map((m) => m.ts).join(", ")}: ${
+            result?.note ??
+            (result ? `the ${source} surface can't fetch files` : `the ${source} surface didn't answer in time`)
+          }`,
+        ];
   return { ...(attachments.length ? { attachments } : {}), ...(notes.length ? { inboundNotes: notes } : {}) };
 }
