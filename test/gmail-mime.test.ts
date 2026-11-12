@@ -14,6 +14,7 @@ from email.policy import default as default_policy
 spec = importlib.util.spec_from_file_location("gmail", sys.argv[1])
 gmail = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gmail)
+gmail.ZONE = "America/Los_Angeles"
 original = json.loads(sys.argv[2]) if len(sys.argv) > 2 else None
 raw = gmail.build_raw({"To": "a@b.com", "Subject": "Probe"}, sys.stdin.read(), None, original)["raw"]
 msg = message_from_bytes(base64.urlsafe_b64decode(raw), policy=default_policy)
@@ -72,43 +73,47 @@ test("smart punctuation stays out of links; balanced brackets stay in", { skip: 
 
 const b64 = (text: string) => Buffer.from(text).toString("base64url");
 
-test("a reply quotes the original below the new text the way Gmail does", { skip: !havePython }, () => {
-  const headers = [
-    { name: "From", value: "Ann Lee <ann@x.test>" },
-    { name: "Date", value: "Tue, 10 Nov 2026 17:52:00 PST" },
-  ];
-  const original = {
-    payload: {
-      mimeType: "multipart/alternative",
-      headers,
-      parts: [
-        { mimeType: "text/plain", body: { data: b64("Caf\u00e9\r\n\r\n> older") } },
-        {
-          mimeType: "text/html",
-          body: {
-            data: b64(
-              "<html><head><style>p{}</style></head><body><!-- <style> --><p>keep</p><style>a{}</style>" +
-                '<img alt="a>b" src="cid:logo"><img src="https://x.test/cid:1.png"></body></html>',
-            ),
+test(
+  "a reply quotes the original below the new text the way Gmail does, timed in the owner's zone",
+  { skip: !havePython },
+  () => {
+    const headers = [
+      { name: "From", value: "Ann Lee <ann@x.test>" },
+      { name: "Date", value: "Wed, 11 Nov 2026 01:52:00 +0000" },
+    ];
+    const original = {
+      payload: {
+        mimeType: "multipart/alternative",
+        headers,
+        parts: [
+          { mimeType: "text/plain", body: { data: b64("Caf\u00e9\r\n\r\n> older") } },
+          {
+            mimeType: "text/html",
+            body: {
+              data: b64(
+                "<html><head><style>p{}</style></head><body><!-- <style> --><p>keep</p><style>a{}</style>" +
+                  '<img alt="a>b" src="cid:logo"><img src="https://x.test/cid:1.png"></body></html>',
+              ),
+            },
           },
-        },
-      ],
-    },
-  };
-  const mime = buildMime("Thanks  again", original);
-  assert.equal(
-    mime.parts["text/plain"]?.replaceAll("\r\n", "\n").trimEnd(),
-    "Thanks  again\n\nOn Tue, Nov 10, 2026 at 5:52\u202fPM Ann Lee <ann@x.test> wrote:\n\n> Caf\u00e9\n>\n>> older",
-  );
-  const html = mime.parts["text/html"] ?? "";
-  assert.ok(
-    html.startsWith('<div dir="ltr">Thanks\u00a0 again</div><br><div class="gmail_quote gmail_quote_container">'),
-  );
-  assert.ok(html.includes('Ann Lee &lt;<a href="mailto:ann@x.test">ann@x.test</a>&gt; wrote:<br></div>'));
-  assert.ok(
-    html.trimEnd().endsWith('<!-- <style> --><p>keep</p><img src="https://x.test/cid:1.png"></blockquote></div>'),
-  );
-});
+        ],
+      },
+    };
+    const mime = buildMime("Thanks  again", original);
+    assert.equal(
+      mime.parts["text/plain"]?.replaceAll("\r\n", "\n").trimEnd(),
+      "Thanks  again\n\nOn Tue, Nov 10, 2026 at 5:52\u202fPM Ann Lee <ann@x.test> wrote:\n\n> Caf\u00e9\n>\n>> older",
+    );
+    const html = mime.parts["text/html"] ?? "";
+    assert.ok(
+      html.startsWith('<div dir="ltr">Thanks\u00a0 again</div><br><div class="gmail_quote gmail_quote_container">'),
+    );
+    assert.ok(html.includes('Ann Lee &lt;<a href="mailto:ann@x.test">ann@x.test</a>&gt; wrote:<br></div>'));
+    assert.ok(
+      html.trimEnd().endsWith('<!-- <style> --><p>keep</p><img src="https://x.test/cid:1.png"></blockquote></div>'),
+    );
+  },
+);
 
 test(
   "api calls go through curl, which can tunnel the sandbox's https CONNECT egress proxy",

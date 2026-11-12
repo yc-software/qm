@@ -14,10 +14,10 @@ Usage:
   gmail.py read MESSAGE_ID [--full]
   gmail.py thread THREAD_ID [--full]    # all messages oldest-first + lastFromMe
   gmail.py draft --to EMAIL --subject TEXT --body-file FILE
-  gmail.py reply MESSAGE_ID --body-file FILE [--all]   # reply-draft anchored to the
+  gmail.py reply MESSAGE_ID --body-file FILE [--all] [--tz ZONE]  # reply-draft anchored to the
                                                        # thread's latest sent message,
                                                        # quoting it like Gmail does
-  gmail.py update-draft DRAFT_ID --body-file FILE      # keeps recipients/threading/quote
+  gmail.py update-draft DRAFT_ID --body-file FILE [--tz ZONE]  # keeps recipients/threading/quote
   gmail.py send-draft DRAFT_ID
 
 Body files are plain text. Lines that look hard-wrapped (long lines inside a
@@ -39,11 +39,13 @@ from email.message import EmailMessage
 from email.policy import SMTP
 from email.utils import formataddr, getaddresses, parseaddr, parsedate_to_datetime
 from html.parser import HTMLParser
+from zoneinfo import ZoneInfo
 
 API = "https://gmail.googleapis.com/gmail/v1/users/me"
 
 
 ACCOUNT: str | None = None
+ZONE: str | None = None
 
 
 def call(method: str, path: str, body: dict | None = None, query: dict | None = None):
@@ -111,8 +113,6 @@ def read_body(path: str) -> str:
 URL_RE = re.compile(r"https?://[^\s<>\"']+")
 CLOSERS = {")": "(", "]": "[", "}": "{"}
 TRAILING = ".,;:!?\u201c\u201d\u2018\u2019\u00ab\u00bb\u2026"
-DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 QUOTE_STYLE = "margin:0px 0px 0px 0.8ex;border-left:1px solid rgb(204,204,204);padding-left:1ex"
 
 
@@ -198,9 +198,8 @@ def quoted_html(markup: str) -> str:
 
 
 def part_text(payload: dict, mime: str) -> str:
-    if payload.get("mimeType") == mime and payload.get("body", {}).get("data"):
-        return base64.urlsafe_b64decode(payload["body"]["data"] + "==").decode("utf-8", "replace")
-    return next((t for p in payload.get("parts", []) if (t := part_text(p, mime))), "")
+    return next((b64url_decode(p["body"]["data"]) for p in walk_parts(payload)
+                 if p.get("mimeType") == mime and p.get("body", {}).get("data")), "")
 
 
 def sent_at(date: str) -> str:
@@ -208,9 +207,8 @@ def sent_at(date: str) -> str:
         at = parsedate_to_datetime(date)
     except (TypeError, ValueError):
         return ""
-    hour = at.hour % 12 or 12
-    return (f"{DAYS[at.weekday()]}, {MONTHS[at.month - 1]} {at.day}, {at.year} at "
-            f"{hour}:{at.minute:02d}\u202f{'PM' if at.hour >= 12 else 'AM'} ")
+    at = at.astimezone(ZoneInfo(ZONE)) if ZONE and at.tzinfo else at
+    return f"{at:%a, %b} {at.day}, {at.year} at {at.hour % 12 or 12}:{at:%M}\u202f{at:%p} "
 
 
 def gmail_quote(original: dict) -> tuple[str, str]:
@@ -311,7 +309,7 @@ def strip_addrs(addrs: str, exclude: str) -> str:
 
 
 def main() -> None:
-    global ACCOUNT
+    global ACCOUNT, ZONE
     p = argparse.ArgumentParser()
     p.add_argument("--account", help="app connection id (ca_...) when several Gmail connections match")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -335,10 +333,12 @@ def main() -> None:
     u = sub.add_parser("update-draft")
     u.add_argument("draft_id")
     u.add_argument("--body-file", required=True)
+    for cmd in (rp, u):
+        cmd.add_argument("--tz", help="the owner's IANA time zone, for the quote's \"On ... wrote:\" time")
     sd = sub.add_parser("send-draft")
     sd.add_argument("draft_id")
     a = p.parse_args()
-    ACCOUNT = a.account
+    ACCOUNT, ZONE = a.account, getattr(a, "tz", None)
 
     if a.cmd == "search":
         meta_q = {"format": "metadata", "metadataHeaders": ["From", "Date", "Subject"]}
