@@ -589,6 +589,7 @@ export interface RunPoll {
     reply?: string;
     reason?: string;
     refusalKind?: string;
+    errorCode?: string;
     stopped?: boolean;
     pendingApprovals?: PendingApproval[];
     attachments?: Array<{ name: string; mimetype?: string; sizeBytes?: number; artifactId?: string }>;
