@@ -73,7 +73,7 @@ export function createDirectorySync(deps: {
         return true;
       }
       const complete = await write(client, Number(row?.[syncedAtCol] ?? 0));
-      if (partial && complete === false) return false;
+      if (partial && complete !== true) return complete === undefined;
       await client.query(
         `INSERT INTO directory_sync (org_id, ${hashCol}, ${syncedAtCol}, updated_at) VALUES ($1, $2, $3, $4)
          ON CONFLICT (tenant_id, org_id) DO UPDATE SET ${hashCol} = EXCLUDED.${hashCol},
@@ -149,8 +149,8 @@ export function createDirectorySync(deps: {
         syncedAt,
         async (client, storedSyncedAt) => {
           const protectedRows = await client.query(
-            "SELECT channel_id FROM directory_channels WHERE org_id = $1 AND (observed_at > $2 OR ($3 AND observed_at = $2))",
-            [orgId, syncedAt ?? null, partial],
+            "SELECT channel_id FROM directory_channels WHERE org_id = $1 AND (observed_at > $2 OR ($3 AND observed_at = $2)) AND (NOT $3 OR channel_id = ANY($4::text[]))",
+            [orgId, syncedAt ?? null, partial, [...listedIds]],
           );
           const protectedIds = new Set(protectedRows.rows.map((row) => row.channel_id as string));
           if (partial && storedSyncedAt >= syncedAt!) {
@@ -158,9 +158,15 @@ export function createDirectorySync(deps: {
               "SELECT channel_id FROM directory_channels WHERE org_id = $1 AND channel_id = ANY($2::text[])",
               [orgId, [...listedIds]],
             );
-            if (stored.rowCount !== listedIds.size) return false;
+            if (stored.rowCount !== listedIds.size) {
+              console.warn(
+                `[directory] refused live observation of ${[...listedIds].join(",")} for ${orgId}: a sync stamped ${storedSyncedAt - syncedAt!}ms later does not list every pushed channel`,
+              );
+              return false;
+            }
           }
           list = list.filter((channel) => !protectedIds.has(channel.channelId));
+          if (partial && !list.length) return;
           rosterIds = rosterIds && new Set([...rosterIds].filter((id) => !protectedIds.has(id)));
           membershipRows = membershipRows?.filter((member) => !protectedIds.has(member.channelId));
           revokedRows = revokedRows.filter((member) => !protectedIds.has(member.channelId));
