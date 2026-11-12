@@ -307,7 +307,7 @@ export async function browserIdentity(
   };
 }
 
-export function withBrowserActor(
+export function withRouteActor(
   field: Route["actor"],
   req: IncomingMessage,
   url: URL,
