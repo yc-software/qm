@@ -31,7 +31,7 @@ test("a company web turn refuses when its stored runtime's provider has no key",
   assert.equal(result.reason, "that model isn't available on this deployment (its provider isn't configured)");
 });
 
-test("a web turn refuses another person's new thread, an unknown subagent thread and a channel the actor isn't in", async () => {
+test("a web turn starts new threads only under the caller's own IDs and refuses an unknown subagent thread or channel", async () => {
   const built = buildApp(testConfig({}));
   const foreign = await built.app.turn(
     webTurn("alice", { conversation: { kind: "dm", threadRef: `web:bob:${crypto.randomUUID()}` } }),
@@ -48,16 +48,7 @@ test("a web turn refuses another person's new thread, an unknown subagent thread
     webTurn("alice", { conversation: { kind: "channel", channelRef: "C-NOT-JOINED", threadRef: "web:alice:channel" } }),
   );
   assert.deepEqual([channel.status, channel.reason], ["refused", "you're not a member of that context"]);
-});
-
-test("a web turn starts a thread named for the sign-in ID that QM links to an existing person", async (t) => {
-  const built = buildApp(testConfig({}));
-  installPrincipalLinks({
-    canonical: (key) => (key === "oidc:bookface:alice" ? "alice" : undefined),
-    aliases: () => [],
-  });
-  t.after(() => installPrincipalLinks(null));
-  const result = await built.app.turn(webTurn("oidc:bookface:alice"));
-  assert.notEqual(result.reason, "you can only start a new conversation on your own thread");
-  assert.notEqual(result.status, "refused");
+  installPrincipalLinks({ canonical: (key) => (key === "sso:alice" ? "alice" : undefined), aliases: () => [] });
+  assert.notEqual((await built.app.turn(webTurn("sso:alice"))).status, "refused");
+  installPrincipalLinks(null);
 });
