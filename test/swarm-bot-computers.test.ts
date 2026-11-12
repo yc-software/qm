@@ -271,11 +271,11 @@ function assertKeptOut(observed: Record<string, unknown>): void {
   assert.equal(defaultIsBoard, true);
 }
 
-test("outside a swarm, a Slack bot's turn can use a computer it made only until a person's turn uses it", async () => {
+test("outside a swarm, a Slack bot's turn can use a computer it made only until a person's turn uses it", async (t) => {
   const f = await channelSwarm();
   if (f.caller.kind !== "agent") throw new Error("wrong caller");
   await f.runs.complete(f.caller.claims.runId!, f.caller.claims.runLeaseToken!, { status: "ok", reply: "idle" });
-  recordRuns(f);
+  const ran = recordRuns(f);
   const people = await f.sandboxes.create(alice.id, f.root.scopeId, "modal");
   const bots = await f.sandboxes.create(releaseBot.id, f.root.scopeId, "modal");
   const turn = async (actor: Principal, act: (call: Call) => Promise<string>): Promise<string> => {
@@ -285,9 +285,19 @@ test("outside a swarm, a Slack bot's turn can use a computer it made only until 
     await f.runs.complete(run.id, (await f.runs.get(run.id))!.leaseToken!, { status: "ok", reply: "done" });
     return String(out);
   };
-  const execute = (sandbox_id: string) => (call: Call) =>
+  const execute = (sandbox_id?: string) => (call: Call) =>
     call("execute", { command: "ls", sandbox_id, purpose: "Listing" });
   const retire = (call: Call) => call("sandbox", { action: "retire", sandbox_id: bots.id, purpose: "Retiring" });
+  const provision = f.sandbox.provision.bind(f.sandbox);
+  t.mock
+    .method(f.sandbox, "provision")
+    .mock.mockImplementation((...args) =>
+      f.sandboxes.setDefault(alice.id, f.root.scopeId, people.id).then(() => provision(...args)),
+    );
+  assert.match(await turn(releaseBot, execute()), /no default sandbox/);
+  await f.sandboxes.setDefault(alice.id, f.root.scopeId, bots.id);
+  await turn(releaseBot, execute());
+  assert.equal(ran.at(-1)?.on, bots.backingScopeId);
   assert.ok((await turn(releaseBot, execute(people.id))).endsWith(refusedComputer));
   assert.ok(!(await turn(releaseBot, execute(bots.id))).endsWith(refusedComputer));
   await turn(alice, execute(bots.id));

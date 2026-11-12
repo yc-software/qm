@@ -6,9 +6,9 @@ import { collectNamedOutbound, parseOutboundFiles, type ArtifactRegistration } f
 import type { SandboxHandle } from "../../sandbox/sandbox.ts";
 import {
   accessConversationSandbox,
-  assertBotMayUseComputer,
   BotComputerRefusedError,
   botMayUseComputers,
+  defaultComputer,
   SandboxAccessError,
   type SandboxResource,
 } from "../../sandbox/sandbox-resources.ts";
@@ -209,7 +209,7 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
       }
     } else if (needsSandbox) {
       try {
-        await assertBotMayUseComputer(deps.sandboxResources, envScope, undefined, botMayUse);
+        resource = await defaultComputer(deps.sandboxResources, envScope, botMayUse);
       } catch (e) {
         if (!(e instanceof SandboxAccessError)) throw e;
         return sendJson(res, 403, { error: "forbidden", message: e.message });

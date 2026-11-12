@@ -260,3 +260,14 @@ test("offboarding refuses non-admins, the admin themselves, and unknown body fie
     await s.close();
   }
 });
+
+test("a computer an admin creates through the admin API counts as used by a person", async () => {
+  const s = await start();
+  try {
+    const init = { method: "POST", headers: ADMIN, body: JSON.stringify({ action: "create", backend: "sprites" }) };
+    const made = await fetch(`${s.base}/v1/admin/sandboxes/personal:admin-alice`, init);
+    assert.equal(((await made.json()) as { personUsed?: boolean }).personUsed, true);
+  } finally {
+    await s.close();
+  }
+});

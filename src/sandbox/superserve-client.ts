@@ -1,4 +1,5 @@
 import { errMessage } from "../util/errors.ts";
+import { clampUtf8 } from "../util/text.ts";
 
 export interface SuperserveCommandResult {
   stdout: string;
@@ -86,14 +87,6 @@ export interface SdkSuperserveClientOptions {
 const DEFAULT_MAX_COMMAND_MS = 3600_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 
-export const clampUtf8 = (text: string, maxBytes: number): string => {
-  if (maxBytes <= 0) return "";
-  const encoded = Buffer.from(text, "utf8");
-  if (encoded.length <= maxBytes) return text;
-  let end = maxBytes;
-  while (end > 0 && (encoded[end]! & 0xc0) === 0x80) end -= 1;
-  return encoded.subarray(0, end).toString("utf8");
-};
 const GONE_STATES: ReadonlySet<string> = new Set(["deleted", "failed"]);
 
 function hasStatus(err: unknown, statusCode: number): boolean {
