@@ -274,12 +274,13 @@ export function rosterAdmits(roster: readonly string[], principalId: string, sco
   return actsAsScope(principalId, scope) || roster.includes(principalId);
 }
 
-type ScopeMembershipSources = Omit<ScopeMembershipDeps, "directory" | "managedGroups" | "personas"> & {
+type ScopeMembershipSources = Omit<ScopeMembershipDeps, "directory" | "managedGroups" | "personas" | "teams"> & {
   directory: Pick<DirectoryStore, "getMany" | "channelMemberships" | "groupMemberships">;
   managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "members"> & {
     membersMany(groupIds: readonly string[]): Promise<Map<string, string[]>>;
   };
   personas?: { roles(principalId: string): Promise<Map<string, PersonaRole>> };
+  teams?: { memberTeams(principalId: string, teamIds: readonly string[]): Promise<ReadonlySet<string>> };
 };
 
 export async function scopeMembershipSnapshot(
@@ -288,7 +289,7 @@ export async function scopeMembershipSnapshot(
   scopes: readonly ScopeId[],
   people: readonly string[] = [],
 ) {
-  const refs = (kind: "channel" | "group") => [
+  const refs = (kind: "channel" | "group" | "team") => [
     ...new Set(
       scopes.flatMap((scope) => {
         const parsed = parseScopeId(scope);
@@ -298,13 +299,14 @@ export async function scopeMembershipSnapshot(
   ];
   const channels = refs("channel");
   const groups = refs("group");
-  const { directory, managedGroups, personas } = sources;
+  const teamIds = refs("team");
+  const { directory, managedGroups, personas, teams } = sources;
   const members = await directory
     .getMany([...new Set([principalId, ...people].flatMap((id) => [id, canonicalPerson(id)]))])
     .catch(swallowAs("scope membership: directory lookup", new Map<string, DirectoryMember>()));
   const member = members.get(principalId);
   const aliases = [...new Set([principalId, member?.principalId, member?.slackId].filter((id): id is string => !!id))];
-  const [channelFacts, groupFacts, projectMembers, roles] = await Promise.all([
+  const [channelFacts, groupFacts, projectMembers, roles, memberTeams] = await Promise.all([
     Promise.all(
       aliases.map(
         async (id) =>
@@ -333,12 +335,21 @@ export async function scopeMembershipSnapshot(
     scopes.some((scope) => parseScopeId(scope).kind === "persona")
       ? personas?.roles(principalId).catch(swallowAs("scope membership: persona roles", new Map<string, PersonaRole>()))
       : undefined,
+    teams
+      ?.memberTeams(principalId, teamIds)
+      .catch(swallowAs("scope membership: teams", new Set<string>() as ReadonlySet<string>)),
   ]);
   const channelsBy = new Map(channelFacts);
   const groupsBy = new Map(groupFacts);
   return {
     ...(sources.identity ? { identity: sources.identity } : {}),
-    ...(sources.teams ? { teams: sources.teams } : {}),
+    ...(teams
+      ? {
+          teams: {
+            isMember: async (_tenant: Tenant, _id: string, teamId: string) => memberTeams?.has(teamId) === true,
+          },
+        }
+      : {}),
     directory: {
       get: async (id: string) => members.get(id) ?? null,
       channelMember: async (ref: string, id: string) => channelsBy.get(id)?.get(ref)?.member === true,

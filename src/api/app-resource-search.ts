@@ -20,7 +20,7 @@ export function createResourceSearchMethods(
 ): Pick<App, "searchResources"> {
   const store = deps.resourceSearch;
   return {
-    async searchResources(principalId, query) {
+    async searchResources(tenant, principalId, query) {
       query = query.slice(0, 500);
       if (query.trim().length < 2 || !searchTerms(query).length) return { hits: [], failed: [], limited: [] };
       let visibleSkills = new Set<string>();
@@ -55,7 +55,9 @@ export function createResourceSearchMethods(
           const batch = rows.slice(i, i + 20);
           const allowed =
             kind === "deploys"
-              ? (await helpers.deploymentPermissions(batch, principalId)).map((permission) => permission !== null)
+              ? (await helpers.deploymentPermissions(tenant, batch, principalId)).map(
+                  (permission) => permission !== null,
+                )
               : await Promise.all(batch.map((row) => canSee(kind, row)));
           for (const [j, row] of batch.entries()) {
             if (allowed[j]) hits.push(resourceHit(kind, row, query));

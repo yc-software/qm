@@ -693,30 +693,47 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   });
   const resourceKey = (r: { ownerScopeId: ScopeId; ref: string }) => `${r.ownerScopeId}\n${r.ref}`;
 
-  async function deploymentGrants(deployments: readonly DeploymentAccess[]): Promise<readonly Grant[]> {
+  async function deploymentGrants(tenant: Tenant, deployments: readonly DeploymentAccess[]): Promise<readonly Grant[]> {
     return (
       (await deps.acl
-        ?.find(ambientTenant(), { resources: deployments.map(deploymentResource) })
+        ?.find(tenant, { resources: deployments.map(deploymentResource) })
         .catch(swallowAs("deployment permissions: grants", []))) ?? []
     );
   }
 
   function principalGitPermission(d: DeploymentAccess, principalId: string): Promise<"read" | "write" | null> {
-    return live.deploymentPermission(d, principalId, () => deploymentGrants([d]));
+    return live.deploymentPermission(d, principalId, () => deploymentGrants(ambientTenant(), [d]));
   }
 
   async function deploymentPermissions(
+    tenant: Tenant,
     deployments: readonly DeploymentAccess[],
     principalId: string,
   ): Promise<Array<"read" | "write" | null>> {
     if (!principalId || !deployments.length) return deployments.map(() => null);
-    const grants = await deploymentGrants(deployments);
+    const grants = await deploymentGrants(tenant, deployments);
     const scopes = [
       ...deployments.flatMap((d) => [d.ownerScopeId, ...(d.createdInScope ? [d.createdInScope] : [])]),
       ...grants.map((g) => g.granteeScopeId),
     ];
     const rules = scopeRules(
-      await scopeMembershipSnapshot({ ...scopeMembershipDeps, directory: deps.directory }, principalId, scopes),
+      await scopeMembershipSnapshot(
+        {
+          directory: deps.directory,
+          ...(deps.identity ? { identity: deps.identity } : {}),
+          ...(deps.projects ? { managedGroups: deps.projects } : {}),
+          ...(deps.personas ? { personas: deps.personas } : {}),
+          ...(deps.teams
+            ? {
+                teams: {
+                  memberTeams: (id: string, teamIds: readonly string[]) => deps.teams!.memberTeams(tenant, id, teamIds),
+                },
+              }
+            : {}),
+        },
+        principalId,
+        scopes,
+      ),
     );
     const byResource = Map.groupBy(grants, resourceKey);
     return Promise.all(

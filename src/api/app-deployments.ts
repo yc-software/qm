@@ -7,6 +7,7 @@ import { mintDeployGitAccess } from "../deploy/access-token.ts";
 import { appHostLabel } from "../tenants/app-handle.ts";
 import { tenantAppHandle } from "../tenants/settings.ts";
 
+import type { Tenant } from "../tenants/context.ts";
 import type { App, AppDeps, ViewerDeployment } from "./app-types.ts";
 import { deploymentView } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
@@ -65,10 +66,11 @@ export function createDeploymentMethods(
     return (await deps.deploy.canManageDeployment(d.id, caller)) ? "write" : "read";
   }
   async function callerGitPermissions(
+    tenant: Tenant,
     deployments: readonly Deployment[],
     caller: Pick<CapabilityClaims, "actorId" | "botActor">,
   ): Promise<Array<"read" | "write" | null>> {
-    const permissions = await deploymentPermissions(deployments, caller.actorId);
+    const permissions = await deploymentPermissions(tenant, deployments, caller.actorId);
     return Promise.all(deployments.map((d, i) => forCaller(d, caller, permissions[i]!)));
   }
   async function callerGitPermission(
@@ -147,9 +149,9 @@ export function createDeploymentMethods(
     deploymentGrantees(idOrName) {
       return deps.deploy.deploymentGrantees(idOrName);
     },
-    async listDeploymentsForViewer(viewer) {
+    async listDeploymentsForViewer(tenant, viewer) {
       const deployments = await deps.deploy.listDeployments();
-      const permissions = await callerGitPermissions(deployments, viewer);
+      const permissions = await callerGitPermissions(tenant, deployments, viewer);
       return deployments.flatMap((d, i): ViewerDeployment[] => {
         const permission = permissions[i];
         return permission ? [{ ...deploymentView(d), permission }] : [];
@@ -162,8 +164,8 @@ export function createDeploymentMethods(
       const deployment = await deps.deploy.getDeployment(idOrName);
       return deployment ? callerGitPermission(deployment, viewer) : null;
     },
-    deploymentGitPermissionsFor(deployments, viewer) {
-      return callerGitPermissions(deployments, viewer);
+    deploymentGitPermissionsFor(tenant, deployments, viewer) {
+      return callerGitPermissions(tenant, deployments, viewer);
     },
     rollbackDeployment(id, version, actor) {
       return deps.deploy.rollbackDeployment(id, version, actor ? { actor } : undefined);

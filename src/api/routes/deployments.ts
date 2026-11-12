@@ -1331,7 +1331,7 @@ async function listDeployments(ctx: ApiCtx): Promise<void> {
   const principalId = capability?.actorId ?? actor?.p ?? url.searchParams.get("principalId");
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
   const viewer = capability ?? { actorId: principalId };
-  const visible = await app.listDeploymentsForViewer(viewer);
+  const visible = await app.listDeploymentsForViewer(tenantOf(ctx), viewer);
   const baseUrl = gitUrlBase(ctx);
   const ownerOf = (d: { ownerScopeId?: string }) =>
     d.ownerScopeId?.startsWith("personal:") ? d.ownerScopeId.slice("personal:".length) : undefined;
@@ -1601,7 +1601,7 @@ async function visibleDeploymentsExport(ctx: BaseCtx): Promise<void> {
   if (!requested) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
   const principalId = canonicalPerson(requested);
   const live = (await app.listDeployments()).filter((d) => d.status !== "archived");
-  const permissions = await app.deploymentGitPermissionsFor(live, { actorId: principalId });
+  const permissions = await app.deploymentGitPermissionsFor(tenantOf(ctx), live, { actorId: principalId });
   const visible = live.flatMap((deployment, i) => {
     const permission = permissions[i];
     return permission ? [{ deployment, view: deploymentView(deployment), permission }] : [];

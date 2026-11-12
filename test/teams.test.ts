@@ -65,6 +65,8 @@ const fakeStore = (teams: TurnTeam[]): TeamStore => ({
   list: async () => [],
   forTurn: async (_tenant, _scope, ids) => teams.filter((t) => ids.some((id) => t.present.has(id.toLowerCase()))),
   isMember: async (_tenant, id, teamId) => teams.some((t) => t.id === teamId && t.present.has(id.toLowerCase())),
+  memberTeams: async (_tenant, id, ids) =>
+    new Set(ids.filter((teamId) => teams.some((t) => t.id === teamId && t.present.has(id.toLowerCase())))),
   apply: async () => {},
 });
 const group = (audience: Principal[]) =>

@@ -949,7 +949,7 @@ export function createSessionMethods(
       }
       files.sort((a, b) => b.createdAt - a.createdAt);
       const inScope = allDeployments.filter((d) => d.createdInScope === scope || d.ownerScopeId === scope);
-      const permissions = await deploymentPermissions(inScope, principalId);
+      const permissions = await deploymentPermissions(tenant, inScope, principalId);
       const deployments = inScope.flatMap((d, i): ScopeDeployment[] => {
         const permission = permissions[i];
         return permission

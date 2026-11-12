@@ -122,7 +122,7 @@ test("deployment export: lists the person's live Apps page apps with their addre
     };
     const fleet = [app("live", "running"), app("gone", "archived"), own, given];
     s.built.app.listDeployments = async () => fleet;
-    s.built.app.deploymentGitPermissionsFor = async (deployments, { actorId }) =>
+    s.built.app.deploymentGitPermissionsFor = async (_tenant, deployments, { actorId }) =>
       deployments.map(() => (actorId === "alice@example.com" ? "read" : null));
     assert.equal((await s.get("/v1/deployments/export")).status, 400);
     const { principalId, deployments }: any = await (await s.get(apps)).json();
