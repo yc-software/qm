@@ -130,7 +130,7 @@ import type {
 import type { Cron, Monitor, Webhook } from "./triggers/types.ts";
 import type { Loop, LoopItem, LoopOutput, ShipGrant } from "./loops/types.ts";
 import type { SurfaceContextRequest } from "./reach/reach.ts";
-import { personalScope, scopeId } from "./types.ts";
+import { APPROVAL_LIFETIME_MS, personalScope, scopeId } from "./types.ts";
 import type { AuditLog } from "./audit/audit-log.ts";
 import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
 import { createPostgresAppPageViewLog, DEPLOYMENT_TABLES, type AppPageViewLog } from "./deploy/page-views.ts";
@@ -2954,6 +2954,14 @@ export function buildApp(
     30 * 60_000,
     { label: "Composio consent returns", immediate: true },
   );
+  const approvalExpirySweeper = createSweeper(
+    () =>
+      claimThenBind(approvals.claimTenants, () =>
+        approvals.deleteBefore("createdAt", Date.now() - APPROVAL_LIFETIME_MS),
+      ),
+    60_000,
+    { label: "approval expiry", immediate: true },
+  );
   const blobSweeper = createSweeper(() => blobTransfer.sweep(BLOB_TTL_MS), 30 * 60_000);
   const BLOB_TRANSFER_EXPIRY_DAYS = 1;
   void blobTransfer
@@ -3011,6 +3019,7 @@ export function buildApp(
       if (config.skillSyncPollMs > 0) skillSyncEngine.start(config.skillSyncPollMs);
       blobSweeper.start();
       composioReturnSweeper.start();
+      approvalExpirySweeper.start();
       fileUploads?.start();
       idleSweeper?.start();
       deployMaintenanceSweeper.start();
@@ -3053,6 +3062,7 @@ export function buildApp(
       deepIdleSweeper?.stop(),
       blobSweeper.stop(),
       composioReturnSweeper.stop(),
+      approvalExpirySweeper.stop(),
       fileUploads?.stop(),
       wakeSweep.stop(),
       swarms?.stop(),

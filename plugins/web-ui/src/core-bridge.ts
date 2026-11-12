@@ -554,10 +554,6 @@ export function approvalDecidableDuringRun(approval: PendingApproval): boolean {
   return approval.executesOnApprove === true && approval.blocksInput === false;
 }
 
-export function approvalBlocksComposer(approval: PendingApproval): boolean {
-  return approval.blocksInput !== false;
-}
-
 export interface ApprovalDecision {
   requestId: string;
   approved: boolean;

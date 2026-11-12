@@ -85,7 +85,6 @@ import {
   activeRunForThread,
   stopThreadRun,
   api,
-  approvalBlocksComposer,
   approvalDecidableDuringRun,
   createRunSlot,
   hasLiveRun,
@@ -936,10 +935,6 @@ export function createChatSurface(
     return unresolvedApprovals([...byId.values()]);
   }
 
-  function hasUnresolvedApproval(): boolean {
-    return activePendingApprovals().some(approvalBlocksComposer);
-  }
-
   async function syncPendingApprovals(
     agent: Agent,
     messages?: AgentMessage[],
@@ -1474,8 +1469,7 @@ export function createChatSurface(
       Boolean(chatState.pendingSend) ||
       Boolean(ctx.composer.state.draft) ||
       Boolean(ctx.composer.state.attachments.length) ||
-      ctx.composer.state.processingFiles ||
-      hasUnresolvedApproval()
+      ctx.composer.state.processingFiles
     );
   }
 
@@ -3888,7 +3882,6 @@ export function createChatSurface(
     setTurnRuntime,
     requestBackgroundPanel,
     activePendingApprovals,
-    hasUnresolvedApproval,
     resolveCommandApproval,
     approvalSummaryView,
     notePendingSessionOnSend,

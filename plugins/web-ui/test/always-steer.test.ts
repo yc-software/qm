@@ -111,7 +111,6 @@ test("a mid-run send with the steer preference asks core to steer and queues onl
         },
         isStopping: () => false,
         hasLiveRun: () => live,
-        hasUnresolvedApproval: () => false,
         activePendingApprovals: () => [],
         turnRuntime: () => null,
         notePendingSessionOnSend() {},
