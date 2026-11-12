@@ -1,6 +1,6 @@
 import { orgId } from "../config.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
-import { sessionTreeRoot } from "../sessions/session-syscalls.ts";
+import { sessionTreeRoots } from "../sessions/session-syscalls.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { ScopeId, Session } from "../types.ts";
 import { externalSlackRequestAllowed, type ExternalSlackPolicies } from "./external-slack.ts";
@@ -24,12 +24,12 @@ export function withAmbientWakes(
 }
 
 export async function ambientWakeReaches(
-  sessions: Pick<SessionStore, "get">,
+  sessions: Pick<SessionStore, "treeRoots">,
   request: WakeRequest,
   target: Session,
   from: Session,
 ): Promise<boolean> {
   if (request.actor.id !== ambientActorId() || target.id === from.id) return true;
-  const [a, b] = await Promise.all([sessionTreeRoot(sessions, target), sessionTreeRoot(sessions, from)]);
-  return a.id === b.id;
+  const [a, b] = await sessionTreeRoots(sessions, [target, from]);
+  return a?.id === b?.id;
 }

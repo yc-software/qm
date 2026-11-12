@@ -455,23 +455,16 @@ export function assertAudienceCompatible(
     throw new Error("the target audience includes people outside the sender's authorized audience");
 }
 
-async function sessionAncestors(sessions: Pick<SessionStore, "get">, session: Session): Promise<Session[]> {
-  const ancestors: Session[] = [];
-  let current = session;
-  const seen = new Set<string>();
-  while (current.parentSessionId) {
-    if (seen.has(current.id)) throw new Error("session parent cycle");
-    seen.add(current.id);
-    const parent = await sessions.get(current.parentSessionId);
-    if (!parent) break;
-    ancestors.push(parent);
-    current = parent;
-  }
-  return ancestors;
+export async function sessionTreeRoots(
+  sessions: Pick<SessionStore, "treeRoots">,
+  list: readonly Session[],
+): Promise<Session[]> {
+  const roots = await sessions.treeRoots(list.map((session) => session.id));
+  return list.map((session) => roots.get(session.id) ?? session);
 }
 
-export async function sessionTreeRoot(sessions: Pick<SessionStore, "get">, session: Session): Promise<Session> {
-  return (await sessionAncestors(sessions, session)).at(-1) ?? session;
+export async function sessionTreeRoot(sessions: Pick<SessionStore, "treeRoots">, session: Session): Promise<Session> {
+  return (await sessionTreeRoots(sessions, [session]))[0]!;
 }
 
 export async function stoppableRoot(
