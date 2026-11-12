@@ -126,7 +126,6 @@ function compactionRow() {
       <span class="runtime-label">Compaction keeps</span>
       <input
         type="number"
-        class="runtime-percent"
         min="1"
         step="1"
         placeholder=${fallback}
