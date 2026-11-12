@@ -40,6 +40,8 @@ Patterns from this repo's history, with the PRs that introduced or removed them.
 
 A finding ends one of three ways: it is fixed and a fresh reviewer of the new diff does not raise it, a judge drops it, or a maintainer waives the lens. A judge is a fresh agent given only the finding as the reviewer wrote it, the PR's whole diff and the repository, and the PR description as it stood when the finding was raised. It drops a finding only when the finding is wrong about the code, is not an instance of the lens, predates the PR and is not made worse by it, or cannot be fixed without losing the behavior the PR is for. How the PR builds that behavior is not its purpose. Each finding is judged once; the ruling stands if the finding is raised again. A lens is accepted once none of its findings stands.
 
+A finding names a problem; how to fix it is the author's call. If findings pull in opposite directions, or review passes three rounds, stop and bring what still stands to the maintainer.
+
 ### Overengineering (always reviewed, 6 examples)
 
 Let sLOC +/- be your guide here. Small and net-negative LOC fixes will be rewarded. This codebase at baseline is flabby -- many bugs can be fixed by _deleting_, _removing_, _simplifying_. For features: use restraint when adding new subsystems that increase surface area and widen the config matrix we will have to support.
