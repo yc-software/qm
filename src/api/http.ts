@@ -12,8 +12,7 @@ export function refuseImpersonated(res: ServerResponse): void {
 export function refuseWithoutPerson(res: ServerResponse): void {
   sendJson(res, 403, {
     error: "human_consent_required",
-    message:
-      "Only the person can do this, by asking for it in a conversation. Scheduled, triggered and bot turns can't.",
+    message: "Only the person can take this step. Ask them to do it themselves.",
   });
 }
 

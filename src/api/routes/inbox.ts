@@ -67,7 +67,7 @@ export async function inboxView(ctx: ApiCtx): Promise<InboxView | null> {
   const deps = loopDeps(ctx);
   const preferences = ctx.deps.uiState;
   if (!deps || !preferences) return reply(503, { error: "inbox_unavailable" });
-  const acting = await actingPrincipal(ctx);
+  const acting = actingPrincipal(ctx);
   if (!acting) return null;
   if (!(await inboxPreviewEnabled(ctx.deps, acting.actorId))) return reply(403, { error: "feature_disabled" });
   if (ctx.capability && ctx.capability.privateScope !== true) return reply(403, { error: "forbidden" });
