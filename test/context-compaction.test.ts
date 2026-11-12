@@ -1060,6 +1060,28 @@ test("cron and loop dispatch use purpose defaults while task handoffs and later 
   assert.deepEqual(seen, [category, handoff, category]);
 });
 
+test("an automation turn with no model of its own runs the session's stored runtime", async () => {
+  const { agent } = spyAgent();
+  const seen: Array<string | undefined> = [];
+  const recording: Agent = {
+    ...agent,
+    async runTurn(input) {
+      seen.push(input.runtime?.modelId);
+      return agent.runTurn(input);
+    },
+  };
+  const { orch, sessions } = buildOrchestrator(recording);
+  const sessionId = await seed(sessions, [user("hi")]);
+  await sessions.setRuntime(sessionId, { modelId: "claude-opus-5-5", label: "Opus 5.5" });
+  const report = (runId: string) =>
+    orch.handleTurn({ ...turn("worker report"), origin: { kind: "automation" }, runId, surfaceTools: false });
+  assert.equal((await report("stored-runtime")).status, "ok");
+  assert.equal(seen.at(-1), "claude-opus-5-5");
+  await sessions.setRuntime(sessionId, { modelId: "no-such-model-anywhere" });
+  assert.equal((await report("unusable-runtime")).status, "ok");
+  assert.equal(seen.at(-1), undefined);
+});
+
 test("human child continuations respect non-fast category defaults", async () => {
   const base = createMockAgent();
   const category = { modelId: "gpt-6-astra", effortLevel: "low", fastMode: false };

@@ -156,7 +156,7 @@ import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { randomUUID } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import type { Orchestrator, OrchestratorDeps, OrchestratorInput } from "./orchestrator/types.ts";
-import { personalModelId } from "../model/pi-models.ts";
+import { modelSupported, modelUnavailableReason, personalModelId } from "../model/pi-models.ts";
 import { createSessionTitles } from "./session-title.ts";
 import {
   completedSurfaceEnqueues,
@@ -2078,7 +2078,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           !servesModel(requestedModel, userModelOverride, userProviderKeys)
         )
           throw new NonRetryableTurnError("Your connected AI account cannot serve this model.");
-        const effectiveModel = userModelOverride ?? input.model;
+        const stickyModel =
+          !input.model &&
+          !purposeDefault?.modelId &&
+          session.runtime?.modelId &&
+          modelSupported(session.runtime.modelId) &&
+          !modelUnavailableReason(session.runtime.modelId)
+            ? session.runtime.modelId
+            : undefined;
+        const effectiveModel = userModelOverride ?? input.model ?? stickyModel;
         if (personalAuth) {
           console.log(`[individual-auth] user=${actor.id} model=${effectiveModel} auth=${authLabel}`);
         }
