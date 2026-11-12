@@ -2,6 +2,7 @@ import MailComposer from "nodemailer/lib/mail-composer";
 import type { LoopItem, LoopSourcePayload } from "../types.ts";
 import { isAccountType } from "../../connectors/oauth.ts";
 import { GmailApiError, gmailApi } from "../../connectors/gmail-api.ts";
+import { gmailBodyParts } from "../../connectors/gmail-compose.ts";
 import { errMessage } from "../../util/errors.ts";
 import {
   addressList,
@@ -86,7 +87,12 @@ export function replySubject(item: LoopItem, draft: ReplyDraft): string {
   return /^re:/i.test(original) ? original : `Re: ${original}`;
 }
 
-export async function buildGmailReplyMime(item: LoopItem, draft: ReplyDraft): Promise<Buffer | null> {
+export async function buildGmailReplyMime(
+  item: LoopItem,
+  draft: ReplyDraft,
+  original?: Record<string, unknown>,
+  timeZone?: string,
+): Promise<Buffer | null> {
   const meta = metaOf(item);
   if (!meta) return null;
   const parsed = parseReplyDraft(draft);
@@ -99,8 +105,8 @@ export async function buildGmailReplyMime(item: LoopItem, draft: ReplyDraft): Pr
     cc: parsed.cc ?? meta.cc ?? [],
     subject: replySubject(item, parsed),
     ...(rfcId ? { inReplyTo: rfcId, references: rfcId } : {}),
-    text: parsed.body,
-    textEncoding: "base64",
+    ...gmailBodyParts(parsed.body, original, timeZone),
+    textEncoding: "quoted-printable",
   })
     .compile()
     .build();
@@ -112,11 +118,15 @@ async function sendGmail(deps: SourceActionDeps, item: LoopItem, draft: ReplyDra
   if (!meta) return { ok: false, reason: "bad_item", message: "invalid Gmail metadata" };
   const token = await gmailToken(deps.tokens, deps.owner, item);
   if (!token) return { ok: false, reason: "not_connected", message: "Google is not connected for this account" };
-  const mime = await buildGmailReplyMime(item, draft);
-  if (!mime) return { ok: false, reason: "bad_item", message: "no recipient — add a To: address to the draft" };
-  const threadId = metaOf(item)?.threadId;
+  const api = gmailApi(token, fetchImpl);
+  const threadId = meta.threadId;
   try {
-    await gmailApi(token, fetchImpl)("messages/send", {
+    const original = meta.messageId
+      ? await api<Record<string, unknown>>(`messages/${encodeURIComponent(meta.messageId)}?format=full`)
+      : undefined;
+    const mime = await buildGmailReplyMime(item, draft, original, deps.timezone);
+    if (!mime) return { ok: false, reason: "bad_item", message: "no recipient — add a To: address to the draft" };
+    await api("messages/send", {
       timeoutMs: 30_000,
       body: {
         raw: mime.toString("base64url"),
@@ -125,7 +135,7 @@ async function sendGmail(deps: SourceActionDeps, item: LoopItem, draft: ReplyDra
     });
   } catch (error) {
     if (!(error instanceof GmailApiError)) throw error;
-    return { ok: false, reason: "upstream", message: `Gmail refused the send (${error.status}): ${error.detail}` };
+    return { ok: false, reason: "upstream", message: `${error.message}: ${error.detail}` };
   }
   return { ok: true, result: draft.body };
 }

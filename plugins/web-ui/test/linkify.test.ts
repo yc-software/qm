@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { splitLinks, splitMentions } from "../src/linkify.ts";
+import { splitLinks } from "../../chassis/src/links.ts";
+import { splitMentions } from "../src/linkify.ts";
 
 test("plain text stays a single text segment", () => {
   assert.deepEqual(splitLinks("no links here"), [{ kind: "text", text: "no links here" }]);

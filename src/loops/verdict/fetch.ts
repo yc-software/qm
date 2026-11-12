@@ -187,19 +187,19 @@ export function createSourceClients(deps: SourceClientDeps): SourceClients {
   return clients;
 }
 
-function plainText(part: Record<string, unknown>): string | undefined {
+export function plainText(part: Record<string, unknown>, mimeType = "text/plain"): string | undefined {
   const body = isObj(part.body) ? part.body : {};
-  if (part.mimeType === "text/plain" && typeof body.data === "string")
+  if (part.mimeType === mimeType && typeof body.data === "string")
     return Buffer.from(body.data, "base64url").toString("utf8");
   const parts = Array.isArray(part.parts) ? part.parts.filter(isObj) : [];
   for (const nested of parts) {
-    const text = plainText(nested);
+    const text = plainText(nested, mimeType);
     if (text) return text;
   }
   return undefined;
 }
 
-function header(payload: Record<string, unknown>, name: string): string {
+export function header(payload: Record<string, unknown>, name: string): string {
   const headers = Array.isArray(payload.headers) ? payload.headers.filter(isObj) : [];
   const found = headers.find((h) => typeof h.name === "string" && h.name.toLowerCase() === name.toLowerCase());
   return typeof found?.value === "string" ? found.value : "";
