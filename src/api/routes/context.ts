@@ -221,22 +221,20 @@ async function fulfillContextRequest(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
   const id = ctx.params.id!;
   const b = isObj(body) ? body : {};
+  const sent: unknown[] = Array.isArray(b.attachments) ? b.attachments : [];
+  const readable = (a: unknown): a is { blobId: string; name: string; sizeBytes: number } & Record<string, unknown> =>
+    isObj(a) && typeof a.blobId === "string" && typeof a.name === "string" && typeof a.sizeBytes === "number";
   const attachments = Array.isArray(b.attachments)
-    ? b.attachments.flatMap((a) =>
-        isObj(a) && typeof a.blobId === "string" && typeof a.name === "string" && typeof a.sizeBytes === "number"
-          ? [
-              {
-                blobId: a.blobId,
-                name: a.name,
-                sizeBytes: a.sizeBytes,
-                mimetype: typeof a.mimetype === "string" ? a.mimetype : "application/octet-stream",
-                ...(typeof a.sourceId === "string" ? { sourceId: a.sourceId } : {}),
-                ...(typeof a.author === "string" ? { author: a.author } : {}),
-              },
-            ]
-          : [],
-      )
+    ? sent.filter(readable).map((a) => ({
+        blobId: a.blobId,
+        name: a.name,
+        sizeBytes: a.sizeBytes,
+        mimetype: typeof a.mimetype === "string" ? a.mimetype : "application/octet-stream",
+        ...(typeof a.sourceId === "string" ? { sourceId: a.sourceId } : {}),
+        ...(typeof a.author === "string" ? { author: a.author } : {}),
+      }))
     : undefined;
+  const rejected = sent.filter((a) => !readable(a));
   const g = isObj(b.group) ? b.group : undefined;
   const group = g && typeof g.groupId === "string" && g.groupId ? { groupId: g.groupId } : undefined;
   const outcome =
@@ -251,7 +249,14 @@ async function fulfillContextRequest(ctx: ApiCtx): Promise<void> {
             ...(Array.isArray(b.selfTs) ? { selfTs: b.selfTs.filter((ts) => typeof ts === "string") } : {}),
             ...(b.liveSearch === "unconfigured" || b.liveSearch === "unconnected" ? { liveSearch: b.liveSearch } : {}),
             ...(attachments ? { attachments } : {}),
-            ...(Array.isArray(b.issues) ? { issues: b.issues.filter((i) => typeof i === "string") } : {}),
+            ...(Array.isArray(b.issues) || rejected.length
+              ? {
+                  issues: [
+                    ...(Array.isArray(b.issues) ? b.issues.filter((i) => typeof i === "string") : []),
+                    ...rejected.map((a) => `the surface sent an unreadable attachment: ${JSON.stringify(a)}`),
+                  ],
+                }
+              : {}),
             ...(group ? { group } : {}),
           } satisfies SurfaceContextResult,
         };
