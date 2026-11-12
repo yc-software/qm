@@ -13,7 +13,7 @@ export const SHARE_CSS = `
 export const SHARE_BUTTON = '<button type="button" class="access-btn" id="access" hidden></button>';
 
 export const shareMarkup = (name: string): string =>
-  `<dialog id="share-dialog" tabindex="-1" autofocus aria-label="Share ${name}"><iframe id="share" title="Share ${name}" allowtransparency="true"></iframe></dialog>`;
+  `<dialog id="share-dialog" tabindex="-1" aria-label="Share ${name}"><iframe id="share" title="Share ${name}" allowtransparency="true"></iframe></dialog>`;
 
 export const SHARE_JS = String.raw`
   const accessBtn = document.getElementById("access");
@@ -45,6 +45,7 @@ export const SHARE_JS = String.raw`
   accessBtn.addEventListener("click", () => {
     share.src = shareUrl + "&name=" + encodeURIComponent(document.getElementById("name").textContent || "");
     shareDialog.showModal();
+    shareDialog.focus();
   });
   share.addEventListener("load", () => {
     if (shareDialog.open) share.contentWindow.postMessage({ type: "qm:theme-request" }, portalOrigin);
