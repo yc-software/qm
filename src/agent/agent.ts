@@ -198,7 +198,7 @@ export interface DetectResult {
 }
 
 export type SessionRoute = Partial<
-  Pick<AgentTurnInput, "scopeLabel" | "runtime" | "runtimePurpose" | "runtimePinned" | "providerKeys">
+  Pick<AgentTurnInput, "scopeLabel" | "runtime" | "runtimePurpose" | "runtimePinned" | "providerKeys" | "session">
 >;
 
 export interface CompactInput extends SessionRoute {

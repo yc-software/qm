@@ -1,4 +1,5 @@
 import { scopeId, type ActorAssertion, type TurnRequest } from "../types.ts";
+import { pullSurfaceFiles } from "./surface-context-puller.ts";
 import { personLabel } from "../identity/person-names.ts";
 import type { TurnSurfaceOrigin } from "../surfaces/contract.ts";
 import { slackSurfaceOrigin } from "../surfaces/slack/adapter.ts";
@@ -8,6 +9,7 @@ import { fitsScreenInput } from "../security/security-posture.ts";
 import { samePerson } from "../directory/person.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
 import type { CachedMessage } from "../surface-cache/surface-cache.ts";
+import { hasContent } from "../slack/message-gating.ts";
 import { DEFAULT_ROLLUP_HOURS, type BotPolicy } from "../surface-cache/channel-policy-store.ts";
 import {
   ambientWindow,
@@ -27,6 +29,7 @@ import { swallow, swallowAs } from "../util/errors.ts";
 import { withModelRequestContext } from "../model/request-context.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
+import { ambientActorId } from "../resolution/ambient-wake.ts";
 
 export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
   function shouldRouteToSpine(input: OrchestratorInput): boolean {
@@ -133,7 +136,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     }
     const self = ambientSelf.get(`${orgIdOf()}:${surface}`);
     const unmentioned = delta.filter((m) => !m.mentionsSelf);
-    const forJudge = unmentioned.filter((m) => m.text.trim());
+    const forJudge = unmentioned.filter((m) => hasContent(m.text, m.files ?? []));
     if (unmentioned.length < delta.length)
       recordJudgment({
         surface,
@@ -324,6 +327,13 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
       console.error(
         `[ambient] wake left out ${omitted} earlier messages past the content screen's input limit (container=${batch.container})`,
       );
+    const fileFields = await pullSurfaceFiles(app, batch.surface, batch.container, [
+      ...new Set(
+        batch.messages
+          .filter((m) => !m.deleted && (!solicited || m.authorId === solicited.message.authorId))
+          .flatMap((m) => (m.files ?? []).map((f) => f.fileId)),
+      ),
+    ]);
     const req: TurnRequest = solicited
       ? {
           surface: batch.surface,
@@ -336,6 +346,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
           deliveryTarget: batch.container,
           text: solicited.message.text,
           origin: { kind: "human", ...(solicited.message.ts ? { messageTs: solicited.message.ts } : {}) },
+          ...fileFields,
           surfaceTools: true,
           async: true,
           spawned: true,
@@ -344,7 +355,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
       : {
           surface: batch.surface,
           ...(surfaceOrigin ? { surfaceOrigin } : {}),
-          actor: { externalId: `system:ambient:${orgIdOf()}` },
+          actor: { externalId: ambientActorId() },
           ...(batch.messages.some((m) => m.bot) ? { botActor: true } : {}),
           conversation,
           deliveryTarget: batch.container,
@@ -362,6 +373,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
             kind: "automation",
             screenData: screenDataOf(shown.map(screened)),
           },
+          ...fileFields,
           surfaceTools: true,
           async: true,
           spawned: true,
@@ -389,7 +401,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
         origin: "ambient",
         person: false,
         text: req.text,
-        hasFiles: false,
+        hasFiles: Boolean(req.attachments?.length),
         actorId: req.actor.externalId,
         modelAccount: "company",
         ...(req.botActor ? { bot: true } : {}),
