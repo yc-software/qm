@@ -34,6 +34,9 @@ export interface SlackFile {
   user?: string;
 }
 
+export const slackFileName = (f: Pick<SlackFile, "name" | "title" | "id">): string =>
+  f.name || f.title || f.id || "file";
+
 async function hydrateSlackFiles(
   files: readonly SlackFile[],
   lookup: (fileId: string) => Promise<SlackFile | undefined>,
@@ -73,7 +76,7 @@ export function attachmentFromBytes(
   blobId: string,
   author?: string,
 ): IncomingAttachment {
-  const name = file.name || file.title || file.id || "file";
+  const name = slackFileName(file);
   const mimetype = file.mimetype || "application/octet-stream";
   return {
     name,

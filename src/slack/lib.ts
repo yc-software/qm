@@ -62,6 +62,7 @@ export {
   stageSlackFiles,
   uploadAttachments,
   uploadFailureNote,
+  slackFileName,
 } from "./attachments.ts";
 export {
   type ApprovalActionId,

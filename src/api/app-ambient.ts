@@ -9,10 +9,10 @@ import { fitsScreenInput } from "../security/security-posture.ts";
 import { samePerson } from "../directory/person.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
 import type { CachedMessage } from "../surface-cache/surface-cache.ts";
+import { hasContent } from "../slack/message-gating.ts";
 import { DEFAULT_ROLLUP_HOURS, type BotPolicy } from "../surface-cache/channel-policy-store.ts";
 import {
   ambientWindow,
-  hasContent,
   judgeAmbientBatch,
   recentWakeMessages,
   renderAmbientPrompt,
@@ -135,7 +135,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     }
     const self = ambientSelf.get(`${orgIdOf()}:${surface}`);
     const unmentioned = delta.filter((m) => !m.mentionsSelf);
-    const forJudge = unmentioned.filter(hasContent);
+    const forJudge = unmentioned.filter((m) => hasContent(m.text, m.files ?? []));
     if (unmentioned.length < delta.length)
       recordJudgment({
         surface,

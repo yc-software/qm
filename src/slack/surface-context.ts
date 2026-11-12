@@ -10,18 +10,14 @@ import {
   isExternallyShared,
   openConversationFor,
   parseDeliveryTarget,
+  slackFileName,
   stageSlackFiles,
 } from "./lib.ts";
 import { SLACK_AUTH_ERRORS, type SlackHistoryMessage, parseMessageList, slackErrorCode } from "./payloads.ts";
 import type { SlackCoreClient, SurfaceContextRequest } from "../api/slack-core-client.ts";
 import type { Directory } from "./directory.ts";
 import { slackMessageContent } from "./message-content.ts";
-import {
-  type ConversationSerializer,
-  RECENT_HISTORY_LIMIT,
-  RECENT_THREAD_LIMIT,
-  slackFileName,
-} from "./conversation-view.ts";
+import { type ConversationSerializer, RECENT_HISTORY_LIMIT, RECENT_THREAD_LIMIT } from "./conversation-view.ts";
 
 export function createSurfaceContextFulfiller(deps: {
   rateLimitNotice?: SlackRateLimitNotice;
