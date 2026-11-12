@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { testTenant as tenant } from "./support/test-tenant.ts";
 
 function freshApp() {
   return buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "document-turn-")) }));
@@ -53,22 +54,26 @@ test("an earlier turn's document is not re-sent on later turns and stays saved i
   assert.doesNotMatch(JSON.stringify(otherRequests), /notes.txt/);
 });
 
-for (const extension of ["docx", "pdf"]) {
-  test(`automatic ${extension} input respects a strict content-screen verdict`, async () => {
+for (const [file, extension] of [
+  ["hostile", "docx"],
+  ["hostile", "pdf"],
+  ["long", "docx"],
+]) {
+  test(`automatic ${file}.${extension} input is withheld unless the content screen clears it`, async () => {
     const built = freshApp();
-    const bytes = await readFile(new URL(`./fixtures/documents/hostile.${extension}`, import.meta.url));
+    const bytes = await readFile(new URL(`./fixtures/documents/${file}.${extension}`, import.meta.url));
     const blob = await built.blobTransfer.put(bytes);
     const request = {
       surface: "test" as const,
       actor: { externalId: "U1" },
-      conversation: { kind: "dm" as const, threadRef: `dm:U1:hostile-${extension}` },
+      conversation: { kind: "dm" as const, threadRef: `dm:U1:${file}-${extension}` },
     };
     const result = await built.app.turn({
       ...request,
       text: "summarize",
       attachments: [
         {
-          name: `hostile.${extension}`,
+          name: `${file}.${extension}`,
           mimetype:
             extension === "pdf"
               ? "application/pdf"
@@ -82,6 +87,9 @@ for (const extension of ["docx", "pdf"]) {
     const calls = (await built.sessions.listLlmRequests(result.sessionId!)).filter((record) => record.model === "mock");
     assert.doesNotMatch(JSON.stringify(calls.at(-1)?.promptEnvelope), /"documents":/);
     assert.match(JSON.stringify(calls.at(-1)?.promptEnvelope), /withheld by the external-data security screen/);
+    if (file === "long") assert.match(JSON.stringify(calls.at(-1)?.promptEnvelope), /long\.docx \(too long for the/);
+    const withheld = (await built.auditLog.events(tenant)).find((event) => event.resource === "inbound_document");
+    assert.ok(withheld?.detail?.includes(`"source":["${file}.${extension}"]`));
     const followup = await built.app.turn({ ...request, text: "try reading it again" });
     const followupCalls = (await built.sessions.listLlmRequests(followup.sessionId!)).filter(
       (record) => record.model === "mock",

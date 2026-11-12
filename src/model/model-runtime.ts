@@ -158,8 +158,21 @@ export async function buildModelRuntime(
       return getAuth(model, overrides);
     }) as typeof runtime.getAuth;
   }
-  const retained = <T extends object | undefined>(options: T): T =>
-    cacheRetention ? ({ ...options, cacheRetention } as T) : options;
+  const thenPayload =
+    (options: Pick<ModelsSimpleStreamOptions, "onPayload"> | undefined, model: Model<Api>, step: PayloadStep) =>
+    async (payload: unknown) => {
+      const transformed = options?.onPayload ? await options.onPayload(payload, model) : undefined;
+      return step(transformed === undefined ? payload : transformed);
+    };
+  const retained = <T extends ModelsSimpleStreamOptions | undefined>(options: T): T =>
+    cacheRetention
+      ? ({
+          ...options,
+          cacheRetention,
+          onPayload: (payload: unknown, model: Model<Api>) =>
+            thenPayload(options, model, (body) => shortConversationCache(body, model.api))(payload),
+        } as T)
+      : options;
   const wireModelId = <T extends Pick<ModelsSimpleStreamOptions, "onPayload"> | undefined>(
     options: T,
     model: Model<Api>,
@@ -167,14 +180,12 @@ export async function buildModelRuntime(
   ): T =>
     ({
       ...options,
-      onPayload: async (payload: unknown) => {
-        const transformed = options?.onPayload ? await options.onPayload(payload, model) : undefined;
-        const body = transformed === undefined ? payload : transformed;
+      onPayload: thenPayload(options, model, async (body) => {
         if (!body || typeof body !== "object" || Array.isArray(body)) {
           throw new Error("model request payload must be an object");
         }
         return { ...body, ...modelRequestOverrides(model.id), model: await target() };
-      },
+      }),
     }) as T;
   const route = <T extends ModelsSimpleStreamOptions | undefined>(
     model: Model<Api>,
@@ -189,8 +200,9 @@ export async function buildModelRuntime(
           : (modelRequestOverrides(model.id)?.model ?? custom?.upstreamId ?? model.id);
       const unregistered = !custom && hasCustomModelPrefix(model.id);
       const candidate = withRequestHeaders(model, true, false, apiKeys[String(model.provider)]);
+      const base = retained(options);
       const passthrough = {
-        ...retained(options),
+        ...base,
         ...(hasCustomModelPrefix(model.id)
           ? {
               fetch: (input: string | URL, init?: RequestInit) =>
@@ -201,10 +213,7 @@ export async function buildModelRuntime(
                 }),
             }
           : {}),
-        onPayload: async (payload: unknown) => {
-          const transformed = options?.onPayload ? await options.onPayload(payload, model) : undefined;
-          return applyThinkingBinding(transformed === undefined ? payload : transformed, candidate);
-        },
+        onPayload: thenPayload(base, model, (body) => applyThinkingBinding(body, candidate)),
       } as T;
       return {
         model: candidate,
@@ -330,6 +339,19 @@ export function applyThinkingBinding<T>(
   if (thinking?.type === "adaptive" || thinking?.type === "enabled") {
     (payload as Record<string, unknown>).thinking = { ...thinking, block_binding: THINKING_BINDING };
   }
+  return payload;
+}
+
+type PayloadStep = (payload: unknown) => unknown;
+
+function shortConversationCache(payload: unknown, api: Api): unknown {
+  const messages = (payload as { messages?: Array<{ content?: unknown }> } | undefined)?.messages;
+  const breakpoint = (api === "anthropic-messages" && Array.isArray(messages) ? messages : [])
+    .flatMap((message) =>
+      Array.isArray(message?.content) ? (message.content as Array<{ cache_control?: object }>) : [],
+    )
+    .findLast((block) => block?.cache_control);
+  if (breakpoint) breakpoint.cache_control = { type: "ephemeral" };
   return payload;
 }
 

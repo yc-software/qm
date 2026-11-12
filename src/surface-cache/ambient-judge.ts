@@ -84,7 +84,8 @@ export function ambientWindow(
 export function recentWakeMessages(batch: AmbientBatch): WakeMessage[] {
   const triggers = new Set(batch.messages.map((m) => m.ts));
   const self = batch.self?.mentionId;
-  return batch.recent.map((m) => ({
+  const visible = batch.recent.filter((m) => !m.deleted && m.text.trim());
+  return visible.map((m) => ({
     ts: m.ts,
     ...(m.sub ? { thread: m.sub } : {}),
     ...(m.self ? { self: true } : {}),
@@ -93,7 +94,6 @@ export function recentWakeMessages(batch: AmbientBatch): WakeMessage[] {
     ...(m.authorId ? { authorId: m.authorId } : {}),
     text: resolveMentions(m.text, new Map(Object.entries(m.mentions ?? {}).filter(([id]) => id !== self))),
     ...(m.mentions ? { mentions: m.mentions } : {}),
-    ...(m.deleted ? { deleted: true } : {}),
     ...(triggers.has(m.ts) ? { trigger: true } : {}),
   }));
 }

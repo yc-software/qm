@@ -145,7 +145,11 @@ export async function runLoopFire(
     recordFailure(summary, "intake", error);
   }
 
-  await effects.triage?.(loop);
+  try {
+    await effects.triage?.(loop);
+  } catch (error) {
+    recordFailure(summary, "triage", error);
+  }
 
   const queued = workOrder(loop, await stores.items.queued(loop.id), await stores.items.byLoop(loop.id)).slice(
     0,

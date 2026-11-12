@@ -15,7 +15,7 @@ import {
   type MemoryProviderProblem,
 } from "../../memory/provider-outcome.ts";
 import { suggestedActivityRoutes } from "./suggested-activities.ts";
-import { runtimeConfigBody, userRuntimeConfigBody, webuiModelEnabled, withAppEditRuntime } from "../runtime-config.ts";
+import { runtimeConfigBody, userRuntimeConfigBody, withAppEditRuntime } from "../runtime-config.ts";
 import { canReadNotebook, searchAcrossScopes } from "../../memory/cross-scope.ts";
 import { sessionSharingRoutes } from "./session-sharing.ts";
 import type { Grant, PendingApproval, ScopeId, Session } from "../../types.ts";
@@ -551,7 +551,7 @@ async function searchResources(ctx: ApiCtx): Promise<void> {
   const principalId = ctx.actor?.p ?? ctx.url.searchParams.get("principalId");
   if (!principalId) return sendJson(ctx.res, 400, { error: "bad_request" });
   const query = (ctx.url.searchParams.get("q") ?? "").slice(0, 500);
-  return sendJson(ctx.res, 200, await ctx.app.searchResources(principalId, query));
+  return sendJson(ctx.res, 200, await ctx.app.searchResources(tenantOf(ctx), principalId, query));
 }
 
 async function searchSessions(ctx: ApiCtx): Promise<void> {
@@ -1317,27 +1317,25 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
   if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });
   await ctx.deps.refreshModels?.();
   const config = ctx.deps.config;
+  const offered = async (modelId: string) =>
+    (await userRuntimeConfigBody(ctx, target.scope, target.actorId)).models.includes(modelId);
   if (ctx.body.inherit === true) await config.setRuntimeSelection(target.scope, null);
   else if (ctx.body.keep === true) {
     const runtime = await config.getRuntimeSelectionDurable(target.scope);
     const legacyModel = runtime ? null : await config.getBaseModelOwnDurable(target.scope);
-    if (runtime || (legacyModel && modelSupported(legacyModel) && (await webuiModelEnabled(ctx, legacyModel))))
+    if (runtime || (legacyModel && modelSupported(legacyModel) && (await offered(legacyModel))))
       await config.acknowledgeRuntimeSelection(target.scope);
   } else {
     const modelId = ctx.body.modelId;
     if (typeof modelId !== "string" || !modelSupported(modelId))
       return sendJson(ctx.res, 400, { error: "model_not_supported" });
-    if (!(await webuiModelEnabled(ctx, modelId))) return sendJson(ctx.res, 400, { error: "model_not_enabled" });
+    if (!(await offered(modelId))) return sendJson(ctx.res, 400, { error: "model_not_enabled" });
     const effortLevel = ctx.body.effortLevel ?? "auto";
     if (typeof effortLevel !== "string" || !thinkingLevelsFor(modelId).includes(effortLevel))
       return sendJson(ctx.res, 400, { error: "effort_not_supported" });
     const fastMode = ctx.body.fastMode ?? false;
     if (typeof fastMode !== "boolean") return sendJson(ctx.res, 400, { error: "fast_mode_invalid" });
     const choice = { modelId, effortLevel, fastMode: fastMode && fastModeModelIds().includes(modelId) };
-    if ((await config.getModelAccountDurable(target.actorId)) !== "company") {
-      const available = await userRuntimeConfigBody(ctx, target.scope, target.actorId);
-      if (!available.models.includes(modelId)) return sendJson(ctx.res, 400, { error: "account_runtime_unavailable" });
-    }
     await config.setRuntimeSelection(target.scope, choice);
   }
   audit(ctx, {

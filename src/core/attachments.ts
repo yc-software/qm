@@ -17,6 +17,7 @@ import { hashId } from "../util/crypto.ts";
 import type { SecurityScreenVerdict } from "../security/security-posture.ts";
 import { downscaleVisionImage } from "./image-downscale.ts";
 import { NoDefaultSandboxError } from "../sandbox/sandbox-routing.ts";
+import { BotComputerRefusedError } from "../sandbox/sandbox-resources.ts";
 
 export const INBOX_DIR = "inbox";
 export const TURN_FILES_DIR = ".agent-turn";
@@ -205,6 +206,9 @@ export function inboundIssuesNote(issues: readonly string[]): string {
   return issues.length ? `Files received this turn that did not reach ./${INBOX_DIR}/: ${issues.join("; ")}` : "";
 }
 
+export const withheldName = (name: string, verdict: SecurityScreenVerdict): string =>
+  verdict.unscreened && verdict.reason ? `${name} (${verdict.reason})` : name;
+
 export function inboundIssueList(opts: {
   tooMany?: readonly string[];
   unavailable?: readonly string[];
@@ -251,7 +255,7 @@ export async function materializeInbound(
   let target: Promise<SandboxHandle | null> | undefined;
   const computer = () =>
     (target ??= (typeof handle === "function" ? handle() : Promise.resolve(handle)).catch((e: unknown) => {
-      if (e instanceof NoDefaultSandboxError) return null;
+      if (e instanceof NoDefaultSandboxError || e instanceof BotComputerRefusedError) return null;
       throw e;
     }));
   const unstaged = new Set<string>();
@@ -280,7 +284,7 @@ export async function materializeInbound(
     if (screenText && textContent !== null) {
       const verdict = await screenText({ content: textContent, name, mimetype });
       if (verdict?.decision === "strict") {
-        blocked.push(name);
+        blocked.push(withheldName(name, verdict));
         continue;
       }
       if (!verdict || verdict.unscreened) unscreened.push(name);
