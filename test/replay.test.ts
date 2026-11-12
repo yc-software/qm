@@ -767,3 +767,48 @@ test("a scheduled task's post replays as a tagged message, never merged into the
     ],
   );
 });
+
+test("an approved call replayed under its original id pairs each occurrence with its own result", () => {
+  const history = [
+    at({ kind: "UserMessage", text: "deploy the ledger" }, 1),
+    at({ kind: "ToolCall", tool: "execute", callId: "toolu_deploy", body: { command: "deploy ledger" } }, 2),
+    at(
+      {
+        kind: "ToolResult",
+        tool: "execute",
+        callId: "toolu_deploy",
+        isError: true,
+        text: "[blocked: needs human approval] deploys need a human",
+      },
+      3,
+    ),
+    at(
+      {
+        kind: "ToolCall",
+        tool: "execute",
+        callId: "toolu_deploy",
+        body: { command: "deploy ledger", approvedRequestId: "req-1" },
+      },
+      4,
+    ),
+    at(
+      {
+        kind: "ToolResult",
+        tool: "execute",
+        callId: "toolu_deploy",
+        isError: false,
+        text: "deployed: the harbor ledger balances",
+        body: { approvedRequestId: "req-1" },
+      },
+      5,
+    ),
+  ];
+  const msgs = reconstructMessagesFromHistory(history);
+  const results = msgs.filter((m) => m.role === "toolResult");
+  assert.deepEqual(
+    results.map((m) => (m.content[0] as { text: string }).text),
+    ["[blocked: needs human approval] deploys need a human", "deployed: the harbor ledger balances"],
+  );
+  assert.equal(JSON.stringify(msgs).split("the harbor ledger balances").length - 1, 1, "approved output appears once");
+  assertValidWire(msgs);
+});
