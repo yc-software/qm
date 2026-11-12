@@ -30,6 +30,28 @@ export function clipText(t: string, max: number): string {
   return s.length > max ? `${s.slice(0, max)}…` : s;
 }
 
+const DETECT_MESSAGE_CHARS = 300;
+
+export interface DetectSourceMessage {
+  name: string;
+  text: string;
+  isBot?: boolean;
+  isSelf?: boolean;
+  isTrigger?: boolean;
+}
+
+export function detectInputs(
+  messages: readonly DetectSourceMessage[],
+  ownOpener?: string,
+): { detectContext: string; detectOpener?: string } {
+  const detectContext = messages
+    .filter((m) => !m.isBot && !m.isSelf && !m.isTrigger)
+    .map((m) => `${m.name || "someone"}: ${clipText(m.text, DETECT_MESSAGE_CHARS)}`)
+    .join("\n");
+  const detectOpener = clipText(ownOpener ?? "", DETECT_MESSAGE_CHARS);
+  return { detectContext, ...(detectOpener ? { detectOpener } : {}) };
+}
+
 export function epochTsTime(ts: string): string {
   const sec = Number(ts);
   if (!Number.isFinite(sec) || sec <= 0) return "";

@@ -4,7 +4,7 @@ import type { Destination, TurnResult } from "../../types.ts";
 import type { SurfaceCache } from "../../surface-cache/surface-cache.ts";
 import { inTenant } from "../../tenants/claim.ts";
 import { errMessage, reportFailureAs } from "../../util/errors.ts";
-import { buildContextWindow } from "../context-window.ts";
+import { buildContextWindow, detectInputs } from "../context-window.ts";
 import { partnerChatPrincipal } from "./adapter.ts";
 import {
   findMessage,
@@ -36,30 +36,37 @@ export function createPartnerChatInbound(deps: {
   const now = deps.now ?? Date.now;
   const cache = deps.surfaceCache;
 
-  async function threadEngaged(container: string, thread: string): Promise<boolean> {
-    const mine = await cache.readMessages(container, {
-      surface: SURFACE,
-      sub: thread,
-      self: true,
-      limit: 1,
-      noFallback: true,
-    });
-    return mine.length > 0 || (await findMessage(cache, container, thread, { self: true })) !== undefined;
+  async function followedThread(container: string, thread: string) {
+    const [root, [lastReply]] = await Promise.all([
+      findMessage(cache, container, thread),
+      cache.readMessages(container, { surface: SURFACE, sub: thread, self: true, limit: 1, noFallback: true }),
+    ]);
+    if (!root?.self && !lastReply) return undefined;
+    return { ...(root?.self ? { opener: root.text } : {}), ...(lastReply ? { lastReplyTs: lastReply.ts } : {}) };
   }
 
-  async function threadDetection(container: string, thread: string, triggerTs: string) {
-    const [root, replies] = await Promise.all([
-      findMessage(cache, container, thread),
-      cache.readMessages(container, { surface: SURFACE, sub: thread, limit: CONTEXT_DEFAULT_COUNT, noFallback: true }),
-    ]);
-    const detectContext = replies
-      .filter((m) => !m.self && !m.bot && m.ts !== triggerTs)
-      .map((m) => `${m.authorName ?? m.authorId ?? "someone"}: ${m.text}`)
-      .join("\n");
-    return {
-      ...(detectContext ? { detectContext } : {}),
-      ...(root?.self && root.text ? { detectOpener: root.text } : {}),
-    };
+  async function threadDetection(
+    container: string,
+    thread: string,
+    followed: { opener?: string; lastReplyTs?: string },
+    triggerTs: string,
+  ) {
+    const unanswered = await cache.readMessages(container, {
+      surface: SURFACE,
+      sub: thread,
+      ...(followed.lastReplyTs ? { after: followed.lastReplyTs } : {}),
+      noFallback: true,
+    });
+    return detectInputs(
+      unanswered.map((m) => ({
+        name: m.authorName ?? m.authorId ?? "",
+        text: m.text,
+        ...(m.bot ? { isBot: true } : {}),
+        ...(m.self ? { isSelf: true } : {}),
+        ...(m.ts === triggerTs ? { isTrigger: true } : {}),
+      })),
+      followed.opener,
+    );
   }
 
   async function handle(timestamp: string | undefined, signature: string | undefined, rawBody: string) {
@@ -125,8 +132,9 @@ export function createPartnerChatInbound(deps: {
     const ts = own?.ts ?? partnerChatTs(message.created_at, message.id);
     const startsTurn = event.type === "message.created" && !bot;
     const direct = chat.kind === "dm" || message.mentions_agent;
-    const following = startsTurn && !direct && thread !== undefined && (await threadEngaged(container, thread));
-    const addressed = startsTurn && (direct || following);
+    const followed =
+      startsTurn && !direct && thread !== undefined ? await followedThread(container, thread) : undefined;
+    const addressed = startsTurn && (direct || followed !== undefined);
     await deps.app.ingestSurfaceEvents(
       [
         {
@@ -185,10 +193,10 @@ export function createPartnerChatInbound(deps: {
           }
         : {}),
       text: message.body,
-      ...(following && thread
+      ...(followed && thread
         ? {
             origin: { kind: "ambient" as const, entryTs: ts, live: true },
-            ...(await threadDetection(container, thread, ts)),
+            ...(await threadDetection(container, thread, followed, ts)),
           }
         : { origin: { kind: "human" as const, messageTs: ts } }),
       async: true,
