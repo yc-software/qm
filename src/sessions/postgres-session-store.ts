@@ -287,23 +287,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return rows.map(rowToSession);
     },
 
-    async treeRoots(sessionIds) {
-      const rows = await q(
-        `WITH RECURSIVE up(leaf_id, id, parent_id, path) AS (
-           SELECT id, id, parent_session_id, ARRAY[id] FROM sessions WHERE id = ANY($1::text[])
-           UNION ALL
-           SELECT u.leaf_id, p.id, p.parent_session_id, u.path || p.id FROM up u
-             CROSS JOIN LATERAL (SELECT id, parent_session_id FROM sessions WHERE id = u.parent_id OFFSET 0) p
-            WHERE NOT p.id = ANY(u.path)
-         )
-         SELECT DISTINCT ON (u.leaf_id) u.leaf_id, u.parent_id = ANY(u.path) AS cycled, s.*
-           FROM up u JOIN sessions s ON s.id = u.id ORDER BY u.leaf_id, cardinality(u.path) DESC`,
-        [[...sessionIds]],
-      );
-      if (rows.some((row) => row.cycled)) throw new Error("session parent cycle");
-      return new Map(rows.map((row) => [row.leaf_id as string, rowToSession(row)]));
-    },
-
     async addPin(sessionId, pin: NewSessionPin, maxPins?: number): Promise<SessionPin | null> {
       const rec: SessionPin = { ...pin, id: randomUUID(), sessionId, createdAt: now() };
       return withPgTransaction(await pool(), async (client) => {

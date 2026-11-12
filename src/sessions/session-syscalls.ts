@@ -458,16 +458,23 @@ export function assertAudienceCompatible(
 export const AMBIENT_REACH_REFUSAL =
   "that helper belongs to another unprompted wake; only the wake that opened it can reach it.";
 
-export async function sessionTreeRoots(
-  sessions: Pick<SessionStore, "treeRoots">,
-  list: readonly Session[],
-): Promise<Session[]> {
-  const roots = await sessions.treeRoots(list.map((session) => session.id));
-  return list.map((session) => roots.get(session.id) ?? session);
+async function sessionAncestors(sessions: Pick<SessionStore, "get">, session: Session): Promise<Session[]> {
+  const ancestors: Session[] = [];
+  let current = session;
+  const seen = new Set<string>();
+  while (current.parentSessionId) {
+    if (seen.has(current.id)) throw new Error("session parent cycle");
+    seen.add(current.id);
+    const parent = await sessions.get(current.parentSessionId);
+    if (!parent) break;
+    ancestors.push(parent);
+    current = parent;
+  }
+  return ancestors;
 }
 
-export async function sessionTreeRoot(sessions: Pick<SessionStore, "treeRoots">, session: Session): Promise<Session> {
-  return (await sessionTreeRoots(sessions, [session]))[0]!;
+export async function sessionTreeRoot(sessions: Pick<SessionStore, "get">, session: Session): Promise<Session> {
+  return (await sessionAncestors(sessions, session)).at(-1) ?? session;
 }
 
 export async function stoppableRoot(
