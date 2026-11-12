@@ -2,6 +2,7 @@ import { swallowAs } from "../util/errors.ts";
 import type { PendingApprovalRecord } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
+import type { SessionStore } from "../sessions/session-store.ts";
 import { principalDestination } from "../reach/reach.ts";
 import { claimThenBind } from "../tenants/claim.ts";
 import { approvalDeliveryRecipient } from "./approval-cards.ts";
@@ -12,10 +13,14 @@ export function approvalDeliveryKey(id: string, record: Pick<PendingApprovalReco
 
 export function createApprovalStore(
   backing: DurableMap<PendingApprovalRecord>,
+  sessions: Pick<SessionStore, "get">,
   deliveries: Pick<DeliveryStore, "enqueue">,
 ) {
   async function deliver(id: string, record: PendingApprovalRecord): Promise<void> {
-    if (record.request?.surface !== "slack") return;
+    if (!record.request) return;
+    const blocksSlackConversation =
+      record.request.surface === "slack" || (await sessions.get(record.sessionId))?.surface === "slack";
+    if (!blocksSlackConversation) return;
     const actorId = record.request.actor.externalId;
     const recipient = approvalDeliveryRecipient(record.request);
     if (!actorId || !recipient) return;
