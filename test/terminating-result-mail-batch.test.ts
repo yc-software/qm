@@ -426,3 +426,45 @@ test("a real approval pause then approved resume delivers the held answer once a
     deployApproved = false;
   }
 });
+
+test("persisted mail reconciliation fails before model execution until acknowledgement recovers", async () => {
+  const r = inbox({ crashOnAck: true });
+  slowRun = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    return { stdout: "built", stderr: "", code: 0 };
+  };
+  const first = await runTurn(
+    [],
+    [() => slowBatch(), () => anthropicSse([{ type: "text", text: "Built." }], "end_turn")],
+    r.syscalls,
+  );
+  assert.deepEqual(r.unread(), ["helper-answer"]);
+  const acknowledge = r.syscalls.acknowledge;
+  r.syscalls.acknowledge = async () => {
+    throw new Error("ack store unavailable");
+  };
+  let modelCalls = 0;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await assert.rejects(
+      () =>
+        runTurn(
+          forModelContext(first.emitted),
+          [
+            () => {
+              modelCalls++;
+              return anthropicSse([{ type: "text", text: "Must not run." }], "end_turn");
+            },
+          ],
+          r.syscalls,
+        ),
+      /ack store unavailable/,
+    );
+    assert.equal(modelCalls, 0);
+    assert.deepEqual(r.unread(), ["helper-answer"]);
+  }
+  r.syscalls.acknowledge = acknowledge;
+  const { next, replayedSightings } = await followUp(r, first.emitted);
+  assert.equal(replayedSightings, 1);
+  assert.equal(sightings(next.bodies.at(-1)), 1);
+  assert.deepEqual(r.unread(), []);
+});

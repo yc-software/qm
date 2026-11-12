@@ -173,9 +173,9 @@ export async function acknowledgePersistedMail(
     }),
   );
   if (!persisted.size || !tools?.sessionSyscalls?.acknowledge) return;
-  const unread = (await tools.sessionSyscalls.receive?.().catch(() => [])) ?? [];
+  const unread = (await tools.sessionSyscalls.receive?.()) ?? [];
   const seen = unread.filter((message) => persisted.has(message.id)).map((message) => message.id);
-  if (seen.length) await tools.sessionSyscalls.acknowledge(seen).catch(() => undefined);
+  if (seen.length) await tools.sessionSyscalls.acknowledge(seen);
 }
 
 export async function acknowledgeShownMail(
