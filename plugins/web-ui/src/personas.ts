@@ -379,8 +379,12 @@ function granteeLabel(scopeId: string): string {
   if (kind === "org") return `Everyone at ${orgName()}`;
   if (kind === "team") return `Team ${ref}`;
   if (kind === "channel") return `#${ref}`;
+  if (kind === "group") return `Group ${ref}`;
   return scopeId;
 }
+
+const inRoom = (grant: Pick<PersonaGrant, "scopeId">): boolean =>
+  grant.scopeId.startsWith("channel:") || grant.scopeId.startsWith("group:");
 
 const isMe = (grant: Pick<PersonaGrant, "scopeId">): boolean => grant.scopeId === `personal:${appState.me?.user ?? ""}`;
 
@@ -549,7 +553,7 @@ function credentialsSection(persona: PersonaDetail, reload: (flash: string) => v
 
 function channelsSection(persona: PersonaDetail): TemplateResult {
   const owner = canSharePersona(persona.role);
-  const channels = persona.access.filter((grant) => grant.scopeId.startsWith("channel:"));
+  const channels = persona.access.filter(inRoom);
   const flagNotes = new Set(channels.filter((grant) => !grant.personasEnabled).map(flagOffNote));
   const flagNote = [...flagNotes].map((note) => html`<p class="permission-note">${note}</p>`);
   const list = channels.length
@@ -580,13 +584,13 @@ function channelsSection(persona: PersonaDetail): TemplateResult {
     "Slack channels",
     owner ? rowAction("Add channel", Plus, () => void openGranteePicker(persona.id, "channels")) : nothing,
     html`${list}${flagNote}${granteePickerTpl(persona, "channels")}`,
-    `People in these channels can ask QM to use ${persona.name} in a thread there; they can't edit ${persona.name}. Pin it in a channel to make every conversation there ${persona.name}, posting under its name and icon.`,
+    `People in these channels and groups can ask QM to use ${persona.name} in a thread there; they can't edit ${persona.name}. Pin it in one to make every conversation there ${persona.name}, posting under its name and icon.`,
   );
 }
 
 function accessSection(persona: PersonaDetail): TemplateResult {
   const owner = canSharePersona(persona.role);
-  const people = persona.access.filter((grant) => !grant.scopeId.startsWith("channel:"));
+  const people = persona.access.filter((grant) => !inRoom(grant));
   const owners = persona.access.filter((grant) => grant.role === "owner");
   return sectionTpl(
     "Who has access",

@@ -3,7 +3,7 @@ import { validProjectIcon } from "../projects/project-store.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
 import type { TeamStore } from "../teams/teams.ts";
 import type { Keychain } from "../credentials/keychain.ts";
-import { parseScopeId, scopeId, type ScopeId, type Session } from "../types.ts";
+import { isSharedScope, parseScopeId, scopeId, type ScopeId, type Session } from "../types.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { PERSONA_ROLES, activeHolder, atLeast, type PersonaRole } from "./persona-schema.ts";
 import {
@@ -70,7 +70,7 @@ export interface PersonaService {
   ): Promise<PersonaForTurn | string | null>;
 }
 
-const GRANTEE_KINDS = new Set(["personal", "team", "org", "channel"]);
+const GRANTEE_KINDS = new Set(["personal", "team", "org", "channel", "group"]);
 function fieldsFrom(input: unknown, requireName: boolean): PersonaFields | string {
   if (!input || typeof input !== "object") return "expected an object";
   const body = input as Record<string, unknown>;
@@ -108,7 +108,7 @@ export function createPersonaService(deps: {
       ...personIds(principalId).map((id) => scopeId("personal", id)),
       deps.orgScope,
       ...teams.map((team) => scopeId("team", team.id)),
-      ...(contextScope && parseScopeId(contextScope).kind === "channel" ? [contextScope] : []),
+      ...(isSharedScope(contextScope) ? [contextScope!] : []),
     ];
   }
 
@@ -214,15 +214,18 @@ export function createPersonaService(deps: {
           const target = typeof e.scopeId === "string" ? e.scopeId.trim() : "";
           const kind = parseScopeId(target).kind;
           if (!kind || !GRANTEE_KINDS.has(kind) || !parseScopeId(target).ref)
-            return { status: "invalid", message: `scopeId must be personal:, team:, org: or channel: (got ${target})` };
+            return {
+              status: "invalid",
+              message: `scopeId must be personal:, team:, org:, channel: or group: (got ${target})`,
+            };
           if (!PERSONA_ROLES.includes(e.role as PersonaRole))
             return { status: "invalid", message: "role must be owner, write or read" };
-          if (kind === "channel" && e.role !== "read")
-            return { status: "invalid", message: "a Slack channel can only be given read access" };
+          if (isSharedScope(target) && e.role !== "read")
+            return { status: "invalid", message: "a channel or group can only be given read access" };
           if (e.pinned !== undefined && typeof e.pinned !== "boolean")
             return { status: "invalid", message: "pinned must be a boolean" };
-          if (e.pinned && kind !== "channel")
-            return { status: "invalid", message: "only a Slack channel can be pinned" };
+          if (e.pinned && !isSharedScope(target))
+            return { status: "invalid", message: "only a channel or group can be pinned" };
           entries.push({ scopeId: target, role: e.role as PersonaRole, ...(e.pinned ? { pinned: true } : {}) });
         }
         if (new Set(entries.map((entry) => entry.scopeId)).size !== entries.length)
@@ -278,9 +281,11 @@ export function createPersonaService(deps: {
     },
     async forTurn(personaId, actorId, contextScope) {
       let pinned = false;
-      if (!personaId && parseScopeId(contextScope).kind === "channel" && (await enabledFor(actorId))) {
+      if (!personaId && isSharedScope(contextScope) && (await enabledFor(actorId))) {
         personaId = (await store.pinnedIn(contextScope)) ?? undefined;
         pinned = Boolean(personaId);
+        if (!personaId)
+          return "No persona is pinned in this conversation's channel or group, so you speak in your default voice. A persona's owner can share it here and pin it (personas in /v1/apis), so every conversation here takes its name, icon and instructions; one conversation can also pick a persona of its own.";
       }
       if (!personaId) return null;
       if (!(await enabledFor(actorId)))
@@ -302,7 +307,7 @@ export function personaPrompt({ persona, scope, pinned }: PersonaForTurn): strin
   ];
   if (pinned)
     lines.push(
-      `This channel pinned ${persona.name}. An owner can unpin it on the persona page; one conversation can pick another persona.`,
+      `This channel or group pinned ${persona.name}. An owner can unpin it on the persona page; one conversation can pick another persona.`,
     );
   if (persona.description.trim()) lines.push(`Purpose: ${persona.description.trim()}`);
   if (persona.instructions.trim()) lines.push("", persona.instructions.trim());
