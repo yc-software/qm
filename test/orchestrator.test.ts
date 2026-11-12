@@ -3453,6 +3453,10 @@ test("Auto asks for input approval on suspicious data, skips re-screening on app
     }),
   );
   assert.equal(secondFlagged.status, "ok", "a session grant covers later flags in the same session");
+  const unread = await grantApp.app.turn(
+    dm("x".repeat(MAX_DOCUMENT_TEXT_CHARS + 1), { surface: "monitor", origin: { kind: "automation" } }),
+  );
+  assert.equal(unread.status, "pending_approval", "a session grant does not cover input the screen never read");
   assert.ok(
     (await grantApp.auditLog.events(tenant)).some((event) => event.action === "security_posture.flag_allowed_by_grant"),
   );
@@ -3814,20 +3818,39 @@ test("Auto treats a fresh authenticated ambient speaker as the initiating human"
   );
 });
 
-test("Auto fails open on input too long to screen, flagging it unscreened to the model", async () => {
+test("Auto holds input too long to screen until a person allows it, then runs it marked unscreened, and withholds an attachment too long to screen", async () => {
   const built = freshApp();
   const padded = `please note ${"x".repeat(MAX_DOCUMENT_TEXT_CHARS)} thanks`;
+  const request = dm(padded, { surface: "monitor", origin: { kind: "automation" } });
 
-  const result = await built.app.turn(dm(padded, { surface: "monitor", origin: { kind: "automation" } }));
-  assert.equal(result.status, "ok");
-  const oversize = (await built.auditLog.events(tenant)).find(
-    (event) => event.action === "security_posture.input_failed_open",
+  const held = await built.app.turn(request);
+  assert.equal(held.status, "pending_approval");
+  assert.match(held.pendingApprovals?.[0]?.reason ?? "", /too long for the security screen to read/);
+  assert.deepEqual(held.pendingApprovals?.[0]?.grantModes, { session: false, always: false });
+  assert.equal(
+    built.modelCalls.some((call) => call.model === "mock"),
+    false,
   );
-  assert.match(oversize?.detail ?? "", /"cause":"oversize-input"/);
-  const main = [...(await built.sessions.listLlmRequests(result.sessionId!))]
-    .reverse()
-    .find((rec) => rec.model !== "mock-security");
-  assert.match(JSON.stringify(main?.promptEnvelope), /NOT security-screened/);
+  const approval = { requestId: held.pendingApprovals![0]!.requestId, approved: true };
+  const allowed = await built.app.turn({ ...request, approval });
+  assert.equal(allowed.status, "ok");
+  const replay = (await built.sessions.listLlmRequests(allowed.sessionId!)).findLast((rec) => rec.model === "mock");
+  assert.match(JSON.stringify(replay?.promptEnvelope), /NOT security-screened/);
+
+  const blob = await built.blobTransfer.put(Buffer.from(padded));
+  const attached = await built.app.turn(
+    dm("summarize this", {
+      conversation: { kind: "dm", threadRef: "dm:U1:t2" },
+      attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: blob.sizeBytes, blobId: blob.blobId }],
+    }),
+  );
+  const main = (await built.sessions.listLlmRequests(attached.sessionId!)).findLast((rec) => rec.model === "mock");
+  assert.match(
+    JSON.stringify(main?.promptEnvelope),
+    /notes\.txt \(too long for the security screen to read, over \d+ characters\) — withheld by the external-data security screen/,
+  );
+  const withheld = (await built.auditLog.events(tenant)).find((event) => event.resource === "inbound_file");
+  assert.match(withheld?.detail ?? "", /"source":\["notes\.txt"\]/);
 });
 
 test("an Auto-downgraded turn is quarantined from later full-authority model history", async () => {
