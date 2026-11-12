@@ -1,6 +1,7 @@
 import { REQUEST_ID_HEADERS, reportBackendError } from "../../plugins/chassis/src/error-reporting.ts";
 import { errChain as errMessage, errDetail, failureCode } from "../../plugins/chassis/src/errors.ts";
 import { WorkAdmissionClosed } from "./admitted-work.ts";
+import { isProviderDecision } from "../core/turn-error.ts";
 
 export { errChain as errMessage, failureCode, swallow, swallowAs } from "../../plugins/chassis/src/errors.ts";
 
@@ -18,12 +19,12 @@ export function errorAlreadyReported(e: unknown): boolean {
   return typeof e === "object" && e !== null && reportedErrors.has(e);
 }
 
-function isExpectedInterruption(e: unknown): boolean {
-  return (e instanceof Error && e.name === "AbortError") || e instanceof WorkAdmissionClosed;
+function isExpectedFailure(e: unknown): boolean {
+  return (e instanceof Error && e.name === "AbortError") || e instanceof WorkAdmissionClosed || isProviderDecision(e);
 }
 
 export function reportFailure(context: string, e: unknown, detail?: string): void {
-  const reportable = !isExpectedInterruption(e) && !errorAlreadyReported(e);
+  const reportable = !isExpectedFailure(e) && !errorAlreadyReported(e);
   if (reportable) markErrorReported(e);
   const eventId = reportable
     ? reportBackendError(asError(e), failureCode(context), detail ? { detail } : undefined)

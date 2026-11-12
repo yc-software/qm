@@ -10,7 +10,7 @@ import type { AgentTurnInput, CompactInput } from "../src/agent/agent.ts";
 import type { Item, NewItem } from "../src/sessions/items.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
 import { configurePublicFetch } from "../src/util/network.ts";
-import { ProviderTurnError } from "../src/core/turn-error.ts";
+import { isProviderDecision, ProviderTurnError } from "../src/core/turn-error.ts";
 import { runtimeConfigBody } from "../src/api/runtime-config.ts";
 import { testConfigStore } from "./support/test-database.ts";
 import { orgScope } from "../src/config.ts";
@@ -299,6 +299,33 @@ test("a fallback that fails keeps the original refusal and says what happened to
         calls.map((call) => call.host),
         ["api.anthropic.com", "gateway.example"],
       );
+    },
+  );
+});
+
+test("a fallback that fails for its own reason reports that reason, not the original refusal", async () => {
+  const agent = createAgent({
+    routes: createModelRoutes({
+      apiKey: "sk-anthropic",
+      modelGateway: GATEWAY,
+      resolveFallbackRuntime: () => ({ modelId: "gpt-6-astra" }),
+    }),
+  });
+  await withFetch(
+    (url) =>
+      url.includes("gateway.example")
+        ? errorReply(400, "invalid_request_error", "tools.0: unsupported schema")
+        : anthropicReply("", "refusal"),
+    async () => {
+      const error = await turn(agent, "claude-sonnet-5").then(
+        () => assert.fail("the refused turn should fail"),
+        (e: unknown) => e,
+      );
+      assert.ok(error instanceof ProviderTurnError);
+      assert.equal(error.code, "bad_request");
+      assert.equal(isProviderDecision(error), false);
+      assert.match(error.message, /fallback .*shared model gateway.*unsupported schema/s);
+      assert.match(error.raw, /unsupported schema/);
     },
   );
 });

@@ -1,11 +1,14 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { ProviderTurnError, TRANSIENT_ERROR_CODES, type ProviderErrorCode } from "../core/turn-error.ts";
+import { modelDisplayName } from "./pi-models.ts";
 
 const AUTH_TYPES = new Set(["authentication_error", "permission_error", "invalid_api_key"]);
 const TRANSIENT_TYPES = new Set(["overloaded_error", "api_error", "timeout_error"]);
 const CONTEXT_CODES = new Set(["context_length_exceeded"]);
-const QUOTA_CODES = new Set(["insufficient_quota"]);
 const NOT_FOUND_CODES = new Set(["model_not_found"]);
+const POLICY_CODES = new Set(["cyber_policy"]);
+const ACCOUNT_CODES = new Set(["insufficient_credits", "insufficient_quota"]);
+const ANTHROPIC_LOW_CREDIT = "credit balance is too low";
 const RETRYABLE_CODES = new Set<ProviderErrorCode>([...TRANSIENT_ERROR_CODES, "unknown"]);
 
 export interface ContextUsage {
@@ -20,15 +23,23 @@ function nearWindow(usage: ContextUsage | undefined): boolean {
   return !!contextWindow && !!lastInputTokens && lastInputTokens >= contextWindow * NEAR_WINDOW_RATIO;
 }
 
-type ProviderFailure = Pick<AssistantMessage, "providerError" | "rawStopReason" | "errorMessage">;
+type ProviderFailure = Pick<AssistantMessage, "providerError" | "rawStopReason" | "errorMessage"> &
+  Partial<Pick<AssistantMessage, "model">>;
 
 function providerErrorCode(failed: ProviderFailure, usage?: ContextUsage): ProviderErrorCode {
-  if (failed.rawStopReason === "refusal") return "refusal";
-  const { status, type, code } = failed.providerError ?? {};
+  const { status, type, code, body } = failed.providerError ?? {};
+  if (failed.rawStopReason === "refusal" || (code && POLICY_CODES.has(code))) return "refusal";
+  if (
+    type === "billing_error" ||
+    status === 402 ||
+    (code && ACCOUNT_CODES.has(code)) ||
+    (type === "invalid_request_error" && providerBodyMessage(body)?.includes(ANTHROPIC_LOW_CREDIT))
+  )
+    return "account";
   if (type === "model_unavailable") return "model_unavailable";
   if (type === "request_too_large" || status === 413) return "context_too_long";
   if (type === "invalid_request_error" && status === 400 && nearWindow(usage)) return "context_too_long";
-  if (type === "budget_exceeded" || (code && QUOTA_CODES.has(code))) return "model_budget";
+  if (type === "budget_exceeded") return "model_budget";
   if (code && CONTEXT_CODES.has(code)) return "context_too_long";
   if ((type && AUTH_TYPES.has(type)) || status === 401 || status === 403) return "auth";
   if (type === "rate_limit_error" || status === 429) return "rate_limit";
@@ -57,5 +68,6 @@ export function providerTurnError(failed: ProviderFailure, usage?: ContextUsage)
     : raw || "The agent stopped with an error";
   const retryable =
     RETRYABLE_CODES.has(code) && !(code === "unknown" && (status !== undefined || failed.rawStopReason));
-  return new ProviderTurnError(message, { code, retryable, status, raw });
+  const modelName = failed.model ? modelDisplayName(failed.model) : undefined;
+  return new ProviderTurnError(message, { code, retryable, status, raw, modelName });
 }

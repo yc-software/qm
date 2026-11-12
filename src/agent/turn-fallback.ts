@@ -1,8 +1,9 @@
 import { documentStub, type DocumentInput } from "../core/documents.ts";
-import { ProviderTurnError } from "../core/turn-error.ts";
+import { isProviderDecision, ProviderTurnError } from "../core/turn-error.ts";
+import { errMessage } from "../util/errors.ts";
 import { routeLabel, type ModelRoute } from "../model/model-route.ts";
 
-export const FALLBACK_CODES = new Set(["refusal", "model_unavailable", "model_budget", "auth"]);
+export const FALLBACK_CODES = new Set(["refusal", "model_unavailable", "model_budget", "auth", "account"]);
 export const DOCUMENT_REJECTION_CODES = new Set(["context_too_long", "bad_request"]);
 
 export function documentsDroppedNote(documents: readonly DocumentInput[]): string {
@@ -14,13 +15,19 @@ export function documentsDroppedNote(documents: readonly DocumentInput[]): strin
   );
 }
 
-export function fallbackFailed(failure: ProviderTurnError, fallback: ModelRoute, reason: string): ProviderTurnError {
-  return new ProviderTurnError(`${failure.message} — the fallback ${routeLabel(fallback)} also failed: ${reason}`, {
-    code: failure.code,
-    retryable: false,
-    status: failure.status,
-    raw: failure.raw,
-  });
+export function fallbackFailed(failure: ProviderTurnError, fallback: ModelRoute, error: unknown): ProviderTurnError {
+  const own = error instanceof ProviderTurnError ? error.code : "unknown";
+  const code = isProviderDecision(error) ? failure.code : own;
+  return new ProviderTurnError(
+    `${failure.message} — the fallback ${routeLabel(fallback)} also failed: ${errMessage(error)}`,
+    {
+      code,
+      retryable: false,
+      status: failure.status,
+      raw: `${failure.raw}\n${error instanceof ProviderTurnError ? error.raw : errMessage(error)}`,
+      modelName: failure.modelName,
+    },
+  );
 }
 
 export function routeFailed(failure: ProviderTurnError, route: ModelRoute): ProviderTurnError {
@@ -29,6 +36,7 @@ export function routeFailed(failure: ProviderTurnError, route: ModelRoute): Prov
     retryable: failure.retryable,
     status: failure.status,
     raw: failure.raw,
+    modelName: failure.modelName,
   });
 }
 

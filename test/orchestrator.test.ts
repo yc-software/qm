@@ -4468,6 +4468,20 @@ test("an exhausted model budget refuses the turn with a plain explanation instea
   assert.match(logged!.message, /ExceededBudget: Team=team-a over 1d budget/, "operators keep the gateway's detail");
 });
 
+test("a provider policy refusal fails the turn with a plain notice and logs the provider's words under its own code", async () => {
+  const built = freshApp();
+  const reason = await failedTurnError(built, dm("!policy-refusal"));
+  assert.match(
+    reason,
+    /^Claude Opus 4\.8 declined this request under the provider's usage policy \("This request triggered restrictions on violative cyber content\."\)/,
+  );
+  const logged = (await built.errors.list(tenant)).filter((e) => e.category === "turn");
+  assert.deepEqual(
+    logged.map((e) => [e.code, e.message]),
+    [["refusal", "This request triggered restrictions on violative cyber content."]],
+  );
+});
+
 test("a RETRYABLE error that exhausts its budget leaves one durable turn_failure record — no dead air", async (t) => {
   const { app, runs, errors } = freshApp();
   const t1 = await app.turn(dm("hello"));
