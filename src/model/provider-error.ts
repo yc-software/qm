@@ -6,6 +6,7 @@ const TRANSIENT_TYPES = new Set(["overloaded_error", "api_error", "timeout_error
 const CONTEXT_CODES = new Set(["context_length_exceeded"]);
 const QUOTA_CODES = new Set(["insufficient_quota"]);
 const NOT_FOUND_CODES = new Set(["model_not_found"]);
+const REFUSAL_STOP_REASONS = new Set(["refusal", "content_filter", "content_filtered", "guardrail_intervened"]);
 const RETRYABLE_CODES = new Set<ProviderErrorCode>([...TRANSIENT_ERROR_CODES, "unknown"]);
 
 export interface ContextUsage {
@@ -23,7 +24,7 @@ function nearWindow(usage: ContextUsage | undefined): boolean {
 type ProviderFailure = Pick<AssistantMessage, "providerError" | "rawStopReason" | "errorMessage">;
 
 function providerErrorCode(failed: ProviderFailure, usage?: ContextUsage): ProviderErrorCode {
-  if (failed.rawStopReason === "refusal") return "refusal";
+  if (failed.rawStopReason && REFUSAL_STOP_REASONS.has(failed.rawStopReason)) return "refusal";
   const { status, type, code } = failed.providerError ?? {};
   if (type === "model_unavailable") return "model_unavailable";
   if (type === "request_too_large" || status === 413) return "context_too_long";
