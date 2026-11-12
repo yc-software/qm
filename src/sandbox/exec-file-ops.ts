@@ -22,6 +22,9 @@ import { trimTrailingSlashes } from "../util/text.ts";
 
 const posixDirname = (p: string): string => p.slice(0, Math.max(0, p.lastIndexOf("/"))) || "/";
 
+export const tempPathBeside = (absPath: string): string =>
+  posix.join(posix.dirname(absPath), `.qm-${randomBytes(8).toString("hex")}`);
+
 const BLOB_TRANSFER_TTL_MS = 2 * 60_000;
 
 function workspaceRel(rel: string): string {
@@ -311,7 +314,7 @@ function createExecBlobStaging(deps: ExecBlobStagingDeps): ExecBlobStaging {
     async stageInAbs(handle, abs, blobId, callTimeoutSec): Promise<void> {
       const effectiveTimeoutSec = callTimeoutSec ?? timeoutSec;
       const token = await mintToken({ dir: "read", id: blobId }, effectiveTimeoutSec);
-      const tmp = `${abs}.${randomBytes(8).toString("hex")}.part`;
+      const tmp = `${tempPathBeside(abs)}.part`;
       const script =
         proxyPrefix(handle) +
         `mkdir -p ${shq(posixDirname(abs))} && ` +
