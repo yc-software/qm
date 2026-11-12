@@ -3,6 +3,7 @@ import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { MODEL_BUDGET_TEXT } from "../src/core/turn-error.ts";
+import { MAX_DOCUMENT_TEXT_CHARS } from "../src/core/documents.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -2827,22 +2828,21 @@ test("a command-approval card that fails terminally settles the approval as decl
   assert.notEqual(follow.status, "pending_approval");
 });
 
-test("a pending command approval blocks unrelated follow-up input in the same thread", async () => {
+test("a pending command approval doesn't hold up follow-up input in the same thread", async () => {
   const { app } = await withCommandRules(freshApp());
   const first = await app.turn(dm("!run git push --force origin main"));
   assert.equal(first.status, "pending_approval");
   const pending = first.pendingApprovals![0]!;
 
-  const blocked = await app.turn(dm("actually, what were we doing?"));
-  assert.equal(blocked.status, "pending_approval");
-  assert.equal(blocked.sessionId, first.sessionId);
-  assert.equal(blocked.pendingApprovals?.[0]?.requestId, pending.requestId);
+  const followUp = await app.turn(dm("actually, what were we doing?"));
+  assert.equal(followUp.status, "ok");
+  assert.equal(followUp.sessionId, first.sessionId);
 
   const found = await app.getSession(first.sessionId!);
   assert.equal(
     found!.items.some((e) => isUserItem(e) && (e.text ?? "").includes("what were we doing")),
-    false,
-    "the blocked follow-up is not appended as a forked user turn",
+    true,
+    "the follow-up runs in the same conversation",
   );
 
   const approved = await app.turn(
@@ -2993,65 +2993,23 @@ test("only the requester can approve or deny a collected approval; a bystander i
   assert.equal(approved.status, "ok", "the bystander's clicks left the requester's approval intact");
 });
 
-test("a pending approval stops blocking its thread once the requester is deactivated", async () => {
-  const { app, identity } = await withCommandRules(freshApp());
-  const bystander = { externalId: "U2" };
-  const first = await app.turn(channel("!run git push --force origin main"));
-  assert.equal(first.status, "pending_approval");
-
-  const blocked = await app.turn(
-    channel("what's the hold-up?", {
-      actor: bystander,
-      conversation: { kind: "channel", threadRef: "ch:C1:t1", channelRef: "C1", audience: [bystander] },
-    }),
-  );
-  assert.equal(blocked.status, "pending_approval");
-
-  await identity.deactivate("U1");
-  const after = await app.turn(
-    channel("hello again?", {
-      actor: bystander,
-      conversation: { kind: "channel", threadRef: "ch:C1:t1", channelRef: "C1", audience: [bystander] },
-    }),
-  );
-  assert.equal(after.status, "ok", "a departed requester's approval no longer wedges the conversation");
-
-  await identity.reactivate("U1");
-  const reactivated = await app.turn(
-    channel("still with me?", {
-      actor: bystander,
-      conversation: { kind: "channel", threadRef: "ch:C1:t1", channelRef: "C1", audience: [bystander] },
-    }),
-  );
-  assert.equal(reactivated.status, "pending_approval", "the returned requester's approval seals the thread again");
-  assert.equal(reactivated.pendingApprovals, undefined, "and still reveals nothing to the bystander");
-
-  const resumed = await app.turn(
-    channel("!run git push --force origin main", {
-      approval: { requestId: first.pendingApprovals![0]!.requestId, approved: true },
-    }),
-  );
-  assert.equal(resumed.status, "ok", "the approval waited for its requester instead of being destroyed");
-});
-
-test("a blocked thread hides the requester's pending command from everyone else", async () => {
+test("a pending command in a channel thread doesn't hold up anyone's follow-ups or leak to them", async () => {
   const { app } = await withCommandRules(freshApp());
   const first = await app.turn(channel("!run git push --force origin main"));
   assert.equal(first.status, "pending_approval");
   const pending = first.pendingApprovals![0]!;
 
   const overheard = await app.turn(channel("what's the hold-up?", { actor: { externalId: "U2" } }));
-  assert.equal(overheard.status, "pending_approval");
+  assert.equal(overheard.status, "ok");
   assert.equal(overheard.pendingApprovals, undefined, "requestIds and commands never reach a non-requester");
-  assert.doesNotMatch(overheard.reason ?? "", /git push/);
 
   const nudge = await app.turn(channel("any progress?"));
-  assert.equal(nudge.status, "pending_approval");
-  assert.equal(
-    nudge.pendingApprovals?.[0]?.requestId,
-    pending.requestId,
-    "the requester still sees their own pending approval re-presented",
+  assert.equal(nudge.status, "ok");
+
+  const approved = await app.turn(
+    channel("!run git push --force origin main", { approval: { requestId: pending.requestId, approved: true } }),
   );
+  assert.equal(approved.status, "ok", "the card is still approvable after the follow-ups");
 });
 
 test("a session approval covers the whole rule: a different command matching it runs without re-prompting", async () => {
@@ -3495,6 +3453,10 @@ test("Auto asks for input approval on suspicious data, skips re-screening on app
     }),
   );
   assert.equal(secondFlagged.status, "ok", "a session grant covers later flags in the same session");
+  const unread = await grantApp.app.turn(
+    dm("x".repeat(MAX_DOCUMENT_TEXT_CHARS + 1), { surface: "monitor", origin: { kind: "automation" } }),
+  );
+  assert.equal(unread.status, "pending_approval", "a session grant does not cover input the screen never read");
   assert.ok(
     (await grantApp.auditLog.events(tenant)).some((event) => event.action === "security_posture.flag_allowed_by_grant"),
   );
@@ -3524,15 +3486,14 @@ test("Concurrent flagged inputs get distinct approval requests that release inde
 
   const bounced = await built.app.turn(requestB);
   assert.equal(bounced.status, "pending_approval");
-  assert.equal(bounced.pendingApprovals![0]!.requestId, idA, "the gate re-presents A's card, records nothing for B");
+  const idB = bounced.pendingApprovals![0]!.requestId;
+  assert.notEqual(idB, idA, "B's flag gets its own request id instead of overwriting A's record");
 
   const crossed = await built.app.turn({
     ...requestB,
     approval: { requestId: idA, approved: true },
   });
   assert.equal(crossed.status, "pending_approval", "A's approval cannot release B's content");
-  const idB = crossed.pendingApprovals![0]!.requestId;
-  assert.notEqual(idB, idA, "B's flag gets its own request id instead of overwriting A's record");
 
   const crossedAgain = await built.app.turn({
     ...requestB,
@@ -3857,20 +3818,39 @@ test("Auto treats a fresh authenticated ambient speaker as the initiating human"
   );
 });
 
-test("Auto fails open when bounded screening omits oversize content, flagging it unscreened to the model", async () => {
+test("Auto holds input too long to screen until a person allows it, then runs it marked unscreened, and withholds an attachment too long to screen", async () => {
   const built = freshApp();
-  const padded = `please note ${"x".repeat(9_000)} and also ${"y".repeat(9_000)} thanks`;
+  const padded = `please note ${"x".repeat(MAX_DOCUMENT_TEXT_CHARS)} thanks`;
+  const request = dm(padded, { surface: "monitor", origin: { kind: "automation" } });
 
-  const result = await built.app.turn(dm(padded, { surface: "monitor", origin: { kind: "automation" } }));
-  assert.equal(result.status, "ok");
-  const oversize = (await built.auditLog.events(tenant)).find(
-    (event) => event.action === "security_posture.input_failed_open",
+  const held = await built.app.turn(request);
+  assert.equal(held.status, "pending_approval");
+  assert.match(held.pendingApprovals?.[0]?.reason ?? "", /too long for the security screen to read/);
+  assert.deepEqual(held.pendingApprovals?.[0]?.grantModes, { session: false, always: false });
+  assert.equal(
+    built.modelCalls.some((call) => call.model === "mock"),
+    false,
   );
-  assert.match(oversize?.detail ?? "", /"cause":"oversize-input"/);
-  const main = [...(await built.sessions.listLlmRequests(result.sessionId!))]
-    .reverse()
-    .find((rec) => rec.model !== "mock-security");
-  assert.match(JSON.stringify(main?.promptEnvelope), /NOT security-screened/);
+  const approval = { requestId: held.pendingApprovals![0]!.requestId, approved: true };
+  const allowed = await built.app.turn({ ...request, approval });
+  assert.equal(allowed.status, "ok");
+  const replay = (await built.sessions.listLlmRequests(allowed.sessionId!)).findLast((rec) => rec.model === "mock");
+  assert.match(JSON.stringify(replay?.promptEnvelope), /NOT security-screened/);
+
+  const blob = await built.blobTransfer.put(Buffer.from(padded));
+  const attached = await built.app.turn(
+    dm("summarize this", {
+      conversation: { kind: "dm", threadRef: "dm:U1:t2" },
+      attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: blob.sizeBytes, blobId: blob.blobId }],
+    }),
+  );
+  const main = (await built.sessions.listLlmRequests(attached.sessionId!)).findLast((rec) => rec.model === "mock");
+  assert.match(
+    JSON.stringify(main?.promptEnvelope),
+    /notes\.txt \(too long for the security screen to read, over \d+ characters\) — withheld by the external-data security screen/,
+  );
+  const withheld = (await built.auditLog.events(tenant)).find((event) => event.resource === "inbound_file");
+  assert.match(withheld?.detail ?? "", /"source":\["notes\.txt"\]/);
 });
 
 test("an Auto-downgraded turn is quarantined from later full-authority model history", async () => {
@@ -4125,7 +4105,7 @@ test("collect-mode: skipped approval notes do not block later user input", async
   assert.match(next.reply ?? "", /You said: thanks/);
 });
 
-test("a turn that PAUSED on an approval blocks the thread even when it carried reply text", async () => {
+test("a turn that PAUSED on an approval keeps a blocking card even when it carried reply text", async () => {
   const { app } = freshApp();
   const res = await app.turn(dm("!paused-approval git push --force origin main"));
   assert.equal(res.status, "ok", "the preamble reply is still delivered");
@@ -4134,9 +4114,8 @@ test("a turn that PAUSED on an approval blocks the thread even when it carried r
   assert.ok(pending, "the pause surfaces its approval");
   assert.equal(pending!.blocksInput, true, "reply text must not launder the gate away");
 
-  const blocked = await app.turn(dm("unrelated follow-up"));
-  assert.equal(blocked.status, "pending_approval", "the thread is genuinely gated until the human decides");
-  assert.equal(blocked.pendingApprovals?.[0]?.requestId, pending!.requestId);
+  const followUp = await app.turn(dm("unrelated follow-up"));
+  assert.equal(followUp.status, "ok", "the card never holds up the next message");
 });
 
 test("execute and write provision a sandbox that is released after the turn", async () => {

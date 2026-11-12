@@ -201,6 +201,8 @@ export type ReachNowResult =
 
 export type VisibleCron = Cron & { scopeName?: string };
 
+export type CronEditor = Pick<CapabilityClaims, "actorId" | "runId" | "botActor">;
+
 export type ProjectView = Project & {
   scopeId: ScopeId;
   members: Array<{ principalId: string; displayName: string; avatarUrl?: string; viaChannel?: boolean }>;
@@ -382,6 +384,7 @@ export interface App {
   sessionChildren(principalId: string, sessionId: string): Promise<Session[] | null>;
   sessionRow(principalId: string, ref: { id?: string; threadRef?: string }): Promise<Session | null>;
   searchResources(
+    tenant: Tenant,
     principalId: string,
     query: string,
   ): Promise<{ hits: ResourceSearchHit[]; failed: string[]; limited: string[] }>;
@@ -497,15 +500,15 @@ export interface App {
   getCron(id: string): Promise<Cron | null>;
   listCrons(ids?: readonly string[]): Promise<Cron[]>;
   listCronsForViewer(principalId: string): Promise<{ owned: Cron[]; visible: VisibleCron[] }>;
-  updateCron(id: string, patch: CronPatch, trial?: CronScriptTrial): Promise<Cron | null>;
-  deleteCron(id: string): Promise<void>;
+  updateCron(id: string, patch: CronPatch, by: CronEditor, trial?: CronScriptTrial): Promise<Cron | null>;
+  deleteCron(id: string, by: CronEditor): Promise<void>;
   setCronEnabled(id: string, enabled: boolean): Promise<void>;
-  setCronFireNote(id: string, note: CronFireNote): Promise<"applied" | "superseded" | "missing">;
+  setCronFireNote(id: string, note: CronFireNote, by: CronEditor): Promise<"applied" | "superseded" | "missing">;
   listCronFires(id: string, opts?: { limit?: number }): Promise<{ runs: CronFireLogEntry[]; total: number }>;
   cronFiresByThreadRefs(threadRefs: readonly string[]): Promise<CronFireRecord[]>;
   latestCronFireForThread(id: string, threadRef: string): Promise<CronFireLogEntry | undefined>;
   setCronRuntime(id: string, runtime: Exclude<Cron["runtime"], undefined>): Promise<Cron | null>;
-  setCronDestination(id: string, destination: Destination | undefined): Promise<Cron | null>;
+  setCronDestination(id: string, destination: Destination | undefined, by: CronEditor): Promise<Cron | null>;
   createWebhook(input: CreateWebhookInput): Promise<Webhook>;
   getWebhook(id: string): Promise<Webhook | null>;
   listWebhookEvents(id: string, viewer: string): Promise<Array<WebhookEvent & { sessionId?: string }>>;
@@ -590,12 +593,20 @@ export interface App {
   redeploy(id: string, input: RedeployInput): Promise<Deployment>;
   listDeployments(): Promise<Deployment[]>;
   getDeployment(idOrName: string): Promise<Deployment | null>;
-  listDeploymentsForViewer(viewer: Pick<CapabilityClaims, "actorId" | "botActor">): Promise<ViewerDeployment[]>;
+  listDeploymentsForViewer(
+    tenant: Tenant,
+    viewer: Pick<CapabilityClaims, "actorId" | "botActor">,
+  ): Promise<ViewerDeployment[]>;
   effectiveDeploymentPermission(d: Deployment, principalId: string): Promise<Permission | null>;
   deploymentGitPermissionFor(
     idOrName: string,
     viewer: Pick<CapabilityClaims, "actorId" | "botActor">,
   ): Promise<"read" | "write" | null>;
+  deploymentGitPermissionsFor(
+    tenant: Tenant,
+    deployments: readonly Deployment[],
+    viewer: Pick<CapabilityClaims, "actorId" | "botActor">,
+  ): Promise<Array<"read" | "write" | null>>;
   listSkills(): Promise<Skill[]>;
   getSkill(id: string): Promise<Skill | null>;
   archiveSkill(id: string): Promise<Skill>;
@@ -740,7 +751,7 @@ export interface AppDeps {
   webhooks: WebhookStore;
   deliveries: DeliveryStore;
   directory: DirectoryStore;
-  teams?: Pick<TeamStore, "isMember">;
+  teams?: Pick<TeamStore, "isMember" | "memberTeams">;
   emailAuthMembers?: DirectoryMember[];
   projects?: ProjectStore;
   deploy: DeployService;

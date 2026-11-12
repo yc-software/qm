@@ -27,8 +27,8 @@ test("compaction leaves the session goal on its row and writes no goal entries",
   const compaction = createCompaction({
     sessions,
     errors: createPostgresErrorLog(testDatabaseUrl()),
-    maxContextTokens: 400,
-    agent: { compactHistory: async () => "Earlier work." },
+    config: { getCompactionSettingsDurable: async () => ({ keepPercent: null, historyBudgetTokens: null }) },
+    agent: { contextTokenBudget: () => 400, compactHistory: async () => "Earlier work." },
   } as unknown as OrchestratorDeps);
   for (let round = 0; round < 2; round++) {
     const rebuilt = await compaction.compactContextIfNeeded({
@@ -63,8 +63,9 @@ test("background compaction cannot revive an older goal over one closed while it
   const compaction = createCompaction({
     sessions,
     errors: createPostgresErrorLog(testDatabaseUrl()),
-    maxContextTokens: 400,
+    config: { getCompactionSettingsDurable: async () => ({ keepPercent: null, historyBudgetTokens: null }) },
     agent: {
+      contextTokenBudget: () => 400,
       compactHistory: async () => {
         started.resolve();
         return finish.promise;

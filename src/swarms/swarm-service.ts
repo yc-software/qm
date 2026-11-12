@@ -326,11 +326,13 @@ export function createSwarmService(deps: {
     }
     const identity = threadIdentity(session.threadRef, session.id);
     const swarm = await store.get(identity.rootId);
+    const turnVersion = caller.kind === "agent" ? caller.claims.scopeVersion : undefined;
+    const scopeVersion = swarm ? swarm.template.scopeVersion : turnVersion;
     if (
       !(await deps.authorize({
         actorId,
         scopeId: session.scopeId,
-        ...(swarm?.template.scopeVersion ? { scopeVersion: swarm.template.scopeVersion } : {}),
+        ...(scopeVersion ? { scopeVersion } : {}),
         ...(caller.kind === "agent" && caller.claims.members ? { members: caller.claims.members } : {}),
       }))
     )

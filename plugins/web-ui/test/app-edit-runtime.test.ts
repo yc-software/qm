@@ -42,7 +42,6 @@ test("app edit chats start on the app edit runtime and keep a person's pick", as
         chat: {
           state: { agent, host, threadRef, sessionId: null, scopeId: null, resolvingApprovals: new Set<string>() },
           activePendingApprovals: () => [],
-          hasUnresolvedApproval: () => false,
           turnRuntime: () => null,
           hasLiveRun: () => false,
           isStopping: () => false,

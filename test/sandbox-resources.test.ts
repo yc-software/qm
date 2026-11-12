@@ -683,8 +683,7 @@ test("retirement waits for background startup to commit its live registry row", 
   const resources = createSandboxResources({
     ...options,
     beforeRetire: async (record) => {
-      if ((await registry.liveByScope(record.ownerScopeId)).some((r) => r.sandboxId === record.id))
-        throw new Error("live background work");
+      if ((await registry.listLive()).some((r) => r.sandboxId === record.id)) throw new Error("live background work");
     },
   });
   const router = createSandboxRouter({ resources, backends: { local: backend }, defaultBackend: "local" });
