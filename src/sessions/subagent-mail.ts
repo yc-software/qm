@@ -190,7 +190,6 @@ async function parentTurn(
             ? { destination: currentContext!.origin.destination }
             : {}),
         },
-        unattendedGrants: undefined,
         botActor: source.botActor,
       };
   const { openFingerprint: _openFingerprint, ...request }: OrchestratorInput & Pick<SpawnMeta, "openFingerprint"> = {

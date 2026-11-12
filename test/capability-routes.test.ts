@@ -123,122 +123,6 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
       SECRET,
     );
 
-  it("enforces unattended grant creation and privileged-cron tamper rules at the HTTP boundary", async () => {
-    const body = {
-      schedule: { everyMs: 60_000 },
-      action: "scan transcripts",
-      unattendedGrants: ["admin.sessions.read"],
-    };
-    assert.equal((await post("/v1/crons", body, { "x-agent-capability": await capFor("admin-alice") })).status, 403);
-    assert.equal(
-      (
-        await post("/v1/crons", body, {
-          "x-agent-capability": await capFor("U1", scopeId("personal", "U1"), { liveActor: true }),
-        })
-      ).status,
-      403,
-    );
-    assert.equal(
-      (
-        await post(
-          "/v1/crons",
-          { ...body, unattendedGrants: ["admin.everything"] },
-          {
-            "x-agent-capability": await capFor("admin-alice", scopeId("personal", "admin-alice"), {
-              liveActor: true,
-            }),
-          },
-        )
-      ).status,
-      400,
-    );
-    assert.equal(
-      (
-        await post("/v1/crons", body, {
-          "x-agent-capability": await capFor("admin-alice", scopeId("channel", "C"), {
-            liveActor: true,
-            members: [{ id: "admin-alice", type: "internal" }],
-          }),
-        })
-      ).status,
-      400,
-    );
-    const create = await post("/v1/crons", body, {
-      "x-agent-capability": await capFor("admin-alice", scopeId("personal", "admin-alice"), { liveActor: true }),
-    });
-    assert.equal(create.status, 200);
-    const { cron } = (await create.json()) as { cron: { id: string; unattendedGrants?: string[] } };
-    assert.deepEqual(cron.unattendedGrants, ["admin.sessions.read"]);
-    const got = (await (
-      await get(`/v1/crons/${cron.id}`, {
-        "x-agent-capability": await capFor("admin-alice", scopeId("personal", "admin-alice"), { liveActor: true }),
-      })
-    ).json()) as { cron: { unattendedGrants?: string[] } };
-    assert.deepEqual(got.cron.unattendedGrants, ["admin.sessions.read"]);
-    const listed = (await (
-      await get("/v1/crons", {
-        "x-agent-capability": await capFor("admin-alice", scopeId("personal", "admin-alice"), { liveActor: true }),
-      })
-    ).json()) as { crons: Array<{ id: string; unattendedGrants?: string[] }> };
-    assert.deepEqual(listed.crons.find((candidate) => candidate.id === cron.id)?.unattendedGrants, [
-      "admin.sessions.read",
-    ]);
-    assert.equal(
-      (
-        await patch(
-          `/v1/crons/${cron.id}`,
-          { action: "tamper" },
-          {
-            "x-agent-capability": await capFor("admin-alice"),
-          },
-        )
-      ).status,
-      403,
-    );
-    assert.equal(
-      (
-        await patch(
-          `/v1/crons/${cron.id}`,
-          { unattendedGrants: [] },
-          {
-            "x-agent-capability": await capFor("admin-bob", scopeId("personal", "admin-bob"), { liveActor: true }),
-          },
-        )
-      ).status,
-      403,
-    );
-    const unattended = { "x-agent-capability": await capFor("admin-alice") };
-    assert.equal((await post(`/v1/crons/${cron.id}/disable`, {}, unattended)).status, 200);
-    assert.equal((await post(`/v1/crons/${cron.id}/enable`, {}, unattended)).status, 403);
-    assert.equal((await built.app.getCron(cron.id))?.enabled, false);
-    assert.equal(
-      (
-        await post(
-          `/v1/crons/${cron.id}/note`,
-          { note: "steer the next privileged fire" },
-          { "x-agent-capability": await capFor("admin-alice") },
-        )
-      ).status,
-      403,
-      "an unattended non-fire session cannot note a privileged cron over HTTP either",
-    );
-    assert.equal(
-      (
-        await post(
-          `/v1/crons/${cron.id}/note`,
-          { note: "scan clean, nothing carried over" },
-          {
-            "x-agent-capability": await capFor("admin-alice", scopeId("personal", "admin-alice"), {
-              threadRef: `cron:${cron.id}:fire:abc`,
-            }),
-          },
-        )
-      ).status,
-      200,
-      "the cron's own fire leaves its shift-change note over the agent API",
-    );
-  });
-
   it("creates a cron as the TOKEN's actor, ignoring a forged owner in the body", async () => {
     const res = await post(
       "/v1/crons",
@@ -782,10 +666,18 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
       { "x-agent-capability": await capChannelMembers("U1") },
     );
     assert.equal(shared.status, 200);
-    const patched = await patch(`/v1/crons/${cron.id}`, { action: "tweaked by a teammate" }, teammate);
-    assert.equal(patched.status, 200);
-    assert.equal(((await patched.json()) as any).cron.owner, "U1");
+    const renamed = await patch(`/v1/crons/${cron.id}`, { title: "standup (renamed)" }, teammate);
+    assert.equal(renamed.status, 200);
+    assert.equal(((await renamed.json()) as any).cron.owner, "U1", "a write grant edits without taking over");
+    const taken = await patch(`/v1/crons/${cron.id}`, { action: "tweaked by a teammate" }, teammate);
+    assert.equal(taken.status, 200);
+    assert.equal(((await taken.json()) as any).cron.owner, "U2", "whoever rewrites the task owns the fires");
     assert.equal((await post(`/v1/crons/${cron.id}/disable`, {}, teammate)).status, 200);
+    assert.equal(
+      (await post(`/v1/crons/${cron.id}/enable`, {}, { "x-agent-capability": await capChannelMembers("U1") })).status,
+      200,
+      "the previous owner keeps a write grant",
+    );
     const channelClaims = (actorId: string): CapabilityClaims => ({
       actorId,
       scopeId: scopeId("channel", "C"),
@@ -795,22 +687,48 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
       members: MEMBERS,
       exp: Date.now() + CAPABILITY_TTL_MS,
     });
-    const control = createControlService(built.app, built.scheduler, built.admin);
+    const control = createControlService(built.app, built.scheduler);
     const script = { command: "./standup.sh" };
     const passes = async () => undefined;
-    const byTeammate = await control.patchCron(cron.id, { script }, channelClaims("U2"), passes);
-    assert.equal(byTeammate.ok ? "" : byTeammate.code, "forbidden");
-    const byOwner = await control.patchCron(cron.id, { script }, channelClaims("U1"), passes);
+    const byPreviousOwner = await control.patchCron(cron.id, { script }, channelClaims("U1"), passes);
+    assert.equal(byPreviousOwner.ok ? "" : byPreviousOwner.code, "forbidden", "only the owner changes the script");
+    const byOwner = await control.patchCron(cron.id, { script }, channelClaims("U2"), passes);
     assert.deepEqual(byOwner.ok && byOwner.cron.script, script);
-    const removed = await control.patchCron(cron.id, { script: null }, channelClaims("U2"));
+    const removed = await control.patchCron(cron.id, { script: null }, channelClaims("U1"));
     assert.equal(removed.ok ? "" : removed.code, "forbidden");
     const overHttp = await patch(
       `/v1/crons/${cron.id}`,
       { script },
-      { "x-agent-capability": await capChannelMembers("U1") },
+      { "x-agent-capability": await capChannelMembers("U2") },
     );
     assert.equal(overHttp.status, 400);
     assert.match(((await overHttp.json()) as any).message, /cron tool/);
+  });
+
+  it("records the agent turn that changed a cron: its actor, its run and whether it was bot work", async () => {
+    const owner = { "x-agent-capability": await capChannelMembers("U1") };
+    const created = await post("/v1/crons", { schedule: { everyMs: 60_000 }, action: "standup notes" }, owner);
+    const { cron } = (await created.json()) as any;
+    await post("/v1/share", { type: "cron", id: cron.id, toScope: "personal:U2", permission: "write" }, owner);
+    const teammate = { "x-agent-capability": await capChannel("U2", { runId: "run-u2" }) };
+    assert.equal((await patch(`/v1/crons/${cron.id}`, { title: "standup (renamed)" }, teammate)).status, 200);
+    const bot = {
+      "x-agent-capability": await capFor("B1", scopeId("personal", "B1"), { botActor: true, runId: "run-b1" }),
+    };
+    const botCron = (
+      (await (await post("/v1/crons", { schedule: { everyMs: 60_000 }, action: "x" }, bot)).json()) as any
+    ).cron;
+    assert.equal((await del(`/v1/crons/${botCron.id}`, bot)).status, 200);
+    const changes = (await built.auditLog.events(testTenant)).filter(
+      (e) => [cron.id, botCron.id].includes(e.resource) && ["cron_update", "cron_delete"].includes(e.action),
+    );
+    assert.deepEqual(
+      changes.map(({ principalId, action, detail }) => ({ principalId, action, detail })),
+      [
+        { principalId: "U2", action: "cron_update", detail: JSON.stringify({ runId: "run-u2" }) },
+        { principalId: "B1", action: "cron_delete", detail: JSON.stringify({ runId: "run-b1", botActor: true }) },
+      ],
+    );
   });
 
   it("a channel cron is readable by a member but never administrable by them (your boss's channel cron stays out of your DM's control)", async () => {
@@ -1009,25 +927,23 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     assert.equal((await get("/v1/soul", { "x-agent-capability": await capChannel("U8") })).status, 200);
   });
 
-  it("a live verified bot retains private-channel tools without a Slack user principal", async () => {
+  it("a live bot QM knows as an app retains private-channel tools without a Slack user principal; others do not", async () => {
     await built.directory.replaceChannels(
       [{ channelId: "C", name: "eng", isPrivate: true }],
       ["admin-alice", "U1", "U2"].map((principalId) => ({ channelId: "C", principalId })),
     );
-    const members = [{ id: "B-LEGACY", type: "internal" as const }];
-    const token = await capFor("B-LEGACY", scopeId("channel", "C"), {
-      botActor: true,
-      liveActor: true,
-      members,
-    });
-    assert.equal((await get("/v1/soul", { "x-agent-capability": token })).status, 200);
-    assert.equal(
-      (
-        await get("/v1/soul", {
-          "x-agent-capability": await capFor("B-LEGACY", scopeId("channel", "C"), { members }),
-        })
-      ).status,
-      403,
-    );
+    for (const [actorId, botActor] of [
+      ["B-LEGACY", true],
+      ["U8", false],
+      ["B-UNSEEN", undefined],
+    ] as const) {
+      const conversation = { kind: "channel", threadRef: `ch:C:${actorId}`, channelRef: "C" } as const;
+      if (botActor !== undefined)
+        await built.app.turn({ surface: "test", actor: { externalId: actorId }, conversation, text: "hi", botActor });
+      const members = [{ id: actorId, type: "internal" as const }];
+      const soul = async (extra: Partial<CapabilityClaims>) =>
+        (await get("/v1/soul", { "x-agent-capability": await capChannel(actorId, { members, ...extra }) })).status;
+      assert.deepEqual([await soul({ botActor: true, liveActor: true }), await soul({})], [botActor ? 200 : 403, 403]);
+    }
   });
 });

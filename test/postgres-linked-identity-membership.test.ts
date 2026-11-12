@@ -22,7 +22,7 @@ test(
       testConfig({ dataDir: mkdtempSync(join(tmpdir(), "pg-linked-")), databaseUrl: databaseUrl! }),
     );
     try {
-      const control = createControlService(built.app, built.scheduler, built.admin);
+      const control = createControlService(built.app, built.scheduler);
       const email = "person@example.com";
       const canonical = "oidc|person";
       const room = scopeId("channel", "C-room");

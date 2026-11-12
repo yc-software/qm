@@ -1,6 +1,8 @@
 import { tenantSandboxChoice } from "./tenant-sandbox-shape.ts";
 import { perTenant } from "../tenants/cache.ts";
 import { withLiveTurnMembership } from "../resolution/scope-membership.ts";
+import { personOrOwningBot } from "../auth/capability-token.ts";
+import { samePerson } from "../directory/person.ts";
 import { randomUUID } from "node:crypto";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
@@ -22,6 +24,7 @@ import type { Sandbox, AgentComputerSpec, ProvisionOptions, ComputerStatus, Egre
 import { JOB_COMPUTER_SCOPE_PREFIX } from "./home-snapshot.ts";
 import { claimThenBind } from "../tenants/claim.ts";
 import type { LoadSample } from "./load-probe.ts";
+import type { SwarmService } from "../swarms/swarm-service.ts";
 
 export interface SandboxResource {
   id: string;
@@ -41,6 +44,7 @@ export interface SandboxResource {
   jobOnly?: boolean;
   memoryGb?: number;
   swarmId?: string;
+  personUsed?: true;
 }
 
 export interface SandboxAccessPlan {
@@ -92,6 +96,7 @@ export interface SandboxResources {
   status(actorId: string, id: string): Promise<ComputerStatus>;
   restart(actorId: string, id: string, memoryGb?: number): Promise<void>;
   retire(actorId: string, id: string): Promise<void>;
+  notePersonUse(id: string): Promise<SandboxResource>;
   use<T>(id: string, action: () => Promise<T>, exclusive?: boolean): Promise<T>;
   hold(id: string, runId: string): Promise<void>;
   recordLoad(id: string, sample: LoadSample): Promise<void>;
@@ -105,13 +110,30 @@ export interface SandboxResources {
 
 export class SandboxAccessError extends Error {}
 
-const BOT_SWARM_COMPUTER_REFUSAL = "a Slack bot's turn cannot use the computers of a person's swarm";
+export class BotComputerRefusedError extends SandboxAccessError {
+  constructor() {
+    super("a Slack bot's turn can use only a computer it made that no person has used");
+  }
+}
 
 const JOB_ONLY_REFUSAL =
   "this computer belongs to a background job that uses private credentials; only that job's own controls can reach it";
 
 export async function preferredBackend(resources: SandboxResources, scopeId: ScopeId): Promise<SandboxBackendName> {
   return (await resources.resolve(scopeId))?.backend ?? (await resources.defaultBackend());
+}
+
+export function botMayUseComputers(
+  swarms: Pick<SwarmService, "botMayUseComputer"> | undefined,
+  turn: { actorId: string; threadRef: string; sessionId: string },
+): (computer: SandboxResource) => Promise<boolean> {
+  return async (computer) =>
+    computer.swarmId
+      ? !!swarms && (await swarms.botMayUseComputer(computer, turn))
+      : personOrOwningBot(
+          { actorId: turn.actorId, botActor: true },
+          async () => !computer.personUsed && samePerson(computer.createdBy, turn.actorId),
+        );
 }
 
 export async function accessConversationSandbox(
@@ -125,7 +147,7 @@ export async function accessConversationSandbox(
   const resource = await resources?.access(actorId, id);
   if (!resource || resource.state === "retired" || !(await canUseScope(resource.ownerScopeId)))
     throw new SandboxAccessError("sandbox access is no longer authorized in this conversation");
-  if (botMayUse && !(await botMayUse(resource))) throw new SandboxAccessError(BOT_SWARM_COMPUTER_REFUSAL);
+  if (botMayUse && !(await botMayUse(resource))) throw new BotComputerRefusedError();
   return resource;
 }
 
@@ -137,7 +159,7 @@ export async function assertBotMayUseComputer(
 ): Promise<void> {
   if (!botMayUse) return;
   const resource = sandboxId ? await resources?.get(sandboxId) : await resources?.resolve(scopeId);
-  if (resource && !(await botMayUse(resource))) throw new SandboxAccessError(BOT_SWARM_COMPUTER_REFUSAL);
+  if (resource && !(await botMayUse(resource))) throw new BotComputerRefusedError();
 }
 
 export function createSandboxResources(opts: {
@@ -279,6 +301,11 @@ export function createSandboxResources(opts: {
         }),
       );
     },
+    async notePersonUse(id) {
+      const record = await get(id);
+      if (record.personUsed) return record;
+      return (await opts.records.update(id, (current) => ({ ...current, personUsed: true }))) ?? record;
+    },
     async eachJobComputer(work) {
       await claimThenBind(opts.records.claimTenants, async () => {
         await initialize();
@@ -375,26 +402,25 @@ export function createSandboxResources(opts: {
           if (existing.state === "ready") return existing;
           if (existing.state === "retired") throw new Error("sandbox reservation is retired");
         }
-        await opts.records.put(id, record);
+        if (existing) await opts.records.update(id, (current) => ({ ...current, ...record, error: undefined }));
+        else await opts.records.put(id, record);
         const sandbox = opts.backends[record.backend]!;
         try {
           await sandbox.provision(record.backingScopeId, {
             ...(await opts.provisionOptions?.(scopeId)),
             ...(memoryGb ? { memoryGb } : {}),
           });
-          const ready: SandboxResource = {
-            ...record,
+          return (await opts.records.update(id, (current) => ({
+            ...current,
             state: "ready",
             spec: sandbox.profile.spec,
-          };
-          await opts.records.put(id, ready);
-          return ready;
+          })))!;
         } catch (error) {
-          await opts.records.put(id, {
-            ...record,
+          await opts.records.update(id, (current) => ({
+            ...current,
             state: "failed",
             error: error instanceof Error ? error.message : String(error),
-          });
+          }));
           throw error;
         }
       });
@@ -472,11 +498,9 @@ export function createTurnSandboxAccess(ctx: {
       ...(credentialScopeId ? { credentialScopeId } : {}),
     };
   };
-  const jobComputerPlan = (resource: SandboxResource): SandboxAccessPlan => ({
-    resource,
-    crossScope: false,
-    egress: resolution.egress,
-    commandPolicy: null,
-  });
+  const jobComputerPlan = async (resource: SandboxResource): Promise<SandboxAccessPlan> => {
+    if (botMayUse && !(await botMayUse(resource))) throw new BotComputerRefusedError();
+    return { resource, crossScope: false, egress: resolution.egress, commandPolicy: null };
+  };
   return { accessResource, jobComputerPlan };
 }

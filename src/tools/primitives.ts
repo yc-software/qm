@@ -63,7 +63,7 @@ import type { AclStore } from "../acl/acl-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import type { OutboundFile } from "../core/attachments.ts";
 import { errMessage, withCleanup } from "../util/errors.ts";
-import { quotedData, trimTrailingSlashes } from "../util/text.ts";
+import { quotedData, trimTrailingSlashes, tryDecodeUtf8 } from "../util/text.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { MEMORY_FILE, turnAuthority, type MemoryEdit, type MemoryService } from "../memory/memory-service.ts";
@@ -1137,7 +1137,10 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     },
 
     async setDeploymentPublic(id: string, isPublic: boolean) {
-      const d = await deps.deploy.setDeploymentPublic(id, isPublic, { createdBy: deps.createdBy });
+      const d = await deps.deploy.setDeploymentPublic(id, isPublic, {
+        createdBy: deps.createdBy,
+        botActor: deps.botActor,
+      });
       return { id: d.id, ...(d.name ? { name: d.name } : {}), public: d.public === true };
     },
 
@@ -1401,14 +1404,6 @@ function audienceFromGrantees(
       ? { memberCount: granteeScopeIds.length }
       : {}),
   };
-}
-
-export function tryDecodeUtf8(bytes: Uint8Array): string | null {
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  } catch {
-    return null;
-  }
 }
 
 const COMMAND_PATH_PROBE_TIMEOUT_MS = 10_000;

@@ -1,5 +1,5 @@
 import { definePgMigration, PG_MIGRATIONS_TABLE, type PgMigrationDefinition } from "../persistence/pg-pool.ts";
-import { REPAIR_0116_CONSTRAINTS, retire0116Tenancy } from "./retire-0116-tenancy.ts";
+import { REPAIR_0116_CONSTRAINTS, RETIRE_0116_HOSTS, retire0116Tenancy } from "./retire-0116-tenancy.ts";
 import {
   TENANT_APP_HANDLE_DNS_BOUND,
   TENANT_APP_HANDLES,
@@ -58,27 +58,17 @@ const TENANT_ROW_SECURITY: PgMigrationDefinition = {
 };
 
 const BOOT_TENANT: PgMigrationDefinition = {
-  id: "0000-tenancy/boot-tenant",
+  id: "0000-tenancy/boot-tenant-function",
   statements: [
     `CREATE OR REPLACE FUNCTION qm_boot_tenant() RETURNS uuid LANGUAGE sql STABLE SECURITY DEFINER
       SET search_path = pg_catalog, public AS $qm_boot_tenant$
       SELECT CASE WHEN count(*) = 1 THEN (array_agg(id))[1] END FROM (SELECT id FROM public.tenants LIMIT 2) one
     $qm_boot_tenant$`,
-    `GRANT EXECUTE ON FUNCTION qm_boot_tenant() TO PUBLIC`,
-  ],
-};
-
-const DROP_TENANT_HOSTS: PgMigrationDefinition = {
-  id: "0000-tenancy/tenant-hosts-drop",
-  statements: [
-    `SET LOCAL lock_timeout = '5s'`,
-    `DROP FUNCTION IF EXISTS qm_tenant_for_host(text)`,
-    `DROP TABLE IF EXISTS tenant_hosts`,
   ],
 };
 
 const SERVING_TENANTS: PgMigrationDefinition = {
-  id: "0000-tenancy/serving-tenants",
+  id: "0000-tenancy/serving-tenants-function",
   statements: [
     `DO $serving$ BEGIN EXECUTE format($sql$CREATE OR REPLACE FUNCTION qm_serving_tenants() RETURNS SETOF uuid
       LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = %1$I, pg_temp AS $f$
@@ -86,7 +76,6 @@ const SERVING_TENANTS: PgMigrationDefinition = {
         RETURN QUERY SELECT id FROM tenants
           WHERE settings->>'serving' IS DISTINCT FROM 'false' OR qm_boot_tenant() IS NOT NULL;
       END $f$$sql$, current_schema()); END $serving$`,
-    `GRANT EXECUTE ON FUNCTION qm_serving_tenants() TO PUBLIC`,
   ],
 };
 
@@ -99,7 +88,7 @@ export const TENANCY: readonly PgMigrationDefinition[] = [
   TENANT_ROW_SECURITY,
   BOOT_TENANT,
   TENANT_APP_HANDLES,
-  DROP_TENANT_HOSTS,
+  RETIRE_0116_HOSTS,
   TENANT_APP_HANDLE_DNS_BOUND,
   TENANT_APP_HOSTS_BY_HANDLE,
   TENANT_APP_HOSTS_LEGACY_NAMES,

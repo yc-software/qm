@@ -30,7 +30,7 @@ import type { Cron } from "../triggers/types.ts";
 import { validateUserSchedule } from "../cron/schedule.ts";
 import { trialBeforeSave } from "../cron/script.ts";
 
-import type { App, AppDeps, ReachNowResult } from "./app-types.ts";
+import type { App, AppDeps, CronEditor, ReachNowResult } from "./app-types.ts";
 import { CONTEXT_REQUEST_EXPIRY_MS } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import type { AmbientHelpers } from "./app-ambient.ts";
@@ -176,19 +176,25 @@ export function createMessagingMethods(
     if (error) throw new Error(error);
   };
 
+  const auditCron = (action: string, cron: Pick<Cron, "id" | "ownerScopeId">, by: CronEditor) =>
+    h.recordAudit({
+      at: Date.now(),
+      principalId: by.actorId,
+      action,
+      resource: cron.id,
+      scopeLabel: cron.ownerScopeId,
+      ...(by.runId || by.botActor
+        ? { detail: JSON.stringify({ runId: by.runId, botActor: by.botActor || undefined }) }
+        : {}),
+    });
+
   return {
     async createCron(input, trial) {
       await validateRuntime(input);
       validateUserSchedule(input.schedule);
       await trialBeforeSave(input.script, input.schedule, trial);
       const cron = await deps.crons.create(input);
-      h.recordAudit({
-        at: Date.now(),
-        principalId: cron.createdBy,
-        action: "cron_create",
-        resource: cron.id,
-        scopeLabel: cron.ownerScopeId,
-      });
+      auditCron("cron_create", cron, { actorId: cron.createdBy, botActor: cron.botActor });
       return cron;
     },
     getCron(id) {
@@ -219,53 +225,29 @@ export function createMessagingMethods(
         });
       return { owned, visible };
     },
-    async updateCron(id, patch, trial) {
+    async updateCron(id, patch, by, trial) {
       const before = await deps.crons.get(id);
       if (!before) return null;
       if (patch.runtime !== undefined) await validateRuntime({ ...before, ...patch });
       if (patch.schedule) validateUserSchedule(patch.schedule);
       await trialBeforeSave(patch.script, patch.schedule, trial);
-      const grantsReaffirmed = patch.unattendedGrants !== undefined;
-      const guardedPatch =
-        (before.unattendedGrants?.length ?? 0) > 0 && !grantsReaffirmed ? { ...patch, unattendedGrants: [] } : patch;
-      const updated = await deps.crons.update(id, guardedPatch);
-      h.recordAudit({
-        at: Date.now(),
-        principalId: before.owner,
-        action: "cron_update",
-        resource: id,
-        scopeLabel: before.ownerScopeId,
-      });
+      const updated = await deps.crons.update(id, patch);
+      auditCron("cron_update", before, by);
       return updated;
     },
-    async deleteCron(id) {
+    async deleteCron(id, by) {
       const before = await deps.crons.get(id);
       await deps.crons.delete(id);
-      if (before)
-        h.recordAudit({
-          at: Date.now(),
-          principalId: before.owner,
-          action: "cron_delete",
-          resource: id,
-          scopeLabel: before.ownerScopeId,
-        });
+      if (before) auditCron("cron_delete", before, by);
     },
     setCronEnabled(id, enabled) {
       return deps.crons.setEnabled(id, enabled);
     },
-    async setCronFireNote(id, note) {
+    async setCronFireNote(id, note, by) {
       const before = await deps.crons.get(id);
       if (!before) return "missing";
       const outcome = await deps.crons.setFireNote(id, note);
-      if (outcome === "applied") {
-        h.recordAudit({
-          at: Date.now(),
-          principalId: note.by ?? before.owner,
-          action: "cron_note",
-          resource: id,
-          scopeLabel: before.ownerScopeId,
-        });
-      }
+      if (outcome === "applied") auditCron("cron_note", before, by);
       return outcome;
     },
     async setCronRuntime(id, runtime) {
@@ -274,17 +256,11 @@ export function createMessagingMethods(
       await validateRuntime({ ...before, runtime });
       return deps.crons.update(id, { runtime });
     },
-    async setCronDestination(id, destination) {
+    async setCronDestination(id, destination, by) {
       const before = await deps.crons.get(id);
       if (!before) return null;
       await deps.crons.setDestination(id, destination);
-      h.recordAudit({
-        at: Date.now(),
-        principalId: before.owner,
-        action: "cron_retarget",
-        resource: id,
-        scopeLabel: before.ownerScopeId,
-      });
+      auditCron("cron_retarget", before, by);
       return deps.crons.get(id);
     },
     async createWebhook(input) {
@@ -546,7 +522,7 @@ export function createMessagingMethods(
         (await identityMembers()).find((member) => personKey(member.principalId) === personKey(principalId)) ?? null
       );
     },
-    loopAdministration: (actorId, loops) => loopAdministration(deps, actorId, loops),
+    loopAdministration: (actor, loops) => loopAdministration(deps, actor, loops),
     samePerson(a, b) {
       return samePersonInDirectory(deps.directory, a, b);
     },

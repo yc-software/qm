@@ -39,7 +39,7 @@ import { probedCommand } from "./support/probed-command.ts";
 const releaseBot: Principal = { id: "release-bot", type: "internal", displayName: "Release bot" };
 const alice: Principal = { id: "alice", type: "internal" };
 const refusedDirection = "a Slack bot's turn cannot direct a person's swarm";
-const refusedComputer = "a Slack bot's turn cannot use the computers of a person's swarm";
+const refusedComputer = "a Slack bot's turn can use only a computer it made that no person has used";
 const refusedDefault = "[error] a Slack bot's turn cannot change the default computer; pass sandbox_id instead";
 const refusedForum =
   "a swarm a Slack bot starts cannot take forumSandboxId; spawn without it and the swarm uses its own board computer";
@@ -271,6 +271,30 @@ function assertKeptOut(observed: Record<string, unknown>): void {
   assert.equal(workerState, "ready");
   assert.equal(defaultIsBoard, true);
 }
+
+test("outside a swarm, a Slack bot's turn can use a computer it made only until a person's turn uses it", async () => {
+  const f = await channelSwarm();
+  if (f.caller.kind !== "agent") throw new Error("wrong caller");
+  await f.runs.complete(f.caller.claims.runId!, f.caller.claims.runLeaseToken!, { status: "ok", reply: "idle" });
+  recordRuns(f);
+  const people = await f.sandboxes.create(alice.id, f.root.scopeId, "modal");
+  const bots = await f.sandboxes.create(releaseBot.id, f.root.scopeId, "modal");
+  const turn = async (actor: Principal, act: (call: Call) => Promise<string>): Promise<string> => {
+    const request = channelRequest(f, actor, actor === releaseBot);
+    const { run } = await f.runs.enqueue({ sessionId: f.root.threadRef, request, maxAttempts: 1 });
+    const { out } = await drive(f, run, async (call) => ({ out: await act(call) }));
+    await f.runs.complete(run.id, (await f.runs.get(run.id))!.leaseToken!, { status: "ok", reply: "done" });
+    return String(out);
+  };
+  const execute = (sandbox_id: string) => (call: Call) =>
+    call("execute", { command: "ls", sandbox_id, purpose: "Listing" });
+  const retire = (call: Call) => call("sandbox", { action: "retire", sandbox_id: bots.id, purpose: "Retiring" });
+  assert.ok((await turn(releaseBot, execute(people.id))).endsWith(refusedComputer));
+  assert.ok(!(await turn(releaseBot, execute(bots.id))).endsWith(refusedComputer));
+  await turn(alice, execute(bots.id));
+  for (const act of [execute(bots.id), retire]) assert.ok((await turn(releaseBot, act)).endsWith(refusedComputer));
+  assert.notEqual((await f.records.get(bots.id))!.state, "retired");
+});
 
 test("a Slack bot's channel turn that may not direct a person's swarm cannot list or use the swarm's computers", async (t) => {
   const observed = await channelTurn(await personSwarm(), releaseBot, true);

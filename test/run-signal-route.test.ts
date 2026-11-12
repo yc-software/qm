@@ -135,7 +135,6 @@ test("core route: a malformed request is rejected 400, and privileged fields are
     ...steererRequest("internal:U1", "t-sanitize", "x"),
     origin: { kind: "automation", useOwnerKeychain: true },
     spawned: true,
-    unattendedGrants: ["admin-read"],
   };
   const r = await coreSignal(run.id, { kind: "steer", text: "x", request: smuggled });
   assert.equal(r.status, 200);
@@ -143,7 +142,6 @@ test("core route: a malformed request is rejected 400, and privileged fields are
   assert.ok(signal?.request);
   assert.deepEqual(signal.request.origin, { kind: "automation" });
   assert.equal("spawned" in signal.request, false);
-  assert.equal("unattendedGrants" in signal.request, false);
 });
 
 test("core route: a bare steer without a ts gets one minted so agents persist it", async () => {

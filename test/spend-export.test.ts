@@ -7,8 +7,8 @@ import test from "node:test";
 import { createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
-import { deploymentView } from "../src/api/app.ts";
 import type { Deployment } from "../src/deploy/deploy-store.ts";
+import type { AppPageViewLog } from "../src/deploy/page-views.ts";
 import { scopeId } from "../src/types.ts";
 import { serverDeps } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -27,7 +27,7 @@ const window = `from=${iso(today - DAY)}&to=${iso(today + DAY)}`;
 
 const apps = "/v1/deployments/export?principalId=alice%40example.com";
 
-function fixture(options: { token?: string | null; sessions?: SessionStore | null } = {}) {
+function fixture(options: { token?: string | null; sessions?: SessionStore | null; pageViews?: AppPageViewLog } = {}) {
   const built = buildApp(testConfig({ signingSecret: sourceSecret }));
   const sessions =
     options.sessions === null ? undefined : (options.sessions ?? createPostgresSessionStore(testDatabaseUrl()));
@@ -42,6 +42,7 @@ function fixture(options: { token?: string | null; sessions?: SessionStore | nul
     auditLog: built.auditLog,
     ...(sessions ? { sessions } : {}),
     ...(token ? { spendExportToken: token } : {}),
+    ...(options.pageViews ? { appPageViews: options.pageViews } : {}),
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -69,7 +70,7 @@ test("spend export: missing, wrong, admin-identity and source-signed requests ar
   };
   const s = fixture({ sessions: store });
   try {
-    s.built.app.listDeploymentsForViewer = async () => {
+    s.built.app.listDeployments = async () => {
       reads++;
       return [];
     };
@@ -96,7 +97,12 @@ test("spend export: missing, wrong, admin-identity and source-signed requests ar
 });
 
 test("deployment export: lists the person's live Apps page apps with their addresses", async () => {
-  const s = fixture();
+  const s = fixture({
+    pageViews: {
+      record: async () => {},
+      lastViews: async (_tenant, viewer) => new Map(viewer === "alice@example.com" ? [["live", 7]] : []),
+    },
+  });
   try {
     const app = (id: string, status: Deployment["status"]): Deployment => ({
       id,
@@ -108,17 +114,34 @@ test("deployment export: lists the person's live Apps page apps with their addre
       endpoint: { host: "h", port: 1, publicUrl: `https://${id}.apps.example.com/?access=x` },
       versions: [{ version: 1, createdAt: 1, entrypoint: "x", snapshotDir: "/s" }],
     });
-    const fleet = [app("live", "running"), app("gone", "archived")];
+    const own = { ...app("own", "running"), ownerScopeId: scopeId("personal", "alice@example.com") };
+    const given = {
+      ...app("given", "running"),
+      createdBy: "alice@example.com",
+      ownerScopeId: scopeId("personal", "bob@example.com"),
+    };
+    const fleet = [app("live", "running"), app("gone", "archived"), own, given];
     s.built.app.listDeployments = async () => fleet;
-    s.built.app.listDeploymentsForViewer = async ({ actorId }) =>
-      actorId === "alice@example.com" ? fleet.map((d) => ({ ...deploymentView(d), permission: "read" as const })) : [];
+    s.built.app.deploymentGitPermissionsFor = async (_tenant, deployments, { actorId }) =>
+      deployments.map(() => (actorId === "alice@example.com" ? "read" : null));
     assert.equal((await s.get("/v1/deployments/export")).status, 400);
     const { principalId, deployments }: any = await (await s.get(apps)).json();
     assert.equal(principalId, "alice@example.com");
-    const live = { id: "live", name: "live", createdBy: "bob@example.com", permission: "read", updatedAt: 1 };
-    assert.deepEqual(deployments, [{ ...live, url: "https://live.apps.example.com/" }]);
+    const shown = { createdBy: "bob@example.com", permission: "read", updatedAt: 1 };
+    assert.deepEqual(deployments, [
+      { id: "live", name: "live", ...shown, url: "https://live.apps.example.com/", owned: false, viewedAt: 7 },
+      { id: "own", name: "own", ...shown, url: "https://own.apps.example.com/", owned: true },
+      {
+        id: "given",
+        name: "given",
+        ...shown,
+        createdBy: "alice@example.com",
+        url: "https://given.apps.example.com/",
+        owned: false,
+      },
+    ]);
     const events = (await s.built.auditLog.events(testTenant)).map((e) => [e.resource, e.detail]);
-    assert.deepEqual(events, [["alice@example.com", "deployments=1"]]);
+    assert.deepEqual(events, [["alice@example.com", "deployments=3"]]);
   } finally {
     await s.close();
   }

@@ -1,7 +1,7 @@
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { CronFireLogEntry } from "../../triggers/types.ts";
-import { CRON_FIRE_NOTE_MAX_CHARS, UNATTENDED_ADMIN_GRANTS } from "../../api/control-service.ts";
+import { CRON_FIRE_NOTE_MAX_CHARS } from "../../api/control-service.ts";
 import { utcMinute } from "../../util/time.ts";
 import { text, type ToolKit } from "./kit.ts";
 import { listOrder, pageOf, previewText, previewTrims } from "./listing.ts";
@@ -28,8 +28,8 @@ interface CronLike {
   nextFireAt?: number;
   destination?: { type: string; target: string };
   lastFireNote?: { text: string; at: number; by?: string };
-  unattendedGrants?: string[];
   script?: { command: string };
+  taskAuthor?: "automation";
 }
 
 function fmtCronLine(c: CronLike, preview = false): string {
@@ -49,9 +49,12 @@ function fmtCronLine(c: CronLike, preview = false): string {
   const runtime = c.runtime
     ? `\n    runtime: ${c.runtime.modelId}${c.runtime.effortLevel ? ` (${c.runtime.effortLevel})` : ""}`
     : "";
-  const grants = c.unattendedGrants?.length ? `\n    unattended grants: ${c.unattendedGrants.join(", ")}` : "";
   const script = c.script && !preview ? `\n    script: ${c.script.command}` : "";
-  return `${c.id}${c.title ? ` "${c.title}"` : ""} — ${fmtCronSchedule(c)}${dest}${state}${next}${what ? `\n    ${what}` : ""}${runtime}${grants}${script}${note}`;
+  const authority =
+    c.taskAuthor === "automation" && !preview
+      ? "\n    authority: none — an automated turn wrote this task; its owner restores theirs by rewriting it on a turn they send"
+      : "";
+  return `${c.id}${c.title ? ` "${c.title}"` : ""} — ${fmtCronSchedule(c)}${dest}${state}${next}${what ? `\n    ${what}` : ""}${runtime}${script}${authority}${note}`;
 }
 
 function fmtCronCreated(r: {
@@ -105,8 +108,7 @@ export function cronTools(kit: ToolKit) {
       "DELIVERY: by default a cron posts back to this conversation; keep that for watches and follow-ups on work started here, and don't pick a DM just because this is one. " +
       'Otherwise set `recipient` (teammate → DM), `channel`, `participants` (member ids → an existing group DM; reach it once first), or `destinationKey` (from the "Where scheduled tasks post" menu); ' +
       'scope="personal" runs it at the asker\'s own scope and DMs them. Never put the destination inside `task`. retarget changes the destinationKey.\n' +
-      'Crons whose fires read admin data need `unattendedGrants`, and many admin reads have none: first follow the admin skill\'s "Scheduling admin-reading work", which fetches the live grant list. ' +
-      "Before a grant-carrying cron posts anywhere but its owner's DM (create or retarget), tell the owner who will see its unattended admin output and act only on their explicit yes.\n" +
+      "AUTHORITY: a fire runs as its owner with the owner's own standing — the same credentials, connections and (for org admins) admin reads the owner's typed turn would have, but no admin changes; private-content admin reads still need the cron to live in the owner's DM or an Open conversation. Before a cron that will read admin data posts anywhere but its owner's DM, tell the owner who will see that output and act only on their explicit yes. Whoever rewrites a shared cron's task becomes its owner. A task written by a fire or other automated turn runs without that authority until the owner rewrites it on a turn they send.\n" +
       "ACCESS: a cron belongs to its creator and runs as them; everyone here can see it, only the owner can change it unless shared with permission=write; deleted at its next fire if the owner has left its private channel or group.\n" +
       'list: 25 per page. get: one in full. runs: the fire log (a fire shows as "running" from the moment it starts). ' +
       "patch: edit in place; it keeps its destination (after →), so retarget it or create one to post here instead. `task` is the standing instructions; durable run-state goes in this conversation's Files with the file ID left in the note (recurring non-loop crons only), never only in `task` or on sandbox disk; small progress state can live in the note itself. " +
@@ -197,12 +199,6 @@ export function cronTools(kit: ToolKit) {
           },
         ),
       ),
-      unattendedGrants: Type.Optional(
-        Type.Array(Type.Union(UNATTENDED_ADMIN_GRANTS.map((grant) => Type.Literal(grant))), {
-          description:
-            "create/patch: read-only admin grants for unattended fires (org admins only; the cron must live in and deliver to their own DM); admin unattended_grants lists which read needs which. patch replaces; [] removes.",
-        }),
-      ),
       script: Type.Optional(
         Type.Union(
           [
@@ -270,7 +266,6 @@ export function cronTools(kit: ToolKit) {
             ...(params.destinationKey !== undefined ? { destinationKey: params.destinationKey } : {}),
             ...(params.unfurlLinks !== undefined ? { unfurlLinks: params.unfurlLinks } : {}),
             ...(params.session !== undefined ? { session: params.session } : {}),
-            ...(params.unattendedGrants !== undefined ? { unattendedGrants: params.unattendedGrants } : {}),
             ...(params.script ? { script: params.script } : {}),
           });
           if (isUnavailable(r)) return unavailable(callId, "cron");
@@ -373,7 +368,6 @@ export function cronTools(kit: ToolKit) {
             ...(params.archived !== undefined ? { archived: params.archived } : {}),
             ...(params.unfurlLinks !== undefined ? { unfurlLinks: params.unfurlLinks } : {}),
             ...(params.session !== undefined ? { session: params.session } : {}),
-            ...(params.unattendedGrants !== undefined ? { unattendedGrants: params.unattendedGrants } : {}),
             ...(params.script !== undefined ? { script: params.script } : {}),
           });
           if (isUnavailable(r)) return unavailable(callId, "cron");

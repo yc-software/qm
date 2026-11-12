@@ -33,7 +33,7 @@ import { errMessage, reportFailure, swallow } from "../util/errors.ts";
 import { uuidSchema } from "../util/ids.ts";
 import { claimThenBind } from "../tenants/claim.ts";
 import { assertAppLabelFits } from "../tenants/settings.ts";
-import { createLiveEdits, type LiveEditSaved, type SavedApp } from "./live-edits.ts";
+import { createLiveEdits, type LiveEditSaved } from "./live-edits.ts";
 import { ambientTenant, type Tenant } from "../tenants/context.ts";
 
 export interface DeployFile {
@@ -62,6 +62,11 @@ export type Reach =
   { status: "ok"; id: string; endpoint: DeployEndpoint } | { status: "denied" } | { status: "not_found" };
 
 type PublishedDeployment = Deployment & { liveEdit?: LiveEditSaved };
+
+export interface AppSourceReader {
+  commit: string;
+  source(paths?: string[], commit?: string): Promise<DeploymentSource>;
+}
 
 export interface DeploymentSource {
   commit: string;
@@ -98,6 +103,11 @@ export interface DeployOrUpdateInput {
   embedAncestors?: string[];
 }
 
+export interface DeploymentActor {
+  createdBy: string;
+  botActor?: boolean;
+}
+
 export interface ReachOptions {
   bypassAcl?: boolean;
 }
@@ -116,7 +126,7 @@ export interface DeployService {
   setDeploymentDisplayName(id: string, displayName: string): Promise<Deployment>;
   setDeploymentAlwaysOn(id: string, alwaysOn: boolean): Promise<Deployment>;
   setDeploymentEmbedAncestors(id: string, embedAncestors: string[]): Promise<Deployment>;
-  setDeploymentPublic(idOrName: string, isPublic: boolean, actor: { createdBy: string }): Promise<Deployment>;
+  setDeploymentPublic(idOrName: string, isPublic: boolean, actor: DeploymentActor): Promise<Deployment>;
   setDeploymentConnectors(idOrName: string, connectors: string[], actor: { createdBy: string }): Promise<Deployment>;
 
   maintainDeployments(): Promise<number>;
@@ -126,7 +136,12 @@ export interface DeployService {
   deploymentLogs(idOrName: string, opts: { tailLines: number }): Promise<string | null>;
   gitRepoPath(idOrName: string): Promise<string | null>;
   pushGit<T>(id: string, runReceivePack: () => Promise<{ result: T; ok: boolean }>, actor?: string): Promise<T>;
-  source(idOrName: string, paths?: string[]): Promise<DeploymentSource | null>;
+  source(idOrName: string, paths?: string[], commit?: string): Promise<DeploymentSource | null>;
+  sourceReader(
+    idOrName: string,
+    caller: Pick<CapabilityClaims, "actorId" | "botActor">,
+    actingScopeId?: ScopeId,
+  ): Promise<AppSourceReader | null>;
   editSource(
     idOrName: string,
     actor: string,
@@ -144,9 +159,10 @@ export interface DeployService {
     idOrName: string,
     grantee: ScopeId,
     permission: Permission | null,
-    actor: { createdBy: string },
+    actor: DeploymentActor,
     opts?: { notify?: boolean },
   ): Promise<DeploymentGrantee[]>;
+  assertDeploymentOwner(d: Deployment, actor: DeploymentActor): Promise<void>;
   assertShareAllowed(ownerScopeId: ScopeId, grantee: ScopeId, permission: Permission | null): Promise<void>;
   transferDeploymentOwner(
     idOrName: string,
@@ -340,7 +356,28 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     return v;
   };
 
-  const sourceOf = async (id: string, saved: SavedApp, paths: string[] = []): Promise<DeploymentSource> => ({
+  const getDeployment = async (idOrName: string) =>
+    (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
+
+  async function sourceReaderOf(d: Deployment): Promise<AppSourceReader | null> {
+    const head = await liveEdits.savedHeadOf(d);
+    if (!head) return null;
+    const trees = new Map<string, Promise<DeploymentSource["tree"]>>();
+    return {
+      commit: head.commit,
+      async source(paths, commit = head.commit) {
+        const tree = trees.get(commit) ?? deps.deployStore.commitTreeOf(d.id, commit);
+        trees.set(commit, tree);
+        return sourceOf(d.id, { commit, tree: await tree }, paths);
+      },
+    };
+  }
+
+  const sourceOf = async (
+    id: string,
+    saved: Pick<DeploymentSource, "commit" | "tree">,
+    paths: string[] = [],
+  ): Promise<DeploymentSource> => ({
     commit: saved.commit,
     tree: saved.tree.map(({ path, sha, size }) => ({ path, sha, size })),
     files: (
@@ -530,9 +567,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       });
     },
 
-    async getDeployment(idOrName) {
-      return (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
-    },
+    getDeployment,
 
     listDeployments() {
       return deps.deployStore.list();
@@ -704,9 +739,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     async setDeploymentPublic(idOrName, isPublic, actor) {
       const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
       if (!d) throw new DeployAccessError("not_found", `no such app: ${idOrName}`);
-      if (d.ownerScopeId !== scopeId("personal", actor.createdBy)) {
-        throw new DeployAccessError("forbidden", `only the owner can change who can reach "${d.name ?? d.id}"`);
-      }
+      await this.assertDeploymentOwner(d, actor);
       if (isPublic && !(await externalSharingAllowed(d.ownerScopeId)))
         throw new DeployAccessError("external_sharing_disabled", EXTERNAL_APP_SHARING_OFF);
       if (isPublic && deps.publicLinksAvailable === false)
@@ -810,10 +843,15 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       });
     },
 
-    async source(idOrName, paths) {
-      const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
-      const saved = d ? await liveEdits.savedOf(d) : null;
-      return d && saved ? sourceOf(d.id, saved, paths) : null;
+    async source(idOrName, paths, commit) {
+      const d = await getDeployment(idOrName);
+      const reader = d ? await sourceReaderOf(d) : null;
+      return reader ? reader.source(paths, commit) : null;
+    },
+
+    async sourceReader(idOrName, caller, actingScopeId) {
+      const d = await getDeployment(idOrName);
+      return d && (await canManage(d, caller, actingScopeId)) ? sourceReaderOf(d) : null;
     },
 
     async editSource(idOrName, actor, edit) {
@@ -930,6 +968,8 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         if (existing.ownerScopeId !== ownerScopeId && !(await canManage(existing, caller, input.createdInScope))) {
           throw new Error(`deployment name taken: ${input.name}`);
         }
+        if (!(await personOrOwningBot(caller, async () => samePerson(existing.createdBy, caller.actorId))))
+          throw new Error(`not authorized to manage deployment: ${input.name}`);
         const entrypoint = requiredEntrypoint(input.entrypoint, existing);
         const { liveEdit } = await this.redeploy(existing.id, {
           actor: createdBy,
@@ -960,8 +1000,17 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       return (await deps.deployStore.get(d.id))!;
     },
 
+    async assertDeploymentOwner(d, actor) {
+      const caller = { actorId: actor.createdBy, botActor: actor.botActor };
+      if (
+        d.ownerScopeId !== scopeId("personal", actor.createdBy) ||
+        !(await personOrOwningBot(caller, async () => samePerson(d.createdBy, actor.createdBy)))
+      )
+        throw new DeployAccessError("forbidden", `only the owner can change who can reach "${d.name ?? d.id}"`);
+    },
+
     async canManageDeployment(idOrName, caller, actingScopeId) {
-      const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
+      const d = await getDeployment(idOrName);
       if (!d) return false;
       return canManage(d, caller, actingScopeId);
     },
@@ -975,9 +1024,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     async shareDeployment(idOrName, grantee, permission, actor, opts) {
       const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
       if (!d) throw new DeployAccessError("not_found", `no such app: ${idOrName}`);
-      if (d.ownerScopeId !== scopeId("personal", actor.createdBy)) {
-        throw new DeployAccessError("forbidden", `only the owner can change who can reach "${d.name ?? d.id}"`);
-      }
+      await this.assertDeploymentOwner(d, actor);
       grantee = await deploymentShareScope(grantee, permission, deps.canManageEmail);
       await assertShareAllowed(d.ownerScopeId, grantee, permission);
       const ref = deploymentRef(d.id);

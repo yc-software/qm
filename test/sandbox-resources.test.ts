@@ -219,6 +219,43 @@ test("status and restart resolve the selected backing machine rather than legacy
   assert.deepEqual(provisioned, [record.backingScopeId, `restart:${record.backingScopeId}`]);
 });
 
+test("a person's use of a computer outlasts a failed first boot and a retry it races", async () => {
+  const booting = Promise.withResolvers<void>();
+  const boot = Promise.withResolvers<void>();
+  const { options, records } = fixture((backend) => {
+    const provision = backend.provision.bind(backend);
+    backend.provision = async (id, opts) => {
+      if (id === "sandbox-c1") {
+        booting.resolve();
+        await boot.promise;
+      }
+      return provision(id, opts);
+    };
+  }, []);
+  let markOnRead = "";
+  const resources = createSandboxResources({
+    ...options,
+    records: {
+      ...records,
+      async get(id) {
+        const found = await records.get(id);
+        if (id === markOnRead) await records.update(id, (current) => ({ ...current, personUsed: true }));
+        return found;
+      },
+    },
+  });
+  const creating = resources.create("alice", "channel:team", "local", "computer", "c1");
+  await booting.promise;
+  await resources.notePersonUse("c1");
+  boot.reject(new Error("boot failed"));
+  await assert.rejects(creating, /boot failed/);
+  const failed = (await records.get("c1"))!;
+  assert.equal(failed.personUsed, true);
+  await records.put("c2", { ...failed, id: "c2", backingScopeId: "sandbox-c2", personUsed: undefined });
+  markOnRead = "c2";
+  assert.equal((await resources.create("alice", "channel:team", "local", "computer", "c2")).personUsed, true);
+});
+
 const sizedBackend = (sizes: Array<number | undefined>) => (backend: Sandbox) => {
   backend.profile.sizesMemory = true;
   const provision = backend.provision.bind(backend);
@@ -646,8 +683,7 @@ test("retirement waits for background startup to commit its live registry row", 
   const resources = createSandboxResources({
     ...options,
     beforeRetire: async (record) => {
-      if ((await registry.liveByScope(record.ownerScopeId)).some((r) => r.sandboxId === record.id))
-        throw new Error("live background work");
+      if ((await registry.listLive()).some((r) => r.sandboxId === record.id)) throw new Error("live background work");
     },
   });
   const router = createSandboxRouter({ resources, backends: { local: backend }, defaultBackend: "local" });

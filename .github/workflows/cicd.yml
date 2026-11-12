@@ -357,12 +357,21 @@ jobs:
           # Pinned vendor CLI under test; not shipped, so the repo's release-age guard is bypassed for this install only.
           npm i --no-save --no-audit --no-fund --min-release-age=0 memorable-cli@0.5.15
           node --test test/e2e/memorable-cli.e2e.test.ts
-      - name: Upgrade from the latest published release
+      - name: Upgrade from the latest published release as a managed Postgres app login
         if: needs.reuse.outputs.reusable != 'true'
         env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/qm_upgrade
+          DATABASE_URL: postgres://qm_installer:qm_installer@localhost:5432/qm_upgrade
+          QM_UPGRADE_APP_URL: postgres://schema_admin:schema_admin@localhost:5432/qm_upgrade
         run: |
-          docker exec ${{ job.services.postgres.id }} createdb -U postgres qm_upgrade
+          docker exec -i ${{ job.services.postgres.id }} psql -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE qm_installer LOGIN SUPERUSER PASSWORD 'qm_installer';
+          CREATE ROLE schema_admin LOGIN PASSWORD 'schema_admin';
+          CREATE DATABASE qm_upgrade;
+          GRANT CONNECT, CREATE, TEMPORARY ON DATABASE qm_upgrade TO schema_admin;
+          \c qm_upgrade
+          CREATE EXTENSION vector;
+          GRANT USAGE, CREATE ON SCHEMA public TO schema_admin;
+          SQL
           scripts/check-published-upgrade.sh
 
   web-ui-plugin:
