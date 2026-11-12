@@ -24,7 +24,7 @@ import { childIsolation } from "./child-isolation.ts";
 import { openRuntime, parentRuntime } from "./subagent-runtime.ts";
 import type { RuntimeChoice } from "../agent/agent.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
-import type { Run, RunStore } from "../runs/run-store.ts";
+import { isTerminal, type Run, type RunStore } from "../runs/run-store.ts";
 import { replayableRequest } from "../core/orchestrator/turn-helpers.ts";
 import type { RunSignal, RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SessionStore } from "./session-store.ts";
@@ -100,7 +100,7 @@ export async function delegatedAuthorization(
       !isSubagentThreadRef(child.threadRef) &&
       source.sessionId === sender.threadRef;
     if (!delegated && !continued && !started) return;
-    attended &&= source.status === "running" && (source.leaseExpiresAt ?? 0) > Date.now();
+    attended &&= !isTerminal(source.status);
     const parent = source.request;
     const audience = new Set([parent.actor.id, ...parent.conversation.audience.map((person) => person.id)]);
     if (

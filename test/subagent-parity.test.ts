@@ -197,8 +197,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
   const parentTurn = async (surface: string, threadRef: string) => {
     const conversation = { kind: "dm" as const, threadRef, audience: [actor] };
     const request: OrchestratorInput = { surface, actor, conversation, origin: { kind: "human" }, text: "go" };
-    const { run } = await runs.enqueue({ sessionId: threadRef, request, maxAttempts: 1 });
-    await execute((await runs.claimById(run.id, "parent", 60_000))!);
+    await execute((await runs.enqueue({ sessionId: threadRef, request, maxAttempts: 1 })).run);
     const parent = (await sessions.getByThread(threadRef))!;
     const [child] = await sessions.childrenOf(parent.id);
     assert.ok(child, "the parent opened a subagent");

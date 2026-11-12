@@ -175,7 +175,8 @@ test("sharing e2e: a delegated turn shares its live parent's access under curren
     return provision(owner, opts);
   };
   const { run: running } = await b.runs.enqueue({ sessionId: parent.sessionId, request: parent.request });
-  assert.ok(await b.runs.claimById(running.id, "parent", 60_000));
+  const claimed = await b.runs.claimById(running.id, "parent", 60_000);
+  assert.ok(claimed);
   b.runtime.start();
   const childTurn = async (text: string, expectedStatus: "ok" | "refused" = "ok", delegatingRunId = parent.id) => {
     const { run } = await b.runs.enqueue({
@@ -215,6 +216,9 @@ test("sharing e2e: a delegated turn shares its live parent's access under curren
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/memory/brain`;
   const brain = async () => (await fetch(url, { headers: { "x-agent-capability": token ?? "" } })).status;
   assert.equal(await brain(), 403);
+  await childTurn("!run true", "ok", running.id);
+  assert.equal(await brain(), 200);
+  assert.ok(await b.runs.releaseLease(running.id, claimed.leaseToken!, undefined, Date.now() + 60_000));
   await childTurn("!run true", "ok", running.id);
   assert.equal(await brain(), 200);
   const credential = await b.keychain!.save({
