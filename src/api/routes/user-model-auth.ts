@@ -190,7 +190,7 @@ export const userModelAuthRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...withActor("body.principalId", [
     { method: "POST", path: "/v1/user-model-auth/account", browser: true, auth: "source", handle: setAccount },
     { method: "POST", path: "/v1/user-model-auth/api-key", browser: true, auth: "source", handle: putApiKey },
-    { method: "POST", path: "/v1/user-model-auth/disconnect", browser: true, auth: "source", handle: disconnect },
+    { method: "POST", path: "/v1/user-model-auth/disconnect", browser: "self", auth: "source", handle: disconnect },
     { method: "POST", path: "/v1/user-model-auth/chatgpt/start", browser: true, auth: "source", handle: chatgptStart },
     { method: "POST", path: "/v1/user-model-auth/chatgpt/poll", browser: true, auth: "source", handle: chatgptPoll },
     { method: "POST", path: "/v1/user-model-auth/claude/start", browser: true, auth: "source", handle: claudeStart },

@@ -8,6 +8,7 @@ import { isObj } from "./shared.ts";
 import { parseScopeId, type Permission } from "../../types.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { personAtKeyboard, resolveShareTarget as resolveShareTargetGrammar } from "../artifact-share.ts";
+import { activeRun } from "./composio.ts";
 
 async function setDeploymentConnectors(ctx: ApiCtx): Promise<void> {
   const { res, app, params, body, capability, actor } = ctx;
@@ -17,6 +18,7 @@ async function setDeploymentConnectors(ctx: ApiCtx): Promise<void> {
       error: "forbidden",
       message: "only the publisher, in a live conversation or signed in, can lend an app their connectors",
     });
+  if (!(await activeRun(ctx))) return;
   const connectors = (body as { connectors?: unknown }).connectors;
   if (!Array.isArray(connectors) || !connectors.every((host) => typeof host === "string"))
     return sendJson(res, 400, { error: "bad_request", message: "connectors (array of connected-app hosts) required" });

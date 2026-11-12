@@ -432,7 +432,7 @@ export const keychainRoutes: ReadonlyArray<Route<ApiCtx>> = [
   {
     method: "DELETE",
     path: "/v1/keychain/credentials/:id",
-    browser: true,
+    browser: "self",
     actor: "person",
     auth: "either",
     handle: deleteCredential,
@@ -441,7 +441,7 @@ export const keychainRoutes: ReadonlyArray<Route<ApiCtx>> = [
   {
     method: "POST",
     path: "/v1/keychain/grants/:id/revoke",
-    browser: true,
+    browser: "self",
     actor: "person",
     auth: "either",
     handle: revokeGrant,

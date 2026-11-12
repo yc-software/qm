@@ -631,7 +631,7 @@ export const connectorRoutes: ReadonlyArray<Route<ApiCtx>> = [
   {
     method: "POST",
     path: "/v1/connectors/oauth/revoke",
-    browser: true,
+    browser: "self",
     actor: "body.principalId",
     auth: "either",
     handle: oauthRevoke,

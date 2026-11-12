@@ -3,6 +3,7 @@ import { swallowAs } from "../../util/errors.ts";
 import { isObj } from "./shared.ts";
 import { personAtKeyboard } from "../artifact-share.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
+import { activeRun } from "./composio.ts";
 import { KeychainError } from "../../credentials/keychain.ts";
 import type { PersonaResult } from "../../personas/persona-service.ts";
 import type { Cron } from "../../triggers/types.ts";
@@ -106,7 +107,7 @@ async function updatePersona(ctx: ApiCtx): Promise<void> {
 async function deletePersona(ctx: ApiCtx): Promise<void> {
   const personas = service(ctx);
   const principalId = personas && principalOf(ctx, "body");
-  if (!personas || !principalId) return;
+  if (!personas || !principalId || !(await liveOwnerTurn(ctx))) return;
   respond(ctx, await personas.remove(principalId, ctx.params.id!), "deleted");
 }
 
@@ -156,11 +157,11 @@ async function setPersonaAccess(ctx: ApiCtx): Promise<void> {
   respond(ctx, await personas.setAccess(principalId, ctx.params.id!, access), "access");
 }
 
-function liveOwnerTurn(ctx: ApiCtx): boolean {
-  if (!ctx.capability || personAtKeyboard(ctx.capability)) return true;
+async function liveOwnerTurn(ctx: ApiCtx): Promise<boolean> {
+  if (!ctx.capability || personAtKeyboard(ctx.capability)) return activeRun(ctx);
   sendJson(ctx.res, 403, {
     error: "forbidden",
-    message: "credentials can only be attached or detached on a turn the owner sent themself",
+    message: "credentials can only be attached or detached, and personas deleted, on a turn the owner sent themself",
   });
   return false;
 }
@@ -177,7 +178,7 @@ async function keychainResult<T>(ctx: ApiCtx, fn: () => Promise<PersonaResult<T>
 async function attachCredential(ctx: ApiCtx): Promise<void> {
   const personas = service(ctx);
   const principalId = personas && principalOf(ctx, "body");
-  if (!personas || !principalId || !liveOwnerTurn(ctx)) return;
+  if (!personas || !principalId || !(await liveOwnerTurn(ctx))) return;
   const credentialId = isObj(ctx.body) ? ctx.body.credentialId : undefined;
   await keychainResult(ctx, () => personas.attachCredential(principalId, ctx.params.id!, credentialId), "credential");
 }
@@ -185,7 +186,7 @@ async function attachCredential(ctx: ApiCtx): Promise<void> {
 async function detachCredential(ctx: ApiCtx): Promise<void> {
   const personas = service(ctx);
   const principalId = personas && principalOf(ctx, "body");
-  if (!personas || !principalId || !liveOwnerTurn(ctx)) return;
+  if (!personas || !principalId || !(await liveOwnerTurn(ctx))) return;
   await keychainResult(
     ctx,
     () => personas.detachCredential(principalId, ctx.params.id!, ctx.params.grantId!),
@@ -219,7 +220,7 @@ export const personaRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...withActor("body.principalId", [
     { method: "POST", path: "/v1/personas", browser: true, auth: "either", handle: createPersona },
     { method: "PATCH", path: "/v1/personas/:id", browser: true, auth: "either", handle: updatePersona },
-    { method: "DELETE", path: "/v1/personas/:id", browser: true, auth: "either", handle: deletePersona },
+    { method: "DELETE", path: "/v1/personas/:id", browser: "self", auth: "either", handle: deletePersona },
     {
       method: "POST",
       path: "/v1/personas/:id/versions/:version/restore",
@@ -228,11 +229,11 @@ export const personaRoutes: ReadonlyArray<Route<ApiCtx>> = [
       handle: restorePersonaVersion,
     },
     { method: "PUT", path: "/v1/personas/:id/access", browser: true, auth: "either", handle: setPersonaAccess },
-    { method: "POST", path: "/v1/personas/:id/credentials", browser: true, auth: "either", handle: attachCredential },
+    { method: "POST", path: "/v1/personas/:id/credentials", browser: "self", auth: "either", handle: attachCredential },
     {
       method: "DELETE",
       path: "/v1/personas/:id/credentials/:grantId",
-      browser: true,
+      browser: "self",
       auth: "either",
       handle: detachCredential,
     },

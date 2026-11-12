@@ -17,6 +17,7 @@ import { registryError, writeRegistry } from "./admin/memory-registry.ts";
 import { parseScopeId, scopeId } from "../../types.ts";
 import { tenantOf, type ApiCtx, type Route } from "./route.ts";
 import { adminStanding, audit, orgScope } from "./shared.ts";
+import { activeRun } from "./composio.ts";
 
 const NOT_LIVE = "a member's memory brain can only be managed on a turn that person sent";
 
@@ -36,6 +37,7 @@ async function member(ctx: ApiCtx) {
     sendJson(res, 403, { error: "forbidden", message: NOT_LIVE });
     return null;
   }
+  if (!(await activeRun(ctx))) return null;
   if (
     parseScopeId(capability.scopeId).kind !== "personal" &&
     (await deps.config?.resolveSharingPostureDurable(scopeId("personal", capability.actorId), capability.scopeId)) !==

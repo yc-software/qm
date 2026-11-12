@@ -12,9 +12,9 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS, OAUTH_CONSENT_AUD } from "../sr
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
+import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 
 const SECRET = "consent-bridge-secret".repeat(3);
-const RUN = { runId: "consent-run", runAttempt: 1, runLeaseToken: "consent-lease", threadRef: "dm:consent" };
 
 async function start(
   fetchImpl: FetchLike = async () => {
@@ -41,9 +41,7 @@ async function start(
       { channelId: "C9", principalId: "U1" },
     ],
   );
-  const run = { status: "running", leaseToken: RUN.runLeaseToken, attempts: 1, sessionId: RUN.threadRef };
-  const live = { ...run, leaseExpiresAt: Infinity, request: { actor: { id: "U1" } } } as never;
-  const runs = { ...built.runs, get: async (id: string) => (id === RUN.runId ? live : built.runs.get(id)) };
+  const runs = liveRunStore(built.runs);
   const server = createServer(built.app, { ...serverDeps(config, built), runs, oauthFetch: fetchImpl });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -56,8 +54,7 @@ const consentTok = async (actorId: string, opts: { scopeId?: string } = {}) => {
       actorId,
       scopeId: opts.scopeId ?? `personal:${actorId}`,
       aud: OAUTH_CONSENT_AUD,
-      liveActor: true,
-      ...RUN,
+      ...liveRunClaims(actorId),
       exp: Date.now() + CAPABILITY_TTL_MS,
     },
     SECRET,
@@ -325,14 +322,16 @@ test("the consent-mint route takes only the oauth-consent token of a running tur
   }
 });
 
-test("removing a connection or a saved login takes a running turn with a person at the keyboard", async () => {
+test("removing a connection, a saved login or a persona takes a running turn with a person at the keyboard", async () => {
   const srv = await start();
   try {
     await srv.built.connectorTokens.setConnectorToken("gmail.googleapis.com", "U9", { accessToken: "kept" });
+    await srv.built.featureFlags.setEnabled("personas", "personal:U1", true, "test");
+    const { value } = (await srv.built.app.personas!.create("U1", { name: "Ada" })) as { value: { id: string } };
     const exp = Date.now() + CAPABILITY_TTL_MS;
     const send = async (method: string, path: string, claims: object = {}, principalId?: string) => {
       const cap = await mintCapabilityToken(
-        { ...RUN, actorId: "U1", scopeId: "personal:U1", liveActor: true, exp, ...claims },
+        { ...liveRunClaims("U1"), actorId: "U1", scopeId: "personal:U1", exp, ...claims },
         SECRET,
       );
       const res = await fetch(`${srv.base}${path}`, {
@@ -340,12 +339,13 @@ test("removing a connection or a saved login takes a running turn with a person 
         headers: { "content-type": "application/json", "x-agent-capability": cap },
         body: method === "POST" ? JSON.stringify({ provider: "google", principalId }) : null,
       });
-      const json = (await res.json()) as { error?: string; principalId?: string };
-      return `${res.status} ${json.error ?? json.principalId}`;
+      const json = (await res.json()) as { error?: string; principalId?: string; deleted?: boolean };
+      return `${res.status} ${json.error ?? json.principalId ?? json.deleted}`;
     };
     const revoke = "/v1/connectors/oauth/revoke";
     const login = "/v1/keychain/credentials/x";
     const grant = "/v1/keychain/grants/x/revoke";
+    const persona = `/v1/personas/${value.id}`;
     assert.equal(await send("POST", revoke), "200 U1");
     assert.equal(await send("POST", revoke, { keychainMembers: [{ id: "U2", type: "internal" }] }, "U2"), "200 U2");
     assert.equal(await send("POST", revoke, {}, "U9"), "400 bad_request");
@@ -357,6 +357,10 @@ test("removing a connection or a saved login takes a running turn with a person 
     assert.equal(await send("DELETE", login, { triggered: true }), "403 human_consent_required");
     assert.equal(await send("POST", grant, { botActor: true }), "403 human_consent_required");
     assert.equal(await send("POST", grant, { runId: "finished-run" }), "403 inactive_run");
+    assert.equal(await send("DELETE", persona, { triggered: true }), "403 forbidden");
+    assert.equal(await send("DELETE", persona, { runId: "finished-run" }), "403 inactive_run");
+    assert.equal(await send("DELETE", `${persona}/credentials/x`, { runId: "finished-run" }), "403 inactive_run");
+    assert.equal(await send("DELETE", persona), "200 true");
   } finally {
     await srv.close();
   }
