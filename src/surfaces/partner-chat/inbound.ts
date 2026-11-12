@@ -19,7 +19,6 @@ import {
 const SURFACE = "partner-chat";
 const CONTEXT_SCAN = 500;
 const CONTEXT_DEFAULT_COUNT = 100;
-const DETECT_THREAD_COUNT = 30;
 
 type InboundApp = Pick<
   App,
@@ -51,7 +50,7 @@ export function createPartnerChatInbound(deps: {
   async function threadDetection(container: string, thread: string, triggerTs: string) {
     const [root, replies] = await Promise.all([
       findMessage(cache, container, thread),
-      cache.readMessages(container, { surface: SURFACE, sub: thread, limit: DETECT_THREAD_COUNT, noFallback: true }),
+      cache.readMessages(container, { surface: SURFACE, sub: thread, limit: CONTEXT_DEFAULT_COUNT, noFallback: true }),
     ]);
     const detectContext = replies
       .filter((m) => !m.self && !m.bot && m.ts !== triggerTs)
