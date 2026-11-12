@@ -2133,7 +2133,8 @@ export function buildApp(
     refreshModels,
   };
   const sessionMailbox = createSessionMailbox(artifactMap<SessionMessage>("session_mailbox", ["recipientId", "wake"]));
-  const awaitingApproval = async (sessionId: string) => (await blockingApprovalSessions([sessionId])).has(sessionId);
+  const sessionsAwaitingApproval = (sessionIds: readonly string[]) => app.sessionsAwaitingApproval(sessionIds);
+  const awaitingApproval = async (sessionId: string) => (await sessionsAwaitingApproval([sessionId])).has(sessionId);
   const sessionSyscalls = createSessionSyscalls({
     mailbox: sessionMailbox,
     awaitingApproval,
@@ -2380,7 +2381,7 @@ export function buildApp(
     signals: runSignals,
     advisoryLock,
     awaitingApproval,
-    blockingApprovalSessions,
+    blockingApprovalSessions: sessionsAwaitingApproval,
   };
   const app = createApp({
     errors,

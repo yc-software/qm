@@ -295,6 +295,7 @@ export interface App {
   subscribeSessionStates(cb: (event: SessionStateEvent) => void | Promise<void>, opts?: SubscribeOptions): () => void;
   subscribeLedgerEvents(cb: (event: OwnedLedgerEvent) => void | Promise<void>, opts?: SubscribeOptions): () => void;
   listSessionApprovals(sessionId: string, viewer: string): Promise<PendingApproval[]>;
+  sessionsAwaitingApproval(sessionIds: readonly string[]): Promise<Set<string>>;
   pendingApprovalForThread(threadRef: string, viewer?: string): Promise<TurnResult | null>;
   subscribeRun(runId: string, listener: (event: RunStreamEvent) => void, onResync?: () => void): () => void;
   syncRunStream(runId: string, offset: number, reasoning: Record<string, number>): void;
