@@ -1433,6 +1433,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const detectHistory = filterHistory((await turnWindow()).items.slice(-DETECT_HISTORY_TAIL));
           const decision = await deps.agent
             .shouldRespond({
+              ...sessionRoute,
               session,
               message: input.text,
               recentContext: input.detectContext ?? "",

@@ -382,11 +382,12 @@ async function detectAgainst(
         models: { "claude-haiku-4-5": "detect-model" },
       },
     }),
-    detectModelId: "claude-haiku-4-5",
+    detectModelId: "claude-sonnet-5",
   });
   const rows: TurnLlmRequestRecord[] = [];
   const outcome = await agent.shouldRespond!({
     session: { id: "session-1" } as DetectInput["session"],
+    runtime: { modelId: "claude-haiku-4-5" },
     message: "hey bot, can you check this?",
     recentContext: "",
     systemPrompt: "be brief",

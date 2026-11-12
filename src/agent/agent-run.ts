@@ -1021,7 +1021,7 @@ export function createAgent(opts?: AgentOptions): Agent {
     },
 
     async shouldRespond(detect: DetectInput): Promise<DetectResult> {
-      const route = await utilityRoute(opts?.detectModelId);
+      const route = servable(await sessionRoute(detect));
       if (!route) return { respond: true };
       const detectSystemPrompt = buildDetectionPrompt(detect.reactionGuidance);
       const prompt = renderDetectPrompt(detect);

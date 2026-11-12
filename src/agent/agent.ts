@@ -179,7 +179,7 @@ export interface AgentTurnResult {
   cacheUsage?: { cacheRead: number; cacheWrite: number; uncachedInput: number };
 }
 
-export interface DetectInput {
+export interface DetectInput extends SessionRoute {
   session: Session;
   message: string;
   recentContext: string;

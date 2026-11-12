@@ -27,19 +27,7 @@ import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 const actor: Principal = { id: "U1", type: "internal" };
 
-test("an ambient message whose reply detection fails stays silent and leaves the failure in the error and audit logs", async () => {
-  const base = createMockAgent();
-  let ran = false;
-  const agent: Agent = {
-    ...base,
-    runTurn: async () => {
-      ran = true;
-      return { reply: "spurious" };
-    },
-    shouldRespond: async () => {
-      throw new Error("401 invalid x-api-key");
-    },
-  };
+function orchestratorFor(agent: Agent) {
   const config = testConfigStore("default-org");
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
@@ -69,6 +57,24 @@ test("an ambient message whose reply detection fails stays silent and leaves the
     acl,
   });
 
+  return { orch, auditLog, errors };
+}
+
+test("an ambient message whose reply detection fails stays silent and leaves the failure in the error and audit logs", async () => {
+  const base = createMockAgent();
+  let ran = false;
+  const agent: Agent = {
+    ...base,
+    runTurn: async () => {
+      ran = true;
+      return { reply: "spurious" };
+    },
+    shouldRespond: async () => {
+      throw new Error("401 invalid x-api-key");
+    },
+  };
+  const { orch, auditLog, errors } = orchestratorFor(agent);
+
   const result = await orch.handleTurn({
     surface: "slack",
     actor,
@@ -86,4 +92,29 @@ test("an ambient message whose reply detection fails stays silent and leaves the
   );
   const silent = (await auditLog.events(testTenant)).find((e) => e.action === "turn.silent");
   assert.equal(silent?.detail, "detection failed: 401 invalid x-api-key");
+});
+
+test("ambient reply detection runs on the model the session is using", async () => {
+  const base = createMockAgent();
+  let detectModel: string | undefined;
+  const agent: Agent = {
+    ...base,
+    shouldRespond: async (detect) => {
+      detectModel = detect.runtime?.modelId;
+      return { respond: false };
+    },
+  };
+  const { orch } = orchestratorFor(agent);
+
+  const result = await orch.handleTurn({
+    surface: "slack",
+    actor,
+    conversation: { kind: "channel", threadRef: "ch:C1:300.1", channelRef: "C1", audience: [actor] } as Conversation,
+    origin: { kind: "ambient" },
+    model: "claude-sonnet-5",
+    text: "how's it going?",
+  });
+
+  assert.equal(result.status, "silent");
+  assert.equal(detectModel, "claude-sonnet-5");
 });
