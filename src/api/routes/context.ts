@@ -165,7 +165,7 @@ const FILE_DOWNLOAD_TTL_MS = 5 * 60_000;
 function awaitFileFulfillment(ctx: ApiCtx, requestId: string): Promise<void> {
   return awaitOutcome(ctx, requestId, SURFACE_FILE_WAIT_MS, async (result) => {
     const { res, capability, secret } = ctx;
-    const file = result.file;
+    const file = result.attachments?.[0];
     if (!file) {
       return sendJson(res, 502, {
         error: "surface_error",
@@ -189,7 +189,8 @@ function awaitFileFulfillment(ctx: ApiCtx, requestId: string): Promise<void> {
       (ctx.deps.capabilitySecret ?? secret)!,
       ctx.deps.capabilityTokenCompression,
     );
-    const { blobId, ...meta } = file;
+    const { blobId, name, sizeBytes, mimetype, author } = file;
+    const meta = { name, sizeBytes, mimetype, ...(author ? { author } : {}) };
     return sendJson(res, 200, {
       file: meta,
       download: {
@@ -220,17 +221,6 @@ async function fulfillContextRequest(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
   const id = ctx.params.id!;
   const b = isObj(body) ? body : {};
-  const f = isObj(b.file) ? b.file : undefined;
-  const file =
-    f && typeof f.blobId === "string" && typeof f.name === "string" && typeof f.sizeBytes === "number"
-      ? {
-          blobId: f.blobId,
-          name: f.name,
-          sizeBytes: f.sizeBytes,
-          ...(typeof f.mimetype === "string" ? { mimetype: f.mimetype } : {}),
-          ...(typeof f.author === "string" ? { author: f.author } : {}),
-        }
-      : undefined;
   const attachments = Array.isArray(b.attachments)
     ? b.attachments.flatMap((a) =>
         isObj(a) && typeof a.blobId === "string" && typeof a.name === "string" && typeof a.sizeBytes === "number"
@@ -260,7 +250,6 @@ async function fulfillContextRequest(ctx: ApiCtx): Promise<void> {
             ...(typeof b.note === "string" ? { note: b.note } : {}),
             ...(Array.isArray(b.selfTs) ? { selfTs: b.selfTs.filter((ts) => typeof ts === "string") } : {}),
             ...(b.liveSearch === "unconfigured" || b.liveSearch === "unconnected" ? { liveSearch: b.liveSearch } : {}),
-            ...(file ? { file } : {}),
             ...(attachments ? { attachments } : {}),
             ...(Array.isArray(b.issues) ? { issues: b.issues.filter((i) => typeof i === "string") } : {}),
             ...(group ? { group } : {}),

@@ -30,7 +30,6 @@ export interface SurfaceContextResult {
   note?: string;
   selfTs?: string[];
   liveSearch?: "unconfigured" | "unconnected";
-  file?: { blobId: string; name: string; mimetype?: string; sizeBytes: number; author?: string };
   attachments?: IncomingAttachment[];
   issues?: string[];
   group?: { groupId: string };

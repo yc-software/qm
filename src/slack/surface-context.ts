@@ -158,8 +158,7 @@ export function createSurfaceContextFulfiller(deps: {
       issues,
     } = await stageFiles(client, [file]);
     if (!staged) return { error: issues.join("; ") };
-    const { blobId, name, sizeBytes, mimetype, author } = staged;
-    return { file: { blobId, name, sizeBytes, mimetype, ...(author ? { author } : {}) } };
+    return { attachments: [staged] };
   }
 
   function stageFiles(client: any, files: SlackFile[]) {

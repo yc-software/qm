@@ -52,13 +52,11 @@ export {
 } from "./message-gating.ts";
 export {
   type SlackFile,
-  hydrateSlackFiles,
   MAX_ATTACHMENT_BYTES,
   isOversize,
   isTrustedSlackHost,
   attachmentFromBytes,
   MAX_ATTACHMENTS_PER_TURN,
-  oversizeMsg,
   downloadSlackFile,
   processInboundFiles,
   stageSlackFiles,

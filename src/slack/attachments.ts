@@ -34,7 +34,7 @@ export interface SlackFile {
   user?: string;
 }
 
-export async function hydrateSlackFiles(
+async function hydrateSlackFiles(
   files: readonly SlackFile[],
   lookup: (fileId: string) => Promise<SlackFile | undefined>,
 ): Promise<SlackFile[]> {
@@ -44,7 +44,8 @@ export async function hydrateSlackFiles(
       try {
         const hydrated = await lookup(file.id);
         return hydrated ? { ...file, ...hydrated, ...(file.user ? { user: file.user } : {}) } : file;
-      } catch {
+      } catch (err) {
+        swallow(`slack: files.info ${file.id}`, err);
         return file;
       }
     }),
@@ -88,7 +89,7 @@ export const MAX_ATTACHMENTS_PER_TURN = 10;
 
 const CAP_MB = Math.floor(MAX_ATTACHMENT_BYTES / 1_000_000);
 const capLabel = CAP_MB >= 1000 ? `${Math.round(CAP_MB / 1000)} GB` : `${CAP_MB} MB`;
-export const oversizeMsg = (label: string): string => `"${label}" is too large — I can handle files up to ~${capLabel}`;
+const oversizeMsg = (label: string): string => `"${label}" is too large — I can handle files up to ~${capLabel}`;
 
 export interface DownloadOptions {
   token?: string;
@@ -132,7 +133,7 @@ export async function processInboundFiles(
   for (const f of files) {
     const label = f.name || f.title || "that file";
     if (attachments.length >= MAX_ATTACHMENTS_PER_TURN) {
-      issues.push(`skipped "${label}" — too many files in one message (max ${MAX_ATTACHMENTS_PER_TURN})`);
+      issues.push(`skipped "${label}" — too many files at once (max ${MAX_ATTACHMENTS_PER_TURN})`);
       continue;
     }
     if (isOversize(f)) {
