@@ -213,7 +213,7 @@ export function securityScreenPayload(input: SecurityScreenInput): SecurityScree
   return boundedPayload(securityScreenParts(input));
 }
 
-export function fitsScreenInput(length: number): boolean {
+function fitsScreenInput(length: number): boolean {
   return length <= MAX_DOCUMENT_TEXT_CHARS;
 }
 
