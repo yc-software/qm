@@ -217,6 +217,13 @@ export function fitsScreenInput(length: number): boolean {
   return length <= MAX_DOCUMENT_TEXT_CHARS;
 }
 
+export function fittingEntryCount(entrySizes: number[], envelope: number): number {
+  let size = envelope;
+  let fit = 0;
+  while (fit < entrySizes.length && fitsScreenInput(size + entrySizes[fit]!)) size += entrySizes[fit++]!;
+  return fit;
+}
+
 export function securityScreenPayloads(input: SecurityScreenInput): string[] | null {
   const parts = securityScreenParts(input);
   if (!fitsScreenInput(parts.reduce((total, part) => total + part.content.length, 0))) return null;

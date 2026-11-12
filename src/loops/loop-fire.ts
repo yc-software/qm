@@ -3,7 +3,7 @@ import { inboxPlaybook, inboxSource, loadInboxVoiceProfile } from "./inbox-loop.
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import { cronTriggerAuthority, ownerAuthored } from "../cron/authority.ts";
 import { samePerson } from "../directory/person.ts";
-import { fitsScreenInput, MAX_SCREEN_CHARS } from "../security/security-posture.ts";
+import { fittingEntryCount, MAX_SCREEN_CHARS } from "../security/security-posture.ts";
 import type { CronStore } from "../cron/cron-store.ts";
 import { boundLoopCron } from "./authority.ts";
 import type { TurnRequest, TurnResult } from "../types.ts";
@@ -421,11 +421,10 @@ function triagePrompt(loop: Loop, items: LoopItem[], pending: LoopItem[]): { sta
       ...(item.triage?.groupId ? { groupId: item.triage.groupId } : {}),
     });
   });
-  let size = 1;
-  let shown = 0;
-  while (shown < entries.length && fitsScreenInput(size + entries[shown]!.length + 1))
-    size += entries[shown++]!.length + 1;
-  const shownIds = new Set(items.slice(0, shown).map((item) => item.id));
+  const shown = fittingEntryCount(
+    entries.map((entry) => entry.length + 1),
+    "[]".length,
+  );
   const data = `[${entries.slice(0, shown).join(",")}]`;
   const input = [
     "[Loop triage]",
@@ -449,7 +448,7 @@ function triagePrompt(loop: Loop, items: LoopItem[], pending: LoopItem[]): { sta
   ].join("\n");
   return {
     stage: { input, securityScreenData: promptText(data) },
-    pending: pending.filter((item) => shownIds.has(item.id)),
+    pending: items.slice(0, shown).filter((item) => pendingIds.has(item.id)),
   };
 }
 
