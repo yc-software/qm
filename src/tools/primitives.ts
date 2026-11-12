@@ -354,6 +354,7 @@ interface SurfacePostOpts {
 }
 
 interface SurfaceReachTarget {
+  threadTs?: string;
   channel?: string;
   recipient?: string;
   participants?: readonly string[];
@@ -411,6 +412,8 @@ interface SurfaceWhatsNewResult {
 
 interface SurfaceSearchHit {
   ref?: string;
+  where?: string;
+  thread?: string;
   author?: string;
   when?: string;
   snippet: string;

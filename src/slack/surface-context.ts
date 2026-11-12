@@ -53,12 +53,18 @@ export function createSurfaceContextFulfiller(deps: {
       const res = await userClient.search.messages({ query, count: Math.min(count, 100) });
       const matches = res.messages?.matches ?? [];
       const shaped: RecentMessage[] = matches
-        .map((m) => ({
-          ts: String(m?.ts ?? ""),
-          name: String(m?.username || m?.user || "someone"),
-          text: slackMessageContent(m ?? {}).text,
-          ...(m?.user ? { authorId: String(m.user) } : {}),
-        }))
+        .map((m) => {
+          const where = searchHitChannel(m?.channel);
+          const parentTs = searchHitThread(m?.permalink);
+          return {
+            ts: String(m?.ts ?? ""),
+            name: String(m?.username || m?.user || "someone"),
+            text: slackMessageContent(m ?? {}).text,
+            ...(m?.user ? { authorId: String(m.user) } : {}),
+            ...(where ? { where } : {}),
+            ...(parentTs ? { parentTs } : {}),
+          };
+        })
         .filter((m) => m.ts);
       await post(buildContextWindow(shaped, { count }));
     } catch (err) {
@@ -303,4 +309,18 @@ export function createSurfaceContextFulfiller(deps: {
           )
         : fulfillSurfaceContext(client, request),
   };
+}
+
+function searchHitChannel(channel: unknown): string | undefined {
+  if (!channel || typeof channel !== "object") return undefined;
+  const c = channel as { id?: unknown; name?: unknown; is_im?: unknown; is_mpim?: unknown };
+  const id = typeof c.id === "string" ? c.id : undefined;
+  if (!id) return undefined;
+  const name = typeof c.name === "string" && c.name && !c.is_im && !c.is_mpim ? c.name : undefined;
+  return name ? `#${name} (${id})` : id;
+}
+
+function searchHitThread(permalink: unknown): string | undefined {
+  if (typeof permalink !== "string" || !URL.canParse(permalink)) return undefined;
+  return new URL(permalink).searchParams.get("thread_ts") ?? undefined;
 }

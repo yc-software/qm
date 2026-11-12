@@ -334,3 +334,18 @@ test("successful Slack reads preserve partial-context and rate-limit guidance in
     assert.ok(output.includes(guidance), action);
   }
 });
+
+test("search hits name their channel and thread; reach replies there; reads refuse a named channel", async () => {
+  const calls: unknown[] = [];
+  const tool = surfaceTool({
+    search: async () => ({ ok: true, hits: [{ ref: "2.5", where: "#room (C1)", thread: "2.1", snippet: "stats?" }] }),
+    reach: async (_t: string, target: unknown) => (calls.push(target), { ok: true, matched: "#room" }),
+    readThread: async () => (calls.push("read"), { ok: true, messages: [] }),
+  });
+  const found = await tool.execute("c1", { action: "search", query: "stats", source: "slack" });
+  assert.ok(found.content[0].text.includes("[2.5] in #room (C1) (thread 2.1): stats?"));
+  await tool.execute("c2", { action: "reach", channel: "C1", ts: "2.1", text: "here" });
+  const read = await tool.execute("c3", { action: "read_thread", channel: "room" });
+  assert.ok(read.content[0].text.includes("only reads this conversation"));
+  assert.deepEqual(calls, [{ threadTs: "2.1", channel: "C1" }]);
+});

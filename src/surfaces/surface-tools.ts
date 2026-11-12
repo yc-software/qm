@@ -16,6 +16,7 @@ import {
   withReact,
   withEdit,
   withDelete,
+  withThread,
   type ReachResolution,
 } from "../reach/reach.ts";
 import { type SandboxHandle } from "../sandbox/sandbox.ts";
@@ -342,13 +343,14 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       const sending = postText.trim().length > 0 || (f.attachments?.length ?? 0) > 0;
       const d = await resolveDestination(target, { mayOpenGroup: sending });
       if (!d.ok) return { ok: false, message: d.message };
-      const r0 = await enqueue(d.destination, postText, seq, f.attachments);
+      const r0 = await enqueue(withThread(d.destination, target.threadTs), postText, seq, f.attachments);
       if (!r0.ok) return r0;
       const r = f.attachments?.length ? { ...r0, attachments: postedFileMetas(f.attachments) } : r0;
       spine.crossConversationPosts += 1;
       let label = `a group DM (${target.participants?.length ?? 0} people)`;
       if (target.channel !== undefined) label = `#${target.channel.replace(/^#/, "")}`;
       else if (target.recipient !== undefined) label = `a DM to ${target.recipient}`;
+      if (target.threadTs) label += `, in the thread under ${target.threadTs}`;
       return { ...r, matched: label };
     },
     react: async (input: SurfaceReactInput) => {
@@ -446,11 +448,22 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       const limit = Math.max(1, Math.min(SURFACE_SEARCH_MAX, opts?.limit ?? SURFACE_SEARCH_DEFAULT));
       const dest = currentDestination;
       const shapeHits = (messages: unknown[], prefiltered = false) =>
-        (messages as Array<{ ts?: string; time?: string; author?: string; text?: string }>)
+        (
+          messages as Array<{
+            ts?: string;
+            time?: string;
+            author?: string;
+            text?: string;
+            where?: string;
+            threadTs?: string;
+          }>
+        )
           .filter((m) => typeof m?.text === "string" && (prefiltered || m.text.toLowerCase().includes(q.toLowerCase())))
           .slice(-limit)
           .map((m) => ({
             ...(m.ts ? { ref: m.ts } : {}),
+            ...(m.where ? { where: m.where } : {}),
+            ...(m.threadTs && m.threadTs !== m.ts ? { thread: m.threadTs } : {}),
             ...(m.author ? { author: m.author } : {}),
             ...(m.time ? { when: m.time } : {}),
             snippet: String(m.text).slice(0, 200),

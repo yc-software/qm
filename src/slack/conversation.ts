@@ -17,6 +17,7 @@ export function buildContextWindow(
     ...rest,
     renderText: (text) => resolveMentions(text, nameById),
     clipChars: MAX_CONTEXT_MESSAGE_CHARS,
+    selfClipChars: MAX_TURN_MESSAGE_CHARS,
   });
 }
 
@@ -29,6 +30,7 @@ export interface RecentMessage {
   isBot?: boolean;
   isSelf?: boolean;
   parentTs?: string;
+  where?: string;
   reactions?: ReactionTally[];
   files?: string[];
 }

@@ -75,7 +75,9 @@ export function surfaceTool(kit: ToolKit) {
         Type.String({
           description:
             "post: reply under THIS message id (from read_thread/whats_new) — threads off it. You DON'T need it to answer where you were addressed; a plain post already lands in the current thread/DM. Only set it to reply under a DIFFERENT message here." +
-            (textOnly ? "" : " react: the message id to react to."),
+            (textOnly
+              ? ""
+              : " react: the message id to react to. reach: reply inside THAT message's thread in the destination (the thread's parent id, e.g. a search hit's `thread`, or its own id when it has none) instead of posting top-level."),
         }),
       ),
       broadcast: Type.Optional(
@@ -133,6 +135,21 @@ export function surfaceTool(kit: ToolKit) {
         ...(params.channel !== undefined ? { channel: params.channel } : {}),
         ...(params.participants !== undefined ? { participants: params.participants } : {}),
       };
+      if (
+        (params.action === "read_thread" || params.action === "whats_new") &&
+        (params.channel !== undefined || params.recipient !== undefined || params.participants !== undefined)
+      ) {
+        return recordResult(
+          callId,
+          { tool: surfaceName, action: params.action, error: "reads_here_only" },
+          text(
+            `[not read] \`${params.action}\` only reads this conversation, so the channel or people you named were not looked at. ` +
+              'To find a message elsewhere, use `action: "search"` with `source: "slack"`: each hit names its channel and thread, ' +
+              "and `reach` with that `channel` plus `ts` replies inside that thread.",
+          ),
+          true,
+        );
+      }
       switch (params.action) {
         case "post": {
           if (params.text === undefined) return missing("text");
@@ -189,6 +206,7 @@ export function surfaceTool(kit: ToolKit) {
             );
           }
           const target = {
+            ...(params.ts !== undefined ? { threadTs: params.ts } : {}),
             ...(params.channel !== undefined ? { channel: params.channel } : {}),
             ...(params.recipient !== undefined ? { recipient: params.recipient } : {}),
             ...(params.participants !== undefined ? { participants: params.participants } : {}),
@@ -361,7 +379,8 @@ export function surfaceTool(kit: ToolKit) {
               hits
                 .map(
                   (h) =>
-                    `- ${[h.author, h.when].filter(Boolean).join(" · ")}${h.ref ? ` [${h.ref}]` : ""}: ${h.snippet}`,
+                    `- ${[h.author, h.when].filter(Boolean).join(" · ")}${h.ref ? ` [${h.ref}]` : ""}` +
+                    `${h.where ? ` in ${h.where}` : ""}${h.thread ? ` (thread ${h.thread})` : ""}: ${h.snippet}`,
                 )
                 .join("\n") + coverage;
           } else if (r.source === "slack") {

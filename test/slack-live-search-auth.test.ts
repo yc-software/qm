@@ -4,10 +4,10 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createSurfaceContextFulfiller } from "../src/slack/surface-context.ts";
 
-async function searchWith(error: string, viewerToken?: string): Promise<unknown> {
+async function searchWith(error: string | object, viewerToken?: string): Promise<any> {
   const server = createServer((_req, res) => {
     res.setHeader("content-type", "application/json");
-    res.end(JSON.stringify({ ok: false, error }));
+    res.end(JSON.stringify(typeof error === "string" ? { ok: false, error } : error));
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const fulfilled: unknown[] = [];
@@ -54,4 +54,32 @@ test("other Slack errors, or an auth error on the install token, surface as sear
   assert.deepEqual(await searchWith("invalid_auth"), {
     error: "Slack search failed: An API error occurred: invalid_auth",
   });
+});
+
+test("live search hits carry their channel and thread", async () => {
+  const hit = (ts: string, channel: object, permalink?: string) => ({
+    ts,
+    user: "U9",
+    text: "launch",
+    channel,
+    permalink,
+  });
+  const out = await searchWith({
+    ok: true,
+    messages: {
+      matches: [
+        hit("2.1", { id: "C1", name: "partner-room" }, "https://x.slack.com/archives/C1/p21"),
+        hit("2.5", { id: "C1", name: "partner-room" }, "https://x.slack.com/archives/C1/p25?thread_ts=2.1&cid=C1"),
+        hit("3.1", { id: "D1", name: "U7", is_im: true }),
+      ],
+    },
+  });
+  assert.deepEqual(
+    out.result.messages.map((m: any) => [m.ts, m.where, m.threadTs]),
+    [
+      ["2.1", "#partner-room (C1)", undefined],
+      ["2.5", "#partner-room (C1)", "2.1"],
+      ["3.1", "D1", undefined],
+    ],
+  );
 });
