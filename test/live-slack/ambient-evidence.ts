@@ -5,7 +5,7 @@ export interface StoredSession {
   threadRef?: string;
   scopeId?: string;
   parentSessionId?: string | null;
-  spawnMeta?: { actor?: { id?: string }; origin?: { kind?: string }; unprompted?: boolean };
+  spawnMeta?: { actor?: { id?: string }; origin?: { kind?: string; live?: boolean } };
 }
 
 export interface TranscriptItem {
@@ -47,13 +47,17 @@ export function assertAmbientRoundTrip(e: AmbientEvidence): void {
   const helper = byId.get(child)!;
   const channelActor = `system:channel:${e.channelId}`;
   assert.deepEqual(
-    [worker.session.spawnMeta?.actor?.id, worker.session.spawnMeta?.unprompted, worker.session.spawnMeta?.origin?.kind],
-    [channelActor, true, "automation"],
+    [
+      worker.session.spawnMeta?.actor?.id,
+      worker.session.spawnMeta?.origin?.kind,
+      worker.session.spawnMeta?.origin?.live,
+    ],
+    [channelActor, "ambient", undefined],
     "the worker ran unprompted as the channel",
   );
   assert.deepEqual(
-    [helper.session.scopeId, helper.session.spawnMeta?.actor?.id, helper.session.spawnMeta?.unprompted],
-    [`channel:${e.channelId}`, channelActor, true],
+    [helper.session.scopeId, helper.session.spawnMeta?.actor?.id, helper.session.spawnMeta?.origin?.kind],
+    [`channel:${e.channelId}`, channelActor, "ambient"],
     "the helper ran in the same channel as the channel, still unprompted",
   );
   const answer = [...helper.items]

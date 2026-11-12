@@ -1,5 +1,5 @@
 {
-  "provenance": "Run A of a local real-model QA run on f59ea070 (simulated Slack transport, fictional data). f59ea070 predates the unprompted marker, so spawnMeta.unprompted was added to both sessions for this harness check. Harness validation only, not live Slack evidence.",
+  "provenance": "Run A of a local real-model QA run on f59ea070 (simulated Slack transport, fictional data). f59ea070 predates the typed ambient origin, so both sessions' spawnMeta.origin was rewritten to {\"kind\":\"ambient\"} for this harness check. Harness validation only, not live Slack evidence.",
   "channelId": "GFIXTURE",
   "rootTs": "1794436508.508001",
   "marker": "qa-fa94b7cc",
@@ -17,9 +17,8 @@
             "id": "system:channel:GFIXTURE"
           },
           "origin": {
-            "kind": "automation"
-          },
-          "unprompted": true
+            "kind": "ambient"
+          }
         }
       },
       "items": [
@@ -72,9 +71,8 @@
             "id": "system:channel:GFIXTURE"
           },
           "origin": {
-            "kind": "automation"
-          },
-          "unprompted": true
+            "kind": "ambient"
+          }
         }
       },
       "items": [

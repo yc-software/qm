@@ -79,6 +79,9 @@ for (const wake of ["message", "scheduled"] as const)
           if (!isSubagentThreadRef(threadRef)) {
             const opened = await turn.tools.sessionSyscalls!.open({ task: "look up the memo; read only" });
             done.open = opened.ok ? "ok" : `refused: ${opened.message}`;
+          } else {
+            const wrote = await turn.tools.sessionSyscalls!.write({ target: "parent", text: "memo found" });
+            done.messageParent = wrote.ok ? "ok" : `refused: ${wrote.message}`;
           }
           let created: { id?: string } | undefined;
           done.create = await outcome(
@@ -273,7 +276,10 @@ for (const wake of ["message", "scheduled"] as const)
     };
     const legacyToken = await mintCapabilityToken(legacy, TEST_CAPABILITY_SECRET);
     const markers = (c: CapabilityClaims) => [c.actorId, c.scopeId, c.liveActor, c.turnOrigin];
+    const screened = (await built.sessions.listLlmRequests(session.id)).filter((rec) => rec.model === "mock-security");
     const observed = {
+      workerInputScreened: screened.some((rec) => JSON.stringify(rec.promptEnvelope).includes("judgeReason")),
+      workerParticipants: await built.sessions.participantsOf(session.id),
       othersOpen: [
         await openAs("system:ambient:default-org"),
         await openAs(scopeActor(scopeId("channel", "C-other"))),
@@ -335,6 +341,8 @@ for (const wake of ["message", "scheduled"] as const)
       publish: `refused: ${unpromptedRefusal("apps")}`,
     };
     assert.deepEqual(observed, {
+      workerInputScreened: true,
+      workerParticipants: [scopeActor(here)],
       othersOpen: [
         ...["system:ambient:default-org", "system:channel:C-other", "system:group:C-deals", "b@x.com"].map(
           (id) => `${id} ${notMember("C-deals")}`,
@@ -350,13 +358,13 @@ for (const wake of ["message", "scheduled"] as const)
         crossScopeGate: [false, false],
       },
       minted: {
-        parent: [scopeActor(here), here, true, undefined, "conversation", true],
-        child: [scopeActor(here), here, true, undefined, "conversation", true],
-        cronFire: [scopeActor(here), here, true, undefined, "cron", undefined],
-        person: ["a@x.com", here, undefined, undefined, "conversation", undefined],
+        parent: [scopeActor(here), here, undefined, { kind: "ambient" }],
+        child: [scopeActor(here), here, undefined, { kind: "ambient" }],
+        cronFire: [scopeActor(here), here, undefined, { kind: "automation" }],
+        person: ["a@x.com", here, undefined, { kind: "direct" }],
       },
       worker: { execute: "ok", open: "ok", create: "ok", ...refused },
-      helper: { execute: "ok", create: "ok", ...refused },
+      helper: { execute: "ok", messageParent: "ok", create: "ok", ...refused },
       parent: none,
       child: none,
       legacy: { ...today, privateChannelGate: false },

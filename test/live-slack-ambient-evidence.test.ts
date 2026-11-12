@@ -32,9 +32,11 @@ test("the live ambient scenario's checks accept the recorded unprompted round tr
       otherChannelWorker: failure(
         variant((e) => (session(e, workerId).session.spawnMeta!.actor = { id: "system:channel:COTHER" })),
       ),
-      notUnprompted: failure(variant((e) => delete session(e, workerId).session.spawnMeta!.unprompted)),
+      notUnprompted: failure(variant((e) => (session(e, workerId).session.spawnMeta!.origin = { kind: "automation" }))),
       humanOrigin: failure(variant((e) => (session(e, workerId).session.spawnMeta!.origin = { kind: "human" }))),
-      helperNotUnprompted: failure(variant((e) => delete session(e, childId).session.spawnMeta!.unprompted)),
+      helperNotUnprompted: failure(
+        variant((e) => (session(e, childId).session.spawnMeta!.origin = { kind: "automation" })),
+      ),
       baselineWorker: failure(variant((e) => (e.baseline = [workerId]))),
       noReturn: failure(
         variant(

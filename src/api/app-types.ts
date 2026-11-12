@@ -463,7 +463,7 @@ export interface App {
   authorizesCapabilityScope(
     claims: Pick<
       CapabilityClaims,
-      "actorId" | "scopeId" | "scopeVersion" | "botActor" | "liveActor" | "members" | "origin"
+      "actorId" | "scopeId" | "scopeVersion" | "botActor" | "liveActor" | "members" | "turnOrigin"
     >,
   ): Promise<boolean>;
   openFileForViewer(tenant: Tenant, id: string, principalId: string): Promise<OpenedFile | null>;

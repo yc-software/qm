@@ -365,3 +365,18 @@ test("helper mail that arrives during a runtime handoff starts no turn and the r
   assert.deepEqual(await r.mailbox.pending(r.room.id), []);
   assert.deepEqual(await r.runs.pendingReturns(), []);
 });
+
+test("a helper return carrying unattended ambient origin wakes even a person's session only as ambient work", async () => {
+  const r = await rig();
+  const parent = await parentTurn(r);
+  await parent.step("subagents", "c1", { action: "open", task: "check the harbor ledger" });
+  await parent.finish({ status: "ok", reply: "" });
+  const helper = await finishedHelper(r, (await r.sessions.childrenOf(r.room.id))[0]!.id);
+  await returnSubagentRun(r, { ...helper.run, request: { ...helper.run.request, origin: { kind: "ambient" } } });
+  const [wake] = await followUps(r);
+  assert.equal(
+    wake?.request.origin.kind,
+    "ambient",
+    "the restricted sender narrows the wake; it never takes the person's origin",
+  );
+});
