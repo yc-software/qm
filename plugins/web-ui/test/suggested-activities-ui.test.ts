@@ -105,7 +105,6 @@ test("activity selection fills and persists an editable draft without sending or
           resolvingApprovals: new Set(),
         },
         activePendingApprovals: () => [],
-        hasUnresolvedApproval: () => false,
         turnRuntime: () => null,
         hasLiveRun: () => false,
         isStopping: () => false,

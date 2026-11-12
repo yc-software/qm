@@ -31,6 +31,28 @@ available until the new revision has passed operational checks.
 
 ## Database upgrades and rollback
 
+Run migrations with the schema owner, or with a role that owns
+`qm_schema_migrations` and has `CREATE` on the current schema. This includes
+managed database administrators that own QM's tables but not the provider-owned
+`public` schema. Before the ledger exists, `CREATE` on the schema permits
+bootstrap. A role with only application data grants cannot apply pending
+migrations; granting it schema `CREATE` alone does not grant authority over an
+existing ledger. PostgreSQL still enforces privileges on each migrated object.
+
+The boot and serving tenant function migrations use PostgreSQL's default function
+EXECUTE privileges instead of redundant grants to `PUBLIC`, which Fly Managed
+Postgres rejects. They supersede the earlier definitions under new migration IDs;
+existing ledger checksums are not changed. `CREATE OR REPLACE FUNCTION` preserves
+existing function privileges. Deployments that revoke default function EXECUTE
+must grant execution to their application role, as with the other tenant lookup
+functions (`qm db grant` grants application access to all functions).
+
+On Fly Managed Postgres, enable the `vector` extension through the provider before
+running migrations: the managed login cannot install superuser-only extensions.
+Run `flyctl mpg databases extensions enable vector --cluster <cluster-id> --database <database-name>`
+for the database selected by `DATABASE_URL`. This also applies when upgrading an
+existing deployment; an already configured `DATABASE_URL` does not provision extensions.
+
 Migration identifiers and SQL checksums retain their original meaning. An existing
 checksum mismatch stops the upgrade; do not clear the migration ledger or edit its
 checksums to bypass this check. A previously completed legacy webhook sweep is

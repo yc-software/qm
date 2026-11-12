@@ -33,7 +33,7 @@ const STEPS = tenantTables(
   },
 );
 
-const EXPAND = /\/(0-column|2-keys|2-references)$|^0000-tenancy\/(base|settings|boot-tenant)$/;
+const EXPAND = /\/(0-column|2-keys|2-references)$|^0000-tenancy\/(base|settings|boot-tenant-function)$/;
 const ADOPT = /\/(0-column|0-stamp-column|2-references|2-tenant-policy)$/;
 
 const migrate = (pool: pg.Pool, steps: readonly PgMigrationDefinition[]) =>

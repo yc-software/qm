@@ -1,3 +1,11 @@
+import {
+  generalAccessOf,
+  isOrgScope,
+  orgAccessNote,
+  orgDisplayName,
+  PUBLIC_ACCESS_NOTE,
+  type GeneralAccess,
+} from "../../chassis/src/app-access.ts";
 import { html, render, nothing } from "lit";
 import { live } from "lit/directives/live.js";
 import { Building2, Globe, Lock, Search, X } from "lucide";
@@ -15,11 +23,14 @@ interface Grant {
   permission: "read" | "write";
 }
 
-type GeneralAccess = "restricted" | "org" | "public";
+const isOrgGrant = (grant: Grant): boolean => isOrgScope(grant.scope);
 
-const isOrgGrant = (grant: Grant): boolean => grant.scope === "org" || grant.scope.startsWith("org:");
-
-export async function openDeploymentPermissions(id: string, title: string, owner: string): Promise<void> {
+export async function openDeploymentPermissions(
+  id: string,
+  title: string,
+  owner: string,
+  hooks: { onChange?: () => void; onClose?: () => void } = {},
+): Promise<void> {
   const opener = document.activeElement as HTMLElement | null;
   const dialog = document.createElement("dialog");
   dialog.className = "project-dialog deployment-permissions-dialog";
@@ -48,6 +59,7 @@ export async function openDeploymentPermissions(id: string, title: string, owner
     dialog.close();
     dialog.remove();
     if (opener?.isConnected) opener.focus();
+    hooks.onClose?.();
   };
   dialog.addEventListener("cancel", (event) => {
     event.preventDefault();
@@ -70,6 +82,7 @@ export async function openDeploymentPermissions(id: string, title: string, owner
       );
       publicAccess = response.public;
       grantees = response.grantees;
+      hooks.onChange?.();
       if (response.invitation?.emailProblem)
         error = `Access granted, but no invitation email was sent: ${response.invitation.emailProblem}`;
       selected = null;
@@ -85,10 +98,7 @@ export async function openDeploymentPermissions(id: string, title: string, owner
     }
   };
   const orgGrant = (): Grant | undefined => grantees.find(isOrgGrant);
-  const generalAccess = (): GeneralAccess => {
-    if (publicAccess) return "public";
-    return orgGrant() ? "org" : "restricted";
-  };
+  const generalAccess = (): GeneralAccess => generalAccessOf({ public: publicAccess, grantees });
   const post = async (body: Record<string, unknown>) => {
     const response = await api<{ public: boolean; grantees: Grant[] }>(endpoint, {
       method: "POST",
@@ -96,6 +106,7 @@ export async function openDeploymentPermissions(id: string, title: string, owner
     });
     publicAccess = response.public;
     grantees = response.grantees;
+    hooks.onChange?.();
   };
   const changeGeneral = async (next: GeneralAccess) => {
     if (busy || next === generalAccess() || (next === "public" && !externalSharing)) return;
@@ -153,11 +164,11 @@ export async function openDeploymentPermissions(id: string, title: string, owner
       }
     }
   };
-  const orgName = (): string => appState.me?.companyName?.trim() || "Your organization";
+  const orgName = (): string => orgDisplayName(appState.me?.companyName);
   const generalAccessNote = (): string => {
     const level = generalAccess();
-    if (level === "public") return "Anyone on the internet with the link can open. No sign-in required";
-    if (level === "org") return `Anyone signed in to ${orgName()} can open`;
+    if (level === "public") return `${PUBLIC_ACCESS_NOTE}. No sign-in required`;
+    if (level === "org") return orgAccessNote(appState.me?.companyName);
     return "Only people with access can open";
   };
   const emailCandidate = (): string | null => {
