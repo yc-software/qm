@@ -2,7 +2,7 @@ import { memoryRecallLabels } from "../memory/recall-labels.ts";
 import type { DirectoryStore } from "../directory/directory-store.ts";
 import type { ProjectStore } from "../projects/project-store.ts";
 import { disclosedMemory, type MemoryDisclosure } from "../memory/disclosure.ts";
-import { readNotebook, recallAcrossScopes, searchNotebooks } from "../memory/cross-scope.ts";
+import { readNotebook, recallAcrossScopes, recallLabel, searchNotebooks } from "../memory/cross-scope.ts";
 import { shownFacts } from "../memory/recall-delta.ts";
 import { RECALL_MAX_CHARS } from "../memory/notebook.ts";
 import type { AclStore } from "../acl/acl-store.ts";
@@ -13,7 +13,14 @@ import { tracePhase } from "../../plugins/chassis/src/error-reporting.ts";
 import { readContextFile } from "./context-files.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
-import type { MemoryRecallContext, MemoryService } from "../memory/memory-service.ts";
+import {
+  brainActsAsPerson,
+  turnAuthority,
+  type BoundBrain,
+  type MemoryRecallContext,
+  type MemoryService,
+} from "../memory/memory-service.ts";
+import { connectorTool, type McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import type { MemoryFact } from "../memory/facts.ts";
 import { recallMemoryScopes, type MemoryPolicy } from "../memory/policy.ts";
 import type { SkillStore, GrantedSkillRef } from "../skills/skill-store.ts";
@@ -41,6 +48,38 @@ type ContextInput = Omit<Parameters<typeof sharingSourcesForTurn>[0], "posture">
   directory?: DirectoryStore;
   projects?: Pick<ProjectStore, "recognizes" | "name">;
 };
+
+const BRAIN_ABOUT =
+  "The person's brains here are read as them: check them before saying you don't know someone or something.";
+
+export function withBrainTools(
+  connectors: McpToolDescriptor[] | undefined,
+  brains: readonly BoundBrain[],
+): McpToolDescriptor[] | undefined {
+  const taken = new Set(connectors?.map((tool) => tool.serverId));
+  const listed = brains.filter((brain) => {
+    if (!taken.has(brain.id)) return brain.tools.length > 0;
+    console.warn(`[memory] brain ${brain.id} is hidden because an MCP connector has the same id`);
+    return false;
+  });
+  if (!listed.length) return connectors;
+  const seen = new Set(connectors?.map(({ name }) => name));
+  return [
+    ...(connectors ?? []),
+    ...listed
+      .flatMap((brain, index) =>
+        brain.tools.map((tool) => ({
+          ...connectorTool(
+            { id: brain.id, name: recallLabel(brain.label), readOnly: true },
+            index === 0 ? BRAIN_ABOUT : undefined,
+            tool,
+          ),
+          brain: true as const,
+        })),
+      )
+      .filter((tool) => (seen.has(tool.name) ? false : (seen.add(tool.name), true))),
+  ];
+}
 
 export async function resolveTurnContext(input: ContextInput) {
   const { resolution, memoryPolicy, useMemory } = input;
@@ -98,6 +137,16 @@ export async function resolveTurnContext(input: ContextInput) {
     memoryAccess,
     memory,
     memoryLabels,
+    mcpTools: async (personTurn: boolean, connectors: Promise<McpToolDescriptor[]> | undefined) => {
+      const by = turnAuthority(input.actor.id, memoryAccess, personTurn);
+      const lookups =
+        !input.external &&
+        memoryAccess?.read.includes(memoryScopeId) &&
+        brainActsAsPerson(by, memoryScopeId, input.audienceScopeId);
+      const brains = lookups ? memory.brains?.(memoryScopeId, reader).catch(swallowAs("turn context: brains", [])) : [];
+      const [listed, bound] = await Promise.all([connectors, brains]);
+      return withBrainTools(listed, bound ?? []);
+    },
     memorySnapshot: async () => {
       const notebooks = await tracePhase(
         "turn.memory_snapshot",

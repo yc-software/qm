@@ -1,5 +1,13 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { McpCallError, mcpEnvelope, mcpResultText, providerCode, type McpClient } from "../mcp/mcp-client.ts";
+import {
+  CATALOG_MAX_TOOLS,
+  McpCallError,
+  mcpEnvelope,
+  mcpResultText,
+  providerCode,
+  toolListings,
+  type McpClient,
+} from "../mcp/mcp-client.ts";
 import { TimeoutError, withTimeout } from "../util/async.ts";
 import { attestedPerson, OutsideAudience, ownPrivateConversation } from "../directory/person.ts";
 import { MemoryRecallWithheld } from "./disclosure.ts";
@@ -70,8 +78,36 @@ export function createMcpMemoryProvider(opts: {
   read: McpMemoryOperation;
   write?: McpMemoryOperation;
   forget?: McpMemoryOperation;
+  label?: string;
   attestActor?: boolean;
 }): MemoryService {
+  const attest = (actorId: string | undefined, scopeId: string, audienceScopeId: string | undefined) => {
+    const person = opts.attestActor ? attestedPerson(actorId, "memory provider") : actorId;
+    if (opts.attestActor && !ownPrivateConversation(actorId, scopeId, audienceScopeId))
+      throw new OutsideAudience("memory provider");
+    return { person, headers: opts.attestActor && person ? { "x-qm-actor": person } : undefined };
+  };
+
+  const listings = toolListings();
+  const memoryTools = new Set([opts.read.tool, opts.write?.tool, opts.forget?.tool]);
+  const lookupTools = async (scopeId: string, actorId: string | undefined, audienceScopeId: string | undefined) => {
+    const { person, headers } = attest(actorId, scopeId, audienceScopeId);
+    const listed = await listings.fetch(person!, {
+      context: {
+        label: `memory provider ${opts.label}: tools/list`,
+        list: async () =>
+          (
+            await opts.read.client.listTools({
+              headers: headers!,
+              maxTools: CATALOG_MAX_TOOLS,
+              signal: AbortSignal.timeout(opts.read.timeoutMs),
+            })
+          ).tools,
+      },
+    });
+    return (listed ?? []).filter((tool) => tool.annotations?.readOnlyHint === true && !memoryTools.has(tool.name));
+  };
+
   const call = async (
     op: Pick<McpMemoryOperation, "client" | "tool" | "timeoutMs">,
     args: Record<string, unknown>,
@@ -81,11 +117,8 @@ export function createMcpMemoryProvider(opts: {
     audienceScopeId: string | undefined,
     deadline = Date.now() + op.timeoutMs,
   ) => {
-    const person = opts.attestActor ? attestedPerson(actorId, "memory provider") : actorId;
-    if (opts.attestActor && !ownPrivateConversation(actorId, scopeId, audienceScopeId))
-      throw new OutsideAudience("memory provider");
+    const { person, headers } = attest(actorId, scopeId, audienceScopeId);
     if (person && actorArg) args[actorArg] = person;
-    const headers = opts.attestActor && person ? { "x-qm-actor": person } : undefined;
     const ms = deadline - Date.now();
     if (ms <= 0) throw new TimeoutError(`memory provider timed out after ${op.timeoutMs}ms`);
     const stop = new AbortController();
@@ -182,6 +215,28 @@ export function createMcpMemoryProvider(opts: {
     },
 
     read: async (scopeId) => resultText(await read(scopeId, "")),
+
+    ...(opts.attestActor
+      ? {
+          lookupTools: (scopeId, { actorId, audienceScopeId }) => lookupTools(scopeId, actorId, audienceScopeId),
+          lookup: async (scopeId, tool, args, by, context) => {
+            const { person, headers } = attest(by?.actorId, scopeId, context?.audienceScopeId);
+            const actorArg = opts.read.actorArg ?? ACTING_USER;
+            const sent = Object.hasOwn(args, actorArg) ? { ...args, [actorArg]: person } : args;
+            const result = await opts.read.client.callTool(tool, sent, headers);
+            const { code } = mcpEnvelope(result);
+            if (code && DENIED_CODES.has(code))
+              throw new McpCallError(`memory provider refused ${tool} (${code}): ${resultText(result)}`, {
+                code,
+                answered: true,
+              });
+            const warnings: unknown[] = Array.isArray(result._meta?.warnings) ? result._meta.warnings : [];
+            return [resultText(result), ...warnings.map((warning) => `warning: ${JSON.stringify(warning)}`)]
+              .filter(Boolean)
+              .join("\n");
+          },
+        }
+      : {}),
 
     ...(opts.forget
       ? {

@@ -2,19 +2,25 @@ import type { ConnectorTokenStore } from "../credentials/keychain.ts";
 import { recordAuditInBinding, type AuditLog } from "../audit/audit-log.ts";
 import { errMessage, reportFailureAs } from "../util/errors.ts";
 import { setPublicOAuthClientSource, setPublicOAuthClients, type PublicOAuthClient } from "../connectors/oauth.ts";
-import { LRUCache } from "lru-cache";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { onTenantLoad, perTenant } from "../tenants/cache.ts";
-import { createMcpClient, mcpResultText, type McpAuth, type McpClient, type McpListing } from "./mcp-client.ts";
+import {
+  CATALOG_MAX_TOOLS,
+  createMcpClient,
+  mcpResultText,
+  toolListings,
+  type McpRemoteTool,
+  type ToolListings,
+  type McpAuth,
+  type McpClient,
+  type McpListing,
+} from "./mcp-client.ts";
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
 import { attestsInAudience, attestedPerson, OutsideAudience } from "../directory/person.ts";
 import type { AddressFetch } from "../util/network.ts";
 import type { ScopeId } from "../types.ts";
 
 const REFRESH_INTERVAL_MS = 5 * 60_000;
-const CATALOG_TTL_MS = 60_000;
-const CATALOG_CACHE_MAX = 1_000;
-const CATALOG_MAX_TOOLS = 5_000;
 const CATALOG_SEARCH_LIMIT = 50;
 const CATALOG_OPERATIONS = ["search", "describe", "invoke"];
 const DROPPED_OPTIONAL_PARAMS = ["intent", "locale"];
@@ -37,6 +43,24 @@ function mcpToolNeedsApproval(
   const policy = server.approval ?? "annotations";
   if (policy !== "annotations") return policy === "all";
   return annotations?.destructiveHint === true && annotations.readOnlyHint !== true;
+}
+
+export function connectorTool(
+  server: Pick<McpServer, "id" | "name" | "readOnly" | "approval">,
+  about: string | undefined,
+  tool: McpRemoteTool,
+): McpToolDescriptor {
+  return {
+    name: `${server.id}_${tool.name}`.replace(/[^a-zA-Z0-9_-]/g, "_"),
+    serverId: server.id,
+    serverName: server.name,
+    ...(about ? { serverAbout: about } : {}),
+    remoteName: tool.name,
+    description: tool.description || `${tool.name} on ${server.name}`,
+    inputSchema: modelInputSchema(tool.inputSchema),
+    readOnly: server.readOnly || tool.annotations?.readOnlyHint === true,
+    needsApproval: mcpToolNeedsApproval(server, tool.annotations),
+  };
 }
 
 export function mcpPublicOAuthClients(servers: McpServer[]): PublicOAuthClient[] {
@@ -70,6 +94,7 @@ export interface McpToolDescriptor {
   needsApproval: boolean;
   signIn?: true;
   catalog?: true;
+  brain?: true;
 }
 
 export interface McpToolService {
@@ -196,7 +221,7 @@ export function createMcpToolService(opts: {
     snapshot: McpToolDescriptor[];
     perUserServers: Map<string, McpServer>;
     attestedServers: Map<string, McpServer>;
-    catalogs: LRUCache<string, Promise<RemoteTool[]>>;
+    catalogs: ToolListings;
     loadedAt?: number;
     pending?: Promise<void>;
   }>(() => ({
@@ -204,7 +229,7 @@ export function createMcpToolService(opts: {
     snapshot: [],
     perUserServers: new Map(),
     attestedServers: new Map(),
-    catalogs: new LRUCache({ max: CATALOG_CACHE_MAX, ttl: CATALOG_TTL_MS }),
+    catalogs: toolListings(),
   }));
 
   function signInMessage(server: McpServer): string {
@@ -258,16 +283,15 @@ export function createMcpToolService(opts: {
     const client = await callerClient(server, principalId);
     const perPerson = server.attestActor || server.credentialScope === "per-user";
     const key = `${server.id}\0${server.updatedAt}\0${perPerson ? (principalId ?? "") : ""}`;
-    const cached = catalogs.get(key);
-    if (cached) return cached;
-    const listing = client
-      .listTools({ headers: headersFor(server, principalId), maxTools: CATALOG_MAX_TOOLS })
-      .then((listed) => listed.tools);
-    catalogs.set(key, listing);
-    listing.catch(() => {
-      if (catalogs.peek(key) === listing) catalogs.delete(key);
+    const listing = await catalogs.fetch(key, {
+      allowStale: false,
+      context: {
+        label: `mcp ${server.id}: tools/list`,
+        list: async () =>
+          (await client.listTools({ headers: headersFor(server, principalId), maxTools: CATALOG_MAX_TOOLS })).tools,
+      },
     });
-    return listing;
+    return listing ?? [];
   }
 
   async function catalogEntry(server: McpServer, principalId: string | undefined, name: unknown): Promise<RemoteTool> {
@@ -346,19 +370,7 @@ export function createMcpToolService(opts: {
         tools = listing.tools;
         about = listing.about ?? about;
       }
-      for (const tool of tools) {
-        next.push({
-          name: `${server.id}_${tool.name}`.replace(/[^a-zA-Z0-9_-]/g, "_"),
-          serverId: server.id,
-          serverName: server.name,
-          ...(about ? { serverAbout: about } : {}),
-          remoteName: tool.name,
-          description: tool.description || `${tool.name} on ${server.name}`,
-          inputSchema: modelInputSchema(tool.inputSchema),
-          readOnly: server.readOnly || tool.annotations?.readOnlyHint === true,
-          needsApproval: mcpToolNeedsApproval(server, tool.annotations),
-        });
-      }
+      for (const tool of tools) next.push(connectorTool(server, about, tool));
       record("list", server.id, `ok tools=${tools.length}`);
     } catch (e) {
       record("list", server.id, `error: ${errMessage(e)}`);

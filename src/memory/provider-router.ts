@@ -2,7 +2,7 @@ import { disclosedMemory, MemoryRecallWithheld } from "./disclosure.ts";
 import { isSystemActor, parseScopeId, type ScopeId, type ScopeKind } from "../types.ts";
 import type { McpEnvelope } from "../mcp/mcp-client.ts";
 import {
-  changesBrainAsPerson,
+  brainActsAsPerson,
   changesNotebookOnly,
   type MemoryProviderOutcome,
   type MemoryRecallContext,
@@ -10,8 +10,18 @@ import {
   resolveIds,
 } from "./memory-service.ts";
 import { MemoryForgetRefused, type MemoryCandidate } from "./facts.ts";
-import { changeFailure, failedOutcome, forgetKnown, strictFailure, withEnvelope } from "./provider-outcome.ts";
-import { OutsideAudience, ownPrivateConversation } from "../directory/person.ts";
+import {
+  changeFailure,
+  failedOutcome,
+  forgetKnown,
+  problemLine,
+  problemOf,
+  strictFailure,
+  withEnvelope,
+} from "./provider-outcome.ts";
+import { errMessage } from "../util/errors.ts";
+import { quotedData } from "../util/text.ts";
+import { OutsideAudience } from "../directory/person.ts";
 
 export type MemoryCapturePolicy = "off" | "explicit" | "automatic";
 
@@ -30,6 +40,15 @@ function matches(route: MemoryProviderRoute, scopeId: ScopeId): boolean {
   return route.scopes.some((scope) => scope === scopeId || scope === kind);
 }
 
+export const providerRef = (provider: string, ref: string) => `${provider}:${ref}`;
+
+export const brainRefused = (reason: string) => new Error(`[brain_refused] ${reason} Nothing was sent.`);
+
+function parseProviderRef(value: string): { provider: string; ref: string } | undefined {
+  const at = value.indexOf(":");
+  return at < 0 ? undefined : { provider: value.slice(0, at), ref: value.slice(at + 1) };
+}
+
 function captureAllowed(policy: MemoryCapturePolicy | undefined, mode: "explicit" | "automatic"): boolean {
   if (policy === "automatic") return true;
   return policy === "explicit" && mode === "explicit";
@@ -45,7 +64,7 @@ function settleChange(added: unknown, envelope: McpEnvelope): Pick<MemoryProvide
 export function createRoutedMemoryService(opts: {
   providers: Readonly<Record<string, MemoryService>>;
   routes: readonly MemoryProviderRoute[];
-  onError?: (error: unknown, provider: string, operation: "recall" | "query" | "capture" | "forget") => void;
+  onError?: (error: unknown, provider: string, operation: "recall" | "query" | "capture" | "forget" | "lookup") => void;
 }): MemoryService {
   const routesFor = (scopeId: ScopeId): MemoryProviderRoute[] => opts.routes.filter((route) => matches(route, scopeId));
   const providerFor = (route: MemoryProviderRoute): MemoryService => {
@@ -58,9 +77,15 @@ export function createRoutedMemoryService(opts: {
       ? rows
       : rows.map(({ ref, ...row }) => ({
           ...row,
-          ...(ref === undefined || !opts.providers[route.provider]?.delete ? {} : { ref: `${route.provider}:${ref}` }),
+          ...(ref === undefined || !opts.providers[route.provider]?.delete
+            ? {}
+            : { ref: providerRef(route.provider, ref) }),
           source: { provider: route.provider, label: route.label ?? route.provider },
         }));
+  const brainRoutes = (scopeId: ScopeId): MemoryProviderRoute[] =>
+    routesFor(scopeId)
+      .filter((route) => route.recall !== false && opts.providers[route.provider]?.lookup)
+      .filter((route, index, all) => all.findIndex((other) => other.provider === route.provider) === index);
   const managerFor = (scopeId: ScopeId): MemoryService | undefined => {
     const route = routesFor(scopeId).find((candidate) => candidate.manage !== false);
     return route ? providerFor(route) : undefined;
@@ -180,6 +205,46 @@ export function createRoutedMemoryService(opts: {
       return routes.flatMap((route, index) => tagged(route, batches[index]!));
     },
 
+    async brains(scopeId, reader) {
+      return Promise.all(
+        brainRoutes(scopeId).map(async ({ provider, label }) => ({
+          id: provider,
+          label: label ?? provider,
+          tools: await opts.providers[provider]!.lookupTools!(scopeId, reader).catch((error: unknown) => {
+            opts.onError?.(error, provider, "lookup");
+            return [];
+          }),
+        })),
+      );
+    },
+
+    async lookup(scopeId, tool, args, by, context) {
+      if (!brainActsAsPerson(by, scopeId, context?.audienceScopeId))
+        throw brainRefused(
+          "Only the person, on a turn they sent in their own DM with QM, can look things up in their brain.",
+        );
+      const ref = parseProviderRef(tool);
+      const route = ref && brainRoutes(scopeId).find((candidate) => candidate.provider === ref.provider);
+      if (!ref || !route) throw brainRefused(`${tool} isn't a tool of a brain connected to this conversation.`);
+      const started = Date.now();
+      try {
+        return await opts.providers[route.provider]!.lookup!(scopeId, ref.ref, args, by, context);
+      } catch (error) {
+        opts.onError?.(error, route.provider, "lookup");
+        const problem = problemOf(
+          {
+            provider: route.provider,
+            scope: scopeId,
+            ms: Date.now() - started,
+            ...failedOutcome(error),
+            refs: [ref.ref],
+          },
+          "lookup",
+        )!;
+        throw new Error(`${problemLine(problem)}\n${quotedData(errMessage(error))}`, { cause: error });
+      }
+    },
+
     async read(scopeId) {
       const manager = managerFor(scopeId);
       return manager ? manager.read(scopeId) : "";
@@ -196,36 +261,34 @@ export function createRoutedMemoryService(opts: {
     },
 
     async delete(scopeId, ids, by, context) {
-      const refs = ids
-        .filter((id) => id.includes(":"))
-        .map((ref) => {
-          const brain = ref.slice(0, ref.indexOf(":"));
-          const route =
-            brain === "default" ? undefined : routesFor(scopeId).find((candidate) => candidate.provider === brain);
-          const provider = route && opts.providers[brain];
-          if (!route || !provider)
-            throw new MemoryForgetRefused(
-              `Memory provider ${brain} doesn't serve this conversation's memory here, so QM can't forget ${ref}. Nothing was changed.`,
-            );
-          if (!provider.delete)
-            throw new MemoryForgetRefused(
-              `Memory provider ${brain} has no forget operation; only registry brains forget by ref. Nothing was changed.`,
-            );
-          return { ref, brain, route, provider };
-        });
-      if (
-        refs.length &&
-        (!changesBrainAsPerson(by) || !ownPrivateConversation(by!.actorId, scopeId, context?.audienceScopeId))
-      )
+      const refs = ids.flatMap((ref) => {
+        const parsed = parseProviderRef(ref);
+        if (!parsed) return [];
+        const route =
+          parsed.provider === "default"
+            ? undefined
+            : routesFor(scopeId).find((candidate) => candidate.provider === parsed.provider);
+        const provider = route && opts.providers[parsed.provider];
+        if (!route || !provider)
+          throw new MemoryForgetRefused(
+            `Memory provider ${parsed.provider} doesn't serve this conversation's memory here, so QM can't forget ${ref}. Nothing was changed.`,
+          );
+        if (!provider.delete)
+          throw new MemoryForgetRefused(
+            `Memory provider ${parsed.provider} has no forget operation; only registry brains forget by ref. Nothing was changed.`,
+          );
+        return [{ ref, brain: parsed.provider, factId: parsed.ref, route, provider }];
+      });
+      if (refs.length && !brainActsAsPerson(by, scopeId, context?.audienceScopeId))
         throw new MemoryForgetRefused(
           "Only the person, on a turn they sent in their own DM with QM, can forget a brain fact; admin, maintenance, self-service, bot, automation and ambient changes reach the notebook only. Nothing was changed.",
         );
-      const notebookIds = ids.filter((id) => !id.includes(":"));
+      const notebookIds = ids.filter((id) => !parseProviderRef(id));
       const manager = notebookIds.length ? managerFor(scopeId) : undefined;
       if (notebookIds.length && !manager?.delete) throw new Error(`memory for ${scopeId} is not directly editable`);
       if (refs.length && manager?.facts) resolveIds(await manager.facts(scopeId), notebookIds);
       const settled: MemoryProviderOutcome[] = [];
-      for (const { ref, brain, route, provider } of refs) {
+      for (const { ref, brain, factId, route, provider } of refs) {
         const { error } = await attempt(
           route,
           scopeId,
@@ -236,7 +299,7 @@ export function createRoutedMemoryService(opts: {
               context?.report?.({ ...outcome, ref });
             },
           },
-          () => provider.delete!(scopeId, [ref.slice(brain.length + 1)], by, context),
+          () => provider.delete!(scopeId, [factId], by, context),
           settleChange,
           undefined,
         );
