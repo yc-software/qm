@@ -7,11 +7,10 @@ import {
   type RecentMessage,
   type SlackFile,
   buildContextWindow,
-  downloadSlackFile,
   isExternallyShared,
   openConversationFor,
   parseDeliveryTarget,
-  processInboundFiles,
+  stageSlackFiles,
 } from "./lib.ts";
 import { SLACK_AUTH_ERRORS, type SlackHistoryMessage, parseMessageList, slackErrorCode } from "./payloads.ts";
 import type { SlackCoreClient, SurfaceContextRequest } from "../api/slack-core-client.ts";
@@ -163,36 +162,13 @@ export function createSurfaceContextFulfiller(deps: {
     return { file: { blobId, name, sizeBytes, mimetype, ...(author ? { author } : {}) } };
   }
 
-  async function fetchMessageFiles(
-    client: any,
-    channel: string,
-    conversationThreadTs: string | undefined,
-    refs: ReadonlyArray<{ ts: string; threadTs?: string }>,
-  ): Promise<Record<string, unknown>> {
-    const found = await Promise.all(
-      refs.map((ref) => findMessageAt(client, channel, ref.ts, ref.threadTs || conversationThreadTs)),
-    );
-    const { attachments, issues } = await stageFiles(
-      client,
-      found.flatMap((msg) => (msg?.files ?? []).filter((f) => f?.id)),
-    );
-    const missing = refs.filter((_, i) => !found[i]).map((ref) => `I couldn't find message ${ref.ts}`);
-    return { attachments, issues: [...missing, ...issues] };
-  }
-
   function stageFiles(client: any, files: SlackFile[]) {
-    return processInboundFiles(
-      files,
-      (f) => downloadSlackFile(f, { token: botToken, ...(trustedFileHost ? { trustedHost: trustedFileHost } : {}) }),
-      (bytes) => core.stageBlob(bytes),
-      (userId) =>
-        userId
-          ? directory.classifyUserCached(client, userId).then(
-              (c) => c.actor.displayName,
-              () => undefined,
-            )
-          : undefined,
-    );
+    return stageSlackFiles(client, files, {
+      token: botToken,
+      ...(trustedFileHost ? { trustedHost: trustedFileHost } : {}),
+      stage: (bytes) => core.stageBlob(bytes),
+      author: async (userId) => (await directory.classifyUserCached(client, userId)).actor.displayName,
+    });
   }
 
   async function openGroupDm(client: any, participants: readonly string[]): Promise<Record<string, unknown>> {
@@ -255,7 +231,13 @@ export function createSurfaceContextFulfiller(deps: {
       if (q.file && typeof q.file.ts === "string" && q.file.ts) {
         return await post(await fetchSurfaceFile(client, channel, threadTs, q.file));
       }
-      if (q.messageFiles?.length) return await post(await fetchMessageFiles(client, channel, threadTs, q.messageFiles));
+      if (q.fileIds?.length)
+        return await post(
+          await stageFiles(
+            client,
+            q.fileIds.map((id) => ({ id })),
+          ),
+        );
       const count = Math.max(
         1,
         Math.min(

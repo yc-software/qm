@@ -160,6 +160,28 @@ export async function processInboundFiles(
   return { attachments, issues };
 }
 
+export async function stageSlackFiles(
+  client: { files: { info(args: { file: string }): Promise<unknown> } },
+  files: readonly SlackFile[],
+  deps: {
+    token: string;
+    trustedHost?: string;
+    stage: (bytes: Uint8Array) => Promise<{ blobId: string }>;
+    author: (userId: string) => Promise<string | undefined>;
+  },
+): Promise<ProcessedInbound> {
+  const hydrated = await hydrateSlackFiles(
+    files,
+    async (id) => ((await client.files.info({ file: id })) as { file?: SlackFile } | undefined)?.file,
+  );
+  return processInboundFiles(
+    hydrated,
+    (f) => downloadSlackFile(f, { token: deps.token, ...(deps.trustedHost ? { trustedHost: deps.trustedHost } : {}) }),
+    deps.stage,
+    (userId) => (userId ? deps.author(userId) : undefined),
+  );
+}
+
 export interface UploadClient {
   files: { uploadV2(args: any): Promise<unknown>; info(args: { file: string }): Promise<unknown> };
 }

@@ -1,5 +1,5 @@
 import { scopeId, type ActorAssertion, type TurnRequest } from "../types.ts";
-import { pullMessageFiles } from "./surface-context-puller.ts";
+import { pullSurfaceFiles } from "./surface-context-puller.ts";
 import { personLabel } from "../identity/person-names.ts";
 import type { TurnSurfaceOrigin } from "../surfaces/contract.ts";
 import { slackSurfaceOrigin } from "../surfaces/slack/adapter.ts";
@@ -226,7 +226,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
         surface,
         container,
         decision: "ignore",
-        reason: "no text or files in new messages",
+        reason: "no readable text in new messages",
         ...(tsFrom ? { tsFrom } : {}),
         ...(tsTo ? { tsTo } : {}),
         createdAt: Date.now(),
@@ -295,11 +295,14 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
   async function spawnAmbientWorker(batch: AmbientBatch, decision: AmbientDecision): Promise<string | undefined> {
     const latestTs = batch.messages.reduce((max, m) => (m.ts > max ? m.ts : max), "");
     const threadRef = `${batch.surface}:${batch.container}:ambient:${latestTs}`;
-    const files = pullMessageFiles(
+    const triggerFiles = batch.messages
+      .filter((m) => !m.deleted)
+      .flatMap((m) => (m.files ?? []).map((f) => ({ m, f })));
+    const files = pullSurfaceFiles(
       app,
       batch.surface,
       batch.container,
-      batch.messages.filter((m) => !m.deleted && m.files?.length),
+      triggerFiles.map(({ f }) => f.fileId),
     );
     let solicited = await solicitedAsker(batch, decision);
     let audience: ActorAssertion[] = [];
@@ -332,7 +335,17 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
       console.error(
         `[ambient] wake left out ${omitted} earlier messages past the content screen's input limit (container=${batch.container})`,
       );
-    const fileFields = await files;
+    const fetched = await files;
+    const askerFiles = new Set(
+      triggerFiles.filter(({ m }) => m.authorId === solicited?.message.authorId).map(({ f }) => f.fileId),
+    );
+    const attachments = solicited
+      ? fetched.attachments?.filter((a) => a.sourceId && askerFiles.has(a.sourceId))
+      : fetched.attachments;
+    const fileFields = {
+      ...(attachments?.length ? { attachments } : {}),
+      ...(fetched.inboundNotes ? { inboundNotes: fetched.inboundNotes } : {}),
+    };
     const req: TurnRequest = solicited
       ? {
           surface: batch.surface,

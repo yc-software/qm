@@ -66,18 +66,17 @@ export function createSurfaceContextPuller(
   };
 }
 
-export async function pullMessageFiles(
+export async function pullSurfaceFiles(
   app: SurfaceContextApp,
   source: string,
   conversationTarget: string,
-  messages: ReadonlyArray<{ ts: string; sub?: string }>,
+  fileIds: readonly string[],
 ): Promise<Pick<TurnRequest, "attachments" | "inboundNotes">> {
-  if (!messages.length) return {};
-  const messageFiles = messages.map(({ ts, sub }) => ({ ts, ...(sub ? { threadTs: sub } : {}) }));
+  if (!fileIds.length) return {};
   const result = await createSurfaceContextPuller(app, { waitMs: SURFACE_FILE_WAIT_MS })
-    .pull(source, { conversationTarget, count: 1, messageFiles })
+    .pull(source, { conversationTarget, count: 1, fileIds: [...fileIds] })
     .catch((e: unknown): SurfaceContextResult => {
-      swallow("surface-context: message files", e);
+      swallow("surface-context: files", e);
       return { messages: [], note: errMessage(e) };
     });
   const attachments = result?.attachments ?? [];
@@ -85,7 +84,7 @@ export async function pullMessageFiles(
     result?.attachments || result?.issues
       ? (result.issues ?? [])
       : [
-          `I couldn't fetch the files on ${messages.map((m) => m.ts).join(", ")}: ${
+          `I couldn't fetch ${fileIds.length === 1 ? "a file" : `${fileIds.length} files`} posted here: ${
             result?.note ??
             (result ? `the ${source} surface can't fetch files` : `the ${source} surface didn't answer in time`)
           }`,

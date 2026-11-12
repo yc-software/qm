@@ -61,6 +61,7 @@ export {
   oversizeMsg,
   downloadSlackFile,
   processInboundFiles,
+  stageSlackFiles,
   uploadAttachments,
   uploadFailureNote,
 } from "./attachments.ts";
