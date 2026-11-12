@@ -170,7 +170,7 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
       fireKey,
       surface: "monitor",
       threadRef: m.threadRef,
-      async: true,
+      onQueued: "handoff",
       ...(m.destination ? { destination: m.destination } : {}),
       ...(withErrorNotice
         ? {

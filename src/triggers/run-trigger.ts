@@ -37,7 +37,7 @@ export interface TriggerDeps {
 
 export interface TriggerSpec extends Pick<
   TurnRequest,
-  "model" | "fastMode" | "attachments" | "infrequentCron" | "memoryNotebookOnly" | "botActor" | "async"
+  "model" | "fastMode" | "attachments" | "infrequentCron" | "memoryNotebookOnly" | "botActor"
 > {
   runtime?: import("../agent/agent.ts").RuntimeChoice | null;
   title?: string;
@@ -58,7 +58,7 @@ export interface TriggerSpec extends Pick<
   readOnly?: boolean;
   turnWallClockMs?: number;
   errorNotice?: (noteOrStatus: string) => string;
-  redrivesHandOff?: boolean;
+  onQueued?: "handoff" | "redrive";
   onClaimed?: () => Promise<void>;
 }
 
@@ -323,12 +323,12 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         ? { deliveryTarget: spec.destination.target }
         : {}),
       ...(liveDelivery ? { surfaceTools: true, addressed: true } : {}),
-      ...(spec.async ? { async: true } : {}),
+      ...(spec.onQueued === "handoff" ? { async: true } : {}),
       idempotencyKey: spec.fireKey,
     });
     if (res.status === "queued") {
-      if (spec.async) return;
-      if (!spec.redrivesHandOff) await sendErrorNotice(userFacingFailureClause(res));
+      if (spec.onQueued === "handoff") return;
+      if (spec.onQueued !== "redrive") await sendErrorNotice(userFacingFailureClause(res));
       throw new TransientTurnFailure(`turn ${res.runId ?? ""} was still waiting to finish when this process shut down`);
     }
     status = res.status;
