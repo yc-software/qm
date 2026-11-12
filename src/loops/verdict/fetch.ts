@@ -1,6 +1,5 @@
 import { ErrorCode, WebClient } from "@slack/web-api";
 import { LRUCache } from "lru-cache";
-import addressparser from "nodemailer/lib/addressparser";
 import type { LoopItem } from "../types.ts";
 import { isObj, tokenFor, type ConnectorTokenSource } from "../sources/adapter.ts";
 import { gmailAccountOf, gmailThreadOf, gmailToken } from "../sources/gmail.ts";
@@ -9,6 +8,7 @@ import { normalizeSlackApiUrl } from "../../slack/config.ts";
 import { slackMessageContent } from "../../slack/message-content.ts";
 import { slackWebClient } from "../../slack/web-client.ts";
 import { GmailApiError, gmailApi } from "../../connectors/gmail-api.ts";
+import { header, mailboxes, plainText } from "../../connectors/gmail-compose.ts";
 import { TransientTurnFailure } from "../../core/turn-error.ts";
 import { perTenant } from "../../tenants/cache.ts";
 import {
@@ -187,24 +187,6 @@ export function createSourceClients(deps: SourceClientDeps): SourceClients {
   return clients;
 }
 
-export function plainText(part: Record<string, unknown>, mimeType = "text/plain"): string | undefined {
-  const body = isObj(part.body) ? part.body : {};
-  if (part.mimeType === mimeType && typeof body.data === "string")
-    return Buffer.from(body.data, "base64url").toString("utf8");
-  const parts = Array.isArray(part.parts) ? part.parts.filter(isObj) : [];
-  for (const nested of parts) {
-    const text = plainText(nested, mimeType);
-    if (text) return text;
-  }
-  return undefined;
-}
-
-export function header(payload: Record<string, unknown>, name: string): string {
-  const headers = Array.isArray(payload.headers) ? payload.headers.filter(isObj) : [];
-  const found = headers.find((h) => typeof h.name === "string" && h.name.toLowerCase() === name.toLowerCase());
-  return typeof found?.value === "string" ? found.value : "";
-}
-
 function stripQuoted(text: string): string {
   const lines = text.split(/\r?\n/);
   const cut = lines.findIndex((line) => /^On .+wrote:\s*$/.test(line.trim()) || line.startsWith(">"));
@@ -215,14 +197,6 @@ function countAttachments(part: Record<string, unknown>): number {
   const own = typeof part.filename === "string" && part.filename ? 1 : 0;
   const parts = Array.isArray(part.parts) ? part.parts.filter(isObj) : [];
   return own + parts.reduce((sum, nested) => sum + countAttachments(nested), 0);
-}
-
-export function mailboxes(value: string): Array<{ address: string; name: string }> {
-  return addressparser(value).flatMap((entry) =>
-    "address" in entry && typeof entry.address === "string" && entry.address
-      ? [{ address: entry.address, name: typeof entry.name === "string" ? entry.name : "" }]
-      : [],
-  );
 }
 
 function formatMailbox(box: { address: string; name: string }): string {

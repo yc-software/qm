@@ -1,7 +1,33 @@
 import { splitLinks } from "../../plugins/chassis/src/links.ts";
 import { escapeHtml } from "../../plugins/chassis/src/http.ts";
-import { header, mailboxes, plainText } from "../loops/verdict/fetch.ts";
+import addressparser from "nodemailer/lib/addressparser";
 import { isObj } from "../util/objects.ts";
+
+export function plainText(part: Record<string, unknown>, mimeType = "text/plain"): string | undefined {
+  const body = isObj(part.body) ? part.body : {};
+  if (part.mimeType === mimeType && typeof body.data === "string")
+    return Buffer.from(body.data, "base64url").toString("utf8");
+  const parts = Array.isArray(part.parts) ? part.parts.filter(isObj) : [];
+  for (const nested of parts) {
+    const text = plainText(nested, mimeType);
+    if (text) return text;
+  }
+  return undefined;
+}
+
+export function header(payload: Record<string, unknown>, name: string): string {
+  const headers = Array.isArray(payload.headers) ? payload.headers.filter(isObj) : [];
+  const found = headers.find((h) => typeof h.name === "string" && h.name.toLowerCase() === name.toLowerCase());
+  return typeof found?.value === "string" ? found.value : "";
+}
+
+export function mailboxes(value: string): Array<{ address: string; name: string }> {
+  return addressparser(value).flatMap((entry) =>
+    "address" in entry && typeof entry.address === "string" && entry.address
+      ? [{ address: entry.address, name: typeof entry.name === "string" ? entry.name : "" }]
+      : [],
+  );
+}
 
 export interface GmailParts {
   text: string;
