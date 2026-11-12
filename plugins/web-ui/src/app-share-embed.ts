@@ -19,8 +19,10 @@ export async function bootAppShare(params: URLSearchParams): Promise<void> {
   }
   appState.me = (await r.json()) as Me;
   const { openDeploymentPermissions } = await import("./deploy-permissions");
-  await openDeploymentPermissions(slug, params.get("name") || slug, `personal:${appState.me.user}`, {
+  const opened = openDeploymentPermissions(slug, params.get("name") || slug, `personal:${appState.me.user}`, {
     onChange: () => tellEmbedder({ type: "qm:app-check" }),
     onClose: closeEmbed,
   });
+  tellEmbedder({ type: "qm:app-share-ready" });
+  await opened;
 }

@@ -6,13 +6,14 @@ export const SHARE_CSS = `
   #share-dialog { width: 100%; height: 100%; max-width: none; max-height: none; margin: 0; padding: 0; border: 0;
     background: transparent; }
   #share-dialog::backdrop { background: transparent; }
+  #share-dialog:focus { outline: none; }
   #share { display: block; width: 100%; height: 100%; border: 0; background: transparent; color-scheme: normal; }
 `;
 
 export const SHARE_BUTTON = '<button type="button" class="access-btn" id="access" hidden></button>';
 
 export const shareMarkup = (name: string): string =>
-  `<dialog id="share-dialog" aria-label="Share ${name}"><iframe id="share" title="Share ${name}" allowtransparency="true"></iframe></dialog>`;
+  `<dialog id="share-dialog" tabindex="-1" autofocus aria-label="Share ${name}"><iframe id="share" title="Share ${name}" allowtransparency="true"></iframe></dialog>`;
 
 export const SHARE_JS = String.raw`
   const accessBtn = document.getElementById("access");
@@ -44,7 +45,6 @@ export const SHARE_JS = String.raw`
   accessBtn.addEventListener("click", () => {
     share.src = shareUrl + "&name=" + encodeURIComponent(document.getElementById("name").textContent || "");
     shareDialog.showModal();
-    share.focus();
   });
   share.addEventListener("load", () => {
     if (shareDialog.open) share.contentWindow.postMessage({ type: "qm:theme-request" }, portalOrigin);

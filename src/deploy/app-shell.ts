@@ -127,6 +127,7 @@ ${SHARE_JS}
     if (event.data?.type === "qm:app-check") return void poll();
     if (event.source === share.contentWindow) {
       if (event.data?.type === "qm:app-share-closed") closeShare();
+      if (event.data?.type === "qm:app-share-ready") share.focus();
       return;
     }
     const theme = event.data;
