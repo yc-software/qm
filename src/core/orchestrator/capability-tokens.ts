@@ -153,10 +153,17 @@ async function mintControlPlaneTokens(
   let orgMemoryWrite: ScopeId | undefined;
   const orgMemoryWritable = useMemory && memoryPolicy.capture !== "off" && resolution.orgScopeId !== memoryScopeId;
   let controlClaims: CapabilityClaims | undefined;
+  const presence = { ...(liveAuthorTurn ? { liveAuthor: true } : {}), ...(automatedTurn ? { triggered: true } : {}) };
+  const runBinding = {
+    ...(input.runId ? { runId: input.runId } : {}),
+    runAttempt: input.attempt,
+    runLeaseToken: input.runLeaseToken,
+    threadRef: conversation.threadRef,
+  };
   if (!strictReadOnly && deps.signingSecret && deps.apiBaseUrl) {
     const destination = defaultDestination;
     connectorEnv.AGENT_API_URL = deps.apiBaseUrl;
-    if (deps.admin && (liveAuthorTurn || liveTurn)) {
+    if (deps.admin && input.botActor !== true && (liveAuthorTurn || liveTurn)) {
       try {
         actorIsOrgAdmin = (await deps.admin.adminStatusOf(tenant, actor)).isAdmin;
       } catch (e) {
@@ -187,14 +194,10 @@ async function mintControlPlaneTokens(
         ? { privateScope: true }
         : {}),
       ...(memoryClaim ? { memory: memoryClaim } : {}),
-      ...(liveAuthorTurn ? { liveAuthor: true } : {}),
-      ...(automatedTurn ? { triggered: true } : {}),
-      ...(input.runId ? { runId: input.runId } : {}),
+      ...presence,
+      ...runBinding,
       sessionId: session.id,
       origin,
-      runAttempt: input.attempt,
-      runLeaseToken: input.runLeaseToken,
-      threadRef: conversation.threadRef,
       ...(turnSurface ? { surface: turnSurface } : {}),
     };
     connectorEnv.AGENT_API_TOKEN = await mintCapabilityToken(
@@ -230,6 +233,8 @@ async function mintControlPlaneTokens(
     connectorEnv.AGENT_OAUTH_CONSENT_TOKEN = await mintCapabilityToken(
       {
         ...scopeAttestation,
+        ...presence,
+        ...runBinding,
         aud: OAUTH_CONSENT_AUD,
         exp: sandboxTokenExpiry,
       },

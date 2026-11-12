@@ -12,6 +12,8 @@ import { scopeId, type TurnRequest } from "../src/types.ts";
 import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 
+const asU1 = { actorId: "U1" };
+
 const THREAD = "web:U1:watching";
 
 function claims(extra: Partial<CapabilityClaims> = {}): CapabilityClaims {
@@ -46,7 +48,7 @@ test("a cron created from a live session is tied to it and shows as that session
   assert.equal(created.cron.sessionRef, THREAD);
   assert.equal(created.cron.destination?.target, "D1", "delivery stays where it was addressed");
 
-  const list = await built.app.listSessions("U1");
+  const list = await built.app.listSessions(asU1);
   assert.equal(list.find((s) => s.threadRef === THREAD)?.crons, 1);
   assert.ok(!list.find((s) => s.threadRef === "web:U1:other")?.crons);
 
@@ -67,7 +69,7 @@ test("a cron created from a live session is tied to it and shows as that session
   ]);
 
   await control.patchCron(created.cron.id, { enabled: false }, claims());
-  assert.ok(!(await built.app.listSessions("U1")).find((s) => s.threadRef === THREAD)?.crons, "paused crons drop off");
+  assert.ok(!(await built.app.listSessions(asU1)).find((s) => s.threadRef === THREAD)?.crons, "paused crons drop off");
 });
 
 test("session:false and triggered turns leave a cron untied, and patch ties or unties it", async () => {
@@ -91,7 +93,7 @@ test("session:false and triggered turns leave a cron untied, and patch ties or u
   assert.equal(refused.ok ? "" : refused.code, "bad_request");
   const cleared = await control.patchCron(untied.cron.id, { session: false }, claims());
   assert.ok(cleared.ok && cleared.cron.sessionRef === undefined);
-  assert.ok(!(await built.app.listSessions("U1")).find((s) => s.threadRef === THREAD)?.crons);
+  assert.ok(!(await built.app.listSessions(asU1)).find((s) => s.threadRef === THREAD)?.crons);
 });
 
 test("a one-shot cron stops counting as active once it has fired", () => {

@@ -337,14 +337,14 @@ export interface GatewayContext {
 }
 
 export interface ConversationTurn {
-  role: "user" | "assistant";
+  role: "user" | "bot" | "assistant";
   name?: string;
   text: string;
 }
 
 export interface OverheardMessage {
   ts: string;
-  role: "user" | "self";
+  role: "user" | "bot" | "self";
   name?: string;
   text: string;
   files?: string[];
@@ -465,6 +465,8 @@ export interface ApprovedToolCallSpec {
   tool: string;
   input: Record<string, unknown>;
 }
+
+export const APPROVAL_LIFETIME_MS = 60 * 60_000;
 
 export interface PendingApprovalRecord {
   screenedOutput?: { tool: string; text: string; sourceScopeId?: ScopeId };

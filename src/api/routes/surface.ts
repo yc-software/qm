@@ -15,7 +15,7 @@ import {
   type MemoryProviderProblem,
 } from "../../memory/provider-outcome.ts";
 import { suggestedActivityRoutes } from "./suggested-activities.ts";
-import { runtimeConfigBody, userRuntimeConfigBody, webuiModelEnabled, withAppEditRuntime } from "../runtime-config.ts";
+import { runtimeConfigBody, userRuntimeConfigBody, withAppEditRuntime } from "../runtime-config.ts";
 import { canReadNotebook, searchAcrossScopes } from "../../memory/cross-scope.ts";
 import { sessionSharingRoutes } from "./session-sharing.ts";
 import type { Grant, PendingApproval, ScopeId, Session } from "../../types.ts";
@@ -254,7 +254,7 @@ async function getSession(ctx: ApiCtx): Promise<void> {
       message: "tailTurns and beforeSeq must be positive integers, sinceSeq a non-negative one",
     });
   }
-  const found = await app.getSessionForViewer(id, viewer, Object.keys(window).length ? window : undefined);
+  const found = await app.getSessionForViewer(id, { actorId: viewer }, Object.keys(window).length ? window : undefined);
   if (!found) return sendJson(res, 404, { error: "not_found" });
   return sendJson(res, 200, found);
 }
@@ -288,7 +288,7 @@ async function getAgentConversation(ctx: ApiCtx): Promise<void> {
       message: "tailTurns and beforeSeq must be positive integers, sinceSeq a non-negative one",
     });
   }
-  const found = await app.getSessionForViewer(ctx.params.id!, capability.actorId, window);
+  const found = await app.getSessionForViewer(ctx.params.id!, capability, window);
   if (!found) return sendJson(res, 404, { error: "not_found", message: "not a conversation you can see" });
   return sendJson(res, 200, {
     session: agentConversation(found.session),
@@ -428,7 +428,7 @@ async function patchSession(ctx: ApiCtx): Promise<void> {
   const parsed = parseSessionPatch(b);
   if ("error" in parsed) return sendJson(res, 400, { error: "bad_request", message: parsed.error });
   const patch = parsed.patch;
-  const session = await app.updateSession(id, principalId, patch);
+  const session = await app.updateSession(id, { actorId: principalId }, patch);
   if (!session) return sendJson(res, 404, { error: "not_found" });
   return sendJson(res, 200, { session });
 }
@@ -438,7 +438,7 @@ async function listAgentConversations(ctx: ApiCtx): Promise<void> {
   if (!capability) {
     return sendJson(res, 401, { error: "capability_required", message: "this endpoint is for the agent self-API" });
   }
-  const sessions = await app.listSessions(capability.actorId);
+  const sessions = await app.listSessions(capability);
   return sendJson(res, 200, {
     conversations: sessions.map(agentConversation),
   });
@@ -453,7 +453,7 @@ async function patchAgentConversation(ctx: ApiCtx): Promise<void> {
   const parsed = parseSessionPatch(b);
   if ("error" in parsed) return sendJson(res, 400, { error: "bad_request", message: parsed.error });
   const patch = parsed.patch;
-  const session = await app.updateSession(ctx.params.id!, capability.actorId, patch);
+  const session = await app.updateSession(ctx.params.id!, capability, patch);
   if (!session) return sendJson(res, 404, { error: "not_found", message: "not a conversation you can see" });
   audit(ctx, {
     principalId: capability.actorId,
@@ -551,7 +551,7 @@ async function searchResources(ctx: ApiCtx): Promise<void> {
   const principalId = ctx.actor?.p ?? ctx.url.searchParams.get("principalId");
   if (!principalId) return sendJson(ctx.res, 400, { error: "bad_request" });
   const query = (ctx.url.searchParams.get("q") ?? "").slice(0, 500);
-  return sendJson(ctx.res, 200, await ctx.app.searchResources(principalId, query));
+  return sendJson(ctx.res, 200, await ctx.app.searchResources(tenantOf(ctx), principalId, query));
 }
 
 async function searchSessions(ctx: ApiCtx): Promise<void> {
@@ -561,7 +561,7 @@ async function searchSessions(ctx: ApiCtx): Promise<void> {
   const query = url.searchParams.get("q") ?? "";
   const rawLimit = Number(url.searchParams.get("limit") ?? "");
   const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : undefined;
-  return sendJson(res, 200, { hits: await app.searchSessions(principalId, query, limit) });
+  return sendJson(res, 200, { hits: await app.searchSessions({ actorId: principalId }, query, limit) });
 }
 
 async function listContexts(ctx: ApiCtx): Promise<void> {
@@ -1317,27 +1317,25 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
   if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });
   await ctx.deps.refreshModels?.();
   const config = ctx.deps.config;
+  const offered = async (modelId: string) =>
+    (await userRuntimeConfigBody(ctx, target.scope, target.actorId)).models.includes(modelId);
   if (ctx.body.inherit === true) await config.setRuntimeSelection(target.scope, null);
   else if (ctx.body.keep === true) {
     const runtime = await config.getRuntimeSelectionDurable(target.scope);
     const legacyModel = runtime ? null : await config.getBaseModelOwnDurable(target.scope);
-    if (runtime || (legacyModel && modelSupported(legacyModel) && (await webuiModelEnabled(ctx, legacyModel))))
+    if (runtime || (legacyModel && modelSupported(legacyModel) && (await offered(legacyModel))))
       await config.acknowledgeRuntimeSelection(target.scope);
   } else {
     const modelId = ctx.body.modelId;
     if (typeof modelId !== "string" || !modelSupported(modelId))
       return sendJson(ctx.res, 400, { error: "model_not_supported" });
-    if (!(await webuiModelEnabled(ctx, modelId))) return sendJson(ctx.res, 400, { error: "model_not_enabled" });
+    if (!(await offered(modelId))) return sendJson(ctx.res, 400, { error: "model_not_enabled" });
     const effortLevel = ctx.body.effortLevel ?? "auto";
     if (typeof effortLevel !== "string" || !thinkingLevelsFor(modelId).includes(effortLevel))
       return sendJson(ctx.res, 400, { error: "effort_not_supported" });
     const fastMode = ctx.body.fastMode ?? false;
     if (typeof fastMode !== "boolean") return sendJson(ctx.res, 400, { error: "fast_mode_invalid" });
     const choice = { modelId, effortLevel, fastMode: fastMode && fastModeModelIds().includes(modelId) };
-    if ((await config.getModelAccountDurable(target.actorId)) !== "company") {
-      const available = await userRuntimeConfigBody(ctx, target.scope, target.actorId);
-      if (!available.models.includes(modelId)) return sendJson(ctx.res, 400, { error: "account_runtime_unavailable" });
-    }
     await config.setRuntimeSelection(target.scope, choice);
   }
   audit(ctx, {

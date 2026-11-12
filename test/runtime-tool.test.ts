@@ -131,10 +131,7 @@ test("a saved override removed from the model picker cannot be newly selected", 
   const { config, service } = await setup();
   await config.setRuntimeSelection(claims.scopeId, { ...active, modelId: "gpt-6-astra" });
   await config.setWebuiModels("org:default-org", ["claude-sonnet-5"]);
-  assert.deepEqual(await service(claims, active, { action: "set", model: "Astra" }), {
-    ok: false,
-    error: "model_not_enabled",
-  });
+  assert.equal((await service(claims, active, { action: "set", model: "Astra" })).error, "model_unavailable");
 });
 
 test("cancellation during validation prevents a scope write", async () => {
@@ -230,6 +227,6 @@ test("cron task handoffs still enforce actor, access, model and account policy",
   await config.setWebuiModels("org:default-org", ["claude-sonnet-5"]);
   assert.deepEqual(
     await service(cronClaims, active, { action: "set", model: "Astra" }, undefined, false, undefined, true),
-    { ok: false, error: "model_not_enabled" },
+    { ok: false, error: "model_unavailable", candidates: ["claude-sonnet-5", "claude-opus-5"] },
   );
 });

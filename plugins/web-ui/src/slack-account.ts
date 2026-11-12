@@ -83,6 +83,10 @@ export class SlackAccount extends LitElement {
         return;
       }
       void this.complete();
+    } else if (url.searchParams.get("connect") === "slack") {
+      url.searchParams.delete("connect");
+      history.replaceState(history.state, "", url);
+      void this.connect();
     } else void this.status();
   }
 
@@ -112,7 +116,7 @@ export class SlackAccount extends LitElement {
     this.busy = true;
     this.error = "";
     try {
-      if (await openDesktopBrowser(withBase("/settings"))) return;
+      if (await openDesktopBrowser(withBase("/settings?connect=slack"))) return;
       await this.status();
       if (this.nativeOAuth) {
         const response = await fetch(withBase("/api/connectors/slack/start"), {

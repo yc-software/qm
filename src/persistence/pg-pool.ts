@@ -311,7 +311,7 @@ function describePgError(error: unknown): string {
 }
 
 function unmigrated(migration: PgMigration): Error {
-  const message = `misconfiguration: migration ${migration.id} has not been applied and this database login does not own the schema; run the migrations as the database owner before starting`;
+  const message = `misconfiguration: migration ${migration.id} has not been applied and this database login lacks migration authority; run migrations as the schema owner or the migration ledger owner with CREATE on the schema before starting`;
   console.error(`[pg-pool] ${message}`);
   return new Error(message);
 }
@@ -327,7 +327,15 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
       owns ??=
         (
           await client.query<{ owns: boolean }>(
-            "SELECT pg_has_role(current_user, nspowner, 'USAGE') AS owns FROM pg_namespace WHERE nspname = current_schema()",
+            `SELECT pg_has_role(current_user, n.nspowner, 'USAGE') OR (
+               has_schema_privilege(current_user, n.oid, 'CREATE') AND (
+                 ledger.oid IS NULL OR pg_has_role(current_user, ledger.relowner, 'USAGE')
+               )
+             ) AS owns
+             FROM pg_namespace n
+             LEFT JOIN pg_class ledger ON ledger.oid = to_regclass($1)
+             WHERE n.nspname = current_schema()`,
+            [PG_MIGRATIONS_TABLE],
           )
         ).rows[0]?.owns === true;
       if (!owns) throw unmigrated(migration);

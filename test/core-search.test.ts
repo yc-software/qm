@@ -136,13 +136,13 @@ test("file backend applies the principal visibility intersection to real file ro
     direction: "in",
   });
 
-  const mine = await built.app.search("pelican", [principals[0]!]);
+  const mine = await built.app.search({ query: "pelican", principals: [principals[0]!] });
   assert.deepEqual(
     mine.hits.filter((hit) => hit.backend === "files").map((hit) => hit.id),
     [id],
   );
 
-  const shared = await built.app.search("pelican", principals);
+  const shared = await built.app.search({ query: "pelican", principals });
   assert.deepEqual(
     shared.hits.filter((hit) => hit.backend === "files"),
     [],
@@ -168,7 +168,7 @@ test("slack backend intersects private-channel visibility across all principals"
     { container: "C-ALICE", ts: "2", text: "pelican launch private", kind: "channel" },
   ]);
 
-  const hits = await built.app.search("pelican", principals);
+  const hits = await built.app.search({ query: "pelican", principals });
   assert.deepEqual(
     hits.hits.filter((hit) => hit.backend === "slack").map((hit) => hit.id),
     ["C-SHARED:1"],
@@ -212,7 +212,7 @@ test("file search retains common artifact identities when viewers own different 
     bob.owned.map((f) => f.id),
     [ids[1]],
   );
-  const result = await built.app.search("pelican", principals);
+  const result = await built.app.search({ query: "pelican", principals });
   assert.deepEqual(
     result.hits
       .filter((hit) => hit.backend === "files")
@@ -254,7 +254,7 @@ test("file search still reaches shared artifacts outside the first document page
     page.shared.some((file) => file.id === "shared-search-0"),
     false,
   );
-  const result = await built.app.search("pelican", principals);
+  const result = await built.app.search({ query: "pelican", principals });
   assert.deepEqual(
     result.hits.filter((hit) => hit.backend === "files").map((hit) => hit.id),
     ["shared-search-0"],

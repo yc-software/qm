@@ -86,14 +86,14 @@ export interface ConversationView {
 }
 
 export interface ConversationTurn {
-  role: "user" | "assistant";
+  role: "user" | "bot" | "assistant";
   name?: string;
   text: string;
 }
 
 export interface OverheardMessage {
   ts: string;
-  role: "user" | "self";
+  role: "user" | "bot" | "self";
   name?: string;
   text: string;
   files?: string[];
@@ -135,7 +135,7 @@ export function renderConversationView(view: ConversationView): RenderedConversa
   const rawTurns: ConversationTurn[] = display.map(({ message: m, isReply }) => {
     const text = messageTurnText(m, isReply, view.nameById);
     if (m.isSelf) return { role: "assistant", text };
-    return { role: "user", name: m.name || "someone", text };
+    return { role: m.isBot ? "bot" : "user", name: m.name || "someone", text };
   });
   const priorTurns = mergeConsecutiveTurns(rawTurns);
 
@@ -143,9 +143,11 @@ export function renderConversationView(view: ConversationView): RenderedConversa
     .map(({ message: m }) => {
       const text = clipMessage(resolveMentions(m.text ?? "", view.nameById), MAX_TURN_MESSAGE_CHARS);
       if (!text && !m.files?.length) return undefined;
+      let role: OverheardMessage["role"] = m.isBot ? "bot" : "user";
+      if (m.isSelf) role = "self";
       return {
         ts: m.ts,
-        role: (m.isSelf ? "self" : "user") as "user" | "self",
+        role,
         ...(m.isSelf ? {} : { name: m.name || "someone" }),
         text,
         ...(m.files?.length ? { files: m.files } : {}),
@@ -177,16 +179,19 @@ export function renderConversationView(view: ConversationView): RenderedConversa
 
 export function mergeConsecutiveTurns(turns: readonly ConversationTurn[]): ConversationTurn[] {
   const out: ConversationTurn[] = [];
-  const inlineName = (t: ConversationTurn): string => (t.role === "user" && t.name ? `${t.name}: ${t.text}` : t.text);
+  const inlineName = (t: ConversationTurn): string =>
+    t.role !== "assistant" && t.name ? `${t.name}: ${t.text}` : t.text;
   for (const t of turns) {
     const prev = out[out.length - 1];
     if (!prev || prev.role !== t.role) {
       out.push(
-        t.role === "user" && t.name ? { role: "user", name: t.name, text: t.text } : { role: t.role, text: t.text },
+        t.role !== "assistant" && t.name
+          ? { role: t.role, name: t.name, text: t.text }
+          : { role: t.role, text: t.text },
       );
       continue;
     }
-    if (prev.role === "user" && prev.name !== undefined) {
+    if (prev.role !== "assistant" && prev.name !== undefined) {
       prev.text = inlineName(prev);
       delete prev.name;
     }

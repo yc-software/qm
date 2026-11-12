@@ -4,7 +4,7 @@ import { createModelPicker, type ModelCatalog } from "../model-picker.ts";
 import { runtimeModelOptions, type EffortLevel, type ModelOption } from "../model-options.ts";
 import { fieldSelect } from "../ui.ts";
 import { loadoutActions, type LoadoutEntry } from "../composer-loadout.ts";
-import { states, type SettingsState } from "./settings.ts";
+import { BUDGET, COMPACTION, RECALL, runtimeCardKeys, states, type SettingsState } from "./settings.ts";
 
 const rows: [key: string, label: string, inherit?: string][] = [
   ["runtime", "Conversation runtime"],
@@ -12,8 +12,8 @@ const rows: [key: string, label: string, inherit?: string][] = [
   ["subagent-runtime", "Subagent runtime", "Child's scope default"],
   ["fallback-runtime", "Fallback runtime", "No fallback"],
 ];
-const RECALL = "memory-embedding-model";
-const keys = [...rows.map(([key]) => key), RECALL];
+const COMPACTION_LABEL = "Compaction keeps";
+const BUDGET_LABEL = "History budget";
 type Embedding = { id: string; name: string; provider: string };
 const pickers = new Map<string, ReturnType<typeof picker>>();
 const modelOptions = new WeakMap<object, ModelOption[]>();
@@ -117,10 +117,63 @@ function recallRow() {
     </p>`;
 }
 
+function numberRow(
+  key: string,
+  label: string,
+  field: string,
+  unit: string,
+  step: number,
+  hint: (fallback: string) => unknown,
+) {
+  const s = states.get(key)!;
+  if (!s.available) return nothing;
+  const fallback = String(s.context[`${field}Default`] ?? "");
+  return html`<div class="runtime-row" data-runtime-row=${key}>
+      <span class="runtime-label">${label}</span>
+      <input
+        type="number"
+        step=${step}
+        placeholder=${fallback}
+        aria-label=${`${label} (${unit})`}
+        .value=${s.draft.value}
+        ?disabled=${s.saving}
+        @input=${(e: Event) => s.change("value", (e.target as HTMLInputElement).value.trim())}
+      />
+    </div>
+    <p class="hint runtime-hint">${hint(fallback)}</p>`;
+}
+
+const compactionRow = () =>
+  numberRow(
+    COMPACTION,
+    COMPACTION_LABEL,
+    "compactionKeepPercent",
+    "percent",
+    1,
+    (fallback) =>
+      `Percent of the history budget kept verbatim when a conversation compacts; empty uses the default of ${fallback}%. Lower keeps less recent history verbatim but compacts less often and costs less.`,
+  );
+
+const budgetRow = () =>
+  numberRow(
+    BUDGET,
+    BUDGET_LABEL,
+    "historyBudgetTokens",
+    "tokens",
+    1000,
+    (fallback) =>
+      `Ceiling in tokens on the conversation history each model sees; empty uses the default of ${fallback}. The budget never exceeds half of a model's usable context window. Lower makes long conversations cheaper on per-token providers but the model remembers less verbatim. Applies to every model.`,
+  );
+
 export function runtimesCard() {
-  const shown = keys.map((key) => states.get(key)!).filter((s) => s.available);
+  const shown = runtimeCardKeys.map((key) => states.get(key)!).filter((s) => s.available);
   const dirty = shown.filter((s) => s.dirty);
-  const labels = Object.fromEntries([...rows, [RECALL, "Recall runtime"]]);
+  const labels = Object.fromEntries([
+    ...rows,
+    [RECALL, "Recall runtime"],
+    [COMPACTION, COMPACTION_LABEL],
+    [BUDGET, BUDGET_LABEL],
+  ]);
   const failed = shown.filter((s) => s.tone === "err");
   const status = failed.length
     ? { tone: "err", message: failed.map((s) => `${labels[s.key]}: ${s.message}`).join(" · ") }
@@ -130,7 +183,7 @@ export function runtimesCard() {
     id="card-runtimes"
   >
     <div class="body runtime-rows">
-      ${rows.map(([key, label, inherit]) => runtimeRow(key, label, inherit))}${recallRow()}
+      ${rows.map(([key, label, inherit]) => runtimeRow(key, label, inherit))}${recallRow()}${compactionRow()}${budgetRow()}
     </div>
     <div class="foot">
       <button

@@ -1,5 +1,5 @@
 import type { Readable } from "node:stream";
-import { basename } from "node:path";
+import { basename, extname } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { AttachmentMeta, IncomingAttachment, OutgoingAttachment, ScopeId } from "../types.ts";
 import { isUserItem, type Item } from "../sessions/items.ts";
@@ -12,11 +12,13 @@ import {
 } from "../persistence/blob-transfer.ts";
 import { fileArtifactId, type FileArtifactStore, type FileDirection } from "../files/file-artifact-store.ts";
 import { swallowAs } from "../util/errors.ts";
+import { clampUtf8 } from "../util/text.ts";
 import { MIME_BY_EXT, fileContentRequest } from "./documents.ts";
 import { hashId } from "../util/crypto.ts";
 import type { SecurityScreenVerdict } from "../security/security-posture.ts";
 import { downscaleVisionImage } from "./image-downscale.ts";
 import { NoDefaultSandboxError } from "../sandbox/sandbox-routing.ts";
+import { BotComputerRefusedError } from "../sandbox/sandbox-resources.ts";
 
 export const INBOX_DIR = "inbox";
 export const TURN_FILES_DIR = ".agent-turn";
@@ -95,10 +97,20 @@ export function isVisionAttachment(attachment: Pick<IncomingAttachment, "name" |
   return VISION_MIME_TYPES.has(baseMime(attachment.mimetype || mimeFromName(attachment.name)));
 }
 
+const FILESYSTEM_NAME_BYTES = 255;
+const LONGEST_WRITER_TEMP_SUFFIX_BYTES = `.part.${randomUUID()}`.length;
+const NAME_MAX = FILESYSTEM_NAME_BYTES - LONGEST_WRITER_TEMP_SUFFIX_BYTES;
+
+function fitName(stem: string, suffix: string): string {
+  const room = NAME_MAX - Buffer.byteLength(suffix);
+  return room > 0 ? clampUtf8(stem, room) + suffix : clampUtf8(stem + suffix, NAME_MAX);
+}
+
 export function safeAttachmentName(name: string): string {
   const base = basename(String(name ?? "").replace(/\\/g, "/")).trim();
   if (!base || /^\.+$/.test(base)) return "file";
-  return base;
+  const ext = extname(base);
+  return fitName(base.slice(0, base.length - ext.length), ext);
 }
 
 export function mimeFromName(name: string): string {
@@ -156,12 +168,11 @@ async function registerArtifact(
 
 function uniqueName(name: string, used: Set<string>): string {
   if (!used.has(name)) return name;
-  const dot = name.lastIndexOf(".");
-  const stem = dot > 0 ? name.slice(0, dot) : name;
-  const ext = dot > 0 ? name.slice(dot) : "";
+  const ext = extname(name);
+  const stem = name.slice(0, name.length - ext.length);
   let n = 2;
-  while (used.has(`${stem}-${n}${ext}`)) n++;
-  return `${stem}-${n}${ext}`;
+  while (used.has(fitName(stem, `-${n}${ext}`))) n++;
+  return fitName(stem, `-${n}${ext}`);
 }
 
 export function withoutAlreadyIngested(
@@ -204,6 +215,9 @@ export function inboundManifest(
 export function inboundIssuesNote(issues: readonly string[]): string {
   return issues.length ? `Files received this turn that did not reach ./${INBOX_DIR}/: ${issues.join("; ")}` : "";
 }
+
+export const withheldName = (name: string, verdict: SecurityScreenVerdict): string =>
+  verdict.unscreened && verdict.reason ? `${name} (${verdict.reason})` : name;
 
 export function inboundIssueList(opts: {
   tooMany?: readonly string[];
@@ -251,7 +265,7 @@ export async function materializeInbound(
   let target: Promise<SandboxHandle | null> | undefined;
   const computer = () =>
     (target ??= (typeof handle === "function" ? handle() : Promise.resolve(handle)).catch((e: unknown) => {
-      if (e instanceof NoDefaultSandboxError) return null;
+      if (e instanceof NoDefaultSandboxError || e instanceof BotComputerRefusedError) return null;
       throw e;
     }));
   const unstaged = new Set<string>();
@@ -280,7 +294,7 @@ export async function materializeInbound(
     if (screenText && textContent !== null) {
       const verdict = await screenText({ content: textContent, name, mimetype });
       if (verdict?.decision === "strict") {
-        blocked.push(name);
+        blocked.push(withheldName(name, verdict));
         continue;
       }
       if (!verdict || verdict.unscreened) unscreened.push(name);

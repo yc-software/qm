@@ -11,6 +11,8 @@ import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { configureCommandRules } from "./support/command-rules.ts";
 
+const asMember = { actorId: "member" };
+
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-session-authz-"));
   return buildApp(testConfig({ dataDir }));
@@ -27,12 +29,12 @@ test("getSessionForViewer withholds metadata from a non-participant (no session-
   const sessionId = outcome.sessionId!;
   assert.ok(sessionId);
 
-  const asAlice = await app.getSessionForViewer(sessionId, "alice");
+  const asAlice = await app.getSessionForViewer(sessionId, { actorId: "alice" });
   assert.ok(asAlice, "the owner reads her own session");
   assert.equal(asAlice!.session.id, sessionId);
   assert.equal(asAlice!.session.threadRef, "web:alice:private");
 
-  const asCarol = await app.getSessionForViewer(sessionId, "carol");
+  const asCarol = await app.getSessionForViewer(sessionId, { actorId: "carol" });
   assert.equal(asCarol, null, "a non-participant cannot read the session row");
 });
 
@@ -58,34 +60,34 @@ test("the single-session read applies the managed-project check the session list
   assert.ok(sessionId);
 
   assert.ok(await built.sessions.getForParticipant(sessionId, "member"), "the member is a participant of the row");
-  assert.ok(await built.app.getSessionForViewer(sessionId, "member"), "a project member reads the session");
+  assert.ok(await built.app.getSessionForViewer(sessionId, asMember), "a project member reads the session");
   assert.ok(
     (await built.app.listSessionApprovals(sessionId, "member")).length,
     "and reads the pending approval while membership stands",
   );
   assert.ok(
-    (await built.app.listSessions("member")).some((session) => session.id === sessionId),
+    (await built.app.listSessions(asMember)).some((session) => session.id === sessionId),
     "the list agrees while membership stands",
   );
 
-  assert.ok((await built.app.searchSessions("member", "push")).some((hit) => hit.sessionId === sessionId));
+  assert.ok((await built.app.searchSessions({ actorId: "member" }, "push")).some((hit) => hit.sessionId === sessionId));
   assert.equal((await built.app.removeProjectMember(project.id, "owner", "member")).status, "ok");
-  assert.deepEqual(await built.app.searchSessions("member", "push"), []);
+  assert.deepEqual(await built.app.searchSessions({ actorId: "member" }, "push"), []);
   assert.equal(
     await built.sessions.getForParticipant(sessionId, "member"),
     null,
     "removing the member removes their participant row",
   );
   assert.equal(
-    await built.app.getSessionForViewer(sessionId, "member"),
+    await built.app.getSessionForViewer(sessionId, asMember),
     null,
     "a dropped project member cannot read the session one at a time",
   );
   assert.equal(await built.app.getSessionItemForViewer(sessionId, "member", 1), null, "nor a single item");
   assert.equal(await built.app.sessionBackground(sessionId, "member"), null, "nor its background work");
-  assert.equal(await built.app.updateSession(sessionId, "member", { title: "stolen" }), null, "nor rename it");
+  assert.equal(await built.app.updateSession(sessionId, asMember, { title: "stolen" }), null, "nor rename it");
   assert.ok(
-    !(await built.app.listSessions("member")).some((session) => session.id === sessionId),
+    !(await built.app.listSessions(asMember)).some((session) => session.id === sessionId),
     "the list rejects it too, so both paths agree",
   );
 });
@@ -101,7 +103,7 @@ test("a dropped project member cannot discard or retitle a session they can no l
 
   const spawned = await built.app.spawnSession("owner", { scopeId: projectScopeId(project.id) });
   const sessionId = spawned!.session.id;
-  assert.ok(await built.app.getSessionForViewer(sessionId, "member"), "a project member reads the empty shell");
+  assert.ok(await built.app.getSessionForViewer(sessionId, asMember), "a project member reads the empty shell");
 
   assert.equal((await built.app.removeProjectMember(project.id, "owner", "member")).status, "ok");
   assert.equal(

@@ -22,11 +22,11 @@ function dm(text: string, thread: string): TurnRequest {
 test("background output selects the recorded private resource and fails closed when it is unavailable", async () => {
   const built = buildApp(testConfig({}));
   try {
-    const root = await built.app.turn(dm("Start", "resource-output"));
+    const root = await built.app.turn(dm("Start", "output"));
     const resource = await built.sandboxResources.create("U1", "personal:U1", "sprites", "Worker");
     const fallback = await built.sandboxResources.create("U1", "personal:U1", "sprites", "Default");
     await built.sandboxResources.setDefault("U1", "personal:U1", fallback.id);
-    await built.processes!.register({ ...registryRow("private-output", "resource-output"), sandboxId: resource.id });
+    await built.processes!.register({ ...registryRow("job", "output"), sandboxId: resource.id, scopeId: "channel:C2" });
     let selected: string | undefined;
     const provision = built.sandbox.provision.bind(built.sandbox);
     built.sandbox.provision = (owner, options) => {
@@ -38,12 +38,13 @@ test("background output selects the recorded private resource and fails closed w
       reads++;
       return { chunks: "private output", cursor: 14, status: { state: "exited", code: 0 } };
     };
-    const output = await built.app.readSessionBackgroundOutput(root.sessionId!, "private-output", "U1", 0);
+    const output = await built.app.readSessionBackgroundOutput(root.sessionId!, "job", "U1", 0);
     assert.equal(output?.chunk, "private output");
     assert.equal(selected, resource.id);
-    await built.processes!.markStatus("private-output", "exited");
+    await assert.rejects(built.sandboxResources.retire("U1", resource.id), /background jobs/);
+    await built.processes!.markStatus("job", "exited");
     await built.sandboxResources.retire("U1", resource.id);
-    await assert.rejects(built.app.readSessionBackgroundOutput(root.sessionId!, "private-output", "U1", 0), /retired/);
+    await assert.rejects(built.app.readSessionBackgroundOutput(root.sessionId!, "job", "U1", 0), /retired/);
     assert.equal(reads, 1);
     assert.equal(selected, resource.id);
   } finally {
@@ -104,7 +105,7 @@ test("listSessions counts detached work per conversation — live jobs and armed
   await processes!.register(registryRow("p-unowned", undefined));
   await monitors.create(watchInput(busy, { expiresAt: Date.now() - 1 }));
 
-  const list = await app.listSessions("U1");
+  const list = await app.listSessions({ actorId: "U1" });
   const busyRow = list.find((s) => s.threadRef === busy);
   const idleRow = list.find((s) => s.threadRef === idle);
   assert.equal(busyRow?.backgroundJobs, 2, "live background jobs, this conversation's only");
@@ -178,7 +179,7 @@ test("listSessions counts session-targeted crons — enabled and unarchived only
   await crons.create(cronInput(undefined, "cron with no destination"));
   await crons.create(cronInput("slack:C123", "cron aimed elsewhere"));
 
-  const list = await app.listSessions("U1");
+  const list = await app.listSessions({ actorId: "U1" });
   const hereRow = list.find((s) => s.threadRef === here);
   const plainRow = list.find((s) => s.threadRef === elsewhere);
   assert.equal(hereRow?.crons, 2, "enabled, unarchived crons aimed at this conversation");

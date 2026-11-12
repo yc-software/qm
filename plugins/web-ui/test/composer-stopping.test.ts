@@ -95,7 +95,6 @@ test("stopping holds a disabled Stopping… button beside Send and queues every 
           resolvingApprovals: new Set<string>(),
         },
         activePendingApprovals: () => [],
-        hasUnresolvedApproval: () => false,
         turnRuntime: () => null,
         isStopping: () => stopping,
         hasLiveRun: () => true,

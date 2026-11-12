@@ -13,7 +13,7 @@ async function swarmRequest(ctx: ApiCtx): Promise<void> {
   let caller: SwarmCaller;
   if (capability && !params.id) caller = { kind: "agent", claims: capability };
   else if (actor && params.id && !capability) {
-    if (!(await app.getSessionForViewer(params.id, actor.p)))
+    if (!(await app.getSessionForViewer(params.id, { actorId: actor.p })))
       return sendJson(res, 403, { error: "session access denied" });
     caller = { kind: "human", actorId: actor.p, sessionId: params.id };
   } else return sendJson(res, 403, { error: "session-bound authentication required" });

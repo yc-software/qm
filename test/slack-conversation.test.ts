@@ -13,6 +13,7 @@ import {
   type RecentMessage,
   encodeTs,
 } from "../src/slack/lib.ts";
+import { renderOverheard, seedPriorTurns, selectOverheardToImport } from "../src/agent/replay.ts";
 
 function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -336,6 +337,21 @@ test("renderConversationView: overheard is one un-merged entry per non-trigger m
   assert.match(overheard[1]!.text, /@Alice/);
   assert.equal(overheard[2]!.role, "self");
   assert.equal(overheard[2]!.name, undefined);
+});
+
+test("renderConversationView: another bot's post reaches the model as from=bot, apart from people's posts", () => {
+  const messages: RecentMessage[] = [
+    { ts: "1717360800.000001", name: "Alice", text: "deploy is red", authorId: "U1" },
+    { ts: "1717360800.000002", name: "DeployBot", text: "rollback finished", authorId: "B1", isBot: true },
+  ];
+  const { overheard, priorTurns } = renderConversationView(baseView({ messages }));
+  const imported = selectOverheardToImport(overheard, new Set()).map(renderOverheard).join("");
+  const shown = imported + seedPriorTurns(priorTurns)[0]!.text;
+  assert.match(shown, /from="human" author="Alice"[^<]*red<\/message><[^>]* from="bot" author="DeployBot"/);
+  assert.match(
+    shown,
+    /<message from="human" author="Alice">[^<]*red<\/message>\n<message from="bot" author="DeployBot">/,
+  );
 });
 
 test("renderConversationView: the agent's own reply becomes an assistant turn but is dropped from detection", () => {
