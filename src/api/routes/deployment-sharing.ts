@@ -4,21 +4,20 @@ import { DeployAccessError, type DeployAccessErrorCode } from "../../deploy/depl
 import { deploymentView, type App } from "../app.ts";
 import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
-import { isObj } from "./shared.ts";
+import { isObj, livePersonTurn } from "./shared.ts";
 import { parseScopeId, type Permission } from "../../types.ts";
 import type { ApiCtx, Route } from "./route.ts";
-import { personAtKeyboard, resolveShareTarget as resolveShareTargetGrammar } from "../artifact-share.ts";
-import { activeRun } from "./composio.ts";
+import { resolveShareTarget as resolveShareTargetGrammar } from "../artifact-share.ts";
 
 async function setDeploymentConnectors(ctx: ApiCtx): Promise<void> {
   const { res, app, params, body, capability, actor } = ctx;
   const principalId = capability ? capability.actorId : actor?.p;
-  if (!principalId || (capability && !personAtKeyboard(capability)))
+  if (!principalId)
     return sendJson(res, 403, {
       error: "forbidden",
       message: "only the publisher, in a live conversation or signed in, can lend an app their connectors",
     });
-  if (!(await activeRun(ctx))) return;
+  if (!(await livePersonTurn(ctx))) return;
   const connectors = (body as { connectors?: unknown }).connectors;
   if (!Array.isArray(connectors) || !connectors.every((host) => typeof host === "string"))
     return sendJson(res, 400, { error: "bad_request", message: "connectors (array of connected-app hosts) required" });

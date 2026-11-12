@@ -139,7 +139,7 @@ async function webTurnBase(
     clientSurface: clientSurfaceOf(ctx.req.headers),
     actor: { externalId: user, ...(displayName ? { displayName } : {}) },
     conversation,
-    origin: { kind: "human" },
+    origin: ctx.actor?.imp ? { kind: "direct" } : { kind: "human" },
     deliveryTarget: threadRef,
     ...(inbox ? { conversationHeader: inbox } : {}),
     ...(appSlug ? { conversationHeader: appEditNote(appSlug, liveEdit !== null, failedPublish) } : {}),
@@ -262,6 +262,7 @@ async function webApproval(ctx: ApiCtx): Promise<void> {
   const idempotencyKey = namespacedSendKey(user, p.idempotencyKey);
   return submitTurn(ctx, {
     ...replay,
+    ...(ctx.actor?.imp ? { origin: { kind: "direct" as const } } : {}),
     approval: approvalOf({ ...p, requestId }),
     clientSurface: clientSurfaceOf(ctx.req.headers),
     ...(idempotencyKey ? { idempotencyKey } : {}),
@@ -282,6 +283,8 @@ async function webRunSignal(ctx: ApiCtx): Promise<void> {
     if ("error" in resolved) return sendJson(ctx.res, 403, resolved);
     request = await webTurnBase(ctx, user, resolved.conversation, threadRef, text);
   }
+  if (kind === "steer" && !request && ctx.actor?.imp)
+    return sendJson(ctx.res, 403, { error: "forbidden", message: "Unavailable while impersonating." });
   return postRunSignal({
     ...ctx,
     body: {

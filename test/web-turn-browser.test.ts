@@ -11,7 +11,7 @@ import { scopeId, type TurnRequest } from "../src/types.ts";
 import { serverDeps } from "../src/wiring.ts";
 import { buildApp, stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
+import { browserImpersonationCookie, browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 
 const config = testConfig({ signingSecret: "web-turn-browser-signing-secret-0123456" });
 const built = stopAtEnd(buildApp(config));
@@ -190,6 +190,20 @@ test("the server writes who sent a turn and where it goes; the browser's own cla
   assert.equal(turn.conversationHeader, undefined);
   assert.equal(turn.async, true);
   assert.equal((await sentTurn({ threadRef: "dm:D1" })).conversation.threadRef, "web:alice:default");
+});
+
+test("a turn, approval or steer sent while impersonating someone never claims that person is present", async () => {
+  const cookie = `${browserSessionCookie("admin-carol")}; ${browserImpersonationCookie("admin-carol", "alice")}`;
+  assert.equal((await post("/api/turn", { text: "hi", threadRef: "web:alice:t1" }, { cookie })).status, 202);
+  assert.deepEqual([turns.at(-1)!.actor.externalId, turns.at(-1)!.origin], ["alice", { kind: "direct" }]);
+  assert.equal((await post("/api/approvals/a-1", { approved: true }, { cookie })).status, 202);
+  assert.deepEqual(turns.at(-1)!.origin, { kind: "direct" });
+  const steer = { kind: "steer", text: "more", threadRef: "web:alice:t1" };
+  assert.equal((await post("/api/runs/r1/signal", steer, { cookie })).status, 200);
+  assert.deepEqual(signals.at(-1)!.signal.request?.origin, { kind: "direct" });
+  const signalCount = signals.length;
+  assert.equal((await post("/api/runs/r1/signal", { kind: "steer", text: "more" }, { cookie })).status, 403);
+  assert.equal(signals.length, signalCount);
 });
 
 test("a turn with nothing to send is refused before it reaches the agent", async () => {

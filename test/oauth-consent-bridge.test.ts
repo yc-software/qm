@@ -357,7 +357,7 @@ test("removing a connection, a saved login or a persona takes a running turn wit
     assert.equal(await send("DELETE", login, { triggered: true }), "403 human_consent_required");
     assert.equal(await send("POST", grant, { botActor: true }), "403 human_consent_required");
     assert.equal(await send("POST", grant, { runId: "finished-run" }), "403 inactive_run");
-    assert.equal(await send("DELETE", persona, { triggered: true }), "403 forbidden");
+    assert.equal(await send("DELETE", persona, { triggered: true }), "403 human_consent_required");
     assert.equal(await send("DELETE", persona, { runId: "finished-run" }), "403 inactive_run");
     assert.equal(await send("DELETE", `${persona}/credentials/x`, { runId: "finished-run" }), "403 inactive_run");
     assert.equal(await send("DELETE", persona), "200 true");

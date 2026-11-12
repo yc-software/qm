@@ -65,6 +65,10 @@ test("a signed-in person adds, lists and removes only their own keychain entries
       "/v1/keychain/grants/missing/revoke",
       "/v1/personas/missing/credentials",
       "/v1/user-model-auth/disconnect",
+      "/v1/user-model-auth/api-key",
+      "/v1/user-model-auth/chatgpt/poll",
+      "/v1/user-model-auth/claude/complete",
+      "/v1/connectors/oauth/google/start",
     ],
     DELETE: [`/v1/keychain/credentials/${saved.id}`, "/v1/personas/missing", "/v1/personas/missing/credentials/x"],
   };
