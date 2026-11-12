@@ -87,16 +87,7 @@ async function complete(ctx: ApiCtx, modelId: string, input: Record<string, unkn
   const abort = () => controller.abort();
   res.once("close", abort);
   try {
-    sendJson(
-      res,
-      200,
-      await completeChatRequest(
-        route,
-        input,
-        AbortSignal.any([controller.signal, AbortSignal.timeout(300_000)]),
-        "sandbox",
-      ),
-    );
+    sendJson(res, 200, await completeChatRequest(route, input, controller.signal, "sandbox"));
   } catch (error) {
     if (error instanceof ChatCompletionError) return sendJson(res, error.status, { error: { message: error.message } });
     if (controller.signal.aborted) return;
