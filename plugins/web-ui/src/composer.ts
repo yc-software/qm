@@ -17,7 +17,6 @@ import {
   api,
   ApiError,
   editQueuedRun,
-  approvalBlocksComposer,
   MAX_ATTACHMENT_BYTES,
   MAX_FILES_PER_MESSAGE,
   mintSendKey,
@@ -551,9 +550,8 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       </div>`;
     }
     const approvalPauses = ctx.chat.activePendingApprovals();
-    const blockingPauses = approvalPauses.filter(approvalBlocksComposer);
     const runtimePending = activeRuntimeConfig === null;
-    const inputBlocked = runtimePending || ctx.chat.state.resolvingApprovals.size > 0 || blockingPauses.length > 0;
+    const inputBlocked = runtimePending || ctx.chat.state.resolvingApprovals.size > 0;
     const attachingDisabled = inputBlocked;
     let placeholder =
       options.placeholder ??
@@ -678,18 +676,14 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
             : nothing
         }
         ${approvalPauses.length ? composerApprovalPanel(approvalPauses) : nothing}
-        ${
-          blockingPauses.length
-            ? nothing
-            : composerInput({
-                value: composerState.draft,
-                placeholder,
-                disabled: inputBlocked,
-                onInput: (e) => onDraftInput(e, agent),
-                onKeydown: (e) => onComposerKeydown(e, agent),
-                onPaste: (e) => void onComposerPaste(e, agent),
-              })
-        }
+        ${composerInput({
+          value: composerState.draft,
+          placeholder,
+          disabled: inputBlocked,
+          onInput: (e) => onDraftInput(e, agent),
+          onKeydown: (e) => onComposerKeydown(e, agent),
+          onPaste: (e) => void onComposerPaste(e, agent),
+        })}
         <div class="composer-toolbar">
           <div class="composer-left">
             <input
@@ -1317,8 +1311,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       !composerState.processingFiles &&
       !submitting &&
       getRuntimeConfig(scopeKey()) !== null &&
-      ctx.chat.state.resolvingApprovals.size === 0 &&
-      !ctx.chat.hasUnresolvedApproval()
+      ctx.chat.state.resolvingApprovals.size === 0
     );
   }
 
@@ -1775,8 +1768,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     }
     const text = data.getData("text/plain");
     if (text.length <= LARGE_PASTE_CHARS) return;
-    if (ctx.chat.hasUnresolvedApproval() || ctx.chat.state.resolvingApprovals.size > 0 || composerState.processingFiles)
-      return;
+    if (ctx.chat.state.resolvingApprovals.size > 0 || composerState.processingFiles) return;
     if (composerState.attachments.length >= MAX_FILES_PER_MESSAGE) return;
     e.preventDefault();
     const names = new Set(composerState.attachments.map((a) => a.fileName));
@@ -1876,12 +1868,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   }
 
   async function addFiles(files: File[], agent: Agent, folders: DropEntryLike[] = []): Promise<void> {
-    if (
-      (!files.length && !folders.length) ||
-      ctx.chat.hasUnresolvedApproval() ||
-      ctx.chat.state.resolvingApprovals.size > 0
-    )
-      return;
+    if ((!files.length && !folders.length) || ctx.chat.state.resolvingApprovals.size > 0) return;
     if (composerState.processingFiles) {
       composerState.error = "Still preparing the previous drop. Try again in a moment.";
       ctx.chat.drawActiveChat(agent);
@@ -1942,7 +1929,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   }
 
   function pickFiles(): void {
-    if (ctx.chat.hasUnresolvedApproval() || ctx.chat.state.resolvingApprovals.size > 0) return;
+    if (ctx.chat.state.resolvingApprovals.size > 0) return;
     ctx.chat.state.host?.querySelector<HTMLInputElement>(".file-input")?.click();
   }
 
@@ -2027,7 +2014,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
 
   function toggleFastMode(agent: Agent): void {
     const selected = currentModelOption();
-    if (ctx.chat.hasUnresolvedApproval() || ctx.chat.state.resolvingApprovals.size > 0) return;
+    if (ctx.chat.state.resolvingApprovals.size > 0) return;
     if (selected && isUltrafastModel(selected.model.id)) {
       const target = ultrafastChoice(getModelOptions(scopeKey()), selected);
       if (target) applyLoadout({ ...activeLoadoutEntry(selected), value: target.value, fast: true }, agent);
@@ -2122,13 +2109,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       remove = false,
     ): Promise<boolean> => {
       const agent = ctx.chat.state.agent;
-      if (
-        !agent ||
-        composerState.processingFiles ||
-        ctx.chat.hasUnresolvedApproval() ||
-        ctx.chat.state.resolvingApprovals.size > 0
-      )
-        return false;
+      if (!agent || composerState.processingFiles || ctx.chat.state.resolvingApprovals.size > 0) return false;
       const prefix = `annotation_${annotationId}_`;
       const retained = composerState.attachments.filter((attachment) => !attachment.id.startsWith(prefix));
       if (remove) {

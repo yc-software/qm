@@ -165,7 +165,7 @@ export async function putAdminCronDestination(ctx: ApiCtx): Promise<void> {
   }
   if (isDeepStrictEqual(cron.destination, next))
     return sendJson(res, 200, { cron: { id: cron.id, destination: cron.destination } });
-  const updated = await app.setCronDestination(id, next);
+  const updated = await app.setCronDestination(id, next, { actorId: actor.id });
   await notifyOwnerOfCronEdit(app, {
     cron,
     editorId: actor.id,

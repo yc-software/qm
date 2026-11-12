@@ -1,5 +1,5 @@
 import { loadMessageTranscript, messageLinkSeq } from "./message-link.ts";
-import { initializeBrowserErrors, stopBrowserErrors } from "./browser-errors";
+import { initializeBrowserErrors, reportHandledError, stopBrowserErrors } from "./browser-errors";
 import { initializeAnalytics, capturePageview, stopAnalytics } from "./product-analytics";
 import { captureSlackReturn } from "./slack-account";
 import { clearTranscriptCache } from "./transcript-cache";
@@ -1081,6 +1081,15 @@ export async function boot(): Promise<void> {
     session: wantedSession,
     item: wantedItem,
   } = parseDeepLink(UI_BASE, location.pathname, location.search);
+  if (wanted === "app-share") {
+    await import("./app-share-embed")
+      .then(({ bootAppShare }) => bootAppShare(params))
+      .catch((e: unknown) => {
+        reportHandledError("web-ui: app-share", e);
+        renderAuthGate({ kind: "unreachable" });
+      });
+    return;
+  }
   const appEditEmbed = wanted === "app-edit" && params.get("embed") === "1";
   document.body.classList.toggle("app-edit-embed", appEditEmbed);
   markDesktopEmbed(appEditEmbed);

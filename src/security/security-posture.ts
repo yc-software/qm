@@ -1,4 +1,4 @@
-import type { OverheardMessage, ScopeId, TurnOrigin } from "../types.ts";
+import type { ScopeId, TurnOrigin } from "../types.ts";
 import { MAX_DOCUMENT_TEXT_CHARS } from "../core/documents.ts";
 
 export const SECURITY_POSTURES = ["dangerous", "auto", "strict"] as const;
@@ -163,7 +163,6 @@ interface SecurityScreenInput {
   origin?: TurnOrigin;
   verifiedSwarm?: boolean;
   verifiedSessionMessage?: boolean;
-  overheard?: Array<Pick<OverheardMessage, "role" | "name" | "text">>;
   externalPromptData?: Array<{ source: string; content: string }>;
 }
 
@@ -188,11 +187,6 @@ function securityScreenParts(input: SecurityScreenInput): Array<{ source: string
     if (input.verifiedSessionMessage) source = "session-delegation";
     if (input.verifiedSwarm) source = "swarm-delegation";
     if (content.trim()) payloads.push({ source, content });
-  }
-  for (const message of input.overheard ?? []) {
-    if (message.role === "user" && message.text.trim()) {
-      payloads.push({ source: `overheard:${message.name ?? "participant"}`, content: message.text });
-    }
   }
   for (const datum of input.externalPromptData ?? []) {
     if (datum.content.trim()) payloads.push(datum);

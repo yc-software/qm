@@ -63,13 +63,20 @@
 .loadout-button {
   gap: 7px;
   height: 32px;
-  max-width: min(360px, 58vw);
   padding: 0 8px;
   color: var(--foreground);
   font-size: var(--font-13);
 }
+.loadout-control .loadout-button {
+  max-width: min(360px, 100%);
+}
 .loadout-button .menu-suffix {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: max-content;
+  overflow: hidden;
   color: var(--muted-foreground);
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 [data-density] .composer-toolbar .menu-button.loadout-button {

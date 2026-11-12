@@ -32,6 +32,7 @@ const eventSchema = z.object({
 });
 
 export type PartnerChatUser = z.infer<typeof user>;
+export type PartnerChatEvent = z.infer<typeof eventSchema>;
 
 export interface PartnerChatRef {
   account: string;
