@@ -44,7 +44,7 @@ test("surface-supplied instructions are appended verbatim (and alone are enough 
 
 test("a web chat relayed by another app says so and that web UI widgets won't render there", () => {
   assert.equal(webSurfaceLabel("QM", false), "the QM web app");
-  assert.match(webSurfaceLabel("QM", true), /^another app that relays this chat to QM .*not QM web UI widgets/);
+  assert.match(webSurfaceLabel("QM", true), /^another app that relays this chat to QM .*web UI or its widgets$/);
 });
 
 test("reactionGuidance is detection-only — never rendered into the main prompt", () => {
