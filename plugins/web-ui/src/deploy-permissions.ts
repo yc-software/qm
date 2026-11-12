@@ -1,4 +1,5 @@
 import {
+  GENERAL_ACCESS_ICONS,
   generalAccessOf,
   isOrgScope,
   orgAccessNote,
@@ -8,7 +9,7 @@ import {
 } from "../../chassis/src/app-access.ts";
 import { html, render, nothing } from "lit";
 import { live } from "lit/directives/live.js";
-import { Building2, Globe, Lock, Search, X } from "lucide";
+import { Search, X, type IconNode } from "lucide";
 import { api } from "./core-bridge";
 import { avatarTpl, closeFormMenus, menuSelect } from "./ui";
 import { icon } from "./icons";
@@ -337,7 +338,7 @@ export async function openDeploymentPermissions(
         <div class="project-member-list">
           <div class="permission-row">
             <span class="project-member-avatar" aria-hidden="true"
-              >${icon({ public: Globe, org: Building2, restricted: Lock }[generalAccess()], 16)}</span
+              >${icon(GENERAL_ACCESS_ICONS[generalAccess()] as IconNode, 16)}</span
             >
             <span class="permission-person-label">
               <fieldset class="permission-control general-access-control" ?disabled=${busy}>
