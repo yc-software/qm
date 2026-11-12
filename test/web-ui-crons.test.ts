@@ -157,7 +157,7 @@ test("retained cron runs are private to people who can manage the cron", async (
   assert.equal(huge.status, 400);
   assert.equal((await fetch(`${coreBase}/api/crons/${cron.id}/runs`, asUser("other-user"))).status, 404);
 
-  await built.app.deleteCron(cron.id);
+  await built.app.deleteCron(cron.id, { actorId: cron.owner });
 });
 
 test("list splits owned crons from ones visible through shared scopes, and visibility never grants administration", async () => {
@@ -220,7 +220,8 @@ test("list splits owned crons from ones visible through shared scopes, and visib
     assert.equal((await attempt).status, 404);
   }
 
-  for (const id of [publicCron.id, privateCron.id, dmCron.id, personalCron.id]) await built.app.deleteCron(id);
+  for (const id of [publicCron.id, privateCron.id, dmCron.id, personalCron.id])
+    await built.app.deleteCron(id, { actorId: "bob" });
 });
 
 test("a channel member sees a teammate's cron read-only via the web until the owner shares write access", async () => {
@@ -267,7 +268,31 @@ test("a channel member sees a teammate's cron read-only via the web until the ow
   assert.equal(aliceDisable.status, 200, "a write grantee manages it");
   assert.equal((await built.app.getCron(privCron.id))!.owner, "bob");
 
-  await built.app.deleteCron(privCron.id);
+  const rescheduled = await fetch(
+    `${coreBase}/api/crons/${privCron.id}`,
+    asUser("alice", { method: "PATCH", body: JSON.stringify({ schedule: { everyMs: 1_800_000 } }) }),
+  );
+  assert.equal(rescheduled.status, 200, await rescheduled.clone().text());
+  const afterSchedule = (await built.app.getCron(privCron.id))!;
+  assert.equal(afterSchedule.owner, "bob", "changing when it fires does not change whose words run");
+  assert.equal((afterSchedule.schedule as { everyMs?: number }).everyMs, 1_800_000);
+  const retasked = await fetch(
+    `${coreBase}/api/crons/${privCron.id}`,
+    asUser("alice", { method: "PATCH", body: JSON.stringify({ task: "tock" }) }),
+  );
+  assert.equal(retasked.status, 200, await retasked.clone().text());
+  const afterTask = (await built.app.getCron(privCron.id))!;
+  assert.equal(afterTask.owner, "alice", "whoever rewrites a shared cron's task becomes its owner");
+  assert.equal(afterTask.action, "tock");
+  assert.equal(afterTask.ownerScopeId, "channel:PRIV", "the cron stays where it lives");
+  const bobList = (await (await fetch(`${coreBase}/api/crons`, asUser("bob"))).json()) as {
+    crons: Array<{ id: string }>;
+    visible: Array<{ id: string; owner: string }>;
+  };
+  assert.ok(!bobList.crons.some((c) => c.id === privCron.id), "the former owner no longer lists it as theirs");
+  assert.equal(bobList.visible.find((c) => c.id === privCron.id)?.owner, "alice");
+
+  await built.app.deleteCron(privCron.id, { actorId: privCron.owner });
 });
 
 test("cron runtime patches pass through the web API, validate, and clear", async () => {
@@ -308,7 +333,6 @@ test("a browser cron edit accepts only the fields the web app edits", async () =
     fetch(`${coreBase}/api/crons/${cron.id}`, asUser("alice", { method: "PATCH", body: JSON.stringify(body) }));
   for (const body of [
     { unfurlLinks: false },
-    { unattendedGrants: ["admin.spend.read"] },
     { session: false },
     { action: "renamed task" },
     { title: "ok", note: "extra" },
@@ -320,24 +344,10 @@ test("a browser cron edit accepts only the fields the web app edits", async () =
     assert.match(((await refused.json()) as { message: string }).message, /^expected a cron patch: title/);
   }
   const after = (await built.app.getCron(cron.id))!;
-  assert.deepEqual(
-    [after.action, after.destination?.unfurlLinks, after.unattendedGrants],
-    ["check", undefined, undefined],
-  );
+  assert.deepEqual([after.action, after.destination?.unfurlLinks], ["check", undefined]);
   const edited = await patch({ title: "renamed", task: "check twice", enabled: false });
   assert.equal(edited.status, 200);
   assert.deepEqual(((await edited.json()) as CronBody).cron.enabled, false);
-  const privileged = await built.app.createCron({
-    title: "privileged",
-    action: "report spend",
-    schedule: { everyMs: 60_000 },
-    owner: "alice",
-    createdBy: "alice",
-    ownerScopeId: "personal:alice",
-  });
-  await built.app.updateCron(privileged.id, { enabled: false, unattendedGrants: ["admin.spend.read"] });
-  const enable = await fetch(`${coreBase}/api/crons/${privileged.id}/enable`, asUser("alice", { method: "POST" }));
-  assert.equal(enable.status, 403);
-  assert.equal((await built.app.getCron(privileged.id))!.enabled, false);
-  for (const id of [cron.id, privileged.id]) await built.app.deleteCron(id);
+  assert.equal((await built.app.getCron(cron.id))!.owner, "alice", "an owner editing their own task stays owner");
+  await built.app.deleteCron(cron.id, { actorId: cron.owner });
 });

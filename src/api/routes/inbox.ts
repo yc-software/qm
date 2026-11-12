@@ -78,7 +78,7 @@ export async function inboxView(ctx: ApiCtx): Promise<InboxView | null> {
     updatedAt: Date.now(),
   });
   const loops = (await deps.store.list()).filter((loop) => loop.state !== "archived");
-  const permissions = await ctx.app.loopAdministration(acting.actorId, loops);
+  const permissions = await ctx.app.loopAdministration(acting.capability ?? acting, loops);
   const available = loops.filter((_loop, i) => permissions[i]);
   let ids = Array.isArray(pref.value) ? pref.value.filter((value): value is string => typeof value === "string") : [];
   if (ctx.method === "POST") {

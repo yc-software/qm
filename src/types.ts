@@ -118,7 +118,6 @@ export interface SpawnMeta {
   surfaceTools?: boolean;
   deliveryCandidates?: TurnRequest["deliveryCandidates"];
   origin?: TurnOrigin;
-  unattendedGrants?: string[];
   openFingerprint?: string;
   scopeVersion?: string;
   sessionParticipantIds?: readonly string[];
@@ -338,14 +337,14 @@ export interface GatewayContext {
 }
 
 export interface ConversationTurn {
-  role: "user" | "assistant";
+  role: "user" | "bot" | "assistant";
   name?: string;
   text: string;
 }
 
 export interface OverheardMessage {
   ts: string;
-  role: "user" | "self";
+  role: "user" | "bot" | "self";
   name?: string;
   text: string;
   files?: string[];
@@ -360,6 +359,7 @@ export type TurnOrigin =
       screenData?: string;
       destination?: Destination;
       useOwnerKeychain?: boolean;
+      ownerFire?: true;
     }
   | { kind: "direct" };
 
@@ -405,7 +405,6 @@ export interface TurnRequest {
   text: string;
   origin?: TurnOrigin;
   gatewayContext?: GatewayContext;
-  unattendedGrants?: string[];
   cronScript?: import("./triggers/types.ts").CronScript;
   infrequentCron?: boolean;
   personaId?: string;
@@ -466,6 +465,8 @@ export interface ApprovedToolCallSpec {
   tool: string;
   input: Record<string, unknown>;
 }
+
+export const APPROVAL_LIFETIME_MS = 60 * 60_000;
 
 export interface PendingApprovalRecord {
   screenedOutput?: { tool: string; text: string; sourceScopeId?: ScopeId };

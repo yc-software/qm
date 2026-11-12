@@ -15,7 +15,7 @@ import {
   type MemoryProviderProblem,
 } from "../../memory/provider-outcome.ts";
 import { suggestedActivityRoutes } from "./suggested-activities.ts";
-import { runtimeConfigBody, userRuntimeConfigBody, webuiModelEnabled, withAppEditRuntime } from "../runtime-config.ts";
+import { runtimeConfigBody, userRuntimeConfigBody, withAppEditRuntime } from "../runtime-config.ts";
 import { canReadNotebook, searchAcrossScopes } from "../../memory/cross-scope.ts";
 import { sessionSharingRoutes } from "./session-sharing.ts";
 import type { Grant, PendingApproval, ScopeId, Session } from "../../types.ts";
@@ -51,7 +51,7 @@ import { tenantOf, withActor, type ApiCtx, type Route } from "./route.ts";
 import {
   ARTIFACT_TYPES,
   isArtifactType,
-  livePersonCapability,
+  personAtKeyboard,
   splitToScope,
   SHARED_SKILL_TRIGGER_REFUSAL,
 } from "../artifact-share.ts";
@@ -70,7 +70,7 @@ function isGrant(b: unknown): b is Grant {
 function sharedSkillCreateBlock(capability: ApiCtx["capability"]): string | null {
   if (!capability) return null;
   if (parseScopeId(capability.scopeId).kind === "personal") return null;
-  if (livePersonCapability(capability)) return null;
+  if (personAtKeyboard(capability)) return null;
   return SHARED_SKILL_TRIGGER_REFUSAL;
 }
 
@@ -384,69 +384,50 @@ async function listFiles(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, page);
 }
 
-async function patchSession(ctx: ApiCtx): Promise<void> {
-  const { res, app, body } = ctx;
-  const id = ctx.params.id!;
-  const b = body as {
-    principalId?: unknown;
-    title?: unknown;
-    archived?: unknown;
-    pinned?: unknown;
-    color?: unknown;
-    unread?: unknown;
-  };
-  const principalId = typeof b.principalId === "string" ? b.principalId : null;
-  if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
-  const patch: {
-    title?: string | null;
-    archived?: boolean;
-    pinned?: boolean;
-    color?: string | null;
-    readAt?: number;
-  } = {};
+type SessionPatch = {
+  title?: string | null;
+  archived?: boolean;
+  pinned?: boolean;
+  color?: string | null;
+  readAt?: number;
+};
+
+function parseSessionPatch(b: Record<string, unknown>): { patch: SessionPatch } | { error: string } {
+  const patch: SessionPatch = {};
   if ("unread" in b) {
-    if (typeof b.unread !== "boolean") {
-      return sendJson(res, 400, { error: "bad_request", message: "unread must be a boolean" });
-    }
+    if (typeof b.unread !== "boolean") return { error: "unread must be a boolean" };
     patch.readAt = b.unread ? 0 : Date.now();
   }
   if ("title" in b) {
-    if (b.title !== null && typeof b.title !== "string") {
-      return sendJson(res, 400, { error: "bad_request", message: "title must be a string or null" });
-    }
+    if (b.title !== null && typeof b.title !== "string") return { error: "title must be a string or null" };
     const trimmed = typeof b.title === "string" ? b.title.trim().slice(0, 200) : null;
     patch.title = trimmed ? trimmed : null;
   }
   if ("archived" in b) {
-    if (typeof b.archived !== "boolean") {
-      return sendJson(res, 400, { error: "bad_request", message: "archived must be a boolean" });
-    }
+    if (typeof b.archived !== "boolean") return { error: "archived must be a boolean" };
     patch.archived = b.archived;
   }
   if ("pinned" in b) {
-    if (typeof b.pinned !== "boolean") {
-      return sendJson(res, 400, { error: "bad_request", message: "pinned must be a boolean" });
-    }
+    if (typeof b.pinned !== "boolean") return { error: "pinned must be a boolean" };
     patch.pinned = b.pinned;
   }
   if ("color" in b) {
-    if (!isConversationColor(b.color)) {
-      return sendJson(res, 400, { error: "bad_request", message: "color must be '#rrggbb' or null" });
-    }
+    if (!isConversationColor(b.color)) return { error: "color must be '#rrggbb' or null" };
     patch.color = typeof b.color === "string" ? b.color.toLowerCase() : null;
   }
-  if (
-    patch.title === undefined &&
-    patch.archived === undefined &&
-    patch.pinned === undefined &&
-    patch.color === undefined &&
-    patch.readAt === undefined
-  ) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "title, archived, pinned, color, or unread required",
-    });
-  }
+  if (Object.keys(patch).length === 0) return { error: "title, archived, pinned, color, or unread required" };
+  return { patch };
+}
+
+async function patchSession(ctx: ApiCtx): Promise<void> {
+  const { res, app, body } = ctx;
+  const id = ctx.params.id!;
+  const b = isObj(body) ? body : {};
+  const principalId = typeof b.principalId === "string" ? b.principalId : null;
+  if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
+  const parsed = parseSessionPatch(b);
+  if ("error" in parsed) return sendJson(res, 400, { error: "bad_request", message: parsed.error });
+  const patch = parsed.patch;
   const session = await app.updateSession(id, principalId, patch);
   if (!session) return sendJson(res, 404, { error: "not_found" });
   return sendJson(res, 200, { session });
@@ -469,45 +450,9 @@ async function patchAgentConversation(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 401, { error: "capability_required", message: "this endpoint is for the agent self-API" });
   }
   const b = isObj(body) ? body : {};
-  const patch: {
-    title?: string | null;
-    archived?: boolean;
-    pinned?: boolean;
-    color?: string | null;
-  } = {};
-  if ("archived" in b) {
-    if (typeof b.archived !== "boolean") {
-      return sendJson(res, 400, { error: "bad_request", message: "archived must be a boolean" });
-    }
-    patch.archived = b.archived;
-  }
-  if ("pinned" in b) {
-    if (typeof b.pinned !== "boolean") {
-      return sendJson(res, 400, { error: "bad_request", message: "pinned must be a boolean" });
-    }
-    patch.pinned = b.pinned;
-  }
-  if ("title" in b) {
-    if (b.title !== null && typeof b.title !== "string") {
-      return sendJson(res, 400, { error: "bad_request", message: "title must be a string or null" });
-    }
-    const trimmed = typeof b.title === "string" ? b.title.trim().slice(0, 200) : null;
-    patch.title = trimmed ? trimmed : null;
-  }
-  if ("color" in b) {
-    if (!isConversationColor(b.color)) {
-      return sendJson(res, 400, { error: "bad_request", message: "color must be '#rrggbb' or null" });
-    }
-    patch.color = typeof b.color === "string" ? b.color.toLowerCase() : null;
-  }
-  if (
-    patch.archived === undefined &&
-    patch.pinned === undefined &&
-    patch.title === undefined &&
-    patch.color === undefined
-  ) {
-    return sendJson(res, 400, { error: "bad_request", message: "archived, pinned, title, or color required" });
-  }
+  const parsed = parseSessionPatch(b);
+  if ("error" in parsed) return sendJson(res, 400, { error: "bad_request", message: parsed.error });
+  const patch = parsed.patch;
   const session = await app.updateSession(ctx.params.id!, capability.actorId, patch);
   if (!session) return sendJson(res, 404, { error: "not_found", message: "not a conversation you can see" });
   audit(ctx, {
@@ -606,7 +551,7 @@ async function searchResources(ctx: ApiCtx): Promise<void> {
   const principalId = ctx.actor?.p ?? ctx.url.searchParams.get("principalId");
   if (!principalId) return sendJson(ctx.res, 400, { error: "bad_request" });
   const query = (ctx.url.searchParams.get("q") ?? "").slice(0, 500);
-  return sendJson(ctx.res, 200, await ctx.app.searchResources(principalId, query));
+  return sendJson(ctx.res, 200, await ctx.app.searchResources(tenantOf(ctx), principalId, query));
 }
 
 async function searchSessions(ctx: ApiCtx): Promise<void> {
@@ -1011,7 +956,7 @@ async function restoreSkill(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 401, { error: "capability_required" });
   }
   if (!principalId) return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId required" });
-  const liveActor = ctx.capability ? livePersonCapability(ctx.capability) : true;
+  const liveActor = ctx.capability ? personAtKeyboard(ctx.capability) : true;
   const restored = await ctx.app.restoreOwnedSkill(ctx.params.id!, principalId, { liveActor });
   if (restored === "trigger_blocked")
     return sendJson(ctx.res, 403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
@@ -1052,7 +997,7 @@ async function updateSkill(ctx: ApiCtx): Promise<void> {
   if (patch.description?.trim() === "" || patch.body?.trim() === "") {
     return sendJson(res, 400, { error: "bad_request", message: "description and body can't be blank" });
   }
-  const liveActor = capability ? livePersonCapability(capability) : true;
+  const liveActor = capability ? personAtKeyboard(capability) : true;
   const updated = await app.updateOwnedSkill(id, principalId, patch, { liveActor });
   if (updated === "trigger_blocked")
     return sendJson(res, 403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
@@ -1083,7 +1028,7 @@ async function deleteSkill(ctx: ApiCtx): Promise<void> {
     }
     principalId = b.principalId;
   }
-  const liveActor = capability ? livePersonCapability(capability) : true;
+  const liveActor = capability ? personAtKeyboard(capability) : true;
   const outcome = await app.deleteOwnedSkill({ principalId, id, liveActor });
   if (outcome === "missing") return sendJson(res, 404, { error: "not_found", message: "no such skill" });
   if (outcome === "trigger_blocked")
@@ -1366,33 +1311,31 @@ async function getRuntimeConfig(ctx: ApiCtx): Promise<void> {
 
 async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
   if (!ctx.deps.config || !isObj(ctx.body)) return sendJson(ctx.res, 400, { error: "bad_request" });
-  if (ctx.capability && !livePersonCapability(ctx.capability))
+  if (ctx.capability && !personAtKeyboard(ctx.capability))
     return sendJson(ctx.res, 403, { error: "live_actor_required" });
   const target = await runtimeTarget(ctx);
   if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });
   await ctx.deps.refreshModels?.();
   const config = ctx.deps.config;
+  const offered = async (modelId: string) =>
+    (await userRuntimeConfigBody(ctx, target.scope, target.actorId)).models.includes(modelId);
   if (ctx.body.inherit === true) await config.setRuntimeSelection(target.scope, null);
   else if (ctx.body.keep === true) {
     const runtime = await config.getRuntimeSelectionDurable(target.scope);
     const legacyModel = runtime ? null : await config.getBaseModelOwnDurable(target.scope);
-    if (runtime || (legacyModel && modelSupported(legacyModel) && (await webuiModelEnabled(ctx, legacyModel))))
+    if (runtime || (legacyModel && modelSupported(legacyModel) && (await offered(legacyModel))))
       await config.acknowledgeRuntimeSelection(target.scope);
   } else {
     const modelId = ctx.body.modelId;
     if (typeof modelId !== "string" || !modelSupported(modelId))
       return sendJson(ctx.res, 400, { error: "model_not_supported" });
-    if (!(await webuiModelEnabled(ctx, modelId))) return sendJson(ctx.res, 400, { error: "model_not_enabled" });
+    if (!(await offered(modelId))) return sendJson(ctx.res, 400, { error: "model_not_enabled" });
     const effortLevel = ctx.body.effortLevel ?? "auto";
     if (typeof effortLevel !== "string" || !thinkingLevelsFor(modelId).includes(effortLevel))
       return sendJson(ctx.res, 400, { error: "effort_not_supported" });
     const fastMode = ctx.body.fastMode ?? false;
     if (typeof fastMode !== "boolean") return sendJson(ctx.res, 400, { error: "fast_mode_invalid" });
     const choice = { modelId, effortLevel, fastMode: fastMode && fastModeModelIds().includes(modelId) };
-    if ((await config.getModelAccountDurable(target.actorId)) !== "company") {
-      const available = await userRuntimeConfigBody(ctx, target.scope, target.actorId);
-      if (!available.models.includes(modelId)) return sendJson(ctx.res, 400, { error: "account_runtime_unavailable" });
-    }
     await config.setRuntimeSelection(target.scope, choice);
   }
   audit(ctx, {
@@ -1422,7 +1365,7 @@ async function getChannelHeaderPin(ctx: ApiCtx): Promise<void> {
 
 async function putChannelHeaderPin(ctx: ApiCtx): Promise<void> {
   if (!ctx.deps.config || !isObj(ctx.body)) return sendJson(ctx.res, 400, { error: "bad_request" });
-  if (ctx.capability && !livePersonCapability(ctx.capability))
+  if (ctx.capability && !personAtKeyboard(ctx.capability))
     return sendJson(ctx.res, 403, { error: "live_actor_required" });
   const target = await runtimeTarget(ctx);
   if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });

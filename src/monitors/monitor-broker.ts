@@ -1,5 +1,6 @@
 import { isSystemActor, type Destination, type ScopeId } from "../types.ts";
 import { samePerson } from "../directory/person.ts";
+import { personOrOwningBot } from "../auth/capability-token.ts";
 import type { MonitorStore } from "./monitor-store.ts";
 import type { ProcessRegistry, ProcessStatus } from "../processes/process-registry.ts";
 
@@ -172,7 +173,9 @@ export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
     async unwatch(monitorId) {
       const m = await deps.store.get(monitorId);
       if (!m || m.ownerScopeId !== deps.ownerScopeId) return { monitorId, removed: false };
-      if (isSystemActor(m.owner) ? deps.botActor === true : !samePerson(m.owner, deps.owner))
+      const owns = async () => samePerson(m.owner, deps.owner);
+      const caller = { actorId: deps.owner, botActor: deps.botActor };
+      if (!(await personOrOwningBot(caller, owns, m)) || !(isSystemActor(m.owner) || (await owns())))
         return { monitorId, removed: false, notYours: true };
       await deps.store.delete(monitorId);
       return { monitorId, removed: true };

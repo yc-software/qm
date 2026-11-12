@@ -27,7 +27,7 @@ import { playgroundPath, playgroundsIn, type PlaygroundArtifact } from "./playgr
 import { Agent } from "@earendil-works/pi-agent-core";
 import type { Attachment } from "@earendil-works/pi-web-ui";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage, TextContent } from "@earendil-works/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { UserMessageWithAttachments } from "@earendil-works/pi-web-ui";
 import { markdown } from "./message-markdown";
 import { onSpeakerAvatars, speakerAvatar } from "./speaker-avatars";
@@ -74,6 +74,8 @@ import {
   type IconNode,
 } from "lucide";
 import {
+  APPROVAL_GONE_MESSAGE,
+  messageText,
   continuableMessages,
   hasRecordedRunReply,
   messagesWithStreaming,
@@ -84,7 +86,6 @@ import {
   activeRunForThread,
   stopThreadRun,
   api,
-  approvalBlocksComposer,
   approvalDecidableDuringRun,
   createRunSlot,
   hasLiveRun,
@@ -159,6 +160,7 @@ import { deepLinkPath, sessionLink, UI_BASE } from "./deep-link";
 import type { ChatSurface, ConvCtx } from "./conv-types";
 import { errMessage, swallow } from "../../chassis/src/errors";
 import { showStateError } from "./error-banner";
+import { tellEmbedderOfFinishedTools } from "./embedder";
 import { splitLinks } from "./linkify";
 import { slackPreviewText, slackWireToPlain, splitSlackWire, stripSlackDirectives } from "./slack-text";
 import { charForName } from "./emoji-picker";
@@ -883,6 +885,7 @@ export function createChatSurface(
     try {
       const threadRef = chatState.threadRef;
       const runId = await resolveApproval(decision);
+      if (!runId && agent === chatState.agent) ctx.composer.state.error = APPROVAL_GONE_MESSAGE;
       if (runId && chatState.normalStreamFn && chatState.onWork)
         await resumeRun(agent, threadRef, chatState.normalStreamFn, chatState.onWork, runId, undefined, () => {
           releaseSubmission();
@@ -932,10 +935,6 @@ export function createChatSurface(
       }
     }
     return unresolvedApprovals([...byId.values()]);
-  }
-
-  function hasUnresolvedApproval(): boolean {
-    return activePendingApprovals().some(approvalBlocksComposer);
   }
 
   async function syncPendingApprovals(
@@ -1094,8 +1093,10 @@ export function createChatSurface(
   }
 
   function observeLiveWork(agent: Agent): (work: WorkBlock) => void {
+    const tellEmbedder = tellEmbedderOfFinishedTools();
     return (work: WorkBlock) => {
       if (agent !== chatState.agent) return;
+      tellEmbedder(work);
       appendConsumedSteers(agent.state.messages, work);
       if (work.runtime && switchedDefault(work.runtime) && work.runtime.modelId !== chatState.turnRuntime?.modelId)
         void ctx.composer.followScopeDefault(agent);
@@ -1470,8 +1471,7 @@ export function createChatSurface(
       Boolean(chatState.pendingSend) ||
       Boolean(ctx.composer.state.draft) ||
       Boolean(ctx.composer.state.attachments.length) ||
-      ctx.composer.state.processingFiles ||
-      hasUnresolvedApproval()
+      ctx.composer.state.processingFiles
     );
   }
 
@@ -2109,7 +2109,7 @@ export function createChatSurface(
     }
     if (role === "approval-decision") {
       const decision = message as unknown as HistoryApprovalDecision;
-      let label = "Approval denied";
+      let label = decision.declined === "expired" ? "Approval expired" : "Approval denied";
       if (decision.approved) {
         const labels: Record<string, string> = {
           once: "Approved once",
@@ -2466,20 +2466,6 @@ export function createChatSurface(
   function assistantFileList(files: DeliveredFile[] | undefined): TemplateResult | typeof nothing {
     if (!files?.length) return nothing;
     return html`<div class="message-files">${files.map((f) => deliveredFileBadge(f))}</div>`;
-  }
-
-  function messageText(message: AgentMessage): string {
-    const content = (message as { content?: unknown }).content;
-    if (typeof content === "string") return content;
-    if (Array.isArray(content)) {
-      return content
-        .filter(
-          (c): c is TextContent => Boolean(c) && typeof c === "object" && (c as { type?: string }).type === "text",
-        )
-        .map((c) => c.text ?? "")
-        .join("\n");
-    }
-    return "";
   }
 
   function syncWorkTicker(): void {
@@ -3898,7 +3884,6 @@ export function createChatSurface(
     setTurnRuntime,
     requestBackgroundPanel,
     activePendingApprovals,
-    hasUnresolvedApproval,
     resolveCommandApproval,
     approvalSummaryView,
     notePendingSessionOnSend,

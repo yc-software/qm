@@ -153,16 +153,17 @@ async function mintControlPlaneTokens(
   let orgMemoryWrite: ScopeId | undefined;
   const orgMemoryWritable = useMemory && memoryPolicy.capture !== "off" && resolution.orgScopeId !== memoryScopeId;
   let controlClaims: CapabilityClaims | undefined;
+  const presence = { ...(liveAuthorTurn ? { liveAuthor: true } : {}), ...(automatedTurn ? { triggered: true } : {}) };
   if (!strictReadOnly && deps.signingSecret && deps.apiBaseUrl) {
     const destination = defaultDestination;
     connectorEnv.AGENT_API_URL = deps.apiBaseUrl;
-    if (deps.admin && liveAuthorTurn) {
+    if (deps.admin && input.botActor !== true && (liveAuthorTurn || liveTurn)) {
       try {
         actorIsOrgAdmin = (await deps.admin.adminStatusOf(tenant, actor)).isAdmin;
       } catch (e) {
         swallow("orchestrator: admin status for turn", e);
       }
-      if (actorIsOrgAdmin && liveTurn && orgMemoryWritable) orgMemoryWrite = resolution.orgScopeId;
+      if (actorIsOrgAdmin && liveTurn && !automatedTurn && orgMemoryWritable) orgMemoryWrite = resolution.orgScopeId;
     }
     const memoryClaim = memoryAccess
       ? { ...memoryAccess, read: baseRecallScopes, ...(orgMemoryWrite ? { orgWrite: orgMemoryWrite } : {}) }
@@ -187,9 +188,7 @@ async function mintControlPlaneTokens(
         ? { privateScope: true }
         : {}),
       ...(memoryClaim ? { memory: memoryClaim } : {}),
-      ...(liveAuthorTurn ? { liveAuthor: true } : {}),
-      ...(automatedTurn ? { triggered: true } : {}),
-      ...(!liveTurn && input.unattendedGrants ? { grants: input.unattendedGrants } : {}),
+      ...presence,
       ...(input.runId ? { runId: input.runId } : {}),
       sessionId: session.id,
       origin,
@@ -231,6 +230,7 @@ async function mintControlPlaneTokens(
     connectorEnv.AGENT_OAUTH_CONSENT_TOKEN = await mintCapabilityToken(
       {
         ...scopeAttestation,
+        ...presence,
         aud: OAUTH_CONSENT_AUD,
         exp: sandboxTokenExpiry,
       },

@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { renderGatewayContext } from "../src/core/orchestrator/prompt-blocks.ts";
+import { renderGatewayContext, webSurfaceLabel } from "../src/core/orchestrator/prompt-blocks.ts";
 import { buildApp } from "./support/build-app.ts";
 import type { Config } from "../src/config.ts";
 import { scopeId } from "../src/types.ts";
@@ -40,6 +40,11 @@ test("surface-supplied instructions are appended verbatim (and alone are enough 
   const only = renderGatewayContext(undefined, { instructions: "do the thing" });
   assert.match(only, /^## Where you are/);
   assert.match(only, /do the thing/);
+});
+
+test("a web chat relayed by another app says so and that web UI widgets won't render there", () => {
+  assert.equal(webSurfaceLabel("QM", false), "the QM web app");
+  assert.match(webSurfaceLabel("QM", true), /^another app that relays this chat to QM .*non-web paths/);
 });
 
 test("reactionGuidance is detection-only — never rendered into the main prompt", () => {

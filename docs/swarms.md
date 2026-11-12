@@ -95,7 +95,7 @@ provider creation/retry loops.
 Each worker gets a dedicated **blank** computer owned by the parent's
 authorization scope. No parent files are copied. Data access, keychain policy,
 memory resolution, and approval grants continue through QM's existing scope and
-identity rules, with unattended rather than human-attended permissions. Session
+identity rules; a worker turn carries no person's live authority of its own. Session
 grants belong only to the session that received them, not its workers. A computer's backing storage key
 is not an authorization principal. Existing provider persistence behavior is
 unchanged; swarms add no filesystem snapshots, immutable copies, or restores.
@@ -272,6 +272,7 @@ run on its own worker computer. The check runs each time the turn uses a compute
 turn that is already running loses that access as soon as someone else posts or a person's turn works on one of those computers. Background
 jobs on those computers are covered too: the bot's `background` list leaves them out, it
 cannot watch them, and a watch it armed while it could stops reading the job's output.
+When the bot loses that access, its turns still running in the swarm's threads or on the swarm's computers are told to stop, and background jobs its turns started on the swarm's board and worker computers are stopped and marked reaped.
 A computer supplied as `forumSandboxId` stays an ordinary computer of its scope, which is
 why a swarm a bot starts never takes one, from the bot or from a person: every computer in
 a swarm a bot starts belongs to the swarm. A person's own swarm can still take one, and the

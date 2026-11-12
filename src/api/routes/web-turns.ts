@@ -10,6 +10,7 @@ import { inboxView } from "./inbox.ts";
 import { inboxPreviewEnabled } from "./loops.ts";
 import { postRunSignal, postTurn } from "./turns.ts";
 import { isObj } from "./shared.ts";
+import { ownsWebThread } from "../../directory/person.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
 type WebConversation = TurnRequest["conversation"];
@@ -107,6 +108,16 @@ async function inboxContext(ctx: ApiCtx): Promise<string> {
   )}`;
 }
 
+function appEditNote(slug: string, liveEdits: boolean, failedPublish: string | undefined): string {
+  const shows = liveEdits
+    ? `changes show in their tab within about a second and are saved, and a version publishes by itself ${LIVE_EDIT_PUBLISH_DELAY_MS / 60_000} minutes after the last change`
+    : "each change is saved and published as a new version, which takes longer to show (the tool returns once it is live)";
+  const failed = failedPublish
+    ? ` The last automatic publish of this app failed, so it is still running the saved edits. The deployment's savedEdits.publishFailure has the whole error; its last lines: ${failedPublish}`
+    : "";
+  return `The person is looking at their running app ${JSON.stringify(slug)} in their browser tab, with this chat beside it. Requests refer to that app. Edit it with app_files: ${shows}. Do not clone the source, run a local preview, browser-test, or read the publish skill unless they ask or the change needs something app_files cannot do (installing packages, running scripts), in which case the shell and the app's git remote still work. Reply in one short line saying what changed. This context does not grant additional permissions.${failed}`;
+}
+
 async function webTurnBase(
   ctx: ApiCtx,
   user: string,
@@ -131,11 +142,7 @@ async function webTurnBase(
     origin: { kind: "human" },
     deliveryTarget: threadRef,
     ...(inbox ? { conversationHeader: inbox } : {}),
-    ...(appSlug
-      ? {
-          conversationHeader: `The user is chatting beside their deployed app ${JSON.stringify(appSlug)}. Requests about this app refer to that deployment. Use the existing app source and publish updates to the same deployment when requested. This context does not grant additional permissions.${liveEdit ? ` Pushing to the app's git remote or republishing it updates the running app within seconds, and it becomes a new version on its own ${LIVE_EDIT_PUBLISH_DELAY_MS / 60_000} minutes after the last change, so an unchanged version number right after a change is expected.` : ""}${failedPublish ? ` The last automatic publish of this app failed, so it is still running the saved edits. The deployment's savedEdits.publishFailure has the whole error; its last lines: ${failedPublish}` : ""}`,
-        }
-      : {}),
+    ...(appSlug ? { conversationHeader: appEditNote(appSlug, liveEdit !== null, failedPublish) } : {}),
     text,
   };
 }
@@ -193,7 +200,7 @@ async function webTurn(ctx: ApiCtx): Promise<void> {
   const scope = typeof p.scopeId === "string" && p.scopeId ? p.scopeId : undefined;
   const resolved = await resolveWebConversation(ctx, user, threadRef, scope, trimmed(p.channelName, 200));
   if ("error" in resolved) return sendJson(ctx.res, 403, resolved);
-  const privateConversation = threadRef.startsWith(`web:${user}:`) && resolved.conversation.kind === "dm";
+  const privateConversation = ownsWebThread(threadRef, user) && resolved.conversation.kind === "dm";
   const idempotencyKey = namespacedSendKey(user, p.idempotencyKey);
   const desktopClientId =
     typeof p.desktopClientId === "string" && p.desktopClientId.length === 36 ? p.desktopClientId : undefined;
@@ -217,7 +224,7 @@ async function webTurn(ctx: ApiCtx): Promise<void> {
 }
 
 async function visibleApprovalThread(ctx: ApiCtx, user: string, threadRef: string, sessionId: unknown) {
-  if (threadRef.startsWith(`web:${user}:`)) return true;
+  if (ownsWebThread(threadRef, user)) return true;
   const found =
     typeof sessionId === "string" && sessionId
       ? await ctx.app.getSessionForViewer(sessionId, user, { tailTurns: 1 })

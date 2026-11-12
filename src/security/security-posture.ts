@@ -1,4 +1,5 @@
-import type { OverheardMessage, ScopeId, TurnOrigin } from "../types.ts";
+import type { ScopeId, TurnOrigin } from "../types.ts";
+import { MAX_DOCUMENT_TEXT_CHARS } from "../core/documents.ts";
 
 export const SECURITY_POSTURES = ["dangerous", "auto", "strict"] as const;
 export type SecurityPosture = (typeof SECURITY_POSTURES)[number];
@@ -96,7 +97,7 @@ const INTERNAL_RESULT_TOOLS = new Set([
 ]);
 
 export function toolResultProvenance(tool: string, action?: string): ToolResultProvenance {
-  if (tool === "files") return action === "read" ? "workspace" : "internal";
+  if (tool === "files" || tool === "app_files") return action === "read" ? "workspace" : "internal";
   if (tool === "goal" || tool === "apps" || (tool === "skills" && action !== "read")) return "internal";
   if (INTERNAL_RESULT_TOOLS.has(tool)) return "internal";
   if (tool === "read") return "workspace";
@@ -162,7 +163,6 @@ interface SecurityScreenInput {
   origin?: TurnOrigin;
   verifiedSwarm?: boolean;
   verifiedSessionMessage?: boolean;
-  overheard?: Array<Pick<OverheardMessage, "role" | "name" | "text">>;
   externalPromptData?: Array<{ source: string; content: string }>;
 }
 
@@ -174,7 +174,7 @@ export interface SecurityScreenPayload {
   truncated: boolean;
 }
 
-export function securityScreenPayload(input: SecurityScreenInput): SecurityScreenPayload | null {
+function securityScreenParts(input: SecurityScreenInput): Array<{ source: string; content: string }> {
   const payloads: Array<{ source: string; content: string }> = [];
   const origin = input.origin;
   if (
@@ -188,27 +188,53 @@ export function securityScreenPayload(input: SecurityScreenInput): SecurityScree
     if (input.verifiedSwarm) source = "swarm-delegation";
     if (content.trim()) payloads.push({ source, content });
   }
-  for (const message of input.overheard ?? []) {
-    if (message.role === "user" && message.text.trim()) {
-      payloads.push({ source: `overheard:${message.name ?? "participant"}`, content: message.text });
-    }
-  }
   for (const datum of input.externalPromptData ?? []) {
     if (datum.content.trim()) payloads.push(datum);
   }
   const seen = new Set<string>();
-  const unique = payloads.filter((p) => {
+  return payloads.filter((p) => {
     const key = p.content.trim();
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
-  if (!unique.length) return null;
-  const serialized = JSON.stringify(unique);
+}
+
+function boundedPayload(parts: Array<{ source: string; content: string }>): SecurityScreenPayload | null {
+  if (!parts.length) return null;
+  const serialized = JSON.stringify(parts);
   if (serialized.length <= MAX_SCREEN_CHARS) return { content: serialized, truncated: false };
   const marker = "\n...[security screen input truncated]...\n";
   const half = Math.floor((MAX_SCREEN_CHARS - marker.length) / 2);
   return { content: serialized.slice(0, half) + marker + serialized.slice(-half), truncated: true };
+}
+
+export function securityScreenPayload(input: SecurityScreenInput): SecurityScreenPayload | null {
+  return boundedPayload(securityScreenParts(input));
+}
+
+export function fitsScreenInput(length: number): boolean {
+  return length <= MAX_DOCUMENT_TEXT_CHARS;
+}
+
+export function securityScreenPayloads(input: SecurityScreenInput): string[] | null {
+  const parts = securityScreenParts(input);
+  if (!fitsScreenInput(parts.reduce((total, part) => total + part.content.length, 0))) return null;
+  const chunks: string[] = [];
+  const groups: Array<Array<{ source: string; content: string }>> = [];
+  let group: Array<{ source: string; content: string }> = [];
+  for (const part of parts) {
+    if (boundedPayload([part])?.truncated) {
+      chunks.push(...securityScreenChunks(part.source, part.content));
+    } else if (boundedPayload([...group, part])?.truncated) {
+      groups.push(group);
+      group = [part];
+    } else {
+      group.push(part);
+    }
+  }
+  groups.push(group);
+  return [...groups.flatMap((parts) => boundedPayload(parts)?.content ?? []), ...chunks];
 }
 
 const SCREEN_CHUNK_CHARS = 7_500;
@@ -227,13 +253,22 @@ function boundedChunk(surface: string, slice: string, out: string[]): void {
   boundedChunk(surface, slice.slice(mid - overlap), out);
 }
 
-export function securityScreenChunks(surface: string, data: string): string[] {
+function chunksUnder(label: string, data: string): string[] {
   const chunks: string[] = [];
   const step = SCREEN_CHUNK_CHARS - SCREEN_CHUNK_OVERLAP;
   for (let start = 0; start === 0 || start + SCREEN_CHUNK_OVERLAP < data.length; start += step) {
-    boundedChunk(surface, data.slice(start, start + SCREEN_CHUNK_CHARS), chunks);
+    boundedChunk(label, data.slice(start, start + SCREEN_CHUNK_CHARS), chunks);
   }
   return chunks;
+}
+
+const CHUNK_LABEL_ROOM =
+  MAX_SCREEN_CHARS - Math.max(...chunksUnder("x", "\u0000".repeat(SCREEN_CHUNK_CHARS)).map((chunk) => chunk.length));
+
+export function securityScreenChunks(surface: string, data: string): string[] {
+  let label = surface;
+  while (JSON.stringify(label).length > CHUNK_LABEL_ROOM) label = label.slice(0, label.length >> 1);
+  return chunksUnder(label, data);
 }
 
 export function toolLabelOf(tool: string): string {

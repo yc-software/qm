@@ -7,6 +7,8 @@ import test from "node:test";
 import { createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
+import type { Deployment } from "../src/deploy/deploy-store.ts";
+import type { AppPageViewLog } from "../src/deploy/page-views.ts";
 import { scopeId } from "../src/types.ts";
 import { serverDeps } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -23,7 +25,9 @@ const today = Math.floor(Date.now() / DAY) * DAY;
 const iso = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 const window = `from=${iso(today - DAY)}&to=${iso(today + DAY)}`;
 
-function fixture(options: { token?: string | null; sessions?: SessionStore | null } = {}) {
+const apps = "/v1/deployments/export?principalId=alice%40example.com";
+
+function fixture(options: { token?: string | null; sessions?: SessionStore | null; pageViews?: AppPageViewLog } = {}) {
   const built = buildApp(testConfig({ signingSecret: sourceSecret }));
   const sessions =
     options.sessions === null ? undefined : (options.sessions ?? createPostgresSessionStore(testDatabaseUrl()));
@@ -38,6 +42,7 @@ function fixture(options: { token?: string | null; sessions?: SessionStore | nul
     auditLog: built.auditLog,
     ...(sessions ? { sessions } : {}),
     ...(token ? { spendExportToken: token } : {}),
+    ...(options.pageViews ? { appPageViews: options.pageViews } : {}),
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -49,8 +54,8 @@ function fixture(options: { token?: string | null; sessions?: SessionStore | nul
 test("spend export: absent unless a token is configured", async () => {
   const s = fixture({ token: null });
   try {
-    const res = await s.get(`/v1/spend/export?${window}`);
-    assert.equal(res.status, 404);
+    assert.equal((await s.get(`/v1/spend/export?${window}`)).status, 404);
+    assert.equal((await s.get(apps)).status, 404);
   } finally {
     await s.close();
   }
@@ -65,25 +70,78 @@ test("spend export: missing, wrong, admin-identity and source-signed requests ar
   };
   const s = fixture({ sessions: store });
   try {
-    const path = `/v1/spend/export?${window}`;
-    const ts = Math.floor(Date.now() / 1000);
-    const refused: Record<string, string>[] = [
-      {},
-      { authorization: `Bearer ${exportToken}x` },
-      { authorization: exportToken },
-      { authorization: `Bearer ${sourceSecret}` },
-      { "x-admin-actor": "admin-alice@default-org" },
-      { "x-timestamp": String(ts), "x-signature": signRequest(sourceSecret, ts, `GET\n${path}\n`) },
-    ];
-    for (const headers of refused) {
-      const res = await s.get(path, headers);
-      assert.equal(res.status, 401, JSON.stringify(headers));
+    s.built.app.listDeployments = async () => {
+      reads++;
+      return [];
+    };
+    for (const path of [`/v1/spend/export?${window}`, apps]) {
+      const ts = Math.floor(Date.now() / 1000);
+      const refused: Record<string, string>[] = [
+        {},
+        { authorization: `Bearer ${exportToken}x` },
+        { authorization: exportToken },
+        { authorization: `Bearer ${sourceSecret}` },
+        { "x-admin-actor": "admin-alice@default-org" },
+        { "x-timestamp": String(ts), "x-signature": signRequest(sourceSecret, ts, `GET\n${path}\n`) },
+      ];
+      for (const headers of refused) {
+        const res = await s.get(path, headers);
+        assert.equal(res.status, 401, JSON.stringify(headers));
+      }
     }
     assert.equal(reads, 0);
-    assert.deepEqual(
-      (await s.built.auditLog.events(testTenant)).filter((e) => e.action === "spend.export"),
-      [],
-    );
+    assert.deepEqual(await s.built.auditLog.events(testTenant), []);
+  } finally {
+    await s.close();
+  }
+});
+
+test("deployment export: lists the person's live Apps page apps with their addresses", async () => {
+  const s = fixture({
+    pageViews: {
+      record: async () => {},
+      lastViews: async (_tenant, viewer) => new Map(viewer === "alice@example.com" ? [["live", 7]] : []),
+    },
+  });
+  try {
+    const app = (id: string, status: Deployment["status"]): Deployment => ({
+      id,
+      name: id,
+      ownerScopeId: scopeId("personal", "bob@example.com"),
+      createdBy: "bob@example.com",
+      currentVersion: 1,
+      status,
+      endpoint: { host: "h", port: 1, publicUrl: `https://${id}.apps.example.com/?access=x` },
+      versions: [{ version: 1, createdAt: 1, entrypoint: "x", snapshotDir: "/s" }],
+    });
+    const own = { ...app("own", "running"), ownerScopeId: scopeId("personal", "alice@example.com") };
+    const given = {
+      ...app("given", "running"),
+      createdBy: "alice@example.com",
+      ownerScopeId: scopeId("personal", "bob@example.com"),
+    };
+    const fleet = [app("live", "running"), app("gone", "archived"), own, given];
+    s.built.app.listDeployments = async () => fleet;
+    s.built.app.deploymentGitPermissionsFor = async (_tenant, deployments, { actorId }) =>
+      deployments.map(() => (actorId === "alice@example.com" ? "read" : null));
+    assert.equal((await s.get("/v1/deployments/export")).status, 400);
+    const { principalId, deployments }: any = await (await s.get(apps)).json();
+    assert.equal(principalId, "alice@example.com");
+    const shown = { createdBy: "bob@example.com", permission: "read", updatedAt: 1 };
+    assert.deepEqual(deployments, [
+      { id: "live", name: "live", ...shown, url: "https://live.apps.example.com/", owned: false, viewedAt: 7 },
+      { id: "own", name: "own", ...shown, url: "https://own.apps.example.com/", owned: true },
+      {
+        id: "given",
+        name: "given",
+        ...shown,
+        createdBy: "alice@example.com",
+        url: "https://given.apps.example.com/",
+        owned: false,
+      },
+    ]);
+    const events = (await s.built.auditLog.events(testTenant)).map((e) => [e.resource, e.detail]);
+    assert.deepEqual(events, [["alice@example.com", "deployments=3"]]);
   } finally {
     await s.close();
   }

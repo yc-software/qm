@@ -1,3 +1,4 @@
+import { SHARE_BUTTON, SHARE_CSS, SHARE_JS, shareMarkup } from "./app-share-control.ts";
 import { ANNOTATE_BUTTON, ANNOTATE_CSS, ANNOTATE_JS, ANNOTATE_MARKUP } from "./app-annotate.ts";
 
 export const APP_SHELL_PATH_PREFIX = "/__claw__/";
@@ -51,14 +52,15 @@ export function appShellHtml(opts: {
     color: var(--foreground); border-radius: var(--radius-sm); padding: 0 8px; min-height: 24px; font: inherit;
     font-size: 11px; cursor: pointer; white-space: nowrap; }
   header button:hover { background: var(--secondary); }
-  header .chat-btn { display: inline-flex; align-items: center; gap: 6px; color: var(--muted-foreground); }
-  header .chat-btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; }
+  header .chat-btn, header .access-btn { display: inline-flex; align-items: center; gap: 6px; color: var(--muted-foreground); }
+  header .chat-btn svg, header .access-btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; }
   header .chat-btn[data-on="1"] { color: var(--foreground); }
   header .chat-btn::after { content: ""; width: 4px; height: 4px; border-radius: 50%; background: currentColor; visibility: hidden; }
   header .chat-btn[data-on="1"]::after { visibility: visible; }
   header .upd { display: none; border-color: color-mix(in srgb, var(--brand-accent) 45%, var(--border));
     color: var(--brand-accent); font-weight: 600; }
   header .upd.show { display: inline-block; }
+${SHARE_CSS}
   header .hide-btn { border: none; background: none; color: var(--muted-foreground); font-size: 15px; padding: 5px 7px; }
   header .hide-btn:hover { color: var(--foreground); background: none; }
   main { display: flex; flex: 1; min-height: 0; }
@@ -89,6 +91,7 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
   <span class="name" id="name">${name}</span>
   <span class="ver" id="ver"></span>
   <span class="grow"></span>
+  ${SHARE_BUTTON}
   <button type="button" class="upd" id="upd">Updated &#8635; Reload</button>
   ${opts.annotationsEnabled ? ANNOTATE_BUTTON : ""}
   <button type="button" class="chat-btn" id="chat-toggle" aria-expanded="false" aria-controls="panel"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 3h12a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H8l-5 3V4a1 1 0 0 1 1-1Z"/></svg><span>Chat</span></button>
@@ -97,6 +100,7 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
 <main>
   <iframe id="app" src="${path}" title="${slug}"></iframe>
   ${opts.annotationsEnabled ? ANNOTATE_MARKUP : ""}
+  ${shareMarkup(name)}
   <aside id="panel"><div class="drag" id="drag" role="separator" tabindex="0" aria-label="Resize chat" aria-orientation="vertical"></div><iframe id="chat" title="Chat about ${slug}"></iframe></aside>
 </main>
 <script>
@@ -114,11 +118,18 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
   const hide = document.getElementById("hide");
   const drag = document.getElementById("drag");
   const openKey = "qmChat:" + slug;
-
+${SHARE_JS}
   const portalOrigin = new URL(portal).origin;
   const themeColors = ["--background", "--foreground", "--secondary", "--muted-foreground", "--border", "--brand-accent"];
   window.addEventListener("message", (event) => {
-    if (event.source !== chat.contentWindow || event.origin !== portalOrigin) return;
+    if (event.origin !== portalOrigin) return;
+    if (event.source !== chat.contentWindow && event.source !== share.contentWindow) return;
+    if (event.data?.type === "qm:app-check") return void poll();
+    if (event.source === share.contentWindow) {
+      if (event.data?.type === "qm:app-share-closed") closeShare();
+      if (event.data?.type === "qm:app-share-ready") share.focus();
+      return;
+    }
     const theme = event.data;
     if (theme?.type !== "qm:theme" || typeof theme.dark !== "boolean" || !theme.colors) return;
     if (!themeColors.every((key) => typeof theme.colors[key] === "string" && CSS.supports("color", theme.colors[key]))) return;
@@ -207,20 +218,28 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
   app.addEventListener("load", sync);
   if (location.hash) app.src += location.hash;
   let base = null;
-  app.addEventListener("load", () => { base = null; });
+  let reloading = false;
+  app.addEventListener("load", () => {
+    if (reloading) reloading = false;
+    else base = null;
+  });
   const reloadApp = (v) => {
     base = v;
+    reloading = true;
     upd.classList.remove("show");
     try { app.contentWindow.location.reload(); } catch { app.src = app.src; }
   };
+  let polls = 0;
   const poll = async () => {
     if (document.hidden || bare) return;
+    const mine = ++polls;
     try {
       const r = await fetch("/__claw__/version", { cache: "no-store" });
       if (!r.ok) return;
       const d = await r.json();
-      if (typeof d.version !== "number") return;
+      if (mine !== polls || typeof d.version !== "number") return;
       verEl.textContent = "v" + d.version;
+      if (d.access) showAccess(d.access);
       const served = d.version + ":" + (d.live ?? "");
       if (base === null) {
         base = served;

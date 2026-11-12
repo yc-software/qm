@@ -62,7 +62,7 @@ function agent(
   return { crons, deliveries, calls, scheduler, identity };
 }
 
-test("scheduler threads stored unattended grants into owner-mode turns", async () => {
+test("a fire's TurnRequest runs as the cron owner: the owner's authority is the fire's", async () => {
   const { crons, calls, scheduler } = agent();
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
@@ -70,10 +70,26 @@ test("scheduler threads stored unattended grants into owner-mode turns", async (
     owner: "U1",
     createdBy: "U1",
     ownerScopeId: scopeId("personal", "U1"),
-    unattendedGrants: ["admin.sessions.read"],
   });
   await runNowSettled(scheduler, cron.id);
-  assert.deepEqual(calls[0]?.unattendedGrants, ["admin.sessions.read"]);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.actor.externalId, "U1");
+  assert.equal(automationOrigin(calls[0])?.ownerFire, true);
+  const written = await crons.create({
+    schedule: { everyMs: 1000 },
+    action: "scan every transcript",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+    taskAuthor: "automation",
+  });
+  await runNowSettled(scheduler, written.id);
+  assert.equal(calls.length, 2);
+  assert.equal(
+    automationOrigin(calls[1])?.ownerFire,
+    undefined,
+    "a task no person wrote carries no person's authority",
+  );
 });
 
 test("a channel cron runs in the channel scope and delivers its real output to the channel", async () => {
@@ -761,7 +777,7 @@ test("cron fires do not replay prior sessions or inline prior fire context", asy
   assert.deepEqual(priorAssistantSeen, [0, 0], "fire 2 does not replay fire 1's assistant entry");
   assert.match(texts[1] ?? "", /no memory of previous fires/);
   assert.match(texts[1] ?? "", /action="runs"/);
-  assert.match(texts[1] ?? "", /Files via the available Files API/);
+  assert.match(texts[1] ?? "", /upload helper listed in GET \/v1\/apis/);
   assert.match(texts[1] ?? "", /GET \/v1\/files\/:id\/content/);
   assert.match(texts[1] ?? "", /confirm publication succeeds/);
   assert.match(texts[1] ?? "", /If publication is unavailable/);

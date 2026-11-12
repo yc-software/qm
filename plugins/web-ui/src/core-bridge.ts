@@ -9,7 +9,15 @@ import type { RuntimeChange, RuntimeConfig } from "./runtime-config-cache.ts";
 import type { ChatBrowseStatus } from "./session-list.ts";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import type { Attachment } from "@earendil-works/pi-web-ui";
-import type { Api, AssistantMessage, AssistantMessageEventStream, Context, Model, Usage } from "@earendil-works/pi-ai";
+import type {
+  Api,
+  AssistantMessage,
+  AssistantMessageEventStream,
+  Context,
+  Model,
+  Usage,
+  TextContent,
+} from "@earendil-works/pi-ai";
 import type { Agent, AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
 import { errMessage, swallow } from "../../chassis/src/errors.ts";
 import { userFacingFailureText } from "../../chassis/src/failure-copy.ts";
@@ -544,10 +552,6 @@ export interface PendingApproval {
 
 export function approvalDecidableDuringRun(approval: PendingApproval): boolean {
   return approval.executesOnApprove === true && approval.blocksInput === false;
-}
-
-export function approvalBlocksComposer(approval: PendingApproval): boolean {
-  return approval.blocksInput !== false;
 }
 
 export interface ApprovalDecision {
@@ -1211,7 +1215,8 @@ export async function runApprovalTurn(
   if (outcome.stopReason === "error") throw new Error(outcome.errorMessage || "Could not send the approval.");
 }
 
-const APPROVAL_GONE_MESSAGE = "This approval is no longer available — it may have expired or already been handled.";
+export const APPROVAL_GONE_MESSAGE =
+  "This approval is no longer available — it may have expired or already been handled.";
 const APPROVAL_NOT_APPLIED_MESSAGE =
   "This approval couldn't be applied right now — the conversation is waiting on a different approval.";
 
@@ -2009,12 +2014,13 @@ export interface HistoryApprovalDecision {
   approved: boolean;
   command: string;
   scope?: string;
+  declined?: string;
   timestamp: number;
 }
 
 function approvalDecisionMessage(item: Item): HistoryApprovalDecision | null {
   if (item.kind !== "ElicitationResponse") return null;
-  const { command, scope } = item.body;
+  const { command, scope, declined } = item.body;
   if (typeof item.approved !== "boolean" || typeof command !== "string") return null;
   return {
     role: "approval-decision",
@@ -2023,6 +2029,7 @@ function approvalDecisionMessage(item: Item): HistoryApprovalDecision | null {
     command,
     requestId: item.elicitId,
     ...(typeof scope === "string" ? { scope } : {}),
+    ...(typeof declined === "string" ? { declined } : {}),
     timestamp: item.createdAt,
   };
 }
@@ -2167,6 +2174,18 @@ function isFinishedReplyItem(item: Item): boolean {
 function isWorkHistoryItem(item: Item): boolean {
   if (item.kind === "Reasoning") return isRenderableThinking(item);
   return item.kind === "ToolCall" || item.kind === "ToolResult" || item.kind === "Elicitation" || isNarration(item);
+}
+
+export function messageText(message: AgentMessage): string {
+  const content = (message as { content?: unknown }).content;
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter((c): c is TextContent => Boolean(c) && typeof c === "object" && (c as { type?: string }).type === "text")
+      .map((c) => c.text ?? "")
+      .join("\n");
+  }
+  return "";
 }
 
 export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage[] {

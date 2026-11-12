@@ -19,12 +19,13 @@ import { escapeHtml, relayStream } from "../../../plugins/chassis/src/http.ts";
 import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.ts";
 import { frameAncestorsDirective, sendJson, UNTRUSTED_CONTENT_SANDBOX_CSP, verifyOrReject } from "../http.ts";
 import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
-import { audit, authorizeAdmin, isObj, orgScope } from "./shared.ts";
-import { scopeId, type Permission } from "../../types.ts";
+import { audit, authorizeAdmin, exportTokenAccepted, isObj, orgScope } from "./shared.ts";
+import { personalScope, scopeId, type Permission } from "../../types.ts";
 import { tenantOf, type ApiCtx, type BaseCtx, type Route } from "./route.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
 import { verifyDeployGitAccess, viewerIdentityKey } from "../../deploy/access-token.ts";
 import { appAnnotationAsset } from "../../deploy/app-annotate.ts";
+import { appAccess } from "../../deploy/app-access.ts";
 import { APP_SHELL_PATH_PREFIX, appShellHtml } from "../../deploy/app-shell.ts";
 import type { AppViewAuthMode } from "../../deploy/page-views.ts";
 import { principalDestination } from "../../reach/reach.ts";
@@ -32,6 +33,8 @@ import { FRAME_SESSION_COOKIE, portalSession, portalSessionFrom } from "../../de
 import { appHostLabel, appNameFromLabel, labelOfAppHost } from "../../tenants/app-handle.ts";
 import { isDnsLabel } from "../../../plugins/chassis/src/dns-label.ts";
 import { tenantAppHandle } from "../../tenants/settings.ts";
+import { appUrlOf } from "../../deploy/deploy-store.ts";
+import { canonicalPerson } from "../../directory/person.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "../../deploy/embed-ancestors.ts";
 import { proxyHeaders } from "../../util/http-proxy.ts";
 import { relayWebSocket } from "../../../plugins/chassis/src/websocket-relay.ts";
@@ -953,10 +956,16 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     }
     if (isShellRequest) {
       if (pathname === "/__claw__/version" && deployment) {
-        const draft = (await app.deploymentLiveEdit(deployment.id))?.draft;
+        const [draft, grantees] = await Promise.all([
+          app.deploymentLiveEdit(deployment.id).then((edit) => edit?.draft),
+          app.deploymentGrantees(deployment.id),
+        ]);
+        const orgName = (deps.config?.getBranding(orgScope(deps)) ?? deps.brandingDefault)?.orgName;
+        const { ownerScopeId } = deployment;
         sendJson(res, 200, {
           version: deployment.appliedVersion ?? deployment.currentVersion,
           ...(draft ? { live: draft.reloads } : {}),
+          access: appAccess({ ownerScopeId, public: isPublic, grantees, viewer: sub!, orgName }),
         });
       } else if (
         annotationsEnabled &&
@@ -1329,7 +1338,7 @@ async function listDeployments(ctx: ApiCtx): Promise<void> {
   const principalId = capability?.actorId ?? actor?.p ?? url.searchParams.get("principalId");
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
   const viewer = capability ?? { actorId: principalId };
-  const visible = await app.listDeploymentsForViewer(viewer);
+  const visible = await app.listDeploymentsForViewer(tenantOf(ctx), viewer);
   const baseUrl = gitUrlBase(ctx);
   const ownerOf = (d: { ownerScopeId?: string }) =>
     d.ownerScopeId?.startsWith("personal:") ? d.ownerScopeId.slice("personal:".length) : undefined;
@@ -1590,7 +1599,50 @@ async function setDeploymentAlwaysOn(ctx: ApiCtx): Promise<void> {
   }
 }
 
+const VISIBLE_DEPLOYMENTS_PRINCIPAL = "deployment-export";
+
+async function visibleDeploymentsExport(ctx: BaseCtx): Promise<void> {
+  const { res, app, deps, url } = ctx;
+  if (!exportTokenAccepted(ctx, deps.spendExportToken)) return;
+  const requested = url.searchParams.get("principalId")?.trim();
+  if (!requested) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
+  const principalId = canonicalPerson(requested);
+  const live = (await app.listDeployments()).filter((d) => d.status !== "archived");
+  const permissions = await app.deploymentGitPermissionsFor(tenantOf(ctx), live, { actorId: principalId });
+  const visible = live.flatMap((deployment, i) => {
+    const permission = permissions[i];
+    return permission ? [{ deployment, view: deploymentView(deployment), permission }] : [];
+  });
+  const viewed =
+    (await deps.appPageViews?.lastViews(
+      tenantOf(ctx),
+      principalId,
+      visible.map(({ view }) => view.id),
+    )) ?? new Map<string, number>();
+  const deployments = visible.map(({ deployment, view: d, permission }) => ({
+    id: d.id,
+    ...(d.name ? { name: d.name } : {}),
+    ...(d.displayName ? { displayName: d.displayName } : {}),
+    url: appUrlOf(deployment, { sharedWebUrl: deps.portalUrl, appsDomain: deps.deployAppsDomain }) ?? null,
+    createdBy: d.createdBy,
+    owned: d.ownerScopeId === personalScope(principalId),
+    permission,
+    ...(d.updatedAt !== undefined ? { updatedAt: d.updatedAt } : {}),
+    ...(d.lastAccessAt !== undefined ? { lastAccessAt: d.lastAccessAt } : {}),
+    ...(viewed.has(d.id) ? { viewedAt: viewed.get(d.id) } : {}),
+  }));
+  audit(ctx, {
+    principalId: VISIBLE_DEPLOYMENTS_PRINCIPAL,
+    action: "deployment.export",
+    resource: principalId,
+    scopeLabel: orgScope(deps),
+    detail: `deployments=${deployments.length}`,
+  });
+  sendJson(res, 200, { principalId, deployments });
+}
+
 export const deploymentRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
+  { method: "GET", path: "/v1/deployments/export", auth: "public", handle: visibleDeploymentsExport },
   { match: isDeploymentGitRoute, auth: "public", tenant: deploymentGitTenant, handle: serveDeploymentGit },
   {
     match: (m, p) =>
