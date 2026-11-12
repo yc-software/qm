@@ -34,6 +34,8 @@ struct NativeLoopIcon: View {
         let image = Self.thumbnail(data)
       {
         Image(uiImage: image).resizable().scaledToFit()
+      } else if value == "slack" {
+        NativeServiceLogo(service: "slack", size: 24)
       } else {
         Image(systemName: Self.choices.first { $0.id == value }?.symbol ?? "repeat")
       }
@@ -82,6 +84,9 @@ struct NativeLoopIconPicker: View {
   var body: some View {
     NavigationStack {
       QMList {
+        if model.busy {
+          NativeActionLabel(title: "", busyTitle: "Saving icon...", busy: true)
+        }
         ForEach(NativeLoopIcon.choices) { choice in
           Button {
             Task { await save(choice.id) }

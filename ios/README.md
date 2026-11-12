@@ -1,6 +1,6 @@
 # QM for iOS
 
-An iOS 18+ SwiftUI client for QM deployments. Product screens, navigation, editors, conversation controls, and voice controls are native. There is no embedded WebKit product UI. It uses the existing authenticated APIs and runs no agent or model on the phone. External authentication uses ASWebAuthenticationSession; external links and user-created web apps open in the browser.
+An iOS 18+ SwiftUI client for QM deployments. Product screens, navigation, editors, conversation controls, and voice controls are native. There is no embedded WebKit product UI; the one web view draws app-catalog logos, which the logo service serves as SVG. It uses the existing authenticated APIs and runs no agent or model on the phone. External authentication uses ASWebAuthenticationSession; external links and user-created web apps open in the browser.
 
 ## Run
 
@@ -57,9 +57,13 @@ For local end-to-end QA, use a portal with desktop authentication support and th
 
 ## Feature coverage
 
-Native screens cover sign-in, conversation lists and drafts, new personal conversations, streaming/history, stop and permission-aware approval grants, queued-message editing/withdrawal/steering, per-turn model/harness/effort/fast-mode settings, skill completion, message search, pin/rename/archive/restore, file selection, formatted Markdown and QuickLook previews with sharing. Home includes Active/Waiting/Archived filters; forks identify their origin and separate inherited history. Transcript notices preserve approval decisions, Slack revisions and linked subagent updates.
+Native screens cover sign-in, conversation lists and drafts, new personal conversations, streaming/history, stop and permission-aware approval grants including credential requests, queued-message editing/withdrawal/steering, per-turn model/harness/effort/fast-mode settings, skill completion, pin/rename/archive/restore, formatted Markdown and QuickLook previews with sharing. Attachments come from Files, the photo library, the camera, or the pasteboard. Home has Active/Waiting/Archived filters, paging, read/unread, row colors, title refresh and link copying; forks identify their origin and separate inherited history. Transcript notices preserve approval decisions, Slack revisions and linked subagent updates.
 
-Browse routes to SwiftUI Projects, Files, Crons, Webhooks, Keychain, Apps, Memory, Skills, and Settings. Inbox, Calendar, and Loops follow server permissions. Organization administration stays in the web Settings pages. Search opens a native transcript at its matching message. Conversation tools provide native snapshot sharing, forks, linked conversations, scoped resources, activity and background process output. Calendar matches the current web placeholder.
+A conversation shows its open goal with a cancel action, lists swarm workers with pause/resume/stop, can turn a subagent into a top-level conversation, and starts side chats from an assistant message. Read-only Slack conversations accept replies through the linked personal Slack account. A message sent while QM is working always queues; each queued message has its own Steer, Edit and Remove.
+
+Browse routes to SwiftUI Projects, Files, Crons, Webhooks, Keychain, Apps, Memory, Skills, and Settings. Inbox, Calendar, and Loops follow server permissions. Organization administration stays in the web Settings pages. Search covers messages and skills, crons, apps, webhooks and projects, opens a native transcript at its matching message, and can hand the query to a new conversation. Conversation tools provide native snapshot sharing, forks, side chats, parent navigation, scoped resources, activity and background process output. The Agents view opens child conversations. Calendar matches the current web placeholder.
+
+Inbox supports priorities, grouped items, a shared email filter, source management and scheduled sync. Loops cover quarantine clearing, archiving, triage settings with preview, and the work ledger. Channel and group projects edit ambient behavior, standing orders, the bots ledger and the pinned channel header. Keychain answers credential requests; Apps set public access and allowed embedding sites; Connected apps disconnect and reconnect accounts; Memory edits and forgets individual facts.
 
 Native Markdown images use authenticated workspace file requests with an 8 MiB transfer limit and bounded thumbnails. External block images appear as links, and external inline images use placeholders; they do not load automatically. Oversized or unsupported images can still be opened through the existing file preview or an external browser.
 
@@ -77,7 +81,7 @@ Choose a workspace from the welcome screen or use Change workspace in the accoun
 
 The bundled privacy manifest declares app-local UserDefaults access (`CA92.1`) for workspace and appearance settings, following [Apple’s required-reason API guidance](https://developer.apple.com/documentation/bundleresources/describing-use-of-required-reason-api). This API declaration does not replace App Store Connect privacy answers: those must describe the target deployment’s handling of identity, chat content, attachments, and voice data before distribution.
 
-While visible and active, Home refreshes conversation state every five seconds; read-only transcripts refresh at the same interval. Writable conversations retain their run stream and queued-input reconciliation. Refresh tasks stop when their view disappears or the app becomes inactive.
+While visible and active, Home refreshes conversation state every five seconds. Read-only transcripts refresh at the same interval while in the foreground. Chat streams and queued-input reconciliation belong to the conversation, so focusing the composer or briefly opening a system overlay does not disconnect them. Monitoring pauses when the conversation disappears or the app enters the background. Returning reloads authoritative history and resumes any active run; work continues on the server while the app is suspended.
 
 An unsigned device-target archive can be built for compilation and packaging checks before an Apple team is available:
 
@@ -91,8 +95,8 @@ This archive opens workspace selection and is not installable or distributable u
 
 ## Dictation
 
-The composer microphone records locally with AVAudioRecorder. Finishing uploads the recording to the authenticated `/api/dictation` endpoint and appends the transcript to the editable draft. It never sends a chat message automatically. Interrupted or time-limited recordings wait for an explicit Transcribe action. Failed uploads can be retried; cancellation, leaving the conversation, or backgrounding deletes the temporary audio.
+The composer microphone records locally with AVAudioEngine and shows a live transcript using Apple's Speech framework. Recognition requires on-device support for the current language and never uploads dictation audio to the workspace. Finishing dictation transcribes the saved recording and appends the result to the editable draft; it never sends a chat message automatically. Recording finishes automatically at 55 seconds. Interrupted recordings wait for an explicit Transcribe action. Failed recognition can be retried; cancellation, leaving the conversation, or backgrounding deletes the temporary audio.
 
-Both the native client and server depend on a `SpeechToTextProvider` interface. The server selects the implementation with `WEB_UI_STT_PROVIDER` (currently `openai`) and its model with `WEB_UI_STT_MODEL` (default `gpt-transcribe`). Enable it with `WEB_UI_STT_ENABLED=1`, `WEB_UI_STT_USERS`, and server-only `OPENAI_API_KEY`. The enabled flag and user list fall back to their live-voice equivalents when omitted. No OpenAI credentials or model identifiers are bundled in iOS.
+QM requests microphone and Speech Recognition permission when dictation starts. If the current language lacks on-device recognition, use the device keyboard microphone. The web UI's `/api/dictation` endpoint and `WEB_UI_STT_*` settings are separate and do not control iOS dictation.
 
-Requests require the existing signed portal identity, reject impersonation, and use durable per-user limits of 60 recordings per hour. Recordings are bounded to five minutes on iOS and 10 MiB on the server.
+For physical-device microphone QA, stop Device Hub screen sharing using More Actions → Stop Screen Sharing before recording. Selecting a simulator in the sidebar does not end the phone's sharing session. Apple documents that screen sharing can make lower-priority apps record silence; a running timer or audio engine does not prove speech was captured. Verify spoken words appear on the phone with screen sharing stopped. See [Device Hub camera and microphone conflicts](https://developer.apple.com/documentation/xcode/interacting-with-your-app-in-device-hub).

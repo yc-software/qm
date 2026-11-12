@@ -1,17 +1,44 @@
 import SwiftUI
 import os
 
+extension ConversationFilter {
+  var query: [URLQueryItem] {
+    self == .active ? [] : [URLQueryItem(name: "status", value: rawValue.lowercased())]
+  }
+}
+
+extension Conversation {
+  var tracksUnread: Bool { surface == "web" }
+}
+
 @MainActor @Observable
 final class AppModel {
   private(set) var client: APIClient?
   var identity: Identity?
   var conversations: [Conversation] = []
+  var contexts: [WorkspaceContext] = []
+  private var contextsLoaded = false
   var error: String?
   var loading = false
+  private(set) var filter = ConversationFilter.active
+  private(set) var search = ""
+  private(set) var webOnly = false
+  private(set) var narrowing = false
+  private(set) var nextCursor: String?
+  private(set) var loadingMore = false
+  private(set) var openThread: String?
+  private(set) var hasLoadedConversations = false
+  private(set) var updatingConversationIDs = Set<String>()
+  var showingInitialConversationLoad: Bool {
+    loading && !hasLoadedConversations && conversations.isEmpty && error == nil
+  }
   private let signIn = SignIn()
   private var cleanedAccount: String?
   private let defaults: UserDefaults
   private var loadRevision = UUID()
+  private var pageRevision = UUID()
+  private var paged = false
+  private var leftThreads = Set<String>()
 
   init(
     defaults: UserDefaults = .standard, configuredURL: String? = nil,
@@ -29,9 +56,8 @@ final class AppModel {
   }
 
   func selectWorkspace(_ raw: String) throws {
-    guard !loading else { throw QMError.message("Wait for the current connection to finish.") }
     guard let url = Self.workspaceURL(raw) else {
-      throw QMError.message("Enter a workspace HTTPS address without a path or sign-in details.")
+      throw QMError.message("That isn’t a valid workspace address. \(Self.workspaceAddressHint)")
     }
     if url == client?.baseURL { return }
     signOut()
@@ -40,8 +66,10 @@ final class AppModel {
   }
 
   static func workspaceURL(_ raw: String) -> URL? {
-    guard var parts = URLComponents(string: raw.trimmingCharacters(in: .whitespacesAndNewlines))
-    else { return nil }
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    let input = workspaceInputWithScheme(trimmed)
+    guard var parts = URLComponents(string: input) else { return nil }
     parts.scheme = parts.scheme?.lowercased()
     parts.host = parts.host?.lowercased()
     guard let candidate = parts.url, allowedURL(candidate) else { return nil }
@@ -60,10 +88,51 @@ final class AppModel {
     else { return false }
     if url.scheme == "https" { return true }
     #if DEBUG
-      return url.scheme == "http" && ["localhost", "127.0.0.1", "[::1]"].contains(host)
+      return url.scheme == "http" && isLocalDevelopmentHost(host)
     #else
       return false
     #endif
+  }
+
+  static var workspaceAddressHint: String {
+    #if DEBUG
+      "Use HTTPS for hosted workspaces; local development addresses may use HTTP."
+    #else
+      "Use the HTTPS origin without a path or sign-in details."
+    #endif
+  }
+
+  private static func workspaceInputWithScheme(_ input: String) -> String {
+    guard !input.contains("://") else { return input }
+    #if DEBUG
+      if let host = URLComponents(string: "http://\(input)")?.host,
+        isLocalDevelopmentHost(host)
+      {
+        return "http://\(input)"
+      }
+    #endif
+    return "https://\(input)"
+  }
+
+  private static func isLocalDevelopmentHost(_ rawHost: String) -> Bool {
+    let host = rawHost.lowercased().trimmingCharacters(
+      in: CharacterSet(charactersIn: "[]"))
+    if host == "localhost" || host == "::1" || host.hasSuffix(".local") { return true }
+    if host.contains(":")
+      && (host.hasPrefix("fc") || host.hasPrefix("fd") || host.hasPrefix("fe8")
+        || host.hasPrefix("fe9") || host.hasPrefix("fea") || host.hasPrefix("feb"))
+    {
+      return true
+    }
+
+    let octets = host.split(separator: ".", omittingEmptySubsequences: false).compactMap {
+      UInt8($0)
+    }
+    guard octets.count == 4 else { return false }
+    return octets[0] == 10 || octets[0] == 127
+      || (octets[0] == 172 && (16...31).contains(octets[1]))
+      || (octets[0] == 192 && octets[1] == 168)
+      || (octets[0] == 169 && octets[1] == 254)
   }
 
   func restore() async {
@@ -74,10 +143,14 @@ final class AppModel {
   func watchConversations(interval: Duration = .seconds(5)) async {
     guard let client else { return }
     let generation = client.generation
+    var refreshContext = true
     while !Task.isCancelled, self.client === client, client.generation == generation,
       client.hasSession
     {
-      if !loading { await load(refreshIdentity: false) }
+      if !loading {
+        await load(refreshIdentity: false, refreshContexts: refreshContext)
+        refreshContext = false
+      }
       do { try await Task.sleep(for: interval) } catch { return }
     }
   }
@@ -92,6 +165,9 @@ final class AppModel {
       guard self.client === client, client.generation == generation else { return }
       loading = false
       await load()
+    } catch is CancellationError {
+      guard self.client === client, client.generation == generation else { return }
+      loading = false
     } catch {
       guard self.client === client, client.generation == generation else { return }
       self.error = error.localizedDescription
@@ -99,7 +175,7 @@ final class AppModel {
     }
   }
 
-  func load(refreshIdentity: Bool = true) async {
+  func load(refreshIdentity: Bool = true, refreshContexts: Bool = false) async {
     guard let client else { return }
     let current = client.generation
     let revision = UUID()
@@ -107,7 +183,11 @@ final class AppModel {
     loading = true
     defer { if loadRevision == revision { loading = false } }
     do {
-      async let fetchedList: ConversationList = client.fetch("api/sessions")
+      async let fetchedList: ConversationList = client.fetch("api/sessions", query: listQuery)
+      if refreshIdentity || refreshContexts { contextsLoaded = false }
+      async let fetchedContexts: WorkspaceContexts? =
+        !contextsLoaded
+        ? client.fetch("api/contexts") : nil
       let user: Identity
       if !refreshIdentity, let identity {
         user = identity
@@ -130,9 +210,20 @@ final class AppModel {
       guard self.client === client, current == client.generation, loadRevision == revision else {
         return
       }
-      conversations = DraftStore.merging(
-        list.sessions, account: client.baseURL.absoluteString + user.user)
+      conversations = DraftStore.merging(firstPage(list), account: account)
       error = nil
+      hasLoadedConversations = true
+      if let result = try await fetchedContexts {
+        guard self.client === client, current == client.generation, loadRevision == revision else {
+          return
+        }
+        contexts = result.contexts
+        contextsLoaded = true
+      }
+      error = nil
+      let left = leftThreads
+      leftThreads = []
+      await markRead(left)
     } catch is CancellationError {
     } catch {
       guard !Task.isCancelled, self.client === client, loadRevision == revision,
@@ -140,20 +231,126 @@ final class AppModel {
       else { return }
       self.error = error.localizedDescription
       if case QMError.signedOut = error {
-        identity = nil
-        conversations = []
+        resetAfterSessionLoss()
       }
     }
   }
 
-  func update(_ conversation: Conversation, patch: [String: Any]) async {
-    guard let client, conversation.localOnly != true else { return }
+  func visibleConversations(search: String, webOnly: Bool) -> [Conversation] {
+    let matchingScopes = Set(
+      contexts.filter { $0.title.localizedCaseInsensitiveContains(search) }.map(\.scopeId))
+    return sidebarConversations(conversations).filter {
+      filter.includes($0)
+        && (!webOnly || $0.surface == "web")
+        && (search.isEmpty || $0.label.localizedCaseInsensitiveContains(search)
+          || $0.contextLabel?.localizedCaseInsensitiveContains(search) == true
+          || matchingScopes.contains($0.scopeId))
+    }
+  }
+
+  private var listQuery: [URLQueryItem] {
+    filter.query
+      + (webOnly ? [URLQueryItem(name: "surface", value: "web")] : [])
+      + (search.isEmpty ? [] : [URLQueryItem(name: "q", value: search)])
+  }
+
+  func narrow(search: String, webOnly: Bool) async {
+    guard search != self.search || webOnly != self.webOnly else { return }
+    self.search = search
+    self.webOnly = webOnly
+    resetPaging()
+    nextCursor = nil
+    narrowing = true
+    await load(refreshIdentity: false)
+    if search == self.search, webOnly == self.webOnly { narrowing = false }
+  }
+
+  private func firstPage(_ list: ConversationList) -> [Conversation] {
+    guard paged, list.nextCursor != nil, let floor = list.sessions.last?.lastActivityAt else {
+      paged = false
+      nextCursor = list.nextCursor
+      return list.sessions
+    }
+    let servedIDs = Set(list.sessions.map(\.id))
+    return list.sessions
+      + conversations.filter { row in
+        !servedIDs.contains(row.id) && row.localOnly != true && filter.includes(row)
+          && (filter == .archived || row.pinned != true) && (row.lastActivityAt ?? 0) <= floor
+      }
+  }
+
+  private func resetPaging() {
+    pageRevision = UUID()
+    paged = false
+    loadingMore = false
+  }
+
+  func refresh() async {
+    resetPaging()
+    await load()
+  }
+
+  func select(_ filter: ConversationFilter) async {
+    guard filter != self.filter else { return }
+    self.filter = filter
+    resetPaging()
+    nextCursor = nil
+    conversations = []
+    hasLoadedConversations = false
+    error = nil
+    await load(refreshIdentity: false)
+  }
+
+  func loadMore() async {
+    guard let client, let identity, let cursor = nextCursor, !loadingMore else { return }
     let generation = client.generation
+    let revision = pageRevision
+    loadingMore = true
+    defer { if self.client === client, pageRevision == revision { loadingMore = false } }
     do {
-      let _: ConversationUpdate = try await client.fetch(
-        "api/sessions/\(conversation.id)", body: patch)
+      let page: ConversationList = try await client.fetch(
+        "api/sessions", query: listQuery + [URLQueryItem(name: "before", value: cursor)])
+      guard self.client === client, client.generation == generation, pageRevision == revision
+      else { return }
+      let loaded = conversations.filter { $0.localOnly != true }
+      let known = Set(loaded.map(\.id))
+      let older = page.sessions.filter { !known.contains($0.id) }
+      conversations = DraftStore.merging(
+        loaded + older, account: client.baseURL.absoluteString + identity.user)
+      nextCursor = page.nextCursor
+      paged = true
+    } catch QMError.signedOut {
+      if self.client === client { resetAfterSessionLoss() }
+    } catch is CancellationError {
+    } catch {
+      guard self.client === client, client.generation == generation, pageRevision == revision
+      else { return }
+      self.error = error.localizedDescription
+    }
+  }
+
+  private func mutate(
+    _ conversation: Conversation,
+    _ operation: (APIClient) async throws -> (inout Conversation) -> Void
+  ) async {
+    guard let client, conversation.localOnly != true,
+      updatingConversationIDs.insert(conversation.id).inserted
+    else { return }
+    let generation = client.generation
+    defer {
+      if self.client === client, client.generation == generation {
+        updatingConversationIDs.remove(conversation.id)
+      }
+    }
+    do {
+      let apply = try await operation(client)
       guard self.client === client, client.generation == generation else { return }
+      if let index = conversations.firstIndex(where: { $0.id == conversation.id }) {
+        apply(&conversations[index])
+      }
       await load()
+    } catch QMError.signedOut {
+      if self.client === client { resetAfterSessionLoss() }
     } catch is CancellationError {
     } catch {
       guard self.client === client, client.generation == generation else { return }
@@ -161,26 +358,77 @@ final class AppModel {
     }
   }
 
+  func update(_ conversation: Conversation, patch: [String: Any]) async {
+    await mutate(conversation) { client in
+      let updated: ConversationUpdate = try await client.fetch(
+        "api/sessions/\(conversation.id)", body: patch)
+      let resolved = updated.session
+      return { row in
+        guard resolved.id == row.id else { return }
+        row.title = resolved.title
+        row.pinned = resolved.pinned
+        row.archived = resolved.archived
+        row.color = resolved.color
+        row.unread = resolved.unread
+      }
+    }
+  }
+
+  func open(_ conversation: Conversation?) async {
+    if let left = openThread, left != conversation?.threadRef { leftThreads.insert(left) }
+    openThread = conversation?.threadRef
+    if let openThread { await markRead([openThread]) }
+  }
+
+  func left(_ threadRef: String) {
+    leftThreads.insert(threadRef)
+  }
+
+  private func markRead(_ threads: Set<String>) async {
+    guard let client else { return }
+    var ids: [String] = []
+    for index in conversations.indices
+    where conversations[index].unread == true && threads.contains(conversations[index].threadRef) {
+      conversations[index].unread = false
+      ids.append(conversations[index].id)
+    }
+    for id in ids {
+      do {
+        let _: ConversationUpdate = try await client.fetch(
+          "api/sessions/\(id)", body: ["unread": false])
+      } catch { Log.background.failure("Marking a conversation read", error) }
+    }
+  }
+
   func newConversation() -> Conversation? {
-    guard let identity else { return nil }
-    let id = UUID().uuidString.lowercased()
-    return Conversation(
-      id: id, scopeId: "personal:\(identity.user)", threadRef: "web:\(identity.user):\(id)",
-      surface: "web",
-      localOnly: true)
+    identity.map { .draft(user: $0.user) }
   }
 
   func signOut() {
     signIn.cancel()
-    loadRevision = UUID()
-    loading = false
     if let client, let identity {
       DraftStore.removeAccount(client.baseURL.absoluteString + identity.user)
     }
     client?.signOut()
+    resetAfterSessionLoss()
+    error = nil
+  }
+
+  func resetAfterSessionLoss() {
+    guard client?.hasSession != true else { return }
+    loadRevision = UUID()
+    resetPaging()
+    loading = false
     cleanedAccount = nil
     identity = nil
     conversations = []
-    error = nil
+    filter = .active
+    nextCursor = nil
+    openThread = nil
+    leftThreads = []
+    contexts = []
+    contextsLoaded = false
+    hasLoadedConversations = false
+    updatingConversationIDs = []
   }
 }
