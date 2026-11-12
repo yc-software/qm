@@ -352,7 +352,7 @@ export interface SessionSyscallDeps {
   maxAttempts: number;
   advisoryLock: AdvisoryLock;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
-  authorize?: (session: Session, actorId: string) => Promise<boolean>;
+  authorize?: (session: Session, actorId: string, request: SessionSyscallBinding["request"]) => Promise<boolean>;
   validateRuntime?: (input: SessionOpenInput, scopeId: ScopeId) => Promise<void>;
   defaultModel?: (scopeId: ScopeId) => Promise<string>;
   conversations?: {
@@ -730,7 +730,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           throw new Error(
             `this session moved from ${binding.scopeId} to ${current.scopeId}; nothing was started or sent.`,
           );
-        if (deps.authorize && !(await deps.authorize(current, binding.request.actor.id)))
+        if (deps.authorize && !(await deps.authorize(current, binding.request.actor.id, binding.request)))
           throw new Error(
             `${binding.request.actor.id} can't currently be confirmed as a member of ${binding.scopeId}, so helpers can't run here; nothing was started or sent.`,
           );
@@ -754,7 +754,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
             for (const message of messages) {
               const sender = await deps.sessions.getForParticipant(message.senderId, caller.actor.id);
               if (!sender || sender.scopeId !== binding.scopeId) continue;
-              if (deps.authorize && !(await deps.authorize(sender, caller.actor.id))) continue;
+              if (deps.authorize && !(await deps.authorize(sender, caller.actor.id, caller))) continue;
               try {
                 assertAudienceCompatible(
                   { actor: message.actor, conversation: { ...caller.conversation, audience: message.audience } },
@@ -923,7 +923,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   message:
                     "that subagent finished and retired; open a fresh one with `open` (its result is already in your transcript).",
                 };
-              if (deps.authorize && !(await deps.authorize(target, caller.actor.id)))
+              if (deps.authorize && !(await deps.authorize(target, caller.actor.id, caller)))
                 return { ok: false, message: "you no longer have access to the target session" };
               const meta = storedContext(target);
               if (!meta) return { ok: false, message: "the target has no verified runtime context yet" };

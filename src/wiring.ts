@@ -194,10 +194,12 @@ import {
   createCurrentScopeMembers,
   createIsCurrentSharedScopeMember,
   createManagesArtifactHome,
+  proactiveScopeDelegation,
   rosterAdmits,
   type CanReadScope,
   type CanManageScope,
   type ManagesArtifactHome,
+  type ScopeDelegationRequest,
 } from "./resolution/scope-membership.ts";
 import type { DeployGitArchive } from "./deploy/deploy-git-store.ts";
 import type { MemoryService } from "./memory/memory-service.ts";
@@ -2098,9 +2100,12 @@ export function buildApp(
     }
     return broker;
   };
+  const scopeDelegation = (request: ScopeDelegationRequest, scope: ScopeId) =>
+    proactiveScopeDelegation(request, scope, config.externalSlackPolicies);
   const prepareSessionRequest = async (request: Parameters<RunStore["enqueue"]>[0]["request"]) => {
     const scope = resolution.scopeFor(request.conversation, request.actor);
-    if (!(await canWriteScope(request.actor.id, scope))) throw new Error("session actor no longer has scope access");
+    if (!(await canWriteScope(request.actor.id, scope)) && !scopeDelegation(request, scope))
+      throw new Error("session actor no longer has scope access");
     const ref = request.conversation.channelRef;
     if (request.conversation.kind !== "group" || !ref || !projects.recognizes(ref)) return request;
     const version = await projects.version(ref);
@@ -2142,7 +2147,9 @@ export function buildApp(
     maxAttempts,
     advisoryLock,
     prepareRequest: prepareSessionRequest,
-    authorize: (session, actorId) => canWriteScope(actorId, session.scopeId),
+    authorize: async (session, actorId, request) =>
+      (await canWriteScope(actorId, session.scopeId)) ||
+      (request.actor.id === actorId && scopeDelegation(request, session.scopeId)),
     conversations: {
       search: ({ query, principals, limit }) => app.searchConversations(query, principals, limit),
       list: (actorId) => app.listSessions(actorId),

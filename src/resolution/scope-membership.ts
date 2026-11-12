@@ -10,6 +10,10 @@ import type {
 } from "../directory/directory-store.ts";
 import { swallowAs } from "../util/errors.ts";
 import { type Tenant, ambientTenant } from "../tenants/context.ts";
+import { orgId } from "../config.ts";
+import { conversationScope } from "./resolution-service.ts";
+import { externalSlackRequestAllowed, type ExternalSlackPolicies } from "./external-slack.ts";
+import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 
 export interface ManagedGroupDirectory {
   recognizes(groupId: string): boolean;
@@ -227,6 +231,37 @@ export function createCanWriteScope(deps: ScopeMembershipDeps) {
     if (kind === "channel" || kind === "group") return currentSharedScopeMember(deps, kind, ref, principalId);
     return false;
   };
+}
+
+export type ScopeDelegationRequest = Pick<
+  OrchestratorInput,
+  "actor" | "conversation" | "surface" | "surfaceOrigin" | "botActor"
+> & { origin?: OrchestratorInput["origin"] };
+
+export function proactiveScopeDelegation(
+  request: ScopeDelegationRequest,
+  targetScope: ScopeId,
+  externalSlackPolicies: ExternalSlackPolicies = {},
+): boolean {
+  const { actor, conversation, origin } = request;
+  const source = request.surfaceOrigin;
+  const ref = conversation.channelRef ?? conversation.threadRef;
+  return (
+    actor.id === `system:ambient:${orgId()}` &&
+    origin?.kind === "automation" &&
+    origin.ownerFire !== true &&
+    !request.botActor &&
+    (conversation.kind === "channel" || conversation.kind === "group") &&
+    conversationScope(conversation, actor.id) === targetScope &&
+    request.surface === "slack" &&
+    source?.audience === "internal" &&
+    source.author.surface === "slack" &&
+    !!source.author.account &&
+    !!source.author.id &&
+    !!source.workspace &&
+    !ref.startsWith("slack-account:") &&
+    externalSlackRequestAllowed({ ...request, surface: request.surface }, externalSlackPolicies)
+  );
 }
 
 export type CanManageScope = (principalId: string, scope: ScopeId) => Promise<boolean>;
