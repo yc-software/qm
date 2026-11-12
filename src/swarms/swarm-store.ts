@@ -51,14 +51,17 @@ export const MARK_SWARM_FORUMS_PERSON_USED_MIGRATION = {
         WITH forums AS (
           SELECT s.tenant_id, member ->> 'forumSandboxId' AS sandbox_id
           FROM swarms s, jsonb_array_elements(s.json -> 'members') AS member
-          WHERE member ->> 'forumSandboxId' IS DISTINCT FROM s.json #>> '{board,sandboxId}'
+          WHERE member ? 'forumSandboxId'
+            AND member ->> 'forumSandboxId' IS DISTINCT FROM s.json #>> '{board,sandboxId}'
+            AND member ->> 'state' = 'ready'
             AND (
               s.json #>> '{template,botActor}' IS DISTINCT FROM 'true'
-              OR EXISTS (
-                SELECT 1 FROM jsonb_array_elements(s.json -> 'messages') AS message
+              OR (
+                SELECT message ->> 'actorId' FROM jsonb_array_elements(s.json -> 'messages') AS message
                 WHERE message -> 'audience' ? (member ->> 'id')
-                  AND message ->> 'actorId' IS DISTINCT FROM s.json #>> '{template,actor,id}'
-              )
+                ORDER BY (message ->> 'seq')::int
+                LIMIT 1
+              ) <> s.json #>> '{template,actor,id}'
             )
         ), marked AS (
           UPDATE sandbox_resources r SET json = r.json || '{"personUsed": true}'::jsonb

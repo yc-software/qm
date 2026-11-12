@@ -559,7 +559,7 @@ export function createSwarmService(deps: {
                   ? await provision("Swarm board", member.forumSandboxId)
                   : await step(() => deps.sandboxes.access(swarm!.ownerId, member.forumSandboxId!));
               if (forum.ownerScopeId !== swarm.scopeId) throw new Error("forum scope mismatch");
-              if (forum.id !== swarm.board?.sandboxId && !forum.personUsed)
+              if (forum.id !== swarm.board?.sandboxId && (!forum.personUsed || forum.swarmId))
                 await step(async () => notePersonUse(await deps.sandboxes.notePersonUse(forum.id)));
             }
             await provision("Swarm worker", member.id);
