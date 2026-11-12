@@ -22,30 +22,17 @@ const htmlMirror = (text: string): string => {
   return `<div dir="ltr">${htmlLine(first)}${rest.map((line) => `<div>${htmlLine(line)}</div>`).join("")}</div>`;
 };
 
-function withoutStyles(html: string): string {
+function withoutTags(html: string, open: string, close: string, keep: (tag: string) => boolean): string {
   const lower = html.toLowerCase();
   let kept = "";
   let at = 0;
   for (;;) {
-    const open = lower.indexOf("<style", at);
-    const close = open === -1 ? -1 : lower.indexOf("</style>", open);
-    if (close === -1) return kept + html.slice(at);
-    kept += html.slice(at, open);
-    at = close + "</style>".length;
-  }
-}
-
-function withoutInlineImages(html: string): string {
-  const lower = html.toLowerCase();
-  let kept = "";
-  let at = 0;
-  for (;;) {
-    const open = lower.indexOf("<img", at);
-    const close = open === -1 ? -1 : lower.indexOf(">", open);
-    if (close === -1) return kept + html.slice(at);
-    const tag = lower.slice(open, close);
-    kept += html.slice(at, open) + (tag.includes('src="cid:') ? "" : html.slice(open, close + 1));
-    at = close + 1;
+    const start = lower.indexOf(open, at);
+    const end = start === -1 ? -1 : lower.indexOf(close, start);
+    if (end === -1) return kept + html.slice(at);
+    const tag = html.slice(start, end + close.length);
+    kept += html.slice(at, start) + (keep(tag.toLowerCase()) ? tag : "");
+    at = end + close.length;
   }
 }
 
@@ -54,7 +41,8 @@ function bodyOf(html: string): string {
   const open = lower.indexOf("<body");
   const close = lower.lastIndexOf("</body>");
   const body = open === -1 ? html : html.slice(lower.indexOf(">", open) + 1, close === -1 ? html.length : close);
-  return withoutInlineImages(withoutStyles(body));
+  const styleless = withoutTags(body, "<style", "</style>", () => false);
+  return withoutTags(styleless, "<img", ">", (tag) => !tag.includes("cid:"));
 }
 
 const isOffset = (token: string): boolean =>

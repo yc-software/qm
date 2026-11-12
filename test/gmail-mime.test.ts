@@ -47,7 +47,7 @@ test("replies quote the original the way Gmail's composer does", () => {
       part("text/plain", "Caf\u00e9\r\n\r\n> older"),
       part(
         "text/html",
-        '<html><head><style>p{}</style></head><body><!-- c --><STYLE>a{}</STYLE><div>Caf\u00e9</div><p>para</p>a<br><a href="u">b</a><img src="cid:logo"><img src="https://x.test/i.png"></body></html>',
+        '<html><head><style>p{}</style></head><body><!-- c --><STYLE>a{}</STYLE><div>Caf\u00e9</div><p>para</p>a<br><a href="u">b</a><img src="cid:logo"><IMG SRC=cid:x><img src="https://x.test/i.png"></body></html>',
       ),
     ],
   );
