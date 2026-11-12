@@ -293,11 +293,6 @@ import {
   deriveConnectorKey,
   type SecretKey,
 } from "./connectors/connector-client-store.ts";
-import {
-  createBrowserSessionStore,
-  type BrowserSessionStore,
-  type StoredBrowserSession,
-} from "./connectors/browser-session-store.ts";
 import type { CredentialUsageSink } from "./admin/credential-usage-sink.ts";
 import { createPostgresCredentialUsageSink } from "./admin/postgres-credential-usage-sink.ts";
 import type { EgressAuditSink } from "./admin/egress-audit-sink.ts";
@@ -547,7 +542,6 @@ export interface BuiltApp {
   processes?: ProcessRegistry;
   appPageViews?: AppPageViewLog;
   monitors: MonitorStore;
-  browserSessionStore?: BrowserSessionStore;
   ambientJudgments?: AmbientJudgmentStore;
   ackEmojiPicks?: AckEmojiPickStore;
   channelPolicy: ChannelPolicyStore;
@@ -1347,9 +1341,6 @@ export function buildApp(
         }
       : {}),
   });
-  const browserSessionStore: BrowserSessionStore | undefined = keychainKeyMaterial
-    ? createBrowserSessionStore({ sessions: artifactMap<StoredBrowserSession>("browser_sessions"), key: credentialKey })
-    : undefined;
   const connectorTokens = withOperatorTokenFallback(credentialStore, config.egressServiceHosts ?? [], secretSource);
   const consentLinks: ConsentLinkStore = createConsentLinkStore(inboundMap<ConsentLinkRecord>("consent_links"));
   const oauthFlows: OAuthFlowStore = createOAuthFlowStore(inboundMap<OAuthState>("oauth_flows"));
@@ -3234,7 +3225,6 @@ export function buildApp(
     ...(processes ? { processes } : {}),
     ...(appPageViews ? { appPageViews } : {}),
     monitors,
-    ...(browserSessionStore ? { browserSessionStore } : {}),
     ...(ambientJudgments ? { ambientJudgments } : {}),
     ...(ackEmojiPicks ? { ackEmojiPicks } : {}),
     channelPolicy,
@@ -3374,7 +3364,6 @@ export function serverDeps(
     sandbox: built.sandbox,
     advisoryLock: built.advisoryLock,
     ...(built.processes ? { processes: built.processes } : {}),
-    ...(built.browserSessionStore ? { browserSessionStore: built.browserSessionStore } : {}),
     directory: built.directory,
     ...(built.ambientJudgments ? { ambientJudgments: built.ambientJudgments } : {}),
     ...(built.ackEmojiPicks ? { ackEmojiPicks: built.ackEmojiPicks } : {}),

@@ -632,18 +632,6 @@ const FAMILIES: AgentApiFamily[] = [
   },
   {
     guidance:
-      "Pick or produce a square image under ~128KB, base64 it, then call this once. An upload error is a real result to relay, not a reason to ask the user to do it by hand.",
-    routes: [
-      {
-        method: "POST",
-        path: "/v1/emoji",
-        summary:
-          "add one Slack custom emoji — {name, image:<base64 PNG/GIF>} (optional workspace); runs under your own Slack session or a configured fallback. An error here is a real result to relay, not a reason to ask the user to upload manually",
-      },
-    ],
-  },
-  {
-    guidance:
       "Disconnect a user's OAuth connector (the reverse of connecting one). Defaults to you; to disconnect a teammate's, name them with principalId — they must share this conversation. Confirm before revoking someone else's.",
     routes: [
       {
