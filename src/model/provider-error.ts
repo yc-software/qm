@@ -6,7 +6,7 @@ const TRANSIENT_TYPES = new Set(["overloaded_error", "api_error", "timeout_error
 const CONTEXT_CODES = new Set(["context_length_exceeded"]);
 const QUOTA_CODES = new Set(["insufficient_quota"]);
 const NOT_FOUND_CODES = new Set(["model_not_found"]);
-const REFUSAL_STOP_REASONS = new Set(["refusal", "content_filter", "content_filtered", "guardrail_intervened"]);
+const REFUSAL_STOP_REASONS = new Set(["refusal", "content_filter"]);
 const RETRYABLE_CODES = new Set<ProviderErrorCode>([...TRANSIENT_ERROR_CODES, "unknown"]);
 
 export interface ContextUsage {

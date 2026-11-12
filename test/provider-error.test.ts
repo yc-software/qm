@@ -73,7 +73,6 @@ test("providerTurnError maps documented status, type and code without reading er
     [failed({ status: 503, type: "invalid_request_error" }), "transient", true],
     [failed(undefined, "refusal"), "refusal", false],
     [failed(undefined, "content_filter"), "refusal", false],
-    [failed(undefined, "guardrail_intervened"), "refusal", false],
     [failed(undefined), "unknown", true],
   ] as const) {
     const error = providerTurnError(message);
