@@ -2,8 +2,16 @@ import { memoryRecallLabels } from "../memory/recall-labels.ts";
 import type { DirectoryStore } from "../directory/directory-store.ts";
 import type { ProjectStore } from "../projects/project-store.ts";
 import { disclosedMemory, type MemoryDisclosure } from "../memory/disclosure.ts";
-import { readNotebook, recallAcrossScopes, recallLabel, searchNotebooks } from "../memory/cross-scope.ts";
-import { shownFacts } from "../memory/recall-delta.ts";
+import {
+  readNotebook,
+  recallAcrossScopes,
+  recallLabel,
+  searchNotebooks,
+  type BrainCard,
+} from "../memory/cross-scope.ts";
+import { deliveredCards, shownFacts } from "../memory/recall-delta.ts";
+import { brainCards } from "../memory/brain-card.ts";
+import type { Item } from "../sessions/items.ts";
 import { RECALL_MAX_CHARS } from "../memory/notebook.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import { parseRef } from "../acl/resource-ref.ts";
@@ -128,6 +136,18 @@ export async function resolveTurnContext(input: ContextInput) {
     actorId: input.actor.id,
     ...(input.audienceScopeId ? { audienceScopeId: input.audienceScopeId } : {}),
   };
+  const personAuthority = (personTurn: boolean) => {
+    const by = turnAuthority(input.actor.id, memoryAccess, personTurn);
+    return !input.external &&
+      read.includes(memoryScopeId) &&
+      brainActsAsPerson(by, memoryScopeId, input.audienceScopeId)
+      ? by
+      : undefined;
+  };
+  const listBrains = async () =>
+    (await memory.brains?.(memoryScopeId, reader).catch(swallowAs("turn context: brains", []))) ?? [];
+  let listedBrains: Promise<BoundBrain[]> | undefined;
+  const boundBrains = () => (listedBrains ??= listBrains());
   const handles = [...resolution.grantedHandles, ...(await carriedFileHandles(sharingSources, input.files))];
   const memoryLabels = await memoryRecallLabels(read, input.directory, input.projects);
   return {
@@ -138,14 +158,8 @@ export async function resolveTurnContext(input: ContextInput) {
     memory,
     memoryLabels,
     mcpTools: async (personTurn: boolean, connectors: Promise<McpToolDescriptor[]> | undefined) => {
-      const by = turnAuthority(input.actor.id, memoryAccess, personTurn);
-      const lookups =
-        !input.external &&
-        memoryAccess?.read.includes(memoryScopeId) &&
-        brainActsAsPerson(by, memoryScopeId, input.audienceScopeId);
-      const brains = lookups ? memory.brains?.(memoryScopeId, reader).catch(swallowAs("turn context: brains", [])) : [];
-      const [listed, bound] = await Promise.all([connectors, brains]);
-      return withBrainTools(listed, bound ?? []);
+      const [listed, bound] = await Promise.all([connectors, personAuthority(personTurn) ? boundBrains() : []]);
+      return withBrainTools(listed, bound);
     },
     memorySnapshot: async () => {
       const notebooks = await tracePhase(
@@ -167,26 +181,49 @@ export async function resolveTurnContext(input: ContextInput) {
       report?: MemoryRecallContext["report"],
       text?: string,
       sessionId?: string,
-    ) =>
-      tracePhase(
+      card?: { personTurn: boolean; history: readonly Item[] },
+    ) => {
+      const startedAt = Date.now();
+      const cards = async (): Promise<BrainCard[]> => {
+        const by = card && personAuthority(card.personTurn);
+        if (!by || !card || !text || memoryPolicy.card === "off") return [];
+        return brainCards({
+          memory,
+          brains: await boundBrains(),
+          scopeId: memoryScopeId,
+          message: text,
+          delivered: deliveredCards(card.history),
+          directory: input.directory,
+          by,
+          context: { ...(input.audienceScopeId ? { audienceScopeId: input.audienceScopeId } : {}), startedAt },
+        });
+      };
+      return tracePhase(
         "turn.memory_recall",
-        () =>
-          recallAcrossScopes(
-            memory,
-            read,
-            {
-              query,
-              ...(text ? { input: text } : {}),
-              ...reader,
-              maxChars: RECALL_MAX_CHARS,
-              ...(disclosedFacts ? { disclosedFacts } : {}),
-              ...(report ? { report } : {}),
-              ...(sessionId ? { sessionId } : {}),
-            },
-            memoryLabels,
-          ),
-        { counts: (recalled) => ({ "qm.recalled": recalled.length }) },
-      ),
+        async () => {
+          const [recalled, carded] = await Promise.all([
+            recallAcrossScopes(
+              memory,
+              read,
+              {
+                query,
+                ...(text ? { input: text } : {}),
+                ...reader,
+                maxChars: RECALL_MAX_CHARS,
+                ...(disclosedFacts ? { disclosedFacts } : {}),
+                ...(report ? { report } : {}),
+                ...(sessionId ? { sessionId } : {}),
+                startedAt,
+              },
+              memoryLabels,
+            ),
+            cards(),
+          ]);
+          return { recalled, cards: carded };
+        },
+        { counts: ({ recalled }) => ({ "qm.recalled": recalled.length }) },
+      );
+    },
     searchMemory: async (
       query: string,
       limit = 20,

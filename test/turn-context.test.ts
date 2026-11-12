@@ -42,7 +42,7 @@ async function fixture() {
     isCurrentSharedScopeMember: async (actor, scope) => member && actor === "alice" && scope === "channel:eng",
     config,
     resolution,
-    memoryPolicy: { recall: "visible", capture: "writable" },
+    memoryPolicy: { recall: "visible", capture: "writable", card: "on" },
     useMemory: true,
     memory,
     files,
@@ -75,7 +75,7 @@ async function fixture() {
 test("one context recalls capped, source-labelled memory and shares authority with reads, search, and files", async () => {
   const { input, auditLog } = await fixture();
   const context = await resolveTurnContext(input);
-  const recalled = renderRecall(await context.recallMemory(""), new Map());
+  const recalled = renderRecall((await context.recallMemory("")).recalled, new Map());
   assert.match(recalled, /### personal:alice[\s\S]*LOCAL_FACT/);
   assert.match(recalled, /### channel:eng[\s\S]*LAST_FACT/);
   assert.ok(recalled.length <= 6000 && !recalled.includes("long fact"), "prompt memory stays capped");
@@ -127,7 +127,7 @@ for (const mode of [
     if (mode === "memory-writable") input.memoryPolicy.recall = "writable";
     if (mode === "memory-skip") input.useMemory = false;
     const context = await resolveTurnContext(input);
-    assert.doesNotMatch(renderRecall(await context.recallMemory(""), new Map()), /SHARED_FACT|LAST_FACT/);
+    assert.doesNotMatch(renderRecall((await context.recallMemory("")).recalled, new Map()), /SHARED_FACT|LAST_FACT/);
     assert.deepEqual((await context.searchMemory("LAST_FACT")) ?? [], []);
     assert.equal(await context.readMemory("channel:eng"), null);
     assert.equal(await context.searchMemory("LAST_FACT", 20, "channel:eng"), null);
@@ -140,10 +140,13 @@ for (const mode of [
 
 test("fresh turn re-resolves membership after an earlier successful read", async () => {
   const { input, removeMember } = await fixture();
-  assert.match(renderRecall(await (await resolveTurnContext(input)).recallMemory(""), new Map()), /LAST_FACT/);
+  assert.match(
+    renderRecall((await (await resolveTurnContext(input)).recallMemory("")).recalled, new Map()),
+    /LAST_FACT/,
+  );
   removeMember();
   const next = await resolveTurnContext(input);
-  assert.doesNotMatch(renderRecall(await next.recallMemory(""), new Map()), /LAST_FACT/);
+  assert.doesNotMatch(renderRecall((await next.recallMemory("")).recalled, new Map()), /LAST_FACT/);
   assert.equal(await next.readMemory("channel:eng"), null);
   assert.equal(await next.readFile("shared/open-channel-eng/plan.txt"), null);
 });
@@ -271,7 +274,7 @@ test("semantic recall reuses the turn's memory snapshot instead of reloading not
   const snapshot = await context.memorySnapshot();
   assert.deepEqual(loads.sort(), ["channel:eng", "org:test", "personal:alice"]);
   loads.length = 0;
-  const recalled = await context.recallMemory("anything", Promise.resolve(snapshot.loaded));
+  const { recalled } = await context.recallMemory("anything", Promise.resolve(snapshot.loaded));
   assert.deepEqual(
     recalled.map((fact) => fact.text),
     ["- (" + new Date().toISOString().slice(0, 10) + ") LAST_FACT"],

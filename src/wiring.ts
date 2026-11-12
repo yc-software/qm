@@ -2238,7 +2238,7 @@ export function buildApp(
       ? { inviteMailer: resendMailer(config.resendApiKey, config.emailFrom) }
       : {}),
     ...(config.publicUrl ? { webhookPublicUrl: config.publicUrl } : {}),
-    memoryPolicy: { recall: config.memoryRecall, capture: config.memoryCapture },
+    memoryPolicy: { recall: config.memoryRecall, capture: config.memoryCapture, card: config.memoryCard },
     memoryStrategy,
     skills,
     skillBundles,
