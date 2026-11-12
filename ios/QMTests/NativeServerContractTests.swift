@@ -35,4 +35,39 @@ final class NativeServerContractTests: XCTestCase {
     XCTAssertEqual(
       straddling.chatText, String(repeating: "a", count: NativeSentEmail.chatLimit - 1))
   }
+
+  func testSendPathResponsesTolerateMissingFields() throws {
+    let submission = try JSONDecoder().decode(
+      Submission.self,
+      from: Data(#"{"status":"pending_approval","pendingApprovals":[{"requestId":"a"},{"command":"x"}]}"#.utf8))
+    XCTAssertEqual(submission.pendingApprovals?.map(\.requestId), ["a"])
+    XCTAssertEqual(submission.pendingApprovals?.first?.command, "")
+
+    let list = try JSONDecoder().decode(
+      ConversationList.self,
+      from: Data(#"{"sessions":[{"id":"s","scopeId":"personal:a","threadRef":"web:a:1"},{"id":"broken"}]}"#.utf8))
+    XCTAssertEqual(list.sessions.map(\.id), ["s"])
+
+    let transcript = try JSONDecoder().decode(
+      Transcript.self,
+      from: Data(#"{"items":[{"kind":"UserMessage","createdAt":1},{"kind":"AgentMessage"}],"pins":[{"id":"p"}]}"#.utf8))
+    XCTAssertEqual(transcript.items.count, 1)
+    XCTAssertEqual(transcript.pins?.first?.addedBy, "")
+
+    let run = try JSONDecoder().decode(
+      Run.self, from: Data(#"{"status":"running","input":{"text":"hi"},"activity":[{"marker":"text_start"}]}"#.utf8))
+    XCTAssertNil(run.input)
+    XCTAssertFalse(run.isFinished)
+  }
+
+  func testDecodingFailureNamesMissingKey() {
+    XCTAssertEqual(
+      try APIClient.decode(ApprovalList.self, from: Data(#"{}"#.utf8), path: "test").approvals.count,
+      0)
+    XCTAssertThrowsError(
+      try APIClient.decode(Approval.self, from: Data(#"{"command":"x"}"#.utf8), path: "test")
+    ) { error in
+      XCTAssertTrue(error.localizedDescription.contains("requestId"))
+    }
+  }
 }

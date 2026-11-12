@@ -107,13 +107,44 @@ enum ConversationFilter: String, CaseIterable {
   }
 }
 
-struct ConversationList: Decodable { let sessions: [Conversation] }
+struct ConversationList: Decodable {
+  let sessions: [Conversation]
+
+  enum CodingKeys: String, CodingKey { case sessions }
+
+  init(sessions: [Conversation]) { self.sessions = sessions }
+
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    sessions = c.lossy(Conversation.self, forKey: .sessions) ?? []
+  }
+}
 
 struct Transcript: Decodable {
   let items: [Item]
   let earlierItems: Int?
   let pins: [NativeConversationPin]?
   let session: Conversation?
+
+  enum CodingKeys: String, CodingKey { case items, earlierItems, pins, session }
+
+  init(
+    items: [Item], earlierItems: Int? = nil, pins: [NativeConversationPin]? = nil,
+    session: Conversation? = nil
+  ) {
+    self.items = items
+    self.earlierItems = earlierItems
+    self.pins = pins
+    self.session = session
+  }
+
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    items = c.lossy(Item.self, forKey: .items) ?? []
+    earlierItems = c.logged(Int.self, forKey: .earlierItems)
+    pins = c.lossy(NativeConversationPin.self, forKey: .pins)
+    session = c.logged(Conversation.self, forKey: .session)
+  }
 }
 
 struct NativeConversationPin: Decodable, Identifiable {
@@ -123,6 +154,18 @@ struct NativeConversationPin: Decodable, Identifiable {
   let preview: String?
   let addedBy: String
   let createdAt: Double
+
+  enum CodingKeys: String, CodingKey { case id, text, entrySeq, preview, addedBy, createdAt }
+
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    id = try c.decode(String.self, forKey: .id)
+    text = c.logged(String.self, forKey: .text)
+    entrySeq = c.logged(Int.self, forKey: .entrySeq)
+    preview = c.logged(String.self, forKey: .preview)
+    addedBy = c.logged(String.self, forKey: .addedBy) ?? ""
+    createdAt = c.logged(Double.self, forKey: .createdAt) ?? 0
+  }
 }
 
 struct Item: Decodable, Identifiable {
@@ -275,12 +318,51 @@ struct Approval: Decodable, Identifiable {
   struct GrantModes: Decodable {
     let session: Bool
     let always: Bool
+
+    enum CodingKeys: String, CodingKey { case session, always }
+
+    init(session: Bool, always: Bool) {
+      self.session = session
+      self.always = always
+    }
+
+    init(from decoder: Decoder) throws {
+      let c = try decoder.container(keyedBy: CodingKeys.self)
+      session = c.logged(Bool.self, forKey: .session) ?? false
+      always = c.logged(Bool.self, forKey: .always) ?? false
+    }
   }
   var id: String { requestId }
   var blocksComposer: Bool { blocksInput != false }
+
+  enum CodingKeys: String, CodingKey {
+    case requestId, command, reason, purpose, summary, blocksInput, grantModes
+  }
+
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    requestId = try c.decode(String.self, forKey: .requestId)
+    command = c.logged(String.self, forKey: .command) ?? ""
+    reason = c.logged(String.self, forKey: .reason)
+    purpose = c.logged(String.self, forKey: .purpose)
+    summary = c.logged(String.self, forKey: .summary)
+    blocksInput = c.logged(Bool.self, forKey: .blocksInput)
+    grantModes = c.logged(GrantModes.self, forKey: .grantModes)
+  }
 }
 
-struct ApprovalList: Decodable { let approvals: [Approval] }
+struct ApprovalList: Decodable {
+  let approvals: [Approval]
+
+  enum CodingKeys: String, CodingKey { case approvals }
+
+  init(approvals: [Approval]) { self.approvals = approvals }
+
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    approvals = c.lossy(Approval.self, forKey: .approvals) ?? []
+  }
+}
 
 struct RunInput: Decodable {
   struct Attachment: Decodable {
@@ -372,6 +454,23 @@ struct Run: Decodable {
       return result?.reason ?? "The task could not be completed."
     }
     return nil
+  }
+}
+
+extension Run {
+  enum CodingKeys: String, CodingKey {
+    case status, partial, result, replyComplete, input, activity
+  }
+
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.init(
+      status: c.logged(String.self, forKey: .status) ?? "running",
+      partial: c.logged(String.self, forKey: .partial),
+      result: c.logged(RunResult.self, forKey: .result),
+      replyComplete: c.logged(Bool.self, forKey: .replyComplete),
+      input: c.logged(RunInput.self, forKey: .input),
+      activity: c.lossy(RunActivity.self, forKey: .activity))
   }
 }
 
@@ -613,6 +712,16 @@ struct RunResult: Decodable {
   let reply: String?
   let reason: String?
   let pendingApprovals: [Approval]?
+
+  enum CodingKeys: String, CodingKey { case status, reply, reason, pendingApprovals }
+
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    status = c.logged(String.self, forKey: .status) ?? "done"
+    reply = c.logged(String.self, forKey: .reply)
+    reason = c.logged(String.self, forKey: .reason)
+    pendingApprovals = c.lossy(Approval.self, forKey: .pendingApprovals)
+  }
 }
 
 struct ActiveRun: Decodable { let runId: String? }
@@ -624,6 +733,17 @@ struct Submission: Decodable {
   let pendingApprovals: [Approval]?
   var isTerminalResult: Bool {
     ["ok", "failed", "refused", "pending_approval", "silent", "react"].contains(status ?? "")
+  }
+
+  enum CodingKeys: String, CodingKey { case runId, status, reason, reply, pendingApprovals }
+
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    runId = c.logged(String.self, forKey: .runId)
+    status = c.logged(String.self, forKey: .status)
+    reason = c.logged(String.self, forKey: .reason)
+    reply = c.logged(String.self, forKey: .reply)
+    pendingApprovals = c.lossy(Approval.self, forKey: .pendingApprovals)
   }
 }
 
@@ -655,6 +775,22 @@ struct StreamEvent: Decodable {
     let replyComplete: Bool?
     let input: RunInput?
     let activity: [RunActivity]?
+
+    enum CodingKeys: String, CodingKey {
+      case offset, delta, status, partial, result, replyComplete, input, activity
+    }
+
+    init(from decoder: Decoder) throws {
+      let c = try decoder.container(keyedBy: CodingKeys.self)
+      offset = c.logged(Int.self, forKey: .offset)
+      delta = c.logged(String.self, forKey: .delta)
+      status = c.logged(String.self, forKey: .status)
+      partial = c.logged(String.self, forKey: .partial)
+      result = c.logged(RunResult.self, forKey: .result)
+      replyComplete = c.logged(Bool.self, forKey: .replyComplete)
+      input = c.logged(RunInput.self, forKey: .input)
+      activity = c.lossy(RunActivity.self, forKey: .activity)
+    }
   }
 }
 

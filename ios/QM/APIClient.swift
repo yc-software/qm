@@ -91,7 +91,20 @@ final class SameOriginRedirects: NSObject, URLSessionTaskDelegate, Sendable {
     if let timeout { request.timeoutInterval = timeout }
     let (data, response) = try await session.data(for: request, delegate: redirects)
     try check(response, generation: current, accepting: statusCodes, data: data)
-    return try JSONDecoder().decode(T.self, from: data)
+    return try Self.decode(T.self, from: data, path: path)
+  }
+
+  nonisolated static func decode<T: Decodable>(_ type: T.Type, from data: Data, path: String)
+    throws -> T
+  {
+    do {
+      return try JSONDecoder().decode(type, from: data)
+    } catch let error as DecodingError {
+      Log.decoding.error(
+        "Decoding \(String(describing: T.self), privacy: .public) from \(path, privacy: .public) failed: \(error.summary, privacy: .public) \(String(describing: error), privacy: .public)"
+      )
+      throw QMError.message("QM sent a reply this app could not read (\(error.summary)).")
+    }
   }
 
   func transcribe(file: URL) async throws -> String {
@@ -205,7 +218,7 @@ final class SameOriginRedirects: NSObject, URLSessionTaskDelegate, Sendable {
     try check(response, generation: current)
     try await Self.readEvents(bytes) { data in
       guard current == self.generation else { throw CancellationError() }
-      let event = try JSONDecoder().decode(StreamEvent.self, from: data)
+      let event = try Self.decode(StreamEvent.self, from: data, path: "api/runs/\(runID)/events")
       try onEvent(event)
       return event.type == "RUN_FINISHED" || event.run?.isFinished == true
     }
