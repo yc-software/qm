@@ -194,8 +194,10 @@ test("the server writes who sent a turn and where it goes; the browser's own cla
 
 test("while impersonating someone, a new message reaches the agent as a direct turn and nothing else reaches a run", async () => {
   const cookie = `${browserSessionCookie("admin-carol")}; ${browserImpersonationCookie("admin-carol", "alice")}`;
-  assert.equal((await post("/api/turn", { text: "hi", threadRef: "web:alice:t1" }, { cookie })).status, 202);
-  assert.deepEqual([turns.at(-1)!.actor.externalId, turns.at(-1)!.origin], ["alice", { kind: "direct" }]);
+  const body = { text: "hi", threadRef: "web:alice:t1", clientTools: [scroll] };
+  assert.equal((await post("/api/turn", body, { cookie })).status, 202);
+  const { actor, origin, clientTools } = turns.at(-1)!;
+  assert.deepEqual([actor.externalId, origin, clientTools], ["alice", { kind: "direct" }, undefined]);
   const counts = [turns.length, signals.length];
   for (const [path, body] of [
     ["/api/turn", { threadRef: "web:alice:t1", approval: { requestId: "a-1", approved: true } }],

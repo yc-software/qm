@@ -213,7 +213,7 @@ async function webTurn(ctx: ApiCtx): Promise<void> {
     ...(typeof p.thinkingLevel === "string" && p.thinkingLevel ? { thinkingLevel: p.thinkingLevel } : {}),
     ...(typeof p.fastMode === "boolean" ? { fastMode: p.fastMode } : {}),
     ...(timezone ? { timezone } : {}),
-    ...(privateConversation && Array.isArray(p.clientTools) ? { clientTools: p.clientTools } : {}),
+    ...(privateConversation && !ctx.actor?.imp && Array.isArray(p.clientTools) ? { clientTools: p.clientTools } : {}),
     ...(privateConversation && surfaceBriefing ? { surfaceBriefing } : {}),
     ...(attachments.length ? { attachments } : {}),
     ...(approval ? { approval } : {}),
